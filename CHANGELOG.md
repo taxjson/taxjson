@@ -276,6 +276,50 @@
   `AUD` coin, and an AUD.HOLD reward an unpriced coin. Kraken now uses
   the Coinbase parser's fiat list (re-audit A2-0238, A2-0251, A2-0579,
   A2-0580).
+- Wording: the Canada estimate, the checklist walk (both countries) and
+  docs/filing.md no longer say that no taxjson output totals interest —
+  they point at the .sum's net CASH INTEREST line and say why it is not
+  the interest paid; the estimate's Assumes line says mapped T5 box 18
+  capital-gains dividends are included (re-audit A2-0644, A2-1153,
+  A2-1101).
+- `estimate` (USA): §1256 P/L (futures, futures options, broad-based
+  index options) is still taxed as short-term, but the estimate now
+  names the amount in a NOTE (`section_1256_gain` in --json) and its
+  Assumes line says the Form 6781 60/40 split is not modelled
+  (re-audit A2-1124).
+- `estimate` (Canada): a dividend or s.260 payment in lieu from a
+  Canadian issuer on a US listing (CA ISIN in the books) is an eligible
+  dividend, not a foreign one with an assumed 15% credit — the estimate
+  uses the engine's issuer test (ISIN, else listing) instead of the
+  listing suffix (re-audit A2-0319, A2-0662).
+- `instalments`: a payment made before January 1 is accepted as a
+  prepayment of the project year's instalments when its row says
+  `tax_year = YEAR` (credited from January 1, as the interest model
+  already did); an undesignated prior-year date is still refused and
+  the message names the key (re-audit A2-0648).
+- `sum` / `estimate`: --other-income / --other-losses (and their
+  [estimate] keys) are checked by one guard that names the flag or key
+  it refuses (re-audit A2-1123); the --deductions / --carrying-charges
+  guard is pinned by a test that tells it from the library's check
+  (A2-1122).
+- `sum` / `estimate`: an unreadable sheltered account's gains file is
+  refused like a taxable one (it silently changed the SHELTERED and ALL
+  ACCOUNTS totals), and in a US project a disposition with no ST/LT
+  term stops `sum` the way it stops `form-export`, instead of printing
+  RETURN 0.00 for every account (re-audit A2-1119, A2-1120).
+- `sum`, `t1135`, `list` and the other report commands now print the
+  "not the clean result of the current inputs" banner when a first
+  `taxjson run` aborted after writing work/ (no reports yet), instead
+  of serving the partial books silently (re-audit A2-0658).
+- run: the filing-basis `<acct>_wash.sum` of an account in the blended
+  s.47 pass no longer repeats the isolated per-account pass's s.40(3)
+  notes (return of capital beyond the account's own ACB, or on its
+  empty pool) — the blended pool booked no such gain; the per-account
+  `<acct>.sum` baseline keeps them (re-audit A2-0654, A2-1117).
+- run: a decided crypto gift/payment that cannot be written (no fair
+  value, a malformed sends.json) now reaches the account .sum
+  DIAGNOSTICS and stops `run --strict`; the warning also says when the
+  previous crypto_sends.tt is still booked (re-audit A2-0112).
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of

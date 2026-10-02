@@ -403,6 +403,9 @@ option_grant_timing_since = 2025    # contracts written before this year keep cl
 # paid = [{ date = "2026-03-16", amount = 15000 },
 #          { date = "2026-05-20", amount = 12000,
 #            note = "prior-year refund transferred to instalments" }]
+#                              # a December prepayment of THIS year's
+#                              # instalments needs tax_year = <year> on
+#                              # its row (credited from January 1)
 
 [accounts.margin]              # one section per folder under inputs/
 type = "taxable"               # REQUIRED: taxable | sheltered

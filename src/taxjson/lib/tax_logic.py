@@ -868,7 +868,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "AB) with AMT on top of your other income, for planning "
                  "only.", keys=("province",)),
             Rule("CA-RPT-04",
-                 "Canadian dividends are treated as eligible (38% gross-up "
+                 "Canadian dividends (a Canadian issuer: its CA ISIN when "
+                 "the export gives one, else a Canadian listing) are "
+                 "treated as eligible (38% gross-up "
                  "and credit; a capital-gains dividend in "
                  "capital_gains_dividends.map as a capital gain),",
                  cont=True),
@@ -887,7 +889,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "two previous years — due March, June, September and "
                  "December 15 (the next business day on a weekend), on the "
                  "current-year, prior-year or CRA-reminder basis, with "
-                 "s.161 interest at CRA's prescribed rate."),
+                 "s.161 interest at CRA's prescribed rate. A payment "
+                 "made before January 1 counts only when its row says "
+                 "`tax_year = YEAR`, and earns credit from January 1."),
             Rule("CA-RPT-07",
                  "`taxjson edge-cases`: every trade whose year or "
                  "superficial-loss verdict turns on a boundary."),
@@ -1414,7 +1418,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-RPT-07",
                  "It treats every dividend as qualified, payments in lieu "
                  "and staking as ordinary income, gains with no term as "
-                 "short-term, and a net capital loss as offsetting up to "
+                 "short-term, §1256 P/L as short-term (no 60/40 split; "
+                 "it names the amount), and a net capital loss as "
+                 "offsetting up to "
                  "$3,000 of ordinary income; foreign tax credits, "
                  "interest and state tax are left out.", cont=True),
             Rule("US-EST-NIIT-LOSS",

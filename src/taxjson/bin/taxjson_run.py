@@ -307,12 +307,20 @@ _DIAG_DATE_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
 
 
 def collect_diagnostics(cache: Path, account: str, *,
-                        post_pass: bool = True) -> str:
+                        post_pass: bool = True,
+                        blended: bool = False) -> str:
     """Concatenate persisted stderr diagnostics across an account's
     pipeline stages, keeping ok/warning/note/error lines — bare or
     prog-prefixed (`taxjson-fill-crypto: warning: …`) — plus their
     indented continuation lines. post_pass=False leaves out the
     cross-account passes' sidecars (_POST_PASS_DIAG_SUFFIXES).
+    blended=True (the filing-basis <acct>_wash.sum of an account the
+    blended s.47 pass covers) leaves out the isolated per-account gains
+    pass's <acct>_gains.json.diag: the blend re-ran the engine over the
+    same rows (its mirror <acct>_blend.diag carries what it said), and
+    the per-account pool's notes — a s.40(3) deemed gain on a return
+    of capital beyond the account's own ACB or on its empty pool — are
+    not what the blended books booked (A2-0654, A2-1117).
 
     The engine runs over the whole history, so a year's banner used to
     ask for action on events of a LATER year (declare 2026 transfer
@@ -342,6 +350,8 @@ def collect_diagnostics(cache: Path, account: str, *,
         if any(diag.name.startswith(f"{s}_") for s in siblings):
             continue
         if not post_pass and diag.name.endswith(_POST_PASS_DIAG_SUFFIXES):
+            continue
+        if blended and diag.name == f"{account}_gains.json.diag":
             continue
         kept_prev = False
         for line in diag.read_text(errors="replace").splitlines():
@@ -759,31 +769,30 @@ def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
     income (5.5x on the auditor's fixture)."""
     _warn_config_tables(root)
     cfg = _soft_config(root).get("estimate") or {}
-    oi = getattr(args, "other_income", None)
-    ol = getattr(args, "other_losses", None)
-    if oi is None:
-        oi = cfg.get("other_income")
-    if ol is None:
-        ol = cfg.get("other_losses")
-    # float(True) is 1.0: `other_income = true` was read as $1 (R1-217).
-    for _k, _v in (("other_income", oi), ("other_losses", ol)):
-        if isinstance(_v, bool):
-            _die(f"[estimate] {_k} must be a number, got {_v!r}")
-    try:
-        oi_f, ol_f = float(oi or 0.0), float(ol or 0.0)
-    except (TypeError, ValueError):
-        _die("[estimate] other_income/other_losses must be numbers")
     import math as _math
-    # Same guard the CLI flags get: a NEGATIVE other_losses (the
-    # "-10,000 carryover" sign trap) fabricates taxable gains, and
-    # nan/inf poisons every downstream figure — the config path
-    # skipped both checks (2026-09 audit).
-    if not (_math.isfinite(oi_f) and _math.isfinite(ol_f)) \
-            or oi_f < 0 or ol_f < 0:
-        _die("other_income/other_losses must each be a non-negative "
-             "finite number (enter loss carryovers as positive "
-             "amounts) — check the flags and the [estimate] block in "
-             "taxjson.toml")
+    out = []
+    for key in ("other_income", "other_losses"):
+        v = getattr(args, key, None)
+        src = f"--{key.replace('_', '-')}"
+        if v is None:
+            v, src = cfg.get(key), f"[estimate] {key}"
+        # float(True) is 1.0: `other_income = true` was read as $1
+        # (R1-217).
+        if isinstance(v, bool):
+            _die(f"{src} must be a number, got {v!r}")
+        try:
+            f = float(v or 0.0)
+        except (TypeError, ValueError):
+            _die(f"{src} must be a number, got {v!r}")
+        # The ONE guard for flags and config alike (A2-1123: cmd_summary
+        # kept a second copy this one masked): a NEGATIVE other_losses
+        # (the "-10,000 carryover" sign trap) fabricates taxable gains,
+        # and nan/inf poisons every downstream figure (REVIEW #25/#42).
+        if not _math.isfinite(f) or f < 0:
+            _die(f"{src} must be a non-negative finite number (enter "
+                 f"loss carryovers as positive amounts), got {v!r}")
+        out.append(f)
+    oi_f, ol_f = out
     return oi_f, ol_f
 
 
@@ -1848,10 +1857,16 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
                         strict: bool = False) -> None:
     """`taxjson run` hook for a crypto account, right after the parse:
     prompt for undecided sends at a TTY (else one note line), then
-    refresh the generated crypto_sends.tt from the saved decisions."""
+    refresh the generated crypto_sends.tt from the saved decisions.
+
+    A decided gift/payment that cannot be written (no fair value, a
+    malformed sends.json) is a missing disposition: the error goes to
+    work/<acct>_crypto_sends.diag, so the account .sum DIAGNOSTICS
+    carries it, and `run --strict` stops (A2-0112)."""
     from taxjson.lib import crypto_sends as CS
     cfg = _soft_config(root)
     cache = root / "work"
+    diag = cache / f"{name}_crypto_sends.diag"
     # Another crypto account not parsed yet, or parsed before its
     # export changed (a `run --account` subset): its arrivals are
     # unknown or stale, so a send to it would look like a gift. Don't
@@ -1910,7 +1925,27 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
         # and the run stops until sends.json says what it was.
         sys.exit(f"taxjson run: {name}: crypto sends: {e}")
     except ValueError as e:
-        _problems.append(str(e))
+        # A decided gift/payment that cannot be written is a missing
+        # disposition: the .sum DIAGNOSTICS carries it (A2-0112).
+        tt = root / "inputs" / name / CS.TT_NAME
+        msg = (f"{e} The decided gift(s)/payment(s) it names are NOT "
+               f"booked"
+               + (f"; the previous inputs/{name}/{CS.TT_NAME} is still "
+                  f"booked as it was" if tt.exists() else "")
+               + ". `run --strict` refuses this.")
+        _problems.append(msg)
+    # Every problem also goes to work/<acct>_crypto_sends.diag, so the
+    # account .sum DIAGNOSTICS carries it (A2-0112); a clean pass
+    # removes a stale one.
+    try:
+        if _problems:
+            cache.mkdir(parents=True, exist_ok=True)
+            diag.write_text("".join(f"error: crypto sends: {w}\n"
+                                    for w in _problems))
+        else:
+            diag.unlink(missing_ok=True)
+    except OSError:
+        pass
     for w in _problems:
         print(f"taxjson: WARNING: {name}: crypto sends: {w}",
               file=sys.stderr)
@@ -2952,10 +2987,12 @@ def _json_dumps_report(payload) -> str:
 
 
 def _diagnostics_banner(cache: Path, account: str, *,
-                        post_pass: bool = True) -> bytes:
+                        post_pass: bool = True,
+                        blended: bool = False) -> bytes:
     """A DIAGNOSTICS section for the top of a .sum file, or empty bytes
     when the account's pipeline stages produced no warnings/notes."""
-    diag = collect_diagnostics(cache, account, post_pass=post_pass)
+    diag = collect_diagnostics(cache, account, post_pass=post_pass,
+                               blended=blended)
     if not diag:
         return b""
     rule = "=" * 70
@@ -2995,7 +3032,8 @@ def stage_wash_pass(name: str, settings: Dict[str, Any], cache: Path, reports_di
 
 def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
                          reports_dir: Path, wash_gains: Path,
-                         base_json: Path) -> None:
+                         base_json: Path, *, blended: bool = False
+                         ) -> None:
     """The .sum + report.json rendering for one account's wash-adjusted
     gains — shared by the per-account (crypto) and blended (equity)
     passes."""
@@ -3004,7 +3042,7 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
     wash_tmp = wash_sum.with_name(wash_sum.name + ".part")
     try:
         with wash_tmp.open("wb") as out:
-            out.write(_diagnostics_banner(cache, name))
+            out.write(_diagnostics_banner(cache, name, blended=blended))
             _is_c = bool(((_soft_config(cache.parent).get("accounts")
                            or {}).get(name) or {}).get("crypto"))
             out.write(run_capture(_cmd("taxjson-sum-gains")
@@ -3209,7 +3247,8 @@ def stage_blended_wash_pass(names: List[str],
             "--base", str(cache / f"{name}_base.json"),
         ], wash_gains, capture_diag=False)
         _render_wash_outputs(name, settings, cache, reports_dir,
-                             wash_gains, cache / f"{name}_base.json")
+                             wash_gains, cache / f"{name}_base.json",
+                             blended=True)
     # Conservation check: the splitter apportions blended inventory
     # rows by each account's BASE-book balance, which does not include
     # phantom (OPENING_BALANCE) shares synthesized in-memory from
@@ -8285,6 +8324,65 @@ def cmd_scan(args: argparse.Namespace) -> None:
     raise SystemExit(1)
 
 
+def _issuer_is_canadian_by_symbol(cache: Path, acct: str
+                                  ) -> Dict[str, bool]:
+    """{symbol: Canadian issuer?} from the income rows of an account's
+    base book that carry the issuer's country (an IB CA/US ISIN): the
+    estimate splits Canadian (eligible) from foreign dividends with the
+    SAME test the engine uses for a s.260 payment in lieu,
+    income_dating.is_canadian_issuer, not the listing suffix alone
+    (A2-0319, A2-0662). A symbol with no such row is not in the map:
+    the caller falls back to its listing."""
+    from taxjson.lib.income_dating import is_canadian_issuer
+    out: Dict[str, bool] = {}
+    try:
+        data = _read_work_doc(cache / f"{acct}_base.json")
+    except (OSError, ValueError):
+        return out
+    for t in data.get("transactions", []) or []:
+        if not isinstance(t, dict) or not t.get("issuer_country"):
+            continue
+        if t.get("action") not in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
+            continue
+        sym = str(t.get("symbol") or "")
+        if sym:
+            out[sym] = is_canadian_issuer(t)
+    return out
+
+
+def _section_1256_gain(files: Dict[str, Path], accounts, year,
+                       settings: Dict[str, Any]) -> float:
+    """US only: the year's realized P/L of §1256 contracts (futures,
+    futures options, broad-based index options — lib/futures.
+    section_1256_kind) in the taxable accounts' gains files. The US
+    estimate taxes it with the short-term gains; this names how much of
+    that figure Form 6781 would split 60/40 (US-FUT-02, US-OPT-04:
+    not modelled; A2-1124)."""
+    from taxjson.lib.futures import section_1256_kind
+    key = ("date" if _tax_date_basis(settings) == "trade"
+           else "date_settle")
+    ystr = str(year or "")
+    total = 0.0
+    for acct in sorted(accounts):
+        p = files.get(acct)
+        if p is None:
+            continue
+        try:
+            data = _read_work_doc(p)
+        except (OSError, ValueError):
+            continue                # the account loop already refused it
+        for t in data.get("transactions", []) or []:
+            if not isinstance(t, dict) or t.get("action", "BUYSELL") in (
+                    "DIVIDEND", "DIVIDEND_IN_LIEU"):
+                continue
+            d = str(t.get(key) or t.get("date") or "")
+            if ystr and not d.startswith(ystr):
+                continue
+            if section_1256_kind(str(t.get("symbol") or "")):
+                total += float(t.get("gain") or 0.0)
+    return total
+
+
 def _box18_into_estimate(root: Path, est: Dict[str, float], accounts,
                          year, foreign_by_acct: Dict[str, float]) -> None:
     """Move the tax year's T5 box 18 capital-gains dividends named in
@@ -8317,8 +8415,9 @@ def _box18_into_estimate(root: Path, est: Dict[str, float], accounts,
             if ystr and not str(d).startswith(ystr):
                 continue
             cg = row_amount(t) * f
-            sym = str(t.get("symbol") or "")
-            if sym.rsplit(".", 1)[-1].upper() in ("TO", "V", "CN", "NE"):
+            from taxjson.lib.income_dating import is_canadian_issuer
+            # The issuer test the dividend split uses (A2-0319).
+            if is_canadian_issuer(t):
                 est["div_ca"] = max(0.0, est["div_ca"] - cg)
             else:
                 est["div_foreign"] = max(0.0, est["div_foreign"] - cg)
@@ -8383,18 +8482,8 @@ def cmd_summary(args: argparse.Namespace) -> None:
               f"--other-losses, or use `taxjson estimate`).",
               file=sys.stderr)
     if want_estimate:
-        import math as _math
-        for _flag in ("other_income", "other_losses"):
-            _v = getattr(args, _flag, None)
-            if _v is not None and (not _math.isfinite(_v) or _v < 0):
-                # nan/inf rendered contradictory estimates with rc 0;
-                # a NEGATIVE loss fabricated taxable gains — the
-                # natural sign trap for "my carryover is -10,000"
-                # (REVIEW #25/#42).
-                _die(f"--{_flag.replace('_', '-')} "
-                     f"must be a non-negative finite number "
-                     f"(enter losses as a positive amount), "
-                     f"got {_v!r}")
+        # --other-income/--other-losses were checked by _estimate_inputs
+        # above (one guard, A2-1123).
         _settings0 = cfg.get("settings") or {}
         if _country(_settings0) \
                 == "canada":
@@ -8477,14 +8566,29 @@ def cmd_summary(args: argparse.Namespace) -> None:
                     _die(f"could not read {p}: {e} — a taxable "
                          f"account's gains cannot be left out of the "
                          f"totals. Re-run `taxjson run` to rebuild it.")
+                if acct in acct_types:
+                    # A configured sheltered account dropped out of the
+                    # SHELTERED / ALL ACCOUNTS tables with rc 0 and a
+                    # stderr line, changing their totals (A2-1119).
+                    _die(f"could not read {p}: {e} — account {acct!r} "
+                         f"({acct_types[acct] or 'untyped'}) would be "
+                         f"left out of the account tables and the ALL "
+                         f"ACCOUNTS total. Re-run `taxjson run` to "
+                         f"rebuild it.")
                 print(f"taxjson: warning: could not read {p}: {e}", file=sys.stderr)
                 continue
             year = year or (data.get("summary") or {}).get("year")
             res = summarize_gains(data)
         cap = opt = div = pil = 0.0
+        _issuer_ca = (_issuer_is_canadian_by_symbol(cache, acct)
+                      if want_estimate and acct in taxable_accounts
+                      else {})
         for ticker, cur_map in res.get("ticker_stats", {}).items():
-            is_ca_listed = (ticker.rsplit(".", 1)[-1].upper()
-                            in ("TO", "V", "CN", "NE"))
+            from taxjson.lib.income_dating import is_canadian_listing
+            # The issuer's ISIN country when the books carry it, else
+            # the listing (A2-0319, A2-0662).
+            is_ca_listed = _issuer_ca.get(ticker,
+                                          is_canadian_listing(ticker))
             for s in cur_map.values():
                 cap += float(s.get("cap", 0) or 0)
                 opt += float(s.get("opt", 0) or 0)
@@ -8539,6 +8643,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _box18_into_estimate(root, est, set(files) & taxable_accounts,
                              year or (cfg.get("settings") or {}).get("year"),
                              _foreign_by_acct)
+        if _country(cfg.get("settings") or {}) in ("us", "usa"):
+            est["s1256"] = _section_1256_gain(
+                files, set(files) & taxable_accounts,
+                year or (cfg.get("settings") or {}).get("year"),
+                cfg.get("settings") or {})
 
     def _sum_rows(rows: List[Dict[str, Any]]) -> Dict[str, float]:
         # Summed from the DISPLAYED (2dp-rounded) per-account figures,
@@ -8617,8 +8726,13 @@ def cmd_summary(args: argparse.Namespace) -> None:
             try:
                 _parts = filing_parts_8949(_ents)
             except SystemExit as e:
-                print(f"taxjson sum: warning: {acct}: {e}", file=sys.stderr)
-                continue
+                # Dropping the account (and, below, every account's
+                # Part I/II lines) printed RETURN 0.00 next to a nonzero
+                # realized total with rc 0, where form-export fails and
+                # the Canada branch dies (A2-1120).
+                _die(f"{acct}: {e} — re-run `taxjson run` to rebuild "
+                     f"it (the FOR THE RETURN block cannot leave a "
+                     f"taxable account out).")
             filing_rows.append({"account": acct, **{
                 k: round(sum(x[k] for x in _parts), 2)
                 for k in ("proceeds", "cost", "adjustment", "gain")},
@@ -9046,11 +9160,28 @@ def _instalment_config(root: Path,
             # read "met" with zero interest and fabricated credit
             # interest — silently the maximally wrong answer.
             lo, hi = f"{year}-01-01", f"{int(year) + 1}-04-30"
-            if not (lo <= d <= hi):
+            # A prepayment made before January 1 counts only when the
+            # row designates this year (`tax_year = YEAR`): an
+            # undesignated prior-year date is the rollover trap above.
+            # The interest model credits it from January 1 (A2-0648).
+            _ty = row.get("tax_year")
+            if _ty is not None and (isinstance(_ty, bool)
+                                    or not isinstance(_ty, int)
+                                    or _ty != int(year) or d >= lo):
+                _die(f"[instalments] paid[{i}] tax_year = {_ty!r}: "
+                     f"`tax_year` designates a payment made BEFORE "
+                     f"January 1 as a prepayment of this project's "
+                     f"{year} instalments — it must be {year}, on a "
+                     f"row dated before {lo}.")
+            if not (lo <= d <= hi) and _ty is None:
                 _die(f"[instalments] paid[{i}] is dated {d}, outside "
                      f"tax year {year} ({lo}..{hi}). Instalments are "
                      f"per year — move it to that year's project or "
-                     f"remove it.")
+                     f"remove it"
+                     + (f"; if it is a prepayment of the {year} "
+                        f"instalments, add `tax_year = {year}` to the "
+                        f"row (it earns credit from January 1)"
+                        if d < lo else "") + ".")
         row_out = {"date": d, "amount": a}
         if row.get("note"):
             row_out["note"] = str(row["note"])
@@ -9361,6 +9492,17 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
                      other_income=other_income,
                      other_losses=other_losses)
     r["st_input"] = round(st_in, 2)
+    s1256 = float(est.get("s1256") or 0.0)
+    r["section_1256_gain"] = round(s1256, 2)
+    if abs(s1256) > 0.005:
+        r.setdefault("notes", []).append(
+            f"{fmt_money(s1256)} of the short-term figure is §1256 P/L "
+            f"(futures, futures options, broad-based index options such "
+            f"as SPX), taxed here as short-term at ordinary rates. Form "
+            f"6781 taxes it 60% long-term / 40% short-term and marks "
+            f"contracts open at year end to market — neither is "
+            f"modelled (the 60/40 split would lower this estimate on a "
+            f"gain).")
     return r
 
 
@@ -9406,7 +9548,7 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                "grossed up]")]
              if r.get("capital_gains_dividends") else []) + [
             ("Eligible dividends (grossed)", r["grossed_eligible"],
-             f"[{money(est['div_ca'])} x1.38, Canadian-listed]"),
+             f"[{money(est['div_ca'])} x1.38, Canadian issuers]"),
             ("Foreign dividends", est["div_foreign"],
              f"[FTC {money(r['ftc_assumed'])} — "
              f"{r.get('ftc_source', 'assumed 15%')}]"),
@@ -9652,7 +9794,9 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
         for _n in r.get("notes") or []:
             print(_wrap_note("NOTE: " + _n, indent=""))
         print("Assumes: single filer, standard deduction, all dividends "
-              "QUALIFIED, no foreign tax credit, no state tax; interest "
+              "QUALIFIED, no foreign tax credit, no state tax; §1256 "
+              "contracts (futures, index options) taxed as short-term — "
+              "no 60/40 split or year-end marking (Form 6781); interest "
               "income and the §988 result on foreign currency (`taxjson "
               "fx-cash`) not included.")
 
@@ -11721,6 +11865,23 @@ def _run_state_problems(root: Path, cfg: Dict[str, Any]) -> List[str]:
         res = d_run_clean(Ctx(root, cfg, year, _d.today(),
                               lambda *a, **k: (0, "", "")))
     except Exception:                                   # noqa: BLE001
+        return []
+    if res.status == "blocked":
+        # No .sum yet: nothing to judge — unless a run aborted after
+        # writing work/ (a first run that died at a later stage). Those
+        # partial books are what sum / t1135 / list read (A2-0658).
+        cache = root / "work"
+        try:
+            partial = any(
+                not p.name.startswith(".")
+                for pat in ("*_gains.json", "*_gains_wash.json",
+                            "*_base.json")
+                for p in cache.glob(pat))
+        except OSError:
+            partial = False
+        if partial:
+            return ["the last `taxjson run` did not finish: reports/ has "
+                    "no .sum, but work/ holds the partial books it wrote"]
         return []
     if res.status != "attention":
         return []
