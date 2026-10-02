@@ -459,5 +459,35 @@ class TestTradeMoneyIdentity(unittest.TestCase):
                 self.assertIn("refusing", str(cm.exception))
 
 
+class TestStakedCodesSameProperty(unittest.TestCase):
+    """A2-0236: tax-logic states the fold the parser applies."""
+
+    @rule("CA-CRYPTO-01")
+    def test_canada_rule_states_the_fold(self):
+        from taxjson.lib.tax_logic import catalog
+        text = catalog("canada")["CA-CRYPTO-01"].text
+        self.assertIn("ETH2", text)
+        self.assertIn("DOT.S", text)
+        led = _ledger([
+            "L1,R1,2025-03-01 12:00:00,spend,,currency,DOT,spot,-5,0,0",
+            "L2,R1,2025-03-01 12:00:00,receive,,currency,DOT28.S,spot,5,0,"
+            "5"])
+        txs, _ = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv")
+        self.assertEqual(txs, [])
+
+    @rule("US-CRYPTO-01")
+    def test_us_rule_states_the_fold(self):
+        from taxjson.lib.tax_logic import catalog
+        text = catalog("usa")["US-CRYPTO-01"].text
+        self.assertIn("ETH2", text)
+        led = _ledger([
+            "L1,R1,2025-03-01 12:00:00,spend,,currency,XETH,spot,-1,0,0",
+            "L2,R1,2025-03-01 12:00:00,receive,,currency,ETH2.S,spot,1,0,"
+            "1"])
+        txs, _ = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv",
+                        cash=False)
+        self.assertEqual(txs, [])
+
+
 if __name__ == "__main__":
     unittest.main()

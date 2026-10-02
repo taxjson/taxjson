@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **tax-logic states the Kraken staked-code fold.** CA-CRYPTO-01 and
+  US-CRYPTO-01 now say that Kraken's staked and bonded wallet codes
+  (DOT.S, DOT28.S, ETH2, ETH2.S, the .M/.F/.B/.P/.HOLD suffixes) are the
+  same coin as the bare code, so a 1:1 swap between them is not a sale,
+  which is what the parser already did (re-audit A2-0236).
 - **Kraken trades: the cost must fit vol x price.** A fill whose cost
   contradicts |vol| x price by more than rounding, or whose fee is more
   than 5% of the cost, is refused, naming the txid: a shifted, swapped
