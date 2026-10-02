@@ -76,7 +76,12 @@ def _rows(path: Path) -> List[Dict[str, Any]]:
     if not isinstance(rows, list):
         raise ValueError(f"work/{path.name} has no transactions list — "
                          f"re-run `taxjson run`")
-    return [r for r in rows if isinstance(r, dict)]
+    rows = [r for r in rows if isinstance(r, dict)]
+    # The shared row funnel (A2-0330): a wrong-typed date or quantity
+    # is a one-line error naming the file, not a traceback later on.
+    from taxjson.lib.json_input import check_row_types
+    check_row_types(rows, path)
+    return rows
 
 
 def _is_future(sym: str) -> bool:
@@ -216,6 +221,10 @@ class Book:
             if not isinstance(doc, dict):
                 raise ValueError(f"work/{Path(f).name} is not a gains "
                                  f"document — re-run `taxjson run`")
+            from taxjson.lib.json_input import check_row_types
+            for _k in ("transactions", "inventory"):
+                if isinstance(doc.get(_k), list):
+                    check_row_types(doc[_k], f, _k)
             for t in doc.get("transactions", []):
                 if t.get("gain") is None or t.get("action"):
                     continue

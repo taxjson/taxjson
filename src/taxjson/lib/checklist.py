@@ -134,8 +134,9 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
     ("fees", 4, "Carrying charges (margin interest) for line 22100 taken from the statements",
      "broker statements (`taxjson events` lists the INTEREST rows)",
      "Interest on money borrowed to invest is deductible on line 22100; trade "
-     "commissions are not (they are already in the ACB and proceeds) and no "
-     "taxjson command totals the interest."),
+     "commissions are not (they are already in the ACB and proceeds). The "
+     "account .sum's CASH INTEREST line nets credit against debit interest, "
+     "so it is not the interest paid."),
     ("estimate", 4, "Tax estimate and instalment position checked",
      "taxjson estimate, taxjson instalments",
      "A sanity check on the tax owed and on what was already paid."),
@@ -199,8 +200,10 @@ US_STEPS: Dict[str, Any] = {
                 "personal-transaction exclusion is not modelled)."),
     "fees": ("Margin interest collected (Form 4952, if itemizing)",
              "broker statements (`taxjson events` lists the INTEREST rows)",
-             "Investment interest is deductible only when itemizing; no taxjson "
-             "command totals it, and trade commissions are not investment interest."),
+             "Investment interest is deductible only when itemizing; the account "
+             ".sum's CASH INTEREST line nets credit against debit interest, so it "
+             "is not the interest paid, and trade commissions are not investment "
+             "interest."),
     "estimate": ("Tax estimate and estimated payments checked", "taxjson estimate",
                  "A sanity check on the tax owed."),
     "filed-lock": ("Return filed and the year locked", "taxjson close-year",
@@ -1238,7 +1241,7 @@ def d_audit(ctx: Ctx) -> Result:
     # out as such by the audit (A2-1150); form-export's step asks for
     # the hand-reported rows.
     manual = sum(int(m.group(1).replace(",", "")) for m in re.finditer(
-        r"([\d,]+) phantom basis — manual reporting", out))
+        r"([\d,]+) phantom-basis disposition\(s\) tied to MANUAL REPORTING", out))
     if bad:
         return Result("audit", "attention", f"{bad} disposition(s) MISMATCHED")
     if notfound:
@@ -1625,6 +1628,11 @@ def d_form_export(ctx: Ctx) -> Result:
     else:
         cmp_gain = t["gain"]
         tol = max(0.05, 0.015 * math.sqrt(n + n_acct))
+    # US §1256 contracts stay off Form 8949 (Form 6781 by hand) but are
+    # in the accounts' realized gain: add them back for this tie.
+    s1256 = rep.get("section_1256_totals") if label == "Form 8949" else None
+    if isinstance(s1256, dict):
+        cmp_gain += float(s1256.get("gain") or 0.0)
     if abs(cmp_gain - realized) > tol:
         problems.append(f"{label} gain {t['gain']:,.2f} vs realized {realized:,.2f} "
                         f"in the taxable accounts' .sum")

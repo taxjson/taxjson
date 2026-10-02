@@ -32,8 +32,9 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Dict, List, Optional
 
-from taxjson.lib.core import (TaxTransaction, is_option_symbol,
-                              parse_option_expiry, parse_option_underlying)
+from taxjson.lib.core import (TaxTransaction,
+                              _make_assign_underlying_resolver,
+                              is_option_symbol, parse_option_expiry)
 from taxjson.lib.corporate_timeline import event_sort_key
 from taxjson.lib.phantom_holdings import OrderStarts, unbacked_close
 
@@ -79,6 +80,24 @@ def _buyback_cite(symbol: str) -> str:
         right, "IT-479R paras 29/32")
 
 
+def _expired_test(transactions, year: int, today: Optional[date], date_of):
+    """expired(expiry) -> True when a contract with that expiry date
+    can no longer be open: it expired by the year end (or by the last
+    date the books cover, S075-00) AND before `today`. On the expiry
+    day itself the contract still trades and the broker posts the
+    expiry row afterwards (A2-1112; the run's own expired-options
+    warning skips that day too), while a Dec 31 expiry of a past year
+    is past."""
+    last = max((date_of(t) for t in transactions if date_of(t)),
+               default="")
+    bound = max(f"{year}-12-31", last[:10])
+    now = (today or date.today()).isoformat()
+
+    def expired(expiry: Optional[str]) -> bool:
+        return bool(expiry) and expiry <= bound and expiry < now
+    return expired
+
+
 @dataclass
 class Close:
     date: str
@@ -122,11 +141,14 @@ def write_lots(transactions: List[TaxTransaction],
     exceeds the premium nets a loss). Writes and closes are dated on
     `tax_date` (settle, the default, or trade)."""
     _date_of = date_basis_of(tax_date)
-    # (account, underlying) pairs that trade as STOCK — the engine's
-    # taxable_stock_symbols test for a physically settled assignment.
-    stock = {(t.account, t.symbol) for t in transactions
-             if not is_option_symbol(t.symbol or "")
-             and t.action in ("BUYSELL", "ASSIGN")}
+    # The engine's own pairing of an assignment with its share leg
+    # (A2-0114, A2-0328): the option root is matched to the account's
+    # stock line by class / futures-month spelling (RCI for RCI.B.TO,
+    # BRKB for BRK.B.US) — an exact (account, root) test called those
+    # physically settled assignments cash-settled. No stock line in the
+    # option's account (an index option) -> None -> cash-settled.
+    resolve_underlying = _make_assign_underlying_resolver(
+        transactions, _date_of, quiet=True)
     rows = sorted((t for t in transactions
                    if t.action in ("BUYSELL", "ASSIGN", "SPLIT",
                                    "OPENING_BALANCE")
@@ -179,10 +201,11 @@ def write_lots(transactions: List[TaxTransaction],
                 lots.setdefault(sym, []).append(lot); out.append(lot)
         elif q > 0 and p < -1e-9:
             rem = min(q, -p)
-            per_paid = net / q if q else 0.0
+            # A buy-back's cost is the money paid: parser books carry it
+            # positive, a .tt book negative (money out, A2-1111).
+            per_paid = abs(net) / q if q else 0.0
             if t.action == "ASSIGN":
-                und = parse_option_underlying(sym)
-                kind = ("assignment" if und and (t.account, und) in stock
+                kind = ("assignment" if resolve_underlying(t)
                         else "cash-settled")
             elif abs(float(t.price or 0.0)) < 1e-12 and abs(net) < 1e-9:
                 kind = "expiry"
@@ -261,21 +284,14 @@ def filed_locks(root, settings: Optional[Dict[str, Any]] = None,
     return years, timing
 
 
-def expiry_cutoff(transactions: List[TaxTransaction], year: int,
-                  today: Optional[date] = None,
-                  tax_date: Optional[str] = None) -> str:
-    """The date an option contract must have expired by to be MISSING
-    its expiry row: the later of the year end and the last date the
-    books cover (S075-00), but never after `today` (an expiry later than
-    the run date is simply open). An expiry ON the cutoff counts
-    (S075-03). One home for straddling, expired_open and `taxjson run`'s
-    per-account warning (audit A2-1210)."""
-    _date_of = date_basis_of(tax_date)
-    last = max((_date_of(t) for t in transactions if _date_of(t)),
-               default="")
-    return min(max(f"{year}-12-31", last[:10]),
-               (today or date.today()).isoformat())
-
+def expired_test(transactions: List[TaxTransaction], year: int,
+                 today: Optional[date] = None,
+                 tax_date: Optional[str] = None):
+    """The one "this contract can no longer be open" predicate
+    (`_expired_test`: expired by the later of the year end and the last
+    date the books cover, and before today) for straddling, expired_open
+    and `taxjson run`'s per-account warning (audit A2-1210, A2-1112)."""
+    return _expired_test(transactions, year, today, date_basis_of(tax_date))
 
 def _filed_on_close(wy: int, filed_timing: Optional[Dict[int, Dict[str, Any]]]) -> Optional[bool]:
     """True/False when the filed/<wy>.json lock RECORDS the timing its
@@ -311,7 +327,8 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
     # S075-00: the books may run past Dec 31 (January of the next year
     # is part of a frozen year's inputs) — a contract that expired by
     # the LAST date the books cover cannot still be open either.
-    year_end = expiry_cutoff(transactions, year, today, tax_date)
+    _date_of = date_basis_of(tax_date)
+    _expired = _expired_test(transactions, year, today, _date_of)
     rows: List[Dict[str, Any]] = []
     for lot in write_lots(transactions, tax_date=tax_date):
         later = [c for c in lot.closes if int(c.date[:4]) > lot.write_year]
@@ -447,7 +464,7 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
         if still_open:
             prem = lot.per_unit * lot.open_units
             expiry = parse_option_expiry(lot.symbol)
-            if expiry and expiry <= year_end:
+            if _expired(expiry):
                 # Past its expiry date within (or before) the tax year yet
                 # never closed in the books: the export dropped the
                 # expiry / assignment row. Not "open" — unknown.
@@ -519,13 +536,13 @@ def expired_open(transactions: List[TaxTransaction], year: int,
         pos[key] = pos.get(key, 0.0) + q
         if abs(pos[key]) < 1e-9:
             closing.pop(key, None)
-    cutoff = expiry_cutoff(transactions, year, today, tax_date)
+    _expired = _expired_test(transactions, year, today, _date_of)
     out = []
     for (acct, sym), q in sorted(pos.items()):
         if abs(q) < 1e-9:
             continue
         expiry = parse_option_expiry(sym)
-        if expiry and expiry <= cutoff:
+        if _expired(expiry):
             out.append({"account": acct, "symbol": sym, "quantity": q,
                         "expiry": expiry,
                         "side": "written" if q < 0 else "long",

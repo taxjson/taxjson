@@ -1054,6 +1054,45 @@ def annotate_inventory_multipliers(results: dict, transactions) -> None:
             item['multiplier'] = m
 
 
+def apply_roc_record_dates(transactions, req: GainsRequest) -> None:
+    """Canada: a Canadian trust's return of capital lowers the ACB when
+    it becomes payable (s.53(2)(h)): an ADJUST with a printed record
+    date is booked on it (tax-logic CA-INC-DATE-ROC-TRUST). The row
+    keeps its id; only its dates move (in place).
+
+    Every engine entry point calls this — run_gains, taxjson-audit and
+    taxjson-explain — so an audit or a trace cannot re-run the engine
+    on the pay date the books did not use (re-audit A2-0033)."""
+    if req.country != 'canada':
+        return
+    income_rules = req.income_rules()
+    for _t in transactions:
+        _rec = income_rules.roc_record_date(_t)
+        if _rec:
+            _t.date = _rec
+            _t.date_settle = _rec
+
+
+def engine_options(req: GainsRequest) -> Dict[str, Any]:
+    """The country's engine keyword arguments for `req` (the ones
+    run_gains passes to compute_gains beyond the books and the wash
+    switch): US per-account FIFO (US-BASIS-01); Canadian option premium
+    timing, its since-year and the date basis that year is tested on
+    (SPEC-13: the tax date, not always the settlement date). One
+    builder for run_gains, taxjson-audit and taxjson-explain
+    (re-audit A2-0314/A2-0318)."""
+    extra: Dict[str, Any] = {}
+    if req.per_account_basis and req.country == 'usa':
+        extra['per_account_basis'] = True
+    if req.country == 'canada':
+        extra['option_premium_timing'] = req.option_premium_timing or 'close'
+        extra['option_grant_since'] = req.option_grant_since
+        extra['option_buyback_loss_superficial'] = \
+            req.option_buyback_loss_superficial
+        extra['option_grant_basis'] = req.effective_tax_date()
+    return extra
+
+
 def run_gains(transactions, sheltered_transactions=(),
               affiliated_transactions=(), req: GainsRequest = None, *,
               trace_sink: Optional[Callable[[dict], None]] = None,
@@ -1090,16 +1129,7 @@ def run_gains(transactions, sheltered_transactions=(),
     _warn_year = int(req.year) if req.year else None
     for _w in income_rules.warnings(transactions, _warn_year):
         print(f"warning: {_w}", file=sys.stderr)
-    if req.country == 'canada':
-        # A Canadian trust's return of capital lowers the ACB when it
-        # becomes payable (s.53(2)(h)): an ADJUST with a printed record
-        # date is booked on it (tax-logic CA-INC-DATE-ROC-TRUST). The
-        # row keeps its id; only its dates move.
-        for _t in transactions:
-            _rec = income_rules.roc_record_date(_t)
-            if _rec:
-                _t.date = _rec
-                _t.date_settle = _rec
+    apply_roc_record_dates(transactions, req)
     if req.country == 'canada':
         # The parsers book a stock dividend as a neutral $0 event; the
         # Canadian cost is its declared amount, which the export does
@@ -1116,14 +1146,7 @@ def run_gains(transactions, sheltered_transactions=(),
                       f"shares' cost: add it (distributions.map or a .tt "
                       f"ADJUST) for the correct ACB and income.",
                       file=sys.stderr)
-    _extra = {}
-    if req.per_account_basis and req.country == 'usa':
-        _extra['per_account_basis'] = True
-    if req.country == 'canada':
-        _extra['option_premium_timing'] = req.option_premium_timing or 'close'
-        _extra['option_grant_since'] = req.option_grant_since
-        _extra['option_buyback_loss_superficial'] = req.option_buyback_loss_superficial
-        _extra['option_grant_basis'] = tax_date
+    _extra = engine_options(req)
     # The engine's option/right-replacement warnings are printed below,
     # after the year filter: printed by the engine they put a prior
     # year's warning in this year's .sum DIAGNOSTICS (audit S070-04).

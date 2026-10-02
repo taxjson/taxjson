@@ -401,7 +401,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "distribution (\"DIST ON\", RBC \"Distribution\") on a "
                  "Canadian issuer (a Canadian listing or a CA ISIN) is "
                  "dated by its printed record date — in divs-sum, the "
-                 ".sum, the estimate and instalments. Split-share "
+                 ".sum, the estimate, instalments and the divs / roc / "
+                 "events views' windows (each row still shows its pay "
+                 "date). Split-share "
                  "corporations say \"Distribution\" too but are "
                  "corporations (paid date): "
                  + ", ".join(sorted(_split_share_roots())) + ", any row "
@@ -606,6 +608,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "the sale's trade date less the days held, counted on "
                  "trade dates: a buy traded in late December that settled "
                  "in January shows the December year."),
+            Rule("CA-DISP-08",
+                 "Each Schedule 3 cell is rounded half-up to the cent and "
+                 "the ACB is the row's footing residual, never below 0.00 "
+                 "(a cent of rounding goes to the outlays). A net "
+                 "commission rebate (a negative commission or fee) is not "
+                 "an outlay: it stays netted in the proceeds, so OUTLAYS "
+                 "is never negative."),
         ]),
         ("Superficial loss (s.54)", [
             Rule("CA-SL-01",
@@ -847,7 +856,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "exceeds $100,000 at any time in the year."),
             Rule("CA-RPT-02",
                  "Country comes from the listing suffix (t1135.map "
-                 "overrides); crypto held on an exchange counts.",
+                 "overrides; a foreign listing whose rows carry a "
+                 "Canadian ISIN is named for a `SYMBOL CA` line, since a "
+                 "Canadian corporation's shares are not foreign "
+                 "property); crypto held on an exchange counts.",
                  cont=True),
             Rule("CA-RPT-12",
                  "A property's cost amount is its adjusted cost base as "
@@ -861,7 +873,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "AB) with AMT on top of your other income, for planning "
                  "only.", keys=("province",)),
             Rule("CA-RPT-04",
-                 "Canadian dividends are treated as eligible (38% gross-up "
+                 "Canadian dividends (a Canadian issuer: its CA ISIN when "
+                 "the export gives one, else a Canadian listing) are "
+                 "treated as eligible (38% gross-up "
                  "and credit; a capital-gains dividend in "
                  "capital_gains_dividends.map as a capital gain),",
                  cont=True),
@@ -880,7 +894,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "two previous years — due March, June, September and "
                  "December 15 (the next business day on a weekend), on the "
                  "current-year, prior-year or CRA-reminder basis, with "
-                 "s.161 interest at CRA's prescribed rate."),
+                 "s.161 interest at CRA's prescribed rate. A payment "
+                 "made before January 1 counts only when its row says "
+                 "`tax_year = YEAR`, and earns credit from January 1."),
             Rule("CA-RPT-07",
                  "`taxjson edge-cases`: every trade whose year or "
                  "superficial-loss verdict turns on a boundary — window "
@@ -1375,7 +1391,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-OPT-03", "Cash-settled options realize on the option.",
                  cont=True),
             Rule("US-OPT-04",
-                 "Not modelled: §1256 60/40 contracts, §1233 and §1259."),
+                 "Not modelled: §1256 60/40 contracts, §1233 and §1259. A "
+                 "broad-based index option (SPX, XSP, NDX, RUT, VIX, DJX, "
+                 "OEX and their weekly roots) or an option on a future is "
+                 "a §1256 contract: kept off Form 8949 and listed for "
+                 "Form 6781, as futures are."),
         ]),
         ("Futures", [
             Rule("US-FUT-01",
@@ -1389,7 +1409,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "money (a buy then receives cash: a negative cost)."),
             Rule("US-FUT-02",
                  "Not modelled: §1256 year-end marking to market and the "
-                 "60/40 split; report them on Form 6781 by hand.",
+                 "60/40 split; report them on Form 6781 by hand. "
+                 "`form-export` (8949 and TXF) and `sum` leave every "
+                 "§1256 contract out of the Form 8949 rows and totals and "
+                 "list it, with its P/L, for Form 6781.",
                  cont=True),
         ]),
         ("Reports", [
@@ -1399,13 +1422,20 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-RPT-02", "wash sales as code W).", cont=True),
             Rule("US-RPT-03",
                  "`--form txf` writes a TurboTax TXF file.", cont=True),
+            Rule("US-RPT-09",
+                 "Form 8949 cells are rounded half-up to the cent and (h) "
+                 "= (d) - (e) + (g) on the rounded cells, so a half-cent "
+                 "wash-sale adjustment shows as the allowed gain the other "
+                 "reports print."),
             Rule("US-RPT-04",
                  "`taxjson estimate`: federal tax only (single filer, "
                  "standard deduction, NIIT), for planning."),
             Rule("US-RPT-07",
                  "It treats every dividend as qualified, payments in lieu "
                  "and staking as ordinary income, gains with no term as "
-                 "short-term, and a net capital loss as offsetting up to "
+                 "short-term, §1256 P/L as short-term (no 60/40 split; "
+                 "it names the amount), and a net capital loss as "
+                 "offsetting up to "
                  "$3,000 of ordinary income; foreign tax credits, "
                  "interest and state tax are left out.", cont=True),
             Rule("US-EST-NIIT-LOSS",

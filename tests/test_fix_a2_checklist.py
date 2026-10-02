@@ -625,6 +625,18 @@ class TestStepWording(unittest.TestCase):
             r = cl.d_form_export(ctx(p, {"form-export": (0, json.dumps(rep), ""),
                                          "sum": (0, json.dumps(summ), "")}))
         self.assertEqual(r.status, "done", r.detail)
+        # A §1256 future stays off Form 8949 but is in the realized gain.
+        fut = entries + [{"term": "SHORT_TERM", "symbol": "F:ESZ5", "date": "2025-03-05",
+                          "proceeds": 600.0, "cost": 100.0, "gain": 500.0, "qty": 1}]
+        rep2 = build_8949(fut)
+        summ2 = json.loads(json.dumps(summ))
+        summ2["accounts"][0]["realized"] = round(realized + 500.0, 2)
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td)
+            (p / "taxjson.toml").write_text(cfg)
+            r = cl.d_form_export(ctx(p, {"form-export": (0, json.dumps(rep2), ""),
+                                         "sum": (0, json.dumps(summ2), "")}))
+        self.assertEqual(r.status, "done", r.detail)
 
 
 class TestAuditPhantomBasis(unittest.TestCase):
@@ -641,7 +653,7 @@ class TestAuditPhantomBasis(unittest.TestCase):
             self.assertTrue(g.get("manual_reporting_required"))
             r = tj(p, "audit", "--summary", check=False)
             self.assertEqual(r.returncode, 0, r.stdout[-1500:] + r.stderr[-1500:])
-            self.assertIn("1 phantom basis — manual reporting", r.stdout)
+            self.assertIn("1 phantom-basis disposition(s) tied to MANUAL REPORTING", r.stdout)
             self.assertNotIn("MISSING from the check", r.stdout + r.stderr)
             c = cl.Ctx(root=p, cfg=ctx(p).cfg, year=2025, today=date(2026, 9, 1),
                        run_sub=lambda argv, timeout=900: (lambda r: (r.returncode, r.stdout, r.stderr))(
