@@ -560,5 +560,34 @@ class TestTtBareEquitySymbol(_Tmp):
         self.assertNotIn("no market suffix", err.getvalue())
 
 
+# ----------------------------------------------------------- sum-income
+class TestSumIncomeRows(_Tmp):
+    """A2-1448: rows go through the gains loader's checks."""
+
+    def test_bad_rows_one_line_exit_2(self):
+        good = {"action": "DIVIDEND", "date": "2024-02-15", "time":
+                "09:30:00", "symbol": "QZRY.TO", "quantity": 0.0,
+                "currency": "CAD", "net_amount": 24.69, "type": "dividend",
+                "account": "margin", "id": "d1"}
+        for field, val in (("date", "2024-02-30"),
+                           ("net_amount", float("nan")),
+                           ("net_amount", float("inf")),
+                           ("net_amount", "abc")):
+            row = dict(good, **{field: val})
+            f = self.root / "b.json"
+            f.write_text(json.dumps({"transactions": [row]}))
+            r = tool("taxjson_sum_income", "--year", "2024",
+                     "--country", "canada", str(f))
+            no_tb(self, r)
+            self.assertEqual(r.returncode, 2, (field, val, r.stderr,
+                                               r.stdout))
+            self.assertIn("b.json", r.stderr)
+        f.write_text(json.dumps({"transactions": [good]}))
+        r = tool("taxjson_sum_income", "--year", "2024", "--country",
+                 "canada", str(f))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("24.69", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

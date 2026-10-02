@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `taxjson-sum-income` reads its rows through the same checks as
+  taxjson-gains: an impossible date, a NaN/inf amount or a text amount is
+  a one-line error with exit 2 instead of being summed (or a traceback)
+  (A2-1448).
 - `.tt` files: a symbol with no market suffix (MSFT for MSFT.US) on a
   line of an account that is not `crypto = true` is now warned about in
   the run diagnostics like an unknown suffix — it is its own ACB pool and
