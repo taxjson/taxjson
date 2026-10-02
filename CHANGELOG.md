@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- `taxjson redact` and the generate-parser privacy gate no longer lose a
+  private-denylist pattern silently: a leading UTF-8 BOM is stripped,
+  and a denylist that is UTF-16, not UTF-8, unreadable or a directory
+  (at the default path too) stops the run with exit 2 and nothing
+  written (audit A2-0045, A2-0158, A2-0458, A2-0448).
+- `taxjson redact` covers more identity shapes: every Field Value of an
+  IB `Account Information` section except a safe list (Account Type,
+  Base Currency, ...), every value cell of a multi-cell address (CSV
+  and HTML, inline tags included), every `Label:` cell in a row
+  wherever it sits, uncoloned `SIN,` / `Phone,` / `Tax ID,` label
+  cells, holder / party labels and columns by pattern (Payee Name,
+  Recipient, Trustee, Legal Name ...; any other `X Name` column is
+  listed for REVIEW), French comma labels (`Nom du client,`), dotted
+  SINs and spaced / dotted SSNs, a US ZIP in its own cell, and
+  upper-case bech32 addresses. Account ids are matched
+  case-insensitively in the content and the file name, and a column
+  header row is no longer altered by the `Name,` line rule (audit
+  A2-0046, A2-0455, A2-0456, A2-0457, A2-0460, A2-0759, A2-0762,
+  A2-0763, A2-0764, A2-0765, A2-1386, A2-1389, A2-1390, A2-1391,
+  A2-0451, A2-0452).
+- `taxjson redact` shares transaction-id and wallet pseudonyms across
+  every file of one run, like account ids: two redacted Coinbase
+  exports no longer share an id (taxjson-sort --dedup dropped a real
+  trade) and a redacted Kraken trades + ledgers set still links each
+  trade to its ledger rows (audit A2-0454, A2-0766).
+- `taxjson redact --check` exits 1 when an account id appears only in
+  the file NAME (audit A2-0459); a truncated UTF-16 input is one
+  refusal line and the rest of the batch is still redacted (A2-1392).
+- `taxjson-generate-parser` no longer sends an account id from the
+  input's file name to the model API: the default brokerage, class and
+  DEFAULT_ACCOUNT names use a placeholder, and its messages mask the
+  file name (audit A2-0447).
+
 - Renames are dated events (owner decision, audit A2-0197). On its date
   a ticker change carries the position, the ACB / basis lots and the
   acquisition dates from the old symbol to the new one, and the
