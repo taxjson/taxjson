@@ -3,7 +3,6 @@ behaviour that held but that no test failed on when it was reverted.
 Each test names the finding and the mutant it kills. Every fixture is
 synthetic: invented tickers, ISINs and account ids (pii-ok)."""
 import io
-import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr
@@ -417,3 +416,93 @@ class TestPairCancellations(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+# ------------------------------------- A2-0886 / A2-1559 / A2-1560
+class TestCancelAndRebookOfAnEarlierStatementsRow(unittest.TestCase):
+    """IB cancels (Ca) a row of an EARLIER statement and rebooks it, in
+    the later statement, with the original's date: the later statement
+    holds the Ca and the rebook (both dated before its period), the
+    earlier one the original. The Ca cancels the earlier statement's
+    original; the rebook is booked. It used to pair with the rebook in
+    its own statement, and the cross-statement pass then dropped the
+    earlier original as an "overlapping copy": neither was booked."""
+
+    def setUp(self):
+        from test_fix_a2_ib import _stmt, _booked
+        self._stmt, self._booked = _stmt, _booked
+
+    def _y25(self, *sections):
+        return self._stmt('January 1, 2025', 'December 31, 2025', *sections)
+
+    def _y26(self, *sections):
+        return self._stmt('January 1, 2026', 'March 31, 2026', *sections)
+
+    @rule("CA-ACB-COMMREFUND")
+    def test_trade_rebook_is_booked_with_its_new_commission(self):
+        orig = _trade('QZQ', '2025-10-22, 10:00:00', 100, 20, -2000, comm=-9)
+        ca = _trade('QZQ', '2025-10-22, 10:00:00', -100, 20, 2000, comm=9,
+                    code='Ca')
+        rebook = _trade('QZQ', '2025-10-22, 10:00:00', 100, 20, -2000,
+                        comm=-0.5)
+        sale = _trade('QZQ', '2026-02-02, 10:00:00', -100, 25, 2500,
+                      comm=-1, code='C')
+        for later in ((ca, rebook, sale), (rebook, ca, sale)):
+            with self.subTest(order='ca first' if later[0] is ca
+                              else 'rebook first'):
+                rows, err = self._booked({
+                    'ib_2025.csv': self._y25(TRADES_H, orig),
+                    'ib_2026.csv': self._y26(TRADES_H, *later)})
+                buys = [(t['date'], t['quantity'], t['fee'])
+                        for t in rows if t['symbol'] == 'QZQ.US'
+                        and t['quantity'] > 0]
+                self.assertEqual(buys, [('2025-10-22', 100.0, 0.5)], err)
+                self.assertFalse([t for t in rows
+                                  if t.get('type') == TRADE_CANCEL_TYPE])
+
+    @rule("CA-ACB-04")
+    def test_cash_in_lieu_rebook_is_booked(self):
+        buy = _trade('QZT', '2025-01-10, 10:00:00', 100.5, 20, -2010)
+        when = '2025-11-05, 20:25:00'
+        cil = ('QZT(US0000000QT1) Cash in Lieu of Fractional Shares (QZT, '
+               'QZT CORP, US0000000QT1)')
+        a = self._y25(TRADES_H, buy, CA_H, _ca(cil, -0.5, value=10,
+                                               proceeds=10, when=when))
+        ca = _ca(cil, 0.5, value=-10, proceeds=-10, when=when, code='Ca')
+        rebook = _ca(cil, -0.5, value=12, proceeds=12, when=when)
+        for later in ((ca, rebook), (rebook, ca)):
+            with self.subTest(order='ca first' if later[0] is ca
+                              else 'rebook first'):
+                rows, err = self._booked({'ib_2025.csv': a,
+                                          'ib_2026.csv': self._y26(
+                                              CA_H, *later)})
+                sales = [(t['date'], t['quantity'], t['net_amount'])
+                         for t in rows if t['symbol'] == 'QZT.US'
+                         and t['quantity'] < 0]
+                self.assertEqual(sales, [('2025-11-05', -0.5, 12.0)], err)
+
+    def test_transfer_rebook_is_booked(self):
+        a = self._y25(XFER_H, _xfer('QZT', '2025-06-02', 100, 5000))
+        ca = _xfer('QZT', '2025-06-02', -100, -5000, code='Ca')
+        rebook = _xfer('QZT', '2025-06-02', 100, 5200)
+        for later in ((ca, rebook), (rebook, ca)):
+            with self.subTest(order='ca first' if later[0] is ca
+                              else 'rebook first'):
+                rows, err = self._booked(
+                    {'ib_2025.csv': a,
+                     'ib_2026.csv': self._y26(XFER_H, *later)},
+                    '--transfers')
+                legs = [(t['date'], t['quantity'], t['net_amount'])
+                        for t in rows if t['action'] == 'TRANSFER']
+                self.assertEqual(legs, [('2025-06-02', 100.0, 5200.0)], err)
+
+    def test_lone_later_statement_keeps_todays_pairing(self):
+        # No earlier statement: the Ca pairs with the row in its own
+        # statement, as before.
+        rows, err = self._booked({'ib_2026.csv': self._y26(
+            TRADES_H,
+            _trade('QZQ', '2025-10-22, 10:00:00', -100, 20, 2000, comm=9,
+                   code='Ca'),
+            _trade('QZQ', '2025-10-22, 10:00:00', 100, 20, -2000,
+                   comm=-0.5))})
+        self.assertFalse([t for t in rows if t['symbol'] == 'QZQ.US'], err)
