@@ -3305,7 +3305,7 @@ def _canada_spinoff_rollover_s_86_1(event: CorporateAction, option: str, hints: 
     # converts at the spin-off date's rate — which moves the FX drift
     # since purchase between the pools (audits S019-09, S072-15).
     cad = 'allocated_acb_cad' in (hints or {})
-    return _emit_allocated_basis_spinoff(
+    rows = _emit_allocated_basis_spinoff(
         event, hints,
         description_base=(
             f"Spinoff {event.source_symbol}→{event.target_symbol} "
@@ -3315,6 +3315,52 @@ def _canada_spinoff_rollover_s_86_1(event: CorporateAction, option: str, hints: 
                        if cad else None),
         alloc_cur='CAD' if cad else None,
     )
+    if cad:
+        rows = _cad_allocation_in_listing_currency(event, hints, rows)
+    return rows
+
+
+def _cad_allocation_in_listing_currency(event: CorporateAction,
+                                        hints: dict,
+                                        rows: List[dict]) -> List[dict]:
+    """Express the s.86.1(3) CAD allocation rows in each leg's listing
+    currency at the spin-off date's rate (the parent ADJUST in the
+    event's currency, the spun-off BUYSELL in the target's). The
+    conversion stage values a row at that same date's rate from the
+    same rates file, so the converted books get back exactly the CAD
+    figure the user entered, while the native-currency (raw) view of a
+    USD pool stays in one currency. Booking the rows in CAD on a USD
+    listing made the raw holdings pass abort `taxjson run` (A2-0002,
+    a regression of S072-15) or skip the holdings refresh with a false
+    'rollover rename' message (A2-0215, A2-0967). With no rate the rows
+    stay in CAD and the run skips only the native view, loudly."""
+    out = []
+    for r in rows:
+        cur = ((event.target_currency or event.currency)
+               if r['action'] == 'BUYSELL' else event.currency)
+        cur = (cur or 'CAD').upper()
+        if cur == 'CAD' or (r.get('currency') or '').upper() != 'CAD':
+            out.append(r)
+            continue
+        cad_amt = float(r.get('net_amount') or 0.0)
+        conv = _convert(hints, cad_amt, 'CAD', cur, event.date)
+        if conv is None:
+            print(f"warning: s.86.1 spin-off {event.source_symbol}→"
+                  f"{event.target_symbol} on {event.date}: no CAD->{cur} "
+                  f"rate available, so the {r['symbol']} row is booked in "
+                  f"CAD (the tax books are right; the native-currency "
+                  f"holdings view of that {cur} pool is skipped).",
+                  file=sys.stderr)
+            return rows
+        r = dict(r, currency=cur, net_amount=conv)
+        qty = float(r.get('quantity') or 0.0)
+        if r['action'] == 'BUYSELL' and qty:
+            r['price'] = conv / qty
+        r['description'] = (f"{r.get('description', '')} "
+                            f"[{abs(cad_amt):.2f} CAD allocated, booked "
+                            f"in {cur} at the {event.date} rate]")
+        out.append(r)
+    return out
 
 
 CANADA_SPINOFF = RuleSpec(

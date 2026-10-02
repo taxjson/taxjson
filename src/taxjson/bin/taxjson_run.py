@@ -1362,7 +1362,12 @@ def _raw_mixed_currency_symbols(raw_json: Path) -> List[str]:
         # refresh was skipped with a misleading "rollover rename"
         # message (R1-126). A rename's currency mix still shows through
         # the trades on either side of it (followed via `renames`).
-        if t.get("action") not in ("BUYSELL", "ASSIGN", "TRANSFER"):
+        # ADJUST rows carry money onto the pool too: a CAD-valued
+        # corporate-action ADJUST on a USD pool (an s.86.1 allocation
+        # with no rate to express it in USD) made the raw gains stage
+        # abort the whole run (A2-0002).
+        if t.get("action") not in ("BUYSELL", "ASSIGN", "TRANSFER",
+                                   "ADJUST"):
             continue
         c, sym = t.get("currency"), t.get("symbol")
         if c and sym:
@@ -2487,7 +2492,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # above are complete and authoritative.
             print(f"  !! raw holdings skipped for '{name}': "
                   f"{', '.join(mixed)} would pool mixed currencies "
-                  f"after a cross-currency rollover rename. "
+                  f"(a cross-currency rollover rename, or a corporate-"
+                  f"action row booked in another currency for lack of "
+                  f"a rate). "
                   f"{name}_holdings.toml was NOT refreshed this run.",
                   file=sys.stderr)
             # The native books of an EARLIER run (before the rollover

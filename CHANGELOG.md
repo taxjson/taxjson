@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **An s.86.1 election on a USD parent no longer stops `taxjson run`**
+  (A2-0002, a regression of S072-15; A2-0215, A2-0967): the CAD amount
+  given as `allocated_acb_cad` is booked in each listing's currency at
+  the spin-off date's rate, so the tax books get exactly that CAD figure
+  and the native holdings view stays in one currency. The raw-holdings
+  guard now also counts ADJUST rows, so a row it cannot convert skips the
+  native view instead of aborting the run.
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

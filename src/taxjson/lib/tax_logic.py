@@ -618,8 +618,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Cash for fractional shares is handled; other cash in a "
                  "merger is not modelled.", cont=True),
             Rule("CA-CORP-06",
-                 "Spin-offs: rollover_s_86_1 (ACB split between the two; "
-                 "file the s.86.1 election)"),
+                 "Spin-offs: rollover_s_86_1 (ACB split between the two "
+                 "by the CAD amount you enter, s.86.1(3), booked exactly "
+                 "even on a foreign listing; file the s.86.1 election)"),
             Rule("CA-CORP-07",
                  "or taxable_deemed_dividend (a dividend at FMV, which is "
                  "also the new shares' cost).", cont=True),
