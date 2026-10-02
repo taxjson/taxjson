@@ -564,11 +564,20 @@ def load_rates(path: Path) -> Dict[str, Dict[str, Tuple[float, str]]]:
     word; an unreadable rate is skipped with a warning; the FIRST row of
     a currency and date wins (the noon row, not today's spot row)."""
     out: Dict[str, Dict[str, Tuple[float, str]]] = {}
-    if not path.is_file():
+    if not path.exists() and not path.is_symlink():
         return out
+    # An unreadable rates file is one line naming it (re-audit A2-0790);
+    # a BOM no longer hides the first rate (A2-1411).
+    try:
+        if not path.is_file():
+            raise IsADirectoryError(0, "not a regular file")
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as e:
+        why = (e.strerror if isinstance(e, OSError) else None) or e
+        raise ValueError(f"cannot read the rates file {path} ({why}) — "
+                         f"re-run `taxjson run` to rebuild it.") from None
     bad: List[str] = []
-    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(),
-                             1):
+    for n, line in enumerate(text.splitlines(), 1):
         parts = line.split()
         if len(parts) < 5 or not re.match(r"^\d{4}-\d{2}-\d{2}$", parts[0]):
             continue

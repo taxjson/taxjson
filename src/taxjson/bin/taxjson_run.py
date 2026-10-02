@@ -14448,8 +14448,11 @@ def _fx_cash_doc(root: Path, cache: Path):
     if not found:
         sys.exit(f"taxjson fx-cash: no native transaction files in "
                  f"{cache} (run `taxjson run` first).")
-    fx = load_fx_history(cache / "to_base.csv", base)
-    ledger = FX.build_ledger(txs, base, fx, int(year), country=country)
+    try:      # an unreadable rates file, a futures refusal (A2-1424/1434)
+        fx = load_fx_history(cache / "to_base.csv", base)
+        ledger = FX.build_ledger(txs, base, fx, int(year), country=country)
+    except (OSError, ValueError) as e:
+        sys.exit(f"taxjson fx-cash: error: {e}")
     verdict = FX.apply_jurisdiction(ledger["net_gain"], country)
     return ledger, verdict, base, int(year), country
 

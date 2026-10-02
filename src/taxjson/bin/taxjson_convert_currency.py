@@ -16,7 +16,7 @@ from pathlib import Path
 from decimal import Decimal, InvalidOperation
 from typing import Dict, Optional
 
-from taxjson.lib.cli_diag import guard_main
+from taxjson.lib.cli_diag import InputReadError, guard_main
 from taxjson.lib.country import country_arg
 from datetime import datetime, timedelta
 
@@ -95,58 +95,77 @@ def load_exchange_rates(rates_file: Path, target_curr: str = None) -> Dict[str, 
     skipped_malformed = 0
     malformed_samples = []
     target_norm = norm_currency(target_curr)
-    if rates_file and rates_file.exists():
-        with rates_file.open("r", encoding="utf-8") as f:
-            for lineno, line in enumerate(f, 1):
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-                parts = stripped.split()
-                if len(parts) < 5 or not _RATE_DATE_RE.match(parts[0]):
-                    skipped_malformed += 1
-                    if len(malformed_samples) < 3:
-                        malformed_samples.append(f"line {lineno}: {stripped!r}")
-                    continue
-                date_str = parts[0]
-                from_curr = norm_currency(parts[2])
-                to_curr = norm_currency(parts[3])
-                if target_norm and to_curr != target_norm:
-                    skipped_to_mismatches += 1
-                    continue
-                try:
-                    rate = Decimal(parts[4])
-                except (InvalidOperation, ValueError):
-                    # Narrowed from a broad `except Exception: pass`.
-                    # A malformed rate column was being silently
-                    # dropped; track for a summary warning so a
-                    # corrupted rates file can't quietly leave dates
-                    # uncovered and force --default-rate fallback.
-                    skipped_malformed += 1
-                    if len(malformed_samples) < 3:
-                        malformed_samples.append(f"line {lineno}: {stripped!r}")
-                    continue
-                if not rate.is_finite() or rate <= 0:
-                    raise ValueError(
-                        f"rates file {rates_file}, line {lineno}: rate "
-                        f"{parts[4]!r} for {from_curr}->{to_curr} on "
-                        f"{date_str} is not a positive finite number — "
-                        f"refusing to convert money with it. Fix or "
-                        f"regenerate the rates file.")
-                if not _PLAIN_DECIMAL_RE.match(parts[4]):
-                    # '1_35' parses as 135 (S028-17): malformed, counted.
-                    skipped_malformed += 1
-                    if len(malformed_samples) < 3:
-                        malformed_samples.append(f"line {lineno}: {stripped!r}")
-                    continue
-                if from_curr not in history:
-                    history[from_curr] = {}
-                # FIRST row per (currency, date) wins: to_base_curr
-                # prints the forward-filled NOON row for every date,
-                # then appends an intra-day spot row for TODAY.
-                # Last-wins keying made today's conversions drift
-                # with the market between runs; first-wins pins the
-                # noon rate deterministically.
-                history[from_curr].setdefault(date_str, rate)
+    if rates_file and (rates_file.exists() or rates_file.is_symlink()):
+        # utf-8-sig: a BOM dropped line 1 as 'malformed' (re-audit
+        # A2-1411). An unreadable file (not UTF-8, a directory, no
+        # permission) is one line naming it, an InputReadError (exit 2
+        # under guard_main), never a codec traceback in fx-cash,
+        # harvest or crypto-sends (A2-0790 / A2-1434).
+        try:
+            if rates_file.is_dir():
+                raise IsADirectoryError(0, "is a directory")
+            text = rates_file.read_text(encoding="utf-8-sig")
+        except UnicodeDecodeError as e:
+            raise InputReadError(
+                f"cannot read the rates file {rates_file}: not UTF-8 text "
+                f"(byte 0x{e.object[e.start]:02x} at offset {e.start}) — "
+                f"fix it, or re-run `taxjson run` to rebuild "
+                f"work/to_base.csv") from None
+        except OSError as e:
+            raise InputReadError(
+                f"cannot read the rates file {rates_file}: "
+                f"{e.strerror or e} — fix it, or re-run `taxjson run` to "
+                f"rebuild work/to_base.csv") from None
+        for lineno, line in enumerate(text.splitlines(), 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            parts = stripped.split()
+            if len(parts) < 5 or not _RATE_DATE_RE.match(parts[0]):
+                skipped_malformed += 1
+                if len(malformed_samples) < 3:
+                    malformed_samples.append(f"line {lineno}: {stripped!r}")
+                continue
+            date_str = parts[0]
+            from_curr = norm_currency(parts[2])
+            to_curr = norm_currency(parts[3])
+            if target_norm and to_curr != target_norm:
+                skipped_to_mismatches += 1
+                continue
+            try:
+                rate = Decimal(parts[4])
+            except (InvalidOperation, ValueError):
+                # Narrowed from a broad `except Exception: pass`.
+                # A malformed rate column was being silently
+                # dropped; track for a summary warning so a
+                # corrupted rates file can't quietly leave dates
+                # uncovered and force --default-rate fallback.
+                skipped_malformed += 1
+                if len(malformed_samples) < 3:
+                    malformed_samples.append(f"line {lineno}: {stripped!r}")
+                continue
+            if not rate.is_finite() or rate <= 0:
+                raise ValueError(
+                    f"rates file {rates_file}, line {lineno}: rate "
+                    f"{parts[4]!r} for {from_curr}->{to_curr} on "
+                    f"{date_str} is not a positive finite number — "
+                    f"refusing to convert money with it. Fix or "
+                    f"regenerate the rates file.")
+            if not _PLAIN_DECIMAL_RE.match(parts[4]):
+                # '1_35' parses as 135 (S028-17): malformed, counted.
+                skipped_malformed += 1
+                if len(malformed_samples) < 3:
+                    malformed_samples.append(f"line {lineno}: {stripped!r}")
+                continue
+            if from_curr not in history:
+                history[from_curr] = {}
+            # FIRST row per (currency, date) wins: to_base_curr
+            # prints the forward-filled NOON row for every date,
+            # then appends an intra-day spot row for TODAY.
+            # Last-wins keying made today's conversions drift
+            # with the market between runs; first-wins pins the
+            # noon rate deterministically.
+            history[from_curr].setdefault(date_str, rate)
     if skipped_to_mismatches > 0:
         print(
             f"warning: skipped {skipped_to_mismatches} FX rate row(s) where the TO "
@@ -177,7 +196,7 @@ def load_rate_sources(rates_file: Path, target_curr: str = None) -> Dict[str, Di
     if not rates_file or not Path(rates_file).exists():
         return out
     try:
-        with Path(rates_file).open("r", encoding="utf-8") as f:
+        with Path(rates_file).open("r", encoding="utf-8-sig") as f:
             for line in f:
                 parts = line.split()
                 if len(parts) < 6 or parts[0].startswith("#") \
@@ -187,7 +206,7 @@ def load_rate_sources(rates_file: Path, target_curr: str = None) -> Dict[str, Di
                     continue
                 out.setdefault(norm_currency(parts[2]), {}).setdefault(
                     parts[0], parts[5].lower())
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return {}
     return out
 
@@ -541,6 +560,14 @@ def main():
 
     reset_fallback_tally()
 
+    if args.rates and not Path(args.rates).exists():
+        # A named --rates file that does not exist was ignored: every row
+        # then took --default-rate, or the error blamed the file's
+        # content (re-audit A2-1437).
+        print(f"taxjson-convert-currency: error: no such file: --rates "
+              f"{args.rates}",
+              file=sys.stderr)
+        sys.exit(2)
     try:
         history = load_exchange_rates(
             Path(args.rates) if args.rates else None,
