@@ -166,6 +166,17 @@ def basis_pooled_across_accounts(country: str) -> bool:
     return BASIS_POOLED_ACROSS_ACCOUNTS[canonical_country(country)]
 
 
+# Whether a stock dividend's new shares are an acquisition for the loss
+# window: Canada counts them for s.54 ($0 cost, CA-STKDIV-01); in the US
+# they are not acquired by purchase, so never a §1091 replacement
+# (US-STKDIV-01).
+STOCK_DIVIDEND_IN_LOSS_WINDOW = {CANADA: True, USA: False}
+
+
+def stock_dividend_in_loss_window(country: str) -> bool:
+    return STOCK_DIVIDEND_IN_LOSS_WINDOW[canonical_country(country)]
+
+
 def default_tax_date(country: str) -> str:
     """CRA dates a disposition by settlement, the IRS by trade date."""
     return DEFAULT_TAX_DATE[canonical_country(country)]

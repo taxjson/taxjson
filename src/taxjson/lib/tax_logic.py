@@ -1562,8 +1562,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "wash-sale verdict turns on a boundary, the window on "
                  "trade dates whatever tax_date says; with no still-held "
                  "test, a sale near day 30 decides nothing, a long call "
-                 "is listed as a warning only, and crypto has no "
-                 "window."),
+                 "is listed as a warning only, a stock dividend is not a "
+                 "purchase (never an in-window acquisition), and crypto "
+                 "has no window."),
             Rule("US-RPT-09",
                  "`taxjson checklist`'s slip step names Form 1099-B for "
                  "securities and, from tax year 2025, Form 1099-DA for a "

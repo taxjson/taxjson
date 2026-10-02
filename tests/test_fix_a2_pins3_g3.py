@@ -221,5 +221,43 @@ class TestEdgeCasesDay30(unittest.TestCase):
         self.assertEqual([(i["day"], i["option"]) for i in row["items"]],
                          [(30, "GHI260116C00010000.TO")])
 
+
+class TestEdgeCasesStockDividend(unittest.TestCase):
+    """A2-1547 (a real bug, fixed): a US stock dividend is not a
+    purchase (US-STKDIV-01), so edge-cases no longer lists it as an
+    in-window acquisition the engine ignores; Canada still lists it
+    (CA-STKDIV-01: an acquisition at $0 that counts for s.54). Gate:
+    country.stock_dividend_in_loss_window."""
+
+    ROWS = [
+        _etx("margin", "BUYSELL", "2025-01-02", "2025-01-03", "XYZ.US", 200),
+        _etx("margin", "BUYSELL", "2025-05-20", "2025-05-21", "XYZ.US", -100),
+        _etx("margin", "BUYSELL", "2025-06-18", "2025-06-18", "XYZ.US", 10,
+             typ="stock_dividend"),
+    ]
+    GAINS = [_egain("margin", "2025-05-20", "2025-05-21", "XYZ.US", 100,
+                    -1000.0)]
+
+    def _items(self, country):
+        td, root, cfg = _edge_project(self.ROWS, self.GAINS, country)
+        with td:
+            doc = edge_analyze(root, cfg)
+        return [i for r in doc["window_edges"] for i in r["items"]]
+
+    @rule("US-RPT-05", "US-STKDIV-01")
+    @rule_absent("CA-STKDIV-01", country="usa")
+    @rule("CA-STKDIV-01", "CA-RPT-07")
+    def test_stock_dividend_window_item_by_country(self):
+        self.assertEqual(self._items("usa"), [])
+        ca = self._items("canada")
+        self.assertEqual([(i["kind"], i["day"], i["inside"]) for i in ca],
+                         [("acquisition", 28, True)])
+
+    def test_country_table(self):
+        from taxjson.lib.country import stock_dividend_in_loss_window
+        self.assertTrue(stock_dividend_in_loss_window("canada"))
+        self.assertFalse(stock_dividend_in_loss_window("usa"))
+
+
 if __name__ == "__main__":
     unittest.main()
