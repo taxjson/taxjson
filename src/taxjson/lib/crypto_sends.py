@@ -1380,7 +1380,7 @@ def render_tt(account: str, entries: List[Dict[str, Any]],
     if any(e.get("network_fee") for e in entries):
         why += ["# A `-fee` line is the network fee hidden in a send that "
                 "arrived short on",
-                "# another of your exchanges: the coins that did not "
+                "# another of your crypto accounts: the coins that did not "
                 "arrive paid for a service,",
                 "# a sale at fair value (as a Kraken withdrawal fee "
                 "paid in the coin is)."]
