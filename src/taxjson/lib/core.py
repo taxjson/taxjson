@@ -5437,15 +5437,30 @@ class USATaxRules(TaxRules):
                             f"sh | spread over {len(_lots)} lot(s), "
                             f"{_held:.4f} sh held")
                     continue
+                # Held before and sold out by the pay date (sold between
+                # the record and pay dates): the history is complete, the
+                # §307 share belongs to the sold lots (audit A2-0562). Never
+                # a wash-sale replacement (US-STKDIV-01, A2-0205).
+                _sold_out = any(
+                    _p is not tx and _p.symbol == tx.symbol
+                    and _p.account == tx.account
+                    and _p.action in ('BUYSELL', 'ASSIGN')
+                    and _p.quantity < 0
+                    and (_p.date, _p.time or '') <= (tx.date,
+                                                     tx.time or '')
+                    for _p in taxable_sorted)
                 _note(tx.date,
                       f"warning: {symbol}: stock dividend of "
                       f"{tx.quantity:g} share(s) on {tx.date} with no "
                       f"shares held — booked as a $0 purchase (not a "
-                      f"wash-sale replacement). If the shares were sold "
-                      f"before it was paid, the sold shares' basis should "
-                      f"have been spread over old and new (§307): adjust "
-                      f"it by hand; otherwise add the missing purchase "
-                      f"history.")
+                      f"wash-sale replacement); "
+                      + ("the shares were disposed of before the pay "
+                         "date, so the §307 basis allocation reaches the "
+                         "SOLD lots: adjust their basis and this lot's by "
+                         "hand (.tt ADJUST rows)."
+                         if _sold_out else
+                         "add the missing purchase history so it can "
+                         "share their basis (§307)."))
 
             tx_qty_abs = abs(tx.quantity)
             # A BUY's cost is a magnitude (parsers spell it either sign);

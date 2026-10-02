@@ -142,9 +142,10 @@ def moment_rank(t: dict) -> int:
 def balance_on(transactions: List[dict], symbol: str, date: str,
                date_basis: str = "settle") -> float:
     """Shares of `symbol` held at end of `date`, from the book's own
-    rows: position deltas summed, SPLIT ratios applied, renames
-    (symbol_new) followed — so a map row keyed to the CURRENT ticker
-    finds shares bought under a pre-rename one.
+    rows: position deltas summed per account and raw symbol, each SPLIT
+    applied to its own symbol's shares, renames (symbol_new) moving
+    them — so a map row keyed to the CURRENT ticker finds shares bought
+    under a pre-rename one, and only those.
 
     `date_basis` picks which date a row moves the balance on. Fund
     record dates go by the holder of record — the SETTLED position —
@@ -157,16 +158,6 @@ def balance_on(transactions: List[dict], symbol: str, date: str,
     if date_basis not in DATE_BASES:
         raise ValueError(f"date_basis must be one of {DATE_BASES}, "
                          f"got {date_basis!r}")
-    aliases = {symbol}
-    changed = True
-    while changed:                      # follow rename chains backwards
-        changed = False
-        for t in transactions:
-            new = (t.get("symbol_new") or "").strip()
-            if (t.get("action") == "SPLIT" and new in aliases
-                    and t.get("symbol") not in aliases):
-                aliases.add(t["symbol"])
-                changed = True
     # A trade executed BEFORE a split but settling AFTER it: the engine
     # re-denominates its quantity into post-split shares (core.py, the
     # settle-lag re-denomination), because under settle ordering the
@@ -175,40 +166,66 @@ def balance_on(transactions: List[dict], symbol: str, date: str,
     # shares sized an ADJUST where the engine held 1000).
     factor = _settle_lag_factors(transactions) \
         if date_basis == "settle" else {}
-    bal = 0.0
+    # Order like the Canada balance walk (corporate_timeline 'ca_balance'
+    # profile, tax-logic CA-DATE-14): at one sort date an opening balance
+    # or a settle-lagged execution first, then a split (effective at the
+    # open), then the day's own trades — whatever the export's row order
+    # (audit A2-0225: a buy listed before a same-stamp SPLIT was scaled
+    # by it).
+    def _phase(t: dict) -> int:
+        act = t.get("action")
+        if act == "OPENING_BALANCE":
+            return 0
+        if act == "SPLIT":
+            return 1
+        d = str(t.get("date") or "")
+        return 0 if d and d < _row_date(t, date_basis) else 2
     rows = sorted(transactions,
-                  key=lambda t: (_row_date(t, date_basis),
-                                 str(t.get("date") or ""),
-                                 moment_rank(t),
+                  key=lambda t: (_row_date(t, date_basis), _phase(t),
                                  str(t.get("time") or "")))
     # One corporate event = one application: an account fed by two
     # brokers carries the same SPLIT once per broker CSV (distinct ids,
     # so upstream dedup keeps both). The gains engine dedupes these per
     # corporate event; without the same dedup here, the blended
     # per-account split apportioned DOUBLED quantities (2026-09 audit).
-    from taxjson.lib.corporate_timeline import split_seen
+    from taxjson.lib.corporate_timeline import (normalize_symbol_new,
+                                                split_seen)
     _seen_splits = set()
+    # Shares per (account, raw symbol), the way the engine walk holds
+    # them: a SPLIT scales and moves only the shares of ITS symbol (in
+    # its account), so shares already held under a rename's target are
+    # not scaled by the rename's ratio (audit A2-0021), an old ticker
+    # traded again after its rename stays its own holding (A2-0074),
+    # and one account's copy of a split never scales another account's
+    # shares (A2-0986).
+    held: dict = {}
     for t in rows:
         if _row_date(t, date_basis) > date:
             break
-        if t.get("symbol") not in aliases:
-            continue
+        sym = str(t.get("symbol") or "")
+        acct = str(t.get("account") or "")
         act = t.get("action")
         if act in ("BUYSELL", "ASSIGN", "OPENING_BALANCE", "TRANSFER"):
-            bal += float(t.get("quantity") or 0.0) * factor.get(id(t), 1.0)
+            held[(acct, sym)] = held.get((acct, sym), 0.0) + (
+                float(t.get("quantity") or 0.0) * factor.get(id(t), 1.0))
         elif act == "SPLIT":
             ratio = float(t.get("quantity") or 0.0)
             if not ratio:
                 continue
             # split_seen: the same split booked on two dates by two
             # brokers (within a week) is still ONE event.
-            if split_seen(_seen_splits, str(t.get("symbol") or ""),
+            if split_seen(_seen_splits, sym,
                           str(t.get("date") or ""), ratio,
                           t.get("symbol_new") or "",
-                          account=str(t.get("account") or "")) is not None:
+                          account=acct) is not None:
                 continue
-            bal *= ratio
-    return bal
+            target = normalize_symbol_new(sym, t.get("symbol_new")) or sym
+            for key in [k for k in held
+                        if k[1] == sym and (not acct or k[0] == acct)]:
+                moved = held.pop(key) * ratio
+                held[(key[0], target)] = held.get((key[0], target),
+                                                  0.0) + moved
+    return sum(q for (_a, s), q in held.items() if s == symbol)
 
 
 def _settle_lag_factors(transactions: List[dict]) -> dict:
@@ -275,6 +292,83 @@ def resolve_live_symbol(transactions: List[dict], symbol: str,
     return cur
 
 
+def _stamp_date(txs: List[dict], symbol: str, record_date: str,
+                account: str) -> str:
+    """The trade date to stamp a map ADJUST with. Sized on the settled
+    position (the holder of record), it must also reach exactly those
+    lots in a trade-date-ordered engine (the US, or tax_date = trade):
+    a trade executed on or before the record date that settles AFTER it
+    is not the record holder's, so the ADJUST goes at the end of the day
+    BEFORE the earliest such trade (audit A2-0071: a sale traded on the
+    record date dropped the ADJUST as 'no open lots'; A2-0988: a buy
+    traded on the record date shared it). The settle date stays the
+    record date, so settle-ordered books are unchanged."""
+    straddle = [str(t.get("date") or "") for t in txs
+                if t.get("symbol") == symbol
+                and t.get("action") in ("BUYSELL", "ASSIGN", "TRANSFER")
+                and (not account or not t.get("account")
+                     or str(t.get("account")) == str(account))
+                and str(t.get("date") or "") <= record_date
+                < str(t.get("date_settle") or "")]
+    if not straddle:
+        return record_date
+    first = _dt.date.fromisoformat(min(straddle))
+    return (first - _dt.timedelta(days=1)).isoformat()
+
+
+def _warn_roc_overlaps(txs: List[dict], symbol: str, key: str,
+                       date: str, account: str, amount: float,
+                       country: Optional[str]) -> None:
+    """A map return of capital the book may already carry, or whose cash
+    is still counted as income:
+
+    - the broker's own ROC (an ADJUST of type 'roc', or a .tt ADJUST)
+      dated on the map date — its pay date or its printed record date:
+      both lower the cost, so the ACB is cut twice (audit A2-0072; the
+      R1-163 check compared raw dates only, and only in roc-sum);
+    - a DIVIDEND row of the same distribution (paid within 60 days of
+      the record date): the cash stays in dividend income while the map
+      row lowers the cost, so the same dollars count twice (A2-0232)."""
+    def _acct_ok(t: dict) -> bool:
+        return (not account or not t.get("account")
+                or str(t.get("account")) == str(account))
+    for t in txs:
+        if (t.get("action") != "ADJUST" or t.get("symbol") != symbol
+                or str(t.get("id") or "").startswith("DIST-")
+                or float(t.get("net_amount") or 0.0) >= 0
+                or not _acct_ok(t)):
+            continue
+        dates = {str(t.get("date") or ""), str(t.get("record_date") or "")}
+        if date in dates:
+            print(f"{PROG}: warning: distributions.map {key} {date}: the "
+                  f"book already has a return-of-capital ADJUST of "
+                  f"{float(t.get('net_amount') or 0.0):.2f} on {symbol} "
+                  f"(dated {t.get('date')}"
+                  + (f", record date {t.get('record_date')}"
+                     if t.get("record_date") else "")
+                  + ") — if both are the same distribution the cost is "
+                  f"reduced TWICE. Delete the map line (or the .tt "
+                  f"ADJUST).", file=sys.stderr)
+    try:
+        lo = _dt.date.fromisoformat(date)
+    except ValueError:
+        return
+    hi = (lo + _dt.timedelta(days=60)).isoformat()
+    divs = [t for t in txs
+            if t.get("action") == "DIVIDEND" and t.get("symbol") == symbol
+            and _acct_ok(t) and date <= str(t.get("date") or "") <= hi]
+    slip = ("the T3 box 42" if country != "usa"
+            else "Form 1099-DIV box 3")
+    if divs:
+        d = min(divs, key=lambda t: str(t.get("date") or ""))
+        print(f"{PROG}: warning: distributions.map {key} {date}: the "
+              f"return of capital ({amount:+.2f}) lowers the cost, but the "
+              f"cash of the distribution paid {d.get('date')} is booked as "
+              f"a DIVIDEND row and still counted IN FULL as income by "
+              f"taxjson (divs-sum, the estimate). Report income from the "
+              f"slip ({slip} part is not income).", file=sys.stderr)
+
+
 def _phantom_openings(txs: List[dict], phantoms) -> List[dict]:
     """The OPENING_BALANCE rows the gains stage will synthesize from
     phantoms.json for this book — the SAME synthesize_openings call, so
@@ -334,7 +428,15 @@ def apply_distributions(doc: dict, map_rows, account: str,
         if renames:
             from taxjson.bin.taxjson_ticker_map import map_symbol
             sym = map_symbol(sym, renames)
-        sym = resolve_live_symbol(sizing, sym, date)
+        live = resolve_live_symbol(sizing, sym, date)
+        # A key that still holds shares under its own name on the record
+        # date is that holding — a ticker reused after its rename (FB
+        # bought again after FB -> META) is not the renamed pool (audit
+        # A2-0074).
+        if live != sym and balance_on(sizing, sym, date,
+                                      date_basis) > 1e-9:
+            live = sym
+        sym = live
         via = f" (as {sym})" if sym != key else ""
         bal = balance_on(sizing, sym, date, date_basis)
         if bal <= 1e-9:
@@ -355,9 +457,10 @@ def apply_distributions(doc: dict, map_rows, account: str,
             rid = f"DIST-{sym}-{date}-{account}-{n}"
             n += 1
         used_ids.add(rid)
+        adj_date = _stamp_date(txs, sym, date, account)
         txs.append({
             "action": "ADJUST",
-            "date": date, "time": "23:59:58", "date_settle": date,
+            "date": adj_date, "time": "23:59:58", "date_settle": date,
             "symbol": sym, "quantity": 0.0,
             "currency": doc.get("metadata", {}).get("target_currency", ""),
             "net_amount": amount, "gross_amount": 0.0,
@@ -375,6 +478,9 @@ def apply_distributions(doc: dict, map_rows, account: str,
                   f"{_INCOME_SLIP[country]} — it is not counted as income "
                   f"by taxjson (estimate, divs-sum)." if per_share > 0
                   else "")
+        if per_share < 0:
+            _warn_roc_overlaps(txs, sym, key, date, account, amount,
+                               country)
         print(f"NOTE: {key}{via} {date}: {kind} — {bal:g} sh x "
               f"{per_share:g} = {amount:+.2f} "
               f"{'basis' if country == 'usa' else 'ACB'} "

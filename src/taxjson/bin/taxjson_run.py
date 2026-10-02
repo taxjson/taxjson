@@ -1362,10 +1362,12 @@ def _raw_mixed_currency_symbols(raw_json: Path) -> List[str]:
         # refresh was skipped with a misleading "rollover rename"
         # message (R1-126). A rename's currency mix still shows through
         # the trades on either side of it (followed via `renames`).
-        # ADJUST / DISALLOW rows move the pool too: one left in another
-        # currency (a USD return of capital on a CAD listing that
-        # _raw_align_adjust_currency could not price) would stop the
-        # native gains pass (A2-0055/0191/0204).
+        # ADJUST / DISALLOW rows carry money onto the pool too: a
+        # CAD-valued corporate-action ADJUST on a USD pool (an s.86.1
+        # allocation with no rate to express it in USD — A2-0002), or a
+        # USD return of capital on a CAD listing that
+        # _raw_align_adjust_currency could not price (A2-0055/0191/0204),
+        # would stop the native gains pass.
         if t.get("action") not in ("BUYSELL", "ASSIGN", "TRANSFER",
                                    "ADJUST", "DISALLOW"):
             continue
@@ -1565,8 +1567,16 @@ def _resolve_manifest(acct_dir: Path, cache: Path, name: str,
         return user_manifest
     if legacy.exists():
         acct_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        user_manifest.write_text(legacy.read_text(encoding="utf-8"),
-                                 encoding="utf-8")
+        # Atomic (tmp + replace, as Manifest.save writes): a failed write
+        # left a truncated canonical manifest that then won over the
+        # intact legacy copy on every later run (A2-0218).
+        tmp = user_manifest.with_name(user_manifest.name + ".part")
+        try:
+            tmp.write_text(legacy.read_text(encoding="utf-8"),
+                           encoding="utf-8")
+            tmp.replace(user_manifest)
+        finally:
+            tmp.unlink(missing_ok=True)
         print(f"  migrated elections manifest → {user_manifest} "
               f"(version-control this file; the work/ copy is no longer "
               f"read once this exists)")
@@ -1874,6 +1884,18 @@ _PROJECT_ROOT_INPUTS = ("ticker.map", "ticker_extraction_overrides.txt",
                         "crypto_ticker.map")
 
 
+def _is_empty_manifest(path: Path) -> bool:
+    """An elections manifest with no elections — the file the corp stage
+    creates on an account's first run — is the same as none, so its
+    appearance does not invalidate the --fast cache."""
+    import json as _json
+    try:
+        return _json.loads(path.read_text(encoding="utf-8")) == {
+            "elections": {}}
+    except (OSError, ValueError):
+        return False
+
+
 def _unreadable_project_inputs(root: Path) -> List[str]:
     """Project-root input names that exist as a symlink whose target is
     missing (or loops), or as a directory — never "absent" (A2-0313)."""
@@ -2043,7 +2065,16 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         + [_c.with_name(_c.name + ".toml")
            for _c in _generic_files(grouped)]
         + [acct_dir / "generic.toml"]
-        + [inputs_dir.parent / _m for _m in _PROJECT_ROOT_INPUTS])
+        + [inputs_dir.parent / _m for _m in _PROJECT_ROOT_INPUTS]
+        # The elections manifest (and its legacy work/ copy), a crypto
+        # account's sends.json and taxjson.toml itself change the books
+        # too: restored with an older mtime they kept the previous
+        # election / setting under --fast (A2-0224, A2-0985, A2-1229).
+        + [_m for _m in (acct_dir / "manifest.json",
+                         cache / f"{name}_manifest.json")
+           if not _is_empty_manifest(_m)]
+        + [acct_dir / "sends.json"]
+        + ([_CONFIG_PATH] if _CONFIG_PATH is not None else []))
     if (not _fp_file.exists()
             or _fp_file.read_text(encoding="utf-8") != _fp_txt):
         _fp_file.write_text(_fp_txt, encoding="utf-8")
@@ -2236,6 +2267,18 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # while the real position stayed put (S004-00).
             _apply_override_log(out, cache / f"{name}_{broker}.overrides",
                                 name)
+            # The corp stage's own UNBOOKED lines (a Questrade DIS chain
+            # that nets a removal, a lapse it cannot book) follow the
+            # parse stage's contract: echoed on every run, refused by
+            # --strict. They used to reach only the .diag and the .sum
+            # (A2-0211, the S015-02 twin).
+            for _ln in unbooked_lines(out):
+                print(f"  {_ln}")
+            if strict and unbooked_lines(out):
+                sys.exit(f"taxjson run --strict: {name}: {broker} "
+                         f"corporate actions hold event(s) taxjson could "
+                         f"not book (UNBOOKED warning above / in "
+                         f"{out.name}.diag) — aborting.")
             corp_files.append(out)
         _warn_zero_value_spinoffs(name, is_taxable, corp_files, cache)
 
@@ -2523,6 +2566,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # not — a row booked once (or twice) on a guess must not scroll by.
     echo_attention_lines(cache / f"{name}_sorted.json" if is_crypto
                          else base_json, prefix="dedup: ")
+    # A split booked twice with a rounded ratio (A2-0070): one event,
+    # applied once — on the console, so the manual line gets deleted.
+    if not is_crypto:
+        echo_attention_lines(base_json, prefix="split: ")
 
     # 5. gains
     gains_json = cache / f"{name}_gains.json"
@@ -2557,6 +2604,11 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # the user must report by hand — on the console every run, cached or
     # not, not only in the .sum (audit A2-0199).
     echo_attention_lines(gains_json, prefix="unapplied basis adjustment: ")
+    # Income a record date moves across a year end, or an implausible
+    # record date (lib/income_dating): on the console every run, cached
+    # or not — one project year leaves that income out (audit A2-0073,
+    # A2-0229).
+    echo_attention_lines(gains_json, prefix="income year: ")
     # A phantoms.json entry on a broker-marked real short or a written
     # option is applied, but its ATTENTION line used to reach only the
     # .sum DIAGNOSTICS (audit A2-0637 / A2-0639): echoed every run.
@@ -2603,8 +2655,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             print(f"  !! raw holdings skipped for '{name}': "
                   f"{', '.join(mixed)} would pool mixed currencies "
                   f"(a cross-currency rollover rename, or a cost "
-                  f"adjustment in another currency with no exchange "
-                  f"rate on file). "
+                  f"adjustment or corporate-action row in another "
+                  f"currency with no exchange rate on file). "
                   f"{name}_holdings.toml was NOT refreshed this run.",
                   file=sys.stderr)
             # The native books of an EARLIER run (before the rollover
@@ -3070,12 +3122,22 @@ def _blend_conservation_gaps(blended_doc: Dict[str, Any],
     out: List[str] = []
     for sym, total in sorted(blended_inv.items()):
         got = split_sums.get(sym, 0.0)
-        if abs(total - got) > 1e-4:
+        # Name the direction (audit A2-0021/A2-0074: an EXCESS was
+        # reported as 'only ... under-report' and blamed on phantoms).
+        if total - got > 1e-4:
             out.append(f"blended {sym} holds {total:g} but the per-account "
-                       f"split accounts for only {got:g} — the difference "
-                       f"is likely phantom (phantoms.json) shares, which "
-                       f"the split cannot attribute to an account. "
-                       f"Per-account holdings under-report by the gap.")
+                       f"split accounts for only {got:g} — "
+                       f"{total - got:g} short. Shares from phantoms.json "
+                       f"cannot be attributed to an account; otherwise a "
+                       f"rename or split of {sym} is read differently by "
+                       f"the per-account walk. Per-account holdings "
+                       f"under-report by the gap.")
+        elif got - total > 1e-4:
+            out.append(f"blended {sym} holds {total:g} but the per-account "
+                       f"split accounts for {got:g} — {got - total:g} MORE "
+                       f"than the pool. Check the renames and splits of "
+                       f"{sym} (and any ticker reused after a rename). "
+                       f"Per-account holdings over-report by the excess.")
     return out
 
 
@@ -4625,6 +4687,20 @@ def cmd_elect(args: argparse.Namespace) -> None:
     # Any failure or Ctrl-C mid-prompt RESTORES the pre-clear manifest —
     # elections are the one non-rebuildable user artifact (REVIEW #4).
     grouped = group_inputs(acct_dir)
+    # The same valuation inputs `taxjson run` passes (event-date rates,
+    # base currency, ticker.map): without them a cross-currency merger's
+    # new shares were booked in the wrong currency, and a following
+    # `run --fast` kept that corp file (A2-0981, A2-0982).
+    _redo_corp_flags: List[str] = []
+    _rates = cache / "to_base.csv"
+    if _rates.exists():
+        _redo_corp_flags += ["--rates", str(_rates)]
+    _base_cur = (cfg.get("settings") or {}).get("base_currency")
+    if _base_cur:
+        _redo_corp_flags += ["--base-currency", str(_base_cur)]
+    _tmap = root / "ticker.map"
+    if _tmap.exists():
+        _redo_corp_flags += ["--ticker-map", str(_tmap)]
     ran = False
     try:
         for broker, csvs in grouped.items():
@@ -4634,7 +4710,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
             cmd = _cmd("taxjson-corp-actions") + [
                 "--account-name", name, "--country", country,
                 "--brokerage", broker, "--manifest", str(manifest_path),
-            ] + [str(p) for p in csvs]
+            ] + _redo_corp_flags + [str(p) for p in csvs]
             run_to_file(cmd, out, interactive=True)
             ran = True
     except (subprocess.CalledProcessError, KeyboardInterrupt):
@@ -4852,13 +4928,21 @@ def _tx_display_line(tx: dict, settle: bool = False) -> Optional[str]:
     if action in ("BUYSELL", "ASSIGN"):
         return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)} {money(fee)}"
     if action == "TRANSFER":
-        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)}"
+        # The opt-in DECLARED token rides along as in tx_to_tt_line, or a
+        # re-import loses the declaration (audit A2-0989).
+        from taxjson.lib.pipeline import MANUAL_TRANSFER_DECLARATION
+        decl = (" DECLARED" if tx.get("description")
+                == MANUAL_TRANSFER_DECLARATION else "")
+        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)}{decl}"
     if action == "SPLIT":
         return f"SPLIT {date} {time} {sym} {tx.get('symbol_new') or sym} {sig(qty)}"
     if action in ("DIVIDEND", "DIVIDEND_IN_LIEU", "TAX"):
         # Signed so a reversal row reads as negative instead of masquerading
         # as more income/tax.
-        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(gross)}"
+        # The withholding-NETTED 9th column, as tx_to_tt_line writes it:
+        # without it the line re-parses net as gross (audit A2-0989).
+        net9 = f" {money(net)}" if abs(net - gross) > 0.005 else ""
+        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(gross)}{net9}"
     if action in ("INTEREST", "FEE"):
         return f"{action} {date} {time} {cur} {money(net)}"
     if action in ("ADJUST", "DISALLOW"):
@@ -6397,7 +6481,11 @@ def _dist_adjust_rows(cache: Path, accounts, keep) -> List[Tuple[str, dict]]:
                   else doc) or []:
             if (t.get("action") == "ADJUST"
                     and (t.get("type") or "").lower() == "dist"):
-                d = t.get("date") or ""
+                # The map's own date (the record date) is date_settle:
+                # the trade-date stamp can sit a day earlier so a
+                # trade-ordered engine reaches the record holder's lots
+                # (audit A2-0071).
+                d = t.get("date_settle") or t.get("date") or ""
                 if _ISO_DATE_RE.match(d) and keep(d):
                     out.append((acct, t))
     return out
@@ -6513,7 +6601,10 @@ def _box18_fractions(root: Path, rules=None
     taxable accounts."""
     from taxjson.lib.cg_dividends import (MAP_NAME, CgDividendMapError,
                                           allocate, load_map)
-    if not (root / MAP_NAME).is_file():
+    # lexists: a directory or dangling symlink is refused by load_map,
+    # not taken as "no map" (audit A2-0994).
+    import os as _os
+    if not _os.path.lexists(root / MAP_NAME):
         return None
     settings = _soft_settings(root)
     country = _country(settings)
@@ -6828,14 +6919,35 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
     if _acct_arg:
         _accts = [_acct_arg]
     dist_rows = _dist_adjust_rows(_root / "work", _accts, _keep)
-    # The same ROC entered as a .tt ADJUST AND in distributions.map
-    # reduces the ACB twice — say so (audit R1-163).
-    _manual_keys = {(a, str(t.get("symbol") or ""), t.get("date"))
-                    for a, t in rows}
-    for a, t in dist_rows:
-        if (a, str(t.get("symbol") or ""), t.get("date")) in _manual_keys:
+    # The same ROC entered as a .tt ADJUST (or booked by the broker) AND
+    # in distributions.map reduces the ACB twice — say so (audit
+    # R1-163). Matched over ALL rows, not the window's: the broker row
+    # is windowed on its record date and the map row on its own date,
+    # so a pair straddling the year end never met (audit A2-0072). The
+    # map date may be either the pay date or the printed record date.
+    _all_native: List[Tuple[str, dict]] = []
+    for _a in _accts:
+        _nf = _native_tx_file(_root / "work", _a)
+        if _nf is None:
+            continue
+        _all_native += [(_a, t) for t in
+                        (_load_json_or_die(_nf).get("transactions") or [])
+                        if t.get("action") == "ADJUST"]
+    _all_dist = _dist_adjust_rows(_root / "work", _accts, lambda _d: True)
+    _book_keys: Dict[Tuple[str, str, str], str] = {}
+    for a, t in _all_native:
+        if float(t.get("net_amount") or 0.0) >= 0:
+            continue
+        _w = _rules.roc_date(t) if _rules else str(t.get("date") or "")
+        for _d in (t.get("date"), t.get("record_date")):
+            if _d:
+                _book_keys[(a, str(t.get("symbol") or ""), str(_d))] = _w
+    for a, t in _all_dist:
+        _md = str(t.get("date_settle") or t.get("date") or "")
+        _w = _book_keys.get((a, str(t.get("symbol") or ""), _md))
+        if _w is not None and (_keep(_md) or _keep(_w)):
             print(f"taxjson roc-sum: warning: {t.get('symbol')} "
-                  f"{t.get('date')} ({a}) has an ADJUST in the books AND "
+                  f"{_md} ({a}) has an ADJUST in the books AND "
                   f"a distributions.map row — the ACB is reduced twice "
                   f"if both are the same distribution.", file=sys.stderr)
     rows = list(rows) + dist_rows
@@ -9344,9 +9456,12 @@ def cmd_spinoffs(args: argparse.Namespace) -> None:
     """`taxjson spinoffs`: every spin-off, its election, the value per
     share used and what was booked (lib/corp_views). Exit 1 when one
     needs attention (zero value, no election, ignored)."""
-    from taxjson.lib.corp_views import render_spinoffs, spinoffs
+    from taxjson.lib.corp_views import ViewError, render_spinoffs, spinoffs
     root = Path(args.dir).resolve()
-    doc = spinoffs(root, load_config(root), args.account)
+    try:
+        doc = spinoffs(root, load_config(root), args.account)
+    except ViewError as e:
+        _die(str(e))
     if getattr(args, "json", False):
         _json_out(doc)
     else:
@@ -9361,9 +9476,12 @@ def cmd_splits(args: argparse.Namespace) -> None:
     books with holdings before and after, flagging a split applied twice,
     a no-op row and a fractional result (lib/corp_views). Exit 1 on a
     likely double application."""
-    from taxjson.lib.corp_views import render_splits, splits
+    from taxjson.lib.corp_views import ViewError, render_splits, splits
     root = Path(args.dir).resolve()
-    items = splits(root, load_config(root), args.account)
+    try:
+        items = splits(root, load_config(root), args.account)
+    except ViewError as e:
+        _die(str(e))
     if getattr(args, "json", False):
         _json_out({"splits": items})
     else:
@@ -10272,7 +10390,10 @@ def cmd_positions(args: argparse.Namespace) -> None:
             cmd = [sys.executable, "-m", "taxjson.bin.taxjson_gains",
                    "--country", country, "--year", year,
                    "--as-of", as_of, "--no-wash"] + option_timing_flags(
-                       settings)
+                       settings) + income_dating_flags(settings)
+            # income_dating_flags: [settings] corporate_distributions
+            # keeps a listed corporation's ROC on its pay date, as in
+            # the run (audit A2-0995, A2-0996).
             if _asof_basis_set:
                 cmd += ["--tax-date", _asof_basis]
             if accounts_cfg.get(n, {}).get("type") == "taxable":

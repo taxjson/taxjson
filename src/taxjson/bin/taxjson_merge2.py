@@ -62,7 +62,13 @@ def warn_duplicate_splits(txs) -> int:
     symbol, date, ratio and rename target) are applied ONCE by the engines'
     split dedup, so this is a cleanup warning; rows for the same event with
     DIFFERENT ratios are all applied and would scale the pool twice.
+    Copies whose ratios differ only by rounding (2.333333 next to
+    2.333333333), on the same date or within the split-date window, are
+    one event applied once — said as ATTENTION, which `taxjson run`
+    echoes to the console (A2-0070).
     Returns the number of duplicated events."""
+    from taxjson.lib.corporate_timeline import (SPLIT_DATE_WINDOW_DAYS,
+                                                split_ratios_close)
     groups = {}
     for t in txs:
         if t.action != 'SPLIT':
@@ -83,6 +89,12 @@ def warn_duplicate_splits(txs) -> int:
                   f"(e.g. the broker parser books it AND a manual .tt SPLIT "
                   f"line) — applied ONCE; delete the manual line.",
                   file=sys.stderr)
+        elif all(split_ratios_close(r, ratios[0]) for r in ratios):
+            print(f"warning: ATTENTION: split: {sym}{tgt} on {date} appears "
+                  f"{len(rows)} times in account {acct} with ratios "
+                  f"{ratios} that differ only by rounding — one event, "
+                  f"applied ONCE; delete the manual .tt SPLIT line.",
+                  file=sys.stderr)
         else:
             prod = 1.0
             for r in ratios:
@@ -91,7 +103,78 @@ def warn_duplicate_splits(txs) -> int:
                   f"account {acct} has {len(rows)} SPLIT rows with different "
                   f"ratios {ratios} — EACH is applied (x{prod:g} in total); "
                   f"keep only the right one.", file=sys.stderr)
+    # The same event booked on two dates a few days apart (a .tt line on
+    # the ex-date next to the broker's row): applied once, on the earlier
+    # date, by the engines' split dedup.
+    by_sec = {}
+    for (acct, sym, date, new) in groups:
+        by_sec.setdefault((acct, sym, new), []).append(date)
+    for (acct, sym, new), dates in sorted(by_sec.items()):
+        dates.sort()
+        for i, d1 in enumerate(dates):
+            for d2 in dates[i + 1:]:
+                try:
+                    gap = (datetime.strptime(d2, "%Y-%m-%d")
+                           - datetime.strptime(d1, "%Y-%m-%d")).days
+                except ValueError:
+                    continue
+                if gap > SPLIT_DATE_WINDOW_DAYS:
+                    break
+                r1 = [float(r.quantity or 0) for r in groups[(acct, sym, d1, new)]]
+                r2 = [float(r.quantity or 0) for r in groups[(acct, sym, d2, new)]]
+                pair = next(((a, b) for a in r1 for b in r2
+                             if split_ratios_close(a, b)), None)
+                if pair is None:
+                    continue
+                n += 1
+                tgt = f" -> {new}" if new else ""
+                exact = round(pair[0], 9) == round(pair[1], 9)
+                head = ("warning: duplicate split:" if exact
+                        else "warning: ATTENTION: split:")
+                print(f"{head} {sym}{tgt} is booked on {d1} (x{pair[0]:.9g}) "
+                      f"and {d2} (x{pair[1]:.9g}) in account {acct} — one "
+                      f"event, applied ONCE on {d1}; delete the manual .tt "
+                      f"SPLIT line.", file=sys.stderr)
     return n
+
+
+def _ratio_digits(r: float) -> int:
+    return len(f"{float(r):.15g}".replace("-", "").replace(".", ""))
+
+
+def canonicalize_split_ratios(txs) -> int:
+    """Copies of one split in one account whose ratios differ only by
+    rounding (the broker's 2.333333333 and a hand-typed 2.333333) take
+    the most precise ratio, so the engines' split dedup sees ONE event
+    and no 0.0001-share residue is left by the rounded copy (A2-0070).
+    Mutates the SPLIT rows in place; returns the number changed."""
+    from datetime import datetime as _dt
+    from taxjson.lib.corporate_timeline import (SPLIT_DATE_WINDOW_DAYS,
+                                                split_ratios_close)
+    by_sec = {}
+    for t in txs:
+        if t.action == 'SPLIT' and float(t.quantity or 0):
+            by_sec.setdefault((t.account, t.symbol, normalize_symbol_new(
+                t.symbol, t.symbol_new)), []).append(t)
+    changed = 0
+    for rows in by_sec.values():
+        if len(rows) < 2:
+            continue
+        for a in rows:
+            for b in rows:
+                if a is b or not split_ratios_close(a.quantity, b.quantity):
+                    continue
+                try:
+                    gap = abs((_dt.strptime(a.date[:10], "%Y-%m-%d")
+                               - _dt.strptime(b.date[:10], "%Y-%m-%d")).days)
+                except (TypeError, ValueError):
+                    continue
+                if gap > SPLIT_DATE_WINDOW_DAYS:
+                    continue
+                if _ratio_digits(b.quantity) > _ratio_digits(a.quantity):
+                    a.quantity = float(b.quantity)
+                    changed += 1
+    return changed
 
 
 def _pairing_core(description: str) -> str:
@@ -421,6 +504,7 @@ def main():
     # Post-mapping (a DELETE'd or renamed row is judged as the engine will
     # see it): one account carrying the same split twice.
     warn_duplicate_splits(txs)
+    canonicalize_split_ratios(txs)
 
     # --- Stage 4: currency conversion ---------------------------------
     target_currency = (args.target_currency or '').upper() or None

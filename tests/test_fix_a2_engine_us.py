@@ -254,7 +254,7 @@ class TestStockDividendAfterSale(unittest.TestCase):
             r = USATaxRules().compute_gains(rows)
         self.assertAlmostEqual(r['summary']['total_disallowed'], 0.0)
         self.assertAlmostEqual(r['summary']['total_gain'], -2000.0)
-        self.assertIn("sold before it was paid", err.getvalue())
+        self.assertIn("disposed of before the pay date", err.getvalue())
 
 
 class TestFuturesOutside1091(unittest.TestCase):
