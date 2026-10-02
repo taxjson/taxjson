@@ -11,6 +11,5 @@ CA-DISP-04      ok              A short sale gain/loss is realized when covered
 CA-INC-01       imprecise       Dividends on Canadian listings (.TO, .V, .CN, .NE) count as Canadian, all others
 CA-INC-02       ok              Take the return's line numbers from your slips.
 US-BASIS-02     ok              Specific-lot identification is not supported.
-US-SEND-01      imprecise       Paying with crypto is a sale at fair value; `crypto-sends` records `payment` and
 US-WASH-03      ok              The identical option is a replacement.
 US-WASH-07      ok              Look-alike securities are not detected.
