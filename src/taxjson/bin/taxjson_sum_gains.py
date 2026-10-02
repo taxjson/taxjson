@@ -40,7 +40,13 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
     from taxjson.lib.ticker_map import class_share_aliases
     _aliases = class_share_aliases(t.get('symbol') for t in transactions)
 
-    for tx in transactions:
+    # An expired grant-timing WRITE has no closing record; it stands for
+    # its own close (A2-0693).
+    from taxjson.lib.report_model import grant_write_closes
+    _gclose = grant_write_closes(transactions, data.get('inventory') or [],
+                                 (data.get('summary') or {}).get('year'))
+
+    for _ti, tx in enumerate(transactions):
         symbol = tx.get('symbol')
         if not symbol: continue
         
@@ -97,7 +103,7 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
             # TRADES of every written-and-closed contract and skewed the
             # win rate / average hold (S040-12). Its gain stays in the
             # totals above.
-            if not tx.get('grant'):
+            if not tx.get('grant') or _ti in _gclose:
                 tick_stats['hold_days'].append(days)
                 tick_stats['trade_count'] += 1
 

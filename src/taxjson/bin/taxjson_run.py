@@ -711,6 +711,33 @@ class _CappedHelpFormatter(argparse.HelpFormatter):
         super().__init__(prog, **kw)
 
 
+def _child_error(stderr: Optional[str], limit: int = 400) -> str:
+    """What a wrapper relays of a failed child's stderr: all of it when
+    short, else its error line. A fixed-length PREFIX cut a traceback off
+    before the exception line, so the actual error never showed (audit
+    A2-1190). For a traceback: the lines before it plus its last line;
+    otherwise the last lines, newest kept."""
+    lines = [ln.rstrip() for ln in (stderr or "").strip().splitlines()
+             if ln.strip()]
+    if not lines:
+        return "(no error output)"
+    text = "\n".join(lines)
+    if len(text) <= limit:
+        return text
+    tb = next((i for i, ln in enumerate(lines)
+               if ln.startswith("Traceback (most recent call last)")), None)
+    if tb is not None:
+        keep = lines[:tb][-2:] + ["(traceback omitted) " + lines[-1]]
+    else:
+        keep = []
+        for ln in reversed(lines):
+            if keep and sum(len(k) for k in keep) + len(ln) > limit:
+                break
+            keep.insert(0, ln)
+    return "\n".join(k if len(k) <= limit else k[:limit] + " …"
+                     for k in keep)
+
+
 def _die(msg: str) -> None:
     prefix = f"taxjson {_CURRENT_CMD}: " if _CURRENT_CMD else "taxjson: "
     sys.exit(prefix + msg)
@@ -3203,7 +3230,32 @@ def stage_exports(equity_gains: List[Path], reports_dir: Path) -> None:
     print(f"  → {exports_dir}/")
 
 
-def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> None:
+def _duplicate_input_files(inputs_dir: Path,
+                           accounts: Dict[str, Any]) -> List[List[str]]:
+    """Groups of input files (inputs/<account>/*.csv|.tt) with identical
+    content that sit under two or more DIFFERENT configured accounts —
+    a copied export books every row twice, and parsers whose rows carry
+    no broker account (Kraken, a .tt, an IB dividend) had no check at all
+    (audit A2-0366). Whitespace-only files are ignored. Each group lists
+    `account/file` names."""
+    import hashlib
+    by_hash: Dict[str, List[Tuple[str, str]]] = {}
+    for name in sorted(accounts or {}):
+        d = inputs_dir / name
+        for p in input_files(d, ".csv") + input_files(d, ".tt"):
+            try:
+                data = p.read_bytes()
+            except OSError:
+                continue
+            if not data.strip():
+                continue
+            by_hash.setdefault(hashlib.sha256(data).hexdigest(), []).append(
+                (name, f"{name}/{p.name}"))
+    return [[f for _a, f in grp] for grp in by_hash.values()
+            if len({a for a, _f in grp}) > 1]
+
+
+def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> int:
     """One broker account's export in TWO taxjson accounts books every
     row twice (audit A2-0293, A2-0630). The rows carry their broker
     account (hashed, `source_account`); name each pair of taxjson
@@ -3225,15 +3277,18 @@ def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> None:
                      t.get("quantity"), t.get("net_amount")))
         seen[name] = per
     names = sorted(seen)
+    shared = 0
     for i, a in enumerate(names):
         for b in names[i + 1:]:
             for h in sorted(set(seen[a]) & set(seen[b])):
+                shared += 1
                 same = len(seen[a][h] & seen[b][h])
                 print(f"  {ATTENTION_PREFIX} the same broker account "
                       f"(#{h[:6]}) feeds two taxjson accounts, {a} and "
                       f"{b} ({same} identical row(s)) — every row of it "
                       f"is booked in BOTH. Put each broker account's "
                       f"exports under ONE inputs/<account>/ folder.")
+    return shared
 
 
 def _warn_cross_taxable_overlap(taxable_bases: List[Tuple[str, Path]],
@@ -3669,6 +3724,17 @@ def cmd_run(args: argparse.Namespace) -> None:
     elif _maps_marker.exists():
         _maps_marker.unlink()
 
+    _dup_inputs = _duplicate_input_files(inputs_dir, accounts)
+    for _paths in _dup_inputs:
+        print(f"  {ATTENTION_PREFIX} the same export file sits in two "
+              f"accounts: {', '.join(_paths)} (identical content) — every "
+              f"row of it is booked in BOTH accounts. Keep each broker "
+              f"export under ONE inputs/<account>/ folder.",
+              file=sys.stderr)
+    if _dup_inputs and getattr(args, "strict", False):
+        _die("--strict: the same export file is in two accounts "
+             "(ATTENTION above) — nothing was built.")
+
     print("==> currency rates")
     rates = stage_currency_rates(settings, cache)
 
@@ -3717,9 +3783,28 @@ def cmd_run(args: argparse.Namespace) -> None:
         # meant a later `wash-radar --account margin` (and the web/GUI
         # what-if) read a sheltered book that predated this run's buys,
         # exactly the rows a 30-day radar exists to see (2026-09 audit).
-        _others = [cache / f"{n}_base.json" for n, c in accounts.items()
-                   if c.get("type", "sheltered") == "sheltered"
-                   and n != args.account]
+        _other_names = [n for n, c in accounts.items()
+                        if c.get("type", "sheltered") == "sheltered"
+                        and n != args.account]
+        _others = [cache / f"{n}_base.json" for n in _other_names]
+        # A sibling WITH inputs but no book (deleted, or its last stage
+        # failed) would silently drop its registered buys from the
+        # combined book — the radar and the what-if then said "safe to
+        # sell at a loss" (audit A2-0128). Refuse and keep the old
+        # combined book; an account with no inputs never has a book.
+        _lost = [f"{n}_base.json" for n in _other_names
+                 if not (cache / f"{n}_base.json").exists()
+                 and not (cache / f"{n}_pending_elections.json").exists()
+                 and (input_files(inputs_dir / n, ".csv")
+                      or input_files(inputs_dir / n, ".tt"))]
+        if _lost:
+            _die(f"run --account {args.account}: the sheltered book(s) "
+                 f"{', '.join(_lost)} are missing from work/ although "
+                 f"their accounts have inputs — sheltered_base.json was "
+                 f"left unchanged (rebuilding it without them would hide "
+                 f"their purchases from the superficial-loss checks). "
+                 f"Run `taxjson run` without --account to rebuild every "
+                 f"book.")
         _missing = [p.name for p in _others if not p.exists()]
         _sheltered_merge_inputs = (
             [o["base"] for _, o in sheltered_outputs]
@@ -3727,8 +3812,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         print(f"==> rebuilding sheltered_base.json from this run's "
               f"{args.account} book plus the other sheltered accounts' "
               f"last-built books"
-              + (f" (missing: {', '.join(_missing)} — never built; "
-                 f"run without --account)" if _missing else ""))
+              + (f" (no book for {', '.join(_missing)}: no inputs, "
+                 f"or deferred on elections)" if _missing else ""))
     _pending_sheltered = {pe.account for pe in pending_accounts}
     if (not _sheltered_merge_inputs and not args.account
             and not _pending_sheltered):
@@ -3981,9 +4066,13 @@ def cmd_run(args: argparse.Namespace) -> None:
         _warn_cross_taxable_overlap(
             [(n, o["base"]) for n, o, c in taxable_outputs if not c],
             settings)
-        _warn_shared_broker_accounts(
+        _shared_brokers = _warn_shared_broker_accounts(
             [(n, o["base"]) for n, o in sheltered_outputs]
             + [(n, o["base"]) for n, o, _c in taxable_outputs])
+        if _shared_brokers and getattr(args, "strict", False):
+            # Every row of that broker account is booked twice (A2-0366).
+            _die("--strict: one broker account feeds two taxjson "
+                 "accounts (ATTENTION above) — aborting.")
         if _crypto_blend:
             _warn_cross_taxable_overlap(
                 [(n, o["base"]) for n, o, c in taxable_outputs if c],
@@ -5158,6 +5247,10 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
         if not accounts:
             sys.exit(f"taxjson {label}: no transaction files in {cache} "
                      f"(run `taxjson run` first).")
+        # S045-09 twin (audit A2-1182): an account with inputs but no
+        # books was simply absent from trades/divs/events/roc.
+        _warn_accounts_without_books(root, accounts, label,
+                                     "transaction file")
 
     rows = []
     bad_dates = 0
@@ -6127,7 +6220,13 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     _aliases = class_share_aliases(
         t.get("symbol") for _a, _d in _docs
         for t in _d.get("transactions", []) or [])
+    from taxjson.lib.report_model import grant_write_closes
     for acct, data in _docs:
+        # An expired grant-timing write has no closing record: the
+        # WRITE stands for its close (A2-0693).
+        _gclose = grant_write_closes(
+            data.get("transactions") or [], data.get("inventory") or [],
+            (data.get("summary") or {}).get("year"))
         _settle = _settle_basis(root, data)
         # Routed phantom-basis rows (manual_reporting_required) are
         # tainted too — counted, never silent (audit S040-15 sibling).
@@ -6137,7 +6236,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
             if (is_option_symbol(sym) and parse_option_right(sym) == "C"
                     and _ISO_DATE_RE.match(d) and keep(d)):
                 tainted_skipped += 1
-        for t in data.get("transactions", []):
+        for _ti, t in enumerate(data.get("transactions", [])):
             sym = str(t.get("symbol") or "")
             if not is_option_symbol(sym):
                 continue
@@ -6194,6 +6293,9 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
             if not t.get("grant"):
                 rec["contracts"] += 1
                 rec["qty"] += abs(float(t.get("qty") or 0.0))
+            elif _ti in _gclose:
+                rec["contracts"] += 1
+                rec["qty"] += _gclose[_ti]
             rec["proceeds"] += premium
             rec["cost"] += buyback
             rec["gain"] += gain
@@ -6275,7 +6377,11 @@ def cmd_winners(args: argparse.Namespace) -> None:
     _aliases = class_share_aliases(
         t.get("symbol") for _a, _d in _docs
         for t in _d.get("transactions", []) or [])
+    from taxjson.lib.report_model import grant_write_closes
     for _acct, data in _docs:
+        _gclose = grant_write_closes(
+            data.get("transactions") or [], data.get("inventory") or [],
+            (data.get("summary") or {}).get("year"))
         _settle = _settle_basis(root, data)
         # Pipeline files ROUTE phantom-basis rows out of transactions[]
         # into manual_reporting_required: count them too, or the
@@ -6285,7 +6391,7 @@ def cmd_winners(args: argparse.Namespace) -> None:
             d = _gains_row_date(t, keep, _settle)
             if _ISO_DATE_RE.match(d) and keep(d):
                 tainted_skipped += 1
-        for t in data.get("transactions", []):
+        for _ti, t in enumerate(data.get("transactions", [])):
             if t.get("action") in _INCOME:
                 continue
             d = _gains_row_date(t, keep, _settle)
@@ -6303,7 +6409,9 @@ def cmd_winners(args: argparse.Namespace) -> None:
             und = underlying_of(sym, _aliases)
             rec = agg.setdefault(und, {"closes": 0, "proceeds": 0.0,
                                        "cost": 0.0, "gain": 0.0})
-            if not t.get("grant"):          # a WRITE is not a close
+            # A WRITE is not a close — unless it expired, when it is the
+            # only record of that close (A2-0693).
+            if not t.get("grant") or _ti in _gclose:
                 rec["closes"] += 1
             # Real-world orientation, as ccd-sum and form-export show
             # it: a SHORT row carries the engine's signed legs (cost =
@@ -7291,6 +7399,13 @@ def cmd_gains(args: argparse.Namespace) -> None:
         if not accounts:
             sys.exit(f"taxjson gains: no native gains files in {cache} "
                      f"(run `taxjson run` first).")
+        # S045-09 twin (audit A2-1182): accounts with books are named by
+        # the notes above; one with inputs but no books at all is not.
+        _warn_accounts_without_books(
+            root, set(accounts) | {
+                n for n in (_soft_config(root).get("accounts") or {})
+                if (cache / f"{n}_base.json").exists()},
+            "gains", "books")
 
     rows = []
     bad_dates = 0
@@ -8749,7 +8864,7 @@ def cmd_instalments(args: argparse.Namespace) -> None:
     res = _run(_argv, capture_output=True)
     if res.returncode != 0:
         _die(f"could not compute the estimate it builds on: "
-             f"{(res.stderr or '').strip()[:400]}")
+             f"{_child_error(res.stderr)}")
     # The estimate's own warnings (an unreadable or stale-year gains
     # file, tainted sales EXCLUDED, a run that failed) are caveats on
     # every figure below: relay them, never swallow them (S005-05,
@@ -9353,6 +9468,7 @@ def cmd_shares(args: argparse.Namespace) -> None:
     if not files:
         sys.exit(f"taxjson shares: no gains files in {cache} "
                  f"(run `taxjson run` first).")
+    _warn_accounts_without_books(root, files, "shares", "gains file")
     basis = gains_basis_label(files)
     want = None
     if getattr(args, "taxable", False) or getattr(args, "sheltered", False):
@@ -9583,6 +9699,9 @@ def cmd_check_dates(args: argparse.Namespace) -> None:
     if not doc["sources"]:
         sys.exit("taxjson check-dates: no parsed sources in work/ — run "
                  "`taxjson run` first.")
+    if not args.account:
+        _warn_accounts_without_books(root, _discover_tx_accounts(root / "work"),
+                                     "check-dates", "parsed source")
     if getattr(args, "json", False):
         _json_out(doc)
     else:
@@ -10483,7 +10602,7 @@ def cmd_positions(args: argparse.Namespace) -> None:
             res = _run_cmd(cmd + [str(b)], capture_output=True)
             if res.returncode != 0:
                 print(f"taxjson: warning: as-of compute failed for "
-                      f"{n}: {(res.stderr or '').strip()[:200]}",
+                      f"{n}: {_child_error(res.stderr)}",
                       file=sys.stderr)
                 continue
             tmp_docs[n] = json.loads(res.stdout)
@@ -11952,7 +12071,7 @@ def _explain_wash_sales(root: Path, cache: Path,
                 tmp.unlink(missing_ok=True)
                 sys.exit(f"taxjson wash-sales: could not merge the "
                          f"taxable base books: "
-                         f"{(res.stderr or '').strip()[:300]}")
+                         f"{_child_error(res.stderr)}")
             tmp.write_text(res.stdout, encoding="utf-8")
             target = tmp
         try:
@@ -12216,7 +12335,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
     res = _run(cmd, capture_output=True)
     if res.returncode != 0:
         sys.exit(f"taxjson watch: radar failed: "
-                 f"{(res.stderr or '').strip()[:400]}")
+                 f"{_child_error(res.stderr)}")
     try:
         radar_doc = _json.loads(res.stdout)
     except ValueError as e:
@@ -12238,7 +12357,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
         if hres.returncode != 0:
             print(f"taxjson watch: warning: harvest failed — the "
                   f"harvest dimension is skipped this run: "
-                  f"{(hres.stderr or '').strip()[:200]}",
+                  f"{_child_error(hres.stderr)}",
                   file=sys.stderr)
         else:
             try:
@@ -13249,7 +13368,7 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
                   f"it.", file=sys.stderr)
     res = _run(cmd, capture_output=True)
     if res.returncode != 0:
-        _die(f"radar failed: {(res.stderr or '').strip()[:400]}")
+        _die(f"radar failed: {_child_error(res.stderr)}")
     radar = flatten_radar(_json.loads(res.stdout))
 
     # Identity comes ONLY from ticker.map (GLOBAL/TOBASE/JOURNAL), SPLIT
@@ -14235,7 +14354,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
             if res.returncode != 0:
                 cleanup.unlink(missing_ok=True)
                 _die(f"could not merge the taxable base books: "
-                     f"{(res.stderr or '').strip()[:300]}")
+                     f"{_child_error(res.stderr)}")
             cleanup.write_text(res.stdout, encoding="utf-8")
             base_arg = cleanup
         fl = common_flags() + ["--base", str(base_arg)]
@@ -14607,6 +14726,8 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
         cmd += [str(f) for f in files]
     else:
         cmd += ["--cache", str(cache)]
+        _warn_accounts_without_books(root, _discover_tx_accounts(cache),
+                                     "fees-sum", "transaction file")
 
     tok = (period or "").strip().lower()
     if period and _YEAR_TOKEN_RE.fullmatch(tok):         # literal year window
@@ -15780,6 +15901,9 @@ def main() -> None:
             _die(f"no such directory: {args.dir} (-C/--dir names the "
                  f"project root — the folder holding taxjson.toml)")
         _enforce_command_country(args)
+        _refuse_unknown_account(args)
+        if args.cmd in _RUN_STATE_BANNER_CMDS:
+            _banner_run_state(args)
         try:
             args.func(args)
         except SystemExit as e:
@@ -15801,6 +15925,64 @@ def main() -> None:
                      f"{' '.join(str(c) for c in (e.cmd or [])[-3:])} "
                      f"(exit {e.returncode}) — see the error above.")
     return
+
+
+# Commands that read the work/ books and print figures or verdicts from
+# them: each prints the run-state banner (inputs changed since the last
+# full run, validation ERRORs, a deferred account, an account with
+# inputs but no books) before it runs, on stderr so --json stays valid.
+# Only sum/t1135/carryover/form-export/check-filed had it; every other
+# view served a failed run's books with rc 0 and no word (audit A2-0380,
+# A2-0381). Those five print it themselves and are not listed here.
+_RUN_STATE_BANNER_CMDS = frozenset({
+    "gains", "roc-sum", "divs-sum", "dil-sum", "wash-sales", "winners",
+    "trades-sum", "fx-cash", "leaps", "leaps-sum", "fees-sum", "fees",
+    "shares", "list", "ccd-sum", "trades", "divs", "dil", "roc", "events",
+    "wash-radar", "sell-check", "buy-check", "harvest", "watch",
+    "edge-cases", "option-boundary", "spinoffs", "splits",
+})
+
+
+def _banner_run_state(args: argparse.Namespace) -> None:
+    root = Path(args.dir).resolve()
+    if not (root / "taxjson.toml").is_file() or not (root / "work").is_dir():
+        return
+    try:
+        cfg = _soft_config(root)
+    except Exception:                                   # noqa: BLE001
+        return
+    _warn_run_state(root, cfg)
+
+
+# Commands whose optional `account` positional names a configured
+# account (with a leading optional PERIOD for the period-taking ones):
+# a mistyped name gave an empty report with rc 0, or blamed a missing
+# run (audit A2-0684, A2-1167). Refused in one line here.
+_ACCOUNT_ARG_CMDS = frozenset({
+    "edge-cases", "spinoffs", "splits", "check-dates", "winners",
+    "leaps", "leaps-sum",
+})
+
+
+def _refuse_unknown_account(args: argparse.Namespace) -> None:
+    if args.cmd not in _ACCOUNT_ARG_CMDS:
+        return
+    account = getattr(args, "account", None)
+    period = getattr(args, "period", None)
+    if account is None and period and not _is_period(period):
+        if period.strip()[:1].isdigit():
+            return                     # the command names the bad window
+        account = period
+    if not account:
+        return
+    root = Path(args.dir).resolve()
+    if not (root / "taxjson.toml").is_file():
+        return
+    accounts = _soft_config(root).get("accounts") or {}
+    if not isinstance(accounts, dict) or not accounts or account in accounts:
+        return
+    _die(f"no [accounts.{account}] in taxjson.toml — check the name "
+         f"(configured: {', '.join(sorted(accounts))}).")
 
 
 def _enforce_command_country(args: argparse.Namespace) -> None:

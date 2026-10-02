@@ -1484,7 +1484,8 @@ fees report uses too:
   or settle date match. Delete the `.tt` line if it is that trade;
 - one broker account's export placed under two `inputs/<account>/` folders
   is booked in both: `taxjson run` prints an ATTENTION line naming the two
-  taxjson accounts.
+  taxjson accounts (the same file copied into two folders is named file by
+  file, for every broker and for `.tt` files), and `run --strict` stops.
 
 ### When you can't get the real cost basis
 

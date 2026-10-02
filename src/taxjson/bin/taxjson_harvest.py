@@ -575,7 +575,20 @@ def main(argv: Optional[List[str]] = None,
                                base_currency=args.base_currency)
     if args.symbol:
         want = {s.upper() for s in args.symbol}
+        held = {r["symbol"].upper() for r in positions}
+        # `harvest margn` filtered on a SYMBOL "margn" and said "No open
+        # positions for margn." with rc 0 (audit A2-0684): a bare token
+        # (no .TO/.US listing suffix) that matches nothing is named.
+        bare = [s for s in args.symbol
+                if s.upper() not in held and "." not in s]
         positions = [r for r in positions if r["symbol"].upper() in want]
+        if bare:
+            print(f"{PROG}: {'error' if not positions else 'warning'}: "
+                  f"no open position for symbol(s) {', '.join(bare)} — "
+                  f"harvest takes listed symbols such as AAA.TO / BBB.US "
+                  f"(not account names).", file=sys.stderr)
+            if not positions:
+                return 1
     if not positions:
         scope = (f" for {', '.join(args.symbol)}" if args.symbol else "")
         if args.json:
