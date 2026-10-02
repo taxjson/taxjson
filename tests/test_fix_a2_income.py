@@ -516,5 +516,32 @@ class TestListDateIncomeFlags(unittest.TestCase):
         self.assertNotIn("4,750.00", r.stdout)
 
 
+class TestUsStockDividendAfterSale(unittest.TestCase):
+    """A2-0562: a stock dividend paid after the shares were sold does not
+    blame missing history."""
+
+    @rule("US-DIST-01")
+    def test_wording(self):
+        from taxjson.lib.core import coerce_transaction_row
+        from taxjson.lib.pipeline import GainsRequest, run_gains
+        rows = [_trade("2024-01-02", 100, 10, "XYZ.US"),
+                _trade("2025-06-02", -100, 12, "XYZ.US"),
+                {"action": "BUYSELL", "date": "2025-06-15",
+                 "time": "00:00:00", "date_settle": "2025-06-15",
+                 "symbol": "XYZ.US", "quantity": 5.0, "price": 0.0,
+                 "net_amount": 0.0, "currency": "USD", "account": ACCT,
+                 "type": "stock_dividend"}]
+        txs = [coerce_transaction_row(t, i, "t") for i, t in enumerate(rows)]
+        _r, err = _quiet(run_gains, txs, [], [],
+                         req=GainsRequest(country="usa", taxable=True))
+        self.assertIn("disposed of before the pay date", err)
+        self.assertNotIn("missing purchase history", err)
+        never = [rows[2]]
+        _r, err = _quiet(run_gains,
+                         [coerce_transaction_row(never[0], 0, "t")], [], [],
+                         req=GainsRequest(country="usa", taxable=True))
+        self.assertIn("missing purchase history", err)
+
+
 if __name__ == "__main__":
     unittest.main()

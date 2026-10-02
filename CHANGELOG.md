@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- US: a stock dividend paid after the shares were sold (between the
+  record and pay dates) no longer asks for "the missing purchase
+  history"; the warning says the §307 allocation reaches the sold lots
+  and must be adjusted by hand (A2-0562).
+
 - `reports/<account>_holdings.toml` now says (`meta.base_cost_basis`,
   README) that its costs leave out distributions.map ACB adjustments,
   which `taxjson list` includes (A2-0226).
