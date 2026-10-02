@@ -37,6 +37,13 @@
   short cover matches another tool's filed short; a sub-unit (crypto
   dust) quantity difference is reported (A2-0354, A2-0356, A2-0673,
   A2-0122, A2-0674, A2-1133).
+- close-year records the December and January rows; handoff reports
+  rows the two projects date on different sides of Dec 31 — trust
+  income or a ROC its record date moves back into the closed year, a
+  row local_timezone re-dates to Dec 31, a RIC January dividend kept in
+  one project only, an overnight fill the closed project moved into
+  January — as in neither or both returns (A2-0120, A2-0343, A2-0344,
+  A2-0675, A2-0670).
 
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a

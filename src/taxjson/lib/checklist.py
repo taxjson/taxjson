@@ -1133,8 +1133,8 @@ def d_handoff(ctx: Ctx) -> Result:
                          ("double", "sale(s) reported in both years"),
                          ("timing", "written option(s) on another premium "
                                     "timing than the closed year"),
-                         ("income", "income row(s) dated in the closed "
-                                    "year"),
+                         ("boundary", "row(s) on different sides of "
+                                      "Dec 31 in the two projects"),
                          ("partial", "the closed year's record is a "
                                     "partial-year snapshot")):
             if doc.get(k):

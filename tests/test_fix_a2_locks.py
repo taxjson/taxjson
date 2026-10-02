@@ -561,5 +561,127 @@ class TestHandoffDust(unittest.TestCase):
                              ["positions"], [])
 
 
+def _qrow(d, s_, act, sym, desc, q, p, g, c, n, act_type):
+    return (f"{d} 12:00:00 AM,{s_} 12:00:00 AM,{act},{sym},{desc},{q},{p},"
+            f"{g},{c},{n},CAD,55500001,{act_type},Individual margin\n")  # pii-ok
+
+
+class TestHandoffAcrossDec31(unittest.TestCase):
+    """Rows the closed and the next project date on different sides of
+    Dec 31 (boundary_rows in the record)."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.base = Path(self._td.name)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    @rule("CA-INC-DATE-TRUST", "CA-INC-DATE-ROC-TRUST", "CA-RPT-08")
+    def test_trust_income_dated_back_into_the_closed_year(self):
+        # A2-0120: the 2025 project (2025 export only) never had the
+        # distribution / ROC; the 2026 project dates them on their Dec
+        # record dates, so they are in neither return.
+        f25 = (_QT_HEADER
+               + _qrow("2025-03-03", "2025-03-04", "Buy", "XIC.TO",
+                       "ISHARES CORE S&P/TSX CAPPED COMPOSITE INDEX ETF",
+                       100, 30, -3000, 0, -3000, "Trades")
+               + _qrow("2025-03-03", "2025-03-04", "Buy", "REI.UN.TO",
+                       "RIOCAN REAL ESTATE INVESTMENT TRUST", 100, 20,
+                       -2000, 0, -2000, "Trades")
+               + _qrow("2025-03-03", "2025-03-04", "Buy", "ZZZ.TO",
+                       "SYNTHETIC CORP", 10, 10, -100, 0, -100, "Trades")
+               + _qrow("2025-06-03", "2025-06-04", "Sell", "ZZZ.TO",
+                       "SYNTHETIC CORP", -10, 12, 120, 0, 120, "Trades"))
+        f26 = (_QT_HEADER
+               + _qrow("2026-01-05", "2026-01-05", "   ", "XIC.TO",
+                       "ISHARES CORE S&P/TSX CAPPED COMPOSITE INDEX ETF "
+                       "DIST ON 100 SHS REC 12/30/25 PAY 01/05/26", 0,
+                       0.28, 0, 0, 28.00, "Dividends")
+               + _qrow("2026-01-15", "2026-01-15", "RTC", "REI.UN.TO",
+                       "RIOCAN REAL ESTATE INVESTMENT TRUST RETURN OF "
+                       "CAPITAL REC 12/31/25 PAY 01/15/26", 0, 0, 0, 0,
+                       40.00, "Dividends"))
+        p25 = _project(self.base / "p25", 2025)
+        (p25 / "inputs" / "margin" / "q25.csv").write_text(f25)
+        self.assertEqual(_run_cli(p25, "run", "--no-input").returncode, 0)
+        r = _run_cli(p25, "close-year")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        p26 = _project(self.base / "p26", 2026, "",
+                       'prior_year_record = "../p25/filed/2025.json"\n')
+        (p26 / "inputs" / "margin" / "q25.csv").write_text(f25)
+        (p26 / "inputs" / "margin" / "q26.csv").write_text(f26)
+        self.assertEqual(_run_cli(p26, "run", "--no-input").returncode, 0)
+        r = _run_cli(p26, "handoff", "--json")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        rep = json.loads(r.stdout)
+        self.assertEqual(sorted(i["symbol"] for i in rep["boundary"]),
+                         ["REI.UN.TO", "XIC.TO"])
+        self.assertIn("neither return", rep["boundary"][0]["why"])
+        # Both projects with the same inputs: nothing to report.
+        p25b = _project(self.base / "p25b", 2025)
+        (p25b / "inputs" / "margin" / "q25.csv").write_text(f25)
+        (p25b / "inputs" / "margin" / "q26.csv").write_text(f26)
+        self.assertEqual(_run_cli(p25b, "run", "--no-input").returncode, 0)
+        self.assertEqual(_run_cli(p25b, "close-year").returncode, 0)
+        t = (p26 / "taxjson.toml").read_text().replace("../p25/", "../p25b/")
+        (p26 / "taxjson.toml").write_text(t)
+        r = _run_cli(p26, "handoff", "--json")
+        self.assertEqual(json.loads(r.stdout)["boundary"], [], r.stdout)
+
+    @rule("CA-RPT-08")
+    def test_rows_redated_into_the_closed_year_or_moved_past_it(self):
+        # A2-0343 / A2-0344: a round trip and an earn reward that
+        # local_timezone re-dates from Jan 1 UTC to Dec 31 are in the
+        # next project's books only. A2-0670: the closed project's
+        # inputs hold a fill the overnight shift moved to Jan 2 that the
+        # next project lacks.
+        p25 = _project(self.base / "p25", 2025, TT25
+                       + "BUYSELL 2026-01-02 09:30:00 QZQ.TO 50 CAD 10 500 0\n")
+        self.assertEqual(_run_cli(p25, "run", "--no-input").returncode, 0)
+        r = _run_cli(p25, "close-year")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        p26 = _project(self.base / "p26", 2026, TT25 + (
+            "BUYSELL 2025-12-31 19:00:00 ETH.TO 1 CAD 4000 4000 0\n"
+            "BUYSELL 2025-12-31 20:00:00 ETH.TO -1 CAD 4980 4980 0\n"
+            "DIVIDEND 2025-12-31 20:30:00 USD.HOLD.TO 0 CAD 0 342.65 0\n"),
+            'prior_year_record = "../p25/filed/2025.json"\n')
+        r = _run_cli(p26, "run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = _run_cli(p26, "handoff", "--json")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        got = sorted((i["symbol"], i["action"])
+                     for i in json.loads(r.stdout)["boundary"])
+        self.assertEqual(got, [("ETH.TO", "BUYSELL"),
+                               ("QZQ.TO", "BUYSELL"),
+                               ("USD.HOLD.TO", "DIVIDEND")])
+
+    @rule("US-RPT-06")
+    def test_us_ric_january_dividend_counted_again(self):
+        # A2-0675: the 2025 project moves VTI.US's Jan 5 dividend into
+        # 2025 (ric_january_dividends); the 2026 project, without the
+        # entry, counts it again in 2026.
+        tt = ("BUYSELL 2025-02-03 09:30:00 VTI.US 10 USD 200 2000 0\n"
+              "BUYSELL 2025-02-03 09:30:00 SOLD.US 10 USD 100 1000 0\n"
+              "BUYSELL 2025-06-02 09:30:00 SOLD.US -10 USD 90 900 0\n"
+              "DIVIDEND 2026-01-05 00:00:00 VTI.US 0 USD 0 100.00 0\n")
+        p25 = _project(self.base / "p25", 2025, tt,
+                       'ric_january_dividends = ["VTI.US 2026-01-05"]\n',
+                       country="usa", cur="USD")
+        self.assertEqual(_run_cli(p25, "run", "--no-input").returncode, 0)
+        r = _run_cli(p25, "close-year")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        p26 = _project(self.base / "p26", 2026, tt,
+                       'prior_year_record = "../p25/filed/2025.json"\n',
+                       country="usa", cur="USD")
+        self.assertEqual(_run_cli(p26, "run", "--no-input").returncode, 0)
+        r = _run_cli(p26, "handoff", "--json")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        b = json.loads(r.stdout)["boundary"]
+        self.assertEqual([(i["symbol"], i["action"]) for i in b],
+                         [("VTI.US", "DIVIDEND")])
+        self.assertIn("again", b[0]["why"])
+
+
 if __name__ == "__main__":
     unittest.main()

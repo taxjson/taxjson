@@ -399,6 +399,69 @@ def load_filed_dispositions(path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
+_TRADES = ("BUYSELL", "ASSIGN")
+_INCOME = ("DIVIDEND", "DIVIDEND_IN_LIEU", "INTEREST", "ADJUST")
+
+
+def _income_rules(settings: Dict[str, Any]):
+    from taxjson.lib.income_dating import IncomeRules
+    try:
+        return IncomeRules.from_settings(settings)
+    except ValueError:
+        return IncomeRules(country="")
+
+
+def _eff_date(r: Dict[str, Any], basis: str, ir) -> Optional[date]:
+    """The date a row counts on in the books: a trade's trade or settle
+    date (the date basis), an income row's income date (a Canadian
+    trust's record date, a US RIC January dividend's Dec 31), a return
+    of capital's record date (lib/income_dating)."""
+    a = str(r.get("action") or "").upper()
+    if a in _TRADES:
+        return _bdate(r, basis)
+    try:
+        return _d(ir.row_date(r)) or _d(r.get("date"))
+    except Exception:                               # noqa: BLE001
+        return _d(r.get("date"))
+
+
+def boundary_rows(cache: Path, cfg: Dict[str, Any], year: int
+                  ) -> List[Dict[str, Any]]:
+    """Every taxable trade and income row of December `year` and January
+    `year + 1` (by its own date or the date the books count it on), with
+    that tax date: the next project's `handoff` checks rows the two
+    projects put on different sides of Dec 31 — income a trust record
+    date, a RIC January dividend or a local_timezone re-dating moves
+    across the boundary, and a fill the overnight shift moved into
+    January (A2-0120, A2-0343, A2-0344, A2-0670, A2-0675)."""
+    settings = cfg.get("settings", {}) or {}
+    basis = _basis(settings)
+    ir = _income_rules(settings)
+    lo, hi = date(year, 12, 1), date(year + 1, 1, 31)
+    out = []
+    for g, names in groups(cfg).items():
+        for n in names:
+            for r in _rows(cache / f"{n}_base.json"):
+                a = str(r.get("action") or "").upper()
+                if a not in _TRADES + _INCOME:
+                    continue
+                eff, raw = _eff_date(r, basis, ir), _d(r.get("date"))
+                if not ((eff and lo <= eff <= hi)
+                        or (raw and lo <= raw <= hi)):
+                    continue
+                out.append({"group": g, "account": n, "action": a,
+                            "symbol": r.get("symbol"), "date": str(raw),
+                            "date_settle": str(_d(r.get("date_settle"))
+                                               or raw),
+                            "quantity": round(float(r.get("quantity")
+                                                    or 0.0), 8),
+                            "net": round(float(r.get("net_amount")
+                                               or 0.0), 2),
+                            "tax_date": str(eff) if eff else None})
+    out.sort(key=lambda x: (x["date"], x["symbol"] or "", x["action"]))
+    return out
+
+
 def record_fields(root: Path, cfg: Dict[str, Any], year: int,
                   gains_files: Dict[str, Path], run_gains: RunGains,
                   common_flags: List[str],
@@ -412,6 +475,7 @@ def record_fields(root: Path, cfg: Dict[str, Any], year: int,
         "year_end": snapshot(cache, cfg, f"{year}-12-31", run_gains,
                              common_flags, phantoms),
         "settle_next_year": straddlers(cache, cfg, year),
+        "boundary_rows": boundary_rows(cache, cfg, year),
     }
     if filed_csv is not None:
         fd = load_filed_dispositions(filed_csv)
@@ -594,6 +658,125 @@ def _timing_issues(cache: Path, cfg: Dict[str, Any],
     return out
 
 
+def _same_row(r: Dict[str, Any], x: Dict[str, Any]) -> bool:
+    """A base row of this project and a record's boundary row are the
+    same row: action, symbol, own date, quantity and amount."""
+    if str(r.get("action") or "").upper() != x.get("action") \
+            or r.get("symbol") != x.get("symbol"):
+        return False
+    if str(_d(r.get("date"))) != str(x.get("date")):
+        return False
+    if not _qty_eq(float(r.get("quantity") or 0.0),
+                   float(x.get("quantity") or 0.0)):
+        return False
+    n, xn = float(r.get("net_amount") or 0.0), float(x.get("net") or 0.0)
+    return abs(n - xn) <= max(0.01, 0.005 * abs(xn))
+
+
+def _boundary_issues(cache: Path, cfg: Dict[str, Any],
+                     record: Dict[str, Any], basis: str,
+                     section2: set) -> List[Dict[str, Any]]:
+    """Rows reported in neither year or in both because this project and
+    the closed one date them on different sides of Dec 31 (see
+    boundary_rows). Three cases:
+      (a) this project counts a row in the closed year that the closed
+          books never had — income its trust record date (or a RIC entry)
+          moves back, or a row local_timezone re-dates to Dec 31 — so it
+          is in neither return;
+      (b) the closed books counted an income row in the closed year and
+          this project counts it again in the next;
+      (c) the closed project's inputs held an early-January row (an
+          overnight fill moved past Dec 31) that this project lacks."""
+    settings = cfg.get("settings", {}) or {}
+    ir = _income_rules(settings)
+    ry = int(record["year"])
+    ye = date(ry, 12, 31)
+    rec_rows = [x for x in record.get("boundary_rows") or []
+                if isinstance(x, dict)]
+    here = []
+    for _g, names in groups(cfg).items():
+        for n in names:
+            here += [r for r in _rows(cache / f"{n}_base.json")
+                     if str(r.get("action") or "").upper()
+                     in _TRADES + _INCOME]
+    out: List[Dict[str, Any]] = []
+    used: set = set()
+
+    def _match(r):
+        for i, x in enumerate(rec_rows):
+            if i not in used and _same_row(r, x):
+                used.add(i)
+                return x
+        return None
+
+    for r in here:
+        if r.get("id") not in (None, "") and str(r["id"]) in section2:
+            continue                    # section 2 already judges it
+        a = str(r.get("action") or "").upper()
+        eff, raw = _eff_date(r, basis, ir), _d(r.get("date"))
+        if eff is None or eff > ye:
+            continue
+        q = float(r.get("quantity") or 0.0)
+        if a in _INCOME:
+            if not ((raw and raw > ye) or eff >= date(ry, 12, 30)):
+                continue
+        elif not (q < 0 and eff >= date(ry, 12, 30)):
+            continue
+        if _match(r) is not None:
+            continue
+        what = ("sale" if a in _TRADES else
+                "return of capital" if a == "ADJUST" else "income")
+        out.append({"symbol": r.get("symbol"), "action": a,
+                    "date": str(raw), "tax_date": str(eff),
+                    "amount": round(float(r.get("net_amount") or 0.0), 2),
+                    "why": (f"this project counts this {what} on {eff} "
+                            f"(in {ry})"
+                            + (f", though it is dated {raw}" if raw != eff
+                               else "")
+                            + f", but the {ry} books never had it (their "
+                            f"inputs did not hold it): it is in neither "
+                            f"return. It belongs on the {ry} return — "
+                            f"amend {ry} (or confirm the slip reported "
+                            f"it).")})
+    for i, x in enumerate(rec_rows):
+        a = x.get("action")
+        xd = _d(x.get("tax_date"))
+        if xd is None:
+            continue
+        hit = None
+        for r in here:
+            if _same_row(r, x):
+                hit = r
+                break
+        if a in _INCOME and xd <= ye:
+            if hit is None:
+                continue
+            eff = _eff_date(hit, basis, ir)
+            if eff is not None and eff > ye:
+                out.append({"symbol": x.get("symbol"), "action": a,
+                            "date": x.get("date"), "tax_date": str(eff),
+                            "amount": x.get("net"),
+                            "why": (f"the {ry} books counted this row "
+                                    f"(dated {x.get('date')}) in {ry} "
+                                    f"(on {xd}); this project counts it "
+                                    f"again on {eff}. Report it in one "
+                                    f"year only (a RIC January dividend "
+                                    f"or a trust's record date: keep the "
+                                    f"same entry in this project).")})
+        elif (xd > ye and xd <= date(ry + 1, 1, 10) and hit is None
+              and not (a in _TRADES
+                       and (_d(x.get("date")) or date.max) <= ye)):
+            out.append({"symbol": x.get("symbol"), "action": a,
+                        "date": x.get("date"), "tax_date": str(xd),
+                        "amount": x.get("net"),
+                        "why": (f"the {ry} project's inputs hold this row "
+                                f"dated {x.get('date')}, which counts in "
+                                f"{ry + 1}, so the {ry} return left it "
+                                f"out — but this project does not have it: "
+                                f"it is in neither return. Add it here.")})
+    return out
+
+
 def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
           opening: Dict[str, Any]) -> Dict[str, Any]:
     """Compare a closed year's record with this project's books.
@@ -605,6 +788,7 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
     rbasis = record.get("date_basis") or basis
     issues: Dict[str, List[Dict[str, Any]]] = {
         "positions": [], "missed": [], "double": [], "timing": [],
+        "boundary": [],
         "partial": [], "notes": []}
     issues["timing"] = _timing_issues(cache, cfg, record)
     # A record closed on or before Dec 31 of its year (close-year
@@ -899,6 +1083,19 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                             f"has the same sale on {cd}. Report it "
                             f"in one year only.")})
                 break
+    # 4. Rows the two projects put on different sides of Dec 31.
+    if isinstance(record.get("boundary_rows"), list):
+        issues["boundary"] = _boundary_issues(
+            cache, cfg, record, basis,
+            {str(here[i].get("id")) for i in used_here
+             if here[i].get("id") not in (None, "")})
+    else:
+        issues["notes"].append(
+            f"The {ry} record predates the Dec-31 row list: income or a "
+            f"trade that this project dates in {ry} (a trust's record "
+            f"date, a RIC January dividend, a local_timezone re-dating) "
+            f"is not checked. Re-close {ry} with the current taxjson to "
+            f"check it.")
     if record.get("filed_dispositions") is None:
         issues["notes"].append(
             f"The {ry} record holds taxjson's own dispositions. If that "
@@ -909,7 +1106,7 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
             **issues,
             "problems": sum(len(issues[k]) for k in
                             ("positions", "missed", "double", "timing",
-                             "partial"))}
+                             "boundary", "partial"))}
 
 
 def render(rep: Dict[str, Any], record_path: str) -> List[str]:
@@ -940,6 +1137,11 @@ def render(rep: Dict[str, Any], record_path: str) -> List[str]:
                    f"{i['date']}  settles {i['date_settle']}"))
     sec("Sales reported in both years", rep["double"],
         lambda i: f"{i['symbol']:<26} {i.get('qty', 0):>12g}  {i['date']}")
+    sec(f"Rows on different sides of Dec 31 in the two projects",
+        rep.get("boundary") or [],
+        lambda i: (f"{i['symbol']:<26} {i['action']:<10} dated "
+                   f"{i['date']}  counted {i['tax_date']}  "
+                   f"{float(i.get('amount') or 0):>12,.2f}"))
     sec(f"Written options on another premium timing than the {y} record",
         rep.get("timing") or [],
         lambda i: (f"{i['symbol']:<26} written {i['written']}  "

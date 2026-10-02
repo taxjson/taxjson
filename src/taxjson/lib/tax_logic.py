@@ -860,8 +860,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "never. It also flags a written option carried out of "
                  "the closed year that this project puts on another "
                  "premium timing than the record (taxed twice, or in no "
-                 "return); `option-boundary` and `handoff` read last "
-                 "year's record through prior_year_record."),
+                 "return), and income or a sale the two projects date "
+                 "on different sides of Dec 31 (a trust's record date, a "
+                 "local_timezone re-dating), so it is reported once; "
+                 "`option-boundary` and `handoff` read last year's record "
+                 "through prior_year_record."),
             Rule("CA-RPT-09",
                  "The record states its country: `check-filed` and "
                  "`handoff` refuse one closed under US rules instead of "
@@ -1372,7 +1375,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "`taxjson close-year` records each closed year's sales, "
                  "year-end positions and basis (a disallowed loss "
                  "included in the replacement's basis, as `list` shows), "
-                 "its country and date basis; `check-filed` and `handoff` refuse a record "
+                 "its country and date basis; `handoff` also flags "
+                 "income the two projects date on different sides of "
+                 "Dec 31 (a RIC January dividend kept in one and not the "
+                 "other); `check-filed` and `handoff` refuse a record "
                  "closed under Canadian rules instead of recomputing it "
                  "under US law."),
         ]),
