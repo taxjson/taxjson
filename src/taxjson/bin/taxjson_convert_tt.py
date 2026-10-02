@@ -54,6 +54,20 @@ _TIME_RE = re.compile(r'^\d{2}:\d{2}:\d{2}$')
 # audit S026-22. Without it an option line is checked at the equity 100
 # and a futures line is not checked at all.
 _MULT_RE = re.compile(r'^[xX](\d+(?:\.\d+)?)$')
+# Optional income facts at the END of a DIVIDEND / DIVIDEND_IN_LIEU /
+# TAX / ADJUST line, as `key=value` tokens: the record date that dates
+# trust income and ROC, the broker's "distribution" label, the paying
+# dealer's and the issuer's countries (an s.260 payment in lieu by a
+# Canadian dealer is a deemed dividend), and an ADJUST's kind (`roc`,
+# `dist`). A json -> tt -> json round trip dropped them all, moving
+# income to the pay year and a deemed dividend to other income with no
+# word (audit A2-0291, A2-0631).
+_FACT_KEYS = {'record': 'record_date', 'ex': 'ex_date',
+              'label': 'income_label', 'dealer': 'dealer_country',
+              'issuer': 'issuer_country', 'type': 'type'}
+_FACT_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'ADJUST')
+_FACT_RE = re.compile(r'^([a-z]+)=(\S+)$')
+_ADJUST_TYPES = ('roc', 'dist')
 
 
 def strip_tt_comment(line: str) -> str:
@@ -137,6 +151,12 @@ def parse_tt_line(line: str, account_name: str = 'default',
             f"least a date and a time: {line.strip()!r}")
     _check_date(parts[1], 'date', line, source)
     _check_time(parts[2], line, source)
+    facts = {}
+    if action in _FACT_ACTIONS:
+        while parts and _FACT_RE.match(parts[-1]):
+            key, val = _FACT_RE.match(parts.pop()).groups()
+            facts[key] = val
+        facts = _check_facts(action, facts, line, source)
     _max = _MAX_TOKENS.get(action)
     if _max is not None and len(parts) > _max:
         raise ValueError(
@@ -338,9 +358,74 @@ def parse_tt_line(line: str, account_name: str = 'default',
             f"and the total equals qty x price - commission. "
             f"Line: {line.strip()!r}")
 
+    # Not part of the id (as in TaxTransaction.compute_id).
+    tx.update(facts)
     _warn_unknown_suffix(tx, line, source)
     tx['id'] = compute_tt_id(tx)
     return tx
+
+
+def _check_facts(action: str, facts: dict, line: str, source: str) -> dict:
+    """Validate the `key=value` income-fact tokens of one line and map
+    them to their row fields."""
+    out = {}
+    for key, val in facts.items():
+        field = _FACT_KEYS.get(key)
+        if field is None:
+            raise ValueError(
+                f"{_where(source)}unknown .tt token {key}={val} — the "
+                f"income facts are {', '.join(f'{k}=' for k in _FACT_KEYS)}"
+                f": {line.strip()!r}")
+        if key in ('record', 'ex'):
+            _check_date(val, f"{key}=", line, source)
+        elif key in ('dealer', 'issuer'):
+            if not re.match(r'^[A-Z]{2}$', val):
+                raise ValueError(
+                    f"{_where(source)}{key}={val} must be a two-letter "
+                    f"country code (CA, US): {line.strip()!r}")
+        elif key == 'type':
+            if action != 'ADJUST' or val not in _ADJUST_TYPES:
+                raise ValueError(
+                    f"{_where(source)}type={val}: only an ADJUST line "
+                    f"takes a type ({', '.join(_ADJUST_TYPES)}): "
+                    f"{line.strip()!r}")
+        elif key == 'label':
+            if not re.match(r'^[a-z_]+$', val):
+                raise ValueError(
+                    f"{_where(source)}label={val} must be a lower-case "
+                    f"word (distribution): {line.strip()!r}")
+        out[field] = val
+    return out
+
+
+def _fact_tokens(tx: dict, action: str) -> str:
+    """The `key=value` tokens that carry a row's income facts."""
+    toks = []
+    for key, field in _FACT_KEYS.items():
+        val = str(tx.get(field) or '').strip()
+        if not val:
+            continue
+        if key == 'type':
+            if action != 'ADJUST' or val.lower() not in _ADJUST_TYPES:
+                continue
+            val = val.lower()
+        if ' ' in val:
+            continue
+        toks.append(f"{key}={val}")
+    return (" " + " ".join(toks)) if toks else ""
+
+
+def _num(x: float) -> str:
+    """A quantity / price at full precision: `%.8f` when that is exact,
+    else the shortest exact decimal. Truncating to 8 decimals changed a
+    10-decimal crypto quantity on json -> tt -> json, and with it the
+    row's id (audit A2-1072)."""
+    x = float(x)
+    s = f"{x:.8f}"
+    if float(s) == x:
+        return s
+    from decimal import Decimal
+    return format(Decimal(repr(x)), 'f')
 
 
 def _excess_commission_sale(tx: dict) -> bool:
@@ -466,8 +551,8 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
         # still comes from qty. A sale whose commission exceeds its
         # gross is written with its NEGATIVE total, which parse_tt_line
         # reads back when the line's fee explains it (A2-0620).
-        line = (f"{action} {date} {time} {symbol} {qty:.8f} {currency} "
-                f"{price:.8f} {net:.5f} {fee:.5f}")
+        line = (f"{action} {date} {time} {symbol} {_num(qty)} {currency} "
+                f"{_num(price)} {net:.5f} {fee:.5f}")
         # A declared contract size other than the equity option's 100
         # (or any size on a futures line) rides along as `x<size>`
         # (audit S026-22).
@@ -482,8 +567,8 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
         return line
 
     if action == 'TRANSFER':
-        line = (f"TRANSFER {date} {time} {symbol} {qty:.8f} {currency} "
-                f"{price:.8f} {net:.5f}")
+        line = (f"TRANSFER {date} {time} {symbol} {_num(qty)} {currency} "
+                f"{_num(price)} {net:.5f}")
         # Round-trip the opt-in declaration token: without it a
         # json→tt→json cycle would strip attestation from declared
         # rows (and could never re-grant it, by design).
@@ -495,7 +580,7 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
     if action == 'SPLIT':
         # SPLIT date time symbol_old symbol_new ratio
         symbol_new = tx.get('symbol_new') or symbol
-        return f"SPLIT {date} {time} {symbol} {symbol_new} {qty:.8f}"
+        return f"SPLIT {date} {time} {symbol} {symbol_new} {_num(qty)}"
 
     if action in ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX'):
         # ACTION date time symbol qty currency price total
@@ -504,15 +589,15 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
         # (the exact bug the sign-preserving IB parser fix removed), and the
         # changed net_amount hashed to a different id, breaking dedup
         # against the originals. The .tt parser reads the value signed.
-        line = (f"{action} {date} {time} {symbol} {qty:.8f} {currency} "
-                f"{price:.8f} {gross:.5f}")
+        line = (f"{action} {date} {time} {symbol} {_num(qty)} {currency} "
+                f"{_num(price)} {gross:.5f}")
         # Optional 9th column: the withholding-NETTED amount, emitted
         # only when it differs from gross — without it a json→tt→json
         # cycle re-parsed net as gross and inflated income. Legacy
         # positional consumers ignore trailing columns.
         if abs(net - gross) > 0.005:
             line += f" {net:.5f}"
-        return line
+        return line + _fact_tokens(tx, action)
 
     if action in ('INTEREST', 'FEE'):
         # ACTION date time currency amount  (sign preserved on interest)
@@ -520,7 +605,8 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
 
     if action in ('ADJUST', 'DISALLOW'):
         # ACTION date time symbol currency amount
-        return f"{action} {date} {time} {symbol} {currency} {net:.5f}"
+        return (f"{action} {date} {time} {symbol} {currency} {net:.5f}"
+                + _fact_tokens(tx, action))
 
     return None
 
@@ -569,7 +655,18 @@ def tt_to_json(input_path: Path, account_name: str) -> dict:
     # utf-8-sig: an editor's byte-order mark used to reach the first
     # action as '\ufeffBUYSELL' ("unknown .tt action", R1-133).
     from taxjson.lib.cli_diag import read_text_utf8
-    with io.StringIO(read_text_utf8(input_path)) as f:
+    _text = read_text_utf8(input_path)
+    # A file whose last line has no line end may have been cut short
+    # (a copy or a download that stopped): `... 4.95` cut to `... 4`
+    # still parses, as fee 4 (audit A2-1086). Say so; editors and the
+    # writers here always end the last line.
+    if _text and not _text.endswith(('\n', '\r')):
+        _last = strip_tt_comment(_text.splitlines()[-1]).strip()
+        if _last:
+            print(f"warning: {input_path.name}: the last line has no line "
+                  f"end — if the file was cut short, its last number may "
+                  f"be truncated; check it: {_last!r}", file=sys.stderr)
+    with io.StringIO(_text) as f:
         for lineno, line in enumerate(f, 1):
             source = f"{input_path.name}:{lineno}"
             try:

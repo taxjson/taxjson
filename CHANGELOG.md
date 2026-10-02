@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **.tt keeps income facts and full precision.** A DIVIDEND /
+  DIVIDEND_IN_LIEU / TAX / ADJUST line may end with `record=`, `ex=`,
+  `label=`, `dealer=`, `issuer=` and (ADJUST) `type=roc` tokens, and
+  `taxjson-convert-tt book.json` writes them: the round trip used to
+  move a December-record distribution and its ROC to the pay year, and
+  turn a Canadian dealer's payment in lieu (an s.260 deemed dividend)
+  into other income, with no word. Quantities and prices keep every
+  digit (a 10-decimal coin quantity was cut to 8, changing the row's
+  id). A .tt file whose last line has no line end warns that it may be
+  cut short (audit A2-0291, A2-0631, A2-1072, A2-1086).
 - **.tt: a sale whose commission exceeds its gross keeps its negative
   proceeds.** A .tt SELL line may now carry the negative total
   qty×price − commission (a penny option close: `-8.95` with a 9.95

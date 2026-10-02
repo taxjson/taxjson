@@ -100,5 +100,85 @@ class TestNegativeSellTotal(unittest.TestCase):
         self.assertEqual(back['multiplier'], 10.0)
 
 
+class TestRoundTripFacts(unittest.TestCase):
+    """A2-0291, A2-0631: income facts survive json -> tt -> json;
+    A2-1072: quantity/price precision; A2-1086: a cut last line."""
+
+    def test_pil_dealer_and_issuer_country_round_trip(self):
+        tx = {'action': 'DIVIDEND_IN_LIEU', 'date': '2025-03-31',
+              'time': '09:30:00', 'symbol': 'XEI.TO', 'quantity': 100,
+              'currency': 'CAD', 'price': 0.25, 'net_amount': 25.0,
+              'gross_amount': 25.0, 'dealer_country': 'CA',
+              'issuer_country': 'CA'}
+        line = tx_to_tt_line(tx)
+        self.assertIn("dealer=CA", line)
+        back, err = _parse(line)
+        self.assertEqual(back['dealer_country'], 'CA')
+        self.assertEqual(back['issuer_country'], 'CA')
+        self.assertEqual(err, "")
+
+    def test_record_date_label_and_roc_type_round_trip(self):
+        div = {'action': 'DIVIDEND', 'date': '2026-01-05',
+               'time': '00:00:00', 'symbol': 'XEI.TO', 'quantity': 1000,
+               'currency': 'CAD', 'price': 0.1, 'net_amount': 100.0,
+               'record_date': '2025-12-30',
+               'income_label': 'distribution'}
+        back, _ = _parse(tx_to_tt_line(div))
+        self.assertEqual(back['record_date'], '2025-12-30')
+        self.assertEqual(back['income_label'], 'distribution')
+        roc = {'action': 'ADJUST', 'date': '2026-01-05',
+               'time': '09:30:00', 'symbol': 'XEI.TO', 'currency': 'CAD',
+               'net_amount': -50.0, 'type': 'roc',
+               'record_date': '2025-12-30'}
+        back, _ = _parse(tx_to_tt_line(roc))
+        self.assertEqual(back['type'], 'roc')
+        self.assertEqual(back['record_date'], '2025-12-30')
+        self.assertAlmostEqual(back['net_amount'], -50.0)
+
+    def test_facts_do_not_change_the_id(self):
+        a, _ = _parse("DIVIDEND 2026-01-05 09:30:00 XEI.TO 1000 CAD 0.1 "
+                      "100.00")
+        b, _ = _parse("DIVIDEND 2026-01-05 09:30:00 XEI.TO 1000 CAD 0.1 "
+                      "100.00 record=2025-12-30")
+        self.assertEqual(a['id'], b['id'])
+
+    def test_bad_fact_tokens_refused(self):
+        for tail in ("record=2025-13-40", "dealer=Canada", "type=roc",
+                     "foo=1"):
+            with self.subTest(tail=tail), self.assertRaises(ValueError):
+                _parse("DIVIDEND 2026-01-05 09:30:00 XEI.TO 1000 CAD 0.1 "
+                       f"100.00 {tail}")
+        with self.assertRaises(ValueError):
+            _parse("BUYSELL 2025-01-05 09:31:00 ABC.US 100 USD 50.00 "
+                   "5005.00 5.00 record=2025-01-01")
+
+    def test_ten_decimal_quantity_round_trips(self):
+        tx = {'action': 'BUYSELL', 'date': '2025-03-01',
+              'time': '09:30:00', 'symbol': 'ETH', 'quantity': 0.0123456789,
+              'currency': 'CAD', 'price': 2000.123456789,
+              'net_amount': 24.69, 'fee': 0.0}
+        back, _ = _parse(tx_to_tt_line(tx))
+        self.assertEqual(back['quantity'], 0.0123456789)
+        self.assertEqual(back['price'], 2000.123456789)
+        dust = dict(tx, quantity=1.2345e-06, price=50000.0, net_amount=0.06)
+        back, _ = _parse(tx_to_tt_line(dust))
+        self.assertEqual(back['quantity'], 1.2345e-06)
+        # An exact 8-decimal value keeps the familiar spelling.
+        self.assertIn(" 1.00000000 ", tx_to_tt_line(
+            dict(tx, quantity=1.0, price=10.0, net_amount=10.0)))
+
+    def test_last_line_without_line_end_warns(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "h.tt"
+            p.write_text("BUYSELL 2025-01-05 09:31:00 SHOP.TO 30 CAD 95.00 "
+                         "2854.95 4", encoding="utf-8")
+            _, err = _quiet(tt_to_json, p, "m")
+            self.assertIn("no line end", err)
+            p.write_text("BUYSELL 2025-01-05 09:31:00 SHOP.TO 30 CAD 95.00 "
+                         "2854.95 4.95\n", encoding="utf-8")
+            _, err = _quiet(tt_to_json, p, "m")
+            self.assertNotIn("no line end", err)
+
+
 if __name__ == '__main__':
     unittest.main()
