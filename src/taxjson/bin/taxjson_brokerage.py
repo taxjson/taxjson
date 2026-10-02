@@ -513,12 +513,17 @@ Examples:
     # s.90(1) is Canadian law: never the default without a country
     # (partition INPUTS-03), and refused for a US filer.
     foreign_roc = args.foreign_roc
-    if args.country == "usa" and foreign_roc == "dividend":
-        print("taxjson-brokerage: error: --foreign-roc dividend is ITA "
-              "s.90(1), Canadian law; it does not apply with --country "
-              "usa (a nondividend distribution lowers basis, §301(c)(2))",
-              file=sys.stderr)
-        sys.exit(2)
+    if args.country is not None:
+        # The ownership table (lib/country FLAG_VALUE_COUNTRY: the
+        # "dividend" value is ITA s.90(1), Canada-only; A2-0719).
+        from taxjson.lib.country import flag_country_problems
+        _fp = flag_country_problems(args.country,
+                                    {"--foreign-roc": foreign_roc},
+                                    tool="taxjson-brokerage: error")
+        if _fp:
+            for _m in _fp:
+                print(_m, file=sys.stderr)
+            sys.exit(2)
     if foreign_roc is None:
         foreign_roc = "dividend" if args.country == "canada" else "acb"
 
@@ -530,6 +535,10 @@ Examples:
         extractor = extractor_class()
         if shared_context is not None:
             extractor.account_context = shared_context
+        # Which law the parser's messages cite (never a tax choice).
+        extractor.country = args.country
+        # Which law the parser's messages cite (never a tax choice).
+        extractor.country = args.country
         if hasattr(extractor, 'foreign_return_of_capital'):
             extractor.foreign_return_of_capital = foreign_roc
         if hasattr(extractor, 'futures_settle'):

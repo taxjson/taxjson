@@ -1038,7 +1038,7 @@ def main(argv=None) -> int:
         transactions, sheltered, affiliated, taxable=False,
         incomplete_history=(Path(args.incomplete_history)
                             if args.incomplete_history else None),
-        phantom_hint=False)
+        phantom_hint=False, country=country)
 
     # The engine options and the income re-dating run_gains applies
     # (lib/pipeline: one builder): the trust ROC record date

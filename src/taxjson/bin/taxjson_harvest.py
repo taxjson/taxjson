@@ -350,7 +350,14 @@ def load_radar(paths: List[Path]) -> Dict[str, Dict[str, Any]]:
                               # LOCKED: taxable units whose loss a sale
                               # today would lose (the rest is claimable).
                               "at_risk_qty": r.get("at_risk_qty"),
-                              "taxable_qty": r.get("taxable_qty")}
+                              "taxable_qty": r.get("taxable_qty"),
+                              # The engine's warn-only flags (a warrant,
+                              # an adjusted-series call, a futures
+                              # option, a US long call): the ADVISORY
+                              # cell is starred and the flags listed
+                              # (audit A2-0445).
+                              "notes": [str(n) for n in
+                                        (r.get("notes") or [])]}
     return out
 
 
@@ -521,6 +528,14 @@ def _advisory_display(rec: Optional[Dict[str, Any]],
     cells on whitespace."""
     if not rec:
         return "no-radar-data"
+    cell = _advisory_cell(rec, today)
+    # '*': a warn-only flag the engine names for a manual check — listed
+    # under the table (audit A2-0445).
+    return cell + "*" if rec.get("notes") else cell
+
+
+def _advisory_cell(rec: Dict[str, Any],
+                   today: Optional[date] = None) -> str:
     cat = rec.get("category") or "-"
     clears = rec.get("clears_at")
     if clears:
@@ -624,10 +639,11 @@ def main(argv: Optional[List[str]] = None,
                         "source. Adds a DTE (days-to-expiry) column")
     add_country_argument(p, help="Project country (required; adds the LT "
                                  "IN column for usa)")
-    p.add_argument("--base-currency", default="CAD", metavar="CURR",
+    p.add_argument("--base-currency", default=None, metavar="CURR",
                    type=norm_currency,
-                   help="Base currency of the books (default: %(default)s). "
-                        "Quotes in other currencies convert via --rates")
+                   help="Base currency of the books (default: the "
+                        "--country's home currency, CAD or USD). Quotes "
+                        "in other currencies convert via --rates")
     p.add_argument("--rates", type=Path, default=None, metavar="FILE",
                    help="FX rates file (the pipeline's to_base.csv; "
                         "default: to_base.csv next to the first input). "
@@ -674,7 +690,13 @@ def main(argv: Optional[List[str]] = None,
         return 2
 
     from taxjson.lib.country import is_usa as _country_is_usa
+    from taxjson.lib.country import home_currency as _home_currency
     is_usa = _country_is_usa(args.country)
+    # The books are in the country's currency unless told otherwise —
+    # a CAD default refused a US project's own USD books (re-audit
+    # A2-0433 / A2-0746, the COMMANDS-14 twin).
+    if not args.base_currency:
+        args.base_currency = _home_currency(args.country)
     # US-PLAN-05: a US crypto account is outside §1091 (US-WASH-13).
     # Canada has no such carve-out (crypto is property under s.54), so
     # the set stays empty there — the two countries never mix.
@@ -1138,6 +1160,17 @@ def main(argv: Optional[List[str]] = None,
                       f"prior DENIED losses — UNREALIZED on those rows "
                       f"includes recycled loss, not only new loss "
                       f"(per-row amounts in --json / `taxjson list`).")
+    _flagged = [(r["symbol"], n) for r in rows
+                 for n in ((r.get("radar") or {}).get("notes") or [])
+                 if r.get("verdict") == "LOSS"]
+    if _flagged:
+        # CA-SL-14/15, US-WASH-12/14/15: the engine only warns, so the
+        # loss still counts as claimable — but check it by hand.
+        legend.append("ADVISORY '*': flagged for a manual check (the "
+                      "engine only warns; the loss is counted as "
+                      "claimable):")
+        legend.extend(f"  {sym}: {n}"
+                      for sym, n in dict.fromkeys(_flagged))
     # CA-PLAN-04 / US-PLAN-04 (audit S054-22).
     legend.append(_scope)
     print("\n" + "\n".join(legend))

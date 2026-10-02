@@ -691,8 +691,32 @@ class TransferValidationError(ValueError):
     and exit 1 with the message on stderr."""
 
 
+# The project's own terms in the books' notes (re-audit A2-1255 /
+# A2-1323): a US .sum never reads "superficial-loss walk", "ACB" or
+# "registered accounts". None (a standalone caller with no country):
+# neutral wording.
+_BOOK_WORDS = {
+    "canada": {"walk": "superficial-loss walk", "pool": "ACB pooling",
+               "reg": "registered accounts",
+               "reg_one": "a registered account (TFSA/RRSP)",
+               "denial": "superficial-loss denial"},
+    "usa": {"walk": "wash-sale walk", "pool": "basis tracking",
+            "reg": "retirement (IRA) accounts",
+            "reg_one": "a retirement account (IRA/401(k))",
+            "denial": "wash-sale denial"},
+    None: {"walk": "loss-denial walk", "pool": "cost tracking",
+           "reg": "sheltered accounts",
+           "reg_one": "a sheltered (tax-advantaged) account",
+           "denial": "loss denial"},
+}
+
+
+def _book_words(country: Optional[str]) -> Dict[str, str]:
+    return _BOOK_WORDS.get(country, _BOOK_WORDS[None])
+
+
 def _handle_transfers(transactions, sheltered_transactions, *, taxable,
-                      base_currency=None):
+                      base_currency=None, country=None):
     """Pre-process TRANSFER rows before they reach the gains engine.
 
     The --sheltered file is for cross-account wash-sale context only. Its
@@ -786,7 +810,8 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
         print(
             f"NOTE: {n_sh_rewritten} unmatched TRANSFER row(s) in the "
             f"--sheltered context treated as sheltered "
-            f"acquisitions/disposals for the superficial-loss walk "
+            f"acquisitions/disposals for the "
+            f"{_book_words(country)['walk']} "
             f"(in-kind contributions/withdrawals; custody moves were "
             f"netted out).",
             file=sys.stderr,
@@ -833,7 +858,8 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
                                   'type': 'transfer_rewrite'})
         rewritten.append(t)
     msg = (
-        f"NOTE: rewrote {n_main} TRANSFER row(s) → BUYSELL for ACB pooling "
+        f"NOTE: rewrote {n_main} TRANSFER row(s) → BUYSELL for "
+        f"{_book_words(country)['pool']} "
         f"(sheltered-account approximation). (Standalone "
         f"`taxjson-gains`: pass --taxable to reject TRANSFER rows "
         f"instead.)"
@@ -856,7 +882,8 @@ def prepare_books(transactions, sheltered_transactions=(),
                   incomplete_history: Optional[Path] = None,
                   phantom_hint: bool = True,
                   base_currency: Optional[str] = None,
-                  spot_crypto: bool = False):
+                  spot_crypto: bool = False,
+                  country: Optional[str] = None):
     """The load-side preprocessing every gains consumer must share:
     TRANSFER handling (strip/drop/rewrite/reject) then phantom opening
     synthesis. Returns (transactions, sheltered, affiliated, phantom_log).
@@ -877,7 +904,7 @@ def prepare_books(transactions, sheltered_transactions=(),
 
     transactions, sheltered_transactions = _handle_transfers(
         transactions, sheltered_transactions, taxable=taxable,
-        base_currency=base_currency,
+        base_currency=base_currency, country=country,
     )
 
     phantom_application_log: list = []
@@ -965,12 +992,11 @@ def prepare_books(transactions, sheltered_transactions=(),
                     or c.broker_says_closing):
                 continue
             if c.registered:
-                why = ("a registered account (TFSA/RRSP/IRA) cannot be "
-                       "short")
+                _w = _book_words(country)
+                why = f"{_w['reg_one']} cannot be short"
                 tail = ("its later purchases are read as covering the "
-                        "short, so a superficial-loss / wash-sale denial "
-                        "they cause for a taxable account's loss is "
-                        "missed")
+                        f"short, so a {_w['denial']} they cause for a "
+                        "taxable account's loss is missed")
             elif spot_crypto:
                 why = "spot crypto cannot be short"
                 tail = ("no gain is booked for the sale until the coins' "
@@ -991,7 +1017,8 @@ def prepare_books(transactions, sheltered_transactions=(),
             more = f" (+{len(candidates) - 3} more)" if len(candidates) > 3 else ""
             print(
                 f"NOTE: {len(candidates)} (symbol, account) pair(s) go short in this data: "
-                f"{preview}{more}. {n_reg} are in registered accounts. "
+                f"{preview}{more}. {n_reg} are in "
+                f"{_book_words(country)['reg']}. "
                 f"If any of these are from truncated history rather than real short trades, "
                 f"list them in phantoms.json: `taxjson find-missing-history "
                 f"--gen-phantoms phantoms.json` in a project (`taxjson run` "
@@ -1245,7 +1272,8 @@ def run_gains(transactions, sheltered_transactions=(),
             transactions, sheltered_transactions, affiliated_transactions,
             taxable=req.taxable, incomplete_history=req.incomplete_history,
             phantom_hint=req.phantom_hint, spot_crypto=req.spot_crypto,
-            base_currency=HOME_CURRENCY.get(req.country))
+            base_currency=HOME_CURRENCY.get(req.country),
+            country=req.country)
 
     rules = get_tax_rules(req.country)
     income_rules = req.income_rules()

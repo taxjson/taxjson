@@ -1428,7 +1428,9 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"{'; ...' if len(net_of_tax) > 6 else ''}). In a "
                   f"TAXABLE account the income is understated and the "
                   f"foreign tax credit missing: take the gross and the "
-                  f"withholding from the T5/NR4 slip."
+                  f"withholding from "
+                  f"{self.law('the T5/NR4 slip', 'the year-end tax statement (Form 1099-DIV / 1042-S, or the NR4 a Canadian payer issues)', 'the year-end tax slip')}"
+                  f"."
                   f"{'' if taxable else ' (Account type unknown — ignore in a registered account.)'}",
                   file=sys.stderr)
         if no_book_value and taxable is not False:
@@ -1448,7 +1450,8 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"TAXABLE account transfers are kept out of the books, "
                   f"so these shares have no cost and their sale will "
                   f"read as a short: book the real acquisition (date, "
-                  f"quantity, the sending broker's ACB) as a .tt BUYSELL "
+                  f"quantity, the sending broker's "
+                  f"{self.law('ACB', 'cost basis', 'cost')}) as a .tt BUYSELL "
                   f"row, or declare it in phantoms.json (`taxjson "
                   f"find-missing-history --gen-phantoms`)."
                   f"{'' if taxable else ' (Account type unknown — ignore in a registered account.)'}",

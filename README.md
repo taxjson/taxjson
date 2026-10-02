@@ -179,8 +179,14 @@ than 7 days after it is an ATTENTION line. Futures settle on the trade date, or
 on the next settlement day under `futures_settle = "next_day"`. An option
 closed at $0 on its expiry day is dated and settled that day (a $0 close posted
 up to 7 days after the expiry is moved back to it). Dividend, tax, interest and
-fee rows are dated `date`. For a crypto-only export set `[options] settle_on_trade_date =
-true` (crypto has no settlement cycle).
+fee rows are dated `date`. `[options] settle_on_trade_date = true` settles every
+trade on its trade date (an export whose date column is already the settlement
+date). The generic importer books securities only — every symbol gets a listing
+suffix — so it is not a route for crypto: coins go in a `crypto = true` account
+(the Kraken or Coinbase export, or `.tt` lines with the bare coin symbol), where
+they are crypto-assets (Schedule 3 line 7, pooled across your crypto accounts,
+and outside §1091 in a US project). A generic file in a `crypto = true` account
+is refused.
 
 Kraken and Coinbase timestamps are UTC; rows are dated in local time
 (America/Toronto by default; set `[settings] local_timezone =

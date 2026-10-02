@@ -307,7 +307,7 @@ def main():
         incomplete_history=(Path(args.incomplete_history)
                             if getattr(args, 'incomplete_history', None)
                             else None),
-        phantom_hint=False)
+        phantom_hint=False, country=args.country)
 
     # The income re-dating and engine options run_gains applies (one
     # builder in lib/pipeline): the trust ROC record date
