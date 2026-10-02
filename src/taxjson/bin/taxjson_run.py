@@ -2990,6 +2990,41 @@ def stage_exports(equity_gains: List[Path], reports_dir: Path) -> None:
     print(f"  → {exports_dir}/")
 
 
+def _duplicate_crypto_exports(cache: Path, names: List[str]) -> List[str]:
+    """One line per pair of crypto accounts whose parsed exchange rows
+    share transaction ids: the same export filed under two accounts is
+    booked twice (re-audit A2-0569; the per-account dedup only sees one
+    account). Exchange ids are unique per row (Coinbase IDs, Kraken
+    txids; a content hash when the export has none)."""
+    import json as _json
+    ids: Dict[str, Dict[str, str]] = {}
+    for n in names:
+        mine: Dict[str, str] = {}
+        for b in ("coinbase", "kraken"):
+            p = cache / f"{n}_{b}.json"
+            try:
+                doc = _json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            for t in doc.get("transactions") or []:
+                if t.get("id"):
+                    mine[str(t["id"])] = b
+        ids[n] = mine
+    out = []
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            both = set(ids.get(a, {})) & set(ids.get(b, {}))
+            if both:
+                ex = sorted({ids[a][k] for k in both})
+                out.append(
+                    f"crypto accounts {a} and {b} hold {len(both)} "
+                    f"identical {'/'.join(ex)} row(s) (the same "
+                    f"transaction ids): the same export is in both "
+                    f"inputs/{a}/ and inputs/{b}/, so its trades are "
+                    f"booked twice. Keep it in one account.")
+    return out
+
+
 def _warn_cross_taxable_overlap(taxable_bases: List[Tuple[str, Path]],
                                 settings: Dict[str, Any]) -> None:
     """Loud caveat for the KNOWN_ISSUES multi-account gap: when the SAME
@@ -3448,6 +3483,14 @@ def cmd_run(args: argparse.Namespace) -> None:
                           no_input=no_input,
                           strict=getattr(args, "strict", False),
                           parse_only=True)
+        _dups = _duplicate_crypto_exports(
+            cache, [n for n, _c in _crypto_first])
+        for _d in _dups:
+            print(f"taxjson: WARNING: {_d}", file=sys.stderr)
+        if _dups and getattr(args, "strict", False):
+            sys.exit("taxjson run --strict: the same exchange rows are in "
+                     "two crypto accounts (above) — every one would be "
+                     "booked twice. Remove the copy.")
 
     sheltered_outputs: List[Tuple[str, Dict[str, Path]]] = []
     _skipped_no_input: List[str] = []       # no CSV/.tt — see B7 helper

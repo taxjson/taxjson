@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The same exchange export filed under two crypto accounts (rows with
+  the same transaction ids) is warned about, and `run --strict` stops,
+  instead of booking every trade twice at exit 0 (re-audit A2-0569).
+
 - `taxjson elect ACCOUNT --set A=x --set B=y` is refused (nothing saved)
   instead of saving only the last --set at exit 0; give one --set per
   command (re-audit A2-0563, A2-0568).
