@@ -625,8 +625,10 @@ class TestRbcIncomeAndCorporateRows(unittest.TestCase):
                                    "FRACTYL HEALTH INC", "", "", "25.00",
                                    "USD", "FRACTYL HEALTH INC CASH IN LIEU "
                                    "OF DIVIDEND"))
+        # Income, not a fractional-share CIL — and a payment in lieu
+        # since re-audit A2-0098.
         self.assertEqual([(t['action'], t['net_amount']) for t in txs],
-                         [('DIVIDEND', 25.0)])
+                         [('DIVIDEND_IN_LIEU', 25.0)])
 
     def test_transfer_in_of_a_deliver_named_security_stays_in(self):
         """S016-05 / S065-03."""

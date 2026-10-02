@@ -155,6 +155,142 @@
   `AUD` coin, and an AUD.HOLD reward an unpriced coin. Kraken now uses
   the Coinbase parser's fiat list (re-audit A2-0238, A2-0251, A2-0579,
   A2-0580).
+- Questrade / RBC: an option description whose strike is only partly
+  readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
+  Questrade row with fewer cells than the header is refused instead of
+  booked with blank trailing cells (re-audit A2-1041 and A2-1042, the
+  Questrade / RBC halves).
+- RBC: a merger whose removal and receipt sit in two yearly exports is
+  left to taxjson-corp-actions (which pairs the legs across the
+  account's statements, A2-0214) instead of two UNBOOKED legs that
+  made `run --strict` refuse (re-audit A2-0271).
+- RBC: a USD row whose name reads as the US-dollar class of a TSX fund
+  ('... ETF US DOLLAR UNITS'), other than DLR, is an ATTENTION line with
+  the `GLOBAL X.US X.U.TO` map line; it was booked as a US listing
+  silently (re-audit A2-1043; RBC's spelling for these is unverified,
+  so it is not renamed automatically).
+- Questrade / RBC: the stock leg of an option assignment on a class
+  share (RCI.B under the Montreal root RCI, BRK.B under BRKB) is booked
+  as the stock; it was refused as a contract on another underlying or
+  a 100x gross mismatch (re-audit A2-1059).
+- Questrade: deposit, contribution and withdrawal rows are recognised
+  cash non-events (they were 'unclassified ... needs a new branch'),
+  INT rows are booked as interest with their sign (credit interest was
+  dropped), and stock-lending income is an UNBOOKED warning (re-audit
+  A2-0277, A2-0614).
+- **Questrade / RBC: payments in lieu of a dividend.** A Questrade
+  'SUBST PAY ... IN LIEU OF DIVIDEND' row and an RBC 'CASH / PAYMENT IN
+  LIEU OF DIVIDEND' row were booked as dividends: in Canada a PIL on a
+  US issuer got a foreign tax credit nobody withheld, and in a US
+  project it was a qualified dividend. They are payments in lieu paid
+  by a Canadian dealer now: Canada deems one on a Canadian issuer a
+  dividend (s.260) and keeps the rest ordinary income; the US keeps all
+  of them ordinary (tax-logic CA-INC-03 names the dealers; US-INC-01)
+  (re-audit A2-0098).
+- Questrade: a CAD-settled US trade (EXCHANGE RATE) carries its
+  commission in CAD like its price and net; it stayed USD-sized, so the
+  fees report and the Schedule 3 proceeds/outlays split were short by
+  the rate (the gain was right) (re-audit A2-0615).
+- Questrade: a decimal-comma CNV@ rate ('CNV@ 1,4138', read as 1) or
+  cash-in-lieu fraction ('1,5' read as 1, '0,5' dropped) is refused,
+  as BOOK VALUE already was; a BRW journal's IN leg pairs only with the
+  OUT leg of the same security (two journals on one date swapped their
+  costs) (re-audit A2-0278, A2-1058, A2-1061).
+- **Concatenated exports keep their same-day order.** Two newest-first
+  Questrade or generic exports joined with the header repeated, and RBC
+  exports joined without one, were read top-down as a whole (the dates
+  go both ways), so a same-day sale replayed after its rebuy and the
+  superficial-loss denial changed. The order is now decided per segment
+  (per header, or per run of dates for RBC); the generic importer no
+  longer reports the repeated header as an UNBOOKED row (re-audit
+  A2-0100, A2-1046, A2-1084).
+- RBC: a swallowed-row error names the line of the stray quote, not the
+  end of the swallowed span; a Taxes row with a blank Symbol is refused
+  instead of booked on 'UNKNOWN'; files without an Account column no
+  longer say 'NOTHING was de-duplicated' next to the run's dedup line
+  (re-audit A2-1045, A2-1050, A2-1051).
+- **RBC export coverage is judged per account, over trading days.**
+  Another RBC account's later export no longer hides this account's
+  missing late December; an export taken on Dec 31 is a note (not an
+  ATTENTION with the range 'Jan 1 to Dec 31'), and one taken on the
+  last trading day before a weekend year end is not told its weekend
+  is missing (re-audit A2-0272, A2-0275, A2-1049).
+- **RBC / Questrade: a dividend-reinvestment row must fit units x price.**
+  A REI row whose cash was 10x its units at the REINV@ price was booked
+  as the units' cost with only a schema note; the trade path refuses
+  the same numbers. It is refused now when the price is in the row's
+  currency; a REINV@ marker in the other currency (C$ on a USD row, U$
+  on a CAD row, as real exports carry) is not judged (re-audit
+  A2-0268).
+- **RBC / Questrade / Webull / Coinbase: a Buy row signed as a sale is
+  refused.** An RBC Buy with a negative Quantity was booked as a sale
+  with negative proceeds (a 4,880 swing under `--strict`); Questrade
+  flipped it to a buy silently; a Webull BUY whose quantity and cash
+  both said sale, and a Coinbase Buy carrying Coinbase's own sale
+  signature (negative quantity and total), were booked as purchases.
+  Each is now refused with the row named, as the generic importer does
+  (re-audit A2-0097, A2-0287, A2-1025, A2-1057).
+- **RBC / Questrade: book-cost adjustment rows.** An RBC 'Return of
+  Capital' row lowers the ACB whatever its description words (a
+  'ROC ADJUSTMENT TO BOOK COST' raised it); a Return of Capital row
+  describing a NOTIONAL distribution is refused; a $0 adjustment books
+  nothing (it booked a 0.00 ADJUST under two contradicting lines); the
+  year-end ROC book-cost row is an ATTENTION that the same dollars are
+  usually already in the income totals (take income and box 42 from
+  the T3). A Questrade zero-cash row stating a book-cost adjustment is
+  an UNBOOKED warning, not an 'informational' row (re-audit A2-0094,
+  A2-0273, A2-1047, A2-1062).
+- **Questrade / RBC: reversals pair across all of an account's exports.**
+  A Questrade stock-dividend, cash-in-lieu or DRIP reversal (and an RBC
+  REI CANCEL) cancelled its original only inside its own file: with an
+  overlapping older download the original came back as phantom shares
+  (H1 + full-year exports booked 1,250 shares for 1,100), and an
+  original in last year's export refused the whole account. The
+  pairing is now planned over every export of the account, counting
+  overlap copies once; a reversal cancels the latest original on or
+  before its date (a later identical stock dividend survives), a
+  reversed stock dividend no longer prints its 'booked' note, and an
+  RBC file whose rows all live in the account's other export is no
+  longer a '0 transactions' warning that failed `run --strict`
+  (re-audit A2-0026, A2-0269, A2-0280, A2-0281, A2-0616, A2-1044,
+  A2-1048, A2-1055, A2-1060, A2-1063).
+- **Questrade / RBC: one export holding several broker accounts.** A
+  Questrade file whose Account Type puts a registered plan's rows in a
+  taxable account (or a taxable account's rows in a registered one) is
+  refused — its TFSA trades were booked as taxable gains with rc 0.
+  Any other multi-account Questrade file, and an RBC file holding rows
+  of several RBC accounts (RBC writes no account type), is an ATTENTION
+  line: every row goes to one taxjson account (re-audit A2-0025).
+- **RBC / Questrade / Webull: money-affecting parser warnings reach the
+  run console.** A guessed listing for a USD return of capital on an
+  untraded symbol (now suggesting `TOBASE`, which works, instead of
+  `GLOBAL`, which stopped the run), an RBC temporary code assumed to be
+  the receipt's ticker, a ticker change without a reorganization row
+  (now also when the new symbol opens with a buy and then goes short,
+  with the `GLOBAL` line on the first line), an RBC notional
+  distribution whose income is left to the T3, a Questrade internal
+  code, a dividend booked net of non-resident tax and a transfer-in
+  with no book value are `ATTENTION` lines now; they sat in the .sum
+  only. In a Canada project the $0-cost stock-dividend note is an
+  ATTENTION line too, and `taxjson run` echoes an echoed warning's
+  indented continuation lines (re-audit A2-0005, A2-0007, A2-0027,
+  A2-0096, A2-0099, A2-0265, A2-0270, A2-0276, A2-0279, A2-0282,
+  A2-0283, A2-0612, A2-0613).
+- **RBC: a CLOSE CONTRACT row the books cannot back is said out loud.**
+  RBC re-describes an option between yearly exports (.RCI in 2024,
+  .RCI.B in 2025; an adjusted .TRX1). With the opening position in a
+  `.tt` under the old root, the close was booked as a NEW written (or
+  long) option — its premium taxed in full, the real position left
+  open — with rc 0 and no warning. The parser now carries RBC's OPEN /
+  CLOSE CONTRACT marker (and expiries and assignments as closing) as
+  the `open_close` code, and the run console prints an ATTENTION line
+  for any option row coded closing that the books cannot back, naming
+  the contract held under the related root and the exact `ticker.map`
+  GLOBAL line. The expired-option warning points at that line instead
+  of a missing expiry row, and `taxjson handoff` accepts a re-described
+  root (same expiry, strike, quantity and cost) while failing a `.tt`
+  whose root this year's export closes under another spelling
+  (re-audit A2-0006, A2-0095, A2-0266, A2-0267).
 - A Questrade or RBC share buy at $0 price and $0 cash (almost always a
   transfer or journal row booked with no cost) is flagged ATTENTION
   (audit A2-0619; Webull refuses it, the generic importer already did).

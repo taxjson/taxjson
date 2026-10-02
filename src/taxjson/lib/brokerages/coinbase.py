@@ -445,6 +445,15 @@ class CoinbaseBrokerage(BaseBrokerage):
                 price = self._num(row, header_map, 'price at transaction')
                 fee = self._num(row, header_map, 'fees')
                 total = self._num(row, header_map, 'total')
+                if is_buy and not is_sell and qty < 0 and total < 0:
+                    # Coinbase's own SALE signature (quantity and total
+                    # both negative) under a Buy label was booked as an
+                    # acquisition, also under --strict (re-audit A2-1025).
+                    raise ValueError(
+                        f"Coinbase CSV {path.name} line {reader.line_num}: "
+                        f"a {type_raw.strip()} row with a NEGATIVE "
+                        f"quantity and total — the sale signature; "
+                        f"refusing to book it as a purchase.")
 
                 date_str = dt.strftime("%Y-%m-%d")
                 time_str = dt.strftime("%H:%M:%S")

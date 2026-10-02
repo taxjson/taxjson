@@ -137,7 +137,7 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.tomlcompat import tomllib
 
@@ -644,6 +644,7 @@ class GenericBrokerage(BaseBrokerage):
         transactions: List[Dict[str, Any]] = []
         # Each consumed row's date, file order (newest-first detection).
         row_dates: List[str] = []
+        segments: List[Tuple[int, int]] = []   # (row index, tx index)
         # (where, target, raw signed quantity) per trade row, for the
         # file-level sign-convention check after the loop.
         trade_signs: List[tuple] = []
@@ -733,6 +734,16 @@ class GenericBrokerage(BaseBrokerage):
             for row in reader:
                 if not any((v or "").strip() for v in row.values()
                            if isinstance(v, str) or v is None):
+                    continue
+                if all((v or "").strip().lower() == (k or "").strip().lower()
+                       for k, v in row.items()
+                       if k is not None and isinstance(v, (str, type(None)))):
+                    # The header repeated mid-file: two exports
+                    # concatenated. A segment boundary for the row order
+                    # (re-audit A2-1084), not an unmapped action.
+                    self.count_nonevent("repeated header row "
+                                        "(concatenated exports)")
+                    segments.append((len(row_dates), len(transactions)))
                     continue
                 # A record wider than the header, or a cell holding a
                 # line break: an unescaped quote in a text cell swallowed
@@ -1041,8 +1052,17 @@ class GenericBrokerage(BaseBrokerage):
         # one transaction, so reversing the list reverses the rows.
         # (After the fill marks, so a row's id does not change.)
         self.disambiguate_split_fills(transactions)
-        if self.newest_first(row_dates):
-            transactions.reverse()
+        # Per header-delimited segment (re-audit A2-1084): two
+        # newest-first exports concatenated went both ways over the
+        # whole file and were read top-down.
+        bounds = [(0, 0)] + segments + [(len(row_dates), len(transactions))]
+        out: List[Dict[str, Any]] = []
+        for (r0, t0), (r1, t1) in zip(bounds, bounds[1:]):
+            part = transactions[t0:t1]
+            if self.newest_first(row_dates[r0:r1]):
+                part.reverse()
+            out.extend(part)
+        transactions[:] = out
         self.emit_skip_summary(path.name)
         return transactions
 

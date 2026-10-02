@@ -224,7 +224,15 @@ def echo_parse_stats(out_path: Path) -> None:
     diag_path = out_path.with_name(out_path.name + ".diag")
     if not diag_path.exists():
         return
+    echoing = False
     for line in diag_path.read_text(errors="replace").splitlines():
+        if (echoing and line[:1] in (" ", "\t") and line.strip()
+                and not _PARSE_COUNT_RE.match(line)):
+            # An echoed warning's indented continuation (the GLOBAL line
+            # under a ticker-change hint, re-audit A2-0613).
+            print(f"  {line}")
+            continue
+        echoing = line.startswith((UNBOOKED_PREFIX, ATTENTION_PREFIX))
         if _PARSE_COUNT_RE.match(line):
             # Keep the parser's own leading indent — it visually nests
             # the per-file counts under the `parse {broker}: …` header.
@@ -261,8 +269,13 @@ def echo_attention_lines(out_path: Path, prefix: str = "") -> None:
         lines = diag_path.read_text(errors="replace").splitlines()
     except OSError:
         return
+    echoing = False
     for line in lines:
-        if line.startswith(ATTENTION_PREFIX + " " + prefix):
+        if echoing and line[:1] in (" ", "\t") and line.strip():
+            print(f"  {line}")
+            continue
+        echoing = line.startswith(ATTENTION_PREFIX + " " + prefix)
+        if echoing:
             print(f"  {line}")
 
 
@@ -1152,15 +1165,27 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
     # the trade that opened them in the books): the missing row is the
     # purchase, not the expiry (audit S013-00).
     _closing: set = set()
+    # One contract under two roots (a CLOSING row booked on RCX.B while
+    # the books hold RCX, audit A2-0266): both legs stay open past the
+    # expiry, and the fix is the ticker.map line, not a missing row.
+    _redescribed: Dict[str, str] = {}
     if any(is_option_symbol(str(h.get("symbol") or "")) for h in inv):
         try:
             from taxjson.lib.core import load_transactions
             from taxjson.lib.option_boundary import expired_open
+            from taxjson.lib.option_close_check import (
+                unbacked_option_closes)
             _base = cache / f"{name}_base.json"
             if _base.exists():
+                _txs = load_transactions(_base)
                 _closing = {x["symbol"] for x in expired_open(
-                    load_transactions(_base), int(year))
-                    if x.get("broker_closing")}
+                    _txs, int(year)) if x.get("broker_closing")}
+                for _f in unbacked_option_closes(_txs):
+                    if len(_f["partners"]) == 1:
+                        _p = _f["partners"][0][0]
+                        _fix = f"GLOBAL {_p} {_f['symbol']}"
+                        _redescribed.setdefault(_f["symbol"], _fix)
+                        _redescribed.setdefault(_p, _fix)
         except (OSError, ValueError, TypeError):
             _closing = set()
     for h in inv:
@@ -1175,11 +1200,20 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
         if not exp or exp >= cutoff:
             continue
         side = "long" if qty > 0 else "written"
+        if sym in _redescribed:
+            lines.append(
+                f"warning: {name}: {sym} expired {exp} and the books still "
+                f"hold {qty:g} ({side}): a CLOSING row was booked under "
+                f"another root of the same contract (see the ATTENTION "
+                f"line) — add to ticker.map:  {_redescribed[sym]}  — not "
+                f"a missing row.")
+            continue
         if sym in _closing:
             lines.append(
                 f"warning: {name}: {sym} expired {exp} and the books still "
                 f"hold {qty:g} ({side}), but the broker coded the trade "
-                f"that opened it CLOSING (IB code C): it closed a position "
+                f"that opened it CLOSING (IB code C / RBC CLOSE CONTRACT): "
+                f"it closed a position "
                 f"opened before the data — add the missing "
                 f"{'write' if qty > 0 else 'purchase'} (`taxjson "
                 f"find-missing-history`), not an expiry row.")
@@ -2696,20 +2730,13 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     if force or needs_rebuild(gains_json, *gains_deps):
         print("  gains")
         run_to_file(cmd, gains_json)
-    # A basis adjustment the engine could not apply (US: a return of
-    # capital or notional distribution with no shares held) is a number
-    # the user must report by hand — on the console every run, cached or
-    # not, not only in the .sum (audit A2-0199).
-    echo_attention_lines(gains_json, prefix="unapplied basis adjustment: ")
-    # Income a record date moves across a year end, or an implausible
-    # record date (lib/income_dating): on the console every run, cached
-    # or not — one project year leaves that income out (audit A2-0073,
-    # A2-0229).
-    echo_attention_lines(gains_json, prefix="income year: ")
-    # A phantoms.json entry on a broker-marked real short or a written
-    # option is applied, but its ATTENTION line used to reach only the
-    # .sum DIAGNOSTICS (audit A2-0637 / A2-0639): echoed every run.
-    echo_attention_lines(gains_json, prefix="phantoms.json")
+    # The gains stage's ATTENTION lines, from the persisted .diag on
+    # EVERY run, cached or not: a broker-coded CLOSING row the books
+    # cannot back (audit A2-0006), an unapplied basis adjustment
+    # (A2-0199), income a record date moves across a year end (A2-0073,
+    # A2-0229), a phantoms.json entry on a real short or a written
+    # option (A2-0637 / A2-0639). One call covers all.
+    echo_attention_lines(gains_json)
     if is_taxable:
         _warn_expired_open_options(name, gains_json, cache, year)
 

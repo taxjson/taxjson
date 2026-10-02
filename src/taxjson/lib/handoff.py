@@ -297,6 +297,50 @@ def _root_sym(sym: str) -> str:
     return re.sub(r"\.(US|TO|V|CN|NE|L|AX)$", "", (sym or "").upper())
 
 
+def _redescribed_options(prev: Dict[str, Any], now: Dict[str, Any]
+                         ) -> List[Tuple[str, str]]:
+    """(closed-year symbol, this project's symbol) pairs that are ONE
+    option position under two roots: the record holds it only as one,
+    the opening only as the other, with the same expiry, right, strike,
+    listing, quantity and cost and roots naming the same company
+    (core._root_matches_stock: RCI / RCI.B, TRX / TRX1). RBC
+    re-describes a contract between yearly exports, and the opening
+    must use this year's spelling (audit A2-0006) — reporting that as a
+    missing lot pushed the user to the symbol that books the close as a
+    new write."""
+    from taxjson.lib.core import _OCC_OPTION_RE, _root_matches_stock
+    zero = {"qty": 0.0, "acb": 0.0}
+    gone = [s for s in prev if abs(prev[s]["qty"]) > QTY_TOL
+            and abs(now.get(s, zero)["qty"]) <= QTY_TOL]
+    new = [s for s in now if abs(now[s]["qty"]) > QTY_TOL
+           and abs(prev.get(s, zero)["qty"]) <= QTY_TOL]
+    out: List[Tuple[str, str]] = []
+    used: set = set()
+    for a in sorted(gone):
+        ma = _OCC_OPTION_RE.match(a)
+        if not ma:
+            continue
+        hits = []
+        for b in sorted(new):
+            mb = _OCC_OPTION_RE.match(b)
+            if (not mb or b in used or mb.group(2) != ma.group(2)
+                    or (mb.group(3) or "") != (ma.group(3) or "")):
+                continue
+            ra, rb = ma.group(1), mb.group(1)
+            if not (_root_matches_stock(ra, rb)
+                    or _root_matches_stock(rb, ra)):
+                continue
+            if abs(now[b]["qty"] - prev[a]["qty"]) > \
+                    QTY_TOL * max(1.0, abs(prev[a]["qty"])) \
+                    or not _acb_close(now[b]["acb"], prev[a]["acb"]):
+                continue
+            hits.append(b)
+        if len(hits) == 1:
+            used.add(hits[0])
+            out.append((a, hits[0]))
+    return out
+
+
 def _acb_close(a: float, b: float) -> bool:
     return abs(a - b) <= max(ACB_ABS_TOL, ACB_REL_TOL * max(abs(a), abs(b)))
 
@@ -331,7 +375,18 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
     for g in sorted(set(record.get("year_end") or {}) | set(opening)):
         prev = (record.get("year_end") or {}).get(g, {})
         now = opening.get(g, {})
+        renamed = _redescribed_options(prev, now)
+        for old, new in renamed:
+            issues["notes"].append(
+                f"{old} in the {ry} books opens here as {new}: the same "
+                f"expiry, right, strike, quantity and cost under another "
+                f"root — the broker re-described the contract (RBC: RCI "
+                f"→ RCI.B). Accepted as one position; this year's "
+                f"closing rows must use {new}.")
+        _skip = {s for pair in renamed for s in pair}
         for sym in sorted(set(prev) | set(now)):
+            if sym in _skip:
+                continue
             p = prev.get(sym, {"qty": 0.0, "acb": 0.0, "deferred": 0.0})
             n = now.get(sym, {"qty": 0.0, "acb": 0.0, "deferred": 0.0})
             dq = n["qty"] - p["qty"]
@@ -374,6 +429,43 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                     f"with {p['acb']:,.2f}; never both")
                 item["why"] = "; ".join(parts) + "."
             issues["positions"].append(item)
+
+    # 1b. An option row this year's export marks CLOSING whose position
+    # the opening holds only under another root (a .tt written with the
+    # closed year's RCI while the export closes RCI.B): the opening
+    # matches the record, yet the close is booked as a NEW written call
+    # and the carried long never closes (audit A2-0006).
+    from taxjson.lib.core import load_transactions
+    from taxjson.lib.option_close_check import unbacked_option_closes
+    for g, names in groups(cfg).items():
+        held = set((opening.get(g) or {}))
+        for n in names:
+            p = cache / f"{n}_base.json"
+            if not p.exists():
+                continue
+            try:
+                txs = load_transactions(p)
+            except (OSError, ValueError, TypeError):
+                continue
+            for f in unbacked_option_closes(txs):
+                carried = [s for s, _q in f["partners"] if s in held]
+                if not carried or f["date"][:4] <= str(ry):
+                    continue
+                issues["positions"].append({
+                    "group": g, "symbol": f["symbol"],
+                    "closed_qty": 0.0, "closed_acb": 0.0,
+                    "closed_deferred": 0.0,
+                    "opening_qty": 0.0, "opening_acb": 0.0,
+                    "qty_diff": 0.0, "acb_diff": 0.0,
+                    "filed_gain_diff": None,
+                    "why": (f"this year's {f['side']} of {f['symbol']} on "
+                            f"{f['date']} is marked CLOSING, but the "
+                            f"opening holds the contract as "
+                            f"{carried[0]} (another root) — it is booked "
+                            f"as a NEW position and {carried[0]} never "
+                            f"closes. Write the opening (.tt) with "
+                            f"{f['symbol']}, or add to ticker.map:  "
+                            f"GLOBAL {carried[0]} {f['symbol']}.")})
 
     # 2. Trades that straddle Dec 31.
     here: List[Dict[str, Any]] = []

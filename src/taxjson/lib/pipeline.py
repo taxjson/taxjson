@@ -906,8 +906,18 @@ def prepare_books(transactions, sheltered_transactions=(),
         candidates = detect_phantoms(
             transactions + sheltered_transactions + affiliated_transactions,
             registered_accounts=_types)
+        # Options coded CLOSING that the books cannot back — a sale or a
+        # purchase, with the held contract under another root named
+        # (audit A2-0006: an RBC CLOSE CONTRACT booked as a new write).
+        from taxjson.lib.core import is_option_symbol as _is_opt
+        from taxjson.lib.option_close_check import (
+            unbacked_option_close_messages)
+        for _m in unbacked_option_close_messages(
+                transactions + sheltered_transactions
+                + affiliated_transactions):
+            print(_m, file=sys.stderr)
         for c in candidates:
-            if c.broker_says_closing:
+            if c.broker_says_closing and not _is_opt(c.symbol):
                 # The broker coded the sale CLOSING (IB code C): what it
                 # sold was bought before the data — not a short, not a
                 # written option, whatever the books do with it until
@@ -1095,9 +1105,11 @@ def run_gains(transactions, sheltered_transactions=(),
         # Canadian cost is its declared amount, which the export does
         # not carry (tax-logic CA-STKDIV-01). The US engine words its
         # own rule (§305(a)/§307) when it spreads the basis.
+        # An ATTENTION line, on the run console (re-audit A2-0265: the
+        # NOTE sat in the .sum while the income and ACB were short).
         for _t in transactions:
             if is_stock_dividend(_t) and float(_t.quantity or 0) > 0:
-                print(f"NOTE: {_t.symbol}: stock dividend of "
+                print(f"warning: ATTENTION: {_t.symbol}: stock dividend of "
                       f"{float(_t.quantity):g} share(s) on {_t.date} "
                       f"entered at $0 cost — in Canada it is a dividend "
                       f"at its declared amount, which is also the new "

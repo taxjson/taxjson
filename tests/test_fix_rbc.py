@@ -206,7 +206,11 @@ class TestMarketCurrencyAcrossFiles(unittest.TestCase):
         self.assertEqual({t['symbol'] for t in txs}, {'GLDX.US'})
         self.assertIn('GLDX', err)
         self.assertIn('no trade rows', err)
-        self.assertIn('GLOBAL GLDX.US GLDX.TO', err)
+        # TOBASE, not GLOBAL: a GLOBAL rename puts the USD ROC on the CAD
+        # pool unconverted and the run stops (re-audit A2-0005); and it
+        # is an ATTENTION line, on the run console.
+        self.assertIn('TOBASE GLDX.US GLDX.TO', err)
+        self.assertIn('warning: ATTENTION:', err)
 
 
 # ------------------------------- R1-79 / S016-06: option identity per account
@@ -412,7 +416,9 @@ class TestOverlappingDownloads(unittest.TestCase):
                                   header=HDR_NOACCT)
         self.assertEqual(position(txs, 'RYX.TO'), 200.0)
         self.assertIn('Account', err)
-        self.assertIn('warning', err)
+        # A note now: the run's cross-file dedup decides and says so
+        # (re-audit A2-1051 — the warning contradicted its line).
+        self.assertIn('de-duplication decides', err)
 
 
 if __name__ == '__main__':
