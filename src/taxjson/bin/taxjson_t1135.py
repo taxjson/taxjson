@@ -1079,6 +1079,13 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         "max_total_date": walk["max_total_date"],
         "filing_threshold": threshold,
         "filing_required": max_total > threshold,
+        # The verdict covers these brokerage books only (S052-13): the
+        # JSON carries the text report's qualification (A2-0682).
+        "scope": "books_only",
+        "scope_note": ("on these books only: specified foreign property "
+                       "held outside them (a foreign bank account or "
+                       "cash, certificate shares, a foreign rental) is "
+                       "not counted and adds to the same threshold"),
         "detailed_threshold": detailed_threshold,
         "simplified_method_available": max_total < detailed_threshold,
         "properties": rows,

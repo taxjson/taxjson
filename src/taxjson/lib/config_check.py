@@ -181,6 +181,13 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
                        f"{base!r}")
             return out
         settings["base_currency"] = base.strip().upper()
+    # Every reader of the prior-year lock (run, handoff, the checklist)
+    # refuses a non-path the same way: handoff and the checklist turned
+    # a list into "no prior-year record at P/['../2023/...']" (A2-1161).
+    pyr = settings.get("prior_year_record")
+    if pyr is not None and not (isinstance(pyr, str) and pyr.strip()):
+        out.append(f"[settings] prior_year_record must be a path string "
+                   f"such as \"../2024/filed/2024.json\" (got {pyr!r})")
     tz = settings.get("local_timezone")
     if tz is not None:
         from taxjson.lib.brokerages._crypto_common import utc_to_local

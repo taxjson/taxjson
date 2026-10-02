@@ -38,6 +38,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 STATE_FILE = "checklist.json"
+# taxjson_run.UNBOOKED_PREFIX: a parser row that is a tax event the
+# run could not book.
+UNBOOKED_PREFIX = "warning: UNBOOKED:"
 
 STAGES = [
     (1, "Freeze the inputs"),
@@ -108,7 +111,7 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "taxjson reconcile-slips inputs/slips/*.csv",
      "The CRA matches Schedule 3 proceeds to the T5008s — this step prevents the review letter."),
     ("t5-t3", 3, "T5 / T3 / NR4 slips agree with the dividend and ROC totals",
-     "taxjson divs-sum, taxjson roc-sum (compare by hand)",
+     "taxjson divs-sum, taxjson roc-sum (the TAXABLE lines; compare by hand)",
      "Trust units report on a T3, often weeks after the T5s; split-share and mutual-fund "
      "corporations report on a T5, where box 18 capital-gains dividends go on line 17400 "
      "(taxjson books them as dividends). reconcile-slips reads only T5008 disposition "
@@ -175,11 +178,13 @@ US_STEPS: Dict[str, Any] = {
                         "short-term gain, and an expired long option's cost a "
                         "loss, in the expiry year; a missing expiry, exercise "
                         "or assignment row leaves either out of the return."),
-    "t5008": ("1099-B slips reconcile to the computed dispositions",
+    "t5008": ("1099-B (and, for crypto from 2025, 1099-DA) slips reconcile "
+              "to the computed dispositions",
               "taxjson reconcile-slips inputs/slips/*.csv",
-              "The IRS matches Form 8949 / Schedule D to the 1099-Bs — this step prevents a CP2000."),
+              "The IRS matches Form 8949 / Schedule D to the 1099-Bs and "
+              "1099-DAs — this step prevents a CP2000."),
     "t5-t3": ("1099-DIV / 1099-INT slips agree with the dividend and ROC totals",
-              "taxjson divs-sum, taxjson roc-sum",
+              "taxjson divs-sum, taxjson roc-sum (the TAXABLE lines)",
               "Qualified vs ordinary dividends and nondividend distributions come from the slips."),
     "foreign-tax": ("Foreign tax paid taken from the 1099-DIV (box 7) for the credit (Form 1116)",
                     "1099-DIV box 7",
@@ -315,8 +320,13 @@ def _data_files(folder: Path) -> List[Path]:
     if not folder.is_dir():
         return []
     return sorted(p for p in folder.iterdir()
-                  if p.is_file() and not p.name.startswith(".")
+                  if p.is_file() and not _skipped_input_name(p.name)
                   and p.suffix.lower() in (".csv", ".tt"))
+
+
+# Spreadsheet suffixes a broker export may arrive in; none is read by
+# `run` (taxjson_run.SPREADSHEET_SUFFIXES is the same list, A2-1156).
+SPREADSHEET_SUFFIXES = (".xlsx", ".xls", ".xlsm", ".ods", ".numbers")
 
 
 def _base_docs_checked(ctx: Ctx, names: List[str]
@@ -342,6 +352,34 @@ def _base_docs_checked(ctx: Ctx, names: List[str]
             continue
         out[n] = doc
     return out, bad
+
+
+def orphan_work_accounts(root: Path, known) -> List[str]:
+    """Account names with a work/<name>_base.json that taxjson.toml no
+    longer configures (a renamed or removed account). Their artifacts
+    keep matching the discovery globs (resolve_gains_files, fees
+    --cache, the audit's --source scan), so every aggregate counts them
+    a second time (2026-09 audit; A2-1165: `run --strict` and run-clean
+    now stop on them)."""
+    known = set(known)
+    names = set()
+    try:
+        bases = list((root / "work").glob("*_base.json"))
+    except OSError:
+        return []
+    for p in bases:
+        if p.name.startswith(".") or p.name == "sheltered_base.json":
+            continue
+        nm = p.name[:-len("_base.json")]
+        if nm.endswith("_raw"):
+            # `S_raw_base.json` is usually account S's raw-books
+            # artifact — but only skip it when that S actually exists,
+            # or a REAL account named `ib_raw` would never be flagged.
+            parent = nm[:-len("_raw")]
+            if parent in known or (root / "work" / f"{parent}_base.json").exists():
+                continue
+        names.add(nm)
+    return sorted(names - known)
 
 
 def _git(root: Path, *args: str) -> Tuple[int, str]:
@@ -382,6 +420,36 @@ def _accounts_of(ctx: Ctx, kind: str) -> List[str]:
     return out
 
 
+def _rbc_as_of_by_account(paths: List[Path]) -> List[Tuple[str, str]]:
+    """[(' of account 12***' or '', latest as-of ISO)] for the RBC
+    exports among `paths`: the latest "Activity Export as of" date per
+    RBC account (rows' Account column; a file without one counts for
+    every account of the folder)."""
+    from taxjson.lib.brokerages.rbc_direct import (
+        _mask_account, _norm_account, rbc_export_as_of, read_rbc_rows)
+    per: Dict[str, str] = {}
+    shared: List[str] = []                 # as-of of files with no Account
+    for p in paths:
+        asof = rbc_export_as_of(p)
+        if not asof:
+            continue
+        try:
+            exp = read_rbc_rows(p)
+            accts = {_norm_account(r.account) for r in exp.rows
+                     if r.account.strip()}
+        except Exception:                               # noqa: BLE001
+            accts = set()
+        if not accts:
+            shared.append(asof)
+        for a in accts:
+            per[a] = max(per.get(a, ""), asof)
+    if not per:
+        return [("", max(shared))] if shared else []
+    many = len(per) > 1
+    return [((f" of account {_mask_account(a)}" if many else ""),
+             max([v] + shared)) for a, v in sorted(per.items())]
+
+
 # ---------------------------------------------------------------- detectors
 def d_inputs_frozen(ctx: Ctx) -> Result:
     missing = [n for n in ctx.accounts
@@ -412,14 +480,16 @@ def d_inputs_frozen(ctx: Ctx) -> Result:
     # ..."), and an account whose latest export predates the cutoff
     # cannot hold the rest of the year — another broker's later rows
     # used to certify it.
-    from taxjson.lib.brokerages.rbc_direct import rbc_export_as_of
     early = []
     for n in _accounts_of(ctx, "taxable"):
-        _asof = [a for a in (rbc_export_as_of(p) for p in
-                             _data_files(ctx.root / "inputs" / n)
-                             if p.suffix.lower() == ".csv") if a]
-        if _asof and max(_asof) < cutoff.isoformat():
-            early.append(f"{n} (RBC export as of {max(_asof)})")
+        # Per RBC ACCOUNT (the Account column), as the parser judges it:
+        # one label may hold two RBC accounts' exports, and B's later
+        # export certified A's early one (A2-1147).
+        for who, asof in _rbc_as_of_by_account(
+                [p for p in _data_files(ctx.root / "inputs" / n)
+                 if p.suffix.lower() == ".csv"]):
+            if asof < cutoff.isoformat():
+                early.append(f"{n} (RBC export{who} as of {asof})")
     # IB statements carry their Period: an account whose statements stop
     # before Dec 31 of the year — or hold none of it — cannot hold the
     # rest of it (audit A2-0262, the RBC twin above).
@@ -498,14 +568,39 @@ def d_roc_entered(ctx: Ctx) -> Result:
         return Result("roc-entered", "blocked",
                       f"cannot read {', '.join(bad)} — its ADJUST rows "
                       f"cannot be counted; re-run `taxjson run`")
+    # The year an ADJUST lowers the cost in: a Canadian trust's ROC on
+    # its record date (CA-INC-DATE-ROC-TRUST) — roc-sum's window, not the
+    # pay date (A2-0680).
+    try:
+        from taxjson.lib.income_dating import IncomeRules
+        rules = IncomeRules.from_settings(ctx.settings)
+        when = rules.row_date
+    except Exception:                                   # noqa: BLE001
+        def when(t):
+            return str(t.get("date") or "")
     adjust = sum(1 for d in docs.values()
                  for t in (d.get("transactions") or [])
-                 if t.get("action") == "ADJUST"
-                 and str(t.get("date") or "").startswith(str(ctx.year)))
+                 if isinstance(t, dict) and t.get("action") == "ADJUST"
+                 and str(when(t) or "").startswith(str(ctx.year)))
     dmap = (ctx.root / "distributions.map").is_file()
-    return Result("roc-entered", "manual",
-                  f"{adjust} ADJUST row(s) in {ctx.year}; distributions.map "
-                  f"{'present' if dmap else 'absent'}")
+    detail = (f"{adjust} ADJUST row(s) in {ctx.year}; distributions.map "
+              f"{'present' if dmap else 'absent'}")
+    if dmap:
+        # The same ROC in the books and in the map lowers the ACB twice
+        # (A2-0361): roc-sum warned, this step said nothing.
+        try:
+            from taxjson.bin.taxjson_run import (_double_roc_warnings,
+                                                 _year_keep)
+            dbl = _double_roc_warnings(ctx.root, _accounts_of(ctx, "taxable"),
+                                       _year_keep(str(ctx.year)))
+        except SystemExit:
+            dbl = []
+        if dbl:
+            return Result("roc-entered", "attention",
+                          f"{len(dbl)} ROC entered twice — {dbl[0]}"
+                          + (" ..." if len(dbl) > 1 else "")
+                          + f" ({detail})")
+    return Result("roc-entered", "manual", detail)
 
 
 def d_inputs_committed(ctx: Ctx) -> Result:
@@ -530,6 +625,7 @@ def d_run_clean(ctx: Ctx) -> Result:
     if not sums:
         return Result("run-clean", "blocked", "no reports — run `taxjson run`")
     per_account: Dict[str, int] = {}
+    unbooked: Dict[str, int] = {}
     empty_parse: List[str] = []
     unreadable: List[str] = []
     for s in sums:
@@ -553,34 +649,68 @@ def d_run_clean(ctx: Ctx) -> Result:
                             head):
             if f not in empty_parse:
                 empty_parse.append(f)
+        # Rows the parsers (or the crypto-sends stage) know are tax
+        # events but could not book — the gate `run --strict` applies
+        # (A2-0357, A2-0362). Counted per account, like the errors.
+        try:
+            whole = s.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            whole = head
+        acct_ = s.stem[:-len("_wash")] if s.stem.endswith("_wash") else s.stem
+        n_unb = sum(1 for ln in whole.splitlines()
+                    if ln.lstrip().startswith(UNBOOKED_PREFIX))
+        if n_unb:
+            unbooked[acct_] = max(unbooked.get(acct_, 0), n_unb)
     errors = sum(per_account.values())
     pend = [p for p in ctx.cache.glob("*pending_elections.json")
             if p.is_file() and p.stat().st_size > 2]
-    oldest_report = min(s.stat().st_mtime for s in sums)
+    # A dangling reports/*.sum symlink is already in `unreadable`; its
+    # stat must not take the step down (A2-1148).
+    _mtimes = []
+    for s in sums:
+        try:
+            _mtimes.append(s.stat().st_mtime)
+        except OSError:
+            if f"reports/{s.name}" not in unreadable:
+                unreadable.append(f"reports/{s.name}")
+    oldest_report = min(_mtimes) if _mtimes else 0.0
     problems = []
     if unreadable:
         problems.append(f"cannot read {', '.join(unreadable)} — its "
                         f"validation errors are unknown")
     if errors:
         problems.append(f"{errors} validation error(s) in reports/*.sum")
+    if unbooked:
+        problems.append(
+            f"{sum(unbooked.values())} UNBOOKED event(s) in "
+            f"{', '.join(f'reports/{a}.sum' for a in sorted(unbooked))} — "
+            f"rows the run could not book are not in the books "
+            f"(`run --strict` refuses them)")
     if pend:
         problems.append("pending elections (`taxjson elect --pending`)")
+    orphans = orphan_work_accounts(ctx.root, ctx.accounts)
+    if orphans:
+        problems.append(
+            f"work/ carries books of account(s) not in taxjson.toml: "
+            f"{', '.join(orphans)} — every total counts them again; "
+            f"delete work/<name>_* and reports/<name>* (a renamed "
+            f"account) or restore the account")
     # What the last FULL run was built from (content, not mtimes): a
     # deleted input or a corrected export copied with its old mtime
     # (cp -p, rsync -a, unzip) left this step done over stale reports
     # (S067-07). Older projects without the record fall back to mtimes,
     # now including the project-root inputs `run` reads (R1-249).
-    recorded = _load_fingerprint(ctx.root)
-    if recorded is not None:
-        diff = _fingerprint_diff(recorded,
-                                 input_fingerprint(ctx.root, ctx.cfg))
-        if diff:
-            problems.append("inputs changed since the last full run ("
-                            + diff + ")")
-    else:
+    diff = inputs_changed(ctx.root, ctx.cfg)
+    if diff:
+        problems.append("inputs changed since the last full run ("
+                        + diff + ")")
+    elif diff is None:
         newest_input = 0.0
         for p in _input_paths(ctx.root, ctx.cfg):
-            newest_input = max(newest_input, p.stat().st_mtime)
+            try:
+                newest_input = max(newest_input, p.stat().st_mtime)
+            except OSError:
+                continue
         if newest_input > oldest_report + 1:
             problems.append("inputs changed since the last run")
     # Every configured account with inputs must have its report: a run
@@ -622,8 +752,8 @@ def d_run_clean(ctx: Ctx) -> Result:
             continue
         stems = {p.stem.lower() for p in _data_files(folder)}
         sheets += [f"inputs/{n}/{p.name}" for p in sorted(folder.iterdir())
-                   if p.is_file() and not p.name.startswith((".", "~$"))
-                   and p.suffix.lower() in (".xlsx", ".xls", ".xlsm", ".ods")
+                   if p.is_file() and not _skipped_input_name(p.name)
+                   and p.suffix.lower() in SPREADSHEET_SUFFIXES
                    and p.stem.lower() not in stems]
     if sheets:
         problems.append("unread spreadsheet(s) " + ", ".join(sheets)
@@ -635,23 +765,89 @@ def d_run_clean(ctx: Ctx) -> Result:
 
 
 FINGERPRINT_FILE = ".inputs_fingerprint.json"     # in work/
-_ROOT_INPUTS = ("taxjson.toml", "ticker.map", "distributions.map",
-                "phantoms.json", "ticker_extraction_overrides.txt")
+# The record's format: 2 = taxjson.toml by the settings `run` reads, the
+# root maps of PROJECT_ROOT_MAPS, manifest.json / sends.json. A record
+# without it (1) was written by an older taxjson and is compared the
+# old way until the next full run rewrites it.
+FINGERPRINT_VERSION = 2
+# Project-root maps `taxjson run` reads (taxjson_run._PROJECT_ROOT_INPUTS
+# is the same list; a test keeps the two equal — A2-0363, A2-1158).
+PROJECT_ROOT_MAPS = ("ticker.map", "ticker_extraction_overrides.txt",
+                     "distributions.map", "phantoms.json",
+                     "crypto_ticker.map")
+_ROOT_INPUTS = ("taxjson.toml",) + PROJECT_ROOT_MAPS
+_LEGACY_ROOT_INPUTS = ("taxjson.toml", "ticker.map", "distributions.map",
+                       "phantoms.json", "ticker_extraction_overrides.txt")
+# Per-account files `run` reads besides the activity files: the
+# corp-action elections (A2-0124, A2-0126) and a crypto account's send
+# decisions, which regenerate crypto_sends.tt (A2-0358).
+_ACCOUNT_SIDECARS = ("manifest.json", "sends.json")
+# taxjson.toml content no `taxjson run` stage reads — planning tables,
+# the estimate's province, handoff's prior-year path, `sanity`'s
+# holdings files and `fetch`'s broker keys. An edit to them (or to a
+# comment) does not make the books stale (A2-0681, A2-1157).
+_PLANNING_TABLES = ("instalments", "estimate")
+_PLANNING_SETTINGS = ("province", "prior_year_record")
+_PLANNING_ACCOUNT_KEYS = ("holdings", "brokerage", "account", "query_id")
+
+
+def _skipped_input_name(name: str) -> bool:
+    """Hidden files and Office lock files ('~$x.csv', written while a
+    file is open in Excel) are never inputs — `run` skips them too
+    (A2-1145, A2-1166)."""
+    return name.startswith((".", "~$"))
 
 
 def _input_paths(root: Path, cfg: Dict[str, Any]) -> List[Path]:
     """Every file `taxjson run` reads to build the books: the project-
-    root config and maps, and each configured account's activity files
-    plus generic-mapping sidecars (inputs/<acct>/*.toml)."""
+    root config and maps, and each configured account's activity files,
+    generic-mapping sidecars (inputs/<acct>/*.toml), its elections
+    manifest and its crypto send decisions."""
     out = [root / n for n in _ROOT_INPUTS if (root / n).is_file()]
     for n in sorted((cfg.get("accounts") or {})):
         folder = root / "inputs" / n
         if not folder.is_dir():
             continue
         out += sorted(p for p in folder.iterdir()
-                      if p.is_file() and not p.name.startswith(".")
-                      and p.suffix.lower() in (".csv", ".tt", ".toml"))
+                      if p.is_file() and not _skipped_input_name(p.name)
+                      and (p.suffix.lower() in (".csv", ".tt", ".toml")
+                           or p.name in _ACCOUNT_SIDECARS))
     return out
+
+
+def _run_config_digest(path: Path) -> str:
+    """sha256 of the part of taxjson.toml a run reads: the parsed
+    document without the planning-only tables and keys, canonically
+    serialised (comments and layout do not count). A file that does
+    not parse is hashed as bytes — it changed, whatever it says."""
+    import hashlib
+    raw = path.read_bytes()
+    try:
+        from taxjson.lib.tomlcompat import tomllib
+        doc = tomllib.loads(raw.decode("utf-8-sig"))
+    except Exception:                                   # noqa: BLE001
+        return hashlib.sha256(raw).hexdigest()
+    doc = {k: v for k, v in doc.items() if k not in _PLANNING_TABLES}
+    if isinstance(doc.get("settings"), dict):
+        doc["settings"] = {k: v for k, v in doc["settings"].items()
+                           if k not in _PLANNING_SETTINGS}
+    if isinstance(doc.get("accounts"), dict):
+        doc["accounts"] = {
+            n: ({k: v for k, v in a.items()
+                 if k not in _PLANNING_ACCOUNT_KEYS}
+                if isinstance(a, dict) else a)
+            for n, a in doc["accounts"].items()}
+    blob = json.dumps(doc, sort_keys=True, default=str).encode("utf-8")
+    return "run-settings:" + hashlib.sha256(blob).hexdigest()
+
+
+def _empty_manifest(p: Path) -> bool:
+    """The elections manifest the corp stage creates on an account's
+    first run ({"elections": {}}) is the same as none."""
+    try:
+        return json.loads(p.read_text(encoding="utf-8")) == {"elections": {}}
+    except (OSError, ValueError):
+        return False
 
 
 def input_fingerprint(root: Path, cfg: Dict[str, Any]) -> Dict[str, str]:
@@ -659,6 +855,33 @@ def input_fingerprint(root: Path, cfg: Dict[str, Any]) -> Dict[str, str]:
     import hashlib
     out: Dict[str, str] = {}
     for p in _input_paths(root, cfg):
+        if p.name == "manifest.json" and _empty_manifest(p):
+            continue
+        try:
+            out[p.relative_to(root).as_posix()] = (
+                _run_config_digest(p) if p.parent == root
+                and p.name == "taxjson.toml"
+                else hashlib.sha256(p.read_bytes()).hexdigest())
+        except OSError:
+            continue
+    return out
+
+
+def _legacy_input_fingerprint(root: Path, cfg: Dict[str, Any]
+                              ) -> Dict[str, str]:
+    """The format-1 fingerprint (raw taxjson.toml bytes, the old root
+    maps, .csv/.tt/.toml only) — to judge a record an older taxjson
+    wrote, without calling every project stale after an upgrade."""
+    import hashlib
+    paths = [root / n for n in _LEGACY_ROOT_INPUTS if (root / n).is_file()]
+    for n in sorted((cfg.get("accounts") or {})):
+        folder = root / "inputs" / n
+        if folder.is_dir():
+            paths += sorted(p for p in folder.iterdir()
+                            if p.is_file() and not p.name.startswith(".")
+                            and p.suffix.lower() in (".csv", ".tt", ".toml"))
+    out: Dict[str, str] = {}
+    for p in paths:
         try:
             out[p.relative_to(root).as_posix()] = hashlib.sha256(
                 p.read_bytes()).hexdigest()
@@ -673,20 +896,79 @@ def record_input_fingerprint(root: Path, cfg: Dict[str, Any]) -> None:
     work = root / "work"
     work.mkdir(parents=True, exist_ok=True)
     tmp = work / (FINGERPRINT_FILE + ".part")
-    tmp.write_text(json.dumps({"files": input_fingerprint(root, cfg)},
+    tmp.write_text(json.dumps({"version": FINGERPRINT_VERSION,
+                               "files": input_fingerprint(root, cfg)},
                               indent=1, sort_keys=True) + "\n",
                    encoding="utf-8")
     tmp.replace(work / FINGERPRINT_FILE)
 
 
-def _load_fingerprint(root: Path) -> Optional[Dict[str, str]]:
+class FingerprintUnreadable(ValueError):
+    """work/.inputs_fingerprint.json exists but is not a fingerprint."""
+
+
+def _load_fingerprint_doc(root: Path) -> Optional[Dict[str, Any]]:
+    """The recorded fingerprint document, None when there is none.
+    Raises FingerprintUnreadable for a file that exists but cannot be
+    read (truncated, files not a table): never "no record", which fell
+    back to mtimes and called stale books clean (A2-1155)."""
     p = root / "work" / FINGERPRINT_FILE
+    if not p.exists() and not p.is_symlink():
+        return None
     try:
         doc = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    except (OSError, ValueError) as e:
+        raise FingerprintUnreadable(str(e)) from e
     files = doc.get("files") if isinstance(doc, dict) else None
-    return files if isinstance(files, dict) else None
+    if not isinstance(files, dict) or not all(
+            isinstance(k, str) and isinstance(v, str)
+            for k, v in files.items()):
+        raise FingerprintUnreadable("no files table")
+    return doc
+
+
+def _load_fingerprint(root: Path) -> Optional[Dict[str, str]]:
+    try:
+        doc = _load_fingerprint_doc(root)
+    except FingerprintUnreadable:
+        return None
+    return doc["files"] if doc else None
+
+
+def inputs_changed(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
+    """Why the books are not the result of the current inputs according
+    to the last full run's record: a diff text, "" when they are, None
+    when no record exists (the caller falls back to mtimes). The one
+    rule for run-clean, the filing banners and the web freshness flag."""
+    try:
+        doc = _load_fingerprint_doc(root)
+    except FingerprintUnreadable as e:
+        return (f"work/{FINGERPRINT_FILE} cannot be read ({e}) — what the "
+                f"last full run was built from is unknown")
+    if doc is None:
+        return None
+    if doc.get("version") == FINGERPRINT_VERSION:
+        return _fingerprint_diff(doc["files"], input_fingerprint(root, cfg))
+    # An older record: the old comparison, plus the inputs it did not
+    # cover, by mtime against the record itself.
+    why = _fingerprint_diff(doc["files"], _legacy_input_fingerprint(root, cfg))
+    if why:
+        return why
+    try:
+        since = (root / "work" / FINGERPRINT_FILE).stat().st_mtime
+    except OSError:
+        return why
+    legacy = set(doc["files"])
+    newer = sorted(p.relative_to(root).as_posix()
+                   for p in _input_paths(root, cfg)
+                   if p.relative_to(root).as_posix() not in legacy
+                   and p.name != "taxjson.toml"
+                   and not (p.name == "manifest.json" and _empty_manifest(p))
+                   and p.stat().st_mtime > since + 1)
+    if newer:
+        return "changed: " + ", ".join(newer[:3]) + (
+            " ..." if len(newer) > 3 else "")
+    return ""
 
 
 def _fingerprint_diff(before: Dict[str, str], now: Dict[str, str]) -> str:
@@ -826,11 +1108,27 @@ def d_crypto_sends(ctx: Ctx) -> Result:
                for n in names for b in ("kraken", "coinbase")):
         return Result("crypto-sends", "blocked",
                       "no crypto transfer evidence in work/ — run `taxjson run`")
+    # A crypto account not parsed yet: a send to it reads as unmatched
+    # and undecided (A2-0359) — the books are not ready to judge.
+    # (The command's own guard, crypto_sends.stale_evidence.)
+    try:
+        from taxjson.bin.taxjson_run import (_crypto_broker_files,
+                                             _transfers_accounts)
+        unparsed = cs.stale_evidence(
+            ctx.cache, _crypto_broker_files(ctx.root, ctx.cfg),
+            skip=_transfers_accounts(ctx.cfg))
+    except SystemExit:
+        unparsed = []
+    if unparsed:
+        return Result("crypto-sends", "blocked",
+                      f"the transfer evidence is not current for "
+                      f"{'; '.join(unparsed)} — a send may look unmatched; "
+                      f"run `taxjson run`")
     try:
         rep = cs.build_report(ctx.root, ctx.cfg, None, None, with_pool=False)
     except ValueError as e:
         return Result("crypto-sends", "attention", str(e))
-    undecided, stale, total, refused = [], [], 0, []
+    undecided, stale, total, refused, dups = [], [], 0, [], []
     overridden, cross = [], []
     for n, a in rep["accounts"].items():
         total += len(a["sends"])
@@ -839,10 +1137,21 @@ def d_crypto_sends(ctx: Ctx) -> Result:
         if a["undecided"]:
             undecided.append(f"{n}: {a['undecided']}")
         refused += [e["id"] for e in cs.refused_entries(a)]
-        want = cs.tt_want_ids(a)
-        have = cs.tt_ids(Path(a["tt_file"])) or set()
-        if want != have:
+        if cs.tt_stale_ids(a, Path(a["tt_file"])):
             stale.append(n)
+        # A hand-written .tt line selling what crypto_sends.tt sells:
+        # both are booked (A2-0127).
+        dups += cs.duplicate_lines(ctx.root / "inputs" / n,
+                                   cs.disposing_entries(a))
+    if dups:
+        d0 = dups[0]
+        return Result("crypto-sends", "attention",
+                      f"{len(dups)} hand-written .tt line(s) sell a send "
+                      f"crypto_sends.tt also sells — counted twice: "
+                      f"{d0['file']} line {d0['line']} ({d0['id']})"
+                      + (" ..." if len(dups) > 1 else "")
+                      + " — delete the hand-written line, or record the "
+                        "send as `self`")
     if refused:
         return Result("crypto-sends", "attention",
                       f"saved as `gift`, which a US project refuses (not "
@@ -932,15 +1241,22 @@ def d_audit(ctx: Ctx) -> Result:
         events += int(m.group(1).replace(",", ""))
         bad += int(m.group(2).replace(",", ""))
         notfound += int(m.group(3).replace(",", ""))
+    # Phantom-basis sales the books route to manual reporting are tied
+    # out as such by the audit (A2-1150); form-export's step asks for
+    # the hand-reported rows.
+    manual = sum(int(m.group(1).replace(",", "")) for m in re.finditer(
+        r"([\d,]+) phantom-basis disposition\(s\) tied to MANUAL REPORTING", out))
     if bad:
         return Result("audit", "attention", f"{bad} disposition(s) MISMATCHED")
     if notfound:
         return Result("audit", "attention",
                       f"{notfound} disposition(s) not found in the gains file "
-                      f"(phantom-backed sales show here; see KNOWN_ISSUES)")
+                      f"— stale books? re-run `taxjson run`")
     if code != 0:
         return Result("audit", "attention", _last_line(err) or f"exit {code}")
-    return Result("audit", "done", f"{events} disposition(s) tied")
+    return Result("audit", "done", f"{events} disposition(s) tied"
+                  + (f"; {manual} phantom-basis sale(s) routed to manual "
+                     f"reporting (see the form-export step)" if manual else ""))
 
 
 def d_wash_reviewed(ctx: Ctx) -> Result:
@@ -1195,7 +1511,7 @@ def slip_files(root: Path) -> List[Path]:
     if not slips.is_dir():
         return []
     return sorted((p for p in slips.iterdir()
-                   if p.is_file() and not p.name.startswith(".")
+                   if p.is_file() and not _skipped_input_name(p.name)
                    and p.suffix.lower() == ".csv"),
                   key=lambda p: p.name.lower())
 
@@ -1205,7 +1521,7 @@ def _unread_slip_files(root: Path) -> List[Path]:
     if not slips.is_dir():
         return []
     return sorted(p for p in slips.iterdir()
-                  if p.is_file() and not p.name.startswith(".")
+                  if p.is_file() and not _skipped_input_name(p.name)
                   and p.suffix.lower() != ".csv")
 
 
@@ -1241,8 +1557,22 @@ def _slip_mismatch_summary(code: int, out: str, err: str) -> str:
     return _last_line(err) or _last_line(out) or f"exit {code}"
 
 
+def _slip_names(ctx: Ctx) -> str:
+    """The slips a project's dispositions come on: T5008 in Canada; in
+    the US Form 1099-B for securities and, from tax year 2025, Form
+    1099-DA for a broker's digital-asset sales (US-RPT-09, A2-1149)."""
+    if not is_us(ctx.settings.get("country")):
+        return "T5008"
+    names = []
+    if _accounts_of(ctx, "taxable"):
+        names.append("1099-B")
+    if _accounts_of(ctx, "crypto"):
+        names.append("1099-DA" if ctx.year >= 2025 else "1099-B")
+    return " / ".join(dict.fromkeys(names)) or "1099-B"
+
+
 def d_t5008(ctx: Ctx) -> Result:
-    slip = "1099-B" if is_us(ctx.settings.get("country")) else "T5008"
+    slip = _slip_names(ctx)
     files = slip_files(ctx.root)
     unread = _unread_slip_files(ctx.root)
     if not files:
@@ -1317,14 +1647,19 @@ def d_form_export(ctx: Ctx) -> Result:
     import math
     n_acct = max(1, len(taxable))
     raw = rep.get("gain_unrounded")
-    if isinstance(raw, (int, float)) and label == "Schedule 3":
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
         # Unrounded rows vs the .sum's per-account rounding: at most half
-        # a cent per account apart (R1-210).
+        # a cent per account apart (R1-210; Form 8949 too, A2-1154).
         cmp_gain = float(raw)
         tol = 0.005 * n_acct + 0.01
     else:
         cmp_gain = t["gain"]
         tol = max(0.05, 0.015 * math.sqrt(n + n_acct))
+    # US §1256 contracts stay off Form 8949 (Form 6781 by hand) but are
+    # in the accounts' realized gain: add them back for this tie.
+    s1256 = rep.get("section_1256_totals") if label == "Form 8949" else None
+    if isinstance(s1256, dict):
+        cmp_gain += float(s1256.get("gain") or 0.0)
     if abs(cmp_gain - realized) > tol:
         problems.append(f"{label} gain {t['gain']:,.2f} vs realized {realized:,.2f} "
                         f"in the taxable accounts' .sum")
@@ -1360,9 +1695,16 @@ def d_t1135(ctx: Ctx) -> Result:
         # ITA 233.3 counts cost at any time up to Dec 31: below the
         # threshold mid-year is not a verdict (S051-22, S052-15).
         return Result("t1135", "todo",
-                      f"below the CAD 100,000 threshold so far (books through "
-                      f"{rep.get('as_of') or '?'}) — re-check after Dec 31")
-    return Result("t1135", "done", "below the CAD 100,000 threshold")
+                      f"below the CAD 100,000 threshold so far on these "
+                      f"books (through {rep.get('as_of') or '?'}) — re-check "
+                      f"after Dec 31; foreign property outside them (a "
+                      f"foreign bank account, cash) is not counted")
+    # The books only (S052-13, A2-0682): a foreign bank account or cash
+    # outside them adds to the same threshold.
+    return Result("t1135", "done",
+                  "below the CAD 100,000 threshold on these books — "
+                  "foreign property outside them (a foreign bank account, "
+                  "cash) is not counted; add it if you hold any")
 
 
 def d_carryover(ctx: Ctx) -> Result:
@@ -1425,10 +1767,36 @@ def d_estimate(ctx: Ctx) -> Result:
                   f"[instalments] {'present' if inst else 'absent'}")
 
 
-def d_filed_lock(ctx: Ctx) -> Result:
+def _lock_state(ctx: Ctx, sid: str) -> Optional[Result]:
+    """todo when there is no lock, blocked when filed/<year>.json is
+    not a readable lock (a directory, a dangling link: close-year says
+    it 'already exists', A2-1146), attention when it was taken before
+    the year ended (A2-0679, A2-1164). None: a lock to check."""
     lock = ctx.root / "filed" / f"{ctx.year}.json"
-    if not lock.is_file():
-        return Result("filed-lock", "todo", "no filed/<year>.json — `taxjson close-year` after filing")
+    if not lock.exists() and not lock.is_symlink():
+        return Result(sid, "todo",
+                      "no filed/<year>.json — `taxjson close-year` after filing"
+                      if sid == "filed-lock" else "no lock yet")
+    try:
+        doc = json.loads(lock.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        why = ("a directory" if lock.is_dir() else
+               getattr(e, "strerror", None) or str(e))
+        return Result(sid, "blocked",
+                      f"filed/{ctx.year}.json cannot be read ({why}) — "
+                      f"restore the lock from git, or remove it and "
+                      f"`taxjson close-year` after filing")
+    from taxjson.bin.taxjson_filed import partial_year_note
+    note = partial_year_note(doc, ctx.year)
+    if note:
+        return Result(sid, "attention", note)
+    return None
+
+
+def d_filed_lock(ctx: Ctx) -> Result:
+    st = _lock_state(ctx, "filed-lock")
+    if st is not None:
+        return st
     code, out, err = ctx.sub("check-filed")
     if code != 0:
         # Only a reported DRIFT is drift; a failed recompute (bad
@@ -1448,9 +1816,9 @@ def d_filed_lock(ctx: Ctx) -> Result:
 
 
 def d_lock_committed(ctx: Ctx) -> Result:
-    lock = ctx.root / "filed" / f"{ctx.year}.json"
-    if not lock.is_file():
-        return Result("lock-committed", "todo", "no lock yet")
+    st = _lock_state(ctx, "lock-committed")
+    if st is not None:
+        return st
     if not _is_git_repo(ctx.root):
         return Result("lock-committed", "attention", "not a git repository")
     code, out = _git(ctx.root, "status", "--porcelain", "--", "filed")
@@ -1527,9 +1895,45 @@ def load_state(root: Path) -> Dict[str, Any]:
 
 
 def save_state(root: Path, state: Dict[str, Any], year: int) -> None:
+    """Atomic: a reader never sees a half-written checklist.json."""
     state["year"] = year
-    (root / STATE_FILE).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n",
-                                   encoding="utf-8")
+    path = root / STATE_FILE
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.part")
+    tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n",
+                   encoding="utf-8")
+    os.replace(tmp, path)
+
+
+class _StateLock:
+    """An exclusive lock around a read-modify-write of checklist.json:
+    two `checklist --done` at once lost a mark or left the file
+    unparseable (A2-1160). A POSIX flock on the project directory itself
+    (no lock file to commit or ignore); no lock where fcntl or a
+    directory descriptor is unavailable."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.fd = None
+
+    def __enter__(self):
+        try:
+            import fcntl
+            self.fd = os.open(str(self.root), os.O_RDONLY)
+            fcntl.flock(self.fd, fcntl.LOCK_EX)
+        except (ImportError, OSError):                  # pragma: no cover
+            if self.fd is not None:
+                os.close(self.fd)
+            self.fd = None
+        return self
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            import fcntl
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_UN)
+            finally:
+                os.close(self.fd)
+        return False
 
 
 def set_override(root: Path, year: int, step: str, mark: Optional[str],
@@ -1539,6 +1943,13 @@ def set_override(root: Path, year: int, step: str, mark: Optional[str],
     ids = {s[0] for s in STEPS}
     if step not in ids:
         raise KeyError(step)
+    with _StateLock(root):
+        return _set_override_locked(root, year, step, mark, note, today)
+
+
+def _set_override_locked(root: Path, year: int, step: str,
+                         mark: Optional[str], note: str,
+                         today: Optional[date]) -> bool:
     state = load_state(root)
     if state.get("year") not in (None, year):
         # Another year's marks (a copied project, or `year` bumped):

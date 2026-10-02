@@ -13,8 +13,12 @@ Two kinds of boundary:
 2. The superficial-loss window (ITA s.54: an identical property acquired
    in the 30 days before or after the disposition and still held on day
    30). Acquisitions and rescue sales that fall within a few days of the
-   window's edge are listed with their exact day count on the engine's
-   date basis, the count on the other basis, and the engine's verdict.
+   window's edge are listed with their exact day count and the engine's
+   verdict. The window is counted on the engine's FIXED window dates —
+   settlement dates in Canada (CA-SL-01), trade dates in the US
+   (US-WASH-01) — whatever `tax_date` says; `tax_date` only decides the
+   year a row lands in (audit A2-0133/0134/0135/1206). The count on the
+   other date is shown for reference only: it cannot change the verdict.
 
 Everything is read from the run's work files, so the symbols are the ones
 the engine pooled (ticker.map already applied): identical property is the
@@ -37,8 +41,13 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 WINDOW = 30
-ACQ_ACTIONS = ('BUYSELL', 'ASSIGN', 'TRANSFER')
-INCOME_ACTIONS = ('DIVIDEND', 'INTEREST', 'TAX', 'PIL', 'ROC')
+# Rows that change a position (OPENING_BALANCE: a phantoms.json opening
+# or a broker's opening position, A2-0389). SPLIT rows scale it (_walk).
+ACQ_ACTIONS = ('BUYSELL', 'ASSIGN', 'TRANSFER', 'OPENING_BALANCE')
+# The engine's income actions (it has no 'PIL' or 'ROC' action: a
+# payment in lieu is DIVIDEND_IN_LIEU, a return of capital an ADJUST of
+# type roc — A2-1207).
+INCOME_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'INTEREST', 'TAX')
 
 
 def _d(s: Optional[str]) -> Optional[date]:
@@ -50,18 +59,36 @@ def _d(s: Optional[str]) -> Optional[date]:
         return None
 
 
-def _rows(path: Path) -> List[Dict[str, Any]]:
+def _read(path: Path) -> Any:
+    """A work file's JSON; ValueError naming the file when it exists but
+    cannot be read — a truncated book used to print "None." for every
+    section at exit 0 (audit A2-1199)."""
     try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ValueError(f"work/{path.name} cannot be read "
+                         f"({str(e)[:120]}) — re-run `taxjson run`") from None
+
+
+def _rows(path: Path) -> List[Dict[str, Any]]:
+    doc = _read(path)
     rows = doc.get("transactions", []) if isinstance(doc, dict) else doc
+    if not isinstance(rows, list):
+        raise ValueError(f"work/{path.name} has no transactions list — "
+                         f"re-run `taxjson run`")
     rows = [r for r in rows if isinstance(r, dict)]
     # The shared row funnel (A2-0330): a wrong-typed date or quantity
     # is a one-line error naming the file, not a traceback later on.
     from taxjson.lib.json_input import check_row_types
     check_row_types(rows, path)
     return rows
+
+
+def _is_future(sym: str) -> bool:
+    """A futures row in any spelling lib/futures reads (F:, /, \\) —
+    not only F: (A2-1194)."""
+    from taxjson.lib.futures import _FUTURES_PREFIXES
+    return (sym or "").upper().startswith(_FUTURES_PREFIXES)
 
 
 def _is_option(sym: str) -> bool:
@@ -90,6 +117,48 @@ def _expiry(sym: str) -> Optional[date]:
         return None
 
 
+def _walk(rows: Iterable[Dict[str, Any]], datef, until: Optional[date] = None,
+          pre: Optional[Dict[int, float]] = None
+          ) -> Dict[Tuple[str, str], float]:
+    """Positions per (account, symbol) after the rows dated on or before
+    `until` (by `datef`; every row when None): trades, transfers and
+    openings add their quantity, a SPLIT scales the position by its
+    ratio and moves it to `symbol_new` (A2-0388). `pre` gets each row's
+    position before it, keyed by id(row)."""
+    pos: Dict[Tuple[str, str], float] = {}
+    moving = [r for r in rows
+              if r.get("action") in ACQ_ACTIONS + ("SPLIT",)]
+    moving.sort(key=lambda r: (str(datef(r) or ""), r.get("time") or ""))
+    for r in moving:
+        d = datef(r)
+        if until is not None and (d is None or d > until):
+            continue
+        k = (r.get("_acct") or "", r.get("symbol") or "")
+        if pre is not None:
+            pre[id(r)] = pos.get(k, 0.0)
+        q = float(r.get("quantity") or 0)
+        if r.get("action") == "SPLIT":
+            ratio = q if q > 0 else 1.0
+            new = (str(r.get("symbol_new") or "")).strip() or k[1]
+            p = pos.pop(k, 0.0) * ratio
+            nk = (k[0], new)
+            pos[nk] = pos.get(nk, 0.0) + p
+        else:
+            pos[k] = pos.get(k, 0.0) + q
+    return pos
+
+
+def _opening_qty(book: "Book", r: Dict[str, Any]) -> float:
+    """The part of a buy that OPENS (or adds to) a long position: a
+    buy-to-close of a written option acquires nothing (core
+    _opening_qty) — A2-0699, A2-1197."""
+    q = float(r.get("quantity") or 0)
+    before = book.pre_pos.get(id(r), 0.0)
+    if q <= 0:
+        return 0.0
+    return q if before >= -1e-9 else max(0.0, q + before)
+
+
 class Book:
     """The project's transactions (every account) and the taxable
     dispositions, as the engine saw them."""
@@ -101,11 +170,20 @@ class Book:
         self.cache = root / "work"
         settings = cfg.get("settings", {}) or {}
         self.year = int(settings.get("year") or 0)
-        from taxjson.lib.country import settings_country, settings_tax_date
+        from taxjson.lib.country import (futures_settle_mode,
+                                         settings_country, settings_tax_date)
+        from taxjson.lib.phantom_holdings import LOSS_RULE
+        from taxjson.lib.income_dating import IncomeRules
         self.country = settings_country(settings)
         self.usa = self.country == "usa"
+        # tax_date decides the YEAR a row lands in; the loss window is
+        # counted on the engine's fixed dates (CA settle, US trade).
         self.basis = settings_tax_date(settings)
-        self.futures_settle = settings.get("futures_settle") or "trade"
+        self.window_basis = LOSS_RULE[self.country][1]
+        self.futures_settle = futures_settle_mode(settings)
+        self.income_rules = IncomeRules.from_settings(settings)
+        from taxjson.lib.tax_logic import _local_tz
+        self.local_tz = _local_tz(settings)
         from taxjson.lib.pipeline import option_timing_from_settings
         _kw = option_timing_from_settings(settings) or {}
         self.timing = _kw.get("option_premium_timing", "close")
@@ -120,28 +198,33 @@ class Book:
         self.only = account
         self.txs: List[Dict[str, Any]] = []
         self.missing: List[str] = []
+        self.phantom_openings = 0
+        phantoms = self._phantoms()
         for name in sorted(accounts):
             p = self.cache / f"{name}_base.json"
             if not p.exists():
                 self.missing.append(name)
                 continue
-            for r in _rows(p):
-                r = dict(r)
-                r["_acct"] = name
-                self.txs.append(r)
+            rows = [dict(r, _acct=name) for r in _rows(p)]
+            if phantoms:
+                rows += self._openings(rows, phantoms)
+            self.txs.extend(rows)
+        # Position before each row, per (account, symbol), on the tax
+        # date basis (year straddles, opening vs closing call buys).
+        self.pre_pos: Dict[int, float] = {}
+        _walk(self.txs, self.bdate, pre=self.pre_pos)
         self.gains: List[Dict[str, Any]] = []
         self.inventory: List[Dict[str, Any]] = []
         resolved = resolve_gains_files(self.cache, None) or {}
         for acct, f in resolved.items():
-            try:
-                doc = json.loads(Path(f).read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
+            doc = _read(Path(f))
+            if not isinstance(doc, dict):
+                raise ValueError(f"work/{Path(f).name} is not a gains "
+                                 f"document — re-run `taxjson run`")
             from taxjson.lib.json_input import check_row_types
-            if isinstance(doc, dict):
-                for _k in ("transactions", "inventory"):
-                    if isinstance(doc.get(_k), list):
-                        check_row_types(doc[_k], f, _k)
+            for _k in ("transactions", "inventory"):
+                if isinstance(doc.get(_k), list):
+                    check_row_types(doc[_k], f, _k)
             for t in doc.get("transactions", []):
                 if t.get("gain") is None or t.get("action"):
                     continue
@@ -155,8 +238,45 @@ class Book:
                 h["_acct"] = h.get("account") or acct
                 self.inventory.append(h)
 
+    def _phantoms(self):
+        """phantoms.json's (symbol, account) pairs, as every twin view
+        applies them (A2-1208); None without the file."""
+        p = self.root / "phantoms.json"
+        if not p.exists():
+            return None
+        from taxjson.lib.phantom_holdings import load_phantoms
+        try:
+            return load_phantoms(p) or None
+        except (OSError, ValueError) as e:
+            raise ValueError(f"phantoms.json cannot be read ({e})") from None
+
+    def _openings(self, rows: List[Dict[str, Any]], phantoms
+                  ) -> List[Dict[str, Any]]:
+        """The OPENING_BALANCE rows the gains stage synthesizes for this
+        account's phantom-backed positions."""
+        from dataclasses import asdict
+        from taxjson.lib.core import TaxTransaction
+        from taxjson.lib.phantom_holdings import synthesize_openings
+        name = rows[0]["_acct"] if rows else ""
+        fields = TaxTransaction.__dataclass_fields__
+        txs = []
+        for r in rows:
+            try:
+                txs.append(TaxTransaction(**{k: v for k, v in r.items()
+                                             if k in fields}))
+            except (TypeError, ValueError):
+                continue
+        ids = {id(t) for t in txs}
+        new, _log = synthesize_openings(txs, phantoms, flag_stale=False)
+        out = []
+        for t in new:
+            if id(t) not in ids and t.action == "OPENING_BALANCE":
+                out.append(dict(asdict(t), _acct=name))
+        self.phantom_openings += len(out)
+        return out
+
     def bdate(self, r: Dict[str, Any]) -> Optional[date]:
-        """The engine's date for a row: settlement or trade."""
+        """The row's tax-year date: settlement or trade (tax_date)."""
         if self.basis == "settle":
             return _d(r.get("date_settle")) or _d(r.get("date"))
         return _d(r.get("date"))
@@ -165,6 +285,26 @@ class Book:
         if self.basis == "settle":
             return _d(r.get("date"))
         return _d(r.get("date_settle")) or _d(r.get("date"))
+
+    def wdate(self, r: Dict[str, Any]) -> Optional[date]:
+        """The date the engine counts a loss window on: the settlement
+        date in Canada (CA-SL-01), the trade date in the US (US-WASH-01)
+        — whatever tax_date says (phantom_holdings.loss_window_date)."""
+        if self.window_basis == "settle":
+            return _d(r.get("date_settle")) or _d(r.get("date"))
+        return _d(r.get("date"))
+
+    def wother(self, r: Dict[str, Any]) -> Optional[date]:
+        """The other date, shown for reference only."""
+        if self.window_basis == "settle":
+            return _d(r.get("date"))
+        return _d(r.get("date_settle")) or _d(r.get("date"))
+
+    def in_wash_scope(self, acct: str) -> bool:
+        """§1091 does not reach digital assets: a US crypto account has
+        no wash-sale window (wash-radar and wash-sales leave it out,
+        A2-1201). Canada's s.54 covers crypto."""
+        return not (self.usa and acct in self.crypto)
 
     def wanted(self, acct: str) -> bool:
         return not self.only or acct == self.only
@@ -181,14 +321,9 @@ def year_straddles(book: Book) -> List[Dict[str, Any]]:
     """Trades whose trade date and settlement date fall in different
     years, around this project's two year ends."""
     y = book.year
-    pre_pos: Dict[int, float] = {}
-    run: Dict[Tuple[str, str], float] = {}
-    for r in sorted((r for r in book.txs
-                     if r.get("action") in ("BUYSELL", "ASSIGN", "TRANSFER")),
-                    key=lambda r: (str(book.bdate(r) or ""), r.get("time") or "")):
-        k = (r["_acct"], r.get("symbol") or "")
-        pre_pos[id(r)] = run.get(k, 0.0)
-        run[k] = run.get(k, 0.0) + float(r.get("quantity") or 0)
+    # Opening balances (phantoms.json, a broker's opening position) and
+    # splits count (A2-0389, A2-1208): Book.pre_pos.
+    pre_pos = book.pre_pos
     gains_by_key: Dict[Tuple, List[Dict[str, Any]]] = {}
     for g in book.gains:
         gains_by_key.setdefault((g["_acct"], g.get("symbol"),
@@ -273,7 +408,7 @@ def last_days_dispositions(book: Book, days: int = 3) -> List[Dict[str, Any]]:
         if not near:
             continue
         sym = g.get("symbol") or ""
-        fut = sym.startswith("F:")
+        fut = _is_future(sym)
         why = f"traded and settles in {t.year}"
         if fut:
             why += (" (futures settle on the trade date"
@@ -310,13 +445,45 @@ def option_expiries(book: Book) -> List[Dict[str, Any]]:
             ye = date(yy, 12, 31)
             if not (ye - timedelta(days=6) <= exp <= ye + timedelta(days=7)):
                 continue
-            held = sum(float(r.get("quantity") or 0) for r in book.txs
-                       if r["_acct"] == acct and r.get("symbol") == sym
-                       and r.get("action") in ACQ_ACTIONS
-                       and (_d(r.get("date")) or exp) < exp)
+            mine = [r for r in book.txs
+                    if r["_acct"] == acct and r.get("symbol") == sym
+                    and r.get("action") in ACQ_ACTIONS]
+            held = sum(float(r.get("quantity") or 0) for r in mine
+                       if (_d(r.get("date")) or exp) < exp)
             if abs(held) < 1e-9:
                 continue
             side = "long" if held > 0 else "written"
+            # What happened ON the expiry day (A2-0700): an assignment or
+            # exercise is not an expiry — the premium (or cost) folds
+            # into the share leg, which lands where that leg settles; a
+            # priced close that day is a trade, listed with the trades.
+            on_day = [r for r in mine if _d(r.get("date")) == exp]
+            if any(r.get("action") == "ASSIGN" for r in on_day):
+                und = _underlying(sym) or ""
+                legs = [r for r in book.txs
+                        if r["_acct"] == acct and r.get("action") == "ASSIGN"
+                        and r.get("symbol") == und
+                        and _d(r.get("date")) == exp]
+                ld = book.bdate(legs[0]) if legs else None
+                lands = ld.year if ld else exp.year
+                what = "assigned" if side == "written" else "exercised"
+                why = (f"{side} {abs(held):g} {what} on its expiry date "
+                       f"{exp}: not an expiry — the "
+                       f"{'premium' if side == 'written' else 'cost'} "
+                       f"folds into the {und or 'share'} leg"
+                       + (f" (settles {legs[0].get('date_settle')})"
+                          if legs and legs[0].get("date_settle") else "")
+                       + f", which lands in {lands}")
+                out.append({"account": acct, "symbol": sym, "held": held,
+                            "expiry": str(exp), "lands_in": lands,
+                            "assigned": True, "why": why})
+                continue
+            closed_by_trade = sum(
+                float(r.get("quantity") or 0) for r in on_day
+                if r.get("action") == "BUYSELL"
+                and abs(float(r.get("price") or 0)) > 1e-9)
+            if abs(held + closed_by_trade) < 1e-9:
+                continue
             why = (f"{side} {abs(held):g} expiring {exp}: an expiry is a "
                    f"disposition on the expiry date itself, so it lands in "
                    f"{exp.year}")
@@ -328,37 +495,124 @@ def option_expiries(book: Book) -> List[Dict[str, Any]]:
     return out
 
 
+def _income_why(book: Book, r: Dict[str, Any], pay: date, lands: date,
+                is_roc: bool) -> str:
+    """Why an income row (or a return of capital) lands in its year, on
+    the project's own law: lib/income_dating is the one source of the
+    date (A2-0387, A2-1209)."""
+    rules = book.income_rules
+    a = str(r.get("action") or "")
+    if is_roc:
+        rec = rules.roc_record_date(r)
+        if rec:
+            return (f"a Canadian trust's return of capital lowers the ACB "
+                    f"on its record date {rec}, not the pay date {pay} "
+                    f"(s.53(2)(h)): {lands.year}")
+        if book.usa:
+            return (f"a nondividend distribution lowers the basis when "
+                    f"paid ({pay}, §301(c)(2)): {lands.year}")
+        return (f"a return of capital lowers the ACB when paid ({pay})"
+                + ("" if not rules.is_canadian_trust(r) else
+                   " — the export prints no record date, so the pay date "
+                   "is used; a trust's ROC lowers the ACB when payable "
+                   "(s.53(2)(h)): check the T3")
+                + f": {lands.year}")
+    if book.usa:
+        if rules.ric_prior_year(r):
+            return (f"listed in ric_january_dividends: a January fund/REIT "
+                    f"dividend declared in Oct-Dec is received on Dec 31 "
+                    f"(§852(b)(7), §857(b)(9)), not the pay date {pay}: "
+                    f"{lands.year}")
+        return (f"income is taxed in the year it is paid (the date the "
+                f"broker books it, {pay}): {lands.year}")
+    rec = rules.trust_record_date(r)
+    if rec:
+        return (f"a Canadian trust's distribution is income of the year it "
+                f"became payable — its record date {rec}, not the pay date "
+                f"{pay} (s.104(13)): {lands.year}")
+    if a == "DIVIDEND" and str(r.get("income_label") or "").lower() \
+            == "distribution" and rules.is_canadian_trust(r):
+        return (f"a Canadian trust's distribution is income when payable "
+                f"(s.104(13)); the export prints no record date, so the "
+                f"pay date {pay} is used — check the T3: {lands.year}")
+    if a == "DIVIDEND_IN_LIEU":
+        return f"a payment in lieu is income when paid ({pay}): {lands.year}"
+    if a == "DIVIDEND":
+        return (f"a dividend is income when paid (s.82(1); the date the "
+                f"broker books it, {pay}), not the record or ex-dividend "
+                f"date: {lands.year}")
+    if a == "TAX":
+        return (f"tax withheld goes with the payment it was taken from "
+                f"({pay}): {lands.year}")
+    return f"income of the year it is paid ({pay}): {lands.year}"
+
+
 def income_near_new_year(book: Book, days: int = 5) -> List[Dict[str, Any]]:
+    """Income rows (dividends, payments in lieu, interest, tax withheld)
+    and returns of capital paid — or dated by a record date — within
+    `days` of a year end, with the year lib/income_dating puts them in
+    (the engine's and divs-sum's year)."""
     y = book.year
+    rules = book.income_rules
     out = []
     for r in book.txs:
-        if r.get("action") not in INCOME_ACTIONS or not book.wanted(r["_acct"]):
+        a = r.get("action")
+        is_roc = (a == "ADJUST"
+                  and str(r.get("type") or "").lower() == "roc")
+        if a not in INCOME_ACTIONS and not is_roc:
+            continue
+        if not book.wanted(r["_acct"]):
             continue
         if book.kind.get(r["_acct"]) != "taxable" or r["_acct"] in book.crypto:
             continue
         if abs(float(r.get("net_amount") or 0)) < 1:
             continue
-        d = _d(r.get("date"))
-        if not d:
+        pay = _d(r.get("date"))
+        if not pay:
             continue
+        lands = _d(rules.row_date(r)) or pay
+        near = False
         for yy in (y - 1, y):
             ye = date(yy, 12, 31)
-            if -days < (d - ye).days <= days:
-                out.append({"account": r["_acct"], "symbol": r.get("symbol"),
-                            "action": r.get("action"), "date": str(d),
-                            "amount": round(float(r.get("net_amount") or 0), 2),
-                            "lands_in": d.year,
-                            "why": (f"income is taxed in the year it is PAID "
-                                    f"(the date the broker books it, {d}), "
-                                    f"not the record or ex-dividend date: "
-                                    f"{d.year}")})
+            if any(-days < (x - ye).days <= days for x in (pay, lands)):
+                near = True
+        if not near:
+            continue
+        out.append({"account": r["_acct"], "symbol": r.get("symbol"),
+                    "action": "ROC" if is_roc else a, "date": str(pay),
+                    "tax_date": str(lands),
+                    "amount": round(float(r.get("net_amount") or 0), 2),
+                    "lands_in": lands.year,
+                    "why": _income_why(book, r, pay, lands, is_roc)})
     out.sort(key=lambda x: (x["date"], x["symbol"] or ""))
     return out
 
 
-def crypto_midnight(book: Book, hours: int = 5) -> List[Dict[str, Any]]:
-    """Crypto rows within `hours` of midnight at a year end (local time;
-    the exchanges' CSVs are in UTC, so the UTC date can differ)."""
+def _local_to_utc(ts: datetime, tz_name: str) -> datetime:
+    """Naive local wall-clock time in `tz_name` -> naive UTC (the inverse
+    of the parsers' _crypto_common.utc_to_local)."""
+    from datetime import timezone
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        from taxjson.lib.brokerages._crypto_common import utc_to_local
+        for off in (5, 4):
+            cand = ts + timedelta(hours=off)
+            if utc_to_local(cand, tz_name) == ts:
+                return cand
+        raise ValueError(f"local_timezone {tz_name!r} is not available "
+                         f"(install the `tzdata` package)")
+    return ts.replace(tzinfo=tz).astimezone(timezone.utc).replace(
+        tzinfo=None)
+
+
+def crypto_midnight(book: Book) -> List[Dict[str, Any]]:
+    """Crypto rows whose local date and UTC date fall in different years
+    at one of the project's year ends. The books date crypto in the
+    project's local_timezone; the exchanges' own statements are in UTC,
+    so these rows sit in the other year there (A2-1200, A2-1202..1204:
+    the UTC time came from a fixed EST offset whatever the zone)."""
     y = book.year
     out = []
     for r in book.txs:
@@ -369,37 +623,43 @@ def crypto_midnight(book: Book, hours: int = 5) -> List[Dict[str, Any]]:
                                    "%Y-%m-%d %H:%M:%S")
         except ValueError:
             continue
-        for yy in (y - 1, y):
-            mid = datetime(yy + 1, 1, 1)
-            if abs((ts - mid).total_seconds()) <= hours * 3600:
-                out.append({"account": r["_acct"], "symbol": r.get("symbol"),
-                            "action": r.get("action"), "local": str(ts),
-                            "qty": float(r.get("quantity") or 0),
-                            "lands_in": ts.year,
-                            "why": (f"booked at {ts} local time, in {ts.year}; "
-                                    f"in UTC this is about {ts + timedelta(hours=5)}"
-                                    f" (EST), which may be the other year on the "
-                                    f"exchange's own statement")})
+        if not (y - 1 <= ts.year <= y + 1):
+            continue
+        utc = _local_to_utc(ts, book.local_tz)
+        if utc.year == ts.year or min(ts.year, utc.year) not in (y - 1, y):
+            continue
+        out.append({"account": r["_acct"], "symbol": r.get("symbol"),
+                    "action": r.get("action"), "local": str(ts),
+                    "utc": str(utc), "timezone": book.local_tz,
+                    "qty": float(r.get("quantity") or 0),
+                    "lands_in": ts.year,
+                    "why": (f"booked at {ts} local time ({book.local_tz}), "
+                            f"in {ts.year}; in UTC this is {utc}, "
+                            f"{utc.year} on the exchange's own statement")})
     out.sort(key=lambda x: x["local"])
     return out
 
 
 def windows_across_year_end(book: Book) -> List[Dict[str, Any]]:
     """Losses whose 61-day window spans Dec 31, with where the denied
-    amount goes."""
+    amount goes. The window and the acquisitions on its other side are
+    on the engine's window dates (Book.wdate), not tax_date (A2-1206)."""
     y = book.year
     by_sym: Dict[str, List[Dict[str, Any]]] = {}
     for r in book.txs:
-        if r.get("action") in ACQ_ACTIONS and float(r.get("quantity") or 0) > 0:
+        if (r.get("action") in ACQ_ACTIONS
+                and r.get("action") != "OPENING_BALANCE"
+                and float(r.get("quantity") or 0) > 0
+                and book.in_wash_scope(r["_acct"])):
             by_sym.setdefault(r.get("symbol") or "", []).append(r)
     out = []
     for g in book.gains:
         if float(g.get("raw_gain", g.get("gain") or 0) or 0) >= -0.005:
             continue
-        if not book.wanted(g["_acct"]):
+        if not book.wanted(g["_acct"]) or not book.in_wash_scope(g["_acct"]):
             continue
-        ld = book.bdate(g)
-        if not ld:
+        ld, ty = book.wdate(g), book.bdate(g)
+        if not ld or not ty:
             continue
         for yy in (y - 1, y):
             ye = date(yy, 12, 31)
@@ -407,13 +667,13 @@ def windows_across_year_end(book: Book) -> List[Dict[str, Any]]:
             if not (lo <= ye < hi):
                 continue
             other_side = [r for r in by_sym.get(g.get("symbol") or "", [])
-                          if (d := book.bdate(r)) and lo <= d <= hi
+                          if (d := book.wdate(r)) and lo <= d <= hi
                           and (d.year != ld.year)]
             if not other_side:
                 continue
             denied = float(g.get("disallowed_amount") or 0)
             perm = float(g.get("permanently_disallowed") or 0)
-            acq = ", ".join(f"{r['_acct']} {book.bdate(r)} +{float(r.get('quantity') or 0):g}"
+            acq = ", ".join(f"{r['_acct']} {book.wdate(r)} +{float(r.get('quantity') or 0):g}"
                             for r in other_side[:4])
             if denied > 0.005:
                 verdict = (f"denied {denied:,.2f}"
@@ -434,7 +694,7 @@ def windows_across_year_end(book: Book) -> List[Dict[str, Any]]:
                         "raw_loss": round(float(g.get("raw_gain") or 0), 2),
                         "denied": round(denied, 2), "permanent": round(perm, 2),
                         "other_year_acquisitions": acq,
-                        "why": (f"a {ld.year} loss whose window runs "
+                        "why": (f"a {ty.year} loss whose window runs "
                                 f"{lo}..{hi}, across Dec 31 {yy}: acquisitions "
                                 f"in the other year ({acq}) count. {verdict}")})
             break
@@ -462,22 +722,38 @@ def deferred_into_next_year(book: Book) -> List[Dict[str, Any]]:
 # --------------------------------------------------------- window edges
 
 def _held_at(book: Book, sym: str, when: date) -> float:
-    """Units of `sym` held across every account at the end of `when`."""
-    return sum(float(r.get("quantity") or 0) for r in book.txs
-               if r.get("symbol") == sym and r.get("action") in ACQ_ACTIONS
-               and (d := book.bdate(r)) and d <= when)
+    """Units of `sym` held across every account at the end of `when` (a
+    window date): openings and SPLIT ratios applied, and a position
+    renamed into `sym` by a SPLIT counted under it (A2-0388/0389)."""
+    names = {sym}
+    grew = True
+    while grew:                     # every symbol renamed into `sym`
+        grew = False
+        for r in book.txs:
+            if (r.get("action") == "SPLIT"
+                    and str(r.get("symbol_new") or "").strip() in names
+                    and (r.get("symbol") or "") not in names):
+                names.add(r.get("symbol") or "")
+                grew = True
+    rows = [r for r in book.txs if (r.get("symbol") or "") in names
+            and book.in_wash_scope(r["_acct"])]
+    pos = _walk(rows, book.wdate, until=when)
+    return sum(v for (_a, s_), v in pos.items() if s_ == sym)
 
 
 def _losses(book: Book):
+    """(gain row, loss window date, the other date) for each taxable
+    loss of the project year — the year by tax_date, the window date by
+    the engine's fixed basis (A2-0133/0134/0135)."""
     for g in book.gains:
-        if not book.wanted(g["_acct"]):
+        if not book.wanted(g["_acct"]) or not book.in_wash_scope(g["_acct"]):
             continue
         if float(g.get("raw_gain", g.get("gain") or 0) or 0) >= -0.005:
             continue
-        ld = book.bdate(g)
-        if not ld or ld.year != book.year:
+        ty, ld = book.bdate(g), book.wdate(g)
+        if not ty or not ld or ty.year != book.year:
             continue
-        yield g, ld, book.other(g)
+        yield g, ld, book.wother(g)
 
 
 def _verdict(g: Dict[str, Any]) -> str:
@@ -502,7 +778,7 @@ def _group(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _describe(book: Book, it: Dict[str, Any], held_end: float) -> str:
-    basis = "settlement" if book.basis == "settle" else "trade"
+    basis = "settlement" if book.window_basis == "settle" else "trade"
     other = "trade" if basis == "settlement" else "settlement"
     side = "before" if it["day"] < 0 else "after"
     reg = ((" (IRA)" if book.usa else " (registered)")
@@ -523,11 +799,12 @@ def _describe(book: Book, it: Dict[str, Any], held_end: float) -> str:
                 and not book.usa):
             txt += (" (but none of it was still held on day 30, so it is "
                     "not a replacement: it is the lot that was sold)")
-    if it["other_basis_day"] is not None:
-        txt += (f"; on the {other}-date basis it is day "
-                f"{abs(it['other_basis_day'])}")
-        if it["basis_flip"]:
-            txt += " — THE DATE BASIS DECIDES THIS ONE"
+    alt = it["other_basis_day"]
+    if alt is not None and abs(alt) != abs(it["day"]):
+        # Reference only: the engine counts the window on the
+        # {basis} date whatever tax_date says (A2-0135).
+        txt += (f" (day {abs(alt)} on the {other} date, which does not "
+                f"decide the window)")
     if it.get("option") and book.usa:
         txt += (f". {it['option']} may be an option to acquire the shares "
                 f"(§1091(a)); the US engine does not deny on it — a "
@@ -539,6 +816,28 @@ def _describe(book: Book, it: Dict[str, Any], held_end: float) -> str:
     return txt
 
 
+def _long_calls(book: Book) -> Dict[str, List[Tuple[Dict[str, Any], float]]]:
+    """Call purchases that OPEN a long position, by underlying, with the
+    opening quantity: a buy-to-close of a written call acquires no
+    option (core._opening_qty; A2-0699, A2-1197)."""
+    calls: Dict[str, List[Tuple[Dict[str, Any], float]]] = {}
+    for r in book.txs:
+        sym = r.get("symbol") or ""
+        if r.get("action") != "BUYSELL" or _right(sym) != "C":
+            continue
+        if not book.in_wash_scope(r["_acct"]):
+            continue
+        oq = _opening_qty(book, r)
+        und = _underlying(sym)
+        # A futures option is never a sized replacement of the futures
+        # loss, however it is spelled — the engines flag it for a
+        # manual check (CA-SL-15 / US-WASH-15; audit A2-0378).
+        from taxjson.lib.core import _FUTURES_PREFIX_RE
+        if oq > 1e-9 and und and not _FUTURES_PREFIX_RE.match(und):
+            calls.setdefault(und, []).append((r, oq))
+    return calls
+
+
 def window_edges(book: Book, margin: int = 3) -> List[Dict[str, Any]]:
     """For each taxable loss in the project year: acquisitions of the same
     security (any account) within `margin` days of either window edge, and
@@ -548,22 +847,18 @@ def window_edges(book: Book, margin: int = 3) -> List[Dict[str, Any]]:
     warning only (calls_in_windows), never a window item."""
     lo_edge, hi_edge = WINDOW - margin, WINDOW + margin
     by_sym: Dict[str, List[Dict[str, Any]]] = {}
-    calls: Dict[str, List[Dict[str, Any]]] = {}
+    calls = _long_calls(book)
     for r in book.txs:
-        if r.get("action") in ACQ_ACTIONS:
-            sym = r.get("symbol") or ""
-            by_sym.setdefault(sym, []).append(r)
-            if (_right(sym) == "C" and r.get("action") == "BUYSELL"
-                    and float(r.get("quantity") or 0) > 0):
-                und = _underlying(sym)
-                if und:
-                    calls.setdefault(und, []).append(r)
+        if (r.get("action") in ACQ_ACTIONS
+                and r.get("action") != "OPENING_BALANCE"
+                and book.in_wash_scope(r["_acct"])):
+            by_sym.setdefault(r.get("symbol") or "", []).append(r)
     out = []
     for g, ld, lo_ in _losses(book):
         sym = g.get("symbol") or ""
         items = []
         for r in by_sym.get(sym, []):
-            d, od = book.bdate(r), book.other(r)
+            d, od = book.wdate(r), book.wother(r)
             if not d:
                 continue
             off = (d - ld).days
@@ -573,32 +868,25 @@ def window_edges(book: Book, margin: int = 3) -> List[Dict[str, Any]]:
                     "day": off, "other_basis_day": alt,
                     "sheltered": book.kind.get(r["_acct"]) != "taxable"}
             if q > 0 and lo_edge <= abs(off) <= hi_edge:
-                inside = abs(off) <= WINDOW
-                items.append(dict(base, kind="acquisition", inside=inside,
-                                  basis_flip=(alt is not None and
-                                              (abs(alt) <= WINDOW) != inside)))
+                items.append(dict(base, kind="acquisition",
+                                  inside=abs(off) <= WINDOW))
             elif q < 0 and lo_edge <= off <= hi_edge and not book.usa:
-                inside = off <= WINDOW
-                items.append(dict(base, kind="sale", inside=inside,
-                                  basis_flip=(alt is not None and
-                                              (alt <= WINDOW) != inside)))
+                items.append(dict(base, kind="sale", inside=off <= WINDOW))
         if not _is_option(sym) and not book.usa:
-            for r in calls.get(sym, []):
-                d, od = book.bdate(r), book.other(r)
+            for r, oq in calls.get(sym, []):
+                d, od = book.wdate(r), book.wother(r)
                 if not d:
                     continue
                 off = (d - ld).days
                 if not lo_edge <= abs(off) <= hi_edge:
                     continue
                 alt = (od - lo_).days if od and lo_ else None
-                inside = abs(off) <= WINDOW
                 items.append({"kind": "long call", "account": r["_acct"],
                               "sheltered": book.kind.get(r["_acct"]) != "taxable",
-                              "date": str(d), "qty": float(r.get("quantity") or 0),
+                              "date": str(d), "qty": oq,
                               "day": off, "other_basis_day": alt,
-                              "option": r.get("symbol"), "inside": inside,
-                              "basis_flip": (alt is not None and
-                                             (abs(alt) <= WINDOW) != inside)})
+                              "option": r.get("symbol"),
+                              "inside": abs(off) <= WINDOW})
         if not items:
             continue
         end = ld + timedelta(days=WINDOW)
@@ -608,7 +896,7 @@ def window_edges(book: Book, margin: int = 3) -> List[Dict[str, Any]]:
         bought_after = sum(float(r.get("quantity") or 0)
                            for r in by_sym.get(sym, [])
                            if float(r.get("quantity") or 0) > 0
-                           and (d := book.bdate(r)) and ld < d <= end)
+                           and (d := book.wdate(r)) and ld < d <= end)
         pre_held = held_end - bought_after
         items = _group(items)
         for it in items:
@@ -628,18 +916,7 @@ def calls_in_windows(book: Book) -> List[Dict[str, Any]]:
     """Share losses with a long call on the same shares bought inside the
     window (s.54 'a right to acquire'). The engine treats a call still
     held on day 30 as replacement property (100 shares per contract)."""
-    calls: Dict[str, List[Dict[str, Any]]] = {}
-    for r in book.txs:
-        sym = r.get("symbol") or ""
-        if (r.get("action") == "BUYSELL" and _right(sym) == "C"
-                and float(r.get("quantity") or 0) > 0):
-            und = _underlying(sym)
-            # A futures option is never a sized replacement of the
-            # futures loss, however it is spelled — the engines flag it
-            # for a manual check (CA-SL-15 / US-WASH-15; audit A2-0378).
-            from taxjson.lib.core import _FUTURES_PREFIX_RE
-            if und and not _FUTURES_PREFIX_RE.match(und):
-                calls.setdefault(und, []).append(r)
+    calls = _long_calls(book)
     out = []
     for g, ld, lo_ in _losses(book):
         sym = g.get("symbol") or ""
@@ -647,8 +924,8 @@ def calls_in_windows(book: Book) -> List[Dict[str, Any]]:
             continue
         end = ld + timedelta(days=WINDOW)
         items = []
-        for r in calls[sym]:
-            d, od = book.bdate(r), book.other(r)
+        for r, oq in calls[sym]:
+            d, od = book.wdate(r), book.wother(r)
             if not d or abs((d - ld).days) > WINDOW:
                 continue
             osym = r.get("symbol")
@@ -656,11 +933,10 @@ def calls_in_windows(book: Book) -> List[Dict[str, Any]]:
             alt = (od - lo_).days if od and lo_ else None
             items.append({"kind": "long call", "account": r["_acct"],
                           "sheltered": book.kind.get(r["_acct"]) != "taxable",
-                          "date": str(d), "qty": float(r.get("quantity") or 0),
+                          "date": str(d), "qty": oq,
                           "day": (d - ld).days, "inside": True,
                           "other_basis_day": alt, "option": osym,
-                          "held_at_day30": held,
-                          "basis_flip": (alt is not None and abs(alt) > WINDOW)})
+                          "held_at_day30": held})
         if not items:
             continue
         items = _group(items)
@@ -692,6 +968,19 @@ def analyze(root: Path, cfg: Dict[str, Any], *, margin: int = 3,
     timing = kw.get("option_premium_timing", "close")
     since = kw.get("option_grant_since")
     written = []
+    # The filed-year locks option-boundary reads — filed/<year>.json and
+    # the prior_year_record lock — with the timing each recorded, so the
+    # two commands give one verdict on the same contract (A2-0390,
+    # A2-1205).
+    filed: set = set()
+    filed_timing: Dict[int, Dict[str, Any]] = {}
+    if not book.usa:
+        import sys as _sys
+        from taxjson.lib.option_boundary import filed_locks
+        filed, filed_timing = filed_locks(
+            root, settings,
+            warn=lambda m: print(f"taxjson edge-cases: warning: {m}",
+                                 file=_sys.stderr))
     # Written options across a year end are an s.49(1) grant-timing
     # boundary (option-boundary is Canada-only); a US premium is taxed
     # at the close (§1234), so there is nothing to place.
@@ -707,19 +996,16 @@ def analyze(root: Path, cfg: Dict[str, Any], *, margin: int = 3,
                                              if k in TaxTransaction.__dataclass_fields__}))
             except TypeError:
                 continue
-        filed = set()
-        for f in (root / "filed").glob("*.json"):
-            try:
-                filed.add(int(f.stem))
-            except ValueError:
-                pass
         for r in straddling(txs, book.year, timing, since, filed,
+                            filed_timing=filed_timing,
                             tax_date=book.basis):
             r["account"] = r.get("account") or name
             written.append(r)
     return {
         "year": book.year, "basis": book.basis, "country": book.country,
+        "window_basis": book.window_basis,
         "futures_settle": book.futures_settle, "margin": margin,
+        "phantom_openings": book.phantom_openings,
         "missing_books": book.missing,
         "year_boundary": {
             "straddles": year_straddles(book),
@@ -809,7 +1095,7 @@ def render_text(doc: Dict[str, Any], verbose: bool = False) -> List[str]:
             "None.")
     section("Income paid around New Year", yb["income"],
             lambda r: (f"{r['account']:<8} {str(r['symbol']):<24} "
-                       f"{r['action']:<9} {r['date']}  {_money(r['amount'])}"
+                       f"{r['action']:<17} {r['date']}  {_money(r['amount'])}"
                        f"  -> {r['lands_in']}"),
             "None.")
     section("Crypto near midnight at a year end", yb["crypto_midnight"],
@@ -863,20 +1149,21 @@ def render_text(doc: Dict[str, Any], verbose: bool = False) -> List[str]:
                  f"{r['renamed_to']} on {r['rename_date']}: "
                  f"{r['resolution']}")
     L.append("")
-    flips = sum(1 for r in we for it in r["items"] if it.get("basis_flip"))
     if usa:
-        L.append("Day counts use the engine's date basis. The window is the "
+        L.append("Window day counts are on TRADE dates, as the engine "
+                 "counts them whatever tax_date says (tax_date only "
+                 "decides the year). The window is the "
                  "30 days before and after the loss (§1091): a purchase "
                  "inside it in any account, IRAs included, makes the loss a "
                  "wash sale whatever is sold later — there is no still-held "
-                 "test.")
+                 "test. Crypto is property, not a security: no wash-sale "
+                 "window.")
     else:
-        L.append("Day counts use the engine's date basis. The window is the 30 days "
+        L.append("Window day counts are on SETTLEMENT dates, as the engine "
+                 "counts them whatever tax_date says (tax_date only "
+                 "decides the year). The window is the 30 days "
                  "before and after the loss, and the replacement must still be "
                  "held at the end of day 30 (ITA s.54).")
-    if flips:
-        L.append(f"{flips} item(s) are marked THE BASIS DECIDES THIS ONE: the "
-                 f"window verdict would differ on the other date basis.")
     if doc.get("missing_books"):
         L.append(f"No work files for: {', '.join(doc['missing_books'])} "
                  f"(run `taxjson run`).")

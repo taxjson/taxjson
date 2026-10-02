@@ -1197,7 +1197,8 @@ def main(argv=None) -> int:
             if e["tie_out"].get("manual"):
                 continue
             if e["tie_out"].get("ties") is None and args.check \
-                    and not e["tie_out"].get("out_of_scope"):
+                    and not e["tie_out"].get("out_of_scope") \
+                    and not e["tie_out"].get("manual"):
                 reconciliation_failures.append(
                     f"engine disposition {e['id'][:12]} "
                     f"({e['symbol']} {e['date']}, gain "

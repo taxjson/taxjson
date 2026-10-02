@@ -262,6 +262,26 @@ def lock_country_problem(lock: Dict[str, Any], settings: Dict[str, Any],
             f"would overwrite the filed {display_name(rcc)} record).")
 
 
+def partial_year_note(lock: Dict[str, Any], year) -> Optional[str]:
+    """When the lock was taken on or before Dec 31 of its own year
+    (`close-year --force` on an open year): a sentence saying it is a
+    snapshot, not a filed return — every lock consumer says so instead
+    of certifying it (S045-23, A2-0679, A2-1164). None otherwise, and
+    for a lock without a readable closed_at."""
+    if not isinstance(lock, dict):
+        return None
+    at = str(lock.get("closed_at") or "")[:10]
+    try:
+        y = int(lock.get("year") or year)
+    except (TypeError, ValueError):
+        return None
+    if len(at) != 10 or at > f"{y}-12-31":
+        return None
+    return (f"the {y} lock was taken on {at}, before the year ended "
+            f"(close-year --force) — a snapshot, not a filed return; "
+            f"close the year again after filing")
+
+
 def lock_settings(lock: Dict[str, Any], settings: Dict[str, Any]
                   ) -> Dict[str, Any]:
     """The settings a lock is recomputed under: this project's, with the

@@ -30,6 +30,143 @@
 - A `.tt` SPLIT line carries no currency (it was labelled CAD, and a US
   project with no CAD rates refused the account); a split row with no
   money is relabelled, not converted.
+- `taxjson list --date`: verified on the owner-shaped case of a long call
+  sold at a loss and bought back (OWNER-LIST-ASOF-WASH: two T calls on
+  the 2025 books showed 14,817.50 / 9,069.25 where the engine carries
+  15,305.50 / 9,313.25); fixed by the A2-0391 / A2-0701 change above,
+  pinned by an option test.
+- `taxjson option-boundary` (and the checklist step that runs it) reads
+  the lock named by `[settings] prior_year_record` like a local
+  filed/<year>.json: the per-year layout got "no filed-year locks" and a
+  "no amendment required" checklist row where a local copy of the same
+  lock gave ATTENTION (re-audit A2-0360).
+- A crypto-only Canada project no longer gets the
+  `option_grant_timing_since is not set` warning from `carryover` and
+  `option-boundary` (run and the checklist already skipped it: it writes
+  no options) (re-audit A2-1144).
+- `taxjson checklist --done/--skip/--undo` are repeatable (only the last
+  of a repeated flag was recorded, silently), and concurrent marks no
+  longer lose each other or corrupt checklist.json (a lock around the
+  read-modify-write, an atomic write) (re-audit A2-1159, A2-1160).
+- `taxjson audit`: a phantom-basis sale the books route to manual
+  reporting is tied out as "phantom basis — manual reporting" instead of
+  "MISSING from the check file(s)" (exit 1), so the checklist's audit
+  step can complete; the KNOWN_ISSUES entry is gone (re-audit A2-1150).
+- Checklist wording: the T1135 step's "below the threshold" (and
+  `t1135 --json`, new `scope` / `scope_note`) says it covers these books
+  only; a US project's slip step names Form 1099-DA for crypto sales from
+  2025 (tax-logic US-RPT-09); the T5/T3 step's command names the TAXABLE
+  lines of divs-sum / roc-sum; Form 8949 exports carry `gain_unrounded`
+  so a pure per-row rounding gap no longer makes a US checklist's
+  form-export step "attention" (re-audit A2-0682, A2-1149, A2-1152,
+  A2-1154).
+- Checklist roc-entered: ADJUST rows are counted in the year roc-sum
+  windows them on (a Canadian trust's ROC by its record date), and the
+  step is "attention" when the same ROC is in the books and in
+  distributions.map (roc-sum's and apply-distributions' "reduced twice"
+  warning) (re-audit A2-0361, A2-0680).
+- `taxjson crypto-sends`: `--unset ID` removes a saved decision (the send
+  is undecided again); `--set`/`--write` refuse while another crypto
+  account has not been parsed (a send to it looked unmatched and could be
+  booked as a gift), and the checklist step is "blocked" then (re-audit
+  A2-0359, A2-1163).
+- Locks: a lock taken before its year ended (`close-year --force` on an
+  open year) is called a snapshot, not a filed return, by the checklist's
+  filed-lock and lock-committed steps (attention), by check-filed (a note
+  beside OK) and by option-boundary (marked partial); a filed/<year>.json
+  that is a directory is "blocked", not "no lock". A non-path
+  `prior_year_record` is refused by every command (handoff and the
+  checklist built a path from a list), and handoff with no `year` refuses
+  instead of looking for filed/-1.json (re-audit A2-0679, A2-1146,
+  A2-1161, A2-1162, A2-1164).
+- Checklist inputs-frozen: an RBC export is judged per RBC account (the
+  Account column), so another account's later export in the same folder
+  no longer certifies an export taken before the year ended (re-audit
+  A2-1147; the IB statement-period half was fixed by A2-0262).
+- `run --strict` / checklist run-clean: a crypto send recorded as a gift
+  or payment that could not be priced (not booked), a send booked twice
+  (a hand-written .tt line next to crypto_sends.tt), an undecided send
+  (strict only), and work/ books of a renamed account (counted twice) now
+  stop `--strict`; run-clean is "attention" over any UNBOOKED line in a
+  report and over the renamed account's books; the crypto-sends step
+  flags the double booking and a crypto_sends.tt whose price no longer
+  matches sends.json (re-audit A2-0127, A2-0357, A2-0362, A2-1151,
+  A2-1165).
+- Checklist run-clean / filing banners / web freshness: the record of
+  what the last full run read now covers every run input — an account's
+  elections `manifest.json` and crypto `sends.json`, and the root
+  `crypto_ticker.map` — so a changed election no longer reads as current.
+  Only the settings `run` reads count in taxjson.toml: a comment,
+  `[instalments]`, `[estimate]`, `province`, `prior_year_record`,
+  `holdings` and the fetch keys no longer mark the books stale (close-year
+  refused after an instalment was recorded). A damaged record is
+  "attention", not "no record"; a dangling reports/*.sum symlink is named
+  instead of crashing the step. Hidden files and Excel `~$` lock files in
+  inputs/ are no longer read by `run` (nor fingerprinted, nor taken as
+  slips), and an Apple Numbers export is refused like .xlsx (re-audit
+  A2-0124, A2-0126, A2-0358, A2-0363, A2-0681, A2-1145, A2-1148, A2-1155,
+  A2-1156, A2-1157, A2-1158, A2-1166).
+- edge-cases counts every superficial-loss / wash-sale window on the
+  engine's own dates — settlement dates in Canada, trade dates in the
+  US — whatever `tax_date` says; it called engine-denied losses OUTSIDE
+  the window (and allowed ones INSIDE) under a non-default tax_date,
+  dropped year-crossing windows, and printed "THE DATE BASIS DECIDES"
+  for a choice that cannot change the verdict (re-audit A2-0133,
+  A2-0134, A2-0135, A2-1206).
+- edge-cases positions count opening balances, `phantoms.json` openings
+  and split ratios: a phantom-backed or opening-balance year-end sale
+  read as a short sale, and "held on day 30" was in pre-split units
+  (re-audit A2-0388, A2-0389, A2-1208).
+- edge-cases no longer lists a buy-to-close of a written call as a long
+  call bought in a loss's window, in either section (re-audit A2-0699,
+  A2-1197), describes a written option assigned on its expiry date as
+  an assignment landing with its share leg (A2-0700), and leaves US
+  crypto out of the wash-sale window sections (A2-1201).
+- edge-cases "Income paid around New Year" uses income dating: a
+  Canadian trust's distribution with a December record date lands in
+  the record year (it said the pay year), and payments in lieu and
+  trust returns of capital are listed (re-audit A2-0387, A2-1207,
+  A2-1209).
+- edge-cases "Crypto near midnight" converts with the project's
+  `local_timezone` (it assumed EST and missed real UTC year-straddles
+  west of Eastern) and lists exactly the rows whose local and UTC dates
+  fall in different years (re-audit A2-1200, A2-1202, A2-1203, A2-1204).
+- edge-cases judges written options against the filed locks the way
+  option-boundary does — the timing each lock records, and the
+  `prior_year_record` lock (re-audit A2-0390, A2-1205).
+- edge-cases names an unreadable work file instead of printing "None."
+  at exit 0, refuses `--margin` below 0, and refuses an invalid
+  `futures_settle` as `run` does; check-dates refuses it too (re-audit
+  A2-1199, A2-1198, A2-0697).
+- check-dates: an unreadable parsed file is an ERROR (it was dropped and
+  the exit turned 0); an option expiry row settling after the contract's
+  expiry is a WARN; a far-future row is one error, not two; a `.tt`
+  line may carry the settlement date of a trade made today; `/ESH5`
+  futures are futures; Globex Christmas / New Year's evening fills are
+  normal and a weekend futures settle date is reported (re-audit
+  A2-0385, A2-0386, A2-1192, A2-1193, A2-1194, A2-1191).
+- Settlement cycles per market: the UK, EU and Swiss markets were T+2
+  from 2014-10-06, the ASX and NZX from 2016-03-07, Singapore from
+  2018-12-10, Tokyo from 2019-07-16, Hong Kong throughout — they all
+  inherited North America's T+3 era before 2017-09-05 (and Tokyo got
+  T+2 two years early); every EU currency, not only the euro, moves to
+  T+1 on 2027-10-11. tax-logic CA-DATE-04 / US-DATE-04 state it, with
+  Mexico's 2024 T+1 move (re-audit A2-0704, A2-1195, A2-0705). No
+  2024-2026 trade changes.
+- `list --date` keeps the in-account superficial-loss / wash-sale
+  addition to the replacement's cost, as the README and its label say
+  (it recomputed with `--no-wash`; re-audit A2-0391, A2-0392, A2-0701).
+- `list` / `shares` "as of the latest data" is the last settlement date
+  on a settle-basis book, and an unreadable base book is named on
+  stderr instead of silently moving the date (re-audit A2-0698,
+  A2-0702).
+- Kraken: a ledger of only fiat deposits and withdrawals is "0 tax
+  objects (not tax events)", not the "parsed to 0 transactions" warning
+  that `run --strict` refused (re-audit A2-0703).
+- `run`'s expired-open-option warning uses the same cutoff as
+  option-boundary and the checklist: an expiry on Dec 31 of a closed
+  year, and one after Dec 31 but within the books' data, are flagged
+  (re-audit A2-1210).
 - close-year / handoff / option-boundary (re-audit filing locks):
   close-year refuses books with no reports/ (a run that died before
   writing them) and an unreadable work/<acct>_base.json instead of

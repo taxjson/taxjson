@@ -1147,6 +1147,13 @@ class KrakenBrokerage(BaseBrokerage):
                 f"moves nothing, is not a tax event.",
                 file=sys.stderr,
             )
+            if not unbooked and not getattr(self, 'zero_tx_reason', None):
+                # A ledger of only cash moves books nothing, correctly:
+                # not the "parsed to 0 transactions" regression warning
+                # (and not a `run --strict` refusal) — audit A2-0703.
+                self.zero_tx_reason = (
+                    f"{sum(ignored_types.values())} fiat-cash or "
+                    f"zero-amount row(s): not tax events")
         for refid, sides in instant_trades.items():
             transactions.extend(self._build_instant_trades(sides, refid))
         nonevents = sum(n for c, n in self._skip_counts.items()

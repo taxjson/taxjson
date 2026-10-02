@@ -543,6 +543,17 @@ def record_decision(path: Path, sid: str, decision: str,
     save_decisions(path, doc)
 
 
+def clear_decision(path: Path, sid: str) -> bool:
+    """Remove a saved decision (the send is undecided again: `run`
+    asks, the checklist lists it). False when none was saved."""
+    doc = load_decisions(path)
+    if sid not in doc["sends"]:
+        return False
+    doc["sends"].pop(sid)
+    save_decisions(path, doc)
+    return True
+
+
 # ---------------------------------------------------------------- rates
 def load_rates(path: Path) -> Dict[str, Dict[str, Tuple[float, str]]]:
     """{currency: {date: (rate, source)}} from work/to_base.csv
@@ -1364,6 +1375,36 @@ def tt_ids(path: Path) -> Optional[set]:
         if m:
             ids.add(m.group(1))
     return ids
+
+
+def tt_stale_ids(acct_doc: Dict[str, Any], path: Path) -> List[str]:
+    """Ids whose generated line in crypto_sends.tt is not the one the
+    saved decision gives now: the id is missing or extra, or — when the
+    fair value is known offline (a --price, the cached rates) — its
+    BUYSELL line differs (a changed --price left the old sale booked
+    while the id-only check said current, A2-1151)."""
+    want = tt_want_ids(acct_doc)
+    have = tt_ids(path) or set()
+    stale = set(want ^ have)
+    try:
+        lines = set(path.read_text(encoding="utf-8").splitlines()) \
+            if path.is_file() else set()
+    except OSError:
+        lines = set()
+    for e in list(acct_doc["sends"]) + list(acct_doc.get("network_fees") or []):
+        if e["id"] in want and e.get("tt") and e["tt"] not in lines:
+            stale.add(e["id"])
+    return sorted(stale)
+
+
+def disposing_entries(acct_doc: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Every send crypto_sends.tt sells (priced or not): the decided
+    gifts/payments and the network fees — what a hand-written .tt line
+    must not sell again (duplicate_lines)."""
+    return ([e for e in acct_doc["sends"]
+             if e["decision"] in DISPOSING and not e["stable"]
+             and not e.get("refused")]
+            + list(acct_doc.get("network_fees") or []))
 
 
 # A hand-written quantity this close to a generated one sells the same

@@ -226,6 +226,54 @@ def write_lots(transactions: List[TaxTransaction],
     return out
 
 
+def filed_locks(root, settings: Optional[Dict[str, Any]] = None,
+                warn=None):
+    """Every filed-year lock this project can see — taxjson_filed.
+    project_locks: its own ``filed/<year>.json`` files plus the previous
+    year's record named by ``[settings] prior_year_record`` — as
+    ``(years, timing)``: the locked years, and for each lock that
+    records it the option timing its return used
+    (``option_premium_timing``, ``option_grant_since``) — what
+    `straddling` takes as ``filed_years`` and ``filed_timing``.
+    ``warn(text)`` is called for a lock that cannot be read (its timing
+    is then unknown). A ``prior_year_record`` that is not a path string
+    is skipped here (every config reader refuses it). Shared by
+    option-boundary's twin edge-cases, so the two give one verdict on
+    the same contract (audit A2-0390, A2-1205, A2-0360)."""
+    import json as _json
+    from pathlib import Path as _Path
+    from taxjson.bin import taxjson_filed as _tfl
+    root = _Path(root)
+    try:
+        locks = _tfl.project_locks(root, settings or {})
+    except _tfl.PriorRecordError:
+        locks = [(y, p, "local") for y, p in _tfl.list_snapshots(root)]
+    years: set = set()
+    timing: Dict[int, Dict[str, Any]] = {}
+    for fy, f, _where in locks:
+        years.add(fy)
+        try:
+            doc = _json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            doc = None
+            if warn:
+                warn(f"cannot read {_tfl.lock_label(root, f)} ({e}) — its "
+                     f"recorded option timing is unknown; `taxjson "
+                     f"check-filed` checks the lock.")
+        ot = doc.get("option_timing") if isinstance(doc, dict) else None
+        if isinstance(ot, dict):
+            timing[fy] = ot
+    return years, timing
+
+def expired_test(transactions: List[TaxTransaction], year: int,
+                 today: Optional[date] = None,
+                 tax_date: Optional[str] = None):
+    """The one "this contract can no longer be open" predicate
+    (`_expired_test`: expired by the later of the year end and the last
+    date the books cover, and before today) for straddling, expired_open
+    and `taxjson run`'s per-account warning (audit A2-1210, A2-1112)."""
+    return _expired_test(transactions, year, today, date_basis_of(tax_date))
+
 def _filed_on_close(wy: int, filed_timing: Optional[Dict[int, Dict[str, Any]]]) -> Optional[bool]:
     """True/False when the filed/<wy>.json lock RECORDS the timing its
     return used (close-year writes it) — True if a lot written in `wy`

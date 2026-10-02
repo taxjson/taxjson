@@ -101,7 +101,9 @@ class TestAnalyze(unittest.TestCase):
         td, root, cfg = _project({("ib", "a.csv"): [
             _r("2025-06-07", "2025-06-09"),               # Saturday
             _r("2025-06-10", "2025-06-09"),               # settles first
-            _r("2027-01-05", "2027-01-06")]})             # future
+            _r("2026-06-05", "2026-06-08"),               # future
+            # Far outside the year: ONE error, not also "future" (A2-1192).
+            _r("2027-01-05", "2027-01-06")]})
         with td:
             doc = analyze(root, cfg, today=date(2026, 1, 1))
         self.assertEqual(self.codes(doc), ["future-date", "out-of-range",
