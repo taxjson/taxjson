@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **RBC export coverage is judged per account, over trading days.**
+  Another RBC account's later export no longer hides this account's
+  missing late December; an export taken on Dec 31 is a note (not an
+  ATTENTION with the range 'Jan 1 to Dec 31'), and one taken on the
+  last trading day before a weekend year end is not told its weekend
+  is missing (re-audit A2-0272, A2-0275, A2-1049).
 - **RBC / Questrade: a dividend-reinvestment row must fit units x price.**
   A REI row whose cash was 10x its units at the REINV@ price was booked
   as the units' cost with only a schema note; the trade path refuses

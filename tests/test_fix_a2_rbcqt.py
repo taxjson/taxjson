@@ -637,5 +637,47 @@ class TestReinvestmentMoneyIdentity(unittest.TestCase):
         self.assertEqual([t["net_amount"] for t in txs], [3224.0])
 
 
+
+class TestRbcCoveragePerAccount(unittest.TestCase):
+    """A2-0272 / A2-0275 (per Account) and A2-1049 (trading days, no
+    inverted range)."""
+
+    def _msgs(self, files, year=2025, today=None):
+        from datetime import date
+        with tempfile.TemporaryDirectory() as d:
+            paths = []
+            for i, (as_of, acct) in enumerate(files):
+                body = (row("March 3, 2025", "Buy", "QZF", "QZ FUND", "100",
+                            "10", "-1009.95", "CAD", "QZ FUND UNSOLICITED",
+                            acct=acct)
+                        if acct else "")
+                p = Path(d) / f"rbc{i}.csv"
+                p.write_text(f'"Activity Export as of {as_of}"\n\n' + HDR
+                             + body)
+                paths.append(p)
+            with contextlib.redirect_stderr(io.StringIO()):
+                ctx = RbcBrokerage.prepare_files(paths)
+            return RbcBrokerage.coverage_messages(
+                ctx, year, today=today or date(2026, 7, 10))
+
+    def test_another_accounts_later_export_does_not_certify_this_one(self):
+        m = self._msgs([("Dec 15, 2025", ACCT),
+                        ("Jan 5, 2026", "55500002")])  # pii-ok
+        att = [x for x in m if x.startswith(ATT)]
+        self.assertEqual(len(att), 1, m)
+        self.assertIn("rbc0.csv", att[0])
+        self.assertIn("2025-12-16 to 2025-12-31", att[0])
+
+    def test_dec31_export_has_no_inverted_range(self):
+        m = self._msgs([("Dec 31, 2025", ACCT)])
+        self.assertFalse(any(x.startswith(ATT) for x in m), m)
+        self.assertFalse(any("2026-01-01 to 2025-12-31" in x for x in m))
+
+    def test_weekend_only_gap_is_not_missing_trades(self):
+        # 2023-12-29 is a Friday: only Sat/Sun are left in the year.
+        m = self._msgs([("Dec 29, 2023", ACCT)], year=2023)
+        self.assertFalse(any(x.startswith(ATT) for x in m), m)
+
+
 if __name__ == "__main__":
     unittest.main()

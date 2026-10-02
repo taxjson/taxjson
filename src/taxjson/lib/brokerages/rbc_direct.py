@@ -597,40 +597,70 @@ def rbc_coverage_messages(exports, year: int, listings=None,
     """Coverage findings for tax year `year` from the exports' "as of"
     timestamps (audit S063-22), one message each:
 
-      * ATTENTION when every export of the account was taken on or
-        before Dec 31 of `year` (a finished year): activity after the
-        latest as-of date (a late-December sale) cannot be in any file
-        — the RBC sibling of IB's statement-period check;
+      * ATTENTION when every export of an RBC ACCOUNT was taken before
+        Dec 31 of `year` (a finished year) with trading days left: a
+        late-December trade cannot be in any file — the RBC sibling of
+        IB's statement-period check. Judged per Account (re-audit
+        A2-0272 / A2-0275: another account's later export certified this
+        one's December), over trading days (re-audit A2-1049: an export
+        of Dec 31 got an inverted range, a Friday one a weekend);
+      * a note when the export was taken ON Dec 31 (that day's later
+        activity may be missing);
       * a note when the exports holding `year`'s rows were all taken
         before RBC posts the year's back-dated Dec-31 book-cost
         adjustments (by June 30 of the next year) while the account
         held a position at the year end — they may be missing (R1-85).
 
-    `exports`: [(file name, as_of ISO, [row ISO dates])]; `listings`:
-    the account context's position timelines (symbol -> currency ->
-    _Listing), or None to skip the holding test. Files without an as-of
-    line are not judged."""
+    `exports`: [(file name, as_of ISO, [row ISO dates][, {accounts}])];
+    `listings`: the account context's position timelines (symbol ->
+    currency -> _Listing), or None to skip the holding test. Files
+    without an as-of line are not judged."""
     from datetime import date as _date
+    from taxjson.lib.market_calendar import is_trading_day
     today = today or _date.today()
     y = int(year)
     year_end = f"{y}-12-31"
-    dated = [(n, a, d) for n, a, d in exports if a]
+    dated = [(e[0], e[1], e[2], set(e[3]) if len(e) > 3 and e[3] else {''})
+             for e in exports if e[1]]
     out: List[str] = []
     if not dated or today.isoformat() <= year_end:
         return out                      # no timestamps / the year is open
-    name, last = max(((n, a) for n, a, _ in dated), key=lambda x: x[1])
-    if last <= year_end:
-        nxt = (datetime.strptime(last, '%Y-%m-%d').date()
-               + timedelta(days=1)).isoformat()
+    accounts = sorted({a for *_x, accts in dated for a in accts})
+    for acct in accounts:
+        mine = [(n, a) for n, a, _d, accts in dated if acct in accts]
+        name, last = max(mine, key=lambda x: x[1])
+        which = (f" of RBC account {_mask_account(acct)}"
+                 if len(accounts) > 1 else "")
+        if last >= year_end:
+            if last == year_end:
+                out.append(
+                    f"note: {name}: the latest RBC export{which} was "
+                    f"taken on {year_end} itself — activity later that "
+                    f"day may be missing. Export {y} again after Jan 31, "
+                    f"{y + 1} if you traded on Dec 31.")
+            continue
+        d = datetime.strptime(last, '%Y-%m-%d').date() + timedelta(days=1)
+        end = datetime.strptime(year_end, '%Y-%m-%d').date()
+        gap = []
+        while d <= end:
+            if is_trading_day(d, 'CAD') or is_trading_day(d, 'USD'):
+                gap.append(d)
+            d += timedelta(days=1)
+        if not gap:
+            continue                    # only a weekend / holidays left
+        who = (f"RBC account {_mask_account(acct)}'s"
+               if len(accounts) > 1 else "account's")
         out.append(
-            f"warning: ATTENTION: {name}: the account's latest RBC export "
-            f"was taken as of {last} — any trade or income from {nxt} to "
-            f"{year_end} cannot be in it and is missing from the {y} "
-            f"books. Export the account's activity again (after Jan 31, "
-            f"{y + 1}, so the settlements are in) and add the file.")
+            f"warning: ATTENTION: {name}: the {who} latest RBC export was "
+            f"taken as of {last} — any trade or "
+            f"income from {gap[0].isoformat()} to {year_end} cannot be in "
+            f"it and is missing from the {y} books. Export the account's "
+            f"activity again (after Jan 31, {y + 1}, so the settlements "
+            f"are in) and add the file.")
+    if any(m.startswith('warning:') for m in out):
         return out
     posted = _date(y + 1, *RBC_YEAR_END_POSTING).isoformat()
-    cover = max((a for _, a, ds in dated
+    cover = max((a for _, a, ds, _ac in dated
                  if any(x and x <= year_end for x in ds)), default='')
     if not cover or cover >= posted:
         return out
@@ -1270,7 +1300,10 @@ class RbcBrokerage(BaseBrokerage):
         `taxjson run` passes the project year (--tax-year)."""
         return rbc_coverage_messages(
             [(ctx.exports[k].path.name, ctx.exports[k].as_of,
-              [r.date for r in ctx.exports[k].rows]) for k in ctx.files],
+              [r.date for r in ctx.exports[k].rows],
+              {_norm_account(r.account) for r in ctx.exports[k].rows
+               if r.account.strip()})
+             for k in ctx.files],
             year, ctx.listings, today=today)
 
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
