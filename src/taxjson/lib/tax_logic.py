@@ -364,7 +364,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "January pay date is on the reduced ACB. IB prints no "
                  "record date: the pay date is used, and a January-paid "
                  "one is warned about (check the prior year's T3 box 42 "
-                 "and move it to Dec 31 with a .tt ADJUST pair).",
+                 "and move it to Dec 31 with a .tt ADJUST pair; the "
+                 "warning stops once that pair is in the books).",
                  keys=("corporate_distributions",)),
             Rule("CA-INC-DATE-TRUST",
                  "A Canadian trust's distribution belongs to the year it "
@@ -375,10 +376,17 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  ".sum, the estimate and instalments. Split-share "
                  "corporations say \"Distribution\" too but are "
                  "corporations (paid date): "
-                 + ", ".join(sorted(_split_share_roots())) + ", and the "
-                 "symbols in corporate_distributions"
+                 + ", ".join(sorted(_split_share_roots())) + ", any row "
+                 "whose description says \"SPLIT CORP\", and the "
+                 "issuers in corporate_distributions"
                  + (f" ({', '.join(_corp_list(s))})" if _corp_list(s)
-                    else "") + ". A foreign fund keeps the pay date, and so does an IB "
+                    else "") + " — every class and series of each root. "
+                 "A record date 92 days or more before the pay date (or "
+                 "after it) is not used: the pay date is, with an "
+                 "ATTENTION line. A distribution its record date moves "
+                 "into another year than its pay date is listed on the "
+                 "console (ATTENTION): one of the two project years "
+                 "leaves it out. A foreign fund keeps the pay date, and so does an IB "
                  "row: IB prints no record date and calls a trust's "
                  "distribution a dividend, so a trust cannot be told from "
                  "a corporation (the ex date IB's accruals give is not "
@@ -465,9 +473,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "distributions.map: a non-cash distribution (a reinvested "
                  "capital-gains distribution, a late return-of-capital "
                  "factor) becomes an ACB adjustment sized on the shares "
-                 "held on its record date — the settled position. Its "
+                 "held on its record date — the settled position, each "
+                 "ticker's own shares — and booked on those shares only "
+                 "(a trade straddling the record date is not the "
+                 "holder's). Its "
                  "income is on the T3/T5 slip; taxjson does not count "
-                 "it."),
+                 "it. A return-of-capital row warns when the book already "
+                 "has that ROC or still counts its cash as a dividend."),
             Rule("CA-DIST-02",
                  "An RBC \"NOTIONAL DISTRIBUTION ADJUSTMENT TO BOOK COST\" "
                  "row raises the ACB by its amount (a reinvested "
@@ -659,8 +671,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "share or mutual-fund corporation's, ITA s.130.1(4)/"
                  "s.131(1)) is a capital gain, not a dividend. No export "
                  "labels it, so the books carry it as a dividend; list it "
-                 "in capital_gains_dividends.map (symbol, year or pay "
-                 "date, amount or `all`) and divs-sum shows it apart while "
+                 "in capital_gains_dividends.map (symbol — a bare root "
+                 "covers only its Canadian listings, never a preferred "
+                 "series or a foreign listing —, the year of its tax date "
+                 "or its pay date, amount or `all`) and divs-sum shows it "
+                 "apart while "
                  "the estimate taxes it as a capital gain (50% inclusion, "
                  "no gross-up or credit). ACB is unchanged."),
         ]),
@@ -894,7 +909,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "keeps the pay date, WARNS about a January dividend whose "
                  "ex or record date is in October-December, and dates the "
                  "payments listed in ric_january_dividends (\"SYMBOL\" or "
-                 "\"SYMBOL YYYY-01-DD\""
+                 "\"SYMBOL YYYY-01-DD\"; a bare root is that fund's US "
+                 "listing only, never another class or a .TO listing"
                  + (f"; now: {', '.join(_ric_list(s))}" if _ric_list(s)
                     else "") + ") on Dec 31 of the prior year. Form "
                  "1099-DIV is authoritative.",
@@ -953,8 +969,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "distributions.map: a non-cash distribution (a reinvested "
                  "capital-gain distribution, a late return-of-capital "
                  "factor) becomes a basis adjustment sized on the shares "
-                 "held on its record date — the settled position. Its "
-                 "income is on Form 1099-DIV; taxjson does not count it."),
+                 "held on its record date — the settled position, each "
+                 "ticker's own shares — and booked on those lots only "
+                 "(a trade straddling the record date is not the "
+                 "holder's). Its "
+                 "income is on Form 1099-DIV; taxjson does not count it. "
+                 "A return-of-capital row warns when the book already has "
+                 "that ROC or still counts its cash as a dividend."),
             Rule("US-DIST-02",
                  "An RBC \"NOTIONAL DISTRIBUTION ADJUSTMENT TO BOOK COST\" "
                  "row raises the basis by its amount (a reinvested "

@@ -101,6 +101,82 @@
   A2-1229). `taxjson elect --redo` passes the same rates, base currency
   and ticker.map as `run` (A2-0981, A2-0982), and the legacy manifest
   migration is atomic (A2-0218).
+- `taxjson events` lines keep a dividend's withholding-netted amount
+  (the optional 9th column) and a declared TRANSFER's `DECLARED` token,
+  as `.tt` export does, so a pasted line re-imports the same row
+  (A2-0989).
+
+- US: a stock dividend paid after the shares were sold (between the
+  record and pay dates) no longer asks for "the missing purchase
+  history"; the warning says the §307 allocation reaches the sold lots
+  and must be adjusted by hand (A2-0562).
+
+- `reports/<account>_holdings.toml` now says (`meta.base_cost_basis`,
+  README) that its costs leave out distributions.map ACB adjustments,
+  which `taxjson list` includes (A2-0226).
+
+- `taxjson list --date` now passes the project's income-dating settings
+  (`corporate_distributions`) to its recomputation: a listed
+  corporation's return of capital was moved to its record date, as for
+  a trust, so the as-of cost disagreed with the run (A2-0995, A2-0996).
+
+- **Canada income dating: more split-share corporations, a loud
+  year-end flag.** XTD, GDV, LCS, PWI, SBN, WFS and PIC.A (and any row
+  whose description says "SPLIT CORP") are corporations: their
+  December-record, January-paid dividends and returns of capital now
+  stay in the pay year instead of moving to the record year as a
+  trust's. A `corporate_distributions` entry covers its issuer's
+  classes and series (`GHI.TO` covers GHI.PR.B.TO; `DEF.UN` now
+  matches DEF.UN.TO). A record date 92+ days before the pay date is no
+  longer used. Every trust distribution or ROC whose record date puts
+  it in another year than its payment is now printed on the console
+  (`ATTENTION: income year:`) in both project years — one of them
+  leaves it out (owner books: four January 2025 trust distributions
+  dated to 2024). The IB January trust-ROC warning stops once the two
+  `.tt` lines it prescribes are in the books. US: a bare
+  `ric_january_dividends` entry (`T`, `PSA`) is that fund's US listing
+  only — TELUS (T.TO) and PSA.PR.H.US are no longer moved (A2-0073,
+  A2-0076, A2-0229, A2-0230, A2-0231, A2-0561, A2-0991, A2-0992,
+  A2-0993).
+
+- **capital_gains_dividends.map reads what it documents.** A bare root
+  (`FTN`, `T`) also claimed the issuer's preferred series (FTN.PR.A.TO)
+  and a same-root foreign listing (AT&T's T.US), turning their
+  dividends into box-18 capital gains; it now covers only the root's
+  Canadian listings. An AMOUNT with a decimal comma (`17,11` read as
+  1711) or an underscore is refused, a map that is a directory or a
+  dangling symlink is an error instead of "no map", and a date entry
+  matches the pay date of a distribution the books date by its record
+  date (the documented `XTD.TO 2025-09-10 5.50` example was refused)
+  (A2-0075, A2-0227, A2-0228, A2-0560, A2-0987, A2-0990, A2-0994).
+
+- **distributions.map adjustments reach the holder of record's lots in
+  the US.** The ADJUST was stamped at the end of the record date, so in
+  a trade-date engine a sale traded on the record date (still the
+  holder of record under T+1) left it "found no open lots ... NOT
+  applied" (and called a basis increase a return of capital), and a buy
+  traded on the record date shared it. A trade straddling the record
+  date now moves the stamp to the day before it (the record date stays
+  the settle date). A map return of capital now warns when the book
+  already has that ROC (broker row or .tt ADJUST, by pay or record
+  date — also in `roc-sum` across the year end) or when its cash is
+  still a DIVIDEND row counted in full as income (A2-0071, A2-0072,
+  A2-0232, A2-0988).
+
+- **Per-account holdings and distributions.map sizing follow each
+  ticker's own shares.** The record-date balance walk (used to size a
+  distributions.map adjustment and to split a blended Canada pool by
+  account) kept one running balance for a whole rename family: a
+  rename-split scaled shares already held under the new ticker, an old
+  ticker bought again after its rename counted under both names, two
+  accounts' copies of one split doubled each other, and a buy listed
+  before a same-moment split was scaled by it. It now holds shares per
+  account and symbol like the engine (list/shares/sanity and the
+  adjustments agree with the gains), a map key that still holds shares
+  under its own name is sized on them, and the blended-pool
+  conservation warning names an excess as over-reporting instead of
+  blaming phantoms (A2-0021, A2-0074, A2-0225, A2-0986).
+
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

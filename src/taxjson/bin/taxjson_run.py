@@ -2502,6 +2502,11 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     if force or needs_rebuild(gains_json, *gains_deps):
         print("  gains")
         run_to_file(cmd, gains_json)
+    # Income a record date moves across a year end, or an implausible
+    # record date (lib/income_dating): on the console every run, cached
+    # or not — one project year leaves that income out (audit A2-0073,
+    # A2-0229).
+    echo_attention_lines(gains_json, prefix="income year: ")
     if is_taxable:
         _warn_expired_open_options(name, gains_json, cache, year)
 
@@ -2905,12 +2910,22 @@ def _blend_conservation_gaps(blended_doc: Dict[str, Any],
     out: List[str] = []
     for sym, total in sorted(blended_inv.items()):
         got = split_sums.get(sym, 0.0)
-        if abs(total - got) > 1e-4:
+        # Name the direction (audit A2-0021/A2-0074: an EXCESS was
+        # reported as 'only ... under-report' and blamed on phantoms).
+        if total - got > 1e-4:
             out.append(f"blended {sym} holds {total:g} but the per-account "
-                       f"split accounts for only {got:g} — the difference "
-                       f"is likely phantom (phantoms.json) shares, which "
-                       f"the split cannot attribute to an account. "
-                       f"Per-account holdings under-report by the gap.")
+                       f"split accounts for only {got:g} — "
+                       f"{total - got:g} short. Shares from phantoms.json "
+                       f"cannot be attributed to an account; otherwise a "
+                       f"rename or split of {sym} is read differently by "
+                       f"the per-account walk. Per-account holdings "
+                       f"under-report by the gap.")
+        elif got - total > 1e-4:
+            out.append(f"blended {sym} holds {total:g} but the per-account "
+                       f"split accounts for {got:g} — {got - total:g} MORE "
+                       f"than the pool. Check the renames and splits of "
+                       f"{sym} (and any ticker reused after a rename). "
+                       f"Per-account holdings over-report by the excess.")
     return out
 
 
@@ -4689,13 +4704,21 @@ def _tx_display_line(tx: dict, settle: bool = False) -> Optional[str]:
     if action in ("BUYSELL", "ASSIGN"):
         return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)} {money(fee)}"
     if action == "TRANSFER":
-        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)}"
+        # The opt-in DECLARED token rides along as in tx_to_tt_line, or a
+        # re-import loses the declaration (audit A2-0989).
+        from taxjson.lib.pipeline import MANUAL_TRANSFER_DECLARATION
+        decl = (" DECLARED" if tx.get("description")
+                == MANUAL_TRANSFER_DECLARATION else "")
+        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)}{decl}"
     if action == "SPLIT":
         return f"SPLIT {date} {time} {sym} {tx.get('symbol_new') or sym} {sig(qty)}"
     if action in ("DIVIDEND", "DIVIDEND_IN_LIEU", "TAX"):
         # Signed so a reversal row reads as negative instead of masquerading
         # as more income/tax.
-        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(gross)}"
+        # The withholding-NETTED 9th column, as tx_to_tt_line writes it:
+        # without it the line re-parses net as gross (audit A2-0989).
+        net9 = f" {money(net)}" if abs(net - gross) > 0.005 else ""
+        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(gross)}{net9}"
     if action in ("INTEREST", "FEE"):
         return f"{action} {date} {time} {cur} {money(net)}"
     if action in ("ADJUST", "DISALLOW"):
@@ -6234,7 +6257,11 @@ def _dist_adjust_rows(cache: Path, accounts, keep) -> List[Tuple[str, dict]]:
                   else doc) or []:
             if (t.get("action") == "ADJUST"
                     and (t.get("type") or "").lower() == "dist"):
-                d = t.get("date") or ""
+                # The map's own date (the record date) is date_settle:
+                # the trade-date stamp can sit a day earlier so a
+                # trade-ordered engine reaches the record holder's lots
+                # (audit A2-0071).
+                d = t.get("date_settle") or t.get("date") or ""
                 if _ISO_DATE_RE.match(d) and keep(d):
                     out.append((acct, t))
     return out
@@ -6350,7 +6377,10 @@ def _box18_fractions(root: Path, rules=None
     taxable accounts."""
     from taxjson.lib.cg_dividends import (MAP_NAME, CgDividendMapError,
                                           allocate, load_map)
-    if not (root / MAP_NAME).is_file():
+    # lexists: a directory or dangling symlink is refused by load_map,
+    # not taken as "no map" (audit A2-0994).
+    import os as _os
+    if not _os.path.lexists(root / MAP_NAME):
         return None
     settings = _soft_settings(root)
     country = _country(settings)
@@ -6665,14 +6695,35 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
     if _acct_arg:
         _accts = [_acct_arg]
     dist_rows = _dist_adjust_rows(_root / "work", _accts, _keep)
-    # The same ROC entered as a .tt ADJUST AND in distributions.map
-    # reduces the ACB twice — say so (audit R1-163).
-    _manual_keys = {(a, str(t.get("symbol") or ""), t.get("date"))
-                    for a, t in rows}
-    for a, t in dist_rows:
-        if (a, str(t.get("symbol") or ""), t.get("date")) in _manual_keys:
+    # The same ROC entered as a .tt ADJUST (or booked by the broker) AND
+    # in distributions.map reduces the ACB twice — say so (audit
+    # R1-163). Matched over ALL rows, not the window's: the broker row
+    # is windowed on its record date and the map row on its own date,
+    # so a pair straddling the year end never met (audit A2-0072). The
+    # map date may be either the pay date or the printed record date.
+    _all_native: List[Tuple[str, dict]] = []
+    for _a in _accts:
+        _nf = _native_tx_file(_root / "work", _a)
+        if _nf is None:
+            continue
+        _all_native += [(_a, t) for t in
+                        (_load_json_or_die(_nf).get("transactions") or [])
+                        if t.get("action") == "ADJUST"]
+    _all_dist = _dist_adjust_rows(_root / "work", _accts, lambda _d: True)
+    _book_keys: Dict[Tuple[str, str, str], str] = {}
+    for a, t in _all_native:
+        if float(t.get("net_amount") or 0.0) >= 0:
+            continue
+        _w = _rules.roc_date(t) if _rules else str(t.get("date") or "")
+        for _d in (t.get("date"), t.get("record_date")):
+            if _d:
+                _book_keys[(a, str(t.get("symbol") or ""), str(_d))] = _w
+    for a, t in _all_dist:
+        _md = str(t.get("date_settle") or t.get("date") or "")
+        _w = _book_keys.get((a, str(t.get("symbol") or ""), _md))
+        if _w is not None and (_keep(_md) or _keep(_w)):
             print(f"taxjson roc-sum: warning: {t.get('symbol')} "
-                  f"{t.get('date')} ({a}) has an ADJUST in the books AND "
+                  f"{_md} ({a}) has an ADJUST in the books AND "
                   f"a distributions.map row — the ACB is reduced twice "
                   f"if both are the same distribution.", file=sys.stderr)
     rows = list(rows) + dist_rows
@@ -10099,7 +10150,10 @@ def cmd_positions(args: argparse.Namespace) -> None:
             cmd = [sys.executable, "-m", "taxjson.bin.taxjson_gains",
                    "--country", country, "--year", year,
                    "--as-of", as_of, "--no-wash"] + option_timing_flags(
-                       settings)
+                       settings) + income_dating_flags(settings)
+            # income_dating_flags: [settings] corporate_distributions
+            # keeps a listed corporation's ROC on its pay date, as in
+            # the run (audit A2-0995, A2-0996).
             if _asof_basis_set:
                 cmd += ["--tax-date", _asof_basis]
             if accounts_cfg.get(n, {}).get("type") == "taxable":
