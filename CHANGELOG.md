@@ -16,6 +16,14 @@
   DENIED column (US: the Form 8949 code-W adjustment) the way it already
   named the gain's, and `sum --json` adds `engine_denied_unrounded`
   (re-audit A2-0912, the second half of R1-166).
+- Two taxable accounts with rows at the same moment: check-filed and the
+  run's filed-year drift check, `taxjson t1135`, `carryover`, `audit`,
+  `wash-sales --explain` and the radar now merge the books in
+  taxjson.toml order, as the run does (CA-DATE-14 / US-DATE-13). They
+  took the accounts alphabetically, so check-filed reported a false
+  DRIFT right after close-year, audit a false tie-out mismatch, and
+  t1135 / carryover showed another book's cost and gain (A2-0512,
+  A2-1592).
 - Errors are one line with a consistent exit code in more places
   (re-audit A2-0161, A2-0791, A2-0770, A2-1421, A2-1435, A2-1436,
   A2-1428, A2-1432): `taxjson <tool>` runs a tool under the same guard

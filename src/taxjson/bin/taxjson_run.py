@@ -12289,7 +12289,7 @@ def cmd_t1135(args: argparse.Namespace) -> None:
     base_argv: List[str] = []
     gains_argv: List[str] = []
     missing: List[str] = []
-    for name in sorted(taxable):
+    for name in taxable:          # taxjson.toml order (CA-DATE-14)
         base = cache / f"{name}_base.json"
         if not base.exists():
             missing.append(name)
@@ -12409,7 +12409,7 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     base_argv: List[str] = []
     crypto_argv: List[str] = []
     missing: List[str] = []
-    for name in sorted(taxable):
+    for name in taxable:          # taxjson.toml order (CA-DATE-14)
         base = cache / f"{name}_base.json"
         if not base.exists():
             missing.append(name)
@@ -13356,6 +13356,15 @@ def _check_filed_years(root: Path, cache: Path,
                 a for a in _taxable_cfg
                 if a not in _snap_accts
                 and (cache / f"{a}_base.json").exists())
+            # Merge in taxjson.toml order, as the run's blended pass
+            # does (CA-DATE-14 / US-DATE-13: rows of different accounts
+            # at one moment follow the accounts' order). The lock's
+            # keys are alphabetical (sort_keys), so its order gave a
+            # false DRIFT right after close-year (A2-0512).
+            if _acct_cfg:
+                _toml_order = {a: i for i, a in enumerate(_acct_cfg)}
+                _snap_accts.sort(key=lambda a: _toml_order.get(
+                    a, len(_toml_order)))
             _crypto = [a for a in _snap_accts
                        if (_acct_cfg.get(a) or {}).get("crypto")]
             _equity = [a for a in _snap_accts if a not in _crypto]
@@ -13587,7 +13596,7 @@ def _explain_wash_sales(root: Path, cache: Path,
         if names is not None and not names:
             _no_wash_checkable("taxjson wash-sales")
         if names is not None:
-            bases = [cache / f"{n}_base.json" for n in sorted(names)
+            bases = [cache / f"{n}_base.json" for n in names
                      if (cache / f"{n}_base.json").exists()]
         else:
             bases = [p for p in sorted(cache.glob("*_base.json"))
@@ -13640,9 +13649,15 @@ def _explain_wash_sales(root: Path, cache: Path,
             if (n != account and bool((_acfg.get(n) or {}).get("crypto"))
                     == _is_c and (cache / f"{n}_base.json").exists()):
                 _by_name[n] = cache / f"{n}_base.json"
-    equity = [p for n, p in sorted(_by_name.items())
+    # Merged in taxjson.toml order, as the pipeline's blend: rows of
+    # different accounts at one moment follow that order (CA-DATE-14 /
+    # US-DATE-13); an alphabetical merge traced another book (A2-1592).
+    _toml_pos = {n: i for i, n in enumerate(_acfg)}
+    _ordered = sorted(_by_name.items(), key=lambda kv: (
+        _toml_pos.get(kv[0], len(_toml_pos)), kv[0]))
+    equity = [p for n, p in _ordered
               if not (_acfg.get(n) or {}).get("crypto")]
-    crypto = [p for n, p in sorted(_by_name.items())
+    crypto = [p for n, p in _ordered
               if (_acfg.get(n) or {}).get("crypto")]
     groups = ([equity] if equity else []) + (
         [crypto] if crypto and _crypto_blend
@@ -13831,7 +13846,7 @@ def _radar_taxable_bases(root: Path, cache: Path,
             return []
         _no_wash_checkable(prog)
     if names is not None:
-        bases = [cache / f"{n}_base.json" for n in sorted(names)
+        bases = [cache / f"{n}_base.json" for n in names
                  if (cache / f"{n}_base.json").exists()]
         # A configured taxable account without books used to vanish
         # from the checks in silence — a sibling's recent buy then read
@@ -15909,8 +15924,11 @@ def cmd_audit(args: argparse.Namespace) -> None:
                if (c or {}).get("type") == "taxable"}
     if not taxable:
         _die("no taxable accounts in taxjson.toml — nothing to audit.")
-    equity = sorted(n for n, c in taxable.items() if not c.get("crypto"))
-    crypto = sorted(n for n, c in taxable.items() if c.get("crypto"))
+    # taxjson.toml order, as the pipeline's blended pass merges them
+    # (CA-DATE-14 / US-DATE-13); alphabetical failed the tie-out on a
+    # book with same-moment rows in two accounts (A2-1592 sibling).
+    equity = [n for n, c in taxable.items() if not c.get("crypto")]
+    crypto = [n for n, c in taxable.items() if c.get("crypto")]
     _acct = getattr(args, "account", None)
     if _acct:
         if _acct not in taxable:
