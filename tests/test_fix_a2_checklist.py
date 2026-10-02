@@ -265,6 +265,10 @@ class TestCryptoSendsGates(unittest.TestCase):
             'base_currency = "CAD"\nsource_currencies = ["USD"]\n'
             '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
         (acct / "kr_ledgers.csv").write_text(KR_SEND)
+        # The coins sent were bought: without a purchase the gift would
+        # take spot crypto short, which run --strict now refuses (A2-0137).
+        (acct / "sol_buy.tt").write_text(
+            "BUYSELL 2025-01-02 12:00:00 SOL 100 CAD 100 10000 0\n")
         (self.root / "work").mkdir()
         _rates_file(self.root / "work" / "to_base.csv")
         self.home = td / "home"
