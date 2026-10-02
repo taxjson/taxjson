@@ -130,7 +130,7 @@ def _current_events(root: Path, acct: str) -> Dict[str, Any]:
     try:
         lines = (root / "work" / f"{acct}_sources.list").read_text(
             encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeDecodeError):       # re-audit A2-0795
         return out
     groups: Dict[str, List[Path]] = {}
     for ln in lines:

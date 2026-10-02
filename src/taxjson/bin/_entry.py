@@ -17,7 +17,7 @@ import re
 import sys
 from typing import Any, Callable
 
-from taxjson.lib.cli_diag import guard_main
+from taxjson.lib.cli_diag import guard_main, run_top_level
 
 
 def private_umask() -> None:
@@ -38,7 +38,9 @@ def __getattr__(name: str) -> Callable[[], Any]:
         # console script, never a traceback (audit S070-23 / S079-10).
         prog = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] \
             else f"taxjson-{name}"
-        return guard_main(prog)(main)()
+        # Ctrl-C and a closed stdout pipe: one line / a quiet exit, not
+        # a traceback (re-audit A2-1425, A2-0785).
+        return run_top_level(prog, guard_main(prog)(main))
 
     run.__name__ = name
     return run

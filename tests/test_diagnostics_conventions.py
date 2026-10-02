@@ -51,7 +51,7 @@ class TestCliDiagHelper(unittest.TestCase):
 
 
 class TestMergeDiagnostics(unittest.TestCase):
-    def test_missing_file_is_an_error_with_prefix_and_exit_1(self):
+    def test_missing_file_is_an_error_with_prefix_and_exit_2(self):
         # R1-260/R1-295: a missing input used to warn and exit 0 with a
         # partial merge on stdout; now it refuses (like merge2).
         with tempfile.TemporaryDirectory() as tmp:
@@ -63,7 +63,8 @@ class TestMergeDiagnostics(unittest.TestCase):
                 'price': 150.0, 'net_amount': 15000.0,
             }])
             r = _run('taxjson_merge', str(present), str(tmp / 'ghost.json'))
-            self.assertEqual(r.returncode, 1, r.stderr)
+            # exit 2: an unreadable input, not a finding (A2-0164)
+            self.assertEqual(r.returncode, 2, r.stderr)
             self.assertIn('taxjson-merge: error: ', r.stderr)
             self.assertIn('not found', r.stderr)
             self.assertNotIn('Warning:', r.stderr)
@@ -103,7 +104,7 @@ class TestValidateDiagnostics(unittest.TestCase):
             junk = Path(tmp) / 'junk.json'
             junk.write_text('not json', encoding='utf-8')
             r = _run('taxjson_validate', str(junk))
-            self.assertEqual(r.returncode, 1)
+            self.assertEqual(r.returncode, 2)       # A2-0164
             self.assertIn('taxjson-validate: error: failed to load JSON',
                           r.stderr)
 

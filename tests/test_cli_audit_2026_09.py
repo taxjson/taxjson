@@ -174,7 +174,8 @@ class TestRunEmptyProject(unittest.TestCase):        # B21
     def test_nonexistent_dir_is_named(self):
         with tempfile.TemporaryDirectory() as td:
             r = _tj(Path(td) / "nope", "sum")
-        self.assertEqual(r.returncode, 1)
+        # exit 2: a usage error, not a finding (re-audit A2-0164)
+        self.assertEqual(r.returncode, 2)
         self.assertIn("no such directory", r.stderr)
 
     def test_typo_warning_precedes_missing_year(self):

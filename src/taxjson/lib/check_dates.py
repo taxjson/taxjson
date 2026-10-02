@@ -102,7 +102,9 @@ def sources(cache: Path, account: str) -> List[Tuple[str, str, Path]]:
     lst = cache / f"{account}_sources.list"
     try:
         lines = lst.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # unreadable reads as absent: 'run `taxjson run` first', which
+        # rewrites it (re-audit A2-0795)
         return out
     brokers = []
     for ln in lines:

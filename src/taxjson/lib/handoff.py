@@ -48,6 +48,79 @@ class BooksError(ValueError):
     """A work/ book the hand-off reads exists but cannot be read."""
 
 
+def _num(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _year_like(v: Any) -> bool:
+    if isinstance(v, bool):
+        return False
+    if isinstance(v, int):
+        return True
+    return isinstance(v, str) and v.strip().isdigit()
+
+
+def record_problem(record: Any) -> Optional[str]:
+    """Why a prior-year record (filed/<year>.json, read by `taxjson
+    handoff`) cannot be checked, or None. Its fields are read bare by
+    `check` — a list for the record, a text quantity, a sale with no
+    date or no gain, a non-numeric year — and each was a traceback
+    (re-audit A2-0162, A2-0473, A2-0475, A2-0476). A version-1 record
+    (no year_end) passes: the caller refuses it with its own advice."""
+    if not isinstance(record, dict):
+        return (f"expected a JSON object (a close-year record), got "
+                f"{type(record).__name__}")
+    if not _year_like(record.get("year")):
+        return f'"year" is {record.get("year")!r}, not a year'
+    sv = record.get("schema_version")
+    if sv is not None and not _year_like(sv):
+        return f'"schema_version" is {sv!r}, not a number'
+    ye = record.get("year_end")
+    if ye is not None:
+        if not isinstance(ye, dict):
+            return '"year_end" must be an object of account groups'
+        for g, pos in ye.items():
+            if not isinstance(pos, dict):
+                return f'"year_end" {g!r} must be an object of positions'
+            for sym, p in pos.items():
+                if not isinstance(p, dict):
+                    return f'"year_end" {g}/{sym} must be an object'
+                for k in ("qty", "acb"):
+                    if not _num(p.get(k)):
+                        return (f'"year_end" {g}/{sym}: {k} is '
+                                f'{p.get(k)!r}, not a number')
+                if p.get("deferred") is not None \
+                        and not _num(p.get("deferred")):
+                    return (f'"year_end" {g}/{sym}: deferred is '
+                            f'{p.get("deferred")!r}, not a number')
+    lists = {"settle_next_year": (("symbol", "date", "date_settle"),
+                                  ("qty",)),
+             "dispositions": (("symbol",), ("qty", "proceeds", "gain")),
+             "filed_dispositions": (("symbol",),
+                                    ("qty", "proceeds", "gain"))}
+    for key, (texts, nums) in lists.items():
+        rows = record.get(key)
+        if rows is None:
+            continue
+        if not isinstance(rows, list):
+            return f'"{key}" must be a list'
+        for i, r in enumerate(rows):
+            if not isinstance(r, dict):
+                return f'"{key}" entry {i} must be an object'
+            for k in texts:
+                if not isinstance(r.get(k), str) or not r.get(k):
+                    return (f'"{key}" entry {i}: {k} is {r.get(k)!r}, not '
+                            f'text')
+            for k in nums:
+                if not _num(r.get(k)):
+                    return (f'"{key}" entry {i} ({r.get("symbol")}): {k} '
+                            f'is {r.get(k)!r}, not a number')
+    br = record.get("boundary_rows")
+    if br is not None and not isinstance(br, list):
+        return '"boundary_rows" must be a list'
+    return None
+
+
 def _label(path: Path) -> str:
     p = Path(path)
     return f"{p.parent.name}/{p.name}"

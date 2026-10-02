@@ -41,7 +41,7 @@ from datetime import date as date_cls, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from taxjson.lib.cli_diag import note
+from taxjson.lib.cli_diag import note, write_text_atomic
 from taxjson.lib.cli_diag import tax_year as _tax_year_arg
 from taxjson.lib.numeric import nonneg_float_arg as _nonneg_float_arg
 from taxjson.lib.numeric import positive_float_arg
@@ -93,6 +93,9 @@ def run_to_file(cmd: List[str], out_path: Path, *, capture_diag: bool = True,
     """
     from taxjson.lib.dispatch import run_cmd
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    if out_path.is_dir():
+        # one line, not an IsADirectoryError at the rename (A2-0795)
+        _die_input(_work_path_problem(out_path))
     # Write to a .part sidecar and rename into place only on success. A failed
     # (or Ctrl-C'd, e.g. at the corp-actions election prompt) stage must never
     # leave a truncated output file: its fresh mtime would make needs_rebuild
@@ -120,10 +123,11 @@ def run_to_file(cmd: List[str], out_path: Path, *, capture_diag: bool = True,
         stderr_text = result.stderr or ""
         if capture_diag:
             diag_path = out_path.with_name(out_path.name + ".diag")
+            # (a directory in its place: one line, A2-0795)
             if stderr_text:
-                diag_path.write_text(stderr_text, encoding="utf-8")
-            elif diag_path.exists():
-                diag_path.unlink()
+                _write_work_stamp(diag_path, stderr_text)
+            else:
+                _drop_work_file(diag_path)
         if result.returncode != 0:
             if stderr_text:
                 sys.stderr.write(stderr_text)
@@ -153,17 +157,28 @@ def _load_holdings_summary(toml_path: Path) -> Dict[str, Tuple[float, float]]:
     try:
         with toml_path.open('rb') as f:
             doc = tomllib.load(f)
-    except (tomllib.TOMLDecodeError, OSError):
+    except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError):
+        return {}
+    # A damaged snapshot (it is the previous run's own report, used
+    # only for the 'what moved' lines) reads as none: `holding = "x"`
+    # or a quantity "abc" tracebacked `run` (re-audit A2-0792).
+    rows = doc.get('holding', [])
+    if not isinstance(rows, list):
         return {}
     out: Dict[str, Tuple[float, float]] = {}
-    for h in doc.get('holding', []):
-        sym = h.get('symbol')
-        if not sym:
+    for h in rows:
+        if not isinstance(h, dict):
             continue
-        out[sym] = (
-            float(h.get('quantity', 0.0)),
-            float(h.get('total_cost', 0.0)),
-        )
+        sym = h.get('symbol')
+        if not sym or not isinstance(sym, str):
+            continue
+        try:
+            out[sym] = (
+                float(h.get('quantity', 0.0)),
+                float(h.get('total_cost', 0.0)),
+            )
+        except (TypeError, ValueError):
+            continue
     return out
 
 
@@ -491,6 +506,49 @@ def _package_fingerprint() -> str:
 _CODE_STAMP = ".code_fingerprint"
 
 
+def _read_work_stamp(path: Path) -> Optional[str]:
+    """A work/ bookkeeping file's text (sources list, input fingerprint,
+    code stamp, map markers), or None when it is missing or cannot be
+    read: an unreadable stamp means 'changed' and is rewritten. A
+    non-UTF-8 byte in one was a UnicodeDecodeError traceback that even
+    a full `taxjson run` — the documented recovery — could not get past
+    (re-audit A2-0795, A2-1429)."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _work_path_problem(path: Path) -> str:
+    return (f"{path} is a directory, not a work file — work/ holds only "
+            f"files `taxjson run` rebuilds: delete it and re-run.")
+
+
+def _write_work_stamp(path: Path, text: str) -> None:
+    """Write a work/ bookkeeping file atomically; a directory (or an
+    unwritable path) in its place is one line naming it (A2-1433)."""
+    from taxjson.lib.cli_diag import OutputWriteError
+    if path.is_dir():
+        _die_input(_work_path_problem(path))
+    try:
+        write_text_atomic(path, text)
+    except OutputWriteError as e:
+        _die_input(f"{e} — work/ holds only files `taxjson run` "
+                   f"rebuilds: fix or delete it and re-run.")
+
+
+def _drop_work_file(path: Path) -> None:
+    """Remove a work/ bookkeeping file if present; a directory in its
+    place is one line naming it, not an IsADirectoryError (A2-1433)."""
+    if path.is_dir() and not path.is_symlink():
+        _die_input(_work_path_problem(path))
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as e:
+        _die_input(f"cannot remove {path}: {e.strerror or e} — delete it "
+                   f"and re-run.")
+
+
 def needs_rebuild(out: Path, *inputs: Path) -> bool:
     """Mtime-based rebuild check — consulted only by `run --fast` (the
     default run passes force=True everywhere). Cached output is stale
@@ -766,6 +824,18 @@ def _child_error(stderr: Optional[str], limit: int = 400) -> str:
 def _die(msg: str) -> None:
     prefix = f"taxjson {_CURRENT_CMD}: " if _CURRENT_CMD else "taxjson: "
     sys.exit(prefix + msg)
+
+
+def _die_input(msg: str) -> None:
+    """Like _die, with exit 2: a named input (or output) that is missing
+    or cannot be read or written, or a usage error. Exit 1 stays the
+    command's FINDING (drift, a handoff problem, PII found, a lint hit),
+    so cron and the checklist can tell 'broken input' from 'finding' —
+    the cli_diag convention every console script follows (re-audit
+    A2-0164)."""
+    prefix = f"taxjson {_CURRENT_CMD}: " if _CURRENT_CMD else "taxjson: "
+    print(prefix + msg, file=sys.stderr)
+    sys.exit(2)
 
 
 _ESTIMATE_KEYS = ("other_income", "other_losses", "deductions",
@@ -1632,6 +1702,9 @@ def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
     # `work/` didn't exist yet.
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
     rates_path = cache / "to_base.csv"
+    if rates_path.is_dir():
+        # a traceback at st_size / write_text (re-audit A2-1433)
+        _die_input(_work_path_problem(rates_path))
     if not sources:
         # Only touch the marker when its content is wrong: an
         # unconditional write bumped the mtime every run, and since
@@ -1692,6 +1765,20 @@ def _resolve_manifest(acct_dir: Path, cache: Path, name: str,
     legacy = cache / f"{name}_manifest.json"
     if user_manifest.exists():
         return user_manifest
+    if user_manifest.is_symlink():
+        # A dangling link is not "no manifest": writing through it put
+        # an empty {"elections": {}} at the link target (or crashed),
+        # and the saved elections were silently gone (re-audit
+        # A2-1400). The user's decisions are not rebuildable — refuse.
+        import os as _os
+        try:
+            _tgt = _os.readlink(user_manifest)
+        except OSError:
+            _tgt = "?"
+        _die_input(f"{user_manifest} is a symlink to {_tgt}, which does "
+                   f"not exist (or loops) — it should hold your "
+                   f"corporate-action elections. Fix the link (or remove "
+                   f"it to start a new manifest).")
     if legacy.exists():
         acct_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         # Atomic (tmp + replace, as Manifest.save writes): a failed write
@@ -1710,7 +1797,7 @@ def _resolve_manifest(acct_dir: Path, cache: Path, name: str,
         return user_manifest
     if create:
         acct_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        user_manifest.write_text('{"elections": {}}\n')
+        user_manifest.write_text('{"elections": {}}\n', encoding="utf-8")
         return user_manifest
     # Read-only callers (taxjson elect) on a project with no manifest yet:
     # report the canonical path; Manifest.load treats missing as empty.
@@ -2158,7 +2245,8 @@ def _refuse_unreadable_project_inputs(root: Path) -> None:
     (re-audit A2-0401 / A2-0144; `run` since A2-0313)."""
     _unreadable = _unreadable_project_inputs(root)
     if _unreadable:
-        _die("project file(s) that exist but cannot be read — fix or "
+        # exit 2: inputs that cannot be read (re-audit A2-0164, A2-1438)
+        _die_input("project file(s) that exist but cannot be read — fix or "
              "remove each; nothing was run:\n    "
              + "\n    ".join(_unreadable))
 
@@ -2303,9 +2391,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         # re-parses.
         + ([f"setting/local_timezone={settings['local_timezone']}"]
            if is_crypto and settings.get("local_timezone") else []))) + "\n"
-    if (not src_manifest.exists()
-            or src_manifest.read_text(encoding="utf-8") != src_txt):
-        src_manifest.write_text(src_txt, encoding="utf-8")
+    if _read_work_stamp(src_manifest) != src_txt:
+        _write_work_stamp(src_manifest, src_txt)
     # Content, not just membership: `run --fast` compared mtimes only,
     # so a CSV replaced by a corrected export carrying an OLDER mtime
     # (cp -p, rsync -a, unzip) — or a ticker.map restored the same way
@@ -2330,9 +2417,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
            if not _is_empty_manifest(_m)]
         + [acct_dir / "sends.json"]
         + ([_CONFIG_PATH] if _CONFIG_PATH is not None else []))
-    if (not _fp_file.exists()
-            or _fp_file.read_text(encoding="utf-8") != _fp_txt):
-        _fp_file.write_text(_fp_txt, encoding="utf-8")
+    if _read_work_stamp(_fp_file) != _fp_txt:
+        _write_work_stamp(_fp_file, _fp_txt)
         import os as _os
         _os.utime(src_manifest)
 
@@ -2692,9 +2778,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         _cstate = (_cparts[0] if _cparts[1] == "absent"
                    else " ".join(_cparts))
         _cstamp = cache / f"{name}_crypto_ticker_map.state"
-        if (not _cstamp.exists()
-                or _cstamp.read_text(encoding="utf-8").strip() != _cstate):
-            _cstamp.write_text(_cstate + "\n", encoding="utf-8")
+        if (_read_work_stamp(_cstamp) or "").strip() != _cstate:
+            _write_work_stamp(_cstamp, _cstate + "\n")
         if force or needs_rebuild(filled, mapped, _cstamp):
             print("  fill-crypto-prices")
             run_to_file(_cmd("taxjson-fill-crypto") + [
@@ -3801,6 +3886,36 @@ def _warn_year_without_activity(year: Any, bases: List[Path]) -> None:
           file=sys.stderr)
 
 
+_RUN_LOCK_FH = None
+
+
+def _acquire_run_lock(cache: Path) -> None:
+    """Hold an exclusive lock on work/.run.lock for the life of this
+    process (released by the OS when it exits, however it exits). A
+    second `taxjson run` in the same project refuses in one line.
+    Where advisory locks are unavailable (no fcntl) runs are not
+    serialized, as before."""
+    global _RUN_LOCK_FH
+    if _RUN_LOCK_FH is not None:
+        return                          # `taxjson run run` chains
+    try:
+        import fcntl
+    except ImportError:                 # pragma: no cover — Windows
+        return
+    try:
+        fh = open(cache / ".run.lock", "a+", encoding="utf-8")
+    except OSError:
+        return
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        _die(f"another `taxjson run` is in progress in {cache.parent} — "
+             f"wait for it to finish (or stop it), then re-run. Nothing "
+             f"was run.")
+    _RUN_LOCK_FH = fh
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     # Full rebuild is the DEFAULT: stale cached artifacts must never
     # feed a filing decision. `--fast` opts back into the mtime cache.
@@ -3874,6 +3989,10 @@ def cmd_run(args: argparse.Namespace) -> None:
         import os as _os_mod
         if not _os_mod.access(_d, _os_mod.W_OK | _os_mod.X_OK):
             _die(f"cannot write to {_d} — nothing was run.")
+    # One run per project at a time: the stages write fixed work/ names,
+    # so a cron `watch` racing an interactive run crashed one of them
+    # with a FileNotFoundError on a shared .part file (A2-0778).
+    _acquire_run_lock(cache)
     # --fast trusts cached stages only when they were built by THIS code
     # (content, not mtimes — S039-03). The stamp is removed now and
     # rewritten when the run completes, so a run that stops half-way
@@ -3881,16 +4000,13 @@ def cmd_run(args: argparse.Namespace) -> None:
     _code_stamp = cache / _CODE_STAMP
     _code_fp = _package_fingerprint()
     if not args.force:
-        try:
-            _old_fp = _code_stamp.read_text(encoding="utf-8").strip()
-        except OSError:
-            _old_fp = ""
+        _old_fp = (_read_work_stamp(_code_stamp) or "").strip()
         if _old_fp != _code_fp:
             print("==> taxjson's code changed since the cached stages were "
                   "built (or no complete run recorded it) — rebuilding "
                   "everything; --fast applies from the next run")
             args.force = True
-    _code_stamp.unlink(missing_ok=True)
+    _drop_work_file(_code_stamp)
     # A project map that exists as a NAME but cannot be opened (a
     # dangling or looping symlink) read as "absent": the run exited 0
     # with other gains (audit A2-0313). Absent and unreadable differ.
@@ -3933,6 +4049,12 @@ def cmd_run(args: argparse.Namespace) -> None:
             load_security_overrides(sec_overrides)
         except ValueError as e:
             _die(str(e))
+        except OSError as e:
+            # Not UTF-8 (InputReadError), a directory, no permission:
+            # one line naming the file, exit 2, as for ticker.map
+            # (re-audit A2-0163, A2-0468, A2-0784, A2-1438).
+            from taxjson.lib.cli_diag import describe_input_error
+            _die_input(describe_input_error(e))
     # phantoms.json — optional project-wide list of (symbol, account) pairs
     # with missing pre-window history (from `find-missing-history
     # --gen-phantoms`). Auto-detected at the root like ticker.map; when present
@@ -3978,8 +4100,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     _maps_now = sorted(p.name for p in (ticker_map, sec_overrides,
                                         root / "distributions.map")
                        if p.exists())
-    _maps_before = (_maps_marker.read_text(encoding="utf-8").split()
-                    if _maps_marker.exists() else [])
+    _maps_before = (_read_work_stamp(_maps_marker) or "").split()
     _maps_removed = sorted(set(_maps_before) - set(_maps_now))
     if _maps_removed:
         print(f"==> {', '.join(_maps_removed)} removed — invalidating "
@@ -3991,10 +4112,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     if _maps_now:
         cache.mkdir(parents=True, exist_ok=True, mode=0o700)
         if _maps_now != _maps_before:
-            _maps_marker.write_text("\n".join(_maps_now) + "\n",
-                                    encoding="utf-8")
-    elif _maps_marker.exists():
-        _maps_marker.unlink()
+            _write_work_stamp(_maps_marker, "\n".join(_maps_now) + "\n")
+    else:
+        _drop_work_file(_maps_marker)
 
     _dup_inputs = _duplicate_input_files(inputs_dir, accounts)
     for _paths in _dup_inputs:
@@ -4288,21 +4408,22 @@ def cmd_run(args: argparse.Namespace) -> None:
         # ready-to-copy --set lines (REVIEW #33).
         if args.account and agg_path.exists():
             try:
-                prior = _json.loads(agg_path.read_text(encoding="utf-8"))
+                prior = _load_pending_agg(agg_path)
                 agg["accounts"].update(
                     {a: d for a, d in (prior.get("accounts")
                                        or {}).items()
                      if a != args.account})
-            except (OSError, ValueError):
-                pass
+            except ValueError:
+                pass                    # damaged: rebuilt below
         for pe in pending_accounts:
             try:
                 agg["accounts"][pe.account] = _json.loads(
                     pe.pending_path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 agg["accounts"][pe.account] = {"pending": []}
-        agg_path.write_text(_json.dumps(agg, indent=2, sort_keys=True),
-                            encoding="utf-8")
+        # tmp + replace: a reader never sees half a file (A2-0779)
+        write_text_atomic(agg_path,
+                          _json.dumps(agg, indent=2, sort_keys=True))
         print(f"\ntaxjson run: {len(pending_accounts)} account(s) need "
               f"corp-action elections before their books can build:",
               file=sys.stderr)
@@ -4327,20 +4448,23 @@ def cmd_run(args: argparse.Namespace) -> None:
         # claim everything was resolved).
         import json as _json
         try:
-            _doc = _json.loads(_agg_path.read_text(encoding="utf-8"))
-            _accts = _doc.get("accounts") or {}
+            _doc = _load_pending_agg(_agg_path)
+        except ValueError:
+            # A damaged or wrong-shape aggregate is a rebuildable work
+            # file: dropped, never a traceback after a good run
+            # (re-audit A2-1439, A2-1457, A2-1419).
+            _doc = None
+            _agg_path.unlink(missing_ok=True)
+        if _doc is not None:
+            _accts = dict(_doc.get("accounts") or {})
             _accts.pop(args.account, None)
-            _accts = {a: d for a, d in _accts.items()
-                      if (d or {}).get("pending")}
+            _accts = {a: d for a, d in _accts.items() if d.get("pending")}
             if _accts:
                 _doc["accounts"] = _accts
-                _agg_path.write_text(
-                    _json.dumps(_doc, indent=2, sort_keys=True),
-                    encoding="utf-8")
+                write_text_atomic(
+                    _agg_path, _json.dumps(_doc, indent=2, sort_keys=True))
             else:
                 _agg_path.unlink()
-        except (OSError, ValueError):
-            _agg_path.unlink(missing_ok=True)
     else:
         _agg_path.unlink(missing_ok=True)
 
@@ -4828,6 +4952,67 @@ def _reextract_pending_entry(acct_dir: Path, name: str, country: str,
     return None
 
 
+def _save_manifest(man, manifest_path: Path) -> None:
+    """Save the elections manifest, or one line naming it when its
+    folder cannot be written (a read-only inputs/<acct>/): it was a
+    PermissionError traceback on the .tmp file (re-audit A2-1418)."""
+    try:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        man.save(manifest_path)
+    except OSError as e:
+        _die_input(f"cannot write {manifest_path}: {e.strerror or e} — "
+                   f"nothing was saved; make its folder writable and "
+                   f"re-run.")
+
+
+def _load_pending_agg(path: Path) -> Dict[str, Any]:
+    """work/pending_elections.json, shape-checked: an object whose
+    `accounts` maps each account to {"pending": [event, ...]}, each
+    event an object with a text `event_id` and `options` a list of
+    objects with a text `election`. Anything else (truncated, not
+    UTF-8, a directory, a list, a pending row that is a number) is an
+    InputFileError naming the file — elect --pending, elect --set and
+    run --account read it bare and tracebacked (re-audit A2-0471,
+    A2-0779, A2-1419, A2-1439, A2-1457, A2-1460)."""
+    from taxjson.lib.json_input import InputFileError, read_json_doc
+    doc = read_json_doc(path, list_key=None)
+    accts = doc.get("accounts")
+    if accts is None:
+        doc["accounts"] = accts = {}
+    if not isinstance(accts, dict):
+        raise InputFileError(f'{path}: "accounts" must be an object')
+    for a, ad in accts.items():
+        if not isinstance(ad, dict):
+            raise InputFileError(f'{path}: account {a!r} must be an '
+                                 f'object')
+        pend = ad.get("pending")
+        if pend is None:
+            ad["pending"] = pend = []
+        if not isinstance(pend, list):
+            raise InputFileError(f'{path}: {a}: "pending" must be a list')
+        for i, ev in enumerate(pend):
+            if not isinstance(ev, dict) \
+                    or not isinstance(ev.get("event_id"), str):
+                raise InputFileError(f'{path}: {a}: pending entry {i} '
+                                     f'must be an object with an '
+                                     f'"event_id"')
+            opts = ev.get("options")
+            if opts is None:
+                ev["options"] = opts = []
+            if not isinstance(opts, list) or any(
+                    not isinstance(o, dict)
+                    or not isinstance(o.get("election"), str)
+                    or not isinstance(o.get("hints") or [], list)
+                    or any(not isinstance(h, dict)
+                           or not isinstance(h.get("key"), str)
+                           for h in (o.get("hints") or []))
+                    for o in opts):
+                raise InputFileError(f'{path}: {a}: {ev["event_id"]}: '
+                                     f'"options" must be a list of '
+                                     f'{{"election": ...}} objects')
+    return doc
+
+
 def cmd_elect(args: argparse.Namespace) -> None:
     """View, clear, or redo corporate-action tax elections (taxable vs
     rollover, FMV/ACB hints) that `taxjson run` otherwise prompts for once
@@ -4852,7 +5037,14 @@ def cmd_elect(args: argparse.Namespace) -> None:
             print("No pending elections (no --no-input run has deferred "
                   "any, or they've been resolved).")
             return
-        doc = _json.loads(agg_path.read_text(encoding="utf-8"))
+        try:
+            doc = _load_pending_agg(agg_path)
+        except ValueError as e:
+            # One line, exit 2 — not a traceback (re-audit A2-0471,
+            # A2-0779, A2-1419, A2-1460). It is a work file `run`
+            # rebuilds.
+            _die_input(f"{e} — a damaged work file: re-run `taxjson run "
+                       f"--no-input` to rebuild it.")
         if getattr(args, "json", False):
             print(_json.dumps(doc, indent=2, sort_keys=True))
             return
@@ -4996,13 +5188,13 @@ def cmd_elect(args: argparse.Namespace) -> None:
         if agg_path.exists():
             import json as _json
             try:
-                _pdoc = _json.loads(agg_path.read_text(encoding="utf-8"))
+                _pdoc = _load_pending_agg(agg_path)
                 for _ev in (((_pdoc.get("accounts") or {}).get(name)
                              or {}).get("pending") or []):
                     if _ev.get("event_id") == event_id:
                         pending_entry = _ev
-            except (OSError, ValueError):
-                pass
+            except ValueError:
+                pass            # damaged: re-extracted below (A2-0779)
         if pending_entry is None:
             pending_entry = _reextract_pending_entry(
                 acct_dir, name, country, manifest_path, event_id)
@@ -5094,8 +5286,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
                                election=election,
                                notes="set via elect --set",
                                hints=hints))
-        manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        man.save(manifest_path)
+        _save_manifest(man, manifest_path)
         print(f"Election saved: {event_id} = {election}"
               + (f" (hints: {hints})" if hints else "")
               + f" → {manifest_path}")
@@ -5149,8 +5340,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
         targets = list(man.records)
     for eid in targets:
         man.records.pop(eid, None)
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    man.save(manifest_path)
+    _save_manifest(man, manifest_path)
     print(f"Cleared {len(targets)} election(s) from {manifest_path}.")
 
     if args.reset:
@@ -5755,6 +5945,36 @@ _BOOK_VALUE_DESC_RE = re.compile(
     r"\bBOOK\s+VALUE:?\s*\$?\s*(\d+(?:,\d+)*(?:\.\d+)?)", re.IGNORECASE)
 
 
+def _require_books(root: Path, account: Optional[str] = None,
+                   also: Tuple[str, ...] = ()) -> None:
+    """Refuse a books view over a project with no books: never run
+    (no work/), a run that died before any book was written, or an
+    account with no book. spinoffs, splits, transfers, edge-cases and
+    fees-sum printed an empty report ('No spin-offs', nine 'None.'
+    sections) at rc 0 where their twins say 'run `taxjson run` first'
+    (re-audit A2-0797, A2-1395)."""
+    cache = root / "work"
+    if not cache.is_dir():
+        _die("no work/ — run `taxjson run` first.")
+    names = set(_discover_tx_accounts(cache)) | {
+        p.name[:-len("_base.json")] for p in cache.glob("*_base.json")
+        if not p.name.startswith(".")
+        and not p.name.endswith("_raw_base.json")
+        and p.name != "sheltered_base.json"}
+    # `also`: the stage files a view reads besides the books (parsed
+    # per-broker JSONs for fees-sum, transfer sidecars for transfers).
+    extra = any(not p.name.startswith(".")
+                for g in also for p in cache.glob(g))
+    if account:
+        if account not in names:
+            _die(f"no books for account {account!r} in work/ — run "
+                 f"`taxjson run` first (an account with no inputs has no "
+                 f"books).")
+    elif not names and not extra:
+        _die("no books in work/ — run `taxjson run` first (or the last "
+             "run stopped before writing any; see its error).")
+
+
 def cmd_transfers_view(args: argparse.Namespace) -> None:
     """`taxjson transfers`: the custody-evidence view. TRANSFER rows
     are deliberately NOT tax events — a taxable book's basis comes from
@@ -5781,6 +6001,7 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
         # A typo read "no transfer rows ... the broker reported none"
         # with rc 0, as if the account existed (S039-20).
         _die(f"no [accounts.{want}] in taxjson.toml — check the name.")
+    _require_books(root, also=("*_transfers.json",))
 
     def _fee(t: Dict[str, Any]) -> float:
         # A custody move's fee (a crypto withdrawal's network fee) is
@@ -5916,6 +6137,15 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
     print(f"\n{len(rows)} transfer row(s).")
 
 
+def _cannot_write_decisions(path, e: OSError) -> str:
+    """One line for a sends.json that cannot be saved (a read-only
+    inputs/<acct>/, a full disk): it was a PermissionError traceback on
+    sends.json.part (re-audit A2-1416)."""
+    return (f"cannot write {path}: {e.strerror or e} — nothing was "
+            f"saved; make inputs/{Path(path).parent.name}/ writable and "
+            f"re-run.")
+
+
 def cmd_crypto_sends(args: argparse.Namespace) -> None:
     """`taxjson crypto-sends`: every outgoing crypto transfer that did
     not arrive on another of your exchanges, with your decision (self /
@@ -5966,6 +6196,8 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
                       f"asks, or `--set {sid}=...`)")
         except ValueError as e:
             _die(str(e))
+        except OSError as e:
+            _die_input(_cannot_write_decisions(_man, e))
         print(f"Regenerate the .tt lines: `taxjson crypto-sends {acct} "
               f"--write` (or just `taxjson run`).")
         return
@@ -6004,9 +6236,12 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
                              f"that arrived short — a sale at fair value; "
                              f"give its price: `--set {sid}="
                              f"{CS.FEE_DECISION} --price P`.")
-                    CS.record_decision(Path(adoc["manifest"]), sid, dec,
-                                       note=args.note, price=args.price,
-                                       summary=fee_ids[sid]["summary"])
+                    try:
+                        CS.record_decision(Path(adoc["manifest"]), sid, dec,
+                                           note=args.note, price=args.price,
+                                           summary=fee_ids[sid]["summary"])
+                    except OSError as e:
+                        _die_input(_cannot_write_decisions(adoc["manifest"], e))
                     print(f"saved: {sid} priced at {args.price:g} "
                           f"{light['base_currency']} per "
                           f"{fee_ids[sid]['symbol']}  "
@@ -6050,6 +6285,8 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
                                        summary=summary, unpair=unpair)
                 except ValueError as e:
                     _die(str(e))
+                except OSError as e:
+                    _die_input(_cannot_write_decisions(adoc["manifest"], e))
                 print(f"saved: {sid} = {dec}"
                       f"{' (unpaired)' if unpair else ''}  "
                       f"(inputs/{acct}/{CS.MANIFEST_NAME})")
@@ -8202,8 +8439,17 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 unscanned[name] = f"reports/{f.name}"
             continue
         try:
-            holdings[name] = (tomllib.loads(f.read_text(encoding="utf-8"))
-                              .get("holding", []))
+            _hl = (tomllib.loads(f.read_text(encoding="utf-8"))
+                   .get("holding", []))
+            # `holding = "x"` or a quantity "abc" was an AttributeError
+            # / ValueError traceback further down (re-audit A2-0792).
+            if not isinstance(_hl, list) \
+                    or any(not isinstance(h, dict) for h in _hl):
+                raise ValueError("`holding` is not a list of [[holding]] "
+                                 "tables")
+            for h in _hl:
+                float(h.get("quantity", 0) or 0)
+            holdings[name] = _hl
         except Exception as e:
             # A warning, then "No findings — clean scan." and exit 0
             # turned an unreadable report into a false all-clear: the
@@ -8383,9 +8629,18 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     # option identity classes.
                     _unread.append(f"{_p.name} ({e})")
                     continue
-                for _t in (_doc.get("transactions", _doc)
-                           if isinstance(_doc, dict) else _doc) or []:
-                    _sym = str((_t or {}).get("symbol") or "").upper()
+                _rows = (_doc.get("transactions", _doc)
+                         if isinstance(_doc, dict) else _doc) or []
+                # A wrong-shape stage file ([1] / {"transactions": [1]})
+                # is unreadable too, not an AttributeError traceback
+                # (re-audit A2-1440).
+                if not isinstance(_rows, list) or any(
+                        not isinstance(_t, dict) for _t in _rows):
+                    _unread.append(f"{_p.name} (not a list of "
+                                   f"transaction objects)")
+                    continue
+                for _t in _rows:
+                    _sym = str(_t.get("symbol") or "").upper()
                     if _sym:
                         _seen_syms.add(_sym)
         _reached: set = set()
@@ -10433,8 +10688,10 @@ def cmd_spinoffs(args: argparse.Namespace) -> None:
     needs attention (zero value, no election, ignored)."""
     from taxjson.lib.corp_views import ViewError, render_spinoffs, spinoffs
     root = Path(args.dir).resolve()
+    cfg = load_config(root)
+    _require_books(root, args.account)
     try:
-        doc = spinoffs(root, load_config(root), args.account)
+        doc = spinoffs(root, cfg, args.account)
     except ViewError as e:
         _die(str(e))
     if getattr(args, "json", False):
@@ -10453,8 +10710,10 @@ def cmd_splits(args: argparse.Namespace) -> None:
     likely double application."""
     from taxjson.lib.corp_views import ViewError, render_splits, splits
     root = Path(args.dir).resolve()
+    cfg = load_config(root)
+    _require_books(root, args.account)
     try:
-        items = splits(root, load_config(root), args.account)
+        items = splits(root, cfg, args.account)
     except ViewError as e:
         _die(str(e))
     if getattr(args, "json", False):
@@ -10558,6 +10817,7 @@ def cmd_edge_cases(args: argparse.Namespace) -> None:
     cfg = load_config(root)
     if not (root / "work").is_dir():
         sys.exit("taxjson edge-cases: no work/ directory — run `taxjson run` first.")
+    _require_books(root, args.account)
     if args.margin < 0:
         # A negative margin emptied the window-edge section at rc 0
         # (audit A2-1198); winners --top refuses < 1 the same way.
@@ -10843,6 +11103,13 @@ def cmd_checklist(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _walk_interrupted(sid: str, ctx) -> None:
+    print(f"\ntaxjson checklist: interrupted at {sid} — it is not "
+          f"recorded; the marks made so far are kept in "
+          f"{ctx.root / 'checklist.json'}.", file=sys.stderr)
+    sys.exit(1)
+
+
 def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
     """Interactive pass over the open steps, one detector at a time: each
     step is shown as soon as its own check finishes (the whole list can
@@ -10884,16 +11151,25 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
                 print()
                 quit_early = True
                 break
+            except KeyboardInterrupt:
+                _walk_interrupted(sid, ctx)
+            if ans in ("d", "done", "s", "skip"):
+                # EOF or Ctrl-C at the note/reason prompt was a traceback
+                # (re-audit A2-1394): this step is not recorded, the
+                # marks made so far are kept.
+                try:
+                    note = input("    note (optional): " if ans[0] == "d"
+                                 else "    reason (optional): ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    _walk_interrupted(sid, ctx)
             if ans in ("q", "quit"):
                 quit_early = True
                 break
             if ans in ("d", "done"):
-                note = input("    note (optional): ").strip()
                 cl.set_override(ctx.root, ctx.year, sid, "done", note=note)
                 print(f"    recorded: {sid} done")
                 break
             if ans in ("s", "skip"):
-                note = input("    reason (optional): ").strip()
                 cl.set_override(ctx.root, ctx.year, sid, "skipped", note=note)
                 print(f"    recorded: {sid} skipped")
                 break
@@ -11022,9 +11298,9 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         p2 = _resolved(name)
         if p2 is not None:
             return p2
-        sys.exit(f"taxjson sanity: {_mask_ids_in_path(ctx)}: "
-                 f"{_mask_ids_in_path(name)!r} is not an existing "
-                 f".toml file (or a symlink loop)")
+        _die_input(f"{_mask_ids_in_path(ctx)}: "
+                   f"{_mask_ids_in_path(name)!r} is not an existing "
+                   f".toml file (or a symlink loop)")
 
     groups: Dict[Tuple[str, ...], Dict[str, Any]] = {}
     bare: Dict[str, Any] = {"accounts": [], "files": [], "paired": False}
@@ -11184,10 +11460,12 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         labels: List[str] = []
         alt: Dict[str, str] = {}
         for path in paths:
+            # A broker/position file re-saved with a BOM was refused
+            # (re-audit A2-1409, A2-1453); unreadable is exit 2 (A2-0164).
             try:
-                doc = tomllib.loads(path.read_text(encoding="utf-8"))
+                doc = tomllib.loads(path.read_text(encoding="utf-8-sig"))
             except Exception as e:
-                sys.exit(f"taxjson sanity: cannot parse {path}: {e}")
+                _die_input(f"cannot parse {path}: {e}")
             meta = doc.get("meta") if isinstance(doc, dict) else None
             labels.append(str((meta or {}).get("account") or path.stem)
                           if isinstance(meta, (dict, type(None)))
@@ -11506,10 +11784,14 @@ def cmd_positions(args: argparse.Namespace) -> None:
                 cmd += ["--incomplete-history", str(_phantoms)]
             res = _run_cmd(cmd + [str(b)], capture_output=True)
             if res.returncode != 0:
-                print(f"taxjson: warning: as-of compute failed for "
-                      f"{n}: {_child_error(res.stderr)}",
-                      file=sys.stderr)
-                continue
+                # Dropping the account (a warning, then a table of the
+                # others at rc 0 — or 'no base files' when it was the
+                # only one) was a silently incomplete list (re-audit
+                # A2-1450).
+                _die(f"as-of compute failed for {n}: "
+                     f"{_child_error(res.stderr)} — fix or rebuild its "
+                     f"books (`taxjson run`); a list without it would be "
+                     f"incomplete.")
             tmp_docs[n] = json.loads(res.stdout)
             files[n] = b                      # key only; doc from memory
         if not files:
@@ -12118,9 +12400,9 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     if claimed.is_file():
         argv += ["--claimed", str(claimed)]
     elif args.claimed or claimed.is_symlink() or claimed.exists():
-        sys.exit(f"taxjson carryover: cannot read the claimed file "
-                 f"{claimed} (missing, a broken link or not a file) — "
-                 f"fix or remove it; the carryforward depends on it.")
+        _die_input(f"cannot read the claimed file "
+                   f"{claimed} (missing, a broken link or not a file) — "
+                   f"fix or remove it; the carryforward depends on it.")
     # Each filed-year lock — this project's filed/<year>.json and the
     # prior_year_record lock of the per-year layout (A2-0338, A2-0121):
     # a year before the project year takes what the lock says was
@@ -12355,8 +12637,10 @@ def cmd_harvest(args: argparse.Namespace) -> None:
     # the cross reports — reported a registered-account buy's LOCKED
     # name as CLEAR / claimable now (2026-09 audit S038-09). Run the
     # radar live over the current books instead.
+    # (is_file: a dangling *_base.json symlink was a FileNotFoundError
+    # traceback, re-audit A2-1422)
     _books = [p for p in cache.glob("*_base.json")
-              if not p.name.startswith(".")]
+              if not p.name.startswith(".") and p.is_file()]
     _newest_book = max((p.stat().st_mtime for p in _books), default=0.0)
     if radar_files and any(sc.stat().st_mtime < _newest_book
                            for sc in radar_files):
@@ -12689,7 +12973,7 @@ def cmd_close_year(args: argparse.Namespace) -> None:
     filed_csv = (Path(args.filed_dispositions).expanduser()
                  if getattr(args, "filed_dispositions", None) else None)
     if filed_csv is not None and not filed_csv.exists():
-        sys.exit(f"taxjson close-year: {filed_csv} not found.")
+        _die_input(f"{filed_csv} not found.")
     if filed_csv is not None:
         # Read it up front, through the broker decode funnel: a UTF-16
         # save, a directory or a stray quote is one line naming the
@@ -12849,11 +13133,26 @@ def cmd_handoff(args: argparse.Namespace) -> None:
     settings = cfg["settings"]
     rp = _prior_record_path(root, settings, args.prior)
     if not rp.exists():
-        sys.exit(f"taxjson handoff: no prior-year record at {rp}. Run "
-                 f"`taxjson close-year` in the previous year's project, "
-                 f"then set [settings] prior_year_record to its "
-                 f"filed/<year>.json (or pass --prior).")
-    record = _json.loads(rp.read_text(encoding="utf-8"))
+        # A missing named input: exit 2, not handoff's "problems found"
+        # code 1 (re-audit A2-0164).
+        _die_input(f"no prior-year record at {rp}. Run "
+                   f"`taxjson close-year` in the previous year's project, "
+                   f"then set [settings] prior_year_record to its "
+                   f"filed/<year>.json (or pass --prior).")
+    # A truncated, non-UTF-8, unreadable or wrong-shape record: one line
+    # naming it, exit 2 (re-audit A2-0162, A2-0473, A2-0475, A2-0476).
+    from taxjson.lib.json_input import InputFileError, read_json_doc
+    try:
+        record = read_json_doc(rp, list_key=None)
+    except InputFileError as e:
+        _die_input(f"{e} — restore the prior-year record (or re-close "
+                   f"that year with `taxjson close-year --force` in its "
+                   f"project).")
+    _rprob = _handoff.record_problem(record)
+    if _rprob:
+        _die_input(f"{rp}: not a usable close-year record: {_rprob} — "
+                   f"restore it (or re-close that year with `taxjson "
+                   f"close-year --force` in its project).")
     from taxjson.bin.taxjson_filed import lock_country_problem
     _cp = lock_country_problem(record, settings, str(rp))
     if _cp:
@@ -12877,10 +13176,16 @@ def cmd_handoff(args: argparse.Namespace) -> None:
               file=sys.stderr)
     if not (root / "work").is_dir():
         sys.exit("taxjson handoff: no work/ — run `taxjson run` first.")
+    from taxjson.lib.income_dating import IncomeRulesError
+    try:
+        _hflags = _handoff_gains_flags(settings)
+    except IncomeRulesError as e:
+        # A bad [settings] corporate_distributions & co.: one line, as
+        # divs-sum gives it (re-audit A2-0802).
+        _die(str(e))
     try:
         opening = _handoff.snapshot(root / "work", cfg, f"{ry}-12-31",
-                                    _filed_run_gains,
-                                    _handoff_gains_flags(settings),
+                                    _filed_run_gains, _hflags,
                                     root / "phantoms.json")
         rep = _handoff.check(root, cfg, record, opening)
     except _handoff.BooksError as e:
@@ -13321,8 +13626,13 @@ def _radar_config(root: Path, prog: str = "taxjson") -> Dict[str, Any]:
     shares (2026-09 audit S048-13)."""
     cfg_path = root / "taxjson.toml"
     if cfg_path.exists() and tomllib is not None:
+        # Through _read_config_text, as every other command reads it:
+        # a Notepad BOM is dropped, not 'Invalid statement (at line 1,
+        # column 1)' (re-audit A2-0470, A2-1454, A2-1456, A2-1458,
+        # A2-1459 — the S038-04 twin).
+        text = _read_config_text(cfg_path)
         try:
-            tomllib.loads(cfg_path.read_text(encoding="utf-8"))
+            tomllib.loads(text)
         except Exception as e:
             sys.exit(f"{prog}: taxjson.toml cannot be read ({e}) — fix "
                      f"it first; the radar will not guess which "
@@ -13603,12 +13913,12 @@ def cmd_watch(args: argparse.Namespace) -> None:
         # an 11-line traceback (S046-12) — one line, like
         # --gen-phantoms.
         if state_path.is_dir():
-            _die(f"--state {args.state} is a directory — pass a FILE "
+            _die_input(f"--state {args.state} is a directory — pass a FILE "
                  f"path, e.g. {state_path / 'watch_state.json'}")
         try:
             state_path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            _die(f"cannot create the folder for --state {args.state}: "
+            _die_input(f"cannot create the folder for --state {args.state}: "
                  f"{e} — pass a FILE path in a writable folder.")
     else:
         state_path = cache / ".watch_state.json"
@@ -13617,7 +13927,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
         try:
             _watch.save_state(state_path, cur_radar, harvest_value, as_of)
         except OSError as e:
-            _die(f"cannot write the watch state {state_path}: {e} — "
+            _die_input(f"cannot write the watch state {state_path}: {e} — "
                  f"pass a writable FILE path with --state.")
 
     state = _watch.load_state(state_path)
@@ -13821,7 +14131,10 @@ def _merge_csv_text(existing: str, new: str) -> Tuple[str, int]:
     def _rows(text):
         return [tuple(r) for r in _csv.reader(_io.StringIO(text))
                 if any(f.strip() for f in r)]
-    ex_rows, new_rows = _rows(existing), _rows(new)
+    # A BOM (an Excel re-save of the fetch file) is not part of the
+    # header: 'header mismatch' failed every later fetch (A2-1445).
+    ex_rows = _rows(existing.removeprefix("\ufeff"))
+    new_rows = _rows(new.removeprefix("\ufeff"))
     if not new_rows:
         return existing, 0
     if not ex_rows:
@@ -14375,7 +14688,15 @@ def cmd_fetch(args: argparse.Namespace) -> None:
                 raw = F.flex_fetch(token, query_id, http)
             except RuntimeError as e:
                 sys.exit(f"taxjson fetch: {a}: {e}")
-            text = raw.decode("utf-8", "replace")
+            # Decoded like detection and the parser (UTF-16, a UTF-8
+            # BOM dropped): with the BOM kept as U+FEFF the section
+            # test refused a download `run` reads (A2-0799, R1-57).
+            from taxjson.lib.brokerages.base import (
+                BrokerageParseError as _BPE, decode_broker_text as _dbt)
+            try:
+                text = _dbt(raw, "the Flex download")
+            except _BPE:
+                text = raw.decode("utf-8-sig", "replace")
             out = acct_dir / "ib_flex.csv"
             _nstmt = F.flex_statement_count(text)
             if _nstmt > 1:
@@ -14502,9 +14823,13 @@ def _fx_cash_doc(root: Path, cache: Path):
         try:
             doc = _read_work_doc(f)
         except (OSError, ValueError) as e:
-            sys.exit(f"taxjson fx-cash: could not read {f}: {e} — "
-                     f"re-run `taxjson run` to rebuild it; a ledger "
-                     f"without account {name!r} would be partial.")
+            _m = str(e)                 # (named once: A2-1413)
+            sys.exit(f"taxjson fx-cash: "
+                     f"{_m if str(f) in _m else f'could not read {f}: {_m}'}"
+                     + ("" if "taxjson run" in _m else
+                        " — re-run `taxjson run` to rebuild it")
+                     + f"; a ledger without account {name!r} would be "
+                       f"partial.")
         found = True
         for t in doc.get("transactions", []):
             t.setdefault("account", name)
@@ -15698,6 +16023,13 @@ def cmd_audit(args: argparse.Namespace) -> None:
                 if res.returncode == 3:
                     no_match += 1
                     continue
+                if res.returncode == 2:
+                    # An input the audit cannot read: its own one line
+                    # above says which; the same exit code as the text
+                    # mode, and the next book would only repeat it
+                    # (re-audit A2-0796).
+                    rc = 2
+                    break
                 try:
                     json_docs.append(_json.loads(res.stdout))
                 except ValueError:
@@ -15710,6 +16042,8 @@ def cmd_audit(args: argparse.Namespace) -> None:
                     no_match += 1
                     continue
                 rc = max(rc, res.returncode or 0)
+                if res.returncode == 2:
+                    break               # (A2-0796: printed once)
     finally:
         for _fl, _cl in invocations:
             if _cl is not None:
@@ -15726,6 +16060,8 @@ def cmd_audit(args: argparse.Namespace) -> None:
                "every event; --date matches the trade or settlement "
                "date).")
 
+    if rc == 2:
+        raise SystemExit(2)
     if getattr(args, "json", False):
         _json_out(_merge_audit_json(json_docs, base_currency, country))
     if _uncovered and not _acct:
@@ -15916,7 +16252,7 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         except OSError as e:
             # A directory (or unwritable path) argument crashed with a
             # raw traceback AFTER all the per-account work (REVIEW #40).
-            sys.exit(f"taxjson find-missing-history: cannot write "
+            _die_input(f"cannot write "
                      f"--gen-phantoms {out}: {e} — pass a FILE path, "
                      f"e.g. {out / 'phantoms.json' if out.is_dir() else 'phantoms.json'}")
         n_reg = sum(1 for e in rows
@@ -15973,6 +16309,7 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
     cache = root / "work"
     if not cache.exists():
         sys.exit(f"taxjson fees-sum: no {cache} (run `taxjson run` first).")
+    _require_books(root, also=("*_*.json",))
     settings = _soft_settings(root)
 
     period, account = args.period, args.account
@@ -16078,6 +16415,15 @@ def cmd_init(args: argparse.Namespace) -> None:
     # The config is (re)written — the guard above already enforces --force.
     config_text, account_names = _render_init_config(
         country, getattr(args, "year", None))
+    # The tree is checked BEFORE anything is written: inputs/ existing
+    # as a file was a NotADirectoryError traceback after taxjson.toml
+    # and ticker.map were already in place (re-audit A2-0781).
+    for rel in ["inputs"] + [f"inputs/{a}" for a in account_names]:
+        q = root / rel
+        if q.exists() and not q.is_dir():
+            _die(f"cannot create {rel}/: {q} exists and is not a "
+                 f"directory — move it away, then re-run init. Nothing "
+                 f"was written.")
     bak_name = "taxjson.toml.bak"
     if cfg.exists():
         # --force re-templates: keep the user's previous config (their
@@ -16094,7 +16440,10 @@ def cmd_init(args: argparse.Namespace) -> None:
             shutil.copy2(cfg, bak)
         bak_name = bak.name
         written.append(f"{bak_name} (your previous config)")
-    cfg.write_text(config_text)
+    # UTF-8 whatever the locale, through tmp + replace: under LC_ALL=C
+    # the template's em dash was a UnicodeEncodeError that left a 0-byte
+    # taxjson.toml blocking the retry (re-audit A2-0477).
+    write_text_atomic(cfg, config_text)
     written.append("taxjson.toml")
     if country == "usa":
         print(_US_EXPERIMENTAL_NOTE, file=sys.stderr)
@@ -16106,7 +16455,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         if not p.exists():
-            p.write_text(content)
+            p.write_text(content, encoding="utf-8")
             written.append(rel)
 
     _stub("ticker.map", _TEMPLATE_TICKER_MAP)
@@ -16153,7 +16502,25 @@ def _add_deduction_flags(p: argparse.ArgumentParser) -> None:
                         "[estimate] carrying_charges, else 0)")
 
 
+def _interrupt_note() -> str:
+    if _CURRENT_CMD == "run":
+        return ("work/ is incomplete — re-run `taxjson run` before "
+                "trusting any report")
+    return ""
+
+
 def main() -> None:
+    """The `taxjson` entry point: Ctrl-C is one `interrupted` line with
+    exit 130 and a closed stdout pipe a quiet exit 141, never a
+    traceback (re-audit A2-0782, A2-0785); report text the terminal
+    cannot encode degrades to '?' (A2-0786)."""
+    from taxjson.lib.cli_diag import run_top_level
+    run_top_level(lambda: (f"taxjson {_CURRENT_CMD}" if _CURRENT_CMD
+                           else "taxjson"),
+                  _main, interrupt_note=_interrupt_note)
+
+
+def _main() -> None:
     # Tax data is private: everything this process and its pipeline
     # stages create is owner-only (files 0600, dirs 0700) whatever the
     # shell umask — SECURITY.md promises it.
@@ -17202,15 +17569,20 @@ def main() -> None:
                 and not Path(args.dir).is_dir()):
             # `-C typo sum` said "no gains files in typo/work (run
             # `taxjson run` first)" — send the user to the real problem.
-            _die(f"no such directory: {args.dir} (-C/--dir names the "
+            _die_input(f"no such directory: {args.dir} (-C/--dir names the "
                  f"project root — the folder holding taxjson.toml)")
         _enforce_command_country(args)
         _refuse_artifact_account(args)
+        _refuse_path_account(args)
         _refuse_unknown_account(args)
         if args.cmd in _RUN_STATE_BANNER_CMDS:
             _banner_run_state(args)
         try:
-            args.func(args)
+            # An input a command reads itself (not through a guarded
+            # tool) that is missing, a directory, not UTF-8 or not JSON:
+            # one `taxjson <cmd>: error:` line with exit 2, never a
+            # traceback — the S070-23 / S079-10 contract (A2-1420).
+            _guarded_func(args)
         except SystemExit as e:
             # A failing command stops the chain and propagates its
             # code; an explicit success (sys.exit(0) / None) lets the
@@ -17230,6 +17602,43 @@ def main() -> None:
                      f"{' '.join(str(c) for c in (e.cmd or [])[-3:])} "
                      f"(exit {e.returncode}) — see the error above.")
     return
+
+
+def _guarded_func(args: argparse.Namespace) -> None:
+    from taxjson.lib.cli_diag import error, guard_main
+    from taxjson.lib.json_input import InputFileError
+    prog = f"taxjson {args.cmd}"
+    try:
+        guard_main(prog)(args.func)(args)
+    except InputFileError as e:
+        error(prog, str(e))
+        raise SystemExit(2)
+
+
+_ACCOUNT_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
+
+
+def _refuse_path_account(args: argparse.Namespace) -> None:
+    """An ACCOUNT argument must be an account NAME (the spelling
+    load_config allows in [accounts]): './margin' or
+    '../../other/work/margin' was joined into work/ paths — another
+    project's books were read and printed, `sum ./margin` was a
+    traceback — and fees-sum used the name as a glob ('*' summed every
+    account, '/' tracebacked) (re-audit A2-1398, A2-0798)."""
+    vals = []
+    for attr in ("account", "period"):
+        v = getattr(args, attr, None)
+        vals += v if isinstance(v, list) else [v]
+    for v in vals:
+        if not isinstance(v, str) or not v:
+            continue
+        if v is getattr(args, "period", None) and (
+                _is_period(v) or v.strip()[:1].isdigit()):
+            continue                # a PERIOD, judged by its command
+        if not _ACCOUNT_NAME_RE.fullmatch(v):
+            _die(f"{v!r} is not an account name — give the name of an "
+                 f"[accounts.<name>] section in taxjson.toml (letters, "
+                 f"digits, '_', '-', '.'), not a path or a pattern.")
 
 
 def _refuse_artifact_account(args: argparse.Namespace) -> None:
