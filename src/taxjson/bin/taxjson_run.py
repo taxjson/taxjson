@@ -1818,6 +1818,25 @@ def _is_empty_manifest(path: Path) -> bool:
         return False
 
 
+def _unreadable_project_inputs(root: Path) -> List[str]:
+    """Project-root input names that exist as a symlink whose target is
+    missing (or loops), or as a directory — never "absent" (A2-0313)."""
+    import os
+    out = []
+    for name in _PROJECT_ROOT_INPUTS + ("claimed_losses.txt",):
+        p = root / name
+        if p.is_symlink() and not p.exists():
+            try:
+                tgt = os.readlink(p)
+            except OSError:
+                tgt = "?"
+            out.append(f"{name} is a symlink to {tgt}, which does not "
+                       f"exist (or loops)")
+        elif p.is_dir():
+            out.append(f"{name} is a directory, not a file")
+    return out
+
+
 def _inputs_fingerprint(paths: List[Path]) -> str:
     """One line per existing file: name, size and SHA-256 of the
     content (mtimes deliberately left out — see R1-253)."""
@@ -2507,6 +2526,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # or not — one project year leaves that income out (audit A2-0073,
     # A2-0229).
     echo_attention_lines(gains_json, prefix="income year: ")
+    # A phantoms.json entry on a broker-marked real short or a written
+    # option is applied, but its ATTENTION line used to reach only the
+    # .sum DIAGNOSTICS (audit A2-0637 / A2-0639): echoed every run.
+    echo_attention_lines(gains_json, prefix="phantoms.json")
     if is_taxable:
         _warn_expired_open_options(name, gains_json, cache, year)
 
@@ -2559,7 +2582,17 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                           file=sys.stderr)
         else:
             raw_gains = cache / f"{name}_raw_gains.json"
-            if force or needs_rebuild(raw_gains, raw_json):
+            # phantoms.json applies to the native books too: without it
+            # holdings.toml (and the web positions) listed every
+            # phantom pair as a SHORT, and `taxjson gains` showed a
+            # tainted sale as a realized gain (audit A2-0111 / A2-0305,
+            # R1-275 / R1-322). A pair spelled with a TOBASE target the
+            # native books do not use simply has no rows here.
+            _ph_raw = (["--incomplete-history", str(incomplete_history)]
+                       if incomplete_history is not None else [])
+            _ph_deps = ([incomplete_history]
+                        if incomplete_history is not None else [])
+            if force or needs_rebuild(raw_gains, raw_json, *_ph_deps):
                 print("  raw gains")
                 # Match the country to the rest of the pipeline (it is
                 # required; it used to default to Canada, and the US
@@ -2569,7 +2602,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 run_to_file(_cmd("taxjson-gains") + [
                     "--country", country,
                 ] + option_timing_flags(settings)
-                    + income_dating_flags(settings) + [str(raw_json)],
+                    + income_dating_flags(settings) + _ph_raw
+                    + [str(raw_json)],
                             raw_gains, capture_diag=False)
             # Base-currency companion: convert the SAME raw merge to the base
             # currency (per-transaction FX, no ticker consolidation — so symbols
@@ -2590,12 +2624,14 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     "--country", country,
                 ], raw_base_json)
             raw_base_gains = cache / f"{name}_raw_base_gains.json"
-            if force or needs_rebuild(raw_base_gains, raw_base_json):
+            if force or needs_rebuild(raw_base_gains, raw_base_json,
+                                      *_ph_deps):
                 print("  raw base gains")
                 run_to_file(_cmd("taxjson-gains") + [
                     "--country", country,
                 ] + option_timing_flags(settings)
-                    + income_dating_flags(settings) + [str(raw_base_json)],
+                    + income_dating_flags(settings) + _ph_raw
+                    + [str(raw_base_json)],
                             raw_base_gains, capture_diag=False)
             # Machine-readable holdings handoff (TOML) for live-pricing /
             # trading tools. ticker.map's JOURNAL lines net offsetting
@@ -2792,6 +2828,93 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
         print(f"taxjson: warning: could not write {name}_report.json: {e}",
               file=sys.stderr)
     print(f"  → {wash_sum}")
+
+
+# A custody move's two legs (out of one account, into another) post a
+# few days apart at most.
+_OWN_MOVE_DAYS = 10
+
+
+def own_account_custody_moves(names: List[str], cache: Path
+                              ) -> List[Dict[str, Any]]:
+    """Moves of a security between two of these accounts, read from the
+    transfer sidecars (transfers = false keeps TRANSFER rows out of the
+    books): an outbound leg in one account paired with an inbound leg
+    of the same symbol and quantity in another, within _OWN_MOVE_DAYS."""
+    import json as _json
+    from datetime import date as _date
+    rows = []
+    for n in names:
+        for sc in sorted(cache.glob(f"{n}_*_transfers.json")):
+            try:
+                doc = _json.loads(sc.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            md = ((doc.get("metadata") or {}) if isinstance(doc, dict)
+                  else {})
+            if (md.get("kind") != "transfer_sidecar"
+                    or md.get("account") != n):
+                continue        # another account's (or a .tt) file
+            for t in doc.get("transactions") or []:
+                if (t.get("action") == "TRANSFER" and t.get("symbol")
+                        and abs(float(t.get("quantity") or 0)) > 1e-9):
+                    rows.append((n, t))
+
+    def _d(t):
+        try:
+            return _date.fromisoformat(str(t.get("date"))[:10])
+        except ValueError:
+            return None
+    ins = [(n, t) for n, t in rows if float(t["quantity"]) > 0]
+    used = set()
+    out = []
+    for a, t in sorted(((n, t) for n, t in rows
+                        if float(t["quantity"]) < 0),
+                       key=lambda e: (str(e[1].get("date")), e[0])):
+        q = -float(t["quantity"])
+        da = _d(t)
+        for i, (b, u) in enumerate(ins):
+            db = _d(u)
+            if (i in used or b == a or u.get("symbol") != t.get("symbol")
+                    or abs(float(u["quantity"]) - q) > 1e-6
+                    or da is None or db is None
+                    or abs((db - da).days) > _OWN_MOVE_DAYS):
+                continue
+            used.add(i)
+            out.append({"symbol": t["symbol"], "qty": q, "from": a,
+                        "to": b, "date_out": str(t.get("date")),
+                        "date_in": str(u.get("date"))})
+            break
+    return out
+
+
+def _check_own_account_moves(names: List[str], settings: Dict[str, Any],
+                             cache: Path, *, strict: bool) -> None:
+    """US projects: a custody move between two of your own taxable
+    accounts carries the lot's basis and purchase date, but the US
+    engine keeps lots per account (US-BASIS-01) and the move's rows sit
+    in the transfer sidecar — the receiver's sale read as a short with
+    no basis, the sender kept the shares, and the run exited 0 (audit
+    A2-0032). Said loudly (ATTENTION), and --strict stops. Canada pools
+    the ACB across the accounts (s.47): nothing to say there."""
+    from taxjson.lib.country import basis_pooled_across_accounts
+    if basis_pooled_across_accounts(_country(settings)):
+        return
+    moves = own_account_custody_moves(names, cache)
+    for m in moves:
+        print(f"  warning: ATTENTION: {m['symbol']}: {m['qty']:g} moved "
+              f"from {m['from']} ({m['date_out']}) to {m['to']} "
+              f"({m['date_in']}) — a move between your own accounts is "
+              f"not a sale and the lot keeps its basis and purchase "
+              f"date, but taxjson keeps US lots per account and does not "
+              f"carry them: {m['to']}'s sales of these shares read as a "
+              f"short with no basis and {m['from']} still holds them. "
+              f"Report those sales by hand (US-BASIS-05).",
+              file=sys.stderr)
+    if moves and strict:
+        sys.exit(f"taxjson run --strict: {len(moves)} move(s) between "
+                 f"your own taxable accounts that the US books cannot "
+                 f"carry (ATTENTION above) — aborting.")
 
 
 def stage_blended_wash_pass(names: List[str],
@@ -3286,6 +3409,14 @@ def cmd_run(args: argparse.Namespace) -> None:
                   "everything; --fast applies from the next run")
             args.force = True
     _code_stamp.unlink(missing_ok=True)
+    # A project map that exists as a NAME but cannot be opened (a
+    # dangling or looping symlink) read as "absent": the run exited 0
+    # with other gains (audit A2-0313). Absent and unreadable differ.
+    _unreadable = _unreadable_project_inputs(root)
+    if _unreadable:
+        _die("project file(s) that exist but cannot be read — fix or "
+             "remove each; nothing was run:\n    "
+             + "\n    ".join(_unreadable))
     # ticker.map — one keyword-prefixed symbol-rule file. GLOBAL renames
     # apply everywhere; TOBASE consolidations apply only in the main
     # (to-base) merge; JOURNAL pairs also net in the holdings export;
@@ -3346,7 +3477,9 @@ def cmd_run(args: argparse.Namespace) -> None:
               "with it")
         _ph_marker.unlink()
         import os as _os
-        for _f in cache.glob("*_base.json"):
+        # (*_raw.json too: the native raw-gains pass applies the
+        # phantoms since A2-0111 and depends on that file.)
+        for _f in [*cache.glob("*_base.json"), *cache.glob("*_raw.json")]:
             _os.utime(_f)
         # distributions.map ADJUSTs in the taxable base books were
         # sized WITH the phantom openings (S000-08): drop those books
@@ -3575,6 +3708,8 @@ def cmd_run(args: argparse.Namespace) -> None:
             raise SystemExit(1)
         return
     if _blend_names and not args.account and not pending_accounts:
+        _check_own_account_moves(_blend_names, settings, cache,
+                                 strict=getattr(args, "strict", False))
         stage_blended_wash_pass(_blend_names, settings, cache,
                                 reports_dir, sheltered_base,
                                 incomplete_history=phantoms_arg)
@@ -6993,6 +7128,7 @@ def cmd_gains(args: argparse.Namespace) -> None:
 
     rows = []
     bad_dates = 0
+    manual = 0
     for acct in accounts:
         f = cache / f"{acct}{suffix}"
         if not f.exists():
@@ -7001,6 +7137,15 @@ def cmd_gains(args: argparse.Namespace) -> None:
             continue
         data = _load_json_or_die(f)
         _settle = _settle_basis(root, data)
+        # phantoms.json sales (basis before the data) are routed out of
+        # the gains, as in `sum`: count them so the view says so (audit
+        # A2-0305).
+        for g in data.get("manual_reporting_required") or []:
+            if sym_filter is not None and not sym_filter(g.get("symbol") or ""):
+                continue
+            d = _gains_row_date(g, keep, _settle)
+            if _ISO_DATE_RE.match(d) and keep(d):
+                manual += 1
         for g in data.get("transactions", []):
             if g.get("action") in _INCOME:
                 continue
@@ -7016,6 +7161,12 @@ def cmd_gains(args: argparse.Namespace) -> None:
     if bad_dates:
         print(f"taxjson: warning: {bad_dates} gain row(s) had a missing/unparseable "
               f"date and were excluded.", file=sys.stderr)
+    if manual:
+        print(f"taxjson gains: note: {manual} phantom-basis disposition(s) "
+              f"(sales of shares bought before the data, phantoms.json) "
+              f"are not shown — their basis is unknown; `taxjson "
+              f"form-export` lists them for manual reporting.",
+              file=sys.stderr)
     rows.sort(key=lambda r: (r[0], r[1]))
     if getattr(args, "json", False):
         jt: Dict[str, float] = {}
@@ -13796,6 +13947,22 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         import json
         import tempfile
 
+        out = Path(args.gen_phantoms)
+        # A reviewed phantoms.json is a user record (real shorts pruned,
+        # pairs added by hand): rewriting it brought pruned shorts back
+        # and dropped the hand-added pairs, silently (audit A2-0312).
+        # Refused up front — before the per-account work — unless
+        # --force, which keeps a .bak like `init --force`.
+        if out.exists() and not out.is_dir():
+            if not getattr(args, "force", False):
+                sys.exit(f"taxjson find-missing-history --gen-phantoms: "
+                         f"{out} already exists — not overwritten (a "
+                         f"reviewed file keeps your prunes and hand-added "
+                         f"pairs). Write the candidates to a new file "
+                         f"(e.g. phantoms.new.json) and merge by hand, or "
+                         f"pass --force to replace it (a .bak copy is "
+                         f"kept).")
+
         merged: Dict[Tuple[str, str], dict] = {}
         for f in files:
             with tempfile.NamedTemporaryFile(
@@ -13842,8 +14009,47 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
             for e in entries:
                 merged[(e.get("symbol"), e.get("account"))] = e
 
-        out = Path(args.gen_phantoms)
+        # A short that a same-day JOURNAL leg covers (Norbert's gambit,
+        # RBC's ordinal times put the sale first) is not missing
+        # history: an entry for it pulled the sale off Schedule 3 and
+        # invented the shares (audit A2-0309). taxjson-gains has no
+        # ticker.map, so the JOURNAL symbols are re-checked here with
+        # the walk that knows them.
+        _tm_path = root / "ticker.map"
+        if _tm_path.exists() and merged:
+            from taxjson.lib.phantom_holdings import (detect_phantoms,
+                                                      journal_targets)
+            from taxjson.lib.core import load_transactions
+            try:
+                _journal = journal_targets(_tm_path)
+            except (OSError, ValueError):
+                _journal = set()
+            _js = {k for k in merged
+                   if str(k[0] or "").upper() in _journal}
+            if _js:
+                _txs = []
+                for f in files:
+                    try:
+                        _txs.extend(load_transactions(f))
+                    except (OSError, ValueError):
+                        pass
+                _still = {(c.symbol, c.account) for c in detect_phantoms(
+                    _txs, include_options=True, include_broker_shorts=True,
+                    journal_symbols=_journal)}
+                for k in sorted(_js - _still):
+                    del merged[k]
+                    print(f"  left out {k[0]} / {k[1]}: its short is the "
+                          f"same-day leg of a ticker.map JOURNAL pair "
+                          f"(Norbert's gambit), not missing history.",
+                          file=sys.stderr)
+
         rows = list(merged.values())
+        if out.exists() and not out.is_dir():
+            import shutil as _sh
+            _bak = out.with_name(out.name + ".bak")
+            _sh.copy2(out, _bak)
+            print(f"  kept the previous {out.name} as {_bak.name}",
+                  file=sys.stderr)
         try:
             out.write_text(json.dumps(rows, indent=2) + "\n",
                            encoding="utf-8")
@@ -14990,6 +15196,10 @@ def main() -> None:
     p_fmh.add_argument("--all-history", action="store_true",
                        help="With --gen-phantoms, emit every candidate, not "
                             "just those affecting the tax year")
+    p_fmh.add_argument("--force", action="store_true",
+                       help="With --gen-phantoms, replace an existing FILE "
+                            "(a reviewed phantoms.json is otherwise "
+                            "refused; the old file is kept as FILE.bak)")
     p_fmh.set_defaults(func=cmd_find_missing_history)
 
     p_fees = sub.add_parser(

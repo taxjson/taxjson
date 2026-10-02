@@ -32,10 +32,13 @@ from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
 # Registered-account labels, the fallback for an account whose type the
 # caller does not know (standalone tools outside a project). Short
 # positions are prohibited in these accounts, so a negative balance is
-# almost certainly phantom. Canadian plans match as substrings (as
-# before); US plans need a non-letter on each side ('ROTH_IRA', 'IRA-2',
-# not 'MIRAGE'). Canada-only labels used to be the whole list, so an
-# IRA was never recognised (partition ENGINE-14).
+# almost certainly phantom. Every plan name — Canadian and US alike —
+# needs a non-letter on each side ('ROTH_IRA', 'IRA-2', 'Spousal RRSP',
+# 'rrsp2'; not 'MIRAGE', 'sunlife', 'cliff-margin', 'response'): the
+# Canadian names matched as substrings and a taxable 'sunlife' read as
+# a LIF (audit A2-1097, the twin of R1-243). Canada-only labels used to
+# be the whole list, so an IRA was never recognised (partition
+# ENGINE-14).
 REGISTERED_ACCOUNT_PATTERNS = (
     'LIRA', 'RRSP', 'RRIF', 'TFSA', 'RESP', 'LIF', 'FHSA', 'LRIF', 'PRPP', 'RDSP',
 )
@@ -44,16 +47,19 @@ US_REGISTERED_ACCOUNT_PATTERNS = (
 )
 
 
+def _label_has(upper: str, patterns) -> bool:
+    return any(re.search(rf'(?<![A-Z]){p}(?![A-Z])', upper)
+               for p in patterns)
+
+
 def _registered_label(upper: str, country: Optional[str]) -> bool:
-    import re as _re
     from taxjson.lib.country import canonical_country
     c = canonical_country(country) if country else None
-    if c in (None, 'canada') and any(p in upper
-                                     for p in REGISTERED_ACCOUNT_PATTERNS):
+    if c in (None, 'canada') and _label_has(upper,
+                                            REGISTERED_ACCOUNT_PATTERNS):
         return True
     if c in (None, 'usa'):
-        return any(_re.search(rf'(?<![A-Z]){p}(?![A-Z])', upper)
-                   for p in US_REGISTERED_ACCOUNT_PATTERNS)
+        return _label_has(upper, US_REGISTERED_ACCOUNT_PATTERNS)
     return False
 
 
@@ -239,6 +245,39 @@ def _is_marked_short(tx) -> bool:
     return bool(broker_short_marker(tx))
 
 
+def journal_targets(ticker_map) -> Set[str]:
+    """The symbols ticker.map's JOURNAL lines fold a listing INTO (and
+    from): a Norbert's-gambit pair (sell DLR.TO, buy DLR.U.TO the same
+    morning) is one symbol in the books. Empty without a readable map
+    (a missing map is not an error here: the caller decides)."""
+    if not ticker_map:
+        return set()
+    from taxjson.bin.taxjson_ticker_map import load_map_file
+    tm = load_map_file(Path(ticker_map))
+    out: Set[str] = set()
+    for src, dst in (getattr(tm, 'journal', {}) or {}).items():
+        out.add(str(dst).upper())
+        out.add(str(src).upper())
+    return out
+
+
+def _walk_key(t, journal_symbols: Optional[Set[str]] = None) -> Tuple:
+    """The phantom walks' order. A JOURNAL-folded symbol's trades of one
+    day read buys first whatever their clock: RBC stamps a day's rows
+    with its row ORDINAL (09:30:00 + k s, newest-first export), so the
+    Norbert's-gambit sale of DLR.TO sorted ahead of the same morning's
+    DLR.U.TO buy and read as a one-day phantom short — reported as
+    missing history, and --gen-phantoms wrote an entry that pulled the
+    sale off Schedule 3 (audit A2-0309 / A2-0636). Other symbols keep
+    the clock: a same-day sale and rebuy of shares bought before the
+    data IS missing history."""
+    k = event_sort_key(t, profile='phantom_walk')
+    if (journal_symbols and t.action == 'BUYSELL'
+            and str(t.symbol or '').upper() in journal_symbols):
+        k = (k[0], k[1], '', k[3])
+    return k
+
+
 def detect_phantoms(
     transactions: Iterable[TaxTransaction],
     *,
@@ -246,6 +285,7 @@ def detect_phantoms(
     include_broker_shorts: bool = False,
     registered_accounts=None,
     country: Optional[str] = None,
+    journal_symbols: Optional[Set[str]] = None,
 ) -> List[PhantomCandidate]:
     """Walk transactions per (symbol, account, currency) and return one
     PhantomCandidate per pair whose running position ever went negative.
@@ -272,6 +312,9 @@ def detect_phantoms(
     reported even for an option or a future (broker_says_closing) —
     otherwise the sale of a long option bought before the data reads
     as a write (audit S013-00).
+
+    `journal_symbols` (journal_targets of the project's ticker.map):
+    their same-day trades read buys first (_walk_key).
     """
     # state[(symbol, account, currency)] -> running, peak_short, first_neg, count
     state: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
@@ -282,7 +325,7 @@ def detect_phantoms(
     # otherwise read as an N-share phantom short.
     sorted_txs = _drop_duplicate_splits(sorted(
         transactions,
-        key=lambda t: (event_sort_key(t, profile='phantom_walk'),
+        key=lambda t: (_walk_key(t, journal_symbols),
                        0 if float(t.quantity or 0) > 0 else 1),
     ))
     orders = OrderStarts()
@@ -410,6 +453,159 @@ def detect_phantoms(
 
 
 @dataclass
+class UnbackedCover:
+    """A buy the broker marks as COVERING a short (RBC "COVER SHORT.",
+    IB Trades code C on a buy) while the data holds no short to cover:
+    the short was opened before the data. Covering it is the
+    disposition, so that sale's gain or loss is missing — and the
+    engine books the buy as a new long (audit A2-0306, IB twin
+    A2-0175)."""
+    symbol: str
+    account: str
+    date: str                 # the cover's date on the caller's basis
+    unbacked_qty: float       # bought to cover beyond any short held
+    marker: str               # 'COVER SHORT.' / 'IB code C'
+    proceeds: float           # the cover's cost (|net_amount|)
+
+
+def _derivative_symbol(sym: str) -> bool:
+    return (is_option_symbol(sym)
+            or (sym or '').startswith(('F:', '/', '\\')))
+
+
+def detect_unbacked_covers(
+    transactions: Iterable[TaxTransaction],
+    *,
+    include_options: bool = False,
+    date_basis: str = 'settle',
+    journal_symbols: Optional[Set[str]] = None,
+) -> List[UnbackedCover]:
+    """Broker-marked covers the data's own short cannot back — the
+    mirror of a sale that goes short. Walked like detect_phantoms (per
+    (symbol, account), renames and splits followed, same-moment buys
+    first). Options and futures only with include_options: a buy coded
+    C of a contract written before the data is option-boundary's case.
+    Same-moment rows read SELLS first here (the opposite of the
+    short-side walk, for the same reason): a short and its cover
+    stamped alike is no evidence that the short predates the data."""
+    run: Dict[Tuple[str, str], float] = {}
+    orders = OrderStarts()
+    out: List[UnbackedCover] = []
+
+    def _key(t):
+        k = _walk_key(t, journal_symbols)
+        return k[:3] + ((3 - k[3]) if k[3] in (1, 2) else k[3],)
+    for tx in _drop_duplicate_splits(sorted(transactions, key=_key)):
+        key = (tx.symbol, tx.account)
+        if tx.action == 'SPLIT':
+            ratio = float(tx.quantity or 0.0)
+            new_sym = normalize_symbol_new(tx.symbol,
+                                           getattr(tx, 'symbol_new', ''))
+            if new_sym:
+                nk = (new_sym, tx.account)
+                run[nk] = run.get(nk, 0.0) + run.pop(key, 0.0) * ratio
+            elif key in run:
+                run[key] *= ratio
+            continue
+        if tx.action not in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
+                             'TRANSFER'):
+            continue
+        prev = run.get(key, 0.0)
+        q = float(tx.quantity or 0.0)
+        order_prev = orders.prev(key, tx, prev)
+        run[key] = prev + q
+        if q <= 1e-9 or tx.action != 'BUYSELL':
+            continue
+        if _derivative_symbol(tx.symbol or '') and not include_options:
+            continue
+        if _BROKER_SHORT_RE.search((tx.description or '').upper()):
+            marker = 'COVER SHORT.'
+            unbacked = q - max(0.0, -prev)
+        elif unbacked_close(tx, prev, order_prev):
+            marker = 'IB code C'
+            unbacked = q - max(0.0, -prev)
+            if 'O' in open_close_codes(tx):
+                # C;O with no short when the order began: the whole
+                # closing part is unbacked; the broker does not say
+                # how much of the fill closed — the fill is reported.
+                unbacked = q
+        else:
+            continue
+        if unbacked <= 1e-9:
+            continue
+        out.append(UnbackedCover(
+            symbol=tx.symbol, account=tx.account,
+            date=_basis_date(tx, date_basis),
+            unbacked_qty=unbacked, marker=marker,
+            proceeds=round(abs(float(tx.net_amount or 0.0)), 2)))
+    out.sort(key=lambda c: (c.symbol, c.account, c.date))
+    return out
+
+
+@dataclass
+class StalePhantomEntry:
+    """A phantoms.json entry today's detection would NOT propose: the
+    broker marks the sales that took it short as short sales (a real
+    short), or it is an option / future whose short side the broker
+    never coded CLOSING (a written contract). Applying it moves a real
+    short's (or a write's) gain off the totals into manual reporting
+    and leaves phantom units (audit A2-0308 / A2-0310 / A2-0311 /
+    A2-0637 / A2-0638 / A2-0639, R1-8)."""
+    symbol: str
+    account: str
+    reason: str               # 'broker-short' | 'derivative'
+    marker: str = ''          # how the broker marks the short
+
+
+def stale_phantom_entries(
+    transactions: Iterable[TaxTransaction],
+    phantoms: Set[Tuple[str, str]],
+) -> List[StalePhantomEntry]:
+    """The listed pairs that are a broker-marked real short or a
+    derivative the broker did not code CLOSING (the two cases
+    detect_phantoms leaves out by default)."""
+    if not phantoms:
+        return []
+    listed = {(str(s).upper(), str(a)) for s, a in phantoms}
+    txs = list(transactions)
+    cands = detect_phantoms(txs, include_options=True,
+                            include_broker_shorts=True)
+    out: List[StalePhantomEntry] = []
+    for c in cands:
+        pair = (str(c.symbol).upper(), c.account)
+        if pair not in listed:
+            continue
+        if c.broker_marked_short:
+            out.append(StalePhantomEntry(c.symbol, c.account,
+                                         'broker-short',
+                                         c.short_marker or 'SHORT.'))
+        elif (_derivative_symbol(c.symbol or '')
+              and not c.broker_says_closing):
+            out.append(StalePhantomEntry(c.symbol, c.account,
+                                         'derivative'))
+    return out
+
+
+def stale_entry_message(e: StalePhantomEntry) -> str:
+    """One ATTENTION line for a stale entry (run, gains and every other
+    phantoms.json applier print it; find-missing-history lists it)."""
+    if e.reason == 'broker-short':
+        how = ("codes the sale O (opening)" if e.marker == 'IB code O'
+               else f"marks the sales {e.marker}")
+        return (f"phantoms.json lists {e.symbol} / {e.account}, but the "
+                f"broker {how} — a REAL short, not missing history. The "
+                f"entry moves the short's gain or loss off the totals "
+                f"into manual reporting and leaves phantom shares; "
+                f"remove it from phantoms.json.")
+    return (f"phantoms.json lists {e.symbol} / {e.account}, an option or "
+            f"future the broker never coded CLOSING — its short side reads "
+            f"as a WRITE (sell-to-open), not missing history. The entry "
+            f"moves the premium's gain off the totals and leaves a phantom "
+            f"long contract; remove it unless the contract was bought "
+            f"before the data.")
+
+
+@dataclass
 class MissingHistoryRow:
     """A phantom candidate enriched with whether — and how much — it bears on
     a specific tax year."""
@@ -432,6 +628,7 @@ def assess_tax_year_relevance(
     year: Any = None,
     *,
     date_basis: str = 'settle',
+    journal_symbols: Optional[Set[str]] = None,
 ) -> List[MissingHistoryRow]:
     """For each phantom candidate, decide whether its missing history actually
     bears on tax year `year`.
@@ -463,7 +660,7 @@ def assess_tax_year_relevance(
 
     for tx in _drop_duplicate_splits(
             sorted(transactions,
-                   key=lambda t: event_sort_key(t, profile='phantom_walk'))):
+                   key=lambda t: _walk_key(t, journal_symbols))):
         key = (tx.symbol, tx.account)
         if tx.action == 'SPLIT':
             ratio = float(tx.quantity or 0.0)
@@ -571,7 +768,15 @@ def detect_zero_basis_acquisitions(
             key=lambda t: event_sort_key(t, profile='phantom_walk'))):
         if not include_options and is_option_symbol(tx.symbol):
             continue
-        if tx.action not in ('BUYSELL', 'SPLIT'):
+        # An ASSIGN stock leg (Questrade, Webull) moves the pool like a
+        # trade — the module's other two walks count it; skipping it
+        # here missed a $0-basis spin-off sold by assignment and flagged
+        # a later clean sale instead (audit A2-0307). The option leg of
+        # an assignment closes the contract at no value: never a "$0
+        # acquisition".
+        if tx.action == 'ASSIGN' and is_option_symbol(tx.symbol):
+            continue
+        if tx.action not in ('BUYSELL', 'ASSIGN', 'SPLIT'):
             continue
         if tx.action == 'SPLIT':
             # Every currency-slice of this (symbol, account) pool — a
@@ -761,9 +966,17 @@ def detect_corp_action_links(
             continue
         i, rc = pick
         used.add(i)
-        rr = _RATIO_RE.search(rem.description or '')
-        _rn = float(rr.group(1).replace(',', '')) if rr else 0.0
-        _ro = float(rr.group(2).replace(',', '')) if rr else 0.0
+        # The corp-actions extractor's own reader (thousands commas
+        # only): '0,125 NEW = 1 OLD' is a decimal comma it refuses —
+        # the hint used to drop the comma and show ratio 125 (audit
+        # A2-1096). An unreadable ratio is left out of the hint.
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        from taxjson.lib.corp_actions import rbc_ratio_parts
+        try:
+            _parts = rbc_ratio_parts(rem.description or '')
+        except (BrokerageParseError, ValueError):
+            _parts = None
+        _rn, _ro = _parts if _parts else (0.0, 0.0)
         ratio = _rn / _ro if _ro else 0.0
         oldm = _OLDCO_RE.search(rem.description or '')
         rcm = _RECVCO_RE.search(rc.description or '')
@@ -965,6 +1178,7 @@ def synthesize_openings(
     transactions: List[TaxTransaction],
     phantoms: Set[Tuple[str, str]],
     *, warn: bool = False,
+    flag_stale: bool = True,
 ) -> Tuple[List[TaxTransaction], List[Dict[str, Any]]]:
     """For each (symbol, account) in phantoms, compute the minimum running
     position over the data and prepend an OPENING_BALANCE transaction with
@@ -975,6 +1189,15 @@ def synthesize_openings(
 
     No-op for phantoms that don't go negative in the data: the log entry
     notes this so the user knows the phantoms.json entry was redundant.
+
+    An applied entry that today's detection would not propose — a
+    broker-marked real short, or an option / future the broker never
+    coded CLOSING (stale_phantom_entries) — is still applied (it is the
+    user's explicit record), but its log entry carries `stale` and,
+    with `flag_stale` (the default), an ATTENTION line goes to stderr:
+    this is the one applier every caller shares (run's gains stages,
+    t1135, wash-radar, option-boundary, apply-distributions), so each
+    of them says so (audit A2-0308 / A2-0310 / A2-0637, R1-M006).
     """
     if not phantoms:
         return list(transactions), []
@@ -1153,4 +1376,20 @@ def synthesize_openings(
         entry['anchor_date'] = anchor_date
         entry['anchor_symbol'] = anchor_symbol
         applied.append(entry)
+
+    inserted = {(e['symbol'], e['account']) for e in applied
+                if e.get('inserted')}
+    if inserted:
+        stale = stale_phantom_entries(
+            [t for t in sorted_txs if (t.symbol, t.account) in member_to_pair],
+            inserted)
+        by_pair = {(e.symbol.upper(), e.account): e for e in stale}
+        for entry in applied:
+            st = by_pair.get((entry['symbol'], entry['account']))
+            if st is None or not entry.get('inserted'):
+                continue
+            entry['stale'] = st.reason
+            if flag_stale:
+                print(f"warning: ATTENTION: {stale_entry_message(st)}",
+                      file=sys.stderr)
     return out, applied

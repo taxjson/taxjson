@@ -964,7 +964,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "when ticker.map joins them."),
             Rule("US-BASIS-05",
                  "A transfer into a taxable account stops the run until "
-                 "the original purchase is declared (.tt ACQUIRED line)."),
+                 "the original purchase is declared (.tt ACQUIRED line). "
+                 "With transfers = false (the default) a move between two "
+                 "of your own taxable accounts is flagged ATTENTION: the "
+                 "lot keeps its basis and purchase date, but the books do "
+                 "not carry it to the receiving account, so its sales "
+                 "there are reported by hand (--strict stops)."),
             Rule("US-DIST-01",
                  "distributions.map: a non-cash distribution (a reinvested "
                  "capital-gain distribution, a late return-of-capital "
