@@ -480,6 +480,28 @@ class TestStablecoinPool(_UTC):
         self.assertEqual(res["units_now"], 99.0)
 
 
+class TestStrictNumberSites(_UTC):
+    """A2-1021 (crypto-sends sites): each strict number site refuses a
+    decimal comma instead of reading it 1000x too large."""
+
+    def test_kraken_pool_amount_and_fee(self):
+        for amount, fee in (('"1,5"', "0"), ("1", '"0,5"')):
+            with tempfile.TemporaryDirectory() as tmp:
+                p = Path(tmp) / "kr.csv"
+                p.write_text(KR_HEADER + f"L1,R1,2025-01-15 15:00:00,earn,"
+                             f"reward,currency,USDC,spot,{amount},{fee},1\n")
+                with self.assertRaises(ValueError, msg=(amount, fee)):
+                    cs.kraken_pool_flows(p)
+
+    def test_coinbase_pool_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "cb.csv"
+            p.write_text(CB_HEADER + 'c1,2025-05-01 12:00:00 UTC,Buy,USDC,'
+                         '"20,5",CAD,1.38,27.60,27.60,0,Bought USDC\n')
+            with self.assertRaises(ValueError):
+                cs.coinbase_pool_flows(p)
+
+
 class TestDuplicateLines(unittest.TestCase):
     def _hits(self, lines, qty=1000.0, sym="SOL"):
         with tempfile.TemporaryDirectory() as tmp:
