@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The `taxjson-harvest` console script run on a project's
+  work/*_gains_wash.json without --ticker-map finds the project's
+  ticker.map (next to the inputs or the folder above), so a TOBASE-renamed
+  option is quoted as the contract held, in its own currency, as
+  `taxjson harvest` does (re-audit A2-0885).
 - `taxjson tax-logic` (US) states the wash-sale replacement order the
   engine already applies: order acquired, and at the same moment taxable
   accounts first, then IRAs, then affiliated accounts (US-WASH-20, re-audit
