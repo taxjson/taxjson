@@ -55,7 +55,9 @@ _SPLIT_ON_SHS_RE = re.compile(r'\bON\s+' + DESC_NUMBER_RE + r'\s+SH',
 # and the Currency column says CAD (the SETTLEMENT currency).
 _FX_SETTLED_RE = re.compile(r'EXCHANGE RATE\s+([0-9]+(?:\.[0-9]+)?)', re.IGNORECASE)
 
-_CIL_RE = re.compile(r'CASH\s+IN\s+LIEU\s+OF\s+([0-9]*\.?[0-9]+)', re.I)
+# The fraction with every comma captured, judged by desc_number: '1,5'
+# read as 1 and '0,5' as no fraction (re-audit A2-1058).
+_CIL_RE = re.compile(r'CASH\s+IN\s+LIEU\s+OF\s+' + DESC_NUMBER_RE, re.I)
 _REINV_PRICE_RE = re.compile(r'REINV@(?:[A-Z]{1,3}\$)?\s*' + DESC_NUMBER_RE,
                              re.I)
 _STK_DIV_RE = re.compile(r'\bSTK\.?\s+DIV\b|\bSTOCK\s+DIVIDEND\b',
@@ -132,12 +134,21 @@ _QT_CA_LEG_RE = re.compile(r'\b(SPINOFF|RTS\s+DIST|RIGHTS\s+DIST)\b',
 # VALUE: $3039.64 CNV@ 1.4138" (carried as evidence, like RBC's).
 _BRW_BOOK_VALUE_RE = re.compile(
     r'BOOK\s+VALUE:?\s*\$?\s*([\d,]+(?:\.\d+)?)', re.IGNORECASE)
-_BRW_CNV_RE = re.compile(r'\bCNV\s*@\s*([0-9]+(?:\.[0-9]+)?)', re.IGNORECASE)
+# Every comma captured, judged by desc_number: 'CNV@ 1,4138' read as a
+# rate of 1 (re-audit A2-0278).
+_BRW_CNV_RE = re.compile(r'\bCNV\s*@\s*' + DESC_NUMBER_RE, re.IGNORECASE)
 # A zero-cash row stating a book-cost change ("... RETURN OF CAPITAL
 # ADJUSTMENT TO BOOK COST $1.16"), the shape RBC exports.
 _QT_BOOK_COST_RE = re.compile(r'\bADJUSTMENT\s+TO\s+BOOK\s+COST\b', re.I)
 # A dividend Questrade posts NET of non-resident withholding.
 _NONRES_NET_RE = re.compile(r'NON-?RES\w*\.?\s+TAX\s+WITH', re.IGNORECASE)
+
+
+def _journal_root(symbol: str) -> str:
+    """The security behind one listing line: DLR.U.TO and DLR.TO -> DLR
+    (a BRW journal moves units between the CAD and USD lines)."""
+    s = re.sub(r'\.(TO|US|V|CN|NE)$', '', (symbol or '').upper())
+    return re.sub(r'\.U$', '', s)
 
 
 def _get_desc_key(desc: str) -> str:
@@ -323,7 +334,10 @@ def _qt_reversal_kind(row, helper) -> Optional[Tuple[tuple, bool, str]]:
     if action == 'DIS' and _STK_DIV_RE.search(desc) and abs(qty) > 1e-9:
         return ('STK DIV', sym, round(abs(qty), 6), 0.0), qty < 0, date
     if action == 'CIL' and _CIL_RE.search(desc):
-        frac = float(_CIL_RE.search(desc).group(1))
+        try:
+            frac = desc_number(_CIL_RE.search(desc).group(1))
+        except BrokerageParseError:
+            return None                 # parse_file refuses the row
         if frac <= 0 or abs(net) <= 0:
             return None
         return ('CIL', sym, round(frac, 6), round(abs(net), 2)), net < 0, date
@@ -1035,7 +1049,9 @@ class QuestradeBrokerage(BaseBrokerage):
                             where=self._where(lineno))
                         _cnv = _BRW_CNV_RE.search(desc)
                         if _cnv:
-                            _jtx['_cnv'] = float(_cnv.group(1))
+                            _jtx['_cnv'] = desc_number(
+                                _cnv.group(1), where=self._where(lineno),
+                                field='CNV@ rate')
                     self.note_row_consumed()
                     transactions.append(_jtx)
                     journals.append(f"{_jtx['symbol']} {_q:+g}")
@@ -1358,8 +1374,13 @@ class QuestradeBrokerage(BaseBrokerage):
             bv = float(i['book_value'])
             i['net_amount'] = i['gross_amount'] = bv
             i['price'] = round(bv / i['quantity'], 8)
+            # The SAME security's other line only (re-audit A2-1061: two
+            # journals on one date swapped their costs): DLR.U.TO and
+            # DLR.TO share the root DLR.
             out = next((o for o in legs if o['quantity'] < 0
                         and o['date'] == i['date']
+                        and _journal_root(o['symbol'])
+                        == _journal_root(i['symbol'])
                         and abs(o['quantity'] + i['quantity']) < 1e-9
                         and not o.get('net_amount')), None)
             if out is None:
@@ -1423,7 +1444,8 @@ class QuestradeBrokerage(BaseBrokerage):
         which cancels that original (paired in _pair_reversals) — abs()
         booked it as a second sale, the cash counted twice as gain."""
         m = _CIL_RE.search(desc)
-        frac = float(m.group(1)) if m else 0.0
+        frac = (desc_number(m.group(1), where=self._where(lineno),
+                            field='CASH IN LIEU fraction') if m else 0.0)
         net = self._num(row, 'Net Amount', lineno)
         cash = abs(net)
         if frac <= 0 or cash <= 0:

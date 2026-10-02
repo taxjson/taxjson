@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Questrade: a decimal-comma CNV@ rate ('CNV@ 1,4138', read as 1) or
+  cash-in-lieu fraction ('1,5' read as 1, '0,5' dropped) is refused,
+  as BOOK VALUE already was; a BRW journal's IN leg pairs only with the
+  OUT leg of the same security (two journals on one date swapped their
+  costs) (re-audit A2-0278, A2-1058, A2-1061).
 - **Concatenated exports keep their same-day order.** Two newest-first
   Questrade or generic exports joined with the header repeated, and RBC
   exports joined without one, were read top-down as a whole (the dates

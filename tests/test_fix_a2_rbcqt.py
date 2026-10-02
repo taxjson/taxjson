@@ -785,5 +785,49 @@ class TestRbcSmallRowChecks(unittest.TestCase):
         self.assertIn("de-duplication decides", err)
 
 
+
+class TestQuestradeDescriptionNumbers(unittest.TestCase):
+    """A2-0278, A2-1058 (decimal commas refused) and A2-1061 (a BRW
+    journal's cost stays with its own security)."""
+
+    def _brw(self, sym, qty, desc, cur="CAD"):
+        return q(action="BRW", sym=sym, desc=desc, qty=qty, price="0",
+                 gross="0", comm="0", net="0", cur=cur, act="Other")
+
+    def test_cnv_rate_with_a_decimal_comma_is_refused(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        body = (self._brw("DLR.TO", "-300", "GLOBAL X US DLR JOURNAL "
+                          "POSITION TO USD")
+                + self._brw("DLR.U.TO", "300", "GLOBAL X US DLR JOURNAL "
+                            "POSITION FROM CAD BOOK VALUE: $3039.64 CNV@ "
+                            "1,4138", cur="USD"))
+        with self.assertRaises(BrokerageParseError):
+            qt_parse(body)
+
+    def test_cil_fraction_with_a_decimal_comma_is_refused(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        for frac in ("1,5", "0,5"):
+            cil = q(td="2025-07-30", action="CIL", sym="TDB.TO",
+                    desc=f"TDB SPLIT CORP CASH IN LIEU OF {frac} SHARES",
+                    qty="0", price="0", gross="0", comm="0", net="6.25",
+                    cur="CAD", act="Other")
+            with self.assertRaises(BrokerageParseError, msg=frac):
+                qt_parse(cil)
+
+    def test_journal_cost_pairs_by_security(self):
+        body = (self._brw("XYZ.TO", "-100", "XYZ CORP JOURNAL POSITION TO "
+                          "USD")
+                + self._brw("DLR.TO", "-100", "DLR JOURNAL POSITION TO USD")
+                + self._brw("DLR.U.TO", "100", "DLR JOURNAL POSITION FROM "
+                            "CAD BOOK VALUE: $1000.00 CNV@ 1.40", cur="USD")
+                + self._brw("XYZ", "100", "XYZ CORP JOURNAL POSITION FROM "
+                            "CAD BOOK VALUE: $5000.00 CNV@ 1.40", cur="USD"))
+        txs, err, _ = qt_parse(body)
+        cost = {t["symbol"]: t.get("net_amount") for t in txs
+                if t["quantity"] < 0}
+        self.assertAlmostEqual(cost["DLR.TO"], 1400.0, msg=err)
+        self.assertAlmostEqual(cost["XYZ.TO"], 7000.0, msg=err)
+
+
 if __name__ == "__main__":
     unittest.main()
