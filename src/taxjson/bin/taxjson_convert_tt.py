@@ -490,7 +490,7 @@ def _warn_unknown_suffix(tx: dict, line: str, source: str) -> None:
             print(f"warning: {_where(source)}symbol {sym} ends in .{ext}, "
                   f"which is not a known market suffix "
                   f"({', '.join(sorted(KNOWN_SUFFIXES))}) — a typo here is "
-                  f"its own ACB pool, and the broker's rows for the real "
+                  f"its own cost-basis pool, and the broker's rows for the real "
                   f"listing go short: {line.strip()!r}", file=sys.stderr)
 
 
