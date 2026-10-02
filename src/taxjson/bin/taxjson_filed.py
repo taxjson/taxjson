@@ -449,6 +449,13 @@ def recompute_year(cache: Path, account: str, year: int,
     return aggregates_from_gains(doc, crypto=crypto, year=int(year))
 
 
+# The per-account figures a lock records (any one makes the entry
+# comparable; a pre-upgrade lock may lack the later ones).
+_LOCKED_KEYS = ("realized", "disallowed", "dispositions", "income",
+                "dividend", "pil", "proceeds", "st_gain", "lt_gain",
+                "tainted", "form_lines")
+
+
 def diff_snapshot(snapshot: Dict[str, Any],
                   recomputed: Dict[str, Optional[Dict[str, Any]]],
                   unconfigured: Optional[set] = None
@@ -491,6 +498,21 @@ def diff_snapshot(snapshot: Dict[str, Any],
                          f"recompute (missing book — account renamed "
                          f"or removed?)")
             continue
+        # An entry that records NONE of the locked totals compared
+        # nothing, and a form_lines that is not a table compared no
+        # line: both said "OK (matches)" over real drift (A2-0347,
+        # A2-0668). A damaged lock is reported, never a match.
+        if not any(k in filed for k in _LOCKED_KEYS):
+            raise ValueError(
+                f"accounts.{acct} records none of the locked totals "
+                f"({', '.join(_LOCKED_KEYS[:3])}, ...) — the lock is "
+                f"damaged")
+        if "form_lines" in filed and not isinstance(
+                filed.get("form_lines"), dict):
+            raise ValueError(
+                f"accounts.{acct}.form_lines is "
+                f"{type(filed.get('form_lines')).__name__}, not a table "
+                f"of line amounts — the lock is damaged")
         for key in ("realized", "disallowed", "income", "dividend",
                     "pil", "proceeds", "st_gain", "lt_gain"):
             if key not in filed or key not in cur:
