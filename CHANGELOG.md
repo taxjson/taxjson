@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Kraken: three smaller ledger fixes.** An instant-trade spend with a
+  positive amount or a receive with a negative one is refused (the
+  amount was taken as abs(), booking an inverted trade as an ordinary
+  buy); a fill whose fee was paid with KFEE fee credits books with no
+  fee instead of being refused; and a multi-coin dust sweep into one
+  coin keeps ids fill-crypto pairs, so each split swap is valued once
+  instead of each leg at its own coin's close (re-audit A2-1019,
+  A2-0577, A2-0581).
 - **Kraken: rows that are not your own cash moving are no longer
   ignored.** A trades row whose type is blank or not buy/sell, a fiat
   `credit` or `adjustment`, and a coin row that moves nothing but a fee

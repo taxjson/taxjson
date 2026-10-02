@@ -437,11 +437,15 @@ class KrakenBrokerage(BaseBrokerage):
         a mis-joined ledger must never silently rewrite a trade."""
         ctx = f"trade {row.get('txid')!r} ({pair}, {row.get('time')!r})"
         by_asset: Dict[str, list] = {}
+        kfee_paid = False
         for lg in legs:
             a = self._norm(lg.get('asset') or '')
             if a == 'KFEE':
                 # Legacy fee credits (promotional, no tax value): the
                 # fee was paid in credits, not in either leg.
+                kfee_paid = kfee_paid or bool(
+                    abs(self._num(lg, 'fee', ctx))
+                    or abs(self._num(lg, 'amount', ctx)))
                 continue
             by_asset.setdefault(a, []).append(lg)
         unknown = sorted(set(by_asset) - {base, quote})
@@ -486,6 +490,13 @@ class KrakenBrokerage(BaseBrokerage):
             # Fee taken in the traded coin: the quote side paid/received
             # exactly `cost` (plus any quote fee the ledger shows).
             return abs(b_amt), b_fee, q_fee
+        if kfee_paid and not q_fee:
+            # The whole fee was paid with KFEE credits, which cost you
+            # nothing: no fee in the basis or proceeds (the conservative
+            # side). It used to be refused as "the ledger charged 0"
+            # (re-audit A2-0577).
+            self._kfee_fills = getattr(self, '_kfee_fills', 0) + 1
+            return abs(b_amt), 0.0, 0.0
         # Fee in quote units: the trades export states it to more
         # decimals than the ledger — keep that value, but only when the
         # two agree (a disagreement means the columns are not what we
@@ -775,6 +786,11 @@ class KrakenBrokerage(BaseBrokerage):
                   f"position's rollover (financing) and settlement "
                   f"ledger rows are NOT modeled; hand-check these "
                   f"positions (R1-107).", file=sys.stderr)
+        if getattr(self, '_kfee_fills', 0):
+            print(f"note: Kraken trades {path.name}: {self._kfee_fills} "
+                  f"fill(s) paid their fee with Kraken fee credits (KFEE) "
+                  f"— booked with no fee (the credits cost nothing).",
+                  file=sys.stderr)
         if coin_fee_fills:
             print(f"note: Kraken trades {path.name}: {coin_fee_fills} "
                   f"fill(s) had the fee taken in the traded coin (per the "
@@ -959,6 +975,18 @@ class KrakenBrokerage(BaseBrokerage):
                             f"leg in {asset_name} with its fee in "
                             f"{fee_ccy} (feecurrency) — not supported; "
                             f"enter this trade via a .tt file{_TT_REMOVE}.")
+                    if ((type_raw == 'spend' and amount > 0)
+                            or (type_raw == 'receive' and amount < 0)):
+                        # The leg's sign contradicts its type: the amount
+                        # used to be taken as abs(), booking an inverted
+                        # trade as an ordinary buy (re-audit A2-1019).
+                        raise ValueError(
+                            f"Kraken {ctx}: a {type_raw} row with amount "
+                            f"{amount:+g} {asset_name} — the sign "
+                            f"contradicts the type (a spend is negative, "
+                            f"a receive positive). Refusing to guess the "
+                            f"direction; fix the row or re-export the "
+                            f"ledger.")
                     sides = instant_trades.setdefault(
                         refid, {'spend': {}, 'receive': {}})
                     side = sides[type_raw]
@@ -1387,7 +1415,14 @@ class KrakenBrokerage(BaseBrokerage):
                     else {'spend': part, 'receive': leg})
             for tx in self._build_instant_trade(pair, refid):
                 if 'id' in tx:
-                    tx['id'] = f"{tx['id']}-{leg['asset']}"
+                    # A coin-for-coin split keeps its -sell/-buy suffix
+                    # LAST (`<refid>-ADA-sell`), the stem fill-crypto
+                    # pairs on to value each swap once: `<refid>-sell-ADA`
+                    # was never paired, so each leg took its own coin's
+                    # daily close — a phantom gain (A2-0581, S013-08).
+                    m = re.fullmatch(r'(.+)-(sell|buy)', tx['id'])
+                    tx['id'] = (f"{m.group(1)}-{leg['asset']}-{m.group(2)}"
+                                if m else f"{tx['id']}-{leg['asset']}")
                 tx['description'] = (tx.get('description', '')
                                      + f" [split {share:.4f} of "
                                        f"{one['asset']} {one['amount']:g}]")

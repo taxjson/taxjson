@@ -360,5 +360,77 @@ class TestFeeInAnotherCoin(unittest.TestCase):
                 self.assertAlmostEqual(txs[0]["net_amount"], 3.0)
 
 
+class TestInstantTradeSigns(unittest.TestCase):
+    """A2-1019."""
+
+    def test_inverted_spend_and_receive_are_refused(self):
+        good = _ledger([
+            "L1,R1,2025-03-01 12:00:00,spend,,currency,ZUSD,spot,-100,0,0",
+            "L2,R1,2025-03-01 12:00:00,receive,,currency,XXBT,spot,0.001,0,"
+            "0.001"])
+        txs, _ = _parse({"kr_ledgers.csv": good}, "kr_ledgers.csv")
+        self.assertEqual(_bs(txs), [("BTC", 0.001)])
+        bad = good.replace("spot,-100,", "spot,100,").replace(
+            "spot,0.001,", "spot,-0.001,")
+        with self.assertRaises(ValueError) as cm:
+            _parse({"kr_ledgers.csv": bad}, "kr_ledgers.csv")
+        self.assertIn("sign", str(cm.exception))
+
+
+class TestKfeeCredits(unittest.TestCase):
+    """A2-0577: a fee paid with KFEE credits books with no fee."""
+
+    def test_kfee_paid_fill_books(self):
+        t = _KT_H + ("TX1,O1,XBT/USD,2025-06-02 16:00:00,buy,limit,40000,"
+                     "4000,10.4,0.1,,,\n")
+        led = _ledger([
+            "L1,TX1,2025-06-02 16:00:00,trade,,currency,XXBT,spot,0.1,0,"
+            "0.1",
+            "L2,TX1,2025-06-02 16:00:00,trade,,currency,ZUSD,spot,-4000,0,0",
+            "L3,TX1,2025-06-02 16:00:00,trade,,currency,KFEE,spot,0,1040,"
+            "0"])
+        txs, err = _parse({"kr_trades.csv": t, "kr_ledgers.csv": led},
+                          "kr_trades.csv")
+        self.assertEqual(len(txs), 1)
+        self.assertAlmostEqual(txs[0]["net_amount"], 4000.0)
+        self.assertAlmostEqual(txs[0]["fee"], 0.0)
+        self.assertIn("KFEE", err)
+
+
+class TestMultiCoinSweepValuedOnce(unittest.TestCase):
+    """A2-0581 (S013-08 twin): split legs keep the -sell/-buy suffix so
+    fill-crypto pairs each split and values it once."""
+
+    @rule("CA-CRYPTO-01")
+    def test_split_legs_pair_for_fill_crypto(self):
+        from taxjson.bin.fill_crypto_prices import _swap_pairs
+        from taxjson.lib.core import TaxTransaction
+        led = _ledger([
+            "L1,RS1,2025-03-01 12:00:00,spend,,currency,ADA,spot,-10,0,0",
+            "L2,RS1,2025-03-01 12:00:00,spend,,currency,DOT,spot,-1,0,0",
+            "L3,RS1,2025-03-01 12:00:00,receive,,currency,XETH,spot,0.004,"
+            "0,0.004"])
+        txs, _ = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv")
+        self.assertEqual(len(txs), 4)
+        loaded = [TaxTransaction(
+            action=t["action"], date=t["date"], time=t["time"],
+            date_settle=t["date_settle"], symbol=t["symbol"],
+            quantity=t["quantity"], price=t["price"],
+            net_amount=t["net_amount"], currency=t["currency"],
+            id=t["id"]) for t in txs]
+        pairs = _swap_pairs(loaded)
+        self.assertEqual(len(pairs), 2)
+        self.assertEqual(sorted(s.symbol for _r, s in pairs), ["ADA", "DOT"])
+
+    def test_fiat_sweep_ids_unchanged(self):
+        led = _ledger([
+            "L1,RS1,2025-03-01 12:00:00,spend,,currency,ADA,spot,-10,0,0",
+            "L2,RS1,2025-03-01 12:00:00,spend,,currency,DOT,spot,-1,0,0",
+            "L3,RS1,2025-03-01 12:00:00,receive,,currency,ZUSD,spot,8,0,8"])
+        txs, _ = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv")
+        self.assertEqual(sorted(t["id"] for t in txs),
+                         ["RS1-ADA", "RS1-DOT"])
+
+
 if __name__ == "__main__":
     unittest.main()
