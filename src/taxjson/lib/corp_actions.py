@@ -620,7 +620,9 @@ def _ib_union(own_rows: List[Dict[str, Any]],
 def _ib_apply_cancellations(cancels: List[Dict[str, Any]],
                             *pools: List[Dict[str, Any]]) -> None:
     """Remove from `pools` (in place) the original of every `Ca` row:
-    same description, negated quantity, same row account, dated on or
+    same description, negated quantity, same row account and currency
+    (a spin-off delivered on two listings: a Ca of the CAD leg used to
+    cancel the USD one, A2-0518), dated on or
     before the cancellation (same date preferred, else the latest) —
     the statement parser's `_ca_undo` rule. The cancellation and its
     original may sit in different statements of the account. Only the
@@ -634,6 +636,7 @@ def _ib_apply_cancellations(cancels: List[Dict[str, Any]],
         cands = [(pool, r) for pool in pools for r in pool
                  if r['description'] == ca['description']
                  and (r.get('account') or '') == (ca.get('account') or '')
+                 and (r.get('currency') or '') == (ca.get('currency') or '')
                  and abs(_qty(r) + ca['qty']) < 1e-9
                  and r['date_time'][:10] <= ca['date_time'][:10]]
         if not cands:

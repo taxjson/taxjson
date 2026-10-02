@@ -187,7 +187,7 @@ def _cad(amount, a, b, _d):
 
 
 class TestIbSpinoffParsing(unittest.TestCase):
-    """A2-0504, A2-0896, A2-0871, A2-1601."""
+    """A2-0504, A2-0896, A2-0518, A2-0871, A2-1601."""
 
     @rule("CA-CORP-06")
     def test_a2_0504_dotted_parent_takes_the_s86_1_reduction(self):
@@ -221,6 +221,18 @@ class TestIbSpinoffParsing(unittest.TestCase):
         self.assertEqual(sorted((r['action'], r['symbol']) for r in rows),
                          [('BUYSELL', 'ABC.WT.TO'),
                           ('DIVIDEND', 'ABC.WT.TO')])
+
+    def test_a2_0518_cancellation_matches_its_currency(self):
+        # One spin-off delivered on both listings; IB cancels the CAD
+        # leg. The USD event survives; the CAD one is gone.
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _ib_events(tmp, [
+                _ca(_SPIN, 20, 400, cur='USD'),
+                _ca(_SPIN, 20, 540, cur='CAD'),
+                _ca(_SPIN, -20, -540, cur='CAD', code='Ca')])
+        self.assertEqual([(e.source_symbol, e.target_symbol, e.qty_received,
+                           e.fmv, e.currency) for e in evs],
+                         [('PARNT.US', 'SPNCO.US', 20.0, 400.0, 'USD')], err)
 
     def test_a2_0871_1601_decimal_comma_quantity_or_value_is_refused(self):
         from taxjson.lib.brokerages.base import BrokerageParseError

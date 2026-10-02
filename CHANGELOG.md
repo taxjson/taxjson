@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- An IB corporate-action cancellation (`Ca`) now cancels the leg in its
+  own currency: a spin-off delivered on both the CAD and the USD listing
+  whose CAD leg IB cancelled used to drop the USD event and offer the
+  cancelled CAD one for election (re-audit A2-0518).
 - Errors are one line with a consistent exit code in more places
   (re-audit A2-0161, A2-0791, A2-0770, A2-1421, A2-1435, A2-1436,
   A2-1428, A2-1432): `taxjson <tool>` runs a tool under the same guard
