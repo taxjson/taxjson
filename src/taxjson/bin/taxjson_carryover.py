@@ -464,6 +464,13 @@ SCOPE_NOTE = {
 }
 
 
+def _authority(country: str) -> str:
+    """Whose carryover balance the filed return feeds (re-audit A2-1246
+    / A2-1293: a US ledger named CRA's)."""
+    return ("the IRS Schedule D carryover" if country == 'usa'
+            else "CRA's loss balance")
+
+
 def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
            claimed_used: bool) -> str:
     lines: List[str] = []
@@ -598,14 +605,19 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
                      f"inputs/ — and may be partial (a missing export "
                      f"shows a smaller gain, or a loss that never "
                      f"happened). Verify each against the filed return "
-                     f"(Schedule 3 / Schedule D) before trusting a "
+                     f"({'Schedule D' if country == 'usa' else 'Schedule 3'}"
+                     f") before trusting a "
                      f"carryforward or carryback from it.")
     if first_tx_year is not None and rows and rows[0]['year'] <= first_tx_year:
         lines.append(f"  - warning: this history starts in {first_tx_year} — "
                      f"if you traded before then, earlier gains/losses (and "
                      f"any pre-{first_tx_year} carryforward) are NOT "
                      f"reflected. Reconcile the opening balance against "
-                     f"your CRA/IRS records.")
+                     + ("your prior Schedule D (its Capital Loss "
+                        "Carryover Worksheet)." if country == 'usa' else
+                        "your CRA records (Notice of Assessment / My "
+                        "Account).")
+                     )
     return "\n".join(lines)
 
 
@@ -657,7 +669,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "(filed/<year>.json; the wrapper passes "
                              "them): a ledger row that disagrees is "
                              "flagged — the return, not this recompute, "
-                             "is what CRA's balance is built on.")
+                             "is what the carryover balance (CRA's, or "
+                             "the IRS Schedule D worksheet's) is built "
+                             "on.")
     parser.add_argument("--filed-lock", action="append", default=[],
                         metavar="YEAR=PATH",
                         help="A filed year's close-year lock (the wrapper "
@@ -980,8 +994,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                                 " (no disposition of that year here)")
                       + " — a year before the project year is rebuilt "
                         "from opening lots and whatever prior exports "
-                        "are in inputs/, so the lock is what CRA's loss "
-                        "balance is built on.", file=sys.stderr)
+                        "are in inputs/, so the lock is what "
+                      + _authority(country) + " is built on.",
+                      file=sys.stderr)
             if (country == 'usa' and sd.get('filed_totals_gain') is not None
                     and abs(sd['filed_totals_gain'] - sd['figure']) > 0.01):
                 print(f"warning: {y}: {sd['path']} records "
@@ -1013,11 +1028,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                   + (", as filed with another tool"
                      if src == 'filed_totals' else "")
                   + f" ({where}). This ledger recomputes "
-                  f"every year with this project's settings (option "
-                  f"premium timing and option_grant_timing_since, "
-                  f"tax_date); the lock is what was filed and what "
-                  f"CRA's loss balance is built on — check the settings "
-                  f"or use `taxjson check-filed`.", file=sys.stderr)
+                  f"every year with this project's settings ("
+                  + ("tax_date" if country == 'usa' else
+                     "option premium timing and "
+                     "option_grant_timing_since, tax_date")
+                  + "); the lock is what was filed and what "
+                  + _authority(country) + " is built on — check the "
+                  "settings or use `taxjson check-filed`.",
+                  file=sys.stderr)
     if results.get('manual_reporting_required'):
         n = len(results['manual_reporting_required'])
         print(f"warning: {n} tainted disposition(s) with phantom cost basis "

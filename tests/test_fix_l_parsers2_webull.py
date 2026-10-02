@@ -24,13 +24,17 @@ _H25 = ('"Currency\nDevise",Date,"Action Code\nCode d\'action","Symbol\nSymbole"
         '"Proceeds of\nDisposition or Settlement Amount Produits de disposition"\n')
 
 
-def _parse(rows):
+def _parse(rows, country="canada"):
+    # The ITA citation is the Canadian project's wording; the parser
+    # cites the law of the country taxjson-brokerage passes (A2-0723).
     with tempfile.TemporaryDirectory() as td:
         f = Path(td) / "wb.csv"
         f.write_text(_PRE + _H25 + rows, encoding="utf-8")
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            tx = WebullBrokerage().parse_file(f)
+            wb = WebullBrokerage()
+            wb.country = country
+            tx = wb.parse_file(f)
         return tx, err.getvalue()
 
 

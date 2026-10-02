@@ -2,6 +2,57 @@
 
 ## Unreleased
 
+- A message never cites the other country's law (re-audit partition
+  lists 07/08). taxjson-brokerage passes the project's country to the
+  parsers, which use it only to pick the citation: the Webull inferred
+  exercise/assignment note cites s.49(3)/(3.1) in Canada and Rev. Rul.
+  78-182 in a US project (and says "cost or proceeds"); the IB
+  share-for-share tender note names s.85.1 or a §354/§368
+  reorganization; Questrade's net-of-tax dividend and transfer-in
+  warnings name the T5/NR4 slip and the ACB in Canada, the 1099-DIV /
+  1042-S and cost basis in the US; RBC's rights note and IB's warrant
+  note follow suit, and the multi-account warnings say "sheltered
+  account". A US `.sum` names Form 8949 and basis (not Schedule 3 /
+  ACB), the audit's rounding note names the country's form, the books'
+  TRANSFER and short-history notes say wash-sale walk / basis /
+  retirement accounts, the run's crypto-sends note offers only self /
+  payment, and `taxjson carryover` names the IRS Schedule D carryover
+  (and not the Canadian option settings) instead of CRA.
+- `taxjson-harvest` and `taxjson-corp-actions` default `--base-currency`
+  to the country's currency (a US harvest refused the project's own USD
+  books). `taxjson spinoffs` labels amounts in the country's currency
+  when `base_currency` is unset, and flags a saved election of the other
+  country (a `rollover_s_86_1` left in a project switched to usa) as
+  WRONG-COUNTRY instead of describing it in Canadian law; `taxjson elect
+  --pending` lists such elections instead of "No pending elections".
+- tax-logic CA-RPT-12 cites s.49(3) for a call and s.49(3.1) for a put.
+- The generic importer is no longer documented as a crypto route: the
+  README, the mapping template and the importer no longer suggest
+  `settle_on_trade_date = true` for a crypto-only export (the coins were
+  booked as BTC.US / ETH.TO shares — Schedule 3 line 4, and §1091 in a
+  US project); coins go in a `crypto = true` account, and the importer
+  says so when the option is set.
+- Coinbase, US project (stablecoins are property): a fill priced in a
+  stablecoin (PYUSD, USDC ...) whose Notes carry no `on BASE-QUOTE` pair
+  no longer folds the stablecoin to USD cash and drops its disposal; the
+  row is booked as a crypto-quoted fill, or refused when Notes cannot
+  give the quantity.
+- Kraken ledger instant trade of a stablecoin for USD away from the peg
+  (USDC -> ZUSD at 0.90) now prints the de-peg ATTENTION the trades
+  export and Coinbase print, and the forex note names the stablecoin.
+- IB: a CNH (Stock Connect) fill printed in the ET evening takes the
+  exchange's next-day trade date, like JPY / HKD / SGD / AUD / NZD.
+- `scripts/check_tax_rules.py` checks the country-ownership tables stay
+  complete (owner and reason for every entry, every one-country flag a
+  real CLI option the refusal reads, every one-country command a
+  `taxjson` subcommand, every `[settings]` key the code reads listed,
+  and every option whose help says "Canada only" / "US only" in a
+  table). `--foreign-roc dividend` (ITA s.90(1)) and
+  `taxjson-carryover --slip-gains` (T5 box 18) are now in the tables.
+- `taxjson wash-sales --explain` in a US project passes
+  `--per-account-basis` explicitly, so the trace of the merged books
+  keeps FIFO per account like the table it explains.
+
 - Renames are dated events (owner decision, audit A2-0197). On its date
   a ticker change carries the position, the ACB / basis lots and the
   acquisition dates from the old symbol to the new one, and the

@@ -1989,10 +1989,17 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
                 f"current, so a send to it may look unmatched (or a "
                 f"network fee be missed) — run without --account."))
         if adoc["undecided"]:
+            # The decisions the country allows (a gift is a disposition
+            # only in Canada, s.69(1)(b); US-SEND-02, re-audit A2-1378).
+            _gift_ok = command_country_problem(
+                "crypto-sends", _country(cfg.get("settings")),
+                "gift") is None
             print(f"  note: {adoc['undecided']} crypto send(s) not yet "
-                  f"classified as self / gift / payment — `taxjson "
-                  f"crypto-sends {name}` lists them (a gift or payment is "
-                  f"a disposition at fair value).", file=sys.stderr)
+                  f"classified as "
+                  f"{'self / gift / payment' if _gift_ok else 'self / payment'}"
+                  f" — `taxjson crypto-sends {name}` lists them ("
+                  f"{'a gift or payment is a disposition at fair value' if _gift_ok else 'a payment is a sale at fair value'}"
+                  f").", file=sys.stderr)
             if strict and not unparsed:
                 # A pending decision, like a pending election: a send
                 # that may be a disposition is not in the books (A2-0362).
@@ -3080,6 +3087,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             out.write(_diagnostics_banner(cache, name, post_pass=False))
             out.write(run_capture(_cmd("taxjson-sum-gains")
                                   + (["--staking"] if is_crypto else [])
+                                  + ["--country", country]
                                   + [str(gains_json)]))
             out.write(run_capture(_cmd("taxjson-sum-income") + [
                 "--year", str(year), "--country", country,
@@ -3186,6 +3194,8 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
                            or {}).get(name) or {}).get("crypto"))
             out.write(run_capture(_cmd("taxjson-sum-gains")
                                   + (["--staking"] if _is_c else [])
+                                  + ["--country", _normalize_country(
+                                      settings["country"])]
                                   + [str(wash_gains)]))
             out.write(run_capture(_cmd("taxjson-sum-income") + [
                 "--year", str(settings["year"]),
@@ -4824,6 +4834,19 @@ def _reextract_pending_entry(acct_dir: Path, name: str, country: str,
     return None
 
 
+def _print_wrong_country(wrong: List[Dict[str, str]], country: str) -> None:
+    """`elect --pending`: the saved elections this country's rules do not
+    know, each with the command that replaces it."""
+    from taxjson.lib.country import display_name
+    print(f"Elections that are not {display_name(country)} elections "
+          f"(`taxjson run` refuses them):")
+    for w in wrong:
+        print(f"{w['account']}: {w['event_id']}  {w['summary']}   "
+              f"[saved: {w['election']}]")
+        print(f"  taxjson elect {w['account']} --redo --event "
+              f"{w['event_id']}")
+
+
 def cmd_elect(args: argparse.Namespace) -> None:
     """View, clear, or redo corporate-action tax elections (taxable vs
     rollover, FMV/ACB hints) that `taxjson run` otherwise prompts for once
@@ -4838,20 +4861,37 @@ def cmd_elect(args: argparse.Namespace) -> None:
 
     if getattr(args, "pending", False):
         import json as _json
+        # A saved election the project's country does not know (a
+        # Canadian rollover left in a project switched to usa) stops
+        # `taxjson run`; it is pending too (re-audit A2-0725).
+        from taxjson.lib.corp_views import (ViewError,
+                                            wrong_country_elections)
+        try:
+            _wrong = wrong_country_elections(root, cfg)
+        except ViewError as e:
+            _die(str(e))
         agg_path = cache / "pending_elections.json"
         if not agg_path.exists():
             if getattr(args, "json", False):
                 # Same shape as the pending document itself, so a
                 # machine consumer never has to parse prose.
-                _json_out({"schema_version": 1, "accounts": {}})
+                _json_out({"schema_version": 1, "accounts": {}}
+                          | ({"wrong_country": _wrong} if _wrong else {}))
+                return
+            if _wrong:
+                _print_wrong_country(_wrong, country)
                 return
             print("No pending elections (no --no-input run has deferred "
                   "any, or they've been resolved).")
             return
         doc = _json.loads(agg_path.read_text(encoding="utf-8"))
         if getattr(args, "json", False):
+            if _wrong:
+                doc = dict(doc, wrong_country=_wrong)
             print(_json.dumps(doc, indent=2, sort_keys=True))
             return
+        if _wrong:
+            _print_wrong_country(_wrong, country)
         from taxjson.lib.corp_actions import Manifest
         for acct, adoc in sorted((doc.get("accounts") or {}).items()):
             mpath = _manifest_path_for(inputs_dir / acct, cache, acct)
@@ -13173,6 +13213,11 @@ def _explain_wash_sales(root: Path, cache: Path,
     settings = _soft_settings(root)
     common: List[str] = ["--wash-sales"]
     common += ["--country", _country(settings)]
+    if _country(settings) in ("us", "usa"):
+        # The blended table keeps FIFO per account (US-BASIS-01): said
+        # explicitly, as `taxjson audit` does, so the trace of a merged
+        # book never pools lots across accounts (re-audit A2-0155).
+        common.append("--per-account-basis")
     if settings.get("tax_date"):
         common += ["--tax-date", settings["tax_date"]]
     # The table lists the tax year's wash sales; the trace printed every
@@ -15682,7 +15727,7 @@ def _merge_audit_json(docs: List[Dict[str, Any]], base_currency: str,
     dropped when two books were merged)."""
     if len(docs) == 1:
         return docs[0]
-    from taxjson.bin.taxjson_audit import TOTALS_NOTE
+    from taxjson.bin.taxjson_audit import totals_note
     events = [e for d in docs for e in d.get("events") or []]
 
     def _total(ev_key: str, doc_key: str) -> float:
@@ -15698,7 +15743,7 @@ def _merge_audit_json(docs: List[Dict[str, Any]], base_currency: str,
             "total_gain": _total("gain", "total_gain"),
             "total_disallowed": _total("disallowed_amount",
                                        "total_disallowed"),
-            "totals_note": TOTALS_NOTE,
+            "totals_note": totals_note(country),
             "reconciliation_failures": [
                 f for d in docs
                 for f in d.get("reconciliation_failures") or []],

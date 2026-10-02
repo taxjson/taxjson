@@ -480,6 +480,24 @@ class BaseBrokerage:
     # The taxjson-brokerage CLI overrides this with --account <name>.
     DEFAULT_ACCOUNT: str = "Unknown"
 
+    # The project's country ("canada" | "usa"), set by taxjson-brokerage
+    # from --country; None when the parser runs without one. Parsers
+    # emit neutral FACTS whatever it is (partition rule: country gates
+    # live in the engine/command layer). It only chooses which law a
+    # user-facing message cites, so a US project never reads an ITA
+    # section and a Canadian one never reads an IRC one (re-audit
+    # A2-0723 / A2-1304 / A2-1308).
+    country: Optional[str] = None
+
+    def law(self, canada: str, usa: str, neutral: str = "") -> str:
+        """The wording for the project's country: `canada` / `usa`, or
+        `neutral` (no statute) when the country is unknown."""
+        if self.country == "canada":
+            return canada
+        if self.country == "usa":
+            return usa
+        return neutral
+
     def __init__(self) -> None:
         # Skipped-row accounting. A row the parser cannot classify must be
         # COUNTED, never silently dropped — the 0-transactions safety net

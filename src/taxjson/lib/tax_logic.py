@@ -900,7 +900,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "history: a superficial loss denied in any year is added "
                  "to the replacement's cost (s.53(1)(f)), an option's "
                  "premium follows the shares on exercise or assignment "
-                 "(s.49(3)), and a futures contract has no cost amount."),
+                 "(s.49(3) for a call, s.49(3.1) for a put), and a "
+                 "futures contract has no cost amount."),
             Rule("CA-RPT-03",
                  "`taxjson estimate`: federal and provincial tax (ON, BC, "
                  "AB) with AMT on top of your other income, for planning "

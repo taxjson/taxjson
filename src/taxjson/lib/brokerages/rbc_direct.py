@@ -1050,8 +1050,9 @@ def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
                 f"of {len(accts)} RBC accounts ({', '.join(accts)}) — "
                 f"every row is booked to ONE taxjson account. That is "
                 f"right only when they are one tax entity (two taxable "
-                f"accounts of yours); export a registered plan "
-                f"(TFSA/RRSP) separately into its own inputs/<account>/.")
+                f"accounts of yours); export a sheltered (tax-"
+                f"advantaged) account separately into its own "
+                f"inputs/<account>/.")
 
     live = [(fi, r) for fi, k in enumerate(files) for r in ctx.rows(k)]
     chrono = sorted(live, key=lambda x: (x[1].date, x[1].k, x[0],
@@ -2199,9 +2200,10 @@ class RbcBrokerage(BaseBrokerage):
         is the right booking — said out loud now instead of silently."""
         symbol = self._equity_symbol(self._resolve_temp(r), r.currency, r)
         self._note(f"line {r.line}: rights/warrants distribution booked as a "
-                   f"$0 acquisition of {r.qty:g} {symbol} (nil ACB; ITA "
-                   f"s.15(1)(c)). If these were NOT issued to all "
-                   f"shareholders, their FMV may be a taxable benefit.")
+                   f"$0 acquisition of {r.qty:g} {symbol} ("
+                   f"{self.law('nil ACB; ITA s.15(1)(c)', 'zero basis; a nontaxable rights distribution, §305(a)', 'nil cost')}"
+                   f"). If these were NOT issued to all shareholders, "
+                   f"their FMV may be taxable.")
         return {
             'action': 'BUYSELL',
             'date': r.date, 'time': self._time(r),

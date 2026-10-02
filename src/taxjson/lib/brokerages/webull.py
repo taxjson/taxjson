@@ -590,7 +590,12 @@ class WebullBrokerage(BaseBrokerage):
                 continue
             under = opt.get('_under') or f"{m.group(1)}.{m.group(5)}"
             right, strike = m.group(3), int(m.group(4)) / 1000.0
-            meta.append((strike, 's.49(3)' if right == 'C' else 's.49(3.1)'))
+            # The law the message cites follows the project's country
+            # (re-audit A2-0723): ITA s.49(3) / s.49(3.1) in Canada,
+            # Rev. Rul. 78-182 in the US, none without a country.
+            _c = self.law('s.49(3)' if right == 'C' else 's.49(3.1)',
+                          'Rev. Rul. 78-182')
+            meta.append((strike, f" ({_c})" if _c else ""))
             contracts = abs(float(opt['quantity']))
             closed_short = float(opt['quantity']) > 0   # BUY at 0 closes a write
             # Short put / long call -> shares arrive (BUY);
@@ -642,8 +647,9 @@ class WebullBrokerage(BaseBrokerage):
                       f"{stock['symbol']} at the strike {meta[oi][0]:g} "
                       f"settling {stock['date_settle']} (fee "
                       f"{float(stock.get('fee') or 0):.2f}); both legs "
-                      f"booked ASSIGN (the premium folds into the shares, "
-                      f"{meta[oi][1]}). Check it against the statement.",
+                      f"booked ASSIGN (the premium folds into the shares' "
+                      f"cost or proceeds{meta[oi][1]}). Check it against "
+                      f"the statement.",
                       file=sys.stderr)
             # The shares are acquired/delivered ON the exercise, so the
             # stock leg's trade date is the option leg's date, stamped
@@ -674,7 +680,8 @@ class WebullBrokerage(BaseBrokerage):
                   f"assignment charge, so exercise/assignment was NOT "
                   f"inferred: booked as an expiry plus a separate trade. "
                   f"If the statement shows an exercise/assignment, the "
-                  f"premium belongs in the shares' cost ({meta[oi][1]}) — see "
+                  f"premium belongs in the shares' cost or proceeds"
+                  f"{meta[oi][1]} — see "
                   f"KNOWN_ISSUES 'Webull exercise/assignment inference'.",
                   file=sys.stderr)
         named = set()
@@ -695,7 +702,7 @@ class WebullBrokerage(BaseBrokerage):
                   f"exercise/assignment was NOT inferred: booked as an "
                   f"expiry plus a separate trade. If the statement shows "
                   f"an exercise/assignment, the premium belongs in the "
-                  f"shares' cost ({meta[oi][1]}) — book it by hand (see "
+                  f"shares' cost or proceeds{meta[oi][1]} — book it by hand (see "
                   f"KNOWN_ISSUES 'Webull exercise/assignment inference').",
                   file=sys.stderr)
 

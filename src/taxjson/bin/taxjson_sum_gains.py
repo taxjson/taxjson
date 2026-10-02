@@ -10,9 +10,10 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, Optional, Tuple
 
 from taxjson.lib.cli_diag import guard_main
+from taxjson.lib.country import country_arg
 from taxjson.lib.report_model import load_report_json
 from taxjson.lib.ticker_map import get_underlying as get_base_ticker, is_option_ticker
 from taxjson.lib import cli_diag
@@ -248,8 +249,20 @@ def get_sort_value(ticker: str, currency: str, key: str, ticker_stats: Dict[str,
         return sum(days) / count if count > 0 else 0
     return 0
 
+def _form_words(country: Optional[str]) -> Tuple[str, str]:
+    """(the return's form, the cost term) for the project's country —
+    Schedule 3 / ACB in Canada, Form 8949 / basis in the US, neutral
+    without one (re-audit A2-1378: a US .sum read 'Schedule 3 ...
+    ACB')."""
+    if country == "canada":
+        return "Schedule 3", "ACB"
+    if country == "usa":
+        return "Form 8949", "basis"
+    return "the return's", "cost"
+
+
 def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool = False,
-                  staking: bool = False) -> str:
+                  staking: bool = False, country: Optional[str] = None) -> str:
     lines = []
     ticker_stats = data['ticker_stats']
     total_year = data['total_year']
@@ -395,8 +408,9 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool 
         # cost; sell-side outlays netted) — not Schedule 3 lines. The
         # gains below are the same under both conventions (2026-09
         # audit R1-208).
+        _form, _cost = _form_words(country)
         lines.append("  (engine sign convention: shorts/written options "
-                     "negated — for Schedule 3 proceeds and ACB use "
+                     f"negated — for {_form} proceeds and {_cost} use "
                      "`taxjson form-export`)")
         lines.append("-" * 54)
         # 'cap' is every NON-option disposition: shares and units, but
@@ -404,8 +418,8 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool 
         # old "STOCK" label read as line 4 and disagreed with it by the
         # futures/crypto gains (audit R1-211, S051-01, S031-04).
         lines.append(f"TOTAL REALIZED NON-OPTION GAIN:{color_val(totals['cap'], '14,.2f')} {currency}")
-        lines.append("  (shares, units, futures and crypto — Schedule 3 "
-                     "lines: `taxjson form-export`)")
+        lines.append("  (shares, units, futures and crypto — "
+                     f"{_form} lines: `taxjson form-export`)")
         lines.append(f"TOTAL REALIZED OPTION GAIN: {color_val(totals['opt'], is_cost=False)} {currency}")
         lines.append(f"TOTAL REALIZED GAIN:        {color_val(totals['total'], is_cost=False)} {currency}")
         lines.append("-" * 54)
@@ -523,6 +537,12 @@ def main():
     parser.add_argument("--staking", action="store_true",
                         help="The books are a crypto account's: label its "
                              "DIVIDEND total as staking rewards")
+    parser.add_argument("--country", type=country_arg, default=None,
+                        metavar="{canada,ca,usa,us}",
+                        help="The project's country: which return's form "
+                             "and cost term the notes name (Schedule 3 / "
+                             "ACB, Form 8949 / basis); neutral without "
+                             "it. `taxjson run` passes it.")
     parser.add_argument("files", nargs="*", metavar="FILE")
     args = parser.parse_args()
     
@@ -591,7 +611,7 @@ def main():
         print(json.dumps(report_data, indent=2, sort_keys=True))
         return
     print(format_report(report_data, args.sort_by, args.no_color,
-                        staking=args.staking))
+                        staking=args.staking, country=args.country))
 
 if __name__ == "__main__":
     main()

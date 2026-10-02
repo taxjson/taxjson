@@ -40,11 +40,14 @@ def _write(text):
     return Path(f.name)
 
 
-def parse(body, header=HDR):
-    """(transactions, stderr, parser) for a CSV body (newest-first)."""
+def parse(body, header=HDR, country=None):
+    """(transactions, stderr, parser) for a CSV body (newest-first).
+    `country`: the project country taxjson-brokerage passes (it only
+    picks which law a message cites)."""
     p = _write(header + body)
     err = io.StringIO()
     par = RbcBrokerage()
+    par.country = country
     try:
         with contextlib.redirect_stderr(err):
             txs = par.parse_file(p)
@@ -553,7 +556,8 @@ class TestAccountingAndSpinoffs(unittest.TestCase):
                 "AS OF 10/13/23 EXPIRED", settle="October 16, 2023")
             + row("September 8, 2023", "Reorganization", "CSX.RT", "", "1", "", "0",
                   "CAD", f"DIS - RTS CONSTELLO SOFTWARE INC {RTS_EXP} {RTS_EXP} "
-                  "RTS DIST  ON       1 SHS REC 09/01/23 PAY 09/08/23"))
+                  "RTS DIST  ON       1 SHS REC 09/01/23 PAY 09/08/23"),
+            country="canada")
         self.assertEqual({t['symbol'] for t in txs}, {'CSX.RT.TO'})
         self.assertAlmostEqual(position(txs, 'CSX.RT.TO'), 0.0)
         self.assertIn('15(1)(c)', err)

@@ -766,7 +766,8 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
 def render_reconciliation(events: List[Dict[str, Any]],
                           check_labels: List[str],
                           checks_supplied: bool,
-                          use_color: bool = False) -> List[str]:
+                          use_color: bool = False,
+                          country: Optional[str] = None) -> List[str]:
     W = 86
     paint = _mk_paint(use_color)
     OK = paint("\u2713", "ok")
@@ -827,16 +828,24 @@ def render_reconciliation(events: List[Dict[str, Any]],
         out.append("  pipeline tie-out   " + paint(
             "(no gains files supplied — engine re-run stands alone)",
             "dim"))
-    out.append(paint(f"  {TOTALS_NOTE}", "dim"))
+    out.append(paint(f"  {totals_note(country)}", "dim"))
     out.append(paint("\u2550" * W, "dim"))
     return out
 
 
 # R1-267: the audit sums unrounded engine values; Schedule 3 (form-export,
 # `sum` FOR THE RETURN) rounds each row to the cent first.
-TOTALS_NOTE = ("Totals are unrounded engine sums; Schedule 3 rows "
-               "(form-export, sum FOR THE RETURN) are rounded to the cent "
-               "first, so those totals can differ by a few cents.")
+def totals_note(country: Optional[str] = None) -> str:
+    """The rounding note, naming the project's own form (Schedule 3 in
+    Canada, Form 8949 in the US; re-audit A2-1378)."""
+    form = {"canada": "Schedule 3 rows", "usa": "Form 8949 rows"}.get(
+        country or "", "the return's rows")
+    return (f"Totals are unrounded engine sums; {form} (form-export, sum "
+            f"FOR THE RETURN) are rounded to the cent first, so those "
+            f"totals can differ by a few cents.")
+
+
+TOTALS_NOTE = totals_note("canada")
 
 
 # ---------------------------------------------------------------------------
@@ -1014,7 +1023,7 @@ def main(argv=None) -> int:
         transactions, sheltered, affiliated, taxable=False,
         incomplete_history=(Path(args.incomplete_history)
                             if args.incomplete_history else None),
-        phantom_hint=False)
+        phantom_hint=False, country=country)
 
     # The engine options and the income re-dating run_gains applies
     # (lib/pipeline: one builder): the trust ROC record date
@@ -1257,7 +1266,7 @@ def main(argv=None) -> int:
                    "total_disallowed": round(
                        sum(float(e.get("disallowed_amount") or 0)
                            for e in events), 2),
-                   "totals_note": TOTALS_NOTE,
+                   "totals_note": totals_note(country),
                    "reconciliation_failures": reconciliation_failures,
                    "failed": failed},
                   sys.stdout, indent=2, default=str)
@@ -1298,7 +1307,8 @@ def main(argv=None) -> int:
 
     for ln in render_reconciliation(events, check_labels,
                                     bool(args.check),
-                                    use_color=use_color):
+                                    use_color=use_color,
+                                    country=country):
         print(ln)
     for f in reconciliation_failures:
         print(f"FAILED: {f}")

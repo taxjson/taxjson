@@ -594,10 +594,11 @@ def main(argv: Optional[List[str]] = None,
                         "source. Adds a DTE (days-to-expiry) column")
     add_country_argument(p, help="Project country (required; adds the LT "
                                  "IN column for usa)")
-    p.add_argument("--base-currency", default="CAD", metavar="CURR",
+    p.add_argument("--base-currency", default=None, metavar="CURR",
                    type=norm_currency,
-                   help="Base currency of the books (default: %(default)s). "
-                        "Quotes in other currencies convert via --rates")
+                   help="Base currency of the books (default: the "
+                        "--country's home currency, CAD or USD). Quotes "
+                        "in other currencies convert via --rates")
     p.add_argument("--rates", type=Path, default=None, metavar="FILE",
                    help="FX rates file (the pipeline's to_base.csv; "
                         "default: to_base.csv next to the first input). "
@@ -638,7 +639,13 @@ def main(argv: Optional[List[str]] = None,
     args = p.parse_args(argv)
 
     from taxjson.lib.country import is_usa as _country_is_usa
+    from taxjson.lib.country import home_currency as _home_currency
     is_usa = _country_is_usa(args.country)
+    # The books are in the country's currency unless told otherwise —
+    # a CAD default refused a US project's own USD books (re-audit
+    # A2-0433 / A2-0746, the COMMANDS-14 twin).
+    if not args.base_currency:
+        args.base_currency = _home_currency(args.country)
     # US-PLAN-05: a US crypto account is outside §1091 (US-WASH-13).
     # Canada has no such carve-out (crypto is property under s.54), so
     # the set stays empty there — the two countries never mix.
