@@ -138,6 +138,9 @@ PARTITION_RULES = frozenset({
     "US-STKDIV-01",    # stock dividend: §307 basis spread, no §1091
     "US-BASIS-04",     # manual phantom-loss check on trade dates
     "US-ROC-03",       # ROC with no shares held: not booked (CA books it)
+    "US-ROC-04",       # basis increase with no shares: not applied (CA: next ACB)
+    "CA-ACB-13",       # basis increase with no shares: next purchase's ACB
+    "US-WASH-18",      # futures / futures options outside §1091 (CA denies)
     "US-INC-DATE-RIC", # §852(b)(7) January dividends: warn + list (D8)
     # Planning tools (partition COMMANDS-01/02/05)
     "CA-PLAN-01",      # radar: settle dates, still-held rescue
@@ -479,6 +482,15 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-ACB-07",
                  "Received with no shares held, or beyond the ACB, it is a "
                  "capital gain and the ACB is nil (s.40(3)).", cont=True),
+            Rule("CA-ACB-13",
+                 "A basis increase (a notional distribution) posted after "
+                 "the position was fully sold has no shares to raise: it "
+                 "goes into the next purchase's ACB, with a warning to "
+                 "re-date it before the sale."),
+            Rule("CA-ACB-14",
+                 "An ADJUST on a short position is the short seller's "
+                 "compensation payment: it changes the cover's gain.",
+                 cont=True),
             (Rule("CA-ACB-08",
                   "For IB only, a foreign issuer's return of capital (by "
                   "ISIN) is a dividend (s.90(1); foreign_return_of_capital "
@@ -525,6 +537,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "(grant timing) is shown gross as proceeds, with its "
                  "commission as an outlay, as for a sale (the gain is the "
                  "same)."),
+            Rule("CA-DISP-07",
+                 "`form-export` gives Schedule 3's year of acquisition as "
+                 "the sale's trade date less the days held, counted on "
+                 "trade dates: a buy traded in late December that settled "
+                 "in January shows the December year."),
         ]),
         ("Superficial loss (s.54)", [
             Rule("CA-SL-01",
@@ -972,6 +989,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-ROC-03",
                  "Received with no shares held, it is not applied: taxjson "
                  "warns, and you report it by hand.", cont=True),
+            Rule("US-ROC-04",
+                 "A basis increase (a notional distribution) with no long "
+                 "shares held — after a full sale, or while short — is not "
+                 "applied either: taxjson warns on the console (ATTENTION) "
+                 "and you adjust the sale by hand."),
             Rule("US-BASIS-04",
                  "Shares with missing buy history go in phantoms.json: "
                  "sales that draw on them are listed for manual reporting "
@@ -1018,7 +1040,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-WASH-10", "and its holding period carries over.",
                  cont=True),
             Rule("US-WASH-11",
-                 "A replacement bought in an IRA makes it permanent.",
+                 "A replacement bought in an IRA makes it permanent, even "
+                 "when the IRA sold it again before your loss.",
                  cont=True),
             Rule("US-WASH-16",
                  "A purchase by your spouse or a corporation you control "
@@ -1043,6 +1066,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "e.g. XYZ1) or a futures option on the loss's futures "
                  "contract (a commodity future is usually outside §1091).",
                  cont=True),
+            Rule("US-WASH-19",
+                 "Not modelled: a SALE of the same stock within 30 days of "
+                 "a short-cover loss (§1091(e)(1)) does not disallow it; "
+                 "only re-shorting does."),
             Rule("US-WASH-18",
                  "A loss on a futures contract, or on an option on one, is "
                  "never disallowed: a §1256 contract is not stock or "

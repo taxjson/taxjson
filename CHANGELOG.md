@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **US: an unapplied return of capital or notional distribution is on
+  the console.** A basis adjustment the US engine cannot apply (no
+  shares held after a full sale, or the position short) printed only to
+  the .sum; `taxjson run` now echoes it as `warning: ATTENTION:
+  unapplied basis adjustment: ...`, and a basis increase is no longer
+  called a return of capital (A2-0199, A2-0964). The US stock-dividend
+  notes print only for the tax year's dividends (A2-0956).
+- tax-logic states engine behaviour that only KNOWN_ISSUES described:
+  Canada's basis increase on an emptied pool goes to the next purchase
+  and an ADJUST on a short is the short seller's compensation payment
+  (CA-ACB-13/14); the US leaves both unapplied (US-ROC-04); §1091(e)(1)
+  is not modelled (US-WASH-19); an IRA buy sold before the loss still
+  makes it permanent (US-WASH-11); Schedule 3's acquisition year comes
+  from trade-date days held (CA-DISP-07) (A2-0062, A2-0962, A2-0963,
+  A2-0964).
 - **US: a loss on a futures contract (or an option on one) is no longer
   disallowed as a wash sale.** A §1256 contract is not stock or
   securities; a re-bought F:CLG7 had its whole loss disallowed with no

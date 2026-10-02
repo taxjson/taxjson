@@ -291,5 +291,149 @@ class TestFuturesOutside1091(unittest.TestCase):
         self.assertIn("NOT denied", err.getvalue())
 
 
+def _us_run(book, year):
+    """run_gains (the `taxjson run` gains stage) under the US only."""
+    from taxjson.lib.pipeline import GainsRequest, run_gains
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        r = run_gains(book, [], [], req=GainsRequest(
+            country="usa", taxable=True, year=year))
+    r["_stderr"] = err.getvalue()
+    return r
+
+
+class TestUnappliedAdjustAndNotes(unittest.TestCase):
+    """A2-0199 / A2-0963 / A2-0964 / A2-0956."""
+
+    def _book(self, amount):
+        return [tx("BUYSELL", "2025-01-02", "XYZ.US", 100, 1000),
+                tx("BUYSELL", "2025-03-03", "XYZ.US", -100, 1200),
+                tx("ADJUST", "2025-06-30", "XYZ.US", 0, amount,
+                   type="dist" if amount > 0 else "roc"),
+                tx("BUYSELL", "2025-07-02", "XYZ.US", 100, 1000),
+                tx("BUYSELL", "2025-08-01", "XYZ.US", -100, 1100)]
+
+    @rule("CA-ACB-13")
+    @rule_absent("CA-ACB-13", country="usa")
+    @rule("US-ROC-04")
+    @rule_absent("US-ROC-04", country="canada")
+    def test_positive_adjust_on_empty_pool(self):
+        r = gains_both(self._book(50.0), year=2025)
+        # Canada: carried into the next purchase's ACB (warned).
+        ca = [g for g in r["canada"]["transactions"]
+              if g.get("date") == "2025-08-01"]
+        self.assertAlmostEqual(ca[0]["cost"], 1050.0, places=6)
+        self.assertIn("EMPTY pool", r["canada"]["_stderr"])
+        # US: not applied; ATTENTION worded as a basis increase.
+        us = [g for g in r["usa"]["transactions"]
+              if g.get("date") == "2025-08-01"]
+        self.assertAlmostEqual(us[0]["cost"], 1000.0, places=6)
+        err = r["usa"]["_stderr"]
+        self.assertIn("warning: ATTENTION: unapplied basis adjustment: "
+                      "XYZ.US ADJUST of +50.00", err)
+        self.assertIn("basis increase", err)
+        self.assertNotIn("return of capital", err)
+
+    @rule("US-ROC-03")
+    def test_roc_after_full_sale_is_attention(self):
+        r = _us_run(self._book(-500.0), 2025)
+        self.assertIn("warning: ATTENTION: unapplied basis adjustment: "
+                      "XYZ.US ADJUST of -500.00", r["_stderr"])
+        self.assertIn("(the position was closed)", r["_stderr"])
+
+    @rule("US-ROC-04")
+    def test_adjust_while_short_not_applied(self):
+        book = [tx("BUYSELL", "2025-01-02", "XYZ.US", -100, 1000),
+                tx("ADJUST", "2025-02-03", "XYZ.US", 0, 30.0, type="dist"),
+                tx("BUYSELL", "2025-03-03", "XYZ.US", 100, 900)]
+        r = _us_run(book, 2025)
+        self.assertIn("(the position is short)", r["_stderr"])
+        self.assertAlmostEqual(r["summary"]["total_gain"], 100.0, places=6)
+
+    @rule("CA-ACB-14")
+    def test_canada_adjust_on_short_is_compensation(self):
+        book = [tx("BUYSELL", "2025-01-02", "XYZ.TO", -100, 1000,
+                   currency="CAD"),
+                tx("ADJUST", "2025-02-03", "XYZ.TO", 0, 30.0, type="dist",
+                   currency="CAD"),
+                tx("BUYSELL", "2025-03-03", "XYZ.TO", 100, 900,
+                   currency="CAD")]
+        from taxjson.lib.pipeline import GainsRequest, run_gains
+        with contextlib.redirect_stderr(io.StringIO()):
+            r = run_gains(book, [], [], req=GainsRequest(
+                country="canada", taxable=True, year=2025))
+        self.assertAlmostEqual(r["summary"]["total_gain"], 70.0, places=6)
+
+    @rule("US-STKDIV-01")
+    def test_stock_dividend_note_only_in_its_year(self):
+        def stk(d, q):
+            return tx("BUYSELL", d, "ABC.US", q, 0.0, price=0.0,
+                      type="stock_dividend")
+        book = [tx("BUYSELL", "2023-01-03", "ABC.US", 100, 1000),
+                stk("2023-06-26", 10),
+                tx("BUYSELL", "2025-02-03", "ABC.US", -110, 1500)]
+        e25 = _us_run(book, 2025)["_stderr"]
+        e23 = _us_run(book, 2023)["_stderr"]
+        self.assertNotIn("stock dividend of 10", e25)
+        self.assertIn("stock dividend of 10", e23)
+
+    @rule("US-ROC-03")
+    def test_run_console_echoes_unapplied_roc(self):
+        import tempfile
+        from pathlib import Path
+        from tax_rules.dual import cli, settings_for
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "p"
+            (root / "inputs" / "m").mkdir(parents=True)
+            (root / "taxjson.toml").write_text(
+                settings_for("usa", year=2025)
+                + '[accounts.m]\ntype = "taxable"\n')
+            (root / "inputs" / "m" / "book.tt").write_text(
+                "BUYSELL 2025-01-06 10:00:00 XYZ.US 100 USD 10 -1000 0\n"
+                "BUYSELL 2025-03-03 10:00:00 XYZ.US -100 USD 12 1200 0\n"
+                "ADJUST 2025-06-30 09:30:00 XYZ.US USD -500\n")
+            r = cli(root, "run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("ATTENTION: unapplied basis adjustment: XYZ.US",
+                      r.stdout)
+
+
+class TestSpecStatesEngineBehaviour(unittest.TestCase):
+    """A2-0062 / A2-0962: behaviours KNOWN_ISSUES documented are stated
+    in tax-logic and pinned."""
+
+    @rule("US-WASH-19")
+    def test_long_sale_after_short_cover_loss_not_a_trigger(self):
+        b = [_t('2025-03-03', -100, 100), _t('2025-03-10', 200, 110),
+             _t('2025-03-24', -100, 105)]
+        r = _us(b)
+        self.assertAlmostEqual(r['summary']['total_disallowed'], 0.0)
+
+    @rule("US-WASH-11")
+    def test_ira_buy_sold_before_loss_still_permanent(self):
+        loss = [_t("2025-04-01", 100, 10, sym="III.US"),
+                _t("2025-06-15", -100, 8, sym="III.US")]
+        ira = [_t("2025-05-20", 100, 9, sym="III.US", acct="ira"),
+               _t("2025-05-25", -100, 9, sym="III.US", acct="ira")]
+        r = _us(loss, sheltered_transactions=ira)
+        self.assertAlmostEqual(
+            sum(g.get('permanently_disallowed', 0) or 0
+                for g in r['transactions']), 200.0)
+
+    @rule("CA-DISP-07")
+    def test_schedule3_acquisition_year_from_trade_days(self):
+        from taxjson.bin.taxjson_form_export import _acquired_date
+        from taxjson.lib.pipeline import GainsRequest, run_gains
+        b = [tx("BUYSELL", "2024-12-31", "AAA.TO", 100, 1000,
+                settle="2025-01-02", currency="CAD"),
+             tx("BUYSELL", "2025-06-02", "AAA.TO", -100, 1200,
+                settle="2025-06-03", currency="CAD")]
+        with contextlib.redirect_stderr(io.StringIO()):
+            r = run_gains(b, [], [], req=GainsRequest(
+                country="canada", taxable=True, year=2025))
+        g = [x for x in r["transactions"] if x.get("proceeds")][0]
+        self.assertEqual(_acquired_date(g), "2024-12-31")
+
+
 if __name__ == '__main__':
     unittest.main()

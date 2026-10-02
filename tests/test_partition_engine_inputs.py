@@ -163,7 +163,11 @@ class TestStockDividend(unittest.TestCase):
         self.assertEqual([(g["qty"], g["term"], g["acquired_date"])
                           for g in us], [(105.0, "LONG_TERM", "2023-03-01")])
         self.assertAlmostEqual(us[0]["cost"], 5000.0, places=6)
-        self.assertIn("§307", r["usa"]["_stderr"])
+        # The §307 note belongs to the dividend's year, not every later
+        # year's .sum (audit A2-0956).
+        self.assertNotIn("§307", r["usa"]["_stderr"])
+        self.assertIn("§307",
+                      gains_both(book, year=2024)["usa"]["_stderr"])
         # Canada: the 5 shares joined the pool at $0 (same total here),
         # and the declared amount is left to the user, with a note.
         self.assertAlmostEqual(r["canada"]["summary"]["total_gain"], 1300.0,

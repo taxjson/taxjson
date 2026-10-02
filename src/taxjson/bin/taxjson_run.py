@@ -2452,6 +2452,11 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     if force or needs_rebuild(gains_json, *gains_deps):
         print("  gains")
         run_to_file(cmd, gains_json)
+    # A basis adjustment the engine could not apply (US: a return of
+    # capital or notional distribution with no shares held) is a number
+    # the user must report by hand — on the console every run, cached or
+    # not, not only in the .sum (audit A2-0199).
+    echo_attention_lines(gains_json, prefix="unapplied basis adjustment: ")
     if is_taxable:
         _warn_expired_open_options(name, gains_json, cache, year)
 

@@ -4187,6 +4187,9 @@ class USATaxRules(TaxRules):
       (Each needs "substantially identical" reasoning beyond a simple
       symbol match.)
     - §1259 constructive sale of appreciated long when hedged by short.
+    - §1091(e)(1): a SALE of substantially identical stock within ±30
+      days of a short-cover loss does not disallow it (only a re-short
+      registers as a short-side replacement) — tax-logic US-WASH-19.
     - Section 1256 60/40 mark-to-market for futures and broad-based
       index options. (Affects symbols like SPX, NDX, futures.)
     """
@@ -4262,6 +4265,17 @@ class USATaxRules(TaxRules):
         # Rows below the lot epsilon (1e-8 units) are not booked; they
         # are named once instead of vanishing silently (audit S070-09).
         _us_dust: List[TaxTransaction] = []
+        # Notes tied to one dated row (stock dividends, an unapplied
+        # basis adjustment): printed now by a direct caller, or by
+        # run_gains after its year filter (audit A2-0956: a 2023 stock
+        # dividend's note landed in every later year's .sum).
+        _dated_notes: List[tuple] = []
+
+        def _note(date_: str, text: str) -> None:
+            if getattr(self, 'emit_replacement_stderr', True):
+                print(text, file=sys.stderr)
+            else:
+                _dated_notes.append((date_, text))
 
         # === PRE-PASS: classify each event and build replacement indexes. ===
         # The "opening portion" of each transaction is what's eligible to be
@@ -4957,14 +4971,30 @@ class USATaxRules(TaxRules):
                 lots = inventory_long.get(ikey, [])
                 open_qty = sum(l['qty'] for l in lots)
                 if open_qty <= epsilon:
-                    print(
-                        f"warning: {symbol} ADJUST of {tx.net_amount:.2f} "
-                        f"on {tx.date} found no open long lots (position "
-                        f"closed or short) — a return of capital with no "
-                        f"basis to reduce is a taxable event needing "
-                        f"manual review; the row was NOT applied.",
-                        file=sys.stderr,
-                    )
+                    # Not applied (tax-logic US-ROC-03 / US-ROC-04): a
+                    # return of capital with no basis left is a §301(c)(3)
+                    # gain to report by hand; a basis INCREASE (a notional
+                    # distribution) has no lot to raise. Console-visible
+                    # ATTENTION (audit A2-0199), worded by sign (A2-0964:
+                    # an increase was called a return of capital).
+                    _amt = float(tx.net_amount)
+                    _where = ('the position is short'
+                              if inventory_short.get(ikey)
+                              else 'the position was closed')
+                    if _amt < 0:
+                        _what = ("a return of capital with no basis to "
+                                 "reduce is a taxable gain (§301(c)(3)) "
+                                 "to report by hand")
+                    else:
+                        _what = ("a basis increase (e.g. a notional "
+                                 "distribution) has no lot to raise — "
+                                 "re-date it before the sale or adjust "
+                                 "that sale by hand")
+                    _note(tx.date,
+                          f"warning: ATTENTION: unapplied basis adjustment: "
+                          f"{symbol} ADJUST of {_amt:+.2f} on {tx.date} "
+                          f"found no open long lots ({_where}) — {_what}; "
+                          f"the row was NOT applied.")
                     continue
                 delta = D(tx.net_amount)
                 applied = Decimal(0)
@@ -5056,27 +5086,29 @@ class USATaxRules(TaxRules):
                     _ratio = (_held + tx.quantity) / _held
                     for _lot in _lots:
                         _lot['qty'] = _lot['qty'] * _ratio
-                    print(f"note: {symbol}: stock dividend of "
+                    _note(tx.date,
+                          f"note: {symbol}: stock dividend of "
                           f"{tx.quantity:g} share(s) on {tx.date} — "
                           f"nontaxable (§305(a)): the basis of the "
                           f"{_held:g} share(s) held is spread over old "
                           f"and new (§307) and their purchase dates carry "
                           f"over; if it was taxable (§305(b), e.g. a cash "
-                          f"option), enter it by hand.", file=sys.stderr)
+                          f"option), enter it by hand.")
                     if trace:
                         symbol_traces[symbol].append(
                             f"# {tx.date} STOCK DIVIDEND +{tx.quantity:g} "
                             f"sh | spread over {len(_lots)} lot(s), "
                             f"{_held:.4f} sh held")
                     continue
-                print(f"warning: {symbol}: stock dividend of "
+                _note(tx.date,
+                      f"warning: {symbol}: stock dividend of "
                       f"{tx.quantity:g} share(s) on {tx.date} with no "
                       f"shares held — booked as a $0 purchase (not a "
                       f"wash-sale replacement). If the shares were sold "
                       f"before it was paid, the sold shares' basis should "
                       f"have been spread over old and new (§307): adjust "
                       f"it by hand; otherwise add the missing purchase "
-                      f"history.", file=sys.stderr)
+                      f"history.")
 
             tx_qty_abs = abs(tx.quantity)
             # A BUY's cost is a magnitude (parsers spell it either sign);
@@ -6138,6 +6170,7 @@ class USATaxRules(TaxRules):
             'by_ticker': by_ticker,
             'wash_sales': wash_sale_records,
             'option_replacement_warnings': option_replacement_warnings,
+            'dated_notes': [list(n) for n in _dated_notes],
             'inventory': inventory_report,
             'summary': {
                 'total_gain': sum(g['gain'] for g in realized_gains),
