@@ -3858,12 +3858,13 @@ def cmd_run(args: argparse.Namespace) -> None:
     for _paths in _dup_inputs:
         print(f"  {ATTENTION_PREFIX} the same export file sits in two "
               f"accounts: {', '.join(_paths)} (identical content) — every "
-              f"row of it is booked in BOTH accounts. Keep each broker "
-              f"export under ONE inputs/<account>/ folder.",
+              f"row of it is booked twice, once in each account. Keep "
+              f"each broker export under ONE inputs/<account>/ folder.",
               file=sys.stderr)
     if _dup_inputs and getattr(args, "strict", False):
         _die("--strict: the same export file is in two accounts "
-             "(ATTENTION above) — nothing was built.")
+             "(ATTENTION above), so its rows would be booked twice — "
+             "nothing was built.")
 
     print("==> currency rates")
     rates = stage_currency_rates(settings, cache)
