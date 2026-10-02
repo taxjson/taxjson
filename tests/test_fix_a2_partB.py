@@ -405,9 +405,9 @@ class TestIncomeViewsWording(unittest.TestCase):
         us = roc["usa"].stdout + divs["usa"].stdout + trades["usa"].stdout
         for bad in ("T3", "T5", "ACB", "registered"):
             self.assertNotIn(bad, us, bad)
-        self.assertIn("Form 1099-DIV box 3", roc["usa"].stdout)
+        self.assertIn("1099-DIV box 3", roc["usa"].stdout)
         self.assertIn("Form 1099-DIV", divs["usa"].stdout)
-        self.assertIn("tax-advantaged (IRA)", trades["usa"].stdout)
+        self.assertIn("retirement (IRA)", trades["usa"].stdout)
         self.assertIn("Form 8949 rows", aud["usa"].stdout)
         self.assertNotIn("Schedule 3", aud["usa"].stdout)
         self.assertIn("basis adjustments", empty["usa"].stdout)

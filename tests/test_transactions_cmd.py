@@ -695,12 +695,14 @@ class TestWashSalesCmd(unittest.TestCase):
              "proceeds": 500.0, "cost": 400.0, "raw_gain": 100.0,
              "gain": 100.0, "is_wash_sale": False, "currency": "CAD"}]}
 
-    def _project(self, tmp, **kw):
+    def _project(self, tmp, country="canada", **kw):
         root = Path(tmp)
         (root / "work").mkdir()
+        cur = "USD" if country == "usa" else "CAD"
         (root / "taxjson.toml").write_text(
-            '[settings]\nyear = 2025\ncountry = "canada"\n'
-            'base_currency = "CAD"\n[accounts.margin]\ntype = "taxable"\n')
+            f'[settings]\nyear = 2025\ncountry = "{country}"\n'
+            f'base_currency = "{cur}"\n[accounts.margin]\n'
+            f'type = "taxable"\n')
         (root / "work" / "margin_gains.json").write_text(
             json.dumps(self._gains(**kw)))
         return root
@@ -733,11 +735,21 @@ class TestWashSalesCmd(unittest.TestCase):
         self.assertIn("30.00 permanently denied", r.stdout)
 
     def test_no_wash_sales_message(self):
+        # Each country's own noun (A2-1366): Canada says superficial
+        # losses, the US says wash sales.
         with tempfile.TemporaryDirectory() as tmp:
             r = _runsub(self._project(tmp, wash=False), "wash-sales")
         self.assertEqual(r.returncode, 0, r.stderr)
-        # A Canadian project names its own rule (audit A2-1371).
         self.assertIn("No superficial losses", r.stdout)
+        self.assertNotIn("wash sale", r.stdout.lower())
+
+    def test_no_wash_sales_message_usa(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = _runsub(self._project(tmp, country="usa", wash=False),
+                        "wash-sales")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("No wash sales", r.stdout)
+        self.assertNotIn("superficial", r.stdout.lower())
 
     def test_missing_account_errors(self):
         with tempfile.TemporaryDirectory() as tmp:

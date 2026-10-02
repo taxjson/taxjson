@@ -84,6 +84,15 @@ HOME_CURRENCY = {CANADA: "CAD", USA: "USD"}
 DEFAULT_TAX_DATE = {CANADA: "settle", USA: "trade"}
 TAX_DATES = ("settle", "trade")
 
+# Report wording owned by each country: a report never names the other
+# country's form, cost term or loss-denial rule (re-audit A2-0735). The
+# None entry is a standalone tool run without --country: neutral words.
+GAINS_FORM = {CANADA: "Schedule 3", USA: "Form 8949",
+              None: "the return's capital-gains form"}
+COST_TERM = {CANADA: "ACB", USA: "basis", None: "cost"}
+LOSS_RULE = {CANADA: "superficial-loss", USA: "wash-sale",
+             None: "loss-denial"}
+
 ENGINE_GUARD_ENV = "TAXJSON_TEST_ENGINE_COUNTRY"
 
 
