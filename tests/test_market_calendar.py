@@ -113,6 +113,15 @@ class TestSettlementDates(unittest.TestCase):
         self.assertEqual(settlement_lag_days('2024-05-27', 'USD'), 2)
         # T+3 across Labor Day 2017.
         self.assertEqual(settlement_date('2017-09-01', 'USD'), '2017-09-07')
+        # Options settle T+1 in every era and market (A2-0486, A2-1510).
+        for trade, cur in (('2016-12-28', 'USD'), ('2017-09-01', 'CAD'),
+                           ('2020-03-02', 'USD'), ('2025-03-04', 'GBP'),
+                           ('2016-12-28', 'AUD')):
+            self.assertEqual(settlement_lag_days(trade, cur, is_option=True),
+                             1, (trade, cur))
+        # A Friday option trade settles Monday; the stock trade T+3.
+        self.assertEqual(settlement_date('2017-09-01', 'USD', is_option=True),
+                         '2017-09-05')
 
     def test_rescue_deadline_walks_back_over_a_holiday(self):
         # Must settle by Canada Day 2026: a 06-30 CAD trade settles

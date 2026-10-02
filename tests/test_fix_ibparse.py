@@ -721,6 +721,8 @@ class TestIbAssignLegsShareASettleDate(unittest.TestCase):
     """S058-01: before the T+1 cutover the option leg settled T+1 and
     the stock leg T+2, so a same-day trade could consume the premium."""
 
+    @rule("CA-DATE-04")
+    @rule("US-DATE-04")
     def test_pre_cutover_option_leg_takes_the_stock_leg_settle(self):
         body = (HEAD + TRADES_H
                 + _trade('QZX 16JUN23 50 P', '2023-06-16, 16:20:00', 1, 0, 0,

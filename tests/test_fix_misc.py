@@ -527,6 +527,8 @@ class TestToBaseOptionCollision(unittest.TestCase):
 class TestNonNorthAmericanSettlement(unittest.TestCase):
     """G5-0: LSE (GBP) and ASX (AUD) shares settle T+2, not the US T+1."""
 
+    @rule("CA-DATE-04")
+    @rule("US-DATE-04")
     def test_gbp_and_aud_settle_t2(self):
         from taxjson.lib.brokerages.ib_extractor import get_ib_settlement
         from taxjson.lib.dates import settlement_lag_days

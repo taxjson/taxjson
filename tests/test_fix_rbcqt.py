@@ -325,6 +325,29 @@ class TestQtRowShapes(unittest.TestCase):
                          ('2027-12-31', '2027-12-31'))
 
 
+class TestQtAssignmentLegsShareASettleDate(unittest.TestCase):
+    """A2-0488 / A2-0489: the Questrade twin of S058-01 / S065-06. An
+    ASN option leg with a blank Settlement Date takes its stock leg's
+    cycle (T+2 before the 2024 cutover), not the option T+1 — a Dec-28
+    assignment's premium stays with the stock leg's tax year."""
+
+    @rule("CA-DATE-04")
+    @rule("US-DATE-04")
+    def test_blank_settle_assignment_legs_share_the_equity_cycle(self):
+        txs, _, _ = qt_parse(
+            q(td='2023-12-28', sd='', action='ASN', sym='QZA28Dec23C50.00',
+              desc='CALL QZA 12/28/23 50 QZA CORP ASSIGNMENT', qty='1',
+              price='0', gross='0', comm='0', net='0', cur='CAD')
+            + q(td='2023-12-28', sd='', action='Sell', sym='QZA',
+                desc='QZA CORP COMMON STOCK ASSIGNMENT OF OPTION CALL QZA '
+                     '12/28/23 50', qty='-100', price='50', gross='5000',
+                comm='0', net='5000', cur='CAD'))
+        leg = next(t for t in txs if t['action'] == 'ASSIGN')
+        stock = next(t for t in txs if t['action'] == 'BUYSELL')
+        self.assertEqual(stock['date_settle'], '2024-01-02')
+        self.assertEqual(leg['date_settle'], '2024-01-02')
+
+
 class TestQtStockDividendAndDis(unittest.TestCase):
     BUY = q(sym='XTD.TO', desc='XTD SPLIT CORP WE ACTED AS AGENT', qty='1000',
             price='10', gross='-10000', comm='0', net='-10000', cur='CAD')
@@ -559,6 +582,8 @@ class TestRbcTradeRows(unittest.TestCase):
                            "50", "4990.05", "USD",
                            "CALL XYZ 05/16/25 50 XYZ CORP"))
 
+    @rule("CA-DATE-04")
+    @rule("US-DATE-04")
     def test_blank_settle_assignment_legs_share_the_equity_cycle(self):
         """S065-06: pre-cutover, the ASN option leg follows its stock leg."""
         txs, _, _ = rbc_parse(
