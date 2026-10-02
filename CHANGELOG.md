@@ -2,6 +2,180 @@
 
 ## Unreleased
 
+- US `reorg_368_boot`: the cash boot and the new shares' value (in the
+  new listing's currency) and the old basis (in US dollars) are combined
+  in USD, and each leg is booked in its own listing's currency at the
+  effective date's rate; the hints were added unconverted across
+  currencies (A2-0216). The prompts name each hint's currency.
+- **US: a §355 spin-off's `allocated_acb` is read in US dollars** on any
+  listing (A2-0973): on a TSX-listed parent it is converted at the
+  spin-off date's rate, so the moved basis is exactly the USD figure;
+  it used to be read as CAD. The prompt and US-CORP-07 say so.
+- Corporate-action rows name the election actually made instead of
+  `election=none` (A2-0558), and a taxable merger booked at $0 says
+  whether the saved election values it at 0 and gives the `taxjson
+  elect ... --set` command the run-level warning gives (A2-0974).
+- Questrade corporate actions: an UNBOOKED line from the corporate-action
+  stage (a DIS chain that nets a removal) is echoed on the console and
+  refused by `run --strict`, as the parse stage's are (A2-0211); the
+  internal-code hint names the symbol as booked (`D056068.TO`) and goes
+  quiet once ticker.map renames it (A2-0966); a spin-off parent held only
+  in a start `.tt` can be named with a `GLOBAL <SEC#> <PARENT>` ticker.map
+  line, which the warning now suggests (A2-0980).
+- RBC corporate actions: a spin-off's parent is the listing held on the
+  spin-off date, not any listing the account ever traded (A2-0210); a
+  spin-off `REVERSE ENTRY` cancels its posting, so a reversed and
+  rebooked spin-off is offered once and no false short warning is
+  printed (A2-0213); merger legs split across two statements are paired,
+  and a removal with no receipt anywhere now blocks the run as an
+  `unsupported` event instead of only warning (A2-0214); options
+  adjusted together by a special-dividend XCH pair by strike rank,
+  whatever the row order (A2-0222); corporate-action symbols use the
+  parser's own canonical listing (FTN.PR.A.TO, not FTN.PRA.TO; A2-0223).
+- RBC corporate-action text: a ratio or option strike written with a
+  decimal comma (`0,5 NEW = 1 OLD`, `6,4`) is refused instead of read
+  from after the comma as 5 or 6 (A2-0972, A2-0976); cash on a
+  reorganization leg counts as a return of capital only under RBC's
+  `ROC OF C$<amount>` clause, not when the words appear in an issuer
+  name or a negation (A2-0559).
+- **Elections manifest migration never hands one event's election to
+  another** (A2-0064, A2-0217, A2-0557, A2-0975, A2-0978; R1-301
+  residue A2-0168, A2-0872): a record keyed by a current event's own id
+  is never moved; an older id that several same-day, ISIN-less events
+  share is resolved only by the record's saved summary, otherwise
+  listed for you to set again; the account-rename fallback also needs
+  the saved summary's action type and ratio to match; a change of the
+  readable symbols is named in a note.
+- IB corporate actions use the statement parser's listing rule: a
+  merger or spin-off of a TSX-listed USD unit (QZAA.U) is booked on
+  `.U.TO`, where its trades are, not on a phantom `.US` line (A2-0209,
+  A2-0219), and a leg on a currency-tagged IB line (RGLD.CAD) is
+  warned about with the ticker.map fix (A2-0556).
+- **IB: a cancelled (`Ca`) corporate action is no longer offered for
+  election** (A2-0018, A2-0019, A2-0020, A2-0068, A2-0069, A2-0212,
+  A2-0220, A2-0970, A2-0971): each `Ca` row removes its original (same
+  description, negated quantity) in whichever statement of the account
+  holds it, for mergers, spin-offs and merger shapes taxjson cannot
+  book. Only the corrected rebook is offered; overlapping statement
+  vintages no longer let the cancelled original win. The Code cell is
+  split on `;`, `,` and spaces as the statement parser does. A
+  cross-listing journal IB cancelled and rebooked (the RGLD.CAD shape)
+  no longer needs a manual `ignore`.
+- IB corporate-action times are zero-padded before they are compared,
+  so a merger takes its earlier leg's time (A2-0984); copies of one
+  event from several statements combine the same way whatever the file
+  order, with a warning when one broker account's statements disagree
+  (A2-0977).
+- **An s.86.1 election on a USD parent no longer stops `taxjson run`**
+  (A2-0002, a regression of S072-15; A2-0215, A2-0967): the CAD amount
+  given as `allocated_acb_cad` is booked in each listing's currency at
+  the spin-off date's rate, so the tax books get exactly that CAD figure
+  and the native holdings view stays in one currency. The raw-holdings
+  guard now also counts ADJUST rows, so a row it cannot convert skips the
+  native view instead of aborting the run.
+- **Canada: rows that settle on the same day go in trade order.** Over a
+  settlement holiday a Friday trade and the next trading day's trade
+  settle together; the engine took them by clock time, so a Monday
+  09:45 buy was applied before the previous Friday's 15:00 sale (wrong
+  ACB, a false superficial loss). They now go in trade-date order
+  (tax-logic CA-DATE-14) (A2-0067).
+- **A split repeated with a rounded ratio is applied once.** A manual
+  `.tt` SPLIT line (2.333333, or convert-tt's 8 decimals) next to the
+  broker's own row (2.333333333) scaled the pool twice at exit 0. Copies
+  whose ratios agree to 1e-6 within the 7-day split window are one
+  event, take the most precise ratio, and `run` prints an ATTENTION
+  line naming them (A2-0070). A same-day rename chain (A→B, B→C) gives
+  the same superficial-loss unit conversion in either row order
+  (A2-0983).
+- **`taxjson spinoffs` in a US project** flags a $0 §301 distribution
+  (ZERO-VALUE) and a §355 spin-off with no allocated basis
+  (NO-ALLOCATION) and exits 1, with US wording (an IRA is not called a
+  "registered account") (A2-0063, A2-0221). `spinoffs` and `splits`
+  refuse an unreadable or malformed manifest or base file instead of
+  crashing or reporting an empty view (A2-0968, A2-0969); a corrupt
+  manifest's error no longer suggests deleting it (A2-0979).
+- **`run --fast` sees election, sends and config edits by content.** The
+  elections manifest, sends.json and taxjson.toml are now in the
+  per-account content fingerprint, so a copy restored with an older
+  mtime no longer keeps the previous books (A2-0224, A2-0985,
+  A2-1229). `taxjson elect --redo` passes the same rates, base currency
+  and ticker.map as `run` (A2-0981, A2-0982), and the legacy manifest
+  migration is atomic (A2-0218).
+- `taxjson events` lines keep a dividend's withholding-netted amount
+  (the optional 9th column) and a declared TRANSFER's `DECLARED` token,
+  as `.tt` export does, so a pasted line re-imports the same row
+  (A2-0989).
+
+- US: a stock dividend paid after the shares were sold (between the
+  record and pay dates) no longer asks for "the missing purchase
+  history"; the warning says the §307 allocation reaches the sold lots
+  and must be adjusted by hand (A2-0562).
+
+- `reports/<account>_holdings.toml` now says (`meta.base_cost_basis`,
+  README) that its costs leave out distributions.map ACB adjustments,
+  which `taxjson list` includes (A2-0226).
+
+- `taxjson list --date` now passes the project's income-dating settings
+  (`corporate_distributions`) to its recomputation: a listed
+  corporation's return of capital was moved to its record date, as for
+  a trust, so the as-of cost disagreed with the run (A2-0995, A2-0996).
+
+- **Canada income dating: more split-share corporations, a loud
+  year-end flag.** XTD, GDV, LCS, PWI, SBN, WFS and PIC.A (and any row
+  whose description says "SPLIT CORP") are corporations: their
+  December-record, January-paid dividends and returns of capital now
+  stay in the pay year instead of moving to the record year as a
+  trust's. A `corporate_distributions` entry covers its issuer's
+  classes and series (`GHI.TO` covers GHI.PR.B.TO; `DEF.UN` now
+  matches DEF.UN.TO). A record date 92+ days before the pay date is no
+  longer used. Every trust distribution or ROC whose record date puts
+  it in another year than its payment is now printed on the console
+  (`ATTENTION: income year:`) in both project years — one of them
+  leaves it out (owner books: four January 2025 trust distributions
+  dated to 2024). The IB January trust-ROC warning stops once the two
+  `.tt` lines it prescribes are in the books. US: a bare
+  `ric_january_dividends` entry (`T`, `PSA`) is that fund's US listing
+  only — TELUS (T.TO) and PSA.PR.H.US are no longer moved (A2-0073,
+  A2-0076, A2-0229, A2-0230, A2-0231, A2-0561, A2-0991, A2-0992,
+  A2-0993).
+
+- **capital_gains_dividends.map reads what it documents.** A bare root
+  (`FTN`, `T`) also claimed the issuer's preferred series (FTN.PR.A.TO)
+  and a same-root foreign listing (AT&T's T.US), turning their
+  dividends into box-18 capital gains; it now covers only the root's
+  Canadian listings. An AMOUNT with a decimal comma (`17,11` read as
+  1711) or an underscore is refused, a map that is a directory or a
+  dangling symlink is an error instead of "no map", and a date entry
+  matches the pay date of a distribution the books date by its record
+  date (the documented `XTD.TO 2025-09-10 5.50` example was refused)
+  (A2-0075, A2-0227, A2-0228, A2-0560, A2-0987, A2-0990, A2-0994).
+
+- **distributions.map adjustments reach the holder of record's lots in
+  the US.** The ADJUST was stamped at the end of the record date, so in
+  a trade-date engine a sale traded on the record date (still the
+  holder of record under T+1) left it "found no open lots ... NOT
+  applied" (and called a basis increase a return of capital), and a buy
+  traded on the record date shared it. A trade straddling the record
+  date now moves the stamp to the day before it (the record date stays
+  the settle date). A map return of capital now warns when the book
+  already has that ROC (broker row or .tt ADJUST, by pay or record
+  date — also in `roc-sum` across the year end) or when its cash is
+  still a DIVIDEND row counted in full as income (A2-0071, A2-0072,
+  A2-0232, A2-0988).
+
+- **Per-account holdings and distributions.map sizing follow each
+  ticker's own shares.** The record-date balance walk (used to size a
+  distributions.map adjustment and to split a blended Canada pool by
+  account) kept one running balance for a whole rename family: a
+  rename-split scaled shares already held under the new ticker, an old
+  ticker bought again after its rename counted under both names, two
+  accounts' copies of one split doubled each other, and a buy listed
+  before a same-moment split was scaled by it. It now holds shares per
+  account and symbol like the engine (list/shares/sanity and the
+  adjustments agree with the gains), a map key that still holds shares
+  under its own name is sized on them, and the blended-pool
+  conservation warning names an excess as over-reporting instead of
+  blaming phantoms (A2-0021, A2-0074, A2-0225, A2-0986).
 - **phantoms.json is applied to the native books too.** The raw
   holdings pass ran without it, so `reports/<account>_holdings.toml`
   (and the web positions) listed every phantom pair as a short, and

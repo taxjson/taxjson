@@ -42,8 +42,18 @@ class TestBalanceWalk(unittest.TestCase):
         # Query by the CURRENT ticker: pre-rename buys must count.
         self.assertAlmostEqual(balance_on(txs, "NEW.TO", "2025-03-31"),
                                150.0)
-        self.assertAlmostEqual(balance_on(txs, "NEW.TO", "2025-01-31"),
+        # Before the rename the shares are OLD.TO's: balance_on counts
+        # per raw symbol like the engine walk (audit A2-0021/A2-0074);
+        # a map key naming NEW.TO on that date is resolved to OLD.TO by
+        # resolve_live_symbol before sizing.
+        self.assertAlmostEqual(balance_on(txs, "OLD.TO", "2025-01-31"),
                                100.0)   # before the split/rename
+        self.assertAlmostEqual(balance_on(txs, "NEW.TO", "2025-01-31"),
+                               0.0)
+        from taxjson.bin.taxjson_apply_distributions import (
+            resolve_live_symbol)
+        self.assertEqual(resolve_live_symbol(txs, "NEW.TO", "2025-01-31"),
+                         "OLD.TO")
 
     def test_regeneration_never_accumulates(self):
         from taxjson.bin.taxjson_apply_distributions import (
