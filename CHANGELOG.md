@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Kraken: every fiat currency is cash.** Only USD, CAD, EUR and GBP
+  were: an AUD, JPY or CHF bank deposit or withdrawal became a crypto
+  send to classify, an XBT/AUD fill a coin-for-coin swap with a phantom
+  `AUD` coin, and an AUD.HOLD reward an unpriced coin. Kraken now uses
+  the Coinbase parser's fiat list (re-audit A2-0238, A2-0251, A2-0579,
+  A2-0580).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

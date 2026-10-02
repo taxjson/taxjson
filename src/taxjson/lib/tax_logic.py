@@ -663,7 +663,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-CRYPTO-01",
                  "Each coin is its own property. A coin-for-coin trade is "
                  "a sale of one and a purchase of the other at fair "
-                 "value."),
+                 "value. Kraken's staked and bonded wallet codes (DOT.S, "
+                 "DOT28.S, ETH2, ETH2.S, the .M/.F/.B/.P/.HOLD suffixes) "
+                 "name the same coin as the bare code, so a 1:1 swap "
+                 "between them is not a sale."),
             Rule("CA-CRYPTO-09",
                  "Any amount of a coin is property: a residue left after a "
                  "sale, however small, stays in the holdings with its "
@@ -1092,15 +1095,19 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-CRYPTO-01",
                  "Each coin is its own property. A coin-for-coin trade is "
                  "a sale of one and a purchase of the other at fair "
-                 "value."),
+                 "value. Kraken's staked and bonded wallet codes (DOT.S, "
+                 "DOT28.S, ETH2, ETH2.S, the .M/.F/.B/.P/.HOLD suffixes) "
+                 "name the same coin as the bare code, so a 1:1 swap "
+                 "between them is not a sale."),
             Rule("US-CRYPTO-02",
-                 "USD stablecoins (USDC, USDT, DAI; also PYUSD and GUSD on "
-                 "Coinbase) are property like any coin: buying one is a "
-                 "purchase, selling or spending one is a sale (a de-peg "
-                 "is a gain or loss), and a payment in one is written as "
-                 "a sale. A swap against a stablecoin, a reward or a fee "
-                 "in one is valued at its 1.00 USD par; a sale for "
-                 "dollars at the fill's price."),
+                 "USD stablecoins (USDC, USDT, DAI, PYUSD and GUSD, on "
+                 "Kraken and Coinbase alike) are property like any coin: "
+                 "buying one is a purchase, selling or spending one is a "
+                 "sale (a de-peg is a gain or loss), and a payment in one "
+                 "is written as a sale. A swap against a stablecoin, a "
+                 "reward or a fee in one is valued at its 1.00 USD par "
+                 "(ahead of any USD value the exchange states); a sale "
+                 "for dollars at the fill's price."),
             Rule("US-CRYPTO-03",
                  "A Kraken withdrawal fee paid in a coin is a sale of that "
                  "coin."),

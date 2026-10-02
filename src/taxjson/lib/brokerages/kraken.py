@@ -5,12 +5,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from taxjson.lib.brokerages.base import BaseBrokerage
-from taxjson.lib.brokerages._crypto_common import (strict_money, utc_to_local,
+from taxjson.lib.brokerages._crypto_common import (FIAT_CURRENCIES,
+                                                   USD_STABLECOINS,
+                                                   strict_money, utc_to_local,
                                                    warn_depeg)
 
 
-_FIAT_ASSETS = ('USD', 'CAD', 'EUR', 'GBP', 'USDC', 'USDT', 'DAI', 'PYUSD',
-                'GUSD')
 # Appended to every row-level refusal that tells the user to use a .tt
 # file: the refusal aborts the whole file, so entering the .tt alone
 # never unblocks the run (audit S061-04).
@@ -22,8 +22,10 @@ _TT_REMOVE = (' and remove the row from the export (the file is refused until '
 # denominations — not a disposition of property. It used to emit a
 # BUYSELL of a phantom `USD`/`CAD` asset that corrupted the position
 # book; now it is a recognized non-event (KNOWN_ISSUES "Kraken fiat
-# conversions are not modeled").
-_FIAT_CURRENCIES = ('USD', 'CAD', 'EUR', 'GBP')
+# conversions are not modeled"). Every fiat currency, the list shared
+# with the Coinbase parser: Kraken knew only USD/CAD/EUR/GBP, so AUD,
+# JPY and CHF were booked as coins (re-audit A2-0579/0580/0238/0251).
+_FIAT_CURRENCIES = FIAT_CURRENCIES
 # USD-pegged stablecoins: a staking reward in one is worth 1.0/unit by
 # definition, so the parser prices it directly instead of shipping a
 # $0 row for taxjson-fill-crypto to look up. In PROPERTY mode (a US
@@ -36,6 +38,8 @@ _STABLECOINS = ('USDC', 'USDT', 'DAI')
 # property-mode (US) book is unchanged: PYUSD/GUSD stay coins valued by
 # the fill like any coin.
 _CASH_STABLECOINS = _STABLECOINS + ('PYUSD', 'GUSD')
+# Currencies (not property) in a cash-mode book: fiat + the stablecoins.
+_FIAT_ASSETS = FIAT_CURRENCIES | USD_STABLECOINS
 
 
 # Kraken's wallet-flavour suffixes on ledger asset codes: `.S` staked,
@@ -82,7 +86,9 @@ def _normalize_asset(asset: str, fold_stable: bool = True) -> str:
     asset = (asset or '').strip().upper()
     asset = _BONDED_STAKING_RE.sub(r'\1', asset)
     asset = _ASSET_SUFFIX_RE.sub('', asset)
-    asset = re.sub(r'^Z(USD|CAD|EUR|GBP)$', r'\1', asset)
+    if (len(asset) == 4 and asset.startswith('Z')
+            and asset[1:] in _FIAT_CURRENCIES):
+        asset = asset[1:]           # ZUSD, ZJPY, ZAUD (never ZEC: Zcash)
     # The X-prefix strip covers every classic X-prefixed Kraken asset
     # (KNOWN_ISSUES enumerated the missing ones: XLM, XMR, ZEC, XDG
     # [Dogecoin], ETC) — an unstripped `XXLM` reached
@@ -128,8 +134,8 @@ def _split_pair(pair: str, time_raw: str = '') -> tuple:
         base, quote = pair.split('/', 1)
         return base.strip().upper(), quote.strip().upper()
     p = pair.strip().upper()
-    m = re.fullmatch(r'X([A-Z]{3,4})Z(USD|CAD|EUR|GBP)', p)
-    if m:                                   # XXBTZUSD
+    m = re.fullmatch(r'X([A-Z]{3,4})Z([A-Z]{3})', p)
+    if m and m.group(2) in _FIAT_CURRENCIES:  # XXBTZUSD, XXBTZJPY
         return m.group(1), m.group(2)
     m = re.fullmatch(r'X([A-Z]{3,4})X([A-Z]{3,4})', p)
     if m:                                   # XETHXXBT (crypto/crypto)
