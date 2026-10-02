@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- tax-logic states rules the code already applies: a US project keeps
+  sheltered (IRA) accounts out of Form 8949 and the totals (US-
+  BASIS-07); the T1135 test covers these books only and the $250,000
+  simplified/detailed split (CA-RPT-13/14); the radar's IRA replacement
+  is lost for good (US-PLAN-01); cash in lieu of a fraction is a sale of
+  it (CA-CORP-05, US-CORP-09: in the US the units come from the oldest
+  lot), an all-cash merger is a sale and a stock-and-cash merger stops
+  the run (CA-CORP-09/10, US-CORP-10/11) (re-audit A2-0822, A2-1473,
+  A2-0821, A2-1474, A2-1475, A2-0824, A2-1477).
 - tax-logic gives the close-timing buy-back claim its own id (CA-OPT-10;
   CA-OPT-05 named two claims), each pinned on the engine (re-audit
   A2-0826).

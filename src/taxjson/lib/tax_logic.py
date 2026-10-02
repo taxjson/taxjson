@@ -795,8 +795,18 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "or rollover_s_85_1_5 (share-for-share; cost carries "
                  "over).", cont=True),
             Rule("CA-CORP-05",
-                 "Cash for fractional shares is handled; other cash in a "
-                 "merger is not modelled.", cont=True),
+                 "Cash in lieu of a fractional share is a sale of the "
+                 "fraction for the cash, on the pool's average cost "
+                 "(Questrade books the fraction at $0 the same day "
+                 "first).", cont=True),
+            Rule("CA-CORP-09",
+                 "A merger paid wholly in cash (IB \"Merged(Acquisition) "
+                 "FOR CAD 30.00 PER SHARE\") is a sale of the shares at "
+                 "the cash proceeds;", cont=True),
+            Rule("CA-CORP-10",
+                 "one paying shares AND cash is not modelled: it stops "
+                 "the run as an UNSUPPORTED event to enter by hand (.tt "
+                 "lines).", cont=True),
             Rule("CA-CORP-06",
                  "Spin-offs: rollover_s_86_1 (ACB split between the two "
                  "by the CAD amount you enter, s.86.1(3), booked exactly "
@@ -952,6 +962,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Canadian corporation's shares are not foreign "
                  "property); crypto held on an exchange counts.",
                  cont=True),
+            Rule("CA-RPT-13",
+                 "The test covers these books only: specified foreign "
+                 "property held outside them (a foreign bank account or "
+                 "cash, shares held elsewhere) adds to the same $100,000, "
+                 "so the report, its JSON (scope) and the checklist say "
+                 "\"on these books\".", cont=True),
+            Rule("CA-RPT-14",
+                 "A total cost under $250,000 throughout the year allows "
+                 "the simplified method (Part A); $250,000 or more at any "
+                 "time needs the detailed one (Part B).", cont=True),
             Rule("CA-RPT-12",
                  "A property's cost amount is its adjusted cost base as "
                  "the gains engine computes it, day by day over the full "
@@ -1293,6 +1313,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "stop `run --strict` until declared. An undated rename "
                  "(GLOBAL, or RENAME without a date) applies to every row "
                  "of OLD.", cont=True),
+            Rule("US-BASIS-07",
+                 "Accounts typed \"sheltered\" (an IRA, Roth IRA, "
+                 "401(k)...) are tracked but kept out of the filing "
+                 "totals (Form 8949, `sum`, the carryover); for the "
+                 "wash-sale rule they count (US-WASH-04, US-WASH-11)."),
             Rule("US-BASIS-05",
                  "A transfer into a taxable account stops the run until "
                  "the original purchase is declared (.tt ACQUIRED line). "
@@ -1455,6 +1480,20 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "received, a loss never; new basis = old basis - cash + "
                  "gain; the holding period restarts in this model).",
                  cont=True),
+            Rule("US-CORP-09",
+                 "Cash in lieu of a fractional share is a sale of the "
+                 "fraction for the cash (Questrade books the fraction at "
+                 "$0 the same day first); FIFO takes the units sold from "
+                 "the oldest lot, with its basis and holding period."),
+            Rule("US-CORP-10",
+                 "A merger paid wholly in cash (IB \"Merged(Acquisition) "
+                 "FOR USD 30.00 PER SHARE\") is a sale of the shares at "
+                 "the cash proceeds;", cont=True),
+            Rule("US-CORP-11",
+                 "one paying shares AND cash is not booked from the "
+                 "export: it stops the run as an UNSUPPORTED event to "
+                 "enter by hand (.tt lines, e.g. per reorg_368_boot's "
+                 "§356 rule).", cont=True),
             Rule("US-CORP-06",
                  "Spin-offs: taxable_distribution_301 (a §301 "
                  "distribution: income at FMV, which is also the new "
@@ -1684,7 +1723,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "every account, IRAs included, and no still-held test — "
                  "a washed loss shows as WASHED, and no later sale "
                  "undoes it (the disallowed loss is in the replacement's "
-                 "basis)."),
+                 "basis, or lost for good when the replacement is in an "
+                 "IRA, US-WASH-11)."),
             Rule("US-PLAN-02",
                  "A long call bought in the window is a note only, for an "
                  "existing loss and for a loss sale today, as are a "

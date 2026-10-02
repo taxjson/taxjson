@@ -38,7 +38,10 @@ def _project(td, country, files, *, accounts=("margin",), year=2025,
              **settings):
     root = Path(td) / country
     root.mkdir(parents=True, exist_ok=True)
-    acc = "".join(f'[accounts.{a}]\ntype = "taxable"\n' for a in accounts)
+    if not isinstance(accounts, dict):
+        accounts = {a: "taxable" for a in accounts}
+    acc = "".join(f'[accounts.{a}]\ntype = "{t}"\n'
+                  for a, t in accounts.items())
     (root / "taxjson.toml").write_text(
         settings_for(country, year=year, **settings) + acc)
     for rel, text in files.items():
@@ -439,6 +442,191 @@ class TestCloseTimingClaims(unittest.TestCase):
         self.assertIn("premium minus the cost",
                       _text("canada", "CA-OPT-10",
                             option_premium_timing="close"))
+
+
+# ------------------------------------------------------------ reports
+class TestT1135Scope(unittest.TestCase):
+    """A2-1473 (scope) and A2-0821 (the $250,000 Part A / Part B split)."""
+
+    def _rep(self, net):
+        from taxjson.bin.taxjson_t1135 import build_report
+        from test_t1135 import tx as t1135_tx
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td) / "base.json"
+            base.write_text(json.dumps({"transactions": [
+                t1135_tx(date="2025-01-10", qty=100, net=net)]}))
+            return build_report([base], [], 2025, {}, "CAD")
+
+    @rule("CA-RPT-13")
+    def test_verdict_is_on_these_books(self):
+        rep = self._rep(50000.0)
+        self.assertFalse(rep["filing_required"])
+        self.assertEqual(rep["scope"], "books_only")
+        self.assertIn("outside them", rep["scope_note"])
+        self.assertIn("these books", _text("canada", "CA-RPT-13"))
+
+    @rule("CA-RPT-14")
+    def test_simplified_below_250k(self):
+        self.assertTrue(self._rep(240000.0)["simplified_method_available"])
+        self.assertFalse(self._rep(250000.0)["simplified_method_available"])
+
+
+class TestUsShelteredOutOfTheTotals(unittest.TestCase):
+    """A2-0822: US tax-logic states that sheltered (IRA) accounts are
+    kept out of Form 8949 and the totals."""
+
+    @rule("US-BASIS-07")
+    def test_ira_sale_is_not_on_form_8949(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(td, "usa", {
+                "inputs/margin/m.tt":
+                    "BUYSELL 2024-02-01 10:00:00 XYZ.US 10 USD 100 1000 0\n"
+                    "BUYSELL 2025-06-02 10:00:00 XYZ.US -10 USD 200 2000 0\n",
+                "inputs/ira/i.tt":
+                    "BUYSELL 2024-02-01 10:00:00 QQZ.US 10 USD 100 1000 0\n"
+                    "BUYSELL 2025-06-02 10:00:00 QQZ.US -10 USD 300 3000 0\n"},
+                accounts={"margin": "taxable", "ira": "sheltered"})
+            r = cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+            f = cli(root, "form-export", "--form", "8949")
+            self.assertEqual(f.returncode, 0, f.stderr[-2000:])
+        self.assertIn("XYZ.US", f.stdout)
+        self.assertNotIn("QQZ.US", f.stdout)
+        self.assertIn("sheltered", _text("usa", "US-BASIS-07"))
+
+
+# ------------------------------------------------------------ planning
+class TestRadarIraReplacementIsPermanent(unittest.TestCase):
+    """A2-1474: US-PLAN-01 carves out the IRA replacement the radar
+    already reports as lost for good."""
+
+    @rule("US-PLAN-01")
+    def test_ira_rebuy_is_lost_for_good(self):
+        from test_fix_a2_planning import _row, _rows
+        book = [_row("2025-01-10", "XYZ.US", 100, 5000.0, rid="b1",
+                     currency="USD"),
+                _row("2025-03-03", "XYZ.US", -100, 4000.0, rid="s1",
+                     currency="USD")]
+        ira = [_row("2025-03-10", "XYZ.US", 100, 4000.0, account="ira",
+                    rid="i1", currency="USD")]
+        row = _rows(book, "2025-03-20", sheltered=ira,
+                    country="usa")["XYZ.US"]
+        self.assertIn("WASHED", row["advisory"])
+        self.assertIn("lost for good", row["advisory"])
+        self.assertIn("IRA", _text("usa", "US-PLAN-01"))
+
+
+# ------------------------------------------------------------ corporate
+class TestMergerCash(unittest.TestCase):
+    """A2-1475 / A2-0824 (corporate half) / A2-1477: cash in a merger and
+    cash in lieu of a fraction, stated per country."""
+
+    CASH = ('TGT(CA0000000555) Merged(Acquisition) FOR CAD 30.00 PER '
+            'SHARE (TGT, TARGET CO, CA0000000555)')
+    BOTH = ('OLDC(CA0000000801) Merged(Acquisition) WITH CA0000000802 1 '
+            'for 2 AND CAD 5.00 ({t}, {n}, {i})')
+
+    def _ib(self, *rows, cur="CAD"):
+        from test_fix_corp import _IB_CA, _IB_HEAD, _IB_TRADES
+        head = _IB_HEAD.format(acct='U5550001')  # pii-ok: synthetic
+        return (head.replace("Base Currency,CAD", f"Base Currency,{cur}")
+                + _IB_TRADES + rows[0] + _IB_CA + "".join(rows[1:]))
+
+    def _run(self, country, body):
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(td, country, {"inputs/margin/ib_2026.csv": body},
+                            year=2026)
+            r = cli(root, "run", "--no-input")
+            out = {"rc": r.returncode, "err": r.stderr + r.stdout}
+            g = root / "work" / "margin_gains_wash.json"
+            if g.exists():
+                out["gains"] = json.loads(g.read_text())
+            pe = root / "work" / "pending_elections.json"
+            if pe.exists():
+                out["pending"] = json.loads(pe.read_text())[
+                    "accounts"]["margin"]["pending"]
+            return out
+
+    def _cash_takeover(self, country):
+        from test_fix_corp import _ib_buy, _ib_ca
+        cur, sym = (("CAD", "TGT.TO") if country == "canada"
+                    else ("USD", "TGT.US"))
+        desc = self.CASH.replace("CAD", cur).replace("CA0000000555",
+                                                     "US0000000555")
+        r = self._run(country, self._ib(
+            _ib_buy('TGT', 100, 20, cur=cur),
+            _ib_ca(desc, -100, -3000, proceeds=3000,
+                   when='2026-06-01, 20:25:00', cur=cur), cur=cur))
+        self.assertEqual(r["rc"], 0, r["err"][-2000:])
+        sales = [t for t in r["gains"]["transactions"]
+                 if t.get("symbol") == sym and t.get("qty")]
+        self.assertEqual(len(sales), 1)
+        self.assertAlmostEqual(sales[0]["proceeds"], 3000.0, places=2)
+        self.assertAlmostEqual(sales[0]["gain"], 1000.0, places=2)
+        self.assertEqual([i for i in r["gains"]["inventory"]
+                          if abs(i["qty"]) > 1e-9], [])
+
+    def _stock_and_cash(self, country):
+        from test_fix_corp import _ib_buy, _ib_ca
+        cur = "CAD" if country == "canada" else "USD"
+        both = self.BOTH.replace("CAD", cur).replace("CA00", "US00")
+        r = self._run(country, self._ib(
+            _ib_buy('OLDC', 100, 20, cur=cur),
+            _ib_ca(both.format(t='NEWC', n='NEWC CORP',
+                               i='US0000000802'), 50, 2000, cur=cur),
+            _ib_ca(both.format(t='OLDC', n='OLDC CORP',
+                               i='US0000000801'), -100, -2500,
+                   proceeds=500, cur=cur), cur=cur))
+        self.assertEqual(r["rc"], 3, r["err"][-2000:])
+        self.assertEqual(len(r["pending"]), 1)
+        self.assertIn("UNSUPPORTED", r["pending"][0]["summary"])
+
+    @rule("CA-CORP-09")
+    def test_ca_cash_takeover_is_a_sale(self):
+        self._cash_takeover("canada")
+        self.assertIn("wholly in cash", _text("canada", "CA-CORP-09"))
+
+    @rule("US-CORP-10")
+    def test_us_cash_takeover_is_a_sale(self):
+        self._cash_takeover("usa")
+
+    @rule("CA-CORP-10")
+    def test_ca_stock_and_cash_stops(self):
+        self._stock_and_cash("canada")
+        self.assertNotIn("not modelled", _text("canada", "CA-CORP-05"))
+
+    @rule("US-CORP-11")
+    def test_us_stock_and_cash_stops(self):
+        self._stock_and_cash("usa")
+
+    _CIL = ("BUYSELL 2023-02-01 10:00:00 QZS.US 10 USD 20 200 0\n"
+            "BUYSELL 2025-03-03 10:00:00 QZS.US 10 USD 40 400 0\n")
+
+    def _cil_book(self):
+        # Questrade's CIL pair: the fraction at $0, then sold for the cash.
+        return [tx("BUYSELL", "2023-02-01", "QZS.US", 10, 200),
+                tx("BUYSELL", "2025-03-03", "QZS.US", 10, 400),
+                tx("BUYSELL", "2025-06-30", "QZS.US", 0.4, 0.0,
+                   time="09:30:00"),
+                tx("BUYSELL", "2025-06-30", "QZS.US", -0.4, 3.10,
+                   time="09:30:01")]
+
+    @rule("CA-CORP-05")
+    def test_ca_cil_is_a_sale_on_the_pool(self):
+        r = _gains_one("canada", self._cil_book())
+        g = [t for t in r["transactions"] if t.get("qty")]
+        self.assertEqual(len(g), 1)
+        # Average cost of the pool with the $0 fraction: 600 / 20.4.
+        self.assertAlmostEqual(g[0]["cost"], 0.4 * 600 / 20.4, places=2)
+
+    @rule("US-CORP-09")
+    def test_us_cil_takes_the_oldest_lot(self):
+        r = _gains_one("usa", self._cil_book())
+        g = [t for t in r["transactions"] if t.get("qty")]
+        self.assertEqual(len(g), 1)
+        self.assertAlmostEqual(g[0]["cost"], 8.0, places=2)
+        self.assertEqual(g[0]["term"], "LONG_TERM")
+        self.assertIn("oldest lot", _text("usa", "US-CORP-09"))
 
 
 if __name__ == "__main__":
