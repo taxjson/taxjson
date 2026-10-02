@@ -368,6 +368,19 @@ class TestExport(_Tmp):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("NEO:XYZ", r.stdout)
 
+    def test_gains_rows_wrong_types_refused(self):
+        """A2-0793 (export part)."""
+        g = self.root / "margin_gains_wash.json"
+        for inv in ({"symbol": "x", "qty": "x", "total_cost": "x",
+                     "currency": "x"},
+                    {"symbol": 5, "qty": 1, "total_cost": 1}):
+            g.write_text(json.dumps({"transactions": [], "inventory": [inv]}))
+            for mode in ("--report", "--seekingalpha", "--holdings-toml"):
+                r = export(mode, str(g))
+                no_tb(self, r)
+                self.assertEqual(r.returncode, 2, (mode, r.stderr))
+                self.assertIn("margin_gains_wash.json", r.stderr)
+
     def test_holdings_toml_bad_quantity_refused(self):
         h = self.root / "h.toml"
         for bad in ('quantity = "abc"\ntotal_cost = 10.0',

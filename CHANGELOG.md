@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `taxjson export`: a gains / inventory file whose rows hold text in a
+  number field (or a non-text symbol) is a one-line error naming the file
+  and row, exit 2, instead of a float() traceback (A2-0793, export part).
 - `taxjson-sum-income` reads its rows through the same checks as
   taxjson-gains: an impossible date, a NaN/inf amount or a text amount is
   a one-line error with exit 2 instead of being summed (or a traceback)

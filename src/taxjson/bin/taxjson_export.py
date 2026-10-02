@@ -41,6 +41,33 @@ def _read_json(path, **kw):
         return read_json_doc(path, **kw)
     except InputFileError as e:
         _die(str(e))
+
+
+def _read_rows_doc(path, **kw):
+    """`_read_json`, plus its `inventory` / `transactions` rows checked
+    for type (json_input.check_row_types; a symbol must be text): a
+    damaged gains file with "x" in a number field was a float()
+    traceback in the aggregation (A2-0793, export part)."""
+    from taxjson.lib.json_input import check_row_types
+    doc = _read_json(path, **kw)
+    for key in ("inventory", "transactions"):
+        rows = doc.get(key)
+        if rows is None:
+            continue
+        if not isinstance(rows, list) or any(not isinstance(r, dict)
+                                             for r in rows):
+            _die(f'{path}: "{key}" must be a list of JSON objects')
+        try:
+            check_row_types(rows, path, key)
+        except InputFileError as e:
+            _die(str(e))
+        for i, r in enumerate(rows):
+            sym = r.get("symbol")
+            if sym is not None and not isinstance(sym, str):
+                _die(f'{path}: "{key}" row {i}: symbol is {sym!r}, not '
+                     f'a ticker — the file is damaged or hand-edited: '
+                     f'fix it or re-run `taxjson run`')
+    return doc
 from typing import Any, Dict, List
 
 from taxjson.lib.tomlcompat import tomllib
@@ -561,7 +588,7 @@ def _load_trade_events(paths, mapping=None, drops=None,
                                                 split_seen)
     rows: List[Any] = []
     for p in paths:
-        data = _read_json(p, list_key="transactions")
+        data = _read_rows_doc(p, list_key="transactions")
         for tx in data.get("transactions", []):
             if not isinstance(tx, dict):
                 continue
@@ -1025,7 +1052,7 @@ def main():
                     _die(f"{input_path}: not a readable TOML file ({e})")
                 dispatch(_holdings_toml_to_inventory(doc, input_path))
                 continue
-            data = _read_json(input_path, require_key="inventory")
+            data = _read_rows_doc(input_path, require_key="inventory")
             if not isinstance(data["inventory"], list):
                 _die(f"{input_path}: 'inventory' must be a list")
             year = year or (data.get("summary") or {}).get("year")
@@ -1042,7 +1069,7 @@ def main():
         # up; values are in the base currency for downstream gain/loss checks.
         base_agg: Dict[str, Dict[str, Any]] = {}
         for bp in args.base_gains:
-            process_data_report(_read_json(bp, require_key="inventory"),
+            process_data_report(_read_rows_doc(bp, require_key="inventory"),
                                 args, base_agg, holdings_map, holdings_drops)
         # Per-symbol acquisition/sell events (optional), in native currency,
         # from the pre-gains transaction file(s). Mapped/dropped the same way
