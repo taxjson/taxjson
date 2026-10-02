@@ -244,5 +244,51 @@ class TestBadCachedRate(_Cache):
         self.assertNotIn("download failed", err.getvalue())
 
 
+class TestRateGapTolerance(unittest.TestCase):
+    """A2-0706: tax-logic states the gap the converter really accepts."""
+
+    def setUp(self):
+        reset_fallback_tally()
+        self.addCleanup(reset_fallback_tally)
+
+    def _rates(self, td):
+        # Bank observations on 03-03 and 03-20 only; to_base_curr carries
+        # 03-03 forward MAX_FILL_DAYS days (through 03-10).
+        cache = {"_boc": {"USDCAD": {"obs": {"2025-03-03": "1.4400",
+                                             "2025-03-20": "1.4300"}}},
+                 "_coverage": {"boc:USDCAD": [["2025-03-01",
+                                               "2025-03-31"]]}}
+        rows = T.resolve_rows(cache, "USD", "CAD", "2025-03-01",
+                              "2025-03-31", "2025-04-30")
+        p = Path(td) / "to_base.csv"
+        p.write_text("".join(f"{d} 12:00:00 USD CAD {v} {s}\n"
+                             for d, v, s in rows))
+        return load_exchange_rates(p, "CAD")
+
+    @rule("CA-FX-02")
+    def test_canada_rate_gap_is_fill_plus_lookback(self):
+        self._check()
+
+    @rule("US-FX-02")
+    def test_usa_rate_gap_is_fill_plus_lookback(self):
+        self._check()
+
+    def _check(self):
+        from decimal import Decimal
+        with tempfile.TemporaryDirectory() as td:
+            hist = self._rates(td)
+        fill, look = T.MAX_FILL_DAYS, 5
+        last_ok = T._shift("2025-03-03", fill + look)
+        self.assertEqual(get_rate_for_date("USD", last_ok, hist,
+                                           Decimal("9")), Decimal("1.4400"))
+        self.assertEqual(get_rate_for_date(
+            "USD", T._shift(last_ok, 1), hist, Decimal("9")), Decimal("9"))
+        from taxjson.lib import tax_logic
+        for rid in ("CA-FX-02", "US-FX-02"):
+            text = tax_logic.catalog()[rid].text
+            self.assertIn(f"{fill} days", text)
+            self.assertIn(f"{fill + look} days", text)
+
+
 if __name__ == "__main__":
     unittest.main()

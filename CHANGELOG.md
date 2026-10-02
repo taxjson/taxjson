@@ -17,6 +17,10 @@
   the rates file, where the run then blamed the config ("no rates at
   all for USD"): it is dropped, named with `~/.currency_price_cache.json`
   and its date, and asked for again online (re-audit A2-1212).
+- tax-logic CA-FX-02 / US-FX-02 now state the rate gap the converter
+  really accepts: the rates file carries a rate over weekends and
+  holidays for up to 7 days and a day with no row looks back 5 more, so
+  a rate up to 12 days old is used; no number changes (re-audit A2-0706).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those
