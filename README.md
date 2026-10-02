@@ -749,8 +749,9 @@ when the pipeline built it, else `<account>_gains.json`) — i.e. **after** `tic
 quantity and cost basis match the canonical pipeline (unlike
 `reports/<account>_holdings.toml`, which keeps listings separate and native for
 live-pricing tools — its `base_total_cost` is per-account and before any
-superficial-loss adjustment or s.47 blend, as its `meta.base_cost_basis`
-says). One row per (account, symbol) with quantity, base-currency
+superficial-loss adjustment, s.47 blend or `distributions.map` ACB
+adjustment, as its `meta.base_cost_basis` says; its native `total_cost`
+leaves the map adjustments out too). One row per (account, symbol) with quantity, base-currency
 book cost, cost/share (per SHARE for an equity option — 100 a contract, as
 harvest and the holdings report show it), and the position's start date;
 fully-closed positions are omitted. Pass an account to scope to one.

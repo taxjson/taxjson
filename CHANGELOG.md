@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `reports/<account>_holdings.toml` now says (`meta.base_cost_basis`,
+  README) that its costs leave out distributions.map ACB adjustments,
+  which `taxjson list` includes (A2-0226).
+
 - `taxjson list --date` now passes the project's income-dating settings
   (`corporate_distributions`) to its recomputation: a listed
   corporation's return of capital was moved to its record date, as for
