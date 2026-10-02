@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- tax-logic states that a US taxable purchase whose shares were sold
+  (first in, first out) before a loss no longer washes it, unlike an IRA
+  purchase (US-WASH-21); the US engine's unreachable 'consumed
+  replacement' branches are removed (re-audit A2-0817).
 - tax-logic states rules the code already applies: a US project keeps
   sheltered (IRA) accounts out of Form 8949 and the totals (US-
   BASIS-07); the T1135 test covers these books only and the $250,000

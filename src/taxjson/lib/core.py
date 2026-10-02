@@ -5745,14 +5745,13 @@ class USATaxRules(TaxRules):
                         chunk_qty = short_lot['qty']
                         chunk_open_proceeds_d = short_lot['proceeds']
                         inventory_short[ikey].pop(0)
-                        # Mark any short_replacement records that pointed at
-                        # this lot as fully consumed. A later wash-sale match
-                        # against this rep would otherwise silently mutate
-                        # the detached dict and lose the disallowance — see
-                        # `fully_consumed` branch in the wash-match below.
+                        # A short_replacement record that pointed at this
+                        # lot is consumed: no lot reference (a later match
+                        # must not mutate the detached dict) and no
+                        # capacity, so find_replacements_in_window skips it
+                        # (tax-logic US-WASH-21, re-audit A2-0817).
                         for r in short_replacements.get(_rep_key(symbol, tx.date), []):
                             if r.get('short_lot_ref') is short_lot:
-                                r['fully_consumed'] = True
                                 r['short_lot_ref'] = None
                                 # Covered shares can no longer serve as
                                 # §1091 replacement (FUZZ #A): leaving
@@ -5866,19 +5865,10 @@ class USATaxRules(TaxRules):
                                 # adjustment belongs to THEIR position,
                                 # never to a lot in these books (ENGINE-I1).
                                 permanently_disallowed_amt += match_disallowed
-                            elif rep.get('fully_consumed'):
-                                # Replacement short was already opened AND
-                                # closed before this wash sale fired. The
-                                # proceeds reduction has nowhere to land —
-                                # the gain entry for the replacement's close
-                                # has already been emitted. Treat as
-                                # permanently disallowed; the loss is
-                                # disallowed under §1091 but the deferral
-                                # mechanism is unavailable. (This mirrors
-                                # Rev. Rul. 2008-5's "no basis transfer"
-                                # treatment for unrecoverable replacements.)
-                                permanently_disallowed_amt += match_disallowed
                             else:
+                                # (A replacement short covered before the
+                                # loss has no capacity left and is never a
+                                # candidate: US-WASH-21.)
                                 disallowed_amt += match_disallowed
                                 if rep.get('short_lot_ref') is not None:
                                     # Replacement short is already open —
@@ -6136,14 +6126,12 @@ class USATaxRules(TaxRules):
                     chunk_qty = lot['qty']
                     chunk_cost_d = lot['cost_basis']
                     inventory_long[ikey].pop(0)
-                    # Same defensive marker as the short side: if any
-                    # long_replacement rep was pointing at this lot, a
-                    # future wash-sale bump would otherwise hit a detached
-                    # dict and disappear. Mark `fully_consumed` so the
-                    # match falls through to permanent disallowance.
+                    # As on the short side: a long_replacement rep that
+                    # pointed at this sold lot loses its lot reference and
+                    # its capacity, so it never washes a later loss
+                    # (US-WASH-21, re-audit A2-0817).
                     for r in long_replacements.get(_rep_key(symbol, tx.date), []):
                         if r.get('lot_ref') is lot:
-                            r['fully_consumed'] = True
                             r['lot_ref'] = None
                             # Sold shares can no longer serve as §1091
                             # replacement (FUZZ #A): stale capacity made
@@ -6307,16 +6295,10 @@ class USATaxRules(TaxRules):
                             # deferred amount nothing recovers
                             # (partition ENGINE-I1, tax-logic US-WASH-16).
                             permanently_disallowed_amt += match_disallowed
-                        elif rep.get('fully_consumed'):
-                            # Replacement lot was already sold before this
-                            # wash sale fired. The basis bump has nowhere
-                            # to land — the gain entry for the replacement's
-                            # sale has already been emitted. Treat as
-                            # permanently disallowed; the loss is
-                            # disallowed under §1091 but the deferral
-                            # mechanism is unavailable.
-                            permanently_disallowed_amt += match_disallowed
                         else:
+                            # (A taxable replacement sold before the loss
+                            # has no capacity left and is never a
+                            # candidate: US-WASH-21.)
                             disallowed_amt += match_disallowed
                             if _tack_lot is not None:
                                 _tack_lot['cost_basis'] += match_disallowed_d

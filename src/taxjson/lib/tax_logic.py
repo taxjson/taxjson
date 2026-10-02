@@ -1410,6 +1410,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "cover) — one row, or the same-second fills of one order "
                  "— never replace each other's losses; shares kept after "
                  "that sale still do,", cont=True),
+            Rule("US-WASH-21",
+                 "and a purchase in a taxable account replaces only with "
+                 "the shares of it still unsold at the loss: shares sold "
+                 "(first in, first out) before the loss no longer wash "
+                 "it — unlike an IRA purchase (US-WASH-11) —",
+                 cont=True),
             Rule("US-WASH-07",
                  "and look-alike securities are not detected.", cont=True),
             Rule("US-WASH-08",
