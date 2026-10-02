@@ -29,6 +29,7 @@ def _map_file(tmp, text):
 
 
 # ======================================================= distributions.map
+@rule("CA-DIST-01")
 class TestDistributionsMapLow(unittest.TestCase):
     def _apply(self, txs, rows, **kw):
         from taxjson.bin.taxjson_apply_distributions import (
