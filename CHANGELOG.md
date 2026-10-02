@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Questrade corporate actions: an UNBOOKED line from the corporate-action
+  stage (a DIS chain that nets a removal) is echoed on the console and
+  refused by `run --strict`, as the parse stage's are (A2-0211); the
+  internal-code hint names the symbol as booked (`D056068.TO`) and goes
+  quiet once ticker.map renames it (A2-0966); a spin-off parent held only
+  in a start `.tt` can be named with a `GLOBAL <SEC#> <PARENT>` ticker.map
+  line, which the warning now suggests (A2-0980).
 - RBC corporate actions: a spin-off's parent is the listing held on the
   spin-off date, not any listing the account ever traded (A2-0210); a
   spin-off `REVERSE ENTRY` cancels its posting, so a reversed and

@@ -1289,6 +1289,7 @@ def _parse_qt_date(s: str) -> str:
 def parse_questrade_corporate_actions(
     csv_path: Path, account: str = 'Questrade',
     context_files: Optional[List[Path]] = None,
+    renames: Optional[Dict[str, str]] = None,
 ) -> List[CorporateAction]:
     """Extract spinoff events from a Questrade activity CSV.
 
@@ -1482,21 +1483,7 @@ def parse_questrade_corporate_actions(
         # target emitted book rows on 'DFDVW' while the trades carry
         # 'DFDVW.US', splitting one position across two symbols.
         symbol = next((r['symbol'] for r in rows if r['symbol']), '')
-        if symbol and _INTERNAL_CODE_RE.match(symbol.upper()):
-            # A manual web export writes the distributed warrant/right
-            # under Questrade's internal code (D056068) while its later
-            # sale carries the real ticker (DFDVW): booked as-is the
-            # spinoff is a phantom long and the sale an open short, and
-            # in a taxable account the sale drops out of the year's
-            # gains (audit R1-3). Nothing in the export links the two.
-            print(f"warning: Questrade spinoff chain on "
-                  f"{min(r['date'] for r in rows)} is booked under "
-                  f"Questrade's INTERNAL code {symbol!r}, not a ticker "
-                  f"({rows[0]['description'][:70]}). Its later trades "
-                  f"use the real ticker, so map the code with a "
-                  f"ticker.map line (GLOBAL {symbol}.US <TICKER>.US, or "
-                  f".TO) — otherwise the position splits in two.",
-                  file=sys.stderr)
+        internal = bool(symbol and _INTERNAL_CODE_RE.match(symbol.upper()))
         if not symbol:
             print(f"warning: Questrade spinoff chain on "
                   f"{min(r['date'] for r in rows)} has NO resolvable "
@@ -1543,6 +1530,12 @@ def parse_questrade_corporate_actions(
         if hit:
             parent_listing = hit[1].upper()
             parent_symbol = _suffix(hit[0], parent_listing)
+        elif parent_code and not cands and _renamed(parent_code, renames):
+            # The project's ticker.map names the parent (the closing-year
+            # case: the parent sits in the start .tt, which carries no
+            # company name to match).
+            from taxjson.bin.taxjson_ticker_map import map_symbol
+            parent_symbol = map_symbol(parent_code, renames)
         elif parent_code and not cands:
             print(f"warning: Questrade spinoff parent {parent_name or parent_code!r} "
                   f"(SEC# {parent_code}) is not traded or transferred "
@@ -1550,7 +1543,10 @@ def parse_questrade_corporate_actions(
                   f"unknown — a rollover's parent-ACB reduction would "
                   f"land on an empty {parent_code!r} pool. Add the "
                   f"export that bought or transferred the parent into "
-                  f"this account.", file=sys.stderr)
+                  f"this account, or — when the parent is held in a "
+                  f"start .tt (a closing-year project) — name it in "
+                  f"ticker.map:  GLOBAL {parent_code} <PARENT>.TO (or "
+                  f".US).", file=sys.stderr)
 
         # The target's listing, the way the parser books its later
         # trades: its own trades' listing when it trades anywhere in the
@@ -1570,6 +1566,24 @@ def parse_questrade_corporate_actions(
         # The parser's shape: ABC.WS -> ABC.WS.US (the old "no dot yet"
         # test left a dotted target bare), NEWCO.VN -> NEWCO.TO.
         symbol = _suffix(bare, listing)
+        if internal and not _renamed(symbol, renames):
+            # A manual web export writes the distributed warrant/right
+            # under Questrade's internal code (D056068) while its later
+            # sale carries the real ticker (DFDVW): booked as-is the
+            # spinoff is a phantom long and the sale an open short, and
+            # in a taxable account the sale drops out of the year's
+            # gains (audit R1-3). Nothing in the export links the two.
+            # Named as the books carry it, and quiet once ticker.map
+            # renames it — the RBC twin's S072-03 rule (A2-0966).
+            ext = symbol.rsplit('.', 1)[-1]
+            print(f"warning: Questrade spinoff chain on "
+                  f"{event_date} is booked under Questrade's INTERNAL "
+                  f"code {symbol}, not a ticker "
+                  f"({rows[0]['description'][:70]}). Its later trades "
+                  f"use the real ticker, so map the code with a "
+                  f"ticker.map line:  GLOBAL {symbol} <TICKER>.{ext} — "
+                  f"otherwise the position splits in two.",
+                  file=sys.stderr)
 
         # Ratio denominator (the parent share count the user held).
         source_qty = 0.0
@@ -1607,6 +1621,7 @@ def parse_questrade_corporate_actions(
 
 
 parse_questrade_corporate_actions.accepts_context = True
+parse_questrade_corporate_actions.accepts_renames = True
 
 
 # --- RBC Direct extractor --------------------------------------------------

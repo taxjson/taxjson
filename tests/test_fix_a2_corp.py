@@ -676,5 +676,76 @@ class TestRbcOptionAdjustPairing(unittest.TestCase):
                                  ('8AAAAA2', '8BBBBB2'))})
 
 
+
+# ================================================================ Questrade
+class TestQuestradeCorpUnbooked(unittest.TestCase):
+    def test_a2_0211_corp_unbooked_is_echoed_and_strict_refuses(self):
+        import test_fix_rbcqt as R
+        csv = (R.q(sym='PARR.TO', desc='PAR CORP RIGHTS', qty='1000',
+                   price='0.10', gross='-100', comm='0', net='-100',
+                   cur='CAD', td='2025-03-03')
+               + R.q(td='2025-03-17', action='DIS', sym='PARR.TO',
+                     desc='PAR CORP RTS DIST ON 1000 SHS REC 03/14/25 PAY '
+                          '03/17/25 RIGHTS LAPSED', qty='-1000', price='0',
+                     gross='0', comm='0', net='0', cur='CAD',
+                     act='Dividends'))
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "proj"
+            (root / "inputs" / "margin").mkdir(parents=True)
+            (Path(td) / "home").mkdir()
+            (root / "taxjson.toml").write_text(
+                '[settings]\ncountry = "canada"\nyear = 2025\n'
+                'province = "ON"\nbase_currency = "CAD"\n'
+                'source_currencies = []\noption_grant_timing_since = 2025\n'
+                '[accounts.margin]\ntype = "taxable"\n')
+            (root / "inputs" / "margin" / "questrade_2025.csv").write_text(
+                R.QH + csv)
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertIn("UNBOOKED", r.stdout + r.stderr)
+            rs = _run_cli(root, "run", "--no-input", "--strict")
+            self.assertNotEqual(rs.returncode, 0)
+            self.assertIn("--strict", rs.stdout + rs.stderr)
+
+
+    def test_a2_0966_internal_code_hint_names_the_booked_symbol(self):
+        import test_fix_rbcqt as R
+        from taxjson.lib.corp_actions import parse_questrade_corporate_actions
+        leg = ('WTS QZD DEV CORP WT EXP RTS DIST ON 1000 SHS FROM SEC# '
+               'J000001 QZD DEVELOPMENT CORP REC 07/10/25 PAY 07/14/25')
+        body = R.QH + R.q(td='2025-07-14', action='DIS', sym='D056068',
+                          desc=leg, qty='100', price='0', gross='0',
+                          comm='0', net='0', cur='CAD', act='Dividends')
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "qt.csv"
+            p.write_text(body)
+            ev, err = _quiet(parse_questrade_corporate_actions, p)
+            self.assertEqual([e.target_symbol for e in ev], ['D056068.TO'])
+            self.assertIn('GLOBAL D056068.TO <TICKER>.TO', err)
+            ev, err = _quiet(parse_questrade_corporate_actions, p,
+                             renames={'D056068.TO': 'QZDW.TO'})
+            self.assertNotIn('INTERNAL code', err)
+
+
+    def test_a2_0980_parent_in_a_start_tt_is_named_by_ticker_map(self):
+        import test_fix_rbcqt as R
+        from taxjson.lib.corp_actions import parse_questrade_corporate_actions
+        leg = ('WTS ALPHA CORP WT SPINOFF ON 1000 SHS FROM SEC# J000001 '
+               'ALPHA CORP REC 01/20/26 PAY 01/27/26')
+        body = R.QH + R.q(td='2026-01-27', action='DIS', sym='AAAW',
+                          desc=leg, qty='100', price='0', gross='0',
+                          comm='0', net='0', cur='CAD', act='Dividends')
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "qt_2026.csv"
+            p.write_text(body)
+            ev, err = _quiet(parse_questrade_corporate_actions, p)
+            self.assertEqual(ev[0].source_symbol, 'J000001')
+            self.assertIn('GLOBAL J000001 <PARENT>.TO', err)
+            ev, err = _quiet(parse_questrade_corporate_actions, p,
+                             renames={'J000001': 'AAA.TO'})
+            self.assertEqual(ev[0].source_symbol, 'AAA.TO')
+            self.assertNotIn('not traded', err)
+
+
 if __name__ == "__main__":
     unittest.main()

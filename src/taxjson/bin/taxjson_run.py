@@ -2141,6 +2141,18 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # while the real position stayed put (S004-00).
             _apply_override_log(out, cache / f"{name}_{broker}.overrides",
                                 name)
+            # The corp stage's own UNBOOKED lines (a Questrade DIS chain
+            # that nets a removal, a lapse it cannot book) follow the
+            # parse stage's contract: echoed on every run, refused by
+            # --strict. They used to reach only the .diag and the .sum
+            # (A2-0211, the S015-02 twin).
+            for _ln in unbooked_lines(out):
+                print(f"  {_ln}")
+            if strict and unbooked_lines(out):
+                sys.exit(f"taxjson run --strict: {name}: {broker} "
+                         f"corporate actions hold event(s) taxjson could "
+                         f"not book (UNBOOKED warning above / in "
+                         f"{out.name}.diag) — aborting.")
             corp_files.append(out)
         _warn_zero_value_spinoffs(name, is_taxable, corp_files, cache)
 
