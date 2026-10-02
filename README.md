@@ -103,9 +103,13 @@ inputs folder and describe its layout in a TOML mapping — either a sidecar
 folder. Start from the template in
 [`examples/generic_wealthsimple.toml`](./examples/generic_wealthsimple.toml):
 map your CSV's header names in `[columns]`, its date format in `[formats]`, and
-each action value to one of `buy | sell | dividend | tax | interest | fee |
-skip` in `[actions]`. An optional `[broker] name = "wealthsimple"` names the
-real broker. `taxjson run` then parses that broker's generic files on their own
+each action value to one of `buy | sell | dividend | dividend_in_lieu | tax |
+interest | fee | skip` in `[actions]` (`dividend_in_lieu` books a payment in
+lieu: ordinary income, never a dividend). An optional `[broker] name =
+"wealthsimple"` names the real broker; an optional `[broker] account =
+"<id>"` (or a per-row `[columns] account = "<header>"`, which wins) names the
+broker account the rows belong to, so cross-file dedup keeps identical rows of
+two different broker accounts apart (the id is stored hashed, never as is). `taxjson run` then parses that broker's generic files on their own
 (`work/<acct>_generic-wealthsimple.json`) and records them as
 `generic:wealthsimple`, so the fees report gives each broker its own row.
 Without a name, every generic file goes into one `generic` row. Conventions match the hand-written parsers: signed
@@ -116,7 +120,11 @@ silently dropped — an unmapped row that carries a quantity or an amount is an
 references columns the CSV doesn't have refuses loudly. A `fee` row is booked
 positive = charged, like every broker parser: the default `[formats] fee_sign =
 "cash"` flips a CSV that shows a charge as negative cash; `fee_sign =
-"charged"` takes the cell as is. Every buy/sell row is cross-checked — |amount|
+"charged"` takes the cell as is. A buy/sell row's commission keeps its
+direction: with an amount column the amount decides (a buy that cost less
+than qty × price was credited a rebate), else an explicit `fee_sign` does; a
+rebate is booked as a negative fee. With neither, the fee cell is a charge
+whatever its sign. Every buy/sell row is cross-checked — |amount|
 must equal qty × price (× 100 for an OCC option symbol) ± fee within 1%, a fee
 above 5% of the gross needs `[options] allow_large_fees = true`, two fields may
 not share one header, and the currency must be mapped or set in `[defaults]`
@@ -124,8 +132,12 @@ not share one header, and the currency must be mapped or set in `[defaults]`
 wrong money. With no `fee` column mapped, the commission is inferred from
 |amount| − qty × price (a commission-inclusive Net column); a row with no price
 is checked against its amount instead (a fee at least a buy's whole amount is
-refused). A futures symbol (`F:` or `/` prefix) needs the `amount` column: the
-contract size is never guessed. The import also refuses:
+refused). A futures symbol (`F:`, `/` or `\` prefix, all spelled `F:`) needs
+the `amount` column: the contract size is never guessed. The mapping has no
+exercise/assignment target: a $0 option close beside a stock trade at the
+strike is an ATTENTION line on the console — map those rows to skip and enter
+both legs as `.tt` `ASSIGN` rows so the premium folds into the shares' cost.
+UTF-16 exports are read like UTF-8 ones. The import also refuses:
 
 - an unknown section or key in the mapping (`ammount`, `commission`,
   `[format]`, `tax_sgn` …), with a did-you-mean suggestion;
@@ -140,7 +152,14 @@ contract size is never guessed. The import also refuses:
 - a decimal-comma number (`12,50`, `1.234,56`): only a thousands comma
   (`1,234.56`) is accepted. Re-export with a decimal point.
 - a record with more cells than the header, or a cell holding a line break —
-  the mark of an unescaped quote in a text cell swallowing the next row.
+  the mark of an unescaped quote in a text cell swallowing the next row;
+- a record with fewer cells than the header, a last record that ends on a
+  separator with no line break after it, or a currency cell that is not a
+  currency code — a cut-off export (`[defaults]` never fills a cell the cut
+  took away);
+- a `[defaults]` or `[formats]` value that is not a quoted string, and a
+  sidecar mapping that is a dangling link (the shared `generic.toml` is never
+  used in its place).
 
 **Symbols.** Symbols are upper-cased (`xyz` and `XYZ` are one security). A symbol written with an exchange suffix (`.TO`, `.V`, `.CN`,
 `.NE`, `.US`, `.AX`, `.L`) keeps it — `DLR.U.TO` bought in USD stays
@@ -154,8 +173,12 @@ before, T+3 before September 2017, options T+1 — counted in settlement days of
 the listing's market (the Canadian calendar for `.TO`/`.V`/`.CN`/`.NE`, the US
 one for `.US`, else the row currency), skipping weekends and holidays. With
 `tax_date = "settle"` a sale on Dec 31 therefore lands in January. A settle
-date before the trade date is refused. Dividend, tax, interest and fee rows are
-dated `date`. For a crypto-only export set `[options] settle_on_trade_date =
+date before the trade date, or more than 31 days after it, is refused; one more
+than 7 days after it is an ATTENTION line. Futures settle on the trade date, or
+on the next settlement day under `futures_settle = "next_day"`. An option
+closed at $0 on its expiry day is dated and settled that day (a $0 close posted
+up to 7 days after the expiry is moved back to it). Dividend, tax, interest and
+fee rows are dated `date`. For a crypto-only export set `[options] settle_on_trade_date =
 true` (crypto has no settlement cycle).
 
 Kraken and Coinbase timestamps are UTC; rows are dated in local time
@@ -306,7 +329,7 @@ year = 2026                    # tax year the pipeline reports on
 country = "canada"             # canada | ca | usa | us — REQUIRED by every command
 base_currency = "CAD"          # the country's currency: CAD for canada, USD for usa (another is refused)
 tax_date = "settle"            # settle (CRA default) | trade (IRS default)
-# futures_settle = "trade"     # IB futures & futures options: TRADE date (daily variation
+# futures_settle = "trade"     # futures & futures options (IB, generic): TRADE date (daily variation
 #                              # margin settles the P/L) | next_day (clearing premium date)
 # local_timezone = "America/Toronto"  # crypto UTC timestamps are dated in this zone
 source_currencies = ["USD"]    # currencies you hold besides base_currency (FX rates fetched)

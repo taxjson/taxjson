@@ -299,9 +299,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Federal Reserve holidays; Canada: TSX holidays, "
                  "Remembrance Day, Truth and Reconciliation).", cont=True),
             Rule("CA-DATE-06",
-                 "The generic importer uses a mapped settle column, else "
-                 "this cycle (settle_on_trade_date = true keeps the trade "
-                 "date).", cont=True),
+                 "The generic importer uses a mapped settle column (one "
+                 "more than 31 days after the trade is refused, more than "
+                 "7 is flagged), else this cycle (settle_on_trade_date = "
+                 "true keeps the trade date); its futures and its $0 "
+                 "option closes on the expiry day follow the two rules "
+                 "below.", cont=True),
             Rule("CA-DATE-07", "Crypto settles on the trade date;",
                  cont=True),
             Rule("CA-DATE-08", "an option expiry is dated its expiry day.",
@@ -823,9 +826,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "Federal Reserve holidays; Canada: TSX holidays, "
                  "Remembrance Day, Truth and Reconciliation).", cont=True),
             Rule("US-DATE-06",
-                 "The generic importer uses a mapped settle column, else "
-                 "this cycle (settle_on_trade_date = true keeps the trade "
-                 "date).", cont=True),
+                 "The generic importer uses a mapped settle column (one "
+                 "more than 31 days after the trade is refused, more than "
+                 "7 is flagged), else this cycle (settle_on_trade_date = "
+                 "true keeps the trade date); its futures and its $0 "
+                 "option closes on the expiry day follow the two rules "
+                 "below.", cont=True),
             Rule("US-DATE-07", "Crypto settles on the trade date;",
                  cont=True),
             Rule("US-DATE-08", "an option expiry is dated its expiry day.",
