@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Locks: a lock taken before its year ended (`close-year --force` on an
+  open year) is called a snapshot, not a filed return, by the checklist's
+  filed-lock and lock-committed steps (attention), by check-filed (a note
+  beside OK) and by option-boundary (marked partial); a filed/<year>.json
+  that is a directory is "blocked", not "no lock". A non-path
+  `prior_year_record` is refused by every command (handoff and the
+  checklist built a path from a list), and handoff with no `year` refuses
+  instead of looking for filed/-1.json (re-audit A2-0679, A2-1146,
+  A2-1161, A2-1162, A2-1164).
 - Checklist inputs-frozen: an RBC export is judged per RBC account (the
   Account column), so another account's later export in the same folder
   no longer certifies an export taken before the year ended (re-audit

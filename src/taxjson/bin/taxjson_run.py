@@ -860,10 +860,6 @@ def validate_config(cfg: Dict[str, Any],
     _froc = settings.get("foreign_return_of_capital")
     if _froc is not None and _froc not in ("dividend", "acb"):
         _die(f"[settings] foreign_return_of_capital must be \"dividend\" or \"acb\" (got {_froc!r}).")
-    _pyr = settings.get("prior_year_record")
-    if _pyr is not None and not isinstance(_pyr, str):
-        _die(f"[settings] prior_year_record must be a path string "
-             f"(got {_pyr!r}).")
     _fs = settings.get("futures_settle")
     if _fs is not None and _fs not in ("trade", "next_day"):
         _die(f"[settings] futures_settle must be \"trade\" or \"next_day\" (got {_fs!r}).")
@@ -9674,6 +9670,8 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
         print(f"taxjson option-boundary: warning: {_w}", file=sys.stderr)
     filed_years = set()
     filed_timing: Dict[int, Dict[str, Any]] = {}
+    partial_locks: Dict[int, str] = {}
+    from taxjson.bin.taxjson_filed import partial_year_note
     for f in (root / "filed").glob("*.json"):
         try:
             fy = int(f.stem)
@@ -9681,8 +9679,13 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
             continue
         filed_years.add(fy)
         try:
-            _ot = (json.loads(f.read_text(encoding="utf-8")) or {}).get(
-                "option_timing")
+            _lock_doc = json.loads(f.read_text(encoding="utf-8")) or {}
+            _ot = _lock_doc.get("option_timing")
+            # A lock taken before its year ended is a snapshot, not a
+            # filed return (A2-1164): said beside the year.
+            _pn = partial_year_note(_lock_doc, fy)
+            if _pn:
+                partial_locks[fy] = _pn
         except (OSError, ValueError, AttributeError) as e:
             # The lock's recorded timing drives the advice below: an
             # unreadable lock silently read as "no timing recorded" and
@@ -9748,13 +9751,18 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
         _json_out({"year": year, "timing": timing, "since": since,
                    "since_explicit": settings.get(
                        "option_grant_timing_since") not in (None, ""),
-                   "filed_years": sorted(filed_years), "rows": rows,
+                   "filed_years": sorted(filed_years),
+                   "partial_locks": {str(k): v for k, v in
+                                     sorted(partial_locks.items())},
+                   "rows": rows,
                    "amend": len(amend), "attention": len(attention),
                    "missing_books": missing})
         return
     print(f"OPTION YEAR-BOUNDARY REVIEW — tax year {year}; premium timing: {timing}"
           + (f" (contracts written from {since})" if timing == "grant" and since else "")
-          + (f"; filed-year locks: {', '.join(str(y) for y in sorted(filed_years))}" if filed_years else "; no filed-year locks (run `taxjson close-year` after filing)"))
+          + (f"; filed-year locks: {', '.join(str(y) + (' (partial: taken before the year ended)' if y in partial_locks else '') for y in sorted(filed_years))}" if filed_years else "; no filed-year locks (run `taxjson close-year` after filing)"))
+    for _py in sorted(partial_locks):
+        print(f"note: {partial_locks[_py]}")
     print()
     if not rows:
         print("No written option straddles a year boundary and none is open at year end. Nothing to amend.")
@@ -11614,7 +11622,12 @@ def _prior_record_path(root: Path, settings: Dict[str, Any],
     if configured:
         p = Path(str(configured)).expanduser()
         return p if p.is_absolute() else (root / p)
-    return root / "filed" / f"{int(settings.get('year') or 0) - 1}.json"
+    year = settings.get("year")
+    if not isinstance(year, int) or isinstance(year, bool):
+        # It looked for filed/-1.json (A2-1162).
+        _die("[settings] year is required in taxjson.toml (the hand-off "
+             "is from the year before it), or pass --prior.")
+    return root / "filed" / f"{year - 1}.json"
 
 
 def cmd_handoff(args: argparse.Namespace) -> None:
@@ -11784,6 +11797,9 @@ def _check_filed_years(root: Path, cache: Path,
         else:
             print(f"  filed {year}: OK (matches {path.name}; "
                   f"{taxjson_filed.NOT_LOCKED})")
+        _partial = taxjson_filed.partial_year_note(snap, year)
+        if _partial:
+            print(f"  note: filed {year}: {_partial}")
     if (unreadable or mismatched) and strict:
         sys.exit(f"taxjson run --strict: {unreadable + mismatched} "
                  f"filed-year lock(s) could not be checked"

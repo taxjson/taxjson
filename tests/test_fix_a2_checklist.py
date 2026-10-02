@@ -394,3 +394,58 @@ class TestInputsFrozenPerStatement(unittest.TestCase):
             r = cl.d_inputs_frozen(ctx(root, today=self.T))
         self.assertEqual(r.status, "attention", r.detail)
         self.assertIn("IB statements", r.detail)
+
+
+# ------------------------------------------------------------------- locks
+class TestLocks(unittest.TestCase):
+    def test_partial_year_lock_is_not_a_filed_return(self):
+        """A2-0679, A2-1164: a lock taken before the year ended
+        (close-year --force) is named as a snapshot by filed-lock,
+        lock-committed, check-filed and option-boundary."""
+        y = date.today().year                     # always still open
+        book = BOOK.replace("2025-", f"{y}-")
+        with tempfile.TemporaryDirectory() as td:
+            p = make_project(Path(td), toml=TOML.replace("2025", str(y)), book=book)
+            r = tj(p, "close-year", "--force")
+            c = ctx(p, today=date.today(), year=y)
+            for sid in ("filed-lock", "lock-committed"):
+                res = cl.DETECTORS[sid](c)
+                self.assertEqual(res.status, "attention", (sid, res.detail))
+                self.assertIn("before the year ended", res.detail)
+            r = tj(p, "check-filed")
+            self.assertIn(f"filed {y}: OK", r.stdout)
+            self.assertIn("not a filed return", r.stdout)
+            r = tj(p, "option-boundary")
+            self.assertIn(f"{y} (partial: taken before the year ended)", r.stdout)
+            doc = json.loads(tj(p, "option-boundary", "--json").stdout)
+            self.assertIn(str(y), doc["partial_locks"])
+
+    def test_lock_directory_is_blocked(self):
+        """A2-1146: filed/<year>.json as a directory is not 'no lock'."""
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td)
+            (p / "filed" / "2025.json").mkdir(parents=True)
+            (p / "taxjson.toml").write_text(TOML)
+            for sid in ("filed-lock", "lock-committed"):
+                res = cl.DETECTORS[sid](ctx(p))
+                self.assertEqual(res.status, "blocked", (sid, res.detail))
+                self.assertIn("a directory", res.detail)
+
+    def test_prior_year_record_type_and_missing_year(self):
+        """A2-1161: every reader refuses a non-path prior_year_record;
+        A2-1162: handoff never looks for filed/-1.json."""
+        with tempfile.TemporaryDirectory() as td:
+            p = make_project(Path(td), run=False)
+            (p / "taxjson.toml").write_text(TOML.replace(
+                "option_grant_timing_since = 2025\n",
+                'option_grant_timing_since = 2025\n'
+                'prior_year_record = ["../2023/filed/2023.json"]\n'))
+            for cmd in (("handoff",), ("checklist", "--quick"), ("run", "--no-input")):
+                r = tj(p, *cmd, check=False)
+                self.assertNotEqual(r.returncode, 0, cmd)
+                self.assertIn("prior_year_record must be a path string", r.stderr, cmd)
+            (p / "taxjson.toml").write_text(TOML.replace("year = 2025\n", ""))
+            r = tj(p, "handoff", check=False)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertNotIn("-1.json", r.stderr + r.stdout)
+            self.assertIn("year is required", r.stderr)

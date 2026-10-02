@@ -1644,10 +1644,36 @@ def d_estimate(ctx: Ctx) -> Result:
                   f"[instalments] {'present' if inst else 'absent'}")
 
 
-def d_filed_lock(ctx: Ctx) -> Result:
+def _lock_state(ctx: Ctx, sid: str) -> Optional[Result]:
+    """todo when there is no lock, blocked when filed/<year>.json is
+    not a readable lock (a directory, a dangling link: close-year says
+    it 'already exists', A2-1146), attention when it was taken before
+    the year ended (A2-0679, A2-1164). None: a lock to check."""
     lock = ctx.root / "filed" / f"{ctx.year}.json"
-    if not lock.is_file():
-        return Result("filed-lock", "todo", "no filed/<year>.json — `taxjson close-year` after filing")
+    if not lock.exists() and not lock.is_symlink():
+        return Result(sid, "todo",
+                      "no filed/<year>.json — `taxjson close-year` after filing"
+                      if sid == "filed-lock" else "no lock yet")
+    try:
+        doc = json.loads(lock.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        why = ("a directory" if lock.is_dir() else
+               getattr(e, "strerror", None) or str(e))
+        return Result(sid, "blocked",
+                      f"filed/{ctx.year}.json cannot be read ({why}) — "
+                      f"restore the lock from git, or remove it and "
+                      f"`taxjson close-year` after filing")
+    from taxjson.bin.taxjson_filed import partial_year_note
+    note = partial_year_note(doc, ctx.year)
+    if note:
+        return Result(sid, "attention", note)
+    return None
+
+
+def d_filed_lock(ctx: Ctx) -> Result:
+    st = _lock_state(ctx, "filed-lock")
+    if st is not None:
+        return st
     code, out, err = ctx.sub("check-filed")
     if code != 0:
         # Only a reported DRIFT is drift; a failed recompute (bad
@@ -1667,9 +1693,9 @@ def d_filed_lock(ctx: Ctx) -> Result:
 
 
 def d_lock_committed(ctx: Ctx) -> Result:
-    lock = ctx.root / "filed" / f"{ctx.year}.json"
-    if not lock.is_file():
-        return Result("lock-committed", "todo", "no lock yet")
+    st = _lock_state(ctx, "lock-committed")
+    if st is not None:
+        return st
     if not _is_git_repo(ctx.root):
         return Result("lock-committed", "attention", "not a git repository")
     code, out = _git(ctx.root, "status", "--porcelain", "--", "filed")
