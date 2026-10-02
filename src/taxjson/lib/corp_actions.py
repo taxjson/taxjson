@@ -1637,7 +1637,12 @@ RBC_REORG_CODES = frozenset({'MGR', 'NAC', 'REV', 'MER', 'XCH'})
 # A number in RBC's free text: '1,000' groups thousands (a '[\d.]+'
 # group stopped at the comma and read '1 NEW = 1,000 OLD' as 1-for-1 —
 # then the cash-in-lieu sold almost the whole position; audit S073-14).
-_RBC_NUM = r'(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d*\.?\d+)'
+#
+# Captured WHOLE (no digit, comma or point on either side) and checked
+# by `_num_text`: a decimal comma ('0,5', '1,5') is refused. The capture
+# used to start after the comma and read '0,5 NEW = 1 OLD' as 5-for-1
+# (A2-0972, A2-0976).
+_RBC_NUM = r'(?<![\w.,])(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?![\d,])'
 _RBC_MERGER_TO_RE = re.compile(
     rf'\bMERGER\s+TO\s+(.+?)(?:\s+{_RBC_NUM}\s+NEW|\s*$)', re.I)
 _RBC_RATIO_RE = re.compile(
@@ -1666,7 +1671,7 @@ _RBC_TEMP_SYMBOL_RE = re.compile(r'^[A-Z]\d{4,}$')
 _RBC_OPTION_CODE_RE = re.compile(r'^[89][A-Z0-9]{6}$')
 _RBC_LEG_OPTION_RE = re.compile(
     r'\b(CALL|PUT)\s+\.?([A-Z0-9.]+?)\s+(\d{1,2}/\d{1,2}/\d{2})\s+'
-    r'(\d{1,3}(?:,\d{3})+(?:\.\d+)?|[\d.]+)')   # "5,025": audit S063-15
+    r'(\d[\d,]*(?:\.\d+)?|\.\d+)(?![\d,])')  # "5,025": S063-15; whole
 _RBC_CODE_PREFIX_RE = re.compile(r'^\s*[A-Z]{2,4}\s*-\s*')
 _RBC_TO_RE = re.compile(
     r'\b(?:NAME\s+(?:CHANGE|CHG)\s+TO|REV(?:ERSE)?\s+SPLIT\s+TO|MERGER\s+TO|'
@@ -1677,7 +1682,14 @@ _RBC_RECEIPT_TAIL_RE = re.compile(
 # RBC's own return-of-capital phrase ("DEFAULT: ROC OF C$6.1585"), not a
 # bare ROC token: a company named "ROC OIL CORP" turned un-understood
 # merger boot into a return of capital (audit S071-24).
-_RBC_ROC_RE = re.compile(r'\bROC\s+OF\b|\bRETURN\s+OF\s+CAPITAL\b', re.I)
+# Only the consideration clause with an amount ('ROC OF C$6.1585'): the
+# words in an issuer name ('ROC OF CANADA HOLDINGS') or a negation ('NO
+# ROC OF C$ PAID', 'RETURN OF CAPITAL NOT APPLICABLE') turned the leg's
+# cash into a silent ACB reduction (A2-0559); those keep the loud
+# not-understood path.
+_RBC_ROC_RE = re.compile(
+    r'(?<!\bNO\s)(?<!\bNOT\s)\b(?:ROC|RETURN\s+OF\s+CAPITAL)\s+OF\s+'
+    r'(?:[A-Z]{1,3})?\$\s*\.?\d', re.I)
 _RBC_NAME_STOP = frozenset((
     'CORPORATION CORP INCORPORATED INC LTD LIMITED COMPANY CO PLC SA NV AG '
     'HOLDINGS HOLDING GROUP THE COM COMMON STOCK SHARES SHARE SHS SH NEW NO '
@@ -1784,9 +1796,11 @@ def _rbc_stated_ratio(desc: str) -> Optional[float]:
     n = _RBC_NUM
     # '\b...(?![\d,])': '1 FOR 1,000' must read 1000, never stop at
     # the comma and read 1-for-1 (audit S073-19).
+    # `_RBC_NUM` is anchored on both sides in every pattern (the
+    # boundary fix used to reach only the third one: A2-0972).
     for pat in (rf'({n})\s+NEW\s*=\s*({n})\s+OLD',
                 rf'({n})\s+NEW\s+SH(?:S|ARES?)?\s+PER\s+({n})\s+OLD',
-                rf'\b({n})\s+FOR\s+({n})(?![\d,])'):
+                rf'({n})\s+FOR\s+({n})'):
         m = re.search(pat, d)
         if m:
             new = _num_text(m.group(1), where=d[:60])
@@ -1801,6 +1815,8 @@ def _rbc_leg_option(leg):
         m = _RBC_LEG_OPTION_RE.search((text or '').upper())
         if m:
             right, base, exp, strike = m.groups()
+            # '6,4' is refused, not read as strike 6 (A2-0972).
+            _num_text(strike, where=(text or '')[:60])
             return right, base, exp, strike.replace(',', '')
     return None
 

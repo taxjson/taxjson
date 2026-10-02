@@ -456,5 +456,92 @@ class TestElectionMigration(unittest.TestCase):
                          {'allocated_acb_cad': 1234.5})
 
 
+# ======================================================= RBC free text
+class TestRbcDecimalComma(unittest.TestCase):
+    """A2-0972, A2-0976: every number in RBC's corporate-action free text
+    is read whole, so a decimal comma is refused instead of read from
+    after the comma (0,5 -> 5)."""
+
+    def test_ratio_refuses_decimal_comma(self):
+        from taxjson.lib import corp_actions as ca
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        for d in ("MGR - OLDCO MERGER TO NEWCO 1,5 NEW = 1 OLD",
+                  "MGR - OLDCO MERGER TO NEWCO 0,75 NEW = 1 OLD",
+                  "REV - ABC REV SPLIT TO ABC 1 NEW = 2,5 OLD"):
+            with self.assertRaises(BrokerageParseError, msg=d):
+                ca.rbc_ratio_parts(d)
+        self.assertEqual(ca.rbc_ratio_parts(
+            "MGR - OLDCO MERGER TO NEWCO 1,500 NEW = 1 OLD"), (1500.0, 1.0))
+        self.assertEqual(ca.rbc_ratio_parts(
+            "MGR - OLDCO MERGER TO NEWCO .5 NEW = 1 OLD"), (0.5, 1.0))
+
+    def test_stated_ratio_refuses_decimal_comma(self):
+        from taxjson.lib import corp_actions as ca
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        for d in ("REV - ABC REV SPLIT TO ABC 0,5 NEW = 1 OLD",
+                  "XCH - ABC 0,963957 NEW SHS PER 1 OLD",
+                  "NAC - ABC NAME CHG TO XYZ; 0,5 FOR 1",
+                  "REV - ABC REV SPLIT; 1 FOR 2,5"):
+            with self.assertRaises(BrokerageParseError, msg=d):
+                ca._rbc_stated_ratio(d)
+        self.assertAlmostEqual(ca._rbc_stated_ratio(
+            "XCH - ABC .963957 NEW SHS PER 1 OLD"), 0.963957)
+        self.assertEqual(ca._rbc_stated_ratio(
+            "REV - ABC REV SPLIT; 1 FOR 1,000"), 0.001)
+
+    def test_leg_strike_refuses_decimal_comma(self):
+        from types import SimpleNamespace
+        from taxjson.lib import corp_actions as ca
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        leg = SimpleNamespace(desc="XCH - CALL .TOU 03/21/25 6,4 TOURMALINE "
+                                   "ADJ", symdesc='')
+        with self.assertRaises(BrokerageParseError):
+            ca._rbc_leg_option(leg)
+        leg.desc = "XCH - CALL .TOU 03/21/25 5,025 TOURMALINE ADJ"
+        self.assertEqual(ca._rbc_leg_option(leg)[3], '5025')
+
+
+
+class TestRbcRocClause(unittest.TestCase):
+    """A2-0559 (S073-16 partial): cash on an RBC reorganization leg is a
+    return of capital only under RBC's 'ROC OF C$<amount>' clause, not
+    when 'ROC OF' / 'RETURN OF CAPITAL' appears in a name or a negation."""
+
+    HDR = ('"Date","Activity","Symbol","Symbol Description","Quantity",'
+           '"Price","Settlement Date","Value","Currency","Description"\n')
+
+    def _row(self, date, act, sym, sd, qty, price, val, desc):
+        cells = [date, act, sym, sd, qty, price, date, val, 'CAD', desc]
+        return ','.join('"%s"' % c for c in cells) + '\n'
+
+    def _parse(self, name, extra):
+        from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
+        body = (self._row("June 28, 2026", "Reorganization", "Q099003",
+                          f"{name} OLD", "-50", "", "100.00",
+                          f"MER - {name} OLD DEFAULT: C$2.00 CASH + 1 NEW "
+                          f"SHS PER 1 OLD{extra}")
+                + self._row("June 28, 2026", "Reorganization", "QRX",
+                            f"{name} NEW", "50", "", "0",
+                            f"MGR - {name} NEW SHRS RECEIVED THRU MERGER")
+                + self._row("May 3, 2026", "Buy", "QRX", f"{name} OLD", "50",
+                            "20", "-1000.00", f"{name} UNSOLICITED DA"))
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rbc.csv"
+            p.write_text(self.HDR + body)
+            txs, err = _quiet(RbcBrokerage().parse_file, p)
+        return [t for t in txs if t['action'] == 'ADJUST'], err
+
+    def test_only_the_amount_clause_is_a_roc(self):
+        adj, _ = self._parse("QUARTZ CORP", " ROC OF C$2.00")
+        self.assertEqual([round(t['net_amount'], 2) for t in adj], [-100.0])
+        for name, extra in (("ROC OF CANADA HOLDINGS", ""),
+                            ("QUARTZ CORP", " RETURN OF CAPITAL NOT "
+                                            "APPLICABLE"),
+                            ("QUARTZ CORP", " NO ROC OF C$ PAID")):
+            adj, err = self._parse(name, extra)
+            self.assertEqual(adj, [], f"{name}{extra}")
+            self.assertIn('NOT booked', err)
+
+
 if __name__ == "__main__":
     unittest.main()

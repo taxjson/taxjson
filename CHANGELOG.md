@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- RBC corporate-action text: a ratio or option strike written with a
+  decimal comma (`0,5 NEW = 1 OLD`, `6,4`) is refused instead of read
+  from after the comma as 5 or 6 (A2-0972, A2-0976); cash on a
+  reorganization leg counts as a return of capital only under RBC's
+  `ROC OF C$<amount>` clause, not when the words appear in an issuer
+  name or a negation (A2-0559).
 - **Elections manifest migration never hands one event's election to
   another** (A2-0064, A2-0217, A2-0557, A2-0975, A2-0978; R1-301
   residue A2-0168, A2-0872): a record keyed by a current event's own id
