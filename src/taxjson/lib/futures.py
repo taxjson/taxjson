@@ -94,9 +94,16 @@ def _D(x) -> Decimal:
 
 def _money(tx: TaxTransaction) -> Decimal:
     """The fill's native money in pool terms (engine convention): a
-    buy's cost as a magnitude, a sell's proceeds signed."""
+    buy's cost as a magnitude, a sell's proceeds signed. A buy at a
+    NEGATIVE price (WTI, April 2020) received cash: its negative net is
+    the signed cost, and the magnitude booked that loss as a gain
+    (audit A2-0302)."""
     n = _D(tx.net_amount)
-    return n if float(tx.quantity or 0.0) < 0 else abs(n)
+    if float(tx.quantity or 0.0) < 0:
+        return n
+    if n < 0 and float(tx.price or 0.0) < 0:
+        return n
+    return abs(n)
 
 
 def _part(tx: TaxTransaction, qty: Decimal, frac: Decimal, net: Decimal,

@@ -663,6 +663,7 @@ Examples:
                 hash_broker_account(a) for a in _accts)
         stamp_source_accounts(_txs, _accts)
 
+    _bare_warned: set = set()
     for input_path, extractor, transactions in parsed_files:
         _kept_this_file = 0     # TRANSFER evidence rows set aside below
         _source = _source_names[id(extractor)]
@@ -684,6 +685,22 @@ Examples:
                 if t.get('symbol') != _before:
                     override_renamed.setdefault(_key, set()).add(
                         t.get('symbol'))
+                    # A listed symbol renamed to a bare one (A2-0304).
+                    from taxjson.bin.taxjson_ticker_map import \
+                        bare_rename_target
+                    if (bare_rename_target(_before, t.get('symbol'))
+                            and (_before, t.get('symbol'))
+                            not in _bare_warned):
+                        _bare_warned.add((_before, t.get('symbol')))
+                        print(f"warning: ATTENTION: "
+                              f"ticker_extraction_overrides.txt renames "
+                              f"{_before} to {t.get('symbol')}, which has "
+                              f"no market suffix — a bare symbol is read "
+                              f"as crypto / an unknown listing (a Canadian "
+                              f"dividend on it is counted as foreign). "
+                              f"Write the listing "
+                              f"({t.get('symbol')}.TO, "
+                              f"{t.get('symbol')}.US).", file=sys.stderr)
                 else:
                     override_kept.add(_key)
 

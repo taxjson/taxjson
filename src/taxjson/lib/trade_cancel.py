@@ -18,7 +18,7 @@ reversing trade, with a warning.
 Rows may be dicts (parser output) or TaxTransaction objects (merge2).
 """
 
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 TRADE_CANCEL_TYPE = 'trade_cancel'
 
@@ -61,24 +61,87 @@ def cancels(orig: Any, ca: Any) -> bool:
     return abs(p_o - p_c) <= 1e-6 * max(1.0, abs(p_c))
 
 
-def pair_cancellations(txs: List[Any]) -> Tuple[List[Any], List[Tuple[Any, Any]],
-                                                List[Any]]:
+def _probe(orig: Any, qty: float) -> dict:
+    """`orig` as a dict with its quantity replaced (for `cancels`)."""
+    d = dict(orig) if isinstance(orig, dict) else orig.to_dict()
+    d['quantity'] = qty
+    return d
+
+
+def _partly_cancels(orig: Any, ca: Any) -> bool:
+    """True when `ca` reverses PART of `orig`: IB lists an order filled
+    in several executions as one Order row, and a Ca naming one
+    execution (-40 of a 440-share order) never matched the aggregate
+    exactly (audit A2-0298). Every other field must match as for a
+    full cancellation; the original is larger, in the same direction."""
+    q_o = float(_g(orig, 'quantity') or 0.0)
+    q_c = float(_g(ca, 'quantity') or 0.0)
+    if abs(q_c) < 1e-12 or q_o * q_c >= 0 or abs(q_o) <= abs(q_c) + 1e-9:
+        return False
+    return cancels(_probe(orig, -q_c), ca)
+
+
+def _reduced(orig: Any, ca: Any) -> Any:
+    """`orig` less the cancelled execution: quantity and every money
+    field scaled by the share that stays."""
+    q_o = float(_g(orig, 'quantity') or 0.0)
+    q_c = float(_g(ca, 'quantity') or 0.0)
+    keep = (q_o + q_c) / q_o
+    d = dict(orig) if isinstance(orig, dict) else orig.to_dict()
+    d['quantity'] = q_o + q_c
+    for f in ('net_amount', 'gross_amount', 'proceeds', 'commission',
+              'fee'):
+        if d.get(f) not in (None, ''):
+            d[f] = round(float(d[f]) * keep, 10)
+    if isinstance(orig, dict):
+        if 'id' in d:
+            d.pop('id')
+        return d
+    d['id'] = None
+    return type(orig)(**d)
+
+
+def pair_cancellations(txs: List[Any], partials: Optional[list] = None
+                       ) -> Tuple[List[Any], List[Tuple[Any, Any]],
+                                  List[Any]]:
     """Drop every cancellation row together with the original it reverses.
 
     Returns (kept, pairs, unmatched): `kept` in the input order, `pairs`
     as (original, cancellation), `unmatched` the cancellation rows whose
     original is not in `txs` (they stay in `kept`). Among several
     candidate originals the one with the same time wins, else the latest
-    one before the cancellation in the list, else the first after it."""
+    one before the cancellation in the list, else the first after it.
+
+    A cancellation of one execution of a larger order (no exact
+    original, ONE larger same-direction original otherwise matching —
+    the same time preferred) reduces that original pro rata instead:
+    the reduced row takes its place in `kept`, the cancellation is
+    dropped, and (original, cancellation, reduced) is appended to
+    `partials` when a list is given."""
     used = set()
     pairs = []
     unmatched = []
+    replaced = {}
     for ci, ca in enumerate(txs):
         if not is_trade_cancel(ca):
             continue
         cands = [i for i, t in enumerate(txs)
                  if i not in used and i != ci and cancels(t, ca)]
         if not cands:
+            part = [i for i, t in enumerate(txs)
+                    if i not in used and i != ci and not is_trade_cancel(t)
+                    and _partly_cancels(replaced.get(i, t), ca)]
+            same = [i for i in part
+                    if (_g(txs[i], 'time') or '') == (_g(ca, 'time') or '')]
+            part = same or part
+            if len(part) == 1:
+                oi = part[0]
+                before = replaced.get(oi, txs[oi])
+                replaced[oi] = _reduced(before, ca)
+                used.add(ci)
+                if partials is not None:
+                    partials.append((before, ca, replaced[oi]))
+                continue
             unmatched.append(ca)
             continue
         same_time = [i for i in cands
@@ -88,5 +151,5 @@ def pair_cancellations(txs: List[Any]) -> Tuple[List[Any], List[Tuple[Any, Any]]
         oi = before[-1] if before else pool[0]
         used.update((oi, ci))
         pairs.append((txs[oi], ca))
-    kept = [t for i, t in enumerate(txs) if i not in used]
+    kept = [replaced.get(i, t) for i, t in enumerate(txs) if i not in used]
     return kept, pairs, unmatched

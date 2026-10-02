@@ -418,7 +418,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "is paid to open one, so its notional is never converted. "
                  "Each close's P/L (commissions included, average cost of "
                  "the open contracts) is converted at that closing leg's "
-                 "rate;"),
+                 "rate. A fill at a negative price keeps its signed money "
+                 "(a buy then receives cash: a negative cost);"),
             Rule("CA-FX-05",
                  "Schedule 3 shows a gain as proceeds and a loss as ACB.",
                  cont=True),
@@ -446,10 +447,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "The single pool needs a full `taxjson run` (not "
                  "`--account`, and no elections pending).", cont=True),
             Rule("CA-ACB-04",
-                 "Identical property is the same symbol with its currency "
-                 "suffix (.TO, .US, .V). Two listings are one security "
-                 "only when ticker.map joins them. Renames and splits "
-                 "carry the pool forward."),
+                 "Identical property is the same symbol with its listing "
+                 "suffix (.TO, .US). A Canadian listing is one symbol "
+                 "whatever venue the input names: ROOT.TO, with a TSX "
+                 "preferred series dotted (FTN.PR.A.TO) — .V (on a CAD "
+                 "row), .VN, .CN and .NE fold into .TO for broker exports "
+                 "and .tt lines alike. Two other listings are one "
+                 "security only when ticker.map joins them. Renames and "
+                 "splits carry the pool forward."),
             Rule("CA-ACB-05",
                  "Accounts typed \"sheltered\" (RRSP, TFSA, FHSA, LIRA, "
                  "RESP...) are tracked but kept out of the filing totals. "
@@ -947,8 +952,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("US-BASIS-06",
                  "Identical property is the same symbol with its listing "
-                 "suffix (.US, .TO); two listings are one security only "
-                 "when ticker.map joins them."),
+                 "suffix (.US, .TO). A Canadian listing is ROOT.TO "
+                 "whatever venue the input names (.V on a CAD row, .VN, "
+                 ".CN, .NE; a dotted preferred series), for broker "
+                 "exports and .tt lines alike; two other listings are one "
+                 "security only when ticker.map joins them."),
             Rule("US-BASIS-05",
                  "A transfer into a taxable account stops the run until "
                  "the original purchase is declared (.tt ACQUIRED line)."),
@@ -1157,7 +1165,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "or reported. A close's P/L (commissions included) is "
                  "taken first in, first out from the open contracts, and "
                  "a non-USD contract's P/L is converted at the closing "
-                 "leg's rate."),
+                 "leg's rate. A fill at a negative price keeps its signed "
+                 "money (a buy then receives cash: a negative cost)."),
             Rule("US-FUT-02",
                  "Not modelled: §1256 year-end marking to market and the "
                  "60/40 split; report them on Form 6781 by hand.",

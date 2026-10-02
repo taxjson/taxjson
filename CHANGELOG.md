@@ -82,6 +82,59 @@
   corporate-actions reader decode them like the IB/Questrade/RBC parsers
   (no more false 'not UTF-8 or UTF-16 text') (A2-0101, A2-1064, A2-1066,
   A2-1451).
+- **IB: a cancelled execution of a multi-fill order cancels that part
+  of the order.** IB lists an order filled 400 + 40 as one 440-share
+  Order row; a `Ca` naming the 40-share execution never matched it and
+  stayed booked as a phantom 40-share sale (with a false "original in
+  none of the inputs" warning). The order is now reduced pro rata to
+  400 shares, in the statement and across statements (audit A2-0298).
+- **A rename to a bare symbol is an ATTENTION line.** A ticker.map
+  rule (`GLOBAL RY.TO RY`) or a `ticker_extraction_overrides.txt` line
+  that turns a listed symbol into a bare one used to be accepted in
+  silence; the bare symbol is read as crypto or an unknown listing, so
+  a Canadian eligible dividend became a foreign one with an assumed
+  foreign tax credit. `taxjson run` now prints it on the console
+  (audit A2-0304).
+- **Futures at a negative price, and futures schema checks.** A
+  plain-futures buy at a negative price (WTI, April 2020) received cash;
+  its negative net is now accepted by the schema and booked as a
+  negative cost, where the magnitude the schema forced booked the loss
+  as a gain (tax-logic CA-FX-04 / US-FUT-01). The negative-price
+  exemption covers every futures prefix (`/` and `\` as well as `F:`)
+  in the schema and `taxjson-validate`; a futures row with no declared
+  contract size no longer gets a guessed-size ATTENTION (every
+  generic-importer futures row did); and an option expiry row dated
+  after its expiry day is a schema warning (audit A2-0302, A2-1082,
+  A2-1087, A2-1088, A2-1089).
+- **.tt lines spell Canadian listings like the broker parsers.** A .tt
+  `ABC.V` (on a CAD line), `ABC.VN`, `ABC.CN`, `ABC.NE` or `FTN.PRA.TO`
+  is now `ABC.TO` / `FTN.PR.A.TO`: it used to be its own ACB pool, so a
+  loss sold through a .tt file and the broker's repurchase of `ABC.TO`
+  were never linked as identical property. `.VN` is a Canadian venue to
+  the schema, T1135 (no more '??' REVIEW) and the price chain too, and
+  the venue-split lint catches `.VN` and undotted preferred series
+  (tax-logic CA-ACB-04 / US-BASIS-06; audit A2-0300, A2-0635, A2-1077).
+- **.tt keeps income facts and full precision.** A DIVIDEND /
+  DIVIDEND_IN_LIEU / TAX / ADJUST line may end with `record=`, `ex=`,
+  `label=`, `dealer=`, `issuer=` and (ADJUST) `type=roc` tokens, and
+  `taxjson-convert-tt book.json` writes them: the round trip used to
+  move a December-record distribution and its ROC to the pay year, and
+  turn a Canadian dealer's payment in lieu (an s.260 deemed dividend)
+  into other income, with no word. Quantities and prices keep every
+  digit (a 10-decimal coin quantity was cut to 8, changing the row's
+  id). A .tt file whose last line has no line end warns that it may be
+  cut short (audit A2-0291, A2-0631, A2-1072, A2-1086).
+- **.tt: a sale whose commission exceeds its gross keeps its negative
+  proceeds.** A .tt SELL line may now carry the negative total
+  qty×price − commission (a penny option close: `-8.95` with a 9.95
+  commission) when its own commission explains it; any other negative
+  sell total is still refused. The old advice (`enter 0`) left the
+  excess commission out of the loss and now warns. `taxjson-convert-tt`
+  json→tt and the `taxjson events`/`trades` single-account view wrote
+  that negative total already, so their output re-imports again, and the
+  view now carries a declared contract size (`x1000`, `x10`) like
+  convert-tt (audit A2-0292, A2-0620, A2-0621, A2-0622, A2-0623,
+  A2-1073, A2-1226, A2-1227).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those
