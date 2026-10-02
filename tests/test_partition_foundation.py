@@ -961,6 +961,8 @@ class TestEnginePartition(unittest.TestCase):
                     self.assertEqual(r[c]["summary"]["tax_date_basis"],
                                      basis)
 
+    @rule("CA-DATE-01")
+    @rule("US-DATE-01")
     def test_us_ladder_defaults_to_trade_dates(self):
         """ENGINE-13: event_sort_key's default basis follows the ladder's
         country (the US one used Canada's settle-first date)."""

@@ -269,6 +269,7 @@ class TestOptionBoundaryAmountsPinned(unittest.TestCase):
             T(date="2024-12-10", date_settle="2024-12-11", symbol=self.OPT2, quantity=-2, price=1.5, net_amount=298.0),
         ]
 
+    @rule("CA-OPT-03", "CA-OPT-05", "CA-OPT-07")
     def test_close_timing_rows(self):
         from datetime import date
         from taxjson.lib.option_boundary import straddling
@@ -292,6 +293,7 @@ class TestOptionBoundaryAmountsPinned(unittest.TestCase):
         self.assertIn("298.00 premium", by["expired?"]["action"])
         self.assertEqual([r["attention"] for r in rows], [False, False, False, True])
 
+    @rule("CA-OPT-01", "CA-OPT-03")
     def test_grant_timing_rows(self):
         from datetime import date
         from taxjson.lib.option_boundary import straddling

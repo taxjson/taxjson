@@ -11,6 +11,7 @@ from pathlib import Path
 
 from taxjson.lib.brokerages.base import BrokerageParseError
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction
+from tax_rules import rule
 
 
 def _parse(parser, content, name='t.csv'):
@@ -312,6 +313,7 @@ class TestWebullProceeds(unittest.TestCase):
 
 
 # ----------------------------------------------- Canadian listing identity
+@rule("CA-ACB-04")
 class TestCanadianListingIdentity(unittest.TestCase):
     """S010-05 / S014-07: one spelling per Canadian listing, whichever
     parser read it."""
