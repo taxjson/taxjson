@@ -711,6 +711,33 @@ class _CappedHelpFormatter(argparse.HelpFormatter):
         super().__init__(prog, **kw)
 
 
+def _child_error(stderr: Optional[str], limit: int = 400) -> str:
+    """What a wrapper relays of a failed child's stderr: all of it when
+    short, else its error line. A fixed-length PREFIX cut a traceback off
+    before the exception line, so the actual error never showed (audit
+    A2-1190). For a traceback: the lines before it plus its last line;
+    otherwise the last lines, newest kept."""
+    lines = [ln.rstrip() for ln in (stderr or "").strip().splitlines()
+             if ln.strip()]
+    if not lines:
+        return "(no error output)"
+    text = "\n".join(lines)
+    if len(text) <= limit:
+        return text
+    tb = next((i for i, ln in enumerate(lines)
+               if ln.startswith("Traceback (most recent call last)")), None)
+    if tb is not None:
+        keep = lines[:tb][-2:] + ["(traceback omitted) " + lines[-1]]
+    else:
+        keep = []
+        for ln in reversed(lines):
+            if keep and sum(len(k) for k in keep) + len(ln) > limit:
+                break
+            keep.insert(0, ln)
+    return "\n".join(k if len(k) <= limit else k[:limit] + " …"
+                     for k in keep)
+
+
 def _die(msg: str) -> None:
     prefix = f"taxjson {_CURRENT_CMD}: " if _CURRENT_CMD else "taxjson: "
     sys.exit(prefix + msg)
@@ -8764,7 +8791,7 @@ def cmd_instalments(args: argparse.Namespace) -> None:
     res = _run(_argv, capture_output=True)
     if res.returncode != 0:
         _die(f"could not compute the estimate it builds on: "
-             f"{(res.stderr or '').strip()[:400]}")
+             f"{_child_error(res.stderr)}")
     # The estimate's own warnings (an unreadable or stale-year gains
     # file, tainted sales EXCLUDED, a run that failed) are caveats on
     # every figure below: relay them, never swallow them (S005-05,
@@ -10498,7 +10525,7 @@ def cmd_positions(args: argparse.Namespace) -> None:
             res = _run_cmd(cmd + [str(b)], capture_output=True)
             if res.returncode != 0:
                 print(f"taxjson: warning: as-of compute failed for "
-                      f"{n}: {(res.stderr or '').strip()[:200]}",
+                      f"{n}: {_child_error(res.stderr)}",
                       file=sys.stderr)
                 continue
             tmp_docs[n] = json.loads(res.stdout)
@@ -11967,7 +11994,7 @@ def _explain_wash_sales(root: Path, cache: Path,
                 tmp.unlink(missing_ok=True)
                 sys.exit(f"taxjson wash-sales: could not merge the "
                          f"taxable base books: "
-                         f"{(res.stderr or '').strip()[:300]}")
+                         f"{_child_error(res.stderr)}")
             tmp.write_text(res.stdout, encoding="utf-8")
             target = tmp
         try:
@@ -12217,7 +12244,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
     res = _run(cmd, capture_output=True)
     if res.returncode != 0:
         sys.exit(f"taxjson watch: radar failed: "
-                 f"{(res.stderr or '').strip()[:400]}")
+                 f"{_child_error(res.stderr)}")
     try:
         radar_doc = _json.loads(res.stdout)
     except ValueError as e:
@@ -12239,7 +12266,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
         if hres.returncode != 0:
             print(f"taxjson watch: warning: harvest failed — the "
                   f"harvest dimension is skipped this run: "
-                  f"{(hres.stderr or '').strip()[:200]}",
+                  f"{_child_error(hres.stderr)}",
                   file=sys.stderr)
         else:
             try:
@@ -13250,7 +13277,7 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
                   f"it.", file=sys.stderr)
     res = _run(cmd, capture_output=True)
     if res.returncode != 0:
-        _die(f"radar failed: {(res.stderr or '').strip()[:400]}")
+        _die(f"radar failed: {_child_error(res.stderr)}")
     radar = flatten_radar(_json.loads(res.stdout))
 
     # Identity comes ONLY from ticker.map (GLOBAL/TOBASE/JOURNAL), SPLIT
@@ -14060,7 +14087,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
             if res.returncode != 0:
                 cleanup.unlink(missing_ok=True)
                 _die(f"could not merge the taxable base books: "
-                     f"{(res.stderr or '').strip()[:300]}")
+                     f"{_child_error(res.stderr)}")
             cleanup.write_text(res.stdout, encoding="utf-8")
             base_arg = cleanup
         fl = common_flags() + ["--base", str(base_arg)]
