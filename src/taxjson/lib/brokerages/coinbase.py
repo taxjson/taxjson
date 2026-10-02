@@ -1,11 +1,13 @@
 import csv
+import hashlib
 import re
 import sys
 from pathlib import Path
 from typing import List, Dict, Any
 
 from taxjson.lib.brokerages.base import BaseBrokerage
-from taxjson.lib.brokerages._crypto_common import (strict_money, utc_to_local,
+from taxjson.lib.brokerages._crypto_common import (USD_STABLECOINS,
+                                                   strict_money, utc_to_local,
                                                    warn_depeg)
 
 
@@ -77,10 +79,28 @@ _REQUIRED_FIELDS = ('timestamp', 'transaction type', 'asset',
 # None is a trade or income; listing them keeps the "if any of these
 # are trades/income, the parser needs a new branch" call to action for
 # types the parser genuinely cannot classify.
-_KNOWN_NONEVENT_TYPES = frozenset({
+# Coin moves between your own Coinbase wallets: a non-event in any asset.
+_COIN_NONEVENT_TYPES = frozenset({
     'retail staking transfer', 'retail unstaking transfer',
-    'retail eth deprecation', 'deposit', 'subscription',
+    'retail eth deprecation',
 })
+# Cash moves: a non-event only when the asset is fiat (or a stablecoin
+# booked as US-dollar cash). A fiat Withdrawal used to be UNBOOKED (a
+# false 'moves coins' alarm that failed run --strict, re-audit A2-0237),
+# and a COIN Deposit or a Subscription paid in a coin was dropped as a
+# non-event with no warning (A2-0566) — a coin leaving for a
+# subscription is a disposition.
+_FIAT_NONEVENT_TYPES = frozenset({'deposit', 'withdrawal', 'subscription'})
+_KNOWN_NONEVENT_TYPES = _COIN_NONEVENT_TYPES | _FIAT_NONEVENT_TYPES
+
+# Money identity (S023-19's crypto twin, re-audit A2-0022 / A2-0080 /
+# A2-0250): a row's value must fit |Quantity| x Price within Coinbase's
+# spread (real retail sells sit within 1%), and a Buy/Sell Total must
+# be Subtotal +/- the fee (real rows agree to the cent). A 10x or
+# shifted column used to book silently under run --strict.
+_QP_TOL_ABS = 0.02
+_QP_TOL_REL = 0.05
+_TOTAL_TOL_REL = 0.01
 
 # USD-pegged stablecoins are treated as USD CASH — the same model the
 # Kraken parser uses (it folds USDC/USDT/DAI to USD, books a USDC-quoted
@@ -100,7 +120,7 @@ _KNOWN_NONEVENT_TYPES = frozenset({
 # year (USDC bought and spent within days at ~the same BoC rate).
 # The crypto side of each Advanced Trade is still booked at the CAD
 # value Coinbase states for it (Subtotal / Total).
-_STABLECOINS = frozenset({'USDC', 'USDT', 'DAI', 'PYUSD', 'GUSD'})
+_STABLECOINS = USD_STABLECOINS
 
 # Fiat currencies a Coinbase pair can be quoted in (or a row priced
 # in). Anything else in the quote slot of an Advanced Trade pair is a
@@ -159,13 +179,19 @@ class CoinbaseBrokerage(BaseBrokerage):
         # (S056-12): (type, date, asset, quantity).
         unbooked: List[tuple] = []
         self.lint_findings: List[str] = []
+        self._stems: Dict[str, int] = {}
         # utf-8-sig swallows a BOM if present, plain utf-8 reads it as a
         # data byte and silently breaks the first column match.
         with open(path, 'r', encoding='utf-8-sig') as f:
             reader = csv.reader(f)
             header = None
             header_map: Dict[str, int] = {}
+            _prev_line = 0
             for row in reader:
+                # The line the record STARTED on: reader.line_num is
+                # where it ended, which for a cell that swallowed later
+                # lines named the wrong row (re-audit A2-0584).
+                row_start, _prev_line = _prev_line + 1, reader.line_num
                 if not header:
                     # Stripped like raw_map below: a header written
                     # `ID, Timestamp, ...` used to be missed and the
@@ -198,7 +224,10 @@ class CoinbaseBrokerage(BaseBrokerage):
                     continue
                 if not row or not any(c.strip() for c in row):
                     continue
-                _need = max(header_map[f] for f in _REQUIRED_FIELDS)
+                # Every recognized column, not only the required ones: a
+                # row cut inside Total with Fees/Notes missing booked a
+                # short Total and a $0 fee (re-audit A2-0249).
+                _need = max(header_map.values())
                 if len(row) <= _need:
                     # A truncated row: missing cells used to read as ''
                     # / 0 (a 2-cell tail vanished uncounted; a 3-4 cell
@@ -217,10 +246,12 @@ class CoinbaseBrokerage(BaseBrokerage):
                 # never write more cells than the header.
                 if any('\n' in c or '\r' in c for c in row):
                     raise ValueError(
-                        f"Coinbase CSV {path.name} line {reader.line_num}: "
+                        f"Coinbase CSV {path.name} line {row_start}: "
                         f"a cell spans several lines — an unterminated "
-                        f"quote (e.g. in Notes) has swallowed the rows "
-                        f"after it. Fix the quoting in the file.")
+                        f"quote (e.g. in Notes) opened on this line has "
+                        f"swallowed lines {row_start + 1}-"
+                        f"{reader.line_num} after it. Fix the quoting in "
+                        f"the file.")
                 if len(row) > len(header) and any(
                         c.strip() for c in row[len(header):]):
                     raise ValueError(
@@ -327,7 +358,11 @@ class CoinbaseBrokerage(BaseBrokerage):
                             })
                             self.note_row_consumed()
                             continue
-                    if _tl in _KNOWN_NONEVENT_TYPES:
+                    _asset_u = self._col(row, header_map,
+                                         'asset').strip().upper()
+                    if _tl in _COIN_NONEVENT_TYPES or (
+                            _tl in _FIAT_NONEVENT_TYPES
+                            and _asset_u in (_FIAT | self._cash_coins)):
                         self.count_nonevent(f"type {type_raw.strip()}")
                         continue
                     # Rewards-of-unknown-type etc.: no tax-event
@@ -418,6 +453,13 @@ class CoinbaseBrokerage(BaseBrokerage):
                 # dedup from collapsing distinct events that happen to share
                 # second-precision timestamp + qty + price.
                 cb_id = self._col(row, header_map, 'id').strip()
+                if not cb_id and crypto_quote and 'id' not in header_map:
+                    # Both legs need one id stem for fill-crypto to value
+                    # the swap once (re-audit A2-0998's twin).
+                    cb_id = self._content_stem(row)
+                where = (f"Coinbase {path.name} line {row_start} "
+                         f"({type_raw.strip()} {asset} "
+                         f"{self._col(row, header_map, 'timestamp')})")
 
                 if is_staking:
                     # Two-row pattern matches Kraken's staking handling and
@@ -444,6 +486,9 @@ class CoinbaseBrokerage(BaseBrokerage):
                     _sub = abs(self._num(row, header_map, 'subtotal')) \
                         if 'subtotal' in header_map else 0.0
                     if _sub:
+                        # A 10x Subtotal was 10x income and ACB with only
+                        # a warn-level schema note (re-audit A2-0250).
+                        self._check_qp(where, 'Subtotal', _sub, qty, price)
                         total = _sub
                     elif price and qty:
                         total = price * abs(qty)
@@ -493,6 +538,13 @@ class CoinbaseBrokerage(BaseBrokerage):
                         row, header_map, type_raw, is_sell, qty, price,
                         fee)
                     self._blank_totals = (self._blank_totals or 0) + 1
+                else:
+                    # A given Total must fit the row (A2-0080), and a
+                    # sale whose fee exceeds its value nets NEGATIVE
+                    # whatever sign the cell carries (A2-0565).
+                    total = self._checked_total(
+                        where, row, header_map, is_sell, qty, price, fee,
+                        total)
 
                 # Coinbase Advanced Trade Sell rows store both qty and total
                 # as negative ("money out, position out"); store the magnitude
@@ -509,13 +561,27 @@ class CoinbaseBrokerage(BaseBrokerage):
                     'quantity': qty,
                     'currency': currency,
                     'price': price,
-                    'net_amount': total if derived else abs(total),
+                    'net_amount': total,
                     'gross_amount': price * abs(qty),
                     'fee': abs(fee),
                     'account': self.DEFAULT_ACCOUNT,
                 }
                 if cb_id:
                     tx['id'] = cb_id
+                if self._cash_coins and currency == 'USD':
+                    # "Bought 0.5 ETH for 1000 USDC on ETH-USDC" valued
+                    # at 880 USD spent USDC at 0.88: off the peg the
+                    # cash approximation drops a gain or loss — say so,
+                    # as a Buy/Sell USDC row does (re-audit A2-1003).
+                    _am = _ADV_NOTES_RE.search(
+                        self._col(row, header_map, 'notes') or '')
+                    if _am and _am.group(5).upper() in self._cash_coins:
+                        _sq = strict_money(_am.group(4), 'Notes quantity',
+                                           where)
+                        if _sq:
+                            warn_depeg(_am.group(5).upper(),
+                                       abs(total) / _sq, _sq, date_str,
+                                       f"Coinbase {type_raw.strip()}")
                 if crypto_quote:
                     transactions.extend(self._crypto_pair_legs(
                         row, header_map, tx, type_raw, is_sell,
@@ -554,6 +620,88 @@ class CoinbaseBrokerage(BaseBrokerage):
         self.emit_skip_summary(path.name)
         return transactions
 
+    def _content_stem(self, row) -> str:
+        """A stable id stem for a row of an export with no ID column:
+        a hash of the row's cells, numbered when the same row repeats in
+        the file. Both legs of a swap carry it, so fill-crypto values the
+        exchange once (re-audit A2-0998); an identical copy of the same
+        export in another file gets the same stem, so dedup still folds
+        it."""
+        h = hashlib.sha1('\x1f'.join(c.strip() for c in row)
+                         .encode('utf-8')).hexdigest()[:16]
+        n = self._stems.get(h, 0) + 1
+        self._stems[h] = n
+        return f"cb{h}" + (f"n{n}" if n > 1 else "")
+
+    @staticmethod
+    def _fits_qp(value, qty, price) -> bool:
+        qp = abs(qty) * abs(price)
+        return abs(abs(value) - qp) <= _QP_TOL_ABS + _QP_TOL_REL * qp
+
+    def _check_qp(self, where, what, value, qty, price) -> None:
+        """Refuse a value that contradicts |qty| x price (A2-0022,
+        A2-0250). Nothing to check without both."""
+        if not qty or not price or self._fits_qp(value, qty, price):
+            return
+        raise ValueError(
+            f"{where}: {what} {abs(value):,.2f} does not fit |Quantity| "
+            f"{abs(qty):g} x Price {abs(price):g} = "
+            f"{abs(qty) * abs(price):,.2f} — a wrong or shifted column; "
+            f"refusing to book it. Correct the row from the Coinbase "
+            f"statement.")
+
+    def _checked_total(self, where, row, header_map, is_sell, qty, price,
+                       fee, total) -> float:
+        """The signed net of a Buy/Sell row whose Total is given:
+        positive cost on a buy, proceeds on a sale (negative when the fee
+        exceeds the value). The Total must be Subtotal +/- fee, and the
+        Subtotal (or, without one, the Total itself) must fit |qty| x
+        price (re-audit A2-0080). An all-zero row is refused like a
+        blank Total (A2-1023): fill-crypto would re-price it at market,
+        a guess."""
+        fee = abs(fee)
+        has_sub = ('subtotal' in header_map
+                   and self._col(row, header_map, 'subtotal').strip())
+        if has_sub:
+            sub = abs(self._num(row, header_map, 'subtotal'))
+            self._check_qp(where, 'Subtotal', sub, qty, price)
+            tol = _QP_TOL_ABS + _TOTAL_TOL_REL * sub
+        elif price and qty:
+            sub = abs(qty) * abs(price)
+            tol = _QP_TOL_ABS + _QP_TOL_REL * sub
+        else:
+            sub = None
+        if not total and not sub and not (price and qty):
+            raise ValueError(
+                f"{where}: Total, Subtotal and Price are all $0 — refusing "
+                f"to book $0 {'proceeds' if is_sell else 'cost'} (a "
+                f"market price filled in later would be a guess). Fill "
+                f"in the row's value from the Coinbase statement.")
+        if sub is None:
+            return abs(total)
+        if 'fees' not in header_map:
+            # Older layouts have no fee column: the gap between Total and
+            # Subtotal IS the fee, so it must be a charge of fee size
+            # (Coinbase's flat minimums are a few dollars).
+            implied = sub - abs(total) if is_sell else abs(total) - sub
+            if not -tol <= implied <= 3.0 + _QP_TOL_REL * sub:
+                raise ValueError(
+                    f"{where}: Total {abs(total):,.2f} does not fit "
+                    f"{'Subtotal' if has_sub else '|Quantity| x Price'} "
+                    f"{sub:,.2f} (implied fee {implied:,.2f}) — a wrong or "
+                    f"shifted column; refusing to book it. Correct the "
+                    f"row from the Coinbase statement.")
+            return abs(total)
+        expected = sub - fee if is_sell else sub + fee
+        if abs(abs(total) - abs(expected)) > tol:
+            raise ValueError(
+                f"{where}: Total {abs(total):,.2f} does not fit "
+                f"{'Subtotal' if has_sub else '|Quantity| x Price'} "
+                f"{sub:,.2f} {'-' if is_sell else '+'} fee {fee:,.2f} = "
+                f"{expected:,.2f} — a wrong or shifted column; refusing to "
+                f"book it. Correct the row from the Coinbase statement.")
+        return -abs(total) if expected < 0 else abs(total)
+
     def _build_convert(self, row, header_map):
         """Two-leg SELL (spent) + BUY (received) for a retail Convert
         row, or None when the Notes text doesn't match the recognized
@@ -582,6 +730,29 @@ class CoinbaseBrokerage(BaseBrokerage):
         asset_col = (self._col(row, header_map, 'asset') or '').strip().upper()
         if asset_col and asset_col not in (from_raw, to_raw):
             return None
+        where = (f"Coinbase Convert "
+                 f"{self._col(row, header_map, 'timestamp')!r} "
+                 f"(notes {notes!r})")
+        # The row's own Quantity Transacted is the Asset leg's quantity:
+        # it must agree with Notes, and the row's value with that leg's
+        # quantity x price (re-audit A2-0022 — a 10x Subtotal or a
+        # quantity of 5 beside Notes' 0.05 booked silently).
+        row_qty = abs(self._num(row, header_map, 'quantity transacted'))
+        if asset_col and row_qty:
+            leg_qty = from_qty if asset_col == from_raw else to_qty
+            if abs(row_qty - leg_qty) > 1e-8 + 1e-6 * leg_qty:
+                raise ValueError(
+                    f"{where}: Quantity Transacted {row_qty:g} {asset_col} "
+                    f"disagrees with Notes ({leg_qty:g}) — refusing to "
+                    f"guess which to book.")
+            _price = abs(self._num(row, header_map, 'price at transaction'))
+            _sub = abs(self._num(row, header_map, 'subtotal'))
+            _tot = abs(self._num(row, header_map, 'total'))
+            if (_price and (_sub or _tot)
+                    and not any(self._fits_qp(v, row_qty, _price)
+                                for v in (_sub, _tot) if v)):
+                self._check_qp(where, 'Subtotal' if _sub else 'Total',
+                               _sub or _tot, row_qty, _price)
         from_asset, to_asset = _cb_symbol(from_raw), _cb_symbol(to_raw)
         if from_asset == to_asset:
             # ETH -> ETH2: two spellings of one property (R1-110). A
@@ -649,9 +820,21 @@ class CoinbaseBrokerage(BaseBrokerage):
             'description': f'Convert (buy leg): {notes}'.strip(),
         }
         cb_id = self._col(row, header_map, 'id').strip()
+        if not cb_id and 'id' not in header_map:
+            # No ID column (older exports): the legs still need one stem
+            # or fill-crypto values each from its own close (A2-0998).
+            cb_id = self._content_stem(row)
         if cb_id:
             sell['id'] = f'{cb_id}-sell'
             buy['id'] = f'{cb_id}-buy'
+        if subtotal and currency == 'USD':
+            # A USD-valued convert spending or receiving a stablecoin
+            # gives its implied price: off the peg the cash
+            # approximation drops a gain or loss (A2-1003).
+            for _sym, _q in ((from_asset, from_qty), (to_asset, to_qty)):
+                if _sym in self._cash_coins:
+                    warn_depeg(_sym, subtotal / _q, _q, date_str,
+                               "Coinbase Convert")
         # Stablecoin legs are USD cash (see _STABLECOINS): converting
         # USDC into ETH is a cash purchase of ETH, ETH into USDC a cash
         # sale. The fee then lands on the one crypto leg — capitalized
@@ -753,8 +936,17 @@ class CoinbaseBrokerage(BaseBrokerage):
             'net_amount': 0.0, 'gross_amount': 0.0, 'fee': 0.0,
             'account': self.DEFAULT_ACCOUNT,
             'description': f"Advanced Trade {p_base.upper()}-{quote} "
-                           f"(counter leg): {notes}".strip(),
+                           f"(counter leg of crypto-to-crypto): "
+                           f"{notes}".strip(),
         }
+        # Both legs say "crypto-to-crypto": no fiat changes hands, and
+        # fx-cash keys its non-cash test on that wording (Kraken's and
+        # the Convert legs carry it too). The fiat-valued base leg had no
+        # description, so fx-cash booked the swap's value as US dollars
+        # acquired and disposed (re-audit A2-0079 / A2-0234).
+        tx['description'] = (f"Advanced Trade {p_base.upper()}-{quote} "
+                             f"({'sell' if is_sell else 'buy'} leg of "
+                             f"crypto-to-crypto): {notes}").strip()
         if cb_id:
             quote_leg['id'] = f'{cb_id}-quote'
         if tx['currency'] not in _FIAT:
@@ -763,9 +955,6 @@ class CoinbaseBrokerage(BaseBrokerage):
             for leg in (tx, quote_leg):
                 leg.update(currency='USD', price=0.0, net_amount=0.0,
                            gross_amount=0.0, fee=0.0)
-            tx['description'] = (f"Advanced Trade {p_base.upper()}-"
-                                 f"{quote} ({'sell' if is_sell else 'buy'}"
-                                 f" leg): {notes}").strip()
             return [tx, quote_leg]
         value = abs(tx['net_amount'])
         if not value:

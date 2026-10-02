@@ -425,8 +425,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("CA-FX-07",
                  "Gains on holding foreign cash (s.39(1.1)) are NOT in the "
-                 "Schedule 3 totals: `taxjson fx-cash` estimates the net "
-                 "gain beyond the $200 annual exemption.",
+                 "Schedule 3 totals: `taxjson fx-cash` estimates the "
+                 "year's net gain or net loss beyond the $200 annual "
+                 "exemption (a net gain or loss within $200 is nil), from "
+                 "a pooled average cost per currency. Cash moves only on "
+                 "a trade for cash, income, withholding and fees; a "
+                 "coin-for-coin swap, a fee paid in a coin and a reward "
+                 "in a coin move none (a USD stablecoin is US-dollar "
+                 "cash, CA-CRYPTO-02).",
                  keys=("fx_cash_gains",)),
         ]),
         ("Cost base (ACB)", [
@@ -678,8 +684,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "USD stablecoins (USDC, USDT, DAI, PYUSD and GUSD, on "
                  "Kraken and Coinbase alike) are treated as US-dollar "
                  "cash, an approximation (their own gain or loss, a "
-                 "de-peg, is not computed; a fill more than 2% off 1.00 "
-                 "USD is warned about)."),
+                 "de-peg, is not computed; a fill valued in US dollars "
+                 "more than 2% off 1.00 USD is warned about — a fill "
+                 "valued in another currency is not checked)."),
             Rule("CA-CRYPTO-03",
                  "A Kraken fee paid in a coin on a move of coins (a "
                  "withdrawal, a deposit, a transfer to another Kraken user "

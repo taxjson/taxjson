@@ -68,6 +68,38 @@
   really accepts: the rates file carries a rate over weekends and
   holidays for up to 7 days and a day with no row looks back 5 more, so
   a rate up to 12 days old is used; no number changes (re-audit A2-0706).
+- **fx-cash: stablecoins, coin legs and holiday settles.** A PYUSD or
+  GUSD reward in a Canada book now enters the US-dollar pool, as a USDC
+  reward does. fx-cash and the parsers share one stablecoin list. A
+  Coinbase Advanced Trade on a crypto-quoted pair (ETH-BTC) and a Kraken
+  fee paid in a coin no longer count as US dollars acquired and
+  disposed. Rows that settle on the same day are walked in trade-date
+  order, so a holiday no longer puts a later buy before an earlier sale.
+  tax-logic CA-FX-07 now states the loss side of the $200 exemption and
+  the pooled-average-cost method. Re-audit A2-0079, A2-0234, A2-0235,
+  A2-0244, A2-0576, A2-0589, A2-1012, A2-1013, A2-1015 and A2-1016.
+- **Coinbase rows must add up.** A Buy/Sell whose Total is not
+  Subtotal ± fee, a Buy/Sell, Convert or staking reward whose value does
+  not fit Quantity × Price (5% for spread), and a Convert whose Quantity
+  Transacted disagrees with its Notes are refused, naming the file and
+  line. A 10x Subtotal on a Convert used to add about 26.8k to the gain
+  under `run --strict`. A sale whose fee exceeds its Subtotal now books
+  negative proceeds whatever sign the Total cell carries, and an
+  explicit $0.00 Buy is refused like a blank one. Before, fill-crypto
+  re-priced it at market. Re-audit A2-0022, A2-0080 (the Coinbase half),
+  A2-0250, A2-0565, A2-0997 and A2-1023.
+- **Coinbase classification.** A fiat `Withdrawal` is a recognized
+  non-event like a fiat `Deposit`. Before, it raised a false UNBOOKED
+  "moves coins" warning and `run --strict` failed. A `Deposit` or
+  `Subscription` in a coin is now UNBOOKED; it used to be dropped as a
+  non-event. A row cut inside Fees or Notes is refused as truncated. The
+  unterminated-quote error names the line the quote opened on. The two
+  legs of a Convert in an export without an ID column share one id stem,
+  so fill-crypto values the swap once. Advanced Trade legs on a
+  crypto-quoted pair say "crypto-to-crypto". A USD-valued Convert or
+  `*-USDC` Advanced Trade more than 2% off the peg prints the de-peg
+  warning. Re-audit A2-0237, A2-0564, A2-0566, A2-0567, A2-1024,
+  A2-0249, A2-0584, A2-0998 and A2-1003.
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those
