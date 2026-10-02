@@ -787,6 +787,24 @@ class TestRbcSmallRowChecks(unittest.TestCase):
         self.assertIn("de-duplication decides", err)
 
 
+    def test_merger_split_across_two_exports_is_corp_actions_not_unbooked(self):
+        # A2-0271 (parser half; corp-actions pairs the legs, A2-0214).
+        buy = row("March 3, 2025", "Buy", "QZH", "QZH CORPORATION", "100",
+                  "50", "-5009.95", "USD", "QZH CORPORATION UNSOLICITED")
+        rem = row("December 31, 2025", "Reorganization", "Q015283",
+                  "QZH CORPORATION", "-100", "", "0", "USD",
+                  "MGR - QZH CORPORATION MERGER TO QZC CORPORATION 1 NEW = "
+                  "1 OLD")
+        rcv = row("January 2, 2026", "Reorganization", "QZC",
+                  "QZC CORPORATION", "100", "", "0", "USD",
+                  "MGR - QZC CORPORATION SHRS RECEIVED THRU MERGER")
+        txs, err, _ = parse_files({"rbc_2025.csv": buy + rem,
+                                   "rbc_2026.csv": rcv})
+        self.assertNotIn("UNBOOKED", err)
+        self.assertEqual([t["symbol"] for t in txs], ["QZH.US"])
+        self.assertIn("taxjson-corp-actions", err)
+
+
     def test_rbc_usd_class_of_a_tsx_etf_is_said(self):
         # A2-1043: not renamed (RBC's spelling is unverified), but said.
         txs, err, _ = parse_one(row(

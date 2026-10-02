@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- RBC: a merger whose removal and receipt sit in two yearly exports is
+  left to taxjson-corp-actions (which pairs the legs across the
+  account's statements, A2-0214) instead of two UNBOOKED legs that
+  made `run --strict` refuse (re-audit A2-0271).
 - RBC: a USD row whose name reads as the US-dollar class of a TSX fund
   ('... ETF US DOLLAR UNITS'), other than DLR, is an ATTENTION line with
   the `GLOBAL X.US X.U.TO` map line; it was booked as a US listing

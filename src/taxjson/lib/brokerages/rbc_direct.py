@@ -1068,9 +1068,11 @@ def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
     # receipt or cash-in-lieu posts in January's was two UNMATCHED legs
     # telling the user to add a statement already given (audit
     # S064-14). Each event is booked from its removal's file; its legs
-    # in another file are consumed there. A MERGER spanning two files
-    # stays unmatched here: taxjson-corp-actions owns mergers and pairs
-    # per file, so the parser must not consume legs it cannot book.
+    # in another file are consumed there. A MERGER spanning two files is
+    # taxjson-corp-actions' too: it pairs leftover merger legs across the
+    # account's statements (re-audit A2-0214), so the parser counts both
+    # legs as its own (re-audit A2-0271: they were two UNBOOKED legs and
+    # `run --strict` refused).
     _file_of = {id(r): k for k in files for r in ctx.rows(k)}
     _acct = pair_rbc_reorganizations(
         [r for k in files for r in ctx.rows(k)])
@@ -1082,10 +1084,6 @@ def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
                 if x is not None]
         homes = {_file_of[id(x)] for x in legs}
         anchor = _file_of[id(ev.removal)]
-        if len(homes) > 1 and ev.kind == 'merger':
-            for x in legs:
-                (_unm_cil if x in ev.cil else _unm)[_file_of[id(x)]].append(x)
-            continue
         _events[anchor].append(ev)
         for x in legs:
             if _file_of[id(x)] != anchor:
