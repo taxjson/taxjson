@@ -107,5 +107,47 @@ class TestListDateBasisWording(unittest.TestCase):
                       json.loads(j["usa"].stdout)["basis"])
 
 
+
+class TestStaleSendsFileWithUnreadableDecisions(unittest.TestCase):
+    """A2-0415: sends.json became unreadable after crypto_sends.tt was
+    generated from it; the run booked the old file (a decision since
+    changed) with a warning, even under --strict in the US case."""
+
+    def _check(self, country):
+        from test_fix_sends import (_project, _cli, TAO_ID,
+                                    _cad_usd_rates_file)
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _project(td, country=country)
+            if country == "usa":
+                (root / "taxjson.toml").write_text(
+                    '[settings]\nyear = 2026\ncountry = "usa"\n'
+                    'base_currency = "USD"\nsource_currencies = ["CAD"]\n'
+                    '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
+                _cad_usd_rates_file(root / "work" / "to_base.csv")
+                (root / "inputs" / "crypto" / "cb_2025.csv").unlink()
+            man = root / "inputs" / "crypto" / "sends.json"
+            man.write_text(json.dumps({"sends": {
+                TAO_ID: {"decision": "payment"}}}))
+            r = _cli(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            tt = root / "inputs" / "crypto" / "crypto_sends.tt"
+            self.assertIn("TAO", tt.read_text())
+            # The owner reclassifies the payment and mistypes the value.
+            man.write_text(json.dumps({"sends": {
+                TAO_ID: {"decision": "slef"}}}))
+            r = _cli(root, home, "run", "--no-input")
+            self.assertNotEqual(r.returncode, 0, country)
+            self.assertIn("not booked on a guess", r.stderr)
+            self.assertIn("'slef'", r.stderr)
+
+    @rule("CA-CRYPTO-07")
+    def test_canada_run_stops_instead_of_booking_the_old_file(self):
+        self._check("canada")
+
+    @rule("US-SEND-01")
+    def test_usa_run_stops_instead_of_booking_the_old_file(self):
+        self._check("usa")
+
+
 if __name__ == "__main__":
     unittest.main()

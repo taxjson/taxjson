@@ -2031,6 +2031,19 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
         # A decided gift/payment that cannot be written is a missing
         # disposition: the .sum DIAGNOSTICS carries it (A2-0112).
         tt = root / "inputs" / name / CS.TT_NAME
+        if tt.exists():
+            # The old generated file was written from decisions that can
+            # no longer be read: it may book a send since reclassified
+            # (gift -> self), or a gift a US project refuses (US-SEND-02).
+            # Booking it on a guess is worse than stopping (audit A2-0415).
+            _diag.unlink(missing_ok=True)
+            sys.exit(f"taxjson run: {name}: crypto sends: {e} The "
+                     f"generated inputs/{name}/{CS.TT_NAME} was written "
+                     f"from the earlier decisions and is not booked on a "
+                     f"guess — fix the cause above (the decisions are "
+                     f"in inputs/{name}/{CS.MANIFEST_NAME}), or delete "
+                     f"{CS.TT_NAME} to run without the decided sales, "
+                     f"and run again.")
         msg = (f"{e} The decided gift(s)/payment(s) it names are NOT "
                f"booked"
                + (f"; the previous inputs/{name}/{CS.TT_NAME} is still "

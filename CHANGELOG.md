@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `taxjson run` stops when sends.json cannot be read while a
+  crypto_sends.tt generated from earlier decisions exists: it used to
+  book the old file with a warning (a gift since changed to self, or a
+  gift a US project refuses), even under `--strict` (audit A2-0415).
 - `taxjson list --date` in a US project calls its cost the per-account
   FIFO basis (the return's own basis) and no longer claims a symbol held
   in two accounts has one blended s.47 ACB on the return; the note and

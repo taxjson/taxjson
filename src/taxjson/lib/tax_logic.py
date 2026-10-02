@@ -870,7 +870,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Canada rate of the send date, or a price you give "
                  "(`--price`, finite and at least 0.00000001; a network fee "
                  "takes one too). A sale that cannot be priced is not "
-                 "booked: it is warned about and `run --strict` stops.",
+                 "booked: it is warned about and `run --strict` stops. "
+                 "When sends.json cannot be read, a crypto_sends.tt "
+                 "written from earlier decisions is not booked: `taxjson "
+                 "run` stops until it is fixed.",
                  cont=True),
             Rule("CA-CRYPTO-08",
                  "A gift or payment of a stablecoin is not written as a "
@@ -1443,7 +1446,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-SEND-01",
                  "Paying with crypto is a sale at fair value; `taxjson "
                  "crypto-sends` records it (`payment`) and writes the sale "
-                 "to crypto_sends.tt."),
+                 "to crypto_sends.tt. When sends.json cannot be read, a "
+                 "crypto_sends.tt written from earlier decisions is not "
+                 "booked: `taxjson run` stops until it is fixed."),
             Rule("US-SEND-02",
                  "A gift is not a sale for the donor, so `gift` is refused "
                  "in a US project: record it as `self`. A gift already "
