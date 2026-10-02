@@ -127,14 +127,15 @@ class TestCountryAndScope(unittest.TestCase):
             # expiry check does (S066-15); --quick skips it.
             self.assertEqual(res["option-boundary"].status, "todo")
             text = cl.render(list(res.values()), 2025, "usa", quick=True)
-            self.assertIn("1099-B slips reconcile", text)
+            self.assertIn("1099-B (and, for crypto from 2025, 1099-DA) slips reconcile", text)
             self.assertIn("Form 8949 rows exported", text)
             self.assertNotIn("T5008", text)
             self.assertNotIn("line 40500", text)
             self.assertNotIn("Schedule 3", text)
             doc = cl.to_json(list(res.values()), 2025, "usa")
             self.assertEqual({s["id"]: s for s in doc["steps"]}["t5008"]["title"],
-                             "1099-B slips reconcile to the computed dispositions")
+                             "1099-B (and, for crypto from 2025, 1099-DA) slips "
+                             "reconcile to the computed dispositions")
 
     def test_sheltered_only_project_is_na_not_blocked(self):
         with tempfile.TemporaryDirectory() as td:

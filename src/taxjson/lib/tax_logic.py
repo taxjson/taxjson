@@ -1362,6 +1362,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "wash-sale verdict turns on a boundary, on trade dates; "
                  "with no still-held test, a sale near day 30 decides "
                  "nothing, and a long call is listed as a warning only."),
+            Rule("US-RPT-09",
+                 "`taxjson checklist`'s slip step names Form 1099-B for "
+                 "securities and, from tax year 2025, Form 1099-DA for a "
+                 "broker's digital-asset (crypto) sales (gross proceeds "
+                 "only for 2025; basis for covered assets from 2026)."),
             Rule("US-RPT-06",
                  "`taxjson close-year` records each closed year's sales, "
                  "year-end positions and basis, its country and date "

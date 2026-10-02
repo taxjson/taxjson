@@ -137,7 +137,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Current behavior:** in a Canada project a Canadian trust's distribution or return of capital is dated by the record date Questrade and RBC print (s.104(13), s.53(2)(h); tax-logic CA-INC-DATE-TRUST / CA-INC-DATE-ROC-TRUST). An IB row has no record date, so a December-record trust distribution IB pays in January stays in the pay year of `divs-sum` and the estimate, and a January-paid IB ROC on a Canadian trust stays on its pay date — the run warns about the ROC with the two `.tt` ADJUST lines that move it to Dec 31.
 - **Also:** a Canadian issuer is recognised by its listing (or an IB CA ISIN); the split-share corporations that also say "Distribution" are a short built-in list (`SPLIT_SHARE_ROOTS`) — add any other corporation to `[settings] corporate_distributions`.
 - **Why the pay date is kept (owner decision 2026-10-01, audit S057-23):** IB's Dividends section prints only the pay date and labels a trust's distribution a cash dividend, so nothing on the row says the payer is a trust rather than a corporation or split-share issuer (which s.82 dates when paid). The ex date IB's "Change in Dividend Accruals" section gives is kept on the row (`ex_date`, a US project reads it for §852(b)(7)) but is not a record date and does not identify a trust, so a Canada project does not date income by it. Every January CAD payer in the owner's IB books is a corporation, so no current return moves.
-- **Workaround:** compare `divs-sum` with the T3; the slip is authoritative.
+- **Workaround:** compare the TAXABLE line of `divs-sum` with the T3; the slip is authoritative.
 
 ### RBC exports by Date miss back-dated year-end book-cost rows
 - **Where:** the RBC export window (not the parser: `rbc_direct.py:_build_book_adjust` books the rows correctly when present).
@@ -387,7 +387,7 @@ reported manually" instead of counting them as missing.
 ### Payments in lieu: what the exports cannot say
 - **Where:** `lib/income_dating.py` (`pil_is_dividend`), `lib/brokerages/ib_extractor.py`, `rbc_direct.py`.
 - **Current behaviour:** in a Canada project a payment in lieu on a Canadian issuer's share paid by a Canadian dealer is a taxable (eligible) dividend (ITA s.260; tax-logic CA-INC-03); the dealer comes from the IB statement's BrokerName ("Interactive Brokers Canada Inc."). An IB file without that header row leaves the dealer unknown and the payment ordinary income. A payment in lieu on a Canadian TRUST unit is trust income under s.260(5.1)(b), not a dividend; the exports do not say which issuers are trusts, so it is counted as a dividend. RBC books its "CASH IN LIEU OF DIVIDEND" rows as plain dividends (RBC is a Canadian dealer, so the Canadian-issuer case is right; a foreign issuer's is a foreign dividend rather than other income).
-- **Workaround:** the dealer's T5 (box 24 and the other income boxes) is authoritative; compare with `divs-sum` / `dil-sum`.
+- **Workaround:** the dealer's T5 (box 24 and the other income boxes) is authoritative; compare with the TAXABLE line of `divs-sum` and with `dil-sum`.
 
 ### US January fund and REIT dividends need a list
 - **Where:** `lib/income_dating.py`; tax-logic US-INC-DATE-RIC.

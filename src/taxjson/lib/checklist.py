@@ -107,7 +107,7 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "taxjson reconcile-slips inputs/slips/*.csv",
      "The CRA matches Schedule 3 proceeds to the T5008s — this step prevents the review letter."),
     ("t5-t3", 3, "T5 / T3 / NR4 slips agree with the dividend and ROC totals",
-     "taxjson divs-sum, taxjson roc-sum (compare by hand)",
+     "taxjson divs-sum, taxjson roc-sum (the TAXABLE lines; compare by hand)",
      "Trust units report on a T3, often weeks after the T5s; split-share and mutual-fund "
      "corporations report on a T5, where box 18 capital-gains dividends go on line 17400 "
      "(taxjson books them as dividends). reconcile-slips reads only T5008 disposition "
@@ -173,11 +173,13 @@ US_STEPS: Dict[str, Any] = {
                         "short-term gain, and an expired long option's cost a "
                         "loss, in the expiry year; a missing expiry, exercise "
                         "or assignment row leaves either out of the return."),
-    "t5008": ("1099-B slips reconcile to the computed dispositions",
+    "t5008": ("1099-B (and, for crypto from 2025, 1099-DA) slips reconcile "
+              "to the computed dispositions",
               "taxjson reconcile-slips inputs/slips/*.csv",
-              "The IRS matches Form 8949 / Schedule D to the 1099-Bs — this step prevents a CP2000."),
+              "The IRS matches Form 8949 / Schedule D to the 1099-Bs and "
+              "1099-DAs — this step prevents a CP2000."),
     "t5-t3": ("1099-DIV / 1099-INT slips agree with the dividend and ROC totals",
-              "taxjson divs-sum, taxjson roc-sum",
+              "taxjson divs-sum, taxjson roc-sum (the TAXABLE lines)",
               "Qualified vs ordinary dividends and nondividend distributions come from the slips."),
     "foreign-tax": ("Foreign tax paid taken from the 1099-DIV (box 7) for the credit (Form 1116)",
                     "1099-DIV box 7",
@@ -1497,8 +1499,22 @@ def _slip_mismatch_summary(code: int, out: str, err: str) -> str:
     return _last_line(err) or _last_line(out) or f"exit {code}"
 
 
+def _slip_names(ctx: Ctx) -> str:
+    """The slips a project's dispositions come on: T5008 in Canada; in
+    the US Form 1099-B for securities and, from tax year 2025, Form
+    1099-DA for a broker's digital-asset sales (US-RPT-09, A2-1149)."""
+    if not is_us(ctx.settings.get("country")):
+        return "T5008"
+    names = []
+    if _accounts_of(ctx, "taxable"):
+        names.append("1099-B")
+    if _accounts_of(ctx, "crypto"):
+        names.append("1099-DA" if ctx.year >= 2025 else "1099-B")
+    return " / ".join(dict.fromkeys(names)) or "1099-B"
+
+
 def d_t5008(ctx: Ctx) -> Result:
-    slip = "1099-B" if is_us(ctx.settings.get("country")) else "T5008"
+    slip = _slip_names(ctx)
     files = slip_files(ctx.root)
     unread = _unread_slip_files(ctx.root)
     if not files:
@@ -1573,9 +1589,9 @@ def d_form_export(ctx: Ctx) -> Result:
     import math
     n_acct = max(1, len(taxable))
     raw = rep.get("gain_unrounded")
-    if isinstance(raw, (int, float)) and label == "Schedule 3":
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
         # Unrounded rows vs the .sum's per-account rounding: at most half
-        # a cent per account apart (R1-210).
+        # a cent per account apart (R1-210; Form 8949 too, A2-1154).
         cmp_gain = float(raw)
         tol = 0.005 * n_acct + 0.01
     else:
@@ -1616,9 +1632,16 @@ def d_t1135(ctx: Ctx) -> Result:
         # ITA 233.3 counts cost at any time up to Dec 31: below the
         # threshold mid-year is not a verdict (S051-22, S052-15).
         return Result("t1135", "todo",
-                      f"below the CAD 100,000 threshold so far (books through "
-                      f"{rep.get('as_of') or '?'}) — re-check after Dec 31")
-    return Result("t1135", "done", "below the CAD 100,000 threshold")
+                      f"below the CAD 100,000 threshold so far on these "
+                      f"books (through {rep.get('as_of') or '?'}) — re-check "
+                      f"after Dec 31; foreign property outside them (a "
+                      f"foreign bank account, cash) is not counted")
+    # The books only (S052-13, A2-0682): a foreign bank account or cash
+    # outside them adds to the same threshold.
+    return Result("t1135", "done",
+                  "below the CAD 100,000 threshold on these books — "
+                  "foreign property outside them (a foreign bank account, "
+                  "cash) is not counted; add it if you hold any")
 
 
 def d_carryover(ctx: Ctx) -> Result:

@@ -11,6 +11,7 @@ from datetime import date
 from pathlib import Path
 
 from taxjson.lib import checklist as cl
+from tax_rules import rule
 
 REPO = Path(__file__).resolve().parent.parent
 ENV = dict(os.environ, TAXJSON_OFFLINE="1", PYTHONPATH=str(REPO / "src"),
@@ -549,3 +550,75 @@ class TestRocEntered(unittest.TestCase):
             res = cl.d_roc_entered(ctx(p))
             self.assertEqual(res.status, "attention", res.detail)
             self.assertIn("QZR.TO 2025-12-31", res.detail)
+
+
+# ---------------------------------------------------------------- wording
+US_TOML = ('[settings]\nyear = 2025\ncountry = "usa"\nbase_currency = "USD"\n'
+           '[accounts.cb]\ntype = "taxable"\ncrypto = true\n')
+
+
+class TestStepWording(unittest.TestCase):
+    def test_t1135_done_is_qualified(self):
+        """A2-0682: 'below the threshold' is on these books only."""
+        rep = {"filing_required": False, "year_complete": True}
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td)
+            (p / "taxjson.toml").write_text(TOML)
+            r = cl.d_t1135(ctx(p, {"t1135": (0, json.dumps(rep), "")}))
+        self.assertEqual(r.status, "done")
+        self.assertIn("on these books", r.detail)
+        self.assertIn("foreign bank account", r.detail)
+
+    def test_t1135_json_carries_the_scope(self):
+        import inspect
+        from taxjson.bin import taxjson_t1135
+        self.assertIn('"scope_note"', inspect.getsource(taxjson_t1135))
+
+    @rule("US-RPT-09")
+    def test_us_crypto_slip_is_1099_da(self):
+        """A2-1149: a US crypto account's 2025 sales come on Form 1099-DA."""
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td)
+            (p / "taxjson.toml").write_text(US_TOML)
+            r = cl.d_t5008(ctx(p))
+            self.assertIn("1099-DA", r.detail)
+            self.assertNotIn("1099-B", r.detail)
+            (p / "taxjson.toml").write_text(US_TOML + '[accounts.ib]\ntype = "taxable"\n')
+            r = cl.d_t5008(ctx(p))
+            self.assertIn("1099-B / 1099-DA", r.detail)
+            (p / "taxjson.toml").write_text(US_TOML.replace("2025", "2024"))
+            r = cl.d_t5008(ctx(p, year=2024))
+            self.assertIn("1099-B", r.detail)
+            self.assertNotIn("1099-DA", r.detail)
+        self.assertIn("1099-DA", cl.step_meta("t5008", "usa")[2])
+
+    def test_t5_t3_command_names_the_taxable_line(self):
+        """A2-1152: the command field too, both countries."""
+        for c in ("canada", "usa"):
+            self.assertIn("TAXABLE", cl.step_meta("t5-t3", c)[3], c)
+
+    def test_8949_rounding_gap_passes(self):
+        """A2-1154: 40 gains of 1.0053 and 40 superficial losses — the
+        per-row rounding gap is not a false ATTENTION in a US project."""
+        from taxjson.bin.taxjson_form_export import build_8949
+        entries = ([{"term": "SHORT_TERM", "symbol": "A", "date": "2025-03-03",
+                     "proceeds": 11.0053, "cost": 10.0, "gain": 1.0053, "qty": 1}
+                    for _ in range(40)]
+                   + [{"term": "SHORT_TERM", "symbol": "B", "date": "2025-03-04",
+                       "proceeds": 10.0, "cost": 10.0049, "gain": 0.0,
+                       "disallowed_amount": 0.0049, "qty": 1} for _ in range(40)])
+        rep = build_8949(entries)
+        self.assertAlmostEqual(rep["gain_unrounded"], 40.212, places=6)
+        realized = round(rep["gain_unrounded"], 2)
+        summ = {"accounts": [{"account": "ib", "realized": realized}],
+                "filing": {"totals": {
+                    "proceeds": rep["part_I_totals"]["proceeds"],
+                    "gain": rep["part_I_totals"]["gain"]}}}
+        cfg = ('[settings]\nyear = 2025\ncountry = "usa"\nbase_currency = "USD"\n'
+               '[accounts.ib]\ntype = "taxable"\n')
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td)
+            (p / "taxjson.toml").write_text(cfg)
+            r = cl.d_form_export(ctx(p, {"form-export": (0, json.dumps(rep), ""),
+                                         "sum": (0, json.dumps(summ), "")}))
+        self.assertEqual(r.status, "done", r.detail)

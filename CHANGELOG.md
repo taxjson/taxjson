@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Checklist wording: the T1135 step's "below the threshold" (and
+  `t1135 --json`, new `scope` / `scope_note`) says it covers these books
+  only; a US project's slip step names Form 1099-DA for crypto sales from
+  2025 (tax-logic US-RPT-09); the T5/T3 step's command names the TAXABLE
+  lines of divs-sum / roc-sum; Form 8949 exports carry `gain_unrounded`
+  so a pure per-row rounding gap no longer makes a US checklist's
+  form-export step "attention" (re-audit A2-0682, A2-1149, A2-1152,
+  A2-1154).
 - Checklist roc-entered: ADJUST rows are counted in the year roc-sum
   windows them on (a Canadian trust's ROC by its record date), and the
   step is "attention" when the same ROC is in the books and in

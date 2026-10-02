@@ -289,6 +289,11 @@ def build_8949(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         "form": "8949",
         "part_I": parts["I"], "part_I_totals": totals(parts["I"]),
         "part_II": parts["II"], "part_II_totals": totals(parts["II"]),
+        # The engine's allowed gain before per-row rounding, as Schedule
+        # 3 carries it: the checklist ties the export to the .sum on it,
+        # so a pure rounding gap is not a false ATTENTION (A2-1154).
+        "gain_unrounded": sum(float(e.get("gain") or 0.0)
+                              for e in entries),
     }
 
 
