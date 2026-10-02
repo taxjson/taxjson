@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A crypto-only Canada project no longer gets the
+  `option_grant_timing_since is not set` warning from `carryover` and
+  `option-boundary` (run and the checklist already skipped it: it writes
+  no options) (re-audit A2-1144).
 - `taxjson checklist --done/--skip/--undo` are repeatable (only the last
   of a repeated flag was recorded, silently), and concurrent marks no
   longer lose each other or corrupt checklist.json (a lock around the

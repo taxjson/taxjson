@@ -681,3 +681,31 @@ class TestChecklistMarks(unittest.TestCase):
             self.assertTrue(all(pr.exitcode == 0 for pr in procs))
             ov = json.loads((Path(td) / "checklist.json").read_text())["overrides"]
         self.assertEqual(set(ov), set(ids))
+
+
+class TestGrantSinceGate(unittest.TestCase):
+    def test_crypto_only_project_gets_no_option_timing_warning(self):
+        """A2-1144: carryover and option-boundary share run's gate."""
+        from test_fix_sends import _rates_file
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "proj"
+            (p / "inputs" / "crypto").mkdir(parents=True)
+            (p / "inputs" / "crypto" / "kr_ledgers.csv").write_text(KR_SEND)
+            (p / "taxjson.toml").write_text(
+                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                'base_currency = "CAD"\nsource_currencies = ["USD"]\n'
+                '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
+            (p / "work").mkdir()
+            _rates_file(p / "work" / "to_base.csv")
+            home = Path(td) / "home"
+            home.mkdir()
+            (home / ".crypto_price_cache.json").write_text("{}")
+            from test_fix_sends import _cli
+            self.assertEqual(_cli(p, home, "run", "--no-input").returncode, 0)
+            for cmd in ("carryover", "option-boundary"):
+                r = _cli(p, home, cmd)
+                self.assertNotIn("option_grant_timing_since is not set", r.stderr, cmd)
+            from taxjson.bin.taxjson_run import _grant_since_warning
+            st = {"year": 2025, "country": "canada"}
+            self.assertIsNotNone(_grant_since_warning(st, {"m": {"type": "taxable"}}))
+            self.assertIsNone(_grant_since_warning(st, {"c": {"type": "taxable", "crypto": True}}))

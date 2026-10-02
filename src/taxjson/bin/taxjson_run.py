@@ -3525,9 +3525,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     accounts = cfg.get("accounts", {})
     if _country(settings) == "usa":
         print(_US_EXPERIMENTAL_NOTE, file=sys.stderr)
-    _since_warn = _grant_since_warning(settings)
-    if _since_warn and any(_c.get("type") == "taxable" and not _c.get("crypto")
-                           for _c in accounts.values()):
+    _since_warn = _grant_since_warning(settings, accounts)
+    if _since_warn:
         # (a crypto-only project writes no options — nothing to warn about)
         print(f"taxjson: warning: {_since_warn}", file=sys.stderr)
 
@@ -9550,14 +9549,23 @@ def cmd_redact(args: argparse.Namespace) -> None:
     raise SystemExit(redact_main(argv))
 
 
-def _grant_since_warning(settings: Dict[str, Any]) -> Optional[str]:
+def _grant_since_warning(settings: Dict[str, Any],
+                         accounts: Optional[Dict[str, Any]] = None
+                         ) -> Optional[str]:
     """The warning for a Canada project on grant timing with no explicit
     `option_grant_timing_since`: the default is the PROJECT year, which
     moves every year — consecutive default projects tax a year-straddling
     premium twice (2026-09 audit: +399 in 2025, +298 in 2026, for a 298
-    economic gain). None when the key is set or does not apply."""
+    economic gain). None when the key is set or does not apply — also
+    when `accounts` (the [accounts] table) has no non-crypto taxable
+    account: a crypto-only project writes no options (one gate for run,
+    carryover and option-boundary, A2-1144)."""
     if _country(settings) in (
             "us", "usa"):
+        return None
+    if accounts is not None and not any(
+            isinstance(_c, dict) and _c.get("type") == "taxable"
+            and not _c.get("crypto") for _c in accounts.values()):
         return None
     if str(settings.get("option_premium_timing", "grant")).strip().lower() \
             != "grant":
@@ -9724,7 +9732,7 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
     kw = option_timing_from_settings(settings)
     timing = kw.get("option_premium_timing", "close") if kw else "close"
     since = kw.get("option_grant_since") if kw else None
-    _w = _grant_since_warning(settings)
+    _w = _grant_since_warning(settings, cfg.get("accounts") or {})
     if _w:
         print(f"taxjson option-boundary: warning: {_w}", file=sys.stderr)
     filed_years = set()
@@ -11092,7 +11100,7 @@ def cmd_carryover(args: argparse.Namespace) -> None:
                 AttributeError):
             continue
         argv += ["--filed", f"{_yr}={_real!r}"]
-    _w = _grant_since_warning(settings)
+    _w = _grant_since_warning(settings, cfg.get("accounts") or {})
     if _w:
         print(f"taxjson carryover: warning: {_w}", file=sys.stderr)
     # Deferred / failed / validation-ERROR books drive the carryforward
