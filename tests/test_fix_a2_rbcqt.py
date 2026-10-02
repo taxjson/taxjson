@@ -679,5 +679,111 @@ class TestRbcCoveragePerAccount(unittest.TestCase):
         self.assertFalse(any(x.startswith(ATT) for x in m), m)
 
 
+
+class TestConcatenatedExportOrder(unittest.TestCase):
+    """A2-0100: two newest-first Questrade exports concatenated (header
+    repeated) keep each segment's real same-day order."""
+
+    def test_questrade_segments(self):
+        from test_fix_rbcqt import QH
+        d = "XEI ETF WE ACTED AS AGENT"
+        q1 = (q(td="2025-03-03", sym="XEI.TO", desc=d, qty="50", price="20",
+                gross="-1000", comm="0", net="-1000", cur="CAD")
+              + q(td="2025-03-03", action="Sell", sym="XEI.TO", desc=d,
+                  qty="-100", price="20", gross="2000", comm="0", net="2000",
+                  cur="CAD")
+              + q(td="2025-01-06", sym="XEI.TO", desc=d, qty="100",
+                  price="25", gross="-2500", comm="0", net="-2500", cur="CAD"))
+        q2 = (q(td="2025-06-02", action="Sell", sym="XEI.TO", desc=d,
+                qty="-50", price="22", gross="1100", comm="0", net="1100",
+                cur="CAD")
+              + q(td="2025-05-01", sym="XEI.TO", desc=d, qty="10",
+                  price="21", gross="-210", comm="0", net="-210", cur="CAD"))
+        for body in (q1 + QH + q2, q2 + QH + q1):
+            txs, err, _ = qt_parse(body)
+            mar3 = [t["quantity"] for t in txs if t["date"] == "2025-03-03"]
+            self.assertEqual(mar3, [-100.0, 50.0], err)
+
+
+    def test_generic_segments(self):
+        # A2-1084: the generic importer's twin; the repeated header was
+        # also reported as an UNBOOKED trade.
+        from taxjson.lib.brokerages.generic import GenericBrokerage
+        toml = ('[broker]\nname="acme"\n[columns]\ndate="Date"\n'
+                'action="Type"\nsymbol="Ticker"\nquantity="Shares"\n'
+                'price="Price"\namount="Amount"\nfee="Commission"\n'
+                'currency="Currency"\n[actions]\n"BUY"="buy"\n'
+                '"SELL"="sell"\n')
+        gh = "Date,Type,Ticker,Shares,Price,Amount,Commission,Currency\n"
+        seg2 = ("2025-03-20,BUY,XYZ,4,151,605,1,USD\n"
+                "2025-03-20,SELL,XYZ,-4,150,599,1,USD\n"
+                "2025-03-10,BUY,XYZ,1,100,101,1,USD\n")
+        seg1 = ("2025-01-20,BUY,XYZ,2,100,201,1,USD\n"
+                "2025-01-15,BUY,XYZ,10,120,1201,1,USD\n")
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "acme.csv"
+            p.write_text(gh + seg1 + gh + seg2)
+            Path(str(p) + ".toml").write_text(toml)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                txs = GenericBrokerage().parse_file(p)
+        mar20 = [t["quantity"] for t in txs if t["date"] == "2025-03-20"]
+        self.assertEqual(mar20, [-4.0, 4.0], err.getvalue())
+        self.assertNotIn("UNBOOKED", err.getvalue())
+
+
+    def test_rbc_runs_without_a_second_header(self):
+        # A2-1046: RBC refuses a repeated header; a plain concatenation
+        # is read as newest-first runs.
+        r2 = (row("March 20, 2025", "Buy", "RY", "ROYAL BANK", "4", "151",
+                  "-613.95", "CAD", "ROYAL BANK UNSOLICITED")
+              + row("March 20, 2025", "Sell", "RY", "ROYAL BANK", "-4", "150",
+                    "590.05", "CAD", "ROYAL BANK UNSOLICITED")
+              + row("March 10, 2025", "Buy", "RY", "ROYAL BANK", "1", "100",
+                    "-109.95", "CAD", "ROYAL BANK UNSOLICITED"))
+        r1 = (row("January 20, 2025", "Buy", "RY", "ROYAL BANK", "2", "100",
+                  "-209.95", "CAD", "ROYAL BANK UNSOLICITED")
+              + row("January 15, 2025", "Buy", "RY", "ROYAL BANK", "10",
+                    "120", "-1209.95", "CAD", "ROYAL BANK UNSOLICITED"))
+        txs, err, _ = parse_one(r1 + r2)
+        mar20 = sorted((t["time"], t["quantity"]) for t in txs
+                       if t["date"] == "2025-03-20")
+        self.assertEqual([q_ for _t, q_ in mar20], [-4.0, 4.0], err)
+
+
+
+class TestRbcSmallRowChecks(unittest.TestCase):
+    """A2-1045, A2-1050, A2-1051."""
+
+    def test_swallowed_row_error_names_the_stray_quote_line(self):
+        from taxjson.lib.brokerages.rbc_direct import RbcFormatError
+        # RBC writes a quote inside a Description unescaped: one that
+        # ends right after it keeps the field open across the line
+        # breaks (the reader's line_num is where the record ENDS).
+        bad = row("May 1, 2024", "Sell", "ABC", "ABC CORP", "-100", "10",
+                  "990.05", "CAD", 'ABC CORP PRINCIPAL "')
+        rest = "".join(f"May {d} 2024,Buy,DEF,DEF CORP,50,20,May {d} 2024,"
+                       f"{ACCT},-1000.00,CAD,DEF CORP\n" for d in range(2, 8))
+        with self.assertRaises(RbcFormatError) as cm:
+            parse_one(bad + rest)
+        self.assertIn("rbc.csv:2:", str(cm.exception))
+
+    def test_blank_symbol_tax_is_refused(self):
+        from taxjson.lib.brokerages.rbc_direct import RbcFormatError
+        tax = row("June 2, 2025", "Taxes", "", "", "", "", "-1.25", "USD",
+                  "NRT - NON-RES TAX")
+        with self.assertRaises(RbcFormatError):
+            parse_one(tax)
+
+    def test_files_without_account_column_do_not_contradict_dedup(self):
+        from test_fix_rbc import HDR_NOACCT
+        r = row("March 3, 2025", "Buy", "XYZ", "XYZ CORP", "10", "5.00",
+                "-59.95", "CAD", "XYZ CORP UNSOLICITED", acct=None)
+        _txs, err, _ = parse_files({"a.csv": r, "b.csv": r},
+                                   header=HDR_NOACCT)
+        self.assertNotIn("NOTHING was de-duplicated", err)
+        self.assertIn("de-duplication decides", err)
+
+
 if __name__ == "__main__":
     unittest.main()

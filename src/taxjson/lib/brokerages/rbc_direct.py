@@ -434,8 +434,13 @@ def read_rbc_rows(path: Path) -> RbcExport:
                              f"re-export the CSV from RBC") from None
     reader = csv.reader(io.StringIO(text))
     records = []
+    end = 0
     for cells in reader:
-        records.append((reader.line_num, cells))
+        # The record's FIRST physical line (re-audit A2-1045): line_num
+        # is where a record that spans line breaks ENDS, so an error
+        # named the end of a swallowed span, not the stray quote.
+        records.append((end + 1, cells))
+        end = reader.line_num
     hpos, canon = _find_header(records, path)
     ncol = len(canon)
     rows: List[RbcRow] = []
@@ -489,11 +494,13 @@ def read_rbc_rows(path: Path) -> RbcExport:
             # ends right after its opening quote keeps the CSV field open
             # across the line break and swallows the NEXT export row (a
             # whole trade) into this Description (audit R1-84).
+            n_sw = sum(c.count('\n') for c in cells)
             raise _err(path, line, f"a cell spans a line break "
                        f"({spill[:80]!r}) — an unescaped quote in the "
-                       f"Description swallowed the next row. Delete the "
-                       f"stray double quote in the CSV and re-run; "
-                       f"refusing to drop the swallowed row")
+                       f"Description swallowed the next {n_sw} line(s). "
+                       f"Delete the stray double quote on this line of the "
+                       f"CSV and re-run; refusing to drop the swallowed "
+                       f"row(s)")
         num = lambda col: rbc_number(cell.get(col), path=path, line=line,
                                      column=col)
         amount = cell.get('Amount', '')
@@ -548,18 +555,44 @@ def read_rbc_rows(path: Path) -> RbcExport:
     desc_ok = all(a >= b for a, b in zip(dates, dates[1:]))
     asc_ok = all(a <= b for a, b in zip(dates, dates[1:]))
     newest_first: Optional[bool]
+    # Segment index per row: one for a monotone file. Two exports
+    # concatenated without a second header go both ways over the whole
+    # file (re-audit A2-1046): read as a few monotone runs — split where
+    # the dates turn — when one direction needs at most two turns and
+    # the other more; a day that spans two runs keeps one common time.
+    seg = [0] * len(rows)
     if desc_ok:
         newest_first = True
     elif asc_ok:
         newest_first = False
     else:
-        newest_first = None
-        notes.append("rows are not in date order, so same-day rows keep "
-                     "one common time (intra-day order unknown)")
+        ups = [i + 1 for i, (a, b) in enumerate(zip(dates, dates[1:]))
+               if b > a]
+        downs = [i + 1 for i, (a, b) in enumerate(zip(dates, dates[1:]))
+                 if b < a]
+        breaks = (ups if len(ups) < len(downs) else downs
+                  if len(downs) < len(ups) else None)
+        if breaks is not None and len(breaks) <= 2:
+            newest_first = len(ups) < len(downs)
+            for b in breaks:
+                for i in range(b, len(rows)):
+                    seg[i] += 1
+            notes.append(f"rows are in {len(breaks) + 1} "
+                         f"{'newest' if newest_first else 'oldest'}-first "
+                         f"runs (concatenated exports?) — same-day order "
+                         f"read per run")
+        else:
+            newest_first = None
+            notes.append("rows are not in date order, so same-day rows "
+                         "keep one common time (intra-day order unknown)")
     if newest_first is not None:
         by_day: Dict[str, List[RbcRow]] = {}
-        for r in rows:
+        segs_of: Dict[str, set] = {}
+        for i, r in enumerate(rows):
             by_day.setdefault(r.date, []).append(r)
+            segs_of.setdefault(r.date, set()).add(seg[i])
+        for d in [d for d, ss in segs_of.items() if len(ss) > 1]:
+            del by_day[d]           # a day in two runs: order unknown (k 0)
         for day_rows in by_day.values():
             n = len(day_rows)
             for i, r in enumerate(day_rows):
@@ -1174,14 +1207,18 @@ def _plan_overlaps(ctx: RbcAccountContext, name_of: Dict[str, str]) -> None:
             common = sum(min(n, blank[b].get(ck, 0))
                          for ck, n in blank[a].items())
             if common:
+                # The parser does not decide; the run's cross-file
+                # dedup does, and says so (re-audit A2-1051: 'NOTHING
+                # was de-duplicated' contradicted its line).
                 ctx.messages.append(
-                    f"warning: {name_of[a]} and {name_of[b]} share {common} "
+                    f"note: {name_of[a]} and {name_of[b]} share {common} "
                     f"identical row(s) on the same dates but have no Account "
-                    f"column, so an overlapping re-download of ONE account "
-                    f"cannot be told from two accounts — NOTHING was "
-                    f"de-duplicated. If they are the same account, trim the "
-                    f"overlap from one file (or re-export with the Account "
-                    f"column).")
+                    f"column, so the RBC parser cannot tell an overlapping "
+                    f"re-download of ONE account from two accounts and "
+                    f"passes every row on — the run's cross-file "
+                    f"de-duplication decides (its 'dedup:' line says what "
+                    f"it did). Re-export with the Account column to be "
+                    f"sure.")
 
 
 def _short_reach(events) -> Tuple[float, str, float]:
@@ -2205,8 +2242,15 @@ class RbcBrokerage(BaseBrokerage):
         return out
 
     def _build_tax(self, r):
-        tax_symbol = (self._equity_symbol(r.symbol, r.currency, r, market=True)
-                      if r.symbol else 'UNKNOWN')
+        if not r.symbol.strip():
+            # A made-up 'UNKNOWN' symbol split the withholding from its
+            # dividend with no message (re-audit A2-1050): refuse.
+            raise _err(Path(self._fname), r.line,
+                       f"a Taxes row with a blank Symbol ({r.label()}) — "
+                       f"the withholding cannot be tied to its security; "
+                       f"refusing to book it on a made-up symbol. Fill in "
+                       f"the Symbol (or book it in a .tt TAX row).")
+        tax_symbol = self._equity_symbol(r.symbol, r.currency, r, market=True)
         return {
             'action': 'TAX',
             'date': r.date, 'time': '09:30:00', 'date_settle': r.date,

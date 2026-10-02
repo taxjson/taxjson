@@ -416,7 +416,9 @@ class TestOverlappingDownloads(unittest.TestCase):
                                   header=HDR_NOACCT)
         self.assertEqual(position(txs, 'RYX.TO'), 200.0)
         self.assertIn('Account', err)
-        self.assertIn('warning', err)
+        # A note now: the run's cross-file dedup decides and says so
+        # (re-audit A2-1051 — the warning contradicted its line).
+        self.assertIn('de-duplication decides', err)
 
 
 if __name__ == '__main__':

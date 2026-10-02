@@ -521,6 +521,45 @@ class QuestradeBrokerage(BaseBrokerage):
         print(f"warning: UNBOOKED: {self._where(lineno)}: {msg}",
               file=sys.stderr)
 
+    def _in_real_order(self, path: Path, rows) -> List[tuple]:
+        """Rows of one day tie (Questrade stamps 00:00:00) and keep the
+        order they are emitted in (CA-DATE-14 / US-DATE-13): a
+        newest-first export is read bottom-up so that order is the real
+        one. Decided per header-delimited SEGMENT (re-audit A2-0100): two
+        newest-first exports concatenated (the header repeated, which
+        the parse accepts) went both ways over the whole file and were
+        read top-down — a same-day sale replayed after its rebuy."""
+        segs: List[List[tuple]] = [[]]
+        for item in rows:
+            r = item[1]
+            if [(r.get(c) or '').strip() for c in _QT_COLUMNS[:5]] == \
+                    list(_QT_COLUMNS[:5]):
+                segs.append([item])          # the header opens a segment
+            else:
+                segs[-1].append(item)
+        out: List[tuple] = []
+        mixed = False
+        for seg in segs:
+            head = [x for x in seg[:1]
+                    if [(x[1].get(c) or '').strip()
+                        for c in _QT_COLUMNS[:5]] == list(_QT_COLUMNS[:5])]
+            body = seg[len(head):]
+            dates = [self.parse_date(
+                (r.get('Transaction Date') or '')[:10], '%Y-%m-%d')
+                for _, r in body]
+            ds = [d for d in dates if d]
+            if self.newest_first(dates):
+                body = body[::-1]
+            elif not all(a <= b for a, b in zip(ds, ds[1:])):
+                mixed = True
+            out.extend(head + body)
+        if mixed:
+            print(f"note: {path.name}: rows are not in date order, so "
+                  f"same-day rows keep the file's order (intra-day order "
+                  f"unknown) — check a same-day sale and rebuy.",
+                  file=sys.stderr)
+        return out
+
     def _check_account_mix(self, path: Path, rows) -> None:
         """One export holding rows of SEVERAL Questrade accounts (re-audit
         A2-0025): every row is booked to the one taxjson account the file
@@ -674,15 +713,7 @@ class QuestradeBrokerage(BaseBrokerage):
             ctx.emit()
         self._ctx = ctx
         self._desc_to_ticker = ctx.desc_to_ticker
-        rows = _read_qt_rows(path)
-        # Rows of one day tie (Questrade stamps 00:00:00) and keep the
-        # order they are emitted in (CA-DATE-14 / US-DATE-13): read a
-        # newest-first export bottom-up so that order is the real one.
-        if self.newest_first([
-                self.parse_date((r.get('Transaction Date') or '')[:10],
-                                '%Y-%m-%d')
-                for _, r in rows]):
-            rows = rows[::-1]
+        rows = self._in_real_order(path, _read_qt_rows(path))
 
         # Taxable hint from the Account Type column: a registered-plan
         # marker -> sheltered; "margin"/"cash" without one -> taxable;

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Concatenated exports keep their same-day order.** Two newest-first
+  Questrade or generic exports joined with the header repeated, and RBC
+  exports joined without one, were read top-down as a whole (the dates
+  go both ways), so a same-day sale replayed after its rebuy and the
+  superficial-loss denial changed. The order is now decided per segment
+  (per header, or per run of dates for RBC); the generic importer no
+  longer reports the repeated header as an UNBOOKED row (re-audit
+  A2-0100, A2-1046, A2-1084).
+- RBC: a swallowed-row error names the line of the stray quote, not the
+  end of the swallowed span; a Taxes row with a blank Symbol is refused
+  instead of booked on 'UNKNOWN'; files without an Account column no
+  longer say 'NOTHING was de-duplicated' next to the run's dedup line
+  (re-audit A2-1045, A2-1050, A2-1051).
 - **RBC export coverage is judged per account, over trading days.**
   Another RBC account's later export no longer hides this account's
   missing late December; an export taken on Dec 31 is a note (not an
