@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Schedule 3 for 2024 follows the 2024 form's two periods: dispositions
+  from January 1 to June 24, 2024 go on the Period 1 codes 10689/10690
+  (shares) and 10693/10694 (options, futures, crypto and other
+  properties), the rest on 13199/13200 and 15199/15300, in `form-export`,
+  `sum`'s FOR THE RETURN and the close-year lock; a security sold in both
+  periods has two rows, and the notes name the Period 1 slip lines
+  17399/17599. `check-filed` compares a 2024 lock written before the split
+  on the Period 2 codes and says so in a note; `carryover` reads the
+  Period 1 gain lines (tax-logic CA-DISP-03; re-audit A2-0166, A2-1482).
+- Form 8949 from tax year 2025: a crypto account's sales are digital
+  assets on boxes G/H/I (short-term) and J/K/L (long-term), grouped apart
+  from the securities' A/B/C and D/E/F with their own totals in the
+  export, `sum` and the close-year lock; the box note names them, and the
+  TXF (which has no G-L code) leaves them out with a warning (tax-logic
+  US-RPT-11, US-RPT-03; re-audit A2-0482, A2-0829). The checklist's
+  1099-DA statement is tax-logic US-RPT-10 (US-RPT-09 had two meanings).
+
 - Errors are one line with a consistent exit code in more places
   (re-audit A2-0161, A2-0791, A2-0770, A2-1421, A2-1435, A2-1436,
   A2-1428, A2-1432): `taxjson <tool>` runs a tool under the same guard
@@ -428,7 +445,7 @@
 - Checklist wording: the T1135 step's "below the threshold" (and
   `t1135 --json`, new `scope` / `scope_note`) says it covers these books
   only; a US project's slip step names Form 1099-DA for crypto sales from
-  2025 (tax-logic US-RPT-09); the T5/T3 step's command names the TAXABLE
+  2025 (tax-logic US-RPT-10); the T5/T3 step's command names the TAXABLE
   lines of divs-sum / roc-sum; Form 8949 exports carry `gain_unrounded`
   so a pure per-row rounding gap no longer makes a US checklist's
   form-export step "attention" (re-audit A2-0682, A2-1149, A2-1152,

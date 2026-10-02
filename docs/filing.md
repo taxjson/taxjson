@@ -90,7 +90,9 @@ the open steps one at a time; `--quick` skips the slow detectors.
 - [ ] `taxjson form-export` — Schedule 3 rows by property type: Part 3
       line 4 shares and fund units (13199/13200), line 6 options, futures
       and other properties (15199/15300), line 7 crypto-assets
-      (15200/15301; 15199/15300 before 2025). Each line's totals equal
+      (15200/15301; 15199/15300 before 2025; a 2024 return's January 1 -
+      June 24 dispositions on the Period 1 codes 10689/10690 and
+      10693/10694). Each line's totals equal
       the matching row of `taxjson sum`'s FOR THE RETURN block, and all
       lines together equal the wash-adjusted realized gain in
       `reports/<account>_wash.sum`. They are not all of line 19700:

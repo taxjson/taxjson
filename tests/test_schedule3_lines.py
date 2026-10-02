@@ -84,17 +84,28 @@ class TestRouting(unittest.TestCase):
 
     @rule("CA-DISP-03")
     def test_2024_crypto_goes_with_other_properties(self):
+        # Before 2025 a coin is one of the other properties. The 2024 form
+        # splits by period (A2-1482: this test once pinned a June 10 sale
+        # on the Period 2 codes): Jan 1 - Jun 24 on 10693/10694, the rest
+        # on 15199/15300.
         coin = mark_crypto([dict(COIN, date="2024-06-10",
-                                 date_settle="2024-06-10")])
-        rep = build_schedule3([OPTION] + coin, 2024)
+                                 date_settle="2024-06-10"),
+                            dict(COIN, symbol="ETH", date="2024-09-10",
+                                 date_settle="2024-09-10")])
+        opt = dict(OPTION, date="2024-09-10", date_settle="2024-09-10")
+        rep = build_schedule3([opt] + coin, 2024)
         codes = {r["symbol"]: (r["proceeds_line"], r["gain_line"])
                  for r in rep["rows"]}
-        self.assertEqual(codes["BTC"], ("15199", "15300"))
+        self.assertEqual(codes["BTC"], ("10693", "10694"))
+        self.assertEqual(codes["ETH"], ("15199", "15300"))
+        self.assertEqual(codes[OPTION["symbol"]], ("15199", "15300"))
         self.assertNotIn("proceeds_15200", rep["totals"])
-        self.assertEqual(len(rep["lines"]), 1)
+        self.assertEqual(len(rep["lines"]), 2)
+        self.assertAlmostEqual(rep["totals"]["gain_10694"], -10000.0,
+                               places=2)
         self.assertAlmostEqual(rep["totals"]["gain_15300"], 350.0 - 10000.0,
                                places=2)
-        self.assertIn("crypto", rep["lines"][0]["label"])
+        self.assertTrue(all("crypto" in ln["label"] for ln in rep["lines"]))
 
     def test_year_inferred_from_dates(self):
         rep = build_schedule3(mark_crypto([COIN]))

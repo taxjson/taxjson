@@ -581,7 +581,7 @@ class TestStepWording(unittest.TestCase):
         from taxjson.bin import taxjson_t1135
         self.assertIn('"scope_note"', inspect.getsource(taxjson_t1135))
 
-    @rule("US-RPT-09")
+    @rule("US-RPT-10")
     def test_us_crypto_slip_is_1099_da(self):
         """A2-1149: a US crypto account's 2025 sales come on Form 1099-DA."""
         with tempfile.TemporaryDirectory() as td:

@@ -614,7 +614,15 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Line 4 (13199/13200): shares, fund units and other "
                  "securities. Line 6 (15199/15300): options and futures. "
                  "Line 7 (15200/15301): accounts marked crypto, from 2025; "
-                 "on 15199/15300 before."),
+                 "on 15199/15300 before. The 2024 form splits Part 3 by "
+                 "the disposition's date (its tax_date): Period 1, "
+                 "January 1 to June 24, 2024, on 10689/10690 (shares) "
+                 "and 10693/10694 (options, futures, crypto and other "
+                 "properties); Period 2 on the codes above. A security "
+                 "sold in both periods has a row in each; slip gains go "
+                 "on 17399/17599 (Period 1) and 17400/17600. A 2024 "
+                 "close-year lock written before the split is compared "
+                 "on the Period 2 codes."),
             Rule("CA-DISP-04",
                  "A short sale's gain or loss is realized when it is "
                  "covered."),
@@ -1521,8 +1529,18 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "`taxjson form-export --form 8949`: Form 8949 rows (Part "
                  "I short-term, Part II long-term;"),
             Rule("US-RPT-02", "wash sales as code W).", cont=True),
+            Rule("US-RPT-11",
+                 "From tax year 2025 a crypto account's dispositions are "
+                 "digital assets: their own Form 8949 group on boxes "
+                 "G/H/I (short-term) or J/K/L (long-term), with their own "
+                 "totals in the export, `sum` and the close-year lock; "
+                 "securities stay on A/B/C and D/E/F. Earlier years put "
+                 "them with the securities.", cont=True),
             Rule("US-RPT-03",
-                 "`--form txf` writes a TurboTax TXF file.", cont=True),
+                 "`--form txf` writes a TurboTax TXF file of the "
+                 "securities rows (boxes A-F); boxes G-L have no TXF "
+                 "code, so their rows are left out with a warning.",
+                 cont=True),
             Rule("US-RPT-09",
                  "Form 8949 cells are rounded half-up to the cent and (h) "
                  "= (d) - (e) + (g) on the rounded cells, so a half-cent "
@@ -1564,7 +1582,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "test, a sale near day 30 decides nothing, a long call "
                  "is listed as a warning only, and crypto has no "
                  "window."),
-            Rule("US-RPT-09",
+            Rule("US-RPT-10",
                  "`taxjson checklist`'s slip step names Form 1099-B for "
                  "securities and, from tax year 2025, Form 1099-DA for a "
                  "broker's digital-asset (crypto) sales (gross proceeds "
