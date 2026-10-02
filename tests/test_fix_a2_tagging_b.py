@@ -234,5 +234,63 @@ class TestEdgeCasesCountryGates(unittest.TestCase):
         self.assertIn("a warning only", us)
 
 
+
+class TestChecklistCountryGates(unittest.TestCase):
+    """A2-1494: the checklist's country words — the denial's source and
+    where it goes, the disposition slips, the interest form — in a
+    Canadian and a US project (CA-SL-09 / US-WASH-11, CA-RPT-01's T5008
+    slips vs US-RPT-01's 1099-B, carrying charges)."""
+
+    def _ctx(self, root, country):
+        from datetime import date
+        from taxjson.lib import checklist as cl
+        cfg = {"settings": {"country": country, "year": 2025,
+                            "base_currency": ("USD" if country == "usa"
+                                              else "CAD")},
+               "accounts": {"m": {"type": "taxable"}}}
+        return cl.Ctx(root=root, cfg=cfg, year=2025,
+                      today=date(2026, 6, 1),
+                      run_sub=lambda *a, **k: (0, "", ""))
+
+    def _wash(self, root, country, perm):
+        from taxjson.lib import checklist as cl
+        (root / "work").mkdir(parents=True, exist_ok=True)
+        (root / "work" / "m_gains.json").write_text(json.dumps({
+            "summary": {"year": 2025}, "transactions": [
+                {"symbol": "XYZ.US", "date": "2025-03-03",
+                 "date_settle": "2025-03-04", "qty": -10, "gain": 0.0,
+                 "raw_gain": -500.0, "disallowed_amount": 500.0,
+                 "permanently_disallowed": perm}]}))
+        return cl.d_wash_reviewed(self._ctx(root, country)).detail
+
+    @rule("CA-SL-09")
+    @rule("US-WASH-09", "US-WASH-11")
+    def test_wash_reviewed_names_each_countrys_source(self):
+        with tempfile.TemporaryDirectory() as td:
+            ca = self._wash(Path(td) / "ca", "canada", 500.0)
+            us = self._wash(Path(td) / "us", "usa", 500.0)
+            ca_d = self._wash(Path(td) / "ca2", "canada", 0.0)
+            us_d = self._wash(Path(td) / "us2", "usa", 0.0)
+        self.assertIn("registered-account or affiliated-person", ca)
+        self.assertIn("(IRA repurchase)", us)
+        self.assertNotIn("IRA", ca)
+        self.assertIn("(added to ACB)", ca_d)
+        self.assertIn("(added to the replacement's basis)", us_d)
+
+    @rule("CA-RPT-01")
+    @rule("US-RPT-01")
+    def test_slips_and_interest_form(self):
+        from taxjson.lib import checklist as cl
+        with tempfile.TemporaryDirectory() as td:
+            ca, us = (self._ctx(Path(td), c) for c in ("canada", "usa"))
+            self.assertEqual(cl._slip_names(ca), "T5008")
+            self.assertEqual(cl._slip_names(us), "1099-B")
+            fca, fus = cl.d_fees(ca).detail, cl.d_fees(us).detail
+        self.assertIn("line 22100", fca)
+        self.assertNotIn("4952", fca)
+        self.assertIn("Form 4952", fus)
+        self.assertNotIn("22100", fus)
+
+
 if __name__ == "__main__":
     unittest.main()
