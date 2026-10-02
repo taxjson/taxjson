@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `taxjson harvest` in a US project shows an IRA purchase made within
+  the window in SH_ADD even after the IRA sold it (an IRA buy washes a
+  loss for good whether or not it is still held), and the SH_ADD legend
+  states each country's own rule: in Canada only units the registered
+  account still holds 30 days after the sale deny the loss (re-audit
+  A2-1298, A2-1299).
 - In a US project the web holdings pages, the what-if basis note and
   `reports/<account>_holdings.toml` describe the basis as FIFO per
   account before the wash-sale pass; they used to cite the s.47 blend,

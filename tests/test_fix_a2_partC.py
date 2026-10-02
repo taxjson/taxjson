@@ -474,5 +474,77 @@ class TestHoldingsTomlBasisNote(unittest.TestCase):
         self.assertIn("FIFO", us)
 
 
+# ---------------------------------------------------- harvest (06)
+
+class TestHarvestShelteredAdd(unittest.TestCase):
+    """A2-1298 (US SH_ADD counts an IRA buy since sold) and A2-1299
+    (the SH_ADD legend states each country's own rule)."""
+
+    def _run(self, country, td, as_json=True):
+        from datetime import date, timedelta
+        from unittest import mock
+        from taxjson.bin.taxjson_harvest import main as harvest_main
+        today = date.today()
+        iso = lambda d: (today + timedelta(days=d)).isoformat()
+        sfx, cur = (".US", "USD") if country == "usa" else (".TO", "CAD")
+        sym = f"QZL{sfx}"
+        g = Path(td) / "margin_gains_wash.json"
+        g.write_text(json.dumps({"summary": {"year": today.year},
+                                 "transactions": [], "inventory": [
+            {"symbol": sym, "qty": 100, "total_cost": 5000.0,
+             "currency": cur, "last_acq_date": iso(-120),
+             "position_start_date": iso(-120)}]}))
+        # The sheltered account bought 10 twelve days ago and sold
+        # them seven days ago: nothing held now.
+        sh = Path(td) / "ira_gains.json"
+        sh.write_text(json.dumps({"summary": {"year": today.year},
+                                  "inventory": [], "transactions": [
+            {"symbol": sym, "qty": 10.0, "date": iso(-7),
+             "acquired_date": iso(-12), "direction": "LONG",
+             "gain": 10.0, "proceeds": 410.0, "cost": 400.0,
+             "account": "ira"}]}))
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {"TAXJSON_OFFLINE": "1"}), \
+                redirect_stderr(err):
+            import contextlib
+            with contextlib.redirect_stdout(out):
+                rc = harvest_main(
+                    [str(g), "--no-ibkr", "--country", country,
+                     "--base-currency", cur, "--sheltered", str(sh)]
+                    + (["--json"] if as_json else []),
+                    fetchers=[lambda rem: {s: (40.0, "yfinance")
+                                           for s in rem}])
+        self.assertEqual(rc, 0, err.getvalue())
+        if not as_json:
+            return out.getvalue(), iso(-12)
+        row = json.loads(out.getvalue())["rows"][0]
+        return row, iso(-12)
+
+    @rule("US-WASH-11")
+    def test_usa_sold_ira_buy_still_shows(self):
+        with tempfile.TemporaryDirectory() as td:
+            row, bought = self._run("usa", td)
+        self.assertEqual(row["sheltered_last_add"], bought)
+        self.assertEqual(row["sheltered_qty"], 0.0)
+
+    @rule("CA-SL-02")
+    @rule_absent("US-WASH-11", country="canada")
+    def test_canada_sold_registered_buy_does_not_count(self):
+        with tempfile.TemporaryDirectory() as td:
+            row, _ = self._run("canada", td)
+        self.assertIsNone(row["sheltered_last_add"])
+
+    def test_legend_per_country(self):
+        got = {}
+        for c in ("canada", "usa"):
+            with tempfile.TemporaryDirectory() as td:
+                text, _ = self._run(c, td, as_json=False)
+            got[c] = " ".join(text.split())
+        self.assertIn("still holds 30 days after the sale", got["canada"])
+        self.assertNotIn("IRA", got["canada"])
+        self.assertIn("held or since sold", got["usa"])
+        self.assertNotIn("registered", got["usa"])
+
+
 if __name__ == "__main__":
     unittest.main()
