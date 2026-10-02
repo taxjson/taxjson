@@ -150,11 +150,13 @@ def identity_findings(sample: str) -> List[str]:
     ids (U9990..., 9990...) and transaction ids do not count, so an
     already-redacted sample passes."""
     from taxjson.bin.taxjson_redact import (
-        redact_text, load_denylist, DenylistMissing)
+        redact_text, load_denylist, DenylistError)
     try:
         deny = load_denylist()
-    except DenylistMissing as e:
-        return [f"configured denylist {e} is missing"]
+    except DenylistError as e:
+        # Missing, a directory, unreadable, UTF-16 / not UTF-8: the
+        # gate cannot check the sample, so it refuses (A2-0448).
+        return [f"the private denylist cannot be used: {e}"]
     _out, rep = redact_text(sample, deny)
     found = []
     ids = [a for a in rep.accounts if not _SYNTHETIC_ID.match(a)]
@@ -167,6 +169,24 @@ def identity_findings(sample: str) -> List[str]:
         if n:
             found.append(f"{n} {what}")
     return found
+
+
+def _safe_default_name(stem: str) -> str:
+    """The input file's stem as a default brokerage name, with any
+    account id it carries (IB names a download after the account:
+    'U1234567_20250101_20251231') replaced by a 9990 placeholder and any
+    private-denylist match by REDACTED. The stem went into the prompt
+    (brokerage, class and DEFAULT_ACCOUNT names) and the 'Calling ...'
+    line unscanned while the gate checked only the sample lines
+    (A2-0447)."""
+    from taxjson.bin.taxjson_redact import (
+        redacted_name, load_denylist, compile_patterns, DenylistError)
+    try:
+        pats, _bad = compile_patterns(load_denylist())
+    except DenylistError:
+        pats = []          # identity_findings refuses the run on this
+    name = redacted_name(Path(stem + ".x"), {}, pats)
+    return name[:-len(".redacted.x")]
 
 
 def _default_class_name(brokerage_name: str) -> str:
@@ -307,17 +327,23 @@ def main():
         parser.error(f"--sample-lines must be at least 1 "
                      f"(got {args.sample_lines})")
 
+    from taxjson.lib.brokerages.base import shown_name
     input_path = Path(args.input_file)
     output_path = Path(args.output)
     if not input_path.exists():
-        print(f"taxjson-generate-parser: error: file not found: {input_path}", file=sys.stderr)
+        print(f"taxjson-generate-parser: error: file not found: {shown_name(input_path)}", file=sys.stderr)
         sys.exit(1)
     if not base_path.exists() or not example_path.exists():
         print(f"taxjson-generate-parser: error: base.py or questrade.py not found in {here / 'lib' / 'brokerages'}",
               file=sys.stderr)
         sys.exit(1)
 
-    brokerage_name = args.brokerage_name or input_path.stem
+    brokerage_name = args.brokerage_name or _safe_default_name(input_path.stem)
+    if not args.brokerage_name and brokerage_name != input_path.stem:
+        print("note: the file name carries an account id or a denylisted "
+              "word; the default brokerage name uses a placeholder "
+              f"({brokerage_name}) — pass --brokerage-name to choose one",
+              file=sys.stderr)
     class_name = args.class_name or _default_class_name(brokerage_name)
     default_account = args.default_account or brokerage_name
     model_id = args.model or _DEFAULT_MODELS[args.provider]
@@ -329,7 +355,7 @@ def main():
         print(f"taxjson-generate-parser: error: {e}", file=sys.stderr)
         sys.exit(1)
     if not sample:
-        print(f"taxjson-generate-parser: error: {input_path} is empty", file=sys.stderr)
+        print(f"taxjson-generate-parser: error: {shown_name(input_path)} is empty", file=sys.stderr)
         sys.exit(1)
     # The sample goes to a third-party API, and broker exports keep the
     # holder's name, account id and address in their first lines: scan it
@@ -338,9 +364,9 @@ def main():
     found = identity_findings(sample)
     if found and not args.allow_unredacted:
         print(f"taxjson-generate-parser: error: the first {args.sample_lines} "
-              f"line(s) of {input_path.name} still carry personal data "
+              f"line(s) of {shown_name(input_path)} still carry personal data "
               f"({', '.join(found)}) and would be sent to {args.provider}. "
-              f"Run `taxjson redact {input_path.name}` and use its output, "
+              f"Run `taxjson redact {shown_name(input_path)}` and use its output, "
               f"or pass --allow-unredacted to send it anyway.",
               file=sys.stderr)
         sys.exit(1)
@@ -387,12 +413,15 @@ def main():
     output_path.write_text(code, encoding='utf-8')
 
     print(f"Draft parser written to {output_path}", file=sys.stderr)
+    # The hint quotes the sample's path unless its name carries an id.
+    sample_hint = (str(input_path) if shown_name(input_path) == input_path.name
+                   else str(input_path.parent / "<sample>.csv"))
     print(
         "\nNext steps:\n"
         f"  1. Read {output_path} top to bottom. Verify column names match the CSV.\n"
         "  2. Hand-test with a sample file:\n"
         f"       python -c \"from {output_path.stem} import {class_name}; "
-        f"print({class_name}().parse_file('{input_path}')[:3])\"\n"
+        f"print({class_name}().parse_file('{sample_hint}')[:3])\"\n"
         "  3. Confirm the model used self.* helpers — not inlined regex/date logic.\n"
         "  4. Register the class in taxjson/bin/taxjson_brokerage.py.\n"
         "  5. Add a test against a real CSV sample.\n",
