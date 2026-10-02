@@ -496,6 +496,22 @@ class TestIbCurrencyTaggedSymbol(unittest.TestCase):
             'QZB B', '2026-03-02, 10:00:00', 1, 25, -25, cur='CAD'))
         self.assertNotIn('currency/venue tag', err)
 
+    def test_currency_tag_is_said_for_income_rows_too(self):
+        # A2-1493: Dividends and Withholding Tax rows on a tagged line
+        # are booked to the tagged security like the trades — and said.
+        wht_h = 'Withholding Tax,Header,Currency,Account,Date,Description,Amount\n'
+        for body in (_DIV_H + _div('QZG.CAD', 'US0000000QG1', '2026-03-02',
+                                   5.00, cur='CAD', rate='0.10'),
+                     wht_h + ('Withholding Tax,Data,CAD,U5550001,'  # pii-ok
+                              '2026-03-02,"QZG.CAD(US0000000QG1) Cash '
+                              'Dividend CAD 0.10 per Share - US Tax",'
+                              '-0.75\n')):
+            with self.subTest(section=body.split(',')[0]):
+                _, txs, err = _parse_ib(HEAD + body)
+                self.assertTrue(txs, err)
+                self.assertIn("IB symbol 'QZG.CAD' ends in the "
+                              "currency/venue tag .CAD", err)
+
 
 # --------------------------------------------- statement hardening (IB)
 CASH_H = 'Cash Report,Header,Currency Summary,Currency,Total,\n'

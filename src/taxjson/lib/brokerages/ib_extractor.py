@@ -2839,6 +2839,9 @@ class IbBrokerage(BaseBrokerage):
 
                 ticker, isin = _ib_income_ticker_strict(description,
                                                         where, section)
+                # A currency-tagged line (XYZ.CAD) is its own security
+                # here as in Trades: say so once (re-audit A2-1493).
+                self._check_symbol_tag(ticker, where)
                 # Record (ticker, pay date) so the accrual diagnostic
                 # below can tell whether this dividend's cash has
                 # already been booked in this file.
@@ -3150,6 +3153,7 @@ class IbBrokerage(BaseBrokerage):
                 # holding.
                 ticker, isin = _ib_income_ticker_strict(description,
                                                         where, section)
+                self._check_symbol_tag(ticker, where)       # A2-1493
 
                 ext = (None if ticker == 'CASH'
                        else _isin_ext(isin, ticker, isin_fallback))
