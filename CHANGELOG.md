@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **US: all five USD stablecoins at par on Kraken.** In a US project
+  PYUSD and GUSD are valued at their 1.00 USD par like USDC, USDT and
+  DAI (a swap, a reward or a fee in one); an EUR/PYUSD fill is refused
+  like EUR/USDC instead of being dropped as a forex conversion; and a
+  Kraken ledger instant swap against a stablecoin takes the par ahead
+  of the export's amountusd, as the trades export does. tax-logic
+  US-CRYPTO-02 says so (re-audit A2-1004, A2-1020).
 - **Kraken: every fiat currency is cash.** Only USD, CAD, EUR and GBP
   were: an AUD, JPY or CHF bank deposit or withdrawal became a crypto
   send to classify, an XBT/AUD fill a coin-for-coin swap with a phantom

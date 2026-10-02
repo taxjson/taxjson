@@ -26,18 +26,15 @@ _TT_REMOVE = (' and remove the row from the export (the file is refused until '
 # with the Coinbase parser: Kraken knew only USD/CAD/EUR/GBP, so AUD,
 # JPY and CHF were booked as coins (re-audit A2-0579/0580/0238/0251).
 _FIAT_CURRENCIES = FIAT_CURRENCIES
-# USD-pegged stablecoins: a staking reward in one is worth 1.0/unit by
-# definition, so the parser prices it directly instead of shipping a
-# $0 row for taxjson-fill-crypto to look up. In PROPERTY mode (a US
-# project) these three are the ones valued at their 1.00 USD par.
-_STABLECOINS = ('USDC', 'USDT', 'DAI')
-# The stablecoins a CASH-mode book (Canada, tax-logic CA-CRYPTO-02)
-# folds into US dollars: the same set as the Coinbase parser — PYUSD
-# and GUSD were coins here and cash there, so a Kraken PYUSD balance
-# opened a pool that never closed (audit S060-24, owner decision). A
-# property-mode (US) book is unchanged: PYUSD/GUSD stay coins valued by
-# the fill like any coin.
-_CASH_STABLECOINS = _STABLECOINS + ('PYUSD', 'GUSD')
+# USD-pegged stablecoins (USDC, USDT, DAI, PYUSD, GUSD). A CASH-mode book
+# (Canada, tax-logic CA-CRYPTO-02) folds them into US dollars; a
+# PROPERTY-mode book (a US project, US-CRYPTO-02) keeps them as coins
+# valued at their 1.00 USD par in a swap, a reward or a fee — all five,
+# on every path (PYUSD/GUSD used to be valued by a daily close here and
+# at par on Coinbase, and a swap against one by the ledger's amountusd
+# on one path and par on the other: re-audit A2-1004 / A2-1020).
+_STABLECOINS = tuple(sorted(USD_STABLECOINS))
+_CASH_STABLECOINS = _STABLECOINS
 # Currencies (not property) in a cash-mode book: fiat + the stablecoins.
 _FIAT_ASSETS = FIAT_CURRENCIES | USD_STABLECOINS
 
@@ -1422,14 +1419,17 @@ class KrakenBrokerage(BaseBrokerage):
             # proceeds and the received coin's cost. Pricing each leg
             # from its own coin's daily close gave the two sides of one
             # exchange two different values: a phantom gain or loss.
-            usd = recv['usd'] if recv['usd'] else spend['usd']
+            usd = None
+            # Property mode: a stablecoin leg values the swap at 1.00 USD
+            # a coin FIRST, as the trades path does (US-CRYPTO-02) — the
+            # exchange's amountusd came first here, so one swap had two
+            # values depending on the export (re-audit A2-1004).
+            for _l, _rcv in ((spend, False), (recv, True)):
+                if _l['asset'] in _STABLECOINS:
+                    usd = _coins(_l, _rcv)
+                    break
             if not usd:
-                # Property mode: a stablecoin leg values the swap at
-                # 1.00 USD a coin.
-                for _l, _rcv in ((spend, False), (recv, True)):
-                    if _l['asset'] in _STABLECOINS:
-                        usd = _coins(_l, _rcv)
-                        break
+                usd = recv['usd'] if recv['usd'] else spend['usd']
             if usd:
                 for leg in (sell_leg, buy_leg):
                     q = abs(leg['quantity'])

@@ -125,5 +125,76 @@ class TestEveryFiatIsCash(unittest.TestCase):
         self.assertEqual(_normalize_asset("ZJPY"), "JPY")
 
 
+class TestUsStablecoinsAtPar(unittest.TestCase):
+    """A2-1004 / A2-1020: in a US project all five USD stablecoins are
+    property valued at 1.00 USD par, on every Kraken path."""
+
+    @rule("US-CRYPTO-02")
+    def test_rule_text_names_all_five_on_both_exchanges(self):
+        from taxjson.lib.tax_logic import catalog
+        text = catalog("usa")["US-CRYPTO-02"].text
+        for c in ("USDC", "USDT", "DAI", "PYUSD", "GUSD"):
+            self.assertIn(c, text)
+        self.assertIn("Kraken and Coinbase alike", text)
+
+    @rule("US-CRYPTO-02")
+    def test_ledger_instant_swap_against_usdc_uses_par_not_amountusd(self):
+        led = _ledger([
+            "L1,R1,2025-03-01 12:00:00,spend,,currency,USDC,spot,-1000,0,0,"
+            "880,,",
+            "L2,R1,2025-03-01 12:00:00,receive,,currency,XETH,spot,0.4,0,"
+            "0.4,880,,"], header=_KL_H2)
+        txs, _ = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv",
+                        cash=False)
+        self.assertEqual(sorted(_bs(txs)), [("ETH", 0.4), ("USDC", -1000.0)])
+        for t in txs:
+            self.assertAlmostEqual(t["net_amount"], 1000.0)
+
+    @rule("US-CRYPTO-02")
+    def test_pyusd_quote_and_reward_at_par(self):
+        t = _KT_H + ("T1,O1,ETH/PYUSD,2025-06-02 16:00:00,buy,limit,"
+                     "2500,1000,0,0.4,,,\n")
+        txs, _ = _parse({"kr_trades.csv": t}, "kr_trades.csv", cash=False)
+        self.assertEqual(sorted(_bs(txs)), [("ETH", 0.4), ("PYUSD", -1000.0)])
+        for x in txs:
+            self.assertAlmostEqual(x["net_amount"], 1000.0)
+        led = _ledger([
+            "L1,R1,2025-03-01 12:00:00,earn,reward,currency,GUSD,earn,5,0,"
+            "5"])
+        txs, _ = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv",
+                        cash=False)
+        self.assertEqual([(x["action"], x["symbol"], x["net_amount"])
+                          for x in txs],
+                         [("DIVIDEND", "GUSD", 5.0), ("BUYSELL", "GUSD", 5.0)])
+
+    @rule("US-CRYPTO-02")
+    def test_fiat_base_against_pyusd_or_gusd_is_refused_not_forex(self):
+        for q in ("USDC", "PYUSD", "GUSD"):
+            with self.subTest(q=q):
+                t = _KT_H + (f"T1,O1,EUR/{q},2025-06-02 16:00:00,buy,limit,"
+                             f"1.08,108,0,100,,,\n")
+                with self.assertRaises(ValueError) as cm:
+                    _parse({"kr_trades.csv": t}, "kr_trades.csv",
+                           cash=False)
+                self.assertIn("prices dollars in a stablecoin",
+                              str(cm.exception))
+
+    @rule("CA-CRYPTO-02")
+    @rule_absent("CA-CRYPTO-02", country="usa")
+    @rule("US-CRYPTO-02")
+    @rule_absent("US-CRYPTO-02", country="canada")
+    def test_pyusd_reward_cash_in_canada_property_in_the_us(self):
+        led = _ledger([
+            "L1,R1,2025-03-01 12:00:00,earn,reward,currency,PYUSD,earn,5,"
+            "0,5"])
+        ca, _ = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv", cash=True)
+        us, _ = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv", cash=False)
+        # Canada: US-dollar cash income, no coin acquired.
+        self.assertEqual([(x["action"], x["currency"]) for x in ca],
+                         [("DIVIDEND", "USD")])
+        self.assertEqual([(x["action"], x["symbol"]) for x in us],
+                         [("DIVIDEND", "PYUSD"), ("BUYSELL", "PYUSD")])
+
+
 if __name__ == "__main__":
     unittest.main()
