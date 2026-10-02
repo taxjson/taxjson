@@ -236,6 +236,11 @@ def step_meta(sid: str, country: str) -> Tuple[str, int, str, str, str]:
     if is_us(country) and isinstance(US_STEPS.get(sid), tuple):
         title, cmd, why = US_STEPS[sid]
         return (sid, base[1], title, cmd, why)
+    if is_us(country) and isinstance(US_STEPS.get(sid), str):
+        # An n/a step of a US project: never the Canadian title and
+        # reason (T1135's ITA 233.3, the NOA's CRA interest; A2-1261).
+        return (sid, base[1], "Not applicable to a US project", "-",
+                US_STEPS[sid])
     return base
 
 
@@ -547,8 +552,13 @@ def d_sheltered_inputs(ctx: Ctx) -> Result:
         return Result("sheltered-inputs", "n/a", "no sheltered account configured")
     empty = [n for n in names if not _data_files(ctx.root / "inputs" / n)]
     if empty:
+        # US: an IRA's repurchase (Rev. Rul. 2008-5), never Canada's
+        # affiliated persons (A2-1260).
+        unseen = ("IRA/retirement-account purchases unseen"
+                  if is_us(ctx.settings.get("country"))
+                  else "affiliated purchases unseen")
         return Result("sheltered-inputs", "attention",
-                      f"empty: {', '.join(empty)} — affiliated purchases unseen")
+                      f"empty: {', '.join(empty)} — {unseen}")
     return Result("sheltered-inputs", "done", ", ".join(names))
 
 
@@ -734,11 +744,20 @@ def d_run_clean(ctx: Ctx) -> Result:
                      if (ctx.reports / f"{n}.sum").is_file()
                      and not (ctx.cache / f"{n}_gains_wash.json").is_file()]
         if unblended:
+            # US basis is never blended: the missing pass is the
+            # cross-account §1091 wash pass (A2-1262).
+            if is_us(ctx.settings.get("country")):
+                _pass, _books = ("cross-account wash-sale (§1091) pass",
+                                 "per-account books with no cross-account "
+                                 "wash sales")
+            else:
+                _pass, _books = ("blended (s.47) pass",
+                                 "unblended per-account books")
             problems.append(
-                f"no blended (s.47) pass for {', '.join(unblended)} — "
+                f"no {_pass} for {', '.join(unblended)} — "
                 f"the last run was per-account (`run --account`) or "
                 f"stopped at pending elections, so the filing figures "
-                f"are unblended per-account books (run `taxjson run` "
+                f"are {_books} (run `taxjson run` "
                 f"with no --account)")
     if empty_parse:
         problems.append(f"{', '.join(empty_parse)} parsed to 0 "
@@ -1085,10 +1104,15 @@ def d_elections(ctx: Ctx) -> Result:
     # carries no income and a $0 cost for the new shares (R1-11).
     zero = _zero_value_elections(ctx)
     if zero:
+        # Only the project country's rollover (A2-1245): s.86.1 and
+        # allocated_acb_cad in Canada, §355 and allocated_acb in the US.
+        roll = ("a §355 spin-off's allocated_acb"
+                if is_us(ctx.settings.get("country"))
+                else "an s.86.1 rollover's allocated_acb_cad")
         return Result("elections", "attention",
                       f"{zero} spin-off/merger(s) booked at $0 — set "
-                      f"fmv_per_share (or the allocated cost of an "
-                      f"s.86.1 / §355 rollover) with `taxjson elect` (see "
+                      f"fmv_per_share (or {roll}) "
+                      f"with `taxjson elect` (see "
                       f"the .sum DIAGNOSTICS)")
     if "No pending elections" in out or (code == 0 and not out.strip()):
         return Result("elections", "done", "none pending")
@@ -1266,6 +1290,7 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                        and is_us(ctx.settings.get("country"))))
     from taxjson.lib.report_model import stale_wash_inputs
     denied = perm = 0.0
+    flags: set = set()
     seen = False
     # Every taxable book must be read, current and built for this year —
     # a total over the readable subset marked the step done while a
@@ -1310,6 +1335,16 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                 continue
             denied += float(t.get("disallowed_amount") or 0)
             perm += float(t.get("permanently_disallowed") or 0)
+        # Warn-only manual-check flags (a warrant/right, an adjusted
+        # series or a futures option bought in a loss's window:
+        # CA-SL-14/15, US-WASH-14/15) deny nothing, so the totals above
+        # never see them; the step said "no superficial losses" over
+        # them (A2-0413).
+        for w in doc.get("option_replacement_warnings") or []:
+            if isinstance(w, dict) and str(w.get("loss_date") or "") \
+                    .startswith(str(ctx.year)):
+                flags.add(f"{w.get('loss_symbol')} {w.get('loss_date')} "
+                          f"[{w.get('rule')}]")
     blockers = []
     if unreadable:
         blockers.append(f"cannot read {', '.join(unreadable)}")
@@ -1330,12 +1365,25 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                       f"the cross-account pass) — run `taxjson run`")
     # US projects in §1091's words, never CRA's (S049-14).
     _us = is_us(ctx.settings.get("country"))
+    flag_note = ""
+    if flags:
+        shown = sorted(flags)
+        flag_note = (f"{len(shown)} warn-only manual-check flag(s) "
+                     f"(nothing denied by the books): "
+                     f"{', '.join(shown[:4])}"
+                     f"{' ...' if len(shown) > 4 else ''} — decide each "
+                     f"by hand (`taxjson wash-sales` lists them)")
     if perm > 0.005:
         return Result("wash-reviewed", "manual",
                       f"{perm:,.2f} permanently denied ("
                       f"{'IRA' if _us else 'registered-account or affiliated-person'}"
                       f" repurchase) "
-                      f"— confirm each with `taxjson wash-sales`")
+                      f"— confirm each with `taxjson wash-sales`"
+                      + (f"; {flag_note}" if flag_note else ""))
+    if flag_note:
+        return Result("wash-reviewed", "manual",
+                      (f"{denied:,.2f} denied; " if denied > 0.005 else "")
+                      + flag_note)
     if denied > 0.005:
         return Result("wash-reviewed", "done",
                       f"{denied:,.2f} denied, all recoverable "
@@ -1761,9 +1809,16 @@ def d_fees(ctx: Ctx) -> Result:
 
 def d_estimate(ctx: Ctx) -> Result:
     est = (ctx.cfg.get("estimate") or {}).get("other_income")
+    first = f"[estimate] other_income {'set' if est is not None else 'unset'}"
+    # [instalments] is Canada's table (CONFIG_COUNTRY; a US config
+    # refuses it): a US project never hears of it (A2-0738).
+    if is_us(ctx.settings.get("country")):
+        return Result("estimate", "manual",
+                      f"{first}; US estimated tax payments are not "
+                      f"modelled — check them yourself")
     inst = bool(ctx.cfg.get("instalments"))
     return Result("estimate", "manual",
-                  f"[estimate] other_income {'set' if est is not None else 'unset'}; "
+                  f"{first}; "
                   f"[instalments] {'present' if inst else 'absent'}")
 
 
