@@ -195,7 +195,8 @@ class TestDispatchGuard(unittest.TestCase):
             with contextlib.redirect_stderr(err), \
                     contextlib.redirect_stdout(io.StringIO()), \
                     self.assertRaises(SystemExit) as cm:
-                RS.main([str(s), "--gains", str(g), "--ticker-map", str(m)])
+                RS.main([str(s), "--gains", str(g), "--country", "canada",
+                         "--ticker-map", str(m)])
         self.assertEqual(cm.exception.code, 2)
         self.assertIn("not UTF-8", err.getvalue())
 

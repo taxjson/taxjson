@@ -18,10 +18,10 @@
   refused by corp-actions, apply-distributions and harvest (it was
   ignored); wash-radar --json-out under a file and gains
   --suggest-phantoms into a folder say `cannot write`.
-- A console tool piped into `head` exits quietly (141) instead of
-  printing a BrokenPipeError (exit 120), also when `taxjson` runs it;
-  under an ASCII locale a report's `—` is replaced, not a
-  UnicodeEncodeError (A2-1426, A2-1417, A2-1427).
+- A tool that `taxjson` runs as a passthrough command (wash-radar,
+  harvest, fees-sum, find-missing-history) and whose output is piped
+  into `head` exits quietly (141) too; the in-process dispatcher turned
+  the BrokenPipeError into a traceback with exit 1 (A2-1417).
 - The elections manifest: a directory, an unreadable file, a symlink
   loop or a dangling link is one `manifest ... cannot be read` line in
   `elect`, `spinoffs` and run's FILING REQUIRED check (it was a
