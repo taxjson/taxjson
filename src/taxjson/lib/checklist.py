@@ -559,14 +559,39 @@ def d_roc_entered(ctx: Ctx) -> Result:
         return Result("roc-entered", "blocked",
                       f"cannot read {', '.join(bad)} — its ADJUST rows "
                       f"cannot be counted; re-run `taxjson run`")
+    # The year an ADJUST lowers the cost in: a Canadian trust's ROC on
+    # its record date (CA-INC-DATE-ROC-TRUST) — roc-sum's window, not the
+    # pay date (A2-0680).
+    try:
+        from taxjson.lib.income_dating import IncomeRules
+        rules = IncomeRules.from_settings(ctx.settings)
+        when = rules.row_date
+    except Exception:                                   # noqa: BLE001
+        def when(t):
+            return str(t.get("date") or "")
     adjust = sum(1 for d in docs.values()
                  for t in (d.get("transactions") or [])
-                 if t.get("action") == "ADJUST"
-                 and str(t.get("date") or "").startswith(str(ctx.year)))
+                 if isinstance(t, dict) and t.get("action") == "ADJUST"
+                 and str(when(t) or "").startswith(str(ctx.year)))
     dmap = (ctx.root / "distributions.map").is_file()
-    return Result("roc-entered", "manual",
-                  f"{adjust} ADJUST row(s) in {ctx.year}; distributions.map "
-                  f"{'present' if dmap else 'absent'}")
+    detail = (f"{adjust} ADJUST row(s) in {ctx.year}; distributions.map "
+              f"{'present' if dmap else 'absent'}")
+    if dmap:
+        # The same ROC in the books and in the map lowers the ACB twice
+        # (A2-0361): roc-sum warned, this step said nothing.
+        try:
+            from taxjson.bin.taxjson_run import (_double_roc_warnings,
+                                                 _year_keep)
+            dbl = _double_roc_warnings(ctx.root, _accounts_of(ctx, "taxable"),
+                                       _year_keep(str(ctx.year)))
+        except SystemExit:
+            dbl = []
+        if dbl:
+            return Result("roc-entered", "attention",
+                          f"{len(dbl)} ROC entered twice — {dbl[0]}"
+                          + (" ..." if len(dbl) > 1 else "")
+                          + f" ({detail})")
+    return Result("roc-entered", "manual", detail)
 
 
 def d_inputs_committed(ctx: Ctx) -> Result:

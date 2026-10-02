@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Checklist roc-entered: ADJUST rows are counted in the year roc-sum
+  windows them on (a Canadian trust's ROC by its record date), and the
+  step is "attention" when the same ROC is in the books and in
+  distributions.map (roc-sum's and apply-distributions' "reduced twice"
+  warning) (re-audit A2-0361, A2-0680).
 - `taxjson crypto-sends`: `--unset ID` removes a saved decision (the send
   is undecided again); `--set`/`--write` refuse while another crypto
   account has not been parsed (a send to it looked unmatched and could be

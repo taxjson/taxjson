@@ -510,3 +510,42 @@ class TestCryptoSendsCommand(unittest.TestCase):
         r = self.cli("crypto-sends", "cb", "--unset", btc)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("no saved decision", r.stderr)
+
+
+# ------------------------------------------------------------- roc-entered
+QT_HDR = ("Transaction Date,Settlement Date,Action,Symbol,Description,Quantity,Price,"
+          "Gross Amount,Commission,Net Amount,Currency,Account #,Activity Type,Account Type\n")
+QT_ROWS = [
+    "2025-02-03 10:00:00 AM,2025-02-04 12:00:00 AM,Buy,XYZ.UN.TO,XYZ REIT UNITS,100,10.00,"
+    "1000.00,0,-1000.00,CAD,55500001,Trades,Individual margin",  # pii-ok
+    "2026-01-08 12:00:00 AM,2026-01-08 12:00:00 AM,DIV,XYZ.UN.TO,XYZ REIT RETURN OF CAPITAL "
+    "ON 100 SHS REC 12/30/25 PAY 01/08/26,0,0,0,0,20.00,CAD,55500001,Dividends,Individual margin",  # pii-ok
+]
+
+
+class TestRocEntered(unittest.TestCase):
+    def test_counts_on_the_roc_sum_date(self):
+        """A2-0680: a trust ROC with a Dec 30 record date paid Jan 8 is a
+        2025 ADJUST (roc-sum's window), not a 2026 one."""
+        for y, want in ((2025, 1), (2026, 0)):
+            with tempfile.TemporaryDirectory() as td:
+                p = Path(td)
+                (p / "inputs" / "margin").mkdir(parents=True)
+                (p / "inputs" / "margin" / "qt.csv").write_text(QT_HDR + "\n".join(QT_ROWS) + "\n")
+                (p / "taxjson.toml").write_text(TOML.replace("2025", str(y)))
+                tj(p, "run", "--no-input")
+                r = cl.d_roc_entered(ctx(p, year=y))
+                self.assertIn(f"{want} ADJUST row(s) in {y}", r.detail)
+
+    def test_double_roc_is_flagged_by_run_and_checklist(self):
+        """A2-0361: the same ROC as a .tt ADJUST and a distributions.map row."""
+        with tempfile.TemporaryDirectory() as td:
+            p = make_project(Path(td), book=(
+                "BUYSELL 2025-01-06 09:30:00 QZR.TO 1000 CAD 20.00 -20000.00 0\n"
+                "ADJUST 2025-12-31 12:00:00 QZR.TO CAD -500.00\n"), run=False)
+            (p / "distributions.map").write_text("QZR.TO 2025-12-31 -0.50\n")
+            r = tj(p, "run", "--no-input")
+            self.assertIn("reduced twice", r.stderr.lower())   # apply-distributions
+            res = cl.d_roc_entered(ctx(p))
+            self.assertEqual(res.status, "attention", res.detail)
+            self.assertIn("QZR.TO 2025-12-31", res.detail)

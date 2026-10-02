@@ -6610,6 +6610,47 @@ def _account_group_of(root: Path) -> Dict[str, str]:
     return out
 
 
+def _double_roc_warnings(root: Path, accounts, keep, rules=None
+                         ) -> List[str]:
+    """One sentence per distributions.map row that books the same ROC an
+    ADJUST in the books already books (same account, symbol and date):
+    the ACB is reduced twice (audit R1-163). Matched over ALL rows, not
+    the window's: the broker row is windowed on its record date and the
+    map row on its own date, so a pair straddling the year end never met
+    (audit A2-0072). The map date may be either the pay date or the
+    printed record date. Shared by roc-sum, `run` and the checklist's
+    roc-entered step (A2-0361)."""
+    cache = root / "work"
+    if rules is None:
+        rules = _view_income_rules(root)
+    all_native: List[Tuple[str, dict]] = []
+    for a in accounts:
+        nf = _native_tx_file(cache, a)
+        if nf is None:
+            continue
+        all_native += [(a, t) for t in
+                       (_load_json_or_die(nf).get("transactions") or [])
+                       if t.get("action") == "ADJUST"]
+    all_dist = _dist_adjust_rows(cache, accounts, lambda _d: True)
+    book_keys: Dict[Tuple[str, str, str], str] = {}
+    for a, t in all_native:
+        if float(t.get("net_amount") or 0.0) >= 0:
+            continue
+        w = rules.roc_date(t) if rules else str(t.get("date") or "")
+        for d in (t.get("date"), t.get("record_date")):
+            if d:
+                book_keys[(a, str(t.get("symbol") or ""), str(d))] = w
+    out = []
+    for a, t in all_dist:
+        md = str(t.get("date_settle") or t.get("date") or "")
+        w = book_keys.get((a, str(t.get("symbol") or ""), md))
+        if w is not None and (keep(md) or keep(w)):
+            out.append(f"{t.get('symbol')} {md} ({a}) has an ADJUST in the "
+                       f"books AND a distributions.map row — the ACB is "
+                       f"reduced twice if both are the same distribution.")
+    return out
+
+
 def _dist_adjust_rows(cache: Path, accounts, keep) -> List[Tuple[str, dict]]:
     """distributions.map ACB adjustments: `run` books them (type 'dist',
     id DIST-*) into <acct>_base.json only — the native books the
@@ -7069,31 +7110,8 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
     # is windowed on its record date and the map row on its own date,
     # so a pair straddling the year end never met (audit A2-0072). The
     # map date may be either the pay date or the printed record date.
-    _all_native: List[Tuple[str, dict]] = []
-    for _a in _accts:
-        _nf = _native_tx_file(_root / "work", _a)
-        if _nf is None:
-            continue
-        _all_native += [(_a, t) for t in
-                        (_load_json_or_die(_nf).get("transactions") or [])
-                        if t.get("action") == "ADJUST"]
-    _all_dist = _dist_adjust_rows(_root / "work", _accts, lambda _d: True)
-    _book_keys: Dict[Tuple[str, str, str], str] = {}
-    for a, t in _all_native:
-        if float(t.get("net_amount") or 0.0) >= 0:
-            continue
-        _w = _rules.roc_date(t) if _rules else str(t.get("date") or "")
-        for _d in (t.get("date"), t.get("record_date")):
-            if _d:
-                _book_keys[(a, str(t.get("symbol") or ""), str(_d))] = _w
-    for a, t in _all_dist:
-        _md = str(t.get("date_settle") or t.get("date") or "")
-        _w = _book_keys.get((a, str(t.get("symbol") or ""), _md))
-        if _w is not None and (_keep(_md) or _keep(_w)):
-            print(f"taxjson roc-sum: warning: {t.get('symbol')} "
-                  f"{_md} ({a}) has an ADJUST in the books AND "
-                  f"a distributions.map row — the ACB is reduced twice "
-                  f"if both are the same distribution.", file=sys.stderr)
+    for _w in _double_roc_warnings(_root, _accts, _keep, _rules):
+        print(f"taxjson roc-sum: warning: {_w}", file=sys.stderr)
     rows = list(rows) + dist_rows
 
     money = fmt_money               # shared report-layer formatter
