@@ -139,6 +139,17 @@ def home_currency(country: str) -> str:
     return HOME_CURRENCY[canonical_country(country)]
 
 
+# Whether a taxpayer's identical property is ONE pool across all their
+# taxable accounts: Canada averages the ACB across them (ITA s.47 — a
+# move between two of your own accounts changes nothing); the US keeps
+# lots per account (US-BASIS-01), so such a move must carry the lot.
+BASIS_POOLED_ACROSS_ACCOUNTS = {CANADA: True, USA: False}
+
+
+def basis_pooled_across_accounts(country: str) -> bool:
+    return BASIS_POOLED_ACROSS_ACCOUNTS[canonical_country(country)]
+
+
 def default_tax_date(country: str) -> str:
     """CRA dates a disposition by settlement, the IRS by trade date."""
     return DEFAULT_TAX_DATE[canonical_country(country)]
