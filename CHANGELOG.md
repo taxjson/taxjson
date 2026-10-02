@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- taxjson-export `--dust-threshold` refuses nan, inf and negatives (nan or
+  inf hid every zero-cost holding); a position transferred in keeps its
+  later trade events in the holdings TOML; JSON piped on stdin is read
+  as UTF-8 whatever the locale, as files are (re-audit A2-1214, A2-1216,
+  A2-1217, A2-1215, A2-1219).
 - Canada stock-dividend ATTENTION: printed only by a taxable run of the
   dividend's own year, quiet once an ADJUST adds the cost, and worded
   right — adding the cost books the ACB only; the dividend is reported

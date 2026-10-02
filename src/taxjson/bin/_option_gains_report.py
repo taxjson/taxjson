@@ -120,10 +120,13 @@ def load_inputs(prog: str, files: List[str]):
     or a one-line refusal and exit."""
     if not files:
         from taxjson.lib.report_model import strip_report_comments
+        import io
         try:
-            content = strip_report_comments(sys.stdin)
-        except UnicodeDecodeError as e:
-            cli_diag.error(prog, f"<stdin>: not UTF-8 text ({e.reason})")
+            content = strip_report_comments(
+                io.StringIO(cli_diag.read_stdin_utf8()))
+        except (UnicodeDecodeError, cli_diag.InputReadError) as e:
+            cli_diag.error(prog, f"<stdin>: not UTF-8 text "
+                                 f"({getattr(e, 'reason', e)})")
             sys.exit(1)
         if not content.strip():
             cli_diag.error(prog, "no input provided")

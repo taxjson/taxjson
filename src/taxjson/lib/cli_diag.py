@@ -96,6 +96,22 @@ def write_text_atomic(path, text: str, encoding: str = "utf-8") -> None:
             pass
 
 
+def read_stdin_utf8() -> str:
+    """Standard input as UTF-8 text (a BOM dropped), whatever the locale:
+    sys.stdin decodes with the locale's codec, so a JSON document with
+    'Société' piped under an ASCII locale was refused while the same file
+    named on the command line was read (re-audit A2-1219). A stream with
+    no byte buffer (a test's StringIO) is read as is."""
+    buf = getattr(sys.stdin, "buffer", None)
+    if buf is None:
+        return sys.stdin.read()
+    data = buf.read()
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        raise not_utf8("<stdin>", e) from None
+
+
 def describe_input_error(exc: BaseException) -> str:
     """The one-line text for an input a tool could not read."""
     import json

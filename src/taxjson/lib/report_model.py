@@ -149,7 +149,10 @@ def load_report_json(path: Optional[Path] = None) -> Any:
     if path is not None:
         with open(path, 'r', encoding='utf-8') as f:
             return json.loads(strip_report_comments(f))
-    return json.loads(strip_report_comments(sys.stdin))
+    # UTF-8 whatever the locale, as files are read (A2-1219).
+    import io
+    from taxjson.lib.cli_diag import read_stdin_utf8
+    return json.loads(strip_report_comments(io.StringIO(read_stdin_utf8())))
 
 
 def render_table(headers, aligns, body, foot=(), gap="  "):
@@ -304,7 +307,7 @@ def build_account_report(gains_data, account: str,
                       wash_sales records
 
     ADDITIVE artifact: the .sum text pipeline is unchanged; consumers
-    (taxjson summary today; future exports/web) read this instead of
+    (`taxjson sum` today; future exports/web) read this instead of
     re-deriving the same aggregates from the raw gains JSON."""
     from datetime import datetime
     # Deferred imports: bin tools import report_model, so a module-level

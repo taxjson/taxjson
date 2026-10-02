@@ -484,7 +484,8 @@ def main():
         else:
             import io
             from taxjson.lib.pipeline import load_stdin_transactions
-            _stdin = sys.stdin.read()
+            from taxjson.lib.cli_diag import read_stdin_utf8
+            _stdin = read_stdin_utf8()      # UTF-8 whatever the locale
             transactions = load_stdin_transactions(io.StringIO(_stdin))
             if args.dedup:
                 meta_accounts = _doc_source_accounts(_stdin)

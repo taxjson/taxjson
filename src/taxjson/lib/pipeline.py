@@ -55,7 +55,11 @@ def load_stdin_transactions(stream=None) -> List[TaxTransaction]:
     through core.strip_json_comments (which is string-aware and could
     accept inputs the old path rejected)."""
     from taxjson.lib.core import coerce_transaction_row
-    stream = stream if stream is not None else sys.stdin
+    if stream is None:
+        # UTF-8 whatever the locale, as files are read (A2-1219).
+        import io
+        from taxjson.lib.cli_diag import read_stdin_utf8
+        stream = io.StringIO(read_stdin_utf8())
     content = "".join(line for line in stream
                       if not line.strip().startswith('#'))
     if not content.strip():

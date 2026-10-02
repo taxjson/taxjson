@@ -875,5 +875,59 @@ class TestTaxableTransferWording(unittest.TestCase):
         self.assertNotIn("--taxable was set", str(cm.exception))
 
 
+# ------------------------------------------ A2-1214 / A2-1216 / A2-1217 / A2-1215
+class TestExportInputs(unittest.TestCase):
+
+    def test_dust_threshold_refuses_nan_inf_negative(self):
+        for bad in ("nan", "inf", "-1"):
+            with self.subTest(bad=bad):
+                r = subprocess.run(
+                    [sys.executable, "-m", "taxjson.bin.taxjson_export",
+                     "--dust-threshold", bad, "--report", "x.json"],
+                    cwd=REPO_ROOT, capture_output=True, text=True,
+                    env=_env(Path("/nonexistent")), stdin=subprocess.DEVNULL)
+                self.assertEqual(r.returncode, 2, r.stderr)
+                self.assertIn("--dust-threshold", r.stderr)
+
+    def test_transfer_in_counts_toward_the_round(self):
+        from taxjson.bin.taxjson_export import _load_trade_events
+        for opener in ("TRANSFER", "OPENING_BALANCE"):
+            with self.subTest(opener=opener):
+                with tempfile.TemporaryDirectory() as td:
+                    p = Path(td) / "raw.json"
+                    p.write_text(json.dumps({"transactions": [
+                        {"action": opener, "symbol": "XYZ.US",
+                         "quantity": 100, "date": "2026-01-02"},
+                        {"action": "BUYSELL", "symbol": "XYZ.US",
+                         "quantity": 50, "price": 10, "date": "2026-02-02"},
+                        {"action": "BUYSELL", "symbol": "XYZ.US",
+                         "quantity": -50, "price": 11,
+                         "date": "2026-03-02"}]}))
+                    ev = _load_trade_events([p])
+                    self.assertEqual([e["action"] for e in ev["XYZ.US"]],
+                                     ["BUY", "SELL"])
+
+
+# ---------------------------------------------------------------- A2-1219
+class TestStdinIsUtf8(unittest.TestCase):
+
+    def test_piped_json_under_an_ascii_locale(self):
+        doc = json.dumps({"transactions": [{
+            "action": "DIVIDEND", "date": "2026-03-03", "time": "10:00:00",
+            "symbol": "GLE.PA", "quantity": 0, "price": 0,
+            "net_amount": 10.0, "gross_amount": 10.0, "currency": "EUR",
+            "account": "m", "description": "Société Générale"}]},
+            ensure_ascii=False).encode("utf-8")
+        for mod in ("taxjson.bin.taxjson_sort", "taxjson.bin.taxjson_sum_income"):
+            with self.subTest(mod=mod):
+                r = subprocess.run(
+                    [sys.executable, "-m", mod], cwd=REPO_ROOT,
+                    input=doc, capture_output=True,
+                    env=_env(Path("/nonexistent"), PYTHONIOENCODING="ascii:backslashreplace",
+                             LC_ALL="C", LANG="C"))
+                self.assertEqual(r.returncode, 0, r.stderr.decode(
+                    "utf-8", "replace"))
+
+
 if __name__ == "__main__":
     unittest.main()
