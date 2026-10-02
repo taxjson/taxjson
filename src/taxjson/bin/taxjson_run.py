@@ -12164,6 +12164,20 @@ def _radar_engine_args(bases: List[Path],
             out += ["--gains", str(g)]
     if phantoms is not None and Path(phantoms).exists():
         out += ["--incomplete-history", str(phantoms)]
+    if phantoms is not None and out[1] == "canada":
+        # The project's corporate_distributions list: the radar's own
+        # pool moves a Canadian TRUST's return of capital to its record
+        # date as the engine does, and leaves a listed corporation's on
+        # its pay date (CA-INC-DATE-ROC-TRUST; audit A2-1174/A2-1178).
+        try:
+            _corp = (_soft_settings(Path(phantoms).parent).get(
+                "corporate_distributions") or [])
+        except Exception:                                  # noqa: BLE001
+            _corp = []
+        if isinstance(_corp, (list, tuple)):
+            for _c in _corp:
+                if isinstance(_c, str) and _c.strip():
+                    out += ["--corporate-distribution", _c.strip()]
     return out
 
 
@@ -13255,9 +13269,13 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
             _distinct_pairs = {frozenset(s.strip().upper() for s in p)
                                for p in _tm.distinct}
         except Exception as e:
-            print(f"{prog}: warning: could not read ticker.map ({e}) "
-                  f"— mapped cross-listings will not match.",
-                  file=sys.stderr)
+            # The map decides which listings are one security: without
+            # it a cross-listed loss is invisible and the verdict flips
+            # to SAFE, so refuse as `taxjson run` does (audit A2-0683).
+            _die(f"ticker.map cannot be read ({e}) — `taxjson run` "
+                 f"refuses it too; fix it before trusting a wash "
+                 f"verdict (its cross-listing and rename rules decide "
+                 f"which listings are the same security).")
 
     def _root(t: str) -> str:
         t = t.strip().upper()
@@ -13306,7 +13324,14 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
             _bdoc = _json.loads(_bp.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        for _t in _bdoc.get("transactions", []) or []:
+        # A bare-array book is a book (the radar's own read_json_doc
+        # contract — audit A2-1180).
+        _brows = (_bdoc if isinstance(_bdoc, list)
+                  else (_bdoc.get("transactions", []) or [])
+                  if isinstance(_bdoc, dict) else [])
+        for _t in _brows:
+            if not isinstance(_t, dict):
+                continue
             if (_t.get("action") or "").upper() != "SPLIT":
                 continue
             _new = (_t.get("symbol_new") or "").strip()
@@ -13324,8 +13349,10 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
     _shares = {t.strip().upper() for t in radar if not _is_opt(t)}
     for _bp in bases:
         try:
-            for _t in _json.loads(_bp.read_text(encoding="utf-8")).get(
-                    "transactions", []) or []:
+            _bdoc = _json.loads(_bp.read_text(encoding="utf-8"))
+            _brows = (_bdoc if isinstance(_bdoc, list)
+                      else _bdoc.get("transactions", []) or [])
+            for _t in _brows:
                 _sy = str(_t.get("symbol") or "").strip().upper()
                 if _sy and not _is_opt(_sy):
                     _shares.add(_sy)
@@ -13359,6 +13386,26 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
         resolve_gains_files(cache), canon, _taxable,
         usa=_radar_country_is_usa(root))
     return radar, canon, last_loss
+
+
+_OPTION_LOSS_KEY = "option:"
+
+
+def _last_loss_for(last_loss: Dict[str, Dict[str, Any]], want: str,
+                   wroot: str, mode: str, closes_short: bool = False):
+    """The last loss a trade in `want` can affect: a share query sees
+    the class's share losses; an option query sees its own contract's,
+    plus (a call BUY that opens a position) the underlying's share
+    losses (one-way option rule, audit A2-1172)."""
+    from taxjson.lib.core import is_option_symbol, parse_option_right
+    q = want.strip().upper()
+    if not is_option_symbol(q):
+        return last_loss.get(wroot)
+    cands = [last_loss.get(_OPTION_LOSS_KEY + q)]
+    if mode == "buy" and parse_option_right(q) == "C" and not closes_short:
+        cands.append(last_loss.get(wroot))
+    cands = [c for c in cands if c]
+    return max(cands, key=lambda c: c["date"]) if cands else None
 
 
 def _last_loss_by_class(gains_files, canon, taxable, *, usa: bool
@@ -13399,7 +13446,14 @@ def _last_loss_by_class(gains_files, canon, taxable, *, usa: bool
                 _g = float(_t.get("raw_gain", _t.get("gain")) or 0.0)
             if _g >= 0:
                 continue
-            _c = canon(str(_t.get("symbol") or ""))
+            # An option's loss is keyed by its own contract, never by the
+            # underlying's class: shares never replace an option, so a
+            # share query's context line must not show a written call's
+            # buy-back loss as INSIDE its window (audit A2-1172).
+            _sym = str(_t.get("symbol") or "")
+            from taxjson.lib.core import is_option_symbol as _is_o
+            _c = (_OPTION_LOSS_KEY + _sym.strip().upper()
+                  if _is_o(_sym.strip().upper()) else canon(_sym))
             _d = str((_t.get("date") or _t.get("date_settle")) if usa
                      else (_t.get("date_settle") or _t.get("date")) or "")
             _prev = last_loss.get(_c)
@@ -13489,7 +13543,8 @@ def _class_matches(radar: Dict[str, Dict[str, Any]], canon, want: str):
 
 
 def _replacement_rows(want: str, matches: Dict[str, Dict[str, Any]],
-                      mode: str) -> Dict[str, Dict[str, Any]]:
+                      mode: str, closes_short: bool = False
+                      ) -> Dict[str, Dict[str, Any]]:
     """Keep the radar rows a trade in `want` can actually affect (ITA
     s.54, one-way option rule): buying SHARES touches share losses only
     (shares never replace an option); buying a CALL also touches the
@@ -13501,10 +13556,73 @@ def _replacement_rows(want: str, matches: Dict[str, Dict[str, Any]],
     if not is_option_symbol(q):
         return {t: r for t, r in matches.items()
                 if not is_option_symbol(t)}
-    call_buy = mode == "buy" and parse_option_right(q) == "C"
+    # A buy that closes a written call acquires nothing (CA-SL-05,
+    # US-WASH-12; audit A2-0370): it touches only its own contract.
+    from taxjson.lib.core import _FUTURES_PREFIX_RE, parse_option_underlying
+    # A futures option is never sized as a replacement of the futures
+    # loss (CA-SL-15 / US-WASH-15): buy-check flags it instead.
+    call_buy = (mode == "buy" and parse_option_right(q) == "C"
+                and not closes_short
+                and not _FUTURES_PREFIX_RE.match(
+                    parse_option_underlying(q) or ""))
     return {t: r for t, r in matches.items()
             if t.strip().upper() == q
             or (call_buy and not is_option_symbol(t))}
+
+
+_FLAG_WORDS = {
+    "right_vs_share_loss": "a warrant/right on",
+    "adjusted_option_vs_loss": "a call on an adjusted option series of",
+    "futures_option_vs_loss": "a call on the futures contract of",
+}
+
+
+def _flagged_share_rows(radar: Dict[str, Dict[str, Any]], q: str):
+    """[(ticker, row, rule)] for the share rows a purchase of `q` would
+    be flagged against (never sized): `q` a warrant/right on them, a call
+    on an adjusted series of them (root + digit), or a call on their
+    futures contract — the engines' warn-only rules (core.
+    detect_right_replacement_matches / detect_unresolved_option_
+    replacement_matches)."""
+    from taxjson.lib.core import (_FUTURES_PREFIX_RE, _root_matches_stock,
+                                  _split_underlying, is_option_symbol,
+                                  parse_option_right,
+                                  parse_option_underlying, right_underlying)
+    q = q.strip().upper()
+    if is_option_symbol(q):
+        if parse_option_right(q) != "C":
+            return []
+        und = parse_option_underlying(q) or ""
+        b, ext = _split_underlying(und)
+        b = _FUTURES_PREFIX_RE.sub("F:", b)
+        if b.startswith("F:"):
+            kind = "futures_option_vs_loss"
+        elif b[-1:].isdigit():
+            kind = "adjusted_option_vs_loss"
+        else:
+            return []
+    else:
+        und = right_underlying(q)
+        if not und:
+            return []
+        b, ext = _split_underlying(und)
+        kind = "right_vs_share_loss"
+    out = []
+    for t, r in radar.items():
+        tu = t.strip().upper()
+        if is_option_symbol(tu) or tu == q:
+            continue
+        sb, sext = _split_underlying(tu)
+        sb = _FUTURES_PREFIX_RE.sub("F:", sb)
+        if sext != ext:
+            continue
+        if kind == "right_vs_share_loss":
+            if sb != b:
+                continue
+        elif not _root_matches_stock(b, sb):
+            continue
+        out.append((t, r, kind))
+    return sorted(out, key=lambda x: x[0])
 
 
 def _last_loss_line(ll) -> Optional[str]:
@@ -13564,12 +13682,35 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
         f"the sale — a full exit is not")
     unsafe = 0
     results = []
+    from taxjson.lib.core import is_option_symbol as _is_opt_sym
+    from taxjson.lib.core import parse_option_right as _opt_right
     for want in args.symbol:
         want = _fold_class_separator(want)
         wroot, matches, _note = _class_matches(radar, _canon, want)
-        matches = _replacement_rows(want, matches, "buy")
+        _q = want.strip().upper()
+        # Short this very contract: the buy closes it and acquires
+        # nothing (CA-SL-05 / US-WASH-12; audit A2-0370).
+        _own = radar.get(_q) or {}
+        _short_n = -(float(_own.get("taxable_qty") or 0.0)
+                     + float(_own.get("sheltered_qty") or 0.0))
+        _closes = (_is_opt_sym(_q) and _opt_right(_q) == "C"
+                   and _short_n > 1e-9)
+        matches = _replacement_rows(want, matches, "buy", _closes)
         # Worst verdict across the class (cross-listings included).
         verdict, lines = "SAFE", ([_note] if _note else [])
+        if _closes:
+            verdict = "SAFE*"
+            lines.append(
+                f"{_q}: you are short {_short_n:g} contract(s) — a buy "
+                f"that closes them acquires nothing, so it never "
+                f"replaces a loss on the shares; buying MORE than "
+                f"{_short_n:g} opens a long call, a right to acquire "
+                f"them.")
+        # A US long call is a note only (US-WASH-12 / US-PLAN-02): the
+        # engine never denies a share loss on it, so buying one is not
+        # UNSAFE for the shares (it was, against the engine's verdict).
+        _us_call_note = (_usa and _is_opt_sym(_q) and _opt_right(_q) == "C"
+                         and not _closes)
         clears = None
         # A VIOLATION anywhere in the class poisons every leg's date:
         # cross-listings are identical property, so a BLOCKED leg's
@@ -13582,6 +13723,19 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
             for r in matches.values())
         for t, r in sorted(matches.items()):
             cat = r.get("category") or ""
+            if (_us_call_note and not _is_opt_sym(t.strip().upper())
+                    and cat in ("BLOCKED", "COOLING", "VIOLATION",
+                                "WASHED")):
+                if verdict == "SAFE":
+                    verdict = "SAFE*"
+                lines.append(
+                    f"{t}: {cat} — a loss sold within the past 30 days; "
+                    f"{_q} is a long call on these shares: §1091 may "
+                    f"treat it as an option to acquire them, so buying it "
+                    f"now may make that loss a wash sale — the US engine "
+                    f"only flags it (a warning, call_vs_share_loss), so "
+                    f"check it by hand.")
+                continue
             if cat in ("BLOCKED", "COOLING", "VIOLATION"):
                 verdict = "UNSAFE"
                 # VIOLATION's clears_at is the radar's SELL-BY
@@ -13639,6 +13793,25 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                     f"{t}: {cat} — no recent loss sale, buying is "
                     f"safe TODAY, but it extends the wash window: "
                     f"{_future_rule}.")
+        # A warrant/right, a call on an adjusted series or a futures
+        # option on the shares of a recent loss: the engines flag it for
+        # a manual check (CA-SL-14/15, US-WASH-14/15); buy-check said
+        # SAFE, 'no wash exposure on record' (audit A2-0129).
+        for t, r, kind in _flagged_share_rows(radar, _q):
+            cat = r.get("category") or ""
+            if cat not in ("BLOCKED", "COOLING", "VIOLATION", "WASHED"):
+                continue
+            if verdict == "SAFE":
+                verdict = "SAFE*"
+            lines.append(
+                f"{t}: {cat} — a loss sold within the past 30 days; {_q} "
+                f"is {_FLAG_WORDS[kind]} these shares: a right to acquire "
+                f"them bought now may make that loss "
+                + ("a wash sale (§1091 \"contract or option to "
+                   "acquire\")" if _usa
+                   else "superficial (s.54 para (i))")
+                + f" — the engine only flags it [{kind}], so check it by "
+                  f"hand.")
         matches = {t: r for t, r in matches.items()
                    if (r.get("category") or "")}
         if len(lines) == bool(_note) and matches:
@@ -13651,7 +13824,7 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
             lines.append(f"{wroot}: no wash exposure on record — safe "
                          f"to buy. (Any buy starts a 30-day window: "
                          f"{_future_rule}.)")
-        _ll = _last_loss.get(wroot)
+        _ll = _last_loss_for(_last_loss, want, wroot, "buy", _closes)
         _lll = _last_loss_line(_ll)
         if _lll:
             lines.append(_lll)
@@ -13728,6 +13901,13 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
                 _cd = r.get("clears_at")
                 if _cd:                     # worst case across the class
                     clears = max(clears, _cd) if clears else _cd
+                lines.append(f"{t}: {adv}")
+            elif cat == "VIOLATION" and r.get("deadline_passed"):
+                # The last rescue trade date has passed: the loss is
+                # denied and no sale undoes it — never an ACTION with a
+                # sell-by date in the past (audit A2-0368).
+                if verdict == "SAFE":
+                    verdict = "SAFE*"
                 lines.append(f"{t}: {adv}")
             elif cat == "VIOLATION":
                 _cd = r.get("clears_at")
@@ -13808,17 +13988,27 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
                         f" — nothing to sell at a loss (a "
                         f"{'tax-deferred' if _usa else 'registered'} "
                         f"disposition has no tax effect).")
+                elif float(r.get("taxable_qty") or 0.0) < 0:
+                    lines.append(f"{t}: {adv}")
                 else:
                     lines.append(f"{t}: CLEAR — safe to sell at a loss "
                                  f"now; do not rebuy on EITHER side "
                                  f"(taxable or "
                                  f"{'IRA' if _usa else 'sheltered'}) for "
                                  f"30 days.")
+                    # Warn-only flags for a sale today (a US long call,
+                    # a warrant, an adjusted series, a futures option
+                    # bought in the window — audit A2-0687).
+                    for _n in r.get("notes") or []:
+                        if verdict == "SAFE":
+                            verdict = "SAFE*"
+                        lines.append(f"{t}: {_n}")
         if len(lines) == bool(_note):
             lines.append(f"{wroot}: no tracked taxable position — "
                          f"nothing to sell (or run `taxjson run` to "
                          f"refresh the books).")
-        _lll = _last_loss_line(_last_loss.get(wroot))
+        _ll = _last_loss_for(_last_loss, want, wroot, "sell")
+        _lll = _last_loss_line(_ll)
         if _lll:
             lines.append(_lll)
         if verdict in ("UNSAFE", "PARTIAL"):
@@ -13827,7 +14017,7 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
                         "verdict": verdict,
                         "clears_at": clears,
                         "act_by": act_by, "detail": lines,
-                        "last_loss": _last_loss.get(wroot)})
+                        "last_loss": _ll})
     # SAFE is "as far as this project's accounts show" (CA-PLAN-04 /
     # US-PLAN-04, audit S054-22).
     from taxjson.lib.wash_scope import scope_note as _scope_note

@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+- Wash radar, sell-check, buy-check, harvest's ADVISORY: each replacement
+  unit backs one denial, as in the engine (CA-SL-08) — a rebuy an earlier
+  loss used up no longer makes a second, false VIOLATION or a false
+  LOCKED for a sale today, and a sale split into fills no longer counts
+  its shared rebuy twice (re-audit A2-0009, A2-0038, A2-0377, A2-0689,
+  A2-0691; US: an IRA buy the engine already matched is not 'at risk'
+  again). Quantities across a split are compared in today's units
+  (A2-0382); a long call counts at its declared contract size (A2-0373);
+  a class-share option root (RCI for RCI.B.TO) names its class line; a
+  futures option on the loss's own contract is a note to check by hand,
+  never a VIOLATION (A2-0378, A2-0690, also in edge-cases).
+- Wash radar: once the last rescue trade date has passed, a VIOLATION
+  says the loss is denied (JSON `deadline_passed`) instead of 'Sell ...
+  by <yesterday>'; sell-check no longer answers ACTION/UNSAFE for it and
+  safe-to-sell shows DENIED (A2-0688, A2-0368). The sell-by date walks
+  back on the listing's calendar (A2-1183) and a futures rescue settles
+  on its trade date (A2-1181).
+- Wash radar: warrants, adjusted-series calls and futures options bought
+  in a loss's window (and, US, a long call bought in the last 30 days for
+  a sale today) are noted for a manual check, carried to sell-check;
+  buy-check flags buying one after a share loss instead of 'no wash
+  exposure', and a US long call after a share loss is a note, not UNSAFE
+  (A2-0129, A2-0687).
+- Wash radar: a short position is described as a short (cover, re-short;
+  a US short's trigger is a new short sale, not an IRA purchase)
+  (A2-0371, A2-0686, A2-1184).
+- Wash radar's own pool: a Canadian trust's return of capital moves to
+  its record date and a return of capital above the ACB floors it at nil
+  (A2-1174, A2-1178, A2-0372); a coin rebuy under 1e-6 units is a holding
+  (A2-1168); a `.tt` row dated tomorrow in a settle-date project is a
+  trade made today (A2-0130).
+- buy-check: buying back a written call you are short is SAFE (it
+  acquires nothing) (A2-0370). buy-check / sell-check: the 'last loss
+  sale' line shows only losses the queried trade can affect (A2-1172);
+  a bare-array book no longer crashes them (A2-1180); an unreadable
+  ticker.map stops them, as it stops `run` (A2-0683).
+
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of

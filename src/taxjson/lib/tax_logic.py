@@ -865,13 +865,20 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
          "watch, web)", [
             Rule("CA-PLAN-01",
                  "They apply the superficial-loss rule above on settle "
-                 "dates: a loss whose replacement is still held can be "
-                 "rescued by selling the replacement so that it is no "
-                 "longer held when day 30 settles (VIOLATION prints the "
-                 "last trade date that does it)."),
+                 "dates, each replacement unit backing one denial (an "
+                 "earlier loss's claim, even one whose window has closed, "
+                 "is spent; quantities across a split are compared in "
+                 "today's units): a loss whose replacement is still held "
+                 "can be rescued by selling the replacement so that it is "
+                 "no longer held when day 30 settles (VIOLATION prints the "
+                 "last trade date that does it, on the listing's "
+                 "calendar; once that date has passed it says the loss is "
+                 "denied)."),
             Rule("CA-PLAN-02",
                  "A long call on the shares bought in the window counts "
-                 "as a replacement.", cont=True),
+                 "as a replacement at its contract size; a warrant, an "
+                 "adjusted-series call or a futures option is a note to "
+                 "check by hand.", cont=True),
             Rule("CA-PLAN-03",
                  "The web what-if runs a taxable sale on the blended s.47 "
                  "pool of the taxable accounts of its kind, with the "
@@ -1379,7 +1386,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "undoes it (the disallowed loss is in the replacement's "
                  "basis)."),
             Rule("US-PLAN-02",
-                 "A long call bought in the window is a note only.",
+                 "A long call bought in the window is a note only, for an "
+                 "existing loss and for a loss sale today, as are a "
+                 "warrant, an adjusted-series call and a futures option; "
+                 "an IRA purchase the engine already matched to an "
+                 "earlier loss is not counted again (share for share), "
+                 "and a short position's trigger is a new short sale.",
                  cont=True),
             Rule("US-PLAN-03",
                  "The web what-if runs a sale with every taxable "
