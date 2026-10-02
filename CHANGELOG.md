@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `scripts/check-pii.sh` no longer passes silently on a private denylist
+  saved with a UTF-8 BOM (the BOM is dropped, so the first pattern
+  works) and fails closed on a UTF-16, non-UTF-8 or directory denylist
+  instead of reporting clean (A2-0044, A2-0450, A2-0458). It now also
+  catches a lower-case IB account id (u + 7-8 digits, as IB HTML element
+  ids carry it) in content and file names (A2-0449), a labelled SIN in
+  any separator form including unspaced and dotted (A2-0760, A2-1387),
+  a labelled SSN / TIN / Tax ID (A2-1387), and an 8-9 digit value under
+  an Account column in the pre-push `--diff` scan of a .csv/.tsv
+  (A2-1388).
 - Renames are dated events (owner decision, audit A2-0197). On its date
   a ticker change carries the position, the ACB / basis lots and the
   acquisition dates from the old symbol to the new one, and the
