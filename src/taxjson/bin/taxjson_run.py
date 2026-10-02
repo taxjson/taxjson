@@ -11580,10 +11580,16 @@ def _prior_record_path(root: Path, settings: Dict[str, Any],
                        override: Optional[str]) -> Path:
     if override:
         return Path(override).expanduser()
-    configured = settings.get("prior_year_record")
-    if configured:
-        p = Path(str(configured)).expanduser()
-        return p if p.is_absolute() else (root / p)
+    from taxjson.bin.taxjson_filed import (PriorRecordError,
+                                           prior_record_setting)
+    try:
+        p = prior_record_setting(root, settings)
+    except PriorRecordError as e:
+        # The same refusal `taxjson run` gives — not "no prior-year
+        # record at <root>/5" (A2-1135).
+        _die(str(e))
+    if p is not None:
+        return p
     return root / "filed" / f"{int(settings.get('year') or 0) - 1}.json"
 
 
