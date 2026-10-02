@@ -250,5 +250,79 @@ class TestPriorLockTiming(unittest.TestCase):
                           "records)", r.stderr)
 
 
+@rule("CA-RPT-08")
+class TestCloseYearForce(_Base):
+    def test_force_keeps_filed_dispositions_and_warns_on_moved_totals(self):
+        # A2-0119: --force (check-filed's DRIFTED advice) dropped the
+        # dispositions another tool filed. A2-0345: it replaced the
+        # filed totals without a word.
+        p = self.copy("force")
+        csvp = p / "filed.csv"
+        csvp.write_text("symbol,date,qty,proceeds,cost,gain\n"
+                        "SOLD,2025-06-02,10,900,1000,-100\n")
+        r = _run_cli(p, "close-year", "--filed-dispositions", str(csvp))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        lock = p / "filed" / "2025.json"
+        doc = json.loads(lock.read_text())
+        doc["totals"]["realized"] = -90.0          # what was filed
+        lock.write_text(json.dumps(doc))
+        r = _run_cli(p, "close-year", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        new = json.loads(lock.read_text())
+        self.assertEqual(len(new["filed_dispositions"]), 1)
+        self.assertEqual(new["filed_totals"]["gain"], -100.0)
+        self.assertIn("kept the 1 filed disposition", r.stdout)
+        self.assertIn("realized -90.00 -> -100.00", r.stderr)
+
+    def test_filed_dispositions_csv_funnel(self):
+        p = self.copy("csvf")
+        good = ("symbol,date,qty,proceeds,cost,gain\n"
+                "AAA,2025-03-01,10,1000,900,100\n"
+                "BBB,2025-03-02,10,1000,1100,-100\n"
+                "CCC,2025-03-03,10,1000,990,10\n")
+        # A2-1138: a UTF-16 (Excel "Unicode Text") save is read.
+        u = p / "u16.csv"
+        u.write_bytes(good.replace(",", "\t").encode("utf-16"))
+        r = _run_cli(p, "close-year", "--filed-dispositions", str(u))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads((p / "filed" / "2025.json").read_text())
+                         ["filed_totals"]["gain"], 10.0)
+        # A directory: one line, exit 2, no traceback.
+        r = _run_cli(p, "close-year", "--force", "--filed-dispositions",
+                     str(p / "inputs"))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        # A2-1136: a stray quote merged rows and dropped one in silence.
+        bad = p / "bad.csv"
+        bad.write_text(good.replace("AAA,", '"AAA,', 1))
+        r = _run_cli(p, "close-year", "--force", "--filed-dispositions",
+                     str(bad))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("unescaped quote", r.stderr)
+
+
+@rule("CA-RPT-08")
+class TestPartialYearRecord(unittest.TestCase):
+    def test_handoff_flags_a_record_closed_before_year_end(self):
+        # A2-0349: a record from close-year --force during the year.
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            p = _project(base / "p", 2025, TT25)
+            self.assertEqual(_run_cli(p, "run", "--no-input").returncode, 0)
+            self.assertEqual(_run_cli(p, "close-year").returncode, 0)
+            lock = p / "filed" / "2025.json"
+            doc = json.loads(lock.read_text())
+            doc["closed_at"] = "2025-10-01T20:30:42"
+            lock.write_text(json.dumps(doc))
+            q = _project(base / "q", 2026, TT25,
+                         f'prior_year_record = "{lock}"\n')
+            self.assertEqual(_run_cli(q, "run", "--no-input").returncode, 0)
+            r = _run_cli(q, "handoff", "--json")
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            rep = json.loads(r.stdout)
+            self.assertEqual(len(rep["partial"]), 1)
+            self.assertIn("partial-year snapshot", rep["partial"][0]["why"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1134,7 +1134,9 @@ def d_handoff(ctx: Ctx) -> Result:
                          ("timing", "written option(s) on another premium "
                                     "timing than the closed year"),
                          ("income", "income row(s) dated in the closed "
-                                    "year")):
+                                    "year"),
+                         ("partial", "the closed year's record is a "
+                                    "partial-year snapshot")):
             if doc.get(k):
                 parts.append(f"{len(doc[k])} {label}")
         return Result("handoff", "attention",

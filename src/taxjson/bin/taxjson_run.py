@@ -11567,11 +11567,35 @@ def cmd_close_year(args: argparse.Namespace) -> None:
                  if getattr(args, "filed_dispositions", None) else None)
     if filed_csv is not None and not filed_csv.exists():
         sys.exit(f"taxjson close-year: {filed_csv} not found.")
+    if filed_csv is not None:
+        # Read it up front, through the broker decode funnel: a UTF-16
+        # save, a directory or a stray quote is one line naming the
+        # file, exit 2, before anything is computed (A2-1136, A2-1138).
+        try:
+            _handoff.load_filed_dispositions(filed_csv)
+        except ValueError as e:
+            print(f"taxjson close-year: {e} Nothing was written.",
+                  file=sys.stderr)
+            raise SystemExit(2)
     if taxjson_filed.snapshot_path(root, year).exists() and not args.force:
         sys.exit(f"taxjson close-year: {taxjson_filed.snapshot_path(root, year)}"
                  f" already exists — the lock protects a filed year. "
                  f"Re-run with --force to replace it (only if you "
                  f"re-filed/amended).")
+    _old_lock = None
+    if taxjson_filed.snapshot_path(root, year).exists():
+        try:
+            _old_lock = _json.loads(taxjson_filed.snapshot_path(
+                root, year).read_text(encoding="utf-8"))
+            if not isinstance(_old_lock, dict):
+                raise ValueError("not a close-year lock")
+        except (OSError, ValueError) as e:
+            print(f"taxjson close-year: WARNING: the lock being replaced "
+                  f"could not be read ({e}) — anything it recorded "
+                  f"(the filed totals, dispositions filed with another "
+                  f"tool) is not carried into the new lock.",
+                  file=sys.stderr)
+            _old_lock = None
     # The lock records a FILED return: a year that has not ended cannot
     # have been filed — the lock then drifted on every later run and
     # the checklist said "Return filed and the year locked" (S045-23).
@@ -11596,12 +11620,49 @@ def cmd_close_year(args: argparse.Namespace) -> None:
         sys.exit(f"taxjson close-year: {e}. Nothing was written.")
     except ValueError as e:
         sys.exit(f"taxjson close-year: {e}")
+    if (filed_csv is None and _old_lock is not None
+            and _old_lock.get("filed_dispositions") is not None):
+        # --force (what check-filed's DRIFTED advice says) used to drop
+        # the dispositions another tool actually filed, and handoff's
+        # double-reporting check silently fell back to taxjson's own
+        # (A2-0119). They describe the RETURN, not the books: keep them.
+        extra["filed_dispositions"] = _old_lock["filed_dispositions"]
+        if isinstance(_old_lock.get("filed_totals"), dict):
+            extra["filed_totals"] = _old_lock["filed_totals"]
+        print(f"  kept the {len(extra['filed_dispositions'])} filed "
+              f"disposition(s) the replaced lock recorded"
+              + (f" (from {_old_lock['filed_totals'].get('source')})"
+                 if isinstance(_old_lock.get("filed_totals"), dict)
+                 else "")
+              + " — pass --filed-dispositions to replace them.")
     path = taxjson_filed.write_snapshot(
         root, year, _normalize_country(settings["country"]), basis,
         accounts, force=args.force,
         option_timing=option_timing_from_settings(settings) or None,
         extra=extra, raw=raw_aggs)
     tot = _json.loads(path.read_text())["totals"]
+    _old_tot = (_old_lock or {}).get("totals")
+    if isinstance(_old_tot, dict):
+        # The replaced lock was the record of the filed return: say what
+        # moved, so a re-close made only to record positions (handoff's
+        # advice for a version-1 lock) does not overwrite the filed
+        # totals in silence (A2-0345).
+        _moved = []
+        for _k in ("realized", "disallowed", "income", "dispositions"):
+            try:
+                _a, _b = float(_old_tot.get(_k) or 0), float(tot.get(_k) or 0)
+            except (TypeError, ValueError):
+                continue
+            if abs(_a - _b) > 0.005:
+                _moved.append(f"{_k} {_a:,.2f} -> {_b:,.2f}")
+        if _moved:
+            print(f"taxjson close-year: WARNING: the replaced {year} lock "
+                  f"recorded other totals ({'; '.join(_moved)}). The lock "
+                  f"is the record of the FILED return: this is right only "
+                  f"if you amended {year} to these figures — otherwise "
+                  f"restore the old lock from your records (git) and "
+                  f"resolve the drift `taxjson check-filed` reports.",
+                  file=sys.stderr)
     print(f"closed {year} ({basis}): realized {tot['realized']:,.2f}, "
           f"disallowed {tot['disallowed']:,.2f}, income "
           f"{tot['income']:,.2f} across {len(accounts)} account(s)")
@@ -11676,7 +11737,11 @@ def cmd_handoff(args: argparse.Namespace) -> None:
             or "year_end" not in record:
         sys.exit(f"taxjson handoff: {rp} is a version-1 lock (totals "
                  f"only). Re-close that year with the current taxjson "
-                 f"(`taxjson close-year --force`) to record positions.")
+                 f"(`taxjson close-year --force` in its project) to record "
+                 f"positions — run `taxjson check-filed` there first: if "
+                 f"it reports DRIFTED, the re-close would replace the "
+                 f"filed totals, so resolve the drift (or amend) before "
+                 f"re-closing.")
     ry = int(record["year"])
     if int(settings.get("year") or 0) != ry + 1:
         print(f"taxjson handoff: note: the record is for {ry}; this "

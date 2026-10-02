@@ -277,29 +277,64 @@ def load_filed_dispositions(path: Path) -> List[Dict[str, Any]]:
     with another tool. CSV with a header: symbol,date,qty,proceeds,cost,
     gain (account optional; date = the date the return used; amounts in
     the base currency; qty positive)."""
+    import io
+    from taxjson.lib.brokerages.base import (BrokerageParseError,
+                                             decode_broker_text)
+    p = Path(path)
+    if not p.is_file():
+        raise ValueError(f"{path}: not a file")
+    # The decode funnel every broker export goes through: a UTF-16
+    # (Excel "Unicode Text") save is read, any other encoding is one
+    # line naming the file, not a codec message (A2-1138).
+    try:
+        text = decode_broker_text(p.read_bytes(), str(path))
+    except BrokerageParseError as e:
+        raise ValueError(str(e))
+    except OSError as e:
+        raise ValueError(f"{path}: cannot read ({e})")
+    first = text.split("\n", 1)[0]
+    delim = "\t" if ("\t" in first and "," not in first) else ","
     rows = []
-    with open(path, newline="", encoding="utf-8-sig") as fh:
-        rd = csv.DictReader(fh)
-        missing = [c for c in _FILED_COLS
-                   if c not in (rd.fieldnames or [])]
-        if missing:
-            raise ValueError(f"{path}: missing column(s) "
-                             f"{', '.join(missing)} (need "
-                             f"{', '.join(_FILED_COLS)})")
-        for i, r in enumerate(rd, start=2):
-            try:
-                rows.append({
-                    "account": (r.get("account") or "").strip(),
-                    "symbol": r["symbol"].strip(),
-                    "date": str(_d(r["date"]) or ""),
-                    "qty": abs(float(r["qty"])),
-                    "proceeds": round(float(r["proceeds"]), 2),
-                    "cost": round(float(r["cost"]), 2),
-                    "gain": round(float(r["gain"]), 2)})
-            except (KeyError, ValueError) as e:
-                raise ValueError(f"{path}:{i}: bad row ({e})")
-            if not rows[-1]["date"]:
-                raise ValueError(f"{path}:{i}: bad date {r['date']!r}")
+    fh = io.StringIO(text, newline="")
+    rd = csv.DictReader(fh, delimiter=delim)
+    missing = [c for c in _FILED_COLS
+               if c not in (rd.fieldnames or [])]
+    if missing:
+        raise ValueError(f"{path}: missing column(s) "
+                         f"{', '.join(missing)} (need "
+                         f"{', '.join(_FILED_COLS)})")
+    for i, r in enumerate(rd, start=2):
+        # A stray quote merges the following rows into one cell and
+        # a filed disposition vanished from the record in silence
+        # (A2-1136): a record wider than the header or a cell
+        # holding a line break is refused, naming the line.
+        if r.get(None) or any(
+                isinstance(v, str) and ("\n" in v or "\r" in v)
+                for k, v in r.items() if k is not None):
+            raise ValueError(
+                f"{path}: the record ending on line {rd.line_num} "
+                f"holds a line break or more cells than the header — "
+                f"an unescaped quote swallowed the next row(s). Fix "
+                f"the quoting (double an inner quote: \"\") and "
+                f"re-run.")
+        try:
+            rows.append({
+                "account": (r.get("account") or "").strip(),
+                "symbol": r["symbol"].strip(),
+                "date": str(_d(r["date"]) or ""),
+                "qty": abs(float(r["qty"])),
+                "proceeds": round(float(r["proceeds"]), 2),
+                "cost": round(float(r["cost"]), 2),
+                "gain": round(float(r["gain"]), 2)})
+        except (KeyError, ValueError) as e:
+            raise ValueError(f"{path}:{i}: bad row ({e})")
+        import math
+        if not all(math.isfinite(rows[-1][k])
+                   for k in ("qty", "proceeds", "cost", "gain")):
+            raise ValueError(f"{path}:{i}: bad row (an amount is not a "
+                             f"finite number)")
+        if not rows[-1]["date"]:
+            raise ValueError(f"{path}:{i}: bad date {r['date']!r}")
     return rows
 
 
@@ -499,8 +534,23 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
     rbasis = record.get("date_basis") or basis
     issues: Dict[str, List[Dict[str, Any]]] = {
         "positions": [], "missed": [], "double": [], "timing": [],
-        "notes": []}
+        "partial": [], "notes": []}
     issues["timing"] = _timing_issues(cache, cfg, record)
+    # A record closed on or before Dec 31 of its year (close-year
+    # --force during the year) is a partial-year snapshot, not the
+    # year-end: its positions miss the rest of that year's trades, and
+    # "Everything the closed year carried forward is here, once" was
+    # printed over it (A2-0349).
+    _ca = _d(record.get("closed_at"))
+    if _ca is not None and _ca <= date(ry, 12, 31):
+        issues["partial"].append({
+            "closed_at": str(record.get("closed_at")),
+            "why": (f"the {ry} record was closed on {_ca} (close-year "
+                    f"--force before the year ended): a partial-year "
+                    f"snapshot, not the {ry} year-end — its positions, "
+                    f"sales and January settlements miss everything "
+                    f"after {_ca}. Re-close {ry} in its project now that "
+                    f"the year has ended (after filing).")})
 
     # 1. Opening positions and cost.
     book_by, filed_by = _filed_by_symbol(record)
@@ -692,7 +742,8 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
     return {"year": ry, "record_basis": rbasis, "basis": basis,
             **issues,
             "problems": sum(len(issues[k]) for k in
-                            ("positions", "missed", "double", "timing"))}
+                            ("positions", "missed", "double", "timing",
+                             "partial"))}
 
 
 def render(rep: Dict[str, Any], record_path: str) -> List[str]:
@@ -709,6 +760,9 @@ def render(rep: Dict[str, Any], record_path: str) -> List[str]:
             L.append("      " + it["why"])
         L.append("")
 
+    if rep.get("partial"):
+        sec(f"The {y} record itself", rep["partial"],
+            lambda i: f"closed at {i['closed_at']}")
     sec(f"Opening positions vs the {y} year-end books",
         rep["positions"],
         lambda i: (f"{i['symbol']:<26} {y}: {i['closed_qty']:>12g} "

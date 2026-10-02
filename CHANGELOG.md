@@ -15,6 +15,13 @@
   option_grant_timing_since hint quotes the since a lock records
   (A2-1142); handoff refuses a non-string prior_year_record like run
   (A2-1135).
+- close-year --force keeps the dispositions another tool filed (and
+  their totals) from the lock it replaces, and warns when the replaced
+  lock recorded other totals (A2-0119, A2-0345); --filed-dispositions
+  goes through the broker decode funnel (UTF-16 read; a directory or a
+  stray quote is one line, exit 2) (A2-1136, A2-1138); handoff flags a
+  record closed before its year ended as a partial-year snapshot
+  (A2-0349).
 
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
