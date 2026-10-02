@@ -2,395 +2,12 @@
 
 ## Unreleased
 
-- Docs that contradicted each other or the code (re-audit A2-0947 to
-  A2-0954, A2-1619 to A2-1629): `distributions.map` per-share amounts
-  are in the project's base currency (README, `--help`, tax-logic
-  CA-DIST-01 / US-DIST-01, and the run's NOTE name it); the stale
-  KNOWN_ISSUES entry calling US January fund dividends deferred is gone
-  (`ric_january_dividends` implements it); the deck names Webull's
-  Trading Summary CSV and its missing income; SECURITY.md and the deck
-  give the Bank of Canada noon-rate period (Yahoo only before May
-  2007); the crypto-send pairing texts say "another of your crypto
-  accounts, from 10 minutes before to 3 days after"; README says the
-  generic importer spells `.V`/`.CN`/`.NE` as `.TO`; KNOWN_ISSUES says
-  the RBC ticker-change hint needs the old symbol's rows in an export;
-  `taxjson --help` states the exit codes (2 = usage or an unreadable
-  input, 1 = failure or a finding); README documents
-  `crypto-sends --unpair`.
+### Renames, ticker.map and warrants
 
-- Errors are one line with a consistent exit code in more places
-  (re-audit A2-0161, A2-0791, A2-0770, A2-1421, A2-1435, A2-1436,
-  A2-1428, A2-1432): `taxjson <tool>` runs a tool under the same guard
-  as its `taxjson-<tool>` console script (in process and with
-  TAXJSON_DISPATCH=subprocess), so an unreadable ticker.map in
-  `taxjson reconcile-slips` is no longer a traceback; a symlink loop or
-  any other OS error on an input is `cannot read <file>: <reason>`
-  (exit 2); a ticker.map rename cycle is one line (exit 2) in
-  taxjson-ticker-map / merge2 / apply-distributions / reconcile-slips;
-  a missing or unreadable named input exits 2 in lint-crosslistings
-  --map (1 is a lint finding), brokerage --security-overrides,
-  wash-radar/safe-to-sell --incomplete-history, generate-parser and
-  `taxjson redact`; a `--ticker-map` that names a missing file is
-  refused by corp-actions, apply-distributions and harvest (it was
-  ignored); wash-radar --json-out under a file and gains
-  --suggest-phantoms into a folder say `cannot write`.
-- A tool that `taxjson` runs as a passthrough command (wash-radar,
-  harvest, fees-sum, find-missing-history) and whose output is piped
-  into `head` exits quietly (141) too; the in-process dispatcher turned
-  the BrokenPipeError into a traceback with exit 1 (A2-1417).
-- The elections manifest: a directory, an unreadable file, a symlink
-  loop or a dangling link is one `manifest ... cannot be read` line in
-  `elect`, `spinoffs` and run's FILING REQUIRED check (it was a
-  traceback or read as 'no elections'); a failed save is one line and
-  keeps the old file; a BOM is accepted; a non-string `summary` /
-  `notes` is refused (A2-0160, A2-0463, A2-1402, A2-0804, A2-1399,
-  A2-1401, A2-1449).
-- A UTF-8 BOM before hand-edited JSON is accepted by every transaction
-  book and JSON loader (taxjson-sort, merge, merge2, fill-crypto,
-  validate, json_input, phantoms.json) — it was refused with
-  'Unexpected UTF-8 BOM' (A2-0776, A2-1412).
-- edge-cases, check-dates, harvest, apply-distributions and split-gains
-  read work/ documents through the shared reader: a wrong-shape
-  document or a text number is one line naming the file and row
-  (A2-0794, A2-1408, A2-0793).
-- Damaged price caches no longer crash a run (re-audit A2-0772,
-  A2-0773, A2-1403, A2-1446, A2-0464, A2-0474, A2-0800). An entry in
-  ~/.crypto_price_cache.json that is null, text, true or Infinity is
-  now a cache miss: fill-crypto warns, naming the cache and the entry,
-  and looks the price up again. Before, it either crashed or priced the
-  coin at 1.0 or inf. crypto-sends does the same. A cache that is not a
-  JSON object is ignored. In ~/.currency_price_cache.json, a
-  `_coverage`, `_boc` or `_boc_noon` block of the wrong shape is
-  dropped with a warning naming the file, and its dates are fetched
-  again (offline they have no rate). It used to be a traceback in the
-  FX stage, or the cached Bank of Canada series was silently discarded.
-- Rates files (re-audit A2-0790, A2-1434, A2-1411, A2-1437, A2-1423,
-  A2-1424). A work/to_base.csv that is not UTF-8, is a directory or
-  cannot be read is now reported in one line naming the file. This
-  applies to fx-cash, harvest, fees-sum, audit, convert-currency and
-  crypto-sends, which all used to print a traceback. A UTF-8 BOM no
-  longer drops the first rate. `taxjson-convert-currency --rates FILE`
-  refuses a missing FILE (exit 2); before, it converted every row at
-  --default-rate. fees-sum reports a NaN rate in one line (exit 2), and
-  fx-cash reports a futures row it cannot settle in one line.
-- crypto-sends files (re-audit A2-0465, A2-0467, A2-0775, A2-1407,
-  A2-1405, A2-1406, A2-1404, A2-1415, A2-0776/A2-1449 for sends.json):
-  - The double-booking check now reads a hand-written .tt saved with a
-    BOM the way convert-tt does, so a duplicate sale on line 1 is
-    flagged.
-  - A generated crypto_sends.tt re-saved with a BOM is still recognized
-    as generated. It is no longer refused, and it no longer shows as
-    OUT OF DATE indefinitely.
-  - A transfer sidecar of the wrong shape is reported in one line
-    naming the file.
-  - An inputs/<acct>/sends.json that is a directory or cannot be read
-    is reported in one line. It is no longer read as "no decisions",
-    and `--set` no longer leaves sends.json.part behind.
-  - sends.json may start with a BOM, and a non-text `note` is refused
-    in one line.
-  - The error for a bad sends.json no longer suggests deleting the
-    file.
-
-- `taxjson export`: a gains / inventory file whose rows hold text in a
-  number field (or a non-text symbol) is a one-line error naming the file
-  and row, exit 2, instead of a float() traceback (A2-0793, export part).
-- `taxjson-sum-income` reads its rows through the same checks as
-  taxjson-gains: an impossible date, a NaN/inf amount or a text amount is
-  a one-line error with exit 2 instead of being summed (or a traceback)
-  (A2-1448).
-- `.tt` files: a symbol with no market suffix (MSFT for MSFT.US) on a
-  line of an account that is not `crypto = true` is now warned about in
-  the run diagnostics like an unknown suffix — it is its own ACB pool and
-  the broker's rows for the real listing go short (A2-0777).
-- IB parser: an AUD/HKD/JPY/SGD/NZD fill on a system with no time-zone
-  database is a one-line error saying to install `tzdata` (now a declared
-  dependency on Windows), not a ZoneInfoNotFoundError traceback
-  (A2-1447).
-- Generic importer: a mapping .toml that is not UTF-8 is reported against
-  the .toml, not as the CSV being unreadable (A2-1452).
-- Webull parser: a row whose Action Code is blank but that carries a
-  date, quantity, price or proceeds is refused naming the file line; the
-  trade was dropped at rc 0 (A2-0788).
-- IB parser: a Dividends or Withholding Tax row whose Description has
-  no leading `TICKER (ISIN)` token is refused naming the file line; it
-  was booked on UNKNOWN.US (or a word of the text) and a Canadian
-  eligible dividend was estimated as foreign. A withholding row on
-  credit interest is booked on CASH, like the interest (A2-0780).
-- `taxjson export`: a tv_exchange.map saved with a BOM keeps its first
-  rule, and a holdings TOML row whose quantity or total_cost is not a
-  number (or whose symbol is blank) is refused naming the row in every
-  mode (A2-0806, A2-1410, A2-1442, A2-1443, A2-1441).
-- Web UI: `accounts = 5` (or a list) in taxjson.toml is the one-line
-  config error `taxjson serve` gives for the other bad shapes, and a
-  dangling work/*_base.json symlink no longer breaks the wash-radar page
-  (A2-0807, A2-0787).
-- `taxjson handoff`: a prior-year lock whose fields are the wrong shape
-  (dispositions, settle_next_year, year_end, schema_version, ...) is one
-  `taxjson handoff: error:` line naming the file and field, exit 2; a
-  BOM'd lock loads. `close-year --filed-dispositions` refuses a short row
-  or a blank symbol naming file:line, and the hand-off reads the gains
-  and base books through the shared work-file check (A2-0769, A2-0803,
-  A2-1396, A2-1397, A2-0794 handoff part, A2-0776).
-- `taxjson checklist`: a checklist.json that is a directory or a looping
-  symlink, a wrong-shape mark entry, or a file that cannot be written or
-  removed (read-only project, full disk) is now one `taxjson checklist:`
-  line; a failed write keeps the old file and leaves no .part; a BOM'd
-  hand-edited file loads (A2-0768, A2-0789, A2-1393, A2-1414, A2-0776).
-- `taxjson watch`: a .watch_state.json whose inner radar entries or
-  harvest_now are the wrong shape records a new baseline with a warning
-  instead of crashing with exit 1 (A2-1430).
-- A message never cites the other country's law (re-audit partition
-  lists 07/08). taxjson-brokerage passes the project's country to the
-  parsers, which use it only to pick the citation: the Webull inferred
-  exercise/assignment note cites s.49(3)/(3.1) in Canada and Rev. Rul.
-  78-182 in a US project (and says "cost or proceeds"); the IB
-  share-for-share tender note names s.85.1 or a §354/§368
-  reorganization; Questrade's net-of-tax dividend and transfer-in
-  warnings name the T5/NR4 slip and the ACB in Canada, the 1099-DIV /
-  1042-S and cost basis in the US; RBC's rights note and IB's warrant
-  note follow suit, and the multi-account warnings say "sheltered
-  account". A US `.sum` names Form 8949 and basis (not Schedule 3 /
-  ACB), the audit's rounding note names the country's form, the books'
-  TRANSFER and short-history notes say wash-sale walk / basis /
-  retirement accounts, the run's crypto-sends note offers only self /
-  payment, and `taxjson carryover` names the IRS Schedule D carryover
-  (and not the Canadian option settings) instead of CRA.
-- `taxjson-harvest` and `taxjson-corp-actions` default `--base-currency`
-  to the country's currency (a US harvest refused the project's own USD
-  books). `taxjson spinoffs` labels amounts in the country's currency
-  when `base_currency` is unset, and flags a saved election of the other
-  country (a `rollover_s_86_1` left in a project switched to usa) as
-  WRONG-COUNTRY instead of describing it in Canadian law; `taxjson elect
-  --pending` lists such elections instead of "No pending elections".
-- tax-logic CA-RPT-12 cites s.49(3) for a call and s.49(3.1) for a put.
-- The generic importer is no longer documented as a crypto route: the
-  README, the mapping template and the importer no longer suggest
-  `settle_on_trade_date = true` for a crypto-only export (the coins were
-  booked as BTC.US / ETH.TO shares — Schedule 3 line 4, and §1091 in a
-  US project); coins go in a `crypto = true` account, and the importer
-  says so when the option is set.
-- Coinbase, US project (stablecoins are property): a fill priced in a
-  stablecoin (PYUSD, USDC ...) whose Notes carry no `on BASE-QUOTE` pair
-  no longer folds the stablecoin to USD cash and drops its disposal; the
-  row is booked as a crypto-quoted fill, or refused when Notes cannot
-  give the quantity.
-- Kraken ledger instant trade of a stablecoin for USD away from the peg
-  (USDC -> ZUSD at 0.90) now prints the de-peg ATTENTION the trades
-  export and Coinbase print, and the forex note names the stablecoin.
-- IB: a CNH (Stock Connect) fill printed in the ET evening takes the
-  exchange's next-day trade date, like JPY / HKD / SGD / AUD / NZD.
-- `scripts/check_tax_rules.py` checks the country-ownership tables stay
-  complete (owner and reason for every entry, every one-country flag a
-  real CLI option the refusal reads, every one-country command a
-  `taxjson` subcommand, every `[settings]` key the code reads listed,
-  and every option whose help says "Canada only" / "US only" in a
-  table). `--foreign-roc dividend` (ITA s.90(1)) and
-  `taxjson-carryover --slip-gains` (T5 box 18) are now in the tables.
-- `taxjson wash-sales --explain` in a US project passes
-  `--per-account-basis` explicitly, so the trace of the merged books
-  keeps FIFO per account like the table it explains.
-- Wash radar (Canada): rows that settle on the same day are replayed in
-  trade-date order, as the engine does — a Friday sale before a holiday
-  is no longer read as a loss against Monday's buy (A2-0443). A written
-  option's buy-back loss outside the gains files' year is exempt
-  (CA-SL-11) unless `option_buyback_loss_superficial = true` (A2-0442).
-- US wash radar / buy-check: a futures contract or an option on one is
-  outside §1091 (US-WASH-18) — no COOLING/BLOCKED re-entry date, buy-check
-  is no longer UNSAFE, and the futures-option note no longer speaks of
-  "shares" (A2-0435, A2-1343). After a short-cover loss a buy is not a
-  replacement (§1091(e)); the radar names a re-short instead (A2-0436,
-  A2-1369).
-- Radar wording: a US LOCKED row says how many shares the IRA bought and
-  what it holds now, not "still holds" (A2-0751, A2-0754); a position held
-  only in sheltered accounts names its recent purchase instead of "No
-  recent buys" (A2-1370).
-- sell-check relays the radar's warn-only flags (warrant, adjusted-series
-  call, futures option, US long call) on every verdict, and harvest stars
-  the ADVISORY cell and lists them (A2-0434, A2-0445, A2-1341).
-- Errors are one line, never a traceback, with one exit-code rule:
-  2 for a named input or output that cannot be read or written, 1 for a
-  command's finding, 130 for Ctrl-C, 141 for a closed stdout pipe
-  (`taxjson trades | head`). Report text a non-UTF-8 terminal cannot
-  show degrades to `?` instead of crashing. Covers a damaged prior-year
-  record in `handoff`, a damaged `work/pending_elections.json` (`elect
-  --pending`, `elect --set`, `run --account`), a non-UTF-8 or directory
-  `ticker_extraction_overrides.txt`, damaged work/ bookkeeping files
-  (`run` rebuilds them), a damaged holdings snapshot, `estimate = 5`
-  where an `[estimate]` table belongs, unwritable `sends.json` /
-  `manifest.json` folders, a dangling `manifest.json` symlink (refused,
-  never written through), `init` under a C locale or with `inputs` as a
-  file, and Ctrl-C at `checklist --walk` prompts (re-audit lists
-  errors-02 / errors-05).
-- `taxjson.toml`, `phantoms.json` and holdings TOML files saved with a
-  UTF-8 BOM are read by wash-radar, watch, buy-check, sell-check,
-  sanity and taxjson-export too; fetch accepts a BOM'd IB Flex download
-  and a BOM'd Questrade fetch file.
-- An ACCOUNT argument must be an account name: a path (`./margin`,
-  `../other/work/margin`) or a pattern (`fees-sum '*'`) is refused.
-  spinoffs, splits, transfers, edge-cases and fees-sum say "run
-  `taxjson run` first" when there are no books, as their twins do.
-  `list --date` fails when an account's as-of recompute fails instead
-  of silently dropping it; `audit --json` exits 2 like `audit` on an
-  unreadable input, and prints the error once.
-- A second `taxjson run` in the same project refuses while one is in
-  progress (it used to crash on the shared work/ file names).
-
-- Standalone `taxjson-t1135` says when it falls back to close timing
-  for written options (as `taxjson-gains` does), and `taxjson
-  find-missing-history --gen-phantoms` runs the gains engine with the
-  project's option timing and income dating (re-audit A2-1361).
 - `taxjson-ticker-map` summary mode no longer "maps" every `.US`
   listing to `.TO` (a hard-coded CAD target, wrong beside a US project
   and not a real listing in a Canadian one); it lists the symbols with
   only their option-string normalisation (re-audit A2-1367).
-- An invalid `ric_january_dividends` / `corporate_distributions` entry
-  is refused with an example listing of the setting's own country
-  (XYZ.US for the US-only RIC list), and a bad `--ric-january-dividend`
-  flag is named as the flag, not as a `[settings]` key (re-audit
-  A2-1306).
-- `taxjson harvest` in a US project shows an IRA purchase made within
-  the window in SH_ADD even after the IRA sold it (an IRA buy washes a
-  loss for good whether or not it is still held), and the SH_ADD legend
-  states each country's own rule: in Canada only units the registered
-  account still holds 30 days after the sale deny the loss (re-audit
-  A2-1298, A2-1299).
-- In a US project the web holdings pages and the what-if basis note
-  describe the basis as FIFO per account before the wash-sale pass;
-  they used to cite the s.47 blend and the filing ACB (re-audit
-  A2-0755, A2-1250, A2-1300, A2-1327, A2-1339, A2-1353, A2-1374,
-  A2-1375, A2-1376).
-- Standalone `taxjson-brokerage` without `--country` books Kraken /
-  Coinbase USD stablecoins as property (the neutral answer, as a
-  foreign return of capital already defaults to a cost reduction) and
-  prints a note naming `--country`; it used to take Canada's US-dollar
-  cash model. Its help lists every choice `--country` makes (re-audit
-  A2-0742, A2-1238). `taxjson run` always passes the country.
-- RBC parse notes in a US project name Form 1099-DIV, basis and
-  §305/§307 for rights, not the fund's T3 (box 21 / 42), the ACB or ITA
-  s.15(1)(c); a Canada project's notes are unchanged and the booking is
-  the same in both (taxjson-brokerage --country picks the words; none
-  given: neutral words) (re-audit A2-0729, A2-0731, A2-0733, A2-0736,
-  A2-1254, A2-1309, A2-1313, A2-1314, A2-1315, A2-1321, A2-1344,
-  A2-1345, A2-1346, A2-1347).
-- Standalone `taxjson-reconcile-slips` requires `--country` (a missing
-  one silently meant Canada: CAD amounts and settlement-date year
-  scope), and `--date-basis` defaults to the country's (trade date for
-  the USA, so a Dec-31 sale is on its 1099-B year). In a US run the
-  notes and the currency refusal name the 1099-B, FIFO basis per
-  account and the project's own rates — never the T5008, its boxes,
-  the Bank of Canada or a blended ACB (re-audit A2-0423, A2-0744,
-  A2-0747, A2-0753, A2-1292, A2-1294, A2-1295, A2-1331, A2-1337,
-  A2-1348, A2-1349, A2-1350, A2-1351). `taxjson reconcile-slips` is
-  unchanged.
-- A `taxjson.toml` saved with a UTF-8 byte-order mark (Notepad) is read
-  by `find-missing-history`, `gains --suggest-phantoms`, `convert-tt`
-  and the wash radar the way `taxjson run` reads it; one that does not
-  parse stops those commands instead of being treated as "no project"
-  (which fell back to settle dates and guessed account types in a US
-  project) (re-audit A2-0419, A2-0424, A2-0429, A2-0430, A2-0438).
-- `taxjson crypto-sends` prices a send, and values the stablecoin pool,
-  with a rate from the send's day or the 5 days before it, as the
-  conversion stage does; an older rate (a January rate for a June send)
-  leaves it unpriced instead (re-audit A2-0414).
-- `taxjson redact` and the generate-parser privacy gate no longer lose a
-  private-denylist pattern silently: a leading UTF-8 BOM is stripped,
-  and a denylist that is UTF-16, not UTF-8, unreadable or a directory
-  (at the default path too) stops the run with exit 2 and nothing
-  written (audit A2-0045, A2-0158, A2-0458, A2-0448).
-- `taxjson redact` covers more identity shapes: every Field Value of an
-  IB `Account Information` section except a safe list (Account Type,
-  Base Currency, ...), every value cell of a multi-cell address (CSV
-  and HTML, inline tags included), every `Label:` cell in a row
-  wherever it sits, uncoloned `SIN,` / `Phone,` / `Tax ID,` label
-  cells, holder / party labels and columns by pattern (Payee Name,
-  Recipient, Trustee, Legal Name ...; any other `X Name` column is
-  listed for REVIEW), French comma labels (`Nom du client,`), dotted
-  SINs and spaced / dotted SSNs, a US ZIP in its own cell, and
-  upper-case bech32 addresses. Account ids are matched
-  case-insensitively in the content and the file name, and a column
-  header row is no longer altered by the `Name,` line rule (audit
-  A2-0046, A2-0455, A2-0456, A2-0457, A2-0460, A2-0759, A2-0762,
-  A2-0763, A2-0764, A2-0765, A2-1386, A2-1389, A2-1390, A2-1391,
-  A2-0451, A2-0452).
-- `taxjson redact` shares transaction-id and wallet pseudonyms across
-  every file of one run, like account ids: two redacted Coinbase
-  exports no longer share an id (taxjson-sort --dedup dropped a real
-  trade) and a redacted Kraken trades + ledgers set still links each
-  trade to its ledger rows (audit A2-0454, A2-0766).
-- `taxjson redact --check` exits 1 when an account id appears only in
-  the file NAME (audit A2-0459); a truncated UTF-16 input is one
-  refusal line and the rest of the batch is still redacted (A2-1392).
-- `taxjson-generate-parser` no longer sends an account id from the
-  input's file name to the model API: the default brokerage, class and
-  DEFAULT_ACCOUNT names use a placeholder, and its messages mask the
-  file name (audit A2-0447).
-- Source comments, tests and this changelog no longer quote amounts or
-  positions from the maintainer's own books; the futures tests use a
-  synthetic CL round trip (A2-0758, A2-1382, A2-1383, A2-1385).
-- `scripts/check-pii.sh` no longer passes silently on a private denylist
-  saved with a UTF-8 BOM (the BOM is dropped, so the first pattern
-  works) and fails closed on a UTF-16, non-UTF-8 or directory denylist
-  instead of reporting clean (A2-0044, A2-0450, A2-0458). It now also
-  catches a lower-case IB account id (u + 7-8 digits, as IB HTML element
-  ids carry it) in content and file names (A2-0449), a labelled SIN in
-  any separator form including unspaced and dotted (A2-0760, A2-1387),
-  a labelled SSN / TIN / Tax ID (A2-1387), and an 8-9 digit value under
-  an Account column in the pre-push `--diff` scan of a .csv/.tsv
-  (A2-1388).
-- `taxjson sanity --json` and the file-given-twice / file-in-two-groups
-  messages mask an account id in a holdings file name, as the text
-  listing already did (audit A2-1380); a holdings argument that is a
-  symlink loop is a one-line error instead of a traceback (A2-1392).
-- Every parser message (Questrade, RBC, Webull, Kraken, Coinbase, the
-  generic importer, security-override and .tt errors) now names its file
-  the masked way IB's already did, so a download named after an account
-  number prints `55***_activity.csv`, not the number; the `run` stage
-  line for a .tt file too. The IB diagnostics and the other parsers are
-  now pinned by tests (audit A2-0461).
-- Two .tt files (or generic files) whose names differ only in an
-  account-number token (manual_55500001.tt / manual_55500002.tt) are two
-  sources again: dedup read both as `manual_55***.tt`, one file
-  repeating itself, and silently dropped one file's identical line. A
-  masked name now carries a short hash of the real name (`source_key`,
-  never the name itself) for dedup only (audit A2-0159).
-- Kraken notes, errors and skip summaries now mask every ledger refid
-  and txid to its first two characters + *** (the multi-leg instant-trade
-  note, the orphan-leg skip count, the both-sides-many-legs refusal and
-  the unparseable-cell errors printed it in full into the console, .sum
-  and .diag; audit A2-0756, A2-0757, A2-1381). The id itself stays the
-  work-JSON transaction id.
-- A warrant/right, adjusted-series or futures-option flag in a loss's
-  window (warn-only: nothing is denied) now keeps the checklist's
-  `wash-reviewed` step open and is listed by `taxjson wash-sales`
-  (text and `--json` `manual_check_flags`); both said "no superficial
-  losses / no losses were denied" over it (CA-SL-15 / US-WASH-15,
-  audit A2-0413). A Canada project's `wash-sales` says "No superficial
-  losses", a US one "No wash sales" (A2-1366).
-- US projects no longer see Canadian forms and terms (audit A2-0735 and
-  siblings): the account `.sum` points to Form 8949 / basis (Schedule
-  3 / ACB in Canada; `taxjson-sum-gains --country`), `taxjson audit`'s
-  totals note names Form 8949 rows, `roc-sum` names 1099-DIV box 3 and
-  basis, `trades-sum` and `find-missing-history` call a sheltered
-  account an IRA, `carryover` names the IRS only, `handoff` speaks of
-  deferred wash-sale losses (§1091(d)), the holdings TOML cost note has
-  no s.47 blend (`taxjson-export --country`), and the checklist's
-  estimate, sheltered-inputs, run-clean, elections and n/a steps use
-  US wording. A US crypto book's audit trace no longer says "wash sale
-  §1091". The Canada engine's non-convergence warning says
-  "superficial-loss solver" (it said "CRA wash-sale solver").
-- Spin-off warnings from the broker parsers (IB, RBC, Questrade) and the
-  rows the shared corporate-action emitters write (the parent's cost
-  reduction, a ticker rename) use country-neutral words instead of
-  s.86.1 / ACB / wash-sale (A2-1242, A2-1278). The row descriptions
-  changed, so those generated rows get new ids (no amount changes).
-- `taxjson-apply-distributions` without `--country` writes "(cost up)"
-  instead of Canada's "(ACB up)" into the book row (A2-1234).
-- `[settings] year` is checked in the shared settings check, so `taxjson
-  serve` refuses 1850, 2024.0, true or "2024" as every CLI command does
-  (A2-1373).
-- Printed standalone commands (`taxjson-gains --suggest-phantoms`,
-  `taxjson-explain`, `taxjson-corp-actions`) carry the required
-  `--country` (A2-1287).
 - Renames are dated events (owner decision, audit A2-0197). On its date
   a ticker change carries the position, the ACB / basis lots and the
   acquisition dates from the old symbol to the new one, and the
@@ -416,124 +33,65 @@
   coded `Ex` with the same-day share leg coded `Ex`; RBC pairs an
   `Exercise` of the warrants with the same-day `Exercise` of the shares
   and refuses an exercise with no share leg (CA-OPT-09 / US-OPT-06).
-- A `.tt` SPLIT line carries no currency (it was labelled CAD, and a US
-  project with no CAD rates refused the account); a split row with no
-  money is relabelled, not converted.
-- `taxjson list --date`: verified on the owner-shaped case of a long call
-  sold at a loss and bought back (OWNER-LIST-ASOF-WASH: two T calls on
-  the 2025 books showed 14,817.50 / 9,069.25 where the engine carries
-  15,305.50 / 9,313.25); fixed by the A2-0391 / A2-0701 change above,
-  pinned by an option test.
-- `taxjson option-boundary` (and the checklist step that runs it) reads
-  the lock named by `[settings] prior_year_record` like a local
-  filed/<year>.json: the per-year layout got "no filed-year locks" and a
-  "no amendment required" checklist row where a local copy of the same
-  lock gave ATTENTION (re-audit A2-0360).
-- A crypto-only Canada project no longer gets the
-  `option_grant_timing_since is not set` warning from `carryover` and
-  `option-boundary` (run and the checklist already skipped it: it writes
-  no options) (re-audit A2-1144).
-- `taxjson checklist --done/--skip/--undo` are repeatable (only the last
-  of a repeated flag was recorded, silently), and concurrent marks no
-  longer lose each other or corrupt checklist.json (a lock around the
-  read-modify-write, an atomic write) (re-audit A2-1159, A2-1160).
-- `taxjson audit`: a phantom-basis sale the books route to manual
-  reporting is tied out as "phantom basis — manual reporting" instead of
-  "MISSING from the check file(s)" (exit 1), so the checklist's audit
-  step can complete; the KNOWN_ISSUES entry is gone (re-audit A2-1150).
-- Checklist wording: the T1135 step's "below the threshold" (and
-  `t1135 --json`, new `scope` / `scope_note`) says it covers these books
-  only; a US project's slip step names Form 1099-DA for crypto sales from
-  2025 (tax-logic US-RPT-09); the T5/T3 step's command names the TAXABLE
-  lines of divs-sum / roc-sum; Form 8949 exports carry `gain_unrounded`
-  so a pure per-row rounding gap no longer makes a US checklist's
-  form-export step "attention" (re-audit A2-0682, A2-1149, A2-1152,
-  A2-1154).
-- Checklist roc-entered: ADJUST rows are counted in the year roc-sum
-  windows them on (a Canadian trust's ROC by its record date), and the
-  step is "attention" when the same ROC is in the books and in
-  distributions.map (roc-sum's and apply-distributions' "reduced twice"
-  warning) (re-audit A2-0361, A2-0680).
-- `taxjson crypto-sends`: `--unset ID` removes a saved decision (the send
-  is undecided again); `--set`/`--write` refuse while another crypto
-  account has not been parsed (a send to it looked unmatched and could be
-  booked as a gift), and the checklist step is "blocked" then (re-audit
-  A2-0359, A2-1163).
-- Locks: a lock taken before its year ended (`close-year --force` on an
-  open year) is called a snapshot, not a filed return, by the checklist's
-  filed-lock and lock-committed steps (attention), by check-filed (a note
-  beside OK) and by option-boundary (marked partial); a filed/<year>.json
-  that is a directory is "blocked", not "no lock". A non-path
-  `prior_year_record` is refused by every command (handoff and the
-  checklist built a path from a list), and handoff with no `year` refuses
-  instead of looking for filed/-1.json (re-audit A2-0679, A2-1146,
-  A2-1161, A2-1162, A2-1164).
-- Checklist inputs-frozen: an RBC export is judged per RBC account (the
-  Account column), so another account's later export in the same folder
-  no longer certifies an export taken before the year ended (re-audit
-  A2-1147; the IB statement-period half was fixed by A2-0262).
-- `run --strict` / checklist run-clean: a crypto send recorded as a gift
-  or payment that could not be priced (not booked), a send booked twice
-  (a hand-written .tt line next to crypto_sends.tt), an undecided send
-  (strict only), and work/ books of a renamed account (counted twice) now
-  stop `--strict`; run-clean is "attention" over any UNBOOKED line in a
-  report and over the renamed account's books; the crypto-sends step
-  flags the double booking and a crypto_sends.tt whose price no longer
-  matches sends.json (re-audit A2-0127, A2-0357, A2-0362, A2-1151,
-  A2-1165).
-- Checklist run-clean / filing banners / web freshness: the record of
-  what the last full run read now covers every run input — an account's
-  elections `manifest.json` and crypto `sends.json`, and the root
-  `crypto_ticker.map` — so a changed election no longer reads as current.
-  Only the settings `run` reads count in taxjson.toml: a comment,
-  `[instalments]`, `[estimate]`, `province`, `prior_year_record`,
-  `holdings` and the fetch keys no longer mark the books stale (close-year
-  refused after an instalment was recorded). A damaged record is
-  "attention", not "no record"; a dangling reports/*.sum symlink is named
-  instead of crashing the step. Hidden files and Excel `~$` lock files in
-  inputs/ are no longer read by `run` (nor fingerprinted, nor taken as
-  slips), and an Apple Numbers export is refused like .xlsx (re-audit
-  A2-0124, A2-0126, A2-0358, A2-0363, A2-0681, A2-1145, A2-1148, A2-1155,
-  A2-1156, A2-1157, A2-1158, A2-1166).
-- edge-cases counts every superficial-loss / wash-sale window on the
-  engine's own dates — settlement dates in Canada, trade dates in the
-  US — whatever `tax_date` says; it called engine-denied losses OUTSIDE
-  the window (and allowed ones INSIDE) under a non-default tax_date,
-  dropped year-crossing windows, and printed "THE DATE BASIS DECIDES"
-  for a choice that cannot change the verdict (re-audit A2-0133,
-  A2-0134, A2-0135, A2-1206).
-- edge-cases positions count opening balances, `phantoms.json` openings
-  and split ratios: a phantom-backed or opening-balance year-end sale
-  read as a short sale, and "held on day 30" was in pre-split units
-  (re-audit A2-0388, A2-0389, A2-1208).
-- edge-cases no longer lists a buy-to-close of a written call as a long
-  call bought in a loss's window, in either section (re-audit A2-0699,
-  A2-1197), describes a written option assigned on its expiry date as
-  an assignment landing with its share leg (A2-0700), and leaves US
-  crypto out of the wash-sale window sections (A2-1201).
-- edge-cases "Income paid around New Year" uses income dating: a
-  Canadian trust's distribution with a December record date lands in
-  the record year (it said the pay year), and payments in lieu and
-  trust returns of capital are listed (re-audit A2-0387, A2-1207,
-  A2-1209).
-- edge-cases "Crypto near midnight" converts with the project's
-  `local_timezone` (it assumed EST and missed real UTC year-straddles
-  west of Eastern) and lists exactly the rows whose local and UTC dates
-  fall in different years (re-audit A2-1200, A2-1202, A2-1203, A2-1204).
-- edge-cases judges written options against the filed locks the way
-  option-boundary does — the timing each lock records, and the
-  `prior_year_record` lock (re-audit A2-0390, A2-1205).
-- edge-cases names an unreadable work file instead of printing "None."
-  at exit 0, refuses `--margin` below 0, and refuses an invalid
-  `futures_settle` as `run` does; check-dates refuses it too (re-audit
-  A2-1199, A2-1198, A2-0697).
-- check-dates: an unreadable parsed file is an ERROR (it was dropped and
-  the exit turned 0); an option expiry row settling after the contract's
-  expiry is a WARN; a far-future row is one error, not two; a `.tt`
-  line may carry the settlement date of a trade made today; `/ESH5`
-  futures are futures; Globex Christmas / New Year's evening fills are
-  normal and a weekend futures settle date is reported (re-audit
-  A2-0385, A2-0386, A2-1192, A2-1193, A2-1194, A2-1191).
+- A `.tt` SPLIT or rename of a USD stock no longer stops `taxjson run`
+  (exit 1, "Currency mismatch") in the native-holdings pass, in either
+  country: a SPLIT carries no money, so its currency stamp is no longer
+  checked against the pool's (re-audit A2-0010, regression of R1-126).
+- **A rename to a bare symbol is an ATTENTION line.** A ticker.map
+  rule (`GLOBAL RY.TO RY`) or a `ticker_extraction_overrides.txt` line
+  that turns a listed symbol into a bare one used to be accepted in
+  silence; the bare symbol is read as crypto or an unknown listing, so
+  a Canadian eligible dividend became a foreign one with an assumed
+  foreign tax credit. `taxjson run` now prints it on the console
+  (audit A2-0304).
+- IB: a warrant exercise leg (booked as a disposal at 0 — the warrant's
+  cost becomes a loss instead of part of the shares' cost) is an
+  ATTENTION line; the fix is deferred (KNOWN_ISSUES, audit A2-0090).
+- A ticker that trades again after a rename moved it to a new symbol is
+  flagged (`warning: ATTENTION: ... after its rename ...`) in both
+  countries: the superficial-loss / wash-sale rule treats it as the
+  renamed security, which is wrong if another company now uses the
+  ticker. The class is unchanged — the export cannot tell the two cases
+  apart (A2-0197; CA-ACB-04 / US-BASIS-06).
+- **ticker.map tools.** The DELETE audit note prints the signed net cash
+  (a buy and a sale no longer add up) and names the `DELETE` line;
+  `taxjson-ticker-map` refuses a positional map plus `--map`; `merge2
+  --map` help describes the keyword format.
+- **ticker.map means one thing everywhere.** Rule symbols are
+  upper-cased on load (a lower-case rule used to rename nothing while
+  `taxjson scan` called it live), a BOM and inline `# notes` are
+  stripped, and renames chain to their end (`GLOBAL OLD.US NEW.US` plus
+  `TOBASE NEW.US NEW.TO` now sends OLD.US to NEW.TO instead of splitting
+  the pool into a phantom short). `taxjson run` refuses a map with a
+  rename cycle, one symbol renamed to two different targets, or a
+  `DISTINCT` pair that the renames pool together. Scan's MAP-UNUSED
+  note follows chains and judges a rule the way the engine applies it:
+  a suffix-less `GLOBAL QQOL QQNW` that matches only `QQOL.US` is
+  reported with a hint to write the suffixed form. A malformed
+  `ticker_extraction_overrides.txt` line now stops the run by
+  file:line instead of being skipped.
+- **A malformed `ticker.map` line stops the run.** A typo such as
+  `TOBASE XYZ.US=XYZ.TO` or `TOBSE ...` dropped that rule, which changed
+  ACB pools and the Schedule 3 gain, and the warning reached only
+  `reports/*.sum` while `run` and `run --strict` exited 0. `taxjson run`
+  now refuses the map, listing each bad line as `ticker.map:<line>`.
+- **TOBASE no longer pools a US option into a Montreal contract.** When
+  a share rule's root rename would move a US-listed option onto a
+  contract code the account also trades on the Montreal Exchange, the
+  US contract keeps its own symbol (different strike currency and
+  clearing house: not identical property) and the `.sum` DIAGNOSTICS
+  name it; before, the two ACBs were pooled and the gain changed
+  silently.
+
+### Tax rules and engine: Canada
+
+- A warrant/right, adjusted-series or futures-option flag in a loss's
+  window (warn-only: nothing is denied) now keeps the checklist's
+  `wash-reviewed` step open and is listed by `taxjson wash-sales`
+  (text and `--json` `manual_check_flags`); both said "no superficial
+  losses / no losses were denied" over it (CA-SL-15 / US-WASH-15,
+  audit A2-0413). A Canada project's `wash-sales` says "No superficial
+  losses", a US one "No wash sales" (A2-1366).
 - Settlement cycles per market: the UK, EU and Swiss markets were T+2
   from 2014-10-06, the ASX and NZX from 2016-03-07, Singapore from
   2018-12-10, Tokyo from 2019-07-16, Hong Kong throughout — they all
@@ -542,74 +100,16 @@
   T+1 on 2027-10-11. tax-logic CA-DATE-04 / US-DATE-04 state it, with
   Mexico's 2024 T+1 move (re-audit A2-0704, A2-1195, A2-0705). No
   2024-2026 trade changes.
-- `list --date` keeps the in-account superficial-loss / wash-sale
-  addition to the replacement's cost, as the README and its label say
-  (it recomputed with `--no-wash`; re-audit A2-0391, A2-0392, A2-0701).
-- `list` / `shares` "as of the latest data" is the last settlement date
-  on a settle-basis book, and an unreadable base book is named on
-  stderr instead of silently moving the date (re-audit A2-0698,
-  A2-0702).
-- Kraken: a ledger of only fiat deposits and withdrawals is "0 tax
-  objects (not tax events)", not the "parsed to 0 transactions" warning
-  that `run --strict` refused (re-audit A2-0703).
-- `run`'s expired-open-option warning uses the same cutoff as
-  option-boundary and the checklist: an expiry on Dec 31 of a closed
-  year, and one after Dec 31 but within the books' data, are flagged
-  (re-audit A2-1210).
-- taxjson-export `--dust-threshold` refuses nan, inf and negatives (nan or
-  inf hid every zero-cost holding); a position transferred in keeps its
-  later trade events in the holdings TOML; JSON piped on stdin is read
-  as UTF-8 whatever the locale, as files are (re-audit A2-1214, A2-1216,
-  A2-1217, A2-1215, A2-1219).
-- Canada stock-dividend ATTENTION: printed only by a taxable run of the
-  dividend's own year, quiet once an ADJUST adds the cost, and worded
-  right — adding the cost books the ACB only; the dividend is reported
-  from the slip. Income-dating advice is no longer printed for sheltered
-  books, and a TRANSFER in a taxable account names the account instead
-  of a `--taxable` flag the user never passed (re-audit A2-0709,
-  A2-0711, A2-1220, A2-1224, A2-1218, A2-1221).
-- An output path that is a directory (or cannot be written) says
-  "cannot write <path>" and leaves no `.part` file (taxjson-convert-tt,
-  taxjson-brokerage sidecars, wash-radar --json-out); the --explain trace
-  rounds a denial to the same cent as the wash-sales table (re-audit
-  A2-0707, A2-0708).
-- `taxjson sanity` refuses a holdings `quantity = true` (read as 1), and
-  the cross-account overlap note counts a position moved in kind into a
-  second taxable account (re-audit A2-1230, A2-1231).
 - A long option expiring ON Dec 31 with no expiry row is warned about in
   that year's project; ccd.rpt / leaps / ccd-sum / the .sum name a
   covered call's held class share (RCI.B.TO) even when the shares were
   not sold; `taxjson transfers` refuses to run without taxjson.toml and
   says when an account's base book is missing (re-audit A2-0716,
   A2-0715, A2-0717, A2-1232).
-- `taxjson run` reads an unset `base_currency` as the country's currency,
-  like every other command (it refused it); an empty or unreadable
-  statement CSV is named as such instead of "rename it to cb_/kr_/
-  generic_"; an Apple Numbers export in an account folder is refused like
-  .xlsx (re-audit A2-0712, A2-0713, A2-1228, A2-0714).
-- `taxjson scan` no longer prints "No findings — clean scan." (exit 0)
-  when an account's holdings report or raw book is missing: it names
-  each account it could not scan and exits 1 (re-audit A2-0404).
-- `sum`, `list`, `winners` and `wash-sales` refuse a pipeline work-file
-  name as an account (`margin_raw` printed native USD under a CAD
-  header); `wash-sales`, `list` and `winners` carry the run-state banner
-  after per-account runs, and `wash-sales` the other-year banner
-  (re-audit A2-0394, A2-0400, A2-0694, A2-0405).
 - The superficial-loss trace, the `wash-sales` footer and the `sum`
   filing note no longer call an affiliated person's denial "lost for
   good": that person adds it to their own ACB (re-audit A2-1225,
   A2-1233).
-- Unreadable is never absent: a statement CSV or .tt that is a dangling
-  symlink stops `run` naming the file, every command (not only `run`)
-  refuses a dangling or directory ticker.map / phantoms.json /
-  distributions.map / overrides file, and a dangling taxjson.toml is
-  refused instead of read as "no config" (re-audit A2-0143, A2-0403,
-  A2-0401, A2-0144).
-- An account named inside another account's work-file namespace
-  (`<other>_tt_<x>`, `<other>_<broker>`) is refused — the two overwrote
-  each other's books or deleted each other's corp files — and two .tt
-  files of one account that convert to the same work file (`start.tt`,
-  `start.TT`) stop the run (re-audit A2-0140, A2-0402, A2-0399, A2-1222).
 - A position that goes short where no short can exist — a registered
   account (TFSA/RRSP/IRA), a crypto account's spot coins, or a sale the
   broker codes CLOSING with nothing held — is now an `ATTENTION: short:`
@@ -617,6 +117,606 @@
   registered short hid a superficial-loss denial). taxjson-gains takes
   `--spot-crypto`, which `taxjson run` passes for crypto accounts
   (re-audit A2-0395, A2-0137, A2-1223).
+- Grant timing: an expired written option counts as a close in ccd-sum,
+  winners and the .sum TRADES line, as under close timing (re-audit
+  A2-0693).
+- **Futures at a negative price, and futures schema checks.** A
+  plain-futures buy at a negative price (WTI, April 2020) received cash;
+  its negative net is now accepted by the schema and booked as a
+  negative cost, where the magnitude the schema forced booked the loss
+  as a gain (tax-logic CA-FX-04 / US-FUT-01). The negative-price
+  exemption covers every futures prefix (`/` and `\` as well as `F:`)
+  in the schema and `taxjson-validate`; a futures row with no declared
+  contract size no longer gets a guessed-size ATTENTION (every
+  generic-importer futures row did); and an option expiry row dated
+  after its expiry day is a schema warning (audit A2-0302, A2-1082,
+  A2-1087, A2-1088, A2-1089).
+- **Long calls as replacements: class-share roots, mini contracts and
+  futures options.** A call booked under the root that drops the share
+  class (RCI for RCI.B.TO, BRKB for BRK.B) is now a call on that class
+  line: Canada denies the loss and the US warns (A2-0015/0016/0207). A
+  call's replacement units are its declared contract size (a `x10` mini
+  replaces 10 shares, not 100) in both engines (A2-0049/0957). A futures
+  option on the loss's own futures contract is flagged for a manual
+  check in both countries instead of being enforced as a 100-unit call
+  in Canada (A2-0014/0056). tax-logic CA-SL-05/15, US-WASH-12/15.
+- Canada: a coin rebuy under a millionth of a unit now backs its share
+  of a superficial loss; the solver's zero is the pool's own (relative
+  for a coin) instead of a fixed 1e-6 (A2-0552; cents at most).
+- **Canada superficial loss: one held unit backs one denial, and
+  same-moment rows follow the export order.** A registered account's
+  units claimed by an earlier loss, or a call contract claimed through a
+  row sold since, could back a second denial (A2-0012/0057/0198). Same-
+  moment losses, rebuys and triggers were ordered by the rows' content
+  hash or account label, so a one-cent price change could move a denial
+  or turn a deferral permanent; they now follow the main pass's order
+  (export row order, accounts in taxjson.toml order — CA-DATE-14): a
+  rebuy listed after a same-moment loss sale is a purchase after it
+  (A2-0058/0193/0059/0551/0192/0961/0965). A deferred loss's bump now
+  reaches a same-moment sale listed after the replacement purchase
+  (A2-0555). tax-logic CA-SL-08/09/10 state it.
+- **An option assignment's premium goes to its own stock leg (both
+  countries).** The premium ledger used to pair an assignment with the
+  first marked stock leg within 7 days, or with whichever option was
+  staged first: a plain (IB/RBC) assignment next to a Webull marked leg
+  took the other assignment's premium and the other premium was lost;
+  a stock leg dated a day before its option row dropped the premium
+  from every year; same-moment assignments swapped premiums by row
+  order; and a x10 mini option was sized at 100 shares, so one of two
+  mini assignments was never folded. Each assignment is now paired by
+  identity (same account and underlying, the delivered quantity at the
+  declared contract size, the strike as the leg's price, a leg dated up
+  to 3 days before or 7 days after the option row), and the
+  "unconsumed" warning names that window instead of saying the leg
+  never arrived. tax-logic CA-OPT-08 / US-OPT-05 (audit A2-0050,
+  A2-0051, A2-0052, A2-0195, A2-0196, A2-0203).
+- **Canada: rows that settle on the same day go in trade order.** Over a
+  settlement holiday a Friday trade and the next trading day's trade
+  settle together; the engine took them by clock time, so a Monday
+  09:45 buy was applied before the previous Friday's 15:00 sale (wrong
+  ACB, a false superficial loss). They now go in trade-date order
+  (tax-logic CA-DATE-14) (A2-0067).
+- **A phantoms.json entry on a real short or a written option is
+  flagged.** An entry for a short the broker marks as a short sale
+  (RBC `SHORT.`, IB code `O`) or for an option the broker never coded
+  closing is still applied, but every applier (run, t1135, wash-radar,
+  option-boundary, apply-distributions) prints an ATTENTION line, the
+  run echoes it, and `find-missing-history` and the checklist ask to
+  remove it (audit A2-0308, A2-0310, A2-0311, A2-0637, A2-0638,
+  A2-0639).
+- **A futures option keeps its contract size.** The size IB's instrument
+  list declares (CL 1000, ES 50, micro 0.1) is kept on option and futures
+  rows and on the year-end inventory: the holdings export writes it as
+  `contract_multiplier` and divides COST/SHARE by it, `taxjson list` too,
+  the web what-if prices a futures option with it (still refused when no
+  row declares one), and a `.tt` line may end in `x1000` so its total is
+  checked at the real size (audit S026-22).
+- **Adjusted-series and futures calls are flagged as possible
+  replacement property.** A call on an adjusted option series (root +
+  digit, e.g. `XYZ1`) or on the loss's futures contract by its family
+  root (`F:CL` after a loss on `F:CLG6`) bought inside a loss's window
+  is named for a manual superficial-loss / wash-sale check, the way a
+  warrant is, in both countries; warn-only, the numbers do not change
+  (audit S069-23; tax-logic CA-SL-15, US-WASH-15).
+- **Two byte-identical rows each keep their own superficial-loss /
+  wash-sale result** (hand-made JSON passed to `taxjson-gains`): they
+  shared one id, so only one took its denial or basis bump. The engine
+  now books them as separate trades and says so in a NOTE.
+- **Canada, grant timing: a write whose commission exceeds its premium**
+  follows the same rule as a buy-back loss: exempt from the
+  superficial-loss rule unless `option_buyback_loss_superficial = true`,
+  and when it is denied the grant record now carries the denial (the
+  summary and wash-sales used to show a denial the record did not, with
+  an "invariant broken" warning). A phantom (tainted) pool's write loss
+  never feeds the rule. tax-logic CA-SL-11/12.
+- **Rows at the same moment keep the export's row order (Canada).**
+  Webull prints no clock time, so every row is stamped 09:30:00, and the
+  Canada engine put a buy before a sell at one moment: a write listed
+  before its same-day buy-back became a long round trip, whose loss a
+  re-buy within 30 days could deny. Trades at one moment now follow the
+  export's row order in both countries (the US engine already did); the
+  fixed places (opening balance, split, assignment legs, adjustments)
+  stay. The wash radar and `t1135` follow (a same-moment sale listed
+  before the purchase is a short covered at once, not property held
+  for the T1135 cost test); the missing-history walks
+  still read a same-moment pair buys first (they only look for missing
+  history). Questrade and generic-importer files listed newest first are
+  read bottom-up, as RBC's always were. tax-logic CA-DATE-14 /
+  US-DATE-13 (audit R1-30).
+- **Missing-history and phantom tools agree with the engine.**
+  `find-missing-history`, `--gen-phantoms`/`--suggest-phantoms` and the
+  phantom openings now: order same-moment rows buys first and put a trade
+  executed before an evening split (settling after it) ahead of the
+  split, as the engine does (no invented short, no order-dependent
+  opening size); count the in-year BUY that covers a short carried in
+  as affecting the year (the report said "safe to ignore" while the
+  year booked the cover); date a row by the project's `tax_date` (a
+  Dec-31 trade settling in January belongs to January's year); follow
+  renames (a clean sale after a rename is not flagged, a $0-cost
+  position renamed before its sale is); and take "registered" from the
+  account's configured type, not its name. `phantoms.json` symbols are
+  matched case-insensitively and a listed pair that matches no row is
+  named as such; both ends of a rename chain listed give one opening
+  whatever the hash seed.
+- **Phantom-basis superficial-loss warnings are shown.** A clean loss
+  within 30 days of a phantom-basis sale, and a phantom-basis loss with
+  a rebuy in its window, were written only into the gains JSON (and
+  dropped by the per-account split); they now print as `warning:` lines
+  (so they reach the DIAGNOSTICS banner) and stay in each account's
+  `_gains_wash.json`. US engine: an IRA-to-IRA move the tool nets out no
+  longer triggers "sells beyond its recorded balance".
+- **Superficial-loss rule fixes.** A cover that also opens a long (buy
+  150 while short 100) now counts its own 50 new shares as substituted
+  property, as two separate rows already did. In a blended pass the
+  cover-vs-acquisition test uses the pooled s.47 balance, so account B's
+  rebuy after selling shares only account A held is an acquisition. A
+  contract that expires before day 30 is not "still held", even with
+  no expiry row. `option_buyback_loss_superficial = false` (the
+  default) now exempts a written option's buy-back loss under close
+  timing and for contracts written before `option_grant_timing_since`
+  too, not only grant-timed lots. A warrant or right bought in the
+  window (`SLH.WT.TO`, `ABC.RT.TO`) is named in an option-replacement
+  warning for review. US engine: a registered or spouse account's
+  buy-to-close is no longer a §1091 replacement.
+- **Same-moment rows no longer depend on a content hash or a 1-second
+  gap.** The superficial-loss balance walk (Canada) and the US
+  replacement-lot order broke ties by each row's hash, so a one-cent
+  price or description change could flip a denial or move a US wash
+  deferral to the other lot; ties now keep the main pass's order (its
+  buy-before-sell rung, then the export's row order). A denied loss's
+  cost bump for a pre-loss rebuy now applies right after the loss row,
+  so another fill of the same order sees it whether it came 0, 1 or 2
+  seconds later. A bump for a rebuy booked under the old ticker on a
+  rename's own date lands on the pool that holds those shares instead
+  of vanishing into the empty new-ticker pool.
+- **Each option assignment's premium goes to its own stock leg.** Both
+  engines staged every assignment's premium per (account, underlying)
+  and handed the whole sum to the first stock trade that came along: a
+  spread assigned on one day put the put's premium and the call's into
+  one leg, two stock legs of one assignment did not share it, and a
+  missing stock leg let an unrelated trade months later absorb it. The
+  premium is now matched to the leg in the assignment's direction
+  (buy for an assigned put / exercised call, sell otherwise), per share,
+  within 7 days of the option leg; a premium no leg claims is named in
+  the end-of-run "unconsumed" warning instead of moving into another
+  trade (and another year).
+- **Option roots that differ from the stock ticker.** An assignment of
+  a Montreal `RCI` option into `RCI.B.TO`, an OCC `BRKB` option into
+  `BRK.B.US`, or a futures option into its dated contract (`F:CL` into
+  `F:CLG6.US`) was treated as cash-settled, so the premium was realized
+  in the wrong year. The option is now matched to the one stock line in
+  its account that trades at the assignment (a note names it); an
+  ambiguous match warns and stays cash-settled.
+- **Settle dates that pair across legs and files.** An IB assignment's
+  option leg now settles with its stock leg (before the 2024 T+1 cutover
+  the option settled a day earlier, and a same-day trade could consume
+  the premium), and a Dec-31 0DTE option trade is clamped to its expiry
+  even when the expiry row sits in the next yearly export (audit S058-01,
+  S055-22).
+- **A penny option close no longer stops `taxjson run`.** A sell whose
+  commission exceeds its gross (closing at 0.01) nets negative proceeds;
+  the schema used to refuse it on the always-strict parse, although the
+  engine books it. An assignment stock leg's money is now checked
+  against quantity x strike like any trade (audit S017-00, S017-02).
+- **Futures are booked on their settled P/L, not their notional.** Each
+  leg's notional (quantity x price x multiplier) was converted to CAD at
+  its own date's rate, so the CAD gain carried FX on money that never
+  changed hands, and Schedule 3 line 6 showed the notional as proceeds
+  and ACB. A futures fill that opens a position now carries nothing; a
+  close carries the realized native P/L (commissions included), converted
+  at the closing leg's rate. Line 6 shows a gain as proceeds and a loss as
+  ACB (the T5008 shape); `sum`, `form-export`, `audit` (which re-derives
+  the P/L from the broker rows) and `fx-cash` agree. Real books moved
+  in both years. Options on futures are unchanged.
+- **`phantoms.json` openings reach the superficial-loss context.** An
+  opening for a registered (or affiliated) account was applied to that
+  account's own report but not to the context the taxable gains are
+  tested against, so a TFSA with truncated history looked short and its
+  in-window rebuy did not deny the taxable loss (permanently, as s.54
+  requires). The openings now apply to every book.
+- **Same-moment replacements: taxable first, then registered.** When a
+  taxable rebuy and a TFSA/RRSP buy carried the same timestamp (common
+  with Webull and Questrade stamps), a hash of the rows decided whether
+  a superficial loss was deferred into the taxable ACB or lost for good,
+  so a one-cent change on the TFSA row could move the taxable gain.
+  At a tie the taxable acquisition now takes the denial first, then
+  sheltered, then affiliated accounts (both engines; `taxjson
+  tax-logic` lists the rule).
+- **Moving shares between your own registered accounts no longer flips
+  a superficial loss.** A custody move such as rrsp -> rrsp2 was netted
+  out of the superficial-loss context, but the "still held at day 30"
+  test runs per account: the receiving account looked short (a
+  permanent denial for its in-window rebuy was missed) and the sending
+  account looked long (a denial was invented). Netted moves now stay in
+  the context as balance-only rows; they are never replacement
+  property. The misleading "rrsp2 go short" hint goes away with it.
+- **An IB/RBC-style assignment keeps its own premium when a Webull-style
+  assignment on the same stock comes later.** The option premium of a
+  plain-convention assignment (stock leg booked as an ordinary buy/sell)
+  was held back for ANY later marked `ASSIGN` stock leg on that stock in
+  the account, even a year later, and moved to that year. A marked leg
+  now reserves only the premium of its own option leg (same account and
+  underlying, within 7 days).
+- **One replacement backs one denial.** A 100-share rebuy (or one call)
+  inside the window of a sale split into ten fills denied every fill's
+  loss in full: ten times the loss it could back. Replacement units are
+  now claimed in a fixed order, each by one denied unit, across fills
+  and across losses; a call that expires before day 30 is not held on
+  day 30. Real books moved by small amounts.
+- **`cross_asset` retired; puts are never replacement property.** A put
+  is a right to sell, so the old warn-only "long put vs short-cover loss"
+  scan is gone, and with the call rule enforced nothing is left opt-in.
+  The rule is: an option (a long call) replaces shares, never the
+  reverse; an option is replaced only by the identical contract. The
+  `cross_asset` key and `--cross-asset` flag are accepted and ignored
+  (`run` says so); the US engine prints its call warning without them.
+- **Calls are replacement property for share losses (s.54 para (i)).** A
+  long call on the same shares, opened within 30 days of a loss on long
+  shares and still held on day 30 (any account, registered included), now
+  denies the loss at 100 shares per contract; the denied amount is added
+  to the call's cost (permanent when the call is in a registered
+  account). It was a warn-only scan behind `cross_asset`. One-way by
+  design: shares never replace an option, and only the identical contract
+  replaces an option. `wash-radar`, `buy-check`, `sell-check` and
+  `edge-cases` follow the same rule (buy-check and sell-check no longer
+  let an option's row decide a share trade or another series' trade).
+- **Settle dates skip holidays.** Brokers that don't print a settle date
+  (IB, and Webull's trade date worked back from its settle date) were
+  dated by skipping weekends only, so trades
+  settled on closed days (Good Friday, Labour Day, Jan 1).
+  That picked the wrong day's Bank of Canada rate and could move a
+  repurchase into or out of the 30-day superficial-loss window. A new
+  rule-based calendar (`lib/market_calendar.py`) counts settlement days:
+  US = NYSE plus Federal Reserve holidays (Columbus and Veterans Day trade
+  but don't settle); Canada = TSX plus Remembrance Day and the National
+  Day for Truth and Reconciliation. It was checked against every settle
+  date Questrade and RBC print. Equities before 2017-09-05 now settle T+3.
+- **Futures settle on the trade date.** IB futures and futures options
+  were given the stock T+1 settle date, so a close on Dec 31 landed in the
+  next tax year. Variation margin settles their profit and loss daily, so
+  the disposition is now the trade date. `[settings] futures_settle =
+  "next_day"` restores the clearing house's premium date.
+- **Futures shorts are not "truncated history" candidates** — an IB
+  futures sell-to-open is excluded from the go-short hint like an option
+  write (`--include-options` still shows them).
+- **`option_grant_timing_since` no longer drifts with `year`**: unset, it
+  defaults to the project year, so consecutive default projects taxed a
+  year-straddling premium twice (+399 in 2025, +298 in 2026 for a 298
+  economic gain). `taxjson init` now writes the key uncommented; `taxjson
+  run` and `option-boundary` warn on every run while a Canadian grant-
+  timing project leaves it unset; `close-year` records the timing in
+  `filed/<year>.json`; and `option-boundary` flags ATTENTION on a
+  contract written in a locked year but kept on transition close timing
+  here (definite when the lock records grant timing).
+- **Superficial loss (s.54): only substituted property backs a denial.**
+  A denial now needs units acquired inside the 61-day window that the
+  same holder (the taxable pool, or one registered / affiliated account)
+  still owns at its end. Units a registered account held before the
+  window no longer back one: a taxable rebuy sold again inside the
+  window, with an RRSP holding shares bought years earlier, was denied
+  PERMANENTLY (-1,000 → now allowed); a partly-sold taxable rebuy now
+  defers only what is still held instead of turning the rest permanent.
+  (A short taxable balance at day 30 also no longer offsets a registered
+  account's still-held acquisition.)
+- **Superficial loss: a trigger's side of the loss follows the pool's
+  own ordering.** A rebuy that settles on the loss sale's settlement
+  date but traded the day before (a later clock time) is in the pool
+  the sale draws from; it was treated as bought after the loss, its
+  basis bump landed before the sale and inflated the loss it deferred
+  (-1,000 / 250 denied instead of -800 / 200), and some short-cover
+  books never converged. Pre/post-loss is now decided by the phase
+  ladder the pool replays with.
+- **Negative proceeds (Canada).** A sell whose commission exceeds its
+  gross — closing a worthless option at $0.01, writing one for less
+  than the fee — now books its proceeds signed (negative) instead of
+  as a positive amount: the loss grows by twice the shortfall (-201.00
+  was booked for a -220.90 loss). Buys are unchanged.
+- **s.49 grant timing: an assignment folds each premium once.** Every
+  short opening — a write before `option_grant_since`, the short
+  leftover of a sell that crosses zero — is now a lot, consumed FIFO by
+  write date. An ASSIGN that consumed a lot with no grant record used to
+  fold the premium into the shares on top of the grant already
+  recognised (a book that totals 450 under close timing totalled 650
+  under grant timing with `since = 2025`); totals are now identical
+  under both settings (fuzzed with assignments and every `since`).
+  A close-timing (pre-`since`) lot now closes before a later grant lot
+  and at its own premium, and a buy-back of a grant lot is a loss of
+  exactly the amount paid even when other lots were written at other
+  premiums — both move amounts between years, never the total.
+- **LSE, ASX and other non-North-American shares settle T+2.** The
+  settlement lag followed the US T+1 cycle for every currency but CAD, so
+  a GBP or AUD sale on the second-to-last trading day of the year landed
+  in that year; GBP/EUR/CHF now move to T+1 on 2027-10-11 and every
+  other non-North-American currency stays T+2.
+- **An option held past its expiry is named.** `taxjson run` warns (on
+  the console and in the `.sum` DIAGNOSTICS) for every option a taxable
+  account still holds after its expiry date — the export dropped the
+  expiry, assignment or exercise row. For a long contract the premium
+  paid is an unbooked loss of the expiry year; option-boundary covered
+  written contracts only.
+
+### Tax rules and engine: United States (experimental)
+
+- **US: an unapplied return of capital or notional distribution is on
+  the console.** A basis adjustment the US engine cannot apply (no
+  shares held after a full sale, or the position short) printed only to
+  the .sum; `taxjson run` now echoes it as `warning: ATTENTION:
+  unapplied basis adjustment: ...`, and a basis increase is no longer
+  called a return of capital (A2-0199, A2-0964). The US stock-dividend
+  notes print only for the tax year's dividends (A2-0956).
+- **US: a loss on a futures contract (or an option on one) is no longer
+  disallowed as a wash sale.** A §1256 contract is not stock or
+  securities; a re-bought F:CLG7 had its whole loss disallowed with no
+  flag. The re-purchase is now flagged for a manual check
+  (`futures_vs_loss`); Canada keeps denying (s.54 covers any property)
+  (tax-logic US-WASH-18; A2-0053).
+- **US: same-moment replacement lots of two accounts follow the
+  taxjson.toml order**, as US-DATE-13 states, not the account label:
+  renaming an account moved a wash-sale deferral to the other account's
+  lot (A2-0200, A2-0208).
+- **US: a stock dividend posted after the shares were sold is not a
+  wash-sale purchase** (US-STKDIV-01); it washed part of the loss. The
+  warning now names the sold-before-paid case (A2-0205).
+- **US: wash-sale replacement lots keep the right shares, units and
+  holding periods.** A replacement bought before a split got the
+  disallowed loss on the pre-split share count (half the matched
+  shares), creating a fake loss and an inflated gain at its sale
+  (A2-0054); a later purchase matched by two losses became one merged
+  block with an averaged bump and the earliest tacked date, so a
+  short-term block was reported long-term (A2-0060: now one block per
+  matched loss); a short-side replacement bigger than the loss spread
+  the proceeds reduction over every share of the new short, moving loss
+  into a later year (A2-0206: now share for share, as on the long side).
+- **US: shares closed by one sale never wash each other.** A sale that
+  closed an old lot together with shares bought in the last 30 days
+  washed the old lot's loss into the very shares it was selling, split
+  them, and cascaded one chunk at a time: a 1-share old lot sold with
+  100 recent shares gave 101 Form 8949 rows (100 code W, 55,500 of
+  adjustments on a 1,060 loss, the short-term loss reported long-term),
+  and a 0.001-share lot 100,001 rows. Shares (or shorts) closed by the
+  same sale or cover — one row, or the same-second fills of one order —
+  are no longer replacements for each other; shares kept after the sale
+  still are (tax-logic US-WASH-17; audit A2-0001, A2-0017, A2-0553).
+  The wash radar's US EXITABLE advice now says the full exit must be
+  one order.
+- US `reorg_368_boot`: the cash boot and the new shares' value (in the
+  new listing's currency) and the old basis (in US dollars) are combined
+  in USD, and each leg is booked in its own listing's currency at the
+  effective date's rate; the hints were added unconverted across
+  currencies (A2-0216). The prompts name each hint's currency.
+- **US: a §355 spin-off's `allocated_acb` is read in US dollars** on any
+  listing (A2-0973): on a TSX-listed parent it is converted at the
+  spin-off date's rate, so the moved basis is exactly the USD figure;
+  it used to be read as CAD. The prompt and US-CORP-07 say so.
+- US: a stock dividend paid after the shares were sold (between the
+  record and pay dates) no longer asks for "the missing purchase
+  history"; the warning says the §307 allocation reaches the sold lots
+  and must be adjusted by hand (A2-0562).
+- **US: a move between two of your own taxable accounts is flagged.**
+  The per-account lots do not carry the moved lot's basis, so the
+  receiving account's sale read as a short and the run exited 0; the
+  run now prints ATTENTION for each such move and `--strict` stops
+  (tax-logic US-BASIS-05; the carry itself is in KNOWN_ISSUES, audit
+  A2-0032).
+- **US: a spouse's replacement purchase is a permanent denial in your
+  books.** With affiliated trades given (`taxjson-gains --affiliated`),
+  a loss whose replacement your spouse or controlled corporation bought
+  was reported as a deferral (permanently_disallowed 0) that no lot in
+  your books carried, so it never came back and the wash conservation
+  did not foot. §1091(d) puts the basis adjustment on THEIR shares: the
+  loss is now permanently disallowed here, as for an IRA replacement,
+  and the trace says the basis goes to the affiliated holder. tax-logic
+  states the rule (US-WASH-16) (partition SPEC-30, ENGINE-I1).
+- **US: FIFO is per account on any merged book.** `taxjson-gains
+  --country usa` (and the library's GainsRequest) now keeps FIFO lots
+  per account by default, as `taxjson run`'s blended pass always did;
+  a direct run on a merged book used to pool the accounts' lots
+  (tax-logic US-BASIS-01, partition SPEC-30). `--per-account-basis` is
+  still accepted.
+- **US mergers and spin-offs: non-recognition is not optional.** The
+  option text no longer offers `taxable_exchange` for a qualifying
+  §368(a) reorganization "you aren't claiming", and the end-of-run
+  FILING REQUIRED reminder no longer fires for `reorg_368`,
+  `reorg_368_boot` or `tax_free_355`: only a significant holder (5% of a
+  public company, 1% of a private one, or a $1M basis) attaches the
+  Reg. §1.368-3 / §1.355-5 statement (S073-00).
+- **US: the call-as-replacement warning is sized.** Only the opening
+  part of a call purchase counts (a buy that closes a written call is
+  not an acquisition), each contract stands for 100 shares and is used
+  against one loss's shares only, and the warning says how much of the
+  loss is at risk. In a year-scoped run a prior year's warning no
+  longer reaches this year's diagnostics, and `summary.count` counts the
+  records in the file. tax-logic US-WASH-12.
+- **US: January fund/REIT dividends.** A January dividend with an
+  October–December ex or record date is warned about (§852(b)(7),
+  §857(b)(9)); `[settings] ric_january_dividends` (US-only) moves the
+  listed payments to Dec 31 of the prior year. tax-logic
+  US-INC-DATE-RIC.
+- **US: a return of capital beyond basis is booked (§301(c)(3)).** It
+  was a warning only, and the excess came back as extra gain when the
+  shares were sold — right total, wrong year. Now the part beyond each
+  lot's basis is a capital gain on the distribution date (short- or
+  long-term by that lot's holding period) and the basis stays at zero;
+  Form 8949 describes the row as a nondividend distribution in excess of
+  basis. A return of capital received with no shares held is still a
+  warning (report it by hand). tax-logic US-ROC-01/02/03.
+- **US projects: an IB return of capital reduces basis by default.** A
+  `country = "usa"` project no longer books an issuer-designated return
+  of capital as a dividend under Canada's s.90(2) rule; it is a
+  nondividend distribution (IRC s.301(c)(2)) unless `[settings]
+  foreign_return_of_capital` says otherwise (audit S013-01).
+
+### Canada/USA partition and tax-logic
+
+- tax-logic CA-RPT-12 cites s.49(3) for a call and s.49(3.1) for a put.
+- `scripts/check_tax_rules.py` checks the country-ownership tables stay
+  complete (owner and reason for every entry, every one-country flag a
+  real CLI option the refusal reads, every one-country command a
+  `taxjson` subcommand, every `[settings]` key the code reads listed,
+  and every option whose help says "Canada only" / "US only" in a
+  table). `--foreign-roc dividend` (ITA s.90(1)) and
+  `taxjson-carryover --slip-gains` (T5 box 18) are now in the tables.
+- An invalid `ric_january_dividends` / `corporate_distributions` entry
+  is refused with an example listing of the setting's own country
+  (XYZ.US for the US-only RIC list), and a bad `--ric-january-dividend`
+  flag is named as the flag, not as a `[settings]` key (re-audit
+  A2-1306).
+- US projects no longer see Canadian forms and terms (audit A2-0735 and
+  siblings): the account `.sum` points to Form 8949 / basis (Schedule
+  3 / ACB in Canada; `taxjson-sum-gains --country`), `taxjson audit`'s
+  totals note names Form 8949 rows, `roc-sum` names 1099-DIV box 3 and
+  basis, `trades-sum` and `find-missing-history` call a sheltered
+  account an IRA, `carryover` names the IRS only, `handoff` speaks of
+  deferred wash-sale losses (§1091(d)), the holdings TOML cost note has
+  no s.47 blend (`taxjson-export --country`), and the checklist's
+  estimate, sheltered-inputs, run-clean, elections and n/a steps use
+  US wording. A US crypto book's audit trace no longer says "wash sale
+  §1091". The Canada engine's non-convergence warning says
+  "superficial-loss solver" (it said "CRA wash-sale solver").
+- `taxjson-apply-distributions` without `--country` writes "(cost up)"
+  instead of Canada's "(ACB up)" into the book row (A2-1234).
+- tax-logic states engine behaviour that only KNOWN_ISSUES described:
+  Canada's basis increase on an emptied pool goes to the next purchase
+  and an ADJUST on a short is the short seller's compensation payment
+  (CA-ACB-13/14); the US leaves both unapplied (US-ROC-04); §1091(e)(1)
+  is not modelled (US-WASH-19); an IRA buy sold before the loss still
+  makes it permanent (US-WASH-11); Schedule 3's acquisition year comes
+  from trade-date days held (CA-DISP-07) (A2-0062, A2-0962, A2-0963,
+  A2-0964).
+- **tax-logic states RBC notional distributions and DRIP** (CA-DIST-02/03,
+  US-DIST-02/03).
+- **tax-logic states what US projects run.** The US section gains the
+  rules its input stages and engine already applied: settlement cycles
+  and holidays, the generic importer's settle column, crypto and expiry
+  dating, `futures_settle`, the FX gap handling, identity and ticker.map,
+  the transfer stop, the corporate-action elections (`taxable_exchange`,
+  `reorg_368`, `reorg_368_boot`, `taxable_distribution_301`,
+  `tax_free_355`), payments in lieu, staking income, dividends booked
+  gross with withholding as its own row, and the crypto parser rules
+  (coin-for-coin trades, fees in coin, the 3-day pairing, stablecoins as
+  US-dollar cash — an approximation). Two Canadian statements were wrong
+  and are corrected: the FX source (Bank of Canada noon rate before March
+  2017 from May 2007; Yahoo only before that) and the rate-gap rule (a
+  longer gap is a validation ERROR that `run --strict` stops on, not an
+  automatic stop). A stablecoin traded more than 2% off 1.00 USD on
+  Coinbase or a Kraken USD pair now prints a warning with the de-peg
+  amount the approximation leaves out.
+- **Shared helpers no longer carry one country's law.** The warrant /
+  right replacement warning said "the loss may be superficial" in US runs
+  (now "may be a wash sale"); the §355 tax-free spin-off could book
+  Canada's s.86.1(3) `allocated_acb_cad` hint in CAD if called directly
+  (only the Canadian election reads it now); the registered-account
+  fallback for unconfigured accounts knew only Canadian plan names (IRA,
+  Roth, 401(k), HSA ... are recognised; by country when it is known).
+- **Manual loss checks next to phantom-basis sales follow the country.**
+  With `phantoms.json`, the "check by hand" warnings measured the window
+  on settle dates in every project (the US rule runs on trade dates) and
+  the partial-taint one on trade dates (Canada's runs on settle dates),
+  and both said "superficial-loss" in US projects, US crypto included.
+  Now: settle dates and ITA s.54 in Canada, trade dates and "wash-sale
+  check (§1091)" in the US, and none where wash detection is off (US
+  crypto). Warnings only; no numbers change.
+- **Standalone `taxjson-brokerage` no longer applies Canadian law by
+  default.** Its `--foreign-roc` defaulted to `dividend` (ITA s.90(2)),
+  so the documented manual pipeline for a US book turned a US issuer's
+  return of capital into dividend income. It now takes `--country`
+  (canada: s.90(2) dividend; usa: a basis reduction, and `--foreign-roc
+  dividend` is refused); with neither flag the return of capital lowers
+  the cost and a note says so. `taxjson run` passes both flags, so
+  project numbers are unchanged.
+- **Stock dividends follow the country.** The IB, Questrade and RBC
+  parsers booked a stock dividend as a $0 purchase in every project, so
+  in a US project the new shares were a short-term zero-basis lot and a
+  wash-sale replacement. The parsers now emit a neutral stock-dividend
+  event; the US engine applies §305(a)/§307 (the basis is spread over old
+  and new shares, the purchase date carries over, no wash sale), and the
+  Canada engine keeps the $0 acquisition (an s.54 acquisition) with the
+  "add the declared amount" note, now printed by the gains run instead
+  of the parser. Canadian numbers are unchanged. tax-logic CA-STKDIV-01,
+  US-STKDIV-01/02.
+- **Futures follow the country, not the base currency.** The settled-P/L
+  booking of futures (no notional, each close's P/L at its own rate) ran
+  only for a CAD target, so a US project kept FX on the notional of a
+  non-USD contract, and the US engine booked a settlement row with its
+  sign inverted (a short closed at +5,000 was -5,000). Both countries now
+  use the settlement basis, chosen by the project's country
+  (`taxjson-convert-currency` / `taxjson-merge2 --country`, required when
+  a book has futures); a partial close takes average cost in Canada and
+  FIFO in the US. Canadian numbers are unchanged. tax-logic US-FUT-01/02.
+- **No Canadian terms in US output.** `wash-sales`, `carryover`,
+  `crypto-sends`, `fx-cash`, `reconcile-slips`, `buy-check`, `sum`,
+  `checklist`, the radar and the web pages named s.54, "superficial",
+  "registered account", 50% inclusion / T1A, line 22100, T5008 box 20 or
+  s.39(1.1) in US projects; each now names the project's own law.
+- **tax-logic states fx-cash §988 and the US estimate's assumptions**
+  (US-FX-03, US-RPT-07, US-RPT-08): §988 gains are ordinary and not on
+  Form 8949, with no $200 exemption; the estimate treats every dividend
+  as qualified, gains with no term as short-term, and leaves out foreign
+  tax credits, interest and state tax.
+- **Canadian and US law no longer mix through the country setting.**
+  Every command, the web UI and every standalone tool read the country
+  through one resolver: `[settings] country` is required (a missing one
+  was Canada everywhere but `run` — Schedule 3, T1135 and s.39(1.1) were
+  printed over US books) and only canada / ca / usa / us are accepted
+  (`taxjson-audit` read "United States" as Canada). The standalone tools
+  (`taxjson-gains`, `-explain`, `-audit`, `-carryover`, `-harvest`,
+  `-wash-radar`, `-safe-to-sell`, `-corp-actions`) now require
+  `--country` instead of assuming Canada; `taxjson` passes it for you.
+- **Settings, flags and commands belong to a country.** A Canada-only
+  setting in a US project (`province`, `option_premium_timing`,
+  `option_grant_timing_since`, `option_buyback_loss_superficial`,
+  `foreign_return_of_capital`, `[instalments]`, `[estimate]
+  deductions`/`carrying_charges`) is refused by every command, naming
+  the key — it was silently ignored, and `foreign_return_of_capital =
+  "dividend"` (ITA s.90(2)) was even applied to a US filer's IB return of
+  capital. `taxjson-gains`/`-explain`/`-audit`/`-carryover` refuse the
+  Canada-only option flags with `--country usa` and
+  `--per-account-basis` with `--country canada`; `estimate`/`sum`
+  refuse `--province`, `--deductions` and `--carrying-charges` in a US
+  project (`--province XX` was silently ignored). A `tax_date` that
+  departs from the country's practice is accepted with a warning. `t1135`,
+  `instalments`, `option-boundary` and `form-export --form schedule3`
+  are refused in a US project (they gave CRA advice), and `form-export
+  --form 8949`/`txf` in a Canada project with a country message.
+  `base_currency` must be the country's currency (CAD / USD): a US
+  project in CAD produced Form 8949 in CAD at Bank of Canada rates; an
+  unset `base_currency` means the country's currency, not CAD.
+- **`taxjson tax-logic` is the spec, with rule ids.** Every statement has
+  a stable id (`--ids` shows them, `--json` lists them) that the tests
+  cite; `scripts/check_tax_rules.py` (a CI stage) checks the links. It
+  reads the settings through the same resolvers the engine uses (a
+  `" Grant "` timing rendered close timing; `"nextday"` / `"ACB"` were
+  described although the run refuses them), refuses an unknown country
+  instead of rendering Canada, and now states the income dating rules
+  explicitly (how dividends, payments in lieu, returns of capital and
+  trust distributions are dated in each country: CA-INC-DATE-TRUST,
+  CA-INC-DATE-ROC-TRUST, US-INC-DATE-RIC), plus which settings and
+  commands the project's country refuses.
+- **`taxjson tax-logic`.** A one-screen statement of every rule taxjson
+  applies for the project's country (or `--country`), one line per rule
+  (citing the Act where the rule comes from it), with the project's settings filled in
+  where they change the answer. `--json` for machines.
+- `find-missing-history --gen-phantoms` passes the project country
+  (no more "--country not given; assuming canada" per account).
+
+### Income: dividends, distributions and return of capital
+
+- `taxjson-sum-income` reads its rows through the same checks as
+  taxjson-gains: an impossible date, a NaN/inf amount or a text amount is
+  a one-line error with exit 2 instead of being summed (or a traceback)
+  (A2-1448).
+- edge-cases "Income paid around New Year" uses income dating: a
+  Canadian trust's distribution with a December record date lands in
+  the record year (it said the pay year), and payments in lieu and
+  trust returns of capital are listed (re-audit A2-0387, A2-1207,
+  A2-1209).
+- Canada stock-dividend ATTENTION: printed only by a taxable run of the
+  dividend's own year, quiet once an ADJUST adds the cost, and worded
+  right — adding the cost books the ACB only; the dividend is reported
+  from the slip. Income-dating advice is no longer printed for sheltered
+  books, and a TRANSFER in a taxable account names the account instead
+  of a `--taxable` flag the user never passed (re-audit A2-0709,
+  A2-0711, A2-1220, A2-1224, A2-1218, A2-1221).
 - The tax withheld on a dividend now moves with it when income dating
   re-dates the payment (a US January RIC dividend, a Canadian trust's
   record-date distribution), so one payment's income and withholding are
@@ -628,243 +728,6 @@
   filed without it) (re-audit A2-0039; the audit / explain / what-if
   record-date dating of A2-0139, A2-0201, A2-0397 is A2-0033 /
   A2-1175).
-- Two SPLIT rows for one event with different ratios (both applied) are
-  now a validation ERROR named on the console: `run --strict` stops and
-  checklist run-clean is not done (re-audit A2-0040).
-- A `.tt` SPLIT or rename of a USD stock no longer stops `taxjson run`
-  (exit 1, "Currency mismatch") in the native-holdings pass, in either
-  country: a SPLIT carries no money, so its currency stamp is no longer
-  checked against the pool's (re-audit A2-0010, regression of R1-126).
-- close-year / handoff / option-boundary (re-audit filing locks):
-  close-year refuses books with no reports/ (a run that died before
-  writing them) and an unreadable work/<acct>_base.json instead of
-  locking empty year-end positions; handoff names an unreadable or
-  damaged base file instead of reporting every lot as missing or
-  naming a deleted /tmp merge file (A2-0035, A2-0346, A2-1137,
-  A2-1143). option-boundary reads last year's lock through
-  [settings] prior_year_record, as handoff does (A2-0036, A2-0335);
-  handoff flags a written option the closed year's record taxed on
-  another premium timing than this project (A2-0037); the
-  option_grant_timing_since hint quotes the since a lock records
-  (A2-1142); handoff refuses a non-string prior_year_record like run
-  (A2-1135).
-- close-year --force keeps the dispositions another tool filed (and
-  their totals) from the lock it replaces, and warns when the replaced
-  lock recorded other totals (A2-0119, A2-0345); --filed-dispositions
-  goes through the broker decode funnel (UTF-16 read; a directory or a
-  stray quote is one line, exit 2) (A2-1136, A2-1138); handoff flags a
-  record closed before its year ended as a partial-year snapshot
-  (A2-0349).
-- close-year's year-end cost places each superficial-loss addition
-  where the engine lands it (per replacement symbol, on its own trade
-  and settle date) instead of one lump on the first replacement, so a
-  January replacement's share is no longer in the Dec 31 cost; a US
-  record carries the §1091 basis addition `list` shows (A2-0669,
-  A2-0352, A2-1140, A2-0353).
-- handoff matching: a straddling trade matches only the same trade (same
-  trade date, or the same net within 3 days), so a distinct same-size
-  January sale no longer hides a sale missing from both years; a
-  date-basis change between the two projects is one item per sale (not
-  a position, two doubles and the wrong date); a closed-year sale that
-  is its own row in this project is not "reported in both years"; a
-  short cover matches another tool's filed short; a sub-unit (crypto
-  dust) quantity difference is reported (A2-0354, A2-0356, A2-0673,
-  A2-0122, A2-0674, A2-1133).
-- close-year records the December and January rows; handoff reports
-  rows the two projects date on different sides of Dec 31 — trust
-  income or a ROC its record date moves back into the closed year, a
-  row local_timezone re-dates to Dec 31, a RIC January dividend kept in
-  one project only, an overnight fill the closed project moved into
-  January — as in neither or both returns (A2-0120, A2-0343, A2-0344,
-  A2-0675, A2-0670).
-- check-filed / audit (re-audit filing locks): `audit --year` on a locked
-  year reads the lock `[settings] prior_year_record` names (per-year
-  layout) and recomputes on the date basis the lock recorded, with a note
-  (A2-0334, A2-0335, A2-0664, A2-1129). check-filed reports a lock whose
-  account entry records no totals, or whose `form_lines` is not a table,
-  as damaged instead of "OK (matches)" (A2-0347, A2-0668); notes when the
-  project's `tax_date` or `option_buyback_loss_superficial` differs from
-  the lock's (A2-0348, A2-0672); refuses a bad `[settings]` value as a
-  settings error, not a damaged lock (A2-1134); and shows the child's
-  one-line error, exit 2, when the recompute fails on an input (A2-0676).
-  audit and `wash-sales --explain` name a damaged `work/<acct>_base.json`
-  instead of a deleted /tmp merge file (A2-1143).
-- carryover: a year before the project year with a close-year lock
-  (filed/<year>.json or prior_year_record) uses the lock's filed figure
-  (filed_totals, else the gain lines) instead of the rebuilt books, so a
-  prior year's loss is carried and a carry-back to it is offered; a
-  later locked year is compared with the filed lines; an unreadable or
-  non-finite lock is named (re-audit A2-0121, A2-0336, A2-0338, A2-0666,
-  A2-1130, A2-1131, A2-1132, A2-1139).
-- carryover and t1135: the full-history engine pass applies
-  [settings] corporate_distributions (a listed corporation's ROC on its
-  pay date), as the run does (A2-0123, A2-0337, A2-0339, A2-0340,
-  A2-0341, A2-1141).
-- carryover: rows after the project year are partial (no T1A
-  suggestion, the carryforward stops at the project year); box-18
-  capital-gains dividends in capital_gains_dividends.map are netted; a
-  Canada ledger in USD or a book whose metadata.target_currency differs
-  is refused; a dangling claimed_losses.txt / t1135.map is refused; a
-  claimed amount '0,125' is refused; standalone carryover and audit
-  note the close-timing default (A2-0351, A2-0355, A2-0665, A2-0667,
-  A2-0677, A2-0678).
-- Wash radar, sell-check, buy-check, harvest's ADVISORY: each replacement
-  unit backs one denial, as in the engine (CA-SL-08) — a rebuy an earlier
-  loss used up no longer makes a second, false VIOLATION or a false
-  LOCKED for a sale today, and a sale split into fills no longer counts
-  its shared rebuy twice (re-audit A2-0009, A2-0038, A2-0377, A2-0689,
-  A2-0691; US: an IRA buy the engine already matched is not 'at risk'
-  again). Quantities across a split are compared in today's units
-  (A2-0382); a long call counts at its declared contract size (A2-0373);
-  a class-share option root (RCI for RCI.B.TO) names its class line; a
-  futures option on the loss's own contract is a note to check by hand,
-  never a VIOLATION (A2-0378, A2-0690, also in edge-cases).
-- Wash radar: once the last rescue trade date has passed, a VIOLATION
-  says the loss is denied (JSON `deadline_passed`) instead of 'Sell ...
-  by <yesterday>'; sell-check no longer answers ACTION/UNSAFE for it and
-  safe-to-sell shows DENIED (A2-0688, A2-0368). The sell-by date walks
-  back on the listing's calendar (A2-1183) and a futures rescue settles
-  on its trade date (A2-1181).
-- Wash radar: warrants, adjusted-series calls and futures options bought
-  in a loss's window (and, US, a long call bought in the last 30 days for
-  a sale today) are noted for a manual check, carried to sell-check;
-  buy-check flags buying one after a share loss instead of 'no wash
-  exposure', and a US long call after a share loss is a note, not UNSAFE
-  (A2-0129, A2-0687).
-- Wash radar: a short position is described as a short (cover, re-short;
-  a US short's trigger is a new short sale, not an IRA purchase)
-  (A2-0371, A2-0686, A2-1184).
-- Wash radar's own pool: a Canadian trust's return of capital moves to
-  its record date and a return of capital above the ACB floors it at nil
-  (A2-1174, A2-1178, A2-0372); a coin rebuy under 1e-6 units is a holding
-  (A2-1168); a `.tt` row dated tomorrow in a settle-date project is a
-  trade made today (A2-0130).
-- buy-check: buying back a written call you are short is SAFE (it
-  acquires nothing) (A2-0370). buy-check / sell-check: the 'last loss
-  sale' line shows only losses the queried trade can affect (A2-1172);
-  a bare-array book no longer crashes them (A2-1180); an unreadable
-  ticker.map stops them, as it stops `run` (A2-0683).
-- `run --account <sheltered>` refuses (and keeps `sheltered_base.json`)
-  when another sheltered account with inputs has no book in work/; it
-  rebuilt the combined book without that account's buys, so the radar
-  said "safe to sell at a loss" (re-audit A2-0128).
-- The same export file under two accounts' `inputs/` folders is an
-  ATTENTION line naming both files, for every broker and `.tt`; `run
-  --strict` stops on it and on one broker account feeding two taxjson
-  accounts (re-audit A2-0366).
-- Every view and planning command that reads the work/ books (gains,
-  divs-sum, roc-sum, wash-sales, fx-cash, list, shares, winners, the
-  radar, buy-check, sell-check, harvest and others) prints the
-  stale-books banner after a failed run or changed inputs, on stderr
-  (re-audit A2-0380, A2-0381).
-- edge-cases, spinoffs, splits, check-dates, winners, leaps and
-  leaps-sum refuse an account that is not in `[accounts]`; harvest names
-  a bare symbol filter that matches no position (re-audit A2-0684,
-  A2-1167).
-- trades, divs, events, roc, gains, shares, fees-sum and check-dates name
-  a configured account that has inputs but no books (re-audit A2-1182).
-- Grant timing: an expired written option counts as a close in ccd-sum,
-  winners and the .sum TRADES line, as under close timing (re-audit
-  A2-0693).
-- buy-check, sell-check, watch, instalments, wash-sales and `list --date`
-  relay a failed child's error line instead of the first 200-400
-  characters of its traceback (re-audit A2-1190).
-
-- harvest --options values an option at the contract size its rows
-  declare (a x10 mini contract is no longer valued at x100), as `list`
-  and the holdings export do (re-audit A2-0367, A2-1177).
-- harvest: a VIOLATION whose rescue deadline has passed is no longer
-  counted as harvestable now; it waits for the registered buy to age
-  out (re-audit A2-0365).
-- harvest quotes a coin under the project's crypto_ticker.map spelling,
-  the one the books were priced with (re-audit A2-0364).
-- harvest / price chain: an LSE (.L) quote that does not state its unit
-  (pence or pounds) is left out with a warning instead of valued as
-  pounds; a live tier's unit-less quote falls through to the next tier
-  and is never cached (re-audit A2-0379, A2-0692).
-- price cache: a cached quote's currency is checked like its price —
-  'usd' is read as USD, a non-text value is ignored with a warning
-  instead of a traceback (re-audit A2-1170).
-- harvest, t1135, form-export and carryover strip and upper-case
-  --base-currency (' CAD' no longer drops every row or refuses the
-  books; re-audit A2-1169).
-- harvest --json carries the planning-tool scope note (re-audit
-  A2-1171).
-- US harvest: a crypto account's losses are claimable now with no
-  wash-sale advice (US-WASH-13, new US-PLAN-05); an open short shows ST,
-  never LT (US-HOLD-03) (re-audit A2-1173, A2-1176).
-- `taxjson serve` on an IPv6 address (`--host ::1`, `[::1]`, or a LAN
-  IPv6 address) answers requests instead of refusing every one with 400
-  "Invalid host header", and prints the URL with the address in brackets
-  (re-audit A2-0695, A2-1186).
-
-- Web: the wash-radar page shows the scope note (verdicts cover the
-  project's own accounts only, CA-PLAN-04 / US-PLAN-04); a radar sidecar
-  without "sections" or with a row field of the wrong type, and a
-  holdings row whose `trades` is not a list, are an error banner instead
-  of "no report yet", the stale .rpt, or an HTTP 500; the stale-rate
-  label uses harvest's threshold (7 days, not 4); and the freshness
-  fallback counts the same input files as the checklist (a Finder
-  .DS_Store no longer marks the dashboard stale) (re-audit A2-0374,
-  A2-0696, A2-1187, A2-1188, A2-1179, A2-1185).
-
-- Web what-if: an option is priced at the contract size the book's rows
-  declare (a x10 mini option was priced at x100, a 10 loss shown as a
-  350 gain), and a plain futures contract is refused instead of priced
-  at x1 and dated as an equity T+1 sale; the simulated sale settles on
-  the listing's market calendar, not the calendar of the currency the
-  price was typed in; a Canadian trust's return of capital is booked on
-  its record date first, as the run does; a registered account with
-  inputs but no built book is named in the warnings; and the engine's
-  warn-only option-replacement flag (a call bought in the window) is
-  listed in the result (re-audit A2-0131, A2-0384, A2-0132, A2-0375,
-  A2-0437, A2-1189, A2-1175, A2-0383, A2-0687).
-- US form-export (8949, TXF) and `sum` FOR THE RETURN keep §1256
-  contracts — futures, options on futures, broad-based index options
-  such as SPX — off Form 8949 and list them for Form 6781 by hand; a
-  futures loss no longer shows as negative proceeds, and the close-year
-  lock records their net separately (re-audit A2-0118, A2-0322, A2-0323,
-  A2-0324).
-- Schedule 3: a commission rebate (IB, Questrade) stays netted in the
-  proceeds instead of a negative OUTLAYS cell; cells round half-up and
-  the ACB is never a negative rounding residual, in the rows, the line
-  totals and `sum` (re-audit A2-0653, A2-1053, A2-0649, A2-1107,
-  A2-1104). Form 8949 rounds a half-cent wash adjustment half-up so (h)
-  matches the allowed gain the other reports print (A2-1105).
-- form-export: a crypto account's phantom-basis dispositions are listed
-  once under MANUAL REPORTING, not twice (re-audit A2-0113); the export
-  prints the per-row rounding note `sum` prints (A2-1108) and says when
-  the tax year has not ended, as `sum` FOR THE RETURN now does too
-  (A2-1103).
-- form-export and carryover refuse a `--base-currency` other than the
-  return's currency (CAD / USD) instead of exporting a Canadian Schedule
-  3 in USD, or applying the US $3,000 offset to CAD amounts; a
-  disposition with no currency is warned about (re-audit A2-0652,
-  A2-1118).
-- `sum` FOR THE RETURN: the US footer names a loss denied for good by an
-  IRA repurchase and `--json` carries `permanently_denied` (A2-0647); the
-  Canadian footer says an affiliated person adds the denial to their own
-  ACB instead of "lost for good" (A2-0659), as form-export does.
-- Report readers: a work/ row whose date is not a string or whose money
-  or quantity field is not a number is refused with the file and row
-  named, instead of a traceback in whichever view read it (re-audit
-  A2-0330).
-- form-export docstrings describe the short-sale columns as the code
-  renders them and show `--country` in the usage lines (A2-0643).
-- **T1135 cost walk follows the engine.** A return of capital on a
-  sold-out position no longer lowers the next purchase's cost, and one
-  beyond the ACB leaves the cost nil (CA-ACB-07), so the maximum cost —
-  and the filing verdict — match the books (re-audit A2-0034, A2-0115,
-  A2-0321). An exercised or assigned option whose root drops the share
-  class (BRKB for BRK.B, RCI for RCI.B) folds its premium into the
-  shares, through the engine's own resolver (A2-0328, A2-1106). A long
-  option expiring on Dec 31 is named as still held (A2-1121); a s.260
-  payment in lieu counts in the income column (A2-0661); a foreign
-  listing whose rows carry a Canadian ISIN is named for a `SYMBOL CA`
-  t1135.map line (A2-0332). A non-CAD `--base-currency` is refused
-  instead of testing USD amounts against a "100,000 USD" threshold
-  (A2-0660).
-
 - **`taxjson audit` / `taxjson-explain` recompute the books the way the
   run does.** They now apply the Canadian trust ROC record date
   (CA-INC-DATE-ROC-TRUST, with the project's corporate_distributions),
@@ -877,92 +740,1598 @@
   list instead of calling them "stale or truncated saved books" with
   exit 1 (A2-0640, A2-1098), and quotes an option's per-share price at
   its declared contract size (A2-1099).
-- fees report: `--to cad` / `--to " CAD"` no longer converts CAD fees at
-  the 1.35 fallback (re-audit A2-0645); fees in a generic import with no
-  `[broker] name` no longer leave a broker listed as fee-free (A2-0646);
-  the title says the year is windowed by TRADE date, unlike the .sum and
-  trades-sum (A2-1102; JSON `meta.date_basis`).
-
-- `.sum` per-asset block: under grant timing each written option is one
-  trade whose result is its premium plus a same-year buy-back; the block
-  dropped every premium (an expired write vanished, a bought-back one
-  showed only its loss) while TOTAL REALIZED OPTION GAIN kept it
-  (re-audit A2-1114).
-
-- Schedule 3 / reconcile-slips: under grant timing a buy-back nets
-  against this year's write only when it closes a write of the same
-  year; a buy-back of an earlier year's write (grant or pre-`since`
-  close timing) next to a new write of the same series is its own
-  disposition (units 2, not 1; re-audit A2-0320, A2-0650, A2-0651). The
-  engine's buy-back rows name the write years they close
-  (`grant_closed`).
-- reconcile-slips: an option written under grant timing and still open
-  at Dec 31 is NO_SLIP_EXPECTED in the write year, and the close year's
-  T5008 (premium as proceeds) reconciles with a note; both years failed
-  (re-audit A2-0657). A computed row with no slip row keeps its listing
-  suffix in the label. Two columns that are both exact spellings of one
-  amount are refused as ambiguous (A2-0656), and a broker option
-  description with a grouped strike (`5,000.00`) is matched (A2-1113).
-
-- option-boundary: an assignment whose option root drops the share
-  class (RCI for RCI.B.TO, BRKB for BRK.B.US) is paired with its share
-  leg by the engine's own resolver; it was called cash-settled with
-  "no amendment" while the engine folds the premium (re-audit A2-0114,
-  a regression of S075-09, and A2-0328). A buy-back carried with a
-  negative net (a .tt book) is a cost of its magnitude ('net 500.00' and
-  '--101.00' before, A2-1111), and a contract on its own expiry day is
-  open, not 'expired, missing its expiry row' (A2-1112).
 - `divs` / `roc` / `events`: a tax-year window places income and ROC
   rows by their tax date, as `divs-sum` / `roc-sum` / the .sum do (a
   Canadian trust's December record date, a listed US RIC January
   dividend); the row still shows its pay date and a note says why it is
   in the window (re-audit A2-0326, A2-0641, A2-0642, A2-0655, A2-1109,
   A2-1125, A2-1127).
-- The row views (`events`, `divs`, `trades`, `roc`, `dil`) warn about an
-  account with inputs but no built book, as the -sum views do; `divs-sum`
-  / `roc-sum` / `dil-sum` outside a project with a country refuse, as
-  `divs` does, instead of an "all history" total with registered
-  accounts folded in (re-audit A2-0333, A2-1110).
 - `roc` / `roc-sum`: an RBC notional distribution is counted once (it was
   also taken for a distributions.map row: doubled, with a false
   double-entry warning); the `roc` view warns about a ROC entered both in
   the books and in distributions.map, as `roc-sum` does; a missing base
   book is named when distributions.map exists (re-audit A2-0116,
   A2-1116, A2-1128).
-- `leaps` / `leaps-sum` stop when an account with option gains has no
-  native book, or when ticker.map cannot be read (a renamed LEAPS or a
-  whole account vanished at exit 0) (re-audit A2-0117, A2-0329,
-  A2-1126).
-- `ccd-sum` heads a call on a class-share root (Rogers RCI) under the
-  held class share (RCI.B.TO) even when no share was sold in the year
-  (re-audit A2-1115).
-- `transfers`: a Kraken withdrawal's fee paid in coins shows in the FEE
-  column ("0.002_TAO") and as fee_qty / fee_currency in --json; it was
-  empty on every real withdrawal (re-audit A2-0663).
+- **A cost adjustment in another currency no longer stops `taxjson run`.**
+  A USD return of capital or notional distribution on a TSX listing
+  (RBC, Questrade, IB, in either country), or a CAD `.tt` ADJUST /
+  DISALLOW on a USD unit, made the native-currency raw pass exit 1 at
+  "raw gains" with advice to run an underscore tool. The raw merge now
+  restates such a row in the listing's currency at its date (a note per
+  row); with no rate on file the native holdings view is skipped with a
+  note. The filing books were never affected. The engine's own
+  currency-mismatch error names the row and the installed command
+  (A2-0055/0191/0204).
+- `taxjson list --date` now passes the project's income-dating settings
+  (`corporate_distributions`) to its recomputation: a listed
+  corporation's return of capital was moved to its record date, as for
+  a trust, so the as-of cost disagreed with the run (A2-0995, A2-0996).
+- **Canada income dating: more split-share corporations, a loud
+  year-end flag.** XTD, GDV, LCS, PWI, SBN, WFS and PIC.A (and any row
+  whose description says "SPLIT CORP") are corporations: their
+  December-record, January-paid dividends and returns of capital now
+  stay in the pay year instead of moving to the record year as a
+  trust's. A `corporate_distributions` entry covers its issuer's
+  classes and series (`GHI.TO` covers GHI.PR.B.TO; `DEF.UN` now
+  matches DEF.UN.TO). A record date 92+ days before the pay date is no
+  longer used. Every trust distribution or ROC whose record date puts
+  it in another year than its payment is now printed on the console
+  (`ATTENTION: income year:`) in both project years — one of them
+  leaves it out. The IB January trust-ROC warning stops once the two
+  `.tt` lines it prescribes are in the books. US: a bare
+  `ric_january_dividends` entry (`T`, `PSA`) is that fund's US listing
+  only — TELUS (T.TO) and PSA.PR.H.US are no longer moved (A2-0073,
+  A2-0076, A2-0229, A2-0230, A2-0231, A2-0561, A2-0991, A2-0992,
+  A2-0993).
+- **capital_gains_dividends.map reads what it documents.** A bare root
+  (`FTN`, `T`) also claimed the issuer's preferred series (FTN.PR.A.TO)
+  and a same-root foreign listing (AT&T's T.US), turning their
+  dividends into box-18 capital gains; it now covers only the root's
+  Canadian listings. An AMOUNT with a decimal comma (`17,11` read as
+  1711) or an underscore is refused, a map that is a directory or a
+  dangling symlink is an error instead of "no map", and a date entry
+  matches the pay date of a distribution the books date by its record
+  date (the documented `XTD.TO 2025-09-10 5.50` example was refused)
+  (A2-0075, A2-0227, A2-0228, A2-0560, A2-0987, A2-0990, A2-0994).
+- **distributions.map adjustments reach the holder of record's lots in
+  the US.** The ADJUST was stamped at the end of the record date, so in
+  a trade-date engine a sale traded on the record date (still the
+  holder of record under T+1) left it "found no open lots ... NOT
+  applied" (and called a basis increase a return of capital), and a buy
+  traded on the record date shared it. A trade straddling the record
+  date now moves the stamp to the day before it (the record date stays
+  the settle date). A map return of capital now warns when the book
+  already has that ROC (broker row or .tt ADJUST, by pay or record
+  date — also in `roc-sum` across the year end) or when its cash is
+  still a DIVIDEND row counted in full as income (A2-0071, A2-0072,
+  A2-0232, A2-0988).
+- **Per-account holdings and distributions.map sizing follow each
+  ticker's own shares.** The record-date balance walk (used to size a
+  distributions.map adjustment and to split a blended Canada pool by
+  account) kept one running balance for a whole rename family: a
+  rename-split scaled shares already held under the new ticker, an old
+  ticker bought again after its rename counted under both names, two
+  accounts' copies of one split doubled each other, and a buy listed
+  before a same-moment split was scaled by it. It now holds shares per
+  account and symbol like the engine (list/shares/sanity and the
+  adjustments agree with the gains), a map key that still holds shares
+  under its own name is sized on them, and the blended-pool
+  conservation warning names an excess as over-reporting instead of
+  blaming phantoms (A2-0021, A2-0074, A2-0225, A2-0986).
+- **Canada: T5 box 18 capital-gains dividends can be named.** A new
+  project-root `capital_gains_dividends.map` (`SYMBOL YEAR-or-DATE
+  all-or-AMOUNT [ACCOUNT]`) lists the split-share / mutual-fund
+  dividends the slip reports in box 18. `divs-sum` shows them apart as
+  CAPITAL-GAINS DIVIDENDS (line 17400) and the Canadian estimate taxes
+  them as a capital gain instead of a grossed-up eligible dividend. The
+  ledger and ACB are unchanged; a US project refuses the file
+  (tax-logic CA-INC-06; audit R1-62).
+- **distributions.map is read strictly.** A per-share amount must be a
+  plain decimal (`nan`, `inf`, `1e309` and `1_0` were accepted) and the
+  date a real `YYYY-MM-DD`; a `0` is a placeholder that is no longer
+  reported as an applied return of capital; a symbol and date entered
+  twice are both applied with a warning and each ADJUST gets its own
+  id; `taxjson-apply-distributions --account` refuses a label no row of
+  the book carries (S025-12/14/16/19/23).
+- **The foreign return-of-capital citation is ITA s.90(1), not
+  s.90(2).** s.90(2) is the foreign-affiliate rule; a portfolio
+  holder's foreign dividend is included by s.90(1), and a real
+  reduction of paid-up capital lowers the ACB (s.53(2)(b)(ii)). The IB
+  row note, `taxjson-brokerage --help`, tax-logic CA-ACB-08 and the docs
+  say so; nothing is computed differently.
+- `taxjson-sum-income` refuses income rows with no amount instead of
+  booking them as $0; its help names the real input (a base book).
+- **Canada: a Canadian trust's distribution counts in its record-date
+  year.** A "DIST ON ... REC 12/30/24 PAY 01/06/25" row (Questrade, RBC)
+  on a Canadian issuer is 2024 income (s.104(13)) in `divs-sum`, the
+  .sum, the estimate and instalments — as on the T3. Split-share
+  corporations (FTN, FFN, DFN, BK, LFE, YCM ...) stay on the pay date,
+  as does any symbol in the new `[settings] corporate_distributions`.
+  tax-logic CA-INC-DATE-TRUST.
+- **Canada: a Canadian trust's return of capital lowers the ACB on its
+  record date** (s.53(2)(h)), so a sale between the record date and a
+  January pay date uses the reduced ACB and any s.40(3) gain is in the
+  record year; `roc-sum` counts it there. IB rows (no record date) keep
+  the pay date and a January one on a Canadian trust is warned about.
+  tax-logic CA-INC-DATE-ROC-TRUST / CA-INC-DATE-ROC.
+- **Canada: a payment in lieu from a Canadian dealer on a Canadian
+  issuer's share is a dividend.** ITA s.260 deems it a taxable dividend
+  and the dealer's T5 box 24 includes it; it now counts in `divs-sum`
+  and as an eligible dividend in the estimate (`dil-sum` shows each
+  row's treatment). The IB parser records the dealer from the
+  statement's BrokerName and the issuer's ISIN country. tax-logic
+  CA-INC-03; US-INC-01 (US: always ordinary income).
+- **distributions.map sizes on the holder of record in both countries.**
+  The record-date balance followed the project's tax-year date basis, so
+  a US project (trade dates) credited a buy traded on the record date.
+  It is now always the settled position (unchanged for Canada's default).
+  The income note names Form 1099-DIV in a US project (it said T3/T5).
+- **Return of capital: no invented proceeds, right sign on a short.** An
+  s.40(3) deemed gain (ROC below nil, or ROC after the position was
+  sold) was booked with proceeds equal to the gain, overstating
+  Schedule 3 line 13199; it now has no proceeds (CRA: 0 on 13199, the
+  gain on 13200). A ROC ADJUST on a SHORT position raised the short's
+  gain by the amount; it is now the short seller's compensation payment
+  and lowers it (a note names it).
+- **`roc` / `roc-sum` show `distributions.map` adjustments.** The map's
+  ACB adjustments are booked only in `<acct>_base.json`, so both views
+  said there were none while the engine applied them; they are listed now
+  (MAP_ROWS), and `roc-sum` warns when the same symbol and date also has a
+  `.tt` ADJUST (the ACB would be reduced twice) (audit R1-163).
+- **`distributions.map` rows find their shares.** A map whose first line
+  carried a byte-order mark, a lowercase symbol, a key naming the
+  listing a `ticker.map` rule consolidates, or the old ticker after a
+  ticker change was skipped as "no shares held" (or booked on a dead
+  pool) and the ACB increase was lost. Keys are now matched
+  case-insensitively, through `ticker.map`, and onto the ticker live on
+  the record date; a sale executed before a split but settling after it
+  no longer inflates the record-date balance. The NOTE also says the
+  distribution is income to report from the T3/T5 slip.
+- **`distributions.map` counts `phantoms.json` shares.** The record-date
+  balance was taken from the book without the phantom openings, so a
+  position with pre-window history got too small an ACB adjustment (or
+  none, "no shares held"). Removing `phantoms.json` now rebuilds the
+  adjusted books under `--fast` too.
+- **Return of capital after the position is sold (Canada).** A ROC that
+  posts when the pool is empty has no ACB to reduce; it is now a capital
+  gain in the year received (s.40(3) with a nil ACB, noted on the row)
+  instead of silently lowering the NEXT purchase's ACB (which moved the
+  gain to a later year). Positive ADJUSTs on an empty pool are unchanged.
 
-- The shared price and rate caches in $HOME (crypto prices, currency
-  rates, the price chain) are saved through a unique temp file under a
-  lock, so two projects' runs at once no longer fail to save or make a
-  reader see an empty cache; the crypto price cache keeps both runs'
-  prices (re-audit A2-0233).
+### Corporate actions and elections
 
-- The same exchange export filed under two crypto accounts (rows with
-  the same transaction ids) is warned about, and `run --strict` stops,
-  instead of booking every trade twice at exit 0 (re-audit A2-0569).
-
+- The elections manifest: a directory, an unreadable file, a symlink
+  loop or a dangling link is one `manifest ... cannot be read` line in
+  `elect`, `spinoffs` and run's FILING REQUIRED check (it was a
+  traceback or read as 'no elections'); a failed save is one line and
+  keeps the old file; a BOM is accepted; a non-string `summary` /
+  `notes` is refused (A2-0160, A2-0463, A2-1402, A2-0804, A2-1399,
+  A2-1401, A2-1449).
+- Spin-off warnings from the broker parsers (IB, RBC, Questrade) and the
+  rows the shared corporate-action emitters write (the parent's cost
+  reduction, a ticker rename) use country-neutral words instead of
+  s.86.1 / ACB / wash-sale (A2-1242, A2-1278). The row descriptions
+  changed, so those generated rows get new ids (no amount changes).
+- Two SPLIT rows for one event with different ratios (both applied) are
+  now a validation ERROR named on the console: `run --strict` stops and
+  checklist run-clean is not done (re-audit A2-0040).
 - `taxjson elect ACCOUNT --set A=x --set B=y` is refused (nothing saved)
   instead of saving only the last --set at exit 0; give one --set per
   command (re-audit A2-0563, A2-0568).
+- Canada blended books: a split and a trade at the same stamp are walked
+  split first in the per-account split of the blended pass (and in the
+  distribution balance walk), as the engine does (CA-DATE-14): a buy
+  listed before a same-stamp 2:1 split showed 300 shares in `list` /
+  `shares` where the books held 250, with a false "likely phantom"
+  warning (A2-0013).
+- Corporate-action rows name the election actually made instead of
+  `election=none` (A2-0558), and a taxable merger booked at $0 says
+  whether the saved election values it at 0 and gives the `taxjson
+  elect ... --set` command the run-level warning gives (A2-0974).
+- **Elections manifest migration never hands one event's election to
+  another** (A2-0064, A2-0217, A2-0557, A2-0975, A2-0978; R1-301
+  residue A2-0168, A2-0872): a record keyed by a current event's own id
+  is never moved; an older id that several same-day, ISIN-less events
+  share is resolved only by the record's saved summary, otherwise
+  listed for you to set again; the account-rename fallback also needs
+  the saved summary's action type and ratio to match; a change of the
+  readable symbols is named in a note.
+- **An s.86.1 election on a USD parent no longer stops `taxjson run`**
+  (A2-0002, a regression of S072-15; A2-0215, A2-0967): the CAD amount
+  given as `allocated_acb_cad` is booked in each listing's currency at
+  the spin-off date's rate, so the tax books get exactly that CAD figure
+  and the native holdings view stays in one currency. The raw-holdings
+  guard now also counts ADJUST rows, so a row it cannot convert skips the
+  native view instead of aborting the run.
+- **A split repeated with a rounded ratio is applied once.** A manual
+  `.tt` SPLIT line (2.333333, or convert-tt's 8 decimals) next to the
+  broker's own row (2.333333333) scaled the pool twice at exit 0. Copies
+  whose ratios agree to 1e-6 within the 7-day split window are one
+  event, take the most precise ratio, and `run` prints an ATTENTION
+  line naming them (A2-0070). A same-day rename chain (A→B, B→C) gives
+  the same superficial-loss unit conversion in either row order
+  (A2-0983).
+- **`taxjson spinoffs` in a US project** flags a $0 §301 distribution
+  (ZERO-VALUE) and a §355 spin-off with no allocated basis
+  (NO-ALLOCATION) and exits 1, with US wording (an IRA is not called a
+  "registered account") (A2-0063, A2-0221). `spinoffs` and `splits`
+  refuse an unreadable or malformed manifest or base file instead of
+  crashing or reporting an empty view (A2-0968, A2-0969); a corrupt
+  manifest's error no longer suggests deleting it (A2-0979).
+- **Renaming an account keeps its corporate-action elections.** An
+  election's event id no longer includes the taxjson account name (the
+  elections manifest is already stored per account). A manifest written
+  by the old scheme is rekeyed on the next run, and so is one whose
+  account was renamed first: the single saved election with the event's
+  date and symbols is carried over, with a note. Before, every election
+  went back to pending (exit 3) after a rename (audit R1-301).
+- **Corporate-action legs never share a second.** An event stamped
+  23:59:59 (or with no time) put both legs of a taxable exchange on one
+  second, so a same-symbol exchange could pool the new shares before
+  selling the old; event times now leave room for the one-second leg
+  bump (S074-02).
+- **A spin-off rollover allocated $0 is loud.** An s.86.1 (Canada) or
+  §355 (US) election with `allocated_acb_cad` / `allocated_acb` = 0 booked
+  the spun-off shares at $0 with the parent keeping its whole cost and no
+  word; `elect --set`, the corp-actions stage, every `taxjson run` and
+  the checklist now flag it (S073-21, S074-04). A US §356 boot merger
+  with no value for the new shares warns that the recognized gain and
+  basis are understated (S073-22).
+- **taxjson-corp-actions reads IB Corporate Actions columns by name.** A
+  header missing a column, or Data rows before any Header, is refused;
+  the fixed-position fallback read Report Date as the event date in IB's
+  consolidated layout or dropped the merger (S072-22). Questrade's
+  `ON 1,500 SHS` reads as 1500 (the ratio showed 150-for-1) (S073-02).
+- **A broken elections manifest is a one-line error everywhere.**
+  `taxjson elect` (and every other command) on a manifest that is not
+  UTF-8, not JSON, or not the documented shape (a bare-string record, a
+  list of hints) printed a traceback; `taxjson elect <account>` now marks
+  an election key no rule knows as UNKNOWN (S072-05, S072-16).
+- **A merger two brokers book on different dates is one event.** The
+  per-account merger-ratio fold grouped rows by exact date, so when IB
+  booked a merger on 06-11 and RBC on 06-15 the first renamed the whole
+  pool at its own ratio and the second found it empty: the extra share
+  RBC delivered was never sold in the books. Rows within 7 days now fold
+  into one event.
+- **Corporate actions follow ticker_extraction_overrides.txt.** The
+  overrides renamed a security's trades but not its merger/spin-off rows,
+  so the event consumed an empty pool under the broker's spelling while
+  the real position stayed put (a taxable merger's gain vanished). The
+  corp-action rows now take the same rename; when the overrides rename
+  some of a spelling's rows and not others, a corporate action on it is
+  refused instead of guessed (audit S004-00).
+- **Election hints must be non-negative amounts.** `elect --hint`, the
+  interactive prompt and a hand-edited manifest.json refuse a negative,
+  nan or inf hint (a negative allocated ACB created basis from nothing,
+  a negative FMV booked negative dividend income, and nan was saved to
+  fail only on the next run) (audit S039-00).
+- **The FILING REQUIRED reminder survives an unreadable manifest.json**:
+  the file is named and the other accounts' reminders still print
+  (audit S038-23).
+- **An IB corporate-action cancellation reaches the other statement.** A
+  split booked in one yearly statement and cancelled (`Ca`) in the next
+  is undone when both are in the account's inputs; it used to stay
+  applied with a "reverse it by hand" warning (audit S059-04).
+- **Corporate-action elections say what the law says.** The s.85.1
+  share-for-share rollover is automatic when it applies (you opt out by
+  reporting the gain); taxjson described it backwards and printed a
+  FILING REQUIRED reminder for a form that does not exist. The option
+  text now says when s.85.1 applies (not to a Canadian company bought
+  by a foreign purchaser) and the reminder is gone for it. An s.86.1
+  spin-off now takes the allocated cost in CAD (`--hint
+  allocated_acb_cad=`, the parent's CAD ACB times the spin-off's share of
+  the combined FMV, s.86.1(3)); the old source-currency `allocated_acb`
+  still works but warns, since converting it at the spin-off date moved
+  FX drift between the pools. A misspelled hint in a hand-edited
+  `manifest.json` (`fmv`, `allocated_ACB`) now stops the run by name
+  instead of booking $0, and a taxable merger at $0 FMV warns on every
+  run even when cash-in-lieu was paid.
+- **One split booked on two dates applies once.** IB and Questrade date
+  the same split days apart (KLAC 10:1: 06-11 vs 06-15); both copies
+  were applied, scaling the pool by the ratio twice. Copies of one split
+  (same security and ratio) within 7 days are one event, applied on the
+  earlier date, with a note.
+- **Spin-offs use the broker's value.** A deemed-dividend spin-off with
+  no (or a 0) `fmv_per_share` hint is booked at the broker's reported
+  value when there is one. A taxable spin-off booked at $0 is warned
+  about on every run and in the account's .sum until a value is set.
+- **A taxable merger uses one value for both legs.** The old shares'
+  proceeds and the new shares' cost are now the same fair value (the
+  shares received, plus any cash in lieu); the broker's separate out-leg
+  and in-leg figures left their difference as a permanent phantom gain
+  or loss. Across currencies, each leg is converted at the event date
+  (a hint in USD was booked as CAD proceeds).
+- **A merger or spin-off held in two broker accounts is booked for
+  both.** Two IB sub-account statements, or two RBC accounts, feeding
+  one taxjson account kept only the first account's disposition. Their
+  quantities are now combined under the one election; an overlapping
+  statement of the same broker account still counts once.
+- **`taxjson spinoffs` and `taxjson splits`.** Every spin-off with its
+  election, the value per share used and what was booked (income and the
+  new shares' cost), flagging a taxable spin-off booked at $0 and showing
+  the broker's own value when it reported one; every split,
+  consolidation and rename with holdings before and after, flagging a
+  split recorded twice, a no-op row and a fractional result.
+- **Duplicate split rows warned.** When one account carries the same
+  split twice (a parser that now books it plus a manual .tt SPLIT line),
+  merge2 warns "duplicate split" (it is applied once); the same event
+  with different ratios warns "conflicting splits".
+- `elect`: `--pending --json` emits JSON when nothing is pending;
+  `elect ACCOUNT --json` lists that account's elections as JSON (and
+  `--json` with `--set/--redo/--reset` is refused); `--hint` without
+  `--set` is an error; `--set` with an event id that matches nothing is
+  refused instead of saving a junk record into manifest.json.
+- **Mergers with per-account delivered ratios (Canada).** A merger whose
+  accounts received different whole-share counts (15 → 15 in one, 40 → 41
+  in another) emitted one rename per account at its own ratio; the
+  symbol-wide pool was renamed at the first account's ratio and the
+  second found no pool (1,100 booked for 1,220, a phantom short share).
+  The rows now fold into one event at the holdings-weighted ratio, so
+  the pool lands on the shares actually delivered.
 
+### Broker parsers: all brokers
+
+- A message never cites the other country's law (re-audit partition
+  lists 07/08). taxjson-brokerage passes the project's country to the
+  parsers, which use it only to pick the citation: the Webull inferred
+  exercise/assignment note cites s.49(3)/(3.1) in Canada and Rev. Rul.
+  78-182 in a US project (and says "cost or proceeds"); the IB
+  share-for-share tender note names s.85.1 or a §354/§368
+  reorganization; Questrade's net-of-tax dividend and transfer-in
+  warnings name the T5/NR4 slip and the ACB in Canada, the 1099-DIV /
+  1042-S and cost basis in the US; RBC's rights note and IB's warrant
+  note follow suit, and the multi-account warnings say "sheltered
+  account". A US `.sum` names Form 8949 and basis (not Schedule 3 /
+  ACB), the audit's rounding note names the country's form, the books'
+  TRANSFER and short-history notes say wash-sale walk / basis /
+  retirement accounts, the run's crypto-sends note offers only self /
+  payment, and `taxjson carryover` names the IRS Schedule D carryover
+  (and not the Canadian option settings) instead of CRA.
+- The same export file under two accounts' `inputs/` folders is an
+  ATTENTION line naming both files, for every broker and `.tt`; `run
+  --strict` stops on it and on one broker account feeding two taxjson
+  accounts (re-audit A2-0366).
+- Questrade / RBC: an option description whose strike is only partly
+  readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
+  Questrade row with fewer cells than the header is refused instead of
+  booked with blank trailing cells (re-audit A2-1041 and A2-1042, the
+  Questrade / RBC halves).
+- Questrade / RBC: the stock leg of an option assignment on a class
+  share (RCI.B under the Montreal root RCI, BRK.B under BRKB) is booked
+  as the stock; it was refused as a contract on another underlying or
+  a 100x gross mismatch (re-audit A2-1059).
+- **Questrade / RBC: payments in lieu of a dividend.** A Questrade
+  'SUBST PAY ... IN LIEU OF DIVIDEND' row and an RBC 'CASH / PAYMENT IN
+  LIEU OF DIVIDEND' row were booked as dividends: in Canada a PIL on a
+  US issuer got a foreign tax credit nobody withheld, and in a US
+  project it was a qualified dividend. They are payments in lieu paid
+  by a Canadian dealer now: Canada deems one on a Canadian issuer a
+  dividend (s.260) and keeps the rest ordinary income; the US keeps all
+  of them ordinary (tax-logic CA-INC-03 names the dealers; US-INC-01)
+  (re-audit A2-0098).
+- **Concatenated exports keep their same-day order.** Two newest-first
+  Questrade or generic exports joined with the header repeated, and RBC
+  exports joined without one, were read top-down as a whole (the dates
+  go both ways), so a same-day sale replayed after its rebuy and the
+  superficial-loss denial changed. The order is now decided per segment
+  (per header, or per run of dates for RBC); the generic importer no
+  longer reports the repeated header as an UNBOOKED row (re-audit
+  A2-0100, A2-1046, A2-1084).
+- **RBC / Questrade: a dividend-reinvestment row must fit units x price.**
+  A REI row whose cash was 10x its units at the REINV@ price was booked
+  as the units' cost with only a schema note; the trade path refuses
+  the same numbers. It is refused now when the price is in the row's
+  currency; a REINV@ marker in the other currency (C$ on a USD row, U$
+  on a CAD row, as real exports carry) is not judged (re-audit
+  A2-0268).
+- **RBC / Questrade / Webull / Coinbase: a Buy row signed as a sale is
+  refused.** An RBC Buy with a negative Quantity was booked as a sale
+  with negative proceeds (a 4,880 swing under `--strict`); Questrade
+  flipped it to a buy silently; a Webull BUY whose quantity and cash
+  both said sale, and a Coinbase Buy carrying Coinbase's own sale
+  signature (negative quantity and total), were booked as purchases.
+  Each is now refused with the row named, as the generic importer does
+  (re-audit A2-0097, A2-0287, A2-1025, A2-1057).
+- **RBC / Questrade: book-cost adjustment rows.** An RBC 'Return of
+  Capital' row lowers the ACB whatever its description words (a
+  'ROC ADJUSTMENT TO BOOK COST' raised it); a Return of Capital row
+  describing a NOTIONAL distribution is refused; a $0 adjustment books
+  nothing (it booked a 0.00 ADJUST under two contradicting lines); the
+  year-end ROC book-cost row is an ATTENTION that the same dollars are
+  usually already in the income totals (take income and box 42 from
+  the T3). A Questrade zero-cash row stating a book-cost adjustment is
+  an UNBOOKED warning, not an 'informational' row (re-audit A2-0094,
+  A2-0273, A2-1047, A2-1062).
+- **Questrade / RBC: reversals pair across all of an account's exports.**
+  A Questrade stock-dividend, cash-in-lieu or DRIP reversal (and an RBC
+  REI CANCEL) cancelled its original only inside its own file: with an
+  overlapping older download the original came back as phantom shares
+  (H1 + full-year exports booked 1,250 shares for 1,100), and an
+  original in last year's export refused the whole account. The
+  pairing is now planned over every export of the account, counting
+  overlap copies once; a reversal cancels the latest original on or
+  before its date (a later identical stock dividend survives), a
+  reversed stock dividend no longer prints its 'booked' note, and an
+  RBC file whose rows all live in the account's other export is no
+  longer a '0 transactions' warning that failed `run --strict`
+  (re-audit A2-0026, A2-0269, A2-0280, A2-0281, A2-0616, A2-1044,
+  A2-1048, A2-1055, A2-1060, A2-1063).
+- **Questrade / RBC: one export holding several broker accounts.** A
+  Questrade file whose Account Type puts a registered plan's rows in a
+  taxable account (or a taxable account's rows in a registered one) is
+  refused — its TFSA trades were booked as taxable gains with rc 0.
+  Any other multi-account Questrade file, and an RBC file holding rows
+  of several RBC accounts (RBC writes no account type), is an ATTENTION
+  line: every row goes to one taxjson account (re-audit A2-0025).
+- **RBC / Questrade / Webull: money-affecting parser warnings reach the
+  run console.** A guessed listing for a USD return of capital on an
+  untraded symbol (now suggesting `TOBASE`, which works, instead of
+  `GLOBAL`, which stopped the run), an RBC temporary code assumed to be
+  the receipt's ticker, a ticker change without a reorganization row
+  (now also when the new symbol opens with a buy and then goes short,
+  with the `GLOBAL` line on the first line), an RBC notional
+  distribution whose income is left to the T3, a Questrade internal
+  code, a dividend booked net of non-resident tax and a transfer-in
+  with no book value are `ATTENTION` lines now; they sat in the .sum
+  only. In a Canada project the $0-cost stock-dividend note is an
+  ATTENTION line too, and `taxjson run` echoes an echoed warning's
+  indented continuation lines (re-audit A2-0005, A2-0007, A2-0027,
+  A2-0096, A2-0099, A2-0265, A2-0270, A2-0276, A2-0279, A2-0282,
+  A2-0283, A2-0612, A2-0613).
+- A Questrade or RBC share buy at $0 price and $0 cash (almost always a
+  transfer or journal row booked with no cost) is flagged ATTENTION
+  (audit A2-0619; Webull refuses it, the generic importer already did).
+- Parse checks (audit A2-0104, A2-0110, A2-0109, A2-0632, A2-0633):
+  a broker-printed settle date more than 7 days after the trade is
+  booked as printed but flagged ATTENTION (CA-DATE-03 / US-DATE-04); an
+  export cut inside a quoted last cell is refused, and one that ends
+  without a line break on a number is flagged; one security-override
+  line that rewrites two different raw symbols (IB `LEN` and `LEN B`)
+  is flagged; a decimal-comma option strike (`2,50`, `1,0000`) and a
+  stacked currency sign (`$€5`) are refused instead of misread.
+- A file whose rows are all recognized non-events (a deposit-only RBC
+  file, a Questrade FX conversion, a Kraken Earn allocation) prints
+  `0 tax objects (N recognized non-event row(s))` instead of the
+  `parsed to 0 transactions` warning that failed `run --strict`
+  (A2-0301, A2-0303); a Kraken Hybrid Earn move is no longer counted as
+  a possible taxable send (A2-1078); security overrides never rewrite a
+  `/` or `\` futures row (A2-1092).
+- Dedup per broker account (audit A2-0008, A2-0625, A2-0296, A2-1085,
+  A2-0286): every parser that reads the broker account (IB, Questrade
+  `Account #`, RBC `Account`) stamps each row with it, hashed
+  (`source_account`); cross-file dedup in the books, `taxjson-sort
+  --dedup` (which now also reads the parse's per-file accounts, A2-0297)
+  and the fee report never collapses rows of two different accounts —
+  two accounts holding the same ETF no longer lose half the
+  distributions.
+- Dedup no longer depends on file order (A2-0105, A2-0624): a `.tt` line
+  equal to an exported row stands for one exported row, so two accounts'
+  identical fill plus a matching `.tt` line book two rows in any order,
+  and two `.tt` files plus one export book two.
+- A `.tt` line that repeats an exported row by hand (a different id, so
+  both are booked) now prints an ATTENTION line (A2-0295); two exports
+  that disagree on the dates both cover name the rows only one holds — a
+  restated IB statement next to its older vintage (A2-0108).
+- One broker account's export placed in two taxjson accounts prints an
+  ATTENTION line naming both (A2-0293, A2-0630).
+- UTF-16 exports: the Webull, Kraken and Coinbase parsers and the IB
+  corporate-actions reader decode them like the IB/Questrade/RBC parsers
+  (no more false 'not UTF-8 or UTF-16 text') (A2-0101, A2-1064, A2-1066,
+  A2-1451).
+- **Cross-file dedup no longer deletes separate trades.** Every parsed
+  row now records its input file. Identical rows in two `.tt` files, or
+  in IB statements of two different broker accounts, are both booked;
+  before, the second was dropped as a duplicate, which left a phantom
+  short and a wrong gain. The same row in two overlapping exports is
+  still booked once. When the files' overlap is too thin to tell, the
+  row is booked once and an `ATTENTION: dedup` line names both files.
+  `fees-sum` applies the same rule, so its trade count and commissions
+  agree with the books (audit R1-296, S031-02).
+- **A trade whose money does not match qty x price is an ATTENTION line
+  on the console.** When the parser does not declare the contract
+  multiplier (Webull, RBC, crypto, a Questrade/RBC dividend
+  reinvestment priced `REINV@U$` on a CAD row), the schema's notional
+  warning used to sit only in the .sum DIAGNOSTICS: a 10x Proceeds was
+  booked with rc 0 and nothing on screen. `taxjson run` now prints it
+  as `warning: ATTENTION: schema: ...` (still not an error: the booked
+  money is the row's net amount) (audit S065-12).
+- **Cross-listing lint (`crosslistings.rpt`).** Reads ticker.map with the
+  engine's parser (`DISTINCT` pairs are OK, keywords in any case, an
+  unreadable map fails), nets share positions through splits, and counts
+  option rows toward their underlying's listing (audit R1-144, S035-02,
+  S035-03).
+- **Broker detection and `taxjson-brokerage`.** An IB file is routed by
+  its section,Header shape (a Trades-first Flex download, a statement
+  without the BrokerName row or with a Title row first), and `taxjson
+  fetch` accepts exactly what detection routes; an RBC header after a
+  partial preamble or a blank line is found. A file in a legacy encoding
+  (cp1252) gets one line naming the remedy, as do RBC, Kraken and
+  Coinbase refusals (they were tracebacks); an unknown `--brokerage` is
+  a usage error (exit 2). An alias (`--brokerage qt`) is recorded under
+  the canonical id, so fees.rpt shows one row per broker. An account id
+  in an input file's NAME (IB's default `U1234567_....csv`) is masked
+  in every parse line, so it no longer reaches reports/. `taxjson
+  transfers` shows an in-book RBC transfer's BOOK VALUE.
+- **Shared broker helpers.** The back-computed fee (Webull, RBC) is
+  signed by the trade's direction — rounding noise is no longer turned
+  into a charge — and a flat commission on a cheap option fill is kept
+  (it was zeroed above 25% of net); fees.rpt only. "NOT A RETURN OF
+  CAPITAL", "RETURN OF CAPITAL GAINS" and a fund named "... RET OF
+  CAPITAL ETF" are dividends, not ACB reductions. Strict number cells
+  refuse non-ASCII digits and overflow; a lower-case currency is the
+  same currency (Questrade, the shared suffix helper); a decimal comma
+  inside description text ("ON 12,5 SHS", "BOOK VALUE $1234,56",
+  "$1,250.00 PER SHARE") is never read 10-100x off (the field stays
+  unknown, or the grouped number is read whole). Webull's settle-to-
+  trade walk-back is right on the T+1 cutover days themselves.
+- **Questrade / RBC: a settlement date before the trade date is
+  refused.** A garbled Settlement Date cell moved a sale into the prior
+  tax year silently. tax-logic CA-DATE-03 / US-DATE-04.
+- **Questrade / RBC: numbers inside descriptions take thousands commas
+  only.** A decimal comma ('STK SPLIT ON 1,5 SHS', 'ADJUSTMENT TO BOOK
+  COST $1,16', 'BOOK VALUE 1234,56') is refused instead of read 10x-100x
+  too large; a DRIP price 'REINV@C$1,234.56' reads 1234.56 (was 1).
+- **Broker detection: prefixes, then content, then venue words.** A
+  `generic_`/`cb_`/`kr_` prefix now always wins, and an IB, Questrade or
+  Webull export is recognised by its content even when its name mentions
+  coinbase or kraken; `generic_kraken_export.csv` and
+  `kr_trades_moved_from_coinbase.csv` went to the wrong crypto parser
+  (0 rows, exit 0), and an IB export named after Kraken Robotics was
+  refused as crypto data. The crypto/equity refusal names the files
+  (audit R1-127, S044-01, S044-02).
+- **Comma-grouped numbers read right.** `0,125` is refused as a decimal
+  comma everywhere (it read as 125); an option strike written `5,000.00`
+  keeps its thousands (it was cut to strike 5); an IB `Split 1 for
+  1,000` is 1-for-1000 (audit S055-08, R1-170, S058-19).
+- **UTF-16 exports are routed.** Broker detection decodes a UTF-16 BOM
+  the way the IB, Questrade and RBC parsers do (audit R1-70).
+- **Security overrides are stricter and reach every row.**
+  `ticker_extraction_overrides.txt` keys now match whole words (on IB,
+  where the description is the bare ticker, `BN` no longer rewrites
+  ABNB or BNTX), never rewrite option or futures rows, take the currency
+  case-insensitively, ignore a leading BOM, and a malformed line fails
+  the parse naming its line number instead of being skipped. The
+  override now runs before TRANSFER rows are set aside (the custody
+  sidecar gets the corrected symbol), IB TRANSFER rows carry the
+  security (`ACATS (DLR)`) so the override can match them, and an IB
+  split of an overridden security stays a split (its `symbol_new`
+  follows the rewrite) (audit R1-143, S001-00/01/02, S012-09, S027-01,
+  S059-03).
+- **Transfer sidecar is de-duplicated across overlapping exports.** A
+  re-downloaded or overlapping statement no longer doubles every custody
+  row in `taxjson transfers` or moves twice the shares in the holdings
+  evidence netting (audit S026-23, S027-00).
+- **One spelling per Canadian listing.** Questrade's TSX-Venture, CSE
+  and NEO symbols (`VVV.VN`, `CCC.CN`, `XYZ.NE`) became `VVV.V`,
+  `CCC.CN.TO`, `XYZ.NE.TO`, while IB, RBC and Webull book every Canadian
+  listing `.TO`; the pools split and a superficial loss across accounts
+  was missed. Every Canadian venue is now `ROOT.TO` in every parser, the
+  generic importer and the live-position mapping (`yf_ticker.map` still
+  aliases a price lookup, e.g. `PNG.TO PNG.V`). `taxjson-lint-
+  crosslistings` warns when one root is held under two Canadian
+  suffixes (a `.tt` line or a map rule).
+- **Decimal commas are refused in the IB diagnostics and slip
+  reconciliation too** (open-position, dividend-accrual and slip cells
+  were still comma-stripped and read 100x too large).
+- **Decimal commas are refused, not read 100x too large.** `12,50` in a
+  generic CSV, `-48,24` in a `.tt` line and `0,95` in a Webull cell had
+  every comma stripped and were booked as 1250, -4824 and 95. A comma is
+  now accepted only as a thousands separator (`1,234.56`); anything else
+  stops the import with the file and line.
+- **Schema: declared multipliers make the notional check an error, and
+  `taxjson run` parses with `--strict`.** IB and Questrade trade rows
+  carry their contract multiplier; a net amount far from qty x price x
+  multiplier is now a schema error for such rows (the 1/100 guess made
+  every futures row a false positive — 61 warnings on the real 2025/2026
+  margin statements, now 0). Every real 2025/2026 input parses with zero
+  schema errors, so `taxjson run` now passes `--strict`: schema errors
+  stop the run instead of scrolling past.
+- **Parsers: parentheses are negative.** `clean_number` read "(1,352.97)"
+  as +1352.97; it is now -1352.97 and it warns on unparseable text.
+  Webull (the one real user of parentheses) takes the magnitude itself,
+  so its outputs are unchanged.
+
+### Broker parsers: Interactive Brokers
+
+- IB parser: an AUD/HKD/JPY/SGD/NZD fill on a system with no time-zone
+  database is a one-line error saying to install `tzdata` (now a declared
+  dependency on Windows), not a ZoneInfoNotFoundError traceback
+  (A2-1447).
+- IB parser: a Dividends or Withholding Tax row whose Description has
+  no leading `TICKER (ISIN)` token is refused naming the file line; it
+  was booked on UNKNOWN.US (or a word of the text) and a Canadian
+  eligible dividend was estimated as foreign. A withholding row on
+  credit interest is booked on CASH, like the interest (A2-0780).
+- IB: a CNH (Stock Connect) fill printed in the ET evening takes the
+  exchange's next-day trade date, like JPY / HKD / SGD / AUD / NZD.
+- An IB Corporate Actions `Ca` is offered only to statements of its own
+  broker account (A2-1090), merge2's trade-`Ca` pairing compares the
+  broker account (A2-1095), and the TRANSFER-evidence sidecar keeps
+  identical custody moves of two accounts (A2-1093, A2-1094).
+- **IB: a cancelled execution of a multi-fill order cancels that part
+  of the order.** IB lists an order filled 400 + 40 as one 440-share
+  Order row; a `Ca` naming the 40-share execution never matched it and
+  stayed booked as a phantom 40-share sale (with a false "original in
+  none of the inputs" warning). The order is now reduced pro rata to
+  400 shares, in the statement and across statements (audit A2-0298).
+- **IB: a futures fill at a negative price keeps its money sign.** A
+  sale at -37.63 (WTI, April 2020) was booked as receiving 37,630, a
+  loss of 57,630 became a gain; the parser now keeps the notional's
+  sign, the futures settlement books a buy's cost signed and the schema
+  accepts the negative buy (tax-logic CA-FX-04 / US-FUT-01; audit
+  A2-0092). The generic importer and `.tt` lines still read the
+  magnitude (KNOWN_ISSUES).
+- IB: a stock buy at zero cost is an ATTENTION line (it books a $0
+  cost; almost always a transfer or journal row — audit A2-0263); an
+  option description no form reads (a decimal-comma strike
+  `6,85`) is refused instead of becoming a raw symbol or a truncated
+  strike (A2-1041); a money row shorter than its section header (a
+  truncated export) is refused instead of reading the missing cells as
+  blank (A2-1042).
+- IB: a dividend or return of capital is re-bound to the listing held
+  on its payment date: a TSX buy months after an NYSE-line ROC moved
+  the ROC onto the TSX line (an EMPTY-pool s.40(3) gain and a currency
+  clash that stopped `taxjson run`), and two overlapping downloads
+  booked the same dividend twice (audit A2-0089). A row left on its
+  ISIN listing because two listings were held that day gets a note.
+- IB: one option contract keeps one root across the account's
+  statements, whichever statement is parsed (a re-download naming the
+  adjusted root DFDV1 split one put series in two, audit A2-0087); the
+  ticker-change hint names the old symbol first with the listing
+  suffix it is booked under and goes quiet once ticker.map joins the
+  two (A2-0611); an assigned adjusted (QZX1) or class-share (BRKB)
+  option leg shares its stock leg's settle date (A2-1028).
+- IB statement coverage is checked per broker account and against the
+  project year: another IB account's statement no longer hides this
+  account's missing half-year, an account whose only statement is the
+  prior year is reported (and `checklist` inputs-frozen says so), and a
+  year downloaded in two statements split at a year-end weekend no
+  longer reports the weekend as a gap or the next year as missing. A
+  label holding the separate statements of several IB accounts is an
+  ATTENTION line (audit A2-0091, A2-0261, A2-0262, A2-0609).
+- IB: an open dividend accrual and a statement spanning several IB
+  accounts are ATTENTION lines on the run's console (they were only in
+  the .sum/.diag; audit A2-0264, A2-0610). Another IB account's posted
+  dividend no longer pays this account's accrual (A2-1035, A2-1039). A
+  dividend's ex date and share count come from its accrual in the
+  previous statement too, and a posting a day after the accrued pay
+  date keeps its ex date, so the US §852(b)(7) January-dividend
+  warning fires (A2-0601, A2-0602).
+- IB: a corporate action follows the security it names. A split whose
+  new leg names another ticker (`OLDT ... Split 1 for 10 (NEWT, ...)`)
+  moves the pool to it, a cash in lieu naming a delivered security
+  sells that security's fraction, and a stock dividend paid in ANOTHER
+  security is an `UNBOOKED` line instead of new shares in the parent's
+  pool (audit A2-0085, A2-0093, A2-0257, A2-1033). A TSX USD unit's
+  split, cash takeover, tender or commission refund stays on X.U.TO with
+  its trades (audit A2-0086).
+- IB: a Corporate Actions row IB cancelled (`Ca`) leaves no trace in
+  the parse output: a merger, spin-off or tender journal row leaves the
+  non-event tally and the tender note's row count and dates, a
+  cancelled cash takeover no longer prints its `NOTE: cash takeover
+  booked as a sale`, and a cancelled zero-proceeds cash in lieu no
+  longer warns (audit A2-0600, A2-1030, A2-0606, A2-1029, A2-1031,
+  A2-1034).
+- **IB: overlapping statements of one account no longer resurrect a
+  cancelled or refunded row.** A statement pairs a `Ca` cancellation
+  with its original (Trades, Transfers, Corporate Actions), folds a
+  commission refund into its trade and joins a cash in lieu to its
+  split on its own; an older overlapping download that still held the
+  unadjusted original kept it through dedup (a cancelled split applied
+  twice, a cancelled sale booked, a refunded buy booked twice). The
+  same adjustment is now applied to every overlapping statement of the
+  same IB account, and a `Ca` whose original is in two other
+  statements undoes both (audit A2-0023, A2-0024, A2-0088, A2-0258,
+  A2-0259, A2-1038).
+- **IB: a commission refund folds into its trade in another statement**
+  (a December trade refunded in January), and a refund naming one
+  execution of an Order row (`Refund (KWEB, -400, ...)` for a -440
+  order) or an option trade folds too (tax-logic CA-ACB-COMMREFUND /
+  US-BASIS-COMMREFUND; audit A2-0604, A2-0605, A2-1032, A2-1036). A
+  cash in lieu paid in the statement after its split joins that split
+  (A2-1037). A Corporate Actions `Ca` matches its original's currency
+  and asset category too (a CAD leg undid a USD split, A2-0603).
+- IB: a Trades clock time with an unpadded hour (`9:45:00`) is zero-padded
+  before the session rules compare it — it was read as an overnight fill
+  and a Dec 31 morning sale moved into January; an impossible time
+  (hour 24+, minute or second 60+) is refused naming the row (audit
+  A2-0082, A2-0260, A2-0607).
+- IB: fills outside the US regular session take their exchange's trade
+  date (tax-logic CA-/US-DATE-SESSION): US-dollar futures and
+  futures-option fills in the CME evening session (18:00 ET onward,
+  Sunday to Thursday, or on an exchange holiday) and SPX/SPXW/XSP/VIX
+  options in Cboe Global Trading Hours (20:15 ET onward) trade on the
+  next trading day; ASX options and warrants (not only stocks) and
+  HKEX, Tokyo, Singapore and NZX fills are dated in local time; the
+  after-midnight part of a US overnight session on an NYSE holiday
+  moves to the next trading day. A Sunday-evening futures fill is no
+  longer dated Sunday, and a Dec 30 evening futures close settles in
+  January under `futures_settle = "next_day"` (audit A2-0252, A2-0253,
+  A2-0254, A2-0255, A2-0595, A2-0596, A2-0597, A2-0608, A2-1027).
+- IB: a stock or warrant settles in its listing's market, not its quote
+  currency: a USD unit listed on the TSX (ZSP.U) on the Canadian
+  calendar, and a USD line listed on the LSE (a UCITS ETF) is booked as
+  `.L` on the UK T+2 cycle instead of a fictional `.US` security on
+  US T+1 (audit A2-0595, A2-0081). `check-dates` notes a Sunday-evening
+  GTH index-option fill instead of calling it an ERROR.
+- IB corporate actions use the statement parser's listing rule: a
+  merger or spin-off of a TSX-listed USD unit (QZAA.U) is booked on
+  `.U.TO`, where its trades are, not on a phantom `.US` line (A2-0209,
+  A2-0219), and a leg on a currency-tagged IB line (RGLD.CAD) is
+  warned about with the ticker.map fix (A2-0556).
+- **IB: a cancelled (`Ca`) corporate action is no longer offered for
+  election** (A2-0018, A2-0019, A2-0020, A2-0068, A2-0069, A2-0212,
+  A2-0220, A2-0970, A2-0971): each `Ca` row removes its original (same
+  description, negated quantity) in whichever statement of the account
+  holds it, for mergers, spin-offs and merger shapes taxjson cannot
+  book. Only the corrected rebook is offered; overlapping statement
+  vintages no longer let the cancelled original win. The Code cell is
+  split on `;`, `,` and spaces as the statement parser does. A
+  cross-listing journal IB cancelled and rebooked (the RGLD.CAD shape)
+  no longer needs a manual `ignore`.
+- IB corporate-action times are zero-padded before they are compared,
+  so a merger takes its earlier leg's time (A2-0984); copies of one
+  event from several statements combine the same way whatever the file
+  order, with a warning when one broker account's statements disagree
+  (A2-0977).
+- **IB open/close codes reach the missing-history checks.** IB's Trades
+  `Code` (O opening, C closing, C;O both) is kept on each trade. A short
+  IB declares (a sale coded O, or C;O that closed the long and opened the
+  short) is listed as a real short, not "missing a buy — fix before
+  filing", and is never offered as a phantom (a declared real short
+  no longer blocks the checklist). A sale coded C with no position in the
+  data — a long option bought before the statements — is always flagged
+  (options and futures included) with IB's Basis, and `option-boundary`
+  and the expired-option warning ask for the missing purchase instead of
+  an expiry row. Order-level codes are read per order, not per fill
+  (audit S013-00, S058-02, S060-12).
+- **IB: a commission refund lowers the trade's cost.** A Commission
+  Adjustments row naming its trade ("Refund (KWEB, 400, 2026-05-13)")
+  is folded into that trade — a refunded purchase commission comes off
+  the ACB, a refunded sale commission off the outlays — instead of a
+  stand-alone FEE row the gains never saw; one whose trade is not in the
+  statement stays a FEE row and is said. tax-logic CA-ACB-COMMREFUND /
+  US-BASIS-COMMREFUND.
+- **IB statement hardening.** A dividend or fee whose description says
+  "Total" (a "Total Return" fund, Nasdaq TotalView) is no longer
+  skipped as a subtotal; an unreadable Cash Report total on a reconciled
+  line, or an unreadable option/futures multiplier, is refused by name;
+  rows of a type IB does not write are counted and said (and a file
+  with no Data rows is refused); futures rows must match qty x price x
+  multiplier to the cent (no Cash Report line backs them); a lower-case
+  currency cell is upper-cased; IB rows carry the instrument's name
+  (`security_name`), so the cross-listing lint recognizes an IB-held
+  CDR.
+- **IB corporate actions.** A cash-in-lieu row with Proceeds 0 books no
+  cash (it used to book IB's market Value as proceeds) and warns; a
+  fraction folds into the split of its symbol nearest its date within a
+  week, in either row order (an unrelated earlier fraction no longer
+  skews a later split). A two-leg split on a SHORT position gets the
+  text ratio, not its reciprocal (102-for-100 was 0.98). A tender parked
+  in one statement and resolved in the account's next one is a quiet
+  no-op instead of two warnings, and the cash-tender NOTE no longer
+  points at a corp-actions election that cannot exist. A cancelled
+  untranslated row no longer stays in the skip count. A symbol with a
+  currency tag (RGLD.CAD) is warned about in every section — it is a
+  pool of its own.
+- **IB: payment-in-lieu share counts and the open-accrual warning.** A
+  PIL's share count/rate comes from the accrual of the listing that
+  paid it (the posting's currency first, a pay date within a week, the
+  Po row's rate — no longer the first accrual row seen); an accrual in
+  another currency than the cash gives its share count instead of a
+  wrong rate. The "accrued but not yet booked" warning pairs each
+  posted dividend with ONE accrual (exact pay date first), so another
+  week's dividend no longer hides an unpaid one, and a posting in the
+  account's other IB statement (the next year's) now counts.
+- **IB: overnight-session and ASX fills are dated by the exchange's
+  trade date.** IB stamps US Eastern clock time: a US stock or ETF
+  filled in the overnight session (20:00 ET onward, Sunday to Thursday
+  nights) now trades on the NEXT trading day and settles T+1 from it —
+  a Dec 30 20:30 sale trades Dec 31 and settles in January, and a
+  Christmas-night fill settles Dec 29 instead of Dec 26. An ASX fill,
+  stamped in the ET evening, is dated in Sydney time. The overnight row
+  sorts before that day's regular session; the broker's stamp is kept
+  as `broker_time`. tax-logic CA-DATE-SESSION / US-DATE-SESSION.
+- **IB security identity across statements and issuers.** Income is
+  moved to the held listing of its ticker only when the ISINs match (an
+  AT&T dividend no longer lands on Telus `T.TO`), and the holding may
+  come from the account's other statements (a ROC-only statement no
+  longer books a gain on a phantom listing). Option-root aliases are
+  learned from all of the account's statements, and after a ticker
+  rename the canonical root is the contract's underlying (SQ -> XYZ). A
+  USD trade of a TSX `.U` unit is `X.U.TO`, as RBC books it. One stock
+  listed under two symbols (a ticker change) is an ATTENTION line
+  naming the `ticker.map` GLOBAL rule that joins them (audit S059-24,
+  S060-19, S060-00, S059-15, S059-11, S010-06, S059-13, S060-17).
+- **IB corporate actions nobody books are loud.** An unhandled Corporate
+  Actions row is now an UNBOOKED warning (console; fatal under `run
+  --strict`) that points at a `.tt` booking instead of a manual TRANSFER
+  row (dropped in taxable accounts). The same goes for an option or
+  futures contract adjustment (it used to become an equity SPLIT on an
+  invented symbol), a spin-off debit on a short parent, and a tender
+  whose allocation delivers another security (a share-for-share exchange
+  offer was reported as a no-op). An IB stock dividend books its shares
+  at $0 cost with a console note, like Questrade's; an Options
+  Expirations row keeps its own asset category (a futures-option expiry
+  closes the `F:` position) (audit S058-16, S058-22, S058-24, S013-06,
+  R1-56).
+- **IB statements that do not cover the year are reported.** `taxjson
+  run` now says on the console when an account's IB statements stop
+  before Dec 31 of a finished year (the 2024 statement ending Dec 27) or
+  leave a gap between two statements, and when a statement has no Cash
+  Report to reconcile against (audit R1-2, R1-195, R1-53).
+- **IB rows the parser cannot book are refused, not counted.** A Trades
+  row in an asset class without a parser branch (Bonds, Mutual Funds)
+  that moves money, and a security Transfers row with a blank Qty, stop
+  the parse naming the row. An execution-level `Trade` row is skipped
+  only when an `Order` row covers the same symbol and day (a Trade-only
+  fill of another symbol was dropped, a Trade row before its Order row
+  was doubled); levels that disagree are refused (audit S060-08, R1-55,
+  S060-10).
+- **IB mergers are never dropped half-way.** A merger whose out-leg and
+  in-leg sit in two statements (a year-end event split across yearly
+  downloads) or carry Date/Times a day apart was skipped with no warning:
+  the old shares stayed and the new ones never arrived. The legs are now
+  paired across all of the account's statements and within a week; a
+  leg with no partner stops the run as an unsupported event naming it.
+  A merger held in both the TSX and NYSE listings becomes one event per
+  listing (the second listing's shares were never converted), a merger
+  of a short position is refused instead of booked as `OLD -> OLD`, and
+  a cross-listing journal listed before its merger is folded once
+  instead of also becoming its own election.
+- **IB spin-offs go through the spin-off election.** IB `Spinoff` rows
+  were always booked as a dividend at IB's value, with no s.86.1 choice
+  (and a Canadian parent's tax-deferred spin-off taxed as income). They
+  now ask like every other broker's; the default dividend uses IB's
+  value without asking for it. Existing IB spin-offs need one election.
+- **IB cash takeovers are booked.** `Merged(Acquisition) FOR USD 30.00
+  PER SHARE` is a sale at the cash amount (it was left in inventory with
+  only a .sum note). Decimal-ratio and class-share (`BRK B`) mergers are
+  parsed; a stock-plus-cash merger stops the run by name for manual
+  booking instead of vanishing.
+- **IB: a cancelled trade (`Ca`) nets out.** A Trades row coded `Ca`
+  was booked as an ordinary trade, so a cancel-and-rebook was a phantom
+  round trip: a loss sale rebooked a cent higher became two denied
+  superficial losses and the remaining shares' ACB was wrong. The
+  cancellation now drops out with its original fill; when the original
+  is in an earlier statement of the same account, `taxjson-merge2`
+  (`taxjson run`) pairs them, and a cancellation whose original is in
+  no input stays booked with a warning.
+- **IB: Transaction Fees are no longer charged twice.** IB's Trades
+  Comm/Fee already includes per-fill levies (UK stamp tax, SEC/FINRA
+  fees); the Transaction Fees section only breaks them down (the Cash
+  Report shows Commissions + Transaction Fees = the Comm/Fee sum). The
+  parser folded the levy into the trade again, so an LSE buy's fee and
+  cost basis were overstated by the stamp levy; they now equal IB's own
+  Basis. A layout that ever excluded the levy now
+  fails the Cash Report check instead of under-booking.
+- **IB: commission rebates keep their sign.** A positive Comm/Fee is a
+  rebate; abs() booked it as a charge, overstating costs and understating
+  proceeds by twice the rebate (seen on real statements in every IB
+  account that earns rebates). The
+  fee is now negative for a rebate and net_amount is the cash IB moved.
+  Questrade's commission is signed the same way (none of its real
+  exports carries a rebate).
+- **IB and Questrade: missing columns fail the parse.** Every Trades,
+  Dividends, Withholding Tax, Interest, Fees, Corporate Actions, Transfers
+  and Commission Adjustments column that carries money, quantity, price,
+  date or currency (IB), and all 14 Questrade columns, are resolved by
+  header name and required; a renamed or missing one used to read as 0
+  (every fee or every gross silently gone) or as USD. Money cells parse
+  strictly (a decimal comma, text or a blank is an error; parentheses
+  and the unicode minus are negative), dates must be ISO, and each trade
+  row must add up: |proceeds| = |qty| x price x multiplier (IB's own
+  instrument multiplier — CL 1000, ES 50, MET 0.1, SI 5000; a futures
+  contract size is never guessed) with a plausible commission, and for
+  Questrade Net = Gross + Commission.
+- **IB: parsed money reconciles to the Cash Report.** Per currency,
+  Dividends, Payment in Lieu, Withholding Tax, Broker Interest, Other
+  Fees, Commissions (+ Transaction Fees) and Trades (Sales + Purchase)
+  must match IB's own Cash Report within 0.02, or the parse fails naming
+  the currency and line. All 17 real Activity Statements reconcile.
+- **IB: unknown sections are loud.** Only known metadata sections are
+  quiet; an unknown section with money columns (a localized
+  "Dividendes", a renamed "Transactions") fails the parse, any other
+  warns. A "Realized Summary" report is refused instead of being read
+  as activity.
+- **IB: a cancelled corporate action is undone.** A `Ca` row now removes
+  or adjusts its original split leg, cash in lieu, tender sale, spinoff
+  or untranslated merger; a restated split 3:1 -> 2:1 leaves one SPLIT
+  2.0 (both were booked). A cancellation whose original is not in the
+  statement is a loud skip.
+- **IB: option root renames share one symbol.** When IB relists an
+  adjusted option under a new root after a corporate action (DFDV ->
+  DFDV1, one contract id in the instrument list), both legs are booked
+  under the original root, so the assignment folds the premium; a
+  ticker.map DFDV1 -> DFDV rule becomes a no-op. Monthly futures options
+  use their real expiry from the instrument list instead of day 20 of
+  the delivery month.
+- **IB: smaller fixes.** `ADR;Po` / `ADR;Re` dividend accruals pair by
+  token; Warrant and futures-option transfers are booked (they were
+  treated as cash); a consolidated statement spanning several accounts
+  warns (ids masked); an income row whose ISIN country has no suffix
+  mapping warns when no position confirms the assumed .US listing.
+- **IB: option expiries settle on the expiry date.** Rows coded `Ep`,
+  rows of the Options Expirations section and zero-price closes of an
+  option were given T+1 like every trade, so a Dec-31 expiry landed in
+  the NEXT tax year on the settle basis; now `date_settle = date` (also
+  futures final settlement). A same-contract trade executed on the
+  expiry day (0DTE) has its T+1 settle clamped to the expiry so the
+  expiry closes the position it opened. Assignment/exercise option legs
+  keep T+1 (they must share the stock leg's settle date).
+- **IB: "(Return of Capital)" is no longer an ACB reduction when it
+  can't be one.** A payment in lieu labeled ROC is income from the share
+  borrower (`DIVIDEND_IN_LIEU`); ROC from a non-Canadian issuer (ISIN
+  country ≠ CA) is a foreign dividend under ITA s.90(2), noted in the
+  description. Canadian-issuer ROC stays an ACB reduction. New
+  `[settings] foreign_return_of_capital = "dividend" | "acb"` (default
+  `dividend`; `taxjson-brokerage --foreign-roc`) restores the ACB
+  treatment for foreign issuers. Income rises, later gains fall, for
+  affected holdings.
+- **IB: no false "accrued but not booked" warning when IB revises a
+  dividend's pay date** between the accrual and its reversal (Po/Re now
+  net per ex-date; a posting within a week in any currency matches).
+
+### Broker parsers: Questrade
+
+- Questrade: deposit, contribution and withdrawal rows are recognised
+  cash non-events (they were 'unclassified ... needs a new branch'),
+  INT rows are booked as interest with their sign (credit interest was
+  dropped), and stock-lending income is an UNBOOKED warning (re-audit
+  A2-0277, A2-0614).
+- Questrade: a CAD-settled US trade (EXCHANGE RATE) carries its
+  commission in CAD like its price and net; it stayed USD-sized, so the
+  fees report and the Schedule 3 proceeds/outlays split were short by
+  the rate (the gain was right) (re-audit A2-0615).
+- Questrade: a decimal-comma CNV@ rate ('CNV@ 1,4138', read as 1) or
+  cash-in-lieu fraction ('1,5' read as 1, '0,5' dropped) is refused,
+  as BOOK VALUE already was; a BRW journal's IN leg pairs only with the
+  OUT leg of the same security (two journals on one date swapped their
+  costs) (re-audit A2-0278, A2-1058, A2-1061).
+- Questrade corporate actions: an UNBOOKED line from the corporate-action
+  stage (a DIS chain that nets a removal) is echoed on the console and
+  refused by `run --strict`, as the parse stage's are (A2-0211); the
+  internal-code hint names the symbol as booked (`D056068.TO`) and goes
+  quiet once ticker.map renames it (A2-0966); a spin-off parent held only
+  in a start `.tt` can be named with a `GLOBAL <SEC#> <PARENT>` ticker.map
+  line, which the warning now suggests (A2-0980).
+- **Questrade:** the ADR custody fee binds to its ticker ('500 SHARES
+  XPEV'); a row whose cell spans a line break (an unescaped quote) or
+  has extra cells is refused; a cash dividend mentioning STOCK SPLIT
+  stays a dividend; an REI row with units and no cash is refused (its
+  units were dropped); the internal-code warning says it is moot once
+  ticker.map maps the code.
+- **Questrade keeps a TSX listing traded in USD on `.TO`.** `DLR.U.TO`
+  and `XUS.U.TO` bought in USD became `DLR.U.US` / `XUS.U.US`: a pool
+  apart from the same units at RBC or IB, a `JOURNAL DLR.U.TO DLR.TO`
+  rule that never fired, and a Canadian ETF listed as US property on the
+  T1135. A `.TO` symbol now keeps `.TO` whatever the row currency, so the
+  API (`FNV.TO`) and web (`.FNV`) spellings of a USD dividend agree; a
+  CAD dividend or ROC on a US stock bought from the CAD side (`EXCHANGE
+  RATE`) now reaches the `.US` pool instead of a phantom `.TO` one.
+- **Questrade learns identities from all of an account's exports.** A
+  dividend, ROC, stock dividend, DRIP or cash-in-lieu row under an
+  internal code (`A020626`) whose trade sits in last year's export stayed
+  on the code, and a ROC there became a capital gain. The
+  description map now spans every export of the account; the event
+  wording (`STK DIV ON`, `STK SPLIT ON`, `REINV@C$`, `CASH IN LIEU OF`)
+  and Interactive Brokers' transfer wording no longer block the match;
+  a code nothing resolves is a warning (and a `--lint` finding) with the
+  `ticker.map` line to add, and a spinoff chain booked under an internal
+  code is flagged at the election step.
+- **Questrade flags a ticker change with no corporate-action row.** A
+  symbol that stops with shares open while another with the same
+  description opens with a sale they cover gets a warning with the
+  ready `GLOBAL old new` line (the sale's gain used to drop out).
+- **Questrade row shapes.** `BUY`/`buy` and lower-case symbols are read
+  like `Buy`; an unknown action that moves shares is an `UNBOOKED`
+  warning on the console (fatal under `run --strict`); a `BRW`
+  Norbert's-gambit journal between `DLR.TO` and `DLR.U.TO` is booked as
+  a TRANSFER pair like RBC's journal legs, carrying the stated book
+  value (skipped before, leaving the units on `DLR.TO`), which a
+  `JOURNAL DLR.U.TO DLR.TO` rule nets; a negated stock-dividend row cancels its original; a DIS or
+  stock-dividend row carrying both shares and cash is refused; a
+  CAD-settled US trade's CAD net must match the USD gross at the stated
+  rate and keeps its sign; a blank settlement date on an option is T+1;
+  a transferred option books under its OCC symbol at 1/100 of the book
+  value per share; a stock leg whose description quotes the contract
+  books as the stock; a split on a short position scales it up; a
+  warrant expiry books on the date in its description; a transfer row
+  carries its description, so `--security-overrides` reaches it; the
+  no-book-value warning names the remedy that works (a `.tt` BUYSELL).
+  A Questrade DIS chain that removes units is an `UNBOOKED` warning.
+- **Questrade spin-offs land on the parser's symbols.** A dotted target
+  (`ABC.WS`, a class share) was left without its market suffix and a
+  Venture `.VN` listing became `ABC.VN.TO`, so the spun-off lot and its
+  later sale sat in two pools (a phantom long, a short sale, no gain).
+  The extractor now uses the parser's own suffix rule, reads a padded or
+  UTF-16 header like the parser (the whole spin-off used to vanish), picks
+  an interlisted parent by the listing held on the spin-off date (never
+  by file order; ambiguity is refused with a warning), and nets a DIS
+  chain whose rows straddle two yearly exports.
+- **Questrade spin-off parents are found in any export of the account,**
+  and a US parent bought from the CAD side (`EXCHANGE RATE` rows) is
+  named with its US listing, as the parser books it. The s.86.1 cost
+  reduction used to land on an empty pool and book a phantom gain. RBC
+  spin-off parents and merger placeholders get the same all-exports
+  lookup.
+- **Questrade: an assignment stock leg keeps its cash.** A row whose
+  description said ASSIGNMENT or EXERCISE (or ` - EXPIRED`) had its
+  price and cash zeroed even when it carried money: an ASN stock leg was
+  booked at $0 cost, a stock named "... EXERCISE EQUIPMENT" vanished, a
+  sale of expiring rights lost its proceeds. Only zero-cash option legs
+  are zeroed now; an EXP row with cash, or a zero-cash ASN/EX row that is
+  not an option, is refused.
+- **Questrade: CIL / REI reversals cancel.** A negated cash-in-lieu or
+  DRIP row was read with abs() and booked as a second sale or buy (cash
+  counted twice, phantom shares). The reversal now removes its original;
+  a reversal whose original is not in the file is refused.
+- **Questrade preferred shares are dotted.** `FTN.PRA.TO` is now
+  `FTN.PR.A.TO`, as IB, RBC and Webull spell it, so the pools no longer
+  split. An existing `GLOBAL FTN.PRA.TO FTN.PR.A.TO` rule is harmless.
+- **Questrade: no first-match symbol rebinding.** Only internal codes
+  (S098765) and dotted dividend codes (.BTO -> the traded BTG) are
+  rebound to the traded symbol; a real ticker is kept, and a
+  description matching several traded symbols is never guessed (older
+  RESP exports booked FTN.PR income under FTN.PRA; it now stays FTN.PR
+  with a warning to add a ticker.map rule).
+- **Questrade: quantity-bearing DIS rows are corporate-action legs.**
+  Warrant spinoff / rights legs (+100 / -100 / +100, no cash) were
+  counted as "zero-net dividend (informational)"; they are now their own
+  category and reported (taxjson-corp-actions books them); any other
+  quantity DIS row is a loud skip.
+- **Questrade: taxable-account caveats warn.** A dividend marked NON-RES
+  TAX WITHHELD is booked at the net (the export has no gross or tax), and
+  a transfer-in without TRANSFER BOOK VALUE enters at $0 cost; both now
+  warn in taxable accounts (`taxjson-brokerage --account-type`, passed by
+  `taxjson run`).
+- **Questrade .xlsx exports.** `taxjson-xlsx-to-csv` reads every cell as
+  text (dates arrive as ISO text, the ticker NA stays NA, a decimal comma
+  is not turned into thousands), and the parser accepts ISO dates
+  ("2025-12-31 00:00:00"); a settlement date that is present but
+  unparseable is an error instead of a silent T+1 fallback.
+- **Questrade, RBC: expired options are booked on the contract's expiry
+  date**, settle = date. Both brokers post the expiry on the next
+  business day (Friday expiry dated Monday), which moved a Dec-31 expiry
+  into the next year; a blank settle column also added T+1 on top. RBC's
+  blank-settle fallback no longer returns the raw "January 5, 2028" cell
+  as `date_settle` (it now computes an ISO T+1 / era-aware settle).
+
+### Broker parsers: RBC Direct Investing
+
+- RBC parse notes in a US project name Form 1099-DIV, basis and
+  §305/§307 for rights, not the fund's T3 (box 21 / 42), the ACB or ITA
+  s.15(1)(c); a Canada project's notes are unchanged and the booking is
+  the same in both (taxjson-brokerage --country picks the words; none
+  given: neutral words) (re-audit A2-0729, A2-0731, A2-0733, A2-0736,
+  A2-1254, A2-1309, A2-1313, A2-1314, A2-1315, A2-1321, A2-1344,
+  A2-1345, A2-1346, A2-1347).
+- RBC: a merger whose removal and receipt sit in two yearly exports is
+  left to taxjson-corp-actions (which pairs the legs across the
+  account's statements, A2-0214) instead of two UNBOOKED legs that
+  made `run --strict` refuse (re-audit A2-0271).
+- RBC: a USD row whose name reads as the US-dollar class of a TSX fund
+  ('... ETF US DOLLAR UNITS'), other than DLR, is an ATTENTION line with
+  the `GLOBAL X.US X.U.TO` map line; it was booked as a US listing
+  silently (re-audit A2-1043; RBC's spelling for these is unverified,
+  so it is not renamed automatically).
+- RBC: a swallowed-row error names the line of the stray quote, not the
+  end of the swallowed span; a Taxes row with a blank Symbol is refused
+  instead of booked on 'UNKNOWN'; files without an Account column no
+  longer say 'NOTHING was de-duplicated' next to the run's dedup line
+  (re-audit A2-1045, A2-1050, A2-1051).
+- **RBC export coverage is judged per account, over trading days.**
+  Another RBC account's later export no longer hides this account's
+  missing late December; an export taken on Dec 31 is a note (not an
+  ATTENTION with the range 'Jan 1 to Dec 31'), and one taken on the
+  last trading day before a weekend year end is not told its weekend
+  is missing (re-audit A2-0272, A2-0275, A2-1049).
+- **RBC: a CLOSE CONTRACT row the books cannot back is said out loud.**
+  RBC re-describes an option between yearly exports (.RCI in 2024,
+  .RCI.B in 2025; an adjusted .TRX1). With the opening position in a
+  `.tt` under the old root, the close was booked as a NEW written (or
+  long) option — its premium taxed in full, the real position left
+  open — with rc 0 and no warning. The parser now carries RBC's OPEN /
+  CLOSE CONTRACT marker (and expiries and assignments as closing) as
+  the `open_close` code, and the run console prints an ATTENTION line
+  for any option row coded closing that the books cannot back, naming
+  the contract held under the related root and the exact `ticker.map`
+  GLOBAL line. The expired-option warning points at that line instead
+  of a missing expiry row, and `taxjson handoff` accepts a re-described
+  root (same expiry, strike, quantity and cost) while failing a `.tt`
+  whose root this year's export closes under another spelling
+  (re-audit A2-0006, A2-0095, A2-0266, A2-0267).
+- RBC corporate actions: a spin-off's parent is the listing held on the
+  spin-off date, not any listing the account ever traded (A2-0210); a
+  spin-off `REVERSE ENTRY` cancels its posting, so a reversed and
+  rebooked spin-off is offered once and no false short warning is
+  printed (A2-0213); merger legs split across two statements are paired,
+  and a removal with no receipt anywhere now blocks the run as an
+  `unsupported` event instead of only warning (A2-0214); options
+  adjusted together by a special-dividend XCH pair by strike rank,
+  whatever the row order (A2-0222); corporate-action symbols use the
+  parser's own canonical listing (FTN.PR.A.TO, not FTN.PRA.TO; A2-0223).
+- RBC corporate-action text: a ratio or option strike written with a
+  decimal comma (`0,5 NEW = 1 OLD`, `6,4`) is refused instead of read
+  from after the comma as 5 or 6 (A2-0972, A2-0976); cash on a
+  reorganization leg counts as a return of capital only under RBC's
+  `ROC OF C$<amount>` clause, not when the words appear in an issuer
+  name or a negation (A2-0559).
+- **RBC "as of" stamp checked against the year.** An RBC export taken
+  before the tax year ended is an ATTENTION on the console (it cannot
+  hold the rest of the year), `checklist` inputs-frozen judges each
+  account's latest RBC export instead of the latest row of any broker,
+  and a note says when the year's back-dated Dec-31 book-cost
+  adjustments may not be posted yet (audit S063-22).
+- **RBC: another company's cash in lieu is no longer folded into a
+  reorganization.** A CIL row joins an event only by the same ticker or
+  the company's full name; half the name in common (ALPHA GOLD vs ALPHA
+  RESOURCES) moved the cash into the wrong sale and hid its "NOT booked"
+  warning (S072-01).
+- **RBC spin-off under a temporary code:** the warning names the symbol
+  as booked (`C135859.TO`) with the exact `GLOBAL` line, and stops once
+  ticker.map renames it (`taxjson run` passes the map to the corp-actions
+  stage) (S072-03).
+- **RBC:** an in-kind option transfer uses the contract's OCC symbol; a
+  Holdings export is refused by name; a split row with no Quantity says
+  so; the spin-off and merger notes no longer cite Canadian law or ask
+  for a .tt entry the corp-actions stage already books.
+- **RBC books what it used to drop, and says what it cannot book.** A
+  stock dividend (`DIS - ... STK DIV ON N SHS`) enters at $0 cost like
+  Questrade's; an RBC Dominion Securities "Reinvest @ $p" distribution
+  row with units books the income and the purchase; a reversed DRIP
+  cancels its original; a reorganization whose legs or cash-in-lieu
+  straddle two yearly exports is paired across them; a split on a short
+  position scales it up; an option strike with a thousands separator
+  (`5,025`) is read whole; a cash-in-lieu reversal nets instead of
+  adding proceeds. Rows it cannot book (unclassified, unmatched legs,
+  a Transfers row with no quantity) are `UNBOOKED` warnings on the
+  console and fatal under `run --strict`.
+- **RBC refuses rows it would mis-book.** A trade with a blank Value
+  (read as $0 proceeds or cost), a Value that does not fit quantity x
+  price (a commission below zero or far above RBC's), a Description with
+  an unescaped quote that swallowed the next row, and a listed-ticker row
+  whose text names a contract on another underlying are errors. A stock
+  leg whose text quotes the assigned contract books as the stock; a
+  security named DELIVERY... no longer turns a transfer-in into a
+  transfer-out; FRACTYL-style names keep their cash-in-lieu of dividend
+  as income; a blank Description falls back to the Symbol Description
+  for security overrides; a rights/warrant expiry settles on its date; a
+  blank-settle assignment's option leg shares its stock leg's cycle; a
+  notional distribution warns that its income is not in the totals.
+- **RBC spin-off parents and merger sources resolve to the right pool.**
+  The parent took its market suffix from the spun-off shares' row (a TSX
+  parent became `.US`), could resolve to a covered call's option code or
+  to another company sharing its first word (`BROOKFIELD CORP` →
+  Brookfield Renewable), and an interlisted company was resolved by
+  file order. A spin-off's s.86.1 ACB reduction then landed on an empty
+  pool as a phantom gain. The parent now uses its own listing, options
+  never qualify, a fuzzy match needs both names to agree, a merger's
+  temporary code prefers the removal's currency, and an ambiguous
+  listing is refused with a warning. A spin-off debited from a short
+  parent is refused instead of booked as a long buy and a negative
+  dividend.
+- **RBC reorganizations pair on evidence.** A ratio written with a
+  thousands comma (`1 FOR 1,000`, `1 NEW = 1,000 OLD`) was read as
+  1-for-1, so the cash-in-lieu row sold almost the whole position. Two
+  option contracts adjusted the same day now pair by the closest strike
+  (they swapped ACB by file order); a removal no longer pairs with a
+  lone unrelated receipt or a half-name match; a company named "ROC ..."
+  no longer turns merger cash into a return of capital; an exchange into
+  a different company worded `XCH TO` asks for the merger election
+  instead of rolling over silently; and a merger of a short position is
+  refused loudly instead of renaming the new ticker into the temporary
+  code.
+- **RBC: one identity across an account's yearly exports.** The parser
+  learned a symbol's listing, an option code's contract and a temporary
+  reorganization code's company from each file alone. Now all of an
+  account's RBC files are read together. A US stock's USD dividend no
+  longer lands on the TSX listing that shares its bare ticker (its dividends
+  and withholding move from .TO to .US; no gain changes). A TSX stock's USD dividend or return of capital in a
+  year with no trades keeps its .TO listing. An option re-described
+  between exports (RCI vs RCI.B, XCH-adjusted TRP1) keeps one symbol, so
+  its close is no longer booked as a new written option. A name change
+  under a temporary code finds the old ticker in an earlier export, and
+  warns with the `ticker.map` line when no file names it.
+- **RBC: overlapping re-downloads are de-duplicated.** A row's time came
+  from its position within the day, so the same trade in two downloads
+  of one account got two ids and was booked twice. Rows already in an
+  earlier file of the same RBC account are now skipped (identical fills
+  on one day are matched by count), with a note; files without an
+  Account column are never matched, and a warning says so.
+- **RBC: ticker change without a reorganization row.** When one symbol
+  stops with shares open and another with the same Symbol Description
+  and currency opens with a sale they cover (ORCC to OBDC in 2023), the
+  parser warns and prints the `GLOBAL` line for `ticker.map`.
+- **RBC: every reorganization booked as one event.** RBC books name
+  changes (NAC), reverse splits (REV), 1-for-1 exchanges and blank "MGR -"
+  splits (MGR), MER reorganizations and option adjustments (XCH) as a
+  removal under a temporary code plus a receipt. Only "MERGER TO" pairs
+  were handled; the rest became $0 buys and sells on RBC's internal codes,
+  and "SHRS RECEIVED THRU MERGER" receipts vanished. Each removal is now
+  paired with its receipt (same company, within 7 days) and booked as ONE
+  SPLIT (renaming when the ticker changed; a 1-for-1 on the same ticker
+  books nothing), with MER's "ROC OF C$x" as a return-of-capital ADJUST
+  and cash in lieu as the sale of the fractional share. An option XCH
+  keeps the same contract (and its ACB). "REVERSE ENTRY" corrections
+  cancel their leg. Unmatched legs, and any emitted symbol that is an RBC
+  internal code, are warned about (a lint failure). Real mergers still go
+  to the election prompt; spin-offs ("DIS - ... SPINOFF") now do too
+  (s.86.1 or an FMV dividend in kind) instead of becoming $0 buys; rights
+  issued to all shareholders stay a nil-cost acquisition, now noted.
+- **RBC: income by code, never by security name.** Rows are classified
+  by Activity and the RBC code ("DIV - ", "CASH DIV ON", "DIST ON"); the
+  word DIVIDEND inside a name ("DIVIDEND 15 SPLIT CORP", "HIGH DIVIDEND
+  ETF") turned in-kind transfers into $0 dividends and dropped their
+  shares. An income row that carries shares is refused. Reinvestments
+  (REI) are purchases of the units, not negative dividends; "ADJUSTMENT
+  TO BOOK COST $x" rows are signed ACB adjustments (notional distribution
+  up, return of capital down); ADR fees (FCH) are FEE rows; in-kind
+  transfers carry RBC's "BOOK VALUE" as evidence (`book_value`, shown by
+  `taxjson transfers`), booked exactly as before.
+- **RBC: strict reading.** The header row must carry the real columns
+  (a preamble line mentioning "Date" no longer passes); numbers must
+  parse ("39 043" and garbage raise, "(12.50)" is negative); each date
+  column gets ONE format for the whole file and a file that reads as
+  both day/month and month/day raises; currencies are upper-cased; an
+  unquoted comma is re-joined only inside the last (Description) column.
+  Options described only in "Symbol Description" are recognised, one RBC
+  option code is one contract (the first description wins, with a
+  warning), known cash rows and footers count as non-events, and an
+  unclassified row that moves shares or cash is a loud warning and fails
+  `--lint`. Same-day rows keep the export's order (it lists newest
+  first; an option assignment's two rows share one time so the premium
+  still folds into the stock leg), and the older "HORIZONS U S DLR" line maps to DLR.U.TO like
+  "GLOBAL X US DLR".
+- **RBC: split-corp retractions are dispositions.** RBC books an issuer
+  retraction as an `Other` row coded `TEN` ("... RETRACTION AT C$x PER
+  SHARE") with a blank price; it was skipped as unclassified, so the
+  shares never left the books and the proceeds and gain were missing
+  (seen on real 2023/2024 exports). Filed numbers change for any year
+  with a retraction.
+
+### Broker parsers: Webull
+
+- Webull parser: a row whose Action Code is blank but that carries a
+  date, quantity, price or proceeds is refused naming the file line; the
+  trade was dropped at rc 0 (A2-0788).
+- Webull: a last row cut short ('CAD,12-12-2024,') is refused instead of
+  dropped; an unreadable Date is refused by file line; a share row with
+  no Price and no Proceeds, and a $0 option row that opens a position,
+  are refused instead of booked at $0; DIV/transfer rows are
+  `warning: UNBOOKED:` (console echo, `--strict` refuses); the ticker-
+  change hint now sees the buy-first shape and renames across yearly
+  exports; an inferred assignment's option leg settles with its stock
+  leg (CA-DATE-04); a split assignment shape is named; a newest-first
+  export is read bottom-up (CA-DATE-14); each row names its broker
+  account (preamble Account Number) for cross-file dedup (A2-0028,
+  A2-0102, A2-0284, A2-0285, A2-0286, A2-0288, A2-0289, A2-0290,
+  A2-0617, A2-0618, A2-0619, A2-1065, A2-1067, A2-1068, A2-1069,
+  A2-1070, A2-1071).
+- **Webull: a sale's debit keeps its sign.** A close at $0.00 whose
+  commission was charged ("(1.50)" in Proceeds) books -1.50 proceeds,
+  not +1.50 received. The row's
+  Type Code decides option vs shares (an OPC row with an unreadable
+  description, or an SHS row whose description reads as a contract, is
+  refused). The skip warning names only the skipped action codes;
+  exercise/assignment messages cite s.49(3) for a call, s.49(3.1) for a
+  put.
+- **Webull: a Proceeds cell that does not fit its trade is refused.** The
+  gap between Proceeds and quantity x price is the commission; one that is
+  negative or far beyond commission size (a shifted or mislabelled
+  column) now stops the parse naming the line, as Questrade, IB and RBC
+  already do — it used to book with only a schema warning (S023-19).
+- **Webull: exercise/assignment is inferred only on evidence.** A $0 option
+  close is paired with a stock trade at the strike only when that trade
+  carries Webull's $1.00 exercise/assignment charge; a limit order at the
+  strike after a worthless expiry keeps the expiry's gain or loss (it used
+  to fold silently into the shares' cost). Every inferred pair is named on
+  stderr, a rejected candidate is a warning, the closest option wins
+  whatever the row order, the row's own `@Symbol` names the underlying,
+  and a Dec-31 assignment settling in January pairs across the two
+  yearly exports (R1-15, R1-94, R1-175, S066-12, S066-02, S065-24).
+- **Webull: no trade row is dropped silently.** A BUY/SELL row with a
+  blank or unknown currency, or a blank Date, is refused naming the line;
+  `usd`/`Sell` spellings are read; a header with two columns matching one
+  field (an inserted `Gross Proceeds`) is refused; a cell spanning lines
+  (an unescaped quote that swallowed the next rows) is refused. Two
+  symbols sharing one Security Description, the new one opening with a
+  sale, are named as a likely ticker change with the `ticker.map` line to
+  add (R1-92, R1-97, R1-98, S066-04, S066-10).
+- **Webull: a priced trade needs its Proceeds.** A blank, garbage or
+  misaligned Proceeds cell on a priced BUY/SELL booked $0 (the whole
+  gross became a "fee", so even `--strict` passed). Such a row, a row
+  wider or narrower than its header, and a decimal comma are refused
+  with the file line.
+- **Webull: columns by header label, both export layouts pinned.** The
+  Trading Summary's 2024 layout has 9 columns (Proceeds in column 8), the
+  2025 layout 10 (an empty column 8). The parser read by position with a
+  column-9-then-8 fallback; it now resolves every column from the header
+  labels, refuses an unrecognised layout instead of guessing, and fails
+  on any row-accounting mismatch. Tests pin the amounts of both layouts.
+  (A different, older flow read the 2024 layout by position and booked
+  15 Webull purchases at $0 cost on a filed return.)
+- **Webull: option assignment and exercise detected.** The Trading
+  Summary shows an assignment or exercise only as a $0 option close plus
+  a stock trade at the strike. Both legs are now marked ASSIGN when the
+  stock trade matches in quantity, direction and price within a few
+  days, so the premium folds into the shares' cost (s.49(3)) instead of
+  being realized as an expiry; seen on real exports (put assignments
+  and a call exercise).
+- **Webull: expiry rows are no longer shifted a business day earlier.**
+  The Date column is the settlement date for trades but the EXPIRY date
+  for zero-price expiry rows; walking it back put a 0DTE long's expiry
+  before its buy, booking a phantom $0 short WRITE. The expiry now
+  closes the long (direction LONG, loss = premium); gain totals are
+  unchanged.
+
+### Generic importer and .tt files
+
+- `.tt` files: a symbol with no market suffix (MSFT for MSFT.US) on a
+  line of an account that is not `crypto = true` is now warned about in
+  the run diagnostics like an unknown suffix — it is its own ACB pool and
+  the broker's rows for the real listing go short (A2-0777).
+- Generic importer: a mapping .toml that is not UTF-8 is reported against
+  the .toml, not as the CSV being unreadable (A2-1452).
+- The generic importer is no longer documented as a crypto route: the
+  README, the mapping template and the importer no longer suggest
+  `settle_on_trade_date = true` for a crypto-only export (the coins were
+  booked as BTC.US / ETH.TO shares — Schedule 3 line 4, and §1091 in a
+  US project); coins go in a `crypto = true` account, and the importer
+  says so when the option is set.
+- Two .tt files (or generic files) whose names differ only in an
+  account-number token (manual_55500001.tt / manual_55500002.tt) are two
+  sources again: dedup read both as `manual_55***.tt`, one file
+  repeating itself, and silently dropped one file's identical line. A
+  masked name now carries a short hash of the real name (`source_key`,
+  never the name itself) for dedup only (audit A2-0159).
+- A `.tt` SPLIT line carries no currency (it was labelled CAD, and a US
+  project with no CAD rates refused the account); a split row with no
+  money is relabelled, not converted.
+- **Generic importer fixes (re-audit 2).** A cut-off last record (fewer
+  cells than the header, a final separator with no line break, a cut
+  currency code) is refused instead of completed from `[defaults]` (a USD
+  trade was booked as a CAD `.TO` security). Futures spelled `/` or `\`
+  are `F:` futures and settle on the trade date (they took the equity T+1
+  and a Dec-31 close moved a year), and `futures_settle = "next_day"` now
+  reaches the generic importer. An option closed at $0 on its expiry day
+  settles that day (CA-DATE-08). A commission rebate lowers the cost and
+  raises the proceeds and is booked as a negative fee (it was a charge).
+  A buy row with a cash-in amount in a cash-signed file is refused (a
+  sale under one action mapped to buy). A dangling sidecar mapping, a
+  non-string `[defaults]`/`[formats]` value and a mapped settle date more
+  than 31 days late are refused (more than 7 days: ATTENTION). New
+  `dividend_in_lieu` target; UTF-16 exports are read (also by
+  `taxjson-generate-parser`); a $0 option close beside a stock trade at
+  the strike is named as a possible exercise/assignment (ATTENTION).
+  Optional `[columns] account` / `[broker] account` name each row's broker
+  account (A2-0030, A2-0103, A2-0106, A2-0107, A2-0299, A2-0626, A2-0628,
+  A2-0629, A2-1075, A2-1076, A2-1079, A2-1080, A2-1081, A2-1083,
+  A2-1085).
+- **.tt lines spell Canadian listings like the broker parsers.** A .tt
+  `ABC.V` (on a CAD line), `ABC.VN`, `ABC.CN`, `ABC.NE` or `FTN.PRA.TO`
+  is now `ABC.TO` / `FTN.PR.A.TO`: it used to be its own ACB pool, so a
+  loss sold through a .tt file and the broker's repurchase of `ABC.TO`
+  were never linked as identical property. `.VN` is a Canadian venue to
+  the schema, T1135 (no more '??' REVIEW) and the price chain too, and
+  the venue-split lint catches `.VN` and undotted preferred series
+  (tax-logic CA-ACB-04 / US-BASIS-06; audit A2-0300, A2-0635, A2-1077).
+- **.tt keeps income facts and full precision.** A DIVIDEND /
+  DIVIDEND_IN_LIEU / TAX / ADJUST line may end with `record=`, `ex=`,
+  `label=`, `dealer=`, `issuer=` and (ADJUST) `type=roc` tokens, and
+  `taxjson-convert-tt book.json` writes them: the round trip used to
+  move a December-record distribution and its ROC to the pay year, and
+  turn a Canadian dealer's payment in lieu (an s.260 deemed dividend)
+  into other income, with no word. Quantities and prices keep every
+  digit (a 10-decimal coin quantity was cut to 8, changing the row's
+  id). A .tt file whose last line has no line end warns that it may be
+  cut short (audit A2-0291, A2-0631, A2-1072, A2-1086).
+- **.tt: a sale whose commission exceeds its gross keeps its negative
+  proceeds.** A .tt SELL line may now carry the negative total
+  qty×price − commission (a penny option close: `-8.95` with a 9.95
+  commission) when its own commission explains it; any other negative
+  sell total is still refused. The old advice (`enter 0`) left the
+  excess commission out of the loss and now warns. `taxjson-convert-tt`
+  json→tt and the `taxjson events`/`trades` single-account view wrote
+  that negative total already, so their output re-imports again, and the
+  view now carries a declared contract size (`x1000`, `x10`) like
+  convert-tt (audit A2-0292, A2-0620, A2-0621, A2-0622, A2-0623,
+  A2-1073, A2-1226, A2-1227).
+- `taxjson events` lines keep a dividend's withholding-netted amount
+  (the optional 9th column) and a declared TRANSFER's `DECLARED` token,
+  as `.tt` export does, so a pasted line re-imports the same row
+  (A2-0989).
+- **Generic importer: name the real broker.** A mapping can set
+  `[broker] name = "wealthsimple"`. `taxjson run` then parses each named
+  broker's generic files on their own and records them as
+  `generic:<name>`, so `fees-sum` gives each broker its own row. A
+  broker whose fees come in only through a named generic file is no
+  longer listed as having "NO fees". One `taxjson-brokerage` call
+  refuses files whose mappings name different brokers (audit S027-05).
+- **`taxjson-fees-sum`.** `--year` help names the trade date; `--since`
+  must be YYYY-MM-DD; a row without an account is `<broker>/?`; fees in a
+  hand-entered `.tt` no longer leave the footer claiming the other
+  brokers had NO fees (audit R1-101, R1-154, R1-289, S031-03, S031-06).
+- **Generic importer.** An explicit 0 in the amount cell of a priced
+  trade is refused (it was silently replaced by qty x price); the
+  fee-share refusal prints the share to 2 decimals and the 5% limit.
+- **`.tt` converter.** A file with a byte-order mark converts; json->tt
+  and tt->json write atomically; a row with no currency is refused (it
+  was written as CAD); currencies are upper-cased; a sale entered with
+  total 0 because the commission exceeded the gross no longer warns
+  "check for a typo". `taxjson audit` names the `.tt` file of a
+  hand-entered row.
+- **`taxjson-convert-tt` writes the project's tax_date.** Converting a
+  book to .tt defaulted to the settlement date (the Canadian rule) with
+  no country, so a US book's Dec-31 sale came back as a January one. It
+  now reads the project's tax_date when the file sits in a project, and
+  outside one asks for `--date-basis` when a row's two dates differ.
+- **`taxjson trades` prints signed totals and fees.** A fee rebate printed
+  as a charge and a penny close's negative proceeds as positive, so the
+  single-account taxtext did not round-trip; TOTAL SELL and `trades-sum`
+  sold now net those proceeds signed (audit S039-11).
+- **Generic importer: a sell whose commission exceeds its gross nets
+  negative.** A penny option close with a larger commission is booked with
+  its negative net (the schema accepts it since S017-00; the engine deducts
+  it) — it used to be clamped to 0 without an amount column, losing the
+  excess commission, or refused as a mis-mapped column with one (S057-02).
+- **`.tt` lines: canonical symbols and fewer false alarms.** A symbol is
+  upper-cased on read (`aapl.us` was its own pool and the broker's sale
+  went short with no gain), and a suffix that is not a market (`XYZ.TSX`,
+  `XYZ.CA`) is a warning naming the line. Futures totals are no longer
+  called typos (the 1/100 contract-size guess), two identical `ACQUIRED`
+  lots arriving the same day no longer collapse into one arrival leg (a
+  phantom 100 shares, or a refused `AmbiguousTransferDateError`), and a
+  hand-entered split of a USD stock no longer skips the holdings refresh
+  with a "cross-currency rollover" message.
+- **json → .tt keeps the year a sale settles in.** `taxjson-convert-tt`
+  (json to tt) and the single-account `taxjson events` view wrote the
+  trade date; a `.tt` line has one date, read as the settlement date too,
+  so a Dec-31 sale settling in January moved into the earlier year on
+  re-import. They now write the settlement date on a settle-basis project
+  (`--date-basis trade` for the converter), count the rows whose dates
+  differ, keep a Questrade-style `commission` as the fee, and warn about a
+  contract multiplier the format cannot carry.
+- **Generic importer: fewer ways to book wrong money quietly.** Symbols
+  are upper-cased (`xyz` and `XYZ` used to be two pools, the sale a
+  phantom short). An unmapped action that carries a quantity or an amount
+  (a DRIP reinvest, say) is an `UNBOOKED` warning — on the console, fatal
+  under `run --strict`, a `--lint` failure — instead of a note in the
+  report. A row with no price is still checked against its amount (a
+  swapped fee/amount mapping booked the commission as the cost), a
+  mapping with no fee column infers the commission from the net instead
+  of refusing a valid commission-inclusive export, a futures symbol needs
+  its amount (the contract size is never guessed as 1 or 100), and an
+  unescaped quote that swallows the next row stops the import naming the
+  line.
+- **Standalone fee rows have one sign: positive = charged.** The generic
+  importer's `fee` action booked a CSV's negative cash as a negative fee
+  (the opposite of IB, Questrade and RBC, so `fx-cash` read a charge as
+  cash received); `[formats] fee_sign` picks the CSV's convention. The
+  `taxjson fees` view flipped every IB/Questrade/RBC fee row into a
+  rebate and understated TOTAL FEES; it now reads them as charged.
+- **Generic importer: one spelling per security.** `BRK-B` and `BRK/B`
+  are `BRK.B` (they were separate ACB pools, so a cross-account
+  superficial loss was missed), an OCC symbol padded to 21 characters is
+  compacted, and an option description in the symbol column is refused
+  instead of booked as a share that never expires (audit S010-04).
+- **`.tt`: a negative sell total is refused.** `BUYSELL … -100 CAD 20
+  -2000` was booked as -2,000 proceeds (a +1,000 gain became a -3,000
+  loss). The total is the positive net proceeds; the error names the
+  file and line.
+- **Generic importer: strict mapping.** An unknown section or key
+  (`ammount`, `commission`, `[format]`, `tax_sgn`) is refused with a
+  suggestion instead of being ignored; dividend/tax/interest/fee actions
+  require a mapped `amount`, and a blank amount on such a row is refused
+  (it booked 0).
+- **Generic importer: trade rows must add up.** A buy/sell with neither a
+  price nor an amount (the fee became the whole cost), with no quantity,
+  or a stock buy at zero cost is refused; so is a quantity/amount sign
+  that contradicts the mapped action (a sell under an action mapped to
+  `buy` was booked as a buy).
+- **Generic importer keeps an explicit exchange suffix.** `DLR.U.TO`
+  bought in USD became `DLR.U.US`, a different security, so a
+  superficial loss across accounts was missed. A bare symbol still takes
+  its suffix from the row currency.
+- **Generic importer settles trades on the settlement date.** Every row
+  was booked with the trade date as its settlement date, so a Dec-31 sale
+  landed in the wrong tax year. A new optional `settle` column is used
+  when mapped; otherwise buy/sell rows get the standard holiday-aware
+  cycle (T+1/T+2/T+3 by era, options T+1) on the listing's market.
+  `[options] settle_on_trade_date = true` keeps the trade date (crypto).
+- **A .tt file named after a broker no longer erases that broker's
+  trades.** `questrade.tt` (or `webull.tt`, `ib.tt`, `generic.tt` ...)
+  wrote its converted JSON over the broker's parse in `work/`, so every
+  trade in that broker's CSVs vanished with exit 0. Converted .tt files
+  now live at `work/<account>_tt_<stem>.json`; the first run after
+  upgrading removes the old `<account>_<stem>.json` copies as stale.
+- **Generic importer refuses mis-mapped columns.** Two fields on one
+  header, |amount| ≠ qty × price (× 100 for options) ± fee beyond 1%, and
+  a fee above 5% of the gross (unless `[options] allow_large_fees =
+  true`) now stop the import; an amount equal to qty × price while the
+  fee is nonzero warns that the GROSS column is probably mapped as
+  `amount`. The currency must be mapped or set in `[defaults]` — there is
+  no implicit USD any more (the shipped example already sets it).
+- **`.tt` files: unknown actions are errors.** A line starting with
+  `SELL`, `buysell`, `BUYSEL` or `Dividend` was skipped silently with
+  exit 0; it now fails with the valid actions and a did-you-mean. Dates
+  must be YYYY-MM-DD and times HH:MM:SS; inline `# …` comments are
+  stripped (a `# DECLARED` remark no longer grants attestation); stray
+  trailing tokens are errors; warnings and errors name `file.tt:line`.
+  All real `.tt` files convert byte-identically.
+- **.tt validation: option lines are checked against qty × price × 100**
+  — every option row used to warn "differs from qty*price".
+- **A `.tt` file whose name ends in a pipeline suffix is refused**
+  (`msft_gains.tt` created a phantom account in `sum` and counted its fees
+  twice); rename it, e.g. `msft-gains.tt`.
+
+### Crypto
+
+- crypto-sends files (re-audit A2-0465, A2-0467, A2-0775, A2-1407,
+  A2-1405, A2-1406, A2-1404, A2-1415, A2-0776/A2-1449 for sends.json):
+  - The double-booking check now reads a hand-written .tt saved with a
+    BOM the way convert-tt does, so a duplicate sale on line 1 is
+    flagged.
+  - A generated crypto_sends.tt re-saved with a BOM is still recognized
+    as generated. It is no longer refused, and it no longer shows as
+    OUT OF DATE indefinitely.
+  - A transfer sidecar of the wrong shape is reported in one line
+    naming the file.
+  - An inputs/<acct>/sends.json that is a directory or cannot be read
+    is reported in one line. It is no longer read as "no decisions",
+    and `--set` no longer leaves sends.json.part behind.
+  - sends.json may start with a BOM, and a non-text `note` is refused
+    in one line.
+  - The error for a bad sends.json no longer suggests deleting the
+    file.
+- Coinbase, US project (stablecoins are property): a fill priced in a
+  stablecoin (PYUSD, USDC ...) whose Notes carry no `on BASE-QUOTE` pair
+  no longer folds the stablecoin to USD cash and drops its disposal; the
+  row is booked as a crypto-quoted fill, or refused when Notes cannot
+  give the quantity.
+- Kraken ledger instant trade of a stablecoin for USD away from the peg
+  (USDC -> ZUSD at 0.90) now prints the de-peg ATTENTION the trades
+  export and Coinbase print, and the forex note names the stablecoin.
+- Standalone `taxjson-brokerage` without `--country` books Kraken /
+  Coinbase USD stablecoins as property (the neutral answer, as a
+  foreign return of capital already defaults to a cost reduction) and
+  prints a note naming `--country`; it used to take Canada's US-dollar
+  cash model. Its help lists every choice `--country` makes (re-audit
+  A2-0742, A2-1238). `taxjson run` always passes the country.
+- `taxjson crypto-sends` prices a send, and values the stablecoin pool,
+  with a rate from the send's day or the 5 days before it, as the
+  conversion stage does; an older rate (a January rate for a June send)
+  leaves it unpriced instead (re-audit A2-0414).
+- `taxjson crypto-sends`: `--unset ID` removes a saved decision (the send
+  is undecided again); `--set`/`--write` refuse while another crypto
+  account has not been parsed (a send to it looked unmatched and could be
+  booked as a gift), and the checklist step is "blocked" then (re-audit
+  A2-0359, A2-1163).
+- `run --strict` / checklist run-clean: a crypto send recorded as a gift
+  or payment that could not be priced (not booked), a send booked twice
+  (a hand-written .tt line next to crypto_sends.tt), an undecided send
+  (strict only), and work/ books of a renamed account (counted twice) now
+  stop `--strict`; run-clean is "attention" over any UNBOOKED line in a
+  report and over the renamed account's books; the crypto-sends step
+  flags the double booking and a crypto_sends.tt whose price no longer
+  matches sends.json (re-audit A2-0127, A2-0357, A2-0362, A2-1151,
+  A2-1165).
+- Kraken: a ledger of only fiat deposits and withdrawals is "0 tax
+  objects (not tax events)", not the "parsed to 0 transactions" warning
+  that `run --strict` refused (re-audit A2-0703).
+- `transfers`: a Kraken withdrawal's fee paid in coins shows in the FEE
+  column ("0.002_TAO") and as fee_qty / fee_currency in --json; it was
+  empty on every real withdrawal (re-audit A2-0663).
+- The same exchange export filed under two crypto accounts (rows with
+  the same transaction ids) is warned about, and `run --strict` stops,
+  instead of booking every trade twice at exit 0 (re-audit A2-0569).
 - The stablecoin de-peg warning ("not in the gains; report it by hand")
   is an ATTENTION line, so `taxjson run` shows it on the console, not
   only in the .sum (re-audit A2-1001).
-
 - fill-crypto values PYUSD and GUSD at their 1.00 USD par like USDC
   (a US Coinbase or Kraken PYUSD reward went to Yahoo, and an offline
   run stopped); `run --fast` re-prices after a `work/crypto_ticker.map`
   change, which fill-crypto reads (re-audit A2-1000, A2-0593, A2-0585).
-
 - **Crypto sends: pairing, decisions and prices (re-audit 2).** The
   send/arrival pairing is a minimum-loss assignment, not first come
   first served: a send no longer takes another send's arrival and books
@@ -986,26 +2355,6 @@
   applies as in fill-crypto; the duplicate-line check catches the UTC
   date, a fee-inclusive or rounded quantity, a thousands comma and a
   split sale.
-
-- FX rates: a transient failure is no longer cached as a permanent
-  answer (re-audit A2-0136, A2-0393). A failed Yahoo download counts as
-  "no data" only when Yahoo, asked again right then, answers for the
-  dates after the range (later dates already in the cache are no proof);
-  a second empty Bank of Canada answer is no longer read as a stopped
-  series (a series counts as stopped only after 45 silent days with
-  nothing cached after the range), and when the Bank answers again the
-  hole an earlier empty answer left is asked for again; a noon or Yahoo
-  answer cut off before the range end records only the dates it reached
-  and says so.
-- FX rates: a cached Bank of Canada (or Yahoo) rate that is not a
-  positive number (`"abc"`, `"1,3316"`, a list) is no longer copied into
-  the rates file, where the run then blamed the config ("no rates at
-  all for USD"): it is dropped, named with `~/.currency_price_cache.json`
-  and its date, and asked for again online (re-audit A2-1212).
-- tax-logic CA-FX-02 / US-FX-02 now state the rate gap the converter
-  really accepts: the rates file carries a rate over weekends and
-  holidays for up to 7 days and a day with no row looks back 5 more, so
-  a rate up to 12 days old is used; no number changes (re-audit A2-0706).
 - **fx-cash: stablecoins, coin legs and holiday settles.** A PYUSD or
   GUSD reward in a Canada book now enters the US-dollar pool, as a USDC
   reward does. fx-cash and the parsers share one stablecoin list. A
@@ -1093,818 +2442,10 @@
   `AUD` coin, and an AUD.HOLD reward an unpriced coin. Kraken now uses
   the Coinbase parser's fiat list (re-audit A2-0238, A2-0251, A2-0579,
   A2-0580).
-- Wording: the Canada estimate, the checklist walk (both countries) and
-  docs/filing.md no longer say that no taxjson output totals interest —
-  they point at the .sum's net CASH INTEREST line and say why it is not
-  the interest paid; the estimate's Assumes line says mapped T5 box 18
-  capital-gains dividends are included (re-audit A2-0644, A2-1153,
-  A2-1101).
-- `estimate` (USA): §1256 P/L (futures, futures options, broad-based
-  index options) is still taxed as short-term, but the estimate now
-  names the amount in a NOTE (`section_1256_gain` in --json) and its
-  Assumes line says the Form 6781 60/40 split is not modelled
-  (re-audit A2-1124).
-- `estimate` (Canada): a dividend or s.260 payment in lieu from a
-  Canadian issuer on a US listing (CA ISIN in the books) is an eligible
-  dividend, not a foreign one with an assumed 15% credit — the estimate
-  uses the engine's issuer test (ISIN, else listing) instead of the
-  listing suffix (re-audit A2-0319, A2-0662).
-- `instalments`: a payment made before January 1 is accepted as a
-  prepayment of the project year's instalments when its row says
-  `tax_year = YEAR` (credited from January 1, as the interest model
-  already did); an undesignated prior-year date is still refused and
-  the message names the key (re-audit A2-0648).
-- `sum` / `estimate`: --other-income / --other-losses (and their
-  [estimate] keys) are checked by one guard that names the flag or key
-  it refuses (re-audit A2-1123); the --deductions / --carrying-charges
-  guard is pinned by a test that tells it from the library's check
-  (A2-1122).
-- `sum` / `estimate`: an unreadable sheltered account's gains file is
-  refused like a taxable one (it silently changed the SHELTERED and ALL
-  ACCOUNTS totals), and in a US project a disposition with no ST/LT
-  term stops `sum` the way it stops `form-export`, instead of printing
-  RETURN 0.00 for every account (re-audit A2-1119, A2-1120).
-- `sum`, `t1135`, `list` and the other report commands now print the
-  "not the clean result of the current inputs" banner when a first
-  `taxjson run` aborted after writing work/ (no reports yet), instead
-  of serving the partial books silently (re-audit A2-0658).
-- run: the filing-basis `<acct>_wash.sum` of an account in the blended
-  s.47 pass no longer repeats the isolated per-account pass's s.40(3)
-  notes (return of capital beyond the account's own ACB, or on its
-  empty pool) — the blended pool booked no such gain; the per-account
-  `<acct>.sum` baseline keeps them (re-audit A2-0654, A2-1117).
 - run: a decided crypto gift/payment that cannot be written (no fair
   value, a malformed sends.json) now reaches the account .sum
   DIAGNOSTICS and stops `run --strict`; the warning also says when the
   previous crypto_sends.tt is still booked (re-audit A2-0112).
-- Questrade / RBC: an option description whose strike is only partly
-  readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
-  Questrade row with fewer cells than the header is refused instead of
-  booked with blank trailing cells (re-audit A2-1041 and A2-1042, the
-  Questrade / RBC halves).
-- RBC: a merger whose removal and receipt sit in two yearly exports is
-  left to taxjson-corp-actions (which pairs the legs across the
-  account's statements, A2-0214) instead of two UNBOOKED legs that
-  made `run --strict` refuse (re-audit A2-0271).
-- RBC: a USD row whose name reads as the US-dollar class of a TSX fund
-  ('... ETF US DOLLAR UNITS'), other than DLR, is an ATTENTION line with
-  the `GLOBAL X.US X.U.TO` map line; it was booked as a US listing
-  silently (re-audit A2-1043; RBC's spelling for these is unverified,
-  so it is not renamed automatically).
-- Questrade / RBC: the stock leg of an option assignment on a class
-  share (RCI.B under the Montreal root RCI, BRK.B under BRKB) is booked
-  as the stock; it was refused as a contract on another underlying or
-  a 100x gross mismatch (re-audit A2-1059).
-- Questrade: deposit, contribution and withdrawal rows are recognised
-  cash non-events (they were 'unclassified ... needs a new branch'),
-  INT rows are booked as interest with their sign (credit interest was
-  dropped), and stock-lending income is an UNBOOKED warning (re-audit
-  A2-0277, A2-0614).
-- **Questrade / RBC: payments in lieu of a dividend.** A Questrade
-  'SUBST PAY ... IN LIEU OF DIVIDEND' row and an RBC 'CASH / PAYMENT IN
-  LIEU OF DIVIDEND' row were booked as dividends: in Canada a PIL on a
-  US issuer got a foreign tax credit nobody withheld, and in a US
-  project it was a qualified dividend. They are payments in lieu paid
-  by a Canadian dealer now: Canada deems one on a Canadian issuer a
-  dividend (s.260) and keeps the rest ordinary income; the US keeps all
-  of them ordinary (tax-logic CA-INC-03 names the dealers; US-INC-01)
-  (re-audit A2-0098).
-- Questrade: a CAD-settled US trade (EXCHANGE RATE) carries its
-  commission in CAD like its price and net; it stayed USD-sized, so the
-  fees report and the Schedule 3 proceeds/outlays split were short by
-  the rate (the gain was right) (re-audit A2-0615).
-- Questrade: a decimal-comma CNV@ rate ('CNV@ 1,4138', read as 1) or
-  cash-in-lieu fraction ('1,5' read as 1, '0,5' dropped) is refused,
-  as BOOK VALUE already was; a BRW journal's IN leg pairs only with the
-  OUT leg of the same security (two journals on one date swapped their
-  costs) (re-audit A2-0278, A2-1058, A2-1061).
-- **Concatenated exports keep their same-day order.** Two newest-first
-  Questrade or generic exports joined with the header repeated, and RBC
-  exports joined without one, were read top-down as a whole (the dates
-  go both ways), so a same-day sale replayed after its rebuy and the
-  superficial-loss denial changed. The order is now decided per segment
-  (per header, or per run of dates for RBC); the generic importer no
-  longer reports the repeated header as an UNBOOKED row (re-audit
-  A2-0100, A2-1046, A2-1084).
-- RBC: a swallowed-row error names the line of the stray quote, not the
-  end of the swallowed span; a Taxes row with a blank Symbol is refused
-  instead of booked on 'UNKNOWN'; files without an Account column no
-  longer say 'NOTHING was de-duplicated' next to the run's dedup line
-  (re-audit A2-1045, A2-1050, A2-1051).
-- **RBC export coverage is judged per account, over trading days.**
-  Another RBC account's later export no longer hides this account's
-  missing late December; an export taken on Dec 31 is a note (not an
-  ATTENTION with the range 'Jan 1 to Dec 31'), and one taken on the
-  last trading day before a weekend year end is not told its weekend
-  is missing (re-audit A2-0272, A2-0275, A2-1049).
-- **RBC / Questrade: a dividend-reinvestment row must fit units x price.**
-  A REI row whose cash was 10x its units at the REINV@ price was booked
-  as the units' cost with only a schema note; the trade path refuses
-  the same numbers. It is refused now when the price is in the row's
-  currency; a REINV@ marker in the other currency (C$ on a USD row, U$
-  on a CAD row, as real exports carry) is not judged (re-audit
-  A2-0268).
-- **RBC / Questrade / Webull / Coinbase: a Buy row signed as a sale is
-  refused.** An RBC Buy with a negative Quantity was booked as a sale
-  with negative proceeds (a 4,880 swing under `--strict`); Questrade
-  flipped it to a buy silently; a Webull BUY whose quantity and cash
-  both said sale, and a Coinbase Buy carrying Coinbase's own sale
-  signature (negative quantity and total), were booked as purchases.
-  Each is now refused with the row named, as the generic importer does
-  (re-audit A2-0097, A2-0287, A2-1025, A2-1057).
-- **RBC / Questrade: book-cost adjustment rows.** An RBC 'Return of
-  Capital' row lowers the ACB whatever its description words (a
-  'ROC ADJUSTMENT TO BOOK COST' raised it); a Return of Capital row
-  describing a NOTIONAL distribution is refused; a $0 adjustment books
-  nothing (it booked a 0.00 ADJUST under two contradicting lines); the
-  year-end ROC book-cost row is an ATTENTION that the same dollars are
-  usually already in the income totals (take income and box 42 from
-  the T3). A Questrade zero-cash row stating a book-cost adjustment is
-  an UNBOOKED warning, not an 'informational' row (re-audit A2-0094,
-  A2-0273, A2-1047, A2-1062).
-- **Questrade / RBC: reversals pair across all of an account's exports.**
-  A Questrade stock-dividend, cash-in-lieu or DRIP reversal (and an RBC
-  REI CANCEL) cancelled its original only inside its own file: with an
-  overlapping older download the original came back as phantom shares
-  (H1 + full-year exports booked 1,250 shares for 1,100), and an
-  original in last year's export refused the whole account. The
-  pairing is now planned over every export of the account, counting
-  overlap copies once; a reversal cancels the latest original on or
-  before its date (a later identical stock dividend survives), a
-  reversed stock dividend no longer prints its 'booked' note, and an
-  RBC file whose rows all live in the account's other export is no
-  longer a '0 transactions' warning that failed `run --strict`
-  (re-audit A2-0026, A2-0269, A2-0280, A2-0281, A2-0616, A2-1044,
-  A2-1048, A2-1055, A2-1060, A2-1063).
-- **Questrade / RBC: one export holding several broker accounts.** A
-  Questrade file whose Account Type puts a registered plan's rows in a
-  taxable account (or a taxable account's rows in a registered one) is
-  refused — its TFSA trades were booked as taxable gains with rc 0.
-  Any other multi-account Questrade file, and an RBC file holding rows
-  of several RBC accounts (RBC writes no account type), is an ATTENTION
-  line: every row goes to one taxjson account (re-audit A2-0025).
-- **RBC / Questrade / Webull: money-affecting parser warnings reach the
-  run console.** A guessed listing for a USD return of capital on an
-  untraded symbol (now suggesting `TOBASE`, which works, instead of
-  `GLOBAL`, which stopped the run), an RBC temporary code assumed to be
-  the receipt's ticker, a ticker change without a reorganization row
-  (now also when the new symbol opens with a buy and then goes short,
-  with the `GLOBAL` line on the first line), an RBC notional
-  distribution whose income is left to the T3, a Questrade internal
-  code, a dividend booked net of non-resident tax and a transfer-in
-  with no book value are `ATTENTION` lines now; they sat in the .sum
-  only. In a Canada project the $0-cost stock-dividend note is an
-  ATTENTION line too, and `taxjson run` echoes an echoed warning's
-  indented continuation lines (re-audit A2-0005, A2-0007, A2-0027,
-  A2-0096, A2-0099, A2-0265, A2-0270, A2-0276, A2-0279, A2-0282,
-  A2-0283, A2-0612, A2-0613).
-- **RBC: a CLOSE CONTRACT row the books cannot back is said out loud.**
-  RBC re-describes an option between yearly exports (.RCI in 2024,
-  .RCI.B in 2025; an adjusted .TRX1). With the opening position in a
-  `.tt` under the old root, the close was booked as a NEW written (or
-  long) option — its premium taxed in full, the real position left
-  open — with rc 0 and no warning. The parser now carries RBC's OPEN /
-  CLOSE CONTRACT marker (and expiries and assignments as closing) as
-  the `open_close` code, and the run console prints an ATTENTION line
-  for any option row coded closing that the books cannot back, naming
-  the contract held under the related root and the exact `ticker.map`
-  GLOBAL line. The expired-option warning points at that line instead
-  of a missing expiry row, and `taxjson handoff` accepts a re-described
-  root (same expiry, strike, quantity and cost) while failing a `.tt`
-  whose root this year's export closes under another spelling
-  (re-audit A2-0006, A2-0095, A2-0266, A2-0267).
-- A Questrade or RBC share buy at $0 price and $0 cash (almost always a
-  transfer or journal row booked with no cost) is flagged ATTENTION
-  (audit A2-0619; Webull refuses it, the generic importer already did).
-
-- Parse checks (audit A2-0104, A2-0110, A2-0109, A2-0632, A2-0633):
-  a broker-printed settle date more than 7 days after the trade is
-  booked as printed but flagged ATTENTION (CA-DATE-03 / US-DATE-04); an
-  export cut inside a quoted last cell is refused, and one that ends
-  without a line break on a number is flagged; one security-override
-  line that rewrites two different raw symbols (IB `LEN` and `LEN B`)
-  is flagged; a decimal-comma option strike (`2,50`, `1,0000`) and a
-  stacked currency sign (`$€5`) are refused instead of misread.
-- A file whose rows are all recognized non-events (a deposit-only RBC
-  file, a Questrade FX conversion, a Kraken Earn allocation) prints
-  `0 tax objects (N recognized non-event row(s))` instead of the
-  `parsed to 0 transactions` warning that failed `run --strict`
-  (A2-0301, A2-0303); a Kraken Hybrid Earn move is no longer counted as
-  a possible taxable send (A2-1078); security overrides never rewrite a
-  `/` or `\` futures row (A2-1092).
-
-- Dedup per broker account (audit A2-0008, A2-0625, A2-0296, A2-1085,
-  A2-0286): every parser that reads the broker account (IB, Questrade
-  `Account #`, RBC `Account`) stamps each row with it, hashed
-  (`source_account`); cross-file dedup in the books, `taxjson-sort
-  --dedup` (which now also reads the parse's per-file accounts, A2-0297)
-  and the fee report never collapses rows of two different accounts —
-  two accounts holding the same ETF no longer lose half the
-  distributions.
-- Dedup no longer depends on file order (A2-0105, A2-0624): a `.tt` line
-  equal to an exported row stands for one exported row, so two accounts'
-  identical fill plus a matching `.tt` line book two rows in any order,
-  and two `.tt` files plus one export book two.
-- A `.tt` line that repeats an exported row by hand (a different id, so
-  both are booked) now prints an ATTENTION line (A2-0295); two exports
-  that disagree on the dates both cover name the rows only one holds — a
-  restated IB statement next to its older vintage (A2-0108).
-- One broker account's export placed in two taxjson accounts prints an
-  ATTENTION line naming both (A2-0293, A2-0630).
-- An IB Corporate Actions `Ca` is offered only to statements of its own
-  broker account (A2-1090), merge2's trade-`Ca` pairing compares the
-  broker account (A2-1095), and the TRANSFER-evidence sidecar keeps
-  identical custody moves of two accounts (A2-1093, A2-1094).
-
-- **Generic importer fixes (re-audit 2).** A cut-off last record (fewer
-  cells than the header, a final separator with no line break, a cut
-  currency code) is refused instead of completed from `[defaults]` (a USD
-  trade was booked as a CAD `.TO` security). Futures spelled `/` or `\`
-  are `F:` futures and settle on the trade date (they took the equity T+1
-  and a Dec-31 close moved a year), and `futures_settle = "next_day"` now
-  reaches the generic importer. An option closed at $0 on its expiry day
-  settles that day (CA-DATE-08). A commission rebate lowers the cost and
-  raises the proceeds and is booked as a negative fee (it was a charge).
-  A buy row with a cash-in amount in a cash-signed file is refused (a
-  sale under one action mapped to buy). A dangling sidecar mapping, a
-  non-string `[defaults]`/`[formats]` value and a mapped settle date more
-  than 31 days late are refused (more than 7 days: ATTENTION). New
-  `dividend_in_lieu` target; UTF-16 exports are read (also by
-  `taxjson-generate-parser`); a $0 option close beside a stock trade at
-  the strike is named as a possible exercise/assignment (ATTENTION).
-  Optional `[columns] account` / `[broker] account` name each row's broker
-  account (A2-0030, A2-0103, A2-0106, A2-0107, A2-0299, A2-0626, A2-0628,
-  A2-0629, A2-1075, A2-1076, A2-1079, A2-1080, A2-1081, A2-1083,
-  A2-1085).
-- Webull: a last row cut short ('CAD,12-12-2024,') is refused instead of
-  dropped; an unreadable Date is refused by file line; a share row with
-  no Price and no Proceeds, and a $0 option row that opens a position,
-  are refused instead of booked at $0; DIV/transfer rows are
-  `warning: UNBOOKED:` (console echo, `--strict` refuses); the ticker-
-  change hint now sees the buy-first shape and renames across yearly
-  exports; an inferred assignment's option leg settles with its stock
-  leg (CA-DATE-04); a split assignment shape is named; a newest-first
-  export is read bottom-up (CA-DATE-14); each row names its broker
-  account (preamble Account Number) for cross-file dedup (A2-0028,
-  A2-0102, A2-0284, A2-0285, A2-0286, A2-0288, A2-0289, A2-0290,
-  A2-0617, A2-0618, A2-0619, A2-1065, A2-1067, A2-1068, A2-1069,
-  A2-1070, A2-1071).
-- UTF-16 exports: the Webull, Kraken and Coinbase parsers and the IB
-  corporate-actions reader decode them like the IB/Questrade/RBC parsers
-  (no more false 'not UTF-8 or UTF-16 text') (A2-0101, A2-1064, A2-1066,
-  A2-1451).
-- **IB: a cancelled execution of a multi-fill order cancels that part
-  of the order.** IB lists an order filled 400 + 40 as one 440-share
-  Order row; a `Ca` naming the 40-share execution never matched it and
-  stayed booked as a phantom 40-share sale (with a false "original in
-  none of the inputs" warning). The order is now reduced pro rata to
-  400 shares, in the statement and across statements (audit A2-0298).
-- **A rename to a bare symbol is an ATTENTION line.** A ticker.map
-  rule (`GLOBAL RY.TO RY`) or a `ticker_extraction_overrides.txt` line
-  that turns a listed symbol into a bare one used to be accepted in
-  silence; the bare symbol is read as crypto or an unknown listing, so
-  a Canadian eligible dividend became a foreign one with an assumed
-  foreign tax credit. `taxjson run` now prints it on the console
-  (audit A2-0304).
-- **Futures at a negative price, and futures schema checks.** A
-  plain-futures buy at a negative price (WTI, April 2020) received cash;
-  its negative net is now accepted by the schema and booked as a
-  negative cost, where the magnitude the schema forced booked the loss
-  as a gain (tax-logic CA-FX-04 / US-FUT-01). The negative-price
-  exemption covers every futures prefix (`/` and `\` as well as `F:`)
-  in the schema and `taxjson-validate`; a futures row with no declared
-  contract size no longer gets a guessed-size ATTENTION (every
-  generic-importer futures row did); and an option expiry row dated
-  after its expiry day is a schema warning (audit A2-0302, A2-1082,
-  A2-1087, A2-1088, A2-1089).
-- **.tt lines spell Canadian listings like the broker parsers.** A .tt
-  `ABC.V` (on a CAD line), `ABC.VN`, `ABC.CN`, `ABC.NE` or `FTN.PRA.TO`
-  is now `ABC.TO` / `FTN.PR.A.TO`: it used to be its own ACB pool, so a
-  loss sold through a .tt file and the broker's repurchase of `ABC.TO`
-  were never linked as identical property. `.VN` is a Canadian venue to
-  the schema, T1135 (no more '??' REVIEW) and the price chain too, and
-  the venue-split lint catches `.VN` and undotted preferred series
-  (tax-logic CA-ACB-04 / US-BASIS-06; audit A2-0300, A2-0635, A2-1077).
-- **.tt keeps income facts and full precision.** A DIVIDEND /
-  DIVIDEND_IN_LIEU / TAX / ADJUST line may end with `record=`, `ex=`,
-  `label=`, `dealer=`, `issuer=` and (ADJUST) `type=roc` tokens, and
-  `taxjson-convert-tt book.json` writes them: the round trip used to
-  move a December-record distribution and its ROC to the pay year, and
-  turn a Canadian dealer's payment in lieu (an s.260 deemed dividend)
-  into other income, with no word. Quantities and prices keep every
-  digit (a 10-decimal coin quantity was cut to 8, changing the row's
-  id). A .tt file whose last line has no line end warns that it may be
-  cut short (audit A2-0291, A2-0631, A2-1072, A2-1086).
-- **.tt: a sale whose commission exceeds its gross keeps its negative
-  proceeds.** A .tt SELL line may now carry the negative total
-  qty×price − commission (a penny option close: `-8.95` with a 9.95
-  commission) when its own commission explains it; any other negative
-  sell total is still refused. The old advice (`enter 0`) left the
-  excess commission out of the loss and now warns. `taxjson-convert-tt`
-  json→tt and the `taxjson events`/`trades` single-account view wrote
-  that negative total already, so their output re-imports again, and the
-  view now carries a declared contract size (`x1000`, `x10`) like
-  convert-tt (audit A2-0292, A2-0620, A2-0621, A2-0622, A2-0623,
-  A2-1073, A2-1226, A2-1227).
-- **IB: a futures fill at a negative price keeps its money sign.** A
-  sale at -37.63 (WTI, April 2020) was booked as receiving 37,630, a
-  loss of 57,630 became a gain; the parser now keeps the notional's
-  sign, the futures settlement books a buy's cost signed and the schema
-  accepts the negative buy (tax-logic CA-FX-04 / US-FUT-01; audit
-  A2-0092). The generic importer and `.tt` lines still read the
-  magnitude (KNOWN_ISSUES).
-- IB: a warrant exercise leg (booked as a disposal at 0 — the warrant's
-  cost becomes a loss instead of part of the shares' cost) is an
-  ATTENTION line; the fix is deferred (KNOWN_ISSUES, audit A2-0090).
-- IB: a stock buy at zero cost is an ATTENTION line (it books a $0
-  cost; almost always a transfer or journal row — audit A2-0263); an
-  option description no form reads (a decimal-comma strike
-  `6,85`) is refused instead of becoming a raw symbol or a truncated
-  strike (A2-1041); a money row shorter than its section header (a
-  truncated export) is refused instead of reading the missing cells as
-  blank (A2-1042).
-- IB: a dividend or return of capital is re-bound to the listing held
-  on its payment date: a TSX buy months after an NYSE-line ROC moved
-  the ROC onto the TSX line (an EMPTY-pool s.40(3) gain and a currency
-  clash that stopped `taxjson run`), and two overlapping downloads
-  booked the same dividend twice (audit A2-0089). A row left on its
-  ISIN listing because two listings were held that day gets a note.
-- IB: one option contract keeps one root across the account's
-  statements, whichever statement is parsed (a re-download naming the
-  adjusted root DFDV1 split one put series in two, audit A2-0087); the
-  ticker-change hint names the old symbol first with the listing
-  suffix it is booked under and goes quiet once ticker.map joins the
-  two (A2-0611); an assigned adjusted (QZX1) or class-share (BRKB)
-  option leg shares its stock leg's settle date (A2-1028).
-- IB statement coverage is checked per broker account and against the
-  project year: another IB account's statement no longer hides this
-  account's missing half-year, an account whose only statement is the
-  prior year is reported (and `checklist` inputs-frozen says so), and
-  the owner's 2024 download pattern (Jan 1 - Fri Dec 27, Mon Dec 30 -
-  Jan 1) no longer reports the weekend as a gap or 2025 as missing. A
-  label holding the separate statements of several IB accounts is an
-  ATTENTION line (audit A2-0091, A2-0261, A2-0262, A2-0609).
-- IB: an open dividend accrual and a statement spanning several IB
-  accounts are ATTENTION lines on the run's console (they were only in
-  the .sum/.diag; audit A2-0264, A2-0610). Another IB account's posted
-  dividend no longer pays this account's accrual (A2-1035, A2-1039). A
-  dividend's ex date and share count come from its accrual in the
-  previous statement too, and a posting a day after the accrued pay
-  date keeps its ex date, so the US §852(b)(7) January-dividend
-  warning fires (A2-0601, A2-0602).
-- IB: a corporate action follows the security it names. A split whose
-  new leg names another ticker (`OLDT ... Split 1 for 10 (NEWT, ...)`)
-  moves the pool to it, a cash in lieu naming a delivered security
-  sells that security's fraction, and a stock dividend paid in ANOTHER
-  security is an `UNBOOKED` line instead of new shares in the parent's
-  pool (audit A2-0085, A2-0093, A2-0257, A2-1033). A TSX USD unit's
-  split, cash takeover, tender or commission refund stays on X.U.TO with
-  its trades (audit A2-0086).
-- IB: a Corporate Actions row IB cancelled (`Ca`) leaves no trace in
-  the parse output: a merger, spin-off or tender journal row leaves the
-  non-event tally and the tender note's row count and dates, a
-  cancelled cash takeover no longer prints its `NOTE: cash takeover
-  booked as a sale`, and a cancelled zero-proceeds cash in lieu no
-  longer warns (audit A2-0600, A2-1030, A2-0606, A2-1029, A2-1031,
-  A2-1034).
-- **IB: overlapping statements of one account no longer resurrect a
-  cancelled or refunded row.** A statement pairs a `Ca` cancellation
-  with its original (Trades, Transfers, Corporate Actions), folds a
-  commission refund into its trade and joins a cash in lieu to its
-  split on its own; an older overlapping download that still held the
-  unadjusted original kept it through dedup (a cancelled split applied
-  twice, a cancelled sale booked, a refunded buy booked twice). The
-  same adjustment is now applied to every overlapping statement of the
-  same IB account, and a `Ca` whose original is in two other
-  statements undoes both (audit A2-0023, A2-0024, A2-0088, A2-0258,
-  A2-0259, A2-1038).
-- **IB: a commission refund folds into its trade in another statement**
-  (a December trade refunded in January), and a refund naming one
-  execution of an Order row (`Refund (KWEB, -400, ...)` for a -440
-  order) or an option trade folds too (tax-logic CA-ACB-COMMREFUND /
-  US-BASIS-COMMREFUND; audit A2-0604, A2-0605, A2-1032, A2-1036). A
-  cash in lieu paid in the statement after its split joins that split
-  (A2-1037). A Corporate Actions `Ca` matches its original's currency
-  and asset category too (a CAD leg undid a USD split, A2-0603).
-
-- **`taxjson fetch` (Questrade) keeps the API's order of one day's
-  rows.** The fetched file sorted each day's rows by symbol and action,
-  and every re-fetch merge sorted the whole file, so a same-day sale
-  listed before its rebuy was booked as rebuy-then-sale: the sale used
-  the averaged ACB and gain moved into a later year (CA-DATE-14 /
-  US-DATE-13). Rows now sort by trade date only, and the merge keeps
-  the download's order (audit A2-0084, A2-0598).
-- `taxjson fetch`: the overlap check and `--trim-overlap` read a UTF-16
-  or UTF-8-BOM Questrade export the way the parser does. A UTF-16
-  manual export showed no overlap, so it double-counted next to the
-  fetched file with no warning (audit A2-0256, A2-1040).
-- `taxjson fetch` (IBKR Flex): the guard that refuses a download which
-  would drop the tax year's activity takes the download's span from its
-  Statement Period (else its activity dates), not from any digits on any
-  row. An 8-decimal P/L such as -26.20190219 read as 2019-02-19 and
-  silenced the refusal (audit A2-0083).
-- `taxjson fetch` (Questrade): activity windows ask from local
-  (America/Toronto) midnight, -04:00 in summer, not a fixed -05:00 that
-  could miss the first day of a summer `--from` window (audit A2-0599).
-- IB: a Trades clock time with an unpadded hour (`9:45:00`) is zero-padded
-  before the session rules compare it — it was read as an overnight fill
-  and a Dec 31 morning sale moved into January; an impossible time
-  (hour 24+, minute or second 60+) is refused naming the row (audit
-  A2-0082, A2-0260, A2-0607).
-- IB: fills outside the US regular session take their exchange's trade
-  date (tax-logic CA-/US-DATE-SESSION): US-dollar futures and
-  futures-option fills in the CME evening session (18:00 ET onward,
-  Sunday to Thursday, or on an exchange holiday) and SPX/SPXW/XSP/VIX
-  options in Cboe Global Trading Hours (20:15 ET onward) trade on the
-  next trading day; ASX options and warrants (not only stocks) and
-  HKEX, Tokyo, Singapore and NZX fills are dated in local time; the
-  after-midnight part of a US overnight session on an NYSE holiday
-  moves to the next trading day. A Sunday-evening futures fill is no
-  longer dated Sunday, and a Dec 30 evening futures close settles in
-  January under `futures_settle = "next_day"` (audit A2-0252, A2-0253,
-  A2-0254, A2-0255, A2-0595, A2-0596, A2-0597, A2-0608, A2-1027).
-- IB: a stock or warrant settles in its listing's market, not its quote
-  currency: a USD unit listed on the TSX (ZSP.U) on the Canadian
-  calendar, and a USD line listed on the LSE (a UCITS ETF) is booked as
-  `.L` on the UK T+2 cycle instead of a fictional `.US` security on
-  US T+1 (audit A2-0595, A2-0081). `check-dates` notes a Sunday-evening
-  GTH index-option fill instead of calling it an ERROR.
-- A ticker that trades again after a rename moved it to a new symbol is
-  flagged (`warning: ATTENTION: ... after its rename ...`) in both
-  countries: the superficial-loss / wash-sale rule treats it as the
-  renamed security, which is wrong if another company now uses the
-  ticker. The class is unchanged — the export cannot tell the two cases
-  apart (A2-0197; CA-ACB-04 / US-BASIS-06).
-
-- The JSON input path (`taxjson-gains` on a hand-written file, the core
-  loader) refuses a trade whose settle date is before its trade date, as
-  the parsers do (CA-DATE-03 / US-DATE-04); `taxjson-validate` reports it
-  as an error and a settle more than a month late as a warning (A2-0959).
-- Canada: the gains inventory carries `last_acq_settle`, the latest
-  acquisition's settle date, and `taxjson harvest`'s TX_ADD / SH_ADD
-  columns measure the 30-day window from it (s.54 counts settle dates);
-  they showed the trade date, off by a weekend near day 30 (A2-0958).
-
-- The standalone year flags (`taxjson-gains/-explain/-audit/-carryover/
-  -t1135 --option-grant-since`, `taxjson-brokerage --tax-year`,
-  `taxjson-carryover --project-year`, `taxjson-audit --check-year`)
-  refuse an implausible year such as 226 for 2026, like `--year`
-  (A2-0955).
-
-- `taxjson-explain` and `taxjson-audit` take `--sheltered` more than
-  once, as `taxjson-gains` does; a second file used to replace the first
-  silently, and the superficial-loss denial it backed disappeared
-  (A2-0194).
-
-- Canada blended books: a split and a trade at the same stamp are walked
-  split first in the per-account split of the blended pass (and in the
-  distribution balance walk), as the engine does (CA-DATE-14): a buy
-  listed before a same-stamp 2:1 split showed 300 shares in `list` /
-  `shares` where the books held 250, with a false "likely phantom"
-  warning (A2-0013).
-
-- Canada: `taxjson list --date` and the close-year `year_end` snapshot
-  judge a trust's return of capital by its record date, as the books do
-  (CA-INC-DATE-ROC-TRUST): a January-paid ROC with a December record
-  date used to be cut off, so the as-of ACB differed from the engine's
-  (A2-0554/0960/0202).
-
-- **A cost adjustment in another currency no longer stops `taxjson run`.**
-  A USD return of capital or notional distribution on a TSX listing
-  (RBC, Questrade, IB, in either country), or a CAD `.tt` ADJUST /
-  DISALLOW on a USD unit, made the native-currency raw pass exit 1 at
-  "raw gains" with advice to run an underscore tool. The raw merge now
-  restates such a row in the listing's currency at its date (a note per
-  row); with no rate on file the native holdings view is skipped with a
-  note. The filing books were never affected. The engine's own
-  currency-mismatch error names the row and the installed command
-  (A2-0055/0191/0204).
-
-- **Long calls as replacements: class-share roots, mini contracts and
-  futures options.** A call booked under the root that drops the share
-  class (RCI for RCI.B.TO, BRKB for BRK.B) is now a call on that class
-  line: Canada denies the loss and the US warns (A2-0015/0016/0207). A
-  call's replacement units are its declared contract size (a `x10` mini
-  replaces 10 shares, not 100) in both engines (A2-0049/0957). A futures
-  option on the loss's own futures contract is flagged for a manual
-  check in both countries instead of being enforced as a 100-unit call
-  in Canada (A2-0014/0056). tax-logic CA-SL-05/15, US-WASH-12/15.
-
-- Canada: a coin rebuy under a millionth of a unit now backs its share
-  of a superficial loss; the solver's zero is the pool's own (relative
-  for a coin) instead of a fixed 1e-6 (A2-0552; cents at most).
-
-- **Canada superficial loss: one held unit backs one denial, and
-  same-moment rows follow the export order.** A registered account's
-  units claimed by an earlier loss, or a call contract claimed through a
-  row sold since, could back a second denial (A2-0012/0057/0198). Same-
-  moment losses, rebuys and triggers were ordered by the rows' content
-  hash or account label, so a one-cent price change could move a denial
-  or turn a deferral permanent; they now follow the main pass's order
-  (export row order, accounts in taxjson.toml order — CA-DATE-14): a
-  rebuy listed after a same-moment loss sale is a purchase after it
-  (A2-0058/0193/0059/0551/0192/0961/0965). A deferred loss's bump now
-  reaches a same-moment sale listed after the replacement purchase
-  (A2-0555). tax-logic CA-SL-08/09/10 state it.
-
-- **An option assignment's premium goes to its own stock leg (both
-  countries).** The premium ledger used to pair an assignment with the
-  first marked stock leg within 7 days, or with whichever option was
-  staged first: a plain (IB/RBC) assignment next to a Webull marked leg
-  took the other assignment's premium and the other premium was lost;
-  a stock leg dated a day before its option row dropped the premium
-  from every year; same-moment assignments swapped premiums by row
-  order; and a x10 mini option was sized at 100 shares, so one of two
-  mini assignments was never folded. Each assignment is now paired by
-  identity (same account and underlying, the delivered quantity at the
-  declared contract size, the strike as the leg's price, a leg dated up
-  to 3 days before or 7 days after the option row), and the
-  "unconsumed" warning names that window instead of saying the leg
-  never arrived. tax-logic CA-OPT-08 / US-OPT-05 (audit A2-0050,
-  A2-0051, A2-0052, A2-0195, A2-0196, A2-0203).
-- **US: an unapplied return of capital or notional distribution is on
-  the console.** A basis adjustment the US engine cannot apply (no
-  shares held after a full sale, or the position short) printed only to
-  the .sum; `taxjson run` now echoes it as `warning: ATTENTION:
-  unapplied basis adjustment: ...`, and a basis increase is no longer
-  called a return of capital (A2-0199, A2-0964). The US stock-dividend
-  notes print only for the tax year's dividends (A2-0956).
-- tax-logic states engine behaviour that only KNOWN_ISSUES described:
-  Canada's basis increase on an emptied pool goes to the next purchase
-  and an ADJUST on a short is the short seller's compensation payment
-  (CA-ACB-13/14); the US leaves both unapplied (US-ROC-04); §1091(e)(1)
-  is not modelled (US-WASH-19); an IRA buy sold before the loss still
-  makes it permanent (US-WASH-11); Schedule 3's acquisition year comes
-  from trade-date days held (CA-DISP-07) (A2-0062, A2-0962, A2-0963,
-  A2-0964).
-- **US: a loss on a futures contract (or an option on one) is no longer
-  disallowed as a wash sale.** A §1256 contract is not stock or
-  securities; a re-bought F:CLG7 had its whole loss disallowed with no
-  flag. The re-purchase is now flagged for a manual check
-  (`futures_vs_loss`); Canada keeps denying (s.54 covers any property)
-  (tax-logic US-WASH-18; A2-0053).
-- **US: same-moment replacement lots of two accounts follow the
-  taxjson.toml order**, as US-DATE-13 states, not the account label:
-  renaming an account moved a wash-sale deferral to the other account's
-  lot (A2-0200, A2-0208).
-- **US: a stock dividend posted after the shares were sold is not a
-  wash-sale purchase** (US-STKDIV-01); it washed part of the loss. The
-  warning now names the sold-before-paid case (A2-0205).
-- **US: wash-sale replacement lots keep the right shares, units and
-  holding periods.** A replacement bought before a split got the
-  disallowed loss on the pre-split share count (half the matched
-  shares), creating a fake loss and an inflated gain at its sale
-  (A2-0054); a later purchase matched by two losses became one merged
-  block with an averaged bump and the earliest tacked date, so a
-  short-term block was reported long-term (A2-0060: now one block per
-  matched loss); a short-side replacement bigger than the loss spread
-  the proceeds reduction over every share of the new short, moving loss
-  into a later year (A2-0206: now share for share, as on the long side).
-- **US: shares closed by one sale never wash each other.** A sale that
-  closed an old lot together with shares bought in the last 30 days
-  washed the old lot's loss into the very shares it was selling, split
-  them, and cascaded one chunk at a time: a 1-share old lot sold with
-  100 recent shares gave 101 Form 8949 rows (100 code W, 55,500 of
-  adjustments on a 1,060 loss, the short-term loss reported long-term),
-  and a 0.001-share lot 100,001 rows. Shares (or shorts) closed by the
-  same sale or cover — one row, or the same-second fills of one order —
-  are no longer replacements for each other; shares kept after the sale
-  still are (tax-logic US-WASH-17; audit A2-0001, A2-0017, A2-0553).
-  The wash radar's US EXITABLE advice now says the full exit must be
-  one order.
-- US `reorg_368_boot`: the cash boot and the new shares' value (in the
-  new listing's currency) and the old basis (in US dollars) are combined
-  in USD, and each leg is booked in its own listing's currency at the
-  effective date's rate; the hints were added unconverted across
-  currencies (A2-0216). The prompts name each hint's currency.
-- **US: a §355 spin-off's `allocated_acb` is read in US dollars** on any
-  listing (A2-0973): on a TSX-listed parent it is converted at the
-  spin-off date's rate, so the moved basis is exactly the USD figure;
-  it used to be read as CAD. The prompt and US-CORP-07 say so.
-- Corporate-action rows name the election actually made instead of
-  `election=none` (A2-0558), and a taxable merger booked at $0 says
-  whether the saved election values it at 0 and gives the `taxjson
-  elect ... --set` command the run-level warning gives (A2-0974).
-- Questrade corporate actions: an UNBOOKED line from the corporate-action
-  stage (a DIS chain that nets a removal) is echoed on the console and
-  refused by `run --strict`, as the parse stage's are (A2-0211); the
-  internal-code hint names the symbol as booked (`D056068.TO`) and goes
-  quiet once ticker.map renames it (A2-0966); a spin-off parent held only
-  in a start `.tt` can be named with a `GLOBAL <SEC#> <PARENT>` ticker.map
-  line, which the warning now suggests (A2-0980).
-- RBC corporate actions: a spin-off's parent is the listing held on the
-  spin-off date, not any listing the account ever traded (A2-0210); a
-  spin-off `REVERSE ENTRY` cancels its posting, so a reversed and
-  rebooked spin-off is offered once and no false short warning is
-  printed (A2-0213); merger legs split across two statements are paired,
-  and a removal with no receipt anywhere now blocks the run as an
-  `unsupported` event instead of only warning (A2-0214); options
-  adjusted together by a special-dividend XCH pair by strike rank,
-  whatever the row order (A2-0222); corporate-action symbols use the
-  parser's own canonical listing (FTN.PR.A.TO, not FTN.PRA.TO; A2-0223).
-- RBC corporate-action text: a ratio or option strike written with a
-  decimal comma (`0,5 NEW = 1 OLD`, `6,4`) is refused instead of read
-  from after the comma as 5 or 6 (A2-0972, A2-0976); cash on a
-  reorganization leg counts as a return of capital only under RBC's
-  `ROC OF C$<amount>` clause, not when the words appear in an issuer
-  name or a negation (A2-0559).
-- **Elections manifest migration never hands one event's election to
-  another** (A2-0064, A2-0217, A2-0557, A2-0975, A2-0978; R1-301
-  residue A2-0168, A2-0872): a record keyed by a current event's own id
-  is never moved; an older id that several same-day, ISIN-less events
-  share is resolved only by the record's saved summary, otherwise
-  listed for you to set again; the account-rename fallback also needs
-  the saved summary's action type and ratio to match; a change of the
-  readable symbols is named in a note.
-- IB corporate actions use the statement parser's listing rule: a
-  merger or spin-off of a TSX-listed USD unit (QZAA.U) is booked on
-  `.U.TO`, where its trades are, not on a phantom `.US` line (A2-0209,
-  A2-0219), and a leg on a currency-tagged IB line (RGLD.CAD) is
-  warned about with the ticker.map fix (A2-0556).
-- **IB: a cancelled (`Ca`) corporate action is no longer offered for
-  election** (A2-0018, A2-0019, A2-0020, A2-0068, A2-0069, A2-0212,
-  A2-0220, A2-0970, A2-0971): each `Ca` row removes its original (same
-  description, negated quantity) in whichever statement of the account
-  holds it, for mergers, spin-offs and merger shapes taxjson cannot
-  book. Only the corrected rebook is offered; overlapping statement
-  vintages no longer let the cancelled original win. The Code cell is
-  split on `;`, `,` and spaces as the statement parser does. A
-  cross-listing journal IB cancelled and rebooked (the RGLD.CAD shape)
-  no longer needs a manual `ignore`.
-- IB corporate-action times are zero-padded before they are compared,
-  so a merger takes its earlier leg's time (A2-0984); copies of one
-  event from several statements combine the same way whatever the file
-  order, with a warning when one broker account's statements disagree
-  (A2-0977).
-- **An s.86.1 election on a USD parent no longer stops `taxjson run`**
-  (A2-0002, a regression of S072-15; A2-0215, A2-0967): the CAD amount
-  given as `allocated_acb_cad` is booked in each listing's currency at
-  the spin-off date's rate, so the tax books get exactly that CAD figure
-  and the native holdings view stays in one currency. The raw-holdings
-  guard now also counts ADJUST rows, so a row it cannot convert skips the
-  native view instead of aborting the run.
-- **Canada: rows that settle on the same day go in trade order.** Over a
-  settlement holiday a Friday trade and the next trading day's trade
-  settle together; the engine took them by clock time, so a Monday
-  09:45 buy was applied before the previous Friday's 15:00 sale (wrong
-  ACB, a false superficial loss). They now go in trade-date order
-  (tax-logic CA-DATE-14) (A2-0067).
-- **A split repeated with a rounded ratio is applied once.** A manual
-  `.tt` SPLIT line (2.333333, or convert-tt's 8 decimals) next to the
-  broker's own row (2.333333333) scaled the pool twice at exit 0. Copies
-  whose ratios agree to 1e-6 within the 7-day split window are one
-  event, take the most precise ratio, and `run` prints an ATTENTION
-  line naming them (A2-0070). A same-day rename chain (A→B, B→C) gives
-  the same superficial-loss unit conversion in either row order
-  (A2-0983).
-- **`taxjson spinoffs` in a US project** flags a $0 §301 distribution
-  (ZERO-VALUE) and a §355 spin-off with no allocated basis
-  (NO-ALLOCATION) and exits 1, with US wording (an IRA is not called a
-  "registered account") (A2-0063, A2-0221). `spinoffs` and `splits`
-  refuse an unreadable or malformed manifest or base file instead of
-  crashing or reporting an empty view (A2-0968, A2-0969); a corrupt
-  manifest's error no longer suggests deleting it (A2-0979).
-- **`run --fast` sees election, sends and config edits by content.** The
-  elections manifest, sends.json and taxjson.toml are now in the
-  per-account content fingerprint, so a copy restored with an older
-  mtime no longer keeps the previous books (A2-0224, A2-0985,
-  A2-1229). `taxjson elect --redo` passes the same rates, base currency
-  and ticker.map as `run` (A2-0981, A2-0982), and the legacy manifest
-  migration is atomic (A2-0218).
-- `taxjson events` lines keep a dividend's withholding-netted amount
-  (the optional 9th column) and a declared TRANSFER's `DECLARED` token,
-  as `.tt` export does, so a pasted line re-imports the same row
-  (A2-0989).
-
-- US: a stock dividend paid after the shares were sold (between the
-  record and pay dates) no longer asks for "the missing purchase
-  history"; the warning says the §307 allocation reaches the sold lots
-  and must be adjusted by hand (A2-0562).
-
-- `reports/<account>_holdings.toml` now says (`meta.base_cost_basis`,
-  README) that its costs leave out distributions.map ACB adjustments,
-  which `taxjson list` includes (A2-0226).
-
-- `taxjson list --date` now passes the project's income-dating settings
-  (`corporate_distributions`) to its recomputation: a listed
-  corporation's return of capital was moved to its record date, as for
-  a trust, so the as-of cost disagreed with the run (A2-0995, A2-0996).
-
-- **Canada income dating: more split-share corporations, a loud
-  year-end flag.** XTD, GDV, LCS, PWI, SBN, WFS and PIC.A (and any row
-  whose description says "SPLIT CORP") are corporations: their
-  December-record, January-paid dividends and returns of capital now
-  stay in the pay year instead of moving to the record year as a
-  trust's. A `corporate_distributions` entry covers its issuer's
-  classes and series (`GHI.TO` covers GHI.PR.B.TO; `DEF.UN` now
-  matches DEF.UN.TO). A record date 92+ days before the pay date is no
-  longer used. Every trust distribution or ROC whose record date puts
-  it in another year than its payment is now printed on the console
-  (`ATTENTION: income year:`) in both project years — one of them
-  leaves it out (owner books: four January 2025 trust distributions
-  dated to 2024). The IB January trust-ROC warning stops once the two
-  `.tt` lines it prescribes are in the books. US: a bare
-  `ric_january_dividends` entry (`T`, `PSA`) is that fund's US listing
-  only — TELUS (T.TO) and PSA.PR.H.US are no longer moved (A2-0073,
-  A2-0076, A2-0229, A2-0230, A2-0231, A2-0561, A2-0991, A2-0992,
-  A2-0993).
-
-- **capital_gains_dividends.map reads what it documents.** A bare root
-  (`FTN`, `T`) also claimed the issuer's preferred series (FTN.PR.A.TO)
-  and a same-root foreign listing (AT&T's T.US), turning their
-  dividends into box-18 capital gains; it now covers only the root's
-  Canadian listings. An AMOUNT with a decimal comma (`17,11` read as
-  1711) or an underscore is refused, a map that is a directory or a
-  dangling symlink is an error instead of "no map", and a date entry
-  matches the pay date of a distribution the books date by its record
-  date (the documented `XTD.TO 2025-09-10 5.50` example was refused)
-  (A2-0075, A2-0227, A2-0228, A2-0560, A2-0987, A2-0990, A2-0994).
-
-- **distributions.map adjustments reach the holder of record's lots in
-  the US.** The ADJUST was stamped at the end of the record date, so in
-  a trade-date engine a sale traded on the record date (still the
-  holder of record under T+1) left it "found no open lots ... NOT
-  applied" (and called a basis increase a return of capital), and a buy
-  traded on the record date shared it. A trade straddling the record
-  date now moves the stamp to the day before it (the record date stays
-  the settle date). A map return of capital now warns when the book
-  already has that ROC (broker row or .tt ADJUST, by pay or record
-  date — also in `roc-sum` across the year end) or when its cash is
-  still a DIVIDEND row counted in full as income (A2-0071, A2-0072,
-  A2-0232, A2-0988).
-
-- **Per-account holdings and distributions.map sizing follow each
-  ticker's own shares.** The record-date balance walk (used to size a
-  distributions.map adjustment and to split a blended Canada pool by
-  account) kept one running balance for a whole rename family: a
-  rename-split scaled shares already held under the new ticker, an old
-  ticker bought again after its rename counted under both names, two
-  accounts' copies of one split doubled each other, and a buy listed
-  before a same-moment split was scaled by it. It now holds shares per
-  account and symbol like the engine (list/shares/sanity and the
-  adjustments agree with the gains), a map key that still holds shares
-  under its own name is sized on them, and the blended-pool
-  conservation warning names an excess as over-reporting instead of
-  blaming phantoms (A2-0021, A2-0074, A2-0225, A2-0986).
-- **phantoms.json is applied to the native books too.** The raw
-  holdings pass ran without it, so `reports/<account>_holdings.toml`
-  (and the web positions) listed every phantom pair as a short, and
-  `taxjson gains` showed a phantom-basis sale as a realized gain; both
-  now match `sum` and `list`, and `gains` notes the sales left for
-  manual reporting (audit A2-0111, A2-0305).
-- **A phantoms.json entry on a real short or a written option is
-  flagged.** An entry for a short the broker marks as a short sale
-  (RBC `SHORT.`, IB code `O`) or for an option the broker never coded
-  closing is still applied, but every applier (run, t1135, wash-radar,
-  option-boundary, apply-distributions) prints an ATTENTION line, the
-  run echoes it, and `find-missing-history` and the checklist ask to
-  remove it (audit A2-0308, A2-0310, A2-0311, A2-0637, A2-0638,
-  A2-0639).
-- **find-missing-history:** a buy the broker marks as covering a short
-  (RBC `COVER SHORT.`, IB code `C`) with no short in the data is
-  reported as missing history (A2-0306, A2-0175); an ASSIGN stock leg
-  counts in the $0-basis check (A2-0307); a Norbert's-gambit pair
-  folded by a ticker.map JOURNAL line is no longer a one-day phantom
-  short, and `--gen-phantoms` leaves it out (A2-0309, A2-0636); a
-  decimal-comma merger ratio is left out of the hint instead of read as
-  125 (A2-1096); a Canadian plan name in an account label matches as a
-  whole word, so a taxable `sunlife` is not a LIF (A2-1097).
-- **`find-missing-history --gen-phantoms` never overwrites a reviewed
-  file** (nor does `taxjson-gains --suggest-phantoms`): it stops unless
-  `--force`, which keeps a `.bak` (audit A2-0312).
-- **A dangling symlink for a project map stops the run.** A
-  `ticker.map`, `phantoms.json`, `distributions.map` or
-  `crypto_ticker.map` that exists as a name but cannot be read was
-  treated as absent and the run exited 0 with other gains (A2-0313).
-- **US: a move between two of your own taxable accounts is flagged.**
-  The per-account lots do not carry the moved lot's basis, so the
-  receiving account's sale read as a short and the run exited 0; the
-  run now prints ATTENTION for each such move and `--strict` stops
-  (tax-logic US-BASIS-05; the carry itself is in KNOWN_ISSUES, audit
-  A2-0032).
-
-- Tests: mutation pins for fill-crypto, the tax estimate, merge2,
-  option-boundary, crypto-sends, income dating, the country helpers
-  and the settlement calendars (audit G1-0): the kill score of those
-  eight modules went from 59.5% to 89%; the survivors left are
-  equivalent mutants (epsilon boundaries, formatting, dead defaults).
-  No behaviour change.
-- **US: a spouse's replacement purchase is a permanent denial in your
-  books.** With affiliated trades given (`taxjson-gains --affiliated`),
-  a loss whose replacement your spouse or controlled corporation bought
-  was reported as a deferral (permanently_disallowed 0) that no lot in
-  your books carried, so it never came back and the wash conservation
-  did not foot. §1091(d) puts the basis adjustment on THEIR shares: the
-  loss is now permanently disallowed here, as for an IRA replacement,
-  and the trace says the basis goes to the affiliated holder. tax-logic
-  states the rule (US-WASH-16) (partition SPEC-30, ENGINE-I1).
-- **US: FIFO is per account on any merged book.** `taxjson-gains
-  --country usa` (and the library's GainsRequest) now keeps FIFO lots
-  per account by default, as `taxjson run`'s blended pass always did;
-  a direct run on a merged book used to pool the accounts' lots
-  (tax-logic US-BASIS-01, partition SPEC-30). `--per-account-basis` is
-  still accepted.
-
 - **Canada: a coin residue under a millionth stays a holding.** The
   pool walk emptied any position under 1e-6 units after a sale, so
   9e-7 BTC left after selling 1 BTC vanished from the holdings and its
@@ -1914,79 +2455,6 @@
   satoshis is no longer dropped. Share pools keep the millionth-of-a-
   share tolerance. A new coin-book fuzzer (units, cost and wash
   conservation) pins it (audit S069-13, tax-logic CA-CRYPTO-09).
-
-- **T1135: a superficial loss denied in an earlier year is in the
-  replacement's cost.** The cost walk added only the project year's
-  denials, so a 2025 denial on shares still held in 2026 was missing
-  from the 2026 maximum and Dec-31 cost columns (buy 120,000, sell at
-  90,000, rebuy within 30 days: the 2026 report said "no T1135
-  required" at 90,000). `taxjson t1135` now runs the engine once over
-  the full history (registered accounts as wash context, the project's
-  option timing) and replays every s.53(1)(f) addition where the engine
-  applied it; the gains files' `wash_sales` records carry those
-  landings (`adjusts`). The cost columns now equal the engine's ACB.
-  `--year-wash-only` keeps the old year-only mode with its note
-  (audit S008-07, S009-01, S051-21).
-
-- **IB open/close codes reach the missing-history checks.** IB's Trades
-  `Code` (O opening, C closing, C;O both) is kept on each trade. A short
-  IB declares (a sale coded O, or C;O that closed the long and opened the
-  short) is listed as a real short, not "missing a buy — fix before
-  filing", and is never offered as a phantom (a declared real short
-  no longer blocks the checklist). A sale coded C with no position in the
-  data — a long option bought before the statements — is always flagged
-  (options and futures included) with IB's Basis, and `option-boundary`
-  and the expired-option warning ask for the missing purchase instead of
-  an expiry row. Order-level codes are read per order, not per fill
-  (audit S013-00, S058-02, S060-12).
-- **A futures option keeps its contract size.** The size IB's instrument
-  list declares (CL 1000, ES 50, micro 0.1) is kept on option and futures
-  rows and on the year-end inventory: the holdings export writes it as
-  `contract_multiplier` and divides COST/SHARE by it, `taxjson list` too,
-  the web what-if prices a futures option with it (still refused when no
-  row declares one), and a `.tt` line may end in `x1000` so its total is
-  checked at the real size (audit S026-22).
-- **RBC "as of" stamp checked against the year.** An RBC export taken
-  before the tax year ended is an ATTENTION on the console (it cannot
-  hold the rest of the year), `checklist` inputs-frozen judges each
-  account's latest RBC export instead of the latest row of any broker,
-  and a note says when the year's back-dated Dec-31 book-cost
-  adjustments may not be posted yet (audit S063-22).
-
-- **Generic importer: name the real broker.** A mapping can set
-  `[broker] name = "wealthsimple"`. `taxjson run` then parses each named
-  broker's generic files on their own and records them as
-  `generic:<name>`, so `fees-sum` gives each broker its own row. A
-  broker whose fees come in only through a named generic file is no
-  longer listed as having "NO fees". One `taxjson-brokerage` call
-  refuses files whose mappings name different brokers (audit S027-05).
-
-- **Cross-file dedup no longer deletes separate trades.** Every parsed
-  row now records its input file. Identical rows in two `.tt` files, or
-  in IB statements of two different broker accounts, are both booked;
-  before, the second was dropped as a duplicate, which left a phantom
-  short and a wrong gain. The same row in two overlapping exports is
-  still booked once. When the files' overlap is too thin to tell, the
-  row is booked once and an `ATTENTION: dedup` line names both files.
-  `fees-sum` applies the same rule, so its trade count and commissions
-  agree with the books (audit R1-296, S031-02).
-
-- **Renaming an account keeps its corporate-action elections.** An
-  election's event id no longer includes the taxjson account name (the
-  elections manifest is already stored per account). A manifest written
-  by the old scheme is rekeyed on the next run, and so is one whose
-  account was renamed first: the single saved election with the event's
-  date and symbols is carried over, with a note. Before, every election
-  went back to pending (exit 3) after a rename (audit R1-301).
-
-- **Canada: T5 box 18 capital-gains dividends can be named.** A new
-  project-root `capital_gains_dividends.map` (`SYMBOL YEAR-or-DATE
-  all-or-AMOUNT [ACCOUNT]`) lists the split-share / mutual-fund
-  dividends the slip reports in box 18. `divs-sum` shows them apart as
-  CAPITAL-GAINS DIVIDENDS (line 17400) and the Canadian estimate taxes
-  them as a capital gain instead of a grossed-up eligible dividend. The
-  ledger and ACB are unchanged; a US project refuses the file
-  (tax-logic CA-INC-06; audit R1-62).
 - **crypto: the network fee hidden in a Coinbase Send is booked.** A
   send matched to its arrival on another exchange that arrived SHORT,
   with no fee stated (Coinbase puts the network fee inside the sent
@@ -1997,225 +2465,12 @@
   pool as phantom units (which also fed the superficial-loss still-held
   test). A Canada stablecoin's shortfall is US-dollar cash and gets no
   line. `crypto-sends` lists each with its value (audit R1-26).
-
-- **A trade whose money does not match qty x price is an ATTENTION line
-  on the console.** When the parser does not declare the contract
-  multiplier (Webull, RBC, crypto, a Questrade/RBC dividend
-  reinvestment priced `REINV@U$` on a CAD row), the schema's notional
-  warning used to sit only in the .sum DIAGNOSTICS: a 10x Proceeds was
-  booked with rc 0 and nothing on screen. `taxjson run` now prints it
-  as `warning: ATTENTION: schema: ...` (still not an error: the booked
-  money is the row's net amount) (audit S065-12).
-
 - **Kraken: PYUSD and GUSD are US-dollar cash in a Canada project.** As
   on Coinbase and like USDC/USDT/DAI: a PYUSD/USD buy is a currency
   conversion, an ETH/PYUSD fill a purchase for dollars, a PYUSD reward
   dollar income at 1.00 — no PYUSD pool that never closes, no Yahoo
   lookup; `crypto-sends` gives a Kraken PYUSD gift the currency gain.
   A US project keeps every stablecoin as property (audit S060-24).
-- **Docs: IB trust distributions and affiliated persons.** tax-logic
-  CA-INC-DATE-TRUST, README and KNOWN_ISSUES say why an IB row keeps
-  its pay date in a Canada project (IB prints no record date and calls
-  a trust's distribution a dividend; the accrual ex date is not used),
-  and CA-SL-04 and README document declaring a spouse's or controlled
-  corporation's account `sheltered` so its purchases deny your loss
-  (audit S057-23, S004-08).
-
-- **Schedule 3: a written option's premium is shown gross.** Under grant
-  timing, form-export and `sum`'s FOR THE RETURN block show a written
-  option's premium GROSS as proceeds with its write commission as an
-  outlay, as for a sale; the gain is unchanged. Line 6 proceeds and
-  outlays each rise by the year's write commissions. reconcile-slips'
-  gross proceeds match (audit R1-40; tax-logic CA-DISP-06). A year
-  locked by `close-year` reports the moved line 6 proceeds as drift in
-  `check-filed`.
-
-- **Adjusted-series and futures calls are flagged as possible
-  replacement property.** A call on an adjusted option series (root +
-  digit, e.g. `XYZ1`) or on the loss's futures contract by its family
-  root (`F:CL` after a loss on `F:CLG6`) bought inside a loss's window
-  is named for a manual superficial-loss / wash-sale check, the way a
-  warrant is, in both countries; warn-only, the numbers do not change
-  (audit S069-23; tax-logic CA-SL-15, US-WASH-15).
-
-- **fetch / watch.** `fetch` masks the Questrade account number in its
-  progress line and in API error messages (`questrade #59***`,
-  `/v1/accounts/59***/activities: HTTP 400 ...`); `--trim-overlap`
-  refuses to rewrite a sibling CSV whose record spans several lines (an
-  unbalanced quote swallowed out-of-window trades, which were deleted
-  with it); `watch --state` naming a directory, a path under a file or
-  an unwritable place is a one-line error, not a traceback (audit
-  S046-17, S046-16, S046-12).
-
-- **audit and find-missing-history follow ticker.map and the locks.**
-  `audit SYMBOL` also matches the broker's own ticker of a renamed
-  security (`audit CCJ.US` found nothing although every block prints
-  `SELL ... CCJ.US` and its MAPPING); `audit --year <locked year>`
-  recomputes with the option timing the lock recorded, and says so;
-  the merged `audit --json` total is summed over the events and
-  rounded once (it was a cent off wash-sales). find-missing-history
-  names the broker's ticker of a renamed symbol (K.TO <- KGC.US: a
-  missing buy belongs under the broker's symbol and currency), and
-  `--gen-phantoms phantoms.json` from the project root says `taxjson
-  run` auto-detects it (audit S048-17, S048-18, S047-17, S049-01,
-  S047-19).
-
-- **Wash advice: the still-held test, coins, US crypto.** buy-check no
-  longer says any loss sale within 31 days of a buy "would be
-  superficial" or that a rebuy always cancels a loss: in a Canadian
-  project both hold only if the bought shares are still held 30 days
-  after the sale (s.54 'superficial loss' (b)); a full exit is fine
-  (the radar's BLOCKED legend says the same). `buy-check ETH` means the
-  coin when the books hold one (it mixed in ETH.US's verdict and
-  nothing could ask about the coin alone). The "last loss sale" line
-  says which date it shows (settled / traded), includes a loss routed
-  to manual reporting (phantom basis), and warns when a gains file
-  cannot be read. In a US project, `wash-sales --explain` and
-  `wash-radar` no longer apply §1091 to crypto accounts (the pipeline
-  does not) (audit S048-19, S049-15, S047-06, S047-05, S047-02,
-  S047-03, S046-10; pin S047-08).
-
-- **close-year and option-boundary guard the lock.** close-year refuses
-  (without `--force`) a tax year that has not ended and a year with no
-  disposition and no income (a typo'd `[settings] year`), and always
-  refuses books built with another option timing than taxjson.toml now
-  says (the lock stamped the edited setting next to grant-timed
-  totals). option-boundary requires `[settings] year` (it printed "tax
-  year 0" and suggested `option_grant_timing_since = None`) and warns
-  when a `filed/<year>.json` cannot be read instead of silently giving
-  the opposite T1-ADJ advice (audit S045-23, S045-24, S046-02, S044-07,
-  S044-06, S044-08).
-- **Every `--year` is a plausible tax year** (1900..next year): `audit`,
-  `close-year`, `find-missing-history`, `taxjson-fees-sum`,
-  `taxjson-missing-history`, `taxjson-reconcile-slips`,
-  `taxjson-sum-income` (`audit --year 2204` printed an all-checkmark
-  reconciliation of nothing; `--year 0` meant all years).
-  `option_grant_timing_since` accepts 1900.. like `init --year` (audit
-  S047-14, S047-20).
-
-- **Query views say what they show.** `shares` is labelled as of the
-  books' latest date (it said "tax year 2025" over 2026 positions; JSON
-  `as_of`) and leaves futures out; `list` COST/SH is per share for an
-  equity option (it was per contract, 100x harvest's); `gains` and
-  `wash-sales` show a short row's proceeds/cost the real-world way, as
-  winners, ccd-sum and form-export do; `winners margin` / `ccd-sum
-  margin` no longer warn that the window 'margin' may exceed the year;
-  `divs-sum`'s compare-with-slips line leaves crypto staking out (JSON
-  `totals_slips`); `fx-cash --events` prints units to the cent;
-  `wash-sales`, `divs-sum` (and the other period views), `winners` and
-  `ccd-sum` warn naming a configured account with inputs but no books;
-  US projects get §1091 wording in `list` and the checklist (audit
-  S044-05, S044-04, S045-03, S048-10, S048-22, S048-24, S046-21,
-  S045-09, S049-14; pin S045-13).
-
-- **sanity: no silent gaps, no ids.** A holdings row with a quantity
-  but no symbol, or with a missing/blank quantity, is refused (it was
-  dropped and the check said OK); accounts with open positions but no
-  `holdings` file print `UNCHECKED: ...` and the checklist's sanity
-  step is attention instead of done; an unreadable taxjson.toml is
-  named as such (it said no account declares `holdings`); the missing-
-  file note and `--json` `file_account` mask broker ids (audit S044-18,
-  S044-19, S049-08, S044-03, S044-16).
-
-- **A corrupt work/ file is a one-line error everywhere.** A truncated,
-  non-UTF-8 or wrong-shape (`[1,2,3]`, `{"transactions": 5}`) gains,
-  base, raw or report file printed a traceback from about 17 read
-  commands (sum, estimate, winners, shares, wash-sales, list, leaps,
-  close-year, audit, t1135, form-export, wash-radar, buy-/sell-check,
-  option-boundary, transfers, roc-sum, fx-cash ...); they now name the
-  file and stop, or skip it with a warning where they already did
-  (`lib/json_input.read_work_doc`; `load_transactions` refuses a
-  non-list `transactions`) (audit S042-18).
-
-- **sum: rows foot and TOTAL counts PIL.** NON-OPT + OPTION = REALIZED
-  on every row as printed (REALIZED is rounded once; OPTION takes the
-  cent), and TOTAL = REALIZED + DIVIDEND + PIL, the same figure as the
-  `.sum` GRAND TOTAL (a payment in lieu was printed but left out). The
-  FOR THE RETURN footer no longer says every DENIED amount goes onto a
-  replacement's ACB: it names the permanently denied part (a
-  registered-account acquisition, s.40(2)(g)(i)) and the JSON carries
-  `permanently_denied`; form-export's general note says the same
-  (audit S042-21, S042-22, S043-02, S048-04).
-- **estimate / instalments say what they leave out**: the FX result on
-  foreign cash (line 15300; US §988) and slip capital gains, and for
-  instalments CPP/EI on self-employment earnings (`NOT MODELLED`
-  notes, JSON `not_modelled`). `[instalments]` amounts must be TOML
-  numbers (`"5_000"` was read as 5000). The withholding credit is
-  summed in a stable order (audit S048-12, S043-15, S043-05, S043-20;
-  test pins S042-20, S043-04, G1-3, G1-11).
-
-- **scan: no false all-clear, no egress while offline.** An unreadable
-  holdings report stops the scan (it warned, then printed "No findings
-  — clean scan." with exit 0); the unused-ticker.map-rule note is
-  skipped with a warning when a parsed source cannot be read (it listed
-  live rules as unused); `scan --online` honours `TAXJSON_OFFLINE=1`
-  (skips the Yahoo probe with a note — SECURITY.md now says so); the
-  online findings come in a stable order (audit S049-10, S042-10,
-  S042-12, S048-00, S042-13).
-- **audit: provenance.** The crypto ticker.map stage's `_mapped.json`
-  is a derived book, not a second source (every crypto block claimed a
-  false 2-file dedup and lost its MAPPING line), and account `margin`
-  no longer picks up a sibling `margin_us`'s parses (audit S047-12,
-  S047-13).
-
-- **PII gate (`scripts/check-pii.sh`, pre-push, release).** The text
-  inside binary files is scanned (PDF /Author, DOCX creator, PNG text,
-  spreadsheet cells — tree, ad hoc and the binaries a push adds); an
-  account-id shape in a folder name, an 8-9 digit value under an
-  `Account` / `Account #` CSV column, Webull's bilingual account line and
-  an IB id inside a token (`_U<id>Body`) are hits; identities get the
-  e-mail allowlist; branch and tag names a push publishes are scanned; a
-  ':' in a path no longer unmasks a denylist hit. `release.sh` runs the
-  pre-push gate itself, a missing `ruff` fails `ci.sh` (it is in the
-  `[dev]` extra), and the GitHub workflow runs the consistency, tax-rules
-  and PII stages (audit S023-00, S024-04/07/09/11/13/14/16/21/23/24,
-  S025-06).
-- **`taxjson serve`.** The Host allowlist is loopback names only (the
-  test client's `testserver` let a rebinding page read the books);
-  `taxjson.toml` hot-reload notices an edit that keeps the mtime;
-  `--token` requires the per-run token on a loopback bind too, and
-  SECURITY.md says other local users can reach a loopback server
-  (audit S078-10, S078-12, R1-346).
-- **`taxjson-generate-parser` refuses a sample that still carries
-  personal data** (account ids, names, contact details, denylist matches;
-  `--allow-unredacted` overrides), rejects `--sample-lines` below 1, and
-  tells drafted parsers to read required cells with
-  `parse_strict_number` (audit R1-342, S033-18).
-- **Cross-listing lint (`crosslistings.rpt`).** Reads ticker.map with the
-  engine's parser (`DISTINCT` pairs are OK, keywords in any case, an
-  unreadable map fails), nets share positions through splits, and counts
-  option rows toward their underlying's listing (audit R1-144, S035-02,
-  S035-03).
-- **`taxjson-fees-sum`.** `--year` help names the trade date; `--since`
-  must be YYYY-MM-DD; a row without an account is `<broker>/?`; fees in a
-  hand-entered `.tt` no longer leave the footer claiming the other
-  brokers had NO fees (audit R1-101, R1-154, R1-289, S031-03, S031-06).
-- Watchlist export: `.V` / `.CN` / `.NE` listings are Canadian
-  (`TSXV:` / `CSE:` / `NEO:` on TradingView, `:CA` elsewhere) (audit
-  S078-03). `merge2 --to` without `--rates` names the 1.35 default rate
-  it uses (audit R1-155). Crypto money cells with two sign markers
-  (`--5`, `(-5)`) or `1_000` are refused (audit R1-114).
-- `scripts/mutation_audit.py` restores the engine sources on SIGTERM,
-  SIGHUP and exit; `scripts/mutation_triage.py` has `--help` (audit
-  S025-00, S025-04).
-- Docs and samples: README T1135 (suffix-less symbols are the CRYPTO
-  bucket), the git-identity exception to "nothing personal leaves the
-  machine", form-export's outlays split (long sales, and under grant timing a
-  written option's write commission), REFERENCES
-  (no s.53(1)(h) citation), SECURITY.md egress list; `examples/README`
-  step 3 passes `--taxable`, the IB and Webull demo rows are fabricated
-  and self-consistent; real trade figures are gone from this changelog
-  and from test fixtures (audit R1-344, R1-355, R1-40, S023-13, S023-17,
-  S023-18, S023-22, S023-24, S024-00, S079-13, S079-14).
-
-- **Webull: a sale's debit keeps its sign.** A close at $0.00 whose
-  commission was charged ("(1.50)" in Proceeds) books -1.50 proceeds,
-  not +1.50 received. The row's
-  Type Code decides option vs shares (an OPC row with an unreadable
-  description, or an SHS row whose description reads as a contract, is
-  refused). The skip warning names only the skipped action codes;
-  exercise/assignment messages cite s.49(3) for a call, s.49(3.1) for a
-  put.
 - **Coinbase hardening.** A truncated row and a Send/Receive with no
   quantity are refused; a row of an unknown type that moves coins (an
   airdrop) is an UNBOOKED warning (fatal under `run --strict`); a dust
@@ -2234,569 +2489,12 @@
 - **`taxjson crypto-sends` lists matched sends that arrived short** — the
   network fee a Coinbase Send carries inside its quantity, which is not
   booked as a sale.
-- **Generic importer.** An explicit 0 in the amount cell of a priced
-  trade is refused (it was silently replaced by qty x price); the
-  fee-share refusal prints the share to 2 decimals and the 5% limit.
-- **`.tt` converter.** A file with a byte-order mark converts; json->tt
-  and tt->json write atomically; a row with no currency is refused (it
-  was written as CAD); currencies are upper-cased; a sale entered with
-  total 0 because the commission exceeded the gross no longer warns
-  "check for a typo". `taxjson audit` names the `.tt` file of a
-  hand-entered row.
-- **ticker.map tools.** The DELETE audit note prints the signed net cash
-  (a buy and a sale no longer add up) and names the `DELETE` line;
-  `taxjson-ticker-map` refuses a positional map plus `--map`; `merge2
-  --map` help describes the keyword format.
-- **Non-UTF-8 text files name themselves.** A latin-1 `ticker.map`,
-  `distributions.map`, `ticker_extraction_overrides.txt`, `t1135.map` or
-  `claimed_losses.txt` is a one-line error naming the file (`taxjson
-  run` too); a cp1252 broker export that detection cannot read says
-  "not UTF-8" instead of "rename it". `taxjson-lint-crosslistings`
-  refuses a non-numeric quantity in one line.
-- **`taxjson fetch`.** A project year whose window has not started is
-  refused (it fetched the previous year's last 90 days into the new
-  year's file); `--from` with `--days` is refused; a window outside the
-  year is noted; an API row with no settlement date is written with its
-  posting date. `taxjson-fill-crypto` never caches today's still-open
-  candle.
-
-- **Corporate-action legs never share a second.** An event stamped
-  23:59:59 (or with no time) put both legs of a taxable exchange on one
-  second, so a same-symbol exchange could pool the new shares before
-  selling the old; event times now leave room for the one-second leg
-  bump (S074-02).
-
-- **A spin-off rollover allocated $0 is loud.** An s.86.1 (Canada) or
-  §355 (US) election with `allocated_acb_cad` / `allocated_acb` = 0 booked
-  the spun-off shares at $0 with the parent keeping its whole cost and no
-  word; `elect --set`, the corp-actions stage, every `taxjson run` and
-  the checklist now flag it (S073-21, S074-04). A US §356 boot merger
-  with no value for the new shares warns that the recognized gain and
-  basis are understated (S073-22).
-- **US mergers and spin-offs: non-recognition is not optional.** The
-  option text no longer offers `taxable_exchange` for a qualifying
-  §368(a) reorganization "you aren't claiming", and the end-of-run
-  FILING REQUIRED reminder no longer fires for `reorg_368`,
-  `reorg_368_boot` or `tax_free_355`: only a significant holder (5% of a
-  public company, 1% of a private one, or a $1M basis) attaches the
-  Reg. §1.368-3 / §1.355-5 statement (S073-00).
-
-- **taxjson-corp-actions reads IB Corporate Actions columns by name.** A
-  header missing a column, or Data rows before any Header, is refused;
-  the fixed-position fallback read Report Date as the event date in IB's
-  consolidated layout or dropped the merger (S072-22). Questrade's
-  `ON 1,500 SHS` reads as 1500 (the ratio showed 150-for-1) (S073-02).
-
-- **RBC: another company's cash in lieu is no longer folded into a
-  reorganization.** A CIL row joins an event only by the same ticker or
-  the company's full name; half the name in common (ALPHA GOLD vs ALPHA
-  RESOURCES) moved the cash into the wrong sale and hid its "NOT booked"
-  warning (S072-01).
-- **RBC spin-off under a temporary code:** the warning names the symbol
-  as booked (`C135859.TO`) with the exact `GLOBAL` line, and stops once
-  ticker.map renames it (`taxjson run` passes the map to the corp-actions
-  stage) (S072-03).
-
-- **A broken elections manifest is a one-line error everywhere.**
-  `taxjson elect` (and every other command) on a manifest that is not
-  UTF-8, not JSON, or not the documented shape (a bare-string record, a
-  list of hints) printed a traceback; `taxjson elect <account>` now marks
-  an election key no rule knows as UNKNOWN (S072-05, S072-16).
-
-- **distributions.map is read strictly.** A per-share amount must be a
-  plain decimal (`nan`, `inf`, `1e309` and `1_0` were accepted) and the
-  date a real `YYYY-MM-DD`; a `0` is a placeholder that is no longer
-  reported as an applied return of capital; a symbol and date entered
-  twice are both applied with a warning and each ADJUST gets its own
-  id; `taxjson-apply-distributions --account` refuses a label no row of
-  the book carries (S025-12/14/16/19/23).
-
-- **Schedule 3 / Form 8949 export:** under grant timing a written option
-  and its buy-back count their contracts once in the units column (5
-  contracts showed 10); crypto unit counts keep full precision (a
-  0.00003 BTC sale showed 0 units); a write for a net debit shows no
-  proceeds and the debit as an outlay (it showed the debit as proceeds
-  and an invented ACB of twice it); a permanently denied superficial loss
-  is worded for an affiliated person's purchase too; the 2025 crypto-line
-  note follows the line routing itself. Form 8949 rows foot — (h) = (d)
-  − (e) + (g) on the rounded cells — so part totals, the printed 8949 and
-  the TXF agree to the cent. The stand-alone `taxjson-form-export`
-  refuses gains rows in another currency (the native `*_raw_gains.json`
-  summed USD and CAD under a CAD label), and `--csv` no longer leaves a
-  truncated file after a failed write. `taxjson sum` FOR THE RETURN says
-  when its cent-rounded rows differ from the gains files' unrounded
-  total.
-- **Stand-alone report tools refuse a non-gains file:** form-export,
-  sum-gains, ccd-gains, leaps-gains and t1135 refuse a JSON with no
-  `transactions` list or a pre-gains stage file (it rendered a $0
-  Schedule 3 / GRAND TOTAL 0.00 at exit 0); `taxjson-gains` (stdin) and
-  `taxjson-merge` refuse a document without the list.
-- **`taxjson audit`:** a grant-timing write is headed WRITE with its
-  premium as proceeds (it read "COVER ... (short)" with proceeds 0.00 and
-  a negative cost); a short's proceeds and cost are shown as filed (the
-  short sale and the cover, not the engine's negated legs); an option's
-  per-share note is "N contracts × 100 sh @ price" (it divided by the
-  contract count); a denial that is partly deferred and partly permanent
-  names both amounts and destinations (the deferred part read as lost);
-  a cross-zero option fill's long close and its grant write are two
-  events (they were summed into one meaningless SELL); a US sale over
-  long- and short-term lots is MIXED with the per-term gains; a `--check`
-  file named twice is read once (every tie-out failed); a saved
-  disposition with no id fails the reconciliation (it was skipped). The
-  totals say they are unrounded engine sums (Schedule 3 rows round to the
-  cent first), and the multi-book `--json` keeps the reconciliation
-  failures.
-- **T1135:** before Dec 31 a "below the threshold" verdict says "so far
-  (books through DATE)" and the checklist keeps the step open (it read
-  "no T1135 required this year" with a green [x] in September); the
-  year-end column is headed with the books' last date while the year is
-  open. Books in another currency than `--base-currency` (a native
-  `_raw.json`, a USD-base book) are refused instead of tested against
-  CAD 100,000 as if they were CAD; a non-CAD `--base-currency` warns.
-  `--threshold` / `--detailed-threshold` must be finite numbers >= 0.
-  `t1135.map` symbols match case-insensitively, and a COUNTRY word that
-  is not an ISO-3 code or CA/EXCLUDE (EXCLUDED, CDN) is ignored with a
-  did-you-mean warning instead of becoming a "country". Crypto rows
-  under 1e-6 units add their cost (as the engine books them). A long
-  option still held after its expiry is named. The report says the
-  test covers the brokerage books only (foreign bank accounts and other
-  property outside them must be added by hand), attributes the $250,000
-  Part A/B line to the T1135 instructions, and `--help` carries the
-  caveats.
-- **reconcile-slips:** a slip whose currency column (T5008 Box 13) names
-  another currency than the books is refused with a message naming Box
-  13 (a USD Webull T5008 gave one MISMATCH per symbol, every amount off
-  by the FX rate); an unreadable cost cell (`50000,00`, `nan`, `1 500.00
-  CAD`) fails the check like an unreadable proceeds or quantity cell
-  (the cost note vanished or came from a partial sum); a directory or a
-  CSV with bytes cp1252 cannot decode is one error line, not a
-  traceback; `--tolerance` must be a finite number >= 0 (nan or a
-  negative turned every symbol into "off by +0.00", and the `taxjson`
-  wrapper forwarded `-inf` as a separate token); `--help` lists the
-  accepted column spellings; a tainted count reads "1", not "1.0". The
-  checklist's T5/T3 step says the slip check is by hand and lists the
-  known reasons divs-sum differs from the slips.
-- **US estimate (experimental): NIIT and the loss carryforward.** The
-  up-to-$3,000 capital loss deduction now reduces net investment income
-  (Form 8960 line 5a; NIIT was up to $114 too high), and the
-  carryforward shown counts as used only what taxable income absorbs
-  (Capital Loss Carryover Worksheet line 4: zero other income carries
-  the whole loss). The US `--claimed` guidance says the same. tax-logic
-  US-EST-NIIT-LOSS, US-EST-CARRY-TI (audit S077-24, S078-01, S078-02).
-- **Canada estimate: what it does not model is stated** — credits
-  other than the BPA, the OAS recovery tax, and AMT adjustments outside
-  the books (README, KNOWN_ISSUES, the printed assumptions) (audit
-  S077-15, S077-17, S077-20; S077-22: the README now says the US
-  estimate gives no foreign tax credit).
-- **fx-cash: a sale whose commission exceeds its proceeds pays
-  currency** (it was counted as received, leaving phantom currency in
-  the pool) (audit S033-09).
-- **instalments.** When instalments are not required (s.156.1(1))
-  the JSON carries no shortfall, interest or penalty (it said
-  required_at_all=false next to them); the four quarters add up to the
-  year's figure to the cent, so paying exactly the net tax is not
-  "behind by 0.01"; a configured `prescribed_rates` schedule that
-  starts after January 1 says the earlier days assume its first rate
-  (audit R1-222, S034-14, S034-15).
-- **carryover: claimed_losses.txt and rounding.** A BOM is read, a
-  claimed year outside 1900..next year is refused by name instead of
-  becoming a phantom ledger row, a directory is a one-line error, and
-  every ignored line is listed in the report and JSON and turns the
-  checklist's carryover step to attention. A claim equal to the filed
-  (per-row-rounded) Schedule 3 loss no longer leaves a cents
-  carryforward or an "exceeds the losses" warning. A book whose rows
-  are not in `--base-currency` is refused (audit S001-04, S027-10,
-  S027-18, S027-19, S027-23, S028-00, S028-02).
-- **Filed-year lock.** close-year also locks the amounts the export
-  puts on each return line (Schedule 3 codes / Form 8949 part totals),
-  so check-filed reports a move between lines or an outlay folded into
-  a price; the lock's `proceeds` is documented as the engine's net
-  proceeds; totals are rounded once over the accounts; filed/ being a
-  file, a read-only project or a gains file that is not a JSON object
-  is a one-line error; every OK names what the lock does not cover
-  (interest, withholding, FX on cash) (audit R1-205, R1-281, S031-19,
-  S031-20, S032-11).
-- **checklist: no verdict from part of the books.** wash-reviewed is
-  blocked when a taxable gains file is unreadable, missing for an
-  account with inputs, or built for another year, and attention when
-  the wash pass is stale; audit and form-export say "rebuild" for
-  other-year or stale books instead of blaming phantoms; roc-entered,
-  inputs-frozen and run-clean name an unreadable base book or .sum;
-  missing-history counts every AFFECTS row (BRK/B, `?` currency); the
-  form-export check compares the unrounded rows with the .sum, so many
-  rows of rounding no longer read as a mismatch; a US project checks
-  for option positions left open past expiry; `sanity` names an
-  unreadable book instead of "not an account"; `watch` ignores a state
-  file that is not an object. Guidance: missing basis can understate
-  or overstate; split-share corps report on a T5 (box 18 -> line
-  17400) (audit R1-210, R1-338, S023-08, S066-15, S066-19, S067-04,
-  S067-10, S067-11, S067-12, S068-06, S068-11, S068-16).
-- **option-boundary cites the right law and sees more missing rows.**
-  An assignment folds the premium under s.49(3) (call) or s.49(3.1)
-  (put), never s.49(2); a buy-back loss cites IT-479R para 29 / 32
-  (README, design note and Webull messages corrected too). A write
-  still open after an expiry that falls inside the books (a January
-  expiry in books that run into February) is ATTENTION, not "open".
-  Writes and closes are dated on the project's `tax_date`, so a
-  trade-basis Dec-31 write that settles in January is reported as the
-  straddle the engine books (audit R1-39, R1-180, S075-00, S075-05).
-- **Broker detection and `taxjson-brokerage`.** An IB file is routed by
-  its section,Header shape (a Trades-first Flex download, a statement
-  without the BrokerName row or with a Title row first), and `taxjson
-  fetch` accepts exactly what detection routes; an RBC header after a
-  partial preamble or a blank line is found. A file in a legacy encoding
-  (cp1252) gets one line naming the remedy, as do RBC, Kraken and
-  Coinbase refusals (they were tracebacks); an unknown `--brokerage` is
-  a usage error (exit 2). An alias (`--brokerage qt`) is recorded under
-  the canonical id, so fees.rpt shows one row per broker. An account id
-  in an input file's NAME (IB's default `U1234567_....csv`) is masked
-  in every parse line, so it no longer reaches reports/. `taxjson
-  transfers` shows an in-book RBC transfer's BOOK VALUE.
-- **Shared broker helpers.** The back-computed fee (Webull, RBC) is
-  signed by the trade's direction — rounding noise is no longer turned
-  into a charge — and a flat commission on a cheap option fill is kept
-  (it was zeroed above 25% of net); fees.rpt only. "NOT A RETURN OF
-  CAPITAL", "RETURN OF CAPITAL GAINS" and a fund named "... RET OF
-  CAPITAL ETF" are dividends, not ACB reductions. Strict number cells
-  refuse non-ASCII digits and overflow; a lower-case currency is the
-  same currency (Questrade, the shared suffix helper); a decimal comma
-  inside description text ("ON 12,5 SHS", "BOOK VALUE $1234,56",
-  "$1,250.00 PER SHARE") is never read 10-100x off (the field stays
-  unknown, or the grouped number is read whole). Webull's settle-to-
-  trade walk-back is right on the T+1 cutover days themselves.
-- **IB: a commission refund lowers the trade's cost.** A Commission
-  Adjustments row naming its trade ("Refund (KWEB, 400, 2026-05-13)")
-  is folded into that trade — a refunded purchase commission comes off
-  the ACB, a refunded sale commission off the outlays — instead of a
-  stand-alone FEE row the gains never saw; one whose trade is not in the
-  statement stays a FEE row and is said. tax-logic CA-ACB-COMMREFUND /
-  US-BASIS-COMMREFUND.
-- **IB statement hardening.** A dividend or fee whose description says
-  "Total" (a "Total Return" fund, Nasdaq TotalView) is no longer
-  skipped as a subtotal; an unreadable Cash Report total on a reconciled
-  line, or an unreadable option/futures multiplier, is refused by name;
-  rows of a type IB does not write are counted and said (and a file
-  with no Data rows is refused); futures rows must match qty x price x
-  multiplier to the cent (no Cash Report line backs them); a lower-case
-  currency cell is upper-cased; IB rows carry the instrument's name
-  (`security_name`), so the cross-listing lint recognizes an IB-held
-  CDR.
-- **The foreign return-of-capital citation is ITA s.90(1), not
-  s.90(2).** s.90(2) is the foreign-affiliate rule; a portfolio
-  holder's foreign dividend is included by s.90(1), and a real
-  reduction of paid-up capital lowers the ACB (s.53(2)(b)(ii)). The IB
-  row note, `taxjson-brokerage --help`, tax-logic CA-ACB-08 and the docs
-  say so; nothing is computed differently.
-- **IB corporate actions.** A cash-in-lieu row with Proceeds 0 books no
-  cash (it used to book IB's market Value as proceeds) and warns; a
-  fraction folds into the split of its symbol nearest its date within a
-  week, in either row order (an unrelated earlier fraction no longer
-  skews a later split). A two-leg split on a SHORT position gets the
-  text ratio, not its reciprocal (102-for-100 was 0.98). A tender parked
-  in one statement and resolved in the account's next one is a quiet
-  no-op instead of two warnings, and the cash-tender NOTE no longer
-  points at a corp-actions election that cannot exist. A cancelled
-  untranslated row no longer stays in the skip count. A symbol with a
-  currency tag (RGLD.CAD) is warned about in every section — it is a
-  pool of its own.
-- **IB: payment-in-lieu share counts and the open-accrual warning.** A
-  PIL's share count/rate comes from the accrual of the listing that
-  paid it (the posting's currency first, a pay date within a week, the
-  Po row's rate — no longer the first accrual row seen); an accrual in
-  another currency than the cash gives its share count instead of a
-  wrong rate. The "accrued but not yet booked" warning pairs each
-  posted dividend with ONE accrual (exact pay date first), so another
-  week's dividend no longer hides an unpaid one, and a posting in the
-  account's other IB statement (the next year's) now counts.
-- **IB: overnight-session and ASX fills are dated by the exchange's
-  trade date.** IB stamps US Eastern clock time: a US stock or ETF
-  filled in the overnight session (20:00 ET onward, Sunday to Thursday
-  nights) now trades on the NEXT trading day and settles T+1 from it —
-  a Dec 30 20:30 sale trades Dec 31 and settles in January, and a
-  Christmas-night fill settles Dec 29 instead of Dec 26. An ASX fill,
-  stamped in the ET evening, is dated in Sydney time. The overnight row
-  sorts before that day's regular session; the broker's stamp is kept
-  as `broker_time`. tax-logic CA-DATE-SESSION / US-DATE-SESSION.
 - **Canada: crypto rows under a millionth of a unit are booked.**
   Staking rewards below 1e-6 units were dropped by the ACB pool (their
   income was taxed with no matching cost, and the holdings fell short of
   the exchange balance); a sub-micro sale was never reported. Owner-size
   effect: cents of ACB. The US engine still skips rows under 1e-8 units
   but now names them (KNOWN_ISSUES).
-- **Fee statistics:** plain futures fees are their own bucket in the
-  gains summary, the .sum fee stats and `fees-sum` (they were counted as
-  stock fees, and futures contracts as shares in $/share). README and
-  `fees-sum --help` now say that `fees-sum` counts by trade date (as
-  `taxjson fees`) while `sum` FEES follows the project's tax_date.
-- **phantoms.json diagnostics:** an entry that did nothing — its rows
-  never go short, or no row has its symbol — is now named once on the
-  run's output (it was only in the gains JSON, so a typo silently booked
-  the phantom sale); another account's entry no longer prints a "no
-  rows" warning in every account's stage; and the "pairs go short" hint
-  still names the pairs the file does not list. The hint and
-  find-missing-history now point at `taxjson find-missing-history
-  --gen-phantoms` (the `taxjson-gains` flags they quoted are not `taxjson
-  run` options). The unmapped cross-listing NOTE suggests the rule in
-  the right direction for a USD unit (`TOBASE DLR.U.TO DLR.TO`) and in a
-  US project.
-- **ACB traces (`*.traces`, `audit`, `explain`):** an option's ACB/Sh,
-  Gain/Sh and wash-window acb/sh are per share (they were per contract
-  next to a per-share price); a fee the trace derives from the net is
-  the signed residual (a cheap option's real commission no longer shows
-  as 0, and sub-cent price rounding is no longer shown as a fee); a
-  buy that only closes a short is labelled "closes a short — acquires
-  nothing" instead of an eligible candidate; a crypto partial denial is
-  no longer labelled "full".
-- **Hand-made JSON books:** a time written `9:30:00` or `09:30` is read
-  as `09:30:00` (it used to sort after its own superficial-loss
-  adjustment, moving part of a denial into the next year, or crash); a
-  time that is not a clock time is refused with the row named.
-- **Blended accounts (`taxjson-split-gains`):** each account's holdings
-  show its own position start date (SINCE) instead of the pool's, keep
-  full-precision quantities (crypto dust no longer becomes 0 units with
-  a cost), carry their option-replacement warnings and phantom log, and
-  a US file's `summary.count` counts its own records. A missing or
-  unreadable `--base` book is an error instead of an empty fee map.
-- Gains JSON keeps full precision for `wash_trigger.trigger_qty` and
-  `phantom_application_log[].opening_qty` (a 6.76e-06 AVAX trigger read
-  0.0), and `--gen-phantoms` notes keep a crypto short's size;
-  find-missing-history links a merger receipt posted up to 7 days after
-  the removal; US engine: after a rename, same-day lots are sold in
-  order of their purchase time.
-- **Two byte-identical rows each keep their own superficial-loss /
-  wash-sale result** (hand-made JSON passed to `taxjson-gains`): they
-  shared one id, so only one took its denial or basis bump. The engine
-  now books them as separate trades and says so in a NOTE.
-- **US: the call-as-replacement warning is sized.** Only the opening
-  part of a call purchase counts (a buy that closes a written call is
-  not an acquisition), each contract stands for 100 shares and is used
-  against one loss's shares only, and the warning says how much of the
-  loss is at risk. In a year-scoped run a prior year's warning no
-  longer reaches this year's diagnostics, and `summary.count` counts the
-  records in the file. tax-logic US-WASH-12.
-- **Canada, grant timing: a write whose commission exceeds its premium**
-  follows the same rule as a buy-back loss: exempt from the
-  superficial-loss rule unless `option_buyback_loss_superficial = true`,
-  and when it is denied the grant record now carries the denial (the
-  summary and wash-sales used to show a denial the record did not, with
-  an "invariant broken" warning). A phantom (tainted) pool's write loss
-  never feeds the rule. tax-logic CA-SL-11/12.
-- The account `_wash.sum` DIAGNOSTICS no longer repeats each engine line
-  (the gains and blend stages both kept a copy).
-- **Price and FX caches:** `taxjson fx-cash` no longer prices a cash
-  event at a rate older than the converter's 5-day lookback (it is
-  counted unrated and named); a cached price that is missing, zero,
-  negative, NaN or text is a cache miss instead of a 0.00 quote in
-  `harvest`; a non-UTF-8 byte in a price/FX cache degrades to a refetch;
-  `yf_ticker.map` keys are case-insensitive and a line with no target is
-  warned about; an empty or truncated Bank of Canada answer is re-asked
-  for 14 days instead of being cached as coverage for good.
-- **Stand-alone tools: an unreadable input is one line, exit 2.** A
-  missing path, a directory, a non-UTF-8 file or bad JSON gave a
-  traceback (exit 1) in gains, explain, audit, convert-currency,
-  fill-crypto, merge2 --map, safe-to-sell, sort, sum-gains, sum-income,
-  ticker-map, wash-radar and others; every `taxjson-*` tool now prints
-  `<tool>: error: no such file: ...` / `cannot read ...` and exits 2
-  (S070-23, S079-10). A JSON error names the file.
-- **explain / audit / carryover: engine refusals are one line.** A
-  RENAME-split straddling a settlement, a currency mismatch, a SPLIT
-  ratio of 0 or a malformed `phantoms.json` printed a traceback; they
-  now print the same one-line `error:` as `taxjson-gains` and exit 2,
-  and the phantoms.json message names the file and line (S029-20,
-  S071-06, S076-01).
-- **`--year` is checked in taxjson-gains, form-export, t1135, explain
-  and audit.** `--year 0` meant "all history" (form-export folded every
-  year into one Schedule 3) and a 2-digit year silently matched
-  nothing; the flag now takes 1900..next year, like `taxjson init`
-  (S033-16).
-- **`--default-rate` must be a positive number.** convert-currency,
-  merge2, fees-sum and audit took -1.35 (every converted amount
-  sign-flipped), 0, nan, inf and `1_35` (= 135) with exit 0; they are
-  refused at the command line. A rates-file rate written `1_35` is a
-  malformed line, not 135 (S028-15, S028-17).
-- **taxjson-explain `--symbol` is case-insensitive** like `taxjson
-  audit`, and its `--help` example no longer says `--wash-sales`
-  "includes" the wash traces — it filters to wash-sale gains (S029-19,
-  S029-24).
-- **Questrade / RBC: a settlement date before the trade date is
-  refused.** A garbled Settlement Date cell moved a sale into the prior
-  tax year silently. tax-logic CA-DATE-03 / US-DATE-04.
-- **Questrade / RBC: numbers inside descriptions take thousands commas
-  only.** A decimal comma ('STK SPLIT ON 1,5 SHS', 'ADJUSTMENT TO BOOK
-  COST $1,16', 'BOOK VALUE 1234,56') is refused instead of read 10x-100x
-  too large; a DRIP price 'REINV@C$1,234.56' reads 1234.56 (was 1).
-- **Questrade:** the ADR custody fee binds to its ticker ('500 SHARES
-  XPEV'); a row whose cell spans a line break (an unescaped quote) or
-  has extra cells is refused; a cash dividend mentioning STOCK SPLIT
-  stays a dividend; an REI row with units and no cash is refused (its
-  units were dropped); the internal-code warning says it is moot once
-  ticker.map maps the code.
-- **RBC:** an in-kind option transfer uses the contract's OCC symbol; a
-  Holdings export is refused by name; a split row with no Quantity says
-  so; the spin-off and merger notes no longer cite Canadian law or ask
-  for a .tt entry the corp-actions stage already books.
-- **Wash radar / safe-to-sell: a small crypto lot gets its advisory.**
-  A 0.0009 BTC position (about $120) is held for the superficial-loss
-  test, as in the engine, but the radar's 0.01-unit display threshold
-  showed it with no verdict. Crypto now uses the engine's threshold.
-- **harvest: an input it cannot read stops it.** A missing or truncated
-  gains, `--sheltered` or `--radar` file now exits 2 naming the file. It
-  used to print "No open positions." or show SH_QTY/SH_ADD as '-' (the
-  columns that warn of a permanent denial) at exit 0. A native-currency
-  `_raw_gains.json` is refused: its USD cost read as CAD showed the FX
-  factor as a gain.
-- **harvest TOTAL PCT** divides by the gross capital at stake; a short's
-  credited proceeds no longer net against long cost (every row -10% used
-  to total -50%). JSON `totals.gross_cost` is new.
-- **taxjson-harvest finds the project's yf_ticker.map** next to the
-  inputs or in the project root above work/, not only in the current
-  directory.
-- **Wash radar, sell-check, buy-check and safe-to-sell say what they
-  cannot see.** Their verdicts cover the project's own accounts only; a
-  purchase by a spouse or common-law partner or a controlled corporation
-  (Canada: affiliated persons, s.251.1; US: IRS Pub. 550) also denies a
-  loss. Each report now says so in one line. tax-logic CA-PLAN-04 /
-  US-PLAN-04. The web what-if shows the same line under its verdict.
-- **Wash radar: a sale whose commission exceeds its gross is a loss.**
-  Its proceeds are negative, as the engine books them. The radar used
-  abs() and called the loss a gain, so a superficial loss had no
-  VIOLATION and no rescue date. A return of capital on a short position
-  now lowers the short's gain, as in the engine.
-- **Wash radar: crypto rescue deadlines are not walked back through
-  T+1.** A coin settles on its trade date, so the last day to sell is
-  the settle bound itself, weekends included; the row says "units", not
-  "shares".
-- **Wash radar wording.** CAUTION says a loss sale of any size is clean,
-  not only a full exit. BLOCKED, RISK and buy-check say that a rebuy (a
-  DRIP too) denies the loss only on as many shares as it buys, and
-  BLOCKED / buy-check print the amount per unit. `taxjson watch` reports
-  these rows as changed once after the upgrade.
-- **Wash radar input.** A book row the engine would refuse (a
-  non-numeric quantity, a missing date, a trade with no amount) stops
-  the radar and safe-to-sell with one line naming the file and row. It
-  used to print a traceback, or skip the row silently. A bare-array
-  book is accepted.
-- **buy-check / sell-check "last loss sale" line** dates the loss on the
-  project's window basis (trade date in a US project).
-- **`taxjson-export` fails loudly on an unusable input.** A missing,
-  truncated or wrong-shape gains JSON, `--base-gains`, `--trades` or
-  `--transfer-evidence` file, a JSON with no `inventory`, or a `.toml`
-  with no `[[holding]]` array now stops the tool (exit 2, one line naming
-  the file). Under `run --fast` a corrupt cache used to publish an EMPTY
-  `<acct>_holdings.toml` at exit 0 and list every position as closed;
-  the previous snapshot is now kept and the stage fails.
-- **TradingView exports take `tv_exchange.map` from the project.** The
-  map is looked up next to the input and in its parent (the project root
-  for `work/*_gains.json`) before the current directory, so `taxjson -C
-  <proj> run` from elsewhere keeps the `NYSE:`-style prefixes (new
-  `--tv-map FILE` for explicit use).
-- **Holdings export details.** A small quantity with real cost (0.0009
-  BTC) is no longer dropped as dust; the .sum HOLDINGS REPORT says it
-  is the end-of-data inventory, not year-end positions; an option on a
-  class share names the held listing (`RCI.B.TO`, not `RCI.TO`); the
-  `trades` history follows splits and renames; overseas listings (.L,
-  .AX) are in neither currency-split watchlist; a future is `asset_type
-  = "future"` and a futures option gets no guessed `contract_multiplier
-  = 100` (its report cost is per contract).
-- **`taxjson redact` fixes.** An account id on a line with a very long
-  field is now found (the report claimed every occurrence replaced
-  while it stayed); `account = "..."` / `broker_account = "..."` keys
-  (the live-holdings TOML) are ids; the City/State/Street2/Country
-  columns of an IB Flex AccountInformation section and a value in the
-  cell after `Phone:` / `SIN:` / `Payee:` / `Beneficiary:` are
-  redacted. The street pattern no longer swallows the next CSV field
-  (a dropped column). One invocation gives every account its own
-  pseudonym and never writes two inputs to the same copy (`--force`
-  silently kept only the last); a file-name id keeps the content's
-  placeholder. An unreadable input or `--out` is one line and the rest
-  of the batch is still redacted.
-
-- **Web UI: config and report errors are shown, not hidden.** `taxjson
-  serve` refuses the account names `taxjson run` refuses (a
-  `[accounts."../../x"]` name read a holdings file outside the project)
-  and prints one line — no traceback — for a non-UTF-8 or refused
-  taxjson.toml. `/healthz` reports a taxjson.toml edit that no longer
-  loads (`ok: false`, `config_error`). A corrupt or wrong-shape
-  `wash_radar_<acct>.json` or `<acct>_holdings.toml` is an error banner
-  instead of a silent fall-back to the stale .rpt or an HTTP 500.
-  `/api/whatif` for an unknown account and a holding page for a symbol
-  the account does not hold are 404s; the what-if and holding pages
-  accept a symbol in any case.
-- **Report labels say what they add up.** The `.sum` non-option line is
-  `TOTAL REALIZED NON-OPTION GAIN` (shares, units, futures and crypto —
-  it was "STOCK" and read as Schedule 3 line 4), its bottom line is
-  `GRAND TOTAL (GAIN+DIV+PIL)`, and `TOTAL DIVIDENDS / STAKING` names a
-  crypto account's staking rewards; `taxjson sum` heads the column
-  NON-OPT; `fees-sum` says non-option and $/UNIT; `divs-sum` totals
-  crypto staking rewards apart (other income, no T5/T3).
-- `ccd-sum` CLOSES/QTY no longer count a grant-timing write as a close.
-- `taxjson-ccd-gains` / `taxjson-leaps-gains` (reports/ccd.rpt,
-  leaps.rpt): per-contract COST/QTY, PROC/QTY, GAIN/QTY columns (they
-  were always 0.0000), no -0.00, totals per currency on mixed-currency
-  input, and a break-even legacy row is no longer in both reports.
-- Stand-alone tools (fees-sum, lint-crosslistings, sum-gains, sum-income,
-  ccd/leaps-gains, diff, explain, ticker-map, carryover, form-export,
-  split-gains, apply-distributions, reconcile-slips) refuse an
-  unreadable, non-UTF-8 or wrong-shape input in one line with a non-zero
-  exit — no traceback, and no report built from the files that happened
-  to load (fees-sum dropped a broker's fees at exit 0; lint-crosslistings
-  printed "(Clean.)"). A bare-array transaction book is accepted.
-- `taxjson-sum-income` refuses income rows with no amount instead of
-  booking them as $0; its help names the real input (a base book).
-- `taxjson-sum-gains FILE` keeps wash_solver_iterations like stdin does.
-- `taxjson-diff`: a pure re-ordering of same-key rows is no change, a
-  sub-micro crypto quantity change is seen, output order is stable, and
-  an explicit `--by` field no record carries is refused.
-  `taxjson-extractors` parses its arguments.
-- `taxjson-missing-history`: an `--account` no row carries is refused
-  (it printed the all-clear); registered-account rows are listed under
-  SHELTERED (no reportable gain) and the checklist no longer counts them
-  as affecting the year.
-- work/<acct>_report.json: the wash total reads `disallowed_amount`, so
-  a US project's total_disallowed is no longer always 0.
-
-- **Canada: a Canadian trust's distribution counts in its record-date
-  year.** A "DIST ON ... REC 12/30/24 PAY 01/06/25" row (Questrade, RBC)
-  on a Canadian issuer is 2024 income (s.104(13)) in `divs-sum`, the
-  .sum, the estimate and instalments — as on the T3. Split-share
-  corporations (FTN, FFN, DFN, BK, LFE, YCM ...) stay on the pay date,
-  as does any symbol in the new `[settings] corporate_distributions`.
-  tax-logic CA-INC-DATE-TRUST.
-- **Canada: a Canadian trust's return of capital lowers the ACB on its
-  record date** (s.53(2)(h)), so a sale between the record date and a
-  January pay date uses the reduced ACB and any s.40(3) gain is in the
-  record year; `roc-sum` counts it there. IB rows (no record date) keep
-  the pay date and a January one on a Canadian trust is warned about.
-  tax-logic CA-INC-DATE-ROC-TRUST / CA-INC-DATE-ROC.
-- **Canada: a payment in lieu from a Canadian dealer on a Canadian
-  issuer's share is a dividend.** ITA s.260 deems it a taxable dividend
-  and the dealer's T5 box 24 includes it; it now counts in `divs-sum`
-  and as an eligible dividend in the estimate (`dil-sum` shows each
-  row's treatment). The IB parser records the dealer from the
-  statement's BrokerName and the issuer's ISIN country. tax-logic
-  CA-INC-03; US-INC-01 (US: always ordinary income).
-- **US: January fund/REIT dividends.** A January dividend with an
-  October–December ex or record date is warned about (§852(b)(7),
-  §857(b)(9)); `[settings] ric_january_dividends` (US-only) moves the
-  listed payments to Dec 31 of the prior year. tax-logic
-  US-INC-DATE-RIC.
-- **tax-logic states RBC notional distributions and DRIP** (CA-DIST-02/03,
-  US-DIST-02/03).
-- **Rows at the same moment keep the export's row order (Canada).**
-  Webull prints no clock time, so every row is stamped 09:30:00, and the
-  Canada engine put a buy before a sell at one moment: a write listed
-  before its same-day buy-back became a long round trip, whose loss a
-  re-buy within 30 days could deny. Trades at one moment now follow the
-  export's row order in both countries (the US engine already did); the
-  fixed places (opening balance, split, assignment legs, adjustments)
-  stay. The wash radar and `t1135` follow (a same-moment sale listed
-  before the purchase is a short covered at once, not property held
-  for the T1135 cost test); the missing-history walks
-  still read a same-moment pair buys first (they only look for missing
-  history). Questrade and generic-importer files listed newest first are
-  read bottom-up, as RBC's always were. tax-logic CA-DATE-14 /
-  US-DATE-13 (audit R1-30).
-
 - **crypto-sends: a Kraken PYUSD or GUSD send is a coin send.** The
   Kraken parser books those two as coins, but crypto-sends treated them
   as US-dollar cash on every exchange, so a gift or payment of them got
@@ -2812,22 +2510,6 @@
   is valued at its 1.00 USD par, and `crypto-sends` writes a stablecoin
   payment as a sale line. Canada keeps the cash treatment (with a de-peg
   warning). tax-logic CA-CRYPTO-02 / US-CRYPTO-02.
-- **tax-logic states what US projects run.** The US section gains the
-  rules its input stages and engine already applied: settlement cycles
-  and holidays, the generic importer's settle column, crypto and expiry
-  dating, `futures_settle`, the FX gap handling, identity and ticker.map,
-  the transfer stop, the corporate-action elections (`taxable_exchange`,
-  `reorg_368`, `reorg_368_boot`, `taxable_distribution_301`,
-  `tax_free_355`), payments in lieu, staking income, dividends booked
-  gross with withholding as its own row, and the crypto parser rules
-  (coin-for-coin trades, fees in coin, the 3-day pairing, stablecoins as
-  US-dollar cash — an approximation). Two Canadian statements were wrong
-  and are corrected: the FX source (Bank of Canada noon rate before March
-  2017 from May 2007; Yahoo only before that) and the rate-gap rule (a
-  longer gap is a validation ERROR that `run --strict` stops on, not an
-  automatic stop). A stablecoin traded more than 2% off 1.00 USD on
-  Coinbase or a Kraken USD pair now prints a warning with the de-peg
-  amount the approximation leaves out.
 - **Crypto local time is a project setting.** `[settings] local_timezone`
   (an IANA zone, both countries) names the zone Kraken and Coinbase UTC
   stamps are dated in; it was only the `TAXJSON_LOCAL_TZ` environment
@@ -2835,39 +2517,6 @@
   Eastern on Dec 31 could land in the wrong tax year for someone in
   another zone. The default is unchanged; tax-logic states the zone in
   force. A change re-parses the crypto account.
-- **`taxjson-convert-tt` writes the project's tax_date.** Converting a
-  book to .tt defaulted to the settlement date (the Canadian rule) with
-  no country, so a US book's Dec-31 sale came back as a January one. It
-  now reads the project's tax_date when the file sits in a project, and
-  outside one asks for `--date-basis` when a row's two dates differ.
-- **distributions.map sizes on the holder of record in both countries.**
-  The record-date balance followed the project's tax-year date basis, so
-  a US project (trade dates) credited a buy traded on the record date.
-  It is now always the settled position (unchanged for Canada's default).
-  The income note names Form 1099-DIV in a US project (it said T3/T5).
-- **US: a return of capital beyond basis is booked (§301(c)(3)).** It
-  was a warning only, and the excess came back as extra gain when the
-  shares were sold — right total, wrong year. Now the part beyond each
-  lot's basis is a capital gain on the distribution date (short- or
-  long-term by that lot's holding period) and the basis stays at zero;
-  Form 8949 describes the row as a nondividend distribution in excess of
-  basis. A return of capital received with no shares held is still a
-  warning (report it by hand). tax-logic US-ROC-01/02/03.
-- **Shared helpers no longer carry one country's law.** The warrant /
-  right replacement warning said "the loss may be superficial" in US runs
-  (now "may be a wash sale"); the §355 tax-free spin-off could book
-  Canada's s.86.1(3) `allocated_acb_cad` hint in CAD if called directly
-  (only the Canadian election reads it now); the registered-account
-  fallback for unconfigured accounts knew only Canadian plan names (IRA,
-  Roth, 401(k), HSA ... are recognised; by country when it is known).
-- **Manual loss checks next to phantom-basis sales follow the country.**
-  With `phantoms.json`, the "check by hand" warnings measured the window
-  on settle dates in every project (the US rule runs on trade dates) and
-  the partial-taint one on trade dates (Canada's runs on settle dates),
-  and both said "superficial-loss" in US projects, US crypto included.
-  Now: settle dates and ITA s.54 in Canada, trade dates and "wash-sale
-  check (§1091)" in the US, and none where wash detection is off (US
-  crypto). Warnings only; no numbers change.
 - **A crypto `gift` saved in sends.json is refused in a US project when
   the .tt is written, not only at `--set`.** A decision carried over
   from a Canada project, copied or hand-edited was written to
@@ -2881,612 +2530,6 @@
   both files (with the line number), the coin, quantity and timestamp,
   and says how to keep either line; it searches every account's inputs.
   Nothing is deleted.
-- **Standalone `taxjson-brokerage` no longer applies Canadian law by
-  default.** Its `--foreign-roc` defaulted to `dividend` (ITA s.90(2)),
-  so the documented manual pipeline for a US book turned a US issuer's
-  return of capital into dividend income. It now takes `--country`
-  (canada: s.90(2) dividend; usa: a basis reduction, and `--foreign-roc
-  dividend` is refused); with neither flag the return of capital lowers
-  the cost and a note says so. `taxjson run` passes both flags, so
-  project numbers are unchanged.
-- **Stock dividends follow the country.** The IB, Questrade and RBC
-  parsers booked a stock dividend as a $0 purchase in every project, so
-  in a US project the new shares were a short-term zero-basis lot and a
-  wash-sale replacement. The parsers now emit a neutral stock-dividend
-  event; the US engine applies §305(a)/§307 (the basis is spread over old
-  and new shares, the purchase date carries over, no wash sale), and the
-  Canada engine keeps the $0 acquisition (an s.54 acquisition) with the
-  "add the declared amount" note, now printed by the gains run instead
-  of the parser. Canadian numbers are unchanged. tax-logic CA-STKDIV-01,
-  US-STKDIV-01/02.
-- **Futures follow the country, not the base currency.** The settled-P/L
-  booking of futures (no notional, each close's P/L at its own rate) ran
-  only for a CAD target, so a US project kept FX on the notional of a
-  non-USD contract, and the US engine booked a settlement row with its
-  sign inverted (a short closed at +5,000 was -5,000). Both countries now
-  use the settlement basis, chosen by the project's country
-  (`taxjson-convert-currency` / `taxjson-merge2 --country`, required when
-  a book has futures); a partial close takes average cost in Canada and
-  FIFO in the US. Canadian numbers are unchanged. tax-logic US-FUT-01/02.
-- **The wash radar and the checks built on it apply the US rule in a US
-  project.** `wash-radar`, `sell-check`, `buy-check`, `harvest`, `watch`
-  and the web radar applied Canada's s.54 test to US books: windows on
-  settlement dates, a replacement that "rescues" the loss if sold before
-  day 30 (sell-check said ACTION), and a long call as replacement
-  property. In a US project each recent loss's verdict is now the US
-  engine's own, run on the same books as of the date: trade-date windows,
-  purchases in every account including IRAs, no still-held test. A
-  washed loss shows as WASHED with no rescue advice (no sale undoes a
-  wash sale); a long call is a note. Canada is unchanged (tax-logic
-  CA-PLAN-01/02, US-PLAN-01/02).
-- **Web what-if (US) sees every taxable account.** A US what-if ran on
-  the account's own book only and missed a sibling account's purchase in
-  the window; it now simulates with every taxable account and the IRAs
-  as wash-sale context, on the account's own FIFO basis (US-PLAN-03).
-  The result page names the rule of the project's country.
-- **`edge-cases` explains a US project with §1091.** It printed s.54's
-  still-held reasoning, long calls as replacement property and
-  "Schedule 3" for US books; a US project now gets trade dates, no
-  still-held items, long calls as warnings only, Form 8949, and no
-  written-option (s.49) section (US-RPT-05).
-- **`check-filed` and `handoff` refuse a lock closed under the other
-  country.** A US-filed year was recomputed under Canadian rules and
-  reported as drift with "amend or refresh the lock" advice (a refresh
-  would have overwritten the US record); the lock's country is now
-  compared and named, and a lock is recomputed on the date basis it
-  recorded (CA-RPT-09, US-RPT-06).
-- **No Canadian terms in US output.** `wash-sales`, `carryover`,
-  `crypto-sends`, `fx-cash`, `reconcile-slips`, `buy-check`, `sum`,
-  `checklist`, the radar and the web pages named s.54, "superficial",
-  "registered account", 50% inclusion / T1A, line 22100, T5008 box 20 or
-  s.39(1.1) in US projects; each now names the project's own law.
-- **`taxjson-form-export` needs `--country`** and refuses the other
-  country's form (the standalone tool was not gated), and Schedule 3
-  refuses gains files computed by the US engine.
-- **`redact` removes US city/state/ZIP lines** ("Springfield, IL
-  62704-1234") like Canadian postal-code lines.
-- **tax-logic states fx-cash §988 and the US estimate's assumptions**
-  (US-FX-03, US-RPT-07, US-RPT-08): §988 gains are ordinary and not on
-  Form 8949, with no $200 exemption; the estimate treats every dividend
-  as qualified, gains with no term as short-term, and leaves out foreign
-  tax credits, interest and state tax.
-
-- **Canadian and US law no longer mix through the country setting.**
-  Every command, the web UI and every standalone tool read the country
-  through one resolver: `[settings] country` is required (a missing one
-  was Canada everywhere but `run` — Schedule 3, T1135 and s.39(1.1) were
-  printed over US books) and only canada / ca / usa / us are accepted
-  (`taxjson-audit` read "United States" as Canada). The standalone tools
-  (`taxjson-gains`, `-explain`, `-audit`, `-carryover`, `-harvest`,
-  `-wash-radar`, `-safe-to-sell`, `-corp-actions`) now require
-  `--country` instead of assuming Canada; `taxjson` passes it for you.
-- **Settings, flags and commands belong to a country.** A Canada-only
-  setting in a US project (`province`, `option_premium_timing`,
-  `option_grant_timing_since`, `option_buyback_loss_superficial`,
-  `foreign_return_of_capital`, `[instalments]`, `[estimate]
-  deductions`/`carrying_charges`) is refused by every command, naming
-  the key — it was silently ignored, and `foreign_return_of_capital =
-  "dividend"` (ITA s.90(2)) was even applied to a US filer's IB return of
-  capital. `taxjson-gains`/`-explain`/`-audit`/`-carryover` refuse the
-  Canada-only option flags with `--country usa` and
-  `--per-account-basis` with `--country canada`; `estimate`/`sum`
-  refuse `--province`, `--deductions` and `--carrying-charges` in a US
-  project (`--province XX` was silently ignored). A `tax_date` that
-  departs from the country's practice is accepted with a warning. `t1135`,
-  `instalments`, `option-boundary` and `form-export --form schedule3`
-  are refused in a US project (they gave CRA advice), and `form-export
-  --form 8949`/`txf` in a Canada project with a country message.
-  `base_currency` must be the country's currency (CAD / USD): a US
-  project in CAD produced Form 8949 in CAD at Bank of Canada rates; an
-  unset `base_currency` means the country's currency, not CAD.
-- **`taxjson tax-logic` is the spec, with rule ids.** Every statement has
-  a stable id (`--ids` shows them, `--json` lists them) that the tests
-  cite; `scripts/check_tax_rules.py` (a CI stage) checks the links. It
-  reads the settings through the same resolvers the engine uses (a
-  `" Grant "` timing rendered close timing; `"nextday"` / `"ACB"` were
-  described although the run refuses them), refuses an unknown country
-  instead of rendering Canada, and now states the income dating rules
-  explicitly (how dividends, payments in lieu, returns of capital and
-  trust distributions are dated in each country: CA-INC-DATE-TRUST,
-  CA-INC-DATE-ROC-TRUST, US-INC-DATE-RIC), plus which settings and
-  commands the project's country refuses.
-
-- **FX before March 2017 uses the Bank of Canada noon rate.** Folio
-  S5-F4-C1 names the Bank's noon rate for dates before 2017-03-01;
-  those dates (back to 2007-05-01, where Valet's legacy noon series
-  starts) used Yahoo closes, and Jan-Feb 2017 the new daily average.
-  They now take the noon rate (source `boc-noon`); Yahoo stays the
-  fallback for earlier dates. A Yahoo download that fails silently (an
-  empty answer) is no longer remembered as "no data" forever, so the
-  next online run asks again. The default-rate error for a date before
-  every rate source no longer tells you to refresh (it cannot help) or
-  to pass a flag `taxjson run` does not have: enter the row in the base
-  currency at its date's rate.
-- **Harvest prices the right thing in the right currency.** USD-traded
-  TSX units (`DLR.U.TO`) are valued in USD and spelled `DLR-U.TO` for
-  Yahoo; trust units (`DIR.UN.TO` -> `DIR-UN.TO`) and US class shares
-  (`BF.B` -> `BF-B`) get Yahoo's spelling; an LSE quote Yahoo gives in
-  pence is converted to pounds (it was valued 100x); a quote whose
-  currency cannot be told (a `yf_ticker.map` override to `.DE`, `.T`,
-  ...) is omitted with a warning instead of treated as USD; and
-  `harvest --crypto` looks coins up as Yahoo crypto pairs (`ETH-USD`),
-  never as stock tickers, and skips IBKR for them. `TAXJSON_OFFLINE`
-  now also stops the IBKR option-price lookup, and a cache miss refuses
-  as for stocks.
-- **Missing-history and phantom tools agree with the engine.**
-  `find-missing-history`, `--gen-phantoms`/`--suggest-phantoms` and the
-  phantom openings now: order same-moment rows buys first and put a trade
-  executed before an evening split (settling after it) ahead of the
-  split, as the engine does (no invented short, no order-dependent
-  opening size); count the in-year BUY that covers a short carried in
-  as affecting the year (the report said "safe to ignore" while the
-  year booked the cover); date a row by the project's `tax_date` (a
-  Dec-31 trade settling in January belongs to January's year); follow
-  renames (a clean sale after a rename is not flagged, a $0-cost
-  position renamed before its sale is); and take "registered" from the
-  account's configured type, not its name. `phantoms.json` symbols are
-  matched case-insensitively and a listed pair that matches no row is
-  named as such; both ends of a rename chain listed give one opening
-  whatever the hash seed.
-- **Per-account holdings include phantom openings and split the deferred
-  loss.** In a blended taxable pass each account's `_gains_wash.json`
-  inventory (read by `list`, `shares`, `harvest`) was apportioned from
-  the account's own book, which lacks the openings `phantoms.json`
-  adds: a position could show as a short at a negative cost or vanish.
-  The openings now count. The deferred superficial loss parked in a
-  blended pool is apportioned with the shares instead of being copied
-  whole into every account.
-- **Phantom-basis superficial-loss warnings are shown.** A clean loss
-  within 30 days of a phantom-basis sale, and a phantom-basis loss with
-  a rebuy in its window, were written only into the gains JSON (and
-  dropped by the per-account split); they now print as `warning:` lines
-  (so they reach the DIAGNOSTICS banner) and stay in each account's
-  `_gains_wash.json`. US engine: an IRA-to-IRA move the tool nets out no
-  longer triggers "sells beyond its recorded balance".
-- **A merger two brokers book on different dates is one event.** The
-  per-account merger-ratio fold grouped rows by exact date, so when IB
-  booked a merger on 06-11 and RBC on 06-15 the first renamed the whole
-  pool at its own ratio and the second found it empty: the extra share
-  RBC delivered was never sold in the books. Rows within 7 days now fold
-  into one event.
-- **Option-timing settings read the same everywhere.** A quoted
-  `option_buyback_loss_superficial = "false"` or `crypto = "false"`
-  counted as TRUE in every command except `run` (carryover, check-filed,
-  audit, close-year, reconcile-slips, the web UI); every config reader
-  now refuses it. With `tax_date = "trade"`, `option_grant_timing_since`
-  is tested on the write's trade year, the same date the return's year
-  filter uses. Standalone `taxjson-gains` / `taxjson-explain` say when
-  they fall back to close timing (a Canada project runs grant timing).
-- **A trade row with no amount is refused.** `taxjson-gains` accepted a
-  BUYSELL/ASSIGN row whose `net_amount` (or `quantity`) key was missing
-  and booked it at $0, and `taxjson-validate` said OK; both now name the
-  row. US engine: a sale whose commission exceeds the gross (a $0.01
-  close) keeps its negative proceeds instead of booking a credit.
-- **Return of capital: no invented proceeds, right sign on a short.** An
-  s.40(3) deemed gain (ROC below nil, or ROC after the position was
-  sold) was booked with proceeds equal to the gain, overstating
-  Schedule 3 line 13199; it now has no proceeds (CRA: 0 on 13199, the
-  gain on 13200). A ROC ADJUST on a SHORT position raised the short's
-  gain by the amount; it is now the short seller's compensation payment
-  and lowers it (a note names it).
-- **Traces and `taxjson-explain` tell the truth about phantom rows and
-  denials.** The traces file counted phantom-basis sales (from
-  `phantoms.json`) as ordinary gains in its header and per-symbol totals
-  and gave them a holding period counted from 1970; `taxjson-explain`
-  did the same. Both now show them as MANUAL REPORTING rows outside the
-  totals (the gains JSON's manual rows carry no `days_held`). The
-  superficial-loss explanation states the per-holder rule the engine
-  applies, says PERMANENTLY denied for a registered or affiliated
-  replacement instead of "ACB pool bumped", and no longer claims "the
-  earliest is chosen as trigger". A grant-timed buy-back's trace line
-  prints the booked cost and gain. `taxjson-explain --no-wash` explains
-  a registered account's book the way `taxjson run` computes it. The
-  `--affiliated` help no longer calls a parent or sibling affiliated.
-- **Superficial-loss rule fixes.** A cover that also opens a long (buy
-  150 while short 100) now counts its own 50 new shares as substituted
-  property, as two separate rows already did. In a blended pass the
-  cover-vs-acquisition test uses the pooled s.47 balance, so account B's
-  rebuy after selling shares only account A held is an acquisition. A
-  contract that expires before day 30 is not "still held", even with
-  no expiry row. `option_buyback_loss_superficial = false` (the
-  default) now exempts a written option's buy-back loss under close
-  timing and for contracts written before `option_grant_timing_since`
-  too, not only grant-timed lots. A warrant or right bought in the
-  window (`SLH.WT.TO`, `ABC.RT.TO`) is named in an option-replacement
-  warning for review. US engine: a registered or spouse account's
-  buy-to-close is no longer a §1091 replacement.
-- **Same-moment rows no longer depend on a content hash or a 1-second
-  gap.** The superficial-loss balance walk (Canada) and the US
-  replacement-lot order broke ties by each row's hash, so a one-cent
-  price or description change could flip a denial or move a US wash
-  deferral to the other lot; ties now keep the main pass's order (its
-  buy-before-sell rung, then the export's row order). A denied loss's
-  cost bump for a pre-loss rebuy now applies right after the loss row,
-  so another fill of the same order sees it whether it came 0, 1 or 2
-  seconds later. A bump for a rebuy booked under the old ticker on a
-  rename's own date lands on the pool that holds those shares instead
-  of vanishing into the empty new-ticker pool.
-- **Each option assignment's premium goes to its own stock leg.** Both
-  engines staged every assignment's premium per (account, underlying)
-  and handed the whole sum to the first stock trade that came along: a
-  spread assigned on one day put the put's premium and the call's into
-  one leg, two stock legs of one assignment did not share it, and a
-  missing stock leg let an unrelated trade months later absorb it. The
-  premium is now matched to the leg in the assignment's direction
-  (buy for an assigned put / exercised call, sell otherwise), per share,
-  within 7 days of the option leg; a premium no leg claims is named in
-  the end-of-run "unconsumed" warning instead of moving into another
-  trade (and another year).
-- **Option roots that differ from the stock ticker.** An assignment of
-  a Montreal `RCI` option into `RCI.B.TO`, an OCC `BRKB` option into
-  `BRK.B.US`, or a futures option into its dated contract (`F:CL` into
-  `F:CLG6.US`) was treated as cash-settled, so the premium was realized
-  in the wrong year. The option is now matched to the one stock line in
-  its account that trades at the assignment (a note names it); an
-  ambiguous match warns and stays cash-settled.
-- **holdings.toml states what its base-currency cost is**:
-  `meta.base_cost_basis` says `base_total_cost` is per-account and
-  per-listing, before superficial-loss adjustments and the s.47 blend
-  (the filing ACB is `taxjson list`) (audit S037-24).
-- **Corporate actions follow ticker_extraction_overrides.txt.** The
-  overrides renamed a security's trades but not its merger/spin-off rows,
-  so the event consumed an empty pool under the broker's spelling while
-  the real position stayed put (a taxable merger's gain vanished). The
-  corp-action rows now take the same rename; when the overrides rename
-  some of a spelling's rows and not others, a corporate action on it is
-  refused instead of guessed (audit S004-00).
-- **Election hints must be non-negative amounts.** `elect --hint`, the
-  interactive prompt and a hand-edited manifest.json refuse a negative,
-  nan or inf hint (a negative allocated ACB created basis from nothing,
-  a negative FMV booked negative dividend income, and nan was saved to
-  fail only on the next run) (audit S039-00).
-- **audit fails when a configured account has no books** (it printed
-  "✓" over the others and exited 0, and the checklist marked every
-  disposition tied) (audit S047-16).
-- **The checklist's run-clean step flags unblended books.** With two or
-  more taxable equity accounts and no blended pass (`run --account` on
-  each, or a run stopped at pending elections) the filing figures are
-  per-account ACB; run-clean now says so instead of "done", and every
-  command that reports the run state carries it (audit S004-07).
-- **LEAPS views: long positions only, through ticker.map, with the
-  registered accounts split out.** `leaps` / `leaps-sum` no longer count
-  the write and buy-back of a contract that qualified through a long buy
-  (those legs are covered-call P&L, already in `ccd-sum`), a LEAPS whose
-  root ticker.map TOBASE-renames (BCE...US -> BCE...TO) is no longer
-  dropped, and `leaps`, `leaps-sum` and `ccd-sum` print the TAXABLE and
-  SHELTERED parts of their total (`--json`: `taxable_gain`,
-  `sheltered_gain`) (audit R1-172, R1-237, R1-182).
-- **`list --date` applies phantoms.json**, so phantom-backed positions no
-  longer show as large shorts. Plain `list` is labelled with the date the
-  books run to, not "as of tax year" (it shows end-of-data positions),
-  and `--date` no longer claims "pre-ticker.map" (audit R1-187, R1-282).
-- **`fetch` never loses input activity.** `--trim-overlap` finds the
-  trade date by the "Transaction Date" header (a manual export with
-  Settlement Date first lost a trade the API file did not hold) and
-  writes the trimmed file atomically at 0600; the overlap guard sees an
-  upper-case `.CSV` sibling like `run` does; an IBKR Flex download that
-  does not cover the tax-year activity already in `ib_flex.csv` is
-  refused (saved as `ib_flex.csv.new`), the replaced file is kept as a
-  numbered `.bak`, and a past year's download that does not span the
-  year warns (audit R1-74, S046-14, S007-00).
-- **buy-check / sell-check read broker spellings and Montreal option
-  roots.** RCI-B, "RCI B", RCI/B and RCI-B.TO are read as RCI.B(.TO) (they
-  answered SAFE beside a loss on RCI.B.TO), and an option on a root that
-  names no share listing but exactly one class share of it (RBC's
-  RCI270115C00046000.TO for RCI.B.TO shares) is in that share's class
-  (audit S007-02, S047-01).
-- **The wash tools name a taxable account with no books.** wash-radar,
-  watch, buy-check and sell-check warned about nothing when a configured
-  taxable account's base book was missing, so a sibling's recent buy read
-  as SAFE (audit S046-11).
-- **The web radar opens on the COMBINED view** when there are two or
-  more taxable accounts, and a per-account view says it sees only its own
-  book (it read "CLEAR — safe to sell at a loss" while a sibling's buy
-  made the loss superficial) (audit R1-229).
-- **Radar sidecar names follow the account name exactly**: account
-  `a_base_x` no longer overwrites account `a_x`'s radar, and an account
-  named COMBINED is refused (audit S038-10).
-- **`run --fast` sees content, not only mtimes.** Each account's input
-  files and the project-root maps (ticker.map, overrides,
-  distributions.map, phantoms.json, crypto_ticker.map) are fingerprinted
-  by content; a CSV replaced by an export with an older mtime, or a
-  ticker.map restored the same way, kept the old parse at exit 0 (audit
-  R1-253, R1-294).
-- **FX rates: freshness is judged per currency.** to_base.csv holds one
-  block per source currency; a USD block cut short by a failed download
-  hid behind a fresh AUD last line and was served for days. Each
-  configured currency must now reach the last few days (audit S046-06).
-- **A full run removes sidecars the config no longer produces.**
-  work/sheltered_base.json after the last sheltered account is removed
-  (the filed-year lock and the radar kept reading it), and the
-  `_gains_wash.json` / `_wash.sum` of an account re-typed to sheltered
-  (every query preferred them) (audit S004-05, S038-19).
-- **`taxjson-merge` fails on an unreadable input** instead of writing a
-  book without it (`run --account <sheltered>` rebuilt
-  sheltered_base.json without a sibling's rows) (audit S038-18).
-- **The FILING REQUIRED reminder survives an unreadable manifest.json**:
-  the file is named and the other accounts' reminders still print
-  (audit S038-23).
-- **A spreadsheet in an account subfolder** gets the same "not read"
-  warning as a CSV there (audit S043-13).
-- **Broker detection: prefixes, then content, then venue words.** A
-  `generic_`/`cb_`/`kr_` prefix now always wins, and an IB, Questrade or
-  Webull export is recognised by its content even when its name mentions
-  coinbase or kraken; `generic_kraken_export.csv` and
-  `kr_trades_moved_from_coinbase.csv` went to the wrong crypto parser
-  (0 rows, exit 0), and an IB export named after Kraken Robotics was
-  refused as crypto data. The crypto/equity refusal names the files
-  (audit R1-127, S044-01, S044-02).
-- **taxjson.toml is checked the same way by every command.**
-  `base_currency` is trimmed and upper-cased (" CAD" failed later with a
-  misleading "fix the rates file" error; "cad" priced CAD fees at the
-  default FX rate) and must be a 3-letter code; a Canada project with a
-  non-CAD base warns. `[settings] year` must be a plausible tax year
-  (1900 to next year, like `init`), and `run` warns when no transaction
-  in the books falls in the configured year. A misspelled top-level
-  table (`[estimates]`, `[instalment]`) and an unknown `[estimate]` /
-  `[instalments]` key now warn in `estimate`, `sum` and `instalments`,
-  not only (or never) in `run`. `[instalments]` withheld, prior-year
-  figures and prescribed rates must be non-negative finite numbers
-  (rates below 1); a TOML boolean is refused there and in `[estimate]`
-  (audit R1-153, R1-256, R1-216, R1-257, S038-13, R1-217).
-- **Net tax owing guidance names the right lines.** The init template,
-  README and the instalments report said "line 48500 minus withholding";
-  48500 also subtracts the instalments paid, so following it read "no
-  instalments required". They now give CRA's instalment-chart
-  definition (42000 + 42200 + 42800 (+ 43200) minus 43700 and the
-  refundable credits) (audit R1-215).
-- **`init --force` never overwrites an earlier backup.** A second
-  `--force` replaced taxjson.toml.bak (the user's config) with the first
-  template; later backups are numbered (audit R1-255).
-- **harvest: claimable-now losses and option marks that match the
-  books.** A LOCKED position counts the part of its loss a sale today
-  keeps as claimable now (only the units a registered account bought in
-  the window and still holds wait for the clear date); a VIOLATION's
-  last rescue day reads `sell-by:…,+0d`, not "deadline passed"; a
-  written option whose premium was taxed at the write (grant timing)
-  shows the buy-back's whole cost as the loss (the engine's inventory
-  now carries `recognised_premium`); an option the pipeline renamed via
-  ticker.map (TOBASE KGC.US K.TO) is quoted as the contract actually
-  held, in its currency; and when the wash-radar reports are older than
-  the books (after `run --account`), harvest runs the radar live instead
-  of showing a registered-account lock as CLEAR (audit R1-230, R1-232,
-  S033-24, S034-11, S038-09).
-- **`taxjson-safe-to-sell` reads the wash radar.** Its own position walk
-  missed today's (unsettled) buys, booked short covers as long lots and
-  ignored ticker renames; quantities and statuses (SAFE, SAFE*,
-  FULL-EXIT-ONLY, LOCKED, PARTIAL, VIOLATION) now come from the radar,
-  and a bad `--date` is a usage error (audit R1-233, S007-09, S050-03).
-
-- **The wash radar follows the engine's per-holder superficial-loss
-  rule.** A loss is superficial only for units a holder — your taxable
-  accounts together, or one registered account — bought inside the
-  ±30-day window and still holds. A registered account's shares held
-  before the window no longer turn a full taxable exit into a
-  "PERMANENTLY denied" EXITABLE/VIOLATION, a registered buyer that has
-  sold out no longer LOCKs the name, a new short sale or written option
-  is no longer a "recent buy" or a trigger (Canada), a long rebuy now
-  triggers a short-cover loss, and a replacement under 0.01 units
-  (crypto DCA) still counts. VIOLATION names who must sell what; LOCKED
-  says how many shares' loss a sale today would lose and that the
-  registered account can still defeat it by selling within 30 days.
-  `sell-check` answers PARTIAL (exit 1) when only part of a LOCKED
-  position is at risk and ACTION for a violation only taxable shares
-  back. Also: an exercised option is no longer booked as a loss on the
-  option, a sale executed before a split that settles after it is
-  re-denominated like the engine does, own-account registered moves keep
-  each account's balance, `country = "usa"` projects get §1091's
-  re-short and IRA rules, and an unreadable `taxjson.toml` stops
-  wash-radar / buy-check / sell-check / watch instead of treating every
-  book as taxable (audit R1-231, R1-232, R1-234, R1-241, S047-09,
-  S048-13, S053-14, S053-20, S054-00, S054-03, S054-04, S054-08,
-  S054-15, S054-20, S055-01).
-- **redact matches the private denylist the way check-pii does.** A
-  denylisted number written with spaces or dashes (`1122 3344`) is
-  replaced, a denylisted word in the file name is replaced in the output
-  name (and counts for `--check`), and a `TAXJSON_PII_DENYLIST` that
-  names a missing file stops the run instead of silently turning the
-  denylist off (audit R1-345).
-
-- **redact: Québec addresses and accented or ambiguous names.** A
-  French-order street line (`1234 rue Saint-Denis`) is blanked like an
-  English one; names with accented letters (`Josée Tremblay`) are
-  recognised; a name that contains a statement word (`Bill Sample`,
-  `Jane Price`) is listed under REVIEW instead of passing silently, and
-  a flat CSV's Description column gets the "may still name people" note
-  (audit S036-16, S037-05).
-
-- **redact: label cells, other id columns, plan parties.** A Webull-style
-  `Account Number / Numéro de compte:,,,,<id>` or `Name:,<name>` preamble
-  row has its value replaced (the id survived and the report said "none
-  found"); client / plan / portfolio / acct-number columns are id
-  columns; annuitant, subscriber, beneficiary and holder/customer-name
-  columns are blanked, each cell in its own position (audit R1-341,
-  S037-00, S037-02).
-
-- **Web what-if follows the filing.** A native price converts at the
-  latest rate on or before the sale date (named with its date when it
-  is old), not a hardcoded 1.35, and a currency with no rates is
-  refused (audit R1-149). The simulated sale settles like a real one,
-  so the superficial-loss window runs on the settle date and a Dec-31
-  sale says it is a next-year disposition (R1-197). A Canadian project
-  with two or more taxable accounts is simulated on the blended s.47
-  pool, as filed (R1-258). A negative quantity buys to cover a short
-  position; a sale on a short is refused with that hint (S079-00).
-- **Web pages: config, radar and freshness.** A `taxjson.toml` the
-  server cannot reload (a mis-cased type, a quoted boolean) is shown as
-  an error instead of ignored, and quoted booleans are refused
-  (S078-15). A VIOLATION's rescue deadline day reads "sell TODAY", not
-  "deadline passed" (S079-06). A wash-radar report older than the books
-  (after `run --account`) carries a stale warning on every row
-  (S038-09). The "inputs have changed" banner sees the project-root
-  maps and compares against the oldest per-account report, like the
-  checklist (S078-21).
-- **`list --date` says its ACB is per account.** The as-of view
-  recomputes each account alone, so a symbol held in two taxable
-  accounts shows each account's own cost, not the s.47 blend the return
-  uses. The label, `--help` and README now say so (they claimed "full
-  ACB fidelity"), and a note names the shared symbols (audit S044-21).
-- **Account names that collide with work/ artifacts are refused.** A
-  name ending in `_raw`, `_base`, `_gains`, `_wash`, `_tt` (and a few
-  other artifact suffixes), or the name `sheltered`, now stops every
-  command with a rename hint: `cb_raw` silently vanished from `sum` and
-  the estimate, and `margin_raw` overwrote `margin`'s native books
-  (audit S022-00, S041-14).
-- **`taxjson gains` names an account with no native gains.** After a
-  cross-currency rollover skips an account's native books, the run
-  deletes the previous run's stale native gains and `taxjson gains` says
-  the account is missing and why, instead of omitting it or serving the
-  old rows (audit S037-23).
-- **The `.sum` TOTAL PROCEEDS / TOTAL COST are labelled.** They are the
-  engine's signed figures (shorts and written options negated), not the
-  Schedule 3 proceeds and ACB; the report and KNOWN_ISSUES now point to
-  `taxjson form-export` for those (audit R1-208).
-- **Holdings TOML states its option cost unit.** `cost_per_share` in
-  `reports/<account>_holdings.toml` is `total_cost / quantity` (per
-  contract for an option, the convention the broker holdings files
-  share); the file and README now say so next to `contract_multiplier`
-  and the per-share trade prices (audit S030-08).
-- **`taxjson-diff` sees hand-reported dispositions.** Rows the pipeline
-  moves to `manual_reporting_required` (phantom basis) are compared too,
-  so adding, dropping or changing one is no longer "0 added | 0 removed"
-  (audit S029-16).
-- **No false all-clear from sanity or find-missing-history.** When a
-  configured `holdings` file is missing, `taxjson sanity` ends with an
-  `INCOMPLETE` line (`"complete": false` in `--json`), `run` prints a
-  `!!` line and the checklist keeps the step at attention.
-  `find-missing-history` (and `taxjson-missing-history`) no longer print
-  "No missing-cost-basis issues found" and exit 0 when a base book failed
-  to load or a configured account has no book; they name what was not
-  checked and exit 1 (audit R1-324, R1-336, S047-18).
-- **A sheltered-account rerun no longer serves stale wash numbers.**
-  After `run --account <sheltered>` rebuilt `sheltered_base.json`, `sum`,
-  `form-export` and `close-year` read the older wash-adjusted gains with
-  no warning (a registered-account buy that makes a taxable loss
-  superficial was missing). They now warn, and `close-year` refuses
-  until a full `taxjson run` (audit R1-251).
-- **`roc` / `roc-sum` show `distributions.map` adjustments.** The map's
-  ACB adjustments are booked only in `<acct>_base.json`, so both views
-  said there were none while the engine applied them; they are listed now
-  (MAP_ROWS), and `roc-sum` warns when the same symbol and date also has a
-  `.tt` ADJUST (the ACB would be reduced twice) (audit R1-163).
-- **`reports/ccd.rpt` and `leaps.rpt` match their query twins.** They
-  counted phantom-basis (tainted) rows that `ccd-sum` / `leaps-sum` skip,
-  `leaps.rpt` was titled "LEAPS" while listing every long option of any
-  tenor (now titled so, pointing at `leaps-sum`), and an unreadable input
-  printed TOTAL 0.00 with exit 0 (now exit 1) (audit R1-173).
-- **`scan` US-LISTING respects DISTINCT and the US line's own dividends.**
-  A US stock was called a "Canadian issuer held via its US listing" when
-  any `.TO` symbol shared its root, even one `ticker.map` declared
-  `DISTINCT` (a CDR), and a non-paying US line borrowed the `.TO` line's
-  dividends. The check now needs the US line itself to pay, and a
-  `DISTINCT` ruling silences it (audit S042-06, S049-09).
-- **Query views stop on an unreadable file.** `list`, `shares`, `winners`,
-  `wash-sales`, `ccd-sum`, `leaps`, `gains`, the transaction views and the
-  -sum roll-ups warned about a truncated work/ file and printed a partial
-  report with exit 0 (`winners` moved by 39k, `scan` said "clean scan");
-  they now name the file and exit nonzero (audit S045-01, S042-05).
-- **An unparseable `taxjson.toml` is an error in every query command.**
-  It was read as an empty config: `fees-sum` converted a USD-base
-  project's fees to CAD at an invented 1.35 and dropped its sibling-account
-  guard, and the radar treated registered books as taxable (audit S049-00).
-- **`divs-sum` and `winners` separate registered accounts.** Both summed
-  RRSP/TFSA/LIRA/RESP amounts into the headline (the 2025 `winners` total
-  was 2.24x the Schedule 3 gain, and the USD `divs-sum` 2.25x the slips);
-  they now print TAXABLE and SHELTERED lines, and the checklist points the
-  slip tie-out at the TAXABLE line. `divs-sum` counts DIVIDEND rows only
-  (payments in lieu are `dil-sum`; adding the two counted PIL twice), and
-  the `divs` help says it shows both (audit S040-13, S041-04, R1-272).
-- **`winners` and `ccd-sum` count routed phantom-basis sales.** The
-  "skipped N tainted" warning read only in-line rows, so a pipeline file's
-  `manual_reporting_required` sales vanished from the ranking without a
-  word (audit S040-15).
-- **Tax-year views follow the settlement date.** `winners`, `gains`,
-  `ccd-sum`, `leaps` and `leaps-sum` windowed a tax year on the trade
-  date, so a Dec-31 trade that settles in January dropped out of every
-  year's view (the 2026 `ccd-sum` was 3,000.97 short of `ccd.rpt`). On a
-  settle-basis project the year window now uses the settlement date, like
-  `sum` and form-export (audit R1-171, R1-186, R1-238, R1-273).
-- **`leaps` / `leaps-sum` warn outside the books' year, and the default
-  window refuses a stale build.** They had no scope warning (`leaps-sum
-  all` said "all history" over one year); `winners`, `ccd-sum`, `leaps`
-  and `leaps-sum` with the default window now stop when `work/` was built
-  for another year than `[settings] year` instead of saying the year had
-  no dispositions (audit S048-11, S048-14).
-- **`taxjson fees` counts a charged fee as a fee.** Standalone FEE rows
-  (IB market-data subscriptions, Questrade/RBC custody fees) were shown
-  negative and netted against commissions, and a commission refund was
-  shown as a charge; FEE rows now follow the repo convention (positive =
-  charged) (audit R1-54, R1-269).
-- **`taxjson trades` prints signed totals and fees.** A fee rebate printed
-  as a charge and a penny close's negative proceeds as positive, so the
-  single-account taxtext did not round-trip; TOTAL SELL and `trades-sum`
-  sold now net those proceeds signed (audit S039-11).
-- **Webull: a Proceeds cell that does not fit its trade is refused.** The
-  gap between Proceeds and quantity x price is the commission; one that is
-  negative or far beyond commission size (a shifted or mislabelled
-  column) now stops the parse naming the line, as Questrade, IB and RBC
-  already do — it used to book with only a schema warning (S023-19).
-- **Generic importer: a sell whose commission exceeds its gross nets
-  negative.** A penny option close with a larger commission is booked with
-  its negative net (the schema accepts it since S017-00; the engine deducts
-  it) — it used to be clamped to 0 without an amount column, losing the
-  excess commission, or refused as a mis-mapped column with one (S057-02).
-- **Webull: exercise/assignment is inferred only on evidence.** A $0 option
-  close is paired with a stock trade at the strike only when that trade
-  carries Webull's $1.00 exercise/assignment charge; a limit order at the
-  strike after a worthless expiry keeps the expiry's gain or loss (it used
-  to fold silently into the shares' cost). Every inferred pair is named on
-  stderr, a rejected candidate is a warning, the closest option wins
-  whatever the row order, the row's own `@Symbol` names the underlying,
-  and a Dec-31 assignment settling in January pairs across the two
-  yearly exports (R1-15, R1-94, R1-175, S066-12, S066-02, S065-24).
-- **Webull: no trade row is dropped silently.** A BUY/SELL row with a
-  blank or unknown currency, or a blank Date, is refused naming the line;
-  `usd`/`Sell` spellings are read; a header with two columns matching one
-  field (an inserted `Gross Proceeds`) is refused; a cell spanning lines
-  (an unescaped quote that swallowed the next rows) is refused. Two
-  symbols sharing one Security Description, the new one opening with a
-  sale, are named as a likely ticker change with the `ticker.map` line to
-  add (R1-92, R1-97, R1-98, S066-04, S066-10).
-- **Docs: Webull income.** The Webull Trading Summary carries no income;
-  README and KNOWN_ISSUES say so and document the `.tt` `INTEREST` line
-  for T5 interest (R1-96).
-- **`.tt` lines: canonical symbols and fewer false alarms.** A symbol is
-  upper-cased on read (`aapl.us` was its own pool and the broker's sale
-  went short with no gain), and a suffix that is not a market (`XYZ.TSX`,
-  `XYZ.CA`) is a warning naming the line. Futures totals are no longer
-  called typos (the 1/100 contract-size guess), two identical `ACQUIRED`
-  lots arriving the same day no longer collapse into one arrival leg (a
-  phantom 100 shares, or a refused `AmbiguousTransferDateError`), and a
-  hand-entered split of a USD stock no longer skips the holdings refresh
-  with a "cross-currency rollover" message.
-- **json → .tt keeps the year a sale settles in.** `taxjson-convert-tt`
-  (json to tt) and the single-account `taxjson events` view wrote the
-  trade date; a `.tt` line has one date, read as the settlement date too,
-  so a Dec-31 sale settling in January moved into the earlier year on
-  re-import. They now write the settlement date on a settle-basis project
-  (`--date-basis trade` for the converter), count the rows whose dates
-  differ, keep a Questrade-style `commission` as the fee, and warn about a
-  contract multiplier the format cannot carry.
-- **Generic importer: fewer ways to book wrong money quietly.** Symbols
-  are upper-cased (`xyz` and `XYZ` used to be two pools, the sale a
-  phantom short). An unmapped action that carries a quantity or an amount
-  (a DRIP reinvest, say) is an `UNBOOKED` warning — on the console, fatal
-  under `run --strict`, a `--lint` failure — instead of a note in the
-  report. A row with no price is still checked against its amount (a
-  swapped fee/amount mapping booked the commission as the cost), a
-  mapping with no fee column infers the commission from the net instead
-  of refusing a valid commission-inclusive export, a futures symbol needs
-  its amount (the contract size is never guessed as 1 or 100), and an
-  unescaped quote that swallows the next row stops the import naming the
-  line.
-- **Standalone fee rows have one sign: positive = charged.** The generic
-  importer's `fee` action booked a CSV's negative cash as a negative fee
-  (the opposite of IB, Questrade and RBC, so `fx-cash` read a charge as
-  cash received); `[formats] fee_sign` picks the CSV's convention. The
-  `taxjson fees` view flipped every IB/Questrade/RBC fee row into a
-  rebate and understated TOTAL FEES; it now reads them as charged.
 - **Overlapping Kraken ledger exports are fine.** Two ledger exports in
   the crypto folder that repeat rows (an all-history ledger beside the
   yearly ones, a copy) stopped every run with a misleading "check that
@@ -3525,596 +2568,10 @@
   `amountusd` now uses it for both legs, and `taxjson-fill-crypto`
   values both legs at the received coin's fair value (the spent coin's
   when the received one has no price).
-- **`taxjson fetch` covers the superficial-loss window and keeps
-  tokens out of error messages.** The default Questrade window for a
-  tax year now runs Dec 1 of the prior year through Jan 31 of the next
-  (was Dec 15 .. Jan 15): a repurchase on Jan 16-30 or Dec 1-14 in a
-  fetch-only account (an RRSP buying back what the margin account sold
-  at a loss) was never seen, so a permanently denied loss was allowed.
-  An activity with no `netAmount`/`grossAmount`/`commission` is written
-  with a blank cell, so the parser refuses it instead of dropping a
-  dividend as a "zero-net" row. A refused redirect no longer prints the
-  redirect URL's query (the Flex token or Questrade refresh token). The
-  live-holdings snapshot takes an option's suffix from the account's
-  books when they hold that contract, so a CDR such as AMZN.TO no longer
-  makes the account's US AMZN option look Montreal-listed (a false
-  verify/sanity mismatch).
-- **taxjson-merge never emits a partial merge.** The legacy merge that
-  builds the crypto books, the blended base, `sheltered_base.json` and
-  the audit tie-out printed "cannot read" and exited 0 with the
-  unreadable file's rows missing — `run --fast` over a damaged cached
-  Coinbase book dropped half the crypto gains with a clean console. A
-  missing or unreadable input is now an error (exit 1, nothing on
-  stdout), as in taxjson-merge2.
-- **ticker.map means one thing everywhere.** Rule symbols are
-  upper-cased on load (a lower-case rule used to rename nothing while
-  `taxjson scan` called it live), a BOM and inline `# notes` are
-  stripped, and renames chain to their end (`GLOBAL OLD.US NEW.US` plus
-  `TOBASE NEW.US NEW.TO` now sends OLD.US to NEW.TO instead of splitting
-  the pool into a phantom short). `taxjson run` refuses a map with a
-  rename cycle, one symbol renamed to two different targets, or a
-  `DISTINCT` pair that the renames pool together. Scan's MAP-UNUSED
-  note follows chains and judges a rule the way the engine applies it:
-  a suffix-less `GLOBAL QQOL QQNW` that matches only `QQOL.US` is
-  reported with a hint to write the suffixed form. A malformed
-  `ticker_extraction_overrides.txt` line now stops the run by
-  file:line instead of being skipped.
-- **Filing commands refuse partial or broken books.** A taxable account
-  whose stage failed (inputs but no books) now stops `form-export`,
-  `t1135`, `close-year` and `reconcile-slips` instead of a one-line
-  warning with the account left out. A truncated taxable gains file stops
-  `sum`, `estimate`, `instalments`, `t1135`, `form-export` and
-  `close-year` with the file named (no traceback); an unreadable native
-  file stops `fx-cash`, and `sum` says why the line-15300 FX note is
-  missing. `sum`, `estimate`, `form-export`, `t1135`, `carryover` and
-  `check-filed` warn when the books are not the clean result of the
-  current inputs (validation errors, pending elections, inputs changed
-  since the last full run); `close-year` refuses such books without
-  `--force`, and refuses per-account (unblended) books from
-  `run --account`. The checklist counts one validation error once.
-- **instalments passes the estimate's warnings through** (unreadable or
-  other-year books, excluded tainted sales) and prints the rate-vintage
-  note for a year before the built-in tables.
-- **tax_date is honoured everywhere.** `form-export`, the FOR THE RETURN
-  block, `carryover` and `t1135` use the project's `tax_date` (a
-  Canada project on "trade" dropped a Dec-31 sale settling in January).
-- **carryover flags a locked year it disagrees with** (and the moving
-  option_grant_timing_since default).
-- **t1135:** an assigned written put's premium reduces the shares' cost
-  and an exercised call's cost is added; same-timestamp rows follow the
-  engine's order (buy before sell) so the threshold test no longer depends
-  on file order; a split inside a trade's settle lag no longer strands
-  cost; `t1135.map` survives a BOM, follows a ticker change and names an
-  override that matches nothing; denied superficial losses missing from
-  the cost columns are named. Books built for another year are warned
-  about. The other user map files (distributions.map, yf_ticker.map,
-  crypto_ticker.map, security overrides) read a BOM too.
-- **audit:** `--year` for another year and `--all-years` no longer call
-  fresh books stale (the saved gains files hold one year); a crypto fee
-  priced by the fill stage ties out; a large book's per-row 4-dp rounding
-  no longer fails the totals.
-- **`crypto = "false"` (quoted) is refused** by every command instead of
-  moving an equity book to the crypto line.
-- **The account .sum lists phantom-basis sales** in a MANUAL REPORTING
-  section. `option-boundary` applies phantoms.json (a phantom long option
-  sold to close is not a write). `wash-sales --explain` traces the
-  blended books the table comes from.
-
-- **reconcile-slips reads real slips.** A blank proceeds cell beside a
-  cost (an option that expired worthless) is nil proceeds, and a
-  worthless expiry with no slip row no longer fails the check. A written
-  option booked twice under grant timing counts its contracts once. Slip
-  symbols go through the project's ticker.map (KGC ↔ K.TO), and broker
-  option descriptions, share classes (`BRK B`), UTF-16 files, French and
-  T5008 box headings are read. Two listings of one root (AMZN.TO and
-  AMZN.US) are no longer folded together. A row with amounts but no
-  symbol, or an unreadable quantity, counts as not reconciled; a second
-  column that also looks like quantity/proceeds/cost is refused instead
-  of silently taking over. Books built for another tax year are refused
-  with a rebuild message instead of "dropped CSV rows".
-
-- **RBC books what it used to drop, and says what it cannot book.** A
-  stock dividend (`DIS - ... STK DIV ON N SHS`) enters at $0 cost like
-  Questrade's; an RBC Dominion Securities "Reinvest @ $p" distribution
-  row with units books the income and the purchase; a reversed DRIP
-  cancels its original; a reorganization whose legs or cash-in-lieu
-  straddle two yearly exports is paired across them; a split on a short
-  position scales it up; an option strike with a thousands separator
-  (`5,025`) is read whole; a cash-in-lieu reversal nets instead of
-  adding proceeds. Rows it cannot book (unclassified, unmatched legs,
-  a Transfers row with no quantity) are `UNBOOKED` warnings on the
-  console and fatal under `run --strict`.
-- **RBC refuses rows it would mis-book.** A trade with a blank Value
-  (read as $0 proceeds or cost), a Value that does not fit quantity x
-  price (a commission below zero or far above RBC's), a Description with
-  an unescaped quote that swallowed the next row, and a listed-ticker row
-  whose text names a contract on another underlying are errors. A stock
-  leg whose text quotes the assigned contract books as the stock; a
-  security named DELIVERY... no longer turns a transfer-in into a
-  transfer-out; FRACTYL-style names keep their cash-in-lieu of dividend
-  as income; a blank Description falls back to the Symbol Description
-  for security overrides; a rights/warrant expiry settles on its date; a
-  blank-settle assignment's option leg shares its stock leg's cycle; a
-  notional distribution warns that its income is not in the totals.
-- **Broker-marked shorts are not missing history.** A position RBC
-  marks as a short sale (`SHORT.` / `COVER SHORT.`) is no longer offered
-  as a phantom by `find-missing-history`, `--suggest-phantoms` or the
-  run's go-short hint; `find-missing-history` lists it apart.
-- **Questrade keeps a TSX listing traded in USD on `.TO`.** `DLR.U.TO`
-  and `XUS.U.TO` bought in USD became `DLR.U.US` / `XUS.U.US`: a pool
-  apart from the same units at RBC or IB, a `JOURNAL DLR.U.TO DLR.TO`
-  rule that never fired, and a Canadian ETF listed as US property on the
-  T1135. A `.TO` symbol now keeps `.TO` whatever the row currency, so the
-  API (`FNV.TO`) and web (`.FNV`) spellings of a USD dividend agree; a
-  CAD dividend or ROC on a US stock bought from the CAD side (`EXCHANGE
-  RATE`) now reaches the `.US` pool instead of a phantom `.TO` one.
-- **Questrade learns identities from all of an account's exports.** A
-  dividend, ROC, stock dividend, DRIP or cash-in-lieu row under an
-  internal code (`A020626`) whose trade sits in last year's export stayed
-  on the code, and a ROC there became a capital gain. The
-  description map now spans every export of the account; the event
-  wording (`STK DIV ON`, `STK SPLIT ON`, `REINV@C$`, `CASH IN LIEU OF`)
-  and Interactive Brokers' transfer wording no longer block the match;
-  a code nothing resolves is a warning (and a `--lint` finding) with the
-  `ticker.map` line to add, and a spinoff chain booked under an internal
-  code is flagged at the election step.
-- **Questrade flags a ticker change with no corporate-action row.** A
-  symbol that stops with shares open while another with the same
-  description opens with a sale they cover gets a warning with the
-  ready `GLOBAL old new` line (the sale's gain used to drop out).
-- **Questrade row shapes.** `BUY`/`buy` and lower-case symbols are read
-  like `Buy`; an unknown action that moves shares is an `UNBOOKED`
-  warning on the console (fatal under `run --strict`); a `BRW`
-  Norbert's-gambit journal between `DLR.TO` and `DLR.U.TO` is booked as
-  a TRANSFER pair like RBC's journal legs, carrying the stated book
-  value (skipped before, leaving the units on `DLR.TO`), which a
-  `JOURNAL DLR.U.TO DLR.TO` rule nets; a negated stock-dividend row cancels its original; a DIS or
-  stock-dividend row carrying both shares and cash is refused; a
-  CAD-settled US trade's CAD net must match the USD gross at the stated
-  rate and keeps its sign; a blank settlement date on an option is T+1;
-  a transferred option books under its OCC symbol at 1/100 of the book
-  value per share; a stock leg whose description quotes the contract
-  books as the stock; a split on a short position scales it up; a
-  warrant expiry books on the date in its description; a transfer row
-  carries its description, so `--security-overrides` reaches it; the
-  no-book-value warning names the remedy that works (a `.tt` BUYSELL).
-  A Questrade DIS chain that removes units is an `UNBOOKED` warning.
-- **An IB corporate-action cancellation reaches the other statement.** A
-  split booked in one yearly statement and cancelled (`Ca`) in the next
-  is undone when both are in the account's inputs; it used to stay
-  applied with a "reverse it by hand" warning (audit S059-04).
-- **Generic importer: one spelling per security.** `BRK-B` and `BRK/B`
-  are `BRK.B` (they were separate ACB pools, so a cross-account
-  superficial loss was missed), an OCC symbol padded to 21 characters is
-  compacted, and an option description in the symbol column is refused
-  instead of booked as a share that never expires (audit S010-04).
-- **US projects: an IB return of capital reduces basis by default.** A
-  `country = "usa"` project no longer books an issuer-designated return
-  of capital as a dividend under Canada's s.90(2) rule; it is a
-  nondividend distribution (IRC s.301(c)(2)) unless `[settings]
-  foreign_return_of_capital` says otherwise (audit S013-01).
-- **Settle dates that pair across legs and files.** An IB assignment's
-  option leg now settles with its stock leg (before the 2024 T+1 cutover
-  the option settled a day earlier, and a same-day trade could consume
-  the premium), and a Dec-31 0DTE option trade is clamped to its expiry
-  even when the expiry row sits in the next yearly export (audit S058-01,
-  S055-22).
-- **IB security identity across statements and issuers.** Income is
-  moved to the held listing of its ticker only when the ISINs match (an
-  AT&T dividend no longer lands on Telus `T.TO`), and the holding may
-  come from the account's other statements (a ROC-only statement no
-  longer books a gain on a phantom listing). Option-root aliases are
-  learned from all of the account's statements, and after a ticker
-  rename the canonical root is the contract's underlying (SQ -> XYZ). A
-  USD trade of a TSX `.U` unit is `X.U.TO`, as RBC books it. One stock
-  listed under two symbols (a ticker change) is an ATTENTION line
-  naming the `ticker.map` GLOBAL rule that joins them (audit S059-24,
-  S060-19, S060-00, S059-15, S059-11, S010-06, S059-13, S060-17).
-- **IB corporate actions nobody books are loud.** An unhandled Corporate
-  Actions row is now an UNBOOKED warning (console; fatal under `run
-  --strict`) that points at a `.tt` booking instead of a manual TRANSFER
-  row (dropped in taxable accounts). The same goes for an option or
-  futures contract adjustment (it used to become an equity SPLIT on an
-  invented symbol), a spin-off debit on a short parent, and a tender
-  whose allocation delivers another security (a share-for-share exchange
-  offer was reported as a no-op). An IB stock dividend books its shares
-  at $0 cost with a console note, like Questrade's; an Options
-  Expirations row keeps its own asset category (a futures-option expiry
-  closes the `F:` position) (audit S058-16, S058-22, S058-24, S013-06,
-  R1-56).
-- **IB statements that do not cover the year are reported.** `taxjson
-  run` now says on the console when an account's IB statements stop
-  before Dec 31 of a finished year (the 2024 statement ending Dec 27) or
-  leave a gap between two statements, and when a statement has no Cash
-  Report to reconcile against (audit R1-2, R1-195, R1-53).
-- **IB rows the parser cannot book are refused, not counted.** A Trades
-  row in an asset class without a parser branch (Bonds, Mutual Funds)
-  that moves money, and a security Transfers row with a blank Qty, stop
-  the parse naming the row. An execution-level `Trade` row is skipped
-  only when an `Order` row covers the same symbol and day (a Trade-only
-  fill of another symbol was dropped, a Trade row before its Order row
-  was doubled); levels that disagree are refused (audit S060-08, R1-55,
-  S060-10).
-- **A penny option close no longer stops `taxjson run`.** A sell whose
-  commission exceeds its gross (closing at 0.01) nets negative proceeds;
-  the schema used to refuse it on the always-strict parse, although the
-  engine books it. An assignment stock leg's money is now checked
-  against quantity x strike like any trade (audit S017-00, S017-02).
-- **Comma-grouped numbers read right.** `0,125` is refused as a decimal
-  comma everywhere (it read as 125); an option strike written `5,000.00`
-  keeps its thousands (it was cut to strike 5); an IB `Split 1 for
-  1,000` is 1-for-1000 (audit S055-08, R1-170, S058-19).
-- **UTF-16 exports are routed.** Broker detection decodes a UTF-16 BOM
-  the way the IB, Questrade and RBC parsers do (audit R1-70).
-- **Security overrides are stricter and reach every row.**
-  `ticker_extraction_overrides.txt` keys now match whole words (on IB,
-  where the description is the bare ticker, `BN` no longer rewrites
-  ABNB or BNTX), never rewrite option or futures rows, take the currency
-  case-insensitively, ignore a leading BOM, and a malformed line fails
-  the parse naming its line number instead of being skipped. The
-  override now runs before TRANSFER rows are set aside (the custody
-  sidecar gets the corrected symbol), IB TRANSFER rows carry the
-  security (`ACATS (DLR)`) so the override can match them, and an IB
-  split of an overridden security stays a split (its `symbol_new`
-  follows the rewrite) (audit R1-143, S001-00/01/02, S012-09, S027-01,
-  S059-03).
-- **Transfer sidecar is de-duplicated across overlapping exports.** A
-  re-downloaded or overlapping statement no longer doubles every custody
-  row in `taxjson transfers` or moves twice the shares in the holdings
-  evidence netting (audit S026-23, S027-00).
-- **Corporate-action elections say what the law says.** The s.85.1
-  share-for-share rollover is automatic when it applies (you opt out by
-  reporting the gain); taxjson described it backwards and printed a
-  FILING REQUIRED reminder for a form that does not exist. The option
-  text now says when s.85.1 applies (not to a Canadian company bought
-  by a foreign purchaser) and the reminder is gone for it. An s.86.1
-  spin-off now takes the allocated cost in CAD (`--hint
-  allocated_acb_cad=`, the parent's CAD ACB times the spin-off's share of
-  the combined FMV, s.86.1(3)); the old source-currency `allocated_acb`
-  still works but warns, since converting it at the spin-off date moved
-  FX drift between the pools. A misspelled hint in a hand-edited
-  `manifest.json` (`fmv`, `allocated_ACB`) now stops the run by name
-  instead of booking $0, and a taxable merger at $0 FMV warns on every
-  run even when cash-in-lieu was paid.
-- **IB mergers are never dropped half-way.** A merger whose out-leg and
-  in-leg sit in two statements (a year-end event split across yearly
-  downloads) or carry Date/Times a day apart was skipped with no warning:
-  the old shares stayed and the new ones never arrived. The legs are now
-  paired across all of the account's statements and within a week; a
-  leg with no partner stops the run as an unsupported event naming it.
-  A merger held in both the TSX and NYSE listings becomes one event per
-  listing (the second listing's shares were never converted), a merger
-  of a short position is refused instead of booked as `OLD -> OLD`, and
-  a cross-listing journal listed before its merger is folded once
-  instead of also becoming its own election.
-- **Questrade spin-offs land on the parser's symbols.** A dotted target
-  (`ABC.WS`, a class share) was left without its market suffix and a
-  Venture `.VN` listing became `ABC.VN.TO`, so the spun-off lot and its
-  later sale sat in two pools (a phantom long, a short sale, no gain).
-  The extractor now uses the parser's own suffix rule, reads a padded or
-  UTF-16 header like the parser (the whole spin-off used to vanish), picks
-  an interlisted parent by the listing held on the spin-off date (never
-  by file order; ambiguity is refused with a warning), and nets a DIS
-  chain whose rows straddle two yearly exports.
-- **RBC spin-off parents and merger sources resolve to the right pool.**
-  The parent took its market suffix from the spun-off shares' row (a TSX
-  parent became `.US`), could resolve to a covered call's option code or
-  to another company sharing its first word (`BROOKFIELD CORP` →
-  Brookfield Renewable), and an interlisted company was resolved by
-  file order. A spin-off's s.86.1 ACB reduction then landed on an empty
-  pool as a phantom gain. The parent now uses its own listing, options
-  never qualify, a fuzzy match needs both names to agree, a merger's
-  temporary code prefers the removal's currency, and an ambiguous
-  listing is refused with a warning. A spin-off debited from a short
-  parent is refused instead of booked as a long buy and a negative
-  dividend.
-- **RBC reorganizations pair on evidence.** A ratio written with a
-  thousands comma (`1 FOR 1,000`, `1 NEW = 1,000 OLD`) was read as
-  1-for-1, so the cash-in-lieu row sold almost the whole position. Two
-  option contracts adjusted the same day now pair by the closest strike
-  (they swapped ACB by file order); a removal no longer pairs with a
-  lone unrelated receipt or a half-name match; a company named "ROC ..."
-  no longer turns merger cash into a return of capital; an exchange into
-  a different company worded `XCH TO` asks for the merger election
-  instead of rolling over silently; and a merger of a short position is
-  refused loudly instead of renaming the new ticker into the temporary
-  code.
-- **`distributions.map` rows find their shares.** A map whose first line
-  carried a byte-order mark, a lowercase symbol, a key naming the
-  listing a `ticker.map` rule consolidates, or the old ticker after a
-  ticker change was skipped as "no shares held" (or booked on a dead
-  pool) and the ACB increase was lost. Keys are now matched
-  case-insensitively, through `ticker.map`, and onto the ticker live on
-  the record date; a sale executed before a split but settling after it
-  no longer inflates the record-date balance. The NOTE also says the
-  distribution is income to report from the T3/T5 slip.
-- **Filing checklist fixes.**
-  - run-clean compares the inputs with what the last full run was built
-    from (content, not dates): a deleted input, a corrected export copied
-    with its old date, or a new `distributions.map` / `phantoms.json` /
-    `ticker_extraction_overrides.txt` now says "inputs changed". It also
-    flags an account with inputs but no report (a run that died on it, or
-    a `run --account` of another account).
-  - wash-reviewed counts a December loss that settles in January in the
-    settle year, like every other denial total.
-  - t5008 reconciles all slip files together (one per broker is normal;
-    each file alone could never reconcile), finds `.CSV` files, reads
-    only `inputs/slips/`, and names a non-CSV file there as not
-    reconciled. `taxjson reconcile-slips` takes several slip files.
-  - form-export's gain check allows for per-row rounding on a big book
-    (a 6-cent residual over 831 rows was a false attention).
-  - A done mark no longer hides a detector that crashed or had nothing
-    to check. An unreadable `checklist.json` is reported by name and never
-    overwritten. Changing `year` no longer brings last year's marks back
-    at the next mark.
-  - The fees step no longer sends trade commissions to line 22100 or
-    calls data subscriptions deductible: line 22100 is the margin
-    interest from the statements. The carryover step says what to record
-    (Canada: the 100% loss; US: the Schedule D line 21 deduction).
-
-- **check-filed recomputes a locked year the way it was filed.** The
-  drift check used the current project's written-option timing, so a
-  2026 project without `option_grant_timing_since` recomputed the 2025
-  lock on close timing and advised amending a correct return. It now
-  uses the timing the lock recorded and notes when the project differs.
-- **One bad lock no longer switches off the drift guard.** A lock that
-  cannot be read (bad JSON, a hand-edited file missing a count) made
-  `run --strict` exit 0 and skip every other lock, and made
-  `check-filed` crash with a traceback. Each lock is now checked on its
-  own; a bad one is named and fails `--strict`.
-- **A renamed account is reported, not recomputed from its old book.**
-  A locked account that is no longer a taxable account in
-  `taxjson.toml` was recomputed from its orphan `work/<name>_base.json`
-  and the check said OK.
-- **The lock records dividends and payments in lieu separately.** A
-  dividend reclassified as a payment in lieu (different return line, no
-  gross-up) now shows as drift; locks written before this keep
-  comparing the combined income only.
-- **`country` and `tax_date` are checked for every command.** "Canada",
-  "CA" or " canada" are read as `canada` everywhere (check-filed and the
-  web what-if crashed on them, switching the drift guard off); an
-  invalid `tax_date` stops every command with a clear message instead
-  of an engine usage error. The checklist no longer reports a failed
-  check-filed as drift.
-- **reconcile-slips counts phantom-basis sales.** A sale reported by
-  hand (phantom cost basis) was still shown as MISSING_FROM_COMPUTED;
-  it now matches the slip with the "phantom basis included" note.
-- **Canada estimate keeps its sign.** Eligible dividends at a low
-  bracket can lower the tax on the other income; the estimate (and the
-  AMT total and average rate) now shows that as a negative figure — a
-  saving — instead of flooring it at 0.00 under a `WITH - BASE` trace
-  that was negative (R1-47).
-- **Unused foreign tax credit reaches the province.** Foreign tax the
-  federal tax cannot absorb is credited against provincial tax (form
-  T2036, limited to provincial tax x foreign income / net income)
-  instead of being dropped; the estimate and the current-year
-  instalment basis were overstated for foreign-dividend-heavy, low-tax
-  years (S077-16).
-- **Estimate discloses what it leaves out.** A NOTE names the headroom
-  a prior-year minimum tax carryover (T691 Part 8, line 40427) could
-  use when AMT does not bind — the carryover is not modelled
-  (KNOWN_ISSUES); the assumptions line no longer sends interest to
-  views that never show it (R1-218, S078-00).
-- **option-boundary: an open write expiring later this year is open.**
-  A written option whose expiry is after today is an ordinary open row
-  (premium recognised in the write year), not "expired … the broker
-  export is missing it"; the checklist no longer turns `[!]` for it.
-- **option-boundary follows renames and keeps the sign.** A ratio-1
-  rename SPLIT of an option carries the written lot to the new symbol,
-  so its buy-back is matched; a write whose commission exceeds the
-  premium shows a negative premium, as the engine books it.
-- **option-boundary: cash-settled index options are not folded.** An
-  assignment whose underlying never trades as stock in the account
-  (XSP, SPX) is reported as a cash settlement — premium in the write
-  year, settlement loss in the close year, no T1-ADJ — instead of
-  advising the removal of a premium the engine keeps.
-- **option-boundary reads a lock's close timing.** When `filed/<year>.json`
-  records close timing but this project puts that year's writes on grant
-  timing, an expiry, buy-back or still-open write is ATTENTION (the
-  premium is in no return: set `option_grant_timing_since` to the next
-  year, or T1-ADJ to add it), and an assignment says no amendment is
-  needed instead of "remove the premium … filed with it".
-
-- **carryover says what its numbers leave out.** The ledger now notes
-  that slip capital gains (lines 17400/17600; US Schedule D line 13) and
-  the line-15300 FX gain on foreign cash are not in NET GAIN(LOSS), flags
-  rows before the project year as rebuilt from this project's books and
-  possibly partial, and `--claimed` / README state the units to record
-  (Canada: the 100% loss, line 25300 x2 at 50%; US: Schedule D line 21).
-- **claimed_losses.txt takes `1,234.56` and `$1,234.56`.** An amount
-  written the way the return or notice of assessment prints it was
-  dropped with a warning, so the carryforward kept the claimed loss. A
-  malformed grouping is still refused.
-- **carryover: an old claim no longer eats a later loss.** A
-  `claimed_losses.txt` amount recorded for a year the books show no loss
-  for was held and taken by the next loss in ANY later year, lowering
-  its carryforward. A loss carries back only 3 years (ITA 111(1)(b)), so
-  a claim left unmet past that window now stays unmatched, with a
-  warning, and the carryforward is untouched.
-- **fx-cash counts assignment cash, and only cash.** An option
-  assignment's stock leg booked as `ASSIGN` (Webull) now spends or
-  receives currency like a trade; crypto-for-crypto swap legs (Kraken,
-  Coinbase Convert), staking rewards paid in a coin, and stock-for-stock
-  corporate actions no longer count as foreign cash moving (they
-  invented thousands of dollars of s.39(1.1) gain or loss).
-- **fx-cash says the figure can be wrong either way.** The report (and
-  the `sum` FOR THE RETURN line and its `--json`) now carries the
-  overdraft count and a caveat that unseen conversions and deposits can
-  move the estimate in either direction — it used to say only that it
-  "understates activity" — and the report shows the ledger's foreign
-  cash at Dec 31 to compare with the brokers' balances.
-
-- **Instalment interest on the least amount due by each date.** ITA
-  161(4.01) deems the requirement on each due date to be the least
-  cumulative amount any method (current-year, prior-year, CRA reminder)
-  calls for by that day. `taxjson instalments` priced each method as a
-  whole year and took the cheapest, which overstated interest and the
-  s.163.1 penalty whenever the cheapest method changed between dates.
-  The report now shows the mixed schedule when no single method
-  governs.
-- **Instalment rates for 2023 and a flag before the table.** The
-  built-in CRA overdue-tax rates now start with 2023 (Q1 8%, Q2-Q4 9%).
-  A 2023 year was charged 2024's 10% all year and the report called it
-  the published rate; a year before 2023 now says its days ASSUME the
-  earliest rate (`rate_extrapolated`).
-- **One low prior year no longer waives instalments.** With only one
-  of `prior_year_net_tax` / `second_prior_net_tax` set and at or below
-  $3,000, `taxjson instalments` said "No instalments required" and
-  printed the unset year as 0.00. Both preceding years must be at or
-  below $3,000 (ITA s.156.1(1)); with one unknown the test is now
-  unknown (instalments assumed required) and an unset year prints as
-  "not set".
-- **Instalment interest keeps compounding after you catch up.**
-  `taxjson instalments` now computes interest the way CRA publishes it:
-  interest on each required instalment from its due date, minus
-  interest on each payment from its date (or January 1), both to the
-  balance-due date and compounded daily. The old running balance
-  stopped compounding the accrued charge once payments caught up,
-  which understated interest by a few percent and could drop a charge
-  under the $25 threshold.
 - **Kraken Hybrid Earn moves are yours.** `crypto-sends` classifies a
   Kraken `hybridearnwithdrawal` (the coins move to Kraken's Earn product
   and keep earning rewards) as `self` automatically instead of asking;
   `--set ID=gift|payment` still overrides it.
-- **The wash radar sees today's trades.** `wash-radar`, `buy-check`,
-  `sell-check`, `watch` and `reports/wash_radar_*` dropped every trade
-  that had not settled yet, so right after a loss sale `buy-check` said
-  SAFE (and right after a buy `sell-check` said SAFE). A trade now
-  counts from its trade date; the windows stay settlement-based.
-- **The wash radar takes losses from the engine.** Whether a sale was a
-  loss came from the radar's own per-account pool, which missed the
-  s.47 blend across taxable accounts, the cost added back by an earlier
-  denied loss, and option cost folded in on exercise; real losses showed
-  no window and `buy-check` said SAFE. The radar now reads the engine's
-  gains files (grant-timed buy-back losses are not wash losses unless
-  `option_buyback_loss_superficial` is on).
-- **Web what-if prices options per contract.** Selling an option on the
-  holding page used qty x price, 100 times too little, and showed a ~99%
-  loss. Proceeds are now qty x premium x 100 (the page labels the field
-  as the per-share premium and the cost as per contract); a futures
-  option is refused rather than priced with a guessed multiplier.
-- **Web what-if maps cross-listed options like the pipeline.** An option
-  on a `TOBASE`/`GLOBAL`-mapped underlying (a `.US` call booked as
-  `.TO`) was looked up under its unmapped name, and the what-if
-  simulated writing a new short. It now follows the underlying's rule,
-  and a sale that would open a short is refused.
-- **`taxjson redact` removes the holder's name from Coinbase and IB
-  Flex/HTML exports.** Coinbase's `User,<name>,<id>` line, the `Name`
-  column of an IB Flex `Account` section and the Name cell of IB's .html
-  statements were kept. IB ids glued to letters (HTML element ids) were
-  collected but not replaced, while the report said "every occurrence
-  replaced"; they are replaced now, and the report checks the copy and
-  lists any id it could not replace.
-- **The wash radar applies `phantoms.json`.** Phantom-backed positions
-  showed as shorts (rebuys as short covers with invented losses) in the
-  radar, `watch`, `buy-check`, `sell-check`, harvest's ADVISORY and the
-  web UI, and real violations were missed.
-- **One split booked on two dates applies once.** IB and Questrade date
-  the same split days apart (KLAC 10:1: 06-11 vs 06-15); both copies
-  were applied, scaling the pool by the ratio twice. Copies of one split
-  (same security and ratio) within 7 days are one event, applied on the
-  earlier date, with a note.
-- **IB spin-offs go through the spin-off election.** IB `Spinoff` rows
-  were always booked as a dividend at IB's value, with no s.86.1 choice
-  (and a Canadian parent's tax-deferred spin-off taxed as income). They
-  now ask like every other broker's; the default dividend uses IB's
-  value without asking for it. Existing IB spin-offs need one election.
-- **Spin-offs use the broker's value.** A deemed-dividend spin-off with
-  no (or a 0) `fmv_per_share` hint is booked at the broker's reported
-  value when there is one. A taxable spin-off booked at $0 is warned
-  about on every run and in the account's .sum until a value is set.
-- **IB cash takeovers are booked.** `Merged(Acquisition) FOR USD 30.00
-  PER SHARE` is a sale at the cash amount (it was left in inventory with
-  only a .sum note). Decimal-ratio and class-share (`BRK B`) mergers are
-  parsed; a stock-plus-cash merger stops the run by name for manual
-  booking instead of vanishing.
-- **A taxable merger uses one value for both legs.** The old shares'
-  proceeds and the new shares' cost are now the same fair value (the
-  shares received, plus any cash in lieu); the broker's separate out-leg
-  and in-leg figures left their difference as a permanent phantom gain
-  or loss. Across currencies, each leg is converted at the event date
-  (a hint in USD was booked as CAD proceeds).
-- **A merger or spin-off held in two broker accounts is booked for
-  both.** Two IB sub-account statements, or two RBC accounts, feeding
-  one taxjson account kept only the first account's disposition. Their
-  quantities are now combined under the one election; an overlapping
-  statement of the same broker account still counts once.
-- **Questrade spin-off parents are found in any export of the account,**
-  and a US parent bought from the CAD side (`EXCHANGE RATE` rows) is
-  named with its US listing, as the parser books it. The s.86.1 cost
-  reduction used to land on an empty pool and book a phantom gain. RBC
-  spin-off parents and merger placeholders get the same all-exports
-  lookup.
-
-- **IB: a cancelled trade (`Ca`) nets out.** A Trades row coded `Ca`
-  was booked as an ordinary trade, so a cancel-and-rebook was a phantom
-  round trip: a loss sale rebooked a cent higher became two denied
-  superficial losses and the remaining shares' ACB was wrong. The
-  cancellation now drops out with its original fill; when the original
-  is in an earlier statement of the same account, `taxjson-merge2`
-  (`taxjson run`) pairs them, and a cancellation whose original is in
-  no input stays booked with a warning.
-- **Questrade: an assignment stock leg keeps its cash.** A row whose
-  description said ASSIGNMENT or EXERCISE (or ` - EXPIRED`) had its
-  price and cash zeroed even when it carried money: an ASN stock leg was
-  booked at $0 cost, a stock named "... EXERCISE EQUIPMENT" vanished, a
-  sale of expiring rights lost its proceeds. Only zero-cash option legs
-  are zeroed now; an EXP row with cash, or a zero-cash ASN/EX row that is
-  not an option, is refused.
-- **Questrade: CIL / REI reversals cancel.** A negated cash-in-lieu or
-  DRIP row was read with abs() and booked as a second sale or buy (cash
-  counted twice, phantom shares). The reversal now removes its original;
-  a reversal whose original is not in the file is refused.
-- **Webull: a priced trade needs its Proceeds.** A blank, garbage or
-  misaligned Proceeds cell on a priced BUY/SELL booked $0 (the whole
-  gross became a "fee", so even `--strict` passed). Such a row, a row
-  wider or narrower than its header, and a decimal comma are refused
-  with the file line.
-- **One spelling per Canadian listing.** Questrade's TSX-Venture, CSE
-  and NEO symbols (`VVV.VN`, `CCC.CN`, `XYZ.NE`) became `VVV.V`,
-  `CCC.CN.TO`, `XYZ.NE.TO`, while IB, RBC and Webull book every Canadian
-  listing `.TO`; the pools split and a superficial loss across accounts
-  was missed. Every Canadian venue is now `ROOT.TO` in every parser, the
-  generic importer and the live-position mapping (`yf_ticker.map` still
-  aliases a price lookup, e.g. `PNG.TO PNG.V`). `taxjson-lint-
-  crosslistings` warns when one root is held under two Canadian
-  suffixes (a `.tt` line or a map rule).
-- **Questrade preferred shares are dotted.** `FTN.PRA.TO` is now
-  `FTN.PR.A.TO`, as IB, RBC and Webull spell it, so the pools no longer
-  split. An existing `GLOBAL FTN.PRA.TO FTN.PR.A.TO` rule is harmless.
-- **Decimal commas are refused in the IB diagnostics and slip
-  reconciliation too** (open-position, dividend-accrual and slip cells
-  were still comma-stripped and read 100x too large).
-
-- **Futures are booked on their settled P/L, not their notional.** Each
-  leg's notional (quantity x price x multiplier) was converted to CAD at
-  its own date's rate, so the CAD gain carried FX on money that never
-  changed hands, and Schedule 3 line 6 showed the notional as proceeds
-  and ACB. A futures fill that opens a position now carries nothing; a
-  close carries the realized native P/L (commissions included), converted
-  at the closing leg's rate. Line 6 shows a gain as proceeds and a loss as
-  ACB (the T5008 shape); `sum`, `form-export`, `audit` (which re-derives
-  the P/L from the broker rows) and `fx-cash` agree. Real books moved
-  in both years. Options on futures are unchanged.
-- **T1135: a futures contract has no cost amount.** A long futures
-  position was counted at its full notional (one CL contract added about
-  80,000 CAD to the threshold test and could flip "filing required").
-  Plain futures are now listed with a nil cost and a note; options on
-  futures still count at their premium.
-- **`taxjson t1135` applies phantoms.json.** Positions whose early
-  history is cut off read as shorts that later real purchases covered at
-  zero cost, so those purchases never reached the max-cost or Dec-31
-  columns (2024 books: 313k of max cost missing). The report now adds
-  the same phantom openings the gains stage adds, and flags a still-held
-  phantom "cost understated".
-- **One Bank of Canada 404 no longer switches a currency to Yahoo for
-  good.** Any HTTP 404 from the Valet API (a maintenance page, a proxy)
-  was cached as "series not published" with no expiry, so every later
-  run of every project on the machine converted that currency at Yahoo
-  closes, cached Bank rates included. Only the Valet API's own
-  "Series FX…CAD not found" answer marks a series now; the mark carries
-  its date and is re-checked after 7 days; cached Bank observations keep
-  their source; the note names the answer and the source used.
 - **`taxjson crypto-sends`: is a crypto send a gift, a payment, or your
   own wallet?** Every withdrawal/send that did not arrive on another of
   your exchanges is listed with its fair value (the exchange's spot
@@ -4127,153 +2584,6 @@
   gain against the USD pool's average cost instead of a sale line. If you
   already declared a send by hand (a `tao_payment.tt`), delete that file
   when you adopt `crypto_sends.tt` — the command warns while both exist.
-- **The filed-year lock counts phantom-basis sales.** Its `tainted`
-  count read a flag pipeline gains files never carry, so it was always 0
-  and a phantom-basis sale appearing or disappearing never showed as
-  drift. New locks count them; older locks skip that one comparison.
-- **Phantom-basis sales no longer vanish from `form-export`.** Sales
-  drawn on `phantoms.json` openings (cost unknown) were left out of the
-  Schedule 3 / Form 8949 / TXF output with no warning, and the checklist
-  marked the export complete. They are still not in the computed rows or
-  totals, but form-export now warns with each one's proceeds, lists them
-  in a MANUAL REPORTING section (MANUAL rows in the CSV), and the
-  checklist keeps the step open. `t1135` names them too.
-- **`distributions.map` counts `phantoms.json` shares.** The record-date
-  balance was taken from the book without the phantom openings, so a
-  position with pre-window history got too small an ACB adjustment (or
-  none, "no shares held"). Removing `phantoms.json` now rebuilds the
-  adjusted books under `--fast` too.
-- **`phantoms.json` openings reach the superficial-loss context.** An
-  opening for a registered (or affiliated) account was applied to that
-  account's own report but not to the context the taxable gains are
-  tested against, so a TFSA with truncated history looked short and its
-  in-window rebuy did not deny the taxable loss (permanently, as s.54
-  requires). The openings now apply to every book.
-- **`check-filed` compares every taxable account, not only the locked
-  ones.** An account added (or renamed) after `close-year` was never
-  recomputed, so its dispositions were missing from the comparison and
-  the check said OK. It is now recomputed in the same blend and reported
-  as drift when it has activity in the filed year.
-- **`phantoms.json` entries for an unknown account stop the run.** The
-  file is keyed by account name, so renaming an account silently dropped
-  its openings and changed the filed gain. `taxjson run` now names each
-  entry whose account is not in `[accounts]` and suggests the closest
-  current name.
-- **Same-moment replacements: taxable first, then registered.** When a
-  taxable rebuy and a TFSA/RRSP buy carried the same timestamp (common
-  with Webull and Questrade stamps), a hash of the rows decided whether
-  a superficial loss was deferred into the taxable ACB or lost for good,
-  so a one-cent change on the TFSA row could move the taxable gain.
-  At a tie the taxable acquisition now takes the denial first, then
-  sheltered, then affiliated accounts (both engines; `taxjson
-  tax-logic` lists the rule).
-- **Moving shares between your own registered accounts no longer flips
-  a superficial loss.** A custody move such as rrsp -> rrsp2 was netted
-  out of the superficial-loss context, but the "still held at day 30"
-  test runs per account: the receiving account looked short (a
-  permanent denial for its in-window rebuy was missed) and the sending
-  account looked long (a denial was invented). Netted moves now stay in
-  the context as balance-only rows; they are never replacement
-  property. The misleading "rrsp2 go short" hint goes away with it.
-- **An IB/RBC-style assignment keeps its own premium when a Webull-style
-  assignment on the same stock comes later.** The option premium of a
-  plain-convention assignment (stock leg booked as an ordinary buy/sell)
-  was held back for ANY later marked `ASSIGN` stock leg on that stock in
-  the account, even a year later, and moved to that year. A marked leg
-  now reserves only the premium of its own option leg (same account and
-  underlying, within 7 days).
-- **Decimal commas are refused, not read 100x too large.** `12,50` in a
-  generic CSV, `-48,24` in a `.tt` line and `0,95` in a Webull cell had
-  every comma stripped and were booked as 1250, -4824 and 95. A comma is
-  now accepted only as a thousands separator (`1,234.56`); anything else
-  stops the import with the file and line.
-- **`.tt`: a negative sell total is refused.** `BUYSELL … -100 CAD 20
-  -2000` was booked as -2,000 proceeds (a +1,000 gain became a -3,000
-  loss). The total is the positive net proceeds; the error names the
-  file and line.
-- **Generic importer: strict mapping.** An unknown section or key
-  (`ammount`, `commission`, `[format]`, `tax_sgn`) is refused with a
-  suggestion instead of being ignored; dividend/tax/interest/fee actions
-  require a mapped `amount`, and a blank amount on such a row is refused
-  (it booked 0).
-- **Generic importer: trade rows must add up.** A buy/sell with neither a
-  price nor an amount (the fee became the whole cost), with no quantity,
-  or a stock buy at zero cost is refused; so is a quantity/amount sign
-  that contradicts the mapped action (a sell under an action mapped to
-  `buy` was booked as a buy).
-- **Generic importer keeps an explicit exchange suffix.** `DLR.U.TO`
-  bought in USD became `DLR.U.US`, a different security, so a
-  superficial loss across accounts was missed. A bare symbol still takes
-  its suffix from the row currency.
-- **Generic importer settles trades on the settlement date.** Every row
-  was booked with the trade date as its settlement date, so a Dec-31 sale
-  landed in the wrong tax year. A new optional `settle` column is used
-  when mapped; otherwise buy/sell rows get the standard holiday-aware
-  cycle (T+1/T+2/T+3 by era, options T+1) on the listing's market.
-  `[options] settle_on_trade_date = true` keeps the trade date (crypto).
-- **RBC: one identity across an account's yearly exports.** The parser
-  learned a symbol's listing, an option code's contract and a temporary
-  reorganization code's company from each file alone. Now all of an
-  account's RBC files are read together. A US stock's USD dividend no
-  longer lands on the TSX listing that shares its bare ticker (owner
-  2024: HCA and NVDA dividends and withholding move from .TO to .US; no
-  gain changes). A TSX stock's USD dividend or return of capital in a
-  year with no trades keeps its .TO listing. An option re-described
-  between exports (RCI vs RCI.B, XCH-adjusted TRP1) keeps one symbol, so
-  its close is no longer booked as a new written option. A name change
-  under a temporary code finds the old ticker in an earlier export, and
-  warns with the `ticker.map` line when no file names it.
-- **RBC: overlapping re-downloads are de-duplicated.** A row's time came
-  from its position within the day, so the same trade in two downloads
-  of one account got two ids and was booked twice. Rows already in an
-  earlier file of the same RBC account are now skipped (identical fills
-  on one day are matched by count), with a note; files without an
-  Account column are never matched, and a warning says so.
-- **RBC: ticker change without a reorganization row.** When one symbol
-  stops with shares open and another with the same Symbol Description
-  and currency opens with a sale they cover (ORCC to OBDC in 2023), the
-  parser warns and prints the `GLOBAL` line for `ticker.map`.
-
-- **The Canada estimate takes deductions.** `--deductions` (RRSP 20800,
-  FHSA, RPP ...) and `--carrying-charges` (line 22100), or
-  `deductions`/`carrying_charges` in `[estimate]` (which `instalments`
-  reads too), lower net and taxable income; the AMT base takes the
-  deductions in full and carrying charges at 50%. Before, a year with
-  an RRSP deduction and little other income was overstated (by
-  thousands on a typical salary-plus-RRSP mix) and a binding
-  AMT could read as not binding.
-- **A malformed `ticker.map` line stops the run.** A typo such as
-  `TOBASE XYZ.US=XYZ.TO` or `TOBSE ...` dropped that rule, which changed
-  ACB pools and the Schedule 3 gain, and the warning reached only
-  `reports/*.sum` while `run` and `run --strict` exited 0. `taxjson run`
-  now refuses the map, listing each bad line as `ticker.map:<line>`.
-- **An export that parses to 0 transactions is loud, and fatal under
-  `--strict`.** A Coinbase file with a renamed header, or a `kr_`-named
-  file that is not a Kraken ledger, dropped its whole book with exit 0
-  even under `run --strict`, and the checklist called the run clean.
-  Every run (cached or not) now prints a WARNING naming the file on
-  stderr, `run --strict` stops, and the checklist's `run-clean` step
-  needs attention.
-- **An Excel export in `inputs/<account>/` stops the run.** Only `.csv`
-  and `.tt` files are read, so a Questrade `.xlsx` dropped in unconverted
-  lost every trade in it with exit 0 and no mention. `taxjson run` now
-  names each unconverted spreadsheet and stops (a spreadsheet next to
-  its converted CSV only warns); an input folder with only a spreadsheet
-  and no `[accounts.*]` section is named too; the checklist no longer
-  counts `.xlsx`/`.txt` files as account activity and its `run-clean`
-  step flags an unread spreadsheet.
-- **Every command refuses an invalid account type, not only `run`.** An
-  account `type` edited after the run (`"Taxable"`, or deleted) silently
-  dropped that account from `estimate`, `instalments`, `sum`,
-  `form-export`, `carryover` and `close-year` (which locked the wrong
-  total), all with exit 0. Every command that reads `taxjson.toml`, and
-  `taxjson serve`, now stops with the same message `run` gives.
-- **A .tt file named after a broker no longer erases that broker's
-  trades.** `questrade.tt` (or `webull.tt`, `ib.tt`, `generic.tt` ...)
-  wrote its converted JSON over the broker's parse in `work/`, so every
-  trade in that broker's CSVs vanished with exit 0. Converted .tt files
-  now live at `work/<account>_tt_<stem>.json`; the first run after
-  upgrading removes the old `<account>_<stem>.json` copies as stale.
 - **Coinbase Advanced Trade on a crypto-quoted pair books both coins.**
   A fill on `ETH-BTC` booked only the ETH; the BTC spent (or received)
   was never disposed of (or acquired), so its gain went missing and a
@@ -4300,87 +2610,6 @@
   ignored unless the cwd was the project root, and a map in the cwd
   applied to whatever project was run. `run --fast` now re-prices after
   the map is added, edited or deleted.
-
-- **`taxjson spinoffs` and `taxjson splits`.** Every spin-off with its
-  election, the value per share used and what was booked (income and the
-  new shares' cost), flagging a taxable spin-off booked at $0 and showing
-  the broker's own value when it reported one; every split,
-  consolidation and rename with holdings before and after, flagging a
-  split recorded twice, a no-op row and a fractional result.
-- **`taxjson check-dates`.** Every trade and settlement date the parsers
-  produced, checked against the calendar of what was traded: crypto 24/7,
-  futures 23/5 (Sunday evening to Friday), US stocks on exchange days plus
-  the overnight session, options and Canadian listings on exchange days;
-  settlement never before the trade or on a weekend, and normally the
-  standard cycle on either market's calendar. On the owner's books it
-  found three option lots in the 2025 opening file dated Remembrance Day
-  2024, a day neither market settles (the file carries trade dates).
-- **One replacement backs one denial.** A 100-share rebuy (or one call)
-  inside the window of a sale split into ten fills denied every fill's
-  loss in full: ten times the loss it could back. Replacement units are
-  now claimed in a fixed order, each by one denied unit, across fills
-  and across losses; a call that expires before day 30 is not held on
-  day 30. Real books moved by small amounts.
-- **Year-to-year hand-off (`taxjson handoff`).** `close-year` now also
-  records every sale, the positions and cost at Dec 31 (with the
-  superficial-loss deferrals the full history decided), and the trades
-  that settle in January; `--filed-dispositions` stores what a return
-  prepared elsewhere actually reported. `taxjson handoff`, run in the
-  next year's project (`[settings] prior_year_record`), checks the
-  opening positions and cost, that every January settlement is booked
-  here once, and that no sale is reported in both years; a cost
-  difference is listed with its two consistent choices (keep the year as
-  filed, or amend it). It is a `checklist` step and `edge-cases` points
-  to it. Found on the owner's books: four RBC sales traded 2024-12-31
-  that were reported in no year.
-- **`taxjson tax-logic`.** A one-screen statement of every rule taxjson
-  applies for the project's country (or `--country`), one line per rule
-  (citing the Act where the rule comes from it), with the project's settings filled in
-  where they change the answer. `--json` for machines.
-- **`cross_asset` retired; puts are never replacement property.** A put
-  is a right to sell, so the old warn-only "long put vs short-cover loss"
-  scan is gone, and with the call rule enforced nothing is left opt-in.
-  The rule is: an option (a long call) replaces shares, never the
-  reverse; an option is replaced only by the identical contract. The
-  `cross_asset` key and `--cross-asset` flag are accepted and ignored
-  (`run` says so); the US engine prints its call warning without them.
-- **Calls are replacement property for share losses (s.54 para (i)).** A
-  long call on the same shares, opened within 30 days of a loss on long
-  shares and still held on day 30 (any account, registered included), now
-  denies the loss at 100 shares per contract; the denied amount is added
-  to the call's cost (permanent when the call is in a registered
-  account). It was a warn-only scan behind `cross_asset`. One-way by
-  design: shares never replace an option, and only the identical contract
-  replaces an option. `wash-radar`, `buy-check`, `sell-check` and
-  `edge-cases` follow the same rule (buy-check and sell-check no longer
-  let an option's row decide a share trade or another series' trade).
-- **`taxjson edge-cases`.** One report of everything whose treatment turns
-  on a boundary: trades that settle in the other year and where
-  `tax_date` puts them, dispositions on the last and first days of a
-  year, written options and expiries across Dec 31, income paid around
-  New Year, crypto near midnight, loss windows spanning Dec 31 and
-  deferrals carried into next year. For each taxable loss it lists every
-  purchase (any account) or sale within `--margin` days of day 30, with
-  the day count on both date bases, and flags where the basis alone
-  decides. Long calls bought inside a share loss's window are listed as
-  advisory (s.54 'right to acquire'; not enforced).
-- **Settle dates skip holidays.** Brokers that don't print a settle date
-  (IB, and Webull's trade date worked back from its settle date) were
-  dated by skipping weekends only, so 250 of the owner's IB trades
-  settled on a closed day (Good Friday, Labour Day, July 3 2026, Jan 1).
-  That picked the wrong day's Bank of Canada rate and could move a
-  repurchase into or out of the 30-day superficial-loss window. A new
-  rule-based calendar (`lib/market_calendar.py`) counts settlement days:
-  US = NYSE plus Federal Reserve holidays (Columbus and Veterans Day trade
-  but don't settle); Canada = TSX plus Remembrance Day and the National
-  Day for Truth and Reconciliation. It was checked against every settle
-  date Questrade and RBC print. Equities before 2017-09-05 now settle T+3.
-- **Futures settle on the trade date.** IB futures and futures options
-  were given the stock T+1 settle date, so a close on Dec 31 landed in the
-  next tax year. Variation margin settles their profit and loss daily, so
-  the disposition is now the trade date. `[settings] futures_settle =
-  "next_day"` restores the clearing house's premium date.
-
 - **Coinbase staking income is the Subtotal.** Coinbase's Total adds back its
   staking commission ("Fees and/or Spread"), coins you never received; it
   was booked as income and as the rewarded coins' cost. Income and ACB now
@@ -4425,295 +2654,6 @@
   end; the shift moves some dates by a day (FX/price day). Coinbase and
   Kraken amounts like `CA$4.00`, `US$-3` and `(12.00)` now parse;
   anything unparseable raises (`CA$4.00` used to read as 0).
-- **Generic importer refuses mis-mapped columns.** Two fields on one
-  header, |amount| ≠ qty × price (× 100 for options) ± fee beyond 1%, and
-  a fee above 5% of the gross (unless `[options] allow_large_fees =
-  true`) now stop the import; an amount equal to qty × price while the
-  fee is nonzero warns that the GROSS column is probably mapped as
-  `amount`. The currency must be mapped or set in `[defaults]` — there is
-  no implicit USD any more (the shipped example already sets it).
-- **`.tt` files: unknown actions are errors.** A line starting with
-  `SELL`, `buysell`, `BUYSEL` or `Dividend` was skipped silently with
-  exit 0; it now fails with the valid actions and a did-you-mean. Dates
-  must be YYYY-MM-DD and times HH:MM:SS; inline `# …` comments are
-  stripped (a `# DECLARED` remark no longer grants attestation); stray
-  trailing tokens are errors; warnings and errors name `file.tt:line`.
-  All real `.tt` files convert byte-identically.
-- **RBC: every reorganization booked as one event.** RBC books name
-  changes (NAC), reverse splits (REV), 1-for-1 exchanges and blank "MGR -"
-  splits (MGR), MER reorganizations and option adjustments (XCH) as a
-  removal under a temporary code plus a receipt. Only "MERGER TO" pairs
-  were handled; the rest became $0 buys and sells on RBC's internal codes,
-  and "SHRS RECEIVED THRU MERGER" receipts vanished. Each removal is now
-  paired with its receipt (same company, within 7 days) and booked as ONE
-  SPLIT (renaming when the ticker changed; a 1-for-1 on the same ticker
-  books nothing), with MER's "ROC OF C$x" as a return-of-capital ADJUST
-  and cash in lieu as the sale of the fractional share. An option XCH
-  keeps the same contract (and its ACB). "REVERSE ENTRY" corrections
-  cancel their leg. Unmatched legs, and any emitted symbol that is an RBC
-  internal code, are warned about (a lint failure). Real mergers still go
-  to the election prompt; spin-offs ("DIS - ... SPINOFF") now do too
-  (s.86.1 or an FMV dividend in kind) instead of becoming $0 buys; rights
-  issued to all shareholders stay a nil-cost acquisition, now noted.
-- **RBC: income by code, never by security name.** Rows are classified
-  by Activity and the RBC code ("DIV - ", "CASH DIV ON", "DIST ON"); the
-  word DIVIDEND inside a name ("DIVIDEND 15 SPLIT CORP", "HIGH DIVIDEND
-  ETF") turned in-kind transfers into $0 dividends and dropped their
-  shares. An income row that carries shares is refused. Reinvestments
-  (REI) are purchases of the units, not negative dividends; "ADJUSTMENT
-  TO BOOK COST $x" rows are signed ACB adjustments (notional distribution
-  up, return of capital down); ADR fees (FCH) are FEE rows; in-kind
-  transfers carry RBC's "BOOK VALUE" as evidence (`book_value`, shown by
-  `taxjson transfers`), booked exactly as before.
-- **RBC: strict reading.** The header row must carry the real columns
-  (a preamble line mentioning "Date" no longer passes); numbers must
-  parse ("39 043" and garbage raise, "(12.50)" is negative); each date
-  column gets ONE format for the whole file and a file that reads as
-  both day/month and month/day raises; currencies are upper-cased; an
-  unquoted comma is re-joined only inside the last (Description) column.
-  Options described only in "Symbol Description" are recognised, one RBC
-  option code is one contract (the first description wins, with a
-  warning), known cash rows and footers count as non-events, and an
-  unclassified row that moves shares or cash is a loud warning and fails
-  `--lint`. Same-day rows keep the export's order (it lists newest
-  first; an option assignment's two rows share one time so the premium
-  still folds into the stock leg), and the older "HORIZONS U S DLR" line maps to DLR.U.TO like
-  "GLOBAL X US DLR".
-- **Duplicate split rows warned.** When one account carries the same
-  split twice (a parser that now books it plus a manual .tt SPLIT line),
-  merge2 warns "duplicate split" (it is applied once); the same event
-  with different ratios warns "conflicting splits".
-- **IB: Transaction Fees are no longer charged twice.** IB's Trades
-  Comm/Fee already includes per-fill levies (UK stamp tax, SEC/FINRA
-  fees); the Transaction Fees section only breaks them down (the Cash
-  Report shows Commissions + Transaction Fees = the Comm/Fee sum). The
-  parser folded the levy into the trade again, so an LSE buy's fee and
-  cost basis were overstated by the stamp levy; they now equal IB's own
-  Basis. A layout that ever excluded the levy now
-  fails the Cash Report check instead of under-booking.
-- **IB: commission rebates keep their sign.** A positive Comm/Fee is a
-  rebate; abs() booked it as a charge, overstating costs and understating
-  proceeds by twice the rebate (seen on real statements in every IB
-  account that earns rebates). The
-  fee is now negative for a rebate and net_amount is the cash IB moved.
-  Questrade's commission is signed the same way (none of its real
-  exports carries a rebate).
-- **IB and Questrade: missing columns fail the parse.** Every Trades,
-  Dividends, Withholding Tax, Interest, Fees, Corporate Actions, Transfers
-  and Commission Adjustments column that carries money, quantity, price,
-  date or currency (IB), and all 14 Questrade columns, are resolved by
-  header name and required; a renamed or missing one used to read as 0
-  (every fee or every gross silently gone) or as USD. Money cells parse
-  strictly (a decimal comma, text or a blank is an error; parentheses
-  and the unicode minus are negative), dates must be ISO, and each trade
-  row must add up: |proceeds| = |qty| x price x multiplier (IB's own
-  instrument multiplier — CL 1000, ES 50, MET 0.1, SI 5000; a futures
-  contract size is never guessed) with a plausible commission, and for
-  Questrade Net = Gross + Commission.
-- **IB: parsed money reconciles to the Cash Report.** Per currency,
-  Dividends, Payment in Lieu, Withholding Tax, Broker Interest, Other
-  Fees, Commissions (+ Transaction Fees) and Trades (Sales + Purchase)
-  must match IB's own Cash Report within 0.02, or the parse fails naming
-  the currency and line. All 17 real Activity Statements reconcile.
-- **IB: unknown sections are loud.** Only known metadata sections are
-  quiet; an unknown section with money columns (a localized
-  "Dividendes", a renamed "Transactions") fails the parse, any other
-  warns. A "Realized Summary" report is refused instead of being read
-  as activity.
-- **Schema: declared multipliers make the notional check an error, and
-  `taxjson run` parses with `--strict`.** IB and Questrade trade rows
-  carry their contract multiplier; a net amount far from qty x price x
-  multiplier is now a schema error for such rows (the 1/100 guess made
-  every futures row a false positive — 61 warnings on the real 2025/2026
-  margin statements, now 0). Every real 2025/2026 input parses with zero
-  schema errors, so `taxjson run` now passes `--strict`: schema errors
-  stop the run instead of scrolling past.
-- **IB: a cancelled corporate action is undone.** A `Ca` row now removes
-  or adjusts its original split leg, cash in lieu, tender sale, spinoff
-  or untranslated merger; a restated split 3:1 -> 2:1 leaves one SPLIT
-  2.0 (both were booked). A cancellation whose original is not in the
-  statement is a loud skip.
-- **IB: option root renames share one symbol.** When IB relists an
-  adjusted option under a new root after a corporate action (DFDV ->
-  DFDV1, one contract id in the instrument list), both legs are booked
-  under the original root, so the assignment folds the premium; a
-  ticker.map DFDV1 -> DFDV rule becomes a no-op. Monthly futures options
-  use their real expiry from the instrument list instead of day 20 of
-  the delivery month.
-- **IB: smaller fixes.** `ADR;Po` / `ADR;Re` dividend accruals pair by
-  token; Warrant and futures-option transfers are booked (they were
-  treated as cash); a consolidated statement spanning several accounts
-  warns (ids masked); an income row whose ISIN country has no suffix
-  mapping warns when no position confirms the assumed .US listing.
-- **Questrade: no first-match symbol rebinding.** Only internal codes
-  (S098765) and dotted dividend codes (.BTO -> the traded BTG) are
-  rebound to the traded symbol; a real ticker is kept, and a
-  description matching several traded symbols is never guessed (older
-  RESP exports booked FTN.PR income under FTN.PRA; it now stays FTN.PR
-  with a warning to add a ticker.map rule).
-- **Questrade: quantity-bearing DIS rows are corporate-action legs.**
-  Warrant spinoff / rights legs (+100 / -100 / +100, no cash) were
-  counted as "zero-net dividend (informational)"; they are now their own
-  category and reported (taxjson-corp-actions books them); any other
-  quantity DIS row is a loud skip.
-- **Questrade: taxable-account caveats warn.** A dividend marked NON-RES
-  TAX WITHHELD is booked at the net (the export has no gross or tax), and
-  a transfer-in without TRANSFER BOOK VALUE enters at $0 cost; both now
-  warn in taxable accounts (`taxjson-brokerage --account-type`, passed by
-  `taxjson run`).
-- **Questrade .xlsx exports.** `taxjson-xlsx-to-csv` reads every cell as
-  text (dates arrive as ISO text, the ticker NA stays NA, a decimal comma
-  is not turned into thousands), and the parser accepts ISO dates
-  ("2025-12-31 00:00:00"); a settlement date that is present but
-  unparseable is an error instead of a silent T+1 fallback.
-- **Parsers: parentheses are negative.** `clean_number` read "(1,352.97)"
-  as +1352.97; it is now -1352.97 and it warns on unparseable text.
-  Webull (the one real user of parentheses) takes the magnitude itself,
-  so its outputs are unchanged.
-
-- **Webull: columns by header label, both export layouts pinned.** The
-  Trading Summary's 2024 layout has 9 columns (Proceeds in column 8), the
-  2025 layout 10 (an empty column 8). The parser read by position with a
-  column-9-then-8 fallback; it now resolves every column from the header
-  labels, refuses an unrecognised layout instead of guessing, and fails
-  on any row-accounting mismatch. Tests pin the amounts of both layouts.
-  (A different, older flow read the 2024 layout by position and booked
-  15 Webull purchases at $0 cost on a filed return.)
-- **Webull: option assignment and exercise detected.** The Trading
-  Summary shows an assignment or exercise only as a $0 option close plus
-  a stock trade at the strike. Both legs are now marked ASSIGN when the
-  stock trade matches in quantity, direction and price within a few
-  days, so the premium folds into the shares' cost (s.49(3)) instead of
-  being realized as an expiry; seen on real exports (put assignments
-  and a call exercise).
-- **RBC: split-corp retractions are dispositions.** RBC books an issuer
-  retraction as an `Other` row coded `TEN` ("... RETRACTION AT C$x PER
-  SHARE") with a blank price; it was skipped as unclassified, so the
-  shares never left the books and the proceeds and gain were missing
-  (seen on real 2023/2024 exports). Filed numbers change for any year
-  with a retraction.
-- **No security identity by suffix stripping.** `buy-check`, `sell-check`,
-  `harvest` and `scan` matched listings by root, so `XYZ.TO` and `XYZ.US`
-  were one security unless ticker.map said `DISTINCT` (it merged Digital
-  Realty DLR.US with the Global X DLR.TO currency ETF on real books). Two
-  listings are now the same security ONLY through a ticker.map rule
-  (GLOBAL/TOBASE/JOURNAL), a split rename, or an option's own underlying,
-  exactly as the engine pools them. A bare query (`buy-check XYZ`) still
-  finds every listing of that ticker, each with its own verdict.
-  `DISTINCT` now only records a settled pair for the scan's MAP-GAP check.
-- **Estimate: Ontario AMT corrected** — the Ontario additional tax for
-  minimum tax is 24.63% of the federal AMT excess from 2024 (it was a
-  flat 33.67%, the pre-2024 factor), and the Ontario surtax is now
-  recomputed on basic ON tax plus that amount (5006-D "Line 72"). The
-  2026 factor is marked assumed until the 2026 form is published.
-  Gains-only $400k, ON 2026: provincial AMT 1,216.75 → 1,388.50.
-- **Estimate: BC AMT factor by year** — 33.7% (2024), 34.9% (2025),
-  40.0% (2026), per BC Income Tax Act s.4.8 (was 33.7% for all years).
-- **Estimate: Alberta 2026 eligible dividend credit** is 8.12% (the
-  table had 8%); **BC 2026 BPA** 13,216 (was 13,217).
-- **Estimate: federal BPA phase-down** — the enhanced basic personal
-  amount now falls linearly on net income between the 29% and 33%
-  bracket thresholds (2026: 16,452 → 14,829), in regular tax and in
-  the AMT's 50% credit. ON, 250k other income + 300k gains, 2026:
-  estimate 79,955.12 → 79,980.14.
-- **Estimate: Ontario Health Premium** (up to $900) is modelled for ON
-  and shown in the `--verbose` trace.
-- **Estimate: crypto staking** rewards (a crypto account's dividends)
-  are ordinary income with no withholding — they were counted as
-  foreign dividends with an assumed 15% foreign tax credit.
-- **Estimate notes**: the block now says which surtax/health premium
-  applied, the phased BPA, the provincial AMT arithmetic, and — when
-  the project year has no built-in rate table — which year's tables
-  ran (a year before 2024 also says the post-2024 AMT did not apply).
-  The assumptions line keeps disclosing that non-eligible dividends are
-  treated as eligible.
-- **Instalments**: credit interest runs from the later of the payment
-  date and January 1; net interest of $25 or less is not charged; the
-  report says CRA charges instalment interest only after a reminder.
-  With no `prescribed_rate(s)` set, CRA's published quarterly rates
-  (2024–2026, built in) are used instead of 0%. Scaffold and README
-  rate examples corrected (2025 Q3 onward: 7%).
-- **`close-year` no longer locks the wrong year**: after bumping
-  `[settings].year` without a rebuild, it wrote LAST year's books into
-  `filed/<new year>.json`. It now compares the year recorded in each
-  work/ gains file with `[settings].year` and refuses on a mismatch
-  ("rebuild with `taxjson run` first"); `sum`, `estimate` and
-  `form-export` print a loud WARNING instead.
-- **An account without `type` is now fatal** (it silently defaulted to
-  sheltered, so an untyped taxable account dropped out of the return);
-  the message lists `taxable | sheltered`.
-- **No more false "run `taxjson run` first"** after a successful run:
-  `run` records accounts it skipped for having no inputs
-  (`work/skipped_accounts.json`), and t1135, form-export,
-  reconcile-slips, harvest, audit, `list --date`, wash-radar and
-  buy/sell-check stay quiet about them (helper
-  `_accounts_skipped_for_no_inputs`).
-- `inputs/slips/` (the T5008/1099-B CSVs the checklist asks for) no
-  longer triggers the "has no [accounts.slips] section" warning; CSVs
-  in a SUBfolder of an account's inputs now warn that they are not read.
-- `run` on a project where no account has any input says so; with
-  `--strict` it exits 1 instead of "Done". A typo'd settings key's
-  did-you-mean now prints before the "missing year" error it causes.
-  `-C DIR` naming a missing directory says so; `sum` in a non-project
-  says there is no taxjson.toml.
-- `run`'s holdings check tells a config problem (missing holdings file)
-  apart from real position differences.
-- `init`: the next-steps line is `taxjson -C '<dir>' run` (the old
-  `taxjson run -C <dir>` failed); `--year` is capped at next year;
-  `--force` keeps the previous config as `taxjson.toml.bak` and lists
-  input folders the new config no longer covers.
-- `serve`: malformed taxjson.toml is reported like every other command
-  (no traceback); `--port` must be 1-65535. Web UI: error pages for an
-  unknown account return 404; the what-if rejects a negative quantity
-  (it was simulated as positive).
-- `elect`: `--pending --json` emits JSON when nothing is pending;
-  `elect ACCOUNT --json` lists that account's elections as JSON (and
-  `--json` with `--set/--redo/--reset` is refused); `--hint` without
-  `--set` is an error; `--set` with an event id that matches nothing is
-  refused instead of saving a junk record into manifest.json.
-- `audit`: `--date` matches the trade OR settlement date (and says
-  which); `--summary` shows ids long enough to be unique; an unknown
-  `--account`, or a symbol/`--id`/`--date` filter that matches nothing,
-  exits 1 with a message instead of an empty "0/0 ✓" block;
-  `--account` runs only the computation holding that account.
-- `find-missing-history --gen-phantoms` passes the project country
-  (no more "--country not given; assuming canada" per account).
-- `form-export`: `--out`/`--box` without `--form txf` are refused
-  instead of silently ignored.
-- `estimate`/`sum --estimate`: a missing or unsupported province fails
-  BEFORE the table prints, and errors name the invoking command;
-  `sum --province` without the estimate warns that it is ignored.
-- `scan` before any run exits 1 instead of reporting a clean scan;
-  `leaps`/`leaps-sum` with no books say so and exit 1.
-- Help/docs: `fetch --positions` no longer cites the removed
-  `taxjson verify`; the module docstring no longer lists `taxjson
-  show`; `taxjson-fees-sum` usage examples; futures filter help;
-  `reconcile-slips --json`, `serve --port` and `harvest --ibkr-port`
-  document themselves/their defaults. README: `[estimate]` vs
-  `[instalments]` keys split into their own blocks, the chaining row's
-  duplicate example and check-filed's nonexistent `--strict` fixed,
-  fetch windows described as the code does them, `inputs/slips/` in
-  the file table, the estimate sample shows the real FTC label.
-- **IB: option expiries settle on the expiry date.** Rows coded `Ep`,
-  rows of the Options Expirations section and zero-price closes of an
-  option were given T+1 like every trade, so a Dec-31 expiry landed in
-  the NEXT tax year on the settle basis; now `date_settle = date` (also
-  futures final settlement). A same-contract trade executed on the
-  expiry day (0DTE) has its T+1 settle clamped to the expiry so the
-  expiry closes the position it opened. Assignment/exercise option legs
-  keep T+1 (they must share the stock leg's settle date).
-- **Questrade, RBC: expired options are booked on the contract's expiry
-  date**, settle = date. Both brokers post the expiry on the next
-  business day (Friday expiry dated Monday), which moved a Dec-31 expiry
-  into the next year; a blank settle column also added T+1 on top. RBC's
-  blank-settle fallback no longer returns the raw "January 5, 2028" cell
-  as `date_settle` (it now computes an ISO T+1 / era-aware settle).
-- **Webull: expiry rows are no longer shifted a business day earlier.**
-  The Date column is the settlement date for trades but the EXPIRY date
-  for zero-price expiry rows; walking it back put a 0DTE long's expiry
-  before its buy, booking a phantom $0 short WRITE. The expiry now
-  closes the long (direction LONG, loss = premium); gain totals are
-  unchanged.
 - **Kraken: staking rewards book the coins actually credited** — amount
   − fee, where the ledger fee is in the reward's own coin units (the
   balance moves by amount − fee in both the pre-2026 and 2026 formats).
@@ -4727,23 +2667,118 @@
   the assumption of an internal Earn move, but the rows carry a funding
   refid, have no counter-leg in any earn wallet and sweep the spot
   balance to dust — the coins left the ledger.
-- **IB: "(Return of Capital)" is no longer an ACB reduction when it
-  can't be one.** A payment in lieu labeled ROC is income from the share
-  borrower (`DIVIDEND_IN_LIEU`); ROC from a non-Canadian issuer (ISIN
-  country ≠ CA) is a foreign dividend under ITA s.90(2), noted in the
-  description. Canadian-issuer ROC stays an ACB reduction. New
-  `[settings] foreign_return_of_capital = "dividend" | "acb"` (default
-  `dividend`; `taxjson-brokerage --foreign-roc`) restores the ACB
-  treatment for foreign issuers. Income rises, later gains fall, for
-  affected holdings.
-- **.tt validation: option lines are checked against qty × price × 100**
-  — every option row used to warn "differs from qty*price".
-- **IB: no false "accrued but not booked" warning when IB revises a
-  dividend's pay date** between the accrual and its reversal (Po/Re now
-  net per ex-date; a posting within a week in any currency matches).
-- **Futures shorts are not "truncated history" candidates** — an IB
-  futures sell-to-open is excluded from the go-short hint like an option
-  write (`--include-options` still shows them).
+- **Crypto accounts blend across exchanges** (Canada): with two or more
+  taxable `crypto = true` accounts, `taxjson run` now runs ONE blended
+  crypto pass (like the equity blend) producing each account's
+  `<account>_gains_wash.json` — ITA s.47 averaging and the superficial-
+  loss rule reach identical crypto held on different exchanges. Each
+  exchange's book was computed alone, while the run printed a note
+  claiming the blended pass covered them (a sale at a blended-ACB loss
+  replaced on the other exchange filed -10,000 allowed instead of 0).
+  `audit` and `check-filed` recompute the same way; a single crypto
+  account and US crypto (no §1091) are unchanged, and the overlap note
+  now only names accounts a blend actually spans.
+
+### FX rates, prices and fx-cash
+
+- Damaged price caches no longer crash a run (re-audit A2-0772,
+  A2-0773, A2-1403, A2-1446, A2-0464, A2-0474, A2-0800). An entry in
+  ~/.crypto_price_cache.json that is null, text, true or Infinity is
+  now a cache miss: fill-crypto warns, naming the cache and the entry,
+  and looks the price up again. Before, it either crashed or priced the
+  coin at 1.0 or inf. crypto-sends does the same. A cache that is not a
+  JSON object is ignored. In ~/.currency_price_cache.json, a
+  `_coverage`, `_boc` or `_boc_noon` block of the wrong shape is
+  dropped with a warning naming the file, and its dates are fetched
+  again (offline they have no rate). It used to be a traceback in the
+  FX stage, or the cached Bank of Canada series was silently discarded.
+- Rates files (re-audit A2-0790, A2-1434, A2-1411, A2-1437, A2-1423,
+  A2-1424). A work/to_base.csv that is not UTF-8, is a directory or
+  cannot be read is now reported in one line naming the file. This
+  applies to fx-cash, harvest, fees-sum, audit, convert-currency and
+  crypto-sends, which all used to print a traceback. A UTF-8 BOM no
+  longer drops the first rate. `taxjson-convert-currency --rates FILE`
+  refuses a missing FILE (exit 2); before, it converted every row at
+  --default-rate. fees-sum reports a NaN rate in one line (exit 2), and
+  fx-cash reports a futures row it cannot settle in one line.
+- price cache: a cached quote's currency is checked like its price —
+  'usd' is read as USD, a non-text value is ignored with a warning
+  instead of a traceback (re-audit A2-1170).
+- The shared price and rate caches in $HOME (crypto prices, currency
+  rates, the price chain) are saved through a unique temp file under a
+  lock, so two projects' runs at once no longer fail to save or make a
+  reader see an empty cache; the crypto price cache keeps both runs'
+  prices (re-audit A2-0233).
+- FX rates: a transient failure is no longer cached as a permanent
+  answer (re-audit A2-0136, A2-0393). A failed Yahoo download counts as
+  "no data" only when Yahoo, asked again right then, answers for the
+  dates after the range (later dates already in the cache are no proof);
+  a second empty Bank of Canada answer is no longer read as a stopped
+  series (a series counts as stopped only after 45 silent days with
+  nothing cached after the range), and when the Bank answers again the
+  hole an earlier empty answer left is asked for again; a noon or Yahoo
+  answer cut off before the range end records only the dates it reached
+  and says so.
+- FX rates: a cached Bank of Canada (or Yahoo) rate that is not a
+  positive number (`"abc"`, `"1,3316"`, a list) is no longer copied into
+  the rates file, where the run then blamed the config ("no rates at
+  all for USD"): it is dropped, named with `~/.currency_price_cache.json`
+  and its date, and asked for again online (re-audit A2-1212).
+- tax-logic CA-FX-02 / US-FX-02 now state the rate gap the converter
+  really accepts: the rates file carries a rate over weekends and
+  holidays for up to 7 days and a day with no row looks back 5 more, so
+  a rate up to 12 days old is used; no number changes (re-audit A2-0706).
+- **fx-cash: a sale whose commission exceeds its proceeds pays
+  currency** (it was counted as received, leaving phantom currency in
+  the pool) (audit S033-09).
+- **Price and FX caches:** `taxjson fx-cash` no longer prices a cash
+  event at a rate older than the converter's 5-day lookback (it is
+  counted unrated and named); a cached price that is missing, zero,
+  negative, NaN or text is a cache miss instead of a 0.00 quote in
+  `harvest`; a non-UTF-8 byte in a price/FX cache degrades to a refetch;
+  `yf_ticker.map` keys are case-insensitive and a line with no target is
+  warned about; an empty or truncated Bank of Canada answer is re-asked
+  for 14 days instead of being cached as coverage for good.
+- **`--default-rate` must be a positive number.** convert-currency,
+  merge2, fees-sum and audit took -1.35 (every converted amount
+  sign-flipped), 0, nan, inf and `1_35` (= 135) with exit 0; they are
+  refused at the command line. A rates-file rate written `1_35` is a
+  malformed line, not 135 (S028-15, S028-17).
+- **FX before March 2017 uses the Bank of Canada noon rate.** Folio
+  S5-F4-C1 names the Bank's noon rate for dates before 2017-03-01;
+  those dates (back to 2007-05-01, where Valet's legacy noon series
+  starts) used Yahoo closes, and Jan-Feb 2017 the new daily average.
+  They now take the noon rate (source `boc-noon`); Yahoo stays the
+  fallback for earlier dates. A Yahoo download that fails silently (an
+  empty answer) is no longer remembered as "no data" forever, so the
+  next online run asks again. The default-rate error for a date before
+  every rate source no longer tells you to refresh (it cannot help) or
+  to pass a flag `taxjson run` does not have: enter the row in the base
+  currency at its date's rate.
+- **FX rates: freshness is judged per currency.** to_base.csv holds one
+  block per source currency; a USD block cut short by a failed download
+  hid behind a fresh AUD last line and was served for days. Each
+  configured currency must now reach the last few days (audit S046-06).
+- **fx-cash counts assignment cash, and only cash.** An option
+  assignment's stock leg booked as `ASSIGN` (Webull) now spends or
+  receives currency like a trade; crypto-for-crypto swap legs (Kraken,
+  Coinbase Convert), staking rewards paid in a coin, and stock-for-stock
+  corporate actions no longer count as foreign cash moving (they
+  invented thousands of dollars of s.39(1.1) gain or loss).
+- **fx-cash says the figure can be wrong either way.** The report (and
+  the `sum` FOR THE RETURN line and its `--json`) now carries the
+  overdraft count and a caveat that unseen conversions and deposits can
+  move the estimate in either direction — it used to say only that it
+  "understates activity" — and the report shows the ledger's foreign
+  cash at Dec 31 to compare with the brokers' balances.
+- **One Bank of Canada 404 no longer switches a currency to Yahoo for
+  good.** Any HTTP 404 from the Valet API (a maintenance page, a proxy)
+  was cached as "series not published" with no expiry, so every later
+  run of every project on the machine converted that currency at Yahoo
+  closes, cached Bank rates included. Only the Valet API's own
+  "Series FX…CAD not found" answer marks a series now; the mark carries
+  its date and is re-checked after 7 days; cached Bank observations keep
+  their source; the note names the answer and the source used.
 - **FX rates now come from the Bank of Canada.** For a CAD base,
   `taxjson run` converts at the Bank of Canada daily average rate
   (Valet API, series `FX<CUR>CAD`), the rate CRA expects (Folio
@@ -4790,6 +2825,553 @@
   merge2. Dividends and interest now enter the pool GROSS; the TAX row
   takes the withholding out once. Phantom overdrafts on withheld
   dividends disappear and the gain changes accordingly.
+
+### Filing: form-export, locks, handoff, checklist, slips, T1135, carryover
+
+- `taxjson handoff`: a prior-year lock whose fields are the wrong shape
+  (dispositions, settle_next_year, year_end, schema_version, ...) is one
+  `taxjson handoff: error:` line naming the file and field, exit 2; a
+  BOM'd lock loads. `close-year --filed-dispositions` refuses a short row
+  or a blank symbol naming file:line, and the hand-off reads the gains
+  and base books through the shared work-file check (A2-0769, A2-0803,
+  A2-1396, A2-1397, A2-0794 handoff part, A2-0776).
+- `taxjson checklist`: a checklist.json that is a directory or a looping
+  symlink, a wrong-shape mark entry, or a file that cannot be written or
+  removed (read-only project, full disk) is now one `taxjson checklist:`
+  line; a failed write keeps the old file and leaves no .part; a BOM'd
+  hand-edited file loads (A2-0768, A2-0789, A2-1393, A2-1414, A2-0776).
+- Standalone `taxjson-t1135` says when it falls back to close timing
+  for written options (as `taxjson-gains` does), and `taxjson
+  find-missing-history --gen-phantoms` runs the gains engine with the
+  project's option timing and income dating (re-audit A2-1361).
+- Standalone `taxjson-reconcile-slips` requires `--country` (a missing
+  one silently meant Canada: CAD amounts and settlement-date year
+  scope), and `--date-basis` defaults to the country's (trade date for
+  the USA, so a Dec-31 sale is on its 1099-B year). In a US run the
+  notes and the currency refusal name the 1099-B, FIFO basis per
+  account and the project's own rates — never the T5008, its boxes,
+  the Bank of Canada or a blended ACB (re-audit A2-0423, A2-0744,
+  A2-0747, A2-0753, A2-1292, A2-1294, A2-1295, A2-1331, A2-1337,
+  A2-1348, A2-1349, A2-1350, A2-1351). `taxjson reconcile-slips` is
+  unchanged.
+- `taxjson option-boundary` (and the checklist step that runs it) reads
+  the lock named by `[settings] prior_year_record` like a local
+  filed/<year>.json: the per-year layout got "no filed-year locks" and a
+  "no amendment required" checklist row where a local copy of the same
+  lock gave ATTENTION (re-audit A2-0360).
+- A crypto-only Canada project no longer gets the
+  `option_grant_timing_since is not set` warning from `carryover` and
+  `option-boundary` (run and the checklist already skipped it: it writes
+  no options) (re-audit A2-1144).
+- `taxjson checklist --done/--skip/--undo` are repeatable (only the last
+  of a repeated flag was recorded, silently), and concurrent marks no
+  longer lose each other or corrupt checklist.json (a lock around the
+  read-modify-write, an atomic write) (re-audit A2-1159, A2-1160).
+- Checklist wording: the T1135 step's "below the threshold" (and
+  `t1135 --json`, new `scope` / `scope_note`) says it covers these books
+  only; a US project's slip step names Form 1099-DA for crypto sales from
+  2025 (tax-logic US-RPT-09); the T5/T3 step's command names the TAXABLE
+  lines of divs-sum / roc-sum; Form 8949 exports carry `gain_unrounded`
+  so a pure per-row rounding gap no longer makes a US checklist's
+  form-export step "attention" (re-audit A2-0682, A2-1149, A2-1152,
+  A2-1154).
+- Checklist roc-entered: ADJUST rows are counted in the year roc-sum
+  windows them on (a Canadian trust's ROC by its record date), and the
+  step is "attention" when the same ROC is in the books and in
+  distributions.map (roc-sum's and apply-distributions' "reduced twice"
+  warning) (re-audit A2-0361, A2-0680).
+- Locks: a lock taken before its year ended (`close-year --force` on an
+  open year) is called a snapshot, not a filed return, by the checklist's
+  filed-lock and lock-committed steps (attention), by check-filed (a note
+  beside OK) and by option-boundary (marked partial); a filed/<year>.json
+  that is a directory is "blocked", not "no lock". A non-path
+  `prior_year_record` is refused by every command (handoff and the
+  checklist built a path from a list), and handoff with no `year` refuses
+  instead of looking for filed/-1.json (re-audit A2-0679, A2-1146,
+  A2-1161, A2-1162, A2-1164).
+- Checklist inputs-frozen: an RBC export is judged per RBC account (the
+  Account column), so another account's later export in the same folder
+  no longer certifies an export taken before the year ended (re-audit
+  A2-1147; the IB statement-period half was fixed by A2-0262).
+- Checklist run-clean / filing banners / web freshness: the record of
+  what the last full run read now covers every run input — an account's
+  elections `manifest.json` and crypto `sends.json`, and the root
+  `crypto_ticker.map` — so a changed election no longer reads as current.
+  Only the settings `run` reads count in taxjson.toml: a comment,
+  `[instalments]`, `[estimate]`, `province`, `prior_year_record`,
+  `holdings` and the fetch keys no longer mark the books stale (close-year
+  refused after an instalment was recorded). A damaged record is
+  "attention", not "no record"; a dangling reports/*.sum symlink is named
+  instead of crashing the step. Hidden files and Excel `~$` lock files in
+  inputs/ are no longer read by `run` (nor fingerprinted, nor taken as
+  slips), and an Apple Numbers export is refused like .xlsx (re-audit
+  A2-0124, A2-0126, A2-0358, A2-0363, A2-0681, A2-1145, A2-1148, A2-1155,
+  A2-1156, A2-1157, A2-1158, A2-1166).
+- `run`'s expired-open-option warning uses the same cutoff as
+  option-boundary and the checklist: an expiry on Dec 31 of a closed
+  year, and one after Dec 31 but within the books' data, are flagged
+  (re-audit A2-1210).
+- close-year / handoff / option-boundary (re-audit filing locks):
+  close-year refuses books with no reports/ (a run that died before
+  writing them) and an unreadable work/<acct>_base.json instead of
+  locking empty year-end positions; handoff names an unreadable or
+  damaged base file instead of reporting every lot as missing or
+  naming a deleted /tmp merge file (A2-0035, A2-0346, A2-1137,
+  A2-1143). option-boundary reads last year's lock through
+  [settings] prior_year_record, as handoff does (A2-0036, A2-0335);
+  handoff flags a written option the closed year's record taxed on
+  another premium timing than this project (A2-0037); the
+  option_grant_timing_since hint quotes the since a lock records
+  (A2-1142); handoff refuses a non-string prior_year_record like run
+  (A2-1135).
+- close-year --force keeps the dispositions another tool filed (and
+  their totals) from the lock it replaces, and warns when the replaced
+  lock recorded other totals (A2-0119, A2-0345); --filed-dispositions
+  goes through the broker decode funnel (UTF-16 read; a directory or a
+  stray quote is one line, exit 2) (A2-1136, A2-1138); handoff flags a
+  record closed before its year ended as a partial-year snapshot
+  (A2-0349).
+- close-year's year-end cost places each superficial-loss addition
+  where the engine lands it (per replacement symbol, on its own trade
+  and settle date) instead of one lump on the first replacement, so a
+  January replacement's share is no longer in the Dec 31 cost; a US
+  record carries the §1091 basis addition `list` shows (A2-0669,
+  A2-0352, A2-1140, A2-0353).
+- handoff matching: a straddling trade matches only the same trade (same
+  trade date, or the same net within 3 days), so a distinct same-size
+  January sale no longer hides a sale missing from both years; a
+  date-basis change between the two projects is one item per sale (not
+  a position, two doubles and the wrong date); a closed-year sale that
+  is its own row in this project is not "reported in both years"; a
+  short cover matches another tool's filed short; a sub-unit (crypto
+  dust) quantity difference is reported (A2-0354, A2-0356, A2-0673,
+  A2-0122, A2-0674, A2-1133).
+- close-year records the December and January rows; handoff reports
+  rows the two projects date on different sides of Dec 31 — trust
+  income or a ROC its record date moves back into the closed year, a
+  row local_timezone re-dates to Dec 31, a RIC January dividend kept in
+  one project only, an overnight fill the closed project moved into
+  January — as in neither or both returns (A2-0120, A2-0343, A2-0344,
+  A2-0675, A2-0670).
+- check-filed / audit (re-audit filing locks): `audit --year` on a locked
+  year reads the lock `[settings] prior_year_record` names (per-year
+  layout) and recomputes on the date basis the lock recorded, with a note
+  (A2-0334, A2-0335, A2-0664, A2-1129). check-filed reports a lock whose
+  account entry records no totals, or whose `form_lines` is not a table,
+  as damaged instead of "OK (matches)" (A2-0347, A2-0668); notes when the
+  project's `tax_date` or `option_buyback_loss_superficial` differs from
+  the lock's (A2-0348, A2-0672); refuses a bad `[settings]` value as a
+  settings error, not a damaged lock (A2-1134); and shows the child's
+  one-line error, exit 2, when the recompute fails on an input (A2-0676).
+  audit and `wash-sales --explain` name a damaged `work/<acct>_base.json`
+  instead of a deleted /tmp merge file (A2-1143).
+- carryover: a year before the project year with a close-year lock
+  (filed/<year>.json or prior_year_record) uses the lock's filed figure
+  (filed_totals, else the gain lines) instead of the rebuilt books, so a
+  prior year's loss is carried and a carry-back to it is offered; a
+  later locked year is compared with the filed lines; an unreadable or
+  non-finite lock is named (re-audit A2-0121, A2-0336, A2-0338, A2-0666,
+  A2-1130, A2-1131, A2-1132, A2-1139).
+- carryover and t1135: the full-history engine pass applies
+  [settings] corporate_distributions (a listed corporation's ROC on its
+  pay date), as the run does (A2-0123, A2-0337, A2-0339, A2-0340,
+  A2-0341, A2-1141).
+- carryover: rows after the project year are partial (no T1A
+  suggestion, the carryforward stops at the project year); box-18
+  capital-gains dividends in capital_gains_dividends.map are netted; a
+  Canada ledger in USD or a book whose metadata.target_currency differs
+  is refused; a dangling claimed_losses.txt / t1135.map is refused; a
+  claimed amount '0,125' is refused; standalone carryover and audit
+  note the close-timing default (A2-0351, A2-0355, A2-0665, A2-0667,
+  A2-0677, A2-0678).
+- harvest, t1135, form-export and carryover strip and upper-case
+  --base-currency (' CAD' no longer drops every row or refuses the
+  books; re-audit A2-1169).
+- US form-export (8949, TXF) and `sum` FOR THE RETURN keep §1256
+  contracts — futures, options on futures, broad-based index options
+  such as SPX — off Form 8949 and list them for Form 6781 by hand; a
+  futures loss no longer shows as negative proceeds, and the close-year
+  lock records their net separately (re-audit A2-0118, A2-0322, A2-0323,
+  A2-0324).
+- Schedule 3: a commission rebate (IB, Questrade) stays netted in the
+  proceeds instead of a negative OUTLAYS cell; cells round half-up and
+  the ACB is never a negative rounding residual, in the rows, the line
+  totals and `sum` (re-audit A2-0653, A2-1053, A2-0649, A2-1107,
+  A2-1104). Form 8949 rounds a half-cent wash adjustment half-up so (h)
+  matches the allowed gain the other reports print (A2-1105).
+- form-export: a crypto account's phantom-basis dispositions are listed
+  once under MANUAL REPORTING, not twice (re-audit A2-0113); the export
+  prints the per-row rounding note `sum` prints (A2-1108) and says when
+  the tax year has not ended, as `sum` FOR THE RETURN now does too
+  (A2-1103).
+- form-export and carryover refuse a `--base-currency` other than the
+  return's currency (CAD / USD) instead of exporting a Canadian Schedule
+  3 in USD, or applying the US $3,000 offset to CAD amounts; a
+  disposition with no currency is warned about (re-audit A2-0652,
+  A2-1118).
+- form-export docstrings describe the short-sale columns as the code
+  renders them and show `--country` in the usage lines (A2-0643).
+- **T1135 cost walk follows the engine.** A return of capital on a
+  sold-out position no longer lowers the next purchase's cost, and one
+  beyond the ACB leaves the cost nil (CA-ACB-07), so the maximum cost —
+  and the filing verdict — match the books (re-audit A2-0034, A2-0115,
+  A2-0321). An exercised or assigned option whose root drops the share
+  class (BRKB for BRK.B, RCI for RCI.B) folds its premium into the
+  shares, through the engine's own resolver (A2-0328, A2-1106). A long
+  option expiring on Dec 31 is named as still held (A2-1121); a s.260
+  payment in lieu counts in the income column (A2-0661); a foreign
+  listing whose rows carry a Canadian ISIN is named for a `SYMBOL CA`
+  t1135.map line (A2-0332). A non-CAD `--base-currency` is refused
+  instead of testing USD amounts against a "100,000 USD" threshold
+  (A2-0660).
+- Schedule 3 / reconcile-slips: under grant timing a buy-back nets
+  against this year's write only when it closes a write of the same
+  year; a buy-back of an earlier year's write (grant or pre-`since`
+  close timing) next to a new write of the same series is its own
+  disposition (units 2, not 1; re-audit A2-0320, A2-0650, A2-0651). The
+  engine's buy-back rows name the write years they close
+  (`grant_closed`).
+- reconcile-slips: an option written under grant timing and still open
+  at Dec 31 is NO_SLIP_EXPECTED in the write year, and the close year's
+  T5008 (premium as proceeds) reconciles with a note; both years failed
+  (re-audit A2-0657). A computed row with no slip row keeps its listing
+  suffix in the label. Two columns that are both exact spellings of one
+  amount are refused as ambiguous (A2-0656), and a broker option
+  description with a grouped strike (`5,000.00`) is matched (A2-1113).
+- option-boundary: an assignment whose option root drops the share
+  class (RCI for RCI.B.TO, BRKB for BRK.B.US) is paired with its share
+  leg by the engine's own resolver; it was called cash-settled with
+  "no amendment" while the engine folds the premium (re-audit A2-0114,
+  a regression of S075-09, and A2-0328). A buy-back carried with a
+  negative net (a .tt book) is a cost of its magnitude ('net 500.00' and
+  '--101.00' before, A2-1111), and a contract on its own expiry day is
+  open, not 'expired, missing its expiry row' (A2-1112).
+- Wording: the Canada estimate, the checklist walk (both countries) and
+  docs/filing.md no longer say that no taxjson output totals interest —
+  they point at the .sum's net CASH INTEREST line and say why it is not
+  the interest paid; the estimate's Assumes line says mapped T5 box 18
+  capital-gains dividends are included (re-audit A2-0644, A2-1153,
+  A2-1101).
+- Canada: `taxjson list --date` and the close-year `year_end` snapshot
+  judge a trust's return of capital by its record date, as the books do
+  (CA-INC-DATE-ROC-TRUST): a January-paid ROC with a December record
+  date used to be cut off, so the as-of ACB differed from the engine's
+  (A2-0554/0960/0202).
+- **T1135: a superficial loss denied in an earlier year is in the
+  replacement's cost.** The cost walk added only the project year's
+  denials, so a 2025 denial on shares still held in 2026 was missing
+  from the 2026 maximum and Dec-31 cost columns (buy 120,000, sell at
+  90,000, rebuy within 30 days: the 2026 report said "no T1135
+  required" at 90,000). `taxjson t1135` now runs the engine once over
+  the full history (registered accounts as wash context, the project's
+  option timing) and replays every s.53(1)(f) addition where the engine
+  applied it; the gains files' `wash_sales` records carry those
+  landings (`adjusts`). The cost columns now equal the engine's ACB.
+  `--year-wash-only` keeps the old year-only mode with its note
+  (audit S008-07, S009-01, S051-21).
+- **Schedule 3: a written option's premium is shown gross.** Under grant
+  timing, form-export and `sum`'s FOR THE RETURN block show a written
+  option's premium GROSS as proceeds with its write commission as an
+  outlay, as for a sale; the gain is unchanged. Line 6 proceeds and
+  outlays each rise by the year's write commissions. reconcile-slips'
+  gross proceeds match (audit R1-40; tax-logic CA-DISP-06). A year
+  locked by `close-year` reports the moved line 6 proceeds as drift in
+  `check-filed`.
+- **close-year and option-boundary guard the lock.** close-year refuses
+  (without `--force`) a tax year that has not ended and a year with no
+  disposition and no income (a typo'd `[settings] year`), and always
+  refuses books built with another option timing than taxjson.toml now
+  says (the lock stamped the edited setting next to grant-timed
+  totals). option-boundary requires `[settings] year` (it printed "tax
+  year 0" and suggested `option_grant_timing_since = None`) and warns
+  when a `filed/<year>.json` cannot be read instead of silently giving
+  the opposite T1-ADJ advice (audit S045-23, S045-24, S046-02, S044-07,
+  S044-06, S044-08).
+- **Every `--year` is a plausible tax year** (1900..next year): `audit`,
+  `close-year`, `find-missing-history`, `taxjson-fees-sum`,
+  `taxjson-missing-history`, `taxjson-reconcile-slips`,
+  `taxjson-sum-income` (`audit --year 2204` printed an all-checkmark
+  reconciliation of nothing; `--year 0` meant all years).
+  `option_grant_timing_since` accepts 1900.. like `init --year` (audit
+  S047-14, S047-20).
+- **Schedule 3 / Form 8949 export:** under grant timing a written option
+  and its buy-back count their contracts once in the units column (5
+  contracts showed 10); crypto unit counts keep full precision (a
+  0.00003 BTC sale showed 0 units); a write for a net debit shows no
+  proceeds and the debit as an outlay (it showed the debit as proceeds
+  and an invented ACB of twice it); a permanently denied superficial loss
+  is worded for an affiliated person's purchase too; the 2025 crypto-line
+  note follows the line routing itself. Form 8949 rows foot — (h) = (d)
+  − (e) + (g) on the rounded cells — so part totals, the printed 8949 and
+  the TXF agree to the cent. The stand-alone `taxjson-form-export`
+  refuses gains rows in another currency (the native `*_raw_gains.json`
+  summed USD and CAD under a CAD label), and `--csv` no longer leaves a
+  truncated file after a failed write. `taxjson sum` FOR THE RETURN says
+  when its cent-rounded rows differ from the gains files' unrounded
+  total.
+- **Stand-alone report tools refuse a non-gains file:** form-export,
+  sum-gains, ccd-gains, leaps-gains and t1135 refuse a JSON with no
+  `transactions` list or a pre-gains stage file (it rendered a $0
+  Schedule 3 / GRAND TOTAL 0.00 at exit 0); `taxjson-gains` (stdin) and
+  `taxjson-merge` refuse a document without the list.
+- **T1135:** before Dec 31 a "below the threshold" verdict says "so far
+  (books through DATE)" and the checklist keeps the step open (it read
+  "no T1135 required this year" with a green [x] in September); the
+  year-end column is headed with the books' last date while the year is
+  open. Books in another currency than `--base-currency` (a native
+  `_raw.json`, a USD-base book) are refused instead of tested against
+  CAD 100,000 as if they were CAD; a non-CAD `--base-currency` warns.
+  `--threshold` / `--detailed-threshold` must be finite numbers >= 0.
+  `t1135.map` symbols match case-insensitively, and a COUNTRY word that
+  is not an ISO-3 code or CA/EXCLUDE (EXCLUDED, CDN) is ignored with a
+  did-you-mean warning instead of becoming a "country". Crypto rows
+  under 1e-6 units add their cost (as the engine books them). A long
+  option still held after its expiry is named. The report says the
+  test covers the brokerage books only (foreign bank accounts and other
+  property outside them must be added by hand), attributes the $250,000
+  Part A/B line to the T1135 instructions, and `--help` carries the
+  caveats.
+- **reconcile-slips:** a slip whose currency column (T5008 Box 13) names
+  another currency than the books is refused with a message naming Box
+  13 (a USD Webull T5008 gave one MISMATCH per symbol, every amount off
+  by the FX rate); an unreadable cost cell (`50000,00`, `nan`, `1 500.00
+  CAD`) fails the check like an unreadable proceeds or quantity cell
+  (the cost note vanished or came from a partial sum); a directory or a
+  CSV with bytes cp1252 cannot decode is one error line, not a
+  traceback; `--tolerance` must be a finite number >= 0 (nan or a
+  negative turned every symbol into "off by +0.00", and the `taxjson`
+  wrapper forwarded `-inf` as a separate token); `--help` lists the
+  accepted column spellings; a tainted count reads "1", not "1.0". The
+  checklist's T5/T3 step says the slip check is by hand and lists the
+  known reasons divs-sum differs from the slips.
+- **carryover: claimed_losses.txt and rounding.** A BOM is read, a
+  claimed year outside 1900..next year is refused by name instead of
+  becoming a phantom ledger row, a directory is a one-line error, and
+  every ignored line is listed in the report and JSON and turns the
+  checklist's carryover step to attention. A claim equal to the filed
+  (per-row-rounded) Schedule 3 loss no longer leaves a cents
+  carryforward or an "exceeds the losses" warning. A book whose rows
+  are not in `--base-currency` is refused (audit S001-04, S027-10,
+  S027-18, S027-19, S027-23, S028-00, S028-02).
+- **Filed-year lock.** close-year also locks the amounts the export
+  puts on each return line (Schedule 3 codes / Form 8949 part totals),
+  so check-filed reports a move between lines or an outlay folded into
+  a price; the lock's `proceeds` is documented as the engine's net
+  proceeds; totals are rounded once over the accounts; filed/ being a
+  file, a read-only project or a gains file that is not a JSON object
+  is a one-line error; every OK names what the lock does not cover
+  (interest, withholding, FX on cash) (audit R1-205, R1-281, S031-19,
+  S031-20, S032-11).
+- **checklist: no verdict from part of the books.** wash-reviewed is
+  blocked when a taxable gains file is unreadable, missing for an
+  account with inputs, or built for another year, and attention when
+  the wash pass is stale; audit and form-export say "rebuild" for
+  other-year or stale books instead of blaming phantoms; roc-entered,
+  inputs-frozen and run-clean name an unreadable base book or .sum;
+  missing-history counts every AFFECTS row (BRK/B, `?` currency); the
+  form-export check compares the unrounded rows with the .sum, so many
+  rows of rounding no longer read as a mismatch; a US project checks
+  for option positions left open past expiry; `sanity` names an
+  unreadable book instead of "not an account"; `watch` ignores a state
+  file that is not an object. Guidance: missing basis can understate
+  or overstate; split-share corps report on a T5 (box 18 -> line
+  17400) (audit R1-210, R1-338, S023-08, S066-15, S066-19, S067-04,
+  S067-10, S067-11, S067-12, S068-06, S068-11, S068-16).
+- **option-boundary cites the right law and sees more missing rows.**
+  An assignment folds the premium under s.49(3) (call) or s.49(3.1)
+  (put), never s.49(2); a buy-back loss cites IT-479R para 29 / 32
+  (README, design note and Webull messages corrected too). A write
+  still open after an expiry that falls inside the books (a January
+  expiry in books that run into February) is ATTENTION, not "open".
+  Writes and closes are dated on the project's `tax_date`, so a
+  trade-basis Dec-31 write that settles in January is reported as the
+  straddle the engine books (audit R1-39, R1-180, S075-00, S075-05).
+- **`--year` is checked in taxjson-gains, form-export, t1135, explain
+  and audit.** `--year 0` meant "all history" (form-export folded every
+  year into one Schedule 3) and a 2-digit year silently matched
+  nothing; the flag now takes 1900..next year, like `taxjson init`
+  (S033-16).
+- **`check-filed` and `handoff` refuse a lock closed under the other
+  country.** A US-filed year was recomputed under Canadian rules and
+  reported as drift with "amend or refresh the lock" advice (a refresh
+  would have overwritten the US record); the lock's country is now
+  compared and named, and a lock is recomputed on the date basis it
+  recorded (CA-RPT-09, US-RPT-06).
+- **`taxjson-form-export` needs `--country`** and refuses the other
+  country's form (the standalone tool was not gated), and Schedule 3
+  refuses gains files computed by the US engine.
+- **The checklist's run-clean step flags unblended books.** With two or
+  more taxable equity accounts and no blended pass (`run --account` on
+  each, or a run stopped at pending elections) the filing figures are
+  per-account ACB; run-clean now says so instead of "done", and every
+  command that reports the run state carries it (audit S004-07).
+- **Filing commands refuse partial or broken books.** A taxable account
+  whose stage failed (inputs but no books) now stops `form-export`,
+  `t1135`, `close-year` and `reconcile-slips` instead of a one-line
+  warning with the account left out. A truncated taxable gains file stops
+  `sum`, `estimate`, `instalments`, `t1135`, `form-export` and
+  `close-year` with the file named (no traceback); an unreadable native
+  file stops `fx-cash`, and `sum` says why the line-15300 FX note is
+  missing. `sum`, `estimate`, `form-export`, `t1135`, `carryover` and
+  `check-filed` warn when the books are not the clean result of the
+  current inputs (validation errors, pending elections, inputs changed
+  since the last full run); `close-year` refuses such books without
+  `--force`, and refuses per-account (unblended) books from
+  `run --account`. The checklist counts one validation error once.
+- **tax_date is honoured everywhere.** `form-export`, the FOR THE RETURN
+  block, `carryover` and `t1135` use the project's `tax_date` (a
+  Canada project on "trade" dropped a Dec-31 sale settling in January).
+- **carryover flags a locked year it disagrees with** (and the moving
+  option_grant_timing_since default).
+- **t1135:** an assigned written put's premium reduces the shares' cost
+  and an exercised call's cost is added; same-timestamp rows follow the
+  engine's order (buy before sell) so the threshold test no longer depends
+  on file order; a split inside a trade's settle lag no longer strands
+  cost; `t1135.map` survives a BOM, follows a ticker change and names an
+  override that matches nothing; denied superficial losses missing from
+  the cost columns are named. Books built for another year are warned
+  about. The other user map files (distributions.map, yf_ticker.map,
+  crypto_ticker.map, security overrides) read a BOM too.
+- **reconcile-slips reads real slips.** A blank proceeds cell beside a
+  cost (an option that expired worthless) is nil proceeds, and a
+  worthless expiry with no slip row no longer fails the check. A written
+  option booked twice under grant timing counts its contracts once. Slip
+  symbols go through the project's ticker.map (KGC ↔ K.TO), and broker
+  option descriptions, share classes (`BRK B`), UTF-16 files, French and
+  T5008 box headings are read. Two listings of one root (AMZN.TO and
+  AMZN.US) are no longer folded together. A row with amounts but no
+  symbol, or an unreadable quantity, counts as not reconciled; a second
+  column that also looks like quantity/proceeds/cost is refused instead
+  of silently taking over. Books built for another tax year are refused
+  with a rebuild message instead of "dropped CSV rows".
+- **Filing checklist fixes.**
+  - run-clean compares the inputs with what the last full run was built
+    from (content, not dates): a deleted input, a corrected export copied
+    with its old date, or a new `distributions.map` / `phantoms.json` /
+    `ticker_extraction_overrides.txt` now says "inputs changed". It also
+    flags an account with inputs but no report (a run that died on it, or
+    a `run --account` of another account).
+  - wash-reviewed counts a December loss that settles in January in the
+    settle year, like every other denial total.
+  - t5008 reconciles all slip files together (one per broker is normal;
+    each file alone could never reconcile), finds `.CSV` files, reads
+    only `inputs/slips/`, and names a non-CSV file there as not
+    reconciled. `taxjson reconcile-slips` takes several slip files.
+  - form-export's gain check allows for per-row rounding on a big book
+    (a 6-cent residual over 831 rows was a false attention).
+  - A done mark no longer hides a detector that crashed or had nothing
+    to check. An unreadable `checklist.json` is reported by name and never
+    overwritten. Changing `year` no longer brings last year's marks back
+    at the next mark.
+  - The fees step no longer sends trade commissions to line 22100 or
+    calls data subscriptions deductible: line 22100 is the margin
+    interest from the statements. The carryover step says what to record
+    (Canada: the 100% loss; US: the Schedule D line 21 deduction).
+- **check-filed recomputes a locked year the way it was filed.** The
+  drift check used the current project's written-option timing, so a
+  2026 project without `option_grant_timing_since` recomputed the 2025
+  lock on close timing and advised amending a correct return. It now
+  uses the timing the lock recorded and notes when the project differs.
+- **One bad lock no longer switches off the drift guard.** A lock that
+  cannot be read (bad JSON, a hand-edited file missing a count) made
+  `run --strict` exit 0 and skip every other lock, and made
+  `check-filed` crash with a traceback. Each lock is now checked on its
+  own; a bad one is named and fails `--strict`.
+- **A renamed account is reported, not recomputed from its old book.**
+  A locked account that is no longer a taxable account in
+  `taxjson.toml` was recomputed from its orphan `work/<name>_base.json`
+  and the check said OK.
+- **The lock records dividends and payments in lieu separately.** A
+  dividend reclassified as a payment in lieu (different return line, no
+  gross-up) now shows as drift; locks written before this keep
+  comparing the combined income only.
+- **reconcile-slips counts phantom-basis sales.** A sale reported by
+  hand (phantom cost basis) was still shown as MISSING_FROM_COMPUTED;
+  it now matches the slip with the "phantom basis included" note.
+- **option-boundary: an open write expiring later this year is open.**
+  A written option whose expiry is after today is an ordinary open row
+  (premium recognised in the write year), not "expired … the broker
+  export is missing it"; the checklist no longer turns `[!]` for it.
+- **option-boundary follows renames and keeps the sign.** A ratio-1
+  rename SPLIT of an option carries the written lot to the new symbol,
+  so its buy-back is matched; a write whose commission exceeds the
+  premium shows a negative premium, as the engine books it.
+- **option-boundary: cash-settled index options are not folded.** An
+  assignment whose underlying never trades as stock in the account
+  (XSP, SPX) is reported as a cash settlement — premium in the write
+  year, settlement loss in the close year, no T1-ADJ — instead of
+  advising the removal of a premium the engine keeps.
+- **option-boundary reads a lock's close timing.** When `filed/<year>.json`
+  records close timing but this project puts that year's writes on grant
+  timing, an expiry, buy-back or still-open write is ATTENTION (the
+  premium is in no return: set `option_grant_timing_since` to the next
+  year, or T1-ADJ to add it), and an assignment says no amendment is
+  needed instead of "remove the premium … filed with it".
+- **carryover says what its numbers leave out.** The ledger now notes
+  that slip capital gains (lines 17400/17600; US Schedule D line 13) and
+  the line-15300 FX gain on foreign cash are not in NET GAIN(LOSS), flags
+  rows before the project year as rebuilt from this project's books and
+  possibly partial, and `--claimed` / README state the units to record
+  (Canada: the 100% loss, line 25300 x2 at 50%; US: Schedule D line 21).
+- **claimed_losses.txt takes `1,234.56` and `$1,234.56`.** An amount
+  written the way the return or notice of assessment prints it was
+  dropped with a warning, so the carryforward kept the claimed loss. A
+  malformed grouping is still refused.
+- **carryover: an old claim no longer eats a later loss.** A
+  `claimed_losses.txt` amount recorded for a year the books show no loss
+  for was held and taken by the next loss in ANY later year, lowering
+  its carryforward. A loss carries back only 3 years (ITA 111(1)(b)), so
+  a claim left unmet past that window now stays unmatched, with a
+  warning, and the carryforward is untouched.
+- **T1135: a futures contract has no cost amount.** A long futures
+  position was counted at its full notional (one CL contract added about
+  80,000 CAD to the threshold test and could flip "filing required").
+  Plain futures are now listed with a nil cost and a note; options on
+  futures still count at their premium.
+- **`taxjson t1135` applies phantoms.json.** Positions whose early
+  history is cut off read as shorts that later real purchases covered at
+  zero cost, so those purchases never reached the max-cost or Dec-31
+  columns (2024 books: 313k of max cost missing). The report now adds
+  the same phantom openings the gains stage adds, and flags a still-held
+  phantom "cost understated".
+- **The filed-year lock counts phantom-basis sales.** Its `tainted`
+  count read a flag pipeline gains files never carry, so it was always 0
+  and a phantom-basis sale appearing or disappearing never showed as
+  drift. New locks count them; older locks skip that one comparison.
+- **Phantom-basis sales no longer vanish from `form-export`.** Sales
+  drawn on `phantoms.json` openings (cost unknown) were left out of the
+  Schedule 3 / Form 8949 / TXF output with no warning, and the checklist
+  marked the export complete. They are still not in the computed rows or
+  totals, but form-export now warns with each one's proceeds, lists them
+  in a MANUAL REPORTING section (MANUAL rows in the CSV), and the
+  checklist keeps the step open. `t1135` names them too.
+- **`check-filed` compares every taxable account, not only the locked
+  ones.** An account added (or renamed) after `close-year` was never
+  recomputed, so its dispositions were missing from the comparison and
+  the check said OK. It is now recomputed in the same blend and reported
+  as drift when it has activity in the filed year.
+- **Year-to-year hand-off (`taxjson handoff`).** `close-year` now also
+  records every sale, the positions and cost at Dec 31 (with the
+  superficial-loss deferrals the full history decided), and the trades
+  that settle in January; `--filed-dispositions` stores what a return
+  prepared elsewhere actually reported. `taxjson handoff`, run in the
+  next year's project (`[settings] prior_year_record`), checks the
+  opening positions and cost, that every January settlement is booked
+  here once, and that no sale is reported in both years; a cost
+  difference is listed with its two consistent choices (keep the year as
+  filed, or amend it). It is a `checklist` step and `edge-cases` points
+  to it. On real books it found Dec-31 sales that were reported in no year.
+- **`close-year` no longer locks the wrong year**: after bumping
+  `[settings].year` without a rebuild, it wrote LAST year's books into
+  `filed/<new year>.json`. It now compares the year recorded in each
+  work/ gains file with `[settings].year` and refuses on a mismatch
+  ("rebuild with `taxjson run` first"); `sum`, `estimate` and
+  `form-export` print a loud WARNING instead.
+- `inputs/slips/` (the T5008/1099-B CSVs the checklist asks for) no
+  longer triggers the "has no [accounts.slips] section" warning; CSVs
+  in a SUBfolder of an account's inputs now warn that they are not read.
+- `form-export`: `--out`/`--box` without `--form txf` are refused
+  instead of silently ignored.
 - **`taxjson t1135`**: a split held in two taxable accounts was applied
   once per account (the pool doubled — cost at Dec 31 overstated);
   the walk now dedupes split events like the gains engines. Crypto
@@ -4814,19 +3396,6 @@
   (1099-B, Form 8949 / Schedule D, 1099-DIV, Form 1116, §988) and `n/a`
   for option-boundary, T1135 and the NOA; a project with no taxable
   account gets `n/a` rather than blocked for the taxable-only steps.
-
-- **Crypto accounts blend across exchanges** (Canada): with two or more
-  taxable `crypto = true` accounts, `taxjson run` now runs ONE blended
-  crypto pass (like the equity blend) producing each account's
-  `<account>_gains_wash.json` — ITA s.47 averaging and the superficial-
-  loss rule reach identical crypto held on different exchanges. Each
-  exchange's book was computed alone, while the run printed a note
-  claiming the blended pass covered them (a sale at a blended-ACB loss
-  replaced on the other exchange filed -10,000 allowed instead of 0).
-  `audit` and `check-filed` recompute the same way; a single crypto
-  account and US crypto (no §1091) are unchanged, and the overlap note
-  now only names accounts a blend actually spans.
-
 - **`taxjson carryover` ignored the option-timing settings**: the ledger
   ran every year on close timing while the returns were filed on grant
   timing (a filed 2025 of -601 showed as -1,000). The wrapper now passes
@@ -4834,22 +3403,12 @@
   `option_buyback_loss_superficial` (new `--option-*` flags on
   `taxjson-carryover`), as do the `list --date` as-of recompute and the
   raw base-currency holdings pass.
-- **`option_grant_timing_since` no longer drifts with `year`**: unset, it
-  defaults to the project year, so consecutive default projects taxed a
-  year-straddling premium twice (+399 in 2025, +298 in 2026 for a 298
-  economic gain). `taxjson init` now writes the key uncommented; `taxjson
-  run` and `option-boundary` warn on every run while a Canadian grant-
-  timing project leaves it unset; `close-year` records the timing in
-  `filed/<year>.json`; and `option-boundary` flags ATTENTION on a
-  contract written in a locked year but kept on transition close timing
-  here (definite when the lock records grant timing).
 - **`taxjson option-boundary`**: a contract past its expiry date within
   the tax year with no expiry/assignment row is flagged "expired but no
   expiry/assignment row — check the export" instead of listed as open;
   with no taxable book in work/ the command exits 1 ("NOT CHECKED")
   instead of printing the all-clear; `--json` adds `attention`, `amend`,
   `since_explicit` and `missing_books`.
-
 - **Schedule 3 line routing** (`form-export --form schedule3`, `taxjson
   sum`): every disposition went on line 13199/13200 ("section 3, publicly
   traded shares"). Rows are now routed by property type to the 2025 form's
@@ -4866,13 +3425,1515 @@
   superficial losses — backwards: the ACB shown is REDUCED by the denial
   so proceeds − ACB − outlays is the allowed gain, and the denied amount
   goes onto the replacement's ACB. form-export's per-row ACB now uses the
-  same convention, so every row foots (a fully denied row used to show
-  proceeds 1,955.52 − ACB 11,536.54 − outlays 1.40 against a gain of
-  0.00). US projects show Form 8949's own Part I/II (d) proceeds, (e)
+  same convention, so every row foots (a fully denied row's proceeds − ACB −
+  outlays used to differ from its 0.00 gain). US projects show Form 8949's own Part I/II (d) proceeds, (e)
   cost, (g) adjustment and (h) gain — the block used to show Schedule 3
   style proceeds and a cost net of the wash adjustment that matched
   neither 8949 column. A line under the block gives the `fx-cash`
   s.39(1.1) estimate (line 15300), or a pointer when it cannot be built.
+- **T1135 cost includes denied superficial losses.** The cost walk now
+  adds the amount the engine denies under s.54 to the replacement
+  property's cost (s.53(1)(f)), as the ACB does, so the year-end and
+  maximum cost columns and the $100,000 threshold test no longer
+  understate after a superficial loss in the project year.
+- **Schedule 3 outputs name the slip capital-gain lines.** `sum`'s FOR
+  THE RETURN block, `form-export` and docs/filing.md now say that
+  capital gains on T3 (box 21, line 17600) and T5/T5013 (box 18, line
+  17400) slips are not in their rows and are entered from the slips.
+- **A spin-off booked at $0 keeps the checklist open.** The `elections`
+  step now needs attention while any taxable spin-off or merger is
+  booked at $0 (`fmv_per_share=0`, the "defer" value), and `taxjson
+  elect --set ... --hint fmv_per_share=0` says what it books.
+
+### Planning: wash radar, harvest, buy/sell-check, estimate, instalments, web UI
+
+- Web UI: `accounts = 5` (or a list) in taxjson.toml is the one-line
+  config error `taxjson serve` gives for the other bad shapes, and a
+  dangling work/*_base.json symlink no longer breaks the wash-radar page
+  (A2-0807, A2-0787).
+- `taxjson watch`: a .watch_state.json whose inner radar entries or
+  harvest_now are the wrong shape records a new baseline with a warning
+  instead of crashing with exit 1 (A2-1430).
+- `taxjson-harvest` and `taxjson-corp-actions` default `--base-currency`
+  to the country's currency (a US harvest refused the project's own USD
+  books). `taxjson spinoffs` labels amounts in the country's currency
+  when `base_currency` is unset, and flags a saved election of the other
+  country (a `rollover_s_86_1` left in a project switched to usa) as
+  WRONG-COUNTRY instead of describing it in Canadian law; `taxjson elect
+  --pending` lists such elections instead of "No pending elections".
+- Wash radar (Canada): rows that settle on the same day are replayed in
+  trade-date order, as the engine does — a Friday sale before a holiday
+  is no longer read as a loss against Monday's buy (A2-0443). A written
+  option's buy-back loss outside the gains files' year is exempt
+  (CA-SL-11) unless `option_buyback_loss_superficial = true` (A2-0442).
+- US wash radar / buy-check: a futures contract or an option on one is
+  outside §1091 (US-WASH-18) — no COOLING/BLOCKED re-entry date, buy-check
+  is no longer UNSAFE, and the futures-option note no longer speaks of
+  "shares" (A2-0435, A2-1343). After a short-cover loss a buy is not a
+  replacement (§1091(e)); the radar names a re-short instead (A2-0436,
+  A2-1369).
+- Radar wording: a US LOCKED row says how many shares the IRA bought and
+  what it holds now, not "still holds" (A2-0751, A2-0754); a position held
+  only in sheltered accounts names its recent purchase instead of "No
+  recent buys" (A2-1370).
+- sell-check relays the radar's warn-only flags (warrant, adjusted-series
+  call, futures option, US long call) on every verdict, and harvest stars
+  the ADVISORY cell and lists them (A2-0434, A2-0445, A2-1341).
+- `taxjson.toml`, `phantoms.json` and holdings TOML files saved with a
+  UTF-8 BOM are read by wash-radar, watch, buy-check, sell-check,
+  sanity and taxjson-export too; fetch accepts a BOM'd IB Flex download
+  and a BOM'd Questrade fetch file.
+- `taxjson harvest` in a US project shows an IRA purchase made within
+  the window in SH_ADD even after the IRA sold it (an IRA buy washes a
+  loss for good whether or not it is still held), and the SH_ADD legend
+  states each country's own rule: in Canada only units the registered
+  account still holds 30 days after the sale deny the loss (re-audit
+  A2-1298, A2-1299).
+- In a US project the web holdings pages and the what-if basis note
+  describe the basis as FIFO per account before the wash-sale pass;
+  they used to cite the s.47 blend and the filing ACB (re-audit
+  A2-0755, A2-1250, A2-1300, A2-1327, A2-1339, A2-1353, A2-1374,
+  A2-1375, A2-1376).
+- `[settings] year` is checked in the shared settings check, so `taxjson
+  serve` refuses 1850, 2024.0, true or "2024" as every CLI command does
+  (A2-1373).
+- `taxjson scan` no longer prints "No findings — clean scan." (exit 0)
+  when an account's holdings report or raw book is missing: it names
+  each account it could not scan and exits 1 (re-audit A2-0404).
+- Wash radar, sell-check, buy-check, harvest's ADVISORY: each replacement
+  unit backs one denial, as in the engine (CA-SL-08) — a rebuy an earlier
+  loss used up no longer makes a second, false VIOLATION or a false
+  LOCKED for a sale today, and a sale split into fills no longer counts
+  its shared rebuy twice (re-audit A2-0009, A2-0038, A2-0377, A2-0689,
+  A2-0691; US: an IRA buy the engine already matched is not 'at risk'
+  again). Quantities across a split are compared in today's units
+  (A2-0382); a long call counts at its declared contract size (A2-0373);
+  a class-share option root (RCI for RCI.B.TO) names its class line; a
+  futures option on the loss's own contract is a note to check by hand,
+  never a VIOLATION (A2-0378, A2-0690, also in edge-cases).
+- Wash radar: once the last rescue trade date has passed, a VIOLATION
+  says the loss is denied (JSON `deadline_passed`) instead of 'Sell ...
+  by <yesterday>'; sell-check no longer answers ACTION/UNSAFE for it and
+  safe-to-sell shows DENIED (A2-0688, A2-0368). The sell-by date walks
+  back on the listing's calendar (A2-1183) and a futures rescue settles
+  on its trade date (A2-1181).
+- Wash radar: warrants, adjusted-series calls and futures options bought
+  in a loss's window (and, US, a long call bought in the last 30 days for
+  a sale today) are noted for a manual check, carried to sell-check;
+  buy-check flags buying one after a share loss instead of 'no wash
+  exposure', and a US long call after a share loss is a note, not UNSAFE
+  (A2-0129, A2-0687).
+- Wash radar: a short position is described as a short (cover, re-short;
+  a US short's trigger is a new short sale, not an IRA purchase)
+  (A2-0371, A2-0686, A2-1184).
+- Wash radar's own pool: a Canadian trust's return of capital moves to
+  its record date and a return of capital above the ACB floors it at nil
+  (A2-1174, A2-1178, A2-0372); a coin rebuy under 1e-6 units is a holding
+  (A2-1168); a `.tt` row dated tomorrow in a settle-date project is a
+  trade made today (A2-0130).
+- buy-check: buying back a written call you are short is SAFE (it
+  acquires nothing) (A2-0370). buy-check / sell-check: the 'last loss
+  sale' line shows only losses the queried trade can affect (A2-1172);
+  a bare-array book no longer crashes them (A2-1180); an unreadable
+  ticker.map stops them, as it stops `run` (A2-0683).
+- buy-check, sell-check, watch, instalments, wash-sales and `list --date`
+  relay a failed child's error line instead of the first 200-400
+  characters of its traceback (re-audit A2-1190).
+- harvest --options values an option at the contract size its rows
+  declare (a x10 mini contract is no longer valued at x100), as `list`
+  and the holdings export do (re-audit A2-0367, A2-1177).
+- harvest: a VIOLATION whose rescue deadline has passed is no longer
+  counted as harvestable now; it waits for the registered buy to age
+  out (re-audit A2-0365).
+- harvest quotes a coin under the project's crypto_ticker.map spelling,
+  the one the books were priced with (re-audit A2-0364).
+- harvest / price chain: an LSE (.L) quote that does not state its unit
+  (pence or pounds) is left out with a warning instead of valued as
+  pounds; a live tier's unit-less quote falls through to the next tier
+  and is never cached (re-audit A2-0379, A2-0692).
+- harvest --json carries the planning-tool scope note (re-audit
+  A2-1171).
+- US harvest: a crypto account's losses are claimable now with no
+  wash-sale advice (US-WASH-13, new US-PLAN-05); an open short shows ST,
+  never LT (US-HOLD-03) (re-audit A2-1173, A2-1176).
+- `taxjson serve` on an IPv6 address (`--host ::1`, `[::1]`, or a LAN
+  IPv6 address) answers requests instead of refusing every one with 400
+  "Invalid host header", and prints the URL with the address in brackets
+  (re-audit A2-0695, A2-1186).
+- Web: the wash-radar page shows the scope note (verdicts cover the
+  project's own accounts only, CA-PLAN-04 / US-PLAN-04); a radar sidecar
+  without "sections" or with a row field of the wrong type, and a
+  holdings row whose `trades` is not a list, are an error banner instead
+  of "no report yet", the stale .rpt, or an HTTP 500; the stale-rate
+  label uses harvest's threshold (7 days, not 4); and the freshness
+  fallback counts the same input files as the checklist (a Finder
+  .DS_Store no longer marks the dashboard stale) (re-audit A2-0374,
+  A2-0696, A2-1187, A2-1188, A2-1179, A2-1185).
+- Web what-if: an option is priced at the contract size the book's rows
+  declare (a x10 mini option was priced at x100, a 10 loss shown as a
+  350 gain), and a plain futures contract is refused instead of priced
+  at x1 and dated as an equity T+1 sale; the simulated sale settles on
+  the listing's market calendar, not the calendar of the currency the
+  price was typed in; a Canadian trust's return of capital is booked on
+  its record date first, as the run does; a registered account with
+  inputs but no built book is named in the warnings; and the engine's
+  warn-only option-replacement flag (a call bought in the window) is
+  listed in the result (re-audit A2-0131, A2-0384, A2-0132, A2-0375,
+  A2-0437, A2-1189, A2-1175, A2-0383, A2-0687).
+- `estimate` (USA): §1256 P/L (futures, futures options, broad-based
+  index options) is still taxed as short-term, but the estimate now
+  names the amount in a NOTE (`section_1256_gain` in --json) and its
+  Assumes line says the Form 6781 60/40 split is not modelled
+  (re-audit A2-1124).
+- `estimate` (Canada): a dividend or s.260 payment in lieu from a
+  Canadian issuer on a US listing (CA ISIN in the books) is an eligible
+  dividend, not a foreign one with an assumed 15% credit — the estimate
+  uses the engine's issuer test (ISIN, else listing) instead of the
+  listing suffix (re-audit A2-0319, A2-0662).
+- `instalments`: a payment made before January 1 is accepted as a
+  prepayment of the project year's instalments when its row says
+  `tax_year = YEAR` (credited from January 1, as the interest model
+  already did); an undesignated prior-year date is still refused and
+  the message names the key (re-audit A2-0648).
+- `sum` / `estimate`: --other-income / --other-losses (and their
+  [estimate] keys) are checked by one guard that names the flag or key
+  it refuses (re-audit A2-1123); the --deductions / --carrying-charges
+  guard is pinned by a test that tells it from the library's check
+  (A2-1122).
+- `sum` / `estimate`: an unreadable sheltered account's gains file is
+  refused like a taxable one (it silently changed the SHELTERED and ALL
+  ACCOUNTS totals), and in a US project a disposition with no ST/LT
+  term stops `sum` the way it stops `form-export`, instead of printing
+  RETURN 0.00 for every account (re-audit A2-1119, A2-1120).
+- Canada: the gains inventory carries `last_acq_settle`, the latest
+  acquisition's settle date, and `taxjson harvest`'s TX_ADD / SH_ADD
+  columns measure the 30-day window from it (s.54 counts settle dates);
+  they showed the trade date, off by a weekend near day 30 (A2-0958).
+- **Wash advice: the still-held test, coins, US crypto.** buy-check no
+  longer says any loss sale within 31 days of a buy "would be
+  superficial" or that a rebuy always cancels a loss: in a Canadian
+  project both hold only if the bought shares are still held 30 days
+  after the sale (s.54 'superficial loss' (b)); a full exit is fine
+  (the radar's BLOCKED legend says the same). `buy-check ETH` means the
+  coin when the books hold one (it mixed in ETH.US's verdict and
+  nothing could ask about the coin alone). The "last loss sale" line
+  says which date it shows (settled / traded), includes a loss routed
+  to manual reporting (phantom basis), and warns when a gains file
+  cannot be read. In a US project, `wash-sales --explain` and
+  `wash-radar` no longer apply §1091 to crypto accounts (the pipeline
+  does not) (audit S048-19, S049-15, S047-06, S047-05, S047-02,
+  S047-03, S046-10; pin S047-08).
+- **estimate / instalments say what they leave out**: the FX result on
+  foreign cash (line 15300; US §988) and slip capital gains, and for
+  instalments CPP/EI on self-employment earnings (`NOT MODELLED`
+  notes, JSON `not_modelled`). `[instalments]` amounts must be TOML
+  numbers (`"5_000"` was read as 5000). The withholding credit is
+  summed in a stable order (audit S048-12, S043-15, S043-05, S043-20;
+  test pins S042-20, S043-04, G1-3, G1-11).
+- **scan: no false all-clear, no egress while offline.** An unreadable
+  holdings report stops the scan (it warned, then printed "No findings
+  — clean scan." with exit 0); the unused-ticker.map-rule note is
+  skipped with a warning when a parsed source cannot be read (it listed
+  live rules as unused); `scan --online` honours `TAXJSON_OFFLINE=1`
+  (skips the Yahoo probe with a note — SECURITY.md now says so); the
+  online findings come in a stable order (audit S049-10, S042-10,
+  S042-12, S048-00, S042-13).
+- **`taxjson serve`.** The Host allowlist is loopback names only (the
+  test client's `testserver` let a rebinding page read the books);
+  `taxjson.toml` hot-reload notices an edit that keeps the mtime;
+  `--token` requires the per-run token on a loopback bind too, and
+  SECURITY.md says other local users can reach a loopback server
+  (audit S078-10, S078-12, R1-346).
+- **US estimate (experimental): NIIT and the loss carryforward.** The
+  up-to-$3,000 capital loss deduction now reduces net investment income
+  (Form 8960 line 5a; NIIT was up to $114 too high), and the
+  carryforward shown counts as used only what taxable income absorbs
+  (Capital Loss Carryover Worksheet line 4: zero other income carries
+  the whole loss). The US `--claimed` guidance says the same. tax-logic
+  US-EST-NIIT-LOSS, US-EST-CARRY-TI (audit S077-24, S078-01, S078-02).
+- **Canada estimate: what it does not model is stated** — credits
+  other than the BPA, the OAS recovery tax, and AMT adjustments outside
+  the books (README, KNOWN_ISSUES, the printed assumptions) (audit
+  S077-15, S077-17, S077-20; S077-22: the README now says the US
+  estimate gives no foreign tax credit).
+- **instalments.** When instalments are not required (s.156.1(1))
+  the JSON carries no shortfall, interest or penalty (it said
+  required_at_all=false next to them); the four quarters add up to the
+  year's figure to the cent, so paying exactly the net tax is not
+  "behind by 0.01"; a configured `prescribed_rates` schedule that
+  starts after January 1 says the earlier days assume its first rate
+  (audit R1-222, S034-14, S034-15).
+- **Wash radar / safe-to-sell: a small crypto lot gets its advisory.**
+  A 0.0009 BTC position (about $120) is held for the superficial-loss
+  test, as in the engine, but the radar's 0.01-unit display threshold
+  showed it with no verdict. Crypto now uses the engine's threshold.
+- **harvest: an input it cannot read stops it.** A missing or truncated
+  gains, `--sheltered` or `--radar` file now exits 2 naming the file. It
+  used to print "No open positions." or show SH_QTY/SH_ADD as '-' (the
+  columns that warn of a permanent denial) at exit 0. A native-currency
+  `_raw_gains.json` is refused: its USD cost read as CAD showed the FX
+  factor as a gain.
+- **harvest TOTAL PCT** divides by the gross capital at stake; a short's
+  credited proceeds no longer net against long cost (every row -10% used
+  to total -50%). JSON `totals.gross_cost` is new.
+- **taxjson-harvest finds the project's yf_ticker.map** next to the
+  inputs or in the project root above work/, not only in the current
+  directory.
+- **Wash radar, sell-check, buy-check and safe-to-sell say what they
+  cannot see.** Their verdicts cover the project's own accounts only; a
+  purchase by a spouse or common-law partner or a controlled corporation
+  (Canada: affiliated persons, s.251.1; US: IRS Pub. 550) also denies a
+  loss. Each report now says so in one line. tax-logic CA-PLAN-04 /
+  US-PLAN-04. The web what-if shows the same line under its verdict.
+- **Wash radar: a sale whose commission exceeds its gross is a loss.**
+  Its proceeds are negative, as the engine books them. The radar used
+  abs() and called the loss a gain, so a superficial loss had no
+  VIOLATION and no rescue date. A return of capital on a short position
+  now lowers the short's gain, as in the engine.
+- **Wash radar: crypto rescue deadlines are not walked back through
+  T+1.** A coin settles on its trade date, so the last day to sell is
+  the settle bound itself, weekends included; the row says "units", not
+  "shares".
+- **Wash radar wording.** CAUTION says a loss sale of any size is clean,
+  not only a full exit. BLOCKED, RISK and buy-check say that a rebuy (a
+  DRIP too) denies the loss only on as many shares as it buys, and
+  BLOCKED / buy-check print the amount per unit. `taxjson watch` reports
+  these rows as changed once after the upgrade.
+- **Wash radar input.** A book row the engine would refuse (a
+  non-numeric quantity, a missing date, a trade with no amount) stops
+  the radar and safe-to-sell with one line naming the file and row. It
+  used to print a traceback, or skip the row silently. A bare-array
+  book is accepted.
+- **buy-check / sell-check "last loss sale" line** dates the loss on the
+  project's window basis (trade date in a US project).
+- **Web UI: config and report errors are shown, not hidden.** `taxjson
+  serve` refuses the account names `taxjson run` refuses (a
+  `[accounts."../../x"]` name read a holdings file outside the project)
+  and prints one line — no traceback — for a non-UTF-8 or refused
+  taxjson.toml. `/healthz` reports a taxjson.toml edit that no longer
+  loads (`ok: false`, `config_error`). A corrupt or wrong-shape
+  `wash_radar_<acct>.json` or `<acct>_holdings.toml` is an error banner
+  instead of a silent fall-back to the stale .rpt or an HTTP 500.
+  `/api/whatif` for an unknown account and a holding page for a symbol
+  the account does not hold are 404s; the what-if and holding pages
+  accept a symbol in any case.
+- **The wash radar and the checks built on it apply the US rule in a US
+  project.** `wash-radar`, `sell-check`, `buy-check`, `harvest`, `watch`
+  and the web radar applied Canada's s.54 test to US books: windows on
+  settlement dates, a replacement that "rescues" the loss if sold before
+  day 30 (sell-check said ACTION), and a long call as replacement
+  property. In a US project each recent loss's verdict is now the US
+  engine's own, run on the same books as of the date: trade-date windows,
+  purchases in every account including IRAs, no still-held test. A
+  washed loss shows as WASHED with no rescue advice (no sale undoes a
+  wash sale); a long call is a note. Canada is unchanged (tax-logic
+  CA-PLAN-01/02, US-PLAN-01/02).
+- **Web what-if (US) sees every taxable account.** A US what-if ran on
+  the account's own book only and missed a sibling account's purchase in
+  the window; it now simulates with every taxable account and the IRAs
+  as wash-sale context, on the account's own FIFO basis (US-PLAN-03).
+  The result page names the rule of the project's country.
+- **Harvest prices the right thing in the right currency.** USD-traded
+  TSX units (`DLR.U.TO`) are valued in USD and spelled `DLR-U.TO` for
+  Yahoo; trust units (`DIR.UN.TO` -> `DIR-UN.TO`) and US class shares
+  (`BF.B` -> `BF-B`) get Yahoo's spelling; an LSE quote Yahoo gives in
+  pence is converted to pounds (it was valued 100x); a quote whose
+  currency cannot be told (a `yf_ticker.map` override to `.DE`, `.T`,
+  ...) is omitted with a warning instead of treated as USD; and
+  `harvest --crypto` looks coins up as Yahoo crypto pairs (`ETH-USD`),
+  never as stock tickers, and skips IBKR for them. `TAXJSON_OFFLINE`
+  now also stops the IBKR option-price lookup, and a cache miss refuses
+  as for stocks.
+- **buy-check / sell-check read broker spellings and Montreal option
+  roots.** RCI-B, "RCI B", RCI/B and RCI-B.TO are read as RCI.B(.TO) (they
+  answered SAFE beside a loss on RCI.B.TO), and an option on a root that
+  names no share listing but exactly one class share of it (RBC's
+  RCI270115C00046000.TO for RCI.B.TO shares) is in that share's class
+  (audit S007-02, S047-01).
+- **The wash tools name a taxable account with no books.** wash-radar,
+  watch, buy-check and sell-check warned about nothing when a configured
+  taxable account's base book was missing, so a sibling's recent buy read
+  as SAFE (audit S046-11).
+- **The web radar opens on the COMBINED view** when there are two or
+  more taxable accounts, and a per-account view says it sees only its own
+  book (it read "CLEAR — safe to sell at a loss" while a sibling's buy
+  made the loss superficial) (audit R1-229).
+- **Net tax owing guidance names the right lines.** The init template,
+  README and the instalments report said "line 48500 minus withholding";
+  48500 also subtracts the instalments paid, so following it read "no
+  instalments required". They now give CRA's instalment-chart
+  definition (42000 + 42200 + 42800 (+ 43200) minus 43700 and the
+  refundable credits) (audit R1-215).
+- **harvest: claimable-now losses and option marks that match the
+  books.** A LOCKED position counts the part of its loss a sale today
+  keeps as claimable now (only the units a registered account bought in
+  the window and still holds wait for the clear date); a VIOLATION's
+  last rescue day reads `sell-by:…,+0d`, not "deadline passed"; a
+  written option whose premium was taxed at the write (grant timing)
+  shows the buy-back's whole cost as the loss (the engine's inventory
+  now carries `recognised_premium`); an option the pipeline renamed via
+  ticker.map (TOBASE KGC.US K.TO) is quoted as the contract actually
+  held, in its currency; and when the wash-radar reports are older than
+  the books (after `run --account`), harvest runs the radar live instead
+  of showing a registered-account lock as CLEAR (audit R1-230, R1-232,
+  S033-24, S034-11, S038-09).
+- **`taxjson-safe-to-sell` reads the wash radar.** Its own position walk
+  missed today's (unsettled) buys, booked short covers as long lots and
+  ignored ticker renames; quantities and statuses (SAFE, SAFE*,
+  FULL-EXIT-ONLY, LOCKED, PARTIAL, VIOLATION) now come from the radar,
+  and a bad `--date` is a usage error (audit R1-233, S007-09, S050-03).
+- **The wash radar follows the engine's per-holder superficial-loss
+  rule.** A loss is superficial only for units a holder — your taxable
+  accounts together, or one registered account — bought inside the
+  ±30-day window and still holds. A registered account's shares held
+  before the window no longer turn a full taxable exit into a
+  "PERMANENTLY denied" EXITABLE/VIOLATION, a registered buyer that has
+  sold out no longer LOCKs the name, a new short sale or written option
+  is no longer a "recent buy" or a trigger (Canada), a long rebuy now
+  triggers a short-cover loss, and a replacement under 0.01 units
+  (crypto DCA) still counts. VIOLATION names who must sell what; LOCKED
+  says how many shares' loss a sale today would lose and that the
+  registered account can still defeat it by selling within 30 days.
+  `sell-check` answers PARTIAL (exit 1) when only part of a LOCKED
+  position is at risk and ACTION for a violation only taxable shares
+  back. Also: an exercised option is no longer booked as a loss on the
+  option, a sale executed before a split that settles after it is
+  re-denominated like the engine does, own-account registered moves keep
+  each account's balance, `country = "usa"` projects get §1091's
+  re-short and IRA rules, and an unreadable `taxjson.toml` stops
+  wash-radar / buy-check / sell-check / watch instead of treating every
+  book as taxable (audit R1-231, R1-232, R1-234, R1-241, S047-09,
+  S048-13, S053-14, S053-20, S054-00, S054-03, S054-04, S054-08,
+  S054-15, S054-20, S055-01).
+- **Web what-if follows the filing.** A native price converts at the
+  latest rate on or before the sale date (named with its date when it
+  is old), not a hardcoded 1.35, and a currency with no rates is
+  refused (audit R1-149). The simulated sale settles like a real one,
+  so the superficial-loss window runs on the settle date and a Dec-31
+  sale says it is a next-year disposition (R1-197). A Canadian project
+  with two or more taxable accounts is simulated on the blended s.47
+  pool, as filed (R1-258). A negative quantity buys to cover a short
+  position; a sale on a short is refused with that hint (S079-00).
+- **Web pages: config, radar and freshness.** A `taxjson.toml` the
+  server cannot reload (a mis-cased type, a quoted boolean) is shown as
+  an error instead of ignored, and quoted booleans are refused
+  (S078-15). A VIOLATION's rescue deadline day reads "sell TODAY", not
+  "deadline passed" (S079-06). A wash-radar report older than the books
+  (after `run --account`) carries a stale warning on every row
+  (S038-09). The "inputs have changed" banner sees the project-root
+  maps and compares against the oldest per-account report, like the
+  checklist (S078-21).
+- **`scan` US-LISTING respects DISTINCT and the US line's own dividends.**
+  A US stock was called a "Canadian issuer held via its US listing" when
+  any `.TO` symbol shared its root, even one `ticker.map` declared
+  `DISTINCT` (a CDR), and a non-paying US line borrowed the `.TO` line's
+  dividends. The check now needs the US line itself to pay, and a
+  `DISTINCT` ruling silences it (audit S042-06, S049-09).
+- **instalments passes the estimate's warnings through** (unreadable or
+  other-year books, excluded tainted sales) and prints the rate-vintage
+  note for a year before the built-in tables.
+- **Canada estimate keeps its sign.** Eligible dividends at a low
+  bracket can lower the tax on the other income; the estimate (and the
+  AMT total and average rate) now shows that as a negative figure — a
+  saving — instead of flooring it at 0.00 under a `WITH - BASE` trace
+  that was negative (R1-47).
+- **Unused foreign tax credit reaches the province.** Foreign tax the
+  federal tax cannot absorb is credited against provincial tax (form
+  T2036, limited to provincial tax x foreign income / net income)
+  instead of being dropped; the estimate and the current-year
+  instalment basis were overstated for foreign-dividend-heavy, low-tax
+  years (S077-16).
+- **Estimate discloses what it leaves out.** A NOTE names the headroom
+  a prior-year minimum tax carryover (T691 Part 8, line 40427) could
+  use when AMT does not bind — the carryover is not modelled
+  (KNOWN_ISSUES); the assumptions line no longer sends interest to
+  views that never show it (R1-218, S078-00).
+- **Instalment interest on the least amount due by each date.** ITA
+  161(4.01) deems the requirement on each due date to be the least
+  cumulative amount any method (current-year, prior-year, CRA reminder)
+  calls for by that day. `taxjson instalments` priced each method as a
+  whole year and took the cheapest, which overstated interest and the
+  s.163.1 penalty whenever the cheapest method changed between dates.
+  The report now shows the mixed schedule when no single method
+  governs.
+- **Instalment rates for 2023 and a flag before the table.** The
+  built-in CRA overdue-tax rates now start with 2023 (Q1 8%, Q2-Q4 9%).
+  A 2023 year was charged 2024's 10% all year and the report called it
+  the published rate; a year before 2023 now says its days ASSUME the
+  earliest rate (`rate_extrapolated`).
+- **One low prior year no longer waives instalments.** With only one
+  of `prior_year_net_tax` / `second_prior_net_tax` set and at or below
+  $3,000, `taxjson instalments` said "No instalments required" and
+  printed the unset year as 0.00. Both preceding years must be at or
+  below $3,000 (ITA s.156.1(1)); with one unknown the test is now
+  unknown (instalments assumed required) and an unset year prints as
+  "not set".
+- **Instalment interest keeps compounding after you catch up.**
+  `taxjson instalments` now computes interest the way CRA publishes it:
+  interest on each required instalment from its due date, minus
+  interest on each payment from its date (or January 1), both to the
+  balance-due date and compounded daily. The old running balance
+  stopped compounding the accrued charge once payments caught up,
+  which understated interest by a few percent and could drop a charge
+  under the $25 threshold.
+- **The wash radar sees today's trades.** `wash-radar`, `buy-check`,
+  `sell-check`, `watch` and `reports/wash_radar_*` dropped every trade
+  that had not settled yet, so right after a loss sale `buy-check` said
+  SAFE (and right after a buy `sell-check` said SAFE). A trade now
+  counts from its trade date; the windows stay settlement-based.
+- **The wash radar takes losses from the engine.** Whether a sale was a
+  loss came from the radar's own per-account pool, which missed the
+  s.47 blend across taxable accounts, the cost added back by an earlier
+  denied loss, and option cost folded in on exercise; real losses showed
+  no window and `buy-check` said SAFE. The radar now reads the engine's
+  gains files (grant-timed buy-back losses are not wash losses unless
+  `option_buyback_loss_superficial` is on).
+- **Web what-if prices options per contract.** Selling an option on the
+  holding page used qty x price, 100 times too little, and showed a ~99%
+  loss. Proceeds are now qty x premium x 100 (the page labels the field
+  as the per-share premium and the cost as per contract); a futures
+  option is refused rather than priced with a guessed multiplier.
+- **Web what-if maps cross-listed options like the pipeline.** An option
+  on a `TOBASE`/`GLOBAL`-mapped underlying (a `.US` call booked as
+  `.TO`) was looked up under its unmapped name, and the what-if
+  simulated writing a new short. It now follows the underlying's rule,
+  and a sale that would open a short is refused.
+- **The wash radar applies `phantoms.json`.** Phantom-backed positions
+  showed as shorts (rebuys as short covers with invented losses) in the
+  radar, `watch`, `buy-check`, `sell-check`, harvest's ADVISORY and the
+  web UI, and real violations were missed.
+- **The Canada estimate takes deductions.** `--deductions` (RRSP 20800,
+  FHSA, RPP ...) and `--carrying-charges` (line 22100), or
+  `deductions`/`carrying_charges` in `[estimate]` (which `instalments`
+  reads too), lower net and taxable income; the AMT base takes the
+  deductions in full and carrying charges at 50%. Before, a year with
+  an RRSP deduction and little other income was overstated (by
+  thousands on a typical salary-plus-RRSP mix) and a binding
+  AMT could read as not binding.
+- **No security identity by suffix stripping.** `buy-check`, `sell-check`,
+  `harvest` and `scan` matched listings by root, so `XYZ.TO` and `XYZ.US`
+  were one security unless ticker.map said `DISTINCT` (it merged Digital
+  Realty DLR.US with the Global X DLR.TO currency ETF on real books). Two
+  listings are now the same security ONLY through a ticker.map rule
+  (GLOBAL/TOBASE/JOURNAL), a split rename, or an option's own underlying,
+  exactly as the engine pools them. A bare query (`buy-check XYZ`) still
+  finds every listing of that ticker, each with its own verdict.
+  `DISTINCT` now only records a settled pair for the scan's MAP-GAP check.
+- **Estimate: Ontario AMT corrected** — the Ontario additional tax for
+  minimum tax is 24.63% of the federal AMT excess from 2024 (it was a
+  flat 33.67%, the pre-2024 factor), and the Ontario surtax is now
+  recomputed on basic ON tax plus that amount (5006-D "Line 72"). The
+  2026 factor is marked assumed until the 2026 form is published.
+  Gains-only $400k, ON 2026: provincial AMT 1,216.75 → 1,388.50.
+- **Estimate: BC AMT factor by year** — 33.7% (2024), 34.9% (2025),
+  40.0% (2026), per BC Income Tax Act s.4.8 (was 33.7% for all years).
+- **Estimate: Alberta 2026 eligible dividend credit** is 8.12% (the
+  table had 8%); **BC 2026 BPA** 13,216 (was 13,217).
+- **Estimate: federal BPA phase-down** — the enhanced basic personal
+  amount now falls linearly on net income between the 29% and 33%
+  bracket thresholds (2026: 16,452 → 14,829), in regular tax and in
+  the AMT's 50% credit. ON, 250k other income + 300k gains, 2026:
+  estimate 79,955.12 → 79,980.14.
+- **Estimate: Ontario Health Premium** (up to $900) is modelled for ON
+  and shown in the `--verbose` trace.
+- **Estimate: crypto staking** rewards (a crypto account's dividends)
+  are ordinary income with no withholding — they were counted as
+  foreign dividends with an assumed 15% foreign tax credit.
+- **Estimate notes**: the block now says which surtax/health premium
+  applied, the phased BPA, the provincial AMT arithmetic, and — when
+  the project year has no built-in rate table — which year's tables
+  ran (a year before 2024 also says the post-2024 AMT did not apply).
+  The assumptions line keeps disclosing that non-eligible dividends are
+  treated as eligible.
+- **Instalments**: credit interest runs from the later of the payment
+  date and January 1; net interest of $25 or less is not charged; the
+  report says CRA charges instalment interest only after a reminder.
+  With no `prescribed_rate(s)` set, CRA's published quarterly rates
+  (2024–2026, built in) are used instead of 0%. Scaffold and README
+  rate examples corrected (2025 Q3 onward: 7%).
+- `serve`: malformed taxjson.toml is reported like every other command
+  (no traceback); `--port` must be 1-65535. Web UI: error pages for an
+  unknown account return 404; the what-if rejects a negative quantity
+  (it was simulated as positive).
+- `estimate`/`sum --estimate`: a missing or unsupported province fails
+  BEFORE the table prints, and errors name the invoking command;
+  `sum --province` without the estimate warns that it is ignored.
+- `scan` before any run exits 1 instead of reporting a clean scan;
+  `leaps`/`leaps-sum` with no books say so and exit 1.
+- **Views say what they leave out.** `estimate` keeps the 15% foreign-tax
+  fallback for an account whose base book cannot be read (and warns);
+  `estimate --verbose` prints the 2025 rate as 14.5% and names the FTC's
+  source; `carryover` no longer warns about an account the last run
+  skipped for having no inputs; `gains` names the crypto account it does
+  not show; `wash-sales --explain` traces the tax year's wash sales only;
+  a currency-less row prints `?`, not `CAD`; the merged `audit --json`
+  keeps every `reconciliation_failures` reason; the all-accounts views
+  read an account whose only native book is `_sorted.json`; a non-UTF-8
+  work file is a one-line error, not a traceback; `transfers` refuses an
+  unknown account, shows each row's FEE and warns when a base book cannot
+  be read; `leaps` / `leaps-sum` count LEAPS closes routed to manual
+  reporting instead of reporting none.
+- **scan, sanity, fetch.** `scan` matches a plan word only as a whole
+  token of the account name (`admiral` is no IRA), warns about an unknown
+  `plan`, and counts an option as a sighting of its underlying's listing
+  (MAP-GAP / US-LISTING); `sanity` pairs a crypto snapshot's
+  venue-suffixed symbols (`LINK.KR`) with the bare coin and masks account
+  ids in the holdings file names it prints; a failed Questrade refresh
+  says which token was used (the cached chain wins over
+  `$QUESTRADE_REFRESH_TOKEN`) and how to start a new chain.
+
+### Reports and views
+
+- `taxjson-export`: a gains / inventory file whose rows hold text in a
+  number field (or a non-text symbol) is a one-line error naming the file
+  and row, exit 2, instead of a float() traceback (A2-0793, export part).
+- `taxjson wash-sales --explain` in a US project passes
+  `--per-account-basis` explicitly, so the trace of the merged books
+  keeps FIFO per account like the table it explains.
+- `taxjson audit`: a phantom-basis sale the books route to manual
+  reporting is tied out as "phantom basis — manual reporting" instead of
+  "MISSING from the check file(s)" (exit 1), so the checklist's audit
+  step can complete; the KNOWN_ISSUES entry is gone (re-audit A2-1150).
+- edge-cases counts every superficial-loss / wash-sale window on the
+  engine's own dates — settlement dates in Canada, trade dates in the
+  US — whatever `tax_date` says; it called engine-denied losses OUTSIDE
+  the window (and allowed ones INSIDE) under a non-default tax_date,
+  dropped year-crossing windows, and printed "THE DATE BASIS DECIDES"
+  for a choice that cannot change the verdict (re-audit A2-0133,
+  A2-0134, A2-0135, A2-1206).
+- edge-cases positions count opening balances, `phantoms.json` openings
+  and split ratios: a phantom-backed or opening-balance year-end sale
+  read as a short sale, and "held on day 30" was in pre-split units
+  (re-audit A2-0388, A2-0389, A2-1208).
+- edge-cases no longer lists a buy-to-close of a written call as a long
+  call bought in a loss's window, in either section (re-audit A2-0699,
+  A2-1197), describes a written option assigned on its expiry date as
+  an assignment landing with its share leg (A2-0700), and leaves US
+  crypto out of the wash-sale window sections (A2-1201).
+- edge-cases "Crypto near midnight" converts with the project's
+  `local_timezone` (it assumed EST and missed real UTC year-straddles
+  west of Eastern) and lists exactly the rows whose local and UTC dates
+  fall in different years (re-audit A2-1200, A2-1202, A2-1203, A2-1204).
+- edge-cases judges written options against the filed locks the way
+  option-boundary does — the timing each lock records, and the
+  `prior_year_record` lock (re-audit A2-0390, A2-1205).
+- edge-cases names an unreadable work file instead of printing "None."
+  at exit 0, refuses `--margin` below 0, and refuses an invalid
+  `futures_settle` as `run` does; check-dates refuses it too (re-audit
+  A2-1199, A2-1198, A2-0697).
+- check-dates: an unreadable parsed file is an ERROR (it was dropped and
+  the exit turned 0); an option expiry row settling after the contract's
+  expiry is a WARN; a far-future row is one error, not two; a `.tt`
+  line may carry the settlement date of a trade made today; `/ESH5`
+  futures are futures; Globex Christmas / New Year's evening fills are
+  normal and a weekend futures settle date is reported (re-audit
+  A2-0385, A2-0386, A2-1192, A2-1193, A2-1194, A2-1191).
+- `list --date` keeps the in-account superficial-loss / wash-sale
+  addition to the replacement's cost, as the README and its label say
+  (it recomputed with `--no-wash`; re-audit A2-0391, A2-0392, A2-0701);
+  pinned on a long call sold at a loss and bought back by an option
+  test.
+- `list` / `shares` "as of the latest data" is the last settlement date
+  on a settle-basis book, and an unreadable base book is named on
+  stderr instead of silently moving the date (re-audit A2-0698,
+  A2-0702).
+- taxjson-export `--dust-threshold` refuses nan, inf and negatives (nan or
+  inf hid every zero-cost holding); a position transferred in keeps its
+  later trade events in the holdings TOML; JSON piped on stdin is read
+  as UTF-8 whatever the locale, as files are (re-audit A2-1214, A2-1216,
+  A2-1217, A2-1215, A2-1219).
+- `taxjson sanity` refuses a holdings `quantity = true` (read as 1), and
+  the cross-account overlap note counts a position moved in kind into a
+  second taxable account (re-audit A2-1230, A2-1231).
+- `sum`, `list`, `winners` and `wash-sales` refuse a pipeline work-file
+  name as an account (`margin_raw` printed native USD under a CAD
+  header); `wash-sales`, `list` and `winners` carry the run-state banner
+  after per-account runs, and `wash-sales` the other-year banner
+  (re-audit A2-0394, A2-0400, A2-0694, A2-0405).
+- edge-cases, spinoffs, splits, check-dates, winners, leaps and
+  leaps-sum refuse an account that is not in `[accounts]`; harvest names
+  a bare symbol filter that matches no position (re-audit A2-0684,
+  A2-1167).
+- trades, divs, events, roc, gains, shares, fees-sum and check-dates name
+  a configured account that has inputs but no books (re-audit A2-1182).
+- `sum` FOR THE RETURN: the US footer names a loss denied for good by an
+  IRA repurchase and `--json` carries `permanently_denied` (A2-0647); the
+  Canadian footer says an affiliated person adds the denial to their own
+  ACB instead of "lost for good" (A2-0659), as form-export does.
+- Report readers: a work/ row whose date is not a string or whose money
+  or quantity field is not a number is refused with the file and row
+  named, instead of a traceback in whichever view read it (re-audit
+  A2-0330).
+- fees report: `--to cad` / `--to " CAD"` no longer converts CAD fees at
+  the 1.35 fallback (re-audit A2-0645); fees in a generic import with no
+  `[broker] name` no longer leave a broker listed as fee-free (A2-0646);
+  the title says the year is windowed by TRADE date, unlike the .sum and
+  trades-sum (A2-1102; JSON `meta.date_basis`).
+- `.sum` per-asset block: under grant timing each written option is one
+  trade whose result is its premium plus a same-year buy-back; the block
+  dropped every premium (an expired write vanished, a bought-back one
+  showed only its loss) while TOTAL REALIZED OPTION GAIN kept it
+  (re-audit A2-1114).
+- The row views (`events`, `divs`, `trades`, `roc`, `dil`) warn about an
+  account with inputs but no built book, as the -sum views do; `divs-sum`
+  / `roc-sum` / `dil-sum` outside a project with a country refuse, as
+  `divs` does, instead of an "all history" total with registered
+  accounts folded in (re-audit A2-0333, A2-1110).
+- `leaps` / `leaps-sum` stop when an account with option gains has no
+  native book, or when ticker.map cannot be read (a renamed LEAPS or a
+  whole account vanished at exit 0) (re-audit A2-0117, A2-0329,
+  A2-1126).
+- `ccd-sum` heads a call on a class-share root (Rogers RCI) under the
+  held class share (RCI.B.TO) even when no share was sold in the year
+  (re-audit A2-1115).
+- `sum`, `t1135`, `list` and the other report commands now print the
+  "not the clean result of the current inputs" banner when a first
+  `taxjson run` aborted after writing work/ (no reports yet), instead
+  of serving the partial books silently (re-audit A2-0658).
+- run: the filing-basis `<acct>_wash.sum` of an account in the blended
+  s.47 pass no longer repeats the isolated per-account pass's s.40(3)
+  notes (return of capital beyond the account's own ACB, or on its
+  empty pool) — the blended pool booked no such gain; the per-account
+  `<acct>.sum` baseline keeps them (re-audit A2-0654, A2-1117).
+- `taxjson-explain` and `taxjson-audit` take `--sheltered` more than
+  once, as `taxjson-gains` does; a second file used to replace the first
+  silently, and the superficial-loss denial it backed disappeared
+  (A2-0194).
+- `reports/<account>_holdings.toml` now says (`meta.base_cost_basis`,
+  README) that its costs leave out distributions.map ACB adjustments,
+  which `taxjson list` includes (A2-0226).
+- **find-missing-history:** a buy the broker marks as covering a short
+  (RBC `COVER SHORT.`, IB code `C`) with no short in the data is
+  reported as missing history (A2-0306, A2-0175); an ASSIGN stock leg
+  counts in the $0-basis check (A2-0307); a Norbert's-gambit pair
+  folded by a ticker.map JOURNAL line is no longer a one-day phantom
+  short, and `--gen-phantoms` leaves it out (A2-0309, A2-0636); a
+  decimal-comma merger ratio is left out of the hint instead of read as
+  125 (A2-1096); a Canadian plan name in an account label matches as a
+  whole word, so a taxable `sunlife` is not a LIF (A2-1097).
+- **`find-missing-history --gen-phantoms` never overwrites a reviewed
+  file** (nor does `taxjson-gains --suggest-phantoms`): it stops unless
+  `--force`, which keeps a `.bak` (audit A2-0312).
+- **audit and find-missing-history follow ticker.map and the locks.**
+  `audit SYMBOL` also matches the broker's own ticker of a renamed
+  security (`audit CCJ.US` found nothing although every block prints
+  `SELL ... CCJ.US` and its MAPPING); `audit --year <locked year>`
+  recomputes with the option timing the lock recorded, and says so;
+  the merged `audit --json` total is summed over the events and
+  rounded once (it was a cent off wash-sales). find-missing-history
+  names the broker's ticker of a renamed symbol (K.TO <- KGC.US: a
+  missing buy belongs under the broker's symbol and currency), and
+  `--gen-phantoms phantoms.json` from the project root says `taxjson
+  run` auto-detects it (audit S048-17, S048-18, S047-17, S049-01,
+  S047-19).
+- **Query views say what they show.** `shares` is labelled as of the
+  books' latest date (it said "tax year 2025" over 2026 positions; JSON
+  `as_of`) and leaves futures out; `list` COST/SH is per share for an
+  equity option (it was per contract, 100x harvest's); `gains` and
+  `wash-sales` show a short row's proceeds/cost the real-world way, as
+  winners, ccd-sum and form-export do; `winners margin` / `ccd-sum
+  margin` no longer warn that the window 'margin' may exceed the year;
+  `divs-sum`'s compare-with-slips line leaves crypto staking out (JSON
+  `totals_slips`); `fx-cash --events` prints units to the cent;
+  `wash-sales`, `divs-sum` (and the other period views), `winners` and
+  `ccd-sum` warn naming a configured account with inputs but no books;
+  US projects get §1091 wording in `list` and the checklist (audit
+  S044-05, S044-04, S045-03, S048-10, S048-22, S048-24, S046-21,
+  S045-09, S049-14; pin S045-13).
+- **sanity: no silent gaps, no ids.** A holdings row with a quantity
+  but no symbol, or with a missing/blank quantity, is refused (it was
+  dropped and the check said OK); accounts with open positions but no
+  `holdings` file print `UNCHECKED: ...` and the checklist's sanity
+  step is attention instead of done; an unreadable taxjson.toml is
+  named as such (it said no account declares `holdings`); the missing-
+  file note and `--json` `file_account` mask broker ids (audit S044-18,
+  S044-19, S049-08, S044-03, S044-16).
+- **A corrupt work/ file is a one-line error everywhere.** A truncated,
+  non-UTF-8 or wrong-shape (`[1,2,3]`, `{"transactions": 5}`) gains,
+  base, raw or report file printed a traceback from about 17 read
+  commands (sum, estimate, winners, shares, wash-sales, list, leaps,
+  close-year, audit, t1135, form-export, wash-radar, buy-/sell-check,
+  option-boundary, transfers, roc-sum, fx-cash ...); they now name the
+  file and stop, or skip it with a warning where they already did
+  (`lib/json_input.read_work_doc`; `load_transactions` refuses a
+  non-list `transactions`) (audit S042-18).
+- **sum: rows foot and TOTAL counts PIL.** NON-OPT + OPTION = REALIZED
+  on every row as printed (REALIZED is rounded once; OPTION takes the
+  cent), and TOTAL = REALIZED + DIVIDEND + PIL, the same figure as the
+  `.sum` GRAND TOTAL (a payment in lieu was printed but left out). The
+  FOR THE RETURN footer no longer says every DENIED amount goes onto a
+  replacement's ACB: it names the permanently denied part (a
+  registered-account acquisition, s.40(2)(g)(i)) and the JSON carries
+  `permanently_denied`; form-export's general note says the same
+  (audit S042-21, S042-22, S043-02, S048-04).
+- **audit: provenance.** The crypto ticker.map stage's `_mapped.json`
+  is a derived book, not a second source (every crypto block claimed a
+  false 2-file dedup and lost its MAPPING line), and account `margin`
+  no longer picks up a sibling `margin_us`'s parses (audit S047-12,
+  S047-13).
+- Watchlist export: `.V` / `.CN` / `.NE` listings are Canadian
+  (`TSXV:` / `CSE:` / `NEO:` on TradingView, `:CA` elsewhere) (audit
+  S078-03). `merge2 --to` without `--rates` names the 1.35 default rate
+  it uses (audit R1-155). Crypto money cells with two sign markers
+  (`--5`, `(-5)`) or `1_000` are refused (audit R1-114).
+- **`taxjson audit`:** a grant-timing write is headed WRITE with its
+  premium as proceeds (it read "COVER ... (short)" with proceeds 0.00 and
+  a negative cost); a short's proceeds and cost are shown as filed (the
+  short sale and the cover, not the engine's negated legs); an option's
+  per-share note is "N contracts × 100 sh @ price" (it divided by the
+  contract count); a denial that is partly deferred and partly permanent
+  names both amounts and destinations (the deferred part read as lost);
+  a cross-zero option fill's long close and its grant write are two
+  events (they were summed into one meaningless SELL); a US sale over
+  long- and short-term lots is MIXED with the per-term gains; a `--check`
+  file named twice is read once (every tie-out failed); a saved
+  disposition with no id fails the reconciliation (it was skipped). The
+  totals say they are unrounded engine sums (Schedule 3 rows round to the
+  cent first), and the multi-book `--json` keeps the reconciliation
+  failures.
+- **Fee statistics:** plain futures fees are their own bucket in the
+  gains summary, the .sum fee stats and `fees-sum` (they were counted as
+  stock fees, and futures contracts as shares in $/share). README and
+  `fees-sum --help` now say that `fees-sum` counts by trade date (as
+  `taxjson fees`) while `sum` FEES follows the project's tax_date.
+- **ACB traces (`*.traces`, `audit`, `explain`):** an option's ACB/Sh,
+  Gain/Sh and wash-window acb/sh are per share (they were per contract
+  next to a per-share price); a fee the trace derives from the net is
+  the signed residual (a cheap option's real commission no longer shows
+  as 0, and sub-cent price rounding is no longer shown as a fee); a
+  buy that only closes a short is labelled "closes a short — acquires
+  nothing" instead of an eligible candidate; a crypto partial denial is
+  no longer labelled "full".
+- **Blended accounts (`taxjson-split-gains`):** each account's holdings
+  show its own position start date (SINCE) instead of the pool's, keep
+  full-precision quantities (crypto dust no longer becomes 0 units with
+  a cost), carry their option-replacement warnings and phantom log, and
+  a US file's `summary.count` counts its own records. A missing or
+  unreadable `--base` book is an error instead of an empty fee map.
+- Gains JSON keeps full precision for `wash_trigger.trigger_qty` and
+  `phantom_application_log[].opening_qty` (a 6.76e-06 AVAX trigger read
+  0.0), and `--gen-phantoms` notes keep a crypto short's size;
+  find-missing-history links a merger receipt posted up to 7 days after
+  the removal; US engine: after a rename, same-day lots are sold in
+  order of their purchase time.
+- The account `_wash.sum` DIAGNOSTICS no longer repeats each engine line
+  (the gains and blend stages both kept a copy).
+- **taxjson-explain `--symbol` is case-insensitive** like `taxjson
+  audit`, and its `--help` example no longer says `--wash-sales`
+  "includes" the wash traces — it filters to wash-sale gains (S029-19,
+  S029-24).
+- **`taxjson-export` fails loudly on an unusable input.** A missing,
+  truncated or wrong-shape gains JSON, `--base-gains`, `--trades` or
+  `--transfer-evidence` file, a JSON with no `inventory`, or a `.toml`
+  with no `[[holding]]` array now stops the tool (exit 2, one line naming
+  the file). Under `run --fast` a corrupt cache used to publish an EMPTY
+  `<acct>_holdings.toml` at exit 0 and list every position as closed;
+  the previous snapshot is now kept and the stage fails.
+- **TradingView exports take `tv_exchange.map` from the project.** The
+  map is looked up next to the input and in its parent (the project root
+  for `work/*_gains.json`) before the current directory, so `taxjson -C
+  <proj> run` from elsewhere keeps the `NYSE:`-style prefixes (new
+  `--tv-map FILE` for explicit use).
+- **Holdings export details.** A small quantity with real cost (0.0009
+  BTC) is no longer dropped as dust; the .sum HOLDINGS REPORT says it
+  is the end-of-data inventory, not year-end positions; an option on a
+  class share names the held listing (`RCI.B.TO`, not `RCI.TO`); the
+  `trades` history follows splits and renames; overseas listings (.L,
+  .AX) are in neither currency-split watchlist; a future is `asset_type
+  = "future"` and a futures option gets no guessed `contract_multiplier
+  = 100` (its report cost is per contract).
+- **Report labels say what they add up.** The `.sum` non-option line is
+  `TOTAL REALIZED NON-OPTION GAIN` (shares, units, futures and crypto —
+  it was "STOCK" and read as Schedule 3 line 4), its bottom line is
+  `GRAND TOTAL (GAIN+DIV+PIL)`, and `TOTAL DIVIDENDS / STAKING` names a
+  crypto account's staking rewards; `taxjson sum` heads the column
+  NON-OPT; `fees-sum` says non-option and $/UNIT; `divs-sum` totals
+  crypto staking rewards apart (other income, no T5/T3).
+- `ccd-sum` CLOSES/QTY no longer count a grant-timing write as a close.
+- `taxjson-ccd-gains` / `taxjson-leaps-gains` (reports/ccd.rpt,
+  leaps.rpt): per-contract COST/QTY, PROC/QTY, GAIN/QTY columns (they
+  were always 0.0000), no -0.00, totals per currency on mixed-currency
+  input, and a break-even legacy row is no longer in both reports.
+- `taxjson-sum-gains FILE` keeps wash_solver_iterations like stdin does.
+- `taxjson-diff`: a pure re-ordering of same-key rows is no change, a
+  sub-micro crypto quantity change is seen, output order is stable, and
+  an explicit `--by` field no record carries is refused.
+  `taxjson-extractors` parses its arguments.
+- `taxjson-missing-history`: an `--account` no row carries is refused
+  (it printed the all-clear); registered-account rows are listed under
+  SHELTERED (no reportable gain) and the checklist no longer counts them
+  as affecting the year.
+- work/<acct>_report.json: the wash total reads `disallowed_amount`, so
+  a US project's total_disallowed is no longer always 0.
+- **`edge-cases` explains a US project with §1091.** It printed s.54's
+  still-held reasoning, long calls as replacement property and
+  "Schedule 3" for US books; a US project now gets trade dates, no
+  still-held items, long calls as warnings only, Form 8949, and no
+  written-option (s.49) section (US-RPT-05).
+- **Per-account holdings include phantom openings and split the deferred
+  loss.** In a blended taxable pass each account's `_gains_wash.json`
+  inventory (read by `list`, `shares`, `harvest`) was apportioned from
+  the account's own book, which lacks the openings `phantoms.json`
+  adds: a position could show as a short at a negative cost or vanish.
+  The openings now count. The deferred superficial loss parked in a
+  blended pool is apportioned with the shares instead of being copied
+  whole into every account.
+- **Traces and `taxjson-explain` tell the truth about phantom rows and
+  denials.** The traces file counted phantom-basis sales (from
+  `phantoms.json`) as ordinary gains in its header and per-symbol totals
+  and gave them a holding period counted from 1970; `taxjson-explain`
+  did the same. Both now show them as MANUAL REPORTING rows outside the
+  totals (the gains JSON's manual rows carry no `days_held`). The
+  superficial-loss explanation states the per-holder rule the engine
+  applies, says PERMANENTLY denied for a registered or affiliated
+  replacement instead of "ACB pool bumped", and no longer claims "the
+  earliest is chosen as trigger". A grant-timed buy-back's trace line
+  prints the booked cost and gain. `taxjson-explain --no-wash` explains
+  a registered account's book the way `taxjson run` computes it. The
+  `--affiliated` help no longer calls a parent or sibling affiliated.
+- **holdings.toml states what its base-currency cost is**:
+  `meta.base_cost_basis` says `base_total_cost` is per-account and
+  per-listing, before superficial-loss adjustments and the s.47 blend
+  (the filing ACB is `taxjson list`) (audit S037-24).
+- **audit fails when a configured account has no books** (it printed
+  "✓" over the others and exited 0, and the checklist marked every
+  disposition tied) (audit S047-16).
+- **LEAPS views: long positions only, through ticker.map, with the
+  registered accounts split out.** `leaps` / `leaps-sum` no longer count
+  the write and buy-back of a contract that qualified through a long buy
+  (those legs are covered-call P&L, already in `ccd-sum`), a LEAPS whose
+  root ticker.map TOBASE-renames (BCE...US -> BCE...TO) is no longer
+  dropped, and `leaps`, `leaps-sum` and `ccd-sum` print the TAXABLE and
+  SHELTERED parts of their total (`--json`: `taxable_gain`,
+  `sheltered_gain`) (audit R1-172, R1-237, R1-182).
+- **`list --date` applies phantoms.json**, so phantom-backed positions no
+  longer show as large shorts. Plain `list` is labelled with the date the
+  books run to, not "as of tax year" (it shows end-of-data positions),
+  and `--date` no longer claims "pre-ticker.map" (audit R1-187, R1-282).
+- **Radar sidecar names follow the account name exactly**: account
+  `a_base_x` no longer overwrites account `a_x`'s radar, and an account
+  named COMBINED is refused (audit S038-10).
+- **`list --date` says its ACB is per account.** The as-of view
+  recomputes each account alone, so a symbol held in two taxable
+  accounts shows each account's own cost, not the s.47 blend the return
+  uses. The label, `--help` and README now say so (they claimed "full
+  ACB fidelity"), and a note names the shared symbols (audit S044-21).
+- **`taxjson gains` names an account with no native gains.** After a
+  cross-currency rollover skips an account's native books, the run
+  deletes the previous run's stale native gains and `taxjson gains` says
+  the account is missing and why, instead of omitting it or serving the
+  old rows (audit S037-23).
+- **The `.sum` TOTAL PROCEEDS / TOTAL COST are labelled.** They are the
+  engine's signed figures (shorts and written options negated), not the
+  Schedule 3 proceeds and ACB; the report and KNOWN_ISSUES now point to
+  `taxjson form-export` for those (audit R1-208).
+- **Holdings TOML states its option cost unit.** `cost_per_share` in
+  `reports/<account>_holdings.toml` is `total_cost / quantity` (per
+  contract for an option, the convention the broker holdings files
+  share); the file and README now say so next to `contract_multiplier`
+  and the per-share trade prices (audit S030-08).
+- **`taxjson-diff` sees hand-reported dispositions.** Rows the pipeline
+  moves to `manual_reporting_required` (phantom basis) are compared too,
+  so adding, dropping or changing one is no longer "0 added | 0 removed"
+  (audit S029-16).
+- **No false all-clear from sanity or find-missing-history.** When a
+  configured `holdings` file is missing, `taxjson sanity` ends with an
+  `INCOMPLETE` line (`"complete": false` in `--json`), `run` prints a
+  `!!` line and the checklist keeps the step at attention.
+  `find-missing-history` (and `taxjson-missing-history`) no longer print
+  "No missing-cost-basis issues found" and exit 0 when a base book failed
+  to load or a configured account has no book; they name what was not
+  checked and exit 1 (audit R1-324, R1-336, S047-18).
+- **`reports/ccd.rpt` and `leaps.rpt` match their query twins.** They
+  counted phantom-basis (tainted) rows that `ccd-sum` / `leaps-sum` skip,
+  `leaps.rpt` was titled "LEAPS" while listing every long option of any
+  tenor (now titled so, pointing at `leaps-sum`), and an unreadable input
+  printed TOTAL 0.00 with exit 0 (now exit 1) (audit R1-173).
+- **Query views stop on an unreadable file.** `list`, `shares`, `winners`,
+  `wash-sales`, `ccd-sum`, `leaps`, `gains`, the transaction views and the
+  -sum roll-ups warned about a truncated work/ file and printed a partial
+  report with exit 0 (`winners` moved by 39k, `scan` said "clean scan");
+  they now name the file and exit nonzero (audit S045-01, S042-05).
+- **`divs-sum` and `winners` separate registered accounts.** Both summed
+  RRSP/TFSA/LIRA/RESP amounts into the headline (the 2025 `winners` total
+  was 2.24x the Schedule 3 gain, and the USD `divs-sum` 2.25x the slips);
+  they now print TAXABLE and SHELTERED lines, and the checklist points the
+  slip tie-out at the TAXABLE line. `divs-sum` counts DIVIDEND rows only
+  (payments in lieu are `dil-sum`; adding the two counted PIL twice), and
+  the `divs` help says it shows both (audit S040-13, S041-04, R1-272).
+- **`winners` and `ccd-sum` count routed phantom-basis sales.** The
+  "skipped N tainted" warning read only in-line rows, so a pipeline file's
+  `manual_reporting_required` sales vanished from the ranking without a
+  word (audit S040-15).
+- **Tax-year views follow the settlement date.** `winners`, `gains`,
+  `ccd-sum`, `leaps` and `leaps-sum` windowed a tax year on the trade
+  date, so a Dec-31 trade that settles in January dropped out of every
+  year's view (so `ccd-sum` fell short of `ccd.rpt`). On a
+  settle-basis project the year window now uses the settlement date, like
+  `sum` and form-export (audit R1-171, R1-186, R1-238, R1-273).
+- **`leaps` / `leaps-sum` warn outside the books' year, and the default
+  window refuses a stale build.** They had no scope warning (`leaps-sum
+  all` said "all history" over one year); `winners`, `ccd-sum`, `leaps`
+  and `leaps-sum` with the default window now stop when `work/` was built
+  for another year than `[settings] year` instead of saying the year had
+  no dispositions (audit S048-11, S048-14).
+- **`taxjson fees` counts a charged fee as a fee.** Standalone FEE rows
+  (IB market-data subscriptions, Questrade/RBC custody fees) were shown
+  negative and netted against commissions, and a commission refund was
+  shown as a charge; FEE rows now follow the repo convention (positive =
+  charged) (audit R1-54, R1-269).
+- **audit:** `--year` for another year and `--all-years` no longer call
+  fresh books stale (the saved gains files hold one year); a crypto fee
+  priced by the fill stage ties out; a large book's per-row 4-dp rounding
+  no longer fails the totals.
+- **The account .sum lists phantom-basis sales** in a MANUAL REPORTING
+  section. `option-boundary` applies phantoms.json (a phantom long option
+  sold to close is not a write). `wash-sales --explain` traces the
+  blended books the table comes from.
+- **Broker-marked shorts are not missing history.** A position RBC
+  marks as a short sale (`SHORT.` / `COVER SHORT.`) is no longer offered
+  as a phantom by `find-missing-history`, `--suggest-phantoms` or the
+  run's go-short hint; `find-missing-history` lists it apart.
+- **`taxjson check-dates`.** Every trade and settlement date the parsers
+  produced, checked against the calendar of what was traded: crypto 24/7,
+  futures 23/5 (Sunday evening to Friday), US stocks on exchange days plus
+  the overnight session, options and Canadian listings on exchange days;
+  settlement never before the trade or on a weekend, and normally the
+  standard cycle on either market's calendar. On real books it
+  found option lots in an opening file dated on a day neither market
+  settles (the file carries trade dates).
+- **`taxjson edge-cases`.** One report of everything whose treatment turns
+  on a boundary: trades that settle in the other year and where
+  `tax_date` puts them, dispositions on the last and first days of a
+  year, written options and expiries across Dec 31, income paid around
+  New Year, crypto near midnight, loss windows spanning Dec 31 and
+  deferrals carried into next year. For each taxable loss it lists every
+  purchase (any account) or sale within `--margin` days of day 30, with
+  the day count on both date bases, and flags where the basis alone
+  decides. Long calls bought inside a share loss's window are listed as
+  advisory (s.54 'right to acquire'; not enforced).
+- `audit`: `--date` matches the trade OR settlement date (and says
+  which); `--summary` shows ids long enough to be unique; an unknown
+  `--account`, or a symbol/`--id`/`--date` filter that matches nothing,
+  exits 1 with a message instead of an empty "0/0 ✓" block;
+  `--account` runs only the computation holding that account.
+- **`list --date` cuts on the project's date basis.** On a settle-basis
+  project (the Canadian default) the as-of positions now drop rows by
+  settlement date, like the gains year and `t1135`: a sale traded Dec 31
+  that settles in January is still held at Dec 31. The banner names the
+  basis; `taxjson-gains --as-of` follows `--tax-date`.
+- **The .sum DIAGNOSTICS banners are fresh and whole.** `<acct>.sum`
+  (the pre-blend baseline) no longer repeats the previous run's
+  cross-account notes (they are in `<acct>_wash.sum`); a note about a
+  problem already fixed no longer survives in either banner after an
+  account leaves the blended or crypto wash pass; the transfer-cluster
+  attestation note keeps its closing sentence; notes whose events all
+  fall after the tax year (and its 30-day window) are listed last under
+  their own heading instead of asking for action in this year's report;
+  the per-file parse counts are echoed for file names with spaces and
+  for TRANSFER-only files; the crypto validation line names the file,
+  not its absolute path (which carried the OS user name).
+- **Report views label and total what they show.** Payments in lieu
+  have their own footer total in `events` / `dil` (not TOTAL DIVIDEND);
+  a crypto account's DIVIDEND rows are labelled staking rewards (ordinary
+  income) in `sum`, the `events` / `divs` footers and the crypto
+  `.sum`; `dil-sum`, `roc-sum` and `trades-sum` split out
+  registered accounts (no income, no T3, not T5008 proceeds); summary
+  TOTALs equal the sum of their printed rows; `winners` shows a short or
+  written option's PROCEEDS/COST the way `ccd-sum` and form-export do;
+  a grant-timing WRITE record no longer counts as a close in `ccd-sum`,
+  `winners` or the `.sum` trade statistics; `reports/ccd.rpt` prints the
+  premium and the buy-back as positive PREMIUM / BUYBACK columns.
+- **More views say what they mean.** `find-missing-history` lists pairs
+  `phantoms.json` already covers apart (the checklist step clears);
+  `fees.rpt` / `fees-sum` leave out ticker.map DELETE'd rows and their
+  unconverted JSON no longer adds currencies into one total; a LEAPS
+  renamed by a SPLIT keeps its LEAPS entry; `instalments` names the inputs
+  it assumed to be 0 (other income, withholding); `trades`, `trades-sum`
+  and `events` take a trade by its settlement date in a tax-year window on
+  a settle-basis project, as Schedule 3 does; per-underlying reports file
+  an `RCI…` option under the `RCI.B.TO` shares it is written on.
+
+### Pipeline, configuration and errors
+
+- Errors are one line with a consistent exit code in more places
+  (re-audit A2-0161, A2-0791, A2-0770, A2-1421, A2-1435, A2-1436,
+  A2-1428, A2-1432): `taxjson <tool>` runs a tool under the same guard
+  as its `taxjson-<tool>` console script (in process and with
+  TAXJSON_DISPATCH=subprocess), so an unreadable ticker.map in
+  `taxjson reconcile-slips` is no longer a traceback; a symlink loop or
+  any other OS error on an input is `cannot read <file>: <reason>`
+  (exit 2); a ticker.map rename cycle is one line (exit 2) in
+  taxjson-ticker-map / merge2 / apply-distributions / reconcile-slips;
+  a missing or unreadable named input exits 2 in lint-crosslistings
+  --map (1 is a lint finding), brokerage --security-overrides,
+  wash-radar/safe-to-sell --incomplete-history, generate-parser and
+  `taxjson redact`; a `--ticker-map` that names a missing file is
+  refused by corp-actions, apply-distributions and harvest (it was
+  ignored); wash-radar --json-out under a file and gains
+  --suggest-phantoms into a folder say `cannot write`.
+- A tool that `taxjson` runs as a passthrough command (wash-radar,
+  harvest, fees-sum, find-missing-history) and whose output is piped
+  into `head` exits quietly (141) too; the in-process dispatcher turned
+  the BrokenPipeError into a traceback with exit 1 (A2-1417).
+- A UTF-8 BOM before hand-edited JSON is accepted by every transaction
+  book and JSON loader (taxjson-sort, merge, merge2, fill-crypto,
+  validate, json_input, phantoms.json) — it was refused with
+  'Unexpected UTF-8 BOM' (A2-0776, A2-1412).
+- edge-cases, check-dates, harvest, apply-distributions and split-gains
+  read work/ documents through the shared reader: a wrong-shape
+  document or a text number is one line naming the file and row
+  (A2-0794, A2-1408, A2-0793).
+- `taxjson-export`: a tv_exchange.map saved with a BOM keeps its first
+  rule, and a holdings TOML row whose quantity or total_cost is not a
+  number (or whose symbol is blank) is refused naming the row in every
+  mode (A2-0806, A2-1410, A2-1442, A2-1443, A2-1441).
+- Errors are one line, never a traceback, with one exit-code rule:
+  2 for a named input or output that cannot be read or written, 1 for a
+  command's finding, 130 for Ctrl-C, 141 for a closed stdout pipe
+  (`taxjson trades | head`). Report text a non-UTF-8 terminal cannot
+  show degrades to `?` instead of crashing. Covers a damaged prior-year
+  record in `handoff`, a damaged `work/pending_elections.json` (`elect
+  --pending`, `elect --set`, `run --account`), a non-UTF-8 or directory
+  `ticker_extraction_overrides.txt`, damaged work/ bookkeeping files
+  (`run` rebuilds them), a damaged holdings snapshot, `estimate = 5`
+  where an `[estimate]` table belongs, unwritable `sends.json` /
+  `manifest.json` folders, a dangling `manifest.json` symlink (refused,
+  never written through), `init` under a C locale or with `inputs` as a
+  file, and Ctrl-C at `checklist --walk` prompts (re-audit lists
+  errors-02 / errors-05).
+- An ACCOUNT argument must be an account name: a path (`./margin`,
+  `../other/work/margin`) or a pattern (`fees-sum '*'`) is refused.
+  spinoffs, splits, transfers, edge-cases and fees-sum say "run
+  `taxjson run` first" when there are no books, as their twins do.
+  `list --date` fails when an account's as-of recompute fails instead
+  of silently dropping it; `audit --json` exits 2 like `audit` on an
+  unreadable input, and prints the error once.
+- A second `taxjson run` in the same project refuses while one is in
+  progress (it used to crash on the shared work/ file names).
+- A `taxjson.toml` saved with a UTF-8 byte-order mark (Notepad) is read
+  by `find-missing-history`, `gains --suggest-phantoms`, `convert-tt`
+  and the wash radar the way `taxjson run` reads it; one that does not
+  parse stops those commands instead of being treated as "no project"
+  (which fell back to settle dates and guessed account types in a US
+  project) (re-audit A2-0419, A2-0424, A2-0429, A2-0430, A2-0438).
+- Printed standalone commands (`taxjson-gains --suggest-phantoms`,
+  `taxjson-explain`, `taxjson-corp-actions`) carry the required
+  `--country` (A2-1287).
+- An output path that is a directory (or cannot be written) says
+  "cannot write <path>" and leaves no `.part` file (taxjson-convert-tt,
+  taxjson-brokerage sidecars, wash-radar --json-out); the --explain trace
+  rounds a denial to the same cent as the wash-sales table (re-audit
+  A2-0707, A2-0708).
+- `taxjson run` reads an unset `base_currency` as the country's currency,
+  like every other command (it refused it); an empty or unreadable
+  statement CSV is named as such instead of "rename it to cb_/kr_/
+  generic_"; an Apple Numbers export in an account folder is refused like
+  .xlsx (re-audit A2-0712, A2-0713, A2-1228, A2-0714).
+- Unreadable is never absent: a statement CSV or .tt that is a dangling
+  symlink stops `run` naming the file, every command (not only `run`)
+  refuses a dangling or directory ticker.map / phantoms.json /
+  distributions.map / overrides file, and a dangling taxjson.toml is
+  refused instead of read as "no config" (re-audit A2-0143, A2-0403,
+  A2-0401, A2-0144).
+- An account named inside another account's work-file namespace
+  (`<other>_tt_<x>`, `<other>_<broker>`) is refused — the two overwrote
+  each other's books or deleted each other's corp files — and two .tt
+  files of one account that convert to the same work file (`start.tt`,
+  `start.TT`) stop the run (re-audit A2-0140, A2-0402, A2-0399, A2-1222).
+- `run --account <sheltered>` refuses (and keeps `sheltered_base.json`)
+  when another sheltered account with inputs has no book in work/; it
+  rebuilt the combined book without that account's buys, so the radar
+  said "safe to sell at a loss" (re-audit A2-0128).
+- Every view and planning command that reads the work/ books (gains,
+  divs-sum, roc-sum, wash-sales, fx-cash, list, shares, winners, the
+  radar, buy-check, sell-check, harvest and others) prints the
+  stale-books banner after a failed run or changed inputs, on stderr
+  (re-audit A2-0380, A2-0381).
+- **`taxjson fetch` (Questrade) keeps the API's order of one day's
+  rows.** The fetched file sorted each day's rows by symbol and action,
+  and every re-fetch merge sorted the whole file, so a same-day sale
+  listed before its rebuy was booked as rebuy-then-sale: the sale used
+  the averaged ACB and gain moved into a later year (CA-DATE-14 /
+  US-DATE-13). Rows now sort by trade date only, and the merge keeps
+  the download's order (audit A2-0084, A2-0598).
+- `taxjson fetch`: the overlap check and `--trim-overlap` read a UTF-16
+  or UTF-8-BOM Questrade export the way the parser does. A UTF-16
+  manual export showed no overlap, so it double-counted next to the
+  fetched file with no warning (audit A2-0256, A2-1040).
+- `taxjson fetch` (IBKR Flex): the guard that refuses a download which
+  would drop the tax year's activity takes the download's span from its
+  Statement Period (else its activity dates), not from any digits on any
+  row. An 8-decimal P/L such as -26.20190219 read as 2019-02-19 and
+  silenced the refusal (audit A2-0083).
+- `taxjson fetch` (Questrade): activity windows ask from local
+  (America/Toronto) midnight, -04:00 in summer, not a fixed -05:00 that
+  could miss the first day of a summer `--from` window (audit A2-0599).
+- The JSON input path (`taxjson-gains` on a hand-written file, the core
+  loader) refuses a trade whose settle date is before its trade date, as
+  the parsers do (CA-DATE-03 / US-DATE-04); `taxjson-validate` reports it
+  as an error and a settle more than a month late as a warning (A2-0959).
+- The standalone year flags (`taxjson-gains/-explain/-audit/-carryover/
+  -t1135 --option-grant-since`, `taxjson-brokerage --tax-year`,
+  `taxjson-carryover --project-year`, `taxjson-audit --check-year`)
+  refuse an implausible year such as 226 for 2026, like `--year`
+  (A2-0955).
+- **`run --fast` sees election, sends and config edits by content.** The
+  elections manifest, sends.json and taxjson.toml are now in the
+  per-account content fingerprint, so a copy restored with an older
+  mtime no longer keeps the previous books (A2-0224, A2-0985,
+  A2-1229). `taxjson elect --redo` passes the same rates, base currency
+  and ticker.map as `run` (A2-0981, A2-0982), and the legacy manifest
+  migration is atomic (A2-0218).
+- **phantoms.json is applied to the native books too.** The raw
+  holdings pass ran without it, so `reports/<account>_holdings.toml`
+  (and the web positions) listed every phantom pair as a short, and
+  `taxjson gains` showed a phantom-basis sale as a realized gain; both
+  now match `sum` and `list`, and `gains` notes the sales left for
+  manual reporting (audit A2-0111, A2-0305).
+- **A dangling symlink for a project map stops the run.** A
+  `ticker.map`, `phantoms.json`, `distributions.map` or
+  `crypto_ticker.map` that exists as a name but cannot be read was
+  treated as absent and the run exited 0 with other gains (A2-0313).
+- **fetch / watch.** `fetch` masks the Questrade account number in its
+  progress line and in API error messages (`questrade #59***`,
+  `/v1/accounts/59***/activities: HTTP 400 ...`); `--trim-overlap`
+  refuses to rewrite a sibling CSV whose record spans several lines (an
+  unbalanced quote swallowed out-of-window trades, which were deleted
+  with it); `watch --state` naming a directory, a path under a file or
+  an unwritable place is a one-line error, not a traceback (audit
+  S046-17, S046-16, S046-12).
+- **Non-UTF-8 text files name themselves.** A latin-1 `ticker.map`,
+  `distributions.map`, `ticker_extraction_overrides.txt`, `t1135.map` or
+  `claimed_losses.txt` is a one-line error naming the file (`taxjson
+  run` too); a cp1252 broker export that detection cannot read says
+  "not UTF-8" instead of "rename it". `taxjson-lint-crosslistings`
+  refuses a non-numeric quantity in one line.
+- **`taxjson fetch`.** A project year whose window has not started is
+  refused (it fetched the previous year's last 90 days into the new
+  year's file); `--from` with `--days` is refused; a window outside the
+  year is noted; an API row with no settlement date is written with its
+  posting date. `taxjson-fill-crypto` never caches today's still-open
+  candle.
+- **phantoms.json diagnostics:** an entry that did nothing — its rows
+  never go short, or no row has its symbol — is now named once on the
+  run's output (it was only in the gains JSON, so a typo silently booked
+  the phantom sale); another account's entry no longer prints a "no
+  rows" warning in every account's stage; and the "pairs go short" hint
+  still names the pairs the file does not list. The hint and
+  find-missing-history now point at `taxjson find-missing-history
+  --gen-phantoms` (the `taxjson-gains` flags they quoted are not `taxjson
+  run` options). The unmapped cross-listing NOTE suggests the rule in
+  the right direction for a USD unit (`TOBASE DLR.U.TO DLR.TO`) and in a
+  US project.
+- **Hand-made JSON books:** a time written `9:30:00` or `09:30` is read
+  as `09:30:00` (it used to sort after its own superficial-loss
+  adjustment, moving part of a denial into the next year, or crash); a
+  time that is not a clock time is refused with the row named.
+- **Stand-alone tools: an unreadable input is one line, exit 2.** A
+  missing path, a directory, a non-UTF-8 file or bad JSON gave a
+  traceback (exit 1) in gains, explain, audit, convert-currency,
+  fill-crypto, merge2 --map, safe-to-sell, sort, sum-gains, sum-income,
+  ticker-map, wash-radar and others; every `taxjson-*` tool now prints
+  `<tool>: error: no such file: ...` / `cannot read ...` and exits 2
+  (S070-23, S079-10). A JSON error names the file.
+- **explain / audit / carryover: engine refusals are one line.** A
+  RENAME-split straddling a settlement, a currency mismatch, a SPLIT
+  ratio of 0 or a malformed `phantoms.json` printed a traceback; they
+  now print the same one-line `error:` as `taxjson-gains` and exit 2,
+  and the phantoms.json message names the file and line (S029-20,
+  S071-06, S076-01).
+- Stand-alone tools (fees-sum, lint-crosslistings, sum-gains, sum-income,
+  ccd/leaps-gains, diff, explain, ticker-map, carryover, form-export,
+  split-gains, apply-distributions, reconcile-slips) refuse an
+  unreadable, non-UTF-8 or wrong-shape input in one line with a non-zero
+  exit — no traceback, and no report built from the files that happened
+  to load (fees-sum dropped a broker's fees at exit 0; lint-crosslistings
+  printed "(Clean.)"). A bare-array transaction book is accepted.
+- **Option-timing settings read the same everywhere.** A quoted
+  `option_buyback_loss_superficial = "false"` or `crypto = "false"`
+  counted as TRUE in every command except `run` (carryover, check-filed,
+  audit, close-year, reconcile-slips, the web UI); every config reader
+  now refuses it. With `tax_date = "trade"`, `option_grant_timing_since`
+  is tested on the write's trade year, the same date the return's year
+  filter uses. Standalone `taxjson-gains` / `taxjson-explain` say when
+  they fall back to close timing (a Canada project runs grant timing).
+- **A trade row with no amount is refused.** `taxjson-gains` accepted a
+  BUYSELL/ASSIGN row whose `net_amount` (or `quantity`) key was missing
+  and booked it at $0, and `taxjson-validate` said OK; both now name the
+  row. US engine: a sale whose commission exceeds the gross (a $0.01
+  close) keeps its negative proceeds instead of booking a credit.
+- **`fetch` never loses input activity.** `--trim-overlap` finds the
+  trade date by the "Transaction Date" header (a manual export with
+  Settlement Date first lost a trade the API file did not hold) and
+  writes the trimmed file atomically at 0600; the overlap guard sees an
+  upper-case `.CSV` sibling like `run` does; an IBKR Flex download that
+  does not cover the tax-year activity already in `ib_flex.csv` is
+  refused (saved as `ib_flex.csv.new`), the replaced file is kept as a
+  numbered `.bak`, and a past year's download that does not span the
+  year warns (audit R1-74, S046-14, S007-00).
+- **`run --fast` sees content, not only mtimes.** Each account's input
+  files and the project-root maps (ticker.map, overrides,
+  distributions.map, phantoms.json, crypto_ticker.map) are fingerprinted
+  by content; a CSV replaced by an export with an older mtime, or a
+  ticker.map restored the same way, kept the old parse at exit 0 (audit
+  R1-253, R1-294).
+- **A full run removes sidecars the config no longer produces.**
+  work/sheltered_base.json after the last sheltered account is removed
+  (the filed-year lock and the radar kept reading it), and the
+  `_gains_wash.json` / `_wash.sum` of an account re-typed to sheltered
+  (every query preferred them) (audit S004-05, S038-19).
+- **`taxjson-merge` fails on an unreadable input** instead of writing a
+  book without it (`run --account <sheltered>` rebuilt
+  sheltered_base.json without a sibling's rows) (audit S038-18).
+- **A spreadsheet in an account subfolder** gets the same "not read"
+  warning as a CSV there (audit S043-13).
+- **taxjson.toml is checked the same way by every command.**
+  `base_currency` is trimmed and upper-cased (" CAD" failed later with a
+  misleading "fix the rates file" error; "cad" priced CAD fees at the
+  default FX rate) and must be a 3-letter code; a Canada project with a
+  non-CAD base warns. `[settings] year` must be a plausible tax year
+  (1900 to next year, like `init`), and `run` warns when no transaction
+  in the books falls in the configured year. A misspelled top-level
+  table (`[estimates]`, `[instalment]`) and an unknown `[estimate]` /
+  `[instalments]` key now warn in `estimate`, `sum` and `instalments`,
+  not only (or never) in `run`. `[instalments]` withheld, prior-year
+  figures and prescribed rates must be non-negative finite numbers
+  (rates below 1); a TOML boolean is refused there and in `[estimate]`
+  (audit R1-153, R1-256, R1-216, R1-257, S038-13, R1-217).
+- **`init --force` never overwrites an earlier backup.** A second
+  `--force` replaced taxjson.toml.bak (the user's config) with the first
+  template; later backups are numbered (audit R1-255).
+- **Account names that collide with work/ artifacts are refused.** A
+  name ending in `_raw`, `_base`, `_gains`, `_wash`, `_tt` (and a few
+  other artifact suffixes), or the name `sheltered`, now stops every
+  command with a rename hint: `cb_raw` silently vanished from `sum` and
+  the estimate, and `margin_raw` overwrote `margin`'s native books
+  (audit S022-00, S041-14).
+- **A sheltered-account rerun no longer serves stale wash numbers.**
+  After `run --account <sheltered>` rebuilt `sheltered_base.json`, `sum`,
+  `form-export` and `close-year` read the older wash-adjusted gains with
+  no warning (a registered-account buy that makes a taxable loss
+  superficial was missing). They now warn, and `close-year` refuses
+  until a full `taxjson run` (audit R1-251).
+- **An unparseable `taxjson.toml` is an error in every query command.**
+  It was read as an empty config: `fees-sum` converted a USD-base
+  project's fees to CAD at an invented 1.35 and dropped its sibling-account
+  guard, and the radar treated registered books as taxable (audit S049-00).
+- **`taxjson fetch` covers the superficial-loss window and keeps
+  tokens out of error messages.** The default Questrade window for a
+  tax year now runs Dec 1 of the prior year through Jan 31 of the next
+  (was Dec 15 .. Jan 15): a repurchase on Jan 16-30 or Dec 1-14 in a
+  fetch-only account (an RRSP buying back what the margin account sold
+  at a loss) was never seen, so a permanently denied loss was allowed.
+  An activity with no `netAmount`/`grossAmount`/`commission` is written
+  with a blank cell, so the parser refuses it instead of dropping a
+  dividend as a "zero-net" row. A refused redirect no longer prints the
+  redirect URL's query (the Flex token or Questrade refresh token). The
+  live-holdings snapshot takes an option's suffix from the account's
+  books when they hold that contract, so a CDR such as AMZN.TO no longer
+  makes the account's US AMZN option look Montreal-listed (a false
+  verify/sanity mismatch).
+- **taxjson-merge never emits a partial merge.** The legacy merge that
+  builds the crypto books, the blended base, `sheltered_base.json` and
+  the audit tie-out printed "cannot read" and exited 0 with the
+  unreadable file's rows missing — `run --fast` over a damaged cached
+  Coinbase book dropped half the crypto gains with a clean console. A
+  missing or unreadable input is now an error (exit 1, nothing on
+  stdout), as in taxjson-merge2.
+- **`crypto = "false"` (quoted) is refused** by every command instead of
+  moving an equity book to the crypto line.
+- **`country` and `tax_date` are checked for every command.** "Canada",
+  "CA" or " canada" are read as `canada` everywhere (check-filed and the
+  web what-if crashed on them, switching the drift guard off); an
+  invalid `tax_date` stops every command with a clear message instead
+  of an engine usage error. The checklist no longer reports a failed
+  check-filed as drift.
+- **`phantoms.json` entries for an unknown account stop the run.** The
+  file is keyed by account name, so renaming an account silently dropped
+  its openings and changed the filed gain. `taxjson run` now names each
+  entry whose account is not in `[accounts]` and suggests the closest
+  current name.
+- **An export that parses to 0 transactions is loud, and fatal under
+  `--strict`.** A Coinbase file with a renamed header, or a `kr_`-named
+  file that is not a Kraken ledger, dropped its whole book with exit 0
+  even under `run --strict`, and the checklist called the run clean.
+  Every run (cached or not) now prints a WARNING naming the file on
+  stderr, `run --strict` stops, and the checklist's `run-clean` step
+  needs attention.
+- **An Excel export in `inputs/<account>/` stops the run.** Only `.csv`
+  and `.tt` files are read, so a Questrade `.xlsx` dropped in unconverted
+  lost every trade in it with exit 0 and no mention. `taxjson run` now
+  names each unconverted spreadsheet and stops (a spreadsheet next to
+  its converted CSV only warns); an input folder with only a spreadsheet
+  and no `[accounts.*]` section is named too; the checklist no longer
+  counts `.xlsx`/`.txt` files as account activity and its `run-clean`
+  step flags an unread spreadsheet.
+- **Every command refuses an invalid account type, not only `run`.** An
+  account `type` edited after the run (`"Taxable"`, or deleted) silently
+  dropped that account from `estimate`, `instalments`, `sum`,
+  `form-export`, `carryover` and `close-year` (which locked the wrong
+  total), all with exit 0. Every command that reads `taxjson.toml`, and
+  `taxjson serve`, now stops with the same message `run` gives.
+- **An account without `type` is now fatal** (it silently defaulted to
+  sheltered, so an untyped taxable account dropped out of the return);
+  the message lists `taxable | sheltered`.
+- **No more false "run `taxjson run` first"** after a successful run:
+  `run` records accounts it skipped for having no inputs
+  (`work/skipped_accounts.json`), and t1135, form-export,
+  reconcile-slips, harvest, audit, `list --date`, wash-radar and
+  buy/sell-check stay quiet about them (helper
+  `_accounts_skipped_for_no_inputs`).
+- `run` on a project where no account has any input says so; with
+  `--strict` it exits 1 instead of "Done". A typo'd settings key's
+  did-you-mean now prints before the "missing year" error it causes.
+  `-C DIR` naming a missing directory says so; `sum` in a non-project
+  says there is no taxjson.toml.
+- `run`'s holdings check tells a config problem (missing holdings file)
+  apart from real position differences.
+- `init`: the next-steps line is `taxjson -C '<dir>' run` (the old
+  `taxjson run -C <dir>` failed); `--year` is capped at next year;
+  `--force` keeps the previous config as `taxjson.toml.bak` and lists
+  input folders the new config no longer covers.
+- **Every command checks the option-timing and `fx_cash_gains`
+  settings.** `fx_cash_gains = "false"` (quoted) turned the FX-on-cash
+  report on; a typo'd `option_premium_timing` or a quoted / boolean
+  `option_grant_timing_since` was refused only by `run` — option-boundary
+  read it as close timing and close-year wrote it into the lock. All
+  are now refused by every config reader.
+- **taxjson.toml with a UTF-8 BOM is read** (also a generic-importer
+  mapping); a taxjson.toml that is a directory or unreadable, `work/` or
+  `reports/` that is a file, and `init` onto an existing file now give a
+  one-line error instead of a traceback (`run` refuses before any stage).
+- **Tolerance and threshold flags must be finite and non-negative**
+  (`sanity --tolerance`, `reconcile-slips --tolerance`, `taxjson-t1135
+  --threshold/--detailed-threshold` (> 0), `watch --threshold`).
+  `watch --threshold 0` now means "any move" (it read as 100), and an
+  unreadable or other-version `.watch_state.json` is warned about before
+  the new baseline is recorded.
+- **`run --fast` notices a code change by content**: a taxjson upgrade
+  whose files kept older mtimes (`cp -p`, `rsync -a`, `tar x`) or that
+  deleted a module rebuilt nothing; the last complete run's code
+  fingerprint is now kept in `work/` and a mismatch rebuilds everything.
+
+### Privacy and security
+
+- `taxjson redact` and the generate-parser privacy gate no longer lose a
+  private-denylist pattern silently: a leading UTF-8 BOM is stripped,
+  and a denylist that is UTF-16, not UTF-8, unreadable or a directory
+  (at the default path too) stops the run with exit 2 and nothing
+  written (audit A2-0045, A2-0158, A2-0458, A2-0448).
+- `taxjson redact` covers more identity shapes: every Field Value of an
+  IB `Account Information` section except a safe list (Account Type,
+  Base Currency, ...), every value cell of a multi-cell address (CSV
+  and HTML, inline tags included), every `Label:` cell in a row
+  wherever it sits, uncoloned `SIN,` / `Phone,` / `Tax ID,` label
+  cells, holder / party labels and columns by pattern (Payee Name,
+  Recipient, Trustee, Legal Name ...; any other `X Name` column is
+  listed for REVIEW), French comma labels (`Nom du client,`), dotted
+  SINs and spaced / dotted SSNs, a US ZIP in its own cell, and
+  upper-case bech32 addresses. Account ids are matched
+  case-insensitively in the content and the file name, and a column
+  header row is no longer altered by the `Name,` line rule (audit
+  A2-0046, A2-0455, A2-0456, A2-0457, A2-0460, A2-0759, A2-0762,
+  A2-0763, A2-0764, A2-0765, A2-1386, A2-1389, A2-1390, A2-1391,
+  A2-0451, A2-0452).
+- `taxjson redact` shares transaction-id and wallet pseudonyms across
+  every file of one run, like account ids: two redacted Coinbase
+  exports no longer share an id (taxjson-sort --dedup dropped a real
+  trade) and a redacted Kraken trades + ledgers set still links each
+  trade to its ledger rows (audit A2-0454, A2-0766).
+- `taxjson redact --check` exits 1 when an account id appears only in
+  the file NAME (audit A2-0459); a truncated UTF-16 input is one
+  refusal line and the rest of the batch is still redacted (A2-1392).
+- `taxjson-generate-parser` no longer sends an account id from the
+  input's file name to the model API: the default brokerage, class and
+  DEFAULT_ACCOUNT names use a placeholder, and its messages mask the
+  file name (audit A2-0447).
+- `scripts/check-pii.sh` no longer passes silently on a private denylist
+  saved with a UTF-8 BOM (the BOM is dropped, so the first pattern
+  works) and fails closed on a UTF-16, non-UTF-8 or directory denylist
+  instead of reporting clean (A2-0044, A2-0450, A2-0458). It now also
+  catches a lower-case IB account id (u + 7-8 digits, as IB HTML element
+  ids carry it) in content and file names (A2-0449), a labelled SIN in
+  any separator form including unspaced and dotted (A2-0760, A2-1387),
+  a labelled SSN / TIN / Tax ID (A2-1387), and an 8-9 digit value under
+  an Account column in the pre-push `--diff` scan of a .csv/.tsv
+  (A2-1388).
+- `taxjson sanity --json` and the file-given-twice / file-in-two-groups
+  messages mask an account id in a holdings file name, as the text
+  listing already did (audit A2-1380); a holdings argument that is a
+  symlink loop is a one-line error instead of a traceback (A2-1392).
+- Every parser message (Questrade, RBC, Webull, Kraken, Coinbase, the
+  generic importer, security-override and .tt errors) now names its file
+  the masked way IB's already did, so a download named after an account
+  number prints `55***_activity.csv`, not the number; the `run` stage
+  line for a .tt file too. The IB diagnostics and the other parsers are
+  now pinned by tests (audit A2-0461).
+- Kraken notes, errors and skip summaries now mask every ledger refid
+  and txid to its first two characters + *** (the multi-leg instant-trade
+  note, the orphan-leg skip count, the both-sides-many-legs refusal and
+  the unparseable-cell errors printed it in full into the console, .sum
+  and .diag; audit A2-0756, A2-0757, A2-1381). The id itself stays the
+  work-JSON transaction id.
+- **PII gate (`scripts/check-pii.sh`, pre-push, release).** The text
+  inside binary files is scanned (PDF /Author, DOCX creator, PNG text,
+  spreadsheet cells — tree, ad hoc and the binaries a push adds); an
+  account-id shape in a folder name, an 8-9 digit value under an
+  `Account` / `Account #` CSV column, Webull's bilingual account line and
+  an IB id inside a token (`_U<id>Body`) are hits; identities get the
+  e-mail allowlist; branch and tag names a push publishes are scanned; a
+  ':' in a path no longer unmasks a denylist hit. `release.sh` runs the
+  pre-push gate itself, a missing `ruff` fails `ci.sh` (it is in the
+  `[dev]` extra), and the GitHub workflow runs the consistency, tax-rules
+  and PII stages (audit S023-00, S024-04/07/09/11/13/14/16/21/23/24,
+  S025-06).
+- **`taxjson-generate-parser` refuses a sample that still carries
+  personal data** (account ids, names, contact details, denylist matches;
+  `--allow-unredacted` overrides), rejects `--sample-lines` below 1, and
+  tells drafted parsers to read required cells with
+  `parse_strict_number` (audit R1-342, S033-18).
+- **`taxjson redact` fixes.** An account id on a line with a very long
+  field is now found (the report claimed every occurrence replaced
+  while it stayed); `account = "..."` / `broker_account = "..."` keys
+  (the live-holdings TOML) are ids; the City/State/Street2/Country
+  columns of an IB Flex AccountInformation section and a value in the
+  cell after `Phone:` / `SIN:` / `Payee:` / `Beneficiary:` are
+  redacted. The street pattern no longer swallows the next CSV field
+  (a dropped column). One invocation gives every account its own
+  pseudonym and never writes two inputs to the same copy (`--force`
+  silently kept only the last); a file-name id keeps the content's
+  placeholder. An unreadable input or `--out` is one line and the rest
+  of the batch is still redacted.
+- **`redact` removes US city/state/ZIP lines** ("Springfield, IL
+  62704-1234") like Canadian postal-code lines.
+- **redact matches the private denylist the way check-pii does.** A
+  denylisted number written with spaces or dashes (`1122 3344`) is
+  replaced, a denylisted word in the file name is replaced in the output
+  name (and counts for `--check`), and a `TAXJSON_PII_DENYLIST` that
+  names a missing file stops the run instead of silently turning the
+  denylist off (audit R1-345).
+- **redact: Québec addresses and accented or ambiguous names.** A
+  French-order street line (`1234 rue Saint-Denis`) is blanked like an
+  English one; names with accented letters (`Josée Tremblay`) are
+  recognised; a name that contains a statement word (`Bill Sample`,
+  `Jane Price`) is listed under REVIEW instead of passing silently, and
+  a flat CSV's Description column gets the "may still name people" note
+  (audit S036-16, S037-05).
+- **redact: label cells, other id columns, plan parties.** A Webull-style
+  `Account Number / Numéro de compte:,,,,<id>` or `Name:,<name>` preamble
+  row has its value replaced (the id survived and the report said "none
+  found"); client / plan / portfolio / acct-number columns are id
+  columns; annuitant, subscriber, beneficiary and holder/customer-name
+  columns are blanked, each cell in its own position (audit R1-341,
+  S037-00, S037-02).
+- **`taxjson redact` removes the holder's name from Coinbase and IB
+  Flex/HTML exports.** Coinbase's `User,<name>,<id>` line, the `Name`
+  column of an IB Flex `Account` section and the Name cell of IB's .html
+  statements were kept. IB ids glued to letters (HTML element ids) were
+  collected but not replaced, while the report said "every occurrence
+  replaced"; they are replaced now, and the report checks the copy and
+  lists any id it could not replace.
 - **Security/privacy audit (2026-09).**
   - `taxjson redact` also strips names in free text (`Initiated by`,
     `Payee:`, honorifics, `wire from`, the RBC `Account: …,` holder,
@@ -4913,54 +4974,6 @@
     Yahoo lookups reveal (held tickers and dates).
   - Test fixtures copied from real statements replaced with synthetic
     values.
-
-- **Return of capital after the position is sold (Canada).** A ROC that
-  posts when the pool is empty has no ACB to reduce; it is now a capital
-  gain in the year received (s.40(3) with a nil ACB, noted on the row)
-  instead of silently lowering the NEXT purchase's ACB (which moved the
-  gain to a later year). Positive ADJUSTs on an empty pool are unchanged.
-- **Mergers with per-account delivered ratios (Canada).** A merger whose
-  accounts received different whole-share counts (15 → 15 in one, 40 → 41
-  in another) emitted one rename per account at its own ratio; the
-  symbol-wide pool was renamed at the first account's ratio and the
-  second found no pool (1,100 booked for 1,220, a phantom short share).
-  The rows now fold into one event at the holdings-weighted ratio, so
-  the pool lands on the shares actually delivered.
-- **Superficial loss (s.54): only substituted property backs a denial.**
-  A denial now needs units acquired inside the 61-day window that the
-  same holder (the taxable pool, or one registered / affiliated account)
-  still owns at its end. Units a registered account held before the
-  window no longer back one: a taxable rebuy sold again inside the
-  window, with an RRSP holding shares bought years earlier, was denied
-  PERMANENTLY (-1,000 → now allowed); a partly-sold taxable rebuy now
-  defers only what is still held instead of turning the rest permanent.
-  (A short taxable balance at day 30 also no longer offsets a registered
-  account's still-held acquisition.)
-- **Superficial loss: a trigger's side of the loss follows the pool's
-  own ordering.** A rebuy that settles on the loss sale's settlement
-  date but traded the day before (a later clock time) is in the pool
-  the sale draws from; it was treated as bought after the loss, its
-  basis bump landed before the sale and inflated the loss it deferred
-  (-1,000 / 250 denied instead of -800 / 200), and some short-cover
-  books never converged. Pre/post-loss is now decided by the phase
-  ladder the pool replays with.
-- **Negative proceeds (Canada).** A sell whose commission exceeds its
-  gross — closing a worthless option at $0.01, writing one for less
-  than the fee — now books its proceeds signed (negative) instead of
-  as a positive amount: the loss grows by twice the shortfall (-201.00
-  was booked for a -220.90 loss). Buys are unchanged.
-- **s.49 grant timing: an assignment folds each premium once.** Every
-  short opening — a write before `option_grant_since`, the short
-  leftover of a sell that crosses zero — is now a lot, consumed FIFO by
-  write date. An ASSIGN that consumed a lot with no grant record used to
-  fold the premium into the shares on top of the grant already
-  recognised (a book that totals 450 under close timing totalled 650
-  under grant timing with `since = 2025`); totals are now identical
-  under both settings (fuzzed with assignments and every `since`).
-  A close-timing (pre-`since`) lot now closes before a later grant lot
-  and at its own premium, and a buy-back of a grant lot is a loss of
-  exactly the amount paid even when other lots were written at other
-  premiums — both move amounts between years, never the total.
 - **check-pii closes five gaps.** Ad-hoc mode matches file names
   relative to the scanned argument (a home directory named after its
   owner no longer fails every scan) and hides each matching path
@@ -4971,117 +4984,64 @@
   configured `TAXJSON_PII_DENYLIST` that is missing, or a denylist that
   cannot be read, fails instead of passing on the generic patterns; and
   a spaced or dashed 3-3-3 number with a valid SIN check digit is a hit.
-- **T1135 cost includes denied superficial losses.** The cost walk now
-  adds the amount the engine denies under s.54 to the replacement
-  property's cost (s.53(1)(f)), as the ACB does, so the year-end and
-  maximum cost columns and the $100,000 threshold test no longer
-  understate after a superficial loss in the project year.
-- **TOBASE no longer pools a US option into a Montreal contract.** When
-  a share rule's root rename would move a US-listed option onto a
-  contract code the account also trades on the Montreal Exchange, the
-  US contract keeps its own symbol (different strike currency and
-  clearing house: not identical property) and the `.sum` DIAGNOSTICS
-  name it; before, the two ACBs were pooled and the gain changed
-  silently.
-- **`list --date` cuts on the project's date basis.** On a settle-basis
-  project (the Canadian default) the as-of positions now drop rows by
-  settlement date, like the gains year and `t1135`: a sale traded Dec 31
-  that settles in January is still held at Dec 31. The banner names the
-  basis; `taxjson-gains --as-of` follows `--tax-date`.
-- **Schedule 3 outputs name the slip capital-gain lines.** `sum`'s FOR
-  THE RETURN block, `form-export` and docs/filing.md now say that
-  capital gains on T3 (box 21, line 17600) and T5/T5013 (box 18, line
-  17400) slips are not in their rows and are entered from the slips.
-- **LSE, ASX and other non-North-American shares settle T+2.** The
-  settlement lag followed the US T+1 cycle for every currency but CAD, so
-  a GBP or AUD sale on the second-to-last trading day of the year landed
-  in that year; GBP/EUR/CHF now move to T+1 on 2027-10-11 and every
-  other non-North-American currency stays T+2.
-- **A spin-off booked at $0 keeps the checklist open.** The `elections`
-  step now needs attention while any taxable spin-off or merger is
-  booked at $0 (`fmv_per_share=0`, the "defer" value), and `taxjson
-  elect --set ... --hint fmv_per_share=0` says what it books.
-- **An option held past its expiry is named.** `taxjson run` warns (on
-  the console and in the `.sum` DIAGNOSTICS) for every option a taxable
-  account still holds after its expiry date — the export dropped the
-  expiry, assignment or exercise row. For a long contract the premium
-  paid is an unbooked loss of the expiry year; option-boundary covered
-  written contracts only.
-- **Every command checks the option-timing and `fx_cash_gains`
-  settings.** `fx_cash_gains = "false"` (quoted) turned the FX-on-cash
-  report on; a typo'd `option_premium_timing` or a quoted / boolean
-  `option_grant_timing_since` was refused only by `run` — option-boundary
-  read it as close timing and close-year wrote it into the lock. All
-  are now refused by every config reader.
-- **taxjson.toml with a UTF-8 BOM is read** (also a generic-importer
-  mapping); a taxjson.toml that is a directory or unreadable, `work/` or
-  `reports/` that is a file, and `init` onto an existing file now give a
-  one-line error instead of a traceback (`run` refuses before any stage).
-- **Tolerance and threshold flags must be finite and non-negative**
-  (`sanity --tolerance`, `reconcile-slips --tolerance`, `taxjson-t1135
-  --threshold/--detailed-threshold` (> 0), `watch --threshold`).
-  `watch --threshold 0` now means "any move" (it read as 100), and an
-  unreadable or other-version `.watch_state.json` is warned about before
-  the new baseline is recorded.
-- **The .sum DIAGNOSTICS banners are fresh and whole.** `<acct>.sum`
-  (the pre-blend baseline) no longer repeats the previous run's
-  cross-account notes (they are in `<acct>_wash.sum`); a note about a
-  problem already fixed no longer survives in either banner after an
-  account leaves the blended or crypto wash pass; the transfer-cluster
-  attestation note keeps its closing sentence; notes whose events all
-  fall after the tax year (and its 30-day window) are listed last under
-  their own heading instead of asking for action in this year's report;
-  the per-file parse counts are echoed for file names with spaces and
-  for TRANSFER-only files; the crypto validation line names the file,
-  not its absolute path (which carried the OS user name).
-- **Views say what they leave out.** `estimate` keeps the 15% foreign-tax
-  fallback for an account whose base book cannot be read (and warns);
-  `estimate --verbose` prints the 2025 rate as 14.5% and names the FTC's
-  source; `carryover` no longer warns about an account the last run
-  skipped for having no inputs; `gains` names the crypto account it does
-  not show; `wash-sales --explain` traces the tax year's wash sales only;
-  a currency-less row prints `?`, not `CAD`; the merged `audit --json`
-  keeps every `reconciliation_failures` reason; the all-accounts views
-  read an account whose only native book is `_sorted.json`; a non-UTF-8
-  work file is a one-line error, not a traceback; `transfers` refuses an
-  unknown account, shows each row's FEE and warns when a base book cannot
-  be read; `leaps` / `leaps-sum` count LEAPS closes routed to manual
-  reporting instead of reporting none.
-- **`run --fast` notices a code change by content**: a taxjson upgrade
-  whose files kept older mtimes (`cp -p`, `rsync -a`, `tar x`) or that
-  deleted a module rebuilt nothing; the last complete run's code
-  fingerprint is now kept in `work/` and a mismatch rebuilds everything.
-- **A `.tt` file whose name ends in a pipeline suffix is refused**
-  (`msft_gains.tt` created a phantom account in `sum` and counted its fees
-  twice); rename it, e.g. `msft-gains.tt`.
-- **Report views label and total what they show.** Payments in lieu
-  have their own footer total in `events` / `dil` (not TOTAL DIVIDEND);
-  a crypto account's DIVIDEND rows are labelled staking rewards (ordinary
-  income) in `sum`, the `events` / `divs` footers and the crypto
-  `.sum`; `dil-sum`, `roc-sum` and `trades-sum` split out
-  registered accounts (no income, no T3, not T5008 proceeds); summary
-  TOTALs equal the sum of their printed rows; `winners` shows a short or
-  written option's PROCEEDS/COST the way `ccd-sum` and form-export do;
-  a grant-timing WRITE record no longer counts as a close in `ccd-sum`,
-  `winners` or the `.sum` trade statistics; `reports/ccd.rpt` prints the
-  premium and the buy-back as positive PREMIUM / BUYBACK columns.
-- **scan, sanity, fetch.** `scan` matches a plan word only as a whole
-  token of the account name (`admiral` is no IRA), warns about an unknown
-  `plan`, and counts an option as a sighting of its underlying's listing
-  (MAP-GAP / US-LISTING); `sanity` pairs a crypto snapshot's
-  venue-suffixed symbols (`LINK.KR`) with the bare coin and masks account
-  ids in the holdings file names it prints; a failed Questrade refresh
-  says which token was used (the cached chain wins over
-  `$QUESTRADE_REFRESH_TOKEN`) and how to start a new chain.
-- **More views say what they mean.** `find-missing-history` lists pairs
-  `phantoms.json` already covers apart (the checklist step clears);
-  `fees.rpt` / `fees-sum` leave out ticker.map DELETE'd rows and their
-  unconverted JSON no longer adds currencies into one total; a LEAPS
-  renamed by a SPLIT keeps its LEAPS entry; `instalments` names the inputs
-  it assumed to be 0 (other income, withholding); `trades`, `trades-sum`
-  and `events` take a trade by its settlement date in a tax-year window on
-  a settle-basis project, as Schedule 3 does; per-underlying reports file
-  an `RCI…` option under the `RCI.B.TO` shares it is written on.
+
+### Docs and tests
+
+- Docs that contradicted each other or the code (re-audit A2-0947 to
+  A2-0954, A2-1619 to A2-1629): `distributions.map` per-share amounts
+  are in the project's base currency (README, `--help`, tax-logic
+  CA-DIST-01 / US-DIST-01, and the run's NOTE name it); the stale
+  KNOWN_ISSUES entry calling US January fund dividends deferred is gone
+  (`ric_january_dividends` implements it); the deck names Webull's
+  Trading Summary CSV and its missing income; SECURITY.md and the deck
+  give the Bank of Canada noon-rate period (Yahoo only before May
+  2007); the crypto-send pairing texts say "another of your crypto
+  accounts, from 10 minutes before to 3 days after"; README says the
+  generic importer spells `.V`/`.CN`/`.NE` as `.TO`; KNOWN_ISSUES says
+  the RBC ticker-change hint needs the old symbol's rows in an export;
+  `taxjson --help` states the exit codes (2 = usage or an unreadable
+  input, 1 = failure or a finding); README documents
+  `crypto-sends --unpair`.
+- Source comments, tests and this changelog no longer quote amounts or
+  positions from the maintainer's own books; the futures tests use a
+  synthetic CL round trip (A2-0758, A2-1382, A2-1383, A2-1385).
+- Tests: mutation pins for fill-crypto, the tax estimate, merge2,
+  option-boundary, crypto-sends, income dating, the country helpers
+  and the settlement calendars (audit G1-0): the kill score of those
+  eight modules went from 59.5% to 89%; the survivors left are
+  equivalent mutants (epsilon boundaries, formatting, dead defaults).
+  No behaviour change.
+- **Docs: IB trust distributions and affiliated persons.** tax-logic
+  CA-INC-DATE-TRUST, README and KNOWN_ISSUES say why an IB row keeps
+  its pay date in a Canada project (IB prints no record date and calls
+  a trust's distribution a dividend; the accrual ex date is not used),
+  and CA-SL-04 and README document declaring a spouse's or controlled
+  corporation's account `sheltered` so its purchases deny your loss
+  (audit S057-23, S004-08).
+- `scripts/mutation_audit.py` restores the engine sources on SIGTERM,
+  SIGHUP and exit; `scripts/mutation_triage.py` has `--help` (audit
+  S025-00, S025-04).
+- Docs and samples: README T1135 (suffix-less symbols are the CRYPTO
+  bucket), the git-identity exception to "nothing personal leaves the
+  machine", form-export's outlays split (long sales, and under grant timing a
+  written option's write commission), REFERENCES
+  (no s.53(1)(h) citation), SECURITY.md egress list; `examples/README`
+  step 3 passes `--taxable`, the IB and Webull demo rows are fabricated
+  and self-consistent; real trade figures are gone from this changelog
+  and from test fixtures (audit R1-344, R1-355, R1-40, S023-13, S023-17,
+  S023-18, S023-22, S023-24, S024-00, S079-13, S079-14).
+- **Docs: Webull income.** The Webull Trading Summary carries no income;
+  README and KNOWN_ISSUES say so and document the `.tt` `INTEREST` line
+  for T5 interest (R1-96).
+- Help/docs: `fetch --positions` no longer cites the removed
+  `taxjson verify`; the module docstring no longer lists `taxjson
+  show`; `taxjson-fees-sum` usage examples; futures filter help;
+  `reconcile-slips --json`, `serve --port` and `harvest --ibkr-port`
+  document themselves/their defaults. README: `[estimate]` vs
+  `[instalments]` keys split into their own blocks, the chaining row's
+  duplicate example and check-filed's nonexistent `--strict` fixed,
+  fetch windows described as the code does them, `inputs/slips/` in
+  the file table, the estimate sample shows the real FTC label.
 
 ## v0.16.0 (2026-09-25)
 

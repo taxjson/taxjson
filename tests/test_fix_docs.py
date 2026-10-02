@@ -85,6 +85,11 @@ class TestNoPhantomCommands(unittest.TestCase):
         missing = sorted(n for n in named if n not in subs)
         self.assertEqual(missing, [], "README names unknown commands")
 
+    def test_unreleased_names_real_commands(self):
+        subs = _subcommands() | {"verify"}   # "the removed taxjson verify"
+        named = set(re.findall(r"`taxjson ([a-z][a-z0-9-]+)", _unreleased()))
+        self.assertEqual(sorted(named - subs), [])
+
     def test_every_command_is_in_the_readme(self):
         readme = _read("README.md")
         undocumented = sorted(
