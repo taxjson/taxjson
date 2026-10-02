@@ -24,7 +24,14 @@ imports a test) and fails when:
   6. a [settings] key (lib/country.SETTING_COUNTRY) is named by no
      rule's `keys` and not listed in tax_logic.NON_RULE_SETTINGS, or a
      VARIANT_AXES key is not a known setting;
-  7. a statement in the Canada section has a US- id or the reverse.
+  7. a statement in the Canada section has a US- id or the reverse;
+  8. a country-ownership table (lib/country) is incomplete: an entry
+     with no valid owner or no *_WHY reason, a FLAG_COUNTRY flag that no
+     CLI defines or that refuse_foreign_flags cannot read (_FLAG_ATTRS),
+     a COMMAND_COUNTRY command that is not a `taxjson` subcommand, a
+     [settings] key the code reads that SETTING_COUNTRY does not list, or
+     a CLI option whose help calls it "Canada only" / "US only" that is
+     in neither FLAG_COUNTRY nor FLAG_VALUE_COUNTRY.
 
 Usage: scripts/check_tax_rules.py [--summary]
 Exit 0 when clean; 1 with one line per problem.
@@ -152,6 +159,106 @@ def collect(paths) -> List[Marked]:
                     m.rules, m.absent = r, a
                     out.append(m)
     return out
+
+
+_ONE_COUNTRY_HELP = re.compile(
+    r"\b(?:Canada|US|USA|United States)[ -]only\b", re.IGNORECASE)
+_SETTINGS_READ = re.compile(
+    r"""settings(?:\(\))?(?:\.get\(|\[)\s*["']([a-z_]+)["']""")
+
+
+def _cli_options() -> Dict[str, List[str]]:
+    """{--option: [help text, ...]} of every argparse option defined
+    under src/taxjson (read with the AST; help text only when it is a
+    literal)."""
+    out: Dict[str, List[str]] = {}
+    for path in sorted((ROOT / "src" / "taxjson").rglob("*.py")):
+        import warnings
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "add_argument"):
+                continue
+            opts = [a.value for a in node.args
+                    if isinstance(a, ast.Constant)
+                    and isinstance(a.value, str) and a.value.startswith("--")]
+            help_txt = ""
+            for kw in node.keywords:
+                if kw.arg == "help":
+                    try:
+                        help_txt = str(ast.literal_eval(kw.value))
+                    except (ValueError, SyntaxError):
+                        help_txt = ""
+            for o in opts:
+                out.setdefault(o, []).append(help_txt)
+    return out
+
+
+def _taxjson_subcommands() -> Set[str]:
+    """The `taxjson` subcommand names (add_parser("name", ...) literals in
+    bin/taxjson_run.py)."""
+    src = (ROOT / "src" / "taxjson" / "bin" / "taxjson_run.py").read_text(
+        encoding="utf-8")
+    return set(re.findall(r"""add_parser\(\s*["']([a-z0-9-]+)["']""", src))
+
+
+def ownership_problems() -> List[str]:
+    """Problems with lib/country's ownership tables (check 8)."""
+    problems: List[str] = []
+    valid = set(C.COUNTRIES) | {C.BOTH}
+    tables = [("SETTING_COUNTRY", C.SETTING_COUNTRY, C.SETTING_WHY),
+              ("CONFIG_COUNTRY", C.CONFIG_COUNTRY, C.CONFIG_WHY),
+              ("FLAG_COUNTRY", C.FLAG_COUNTRY, C.FLAG_WHY),
+              ("FLAG_VALUE_COUNTRY", C.FLAG_VALUE_COUNTRY,
+               C.FLAG_VALUE_WHY),
+              ("COMMAND_COUNTRY", C.COMMAND_COUNTRY, C.COMMAND_WHY),
+              ("PROJECT_FILE_COUNTRY", C.PROJECT_FILE_COUNTRY,
+               C.PROJECT_FILE_WHY)]
+    for name, table, why in tables:
+        for key, owner in table.items():
+            if owner not in valid:
+                problems.append(f"{name}[{key!r}]: owner {owner!r} is not "
+                                f"canada, usa or both")
+            if owner in C.COUNTRIES and not why.get(key):
+                problems.append(f"{name}[{key!r}] has no reason in the "
+                                f"matching *_WHY table")
+    options = _cli_options()
+    flags = set(C.FLAG_COUNTRY) | {f for f, _v in C.FLAG_VALUE_COUNTRY}
+    for flag in sorted(flags):
+        if flag not in options:
+            problems.append(f"FLAG_COUNTRY: {flag} is not an option of any "
+                            f"CLI under src/taxjson")
+        if flag not in C._FLAG_ATTRS:
+            problems.append(f"FLAG_COUNTRY: {flag} is missing from "
+                            f"country._FLAG_ATTRS, so refuse_foreign_flags "
+                            f"never sees it")
+    for opt, helps in sorted(options.items()):
+        if opt in flags:
+            continue
+        if any(_ONE_COUNTRY_HELP.search(h) for h in helps):
+            problems.append(f"{opt}: its help says it is one country's "
+                            f"only, but it is in neither FLAG_COUNTRY nor "
+                            f"FLAG_VALUE_COUNTRY (lib/country)")
+    subs = _taxjson_subcommands()
+    for cmd in sorted(C.COMMAND_COUNTRY):
+        base = cmd.split(":", 1)[0]
+        if base not in subs:
+            problems.append(f"COMMAND_COUNTRY: {cmd} — `taxjson {base}` is "
+                            f"not a subcommand")
+    read: Set[str] = set()
+    for path in (ROOT / "src" / "taxjson").rglob("*.py"):
+        read |= set(_SETTINGS_READ.findall(
+            path.read_text(encoding="utf-8")))
+    for key in sorted(read - set(C.SETTING_COUNTRY)):
+        problems.append(f"[settings] {key} is read by the code but is not "
+                        f"in SETTING_COUNTRY (lib/country)")
+    return problems
 
 
 def main(argv=None) -> int:
@@ -294,6 +401,9 @@ def main(argv=None) -> int:
             if key not in C.SETTING_COUNTRY:
                 problems.append(f"VARIANT_AXES[{c}] {key}: not a known "
                                 f"[settings] key (lib/country)")
+
+    # 8. country-ownership tables complete (lib/country docstring)
+    problems.extend(ownership_problems())
 
     for p in problems:
         print(f"tax-rules: {p}")
