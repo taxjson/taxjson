@@ -154,10 +154,10 @@ class TestSumGainsSortBy(unittest.TestCase):
                            "trade_count": 1, "hold_days": [400]}},
         "MMM.TO": {"CAD": {"cap": 0.0, "opt": 60.0, "div": 0.0,
                            "pil": 30.0, "cost": 40.0, "proceeds": 100.0,
-                           "trade_count": 1, "hold_days": [5]}},
+                           "trade_count": 1, "hold_days": [300]}},
         "ZZZ.TO": {"CAD": {"cap": 50.0, "opt": 0.0, "div": 0.0,
                            "pil": 0.0, "cost": 50.0, "proceeds": 100.0,
-                           "trade_count": 2, "hold_days": [10, 30]}},
+                           "trade_count": 2, "hold_days": [200, 200]}},
     }
 
     def _order(self, key):
@@ -182,8 +182,9 @@ class TestSumGainsSortBy(unittest.TestCase):
         self.assertEqual(self._order("dividend"),
                          ["AAA.TO", "MMM.TO", "ZZZ.TO"])
         self.assertEqual(self._order("pil"), ["MMM.TO", "AAA.TO", "ZZZ.TO"])
+        # The average per trade (ZZZ: 2 trades, 400 days in all).
         self.assertEqual(self._order("holding_days"),
-                         ["AAA.TO", "ZZZ.TO", "MMM.TO"])
+                         ["AAA.TO", "MMM.TO", "ZZZ.TO"])
 
 
 if __name__ == "__main__":
