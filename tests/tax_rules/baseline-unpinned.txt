@@ -18,4 +18,3 @@ US-OPT-04       ok              Not modelled: §1256 60/40 contracts, §1233 and
 US-SEND-01      imprecise       Paying with crypto is a sale at fair value; `crypto-sends` records `payment` and
 US-WASH-03      ok              The identical option is a replacement.
 US-WASH-07      ok              Look-alike securities are not detected.
-US-WASH-10      ok              The replacement's holding period carries over.

@@ -138,6 +138,9 @@ PARTITION_RULES = frozenset({
     "US-STKDIV-01",    # stock dividend: §307 basis spread, no §1091
     "US-BASIS-04",     # manual phantom-loss check on trade dates
     "US-ROC-03",       # ROC with no shares held: not booked (CA books it)
+    "US-ROC-04",       # basis increase with no shares: not applied (CA: next ACB)
+    "CA-ACB-13",       # basis increase with no shares: next purchase's ACB
+    "US-WASH-18",      # futures / futures options outside §1091 (CA denies)
     "US-INC-DATE-RIC", # §852(b)(7) January dividends: warn + list (D8)
     # Planning tools (partition COMMANDS-01/02/05)
     "CA-PLAN-01",      # radar: settle dates, still-held rescue
@@ -477,7 +480,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Identical property is the same symbol with its currency "
                  "suffix (.TO, .US, .V). Two listings are one security "
                  "only when ticker.map joins them. Renames and splits "
-                 "carry the pool forward."),
+                 "carry the pool forward; a renamed ticker that trades "
+                 "again after its rename stays identical to the new "
+                 "symbol for the superficial-loss rule and is flagged "
+                 "(ATTENTION) — it may be another company reusing it."),
             Rule("CA-ACB-05",
                  "Accounts typed \"sheltered\" (RRSP, TFSA, FHSA, LIRA, "
                  "RESP...) are tracked but kept out of the filing totals. "
@@ -518,6 +524,15 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-ACB-07",
                  "Received with no shares held, or beyond the ACB, it is a "
                  "capital gain and the ACB is nil (s.40(3)).", cont=True),
+            Rule("CA-ACB-13",
+                 "A basis increase (a notional distribution) posted after "
+                 "the position was fully sold has no shares to raise: it "
+                 "goes into the next purchase's ACB, with a warning to "
+                 "re-date it before the sale."),
+            Rule("CA-ACB-14",
+                 "An ADJUST on a short position is the short seller's "
+                 "compensation payment: it changes the cover's gain.",
+                 cont=True),
             (Rule("CA-ACB-08",
                   "For IB only, a foreign issuer's return of capital (by "
                   "ISIN) is a dividend (s.90(1); foreign_return_of_capital "
@@ -564,6 +579,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "(grant timing) is shown gross as proceeds, with its "
                  "commission as an outlay, as for a sale (the gain is the "
                  "same)."),
+            Rule("CA-DISP-07",
+                 "`form-export` gives Schedule 3's year of acquisition as "
+                 "the sale's trade date less the days held, counted on "
+                 "trade dates: a buy traded in late December that settled "
+                 "in January shows the December year."),
         ]),
         ("Superficial loss (s.54)", [
             Rule("CA-SL-01",
@@ -581,8 +601,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "were your registered plan.)", cont=True),
             Rule("CA-SL-05",
                  "A long call on the shares is identical property to them "
-                 "(a right to acquire, s.54 para (i)), at 100 shares per "
-                 "contract."),
+                 "(a right to acquire, s.54 para (i)), at its contract size "
+                 "(100 shares for a standard equity option, the declared "
+                 "size of a mini). A root that drops the share class (RCI "
+                 "for RCI.B.TO) names that class line."),
             Rule("CA-SL-06",
                  "Shares never replace an option; an option is replaced "
                  "only by the identical contract; a put never replaces "
@@ -594,7 +616,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-SL-15",
                  "So is a call on an adjusted option series (root + digit, "
                  "e.g. XYZ1) or a futures option on the loss's futures "
-                 "contract.", cont=True),
+                 "contract, however it is spelled (never sized as 100 "
+                 "units).", cont=True),
             Rule("CA-SL-07",
                  "Only purchases count: writing an option or shorting "
                  "again never replaces, including after a loss on covering "
@@ -602,18 +625,26 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-SL-08",
                  "Only units acquired in the window and still held count, "
                  "per holder, and each one backs a single denial (a sale "
-                 "split into fills, or two losses, share it). The denied "
+                 "split into fills, or two losses, share it; losses at "
+                 "the same moment claim in the export's row order). A "
+                 "held call contract backs one denial however often its "
+                 "series was bought and sold in the window. The denied "
                  "part is loss x (those units / units sold), capped at the "
                  "whole loss."),
             Rule("CA-SL-09",
-                 "The denied amount is added to the replacement's ACB and "
+                 "The denied amount is added to the replacement's ACB from "
+                 "its acquisition (a sale listed after it at the same "
+                 "moment uses the raised ACB) and "
                  "comes back when it is sold. If the replacement is in a "
                  "sheltered account, that part is lost for good."),
             Rule("CA-SL-10",
                  "Replacements are matched in acquisition order: purchases "
                  "after the sale first, then earlier ones, latest first. "
                  "Purchases at the same moment go to your taxable accounts "
-                 "first, then sheltered, then affiliated."),
+                 "first, then sheltered, then affiliated, then in the "
+                 "export's row order (accounts in taxjson.toml order); a "
+                 "purchase listed after a sale at the same moment is a "
+                 "purchase after it."),
             (Rule("CA-SL-12",
                   "A loss on buying back a written option (or, under "
                   "grant timing, on a write whose commission exceeds its "
@@ -637,6 +668,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Exercise or assignment: the premium folds into the "
                  "shares' cost or proceeds (s.49(3) for a call, s.49(3.1) "
                  "for a put; the grant year is amended under s.49(4))."),
+            Rule("CA-OPT-08",
+                 "Each assignment's premium goes to its own stock leg: the "
+                 "same account and underlying, the delivered quantity "
+                 "(contracts x the declared contract size, else 100; one "
+                 "per futures option), priced at the strike, dated up to 3 "
+                 "days before or 7 days after the option row. Several "
+                 "assignments at one moment are told apart by strike, "
+                 "never by row order.", cont=True),
             Rule("CA-OPT-07",
                  "If the premium's year was already filed, `taxjson "
                  "option-boundary` flags the T1-ADJ.", cont=True),
@@ -1004,7 +1043,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-BASIS-06",
                  "Identical property is the same symbol with its listing "
                  "suffix (.US, .TO); two listings are one security only "
-                 "when ticker.map joins them."),
+                 "when ticker.map joins them. A renamed ticker that "
+                 "trades again after its rename stays identical to the "
+                 "new symbol for the wash-sale rule and is flagged "
+                 "(ATTENTION) — it may be another company reusing it."),
             Rule("US-BASIS-05",
                  "A transfer into a taxable account stops the run until "
                  "the original purchase is declared (.tt ACQUIRED line). "
@@ -1046,6 +1088,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-ROC-03",
                  "Received with no shares held, it is not applied: taxjson "
                  "warns, and you report it by hand.", cont=True),
+            Rule("US-ROC-04",
+                 "A basis increase (a notional distribution) with no long "
+                 "shares held — after a full sale, or while short — is not "
+                 "applied either: taxjson warns on the console (ATTENTION) "
+                 "and you adjust the sale by hand."),
             Rule("US-BASIS-04",
                  "Shares with missing buy history go in phantoms.json: "
                  "sales that draw on them are listed for manual reporting "
@@ -1079,6 +1126,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "Re-shorting after a short-cover loss also counts.",
                  cont=True),
             Rule("US-WASH-06", "There is no still-held test,", cont=True),
+            Rule("US-WASH-17",
+                 "but shares (or shorts) closed by the same sale (or "
+                 "cover) — one row, or the same-second fills of one order "
+                 "— never replace each other's losses; shares kept after "
+                 "that sale still do,", cont=True),
             Rule("US-WASH-07",
                  "and look-alike securities are not detected.", cont=True),
             Rule("US-WASH-08",
@@ -1090,7 +1142,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-WASH-10", "and its holding period carries over.",
                  cont=True),
             Rule("US-WASH-11",
-                 "A replacement bought in an IRA makes it permanent.",
+                 "A replacement bought in an IRA makes it permanent, even "
+                 "when the IRA sold it again before your loss.",
                  cont=True),
             Rule("US-WASH-16",
                  "A purchase by your spouse or a corporation you control "
@@ -1104,17 +1157,31 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-WASH-12",
                  "A long call bought in the window is flagged as a warning "
                  "only (\"option to acquire\" is not enforced by the US "
-                 "engine), sized at 100 shares per contract, each contract "
+                 "engine), sized at the contract's size (100 shares for a "
+                 "standard equity option, the declared size of a mini), "
+                 "each contract "
                  "flagged against one loss's shares only; a buy that "
-                 "closes a written call is not an acquisition."),
+                 "closes a written call is not an acquisition. A root "
+                 "that drops the share class (BRKB for BRK.B) names that "
+                 "class line."),
             Rule("US-WASH-14",
                  "A warrant or right bought in the window is flagged for a "
                  "manual wash-sale check only.", cont=True),
             Rule("US-WASH-15",
                  "So is a call on an adjusted option series (root + digit, "
                  "e.g. XYZ1) or a futures option on the loss's futures "
-                 "contract (a commodity future is usually outside §1091).",
+                 "contract, however it is spelled (a commodity future is "
+                 "usually outside §1091).",
                  cont=True),
+            Rule("US-WASH-19",
+                 "Not modelled: a SALE of the same stock within 30 days of "
+                 "a short-cover loss (§1091(e)(1)) does not disallow it; "
+                 "only re-shorting does."),
+            Rule("US-WASH-18",
+                 "A loss on a futures contract, or on an option on one, is "
+                 "never disallowed: a §1256 contract is not stock or "
+                 "securities. A re-purchase in the window is flagged for "
+                 "a manual check."),
             Rule("US-WASH-13",
                  "Accounts marked crypto are not subject to the wash-sale "
                  "rule."),
@@ -1215,6 +1282,14 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-OPT-02",
                  "Exercise or assignment folds the premium into the "
                  "stock's basis or proceeds.", cont=True),
+            Rule("US-OPT-05",
+                 "Each assignment's premium goes to its own stock leg: the "
+                 "same account and underlying, the delivered quantity "
+                 "(contracts x the declared contract size, else 100; one "
+                 "per futures option), priced at the strike, dated up to 3 "
+                 "days before or 7 days after the option row. Several "
+                 "assignments at one moment are told apart by strike, "
+                 "never by row order.", cont=True),
             Rule("US-OPT-03", "Cash-settled options realize on the option.",
                  cont=True),
             Rule("US-OPT-04",

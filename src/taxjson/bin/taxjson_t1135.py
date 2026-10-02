@@ -1236,7 +1236,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         default="close",
                         help="Written-option premium timing the gains "
                              "files use (default close)")
-    parser.add_argument("--option-grant-since", type=int, default=None,
+    parser.add_argument("--option-grant-since", type=tax_year, default=None,
                         metavar="YEAR",
                         help="With grant timing: contracts written before "
                              "YEAR keep close timing")

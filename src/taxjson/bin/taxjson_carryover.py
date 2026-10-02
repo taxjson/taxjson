@@ -51,7 +51,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from taxjson.lib.cli_diag import guard_main, read_text_utf8
+from taxjson.lib.cli_diag import guard_main, read_text_utf8, tax_year
 from taxjson.lib.country import add_country_argument, refuse_foreign_flags
 from taxjson.lib.core import AmbiguousTransferDateError as _AmbiguousXferErr
 from taxjson.lib.pipeline import (GainsRequest, TransferValidationError,
@@ -526,7 +526,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "Worksheet; 0 when taxable income was "
                              "negative) — not the line 6/14 carryover "
                              "coming in.")
-    parser.add_argument("--project-year", type=int, default=None,
+    parser.add_argument("--project-year", type=tax_year, default=None,
                         metavar="YEAR",
                         help="The project's tax year: earlier rows are "
                              "flagged as rebuilt from this project's "
@@ -552,7 +552,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Canada only: written-option premium timing "
                              "(grant — ITA s.49(1) — or close; default "
                              "close). Refused with --country usa.")
-    parser.add_argument("--option-grant-since", type=int, default=None,
+    parser.add_argument("--option-grant-since", type=tax_year, default=None,
                         metavar="YEAR",
                         help="With grant timing: contracts written before "
                              "YEAR keep close timing.")

@@ -1236,10 +1236,14 @@ def main():
                 # still-held test fails if the ENTIRE position (incl. the
                 # recent buy) is disposed, so a full exit realizes the
                 # loss today. Only a PARTIAL loss sale is superficial.
+                # US (A2-0553): there is no still-held test, but shares
+                # sold in the SAME sale never replace each other
+                # (US-WASH-17) — so the full exit must be one order.
+                _one = " in one order" if us_mode else ""
                 adv = (f"EXITABLE: Recent buy in "
                        f"'{tax_acq['account'] or 'unknown'}' on "
                        f"{epoch_to_date(tax_acq['epoch'])}. Selling "
-                       f"{_full} at a loss is fine now; a PARTIAL loss "
+                       f"{_full}{_one} at a loss is fine now; a PARTIAL loss "
                        f"sale before {safe_d} is {_sl_adj} (basis "
                        f"defers into the remaining shares).")
                 if pre_window_shl and us_mode:

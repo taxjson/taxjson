@@ -31,7 +31,7 @@ import argparse
 import re
 from pathlib import Path
 
-from taxjson.lib.cli_diag import guard_main
+from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.core import (register_brokerage, TaxTransaction,
                               load_brokerage, is_option_symbol)
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
@@ -325,7 +325,7 @@ Examples:
         ),
     )
     parser.add_argument(
-        "--tax-year", dest="tax_year", type=int, default=None,
+        "--tax-year", dest="tax_year", type=tax_year, default=None,
         metavar="YYYY",
         help=(
             "The tax year the books are for. Parsers whose exports carry "

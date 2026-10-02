@@ -59,7 +59,7 @@ class TestUSInventoryCurrency(unittest.TestCase):
         msg = str(cm.exception)
         self.assertIn('Currency mismatch', msg)
         self.assertIn('AAPL', msg)
-        self.assertIn('taxjson_convert_currency', msg)
+        self.assertIn('taxjson-convert-currency', msg)  # the installed command (A2-0055)
 
     def test_missing_currency_tolerated(self):
         """If a transaction has no currency (legacy data), the inventory
