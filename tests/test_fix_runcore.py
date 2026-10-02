@@ -193,6 +193,9 @@ class TestInstalmentMoneyInputs(unittest.TestCase):
         r = self._instalments(
             'prescribed_rates = [{ from = "2025-01-01", rate = -0.07 }]\n')
         self.assertNotEqual(r.returncode, 0)
+        # The refusal itself, not the helper project's 'no gains files'
+        # (re-audit A2-0811: any config exits 1 there).
+        self.assertIn("prescribed_rates[1].rate", r.stderr)
 
     def test_estimate_boolean_other_income_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
