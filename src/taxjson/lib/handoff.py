@@ -453,8 +453,10 @@ def boundary_rows(cache: Path, cfg: Dict[str, Any], year: int
                             "symbol": r.get("symbol"), "date": str(raw),
                             "date_settle": str(_d(r.get("date_settle"))
                                                or raw),
-                            "quantity": round(float(r.get("quantity")
-                                                    or 0.0), 8),
+                            # Full precision: a coin reward of
+                            # 0.000135313637 rounded to 8 places no
+                            # longer matched its own row.
+                            "quantity": float(r.get("quantity") or 0.0),
                             "net": round(float(r.get("net_amount")
                                                or 0.0), 2),
                             "tax_date": str(eff) if eff else None})
@@ -1047,8 +1049,13 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
             # A short cover: the engine's proceeds are the negated cover
             # cost and its cost the negated short-sale proceeds; another
             # tool's CSV reports the short-sale proceeds (A2-0674).
-            tp_alt = -float(t.get("cost") or 0.0) \
-                if (t.get("direction") == "SHORT" or tp < 0) else None
+            # Only against another tool's CSV: the record's own
+            # dispositions use the engine's convention, and a grant-timed
+            # premium row (proceeds 0) matched every buy-back otherwise.
+            tc = float(t.get("cost") or 0.0)
+            tp_alt = (-tc if (record.get("filed_dispositions") is not None
+                              and (t.get("direction") == "SHORT" or tp < 0)
+                              and abs(tc) > 0.005) else None)
             tol = max(1.0, 0.01 * abs(tp))
             for c in closed:
                 if _root_sym(c["symbol"]) != k:
@@ -1057,8 +1064,10 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                     continue
                 cp = float(c["proceeds"])
                 if abs(cp - tp) > tol and (
-                        tp_alt is None or abs(cp - tp_alt) > max(
-                            1.0, 0.01 * abs(tp_alt))):
+                        tp_alt is None
+                        or abs(cp - tp_alt) > max(1.0, 0.01 * abs(tp_alt))
+                        or abs(float(c.get("cost") or 0.0) + tp) > max(
+                            1.0, 0.01 * abs(tp))):
                     continue            # a different sale of the same size
                 cds = [x for x in (_d(c.get("date")),
                                    _d(c.get("date_settle"))) if x]
