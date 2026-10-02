@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `taxjson-export --holdings-toml` given --trades files of two accounts
+  applied each account's copy of a split to the summed balance, so a
+  closed round's trades stayed on the holding's `trades` list; a split is
+  one event there now (re-audit A2-1590).
 - The `taxjson-harvest` console script run on a project's
   work/*_gains_wash.json without --ticker-map finds the project's
   ticker.map (next to the inputs or the folder above), so a TOBASE-renamed

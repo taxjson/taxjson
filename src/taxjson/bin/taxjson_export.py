@@ -618,10 +618,13 @@ def _load_trade_events(paths, mapping=None, drops=None,
             # SPLIT rows scale the running balance and follow renames:
             # a split-blind walk kept closed rounds of a split symbol
             # and lost a renamed position's acquisitions (audit S030-04).
+            # One event per split, whichever account's file carries
+            # it: the balance below sums every account's shares, so an
+            # account-keyed event scaled the sum once per account
+            # (re-audit A2-1590).
             new = normalize_symbol_new(tx["symbol"], tx.get("symbol_new"))
             if split_seen(seen, tx["symbol"], tx.get("date") or "",
-                          tx.get("quantity"), new,
-                          account=tx.get("account")) is not None:
+                          tx.get("quantity"), new) is not None:
                 continue                       # duplicate split row
             try:
                 ratio = float(tx.get("quantity") or 0) or 1.0

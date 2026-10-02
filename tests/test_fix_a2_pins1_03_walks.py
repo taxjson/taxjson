@@ -57,6 +57,20 @@ class TestSplitAppliedOnce(unittest.TestCase):
     def test_export_events_keep_only_the_live_round(self):
         self.assertEqual(_events(_DUP_SPLIT), [("BUY", 50.0)])
 
+    def test_export_events_two_accounts_one_split_event(self):
+        """The export's walk sums every account's shares into one
+        balance, so each account's own copy of a split is still ONE
+        event for it: scaling the summed balance once per account
+        doubled it and kept a closed round's events."""
+        rows = [_r("BUYSELL", "2025-01-02", 100, account="a"),
+                _r("BUYSELL", "2025-01-02", 100, account="b"),
+                _r("SPLIT", "2025-06-11", 2.0, account="a"),
+                _r("SPLIT", "2025-06-11", 2.0, account="b"),
+                _r("BUYSELL", "2025-07-01", -200, account="a"),
+                _r("BUYSELL", "2025-07-01", -200, account="b"),
+                _r("BUYSELL", "2025-08-01", 50, account="a")]
+        self.assertEqual(_events(rows), [("BUY", 50.0)])
+
     def test_split_gains_position_start(self):
         self.assertEqual(_starts(_DUP_SPLIT), "2025-08-01")
 
