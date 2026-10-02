@@ -438,13 +438,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "currency the Bank does not publish, or a series it "
                  "stopped.", cont=True),
             Rule("CA-FX-02",
-                 "A day with no rate uses the latest rate of the 5 days "
-                 "before; a longer gap converts the row at a placeholder "
-                 "rate and is a validation ERROR (the .sum DIAGNOSTICS, "
-                 "`taxjson checklist`; `run --strict` stops), and a "
-                 "currency with no rates at all stops the run. `taxjson "
-                 "fx-cash` counts a cash event with no rate in those 5 "
-                 "days as unrated (named in its report).",
+                 "The rates file carries each rate over weekends and "
+                 "holidays for up to 7 days, and a day with no row there "
+                 "uses the latest row of the 5 days before, so a rate up "
+                 "to 12 days old is used (real Bank of Canada gaps are 4 "
+                 "days or less); a longer gap converts the row at a "
+                 "placeholder rate and is a validation ERROR (the .sum "
+                 "DIAGNOSTICS, `taxjson checklist`; `run --strict` "
+                 "stops), and a currency with no rates at all stops the "
+                 "run. `taxjson fx-cash` counts a cash event with no rate "
+                 "row in those 5 days as unrated (named in its report).",
                  cont=True),
             Rule("CA-FX-04",
                  "A futures contract is booked on its settled P/L: nothing "
@@ -459,8 +462,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("CA-FX-07",
                  "Gains on holding foreign cash (s.39(1.1)) are NOT in the "
-                 "Schedule 3 totals: `taxjson fx-cash` estimates the net "
-                 "gain beyond the $200 annual exemption.",
+                 "Schedule 3 totals: `taxjson fx-cash` estimates the "
+                 "year's net gain or net loss beyond the $200 annual "
+                 "exemption (a net gain or loss within $200 is nil), from "
+                 "a pooled average cost per currency. Cash moves only on "
+                 "a trade for cash, income, withholding and fees; a "
+                 "coin-for-coin swap, a fee paid in a coin and a reward "
+                 "in a coin move none (a USD stablecoin is US-dollar "
+                 "cash, CA-CRYPTO-02).",
                  keys=("fx_cash_gains",)),
         ]),
         ("Cost base (ACB)", [
@@ -764,7 +773,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-CRYPTO-01",
                  "Each coin is its own property. A coin-for-coin trade is "
                  "a sale of one and a purchase of the other at fair "
-                 "value."),
+                 "value. Kraken's staked and bonded wallet codes (DOT.S, "
+                 "DOT28.S, ETH2, ETH2.S, the .M/.F/.B/.P/.HOLD suffixes) "
+                 "name the same coin as the bare code, so a 1:1 swap "
+                 "between them is not a sale."),
             Rule("CA-CRYPTO-09",
                  "Any amount of a coin is property: a residue left after a "
                  "sale, however small, stays in the holdings with its "
@@ -776,11 +788,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "USD stablecoins (USDC, USDT, DAI, PYUSD and GUSD, on "
                  "Kraken and Coinbase alike) are treated as US-dollar "
                  "cash, an approximation (their own gain or loss, a "
-                 "de-peg, is not computed; a fill more than 2% off 1.00 "
-                 "USD is warned about)."),
+                 "de-peg, is not computed; a fill valued in US dollars "
+                 "more than 2% off 1.00 USD is warned about — a fill "
+                 "valued in another currency is not checked)."),
             Rule("CA-CRYPTO-03",
-                 "A Kraken withdrawal fee paid in a coin is a sale of that "
-                 "coin."),
+                 "A Kraken fee paid in a coin is a sale of that coin: on a "
+                 "move of coins (a withdrawal, a deposit, a transfer to "
+                 "another Kraken user or a Hybrid Earn withdrawal), on a "
+                 "fiat deposit or withdrawal, or on a staking reward."),
             Rule("CA-CRYPTO-04",
                  "A trade fee taken in a coin reduces the coins bought or "
                  "adds to the coins sold.", cont=True),
@@ -788,9 +803,19 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Moving coins between your own wallets is not a sale. A "
                  "gift or a payment in crypto is a sale at fair value."),
             Rule("CA-CRYPTO-06",
-                 "A send that arrives on another of your exchanges within "
-                 "3 days, with 90% to 100% of the coins sent, is treated as "
-                 "your own move. When fewer coins arrive and the sending "
+                 "A send that arrives on another of your exchanges (or the "
+                 "same exchange in another crypto account) from 10 minutes "
+                 "before it (exchange clocks disagree) to 3 days after it, "
+                 "with 90% to 100% of the coins sent — also as two deposits, "
+                 "or two sends landing as one deposit — is treated as your "
+                 "own move. Sends and arrivals are paired to pair the most "
+                 "sends, then lose the fewest coins, then the closest in "
+                 "time. A Kraken Hybrid Earn withdrawal is never paired (the "
+                 "coins stay on Kraken: your own, decided automatically). A "
+                 "saved gift or payment for a send that pairs is not booked "
+                 "and is warned about (`run --strict` stops) until you "
+                 "confirm it as `self` or unpair it (`--unpair`). When fewer "
+                 "coins arrive and the sending "
                  "exchange states no fee (a Coinbase Send hides the "
                  "network fee in the quantity), the coins that did not "
                  "arrive paid the network fee: a sale of them at fair "
@@ -804,7 +829,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "writes a sale at fair value for each gift or payment to "
                  "crypto_sends.tt: the exchange's price when the row has "
                  "one, otherwise the Yahoo daily close times the Bank of "
-                 "Canada rate of the send date.", cont=True),
+                 "Canada rate of the send date, or a price you give "
+                 "(`--price`, finite and at least 0.00000001; a network fee "
+                 "takes one too). A sale that cannot be priced is not "
+                 "booked: it is warned about and `run --strict` stops.",
+                 cont=True),
             Rule("CA-CRYPTO-08",
                  "A gift or payment of a stablecoin is not written as a "
                  "sale (stablecoins are cash in the books). It is a "
@@ -1025,13 +1054,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  keys=("base_currency",)),
             Rule("US-FX-02",
                  "Other currencies are converted at the Yahoo Finance "
-                 "daily rate for the settle date. A day with no rate uses "
-                 "the latest rate of the 5 days before; a longer gap "
-                 "converts the row at a placeholder rate and is a "
-                 "validation ERROR (`run --strict` stops), and a currency "
-                 "with no rates at all stops the run. `taxjson fx-cash` "
-                 "counts a cash event with no rate in those 5 days as "
-                 "unrated (named in its report).", cont=True),
+                 "daily rate for the settle date. The rates file carries "
+                 "each rate over weekends and holidays for up to 7 days, "
+                 "and a day with no row there uses the latest row of the "
+                 "5 days before, so a rate up to 12 days old is used; a "
+                 "longer gap converts the row at a placeholder rate and "
+                 "is a validation ERROR (`run --strict` stops), and a "
+                 "currency with no rates at all stops the run. `taxjson "
+                 "fx-cash` counts a cash event with no rate row in those "
+                 "5 days as unrated (named in its report).", cont=True),
             Rule("US-FX-03",
                  "Gains on holding foreign cash (§988) are ordinary "
                  "income, not capital gains, and are NOT in the Form 8949 "
@@ -1267,25 +1298,43 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-CRYPTO-01",
                  "Each coin is its own property. A coin-for-coin trade is "
                  "a sale of one and a purchase of the other at fair "
-                 "value."),
+                 "value. Kraken's staked and bonded wallet codes (DOT.S, "
+                 "DOT28.S, ETH2, ETH2.S, the .M/.F/.B/.P/.HOLD suffixes) "
+                 "name the same coin as the bare code, so a 1:1 swap "
+                 "between them is not a sale."),
             Rule("US-CRYPTO-02",
-                 "USD stablecoins (USDC, USDT, DAI; also PYUSD and GUSD on "
-                 "Coinbase) are property like any coin: buying one is a "
-                 "purchase, selling or spending one is a sale (a de-peg "
-                 "is a gain or loss), and a payment in one is written as "
-                 "a sale. A swap against a stablecoin, a reward or a fee "
-                 "in one is valued at its 1.00 USD par; a sale for "
-                 "dollars at the fill's price."),
+                 "USD stablecoins (USDC, USDT, DAI, PYUSD and GUSD, on "
+                 "Kraken and Coinbase alike) are property like any coin: "
+                 "buying one is a purchase, selling or spending one is a "
+                 "sale (a de-peg is a gain or loss), and a payment in one "
+                 "is written as a sale. A swap against a stablecoin, a "
+                 "reward or a fee in one is valued at its 1.00 USD par "
+                 "(on Kraken ahead of any USD value the export states; a "
+                 "Coinbase row keeps the value Coinbase states for it, "
+                 "par when it states none); a sale for dollars at the "
+                 "fill's price."),
             Rule("US-CRYPTO-03",
-                 "A Kraken withdrawal fee paid in a coin is a sale of that "
-                 "coin."),
+                 "A Kraken fee paid in a coin is a sale of that coin: on a "
+                 "move of coins (a withdrawal, a deposit, a transfer to "
+                 "another Kraken user or a Hybrid Earn withdrawal), on a "
+                 "fiat deposit or withdrawal, or on a staking reward."),
             Rule("US-CRYPTO-04",
                  "A trade fee taken in a coin reduces the coins bought or "
                  "adds to the coins sold.", cont=True),
             Rule("US-CRYPTO-05",
-                 "A send that arrives on another of your exchanges within "
-                 "3 days, with 90% to 100% of the coins sent, is treated as "
-                 "your own move. When fewer coins arrive and the sending "
+                 "A send that arrives on another of your exchanges (or the "
+                 "same exchange in another crypto account) from 10 minutes "
+                 "before it to 3 days after it, with 90% to 100% of the "
+                 "coins sent — also as two deposits, or two sends landing "
+                 "as one deposit — is treated as your own move; sends and "
+                 "arrivals are paired to pair the most sends, then lose the "
+                 "fewest coins, then the closest in time, and a Kraken "
+                 "Hybrid Earn withdrawal is never paired. Basis stays per "
+                 "account and is not carried from one crypto account to "
+                 "another: a move paired between two accounts is warned "
+                 "about and `run --strict` stops (keep both exchanges in "
+                 "one crypto account). When fewer coins arrive and the "
+                 "sending "
                  "exchange states no fee (a Coinbase Send hides the "
                  "network fee in the quantity), the coins that did not "
                  "arrive paid the network fee: a sale of them at fair "
