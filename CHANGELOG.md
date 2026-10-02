@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- check-filed / audit (re-audit filing locks): `audit --year` on a locked
+  year reads the lock `[settings] prior_year_record` names (per-year
+  layout) and recomputes on the date basis the lock recorded, with a note
+  (A2-0334, A2-0335, A2-0664, A2-1129). check-filed reports a lock whose
+  account entry records no totals, or whose `form_lines` is not a table,
+  as damaged instead of "OK (matches)" (A2-0347, A2-0668); notes when the
+  project's `tax_date` or `option_buyback_loss_superficial` differs from
+  the lock's (A2-0348, A2-0672); refuses a bad `[settings]` value as a
+  settings error, not a damaged lock (A2-1134); and shows the child's
+  one-line error, exit 2, when the recompute fails on an input (A2-0676).
+  audit and `wash-sales --explain` name a damaged `work/<acct>_base.json`
+  instead of a deleted /tmp merge file (A2-1143).
+
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of
