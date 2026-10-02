@@ -382,10 +382,12 @@ def _read_ib_corporate_actions(csv_path: Path) -> Dict[str, Any]:
     rows nothing understands. Every row carries the statement's account
     (`stmt`) so rows read from another statement keep their own."""
     rows: List[Dict[str, str]] = []
-    # Spin-off rows and their `Ca` cancellations, matched below (a
-    # cancelled spin-off must not be offered for election).
+    # Spin-off rows; `Ca` cancellations of ANY corporate-action row are
+    # kept apart and matched against the originals of every statement
+    # of the account (`_ib_apply_cancellations`): a cancelled event must
+    # not be offered for election.
     spin_rows: List[Dict[str, Any]] = []
-    spin_cancels: List[Dict[str, Any]] = []
+    cancels: List[Dict[str, Any]] = []
     # Merger-shaped rows neither regex understands (see _IB_ANY_MERGER_RE).
     odd_rows: List[Dict[str, Any]] = []
     statement_account = ''
@@ -441,19 +443,28 @@ def _read_ib_corporate_actions(csv_path: Path) -> Dict[str, Any]:
             desc = cell('Description') or ''
             row_account = cell('Account') if 'Account' in header_map \
                 else ''
-            # Cancellation rows undo a previous entry — drop them, don't
-            # let them slip through and double the position.
+            # Cancellation rows undo a previous entry: kept apart and
+            # matched to their original (same description, negated
+            # quantity) across the account's statements. The Code cell
+            # is tokenised the way the statement parser does ('Ca;P',
+            # 'Ca,P', 'Ca P'): a ';'-only split read 'Ca,P' as a live
+            # row (A2-0970).
             code = raw_row[header_map.get('Code', len(raw_row) - 1)] if 'Code' in header_map else ''
-            is_cancel = 'Ca' in (code or '').split(';')
+            is_cancel = 'Ca' in re.split(r'[;,\s]+', code or '')
+            date_time = _ib_norm_date_time(cell('Date/Time'))
+            if is_cancel:
+                cancels.append({
+                    'currency': currency, 'date_time': date_time,
+                    'description': desc, 'qty': _f(cell('Quantity')),
+                    'value': _f(cell('Value')), 'account': row_account})
+                continue
             spin = ib_spinoff_parts(desc)
             if spin is not None:
-                (spin_cancels if is_cancel else spin_rows).append({
-                    'currency': currency, 'date_time': cell('Date/Time'),
+                spin_rows.append({
+                    'currency': currency, 'date_time': date_time,
                     'description': desc, 'qty': _f(cell('Quantity')),
                     'value': _f(cell('Value')), 'parts': spin,
                     'account': row_account})
-                continue
-            if is_cancel:
                 continue
             # Tender / voluntary-offer journals are NOT mergers (see
             # _IB_TENDER_RE): the statement parser nets the zero-
@@ -467,7 +478,7 @@ def _read_ib_corporate_actions(csv_path: Path) -> Dict[str, Any]:
                 continue
             rec = {
                 'currency': currency,
-                'date_time': cell('Date/Time'),
+                'date_time': date_time,
                 'description': desc,
                 'quantity': cell('Quantity'),
                 'value': cell('Value'),
@@ -479,11 +490,85 @@ def _read_ib_corporate_actions(csv_path: Path) -> Dict[str, Any]:
                 odd_rows.append(rec)
                 continue
             rows.append(rec)
-    for r in rows + spin_rows + spin_cancels + odd_rows:
+    for r in rows + spin_rows + cancels + odd_rows:
         r['stmt'] = statement_account
     return {'rows': rows, 'spin_rows': spin_rows,
-            'spin_cancels': spin_cancels, 'odd_rows': odd_rows,
+            'cancels': cancels, 'odd_rows': odd_rows,
             'statement_account': statement_account}
+
+
+def _ib_norm_date_time(s: str) -> str:
+    """IB's 'YYYY-MM-DD, H:MM:SS' with the hour zero-padded, so the
+    raw strings sort and compare as times: '9:30:00' sorted after
+    '20:25:00' and a merger took its later leg's time (A2-0984)."""
+    m = re.match(r'^(\d{4}-\d{2}-\d{2})(\s*[,;]\s*)(\d{1,2})(:\d{2}.*)$',
+                 (s or '').strip())
+    if not m:
+        return (s or '').strip()
+    return f"{m.group(1)}{m.group(2)}{int(m.group(3)):02d}{m.group(4)}"
+
+
+def _ib_row_ident(r: Dict[str, Any]) -> tuple:
+    """One IB Corporate Actions row, as repeated by overlapping
+    statements of the same broker account."""
+    qty = r['qty'] if 'qty' in r else _f(r.get('quantity'))
+    val = r['value'] if isinstance(r.get('value'), float) else _f(
+        r.get('value'))
+    return (r.get('stmt', ''), r.get('account', ''), r['currency'],
+            r['date_time'], r['description'], qty, val)
+
+
+def _ib_union(own_rows: List[Dict[str, Any]],
+              other_rows: List[List[Dict[str, Any]]]
+              ) -> List[Dict[str, Any]]:
+    """The rows of every statement of the account, each marked `own`
+    when this statement holds it. A row the statements repeat
+    (overlapping downloads) counts once — the most copies any one
+    statement holds."""
+    own_ids = {_ib_row_ident(r) for r in own_rows}
+    union: Dict[tuple, Tuple[Dict[str, Any], int]] = {}
+    for src_rows in [own_rows] + list(other_rows):
+        counts: Dict[tuple, int] = defaultdict(int)
+        firsts: Dict[tuple, Dict[str, Any]] = {}
+        for r in src_rows:
+            i = _ib_row_ident(r)
+            counts[i] += 1
+            firsts.setdefault(i, r)
+        for i, n in counts.items():
+            if i not in union or union[i][1] < n:
+                union[i] = (firsts[i], n)
+    out = []
+    for i, (r, n) in union.items():
+        for _ in range(n):
+            out.append(dict(r, own=i in own_ids))
+    return out
+
+
+def _ib_apply_cancellations(cancels: List[Dict[str, Any]],
+                            *pools: List[Dict[str, Any]]) -> None:
+    """Remove from `pools` (in place) the original of every `Ca` row:
+    same description, negated quantity, same row account, dated on or
+    before the cancellation (same date preferred, else the latest) —
+    the statement parser's `_ca_undo` rule. The cancellation and its
+    original may sit in different statements of the account. Only the
+    spin-off branch used to pair them, within one statement: a
+    cancelled merger, a merger shape taxjson cannot book, or a spin-off
+    cancelled in the next statement was still offered for election
+    (A2-0018/0019/0020/0068/0069/0212/0220/0971)."""
+    def _qty(r):
+        return r['qty'] if 'qty' in r else _f(r.get('quantity'))
+    for ca in sorted(cancels, key=lambda c: c['date_time']):
+        cands = [(pool, r) for pool in pools for r in pool
+                 if r['description'] == ca['description']
+                 and (r.get('account') or '') == (ca.get('account') or '')
+                 and abs(_qty(r) + ca['qty']) < 1e-9
+                 and r['date_time'][:10] <= ca['date_time'][:10]]
+        if not cands:
+            continue
+        same = [c for c in cands
+                if c[1]['date_time'][:10] == ca['date_time'][:10]]
+        pool, r = max(same or cands, key=lambda c: c[1]['date_time'])
+        pool.remove(r)
 
 
 def _ib_dt_days(a: str, b: str) -> int:
@@ -509,48 +594,35 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
 
     Handles two flavours of noise that show up in real statements:
 
-    * `Code=Ca` rows are IB cancellations — we drop them so they don't
-      double-count.
+    * `Code=Ca` rows are IB cancellations — each removes its original
+      (same description, negated quantity) in whichever statement of
+      the account holds it, so a cancelled event is never offered.
     * Cross-listing journals (a CAD-side merger entry immediately followed
       by a 1-for-1 CAD→US "Merged(Acquisition) WITH ..." that's really
       just IB moving the position from the .TO sub-account to the .US one)
       get collapsed into the original SSL→RGLD.US event.
     """
     own = _read_ib_corporate_actions(csv_path)
-    spin_rows, spin_cancels = own['spin_rows'], own['spin_cancels']
-    odd_rows = own['odd_rows']
     statement_account = own['statement_account']
-
-    # Merger rows of EVERY statement of the account; a row the
-    # statements repeat (overlapping downloads) counts once — the most
-    # copies any one statement holds.
-    def _ident(r) -> tuple:
-        return (r['stmt'], r['account'], r['currency'], r['date_time'],
-                r['description'], r['quantity'], r['value'])
-    own_ids = {_ident(r) for r in own['rows']}
-    union: Dict[tuple, Tuple[Dict[str, Any], int]] = {}
-    sources = [own['rows']]
+    others: List[Dict[str, Any]] = []
     for other in context_files or []:
         if Path(other).resolve() == Path(csv_path).resolve():
             continue
         try:
-            sources.append(_read_ib_corporate_actions(Path(other))['rows'])
+            others.append(_read_ib_corporate_actions(Path(other)))
         except (OSError, csv.Error, UnicodeError, ValueError):
             continue
-    for src_rows in sources:
-        counts: Dict[tuple, int] = defaultdict(int)
-        firsts: Dict[tuple, Dict[str, Any]] = {}
-        for r in src_rows:
-            i = _ident(r)
-            counts[i] += 1
-            firsts.setdefault(i, r)
-        for i, n in counts.items():
-            if i not in union or union[i][1] < n:
-                union[i] = (firsts[i], n)
-    rows = []
-    for i, (r, n) in union.items():
-        for _ in range(n):
-            rows.append(dict(r, own=i in own_ids))
+
+    # Rows of EVERY statement of the account (a merger's legs, a spin-off
+    # and its cancellation can sit in two yearly downloads); a row the
+    # statements repeat counts once. Each `Ca` row then removes its
+    # original wherever it sits, and only events this statement holds a
+    # row of are emitted (`combine_broker_copies` keeps one copy).
+    def _all(key):
+        return _ib_union(own[key], [o[key] for o in others])
+    rows, spin_rows, odd_rows = _all('rows'), _all('spin_rows'), \
+        _all('odd_rows')
+    _ib_apply_cancellations(_all('cancels'), rows, spin_rows, odd_rows)
 
     def _acct(recs) -> str:
         per_row = sorted({r.get('account') or '' for r in recs} - {''})
@@ -810,9 +882,9 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
                 account=account, raw_descriptions=mb['descriptions'],
                 fractional_delivery=True, broker_account=_acct(mb['recs'])))
 
-    events.extend(_ib_spinoff_events(spin_rows, spin_cancels, account,
-                                     _acct))
-    events.extend(_ib_unsupported_events(odd_rows, account, _acct))
+    events.extend(_ib_spinoff_events(spin_rows, account, _acct))
+    events.extend(_ib_unsupported_events(
+        [r for r in odd_rows if r.get('own')], account, _acct))
     # Half / short mergers: a blocking `unsupported` event (the run stops
     # until the user books it by hand and marks it `ignore`) — never a
     # silent skip that leaves the old shares alive.
@@ -832,28 +904,26 @@ def _ib_ext(currency: str) -> str:
     return _ib_currency_ext(currency)
 
 
-def _ib_spinoff_events(spin_rows, spin_cancels, account, acct_of
+def _ib_spinoff_events(spin_rows, account, acct_of
                        ) -> List[CorporateAction]:
     """IB `Spinoff` rows -> spin-off events. The statement parser used
     to book every one as a dividend at IB's Value with no election
     (s.86.1 never offered, and a Canadian butterfly spin-off taxed as
     income). IB's Value is carried as the broker FMV, which the
-    `taxable_deemed_dividend` default uses."""
-    live = list(spin_rows)
-    for ca in spin_cancels:            # a Ca row undoes its original
-        for i, r in enumerate(live):
-            if (r['description'] == ca['description']
-                    and abs(r['qty'] + ca['qty']) < 1e-9):
-                live.pop(i)
-                break
+    `taxable_deemed_dividend` default uses. `spin_rows` are the live
+    rows of every statement of the account (cancellations already
+    removed); a group this statement holds no row of is another
+    statement's event."""
     groups: Dict[tuple, List[Dict[str, Any]]] = {}
-    for r in live:
+    for r in spin_rows:
         if r['qty'] <= 0:
             continue
         groups.setdefault((r['date_time'], r['description'],
                            r['currency']), []).append(r)
     events = []
     for (date_time, desc, currency), recs in groups.items():
+        if not any(r.get('own', True) for r in recs):
+            continue
         parts = recs[0]['parts']
         ext = _ib_ext(currency)
         qty = sum(r['qty'] for r in recs)
@@ -3735,21 +3805,41 @@ def combine_broker_copies(events: List[CorporateAction], *,
     out: List[CorporateAction] = []
     for eid in order:
         holdings: List[CorporateAction] = []     # one per broker account
-        for ev in groups[eid]:
-            dup = None
-            for h in holdings:
-                if ev.broker_account and h.broker_account:
-                    if ev.broker_account == h.broker_account:
-                        dup = h
-                elif _same_quantities(ev, h):
-                    dup = h
-                if dup is not None:
-                    break
+        seen: List[CorporateAction] = []         # every copy placed
+        # Copies that name their broker account first, then the ones
+        # that do not: matching an unnamed copy against whichever copy
+        # happened to come first made the result depend on input order
+        # (A2-0977).
+        copies = ([ev for ev in groups[eid] if ev.broker_account]
+                  + [ev for ev in groups[eid] if not ev.broker_account])
+        for ev in copies:
+            if ev.broker_account:
+                dup = next((h for h in holdings
+                            if h.broker_account == ev.broker_account),
+                           None)
+                if dup is not None and not _same_quantities(ev, dup):
+                    # One broker account's statements disagree on the
+                    # event (a correction one of them lacks): keep the
+                    # larger copy, whatever the order, and say so.
+                    keep = max((dup, ev), key=lambda e: (
+                        e.qty_disposed, e.qty_received, e.fmv,
+                        e.target_fmv))
+                    print(f"warning: corp-action {eid}: two statements "
+                          f"of broker account "
+                          f"{_mask_account(ev.broker_account)} disagree "
+                          f"on its quantities ({dup.qty_disposed:g}->"
+                          f"{dup.qty_received:g} vs {ev.qty_disposed:g}->"
+                          f"{ev.qty_received:g}); kept "
+                          f"{keep.qty_disposed:g}->{keep.qty_received:g}. "
+                          f"Check which statement is current.",
+                          file=stream or sys.stderr)
+                    holdings[holdings.index(dup)] = keep
+            else:
+                dup = next((h for h in seen if _same_quantities(ev, h)),
+                           None)
+            seen.append(ev)
             if dup is None:
                 holdings.append(ev)
-            elif not dup.broker_account and ev.broker_account:
-                holdings[holdings.index(dup)] = dataclasses.replace(
-                    dup, broker_account=ev.broker_account)
         if len(holdings) == 1:
             out.append(holdings[0])
             continue

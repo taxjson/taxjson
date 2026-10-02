@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **IB: a cancelled (`Ca`) corporate action is no longer offered for
+  election** (A2-0018, A2-0019, A2-0020, A2-0068, A2-0069, A2-0212,
+  A2-0220, A2-0970, A2-0971): each `Ca` row removes its original (same
+  description, negated quantity) in whichever statement of the account
+  holds it, for mergers, spin-offs and merger shapes taxjson cannot
+  book. Only the corrected rebook is offered; overlapping statement
+  vintages no longer let the cancelled original win. The Code cell is
+  split on `;`, `,` and spaces as the statement parser does. A
+  cross-listing journal IB cancelled and rebooked (the RGLD.CAD shape)
+  no longer needs a manual `ignore`.
+- IB corporate-action times are zero-padded before they are compared,
+  so a merger takes its earlier leg's time (A2-0984); copies of one
+  event from several statements combine the same way whatever the file
+  order, with a warning when one broker account's statements disagree
+  (A2-0977).
 - **An s.86.1 election on a USD parent no longer stops `taxjson run`**
   (A2-0002, a regression of S072-15; A2-0215, A2-0967): the CAD amount
   given as `allocated_acb_cad` is booked in each listing's currency at
