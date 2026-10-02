@@ -69,11 +69,11 @@
   in the same year; a listed US January RIC dividend is named on the
   console as `ATTENTION: income year:` in both project years (re-audit
   A2-0396, A2-0398).
-- A Canadian trust's return of capital is booked on its record date by
-  the web what-if too (taxjson-audit and taxjson-explain since A2-0033),
-  and a pay-year run names, as ATTENTION, each prior-year sale whose ACB
-  a December-record ROC lowers (re-audit A2-0139, A2-0201, A2-0397,
-  A2-0039).
+- A pay-year run names, as ATTENTION, each prior-year sale whose ACB a
+  December-record trust return of capital lowers (that year may be
+  filed without it) (re-audit A2-0039; the audit / explain / what-if
+  record-date dating of A2-0139, A2-0201, A2-0397 is A2-0033 /
+  A2-1175).
 - Two SPLIT rows for one event with different ratios (both applied) are
   now a validation ERROR named on the console: `run --strict` stops and
   checklist run-clean is not done (re-audit A2-0040).
