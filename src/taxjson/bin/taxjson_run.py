@@ -2423,6 +2423,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # not — a row booked once (or twice) on a guess must not scroll by.
     echo_attention_lines(cache / f"{name}_sorted.json" if is_crypto
                          else base_json, prefix="dedup: ")
+    # A ticker.map rename to a bare symbol (audit A2-0304).
+    echo_attention_lines(base_json, prefix="ticker.map: ")
 
     # 5. gains
     gains_json = cache / f"{name}_gains.json"

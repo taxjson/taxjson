@@ -41,6 +41,7 @@ from taxjson.bin.taxjson_sort import (deduplicate, sort_transactions,
                                       source_accounts_of)
 from taxjson.bin.taxjson_ticker_map import (
     load_map_file, apply_mapping, apply_drops, merge_renames,
+    bare_target_warnings,
     guard_option_listing_collisions,
 )
 from taxjson.lib.country import country_arg
@@ -414,6 +415,9 @@ def main():
         # book already trades natively keeps its own symbol (R1-16).
         renames = guard_option_listing_collisions(
             [t.symbol for t in txs], renames, prog="taxjson-merge2")
+        # A rename to a bare symbol in a listed book (A2-0304).
+        for _w in bare_target_warnings([t.symbol for t in txs], renames):
+            print(f"warning: ATTENTION: {_w}", file=sys.stderr)
         # apply_mapping mutates and returns the same tx; that's fine here
         # because we built fresh TaxTransaction instances above.
         txs = [apply_mapping(t, renames) for t in txs]

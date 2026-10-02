@@ -311,5 +311,71 @@ class TestSchemaFutures(unittest.TestCase):
                 self.assertAlmostEqual(pl, 5995.0, places=2)
 
 
+class TestBareRenameTargets(unittest.TestCase):
+    """A2-0304: a ticker.map GLOBAL or a security override that renames
+    a listed symbol to a bare one is an ATTENTION line."""
+
+    def test_rule_detection(self):
+        from taxjson.bin.taxjson_ticker_map import (bare_rename_target,
+                                                    bare_target_warnings)
+        self.assertTrue(bare_rename_target('RY.TO', 'RY'))
+        self.assertFalse(bare_rename_target('RY.TO', 'RY.US'))
+        self.assertFalse(bare_rename_target('ETH2', 'ETH'))   # crypto
+        self.assertFalse(bare_rename_target(
+            'XYZ250620C00050000.US', 'XYZ'))
+        self.assertEqual(len(bare_target_warnings(['RY.TO'],
+                                                  {'RY.TO': 'RY'})), 1)
+        self.assertEqual(bare_target_warnings(['AB.TO'],
+                                              {'RY.TO': 'RY'}), [])
+
+    def test_merge2_prints_attention(self):
+        import subprocess
+        import sys
+        import os
+        with tempfile.TemporaryDirectory() as d:
+            book = Path(d) / "b.json"
+            book.write_text(json.dumps({"transactions": [{
+                "action": "DIVIDEND", "date": "2025-03-01",
+                "symbol": "RY.TO", "currency": "CAD",
+                "net_amount": 148.0, "quantity": 100}]}))
+            m = Path(d) / "ticker.map"
+            m.write_text("GLOBAL RY.TO RY\n")
+            env = dict(os.environ, PYTHONPATH=str(
+                Path(__file__).resolve().parents[1] / "src"))
+            r = subprocess.run([sys.executable, "-m",
+                                "taxjson.bin.taxjson_merge2", str(book),
+                                "--map", str(m)],
+                               capture_output=True, text=True, env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("warning: ATTENTION: ticker.map: RY.TO -> RY",
+                          r.stderr)
+
+    def test_security_override_to_bare_symbol_warns(self):
+        import subprocess
+        import sys
+        import os
+        with tempfile.TemporaryDirectory() as d:
+            csv = Path(d) / "qt.csv"
+            csv.write_text(
+                'Transaction Date,Settlement Date,Action,Symbol,'
+                'Description,Quantity,Price,Gross Amount,Commission,'
+                'Net Amount,Currency,Account #,Activity Type,Account Type\n'
+                '2025-01-15 09:30:00 AM,2025-01-16 12:00:00 AM,Buy,RY,'
+                'ROYAL BANK OF CANADA,10,150.00,-1500.00,0,-1500.00,CAD,'
+                '55500001,Trades,Individual\n')  # pii-ok
+            ovr = Path(d) / "ovr.txt"
+            ovr.write_text("ROYAL BANK | CAD | RY\n")
+            env = dict(os.environ, PYTHONPATH=str(
+                Path(__file__).resolve().parents[1] / "src"))
+            r = subprocess.run([sys.executable, "-m",
+                                "taxjson.bin.taxjson_brokerage",
+                                "--brokerage", "questrade",
+                                "--security-overrides", str(ovr), str(csv)],
+                               capture_output=True, text=True, env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("warning: ATTENTION: ticker_extraction_overrides",
+                          r.stderr)
+
+
 if __name__ == '__main__':
     unittest.main()

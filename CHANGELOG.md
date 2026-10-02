@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **A rename to a bare symbol is an ATTENTION line.** A ticker.map
+  rule (`GLOBAL RY.TO RY`) or a `ticker_extraction_overrides.txt` line
+  that turns a listed symbol into a bare one used to be accepted in
+  silence; the bare symbol is read as crypto or an unknown listing, so
+  a Canadian eligible dividend became a foreign one with an assumed
+  foreign tax credit. `taxjson run` now prints it on the console
+  (audit A2-0304).
 - **Futures at a negative price, and futures schema checks.** A
   plain-futures buy at a negative price (WTI, April 2020) received cash;
   its negative net is now accepted by the schema and booked as a
