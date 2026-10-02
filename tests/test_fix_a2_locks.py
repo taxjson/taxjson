@@ -430,5 +430,136 @@ class TestYearEndLandings(unittest.TestCase):
                                    places=2)
 
 
+_QT_HEADER = ("Transaction Date,Settlement Date,Action,Symbol,Description,"
+              "Quantity,Price,Gross Amount,Commission,Net Amount,Currency,"
+              "Account #,Activity Type,Account Type\n")
+
+
+def _qt(trade, settle, action, sym, qty, price):
+    gross = abs(qty) * price
+    net = -gross if action == "Buy" else gross
+    return (f"{trade} 09:30:00 AM,{settle} 12:00:00 AM,{action},{sym},D,"
+            f"{qty},{price:.2f},{gross:.2f},0.00,{net:.2f},CAD,55500001,"  # pii-ok
+            f"Trades,Individual\n")
+
+
+def _qt_project(root, year, csv, extra=""):
+    p = _project(root, year, "", extra)
+    (p / "inputs" / "margin" / "questrade.csv").write_text(_QT_HEADER + csv)
+    r = _run_cli(p, "run", "--no-input")
+    assert r.returncode == 0, r.stderr
+    return p
+
+
+@rule("CA-RPT-08")
+class TestHandoffMatching(unittest.TestCase):
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.base = Path(self._td.name)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _closed(self, csv, extra=""):
+        p = _qt_project(self.base / "p25", 2025, csv, extra)
+        r = _run_cli(p, "close-year")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return p / "filed" / "2025.json"
+
+    def _handoff(self, rec, csv, extra=""):
+        q = _qt_project(self.base / "p26", 2026, csv,
+                        f'prior_year_record = "{rec}"\n' + extra)
+        r = _run_cli(q, "handoff", "--json")
+        return r.returncode, json.loads(r.stdout)
+
+    KEEP = (_qt("2025-03-03", "2025-03-04", "Buy", "KEEP.TO", 10, 10.0)
+            + _qt("2025-06-03", "2025-06-04", "Sell", "KEEP.TO", -10, 11.0))
+    HIST = (KEEP
+            + _qt("2025-03-03", "2025-03-04", "Buy", "AAA.TO", 200, 10.0)
+            + _qt("2025-12-31", "2026-01-02", "Sell", "AAA.TO", -100, 15.0))
+
+    def test_distinct_january_sale_does_not_hide_a_missed_one(self):
+        # A2-0354: the Dec-31 sale (net 1,500) is in neither year; a
+        # distinct 100-unit sale on Jan 2 (net 1,200) cleared it.
+        rec = self._closed(self.HIST)
+        rc, rep = self._handoff(rec, (
+            self.KEEP
+            + _qt("2025-03-03", "2025-03-04", "Buy", "AAA.TO", 200, 10.0)
+            + _qt("2026-01-02", "2026-01-05", "Sell", "AAA.TO", -100,
+                  12.0)))
+        self.assertEqual(rc, 1)
+        self.assertEqual([m["symbol"] for m in rep["missed"]], ["AAA.TO"])
+
+    def test_trade_basis_record_into_settle_project_one_item(self):
+        # A2-0356 / A2-0673: 3 problems per straddling sale (positions +
+        # two doubles), the double quoting the settle date.
+        rec = self._closed(self.HIST, 'tax_date = "trade"\n')
+        rc, rep = self._handoff(rec, self.HIST)
+        self.assertEqual(rc, 1)
+        self.assertEqual(rep["positions"], [])
+        self.assertEqual(len(rep["double"]), 1)
+        self.assertIn("date-basis change", rep["double"][0]["why"])
+        self.assertEqual(rep["problems"], 1)
+
+    def test_settle_basis_record_into_trade_project_one_item(self):
+        rec = self._closed(self.HIST)
+        rc, rep = self._handoff(rec, self.HIST, 'tax_date = "trade"\n')
+        self.assertEqual(rc, 1)
+        self.assertEqual(rep["positions"], [])
+        self.assertEqual(len(rep["missed"]), 1)
+        self.assertEqual(rep["problems"], 1)
+
+    def test_same_size_sales_either_side_of_dec31_are_distinct(self):
+        # A2-0122: the Dec-29 sale is its own 2025 row in this project;
+        # the Jan-2 sale of the same size is a different sale.
+        h = (_qt("2025-03-03", "2025-03-04", "Buy", "XYZ.TO", 200, 50.0)
+             + _qt("2025-12-29", "2025-12-30", "Sell", "XYZ.TO", -100,
+                   50.0))
+        rec = self._closed(h)
+        rc, rep = self._handoff(rec, h + _qt(
+            "2026-01-02", "2026-01-05", "Sell", "XYZ.TO", -100, 50.2))
+        self.assertEqual(rep["double"], [], rep)
+        self.assertEqual(rc, 0, rep)
+
+    def test_short_cover_against_filed_dispositions(self):
+        # A2-0674: another tool reported the short in 2025 (proceeds
+        # 5,000); this project books the cover on Jan 2 (the engine's
+        # proceeds are the negated cover cost) — never matched.
+        h = (_qt("2025-03-03", "2025-03-04", "Buy", "KEEP.TO", 10, 10.0)
+             + _qt("2025-06-03", "2025-06-04", "Sell", "KEEP.TO", -10,
+                   11.0))
+        p = _qt_project(self.base / "p25", 2025, h)
+        csvp = self.base / "filed.csv"
+        csvp.write_text("symbol,date,qty,proceeds,cost,gain\n"
+                        "ABC.TO,2025-12-31,100,5000,4000,1000\n")
+        r = _run_cli(p, "close-year", "--filed-dispositions", str(csvp))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rc, rep = self._handoff(p / "filed" / "2025.json", h + (
+            _qt("2025-12-31", "2026-01-02", "Sell", "ABC.TO", -100, 50.0)
+            + _qt("2026-01-02", "2026-01-05", "Buy", "ABC.TO", 100, 40.0)))
+        self.assertEqual([d["symbol"] for d in rep["double"]], ["ABC.TO"])
+
+
+class TestHandoffDust(unittest.TestCase):
+    def test_sub_unit_quantity_difference_is_reported(self):
+        # A2-1133: 9.4e-7 BTC against 5.6e-7 (or 0) was "no difference".
+        from taxjson.lib import handoff
+        cfg = {"settings": {"country": "canada", "year": 2026},
+               "accounts": {"crypto": {"type": "taxable", "crypto": True}}}
+        rec = {"year": 2025, "year_end": {"crypto": {
+            "BTC": {"qty": 9.4e-7, "acb": 0.05, "deferred": 0.0}}}}
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "work").mkdir()
+            for now in (5.6e-7, 0.0):
+                op = {"crypto": {"BTC": {"qty": now, "acb": 0.05,
+                                         "deferred": 0.0}}}
+                rep = handoff.check(Path(td), cfg, rec, op)
+                self.assertEqual(len(rep["positions"]), 1, now)
+            op = {"crypto": {"BTC": {"qty": 9.4e-7, "acb": 0.05,
+                                     "deferred": 0.0}}}
+            self.assertEqual(handoff.check(Path(td), cfg, rec, op)
+                             ["positions"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

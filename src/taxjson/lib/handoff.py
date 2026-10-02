@@ -264,7 +264,7 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
             for h in tdoc.get("inventory") or []:
                 sym = h.get("symbol")
                 q = float(h.get("qty") or 0.0)
-                if not sym or abs(q) < QTY_TOL:
+                if not sym or abs(q) < 1e-12:
                     continue
                 p = pos.setdefault(sym, {"qty": 0.0, "acb": 0.0,
                                          "deferred": 0.0})
@@ -476,6 +476,16 @@ def _redescribed_options(prev: Dict[str, Any], now: Dict[str, Any]
     return out
 
 
+def _qty_eq(a: float, b: float) -> bool:
+    """Quantities equal within QTY_TOL, relative for sub-unit amounts: the
+    absolute floor called 9.4e-7 BTC and 5.6e-7 (or 0) equal, so a dust
+    difference between the closed year and the opening was "no
+    difference" (A2-1133; taxjson-diff's values_equal, S029-18)."""
+    d = abs(float(a) - float(b))
+    return (d <= QTY_TOL * max(1.0, abs(a), abs(b))
+            and d <= QTY_TOL * max(abs(a), abs(b), 1e-12))
+
+
 def _acb_close(a: float, b: float) -> bool:
     return abs(a - b) <= max(ACB_ABS_TOL, ACB_REL_TOL * max(abs(a), abs(b)))
 
@@ -613,6 +623,18 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                     f"after {_ca}. Re-close {ry} in its project now that "
                     f"the year has ended (after filing).")})
 
+    # A trade that straddles Dec 31 sits on different sides of the
+    # year-end in two projects on different date bases: the quantity
+    # difference it causes is that sale, reported once in section 2 as
+    # a date-basis change, not "a lot or a sale is missing" here too
+    # (A2-0356, A2-0673).
+    basis_dq: Dict[str, float] = {}
+    if rbasis != basis:
+        for st in record.get("settle_next_year") or []:
+            q = float(st.get("qty") or 0.0)
+            basis_dq[st["symbol"]] = basis_dq.get(st["symbol"], 0.0) + (
+                -q if rbasis == "trade" else q)
+
     # 1. Opening positions and cost.
     book_by, filed_by = _filed_by_symbol(record)
     for g in sorted(set(record.get("year_end") or {}) | set(opening)):
@@ -634,9 +656,12 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
             n = now.get(sym, {"qty": 0.0, "acb": 0.0, "deferred": 0.0})
             dq = n["qty"] - p["qty"]
             da = n["acb"] - p["acb"]
-            if abs(dq) <= QTY_TOL * max(1.0, abs(p["qty"])) \
+            if _qty_eq(n["qty"], p["qty"]) \
                     and _acb_close(n["acb"], p["acb"]):
                 continue
+            if sym in basis_dq and abs(basis_dq[sym]) > QTY_TOL \
+                    and _qty_eq(dq, basis_dq[sym]):
+                continue                # the straddling trade (section 2)
             k = _root_sym(sym)
             filed_diff = None
             if record.get("filed_dispositions") is not None:
@@ -648,7 +673,7 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                     "opening_qty": n["qty"], "opening_acb": n["acb"],
                     "qty_diff": round(dq, 8), "acb_diff": round(da, 2),
                     "filed_gain_diff": filed_diff}
-            if abs(dq) > QTY_TOL * max(1.0, abs(p["qty"])):
+            if not _qty_eq(n["qty"], p["qty"]):
                 item["why"] = (
                     f"{ry} books hold {p['qty']:g} on Dec 31; this "
                     f"project opens with {n['qty']:g}. A lot or a sale is "
@@ -718,18 +743,40 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                 if r.get("action") in ("BUYSELL", "ASSIGN"):
                     here.append(dict(r, _acct=n))
 
+    used_here: set = set()
+
     def _found(s: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        for r in here:
-            if r.get("symbol") != s["symbol"]:
+        """This project's row for the record's straddling trade `s`: the
+        same symbol and quantity, and the same trade date — or, within
+        3 days (an opening .tt dates a row on its settlement day), the
+        same net amount. Symbol + quantity + 3 days let a DISTINCT
+        same-size January sale clear a sale missing from both years, or
+        raise a false "double" (A2-0354). A row answers one item."""
+        sd = _d(s.get("date"))
+        for idx, r in enumerate(here):
+            if idx in used_here or r.get("symbol") != s["symbol"]:
                 continue
-            if abs(float(r.get("quantity") or 0) - s["qty"]) > \
-                    QTY_TOL * max(1.0, abs(s["qty"])):
+            if not _qty_eq(float(r.get("quantity") or 0), s["qty"]):
                 continue
             rd = _d(r.get("date"))
-            if rd and abs((rd - _d(s["date"])).days) <= 3:
-                return r
+            if rd is None or sd is None:
+                continue
+            if rd != sd:
+                if abs((rd - sd).days) > 3:
+                    continue
+                if s.get("net") is not None:
+                    rn = abs(float(r.get("net_amount") or 0.0))
+                    if abs(rn - abs(float(s["net"]))) > max(
+                            1.0, 0.005 * abs(float(s["net"]))):
+                        continue
+            used_here.add(idx)
+            return r
         return None
 
+    _bc = (f" (a date-basis change: the {ry} record is on "
+           f"{rbasis} dates, this project on {basis} dates)"
+           if rbasis != basis else "")
+    reported_double: set = set()
     for s in record.get("settle_next_year") or []:
         hit = _found(s)
         if rbasis == "settle":
@@ -740,20 +787,59 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                     f"the {ry} books leave it to {ry + 1} (settlement "
                     f"basis), but it is not in this project"
                     + (" as a " + str(ry + 1) + " trade" if hit else "")
+                    + _bc
                     + ". Add it (dated its settlement day in a .tt file, "
                     "or keep the broker row) so it is reported once.")))
         else:
             if hit is not None and (_bdate(hit, basis) or date.min).year \
                     > ry:
+                reported_double.add((_root_sym(s["symbol"]),
+                                     round(abs(float(s["qty"])), 6),
+                                     str(s.get("date"))))
                 issues["double"].append(dict(s, why=(
                     f"the {ry} return used trade dates, so this "
                     f"{s['date']} trade was reported in {ry}; this "
-                    f"project books it again in {ry + 1}.")))
+                    f"project books it again in {ry + 1}" + _bc + ".")))
 
     # 3. Dispositions reported by the closed year and again here.
     closed = (record.get("filed_dispositions")
               if record.get("filed_dispositions") is not None
               else record.get("dispositions")) or []
+    # The closed year's sales this project's own books ALSO hold as
+    # closed-year rows: a same-size sale in early January is then a
+    # distinct sale, not the closed one again (A2-0122).
+    # Only a sale out of a LONG position is a disposition: the row that
+    # opens a short is not the closed year's sale (its cover is, A2-0674).
+    own_closed: List[Tuple[str, float, Optional[date], Optional[date],
+                           float]] = []
+    _pos: Dict[str, float] = {}
+    for r in sorted(here, key=lambda x: (_bdate(x, basis) or date.max,
+                                         str(x.get("time") or ""))):
+        sym = r.get("symbol") or ""
+        q = float(r.get("quantity") or 0.0)
+        before = _pos.get(sym, 0.0)
+        _pos[sym] = before + q
+        if q >= 0 or before <= QTY_TOL:
+            continue
+        if (_bdate(r, basis) or date.max) > date(ry, 12, 31):
+            continue
+        own_closed.append((_root_sym(sym), min(abs(q), before),
+                           _d(r.get("date")), _d(r.get("date_settle")),
+                           abs(float(r.get("net_amount") or 0.0))))
+
+    def _is_own(c: Dict[str, Any]) -> bool:
+        k, cq = _root_sym(c["symbol"]), abs(float(c["qty"]))
+        cds = {_d(c.get("date")), _d(c.get("date_settle"))} - {None}
+        cp = abs(float(c.get("proceeds") or 0.0))
+        for ok, oq, otd, osd, onet in own_closed:
+            if ok != k or not _qty_eq(oq, cq):
+                continue
+            if not ({otd, osd} & cds):
+                continue
+            if abs(onet - cp) <= max(1.0, 0.01 * cp):
+                return True
+        return False
+
     from taxjson.lib.report_model import resolve_gains_files
     taxable = {n for ns in groups(cfg).values() for n in ns}
     for acct, p in resolve_gains_files(cache).items():
@@ -773,27 +859,46 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                 continue
             k = _root_sym(t.get("symbol"))
             q = abs(float(t.get("qty") or 0.0))
+            tp = float(t.get("proceeds") or 0.0)
+            # A short cover: the engine's proceeds are the negated cover
+            # cost and its cost the negated short-sale proceeds; another
+            # tool's CSV reports the short-sale proceeds (A2-0674).
+            tp_alt = -float(t.get("cost") or 0.0) \
+                if (t.get("direction") == "SHORT" or tp < 0) else None
+            tol = max(1.0, 0.01 * abs(tp))
             for c in closed:
                 if _root_sym(c["symbol"]) != k:
                     continue
                 if abs(abs(c["qty"]) - q) > max(QTY_TOL, 0.005 * q):
                     continue
-                cd = _d(c.get("date_settle") or c.get("date"))
-                tp = float(t.get("proceeds") or 0.0)
-                if abs(c["proceeds"] - tp) > max(5.0, 0.01 * abs(tp)):
+                cp = float(c["proceeds"])
+                if abs(cp - tp) > tol and (
+                        tp_alt is None or abs(cp - tp_alt) > max(
+                            1.0, 0.01 * abs(tp_alt))):
                     continue            # a different sale of the same size
-                if cd and abs((cd - td).days) <= 5:
-                    issues["double"].append({
-                        "symbol": t.get("symbol"), "date": str(td),
-                        "qty": q, "gain": round(float(t.get("gain") or 0),
-                                                2),
-                        "closed_date": str(cd),
-                        "why": (f"a {q:g}-unit sale of "
-                                f"{t.get('symbol')} on {td} is in this "
-                                f"year's totals, and the {ry} record "
-                                f"has the same sale on {cd}. Report it "
-                                f"in one year only.")})
-                    break
+                cds = [x for x in (_d(c.get("date")),
+                                   _d(c.get("date_settle"))) if x]
+                if not cds or min(abs((x - td).days) for x in cds) > 5:
+                    continue
+                if (_root_sym(c["symbol"]), round(abs(float(c["qty"])), 6),
+                        str(c.get("date"))) in reported_double:
+                    break               # already one item in section 2
+                if _is_own(c):
+                    continue            # the closed sale is its own row here
+                # The date the closed RETURN used (its record's basis).
+                cd = (_d(c.get("date")) if rbasis == "trade"
+                      else (_d(c.get("date_settle")) or _d(c.get("date"))))
+                issues["double"].append({
+                    "symbol": t.get("symbol"), "date": str(td),
+                    "qty": q, "gain": round(float(t.get("gain") or 0),
+                                            2),
+                    "closed_date": str(cd),
+                    "why": (f"a {q:g}-unit sale of "
+                            f"{t.get('symbol')} on {td} is in this "
+                            f"year's totals, and the {ry} record "
+                            f"has the same sale on {cd}. Report it "
+                            f"in one year only.")})
+                break
     if record.get("filed_dispositions") is None:
         issues["notes"].append(
             f"The {ry} record holds taxjson's own dispositions. If that "

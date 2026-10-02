@@ -28,6 +28,15 @@
   January replacement's share is no longer in the Dec 31 cost; a US
   record carries the §1091 basis addition `list` shows (A2-0669,
   A2-0352, A2-1140, A2-0353).
+- handoff matching: a straddling trade matches only the same trade (same
+  trade date, or the same net within 3 days), so a distinct same-size
+  January sale no longer hides a sale missing from both years; a
+  date-basis change between the two projects is one item per sale (not
+  a position, two doubles and the wrong date); a closed-year sale that
+  is its own row in this project is not "reported in both years"; a
+  short cover matches another tool's filed short; a sub-unit (crypto
+  dust) quantity difference is reported (A2-0354, A2-0356, A2-0673,
+  A2-0122, A2-0674, A2-1133).
 
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
