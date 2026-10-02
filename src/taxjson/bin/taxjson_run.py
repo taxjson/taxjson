@@ -10990,12 +10990,23 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         sys.exit(f"taxjson sanity: {ctx}: {name!r} is not an account "
                  f"(have: {', '.join(sorted(tax))})")
 
+    def _resolved(name: str) -> Optional[Path]:
+        """The file a holdings argument names, or None when it is not
+        one: a symlink loop or an unreadable path is one clean line,
+        never a traceback (audit A2-1392)."""
+        try:
+            p2 = Path(name).expanduser().resolve()
+            return p2 if p2.is_file() else None
+        except (OSError, RuntimeError):
+            return None
+
     def _file(name: str, ctx: str) -> Path:
-        p2 = Path(name).expanduser().resolve()
-        if p2.is_file():
+        p2 = _resolved(name)
+        if p2 is not None:
             return p2
-        sys.exit(f"taxjson sanity: {ctx}: {name!r} is not an existing "
-                 f".toml file")
+        sys.exit(f"taxjson sanity: {_mask_ids_in_path(ctx)}: "
+                 f"{_mask_ids_in_path(name)!r} is not an existing "
+                 f".toml file (or a symlink loop)")
 
     groups: Dict[Tuple[str, ...], Dict[str, Any]] = {}
     bare: Dict[str, Any] = {"accounts": [], "files": [], "paired": False}
@@ -11025,11 +11036,13 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                 placed_files[path] = gname
                 group["files"].append(path)
             elif owner == gname:
-                print(f"taxjson sanity: note: file {path.name} given "
+                print(f"taxjson sanity: note: file "
+                      f"{_mask_ids_in_path(path.name)} given "
                       f"more than once — counted once.",
                       file=sys.stderr)
             else:
-                sys.exit(f"taxjson sanity: file {path.name} appears in "
+                sys.exit(f"taxjson sanity: file "
+                         f"{_mask_ids_in_path(path.name)} appears in "
                          f"more than one group ({owner} and {gname})")
 
     items = list(args.items or [])
@@ -11088,11 +11101,12 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         if a in tax:
             _place(bare, "the aggregate group", a, None)
             continue
-        p2 = Path(a).expanduser().resolve()
-        if p2.is_file():
+        p2 = _resolved(a)
+        if p2 is not None:
             _place(bare, "the aggregate group", None, p2)
             continue
-        sys.exit(f"taxjson sanity: {a!r} is neither an account "
+        sys.exit(f"taxjson sanity: {_mask_ids_in_path(a)!r} is neither "
+                 f"an account "
                  f"(have: {', '.join(sorted(tax))}) nor an existing "
                  f".toml file")
     if bare["accounts"] or bare["files"]:
@@ -11265,12 +11279,13 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             "accounts": accounts,
             # The [meta] account label is the broker id portoml writes:
             # masked like the text listing (S044-16).
-            "files": [{"file": str(p2),
+            "files": [{"file": _mask_ids_in_path(str(p2)),
                        "file_account": _mask_ids_in_path(lbl)}
                       for p2, lbl in zip(files, file_labels)],
             "groups": [{"accounts": sorted(g["accounts"]),
                         "paired": g["paired"],
-                        "files": [str(p2) for p2 in g["files"]],
+                        "files": [_mask_ids_in_path(str(p2))
+                                  for p2 in g["files"]],
                         "matched_via_underlying": [
                             {"file_symbol": a, "taxjson_symbol": b}
                             for a, b in g["via_underlying"]],

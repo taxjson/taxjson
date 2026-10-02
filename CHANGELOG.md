@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `taxjson sanity --json` and the file-given-twice / file-in-two-groups
+  messages mask an account id in a holdings file name, as the text
+  listing already did (audit A2-1380); a holdings argument that is a
+  symlink loop is a one-line error instead of a traceback (A2-1392).
 - Every parser message (Questrade, RBC, Webull, Kraken, Coinbase, the
   generic importer, security-override and .tt errors) now names its file
   the masked way IB's already did, so a download named after an account
