@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- `run --account <sheltered>` refuses (and keeps `sheltered_base.json`)
+  when another sheltered account with inputs has no book in work/; it
+  rebuilt the combined book without that account's buys, so the radar
+  said "safe to sell at a loss" (re-audit A2-0128).
+- The same export file under two accounts' `inputs/` folders is an
+  ATTENTION line naming both files, for every broker and `.tt`; `run
+  --strict` stops on it and on one broker account feeding two taxjson
+  accounts (re-audit A2-0366).
+- Every view and planning command that reads the work/ books (gains,
+  divs-sum, roc-sum, wash-sales, fx-cash, list, shares, winners, the
+  radar, buy-check, sell-check, harvest and others) prints the
+  stale-books banner after a failed run or changed inputs, on stderr
+  (re-audit A2-0380, A2-0381).
+- edge-cases, spinoffs, splits, check-dates, winners, leaps and
+  leaps-sum refuse an account that is not in `[accounts]`; harvest names
+  a bare symbol filter that matches no position (re-audit A2-0684,
+  A2-1167).
+- trades, divs, events, roc, gains, shares, fees-sum and check-dates name
+  a configured account that has inputs but no books (re-audit A2-1182).
+- Grant timing: an expired written option counts as a close in ccd-sum,
+  winners and the .sum TRADES line, as under close timing (re-audit
+  A2-0693).
+- buy-check, sell-check, watch, instalments, wash-sales and `list --date`
+  relay a failed child's error line instead of the first 200-400
+  characters of its traceback (re-audit A2-1190).
+
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of

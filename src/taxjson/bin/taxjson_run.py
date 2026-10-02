@@ -5247,6 +5247,10 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
         if not accounts:
             sys.exit(f"taxjson {label}: no transaction files in {cache} "
                      f"(run `taxjson run` first).")
+        # S045-09 twin (audit A2-1182): an account with inputs but no
+        # books was simply absent from trades/divs/events/roc.
+        _warn_accounts_without_books(root, accounts, label,
+                                     "transaction file")
 
     rows = []
     bad_dates = 0
@@ -7395,6 +7399,13 @@ def cmd_gains(args: argparse.Namespace) -> None:
         if not accounts:
             sys.exit(f"taxjson gains: no native gains files in {cache} "
                      f"(run `taxjson run` first).")
+        # S045-09 twin (audit A2-1182): accounts with books are named by
+        # the notes above; one with inputs but no books at all is not.
+        _warn_accounts_without_books(
+            root, set(accounts) | {
+                n for n in (_soft_config(root).get("accounts") or {})
+                if (cache / f"{n}_base.json").exists()},
+            "gains", "books")
 
     rows = []
     bad_dates = 0
@@ -9457,6 +9468,7 @@ def cmd_shares(args: argparse.Namespace) -> None:
     if not files:
         sys.exit(f"taxjson shares: no gains files in {cache} "
                  f"(run `taxjson run` first).")
+    _warn_accounts_without_books(root, files, "shares", "gains file")
     basis = gains_basis_label(files)
     want = None
     if getattr(args, "taxable", False) or getattr(args, "sheltered", False):
@@ -9687,6 +9699,9 @@ def cmd_check_dates(args: argparse.Namespace) -> None:
     if not doc["sources"]:
         sys.exit("taxjson check-dates: no parsed sources in work/ — run "
                  "`taxjson run` first.")
+    if not args.account:
+        _warn_accounts_without_books(root, _discover_tx_accounts(root / "work"),
+                                     "check-dates", "parsed source")
     if getattr(args, "json", False):
         _json_out(doc)
     else:
@@ -14521,6 +14536,8 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
         cmd += [str(f) for f in files]
     else:
         cmd += ["--cache", str(cache)]
+        _warn_accounts_without_books(root, _discover_tx_accounts(cache),
+                                     "fees-sum", "transaction file")
 
     tok = (period or "").strip().lower()
     if period and _YEAR_TOKEN_RE.fullmatch(tok):         # literal year window
