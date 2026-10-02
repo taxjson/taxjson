@@ -215,3 +215,125 @@ class TestHiddenAndLockFiles(_Built):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------- run state
+class TestRunCleanSeesWhatStrictRefuses(_Built):
+    def test_unbooked_lines_in_a_report(self):
+        """A2-0357: an UNBOOKED parser row in a .sum keeps run-clean open."""
+        p = self.copy()
+        s = p / "reports" / "margin.sum"
+        s.write_text("warning: UNBOOKED: Kraken ledger x.csv: 1 row(s) ...\n" + s.read_text())
+        r = cl.d_run_clean(ctx(p))
+        self.assertEqual(r.status, "attention", r.detail)
+        self.assertIn("1 UNBOOKED event(s) in reports/margin.sum", r.detail)
+
+    def test_renamed_account_orphans(self):
+        """A2-1165: work/ books of an account the config no longer has are
+        counted twice — run --strict refuses, run-clean says so."""
+        p = self.copy()
+        (p / "taxjson.toml").write_text(TOML.replace("[accounts.margin]", "[accounts.cash]"))
+        shutil.move(str(p / "inputs" / "margin"), str(p / "inputs" / "cash"))
+        r = tj(p, "run", "--no-input", "--strict", check=False)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not in taxjson.toml: margin", r.stderr)
+        tj(p, "run", "--no-input")
+        res = cl.d_run_clean(ctx(p))
+        self.assertEqual(res.status, "attention", res.detail)
+        self.assertIn("not in taxjson.toml: margin", res.detail)
+
+
+KR_SEND = ("txid,refid,time,type,subtype,aclass,asset,wallet,amount,fee,balance\n"
+           "LA1AAA,RA1,2025-01-05 12:00:00,deposit,,currency,SOL,spot,100,0,100\n"
+           "LB1BBB,RB1,2025-03-04 12:00:00,withdrawal,,currency,SOL,spot,-50,0,50\n")
+
+
+class TestCryptoSendsGates(unittest.TestCase):
+    """A2-0127, A2-0362, A2-1151: a crypto send the run could not book, an
+    undecided one, or one booked twice is not a clean run."""
+
+    def setUp(self):
+        from test_fix_sends import _rates_file
+        self._td = tempfile.TemporaryDirectory()
+        td = Path(self._td.name)
+        self.root = td / "proj"
+        acct = self.root / "inputs" / "crypto"
+        acct.mkdir(parents=True)
+        (self.root / "taxjson.toml").write_text(
+            '[settings]\nyear = 2025\ncountry = "canada"\n'
+            'base_currency = "CAD"\nsource_currencies = ["USD"]\n'
+            '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
+        (acct / "kr_ledgers.csv").write_text(KR_SEND)
+        (self.root / "work").mkdir()
+        _rates_file(self.root / "work" / "to_base.csv")
+        self.home = td / "home"
+        self.home.mkdir()
+        (self.home / ".crypto_price_cache.json").write_text("{}")
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def cli(self, *a):
+        from test_fix_sends import _cli
+        return _cli(self.root, self.home, *a)
+
+    def sid(self):
+        r = self.cli("crypto-sends", "crypto", "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)["accounts"]["crypto"]["sends"][0]["id"]
+
+    def cl_ctx(self):
+        from taxjson.lib.tomlcompat import tomllib
+        cfg = tomllib.loads((self.root / "taxjson.toml").read_text())
+        return cl.Ctx(root=self.root, cfg=cfg, year=2025, today=date(2026, 9, 1),
+                      run_sub=lambda argv, timeout=900: (0, "", ""))
+
+    def test_undecided_and_unpriced(self):
+        r = self.cli("run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        r = self.cli("run", "--no-input", "--strict")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not yet classified", r.stderr)
+        sid = self.sid()
+        self.assertEqual(self.cli("crypto-sends", "crypto", "--set", f"{sid}=gift").returncode, 0)
+        r = self.cli("run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        diag = (self.root / "work" / "crypto_crypto_sends.diag").read_text()
+        self.assertTrue(diag.startswith("warning: UNBOOKED: crypto: crypto sends: no fair value"), diag)
+        res = cl.d_run_clean(self.cl_ctx())
+        self.assertEqual(res.status, "attention", res.detail)
+        self.assertIn("UNBOOKED", res.detail)
+        r = self.cli("run", "--no-input", "--strict")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no fair value", r.stderr)
+        # Priced by hand: booked, the diag is gone, strict passes.
+        self.assertEqual(self.cli("crypto-sends", "crypto", "--set", f"{sid}=gift",
+                                  "--price", "100").returncode, 0)
+        r = self.cli("run", "--no-input", "--strict")
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        self.assertFalse((self.root / "work" / "crypto_crypto_sends.diag").exists())
+        self.assertEqual(cl.d_run_clean(self.cl_ctx()).status, "done")
+        self.assertEqual(cl.d_crypto_sends(self.cl_ctx()).status, "done")
+
+        # A2-1151: a new price saved without --write/run: the .tt is stale.
+        self.assertEqual(self.cli("crypto-sends", "crypto", "--set", f"{sid}=gift",
+                                  "--price", "250").returncode, 0)
+        res = cl.d_crypto_sends(self.cl_ctx())
+        self.assertEqual(res.status, "attention", res.detail)
+        self.assertIn("out of date", res.detail)
+        self.assertEqual(cl.d_run_clean(self.cl_ctx()).status, "attention")
+
+        # A2-0127: a hand-written line selling the same send.
+        self.assertEqual(self.cli("run", "--no-input").returncode, 0)
+        tt = (self.root / "inputs" / "crypto" / "crypto_sends.tt").read_text()
+        line = [ln for ln in tt.splitlines() if ln.startswith("BUYSELL")][0]
+        (self.root / "inputs" / "crypto" / "gift_by_hand.tt").write_text(line + "\n")
+        res = cl.d_crypto_sends(self.cl_ctx())
+        self.assertEqual(res.status, "attention", res.detail)
+        self.assertIn("counted twice", res.detail)
+        r = self.cli("run", "--no-input", "--strict")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("counted twice", r.stderr)
+        r = self.cli("run", "--no-input")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("counted twice", (self.root / "work" / "crypto_crypto_sends.diag").read_text())

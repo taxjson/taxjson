@@ -38,6 +38,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 STATE_FILE = "checklist.json"
+# taxjson_run.UNBOOKED_PREFIX: a parser row that is a tax event the
+# run could not book.
+UNBOOKED_PREFIX = "warning: UNBOOKED:"
 
 STAGES = [
     (1, "Freeze the inputs"),
@@ -342,6 +345,34 @@ def _base_docs_checked(ctx: Ctx, names: List[str]
     return out, bad
 
 
+def orphan_work_accounts(root: Path, known) -> List[str]:
+    """Account names with a work/<name>_base.json that taxjson.toml no
+    longer configures (a renamed or removed account). Their artifacts
+    keep matching the discovery globs (resolve_gains_files, fees
+    --cache, the audit's --source scan), so every aggregate counts them
+    a second time (2026-09 audit; A2-1165: `run --strict` and run-clean
+    now stop on them)."""
+    known = set(known)
+    names = set()
+    try:
+        bases = list((root / "work").glob("*_base.json"))
+    except OSError:
+        return []
+    for p in bases:
+        if p.name.startswith(".") or p.name == "sheltered_base.json":
+            continue
+        nm = p.name[:-len("_base.json")]
+        if nm.endswith("_raw"):
+            # `S_raw_base.json` is usually account S's raw-books
+            # artifact — but only skip it when that S actually exists,
+            # or a REAL account named `ib_raw` would never be flagged.
+            parent = nm[:-len("_raw")]
+            if parent in known or (root / "work" / f"{parent}_base.json").exists():
+                continue
+        names.add(nm)
+    return sorted(names - known)
+
+
 def _git(root: Path, *args: str) -> Tuple[int, str]:
     """git in the user's project, hardened against a hostile .git/config:
     core.fsmonitor and hooks can execute arbitrary commands, and a status
@@ -528,6 +559,7 @@ def d_run_clean(ctx: Ctx) -> Result:
     if not sums:
         return Result("run-clean", "blocked", "no reports — run `taxjson run`")
     per_account: Dict[str, int] = {}
+    unbooked: Dict[str, int] = {}
     empty_parse: List[str] = []
     unreadable: List[str] = []
     for s in sums:
@@ -551,6 +583,18 @@ def d_run_clean(ctx: Ctx) -> Result:
                             head):
             if f not in empty_parse:
                 empty_parse.append(f)
+        # Rows the parsers (or the crypto-sends stage) know are tax
+        # events but could not book — the gate `run --strict` applies
+        # (A2-0357, A2-0362). Counted per account, like the errors.
+        try:
+            whole = s.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            whole = head
+        acct_ = s.stem[:-len("_wash")] if s.stem.endswith("_wash") else s.stem
+        n_unb = sum(1 for ln in whole.splitlines()
+                    if ln.lstrip().startswith(UNBOOKED_PREFIX))
+        if n_unb:
+            unbooked[acct_] = max(unbooked.get(acct_, 0), n_unb)
     errors = sum(per_account.values())
     pend = [p for p in ctx.cache.glob("*pending_elections.json")
             if p.is_file() and p.stat().st_size > 2]
@@ -570,8 +614,21 @@ def d_run_clean(ctx: Ctx) -> Result:
                         f"validation errors are unknown")
     if errors:
         problems.append(f"{errors} validation error(s) in reports/*.sum")
+    if unbooked:
+        problems.append(
+            f"{sum(unbooked.values())} UNBOOKED event(s) in "
+            f"{', '.join(f'reports/{a}.sum' for a in sorted(unbooked))} — "
+            f"rows the run could not book are not in the books "
+            f"(`run --strict` refuses them)")
     if pend:
         problems.append("pending elections (`taxjson elect --pending`)")
+    orphans = orphan_work_accounts(ctx.root, ctx.accounts)
+    if orphans:
+        problems.append(
+            f"work/ carries books of account(s) not in taxjson.toml: "
+            f"{', '.join(orphans)} — every total counts them again; "
+            f"delete work/<name>_* and reports/<name>* (a renamed "
+            f"account) or restore the account")
     # What the last FULL run was built from (content, not mtimes): a
     # deleted input or a corrected export copied with its old mtime
     # (cp -p, rsync -a, unzip) left this step done over stale reports
@@ -989,16 +1046,27 @@ def d_crypto_sends(ctx: Ctx) -> Result:
         rep = cs.build_report(ctx.root, ctx.cfg, None, None, with_pool=False)
     except ValueError as e:
         return Result("crypto-sends", "attention", str(e))
-    undecided, stale, total, refused = [], [], 0, []
+    undecided, stale, total, refused, dups = [], [], 0, [], []
     for n, a in rep["accounts"].items():
         total += len(a["sends"])
         if a["undecided"]:
             undecided.append(f"{n}: {a['undecided']}")
         refused += [e["id"] for e in cs.refused_entries(a)]
-        want = cs.tt_want_ids(a)
-        have = cs.tt_ids(Path(a["tt_file"])) or set()
-        if want != have:
+        if cs.tt_stale_ids(a, Path(a["tt_file"])):
             stale.append(n)
+        # A hand-written .tt line selling what crypto_sends.tt sells:
+        # both are booked (A2-0127).
+        dups += cs.duplicate_lines(ctx.root / "inputs" / n,
+                                   cs.disposing_entries(a))
+    if dups:
+        d0 = dups[0]
+        return Result("crypto-sends", "attention",
+                      f"{len(dups)} hand-written .tt line(s) sell a send "
+                      f"crypto_sends.tt also sells — counted twice: "
+                      f"{d0['file']} line {d0['line']} ({d0['id']})"
+                      + (" ..." if len(dups) > 1 else "")
+                      + " — delete the hand-written line, or record the "
+                        "send as `self`")
     if refused:
         return Result("crypto-sends", "attention",
                       f"saved as `gift`, which a US project refuses (not "

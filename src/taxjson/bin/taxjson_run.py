@@ -1805,13 +1805,37 @@ def _dup_warning(acct: str, dups: List[Dict[str, Any]]) -> List[str]:
     return out
 
 
-def _stage_crypto_sends(root: Path, name: str, interactive: bool) -> None:
+def _stage_crypto_sends(root: Path, name: str, interactive: bool,
+                        strict: bool = False) -> None:
     """`taxjson run` hook for a crypto account, right after the parse:
     prompt for undecided sends at a TTY (else one note line), then
-    refresh the generated crypto_sends.tt from the saved decisions."""
+    refresh the generated crypto_sends.tt from the saved decisions.
+
+    What the books then lack or hold twice — a gift/payment with no
+    fair value (not booked), a hand-written .tt line that sells a send
+    the generated file sells too — goes to work/<acct>_crypto_sends.diag
+    (UNBOOKED / ATTENTION lines: the .sum DIAGNOSTICS and the
+    checklist's run-clean step read them), and `--strict` stops on it
+    and on an undecided send (A2-0127, A2-0362)."""
     from taxjson.lib import crypto_sends as CS
     cfg = _soft_config(root)
     cache = root / "work"
+    _diag = cache / f"{name}_crypto_sends.diag"
+    _diag_lines: List[Tuple[str, str]] = []      # (prefix, message)
+
+    def _finish() -> None:
+        if _diag_lines:
+            _diag.write_text("".join(f"{p} {name}: crypto sends: {m}\n"
+                                     for p, m in _diag_lines),
+                             encoding="utf-8")
+        else:
+            _diag.unlink(missing_ok=True)
+        if strict and _diag_lines:
+            sys.exit(f"taxjson run --strict: {name}: crypto sends: "
+                     f"{_diag_lines[0][1]}"
+                     + (f" (and {len(_diag_lines) - 1} more in "
+                        f"work/{_diag.name})" if len(_diag_lines) > 1
+                        else "") + " — aborting.")
     # Another crypto account not parsed yet (first run of a
     # multi-account project): its arrivals are unknown, so a send to it
     # would look like a gift. Don't ask until its sidecar exists.
@@ -1824,6 +1848,7 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool) -> None:
                                  want=name)
         adoc = report["accounts"].get(name)
         if adoc is None:
+            _diag.unlink(missing_ok=True)
             return
         if adoc["undecided"] and interactive and not unparsed:
             if CS.prompt_undecided(adoc["sends"], Path(adoc["manifest"]),
@@ -1844,18 +1869,31 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool) -> None:
                   f"classified as self / gift / payment — `taxjson "
                   f"crypto-sends {name}` lists them (a gift or payment is "
                   f"a disposition at fair value).", file=sys.stderr)
+            if strict and not unparsed:
+                # A pending decision, like a pending election: a send
+                # that may be a disposition is not in the books.
+                sys.exit(f"taxjson run --strict: {name}: "
+                         f"{adoc['undecided']} crypto send(s) not yet "
+                         f"classified as self / gift / payment — decide "
+                         f"each with `taxjson crypto-sends {name} --set "
+                         f"ID=...` — aborting.")
         status, dups = _crypto_sends_tt(root, name, report)
         if status in ("written", "removed"):
             print(f"  crypto-sends: inputs/{name}/{CS.TT_NAME} {status}")
         for w in _dup_warning(name, dups):
             print(f"taxjson: WARNING: {w}", file=sys.stderr)
+            _diag_lines.append((ATTENTION_PREFIX, w))
     except CS.RefusedDecision as e:
         # A saved decision the country refuses (a US gift): not booked,
         # and the run stops until sends.json says what it was.
+        _diag.unlink(missing_ok=True)
         sys.exit(f"taxjson run: {name}: crypto sends: {e}")
     except ValueError as e:
         print(f"taxjson: WARNING: {name}: crypto sends: {e}",
               file=sys.stderr)
+        # A declared disposition the run could not book (R1-104 class).
+        _diag_lines.append((UNBOOKED_PREFIX, str(e)))
+    _finish()
 
 
 def ib_foreign_roc_mode(settings: Dict[str, Any]) -> str:
@@ -2235,7 +2273,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     if is_crypto and not include_transfers:
         _stage_crypto_sends(inputs_dir.parent, name,
                             interactive=not (no_input
-                                             or not sys.stdin.isatty()))
+                                             or not sys.stdin.isatty()),
+                            strict=strict)
 
     # 2. corp-actions per equity broker. taxjson-corp-actions requires
     # --manifest when multiple CSVs are passed, so always provide one.
@@ -3491,36 +3530,21 @@ def cmd_run(args: argparse.Namespace) -> None:
     # --cache, the audit's --source scan), so a renamed account was
     # counted TWICE in every aggregate (2026-09 audit). Loud, with the
     # exact fix — not auto-deleted (the user may want the history).
-    try:
-        _known = set(accounts)
-        _cache_names = set()
-        for _p in (root / "work").glob("*_base.json"):
-            if _p.name.startswith(".") \
-                    or _p.name == "sheltered_base.json":
-                continue
-            _nm = _p.name[:-len("_base.json")]
-            if _nm.endswith("_raw"):
-                # `S_raw_base.json` is usually account S's raw-books
-                # artifact — but only skip it when that S actually
-                # exists, or a REAL account named `ib_raw` would never
-                # be flagged (2026-09 audit).
-                _parent = _nm[:-len("_raw")]
-                if _parent in _known or (
-                        root / "work" / f"{_parent}_base.json"
-                        ).exists():
-                    continue
-            _cache_names.add(_nm)
-        _orphans = sorted(_cache_names - _known)
-        if _orphans:
-            print(f"taxjson: warning: work/ carries artifacts for "
-                  f"account(s) not in taxjson.toml: "
-                  f"{', '.join(_orphans)} — these are STILL COUNTED "
-                  f"by sum/fees/wash tools (a renamed account is "
-                  f"counted twice). Delete work/<name>_* and "
-                  f"reports/<name>* for each, or restore the account "
-                  f"in the config.", file=sys.stderr)
-    except OSError:
-        pass
+    from taxjson.lib.checklist import orphan_work_accounts
+    _orphans = orphan_work_accounts(root, accounts)
+    if _orphans:
+        print(f"taxjson: warning: work/ carries artifacts for "
+              f"account(s) not in taxjson.toml: "
+              f"{', '.join(_orphans)} — these are STILL COUNTED "
+              f"by sum/fees/wash tools (a renamed account is "
+              f"counted twice). Delete work/<name>_* and "
+              f"reports/<name>* for each, or restore the account "
+              f"in the config.", file=sys.stderr)
+        if getattr(args, "strict", False):
+            # Every aggregate would count them twice (A2-1165).
+            sys.exit("taxjson run --strict: work/ carries artifacts for "
+                     "account(s) not in taxjson.toml: "
+                     f"{', '.join(_orphans)} — aborting.")
     if not accounts:
         _die("no [accounts.*] sections in taxjson.toml")
     # Warnings FIRST: a typo'd `yeer = 2025` must show its did-you-mean

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `run --strict` / checklist run-clean: a crypto send recorded as a gift
+  or payment that could not be priced (not booked), a send booked twice
+  (a hand-written .tt line next to crypto_sends.tt), an undecided send
+  (strict only), and work/ books of a renamed account (counted twice) now
+  stop `--strict`; run-clean is "attention" over any UNBOOKED line in a
+  report and over the renamed account's books; the crypto-sends step
+  flags the double booking and a crypto_sends.tt whose price no longer
+  matches sends.json (re-audit A2-0127, A2-0357, A2-0362, A2-1151,
+  A2-1165).
 - Checklist run-clean / filing banners / web freshness: the record of
   what the last full run read now covers every run input — an account's
   elections `manifest.json` and crypto `sends.json`, and the root
