@@ -20,6 +20,8 @@
                      500 or a silent fallback
   A2-1179            one stale-rate threshold shared with harvest
   A2-1185            freshness fallback reads the checklist's input set
+  A2-0695 / A2-1186  IPv6 binds accept their Host header; the printed URL
+                     brackets an IPv6 address
 """
 import contextlib
 import io
@@ -346,12 +348,54 @@ class TestFreshnessInputSet(unittest.TestCase):
             self.assertFalse(f["stale"], f)
 
 
+# ----------------------------------------------- A2-0695 / A2-1186 serve
+class TestServeIpv6(unittest.TestCase):
+    def test_printed_url_brackets_ipv6(self):
+        from taxjson.web.server import _url_host
+        self.assertEqual(_url_host("::1"), "[::1]")
+        self.assertEqual(_url_host("[::1]"), "[::1]")
+        self.assertEqual(_url_host("2001:db8::1"), "[2001:db8::1]")
+        self.assertEqual(_url_host("127.0.0.1"), "127.0.0.1")
+        self.assertEqual(_url_host("localhost"), "localhost")
+
+    def test_host_header_parsing(self):
+        from taxjson.web.app import _host_of, _host_allowed
+        self.assertEqual(_host_of("[::1]:8765"), "::1")
+        self.assertEqual(_host_of("[::1]"), "::1")
+        self.assertEqual(_host_of("127.0.0.1:8765"), "127.0.0.1")
+        self.assertEqual(_host_of("LocalHost"), "localhost")
+        self.assertTrue(_host_allowed("[::1]:1", ["::1"]))
+        self.assertTrue(_host_allowed("[2001:db8::1]:1", ["[2001:db8::1]"]))
+        self.assertFalse(_host_allowed("evil.example:1", ["127.0.0.1"]))
+        self.assertFalse(_host_allowed("", ["127.0.0.1"]))
+        self.assertTrue(_host_allowed("anything:1", ["*"]))
+
+
 @unittest.skipUnless(_HAVE_WEB, "web extra not installed")
 class TestRoutes(unittest.TestCase):
     def _client(self, root, **kw):
         from taxjson.web.app import create_app
         return TestClient(create_app(_ctx(root), **kw),
                           base_url="http://127.0.0.1")
+
+    def test_a2_0695_ipv6_loopback_host_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = self._client(_project(tmp, {"margin": []}))
+            for h in ("[::1]:8765", "[::1]"):
+                self.assertEqual(
+                    c.get("/healthz", headers={"host": h}).status_code,
+                    200, h)
+            self.assertEqual(c.get("/healthz", headers={
+                "host": "evil.example"}).status_code, 400)
+
+    def test_a2_1186_bracketed_and_non_loopback_ipv6_bind(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, {"margin": []})
+            for bind, hdr in (("[::1]", "[::1]:8765"),
+                              ("2001:db8::1", "[2001:db8::1]:8765")):
+                c = self._client(root, allowed_hosts=[bind])
+                self.assertEqual(c.get("/healthz", headers={
+                    "host": hdr}).status_code, 200, bind)
 
     @rule("CA-PLAN-04")
     def test_a2_0374_radar_page_shows_scope_note_canada(self):

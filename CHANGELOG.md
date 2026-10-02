@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `taxjson serve` on an IPv6 address (`--host ::1`, `[::1]`, or a LAN
+  IPv6 address) answers requests instead of refusing every one with 400
+  "Invalid host header", and prints the URL with the address in brackets
+  (re-audit A2-0695, A2-1186).
+
 - Web: the wash-radar page shows the scope note (verdicts cover the
   project's own accounts only, CA-PLAN-04 / US-PLAN-04); a radar sidecar
   without "sections" or with a row field of the wrong type, and a
