@@ -11948,6 +11948,7 @@ def _explain_wash_sales(root: Path, cache: Path,
     for grp in groups:
         target, tmp = grp[0], None
         if len(grp) > 1:
+            _check_books_before_merge(grp)
             fd, name = _tf.mkstemp(prefix="taxjson_explain_",
                                    suffix=".json")
             _os.close(fd)
@@ -13885,6 +13886,24 @@ def _audit_source_files(cache: Path, name: str,
     return out
 
 
+def _check_books_before_merge(paths: List[Path]) -> None:
+    """Load each base book a command is about to merge into a temp file,
+    and die naming the damaged one. taxjson-merge passes a well-formed
+    JSON file with a bad row straight through, so the engine's error
+    named the deleted /tmp merge file instead of work/<acct>_base.json
+    (A2-1143)."""
+    from taxjson.lib.core import load_transactions
+    for b in paths:
+        try:
+            load_transactions(Path(b))
+        except Exception as e:                      # noqa: BLE001
+            msg = str(e).strip().splitlines()[0] if str(e).strip() \
+                else type(e).__name__
+            msg = msg.replace(f"load_transactions({b}): ", "")
+            _die(f"cannot read {b}: {msg} — re-run `taxjson run` to "
+                 f"rebuild it.")
+
+
 def cmd_audit(args: argparse.Namespace) -> None:
     """`taxjson audit`: the authoritative justification of every
     capital-gain figure. One block per taxable disposition: the parsed
@@ -14041,6 +14060,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
             # inputs the pipeline's blended pass merged, rebuilt fresh
             # so a stale .blend artifact can't smuggle old numbers
             # past the tie-out.
+            _check_books_before_merge(bases)
             fd, tmp = tempfile.mkstemp(prefix="taxjson_audit_",
                                        suffix=".json")
             _os.close(fd)
