@@ -426,7 +426,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "A Canadian trust's distribution belongs to the year it "
                  "became PAYABLE (s.104(13)): a row the broker calls a "
                  "distribution (\"DIST ON\", RBC \"Distribution\") on a "
-                 "Canadian issuer (a Canadian listing or a CA ISIN) is "
+                 "Canadian issuer (its ISIN country when the export gives "
+                 "one, else a Canadian listing) is "
                  "dated by its printed record date — in divs-sum, the "
                  ".sum, the estimate, instalments and the divs / roc / "
                  "events views' windows (each row still shows its pay "
@@ -449,6 +450,18 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "distribution a dividend, so a trust cannot be told from "
                  "a corporation (the ex date IB's accruals give is not "
                  "used). The T3 slip is authoritative.",
+                 keys=("corporate_distributions",)),
+            Rule("CA-INC-DATE-ISSUER",
+                 "The exports do not say which Canadian issuer is a "
+                 "trust: for the two record-date rules above every "
+                 "Canadian issuer is a trust except the split-share "
+                 "corporations and the issuers in corporate_distributions. "
+                 "So a corporation's return of capital with a printed "
+                 "record date is dated by it until its issuer is listed "
+                 "there (when that date crosses a year, the ATTENTION "
+                 "line points out a description naming a Corp, Inc or "
+                 "Ltd), and the January return-of-capital warning asks "
+                 "whether the issuer is a trust rather than assuming it.",
                  keys=("corporate_distributions",)),
             Rule("CA-DATE-12",
                  f"Crypto is dated in local time: {tz} ([settings] "
@@ -805,7 +818,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-INC-03",
                  "A payment in lieu of a dividend is ordinary income (no "
                  "gross-up or credit), EXCEPT one on a Canadian issuer's "
-                 "share (a Canadian listing or a CA ISIN) paid by a "
+                 "share (its ISIN country when the export gives one, else "
+                 "a Canadian listing) paid by a "
                  "Canadian dealer (IB's statement names Interactive "
                  "Brokers Canada Inc.; Questrade and RBC Direct are "
                  "Canadian dealers, and their 'IN LIEU OF DIVIDEND' rows "
@@ -813,6 +827,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "s.260(5)/(5.1) deems that a taxable dividend — "
                  "eligible in the estimate, counted in divs-sum, and on "
                  "the dealer's T5 box 24. The slip is authoritative."),
+            Rule("CA-INC-07",
+                 "The exports do not tell a trust's unit from a "
+                 "corporation's share, so a payment in lieu on a Canadian "
+                 "ETF or REIT unit is deemed a dividend too; by law "
+                 "s.260(5) covers shares only and a trust unit's payment "
+                 "in lieu is ordinary income — take it from the dealer's "
+                 "slip.", cont=True),
             Rule("CA-INC-04",
                  "Crypto staking rewards are income at fair value when "
                  "received; that value is the coins' cost."),

@@ -722,8 +722,9 @@ its printed (cent-rounded) rows.
   belong to the year they are PAID (ITA s.82(1); US: the pay date).
 - Canada: a **Canadian trust's distribution** belongs to the year it became
   PAYABLE (s.104(13)). A row the broker calls a distribution (Questrade/RBC
-  "DIST ON ...", RBC activity "Distribution") on a Canadian issuer (a
-  Canadian listing, or a CA ISIN) is dated by the record date it prints
+  "DIST ON ...", RBC activity "Distribution") on a Canadian issuer (its
+  ISIN country when the export gives one, else a Canadian listing) is
+  dated by the record date it prints
   ("REC 12/30/24 PAY 01/06/25" is 2024 income) — in `divs-sum`, the .sum,
   the estimate, instalments and the tax-year window of the `divs` / `roc` /
   `events` views (the row still shows its pay date). Split-share corporations (BK, DF, DFN, DGS,
@@ -748,14 +749,21 @@ its printed (cent-rounded) rows.
   a sale between the record date and a January pay date is on the reduced
   ACB (and any s.40(3) gain is in the record year). A corporation's
   (s.53(2)(a)) or a foreign issuer's return of capital lowers it when paid.
-  IB prints no record date: a January-paid ROC on a Canadian trust is
-  warned about — check the prior year's T3 box 42 and move it to Dec 31
-  with the two `.tt` ADJUST lines the warning prints (the warning stops
-  once both lines are in the books).
+  The exports do not say which Canadian issuer is a trust: every Canadian
+  issuer counts as one except the split-share corporations and the issuers
+  in `corporate_distributions` — list a corporation there so its return of
+  capital keeps the pay date. IB prints no record date: a January-paid ROC
+  on a Canadian issuer is warned about (if it is a trust, check the prior
+  year's T3 box 42 and move it to Dec 31 with the two `.tt` ADJUST lines
+  the warning prints; the warning stops once both lines are in the books,
+  or once a corporation is listed in `corporate_distributions`).
 - Canada: a **payment in lieu** on a Canadian issuer's share paid by a
   Canadian dealer (IB's statement names Interactive Brokers Canada Inc.) is
   a taxable dividend (s.260(5)/(5.1)), as the dealer's T5 box 24 reports
-  it; any other payment in lieu is ordinary income. US: a substitute
+  it; any other payment in lieu is ordinary income. The exports do not
+  tell a trust's unit from a share, so a payment in lieu on a Canadian ETF
+  or REIT unit is deemed a dividend too — by law s.260(5) covers shares
+  only: take a unit's payment from the slip. US: a substitute
   payment is ordinary, non-qualified income.
 - US: a fund (RIC) or REIT dividend declared in October–December and paid
   in January is received on Dec 31 (IRC §852(b)(7), §857(b)(9)). The

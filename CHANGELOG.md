@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Canada income dating: the January return-of-capital warning no longer
+  calls every Canadian issuer a trust — it asks, and listing a
+  corporation in [settings] corporate_distributions stops it; tax-logic
+  states that every Canadian issuer counts as a trust for the record-
+  date rules unless it is on the corporate list (CA-INC-DATE-ISSUER),
+  that the issuer's ISIN country decides over its listing, and that a
+  payment in lieu on a Canadian ETF or REIT unit is deemed a dividend
+  because the export cannot tell a unit from a share (CA-INC-07) (re-
+  audit A2-0810, A2-1466, A2-1470, A2-1465, A2-1468).
 - tax-logic states the crypto rules the parsers and the US engine apply:
   Coinbase's ETH2 is ETH (a Convert between them is not a sale), a
   Kraken dust sweep splits its receipt over the coins by amountusd or

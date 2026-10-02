@@ -16,7 +16,8 @@ Canada
 - [CA-INC-DATE-TRUST] A Canadian trust's distribution is income of the
   year it became PAYABLE (s.104(13)): a row the broker calls a
   distribution ("DIST ON", RBC "Distribution") on a Canadian issuer
-  (Canadian listing or CA ISIN) with a printed record date is dated by
+  (its ISIN country when the export gives one, else a Canadian listing)
+  with a printed record date is dated by
   that record date. Split-share corporations say "Distribution" too:
   ``SPLIT_SHARE_ROOTS`` and ``[settings] corporate_distributions`` keep
   them on the pay date. Foreign funds: the pay date.
@@ -26,7 +27,10 @@ Canada
   record date (IB), a January-paid one is WARNED about.
 - [CA-INC-DATE-ROC] A corporation's (s.53(2)(a)) or a foreign issuer's
   return of capital lowers the ACB when paid.
-- [CA-INC-PIL-01] A payment in lieu on a Canadian issuer's share paid by
+- [CA-INC-DATE-ISSUER] The export cannot tell a trust from a
+  corporation: every Canadian issuer is a trust for these rules except
+  the split-share roots and ``[settings] corporate_distributions``.
+- [CA-INC-03] A payment in lieu on a Canadian issuer's share paid by
   a Canadian dealer is a taxable (eligible) dividend (s.260(5)/(5.1),
   as the dealer's T5 box 24 reports it); every other payment in lieu is
   ordinary income. The slip is authoritative.
@@ -427,18 +431,25 @@ class IncomeRules:
                             and (str(sym), pay, round(amt, 2))
                             in adj_keys):
                         continue
+                    # The export cannot tell a trust from a
+                    # corporation (CA-INC-DATE-ISSUER): ask, never call
+                    # a corporation a trust (re-audit A2-1466).
                     out.append(
                         f"{sym}: return of capital {amt:,.2f} "
                         f"{_get(r, 'currency')} paid {pay} with no record "
                         f"date in the export — booked on the pay date. If "
-                        f"this Canadian trust's ROC was payable in "
-                        f"December (on the {prev} T3, box 42), the ACB "
-                        f"drops on {prev}-12-31 (s.53(2)(h)): check the "
-                        f"{prev} T3 box 42 and move it with two .tt "
-                        f"lines: ADJUST {prev}-12-31 12:00:00 {sym} "
+                        f"{sym} is a Canadian trust and this ROC was "
+                        f"payable in December (on the {prev} T3, box 42), "
+                        f"the ACB drops on {prev}-12-31 (s.53(2)(h)): "
+                        f"check the {prev} T3 box 42 and move it with two "
+                        f".tt lines: ADJUST {prev}-12-31 12:00:00 {sym} "
                         f"{_get(r, 'currency')} {-amt:.2f} and ADJUST "
                         f"{pay} 12:00:00 {sym} {_get(r, 'currency')} "
-                        f"{amt:.2f}.")
+                        f"{amt:.2f}. A corporation's return of capital "
+                        f"(s.53(2)(a)) lowers the ACB when paid: if {sym} "
+                        f"is a corporation, nothing moves — add it to "
+                        f"[settings] {SETTING_CORPORATE} to stop this "
+                        f"note.")
                 continue
             if action == "DIVIDEND" and self.ric_prior_year(r):
                 # A listed January RIC dividend leaves the pay year: say
