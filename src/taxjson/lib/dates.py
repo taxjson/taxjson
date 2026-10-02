@@ -107,6 +107,26 @@ def settlement_lag_days(trade_iso: str, currency: str = 'USD',
     return 2 if trade_iso < cutover else 1
 
 
+# A Canadian listing's suffix (TSX, TSX-V, CSE, NEO / Cboe Canada).
+CA_LISTING_SUFFIXES = (".TO", ".V", ".CN", ".NE", ".VN")
+
+
+def listing_market_currency(symbol: str, fallback=None):
+    """The settlement calendar of a symbol's LISTING, as the currency key
+    the calendar helpers take: 'CAD' for a Canadian listing (an option on
+    one included), 'USD' for a US one (and an F:/'/' futures contract) —
+    whatever currency the trade is priced in. A TSX USD-class unit such
+    as DLR.U.TO settles through CDS on the Canadian calendar, and an
+    AEM.US sale priced in CAD on the US one (audit A2-0375 / A2-1183).
+    `fallback` for any other symbol."""
+    s = str(symbol or "").strip().upper()
+    if s.endswith(CA_LISTING_SUFFIXES):
+        return 'CAD'
+    if s.endswith(".US") or s.startswith(("F:", "/", "\\")):
+        return 'USD'
+    return fallback
+
+
 def settlement_date(trade_iso: str, currency: str = 'USD',
                     is_option: bool = False) -> str:
     """Era- and holiday-aware settlement date for a trade dated

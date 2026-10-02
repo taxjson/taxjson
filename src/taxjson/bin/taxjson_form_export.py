@@ -83,6 +83,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from taxjson.lib.cli_diag import guard_main, tax_year
+from taxjson.bin.taxjson_convert_currency import norm_currency
 from taxjson.lib.core import is_option_symbol
 from taxjson.lib.futures import is_plain_future, section_1256_kind
 from taxjson.lib.numeric import round_half_up
@@ -1069,6 +1070,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Defensive year filter (pipeline gains files "
                              "are already year-scoped)")
     parser.add_argument("--base-currency", default="",
+                        type=norm_currency,
                         help="The amounts' currency. Must be the return's "
                              "own currency (CAD for Schedule 3, USD for "
                              "8949/txf) — refused otherwise, as are rows in "

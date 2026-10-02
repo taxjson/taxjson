@@ -829,7 +829,11 @@ def _long_calls(book: Book) -> Dict[str, List[Tuple[Dict[str, Any], float]]]:
             continue
         oq = _opening_qty(book, r)
         und = _underlying(sym)
-        if oq > 1e-9 and und:
+        # A futures option is never a sized replacement of the futures
+        # loss, however it is spelled — the engines flag it for a
+        # manual check (CA-SL-15 / US-WASH-15; audit A2-0378).
+        from taxjson.lib.core import _FUTURES_PREFIX_RE
+        if oq > 1e-9 and und and not _FUTURES_PREFIX_RE.match(und):
             calls.setdefault(und, []).append((r, oq))
     return calls
 

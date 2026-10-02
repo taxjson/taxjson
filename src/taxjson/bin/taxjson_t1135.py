@@ -74,6 +74,7 @@ from taxjson.lib.cli_diag import guard_main, read_text_utf8, tax_year
 from taxjson.lib.futures import is_plain_future
 from taxjson.lib.numeric import positive_float_arg
 from taxjson.lib.report_model import fmt_money
+from taxjson.bin.taxjson_convert_currency import norm_currency
 from typing import Any, Dict, List, Optional, Tuple
 
 # Filing threshold: ITA 233.3(1) "reporting entity" — SFP total cost more
@@ -1309,6 +1310,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--map", type=Path, default=None,
                         help="t1135.map override file (SYMBOL COUNTRY lines)")
     parser.add_argument("--base-currency", default="CAD",
+                        type=norm_currency,
                         help="Label for amounts (default: CAD)")
     parser.add_argument("--threshold", type=positive_float_arg, default=FILING_THRESHOLD,
                         help="Filing threshold (default: 100000)")
