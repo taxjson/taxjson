@@ -1036,6 +1036,8 @@ class TestSchemaContract(unittest.TestCase):
         flat = str(V(rows))
         self.assertNotIn('Price is negative', flat)
 
+    @rule("CA-DATE-07")
+    @rule("US-DATE-07")
     def test_crypto_settling_after_its_trade_date_warns(self):
         _, warns = self._v(symbol='BTC', date_settle='2026-01-01')
         self.assertTrue([w for w in warns if 'bare (crypto) symbol' in w])
