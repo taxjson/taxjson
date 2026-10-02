@@ -829,5 +829,24 @@ class TestQuestradeDescriptionNumbers(unittest.TestCase):
         self.assertAlmostEqual(cost["XYZ.TO"], 7000.0, msg=err)
 
 
+    def test_cad_settled_us_trade_commission_is_cad(self):
+        # A2-0615: Buy 10 @100 USD at EXCHANGE RATE 1.38, Net -1393.73 CAD.
+        buy = q(sym="ZZQ", desc="ZZQ INC WE ACTED AS AGENT EXCHANGE RATE "
+                "1.38", qty="10", price="100", gross="-1000", comm="-9.95",
+                net="-1393.73", cur="CAD")
+        sell = q(td="2025-03-03", action="Sell", sym="ZZQ",
+                 desc="ZZQ INC WE ACTED AS AGENT EXCHANGE RATE 1.40",
+                 qty="-10", price="120", gross="1200", comm="-9.95",
+                 net="1666.07", cur="CAD")
+        txs, err, _ = qt_parse(buy + sell)
+        got = {t["quantity"]: (t["commission"], t["net_amount"],
+                               t["gross_amount"]) for t in txs}
+        self.assertEqual(got[10.0][0], 13.73, err)
+        self.assertEqual(got[-10.0][0], 13.93, err)
+        for comm, net, gross in got.values():
+            self.assertAlmostEqual(abs(gross) + comm if net > abs(gross)
+                                   else abs(gross) - comm, net, places=2)
+
+
 if __name__ == "__main__":
     unittest.main()

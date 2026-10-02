@@ -1235,6 +1235,16 @@ class QuestradeBrokerage(BaseBrokerage):
                     net = -net_signed if qty > 0 else net_signed
                 else:
                     net = round(net * rate, 8)
+                # The commission in CAD too (re-audit A2-0615): it stayed
+                # the USD-sized figure on a row whose price, gross and
+                # net are CAD, so gross + commission != net and the fees
+                # report / Schedule 3 outlays were short by the rate.
+                # The CAD truth is the cash: the gap between Net and the
+                # CAD gross.
+                if comm:
+                    _gross_cad = abs(qty) * price * mult
+                    comm = round((net - _gross_cad) if qty > 0
+                                 else (_gross_cad - net), 2)
 
             # Option symbol reconstruction from Description; fall back to
             # the bare Symbol column (which is often non-OCC like AAPL.OPT).

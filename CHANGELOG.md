@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Questrade: a CAD-settled US trade (EXCHANGE RATE) carries its
+  commission in CAD like its price and net; it stayed USD-sized, so the
+  fees report and the Schedule 3 proceeds/outlays split were short by
+  the rate (the gain was right) (re-audit A2-0615).
 - Questrade: a decimal-comma CNV@ rate ('CNV@ 1,4138', read as 1) or
   cash-in-lieu fraction ('1,5' read as 1, '0,5' dropped) is refused,
   as BOOK VALUE already was; a BRW journal's IN leg pairs only with the
