@@ -2,6 +2,68 @@
 
 ## Unreleased
 
+- edge-cases counts every superficial-loss / wash-sale window on the
+  engine's own dates — settlement dates in Canada, trade dates in the
+  US — whatever `tax_date` says; it called engine-denied losses OUTSIDE
+  the window (and allowed ones INSIDE) under a non-default tax_date,
+  dropped year-crossing windows, and printed "THE DATE BASIS DECIDES"
+  for a choice that cannot change the verdict (re-audit A2-0133,
+  A2-0134, A2-0135, A2-1206).
+- edge-cases positions count opening balances, `phantoms.json` openings
+  and split ratios: a phantom-backed or opening-balance year-end sale
+  read as a short sale, and "held on day 30" was in pre-split units
+  (re-audit A2-0388, A2-0389, A2-1208).
+- edge-cases no longer lists a buy-to-close of a written call as a long
+  call bought in a loss's window, in either section (re-audit A2-0699,
+  A2-1197), describes a written option assigned on its expiry date as
+  an assignment landing with its share leg (A2-0700), and leaves US
+  crypto out of the wash-sale window sections (A2-1201).
+- edge-cases "Income paid around New Year" uses income dating: a
+  Canadian trust's distribution with a December record date lands in
+  the record year (it said the pay year), and payments in lieu and
+  trust returns of capital are listed (re-audit A2-0387, A2-1207,
+  A2-1209).
+- edge-cases "Crypto near midnight" converts with the project's
+  `local_timezone` (it assumed EST and missed real UTC year-straddles
+  west of Eastern) and lists exactly the rows whose local and UTC dates
+  fall in different years (re-audit A2-1200, A2-1202, A2-1203, A2-1204).
+- edge-cases judges written options against the filed locks the way
+  option-boundary does — the timing each lock records, and the
+  `prior_year_record` lock (re-audit A2-0390, A2-1205).
+- edge-cases names an unreadable work file instead of printing "None."
+  at exit 0, refuses `--margin` below 0, and refuses an invalid
+  `futures_settle` as `run` does; check-dates refuses it too (re-audit
+  A2-1199, A2-1198, A2-0697).
+- check-dates: an unreadable parsed file is an ERROR (it was dropped and
+  the exit turned 0); an option expiry row settling after the contract's
+  expiry is a WARN; a far-future row is one error, not two; a `.tt`
+  line may carry the settlement date of a trade made today; `/ESH5`
+  futures are futures; Globex Christmas / New Year's evening fills are
+  normal and a weekend futures settle date is reported (re-audit
+  A2-0385, A2-0386, A2-1192, A2-1193, A2-1194, A2-1191).
+- Settlement cycles per market: the UK, EU and Swiss markets were T+2
+  from 2014-10-06, the ASX and NZX from 2016-03-07, Singapore from
+  2018-12-10, Tokyo from 2019-07-16, Hong Kong throughout — they all
+  inherited North America's T+3 era before 2017-09-05 (and Tokyo got
+  T+2 two years early); every EU currency, not only the euro, moves to
+  T+1 on 2027-10-11. tax-logic CA-DATE-04 / US-DATE-04 state it, with
+  Mexico's 2024 T+1 move (re-audit A2-0704, A2-1195, A2-0705). No
+  2024-2026 trade changes.
+- `list --date` keeps the in-account superficial-loss / wash-sale
+  addition to the replacement's cost, as the README and its label say
+  (it recomputed with `--no-wash`; re-audit A2-0391, A2-0392, A2-0701).
+- `list` / `shares` "as of the latest data" is the last settlement date
+  on a settle-basis book, and an unreadable base book is named on
+  stderr instead of silently moving the date (re-audit A2-0698,
+  A2-0702).
+- Kraken: a ledger of only fiat deposits and withdrawals is "0 tax
+  objects (not tax events)", not the "parsed to 0 transactions" warning
+  that `run --strict` refused (re-audit A2-0703).
+- `run`'s expired-open-option warning uses the same cutoff as
+  option-boundary and the checklist: an expiry on Dec 31 of a closed
+  year, and one after Dec 31 but within the books' data, are flagged
+  (re-audit A2-1210).
+
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of
