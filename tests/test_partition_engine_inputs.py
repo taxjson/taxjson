@@ -214,7 +214,7 @@ class TestStockDividend(unittest.TestCase):
                           for g in rows], [(110.0, "a")])
         self.assertAlmostEqual(rows[0]["cost"], 5000.0, places=6)
 
-    @rule("US-STKDIV-02")
+    @rule("US-STKDIV-03")
     def test_no_shares_held_is_a_warned_zero_cost_purchase(self):
         from taxjson.lib.core import get_tax_rules
         import contextlib

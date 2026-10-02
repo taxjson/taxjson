@@ -1282,6 +1282,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "ANOTHER security (another class) paid as a stock "
                  "dividend are not booked: the parse says UNBOOKED; enter "
                  "them and the §307 basis split by hand.", cont=True),
+            Rule("US-STKDIV-03",
+                 "Received with no shares held (history missing, or sold "
+                 "before the pay date), the new shares are booked as a $0 "
+                 "purchase with a warning: add the missing history (or "
+                 "adjust the sold lots) so §307 can spread the basis.",
+                 cont=True),
         ]),
         ("Wash sales (§1091)", [
             Rule("US-WASH-01",

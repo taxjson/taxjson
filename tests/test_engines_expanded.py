@@ -167,6 +167,7 @@ class TestUSAShelteredReplacement(unittest.TestCase):
         self.assertTrue(any(r['is_sheltered'] for r in g.get('wash_replacements', [])))
 
 
+@rule("US-WASH-10")
 class TestUSAHoldingPeriodInheritance(unittest.TestCase):
     """§1223(3): wash-sale replacement inherits the loss lot's holding period."""
 

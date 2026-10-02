@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1512,6 +1513,7 @@ class TestRepCapacityUnitsAcrossSplits(unittest.TestCase):
                 "lot A and disallowed the full $45")
 
 
+@rule("US-WASH-10")
 class TestSection1223TackingExcludesGap(unittest.TestCase):
     """Deep-audit 2026-08 #9: §1223(3) tacking inherited the wash-sold
     lot's calendar acquisition date, wrongly counting the sale→rebuy
