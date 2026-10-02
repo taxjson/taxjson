@@ -41,6 +41,26 @@
   broker account (A2-1095), and the TRANSFER-evidence sidecar keeps
   identical custody moves of two accounts (A2-1093, A2-1094).
 
+- **Generic importer fixes (re-audit 2).** A cut-off last record (fewer
+  cells than the header, a final separator with no line break, a cut
+  currency code) is refused instead of completed from `[defaults]` (a USD
+  trade was booked as a CAD `.TO` security). Futures spelled `/` or `\`
+  are `F:` futures and settle on the trade date (they took the equity T+1
+  and a Dec-31 close moved a year), and `futures_settle = "next_day"` now
+  reaches the generic importer. An option closed at $0 on its expiry day
+  settles that day (CA-DATE-08). A commission rebate lowers the cost and
+  raises the proceeds and is booked as a negative fee (it was a charge).
+  A buy row with a cash-in amount in a cash-signed file is refused (a
+  sale under one action mapped to buy). A dangling sidecar mapping, a
+  non-string `[defaults]`/`[formats]` value and a mapped settle date more
+  than 31 days late are refused (more than 7 days: ATTENTION). New
+  `dividend_in_lieu` target; UTF-16 exports are read (also by
+  `taxjson-generate-parser`); a $0 option close beside a stock trade at
+  the strike is named as a possible exercise/assignment (ATTENTION).
+  Optional `[columns] account` / `[broker] account` name each row's broker
+  account (A2-0030, A2-0103, A2-0106, A2-0107, A2-0299, A2-0626, A2-0628,
+  A2-0629, A2-1075, A2-1076, A2-1079, A2-1080, A2-1081, A2-1083,
+  A2-1085).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those
