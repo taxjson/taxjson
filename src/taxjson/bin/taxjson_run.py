@@ -6323,6 +6323,10 @@ def cmd_winners(args: argparse.Namespace) -> None:
     if resolved and not account:
         _warn_accounts_without_books(root, resolved, "winners",
                                      "gains file")
+    # Per-account books after `run --account` (A2-0694).
+    _cfg_w = _soft_config(root)
+    if resolved and _cfg_w:
+        _warn_run_state(root, _cfg_w)
     if not resolved:
         sys.exit(f"taxjson winners: no gains files in {cache} "
                  f"(run `taxjson run` first).")
@@ -8557,8 +8561,10 @@ def cmd_summary(args: argparse.Namespace) -> None:
                   "superficial loss was DENIED the ACB is REDUCED by it, "
                   "so the gain stays the allowed one; a deferred denial "
                   "is added to the ACB of the replacement property, but "
-                  "one caused by a registered-account (affiliated) "
-                  "acquisition is lost for good — no ACB addition"
+                  "one caused by a registered-account acquisition is "
+                  "lost for good, and one caused by an affiliated "
+                  "person's purchase goes to that person's own ACB — no "
+                  "ACB addition on your return"
                   + (f" ({money(_permd)} of the DENIED total)"
                      if _permd > 0.005 else "")
                   + ". Per-security rows: `taxjson form-export`; "
@@ -10584,6 +10590,10 @@ def cmd_positions(args: argparse.Namespace) -> None:
                   file=sys.stderr)
     else:
         files = resolve_gains_files(cache, args.account or None)
+        # Per-account books after `run --account` (A2-0694).
+        _cfg_l = _soft_config(root)
+        if files and _cfg_l:
+            _warn_run_state(root, _cfg_l)
         if not files:
             if args.account:
                 sys.exit(f"taxjson list: no gains for account "
@@ -10798,6 +10808,14 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     if not args.account:
         _warn_accounts_without_books(root, resolved, "wash-sales",
                                      "gains file")
+    # The filing views' banners: per-account books after `run --account`
+    # (no blended pass) and books built for another tax year printed
+    # 'No wash sales' at rc 0 (re-audit A2-0400, A2-0405).
+    _cfg_ws = _soft_config(root)
+    if _cfg_ws:
+        _warn_artifact_year(resolved,
+                            (_cfg_ws.get("settings") or {}).get("year"))
+        _warn_run_state(root, _cfg_ws)
     files = list(resolved.items())
 
     money = fmt_money               # shared report-layer formatter
@@ -10877,10 +10895,14 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
         print(f"Currently embedded in OPEN positions: {money(embedded)} "
               f"{base} of deferred losses (see `taxjson list` DEFERRED).")
     print("DENIED is added to the cost basis of the repurchased shares (you "
-          "recover it on a later sale) — except any permanently-denied amount "
-          "from a repurchase in "
-          + ("an IRA" if _usa else "a registered account")
-          + ", which is lost for good.")
+          "recover it on a later sale) — except any permanently-denied amount"
+          + (" from a repurchase in an IRA, which is lost for good."
+             if _usa else
+             # An affiliated person's purchase: their own ACB, not
+             # "lost for good" (S033-03 wording; re-audit A2-1233).
+             ": a repurchase in a registered account loses it for good; "
+             "one bought by an affiliated person is added to that "
+             "person's own ACB (s.53(1)(f)), not yours."))
 
 
 def cmd_t1135(args: argparse.Namespace) -> None:
@@ -15664,6 +15686,7 @@ def main() -> None:
             _die(f"no such directory: {args.dir} (-C/--dir names the "
                  f"project root — the folder holding taxjson.toml)")
         _enforce_command_country(args)
+        _refuse_artifact_account(args)
         try:
             args.func(args)
         except SystemExit as e:
@@ -15685,6 +15708,33 @@ def main() -> None:
                      f"{' '.join(str(c) for c in (e.cmd or [])[-3:])} "
                      f"(exit {e.returncode}) — see the error above.")
     return
+
+
+def _refuse_artifact_account(args: argparse.Namespace) -> None:
+    """An ACCOUNT argument that is a pipeline artifact's name (`margin_raw`,
+    `margin_raw_base`, `x_gains` ...) is never an account — the config
+    refuses those names — yet sum, list, winners, wash-sales and their
+    twins read work/<name>_gains.json and printed the native-currency
+    books under a base-currency header (re-audit A2-0394). Refused once,
+    for every command."""
+    from taxjson.lib.config_check import RESERVED_NAME_SUFFIXES
+    # `period` too: `winners [PERIOD] [ACCOUNT]` takes a lone name in
+    # the first slot as the account.
+    vals = []
+    for attr in ("account", "period"):
+        v = getattr(args, attr, None)
+        vals += v if isinstance(v, list) else [v]
+    for v in vals:
+        if not isinstance(v, str):
+            continue
+        low = v.lower()
+        suf = next((x for x in RESERVED_NAME_SUFFIXES if low.endswith(x)),
+                   None)
+        if suf:
+            _die(f"{v!r} is not an account: names ending in {suf!r} are "
+                 f"pipeline work files (an account's native or "
+                 f"intermediate books), never accounts — use an account "
+                 f"name from [accounts] in taxjson.toml.")
 
 
 def _enforce_command_country(args: argparse.Namespace) -> None:

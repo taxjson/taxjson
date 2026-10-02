@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `sum`, `list`, `winners` and `wash-sales` refuse a pipeline work-file
+  name as an account (`margin_raw` printed native USD under a CAD
+  header); `wash-sales`, `list` and `winners` carry the run-state banner
+  after per-account runs, and `wash-sales` the other-year banner
+  (re-audit A2-0394, A2-0400, A2-0694, A2-0405).
+- The superficial-loss trace, the `wash-sales` footer and the `sum`
+  filing note no longer call an affiliated person's denial "lost for
+  good": that person adds it to their own ACB (re-audit A2-1225,
+  A2-1233).
 - Unreadable is never absent: a statement CSV or .tt that is a dangling
   symlink stops `run` naming the file, every command (not only `run`)
   refuses a dangling or directory ticker.map / phantoms.json /

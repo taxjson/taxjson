@@ -269,7 +269,9 @@ class TestSumTable(unittest.TestCase):
             self.assertEqual(j["filing"]["totals"]["permanently_denied"],
                              200.0)
             t = _run_cli(root, "sum").stdout
-            self.assertIn("lost for good — no ACB addition (200.00 of the "
+            # (re-audit A2-1233: an affiliated person's part goes to
+            # their own ACB, so the wording names both.)
+            self.assertIn("no ACB addition on your return (200.00 of the "
                           "DENIED total)", " ".join(t.split()))
 
 

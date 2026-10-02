@@ -650,7 +650,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "its acquisition (a sale listed after it at the same "
                  "moment uses the raised ACB) and "
                  "comes back when it is sold. If the replacement is in a "
-                 "sheltered account, that part is lost for good."),
+                 "sheltered account, that part is lost for good; one "
+                 "bought by an affiliated person (--affiliated) is denied "
+                 "on your return too, and that person adds it to their "
+                 "own ACB (s.53(1)(f))."),
             Rule("CA-SL-10",
                  "Replacements are matched in acquisition order: purchases "
                  "after the sale first, then earlier ones, latest first. "

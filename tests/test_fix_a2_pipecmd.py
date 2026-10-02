@@ -476,5 +476,106 @@ class TestUnreadableInputsAreRefused(unittest.TestCase):
             self.assertIn("taxjson.toml", r.stderr)
 
 
+# ---------------------------------------------------------------- A2-0394
+class TestArtifactNamesAreNotAccounts(unittest.TestCase):
+    """sum / list / winners / wash-sales took `margin_raw` (the native-
+    currency books) as an account and printed USD under a CAD header."""
+
+    def test_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _tt_project(td, [
+                "BUYSELL 2026-01-05 10:00:00 XYZ.US 10 USD 10 -100 0",
+                "BUYSELL 2026-03-05 10:00:00 XYZ.US -10 USD 12 120 0"])
+            r = _cli(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-1500:])
+            for cmd in ("sum", "list", "winners", "wash-sales"):
+                for acct in ("m_raw", "m_raw_base"):
+                    with self.subTest(cmd=cmd, acct=acct):
+                        r = _cli(root, home, cmd, acct)
+                        self.assertNotEqual(r.returncode, 0, r.stdout[-600:])
+                        self.assertIn("not an account", r.stderr)
+            r = _cli(root, home, "sum", "m")
+            self.assertEqual(r.returncode, 0, r.stderr[-800:])
+
+
+# ------------------------------------------- A2-0400 / A2-0694 / A2-0405
+class TestViewsSayTheBooksAreNotClean(unittest.TestCase):
+    """wash-sales, list and winners carry the run-state banner (per-account
+    books after `run --account`), and wash-sales the other-year banner."""
+
+    def _two_taxable(self, td):
+        return _tt_project(td, [], accounts={
+            "margin": ("taxable", [
+                "BUYSELL 2026-01-05 10:00:00 XYZ.TO 100 CAD 50 -5000 0",
+                "BUYSELL 2026-06-10 10:00:00 XYZ.TO -100 CAD 40 4000 0"]),
+            "cash": ("taxable", [
+                "BUYSELL 2026-06-12 10:00:00 XYZ.TO 100 CAD 41 -4100 0"])})
+
+    def test_per_account_books_banner(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = self._two_taxable(td)
+            for a in ("margin", "cash"):
+                r = _cli(root, home, "run", "--no-input", "--account", a)
+                self.assertEqual(r.returncode, 0, r.stderr[-1500:])
+            for cmd in ("wash-sales", "list", "winners"):
+                with self.subTest(cmd=cmd):
+                    r = _cli(root, home, cmd)
+                    self.assertIn("not the clean result", r.stderr,
+                                  (r.stdout + r.stderr)[-1000:])
+
+    def test_wash_sales_other_year_banner(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = self._two_taxable(td)
+            r = _cli(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-1500:])
+            cfg = root / "taxjson.toml"
+            cfg.write_text(cfg.read_text().replace("year = 2026",
+                                                   "year = 2025"))
+            r = _cli(root, home, "wash-sales")
+            self.assertIn("built for another tax year", r.stderr,
+                          (r.stdout + r.stderr)[-1000:])
+
+
+# ------------------------------------------------------ A2-1225 / A2-1233
+class TestAffiliatedDenialWording(unittest.TestCase):
+    """An affiliated person's purchase is permanent for this return, but
+    that person adds the loss to their own ACB (s.53(1)(f)) — not 'lost
+    for good' (the S033-03 wording, carried to the trace and the
+    wash-sales footer)."""
+
+    @rule("CA-SL-09")
+    def test_trace_affiliated(self):
+        from taxjson.lib.trace_format import _render_wash_explanation
+        g = {"raw_gain": -100.0, "disallowed_amount": 100.0,
+             "permanently_disallowed": 100.0,
+             "wash_trigger": {"is_full_disallowance": True,
+                              "trigger_date": "2026-03-02",
+                              "trigger_qty": 10, "trigger_price": 9.0,
+                              "trigger_account": "spouse",
+                              "trigger_affiliated": True}}
+        txt = "\n".join(_render_wash_explanation(g))
+        self.assertNotIn("lost for good", txt)
+        self.assertIn("own ACB", txt)
+        g["wash_trigger"]["trigger_affiliated"] = False
+        g["wash_trigger"]["trigger_sheltered"] = True
+        txt = "\n".join(_render_wash_explanation(g))
+        self.assertIn("lost for good", txt)
+
+    @rule("CA-SL-09")
+    def test_wash_sales_footer(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _tt_project(td, [], accounts={
+                "margin": ("taxable", [
+                    "BUYSELL 2026-01-05 10:00:00 XYZ.TO 100 CAD 50 -5000 0",
+                    "BUYSELL 2026-06-10 10:00:00 XYZ.TO -100 CAD 40 4000 0"]),
+                "tfsa": ("sheltered", [
+                    "BUYSELL 2026-06-12 10:00:00 XYZ.TO 100 CAD 41 -4100 0"])})
+            r = _cli(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-1500:])
+            r = _cli(root, home, "wash-sales")
+            self.assertIn("affiliated person", r.stdout)
+            self.assertIn("own ACB", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

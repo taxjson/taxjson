@@ -249,11 +249,22 @@ def _render_wash_explanation(g: Dict[str, Any]) -> List[str]:
                    f", on {wt['adjust_date']}" if 'adjust_date' in wt else "")
             )
         if perm > 0.005:
-            out.append(
-                f"#   PERMANENTLY denied {_fmt_money(perm)}: the replacement "
-                f"is held in a registered or affiliated account — no ACB "
-                f"bump, the loss is lost for good"
-            )
+            # An affiliated person's purchase is permanent for THIS
+            # return, but that person adds it to their own ACB
+            # (s.53(1)(f)) — not "lost for good" (S033-03 / A2-1225).
+            if wt.get('trigger_affiliated'):
+                why = ("the replacement was bought by an affiliated "
+                       "person — no ACB bump on your return; that person "
+                       "adds it to their own ACB (s.53(1)(f))")
+            elif wt.get('trigger_sheltered'):
+                why = ("the replacement is held in a registered account "
+                       "— no ACB bump, the loss is lost for good")
+            else:
+                why = ("the replacement is in a registered account (lost "
+                       "for good) or bought by an affiliated person (who "
+                       "adds it to their own ACB, s.53(1)(f)) — no ACB "
+                       "bump on your return")
+            out.append(f"#   PERMANENTLY denied {_fmt_money(perm)}: {why}")
         return out
 
     reps = g.get('wash_replacements')
