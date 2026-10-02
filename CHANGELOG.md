@@ -47,6 +47,28 @@
   a labelled SSN / TIN / Tax ID (A2-1387), and an 8-9 digit value under
   an Account column in the pre-push `--diff` scan of a .csv/.tsv
   (A2-1388).
+- `taxjson sanity --json` and the file-given-twice / file-in-two-groups
+  messages mask an account id in a holdings file name, as the text
+  listing already did (audit A2-1380); a holdings argument that is a
+  symlink loop is a one-line error instead of a traceback (A2-1392).
+- Every parser message (Questrade, RBC, Webull, Kraken, Coinbase, the
+  generic importer, security-override and .tt errors) now names its file
+  the masked way IB's already did, so a download named after an account
+  number prints `55***_activity.csv`, not the number; the `run` stage
+  line for a .tt file too. The IB diagnostics and the other parsers are
+  now pinned by tests (audit A2-0461).
+- Two .tt files (or generic files) whose names differ only in an
+  account-number token (manual_55500001.tt / manual_55500002.tt) are two
+  sources again: dedup read both as `manual_55***.tt`, one file
+  repeating itself, and silently dropped one file's identical line. A
+  masked name now carries a short hash of the real name (`source_key`,
+  never the name itself) for dedup only (audit A2-0159).
+- Kraken notes, errors and skip summaries now mask every ledger refid
+  and txid to its first two characters + *** (the multi-leg instant-trade
+  note, the orphan-leg skip count, the both-sides-many-legs refusal and
+  the unparseable-cell errors printed it in full into the console, .sum
+  and .diag; audit A2-0756, A2-0757, A2-1381). The id itself stays the
+  work-JSON transaction id.
 - Renames are dated events (owner decision, audit A2-0197). On its date
   a ticker change carries the position, the ACB / basis lots and the
   acquisition dates from the old symbol to the new one, and the

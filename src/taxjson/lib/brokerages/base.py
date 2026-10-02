@@ -265,6 +265,28 @@ def shown_name(path) -> str:
     return _NAME_DIGITS_RE.sub(_mask, _NAME_IB_ID_RE.sub(_mask, name))
 
 
+def source_key(path) -> str:
+    """The dedup key beside a row's `source` (its shown_name): '' when
+    the name has nothing masked, else sha256 of the real file name,
+    first 10 hex — so two files whose names differ only in a masked
+    account-number token (manual_55500001.tt / manual_55500002.tt)
+    stay two sources, while no id is written out (audit A2-0159)."""
+    name = Path(str(path)).name
+    if shown_name(path) == name:
+        return ''
+    import hashlib
+    return hashlib.sha256(name.encode('utf-8')).hexdigest()[:10]
+
+
+def source_identity(source, key) -> str:
+    """One string per input file for dedup: the shown name, plus the
+    key when the name was masked (the form of metadata.source_accounts
+    keys)."""
+    source = str(source or '')
+    key = str(key or '')
+    return f"{source}#{key}" if key and source else source
+
+
 def decode_broker_text(raw: bytes, name: str = '') -> str:
     """The text of a broker export, decoded the way every parser and
     broker detection read it: a UTF-16 BOM is UTF-16, anything else
