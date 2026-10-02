@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Elections manifest migration never hands one event's election to
+  another** (A2-0064, A2-0217, A2-0557, A2-0975, A2-0978; R1-301
+  residue A2-0168, A2-0872): a record keyed by a current event's own id
+  is never moved; an older id that several same-day, ISIN-less events
+  share is resolved only by the record's saved summary, otherwise
+  listed for you to set again; the account-rename fallback also needs
+  the saved summary's action type and ratio to match; a change of the
+  readable symbols is named in a note.
 - IB corporate actions use the statement parser's listing rule: a
   merger or spin-off of a TSX-listed USD unit (QZAA.U) is booked on
   `.U.TO`, where its trades are, not on a phantom `.US` line (A2-0209,

@@ -2383,6 +2383,35 @@ def election_keys(country: str) -> set:
     return keys
 
 
+_SUMMARY_RE = re.compile(
+    r'^(\d{4}-\d{2}-\d{2}) (\w+): (\S+) \u2192 (\S+) '
+    r'\(([-\d.e+]+)-for-([-\d.e+]+)')
+
+
+def _summary_identifies(summary: str, ev: "CorporateAction",
+                        roots: bool = True) -> bool:
+    """Whether a saved election's `summary` (the event's `summary()` when
+    it was elected) describes `ev`: same date, action type and ratio,
+    and — with `roots` — the same symbol roots."""
+    m = _SUMMARY_RE.match((summary or '').strip())
+    if not m:
+        return False
+    date, kind, src, tgt, rn, ro = m.groups()
+    try:
+        same_ratio = (abs(float(rn) - float(ev.ratio_new)) < 1e-9
+                      and abs(float(ro) - float(ev.ratio_old)) < 1e-9)
+    except ValueError:
+        return False
+    if (date != ev._normalize_date(ev.date) or kind != ev.action_type
+            or not same_ratio):
+        return False
+    if not roots:
+        return True
+    root = CorporateAction._sym_root
+    return (root(src), root(tgt)) == (root(ev.source_symbol),
+                                      root(ev.target_symbol))
+
+
 class Manifest:
     """JSON-backed elections store.
 
@@ -2513,82 +2542,170 @@ class Manifest:
         """Rekey records saved under an older id scheme to the current
         ids. Returns the number migrated (caller saves when > 0).
         Elections are the non-rebuildable user artifact — an id-scheme
-        change, or renaming the account, must never orphan them.
+        change, or renaming the account, must never orphan them; and a
+        migration must never hand one event's election to another.
 
-        Aliases tried, in order, for an event whose current id has no
-        record: the pre-2026-07 opaque 12-hex hash; the account-salted
+        A record whose id is the CURRENT id of an event of this run is
+        that event's own and is never moved (A2-0064, A2-0557). For an
+        event whose current id has no record, the aliases tried, in
+        order: the pre-2026-07 opaque 12-hex hash; the account-salted
         id of the R1-301 scheme change (`account_salted_event_id`,
         computed with the CURRENT account name); a record that differs
         only in the readable symbol roots; and last, for a manifest
-        written under ANOTHER account name (the account was renamed
-        before this migration ran), the one record with the event's
-        date and symbol roots that no event of this run claims — only
-        when exactly one record and exactly one event share that
-        prefix. Each rename adoption is described in
-        `self.migration_notes` (the caller prints them)."""
+        written under ANOTHER account name, the one record with the
+        event's date and symbol roots that no event of this run claims
+        and whose saved summary names the same action type and ratio
+        (A2-0975, A2-0168). An alias several events of this run share
+        (ISIN-less events of one date, type and ratio hash alike) is
+        resolved only by the record's saved summary (A2-0217, A2-0978).
+        Every adoption, and every record that could belong to more than
+        one event, is described in `self.migration_notes` (the caller
+        prints them)."""
         self.migration_notes: List[str] = []
         migrated = 0
-        unclaimed = []
+        current = {ev.event_id for ev in events}
+        by_id = {}
         for ev in events:
-            if ev.event_id in self.records:
-                continue
-            rec = None
-            for alias in (ev.legacy_event_id(), ev.account_salted_event_id()):
-                if alias != ev.event_id and alias in self.records:
-                    rec = self.records.pop(alias)
-                    break
-            if rec is None:
-                rec = self._pop_resymbolled(ev)
-            if rec is None:
-                unclaimed.append(ev)
-                continue
+            by_id.setdefault(ev.event_id, ev)
+        uniq = list(by_id.values())
+        owners: Dict[str, List["CorporateAction"]] = defaultdict(list)
+        for ev in uniq:
+            for alias in {ev.legacy_event_id(), ev.account_salted_event_id()}:
+                if alias != ev.event_id:
+                    owners[alias].append(ev)
+        listed: set = set()
+
+        def _orphan(eid: str, cands: List["CorporateAction"]) -> None:
+            if eid in listed:
+                return
+            listed.add(eid)
+            rec = self.records[eid]
+            self.migration_notes.append(
+                f"election {eid} ({rec.election}"
+                f"{'; ' + rec.summary if rec.summary else ''}) was saved "
+                f"under an older id that fits more than one event of this "
+                f"run ({', '.join(e.event_id for e in cands)}) — not "
+                f"guessed. Set it again with `taxjson elect <account> "
+                f"--set <event id>={rec.election}` (the hints are in the "
+                f"manifest), then delete the old entry.")
+
+        def _adopt(eid: str, ev: "CorporateAction", note: str = '') -> None:
+            nonlocal migrated
+            rec = self.records.pop(eid)
             rec.event_id = ev.event_id
             self.records[ev.event_id] = rec
             migrated += 1
-        if unclaimed:
-            current = {ev.event_id for ev in events}
-            for ev in unclaimed:
-                if ev.event_id in self.records:
-                    continue
-                prefix = ev.event_id.rsplit('-', 1)[0] + '-'
-                if sum(1 for e in events
-                       if e.event_id.startswith(prefix)) != 1:
-                    continue
-                hits = [eid for eid in self.records
-                        if eid.startswith(prefix) and eid not in current
-                        and eid.count('-') == ev.event_id.count('-')]
-                if len(hits) != 1:
-                    continue
-                rec = self.records.pop(hits[0])
+            if note:
                 self.migration_notes.append(
-                    f"election {hits[0]} ({rec.election}) was saved "
-                    f"under another account name (the account was "
-                    f"renamed); carried over to {ev.event_id}")
-                rec.event_id = ev.event_id
-                self.records[ev.event_id] = rec
-                migrated += 1
+                    f"election {eid} ({rec.election}) {note}; carried "
+                    f"over to {ev.event_id}")
+
+        unclaimed = []
+        for ev in uniq:
+            if ev.event_id in self.records:
+                continue
+            done = False
+            for alias in (ev.legacy_event_id(), ev.account_salted_event_id()):
+                if (alias == ev.event_id or alias in current
+                        or alias not in self.records):
+                    continue
+                cands = owners[alias]
+                if len(cands) == 1:
+                    _adopt(alias, ev)
+                    done = True
+                    break
+                named = [e for e in cands
+                         if _summary_identifies(self.records[alias].summary,
+                                                e)]
+                if named == [ev]:
+                    _adopt(alias, ev, "was saved under an id several "
+                           "events share; its summary names this one")
+                    done = True
+                    break
+                if not named:
+                    _orphan(alias, cands)
+            if done:
+                continue
+            hit = self._pop_resymbolled(ev, uniq, current)
+            if hit is not None:
+                eid, note = hit
+                _adopt(eid, ev, note)
+                continue
+            unclaimed.append(ev)
+        for ev in unclaimed:
+            if ev.event_id in self.records:
+                continue
+            prefix = ev.event_id.rsplit('-', 1)[0] + '-'
+            if sum(1 for e in uniq if e.event_id.startswith(prefix)) != 1:
+                continue
+            hits = [eid for eid in self.records
+                    if eid.startswith(prefix) and eid not in current
+                    and eid.count('-') == ev.event_id.count('-')]
+            if len(hits) != 1:
+                continue
+            rec = self.records[hits[0]]
+            if not _summary_identifies(rec.summary, ev, roots=False):
+                self.migration_notes.append(
+                    f"election {hits[0]} ({rec.election}) has this "
+                    f"run's {ev.event_id} date and symbols but "
+                    + ("no saved summary" if not rec.summary else
+                       f"a different action type or ratio ({rec.summary})")
+                    + " — not carried over. If it is the same event, set "
+                    f"it again with `taxjson elect <account> --set "
+                    f"{ev.event_id}={rec.election}`.")
+                continue
+            _adopt(hits[0], ev,
+                   "was saved under another id (the account was renamed, "
+                   "or an older id scheme); its date, symbols, type and "
+                   "ratio match")
         return migrated
 
-    def _pop_resymbolled(self, ev: "CorporateAction") -> Optional[ElectionRecord]:
-        """A record whose id differs from `ev`'s only in the readable
-        symbol roots. The date prefix and the 4-hex suffix (hashed from
-        ISINs and ratio — or, in the pre-R1-301 scheme, also the
-        account name) are the event's identity; the roots are display
-        only, and an extractor that learns a better ticker (a broker-
-        internal parent code resolved to the traded symbol) changes
-        them. Requires exactly one candidate."""
-        date, _src, _tgt, suffix = ev.event_id.split('-', 3) \
-            if ev.event_id.count('-') == 3 else ('', '', '', '')
-        if not date or not suffix:
+    def _pop_resymbolled(self, ev: "CorporateAction",
+                         events: Optional[List["CorporateAction"]] = None,
+                         current: Optional[set] = None
+                         ) -> Optional[Tuple[str, str]]:
+        """(record id, note) of a record whose id differs from `ev`'s only
+        in the readable symbol roots, or None. The date prefix and the
+        4-hex suffix (hashed from ISINs and ratio — or, in the pre-R1-301
+        scheme, also the account name) are the event's identity; the
+        roots are display only, and an extractor that learns a better
+        ticker (a broker-internal parent code resolved to the traded
+        symbol) changes them. Requires exactly one candidate record, no
+        candidate that is the current id of an event of this run (that
+        record is its own event's — A2-0557), and no other event of this
+        run with the same date and suffix: ISIN-less events of one date
+        and ratio share the suffix, and the record moved to whichever
+        came first (A2-0064). The record is NOT removed here."""
+        def _parts(e):
+            if e.event_id.count('-') != 3:
+                return '', set()
+            date, _s, _t, suffix = e.event_id.split('-', 3)
+            return date, {suffix,
+                          e.account_salted_event_id().rsplit('-', 1)[-1]}
+        date, suffixes = _parts(ev)
+        if not date:
             return None
-        suffixes = {suffix, ev.account_salted_event_id().rsplit('-', 1)[-1]}
+        current = current if current is not None else {ev.event_id}
         hits = [eid for eid in self.records
                 if eid.count('-') == 3
                 and eid.startswith(f"{date}-")
                 and eid.rsplit('-', 1)[-1] in suffixes]
-        if len(hits) != 1:
+        if len(hits) != 1 or hits[0] in current:
             return None
-        return self.records.pop(hits[0])
+        sfx = hits[0].rsplit('-', 1)[-1]
+        rivals = [e for e in (events or [])
+                  if e.event_id != ev.event_id
+                  and _parts(e)[0] == date and sfx in _parts(e)[1]]
+        if rivals:
+            rec = self.records[hits[0]]
+            named = [e for e in rivals + [ev]
+                     if _summary_identifies(rec.summary, e)]
+            if named != [ev]:
+                return None
+        old = '-'.join(hits[0].split('-')[1:3])
+        new = '-'.join(ev.event_id.split('-')[1:3])
+        return hits[0], (f"was saved when the event's symbols read "
+                         f"{old} (now {new})")
 
     def get(self, event_id: str) -> Optional[ElectionRecord]:
         return self.records.get(event_id)

@@ -363,5 +363,98 @@ class TestCombineBrokerCopies(unittest.TestCase):
         self.assertEqual(len(got), 1, got)
 
 
+# ============================================== election-id migration
+def _spin(src, tgt, *, date='2025-06-02', ratio_old=5, action='spinoff',
+          account='margin', **kw):
+    return _event(date=date, action_type=action, source_symbol=src,
+                  target_symbol=tgt, ratio_old=ratio_old, account=account,
+                  source_isin='', target_isin='', **kw)
+
+
+def _rec(eid, ev=None, election='rollover_s_86_1', summary=None):
+    from taxjson.lib.corp_actions import ElectionRecord
+    return ElectionRecord(event_id=eid, election=election,
+                          summary=(summary if summary is not None
+                                   else (ev.summary() if ev else '')),
+                          hints={'allocated_acb_cad': 1234.5})
+
+
+def _migrate(records, events):
+    from taxjson.lib.corp_actions import Manifest
+    m = Manifest({r.event_id: r for r in records})
+    n = m.migrate_legacy(events)
+    return m, n
+
+
+class TestElectionMigration(unittest.TestCase):
+    """A2-0064, A2-0217, A2-0557, A2-0975, A2-0978 and the R1-301 residue
+    A2-0168 / A2-0872: migration never moves a record that is a current
+    event's own, never guesses between events that share an alias, and
+    lists the records it could not place."""
+
+    def test_a2_0064_0557_current_id_is_never_adopted(self):
+        a = _spin('AAA.TO', 'AAAS.TO')
+        b = _spin('BBB.TO', 'BBBS.TO')
+        self.assertEqual(a.event_id[-4:], b.event_id[-4:])
+        for order in ([a, b], [b, a]):
+            m, n = _migrate([_rec(a.event_id, a)], order)
+            self.assertEqual((n, sorted(m.records)), (0, [a.event_id]))
+
+    def test_a2_0217_0978_shared_legacy_alias_uses_the_summary(self):
+        a = _spin('AAA.TO', 'AAAS.TO')
+        b = _spin('BBB.TO', 'BBBS.TO')
+        self.assertEqual(a.legacy_event_id(), b.legacy_event_id())
+        for order in ([a, b], [b, a]):
+            m, n = _migrate([_rec(b.legacy_event_id(), b)], order)
+            self.assertEqual((n, sorted(m.records)), (1, [b.event_id]))
+
+    def test_shared_legacy_alias_without_summary_is_listed(self):
+        a = _spin('AAA.TO', 'AAAS.TO')
+        b = _spin('BBB.TO', 'BBBS.TO')
+        m, n = _migrate([_rec(b.legacy_event_id(), summary='')], [a, b])
+        self.assertEqual(n, 0)
+        self.assertEqual(sorted(m.records), [b.legacy_event_id()])
+        self.assertTrue(any(b.legacy_event_id() in note and 'elect' in note
+                            for note in m.migration_notes),
+                        m.migration_notes)
+
+    def test_a2_0975_rename_fallback_needs_same_type_and_ratio(self):
+        old = _spin('ABC.TO', 'XYZ.TO', ratio_old=4, account='oldname')
+        eid = old.account_salted_event_id()
+        for new in (_spin('ABC.TO', 'XYZ.TO', ratio_old=2),
+                    _spin('ABC.TO', 'XYZ.TO', ratio_old=4,
+                          action='merger')):
+            m, n = _migrate([_rec(eid, old,
+                                  election='taxable_deemed_dividend')],
+                            [new])
+            self.assertEqual((n, sorted(m.records)), (0, [eid]),
+                             m.migration_notes)
+        same = _spin('ABC.TO', 'XYZ.TO', ratio_old=4)
+        m, n = _migrate([_rec(eid, old, election='taxable_deemed_dividend')],
+                        [same])
+        self.assertEqual((n, sorted(m.records)), (1, [same.event_id]))
+        self.assertTrue(m.migration_notes)
+        self.assertIn('type and ratio match', m.migration_notes[0])
+
+    def test_a2_0168_unrelated_orphan_is_never_adopted(self):
+        ge = _spin('GE.US', 'GEV.US', date='2024-04-02', currency='USD')
+        new = _spin('AAA.US', 'BBB.US', date='2025-06-30', currency='USD')
+        m, n = _migrate([_rec(ge.event_id, ge)], [new])
+        self.assertEqual((n, sorted(m.records)), (0, [ge.event_id]))
+
+    def test_a2_0872_salted_record_with_changed_roots_migrates(self):
+        # Saved under the pre-R1-301 (account-salted) id while the parent
+        # was still a broker-internal code; the extractor now names it.
+        old = _spin('J000001.TO', 'AAAW.TO')
+        new = _spin('AAA.TO', 'AAAW.TO')
+        salted = old.account_salted_event_id()
+        self.assertNotEqual(salted.rsplit('-', 1)[1],
+                            new.event_id.rsplit('-', 1)[1])
+        m, n = _migrate([_rec(salted, old)], [new])
+        self.assertEqual((n, sorted(m.records)), (1, [new.event_id]))
+        self.assertEqual(m.records[new.event_id].hints,
+                         {'allocated_acb_cad': 1234.5})
+
+
 if __name__ == "__main__":
     unittest.main()

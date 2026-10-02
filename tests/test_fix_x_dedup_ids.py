@@ -81,12 +81,19 @@ class TestElectionIdsSurviveRename(unittest.TestCase):
         is carried over, with a note."""
         old = _old_scheme_id(_event('rrsp'), 'rrsp')
         ev = _event('retireA')
+        # The saved summary must name the same type and ratio (A2-0975):
+        # a record with none is listed, not adopted.
         man = Manifest({old: ElectionRecord(
-            event_id=old, summary='', election='rollover_s_85_1_5')})
+            event_id=old, summary=ev.summary(),
+            election='rollover_s_85_1_5')})
         self.assertEqual(man.migrate_legacy([ev]), 1)
         self.assertEqual(man.get(ev.event_id).election, 'rollover_s_85_1_5')
         self.assertEqual(len(man.migration_notes), 1)
-        self.assertIn('another account name', man.migration_notes[0])
+        self.assertIn('account was renamed', man.migration_notes[0])
+        bare = Manifest({old: ElectionRecord(
+            event_id=old, summary='', election='rollover_s_85_1_5')})
+        self.assertEqual(bare.migrate_legacy([ev]), 0)
+        self.assertIn('no saved summary', bare.migration_notes[0])
 
     def test_rename_fallback_refuses_an_ambiguous_prefix(self):
         """Two events share the readable prefix (same day, same symbols,
@@ -127,7 +134,7 @@ class TestElectionIdsSurviveRename(unittest.TestCase):
             self.assertNotEqual(old, ev.event_id)
             man_p = td / "manifest.json"
             man_p.write_text(json.dumps({"elections": {old: {
-                "summary": "", "election": "rollover_s_85_1_5",
+                "summary": ev.summary(), "election": "rollover_s_85_1_5",
                 "notes": ""}}}))
             pend = td / "pending.json"
             r = subprocess.run(
@@ -139,7 +146,7 @@ class TestElectionIdsSurviveRename(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertFalse(pend.exists() and json.loads(
                 pend.read_text()).get("pending"), r.stderr)
-            self.assertIn("another account name", r.stderr)
+            self.assertIn("account was renamed", r.stderr)
             saved = json.loads(man_p.read_text())["elections"]
             self.assertEqual(list(saved), [ev.event_id])
 
