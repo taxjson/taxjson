@@ -15694,6 +15694,9 @@ def main() -> None:
             _die(f"no such directory: {args.dir} (-C/--dir names the "
                  f"project root — the folder holding taxjson.toml)")
         _enforce_command_country(args)
+        _refuse_unknown_account(args)
+        if args.cmd in _RUN_STATE_BANNER_CMDS:
+            _banner_run_state(args)
         try:
             args.func(args)
         except SystemExit as e:
@@ -15715,6 +15718,64 @@ def main() -> None:
                      f"{' '.join(str(c) for c in (e.cmd or [])[-3:])} "
                      f"(exit {e.returncode}) — see the error above.")
     return
+
+
+# Commands that read the work/ books and print figures or verdicts from
+# them: each prints the run-state banner (inputs changed since the last
+# full run, validation ERRORs, a deferred account, an account with
+# inputs but no books) before it runs, on stderr so --json stays valid.
+# Only sum/t1135/carryover/form-export/check-filed had it; every other
+# view served a failed run's books with rc 0 and no word (audit A2-0380,
+# A2-0381). Those five print it themselves and are not listed here.
+_RUN_STATE_BANNER_CMDS = frozenset({
+    "gains", "roc-sum", "divs-sum", "dil-sum", "wash-sales", "winners",
+    "trades-sum", "fx-cash", "leaps", "leaps-sum", "fees-sum", "fees",
+    "shares", "list", "ccd-sum", "trades", "divs", "dil", "roc", "events",
+    "wash-radar", "sell-check", "buy-check", "harvest", "watch",
+    "edge-cases", "option-boundary", "spinoffs", "splits",
+})
+
+
+def _banner_run_state(args: argparse.Namespace) -> None:
+    root = Path(args.dir).resolve()
+    if not (root / "taxjson.toml").is_file() or not (root / "work").is_dir():
+        return
+    try:
+        cfg = _soft_config(root)
+    except Exception:                                   # noqa: BLE001
+        return
+    _warn_run_state(root, cfg)
+
+
+# Commands whose optional `account` positional names a configured
+# account (with a leading optional PERIOD for the period-taking ones):
+# a mistyped name gave an empty report with rc 0, or blamed a missing
+# run (audit A2-0684, A2-1167). Refused in one line here.
+_ACCOUNT_ARG_CMDS = frozenset({
+    "edge-cases", "spinoffs", "splits", "check-dates", "winners",
+    "leaps", "leaps-sum",
+})
+
+
+def _refuse_unknown_account(args: argparse.Namespace) -> None:
+    if args.cmd not in _ACCOUNT_ARG_CMDS:
+        return
+    account = getattr(args, "account", None)
+    period = getattr(args, "period", None)
+    if account is None and period and not _is_period(period):
+        if period.strip()[:1].isdigit():
+            return                     # the command names the bad window
+        account = period
+    if not account:
+        return
+    root = Path(args.dir).resolve()
+    if not (root / "taxjson.toml").is_file():
+        return
+    accounts = _soft_config(root).get("accounts") or {}
+    if not isinstance(accounts, dict) or not accounts or account in accounts:
+        return
+    _die(f"no [accounts.{account}] in taxjson.toml — check the name "
+         f"(configured: {', '.join(sorted(accounts))}).")
 
 
 def _enforce_command_country(args: argparse.Namespace) -> None:
