@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The country-ownership tables own `--foreign-roc dividend` (a value-level
+  entry) and `--slip-gains`, so tax-logic's CTRY-02 lists them and the
+  refusals come from one place; `scripts/check_tax_rules.py` now checks
+  the tables (a reason for every owned entry, every flag defined by a
+  CLI and seen by the refusal helper, no flag refused for one country
+  outside them), as lib/country said it did (audit A2-0719).
 - `taxjson run`'s native-currency (raw) pass checks the same actions as
   the engines' currency guard: an OPENING_BALANCE in another currency
   than its listing skips the raw view with a warning instead of stopping

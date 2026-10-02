@@ -182,7 +182,10 @@ def _ownership(country: str) -> List[Rule]:
     keys = sorted(_C.owners(_C.SETTING_COUNTRY, other))
     cfg = sorted(_C.owners(_C.CONFIG_COUNTRY, other))
     cmds = sorted(_C.owners(_C.COMMAND_COUNTRY, other))
-    flags = sorted(_C.owners(_C.FLAG_COUNTRY, other))
+    # A value-level entry ("--foreign-roc=dividend") reads as the flag
+    # with that value.
+    flags = sorted(f.replace("=", " ")
+                   for f in _C.owners(_C.FLAG_COUNTRY, other))
     files = sorted(_C.owners(_C.PROJECT_FILE_COUNTRY, other))
     plans = [k for k in _C.PLAN_COUNTRY
              if _C.PLAN_COUNTRY[k] == other]

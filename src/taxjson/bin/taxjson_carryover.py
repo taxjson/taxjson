@@ -880,10 +880,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     except ValueError as exc:
         print(f"taxjson-carryover: {exc}", file=sys.stderr)
         return 2
-    if slip and country != 'canada':
-        print("taxjson-carryover: --slip-gains is Canada-only (T5 box 18)",
-              file=sys.stderr)
-        return 2
+    # --slip-gains in a US ledger is refused up front with the other
+    # one-country flags (FLAG_COUNTRY; refuse_foreign_flags).
     _zero = {'net': 0.0, 'st': 0.0, 'lt': 0.0, 'dispositions': 0}
     slip_by: Dict[int, float] = {}
     for y, v in slip:

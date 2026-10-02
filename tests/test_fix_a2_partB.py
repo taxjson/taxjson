@@ -600,5 +600,60 @@ class TestRawMixedCurrencyActions(unittest.TestCase):
                       currency="USD")]), [])
 
 
+
+class TestOwnershipTablesComplete(unittest.TestCase):
+    """A2-0719: --foreign-roc dividend and --slip-gains were refused by
+    ad-hoc checks outside lib/country.FLAG_COUNTRY, and nothing checked
+    the tables as country.py claimed."""
+
+    @rule("US-CTRY-02")
+    @rule("CA-CTRY-02")
+    def test_value_and_flag_entries_are_owned(self):
+        from taxjson.lib import country as C
+        from taxjson.lib import tax_logic as T
+        self.assertTrue(C.flag_country_problems(
+            "usa", {"--foreign-roc": "dividend"}))
+        self.assertFalse(C.flag_country_problems(
+            "usa", {"--foreign-roc": "acb"}))
+        self.assertFalse(C.flag_country_problems(
+            "canada", {"--foreign-roc": "dividend"}))
+        self.assertTrue(C.flag_country_problems(
+            "usa", {"--slip-gains": ["2025=10"]}))
+        us = next(r.text for _s, rules in T.rule_sections("usa", {})
+                  for r in rules if r.id == "US-CTRY-02")
+        self.assertIn("--foreign-roc dividend", us)
+        self.assertIn("--slip-gains", us)
+
+    @rule("US-CTRY-02")
+    def test_cli_refusals_come_from_the_table(self):
+        import contextlib
+        import io
+        from taxjson.bin.taxjson_carryover import main
+        with tempfile.TemporaryDirectory() as td:
+            b = Path(td) / "m_base.json"
+            b.write_text(_book([]))
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), \
+                    contextlib.redirect_stdout(io.StringIO()), \
+                    self.assertRaises(SystemExit) as cm:
+                main([str(b), "--country", "usa",
+                      "--slip-gains", "2025=10"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("--slip-gains is Canada-only", err.getvalue())
+
+    def test_check_tax_rules_checks_the_tables(self):
+        import importlib.util
+        from tax_rules.dual import REPO_ROOT
+        spec = importlib.util.spec_from_file_location(
+            "ctr_partB", REPO_ROOT / "scripts" / "check_tax_rules.py")
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        self.assertEqual(m.ownership_problems(), [])
+        self.assertEqual([x.group(1) for x in m._GATE_MSG_RE.finditer(
+            'print("x: --foo dividend is ITA "\n'
+            '      "s.90; it does not apply with --country usa")')],
+            ["--foo"])
+
+
 if __name__ == "__main__":
     unittest.main()

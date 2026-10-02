@@ -24,7 +24,13 @@ imports a test) and fails when:
   6. a [settings] key (lib/country.SETTING_COUNTRY) is named by no
      rule's `keys` and not listed in tax_logic.NON_RULE_SETTINGS, or a
      VARIANT_AXES key is not a known setting;
-  7. a statement in the Canada section has a US- id or the reverse.
+  7. a statement in the Canada section has a US- id or the reverse;
+  8. the lib/country ownership tables are inconsistent: an owned entry
+     with no reason (*_WHY), an unknown owner, a FLAG_COUNTRY flag no
+     taxjson CLI defines or that refuse_foreign_flags cannot see, or a
+     source file that refuses a flag for one country ("--x ... is
+     Canada-only", "does not apply with --country") while the table
+     does not own it (audit A2-0719).
 
 Usage: scripts/check_tax_rules.py [--summary]
 Exit 0 when clean; 1 with one line per problem.
@@ -151,6 +157,65 @@ def collect(paths) -> List[Marked]:
                     m = Marked(path, node)
                     m.rules, m.absent = r, a
                     out.append(m)
+    return out
+
+
+# "--flag ... is Canada-only" / "... does not apply with --country", the
+# message may run over adjacent string literals ("..." "...").
+_GATE_MSG_RE = re.compile(
+    r'(--[a-z][a-z0-9-]+)(?:[^\n"]|"\s*\n\s*[rf]?"){0,120}?'
+    r'(?:is (?:Canada|United States|US|USA)-only'
+    r'|does not apply (?:with|to) (?:--)?country)')
+
+
+def ownership_problems() -> List[str]:
+    """Check 8: the country-ownership tables against each other and the
+    sources (lib/country says this script keeps them complete)."""
+    out: List[str] = []
+    valid = set(C.COUNTRIES) | {C.BOTH}
+    for name, table, why in (
+            ("SETTING_COUNTRY", C.SETTING_COUNTRY, C.SETTING_WHY),
+            ("CONFIG_COUNTRY", C.CONFIG_COUNTRY, C.CONFIG_WHY),
+            ("FLAG_COUNTRY", C.FLAG_COUNTRY, C.FLAG_WHY),
+            ("COMMAND_COUNTRY", C.COMMAND_COUNTRY, C.COMMAND_WHY),
+            ("PROJECT_FILE_COUNTRY", C.PROJECT_FILE_COUNTRY,
+             C.PROJECT_FILE_WHY)):
+        for key, owner in table.items():
+            if owner not in valid:
+                out.append(f"{name}[{key!r}]: unknown owner {owner!r}")
+            elif owner != C.BOTH and not str(why.get(key) or "").strip():
+                out.append(f"{name}[{key!r}] is {owner}-only but has no "
+                           f"reason in the matching *_WHY table")
+    for key, owner in C.PLAN_COUNTRY.items():
+        if owner not in valid:
+            out.append(f"PLAN_COUNTRY[{key!r}]: unknown owner {owner!r}")
+    src = ROOT / "src" / "taxjson"
+    texts = {p: p.read_text(encoding="utf-8")
+             for p in sorted(src.rglob("*.py"))}
+    defined: Set[str] = set()
+    for t in texts.values():
+        defined |= set(re.findall(r"add_argument\(\s*[\"'](--[a-z0-9-]+)",
+                                  t))
+    owned = {k.split("=", 1)[0] for k in C.FLAG_COUNTRY}
+    for flag in sorted(owned):
+        if flag not in defined:
+            out.append(f"FLAG_COUNTRY[{flag!r}]: no taxjson CLI defines "
+                       f"this flag")
+        if flag not in getattr(C, "_FLAG_ATTRS", {}):
+            out.append(f"FLAG_COUNTRY[{flag!r}]: missing from "
+                       f"lib/country._FLAG_ATTRS, so refuse_foreign_flags "
+                       f"never sees it")
+    for p, t in texts.items():
+        if p.name == "country.py":
+            continue
+        for m in _GATE_MSG_RE.finditer(t):
+            flag = m.group(1)
+            if flag == "--country":
+                continue
+            if flag in defined and flag not in owned:
+                out.append(f"{p.relative_to(ROOT)}: refuses {flag} for "
+                           f"one country but lib/country.FLAG_COUNTRY "
+                           f"does not own it")
     return out
 
 
@@ -294,6 +359,9 @@ def main(argv=None) -> int:
             if key not in C.SETTING_COUNTRY:
                 problems.append(f"VARIANT_AXES[{c}] {key}: not a known "
                                 f"[settings] key (lib/country)")
+
+    # 8. ownership tables (lib/country) complete and consistent
+    problems += ownership_problems()
 
     for p in problems:
         print(f"tax-rules: {p}")

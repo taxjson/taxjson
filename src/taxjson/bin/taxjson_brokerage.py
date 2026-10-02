@@ -503,12 +503,10 @@ Examples:
     # s.90(1) is Canadian law: never the default without a country
     # (partition INPUTS-03), and refused for a US filer.
     foreign_roc = args.foreign_roc
-    if args.country == "usa" and foreign_roc == "dividend":
-        print("taxjson-brokerage: error: --foreign-roc dividend is ITA "
-              "s.90(1), Canadian law; it does not apply with --country "
-              "usa (a nondividend distribution lowers basis, §301(c)(2))",
-              file=sys.stderr)
-        sys.exit(2)
+    if args.country:
+        # lib/country.FLAG_COUNTRY owns the value (audit A2-0719).
+        from taxjson.lib.country import refuse_foreign_flags
+        refuse_foreign_flags(args, "taxjson-brokerage: error")
     if foreign_roc is None:
         foreign_roc = "dividend" if args.country == "canada" else "acb"
 
