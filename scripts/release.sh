@@ -7,7 +7,9 @@
 #   1. refuses on a dirty tree or off main;
 #   2. turns the CHANGELOG's "## Unreleased" into "## vX.Y.Z (date)"
 #      (or requires that heading to exist already);
-#   3. bumps pyproject.toml, reinstalls so `taxjson --version` agrees;
+#   3. bumps pyproject.toml and, in lockstep, the taxjson-fetch plugin's
+#      packages/taxjson-fetch/pyproject.toml (its version and its
+#      `taxjson>=` floor), reinstalls so `taxjson --version` agrees;
 #   4. runs the FULL local gate (scripts/ci.sh, fuzzers included);
 #   5. commits, tags (annotated), runs the pre-push PII gate itself, and
 #      pushes main + the tag.
@@ -41,13 +43,20 @@ else
 fi
 sed -i "s/^version = \"[^\"]*\"/version = \"$V\"/" pyproject.toml
 grep -q "^version = \"$V\"" pyproject.toml || { echo "pyproject version bump failed"; exit 1; }
+# The broker-fetch plugin ships from the same tag, version for version,
+# and needs at least this core (the `taxjson fetch` plugin interface).
+FETCH_TOML=packages/taxjson-fetch/pyproject.toml
+sed -i -e "s/^version = \"[^\"]*\"/version = \"$V\"/" \
+       -e "s/\"taxjson>=[^\"]*\"/\"taxjson>=$V\"/" "$FETCH_TOML"
+grep -q "^version = \"$V\"" "$FETCH_TOML" && grep -q "\"taxjson>=$V\"" "$FETCH_TOML" \
+  || { echo "taxjson-fetch version bump failed"; exit 1; }
 "$PY" -m pip install -e . --quiet
 [ "$("$PY" -m taxjson.bin.taxjson_run --version)" = "taxjson $V" ] || { echo "taxjson --version disagrees with $V"; exit 1; }
 
 echo "== full gate =="
 scripts/ci.sh || { echo "gate FAILED — release aborted (CHANGELOG/pyproject edits left for you to inspect)"; exit 1; }
 
-git add CHANGELOG.md pyproject.toml
+git add CHANGELOG.md pyproject.toml "$FETCH_TOML"
 # An earlier aborted run may already have committed the bump: tag HEAD then.
 git diff --cached --quiet || git commit -q -m "release $TAG"
 git tag -a "$TAG" -m "taxjson $TAG"
@@ -62,3 +71,7 @@ printf 'refs/heads/main %s refs/heads/main %s\nrefs/tags/%s %s refs/tags/%s %s\n
   || { echo "pre-push PII gate refused — nothing pushed (the commit and tag $TAG are local; fix, then delete the tag and re-run)"; exit 1; }
 git push --quiet origin main "$TAG"
 echo "released $TAG — installers pick it up on their next run"
+# The tag covers both distributions (the installer installs the plugin
+# from the same checkout with --with-fetch). To publish wheels as well:
+#   python -m build && python -m build packages/taxjson-fetch
+#   twine upload dist/taxjson-$V* packages/taxjson-fetch/dist/taxjson_fetch-$V*

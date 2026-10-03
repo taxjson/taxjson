@@ -2,11 +2,15 @@
 # taxjson one-line installer.
 #
 #   bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
+#   bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --with-fetch
 #
 # What it does: checks git and Python 3.9+, clones the LATEST RELEASE
 # (newest vX.Y.Z tag) into ~/.local/share/taxjson — or fast-forwards an
 # existing install to it — builds a private virtualenv there with the
-# [fx] extra, and links the `taxjson` command into ~/.local/bin.
+# [fx] extra, and links the `taxjson` command into ~/.local/bin. The core
+# only: broker auto-fetch (`taxjson fetch` for Questrade / IBKR Flex) is
+# the separate taxjson-fetch package, installed into the same environment
+# with --with-fetch (or TAXJSON_WITH_FETCH=1).
 # Re-running is safe and is how you upgrade. Nothing touches your tax
 # project folders.
 #
@@ -16,6 +20,7 @@
 #   TAXJSON_CHANNEL  release | dev           (dev tracks the main branch)
 #   TAXJSON_EXTRAS   pip extras to install   (default fx; "" for none)
 #   TAXJSON_REPO     git remote              (default the GitHub repo)
+#   TAXJSON_WITH_FETCH  1 = also install taxjson-fetch (same as --with-fetch)
 set -euo pipefail
 
 DIR="${TAXJSON_DIR:-$HOME/.local/share/taxjson}"
@@ -23,6 +28,14 @@ BIN="${TAXJSON_BIN:-$HOME/.local/bin}"
 CHANNEL="${TAXJSON_CHANNEL:-release}"
 EXTRAS="${TAXJSON_EXTRAS-fx}"
 REPO="${TAXJSON_REPO:-https://github.com/taxjson/taxjson.git}"
+WITH_FETCH="${TAXJSON_WITH_FETCH:-0}"
+for arg in "$@"; do
+  case "$arg" in
+    --with-fetch) WITH_FETCH=1 ;;
+    -h|--help) echo "usage: install.sh [--with-fetch]   (also installs taxjson-fetch: Questrade / IBKR Flex auto-fetch)"; exit 0 ;;
+    *) printf 'unknown option: %s (known: --with-fetch)\n' "$arg" >&2; exit 2 ;;
+  esac
+done
 OS="$(uname -s)"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
@@ -97,6 +110,18 @@ if [ -n "$EXTRAS" ]; then
 else
   "$DIR/venv/bin/python" -m pip install --quiet -e "$DIR"
 fi
+# An install that already has the fetcher keeps it on upgrade.
+if [ "$WITH_FETCH" != 1 ] && "$DIR/venv/bin/python" -m pip show --quiet taxjson-fetch >/dev/null 2>&1; then
+  WITH_FETCH=1
+fi
+if [ "$WITH_FETCH" = 1 ] && [ ! -d "$DIR/packages/taxjson-fetch" ]; then
+  echo "   NOTE: this release predates the taxjson-fetch split — its \`taxjson fetch\` is built in."
+elif [ "$WITH_FETCH" = 1 ]; then
+  # The broker fetcher (Questrade REST API, IBKR Flex) lives in the same
+  # repository and release tag; the core never holds broker clients.
+  "$DIR/venv/bin/python" -m pip install --quiet -e "$DIR/packages/taxjson-fetch"
+  echo "   taxjson-fetch installed: $("$DIR/venv/bin/taxjson" fetch --list | head -1)"
+fi
 echo "   $("$DIR/venv/bin/taxjson" --version)"
 
 say "4/4 Command → $BIN/taxjson"
@@ -122,6 +147,9 @@ cat <<DONE
    Docs: https://taxjson.com  ·  https://github.com/taxjson/taxjson#readme
    Upgrade later by re-running this installer.
 DONE
+if [ "$WITH_FETCH" != 1 ]; then
+  echo "   Questrade / IBKR auto-fetch: re-run with --with-fetch (installs taxjson-fetch)."
+fi
 }
 trap 'printf "\n\033[31m✗ install did not complete — re-running this installer is safe and resumes.\033[0m\n" >&2' ERR
 main "$@"

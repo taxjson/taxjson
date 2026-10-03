@@ -33,7 +33,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - run: ruff check --select E9,F63,F7,F82 src/ tests/
+      - run: ruff check --select E9,F63,F7,F82 src/ tests/ packages/
 
   gates:
     # The ci.sh stages besides lint and the suite: release consistency,
@@ -74,6 +74,12 @@ jobs:
 
       - name: Run tests
         run: python -m unittest discover -s tests -p "test_*.py"
+
+      # The broker-fetch plugin, installed the way a user installs it.
+      - name: Install and test taxjson-fetch
+        run: |
+          pip install -e packages/taxjson-fetch
+          python -m unittest discover -s packages/taxjson-fetch/tests -p "test_*.py"
 
 
   test-extras:

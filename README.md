@@ -43,8 +43,21 @@ Everything runs locally on your machine. Your transaction data never leaves your
 
 ### Auto-fetch (skip the manual export)
 
-Questrade and Interactive Brokers accounts can pull activity directly —
-declare the source on the account itself:
+Questrade and Interactive Brokers accounts can pull activity directly
+through the optional **taxjson-fetch** plugin. The core taxjson package
+holds no broker API client and never reads a broker credential; the
+plugin is a separate distribution in this repository
+(`packages/taxjson-fetch`) that plugs into `taxjson fetch`:
+
+```bash
+pip install taxjson-fetch                    # or, from a checkout:
+pip install -e packages/taxjson-fetch        # into the same environment as taxjson
+taxjson fetch --list                         # the installed fetchers
+```
+
+Without it, `taxjson fetch` prints the install line and exits 2, and
+`taxjson run` accepts the keys below with a one-line note. Declare the
+source on the account itself:
 
 ```toml
 [accounts.margin]
@@ -94,6 +107,35 @@ tax year into its own `questrade_N.csv`; `--json` emits a machine
 summary (files, windows, rows added, activity types, overlaps). Each
 fetch also prints a per-activity-type count ("Trades 14, Dividends
 6") — a quick sanity check against a mis-scoped window.
+
+#### Writing a fetcher for another broker
+
+`taxjson fetch` is a dispatcher: each `[accounts.<name>]` with a
+`brokerage = "..."` goes to the installed fetcher that serves that
+value. A fetcher is its own Python package that registers under the
+entry-point group `taxjson.fetchers`:
+
+```toml
+# your package's pyproject.toml
+[project.entry-points."taxjson.fetchers"]
+mybroker = "mybroker_fetch.plugin:Fetcher"
+```
+
+The entry point names a class (instantiated with no arguments) or an
+object with `brokerages` (the `brokerage` values it serves),
+`description` (one line for `fetch --list`) and `fetch(request)`, which
+downloads every account in `request.accounts` into
+`request.root / "inputs" / <account>` in a format an existing parser
+reads (or a `.tt` file) and returns `{account: {...}}` for `--json`.
+Optional: `add_arguments(parser)` for its own `taxjson fetch` options,
+`account_keys` for extra `[accounts.<name>]` keys the config check
+should accept, and `setup_hint` (shown when no account declares one of
+its brokerages). `request` also carries the parsed `config`, the `work`
+directory, the parsed `args`, a `say` progress printer (stderr under
+`--json`) and the `dry_run` / `json` flags. Fail with
+`SystemExit("taxjson fetch: ...")`, never a traceback. The contract is
+`src/taxjson/lib/fetchers.py`; `packages/taxjson-fetch` is the worked
+example. See CONTRIBUTING.md.
 
 ### Any other broker (generic importer)
 
@@ -245,6 +287,7 @@ One line, no clone — installs the latest release into `~/.local/share/taxjson`
 
 ```bash
 bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
+bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --with-fetch   # plus the Questrade / IBKR auto-fetch plugin
 ```
 
 Then `mkdir -p ~/taxes/2026 && cd ~/taxes/2026 && taxjson init --country canada` (or `--country usa`). See [REFERENCES.md](REFERENCES.md) for the CRA/IRS sources behind every rule and [docs/releasing.md](docs/releasing.md) for how releases are cut.
@@ -269,10 +312,13 @@ egress list). Optional extras:
 ```bash
 pip install -e ".[fx]"          # yfinance + pandas: the FX fallback for dates before 2007-05-01 (the Bank's noon rate covers 2007-05..2017-02) and currencies the Bank of Canada doesn't publish, and every rate for a non-CAD base (the Bank of Canada path itself needs no extra)
 pip install -e ".[xlsx]"        # taxjson-xlsx-to-csv, for brokers that only ship Excel
-pip install -e ".[all]"         # everything
+pip install -e ".[all]"         # everything (the core's extras)
+pip install -e packages/taxjson-fetch   # the separate broker-fetch plugin: `taxjson fetch` for Questrade / IBKR Flex
 ```
 
-Or run `scripts/dev-setup.sh` for a one-shot venv with the `[fx,dev]` extras, then `source setup.sh` to activate it.
+The curl installer installs the core only; `--with-fetch` adds the fetch plugin (an install that already has it keeps it on upgrade).
+
+Or run `scripts/dev-setup.sh` for a one-shot venv with the `[fx,dev]` extras and the taxjson-fetch plugin, then `source setup.sh` to activate it.
 
 ## Everyday workflow (`taxjson run`)
 
@@ -526,7 +572,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson wash-radar` / `wash-sales` | Wash-sale radar (forward) and denied-loss report (backward). |
 | `taxjson fx-cash` | FX capital gains on foreign-currency **cash** — foreign cash is property, so spending USD realizes the rate move since it was acquired. Canada: ITA s.39(1.1) with the $200/year de minimis; US: the §988 ordinary-income figure. A standalone report reconstructed from the taxable accounts' native books (`--events` for the per-disposal detail, `--json` for machines); changes NO other number. Set `fx_cash_gains = true` under `[settings]` to also print it (and write `reports/fx_cash.rpt`) at the end of every run — off by default. |
 | `taxjson watch` | Cron-able change detector: reports only what CHANGED since the last watch run — new/changed/cleared radar advisories, moved clear dates, and (with `--harvest`) the harvestable-now loss total moving more than `--threshold` (default 100). A report ends with the scope line (verdicts cover this project's accounts only — CA-PLAN-04 / US-PLAN-04). Silent with exit 0 when nothing changed, so a cron line mails only on news; `--exit-code` exits 1 on changes for scripting, `--json` for machines. State: `work/.watch_state.json`; `--state PATH` gives a cron cadence its own baseline (daily and weekly lines can coexist). |
-| `taxjson fetch [ACCOUNT ...]` | Download broker activity straight into `inputs/` — Questrade REST API and IBKR Flex Web Service, configured on the account (`brokerage` + `account`/`query_id` under `[accounts.<name>]`). Writes files the existing parsers already read; hand-exported CSVs keep working side by side. Questrade defaults to the whole tax-year window plus the superficial-loss margins (Dec 1 of the prior year through Jan 31 of the next, capped at today; `--year N` backfills a past year, `--from`/`--days` override the window); IBKR re-covers the Flex query's configured period. `--trim-overlap` drops rows your manual exports already cover, `--dry-run` previews. Credentials: `--refresh-token` (Questrade) / `--flex-token` (IBKR); `--positions` ALSO snapshots live Questrade holdings to `work/<account>_live_holdings.toml` (for `taxjson sanity`). Chain it: `taxjson fetch run`. |
+| `taxjson fetch [ACCOUNT ...]` | Download broker activity straight into `inputs/` through an installed fetcher plugin (`--list` names them; none installed: one install line, exit 2) — the taxjson-fetch plugin (`pip install taxjson-fetch`) covers the Questrade REST API and IBKR Flex Web Service, configured on the account (`brokerage` + `account`/`query_id` under `[accounts.<name>]`). Writes files the existing parsers already read; hand-exported CSVs keep working side by side. Questrade defaults to the whole tax-year window plus the superficial-loss margins (Dec 1 of the prior year through Jan 31 of the next, capped at today; `--year N` backfills a past year, `--from`/`--days` override the window); IBKR re-covers the Flex query's configured period. `--trim-overlap` drops rows your manual exports already cover, `--dry-run` previews. Credentials: `--refresh-token` (Questrade) / `--flex-token` (IBKR); `--positions` ALSO snapshots live Questrade holdings to `work/<account>_live_holdings.toml` (for `taxjson sanity`). Chain it: `taxjson fetch run`. |
 | `taxjson scan` | Lint the project for common tax-efficiency mistakes: cross-listed Canadian dividend payers held via the US line in taxable/TFSA, US payers in a TFSA (unrecoverable 15% withholding), and ticker.map cross-listing gaps. `--online` probes yfinance for unmapped .TO twins. Exit 1 on findings. |
 | `taxjson t1135` | CRA T1135 foreign-property helper: filing-threshold test + per-property/per-country tables. |
 | `taxjson carryover` | Multi-year capital-loss carryforward/carryback ledger (Canada balance + T1A carryback candidates; US ST/LT worksheet). |

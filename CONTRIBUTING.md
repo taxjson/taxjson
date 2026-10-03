@@ -83,6 +83,15 @@ Or use the wrapper:
 ./run_tests.sh
 ```
 
+The broker-fetch plugin (`packages/taxjson-fetch`) has its own tests;
+they run from a checkout without installing the plugin (its
+`tests/_support.py` registers the entry point for the run), or after
+`pip install -e packages/taxjson-fetch`:
+
+```bash
+PYTHONPATH=packages/taxjson-fetch/src python -m unittest discover -s packages/taxjson-fetch/tests -p "test_*.py" </dev/null
+```
+
 ### The full gate: `scripts/ci.sh`
 
 Run this before every push. It is the authoritative CI; the workflow
@@ -151,6 +160,34 @@ is interrupted restore with `git checkout -- src/taxjson/lib/`.
 5. `taxjson-generate-parser` can draft step 1 from a CSV sample — its prompt
    is generated from the same schema table, but the draft still goes through
    steps 2–4 like hand-written code.
+
+## Adding a broker fetcher (`taxjson fetch`)
+
+Broker API clients never go in the core: the core holds no broker
+client and reads no broker credential, and its only network egress is
+FX rates and crypto prices (SECURITY.md). `taxjson fetch` is a thin
+dispatcher over plugins, so a new broker's downloader is its own
+package:
+
+1. Write a class with `brokerages` (the `brokerage = "..."` values it
+   serves under `[accounts.<name>]`), `description`, and
+   `fetch(request) -> {account: {...}}` that writes each account's
+   activity into `request.root / "inputs" / <account>` in a format an
+   existing parser reads. Optional: `add_arguments(parser)`,
+   `account_keys`, `setup_hint`. The contract is documented in
+   `src/taxjson/lib/fetchers.py` (and README, "Writing a fetcher for
+   another broker").
+2. Register it in your package's `pyproject.toml`:
+   `[project.entry-points."taxjson.fetchers"]` → `mybroker =
+   "mybroker_fetch.plugin:Fetcher"`, and depend on `taxjson`.
+3. Test it offline: inject the HTTP layer (see
+   `packages/taxjson-fetch/src/taxjson_fetch/api.py`'s `http_get`) and
+   round-trip the written file through the core parser. Never commit a
+   real token or account number.
+
+`packages/taxjson-fetch` (Questrade REST API, IBKR Flex) is the worked
+example; a fetcher kept in this repository lives under `packages/` and
+`scripts/ci.sh` runs its tests.
 
 ## Adding a country rule set
 

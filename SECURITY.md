@@ -29,8 +29,10 @@ Out of scope:
 
 ## Network access and data egress
 
-The core pipeline reaches the network in exactly two places, both
-during `taxjson run`, and only when a cache miss requires it:
+The core taxjson package holds no broker API client and never reads a
+broker credential. Its pipeline reaches the network in exactly two
+places, both during `taxjson run`, and only when a cache miss requires
+it:
 
 - **FX rates** — `taxjson-to-base-curr` downloads the base-currency
   pairs listed under `source_currencies` into `work/to_base.csv`: from
@@ -53,14 +55,25 @@ Harvest tab (IBKR gateway / Yahoo Finance): they serve
 `work/.price_cache.json` only and refuse the lookup on a miss, and
 `scan --online` skips its Yahoo Finance name probe with a note (the
 offline checks still run). Everything else that touches the network is
-opt-in by command: `fetch` (your broker's API, with your credentials;
-`fetch --positions` reads live Questrade positions), and
-`taxjson-generate-parser`, which sends the first `--sample-lines`
+opt-in by command: `taxjson-generate-parser`, which sends the first `--sample-lines`
 (default 30) lines of the sample CSV you hand it to an LLM API. Those
 lines are where broker exports keep the holder's name, account number
 and address, so it scans them first and refuses to send a sample that
 still carries an identity shape (`--allow-unredacted` overrides) — run
 `taxjson redact` on the sample first.
+
+**Broker fetch is a separate package.** `taxjson fetch` in the core is
+a dispatcher over installed fetcher plugins (entry-point group
+`taxjson.fetchers`); with none installed it only prints how to install
+one. The Questrade / IBKR Flex fetcher is the optional `taxjson-fetch`
+distribution (`packages/taxjson-fetch` in this repository). Installed,
+it adds the broker egress, only when you run `taxjson fetch`: the
+Questrade login and REST API (`https://login.questrade.com`, the
+`https://*.questrade.com` API server the login names; `fetch
+--positions` reads live positions) and the IBKR Flex Web Service
+(`https://ndcdyn.interactivebrokers.com`), with your credentials, and
+nothing else. A third-party fetcher plugin runs with your user's
+rights inside `taxjson fetch` — install only ones you trust.
 
 **What Yahoo Finance learns.** Every Yahoo lookup (FX fallback, crypto
 prices, `harvest` / `watch --harvest` current prices, `scan --online`)
@@ -69,7 +82,8 @@ range — so Yahoo can see which tickers you hold or trade and roughly
 when, though never quantities, prices paid or account numbers. Use
 `TAXJSON_OFFLINE=1` (with a populated cache) if that matters to you.
 
-Credentials: `~/.questrade_token` is written 0600 and rotated
+Credentials (taxjson-fetch only — the core reads none):
+`~/.questrade_token` is written 0600 and rotated
 atomically (the temporary file is created fresh — never through a
 symlink); tokens never appear in logs, `.diag` files or `work/`
 artifacts. Prefer `$QUESTRADE_REFRESH_TOKEN` / `$IBKR_FLEX_TOKEN` over
@@ -85,8 +99,8 @@ response is refused.
 at startup, so everything they create — `work/`, `reports/`,
 `filed/`, `export/`, `checklist.json`, a new project's
 `inputs/<account>/` — is `0600` (files) / `0700` (directories)
-whatever your shell's umask. `taxjson fetch` also tightens an
-existing `inputs/<account>/` to `0700` and writes the fetched
+whatever your shell's umask. `taxjson fetch` (the taxjson-fetch
+plugin) also tightens an existing `inputs/<account>/` to `0700` and writes the fetched
 statements (which carry your account numbers) `0600`. Directories
 created by earlier versions keep their old mode; tighten a project
 once with `chmod -R go-rwx <project>`.

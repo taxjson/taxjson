@@ -12,6 +12,34 @@
   what-if's tax-logic statements CA-PLAN-03 / US-PLAN-03 are retired
   with it. The installer's default extras are now `fx`.
 
+### Changed: broker fetch is a separate package
+
+- `taxjson fetch` moved out of the core into the optional
+  **taxjson-fetch** distribution (`packages/taxjson-fetch`: the
+  Questrade REST API and IBKR Flex Web Service clients, the
+  `~/.questrade_token` handling, the window / merge / `--trim-overlap`
+  logic, `--positions`, and their tests). The core holds no broker
+  client and reads no broker credential; its network egress is FX rates
+  and crypto prices only (SECURITY.md).
+- The core keeps `taxjson fetch` as a thin dispatcher over fetchers
+  registered under the entry-point group `taxjson.fetchers`: `--list`
+  names the installed ones, each account's `brokerage` picks its
+  fetcher (`--fetcher NAME` narrows it), and `--json` / `--dry-run`
+  work as before. With none installed it prints one line — install it
+  with `pip install taxjson-fetch` (or `pip install -e
+  packages/taxjson-fetch` from a checkout) — and exits 2. With the
+  plugin installed, every option and output is unchanged.
+- `brokerage` / `account` / `query_id` under `[accounts.<name>]` stay
+  valid without the plugin (`taxjson run` adds a one-line note); with
+  fetchers installed, the brokerage check names the brokerages they
+  serve.
+- The installer installs the core only; `--with-fetch` (or
+  `TAXJSON_WITH_FETCH=1`) adds taxjson-fetch, and an install that has
+  it keeps it on upgrade. `scripts/dev-setup.sh` installs it;
+  `scripts/ci.sh` runs its tests and lints `packages/`;
+  `scripts/release.sh` bumps both versions in lockstep. README and
+  CONTRIBUTING document the plugin interface for other brokers.
+
 ### US engine (owner request: deferred re-audit work)
 
 - US wash sale: a purchase in another of your taxable accounts inside

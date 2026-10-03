@@ -923,12 +923,6 @@ class TestBrokerDetection(unittest.TestCase):
             with self.subTest(label):
                 self.assertEqual(_detect_text(text)[0], 'ib')
 
-    def test_fetch_accepts_what_detection_routes(self):
-        from taxjson.bin.taxjson_fetch import looks_like_ib_statement
-        self.assertTrue(looks_like_ib_statement(self.ib))
-        self.assertFalse(looks_like_ib_statement(
-            'Statement,Header,Field Name,Field Value\n'
-            'Statement,Data,Notes,LIBOR Rate Source\n'))
 
     def test_rbc_header_after_a_partial_preamble_or_blank_line(self):
         no_brand = self.rbc.split('\n', 1)[1]

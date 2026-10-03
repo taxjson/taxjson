@@ -660,29 +660,5 @@ class TestWatchState(unittest.TestCase):
                 self.assertIn("NEW baseline", err.getvalue())
 
 
-# ------------------------------------------------------ fetch helpers
-class TestFetchHelpers(unittest.TestCase):
-
-    def test_merge_csv_with_bom(self):
-        """A2-1445."""
-        from taxjson.bin.taxjson_run import _merge_csv_text
-        qt = "Transaction Date,Action,Symbol\n2025-01-02,Buy,ABC\n"
-        merged, added = _merge_csv_text("﻿" + qt, qt)
-        self.assertEqual(added, 0)
-
-    def test_ib_flex_text_with_bom_is_decoded(self):
-        """A2-0799: fetch decodes like detection (BOM dropped)."""
-        from taxjson.bin import taxjson_fetch as F
-        from taxjson.lib.brokerages.base import decode_broker_text
-        text = ("Statement,Header,Field Name,Field Value\n"
-                "Statement,Data,BrokerName,Interactive Brokers\n"
-                "Trades,Header,DataDiscriminator,Asset Category\n")
-        raw = b"\xef\xbb\xbf" + text.encode()
-        self.assertTrue(F.looks_like_ib_statement(decode_broker_text(raw)))
-        src = (REPO_ROOT / "src" / "taxjson" / "bin"
-               / "taxjson_run.py").read_text()
-        self.assertNotIn('text = raw.decode("utf-8", "replace")', src)
-
-
 if __name__ == "__main__":
     unittest.main()
