@@ -5529,6 +5529,48 @@ class USATaxRules(TaxRules):
                     and _t.corp_event_id):
                 _spin_adj.setdefault((_t.account, _t.corp_event_id), _t)
         _spin_done: set = set()
+        # §356 boot exchanges booked per block (US-CORP-05): the SELL of
+        # the old shares (sorted first) leaves its blocks here for the
+        # BUY of the new shares, keyed (account, corp_event_id).
+        _boot_blocks: Dict[tuple, tuple] = {}
+
+        def _draw_long_lots(ikey_, sym, q, on_date):
+            """Take `q` units off the front of a long pool (FIFO) with no
+            disposition row: [(units, lot fields)] — the boundary lot is
+            split. Replacement records lose the drawn shares' capacity,
+            as on a sale."""
+            out = []
+            lots = inventory_long.get(ikey_, [])
+            reps = long_replacements.get(_rep_key(sym, on_date), [])
+            left = q
+            while left > epsilon and lots:
+                lot = lots[0]
+                if lot['qty'] <= left + epsilon:
+                    lots.pop(0)
+                    out.append(dict(lot))
+                    left -= lot['qty']
+                    for r in reps:
+                        if r.get('lot_ref') is lot:
+                            r['lot_ref'] = None
+                            r['remaining_qty'] = 0.0
+                    continue
+                frac = D(left) / D(lot['qty'])
+                part = dict(lot)
+                part['qty'] = left
+                part['cost_basis'] = lot['cost_basis'] * frac
+                _wd = lot.get('wash_deferred', Decimal(0))
+                part['wash_deferred'] = _wd * frac
+                lot['qty'] -= left
+                lot['cost_basis'] -= part['cost_basis']
+                lot['wash_deferred'] = _wd - part['wash_deferred']
+                for r in reps:
+                    if r.get('lot_ref') is lot:
+                        _cuf = _rep_units_factor(sym, r['date'], on_date)
+                        r['remaining_qty'] = max(
+                            0.0, r['remaining_qty'] - left / (_cuf or 1.0))
+                out.append(part)
+                left = 0.0
+            return out
 
         def _insert_lots(ikey_, new_lots):
             """Carried lots join a pool in acquisition order (their
@@ -5926,6 +5968,122 @@ class USATaxRules(TaxRules):
                           f"are booked as one lot on the spin date and "
                           f"the parent's basis reduction as a plain "
                           f"adjustment (check the parent's history).")
+
+            if (tx.action == 'BUYSELL' and tx.type == REORG_356_TYPE
+                    and tx.quantity < 0):
+                # §356 per block (Reg. §1.356-1(b), Rev. Rul. 68-23): each
+                # lot realizes its share of (new shares' value + boot)
+                # less its basis and recognizes min(realized, its boot
+                # share) — never a loss (§356(c)); new basis = basis −
+                # boot share + recognized (§358(a)), dates carried
+                # (§1223(1)). One row per block: proceeds = its boot,
+                # cost = boot − recognized, gain = recognized.
+                _q = -tx.quantity
+                _ar = D(tx.net_amount)
+                _boot = D(tx.gross_amount or 0)
+                _drawn = _draw_long_lots(ikey, symbol, _q, tx.date)
+                _got = sum(c['qty'] for c in _drawn)
+                if _q - _got > epsilon:
+                    _note(tx.date,
+                          f"warning: ATTENTION: {symbol}: the §356 "
+                          f"exchange on {tx.date} gives up {_q:g} shares "
+                          f"but {tx.account} holds {_got:g} — the other "
+                          f"{_q - _got:g} have no basis in the books "
+                          f"(missing history): booked at zero basis for "
+                          f"manual reporting.")
+                    _drawn.append({'qty': _q - _got,
+                                   'cost_basis': Decimal(0),
+                                   'date': tx.date,
+                                   'effective_acq_date': tx.date,
+                                   'tainted': True})
+                _blocks = []
+                for _c in _drawn:
+                    _f = D(_c['qty']) / D(_q)
+                    _arb, _bb = _ar * _f, _boot * _f
+                    _rec = max(Decimal(0), min(_arb - _c['cost_basis'],
+                                               _bb))
+                    _acq = _c.get('effective_acq_date', _c['date'])
+                    _blocks.append((_f, _c['cost_basis'] - _bb + _rec,
+                                    _c['date'], _acq,
+                                    bool(_c.get('tainted')),
+                                    _c.get('wash_deferred', Decimal(0))))
+                    if _bb <= 0:
+                        continue
+                    try:
+                        _held = (datetime.strptime(tx.date, '%Y-%m-%d')
+                                 - datetime.strptime(_acq, '%Y-%m-%d')
+                                 ).days
+                    except ValueError:
+                        _held = 0
+                    realized_gains.append({
+                        'date': tx.date,
+                        'date_settle': tx.date_settle or tx.date,
+                        'symbol': symbol, 'qty': _c['qty'],
+                        'cost': float(_bb - _rec),
+                        'proceeds': float(_bb),
+                        'gain': float(_rec), 'raw_gain': float(_rec),
+                        'disallowed_amount': 0.0,
+                        'permanently_disallowed': 0.0,
+                        'replacement_lot_ids': [],
+                        'days_held': max(0, _held),
+                        'acquired_date': _c['date'],
+                        'account': tx.account,
+                        'currency': tx.currency,
+                        'commission': 0.0, 'fee': 0.0,
+                        'is_wash_sale': False,
+                        'is_option': is_option_symbol(symbol),
+                        'id': tx.id, 'trace': [],
+                        'direction': 'LONG',
+                        'term': ('LONG_TERM'
+                                 if held_more_than_one_year(_acq, tx.date)
+                                 else 'SHORT_TERM'),
+                        'wash_trigger': None, 'wash_window': None,
+                        'wash_replacements': None,
+                        'tainted': bool(_c.get('tainted')),
+                        'reorg_356': True,
+                        'note': (f"§356 boot: realized "
+                                 f"{float(_arb - _c['cost_basis']):.2f}, "
+                                 f"recognized {float(_rec):.2f} "
+                                 f"(never a loss)"),
+                    })
+                _boot_blocks[(tx.account, tx.corp_event_id)] = (
+                    _blocks, _ar - _boot)
+                if trace:
+                    symbol_traces[symbol].append(
+                        f"# {tx.date} §356 EXCHANGE {_q:10.4f} | "
+                        f"{len(_blocks)} block(s), boot {float(_boot):.4f}")
+                continue
+            if (tx.action == 'BUYSELL' and tx.type == REORG_356_TYPE
+                    and tx.quantity > 0):
+                _st = _boot_blocks.pop((tx.account, tx.corp_event_id),
+                                       None)
+                if _st is not None:
+                    _blocks, _src_value = _st
+                    _val = D(abs(tx.net_amount))
+                    # The new shares' value in this leg's currency over
+                    # the same value in the old leg's: the currency
+                    # rate (and the whole-share fraction) between them.
+                    _r = (_val / _src_value
+                          if _src_value > 0 and _val > 0 else Decimal(1))
+                    _insert_lots(ikey, [{
+                        'qty': tx.quantity * float(_f),
+                        'cost_basis': _nb * _r,
+                        'wash_deferred': _wd * _r if _wd else Decimal(0),
+                        'date': _d, 'effective_acq_date': _e,
+                        'id': tx.id,
+                        **({'tainted': True} if _t else {}),
+                    } for _f, _nb, _d, _e, _t, _wd in _blocks])
+                    if trace:
+                        symbol_traces[symbol].append(
+                            f"# {tx.date} §356 NEW SHARES "
+                            f"{tx.quantity:10.4f} | {len(_blocks)} "
+                            f"block(s), basis carried")
+                    continue
+                _note(tx.date,
+                      f"warning: ATTENTION: {symbol}: the new shares of "
+                      f"the §356 exchange on {tx.date} have no old-share "
+                      f"leg in {tx.account} — booked at their value, not "
+                      f"the carried basis; check the merger's rows.")
 
             tx_qty_abs = abs(tx.quantity)
             # A BUY's cost is a magnitude (parsers spell it either sign);

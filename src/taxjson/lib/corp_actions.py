@@ -3368,27 +3368,24 @@ CANADA_MERGER = RuleSpec(
 
 
 def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
-    """§368(a) reorganization with cash boot (§356(a)(1)): gain is
-    recognized to the LESSER of the realized gain or the boot received;
-    LOSSES ARE NOT RECOGNIZED (§356(c)). New-share basis per §358(a) =
-    old basis − boot + gain recognized.
+    """§368(a) reorganization with cash boot (§356(a)(1)), computed PER
+    BLOCK by the US engine (Reg. §1.356-1(b), Rev. Rul. 68-23): each lot
+    of old shares realizes its share of (new shares' value + boot) less
+    its basis and recognizes min(realized, its share of the boot), never
+    a loss (§356(c)); its new shares' basis is basis − boot share +
+    recognized (§358(a)) and their holding period tacks (§1223(1)).
 
-    Modeled as an engineered SELL/BUY pair so the ENGINE books exactly
-    the recognized gain against its own pool:
-        SELL source at proceeds = basis + recognized_gain
-        BUY  target at cost     = proceeds − boot   (== the §358 basis)
-    This needs the user's total pre-merger basis (`source_basis_total`
-    hint — read it off `taxjson list` / holdings.toml; it must match the
-    engine's pool or the booked gain drifts by the difference). The
-    target-side FMV (broker-reported or the `fmv_per_share` hint) is
-    used only to compute the realized gain for the min(gain, boot) cap.
-
-    Known limitation, documented: unlike the all-stock §368 path (SPLIT
-    rename), the SELL/BUY model RESETS the holding-period start —
-    §1223(1) tacking is not preserved. Fractional shares snap to whole
-    with proportional basis, like the taxable path."""
+    Two typed rows (`reorg_356`, joined by corp_event_id) carry what the
+    engine needs, each leg in its own listing's currency:
+        SELL source: net_amount = amount realized (new shares' value +
+                     boot), gross_amount = the boot
+        BUY  target: net_amount = the value of the whole new shares
+    The engine computes each block from ITS OWN lots, so no pre-merger
+    basis hint is needed (`source_basis_total` from older manifests is
+    accepted and ignored). Fractional shares snap to whole like the
+    taxable path: the dropped fraction's share of the new basis is not
+    carried (cash in lieu is entered as its own sale)."""
     boot = float((hints or {}).get('cash_boot') or 0.0)
-    basis = float((hints or {}).get('source_basis_total') or 0.0)
     tgt_cur = (event.target_currency or event.currency or 'USD').upper()
     src_cur = (event.currency or 'USD').upper()
     tgt_fmv = event.target_fmv
@@ -3397,11 +3394,10 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
     if tgt_fmv <= 0 and hint_ps > 0:
         tgt_fmv = hint_ps * event.qty_received
         fmv_cur = tgt_cur
-    # One currency for the §356 arithmetic: US dollars. The boot and the
-    # new shares' value are in the target listing's currency, the basis
-    # in USD (what a US project's `taxjson list` shows); each leg is
-    # then booked in its own listing's currency at the event-date rate.
-    # The hints used to be added unconverted across currencies (A2-0216).
+    # One currency for the arithmetic: US dollars (the boot and the new
+    # shares' value are in the target listing's currency); each leg is
+    # then booked in its own listing's currency at the event-date rate
+    # (A2-0216).
     usd_boot = _convert(hints, boot, tgt_cur, 'USD', event.date)
     usd_fmv = _convert(hints, tgt_fmv, fmv_cur, 'USD', event.date)
     in_usd = usd_boot is not None and usd_fmv is not None
@@ -3411,29 +3407,18 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
                                                     fmv_cur}) > 1:
         print(f"warning: boot merger {event.source_symbol}→"
               f"{event.target_symbol} on {event.date}: no exchange rate "
-              f"for its currencies ({src_cur}/{tgt_cur}) — the cash, "
-              f"the basis and the new shares' value are combined as "
-              f"entered; check the recognized gain.", file=sys.stderr)
+              f"for its currencies ({src_cur}/{tgt_cur}) — the cash and "
+              f"the new shares' value are combined as entered; check the "
+              f"recognized gain.", file=sys.stderr)
 
     if boot <= 0:
         print(
             f"warning: boot merger {event.source_symbol}→"
             f"{event.target_symbol} on {event.date} has cash_boot=0 — "
-            f"this election degenerates to a basis carryover but RESETS "
-            f"holding dates. Elect reorg_368 instead (`taxjson elect "
-            f"--redo`).",
+            f"elect reorg_368 for an all-stock reorganization (`taxjson "
+            f"elect --redo`).",
             file=sys.stderr,
         )
-    if basis <= 0:
-        print(
-            f"warning: boot merger {event.source_symbol}→"
-            f"{event.target_symbol} on {event.date} has no "
-            f"source_basis_total hint — recognized gain defaults to the "
-            f"full boot and the new basis to $0−boot+gain. Re-run "
-            f"`taxjson elect --redo` with your pre-merger basis.",
-            file=sys.stderr,
-        )
-
     if tgt_fmv <= 0 and event.qty_received > 0:
         # Without the new shares' value the realized gain is understated
         # (boot - basis), so the §356 gain is capped too low and the
@@ -3448,29 +3433,26 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
             file=sys.stderr,
         )
 
-    realized = (max(tgt_fmv, 0.0) + boot) - basis
-    recognized = max(0.0, min(realized, boot))   # §356: capped at boot; no losses
-    proceeds = basis + recognized
-    new_basis = proceeds - boot                  # == basis − boot + recognized
-
-    whole_qty, new_basis, frac_qty = _snap_received(event,
-        event.qty_received, new_basis,
-    )
+    tgt_fmv = max(tgt_fmv, 0.0)
+    realized_amount = tgt_fmv + boot
+    whole_qty, whole_fmv, frac_qty = _snap_received(
+        event, event.qty_received, tgt_fmv)
     description = (
         f"Merger {event.source_symbol}→{event.target_symbol} "
         f"(§368(a) reorg with §356 cash boot {boot:.2f}; gain recognized "
-        f"{recognized:.2f}; §358 basis carried)"
+        f"per lot, never a loss; §358 basis and holding period carried)"
     )
     if frac_qty > 0:
         description += f"; cash-in-lieu for {frac_qty:.6g} fractional share(s)"
 
-    sell_cur, buy_cur = event.currency, event.target_currency or \
-        event.currency
+    sell_cur, buy_cur = src_cur, tgt_cur
+    s_amount, s_boot, b_value = realized_amount, boot, whole_fmv
     if in_usd:
-        p = _convert(hints, proceeds, 'USD', src_cur, event.date)
-        b = _convert(hints, new_basis, 'USD', tgt_cur, event.date)
-        if p is not None and b is not None:
-            proceeds, new_basis = p, b
+        p = _convert(hints, realized_amount, 'USD', src_cur, event.date)
+        pb = _convert(hints, boot, 'USD', src_cur, event.date)
+        b = _convert(hints, whole_fmv, 'USD', tgt_cur, event.date)
+        if p is not None and pb is not None and b is not None:
+            s_amount, s_boot, b_value = p, pb, b
         else:                     # keep both legs in USD, said loudly
             sell_cur = buy_cur = 'USD'
             print(f"warning: boot merger {event.source_symbol}→"
@@ -3483,11 +3465,15 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
         'symbol': event.source_symbol,
         'quantity': -abs(event.qty_disposed),
         'currency': sell_cur,
-        'price': (proceeds / event.qty_disposed) if event.qty_disposed else 0.0,
-        'net_amount': proceeds,
+        'price': (s_amount / event.qty_disposed) if event.qty_disposed
+        else 0.0,
+        'net_amount': s_amount,
+        'gross_amount': s_boot,
         'fee': 0.0,
         'account': event.account,
-        'description': description + ' (engineered proceeds = basis + recognized gain)',
+        'type': 'reorg_356',
+        'description': description + ' (amount realized: new shares\' '
+                                     'value + boot; gross_amount = boot)',
     }]
     if whole_qty > 0:
         rows.append({
@@ -3498,11 +3484,13 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
             'symbol': event.target_symbol,
             'quantity': whole_qty,
             'currency': buy_cur,
-            'price': new_basis / whole_qty,
-            'net_amount': new_basis,
+            'price': b_value / whole_qty,
+            'net_amount': b_value,
             'fee': 0.0,
             'account': event.account,
-            'description': description,
+            'type': 'reorg_356',
+            'description': description + ' (value of the new shares; '
+                                         'their basis is carried per lot)',
         })
     return rows
 
@@ -3527,11 +3515,12 @@ USA_MERGER = RuleSpec(
         ),
         (
             'reorg_368_boot',
-            "§368(a) reorganization with CASH BOOT (§356): gain recognized "
-            "to the lesser of your realized gain or the cash received; "
-            "losses are NOT recognized. New basis = old basis − boot + "
-            "gain recognized (§358(a)). You supply the boot and your "
-            "total pre-merger basis. Holding dates reset in this model. "
+            "§368(a) reorganization with CASH BOOT (§356): per lot of old "
+            "shares, gain recognized to the lesser of its realized gain or "
+            "its share of the cash; losses are NOT recognized. New basis "
+            "= old basis − boot + gain recognized (§358(a)), and the "
+            "holding period carries over (§1223(1)). You supply the boot "
+            "and the new shares' value. "
             + _US_SIGNIFICANT_HOLDER.format(reg="1.368-3"),
         ),
     ],
@@ -4025,11 +4014,9 @@ HINTS_BY_ELECTION: Dict[str, List[tuple]] = {
          "shares' listing currency (converted to USD at the effective "
          "date's rate)."),
         ('source_basis_total',
-         "Your TOTAL cost basis in the old shares immediately before the "
-         "merger, in US DOLLARS (see `taxjson list` / holdings.toml). The "
-         "engine books gain = engineered proceeds − its own pool basis, "
-         "so this must match your books or the recognized gain drifts by "
-         "the difference."),
+         "Not used any more: the engine computes the §356 gain per lot "
+         "from your own lots. Accepted from older manifests and ignored.",
+         lambda ev: False),
         ('fmv_per_share',
          "FMV per NEW share on the effective date, in the NEW shares' "
          "listing currency — used only to compute your realized gain for "

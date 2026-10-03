@@ -1675,9 +1675,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "significant holder attaches the Reg. §1.368-3 "
                  "statement),", cont=True),
             Rule("US-CORP-05",
-                 "or reorg_368_boot (§356: gain recognised up to the cash "
-                 "received, a loss never; new basis = old basis - cash + "
-                 "gain; the holding period restarts in this model).",
+                 "or reorg_368_boot (§356, per lot of old shares — Reg. "
+                 "§1.356-1(b): each lot's gain is its share of the new "
+                 "shares' value and the cash less its basis, recognised "
+                 "up to its share of the cash, a loss never; its new "
+                 "shares' basis = its basis - its cash + its gain, and "
+                 "they keep its purchase date (§1223(1)); the new shares "
+                 "are not a purchase for the wash-sale rule).",
                  cont=True),
             Rule("US-CORP-09",
                  "Cash in lieu of a fractional share is a sale of the "

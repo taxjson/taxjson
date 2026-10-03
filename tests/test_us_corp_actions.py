@@ -100,61 +100,75 @@ class TestUsMergerReorg368(unittest.TestCase):
 
 
 class TestUsMergerBoot(unittest.TestCase):
-    """§356 math: gain = max(0, min(realized, boot)); SELL proceeds =
-    basis + gain (so the engine books exactly the recognized gain);
-    BUY basis = proceeds − boot (== §358 basis)."""
+    """§356 rows (re-audit A2-0066: computed per block by the engine):
+    SELL net = amount realized (new shares' value + boot), gross_amount
+    = the boot; BUY net = the new shares' value. The engine computes
+    gain = max(0, min(realized, boot)) per lot and the §358 basis."""
 
-    def _rows(self, *, basis, tgt_fmv, boot):
+    def _rows(self, *, tgt_fmv, boot, hints=None):
         ev = merger_event(target_fmv=tgt_fmv)
         err = io.StringIO()
         with redirect_stderr(err):
             rows = resolve_event(
                 ev, 'reorg_368_boot', country='usa',
-                hints={'cash_boot': boot, 'source_basis_total': basis})
+                hints=dict({'cash_boot': boot}, **(hints or {})))
         return rows, err.getvalue()
 
+    def _engine(self, basis, *, tgt_fmv, boot):
+        from taxjson.lib.core import USATaxRules, TaxTransaction
+        rows, _ = self._rows(tgt_fmv=tgt_fmv, boot=boot)
+        txs = [TaxTransaction(action='BUYSELL', date='2024-01-10',
+                              symbol='HES.US', quantity=100, currency='USD',
+                              price=basis / 100, net_amount=basis)]
+        txs += [TaxTransaction(**r) for r in rows]
+        res = USATaxRules().compute_gains(txs)
+        cvx = next(h for h in res['inventory'] if h['symbol'] == 'CVX.US')
+        return res['summary']['total_gain'], cvx['total_cost']
+
+    def test_rows_carry_amount_realized_and_boot(self):
+        rows, _ = self._rows(tgt_fmv=1800.0, boot=300.0)
+        sell, buy = rows
+        self.assertAlmostEqual(sell['net_amount'], 2100.0, places=2)
+        self.assertAlmostEqual(sell['gross_amount'], 300.0, places=2)
+        self.assertAlmostEqual(buy['net_amount'], 1800.0, places=2)
+        self.assertEqual({sell['type'], buy['type']}, {'reorg_356'})
+
+    @rule("US-CORP-05")
     def test_appreciated_gain_capped_at_boot(self):
         # realized = (1800 + 300) − 1000 = 1100 → recognized = boot = 300
-        rows, _ = self._rows(basis=1000.0, tgt_fmv=1800.0, boot=300.0)
-        sell, buy = rows
-        self.assertAlmostEqual(sell['net_amount'], 1300.0, places=2)  # 1000+300
-        self.assertAlmostEqual(buy['net_amount'], 1000.0, places=2)   # §358: 1000−300+300
+        gain, basis = self._engine(1000.0, tgt_fmv=1800.0, boot=300.0)
+        self.assertAlmostEqual(gain, 300.0, places=2)
+        self.assertAlmostEqual(basis, 1000.0, places=2)  # 1000−300+300
 
+    @rule("US-CORP-05")
     def test_boot_exceeds_gain_caps_at_gain(self):
-        # realized = (900 + 200) − 1000 = 100 → recognized = 100 (< boot 200)
-        rows, _ = self._rows(basis=1000.0, tgt_fmv=900.0, boot=200.0)
-        sell, buy = rows
-        self.assertAlmostEqual(sell['net_amount'], 1100.0, places=2)  # 1000+100
-        self.assertAlmostEqual(buy['net_amount'], 900.0, places=2)    # 1000−200+100
+        # realized = (900 + 200) − 1000 = 100 → recognized = 100 (< boot)
+        gain, basis = self._engine(1000.0, tgt_fmv=900.0, boot=200.0)
+        self.assertAlmostEqual(gain, 100.0, places=2)
+        self.assertAlmostEqual(basis, 900.0, places=2)   # 1000−200+100
 
     @rule("US-CORP-05")
     def test_loss_recognizes_nothing(self):
         # realized = (600 + 100) − 1000 = −300 → recognized = 0 (§356(c))
-        rows, _ = self._rows(basis=1000.0, tgt_fmv=600.0, boot=100.0)
-        sell, buy = rows
-        self.assertAlmostEqual(sell['net_amount'], 1000.0, places=2)  # zero gain
-        self.assertAlmostEqual(buy['net_amount'], 900.0, places=2)    # 1000−100+0
+        gain, basis = self._engine(1000.0, tgt_fmv=600.0, boot=100.0)
+        self.assertAlmostEqual(gain, 0.0, places=2)
+        self.assertAlmostEqual(basis, 900.0, places=2)   # 1000−100+0
 
-    def test_missing_basis_hint_warns(self):
-        _rows, err = self._rows(basis=0.0, tgt_fmv=1800.0, boot=300.0)
-        self.assertIn('source_basis_total', err)
+    def test_basis_hint_is_not_needed(self):
+        # The engine reads its own lots; an older manifest's
+        # source_basis_total is accepted and ignored.
+        _rows, err = self._rows(tgt_fmv=1800.0, boot=300.0)
+        self.assertNotIn('source_basis_total', err)
+        rows2, _ = self._rows(tgt_fmv=1800.0, boot=300.0,
+                              hints={'source_basis_total': 5.0})
+        self.assertEqual([r['net_amount'] for r in rows2],
+                         [r['net_amount'] for r in _rows])
 
     @rule("US-CORP-05")
     def test_engine_books_exactly_the_recognized_gain(self):
-        # End-to-end: engine pool basis == hint → booked gain == 300.
-        from taxjson.lib.core import USATaxRules, TaxTransaction
-        ev = merger_event(target_fmv=1800.0)
-        rows = resolve_event(
-            ev, 'reorg_368_boot', country='usa',
-            hints={'cash_boot': 300.0, 'source_basis_total': 1000.0})
-        txs = [TaxTransaction(action='BUYSELL', date='2024-01-10',
-                              symbol='HES.US', quantity=100, currency='USD',
-                              price=10.0, net_amount=1000.0)]
-        txs += [TaxTransaction(**r) for r in rows]
-        res = USATaxRules().compute_gains(txs)
-        self.assertAlmostEqual(res['summary']['total_gain'], 300.0, places=2)
-        cvx = next(h for h in res['inventory'] if h['symbol'] == 'CVX.US')
-        self.assertAlmostEqual(cvx['total_cost'], 1000.0, places=2)
+        gain, basis = self._engine(1000.0, tgt_fmv=1800.0, boot=300.0)
+        self.assertAlmostEqual(gain, 300.0, places=2)
+        self.assertAlmostEqual(basis, 1000.0, places=2)
 
 
 class TestUsSpinoff(unittest.TestCase):

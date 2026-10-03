@@ -22,6 +22,15 @@
   A2-0065). An allocation beyond the parent's basis is capped at it with
   an ATTENTION line; the spun-off shares are not a wash-sale replacement
   (§1091(a): not acquired by purchase).
+- US `reorg_368_boot` (§356): the recognized gain is now computed per lot
+  of old shares (Reg. §1.356-1(b)): each lot's realized gain is its share
+  of the new shares' value and the cash less its own basis, recognized up
+  to its share of the cash, never a loss; its new shares get basis − cash
+  + gain and keep its purchase date (§1223(1)). The whole pool was one
+  engineered sale before: with lots of different basis one lot booked a
+  gain and another a LOSS, and the holding period restarted (re-audit
+  A2-0066). The engine uses your own lots, so `source_basis_total` is no
+  longer asked (an older manifest's value is ignored).
 
 ### Renames, ticker.map and warrants
 

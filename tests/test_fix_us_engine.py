@@ -254,5 +254,81 @@ class TestSpinoff355PerLot(unittest.TestCase):
         self.assertIn("finds no long PAR.US lots", r["_stderr"])
 
 
+# ---------------------------------------------------------------- A2-0066
+def _boot_rows(boot=400.0, fmv_per_share=32.0):
+    from taxjson.lib.core import TaxTransaction
+    from taxjson.lib.corp_actions import CorporateAction, resolve_event
+    ev = CorporateAction(
+        date="2025-06-20", time="09:30:00", action_type="merger",
+        source_symbol="OLD.US", source_isin="", target_symbol="NEW.US",
+        target_isin="", ratio_new=1, ratio_old=2, qty_disposed=100.0,
+        qty_received=50.0, fmv=0.0, currency="USD", target_currency="USD",
+        account="margin", event_id="ev-boot")
+    with contextlib.redirect_stderr(io.StringIO()):
+        rows = resolve_event(ev, "reorg_368_boot", country="usa",
+                             hints={"cash_boot": boot,
+                                    "fmv_per_share": fmv_per_share})
+    return [TaxTransaction(**r) for r in rows]
+
+
+def _old_lots():
+    return [tx("BUYSELL", "2023-01-10", "OLD.US", 50, 200.0),
+            tx("BUYSELL", "2025-03-01", "OLD.US", 50, 1800.0)]
+
+
+class TestBoot356PerBlock(unittest.TestCase):
+    """A2-0066: Reg. §1.356-1(b) / Rev. Rul. 68-23 — realized and
+    recognized gain per block, never a loss; new basis per block = old
+    basis − boot share + recognized; holding period tacked."""
+
+    @rule("US-CORP-05")
+    def test_per_block_gain_and_no_loss_row(self):
+        r = _engine(_old_lots() + _boot_rows())
+        rows = sorted((t for t in r["transactions"]
+                       if t["symbol"] == "OLD.US"),
+                      key=lambda t: t["acquired_date"])
+        # Lot A: realized 1000 − 200 = 800, recognized min(800, 200);
+        # lot B: realized 1000 − 1800 < 0, recognized 0.
+        self.assertEqual([(round(t["gain"], 2), t["term"]) for t in rows],
+                         [(200.0, "LONG_TERM"), (0.0, "SHORT_TERM")])
+        self.assertFalse(any(t["gain"] < -0.005 for t in rows))
+        self.assertEqual([round(t["proceeds"], 2) for t in rows],
+                         [200.0, 200.0])
+        self.assertAlmostEqual(r["summary"]["total_gain"], 200.0, places=2)
+        new = _lots(r, "NEW.US")[0]
+        self.assertAlmostEqual(new["total_cost"], 1800.0, places=2)
+        self.assertAlmostEqual(new["qty"], 50.0)
+
+    @rule("US-CORP-05")
+    def test_new_blocks_keep_the_old_blocks_dates(self):
+        book = _old_lots() + _boot_rows() + [
+            tx("BUYSELL", "2025-09-02", "NEW.US", -50, 2000.0)]
+        r = _engine(book)
+        sold = sorted((t for t in r["transactions"]
+                       if t["symbol"] == "NEW.US"),
+                      key=lambda t: t["acquired_date"])
+        self.assertEqual([(round(t["qty"]), round(t["cost"], 2),
+                           t["acquired_date"], t["term"]) for t in sold],
+                         [(25, 200.0, "2023-01-10", "LONG_TERM"),
+                          (25, 1600.0, "2025-03-01", "SHORT_TERM")])
+
+    @rule("US-CORP-05")
+    def test_new_shares_are_not_a_wash_replacement(self):
+        # A NEW.US loss in the window of the exchange is not washed by
+        # shares received in a §356 exchange (§1091(a)).
+        book = _old_lots() + [
+            tx("BUYSELL", "2025-06-01", "NEW.US", 10, 500.0),
+            tx("BUYSELL", "2025-06-05", "NEW.US", -10, 400.0)] \
+            + _boot_rows()
+        r = _engine(book)
+        loss = [t for t in r["transactions"] if t["symbol"] == "NEW.US"][0]
+        self.assertAlmostEqual(loss["disallowed_amount"], 0.0)
+
+    @rule("US-CORP-05")
+    def test_missing_old_lots_are_named(self):
+        r = _engine(_old_lots()[:1] + _boot_rows())
+        self.assertIn("have no basis in the books", r["_stderr"])
+
+
 if __name__ == "__main__":
     unittest.main()

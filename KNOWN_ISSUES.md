@@ -180,11 +180,6 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** `core.py` `detect_option_replacement_matches` (warn-only in the US engine; the Canada engine enforces the call rule).
 - **Current behavior:** §1091(a) covers "a contract or option so to acquire"; a deep-ITM call bought inside the window leaves the stock loss allowed, with a warning. A user policy choice, not a bug — the statute itself is mandatory, so treat the warning as an instruction (2026-09 audit).
 
-### US: `reorg_368_boot` is computed on the whole pool, not per block (A2-0066)
-- **Where:** `lib/corp_actions.py` `_emit_boot_exchange` (one engineered SELL at proceeds = total basis + recognized gain, split by the engine across lots by quantity).
-- **Current behavior:** with lots of different basis, one lot books a gain and another a LOSS, though §356(c) recognizes no loss; Reg. §1.356-1(b) / Rev. Rul. 68-23 compute the recognized gain block by block (each block: min(its realized gain, its share of the boot), never below zero). Totals are right only when every lot is in a gain.
-- **Why deferred:** needs per-lot data the corp-actions stage does not have; the fix is an engine-applied boot exchange (per lot: realized = its share of new-share FMV + boot − basis, recognized = max(0, min(realized, boot share)), new basis = basis − boot share + recognized, holding period tacked). Workaround: book it by hand in a `.tt` file, one SELL/BUY pair per block.
-
 ### US: specific-lot identification is not supported (FIFO only)
 - **Where:** the US engine consumes lots FIFO (Reg. 1.1012-1(c)(1) default). Reg. 1.1012-1(c)(2)–(3) specific identification, and a broker's non-FIFO default (e.g. highest-cost), are not modeled.
 - **Consequence:** a broker 1099-B computed under specific ID will not reconcile per-lot; year totals agree only when every lot is eventually sold. Set the broker's lot method to FIFO or reconcile by hand.
