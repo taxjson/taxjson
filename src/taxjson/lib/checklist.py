@@ -144,6 +144,12 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
     ("estimate", 4, "Tax estimate and instalment position checked",
      "taxjson estimate, taxjson instalments",
      "A sanity check on the tax owed and on what was already paid."),
+    ("amt", 4, "Minimum tax (AMT) and its carryover checked",
+     "taxjson amt, amt_carryover.txt",
+     "Minimum tax paid in the 7 preceding years is recovered against regular tax above "
+     "the minimum (ITA s.120.2, line 40427), and a year where AMT binds starts a new "
+     "carryover; the estimate applies one only when amt_carryover.txt (your notice of "
+     "assessment / T691) or last year's close-year lock carries it."),
     ("filed-lock", 5, "Return filed and the year locked",
      "taxjson close-year",
      "The lock is what check-filed and option-boundary use to detect drift and to word a T1-ADJ."),
@@ -210,6 +216,7 @@ US_STEPS: Dict[str, Any] = {
              "interest."),
     "estimate": ("Tax estimate and estimated payments checked", "taxjson estimate",
                  "A sanity check on the tax owed."),
+    "amt": "US project (the US alternative minimum tax, Form 6251, is not modelled)",
     "filed-lock": ("Return filed and the year locked", "taxjson close-year",
                    "The lock is what check-filed uses to detect drift after filing."),
     "noa": "US project (no Notice of Assessment)",
@@ -221,7 +228,7 @@ TAXABLE_ONLY = {"inputs-frozen", "roc-entered", "missing-history", "audit",
                 "crypto-sends",
                 "wash-reviewed", "option-boundary", "handoff", "t5008", "t5-t3",
                 "foreign-tax", "form-export", "t1135", "carryover",
-                "fx-cash", "fees", "filed-lock", "lock-committed"}
+                "fx-cash", "fees", "amt", "filed-lock", "lock-committed"}
 
 
 def is_us(country: str) -> bool:
@@ -1866,6 +1873,35 @@ def d_estimate(ctx: Ctx) -> Result:
                   f"[instalments] {'present' if inst else 'absent'}")
 
 
+def d_amt(ctx: Ctx) -> Result:
+    """`taxjson amt --json`: whether AMT binds, what carryover was
+    recovered and where it came from (Canada only)."""
+    code, out, err = ctx.sub("amt", "--json")
+    if code != 0 or not out.strip():
+        return Result("amt", "blocked", _last_line(err) or f"exit {code}")
+    try:
+        doc = json.loads(out)
+    except ValueError:
+        return Result("amt", "blocked", "unreadable `taxjson amt --json`")
+    a = doc.get("amt") or {}
+    c = a.get("carryover") or {}
+    src = (doc.get("carry_sources") or {}).get("amt_carryover")
+    if a.get("binding"):
+        first = (f"AMT binds: {a.get('excess_fed', 0.0):,.2f} federal "
+                 f"additional tax carries forward 7 years")
+    else:
+        first = (f"AMT does not bind (regular tax over the minimum by "
+                 f"{a.get('headroom', 0.0):,.2f})")
+    if src:
+        rest = (f"carryover {c.get('available', 0.0):,.2f} from {src}, "
+                f"{c.get('recovered_federal', 0.0):,.2f} recovered "
+                f"federally (line 40427)")
+    else:
+        rest = ("no minimum tax carryover entered — if you paid AMT in "
+                "the last 7 years, put it in amt_carryover.txt")
+    return Result("amt", "manual", f"{first}; {rest}")
+
+
 def _lock_state(ctx: Ctx, sid: str) -> Optional[Result]:
     """todo when there is no lock, blocked when filed/<year>.json is
     not a readable lock (a directory, a dangling link: close-year says
@@ -1956,6 +1992,7 @@ DETECTORS: Dict[str, Callable[[Ctx], Result]] = {
     "fx-cash": d_fx_cash,
     "fees": d_fees,
     "estimate": d_estimate,
+    "amt": d_amt,
     "filed-lock": d_filed_lock,
     "lock-committed": d_lock_committed,
     "noa": d_noa,
@@ -1964,7 +2001,8 @@ DETECTORS: Dict[str, Callable[[Ctx], Result]] = {
 # Detectors that shell out to a slow sub-command; `--quick` skips them.
 SLOW = {"sanity", "missing-history", "elections", "audit", "option-boundary",
         "handoff",
-        "t5008", "form-export", "t1135", "carryover", "fx-cash", "filed-lock"}
+        "t5008", "form-export", "t1135", "carryover", "fx-cash", "amt",
+        "filed-lock"}
 
 
 # -------------------------------------------------------------------- state

@@ -35,7 +35,7 @@ discloses the pick (with an explicit note when it is not the requested
 year) — add a new vintage annually.
 """
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 RATE_VINTAGE = "2025"
 
@@ -391,14 +391,19 @@ def _surtax_parts(basic: float, prov: Dict[str, Any]
 def _canada_tax(ordinary: float, taxable_gain: float,
                 eligible_div: float, foreign_div: float,
                 prov: Dict[str, Any], ftc=None,
-                net_income=None) -> Dict[str, Any]:
+                net_income=None, fed_mtc: float = 0.0,
+                prov_mtc: float = 0.0) -> Dict[str, Any]:
     """Federal + provincial tax for one income mix (all components
     already in their taxed form except the eligible gross-up applied
     here). Floors at zero per jurisdiction. `net_income` (line 23600)
     drives the federal BPA phase-down; it defaults to taxable income
     and differs only by carryforward losses deducted at line 25300.
-    Returns totals PLUS the per-step detail the --verbose trace
-    prints."""
+    `fed_mtc` / `prov_mtc`: a minimum tax carryover applied this year
+    (ITA s.120.2) — federal Schedule 1 line 40427, deducted with the
+    dividend tax credit before the foreign tax credit; the province's
+    share is deducted from basic provincial tax before its surtax
+    (tax-logic CA-AMT-04/05). Returns totals PLUS the per-step detail the
+    --verbose trace prints."""
     grossed = eligible_div * CA_ELIGIBLE_GROSSUP
     # Deductions enter `ordinary` as a negative; income never goes
     # below zero (a return does not carry a negative net income).
@@ -411,7 +416,8 @@ def _canada_tax(ordinary: float, taxable_gain: float,
     fed_dtc = grossed * CA_FED_DTC_ELIGIBLE
     fed_ftc = (ftc if ftc is not None
                else foreign_div * CA_FOREIGN_WITHHOLDING)
-    fed_before_ftc = max(0.0, fed_gross - fed_bpa - fed_dtc)
+    fed_before_ftc = max(0.0, fed_gross - fed_bpa - fed_dtc
+                         - max(0.0, fed_mtc))
     fed = max(0.0, fed_before_ftc - fed_ftc)
     # Foreign tax the federal tax cannot absorb is not lost: the
     # provincial foreign tax credit (form T2036, the provincial
@@ -426,7 +432,7 @@ def _canada_tax(ordinary: float, taxable_gain: float,
     # premium is added at line 89, after every credit.
     prov_gross = _bracket_tax(ti, prov["brackets"])
     prov_bpa = prov["bpa"] * prov["brackets"][0][1]
-    basic = max(0.0, prov_gross - prov_bpa)
+    basic = max(0.0, prov_gross - prov_bpa - max(0.0, prov_mtc))
     surtax_parts = _surtax_parts(basic, prov)
     surtax = sum(amt for _t, _r, amt in surtax_parts)
     prov_dtc = grossed * prov["dtc_eligible"]
@@ -450,6 +456,8 @@ def _canada_tax(ordinary: float, taxable_gain: float,
                 "prov_basic": basic, "surtax_parts": surtax_parts,
                 "prov_surtax": surtax,
                 "prov_dtc": prov_dtc, "prov_ohp": ohp,
+                "fed_mtc": max(0.0, fed_mtc),
+                "prov_mtc": max(0.0, prov_mtc),
             }}
 
 
@@ -463,21 +471,27 @@ def _amt_canada(*, realized: float, eligible_div: float,
     Pure arithmetic on figures estimate_canada already holds — nothing
     outside this module learns AMT exists. Always returned (binding or
     not): the headroom number is planning information in itself.
-    `pil` here is every ordinary investment amount (PIL + staking)."""
+    `pil` here is every ordinary investment amount (PIL + staking).
+    `ati_lines` is the adjusted taxable income line by line (ITA
+    s.127.52), the breakdown `taxjson amt` prints — the SAME figures
+    the total is built from (tax-logic CA-AMT-01)."""
     # Losses deduct at 50% in the AMT base — but only the CLAIMABLE
     # amount, exactly as the regular branch caps them at the year's
     # gains (111(1)(b)). Deducting the whole carryforward POOL let an
     # unused balance that changes nothing in regular tax silently
     # erase a real AMT liability.
     claimable_losses = min(max(0.0, realized), max(0.0, other_losses))
+    loss_allowed = CA_AMT_LOSS_ALLOWANCE * claimable_losses
+    gains_net = max(0.0, realized - loss_allowed)
+    cc_allowed = CA_AMT_CARRYING_CHARGE_ALLOWANCE * carrying_charges
     # Deductions: RRSP/FHSA/RPP-type amounts in full; interest and
     # carrying charges to earn property income (line 22100) at 50%
     # under the post-2024 rules.
     ati = max(0.0,
-              max(0.0, realized - CA_AMT_LOSS_ALLOWANCE * claimable_losses)
+              gains_net
               + eligible_div + foreign_div + pil + other_income
               - deductions
-              - CA_AMT_CARRYING_CHARGE_ALLOWANCE * carrying_charges)
+              - cc_allowed)
     exemption = ca_amt_exemption()
     base = max(0.0, ati - exemption)
     gross = base * CA_AMT_RATE
@@ -503,11 +517,36 @@ def _amt_canada(*, realized: float, eligible_div: float,
                                                  prov))
             - sum(a for _t, _r, a in _surtax_parts(prov_basic, prov)))
     prov_amt = prov_add + prov_surtax_extra
+    # (label, amount, reference) — signed as they enter the total
+    # (before its floor at zero). A net capital loss of the year enters
+    # as zero: it is not deductible from other income in either base.
+    lines = [
+        ("Capital gains at 100% (regular: 50%)", max(0.0, realized),
+         "s.127.52(1)(d)"),
+        ("Net capital losses of other years at 50%", -loss_allowed,
+         "s.127.52(1); regular line 25300"),
+        ("Eligible dividends, actual amount (no gross-up)",
+         eligible_div, "s.127.52(1)"),
+        ("Foreign dividends", foreign_div, ""),
+        ("Payments in lieu and staking (ordinary)", pil, ""),
+        ("Other income", other_income, "[estimate] other_income"),
+        ("Deductions in full (RRSP, FHSA, RPP ...)", -deductions,
+         "lines 20700-23500"),
+        ("Carrying charges at 50%", -cc_allowed,
+         "s.127.52(1); line 22100"),
+    ]
     return {
         "adjusted_income": round(ati, 2),
+        "ati_lines": [{"label": lb, "amount": round(float(a), 2) + 0.0,
+                       "ref": ref}
+                      for lb, a, ref in lines],
         "exemption": round(exemption, 2),
+        "subject": round(base, 2),
         "rate": CA_AMT_RATE,
+        "gross_minimum": round(gross, 2),
+        "bpa_amount": round(bpa_amount, 2),
         "bpa_credit": round(bpa_credit, 2),
+        "ftc": round(ftc, 2),
         "minimum_fed": round(fed_min, 2),
         "regular_fed": round(regular_fed, 2),
         "excess_fed": round(excess, 2),
@@ -520,6 +559,72 @@ def _amt_canada(*, realized: float, eligible_div: float,
         "carryforward": round(excess, 2),
         "binding": excess > 0.005,
         "headroom": round(max(0.0, regular_fed - fed_min), 2),
+    }
+
+
+# ---- Minimum tax carryover (ITA s.120.2) ------------------------------
+# The federal "additional tax" of a year (minimum tax over regular tax,
+# s.120.2(3)) carries forward 7 years and is deducted (T1 Schedule 1
+# line 40427, T691 Part 8) oldest year first, limited to the year's
+# regular tax above its minimum tax.
+CA_AMT_CARRY_YEARS = 7
+
+
+def ca_amt_carryover(year, available: Optional[Dict[Any, float]],
+                     headroom: float) -> Dict[str, Any]:
+    """Apply a minimum tax carryover to tax year `year`. `available`:
+    {year of origin: unapplied amount} as on the notice / T691;
+    `headroom`: regular federal tax minus federal minimum tax for
+    `year` (0 when AMT binds). Origins older than `year` - 7 have
+    expired (dropped, listed); an origin of `year` or later is refused
+    (ValueError) — a carryover comes from an EARLIER year. Recovery
+    takes the oldest origins first (tax-logic CA-AMT-03/04). Amounts
+    in, cents out; `remaining_by_year` keeps the origins still open
+    after this year (an origin of `year` - 7 is used up or gone)."""
+    y = int(year)
+    usable: Dict[int, float] = {}
+    expired: Dict[int, float] = {}
+    for origin, amount in (available or {}).items():
+        o = int(origin)
+        a = float(amount)
+        if a <= 0.005:
+            continue
+        if o >= y:
+            raise ValueError(
+                f"a minimum tax carryover from {o} cannot be applied in "
+                f"{y}: it carries forward from an EARLIER year (the "
+                f"year of origin is the year the minimum tax was paid)")
+        if o < y - CA_AMT_CARRY_YEARS:
+            expired[o] = expired.get(o, 0.0) + a
+        else:
+            usable[o] = usable.get(o, 0.0) + a
+    room = max(0.0, float(headroom))
+    recovered: Dict[int, float] = {}
+    for o in sorted(usable):
+        take = min(usable[o], room)
+        if take > 0.005:
+            recovered[o] = take
+            room -= take
+    remaining = {o: usable[o] - recovered.get(o, 0.0) for o in usable}
+    lapsing = {o: a for o, a in remaining.items()
+               if o <= y - CA_AMT_CARRY_YEARS and a > 0.005}
+    open_after = {o: a for o, a in remaining.items()
+                  if o > y - CA_AMT_CARRY_YEARS and a > 0.005}
+
+    def _c(d):
+        return {str(k): round(float(v), 2) for k, v in sorted(d.items())}
+    return {
+        "year": y,
+        "available_by_year": _c(usable),
+        "last_year_by_origin": {str(o): o + CA_AMT_CARRY_YEARS
+                                for o in sorted(usable)},
+        "available": round(float(sum(usable.values())), 2),
+        "expired_by_year": _c(expired),
+        "limit": round(max(0.0, float(headroom)), 2),
+        "recovered_by_year": _c(recovered),
+        "recovered_federal": round(float(sum(recovered.values())), 2),
+        "lapsing_by_year": _c(lapsing),
+        "remaining_by_year": _c(open_after),
     }
 
 
@@ -575,7 +680,26 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
                      f"({m(tw['fed_ftc_unused'])}) is credited against "
                      f"{prov_key} tax (form T2036): "
                      f"{m(tw['prov_ftc'])}.")
-    if not amt["binding"] and amt["headroom"] > 0.005:
+    carry = amt.get("carryover") or {}
+    if carry.get("entered"):
+        src = carry.get("source") or "the input"
+        if carry.get("recovered", 0.0) > 0.005:
+            notes.append(
+                f"Minimum tax carryover applied (ITA s.120.2; T691 Part "
+                f"8, line 40427): {m(carry['recovered_federal'])} federal"
+                f" + {m(carry['recovered_provincial'])} {prov_key}, oldest "
+                f"year first, limited to the {m(carry['limit'])} by which "
+                f"regular federal tax exceeds the minimum — from {src}.")
+        elif amt["binding"]:
+            notes.append(f"Minimum tax carryover available "
+                         f"({m(carry['available'])}, from {src}) is not "
+                         f"recovered this year: AMT binds, so regular tax "
+                         f"does not exceed the minimum (ITA s.120.2).")
+        for o, a in (carry.get("expired_by_year") or {}).items():
+            notes.append(f"The {o} minimum tax carryover ({m(a)}, from "
+                         f"{src}) expired after {int(o) + 7}: it carries "
+                         f"forward 7 years only (ITA s.120.2) — dropped.")
+    elif not amt["binding"] and amt["headroom"] > 0.005:
         # ITA s.120.2: minimum tax paid in the 7 preceding years is
         # creditable against regular tax above the minimum
         # (T691 Part 8, T1 line 40427, provincial piggyback e.g. ON428
@@ -585,9 +709,11 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
                      f"line 40427; ITA s.120.2) can reduce federal tax "
                      f"by up to the "
                      f"{m(amt['headroom'])} headroom, plus the "
-                     f"{prov_key} share — not modelled, so the estimate "
-                     f"and the instalments overstate the tax by what "
-                     f"you can apply.")
+                     f"{prov_key} share — none is entered: put it in "
+                     f"amt_carryover.txt (`YEAR AMOUNT` lines by year of "
+                     f"origin, from your notice of assessment or T691), "
+                     f"or close last year with `taxjson close-year` so "
+                     f"this year reads it from the lock.")
     if staking > 0.005:
         notes.append(f"Crypto staking rewards ({m(staking)}) are taxed "
                      f"as ordinary income — no withholding, no foreign "
@@ -615,7 +741,9 @@ CA_ASSUMPTIONS = (
     "fx-cash`), T3 box 21 capital gains and T5 box 18 amounts not "
     "named in capital_gains_dividends.map are not included; "
     "deductions below line 15000 only as entered (--deductions, "
-    "--carrying-charges); no prior-year minimum tax carryover; the basic "
+    "--carrying-charges); a prior-year minimum tax carryover only as "
+    "entered (amt_carryover.txt, [estimate] amt_carryover) or carried "
+    "by last year's close-year lock; the basic "
     "personal amount is the only non-refundable credit (no CPP/EI, "
     "Canada employment, age, pension or donation credits); no OAS "
     "recovery tax; the AMT sees only these books and other income (no "
@@ -631,9 +759,14 @@ def estimate_canada(*, realized: float, eligible_div: float,
                     staking: float = 0.0,
                     deductions: float = 0.0,
                     carrying_charges: float = 0.0,
-                    capital_gains_dividends: float = 0.0
+                    capital_gains_dividends: float = 0.0,
+                    amt_carryover: Optional[Dict[Any, float]] = None,
+                    amt_carryover_source: Optional[str] = None
                     ) -> Dict[str, Any]:
-    """`deductions`: amounts deducted at lines 20700-23500 that the
+    """`amt_carryover`: {year of origin: unapplied minimum tax
+    carryover} (ITA s.120.2), None when nothing was entered;
+    `amt_carryover_source` names where it came from (printed).
+    `deductions`: amounts deducted at lines 20700-23500 that the
     AMT allows in full (RRSP 20800, FHSA 20805, RPP 20700, ...);
     `carrying_charges`: line 22100 interest and carrying charges,
     allowed at 50% in the post-2024 AMT base. Both lower net and
@@ -710,13 +843,71 @@ def estimate_canada(*, realized: float, eligible_div: float,
                       prov_basic=with_inv["detail"]["prov_basic"],
                       deductions=deductions,
                       carrying_charges=carrying_charges)
+    # Minimum tax carryover (s.120.2): recovered against the regular
+    # federal tax above the minimum, the province's share at its
+    # minimum-tax factor. The estimate is incremental, so only the
+    # recovery the investment income changes is attributed to it: the
+    # other income alone would recover `base_recovered` (tax-logic
+    # CA-AMT-04..07).
+    recovered_attr = 0.0
+    if year is not None:
+        try:
+            _cy = int(year)
+        except (TypeError, ValueError):
+            _cy = None
+    else:
+        _cy = None
+    if _cy is not None:
+        factor = float(prov.get("amt_factor") or 0.0)
+        c = ca_amt_carryover(_cy, amt_carryover or {}, amt["headroom"])
+        fed_rec = c["recovered_federal"]
+        after = _canada_tax(other_income + pil + staking - ded_total,
+                            taxable_gain, eligible_div, foreign_div, prov,
+                            ftc=ftc, net_income=net_income,
+                            fed_mtc=fed_rec, prov_mtc=fed_rec * factor)
+        prov_rec = with_inv["provincial"] - after["provincial"]
+        fed_rec_t = with_inv["federal"] - after["federal"]
+        base_amt = _amt_canada(
+            realized=0.0, eligible_div=0.0, foreign_div=0.0, pil=0.0,
+            other_income=other_income, other_losses=0.0, ftc=0.0,
+            regular_fed=base["federal"], prov=prov,
+            fed_bpa_amount=base["detail"]["fed_bpa_amount"],
+            prov_basic=base["detail"]["prov_basic"],
+            deductions=deductions, carrying_charges=carrying_charges)
+        bc = ca_amt_carryover(_cy, amt_carryover or {},
+                              base_amt["headroom"])
+        b_after = _canada_tax(other_income - ded_total, 0.0, 0.0, 0.0,
+                              prov, fed_mtc=bc["recovered_federal"],
+                              prov_mtc=bc["recovered_federal"] * factor)
+        base_rec = base["total"] - b_after["total"]
+        recovered = fed_rec_t + prov_rec
+        recovered_attr = recovered - base_rec
+        closing = dict(c["remaining_by_year"])
+        if amt["excess_fed"] > 0.005:
+            closing[str(_cy)] = amt["excess_fed"]
+        c.update({
+            "entered": amt_carryover is not None,
+            "source": amt_carryover_source,
+            "recovered_federal": round(fed_rec_t, 2),
+            "recovered_provincial": round(prov_rec, 2),
+            "recovered": round(recovered, 2),
+            "base_recovered": round(base_rec, 2),
+            "attributed": round(recovered_attr, 2),
+            "created": amt["excess_fed"],
+            "closing_by_year": dict(sorted(closing.items())),
+            "closing": round(float(sum(closing.values())), 2),
+        })
+        amt["carryover"] = c
     notes = (vintage_notes(year, pick)
              + _canada_notes(prov_key, prov, with_inv, base, amt,
                              staking))
     return {
         "country": "canada", "province": prov_key,
         "amt": amt,
-        "estimated_tax_with_amt": round(est + amt["topup"], 2),
+        "estimated_tax_with_amt": round(est + amt["topup"]
+                                        - recovered_attr, 2),
+        "losses_opening": round(max(0.0, other_losses), 2),
+        "losses_created": round(max(0.0, -realized), 2),
         "vintage": RATE_VINTAGE,
         "notes": notes,
         "assumptions": CA_ASSUMPTIONS,
@@ -797,6 +988,11 @@ def estimate_usa(*, st: float, lt: float, qualified_div: float,
     # Net negative capital result also offsets ordinary (cap 3,000).
     net_cap = st_net + lt_net
     ordinary_offset = min(US_ORDINARY_LOSS_CAP, loss + max(0.0, -net_cap))
+    # The residual loss of each term after cross-netting (at most one
+    # is non-zero): what carries over, less the ordinary-income offset
+    # actually used, short-term first (Capital Loss Carryover Worksheet;
+    # tax-logic US-CARRY-01).
+    st_loss_left, lt_loss_left = max(0.0, -st_net), max(0.0, -lt_net)
     st_net, lt_net = max(0.0, st_net), max(0.0, lt_net)
 
     inv_ordinary = st_net + pil - ordinary_offset
@@ -825,6 +1021,10 @@ def estimate_usa(*, st: float, lt: float, qualified_div: float,
     taxable_income = magi - US_STD_DEDUCTION
     offset_used = min(ordinary_offset,
                       max(0.0, taxable_income + ordinary_offset))
+    ded_st = min(offset_used, st_loss_left)
+    ded_lt = min(offset_used - ded_st, lt_loss_left)
+    st_carry_after = st_loss_left - ded_st
+    lt_carry_after = lt_loss_left - ded_lt
     # Signed: a net-loss year (the $3,000 ordinary offset) legitimately
     # REDUCES tax vs the base — report the saving as a negative estimate.
     est = with_inv["total"] - base["total"] + niit
@@ -841,6 +1041,8 @@ def estimate_usa(*, st: float, lt: float, qualified_div: float,
         "offset_used_for_carryover": round(offset_used, 2),
         "losses_unused": round(loss + max(0.0, -net_cap)
                                - offset_used, 2),
+        "st_carryover_after": round(st_carry_after, 2),
+        "lt_carryover_after": round(lt_carry_after, 2),
         "niit": round(niit, 2),
         "niit_base": round(min(max(0.0, inv_income_for_niit),
                                max(0.0, magi - US_NIIT_MAGI_THRESHOLD)), 2),

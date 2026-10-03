@@ -124,6 +124,12 @@ the open steps one at a time; `--quick` skips the slow detectors.
 - [ ] `taxjson estimate` with other income, then `taxjson instalments` —
       a sanity check on the tax and on what is still owed against what
       was paid.
+- [ ] `taxjson amt` — the minimum tax line by line (form T691): whether
+      it binds, the carryover it creates, and the carryover of the 7
+      preceding years recovered against regular tax above the minimum
+      (ITA s.120.2, line 40427). Enter last years' carryover by year of
+      origin in `amt_carryover.txt` (`YEAR AMOUNT` lines, from the notice
+      of assessment) unless last year's close-year lock carries it.
 
 ## 5. File and lock
 
@@ -133,7 +139,10 @@ the open steps one at a time; `--quick` skips the slow detectors.
 - [ ] `taxjson close-year` **immediately after filing** (`--force` when
       re-filing). The lock is what `check-filed`, `option-boundary` and
       every later `run` use to detect drift, and what makes next year's
-      T1-ADJ instructions accurate.
+      T1-ADJ instructions accurate. It also records the year's
+      carry-forwards (net capital loss; minimum tax carryover by year of
+      origin), which next year's `estimate`, `carryover` and `amt` read
+      and its `handoff` checks.
 - [ ] Commit the `filed/<year>.json` lock; tag the data repo with the
       filing date.
 
@@ -142,6 +151,10 @@ the open steps one at a time; `--quick` skips the slow detectors.
 - [ ] Compare the Notice of Assessment with what was filed; put its net
       tax owing into next year's `[instalments]` block
       (`prior_year_net_tax`, then `second_prior_net_tax` the year after).
+      If it shows a minimum tax carryover or a net capital loss balance
+      that differs from the lock, enter the notice's figures in next
+      year's `amt_carryover.txt` / `[estimate] other_losses` (explicit
+      input wins over the lock; `taxjson handoff` names the difference).
 - [ ] `taxjson check-filed` on every later run: an assignment, a late
       election or a corrected export that changes a filed year is
       amended, not silently absorbed.

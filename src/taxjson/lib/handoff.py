@@ -686,6 +686,14 @@ def validate_record(record: Any, path: Any = "the prior-year record"
     ot = record.get("option_timing")
     if ot is not None and not isinstance(ot, dict):
         raise bad("option_timing", "an object")
+    if record.get("carryforwards") is not None:
+        from taxjson.lib.carryforward import block_problem
+        prob = block_problem(record["carryforwards"])
+        if prob:
+            raise RecordError(f"{path}: {prob} — fix the lock or restore "
+                              f"it from git (or re-close that year with "
+                              f"`taxjson close-year --force` in its "
+                              f"project)")
     return record
 
 
@@ -1007,7 +1015,7 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
     rbasis = record.get("date_basis") or basis
     issues: Dict[str, List[Dict[str, Any]]] = {
         "positions": [], "missed": [], "double": [], "timing": [],
-        "boundary": [],
+        "boundary": [], "carry": [],
         "partial": [], "notes": []}
     issues["timing"] = _timing_issues(cache, cfg, record)
     from taxjson.lib.country import CountryError, settings_country
@@ -1328,6 +1336,18 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
             f"date, a RIC January dividend, a local_timezone re-dating) "
             f"is not checked. Re-close {ry} with the current taxjson to "
             f"check it.")
+    # 5. Carry-forwards: this project's inputs vs what the closed year
+    # carried forward (tax-logic CA-CARRY-05, US-CARRY-03).
+    from taxjson.lib.carryforward import handoff_issues
+    issues["carry"] = handoff_issues(root, cfg, record)
+    if record.get("carryforwards") is None:
+        issues["notes"].append(
+            f"The {ry} record predates the carry-forward record (net "
+            f"capital loss / capital loss carryover"
+            + ("" if _usa else ", minimum tax carryover")
+            + f"): this year's estimate cannot read them from it. "
+            f"Re-close {ry} with the current taxjson, or enter them "
+            f"yourself.")
     if record.get("filed_dispositions") is None:
         issues["notes"].append(
             f"The {ry} record holds taxjson's own dispositions. If that "
@@ -1338,7 +1358,7 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
             **issues,
             "problems": sum(len(issues[k]) for k in
                             ("positions", "missed", "double", "timing",
-                             "boundary", "partial"))}
+                             "boundary", "carry", "partial"))}
 
 
 def render(rep: Dict[str, Any], record_path: str) -> List[str]:
@@ -1379,6 +1399,13 @@ def render(rep: Dict[str, Any], record_path: str) -> List[str]:
         lambda i: (f"{i['symbol']:<26} written {i['written']}  "
                    f"{y}: {i['closed_year_timing']}  here: "
                    f"{i['timing_here']}"))
+    sec(f"Carry-forward inputs vs the {y} record", rep.get("carry") or [],
+        lambda i: (f"{i['what']:<34} here: "
+                   + (f"{i['here']:,.2f}" if isinstance(i['here'],
+                                                       (int, float))
+                      else str(i['here']))
+                   + (f"   {y} record: {i['record']:,.2f}"
+                      if isinstance(i['record'], (int, float)) else "")))
     for n in rep["notes"]:
         L.append("note: " + n)
     L.append("")

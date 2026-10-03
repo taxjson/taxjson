@@ -820,7 +820,7 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Build the books", ("run", "crypto-sends", "find-missing-history")),
     ("Read the numbers", (
         "sum", "list", "divs-sum", "trades-sum", "fees-sum", "shares",
-        "estimate", "instalments", "events", "divs", "dil", "trades",
+        "estimate", "amt", "instalments", "events", "divs", "dil", "trades",
         "gains", "fees", "roc", "leaps", "transfers", "roc-sum", "dil-sum",
         "winners", "stats", "ccd-sum", "leaps-sum", "fx-cash")),
     ("Before you trade", ("wash-radar", "buy-check", "sell-check",
@@ -1016,7 +1016,7 @@ def _die_input(msg: str) -> None:
 
 
 _ESTIMATE_KEYS = ("other_income", "other_losses", "deductions",
-                  "carrying_charges", "long_term_losses")
+                  "carrying_charges", "long_term_losses", "amt_carryover")
 
 
 def _estimate_deductions(root: Path, args) -> Tuple[float, float]:
@@ -1070,6 +1070,68 @@ def _estimate_lt_losses(root: Path, args) -> float:
         _die(f"{src} must be a non-negative finite number (enter loss "
              f"carryovers as positive amounts), got {v!r}")
     return f
+
+
+def _carry_inputs(root: Path, args, cfg: Dict[str, Any], ol: float,
+                  ltl: float):
+    """The carry-forwards the estimate uses (lib/carryforward):
+    explicit input wins (--other-losses / --long-term-losses, their
+    [estimate] keys; amt_carryover.txt or [estimate] amt_carryover),
+    else the latest close-year lock before the project year. Returns
+    (other_losses, lt_losses, amt_carryover_by_year | None, sources) —
+    `sources` says where each figure came from (printed and in --json;
+    tax-logic CA-CARRY-03, CA-AMT-08, US-CARRY-02)."""
+    from taxjson.lib import carryforward as CF
+    settings = cfg.get("settings") or {}
+    country = _country(settings)
+    est_cfg = cfg.get("estimate") or {}
+    if not isinstance(est_cfg, dict):
+        est_cfg = {}
+
+    def _given(flag_attr: str, key: str) -> Optional[str]:
+        if getattr(args, flag_attr, None) is not None:
+            return "--" + flag_attr.replace("_", "-")
+        if key in est_cfg:
+            return f"[estimate] {key}"
+        return None
+    src: Dict[str, Any] = {
+        "other_losses": _given("other_losses", "other_losses"),
+        "long_term_losses": (_given("long_term_losses", "long_term_losses")
+                             if country == "usa" else None),
+        "amt_carryover": None, "notes": [],
+        "other_income_entered": _given("other_income", "other_income")
+        is not None,
+        "other_income_value": None}
+    explicit = bool(src["other_losses"] or src["long_term_losses"])
+    try:
+        lr = CF.resolve_losses(root, settings, country, explicit)
+    except CF.CarryInputError as e:
+        _die(str(e))
+    if "other_losses" in lr:
+        ol = float(lr["other_losses"])
+        src["other_losses"] = lr["source"]
+        if country == "usa":
+            ltl = float(lr.get("lt_losses") or 0.0)
+            src["long_term_losses"] = lr["source"]
+        src["notes"] += lr["notes"]
+    amt = None
+    if country == "canada":
+        try:
+            a = CF.resolve_amt(root, settings, est_cfg)
+        except CF.CarryInputError as e:
+            _die(str(e))
+        amt = a["by_year"]
+        src["amt_carryover"] = a["source"]
+        for n in a["notes"]:
+            if n not in src["notes"]:
+                src["notes"].append(n)
+    else:
+        from taxjson.lib.country import project_file_problems
+        probs = [p for p in project_file_problems(root, country)
+                 if p.startswith(CF.AMT_FILE)]
+        if probs:
+            _die("; ".join(probs))
+    return ol, ltl, amt, src
 
 
 def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
@@ -9888,6 +9950,12 @@ def cmd_summary(args: argparse.Namespace) -> None:
     _ltl = _estimate_lt_losses(root, args)
     _foreign_by_acct: Dict[str, float] = {}
     cfg = load_config(root) if (root / "taxjson.toml").exists() else {}
+    _amt_in: Optional[Dict[int, float]] = None
+    _carry_src: Dict[str, Any] = {}
+    if want_estimate and cfg:
+        _ol, _ltl, _amt_in, _carry_src = _carry_inputs(root, args, cfg,
+                                                       _ol, _ltl)
+        _carry_src["other_income_value"] = _oi
     taxable_accounts = {n for n, c in cfg.get("accounts", {}).items()
                         if c.get("type") == "taxable"}
     est = dict(realized=0.0, st=0.0, lt=0.0, div_ca=0.0,
@@ -10311,6 +10379,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                 cfg, est,
                 other_income=_oi, other_losses=_ol,
                 deductions=_ded, carrying_charges=_cc, lt_losses=_ltl,
+                amt_carryover=_amt_in, carry_sources=_carry_src,
                 province=getattr(args, "province", None),
                 actual_withheld=_actual_withholding(
                     cache, set(files) & taxable_accounts,
@@ -10483,6 +10552,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
             cfg, est, base,
             other_income=_oi, other_losses=_ol,
             deductions=_ded, carrying_charges=_cc, lt_losses=_ltl,
+            amt_carryover=_amt_in, carry_sources=_carry_src,
             province=getattr(args, "province", None),
             verbose=getattr(args, "verbose", False),
             actual_withheld=_actual_withholding(
@@ -10639,9 +10709,12 @@ def _instalment_config(root: Path,
 def _net_tax_owing(r: Dict[str, Any], withheld: float) -> float:
     """Instalments are computed on NET TAX OWING — total tax for the
     year (not the incremental investment-income figure) minus amounts
-    withheld at source, with any AMT top-up included."""
+    withheld at source, with any AMT top-up included and any minimum
+    tax carryover recovered (s.120.2) taken off."""
     total = float((r.get("tax_with") or {}).get("total") or 0.0)
     total += float((r.get("amt") or {}).get("topup") or 0.0)
+    total -= float(((r.get("amt") or {}).get("carryover") or {})
+                   .get("recovered") or 0.0)
     return max(0.0, total - withheld)
 
 
@@ -10794,6 +10867,85 @@ def cmd_estimate(args: argparse.Namespace) -> None:
     cmd_summary(args)
 
 
+def cmd_amt(args: argparse.Namespace) -> None:
+    """`taxjson amt [YEAR]`: the year's Canadian minimum tax line by
+    line — regular tax, adjusted taxable income, exemption, rate,
+    credits, whether it binds, the provincial AMT, the carryover
+    created, the carryovers available by year of origin with their
+    7-year limit, what is recovered and what carries forward. Every
+    figure is the estimate's own (`taxjson estimate --json`), so the
+    two agree to the cent (tax-logic CA-AMT-01). A closed earlier
+    year prints what its close-year lock recorded."""
+    import json as _json
+    from taxjson.lib import amt_report as AR
+    from taxjson.lib import carryforward as CF
+    from taxjson.lib.dispatch import run_cmd as _run
+    root = Path(args.dir).resolve()
+    settings = _soft_settings(root)
+    if not settings:
+        _die("no taxjson.toml here — run it in a project.")
+    py = settings.get("year")
+    year = args.year if args.year is not None else py
+    if year is None:
+        _die("no `year` under [settings] in taxjson.toml — pass YEAR.")
+    if py is None or int(year) != int(py):
+        from taxjson.bin import taxjson_filed
+        try:
+            lk = taxjson_filed.lock_for_year(root, settings, int(year))
+        except taxjson_filed.PriorRecordError as e:
+            _die(str(e))
+        if lk is None:
+            _die(f"this project's books are for {py}; {year} has no "
+                 f"close-year lock here (filed/{year}.json or [settings] "
+                 f"prior_year_record) — run `taxjson amt` in the {year} "
+                 f"project.")
+        try:
+            block = CF.lock_block(lk[0])
+        except CF.CarryInputError as e:
+            _die(str(e))
+        mt = (block or {}).get("minimum_tax")
+        label = taxjson_filed.lock_label(root, lk[0])
+        if not isinstance(mt, dict):
+            _die(f"{label} records no minimum tax (closed before taxjson "
+                 f"recorded carry-forwards, or with no province set) — "
+                 f"run `taxjson amt` in the {year} project, or re-close "
+                 f"{year} there.")
+        if getattr(args, "json", False):
+            _json_out({"year": int(year), "recorded": True,
+                       "lock": label, "minimum_tax": mt, "law": AR.LAW})
+            return
+        for ln in AR.render_recorded(int(year), label, mt):
+            print(ln)
+        return
+    argv = [sys.executable, "-m", "taxjson.bin.taxjson_run",
+            "-C", str(root), "estimate", "--json"]
+    for flag, attr in (("--other-income", "other_income"),
+                       ("--other-losses", "other_losses"),
+                       ("--deductions", "deductions"),
+                       ("--carrying-charges", "carrying_charges"),
+                       ("--province", "province")):
+        v = getattr(args, attr, None)
+        if v is not None:
+            argv += [flag, str(v) if isinstance(v, str) else repr(v)]
+    res = _run(argv, capture_output=True)
+    if res.returncode != 0:
+        _die(f"could not compute the estimate it builds on: "
+             f"{_child_error(res.stderr)}")
+    if (res.stderr or "").strip():
+        sys.stderr.write(res.stderr if res.stderr.endswith("\n")
+                         else res.stderr + "\n")
+    r = (_json.loads(res.stdout) or {}).get("estimate") or {}
+    if not r or not r.get("amt"):
+        _die("the estimate produced no minimum tax result — run "
+             "`taxjson run` first, and set [settings] province.")
+    doc = AR.build(r, int(year), str(_base(settings)))
+    if getattr(args, "json", False):
+        _json_out(doc)
+        return
+    for ln in AR.render(doc):
+        print(ln)
+
+
 def _wrap_note(text: str, indent: str = "  ") -> str:
     """Report prose wrapped to the house 78-column width — the AMT
     explanation and the assumptions footer ran off the edge on any
@@ -10888,7 +11040,9 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
                          actual_withheld: Optional[float] = None,
                          deductions: float = 0.0,
                          carrying_charges: float = 0.0,
-                         lt_losses: float = 0.0
+                         lt_losses: float = 0.0,
+                         amt_carryover: Optional[Dict[int, float]] = None,
+                         carry_sources: Optional[Dict[str, Any]] = None
                          ) -> Dict[str, Any]:
     """Resolve country/province and run the estimator — shared by the
     text block and `sum --json` so the two can never disagree. For usa,
@@ -10905,8 +11059,9 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
             _die("the canada estimate needs a province — pass "
                  "--province ON|BC|AB or set `province` under "
                  "[settings] in taxjson.toml.")
+        _cs = carry_sources or {}
         try:
-            return estimate_canada(realized=est["realized"],
+            r = estimate_canada(realized=est["realized"],
                                    year=_est_year,
                                    eligible_div=est["div_ca"],
                                    foreign_div=est["div_foreign"],
@@ -10919,9 +11074,16 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
                                    deductions=deductions,
                                    carrying_charges=carrying_charges,
                                    capital_gains_dividends=est.get(
-                                       "cg_div", 0.0))
+                                       "cg_div", 0.0),
+                                   amt_carryover=amt_carryover,
+                                   amt_carryover_source=_cs.get(
+                                       "amt_carryover"))
         except ValueError as e:
             _die(str(e))
+        r["carry_sources"] = _carry_sources_doc(_cs)
+        r["notes"] = list(_cs.get("notes") or []) + list(r.get("notes")
+                                                         or [])
+        return r
     if deductions or carrying_charges:
         _die("--deductions/--carrying-charges are modelled for the "
              "canada estimate only (the US estimate is experimental and "
@@ -10942,6 +11104,9 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
     r["st_input"] = round(st_in, 2)
     r["carryover_short_term"] = round(other_losses, 2)
     r["carryover_long_term"] = round(lt_losses, 2)
+    r["carry_sources"] = _carry_sources_doc(carry_sources or {})
+    r["notes"] = (list((carry_sources or {}).get("notes") or [])
+                  + list(r.get("notes") or []))
     s1256 = float(est.get("s1256") or 0.0)
     r["section_1256_gain"] = round(s1256, 2)
     if abs(s1256) > 0.005:
@@ -10956,6 +11121,13 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
     return r
 
 
+def _carry_sources_doc(cs: Dict[str, Any]) -> Dict[str, Any]:
+    """Where the estimate's carry-forward inputs came from (JSON)."""
+    return {k: cs.get(k) for k in ("other_losses", "long_term_losses",
+                                   "amt_carryover")
+            if k in cs}
+
+
 def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                         base_cur: str, *, other_income: float,
                         other_losses: float,
@@ -10966,7 +11138,10 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                         verbose: bool = False,
                         actual_withheld: Optional[float] = None,
                         root: Optional[Path] = None,
-                        year: Optional[Any] = None) -> None:
+                        year: Optional[Any] = None,
+                        amt_carryover: Optional[Dict[int, float]] = None,
+                        carry_sources: Optional[Dict[str, Any]] = None
+                        ) -> None:
     """Marginal tax-estimate block under `taxjson sum` — TAXABLE
     accounts only, incremental on top of --other-income. Assumptions
     are printed with the numbers; these are never filing figures.
@@ -10978,7 +11153,9 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                              actual_withheld=actual_withheld,
                              deductions=deductions,
                              carrying_charges=carrying_charges,
-                             lt_losses=lt_losses)
+                             lt_losses=lt_losses,
+                             amt_carryover=amt_carryover,
+                             carry_sources=carry_sources)
     # The result carries the vintage apply_vintage() actually selected
     # for the project year — never the import-time module default.
     RATE_VINTAGE = r.get("vintage", "?")
@@ -11040,6 +11217,10 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
         if r["losses_unused"]:
             print(f"  Unused capital losses: {money(r['losses_unused'])} "
                   f"(carry forward)")
+        _ls = (r.get("carry_sources") or {}).get("other_losses")
+        if _ls and other_losses:
+            print(f"  Net capital losses carried in: "
+                  f"{money(other_losses)} — from {_ls}")
         amt = r.get("amt")
         if amt:
             print()
@@ -11058,7 +11239,7 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 print(f"  {'   federal / ' + r['province']:<30}"
                       f"{money(amt['excess_fed']) + ' / ' + money(amt['provincial_amt']):>14}")
                 print(f"  {'=> TOTAL WITH AMT':<30}"
-                      f"{money(r['estimated_tax_with_amt']):>14} "
+                      f"{money(r['estimated_tax'] + amt['topup']):>14} "
                       f"{base_cur}")
                 print(_wrap_note(
                     f"AMT binds because capital gains enter at 100% "
@@ -11076,6 +11257,37 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                     "50%) and the dividend tax credit denied; on "
                     "these numbers regular tax still exceeds the "
                     "minimum, so no top-up is owed."))
+            _cy = amt.get("carryover") or {}
+            if _cy.get("entered") or _cy.get("created", 0.0) > 0.005:
+                print(f"  MINIMUM TAX CARRYOVER (s.120.2; line 40427)"
+                      + (f" — from {_cy['source']}"
+                         if _cy.get("source") else ""))
+                if _cy.get("entered"):
+                    print(f"  {'Available from prior years':<30}"
+                          f"{money(_cy.get('available', 0.0)):>14}")
+                    print(f"  {'Recovered this year':<30}"
+                          f"{money(_cy.get('recovered', 0.0)):>14}"
+                          f"  [federal "
+                          f"{money(_cy.get('recovered_federal', 0.0))}"
+                          f" + {r['province']} "
+                          f"{money(_cy.get('recovered_provincial', 0.0))}]")
+                    if abs(_cy.get("attributed", 0.0)
+                           - _cy.get("recovered", 0.0)) > 0.005:
+                        print(_wrap_note(
+                            f"The other income alone would recover "
+                            f"{money(_cy.get('base_recovered', 0.0))}, so "
+                            f"the investment income changes this year's "
+                            f"recovery by "
+                            f"{money(_cy.get('attributed', 0.0))} — the "
+                            f"part counted in the figure below (what is "
+                            f"not recovered stays carried forward)."))
+                    if abs(_cy.get("attributed", 0.0)) > 0.005:
+                        print(f"  {'=> AFTER CARRYOVER':<30}"
+                              f"{money(r['estimated_tax_with_amt']):>14} "
+                              f"{base_cur}")
+                print(f"  {'Carried forward':<30}"
+                      f"{money(_cy.get('closing', 0.0)):>14}  "
+                      f"[`taxjson amt` for the detail]")
         if verbose:
             from taxjson.lib.tax_estimate import (CA_FED_BPA,
                                                   CA_FED_BRACKETS,
@@ -11207,6 +11419,11 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
         if r["losses_unused"]:
             print(f"  Unused capital losses: {money(r['losses_unused'])} "
                   f"(carry forward)")
+        _ls = (r.get("carry_sources") or {}).get("other_losses")
+        if _ls and (other_losses or lt_losses):
+            print(f"  Capital loss carryovers in: short-term "
+                  f"{money(other_losses)}, long-term {money(lt_losses)}"
+                  f" — from {_ls}")
         if verbose:
             from taxjson.lib.tax_estimate import (US_NIIT_MAGI_THRESHOLD,
                                                   US_ORD_BRACKETS,
@@ -13961,6 +14178,9 @@ def cmd_close_year(args: argparse.Namespace) -> None:
                  if isinstance(_old_lock.get("filed_totals"), dict)
                  else "")
               + " — pass --filed-dispositions to replace them.")
+    _cf = _carryforwards_for_lock(root, cfg)
+    if _cf is not None:
+        extra["carryforwards"] = _cf
     path = taxjson_filed.write_snapshot(
         root, year, _normalize_country(settings["country"]), basis,
         accounts, force=args.force,
@@ -13999,11 +14219,90 @@ def cmd_close_year(args: argparse.Namespace) -> None:
         print(f"  as filed ({_ft['source']}): {_ft['dispositions']} "
               f"dispositions, gain {_ft['gain']:,.2f} — the {int(year) + 1}"
               f" project's `taxjson handoff` checks against these.")
+    if _cf is not None:
+        for _ln in _carryforwards_summary(_cf, int(year)):
+            print(_ln)
     _ye = extra.get("year_end") or {}
     print(f"  year-end positions: "
           + ", ".join(f"{g} {len(v)}" for g, v in _ye.items())
           + f"; trades settling in {int(year) + 1}: "
           f"{len(extra.get('settle_next_year') or [])}")
+
+
+def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any]
+                            ) -> Optional[Dict[str, Any]]:
+    """The `carryforwards` block close-year writes (lib/carryforward):
+    the year's net capital loss (Canada) or ST/LT capital loss
+    carryover (USA), and the Canadian minimum tax carryover — from the
+    estimate itself (`taxjson estimate --json`, the computation `amt`
+    prints), with the inputs the project gives it. A Canada project
+    with no supported province is estimated on Ontario's tables: every
+    figure the block carries forward is federal (the provincial
+    recovery is left out). A failing estimate stops the close (its
+    inputs are wrong), naming the reason."""
+    import json as _json
+    from taxjson.lib import carryforward as CF
+    from taxjson.lib.dispatch import run_cmd as _run
+    from taxjson.lib.tax_estimate import _VINTAGES
+    settings = cfg.get("settings") or {}
+    country = _country(settings)
+    argv = [sys.executable, "-m", "taxjson.bin.taxjson_run",
+            "-C", str(root), "estimate", "--json"]
+    prov = str(settings.get("province") or "").strip().upper()
+    stand_in = False
+    if country == "canada" and prov not in {
+            k for v in _VINTAGES.values() for k in v["CA_PROVINCES"]}:
+        argv += ["--province", "ON"]
+        stand_in = True
+    res = _run(argv, capture_output=True)
+    if res.returncode != 0:
+        sys.exit(f"taxjson close-year: could not compute the carry-"
+                 f"forwards the lock records (the estimate failed: "
+                 f"{_child_error(res.stderr)}). Fix the input, then "
+                 f"close. Nothing was written.")
+    r = (_json.loads(res.stdout) or {}).get("estimate") or {}
+    est_cfg = cfg.get("estimate") if isinstance(cfg.get("estimate"),
+                                                dict) else {}
+    src = dict(r.get("carry_sources") or {})
+    src["other_income_entered"] = "other_income" in (est_cfg or {})
+    src["other_income_value"] = (est_cfg or {}).get("other_income") or 0.0
+    block = CF.record_block(country, r, src)
+    mt = block.get("minimum_tax")
+    if stand_in and isinstance(mt, dict):
+        mt["province"] = None
+        mt.pop("recovered_provincial", None)
+    return block
+
+
+def _carryforwards_summary(cf: Dict[str, Any], year: int) -> List[str]:
+    """close-year's lines on what the lock carries into year + 1."""
+    out: List[str] = []
+    ncl = cf.get("net_capital_loss")
+    if isinstance(ncl, dict):
+        out.append(f"  net capital loss: applied {ncl['applied']:,.2f}, "
+                   f"created {ncl['created']:,.2f}, carried into "
+                   f"{year + 1}: {ncl['closing']:,.2f} (100% amounts)")
+    cl = cf.get("capital_loss")
+    if isinstance(cl, dict):
+        out.append(f"  capital loss carryover into {year + 1}: "
+                   f"short-term {cl['st_closing']:,.2f}, long-term "
+                   f"{cl['lt_closing']:,.2f}")
+    mt = cf.get("minimum_tax")
+    if isinstance(mt, dict):
+        out.append(f"  minimum tax: recovered {mt['recovered_federal']:,.2f}"
+                   f", created {mt['created']:,.2f}, carried into "
+                   f"{year + 1}: {mt['closing']:,.2f}")
+        if not mt.get("other_income_entered"):
+            out.append("  note: the minimum tax was computed with no "
+                       "[estimate] other_income — compare it with the "
+                       "T691 you filed; the next project's "
+                       "amt_carryover.txt (from your notice of "
+                       "assessment) wins over this record.")
+    if out:
+        out.append(f"  the {year + 1} project's estimate, carryover and "
+                   f"amt read these; its handoff checks its inputs "
+                   f"against them.")
+    return out
 
 
 def _handoff_gains_flags(settings: Dict[str, Any]) -> List[str]:
@@ -17258,6 +17557,31 @@ def _build_parser(prog: str = "taxjson"
                             "totals, estimate, and instalments when "
                             "configured)")
     p_est.set_defaults(func=cmd_estimate)
+
+    p_amt = sub.add_parser(
+        "amt",
+        help="Canada: the year's minimum tax (AMT) line by line — "
+             "adjusted taxable income, exemption, rate, credits, whether "
+             "it binds, the provincial AMT, and the carryover (ITA "
+             "s.120.2): available by year of origin with its 7-year "
+             "limit, recovered this year, carried forward. The "
+             "estimate's own figures; YEAR = a closed year prints what "
+             "its lock recorded")
+    p_amt.add_argument("year", nargs="?", type=_tax_year_arg, default=None,
+                       help="Tax year (default: [settings] year)")
+    p_amt.add_argument("--other-income", type=float, default=None,
+                       metavar="AMT",
+                       help="Employment/other income (default: [estimate] "
+                            "other_income, else 0)")
+    p_amt.add_argument("--other-losses", type=float, default=None,
+                       metavar="AMT", help=_OTHER_LOSSES_HELP)
+    _add_deduction_flags(p_amt)
+    p_amt.add_argument("--province", default=None,
+                       help="ON|BC|AB (default: `province` under "
+                            "[settings])")
+    p_amt.add_argument("--json", action="store_true",
+                       help="Emit the breakdown as JSON")
+    p_amt.set_defaults(func=cmd_amt)
 
     p_inst = sub.add_parser(
         "instalments",

@@ -402,7 +402,7 @@ tax_date = "settle"            # settle (CRA default) | trade (IRS default)
 source_currencies = ["USD"]    # currencies you hold besides base_currency (FX rates fetched)
 # province = "ON"              # canada tax-estimate default (ON/BC/AB)
 #   Canada-only keys (province, option_*, foreign_return_of_capital, and the
-#   [instalments] table / [estimate] deductions & carrying_charges) are refused
+#   [instalments] table / [estimate] deductions, carrying_charges & amt_carryover) are refused
 #   in a country = "usa" project, naming the key — never silently ignored.
 # option_premium_timing = "grant"   # Canada (default): a written option's premium is a gain in
 #                                   # the year WRITTEN (ITA s.49(1)); a buy-back is a loss in its
@@ -440,6 +440,8 @@ option_grant_timing_since = 2025    # contracts written before this year keep cl
 # other_losses = 0
 # deductions = 0               # Canada: RRSP 20800, FHSA, RPP ... (full under AMT)
 # carrying_charges = 0         # Canada: line 22100 (50% under the 2024+ AMT)
+# amt_carryover = { 2023 = 1200.50 }  # Canada: minimum tax carryover by year of
+#                              # origin (or amt_carryover.txt; see "Carry-forwards")
 # long_term_losses = 0         # US: long-term carryover (other_losses is then the short-term one)
 
 # Optional — Canadian tax instalments (`taxjson instalments`, and a
@@ -528,6 +530,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `capital_gains_dividends.map` | Canada only: T5 box 18 capital-gains dividends booked as dividends: `SYMBOL YEAR-or-DATE all-or-AMOUNT [ACCOUNT]`. |
 | `t1135.map`, `yf_ticker.map`, `sector.map`, `crypto_ticker.map` | Per-symbol overrides: T1135 domicile, yfinance spelling, timeline sectors, crypto Yahoo-collision fixes (`crypto_ticker.map` is read from the project root whatever the cwd; editing it re-prices under `run --fast`). |
 | `missing_history.json`, `claimed_losses.txt` | Sales with no purchase in your files (bought before the data; auto-applied — the old name `phantoms.json` is still read, with a NOTE to rename it); losses actually claimed on filed returns (`YEAR AMOUNT`). |
+| `amt_carryover.txt` | Canada: the minimum tax carryover still unapplied, by year of origin (`YEAR AMOUNT` lines, from the notice of assessment / T691) — read by `estimate` and `amt`; see "Carry-forwards". A US project refuses it. |
 | `work/` | Intermediate per-stage artifacts and price/FX caches. Rebuildable; gitignored. |
 | `reports/` | Everything you read: `<account>.sum`, `wash_radar_*`, `fees.rpt`, holdings, `exports/`. Rebuildable. |
 | `filed/<year>.json` | Filed-year locks from `taxjson close-year` — **commit these**. |
@@ -563,6 +566,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson sum` / `list` / `divs-sum` / `trades-sum` / `fees-sum` | Roll-up summaries — see below. `list --date YYYY-MM-DD` shows positions AS OF that date (each account's books recomputed alone via the engine's `--as-of` cutoff, on the project's date basis — the settlement date unless `tax_date = "trade"`, so a sale traded Dec 31 that settles in January is still held at Dec 31, as in the gains year and `t1135`: Canada: per-account ACB — not the s.47 blend across taxable accounts that plain `list` and the return use; USA: the per-account FIFO basis the return uses, so no note — with in-account deferred wash and missing_history.json applied; the books are already ticker.map-consolidated, and the cross-account wash pass is not in it); plain `list` shows the positions at the end of the books (the header names the date); `list --negative` shows only negative-quantity positions — real shorts, or (in accounts that can't short) missed corporate actions / import gaps. Ends with a **FOR THE RETURN** block over the taxable accounts — Canada: one row per Schedule 3 line (line 4 shares & fund units 13199/13200; line 6 options, futures & other properties 15199/15300; line 7 crypto-assets 15200/15301 — 15199/15300 before 2025; for 2024, January 1 – June 24 on the Period 1 codes 10689/10690 and 10693/10694) with PROCEEDS, COST(ACB), OUTLAYS, GAIN and the superficial losses DENIED, on the Schedule 3 convention (a short sale's proceeds as PROCEEDS and its cover as ACB, sell commissions as outlays; a denied loss REDUCES the ACB shown so proceeds − ACB − outlays is the allowed gain, the denial going onto the replacement's ACB), plus the `fx-cash` estimate for line 15300; USA: Form 8949's own Part I/II (d) proceeds, (e) cost, (g) adjustment, (h) gain (from 2025 the crypto accounts' digital-asset boxes G/H/I and J/K/L on rows of their own). Rows equal `form-export`'s line totals (each row rounded to the cent, as filed — when that differs from the gains files' unrounded total gain or denied amount (US: the (g) adjustment) by a cent or more the block says so, and `--json` carries `engine_gain_unrounded` and `engine_denied_unrounded`); `--json` adds the per-account split. |
 | `taxjson shares [--options] [--taxable\|--sheltered] [--sort qty] [--json]` | Combined quantity held of each symbol across all accounts (post ticker.map, wash-adjusted where built) with a per-account breakdown and combined book cost; shorts net against longs. Option contracts only with `--options`; futures contracts are left out. Like `list`, it is the end of the books (the header says the date), not the tax year's Dec 31. |
 | `taxjson estimate` | The realized-gains summary table followed by the marginal tax **estimate**: tax(other income + investment income) − tax(other income). Canada projects also get an **AMT check** (post-2024 rules: gains at 100%, no DTC, 20.5% over the exemption + provincial piggyback) — shown binding-or-not, with the top-up and 7-year carryforward when it binds. Canada: 50% inclusion, eligible gross-up/DTC, FTC from the books' actual TAX rows, ON/BC/AB (`--province`, or `province` under `[settings]`). `--other-income`/`--other-losses` (in a US project the short-term carryover; `--long-term-losses` the long-term one), and for Canada `--deductions` (RRSP 20800, FHSA, RPP ...) / `--carrying-charges` (line 22100) (or the `[estimate]` config block, which `instalments` reads too), `--verbose` trace, `--json`. Planning numbers, never filing numbers. |
+| `taxjson amt [YEAR] [--json]` | Canada: the year's **minimum tax (AMT)** line by line (ITA s.127.5-127.55, form T691) — regular tax, the adjusted taxable income item by item (gains at 100%, other years' net capital losses and carrying charges at 50%, dividends without the gross-up, deductions in full), the basic exemption, the 20.5% rate, the credits allowed (BPA credit at 50%, foreign tax credit in full), whether it binds, the provincial AMT, the carryover it **creates**, the carryovers **available** by year of origin with their 7-year limit (ITA s.120.2), what is **recovered** this year (up to regular tax minus minimum tax, line 40427) and what carries forward. Every figure is `taxjson estimate`'s own (same flags: `--other-income`, `--other-losses`, `--deductions`, `--carrying-charges`, `--province`). `YEAR` = an earlier closed year prints what its close-year lock recorded. Refused in a US project (Form 6251 is not modelled). See "Carry-forwards". |
 | `taxjson instalments` | Canadian tax instalments: what each of the four dates (Mar/Jun/Sep/Dec 15) calls for under your chosen basis, what you have paid, and the **offset interest** plus **s.163.1 penalty** that follow from any gap. The current-year basis is driven by `taxjson estimate` itself (AMT included). Interest uses CRA's published quarterly rates (built in; `prescribed_rate(s)` overrides), credit interest runs from the later of the payment date and January 1, and net interest of $25 or less is not charged; CRA charges instalment interest only if it sent you a reminder for the year, which the report says. Configure `[instalments]` in `taxjson.toml`; `--json` for machines. |
 | `taxjson events` / `divs` / `dil` / `trades` / `gains` / `fees` / `roc` / `leaps` | Per-transaction views over a look-back window — see below. |
 | `taxjson transfers [ACCOUNT]` | Custody-transfer **evidence** view: depot flips, listing journals, broker migrations, and crypto withdrawals/sends (a send that arrived in another of your crypto accounts is a self-custody move; the rest are gift/payment candidates — see `taxjson crypto-sends`) — the TRANSFER rows the books deliberately exclude (basis comes from buy/sell history). Reads the parse-stage sidecars (`work/<acct>_<broker>_transfers.json`) plus in-book TRANSFERs from `transfers = true` accounts, with the broker's transfer type (InterDepot / Internal / ATON). `--json` for machines. |
@@ -593,11 +597,11 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson form-export` | Filing-shaped output: IRS Form 8949 / CRA Schedule 3 (default follows the country), or a TurboTax-importable TXF via `--form txf [--box A|B|C] --out gains.txf`. |
 | `taxjson t1135` | CRA T1135 foreign-property helper: filing-threshold test + per-property/per-country tables. |
 | `taxjson reconcile-slips SLIP.csv [SLIP.csv ...]` | Diff broker T5008 / 1099-B slips against computed dispositions before filing (exit 1 on mismatch); several slip files (one per broker) are reconciled together. |
-| `taxjson carryover` | Multi-year capital-loss carryforward/carryback ledger (Canada balance + T1A carryback candidates; US ST/LT worksheet). |
+| `taxjson carryover` | Multi-year capital-loss carryforward/carryback ledger (Canada balance + T1A carryback candidates; US ST/LT worksheet). A close-year lock's recorded balance (this project's or `prior_year_record`'s) becomes the running balance at its year end. |
 | `taxjson option-boundary [--json]` | Written options whose write and close straddle a tax-year boundary, or that are open at year end: where the premium and any later amount land under ITA s.49 for the timing in force, and — using the `filed/` locks — whether a filed year needs a T1-ADJ (an assignment after the grant year was filed, s.49(4)). |
-| `taxjson close-year [--filed-dispositions CSV]` | Snapshot the current tax year's filing aggregates to `filed/<year>.json` — the filed-year lock. Commit it with your records. It also records what the next year needs for `taxjson handoff`: every sale, the positions and cost at Dec 31 (superficial-loss deferrals included), and the trades that settle in January. When the return was prepared with another tool, `--filed-dispositions` stores the sales it actually reported (CSV: `symbol,date,qty,proceeds,cost,gain`, optional `account`). `--force` keeps the filed dispositions of the lock it replaces (unless a new CSV is given) and warns when that lock recorded other totals. It refuses books whose last run did not finish (no reports, an unreadable `work/<acct>_base.json`). Without `--force` it refuses a year that has not ended, a year with no disposition and no income in the taxable books (a typo'd `year`), and books built with another option timing than `taxjson.toml` now says (that one even with `--force`). |
+| `taxjson close-year [--filed-dispositions CSV]` | Snapshot the current tax year's filing aggregates to `filed/<year>.json` — the filed-year lock. Commit it with your records. It also records what the next year needs for `taxjson handoff`: every sale, the positions and cost at Dec 31 (superficial-loss deferrals included), and the trades that settle in January. It also records the year's carry-forwards — the net capital loss (US: the short-/long-term capital loss carryover) and, in Canada, the minimum tax carryover by year of origin — from the year's own estimate (see "Carry-forwards"). When the return was prepared with another tool, `--filed-dispositions` stores the sales it actually reported (CSV: `symbol,date,qty,proceeds,cost,gain`, optional `account`). `--force` keeps the filed dispositions of the lock it replaces (unless a new CSV is given) and warns when that lock recorded other totals. It refuses books whose last run did not finish (no reports, an unreadable `work/<acct>_base.json`). Without `--force` it refuses a year that has not ended, a year with no disposition and no income in the taxable books (a typo'd `year`), and books built with another option timing than `taxjson.toml` now says (that one even with `--force`). |
 | `taxjson check-filed` | Recompute every filed year from the current books and report drift vs the locks; exit 1 on drift. A taxable account the books have but the lock does not (with activity in that year), or a locked account the books no longer have, is drift too; a locked account that is no longer a taxable account in `taxjson.toml` is reported, never recomputed from its old `work/` book. Each year is recomputed with the written-option timing its lock recorded. Dividends and payments in lieu are compared separately, and so are the amounts the export puts on each return line (Schedule 3 line codes, Form 8949 part totals), so a change that moves an amount between lines is drift even when the gain is unchanged; interest, foreign tax withheld and the FX gain on foreign cash are not locked (every OK says so). An unreadable lock is named and counts as a failure. A lock closed under the other country (every lock records its `country`) is refused by name and never recomputed under this project's law; a lock is recomputed on the date basis it recorded, and a note says when this project's `tax_date` or `option_buyback_loss_superficial` now differs from the lock's (its own reports for that year then differ from the filed return). A lock account entry that records none of the locked totals, or whose `form_lines` is not a table, is damaged, never OK. A bad `[settings]` value is refused as a settings error before any lock is checked; when the recompute itself fails on an input the child's own error is shown and the exit code is 2 (1 is drift or a damaged lock). Every full run also auto-checks (`taxjson run --strict` aborts on drift or an unreadable lock). |
-| `taxjson handoff [--prior PATH] [--json]` | Checks that this year's project starts from exactly what last year's return carried forward, using last year's `close-year` record (`[settings] prior_year_record`, or `filed/<year-1>.json` here). Checks: opening positions and cost at Dec 31 against last year's year-end books; every trade made last year that settles in January is booked here, once; no sale is reported in both years (a closed-year sale that is its own row here is a different sale); rows the two projects put on different sides of Dec 31 — income a trust's record date or a RIC entry moves, a row `local_timezone` re-dates, an overnight fill moved into January — are reported in neither or both years; written options carried out of last year on another premium timing than its record (taxed twice, or in no return). A record closed before its year ended is flagged as a partial-year snapshot. A cost difference is listed with the two consistent choices: keep last year as filed and open with the cost that return implied, or amend it and open with the corrected cost. A record closed under the other country is refused by name. Exit 1 on any problem; `checklist` runs it. |
+| `taxjson handoff [--prior PATH] [--json]` | Checks that this year's project starts from exactly what last year's return carried forward, using last year's `close-year` record (`[settings] prior_year_record`, or `filed/<year-1>.json` here). Checks: opening positions and cost at Dec 31 against last year's year-end books; every trade made last year that settles in January is booked here, once; no sale is reported in both years (a closed-year sale that is its own row here is a different sale); rows the two projects put on different sides of Dec 31 — income a trust's record date or a RIC entry moves, a row `local_timezone` re-dates, an overnight fill moved into January — are reported in neither or both years; written options carried out of last year on another premium timing than its record (taxed twice, or in no return). A record closed before its year ended is flagged as a partial-year snapshot. A cost difference is listed with the two consistent choices: keep last year as filed and open with the cost that return implied, or amend it and open with the corrected cost. A record closed under the other country is refused by name. The carry-forward inputs (`[estimate] other_losses` / `long_term_losses`, `claimed_losses.txt`'s line for that year, `amt_carryover.txt` / `[estimate] amt_carryover`) are compared with what the record carried out (see "Carry-forwards"). Exit 1 on any problem; `checklist` runs it. |
 
 #### Explain and check
 
@@ -782,11 +786,13 @@ the earliest table also says the post-2024 AMT shown did not apply).
   absorb goes to the provincial foreign tax credit (form T2036, limited
   to provincial tax x foreign income / net income). The estimate is
   signed: eligible dividends at a low bracket can show a negative
-  figure — a saving on the tax of the other income. Not modelled: QC,
-  low-income reductions, non-eligible dividends, a prior-year
-  minimum tax carryover (T691 Part 8, line 40427, ITA s.120.2) — when
-  AMT does not bind, a NOTE names the headroom such a carryover could
-  use — non-refundable credits other than the basic personal amount
+  figure — a saving on the tax of the other income. A prior-year
+  minimum tax carryover (ITA s.120.2, line 40427) is applied when it is
+  entered or last year's close-year lock carries it (see
+  "Carry-forwards"); with none, a NOTE names the headroom one could use.
+  Not modelled: QC,
+  low-income reductions, non-eligible dividends,
+  non-refundable credits other than the basic personal amount
   (CPP/EI, Canada employment, age, pension, donations ...), the OAS
   recovery tax (s.180.2) and AMT adjustments outside the books (the
   s.110(1)(d) stock-option deduction, donated securities), the FX
@@ -816,6 +822,38 @@ landed in the brackets and what the gross-up/DTC did.
 Rate tables live in `lib/tax_estimate.py` with a printed vintage —
 they need an annual refresh, and the output says so. These are
 planning estimates, never filing numbers.
+
+**Carry-forwards** — what one year passes to the next, and where each
+year reads it from (`taxjson tax-logic`: CA-CARRY-*, CA-AMT-*,
+US-CARRY-*):
+
+- **Net capital losses** (Canada, 100% amounts) and the **short-/long-term
+  capital loss carryover** (US). The estimate uses `--other-losses`
+  (`--long-term-losses`) or the `[estimate]` keys when you give them;
+  otherwise the balance the latest close-year lock before the project
+  year carried out — this project's `filed/<year>.json` or the one
+  `[settings] prior_year_record` names. `taxjson carryover` takes that
+  lock's balance at its year end, so a new year's ledger starts where the
+  filed year left off.
+- **Minimum tax carryover** (Canada, ITA s.120.2): by year of origin, in a
+  project-root `amt_carryover.txt` — one `YEAR AMOUNT` line per year, the
+  unapplied carryover as your notice of assessment / T691 shows it
+  (`2023 1,200.50`) — or `[estimate] amt_carryover = { 2023 = 1200.50 }`
+  (not both); otherwise the last lock's balance. Each year's carryover can
+  be used for 7 years (an older one is dropped with a note), oldest first,
+  up to regular federal tax minus federal minimum tax (none in a year AMT
+  binds); the province's share follows at its minimum-tax factor. A year
+  where AMT binds adds its federal excess. `taxjson amt` shows it all.
+- **close-year** writes the year's figures into `filed/<year>.json` from
+  the same estimate (net capital loss carried in / created / applied /
+  carried out; minimum tax opening, expired, recovered, created and
+  carried out by year of origin). Set `[estimate] other_income` before
+  closing: the minimum tax depends on it. Input you give always wins over
+  a lock, and the estimate prints where each number came from;
+  `taxjson handoff` in the next project flags an input
+  (`[estimate] other_losses`, `claimed_losses.txt`'s line for the closed
+  year, `amt_carryover.txt`) that differs from what the record carried
+  out — your notice of assessment decides which is right.
 
 **`taxjson divs-sum [PERIOD] [ACCOUNT]`** — dividends received per ticker over
 the window (DIVIDEND rows, plus in a Canada project the payments in lieu
