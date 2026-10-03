@@ -31,6 +31,22 @@
   gain and another a LOSS, and the holding period restarted (re-audit
   A2-0066). The engine uses your own lots, so `source_basis_total` is no
   longer asked (an older manifest's value is ignored).
+- US: a move of shares or coins between two of your own taxable accounts
+  now carries the lots (re-audit A2-0032 securities, A2-0003 crypto).
+  `taxjson run` pairs the move's out and in rows (securities from the
+  transfer evidence: one symbol within 10 days, the same quantity or two
+  deliveries adding up to it; coins from the crypto-sends pairing), adds
+  them to both accounts' books as `work/<account>_own_moves.json`, and the
+  US engine hands the sending account's FIFO lots — basis and purchase
+  dates — to the receiving one with no sale. Before, the receiver's sale
+  read as a short with no basis and the sender kept a phantom long (since
+  the first re-audit fix: an ATTENTION line and a `--strict` stop, now
+  removed). US crypto accounts with such a move run one blended crypto
+  pass (FIFO per account, no wash-sale rule); `check-filed` recomputes
+  the same way. Rows that look like a move but do not pair, and a move larger
+  than the sender's lots, are ATTENTION (`--strict` stops). Canada pools
+  the ACB across the accounts (s.47) and is unchanged (tax-logic
+  US-BASIS-05, US-CRYPTO-05).
 
 ### Renames, ticker.map and warrants
 

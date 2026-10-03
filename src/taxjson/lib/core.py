@@ -1795,7 +1795,10 @@ def _verify_share_conservation(position_rows, actual_qty_by_symbol,
                 if tk != k:
                     expected[tk] = expected.get(tk, 0.0) + expected.pop(k, 0.0)
                     redirect[k] = tk
-        elif t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE'):
+        elif t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
+                          'TRANSFER'):
+            # (TRANSFER: the US engine's own-account move legs only —
+            # the callers pass no other.)
             k = rkey(t.symbol)
             expected[k] = expected.get(k, 0.0) + t.quantity
 
@@ -1998,6 +2001,15 @@ STOCK_DIVIDEND = 'stock_dividend'
 # boot exchange's two rows (the old shares' SELL and the new shares'
 # BUYSELL). Neither acquisition is "by purchase" for §1091(a).
 SPINOFF_355_TYPE = 'spinoff_355'
+# A custody move between two of your own TAXABLE accounts, as a pair of
+# TRANSFER rows (out of one account, into the other; same symbol,
+# moment, quantity and description) that `taxjson run` adds to a US
+# blended book: the US engine moves the sender's FIFO lots — basis and
+# purchase dates — to the receiver, with no disposition (US-BASIS-05).
+# Canada pools the ACB across the accounts (s.47): nothing to move.
+LOT_MOVE_TYPE = 'lot_move'
+# "own-account move #N: FROM -> TO (...)" — the legs' description.
+_MOVE_DESC_RE = re.compile(r'own-account move #\d+: (\S+) -> (\S+)')
 REORG_356_TYPE = 'reorg_356'
 _LOT_EVENT_TYPES = (SPINOFF_355_TYPE, REORG_356_TYPE)
 
@@ -2039,6 +2051,11 @@ class CanadaTaxRules(TaxRules):
         candidate-replacement trades.
         """
         _check_engine_allowed("canada")  # test-only guard (lib/country)
+        # A move between two of your own taxable accounts changes nothing
+        # in Canada: the ACB is one pool across them (s.47).
+        transactions = [t for t in transactions
+                        if not (t.action == 'TRANSFER'
+                                and t.type == LOT_MOVE_TYPE)]
         _disambiguate_duplicate_ids(transactions, sheltered_transactions,
                                     affiliated_transactions)
         # One corporate split = one application: collapse per-account SPLIT
@@ -4892,6 +4909,14 @@ class USATaxRules(TaxRules):
                 other_qty_state[_ok] = (other_qty_state.get(_ok, 0.0)
                                         + ev.quantity)
                 continue
+            if ev.action == 'TRANSFER' and ev.type == LOT_MOVE_TYPE:
+                # An own-account custody move: never an acquisition, but
+                # the per-account position moves with it (US-BASIS-05).
+                if per_account_basis and abs(ev.quantity or 0.0) >= epsilon:
+                    _nk = _nkey(ev.account, ev.symbol)
+                    net_qty_state[_nk] = (net_qty_state.get(_nk, 0.0)
+                                          + ev.quantity)
+                continue
             if non_capital(ev.action, ev.type):
                 continue
             sym = ev.symbol
@@ -5533,6 +5558,58 @@ class USATaxRules(TaxRules):
         # the old shares (sorted first) leaves its blocks here for the
         # BUY of the new shares, keyed (account, corp_event_id).
         _boot_blocks: Dict[tuple, tuple] = {}
+        # Own-account custody moves (US-BASIS-05): each TRANSFER lot_move
+        # leg -> its other leg (out of one account, into another: same
+        # symbol, moment, quantity and description).
+        _move_pair: Dict[str, TaxTransaction] = {}
+        _moves_done: set = set()
+        _book_accounts = {t.account for t in taxable_sorted}
+        _move_ins = [t for t in taxable_sorted
+                     if t.action == 'TRANSFER' and t.type == LOT_MOVE_TYPE
+                     and (t.quantity or 0.0) > 0]
+        for _o in taxable_sorted:
+            if not (_o.action == 'TRANSFER' and _o.type == LOT_MOVE_TYPE
+                    and (_o.quantity or 0.0) < 0):
+                continue
+            for _i in _move_ins:
+                if (_i.id not in _move_pair and _i.account != _o.account
+                        and _i.symbol == _o.symbol and _i.date == _o.date
+                        and (_i.time or '') == (_o.time or '')
+                        and _i.description == _o.description
+                        and abs(_i.quantity + _o.quantity)
+                        <= 1e-9 * max(1.0, abs(_i.quantity))):
+                    _move_pair[_o.id] = _i
+                    _move_pair[_i.id] = _o
+                    break
+
+        def _move_long_lots(src, dst, sym, q, on_date):
+            """Hand `q` units of `src`'s FIFO lots (the lot objects
+            themselves: basis, purchase dates, wash-sale deferrals and
+            replacement links travel with them) to `dst`. Returns the
+            units moved."""
+            lots = inventory_long.get(src, [])
+            moved = []
+            left = q
+            while left > epsilon and lots:
+                lot = lots[0]
+                if lot['qty'] <= left + epsilon:
+                    moved.append(lots.pop(0))
+                    left -= lot['qty']
+                    continue
+                frac = D(left) / D(lot['qty'])
+                part = dict(lot)
+                part['qty'] = left
+                part['cost_basis'] = lot['cost_basis'] * frac
+                _wd = lot.get('wash_deferred', Decimal(0))
+                part['wash_deferred'] = _wd * frac
+                lot['qty'] -= left
+                lot['cost_basis'] -= part['cost_basis']
+                lot['wash_deferred'] = _wd - part['wash_deferred']
+                moved.append(part)
+                left = 0.0
+            if moved and dst is not None:
+                _insert_lots(dst, moved)
+            return sum(l['qty'] for l in moved)
 
         def _draw_long_lots(ikey_, sym, q, on_date):
             """Take `q` units off the front of a long pool (FIFO) with no
@@ -5592,6 +5669,76 @@ class USATaxRules(TaxRules):
             inventory_short.setdefault(ikey, [])
             if trace and symbol not in symbol_traces:
                 symbol_traces[symbol] = [f"# --- FIFO CALCULATION TRACE: {symbol} ---"]
+
+            if tx.action == 'TRANSFER' and tx.type == LOT_MOVE_TYPE:
+                # A custody move between two of your own taxable
+                # accounts: not a sale — the lots keep their basis and
+                # purchase dates and go to the receiving account
+                # (US-BASIS-05). One leg books the pair.
+                if tx.id in _moves_done:
+                    continue
+                _other = _move_pair.get(tx.id)
+                if _other is None:
+                    _mm = _MOVE_DESC_RE.match(tx.description or '')
+                    _peer = (_mm.group(2) if _mm and tx.quantity < 0
+                             else _mm.group(1) if _mm else None)
+                    if _peer is None or _peer in _book_accounts:
+                        _note(tx.date,
+                              f"warning: ATTENTION: own-account move: "
+                              f"{symbol} {tx.quantity:+g} in {tx.account} "
+                              f"on {tx.date} has no matching leg — not "
+                              f"booked.")
+                        continue
+                    # A book without the other account (one account's
+                    # own view): the shares leave the sender with no
+                    # disposition; the receiver holds them with their
+                    # basis unknown HERE — the blended pass, which has
+                    # both accounts, carries the basis (US-BASIS-05).
+                    if tx.quantity < 0:
+                        _move_long_lots(ikey, None, symbol,
+                                        -tx.quantity, tx.date)
+                    else:
+                        _insert_lots(ikey, [{
+                            'qty': tx.quantity,
+                            'cost_basis': Decimal(0),
+                            'wash_deferred': Decimal(0),
+                            'date': tx.date,
+                            'effective_acq_date': tx.date,
+                            'id': tx.id, 'tainted': True}])
+                    _note(tx.date,
+                          f"note: {symbol}: {abs(tx.quantity):g} moved "
+                          f"{'to' if tx.quantity < 0 else 'from'} {_peer} "
+                          f"on {tx.date} (your own account): this book has "
+                          f"only {tx.account}, so "
+                          + ("the lots leave it with no sale"
+                             if tx.quantity < 0 else
+                             "their basis is unknown here")
+                          + " — the blended pass of `taxjson run` carries "
+                            "the basis and purchase dates (US-BASIS-05).")
+                    continue
+                _moves_done.update((tx.id, _other.id))
+                _out, _in = ((tx, _other) if tx.quantity < 0
+                             else (_other, tx))
+                if not per_account_basis:
+                    continue          # one pool: nothing moves
+                _q = -_out.quantity
+                _got = _move_long_lots(_ikey(_out.account, symbol),
+                                       _ikey(_in.account, symbol),
+                                       symbol, _q, tx.date)
+                if _q - _got > max(epsilon, _dust_noise(_q)):
+                    _note(tx.date,
+                          f"warning: ATTENTION: own-account move: "
+                          f"{symbol}: {_q:g} moved from {_out.account} to "
+                          f"{_in.account} on {tx.date}, but {_out.account} "
+                          f"held {_got:g} — the other {_q - _got:g} have "
+                          f"no purchase in the books (missing history in "
+                          f"{_out.account}); {_in.account}'s sales of them "
+                          f"read as a short.")
+                if trace:
+                    symbol_traces[symbol].append(
+                        f"# {tx.date} OWN MOVE {_got:10.4f} | "
+                        f"{_out.account} -> {_in.account}, lots carried")
+                continue
 
             if non_capital(tx.action, tx.type):
                 continue
@@ -7119,9 +7266,10 @@ class USATaxRules(TaxRules):
                 - sum(l['qty'] for l in _lots)
         _verify_share_conservation(
             [t for t in taxable_sorted
-             if not non_capital(t.action, t.type)
-             and t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
-                              'SPLIT')],
+             if (not non_capital(t.action, t.type)
+                 and t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
+                                  'SPLIT'))
+             or (t.action == 'TRANSFER' and t.type == LOT_MOVE_TYPE)],
             _inv_qty, 'usa',
             zero_ratio_skips=True)      # US: ratio-0 skips the scale,
                                         # rename still migrates

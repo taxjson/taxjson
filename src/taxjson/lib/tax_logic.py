@@ -124,6 +124,7 @@ PARTITION_RULES = frozenset({
     "US-WASH-01",      # §1091 window on trade dates
     "US-WASH-06",      # no still-held test
     "US-WASH-22",      # a replacement sold before the loss still washes
+    "US-BASIS-05",     # an own-account move carries the lots (CA: s.47)
     "US-WASH-12",      # a long call is a warning only
     "US-HOLD-01",      # short-/long-term
     "US-BASIS-01",     # FIFO per account
@@ -1474,10 +1475,16 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "A transfer into a taxable account stops the run until "
                  "the original purchase is declared (.tt ACQUIRED line). "
                  "With transfers = false (the default) a move between two "
-                 "of your own taxable accounts is flagged ATTENTION: the "
-                 "lot keeps its basis and purchase date, but the books do "
-                 "not carry it to the receiving account, so its sales "
-                 "there are reported by hand (--strict stops)."),
+                 "of your own taxable accounts is not a sale: the run "
+                 "pairs its out and in rows (one symbol, within 10 days, "
+                 "the same quantity or two deliveries adding up to it; "
+                 "coins by the crypto-sends pairing, US-CRYPTO-05) and the "
+                 "sending account's lots, first in first out, go to the "
+                 "receiving account with their basis and purchase dates "
+                 "(holding period). Out and in rows that look like a move "
+                 "but do not pair, or a move larger than the lots the "
+                 "sender holds, are said ATTENTION (--strict stops); "
+                 "those shares' sales are then reported by hand."),
             Rule("US-DIST-01",
                  "distributions.map: a non-cash distribution (a reinvested "
                  "capital-gain distribution, a late return-of-capital "
@@ -1787,10 +1794,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "arrivals are paired to pair the most sends, then lose the "
                  "fewest coins, then the closest in time, and a Kraken "
                  "Hybrid Earn withdrawal is never paired. Basis stays per "
-                 "account and is not carried from one crypto account to "
-                 "another: a move paired between two accounts is warned "
-                 "about and `run --strict` stops (keep both exchanges in "
-                 "one crypto account). When fewer coins arrive and the "
+                 "account; a move paired between two of your taxable "
+                 "crypto accounts carries the coins that arrived — the "
+                 "sending account's lots, first in first out, with their "
+                 "basis and purchase dates — to the receiving account "
+                 "(US-BASIS-05; the run then blends those crypto accounts, "
+                 "with no wash-sale rule). When fewer coins arrive and the "
                  "sending "
                  "exchange states no fee (a Coinbase Send hides the "
                  "network fee in the quantity), the coins that did not "

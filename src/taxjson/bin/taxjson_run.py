@@ -295,6 +295,15 @@ def echo_attention_lines(out_path: Path, prefix: str = "") -> None:
             print(f"  {line}")
 
 
+def _diag_lines(out_path: Path) -> List[str]:
+    """The lines of a stage's persisted .diag ([] when none)."""
+    try:
+        return out_path.with_name(out_path.name + ".diag").read_text(
+            errors="replace").splitlines()
+    except OSError:
+        return []
+
+
 def _attention_short_lines(out_path: Path) -> List[str]:
     """The `ATTENTION: short:` lines of a gains stage's persisted .diag
     (lib/pipeline.ATTENTION_SHORT)."""
@@ -2104,9 +2113,9 @@ def _transfers_accounts(cfg: Dict[str, Any]) -> List[str]:
 def _crypto_sends_problems(name: str, adoc: Dict[str, Any]) -> List[str]:
     """What the run must not book silently for crypto account `name`
     (each a WARNING; `run --strict` stops on any): a saved gift/payment
-    the automatic pairing overrode (re-audit A2-0004) and, in a US
-    project, a paired move between two crypto accounts whose basis
-    nothing carries (A2-0003)."""
+    the automatic pairing overrode (re-audit A2-0004). (A US move
+    between two crypto accounts is carried by the blended crypto pass,
+    US-CRYPTO-05 — no longer a problem, A2-0003.)"""
     out = []
     for o in adoc.get("overridden") or []:
         out.append(
@@ -2117,15 +2126,6 @@ def _crypto_sends_problems(name: str, adoc: Dict[str, Any]) -> List[str]:
             f"`taxjson crypto-sends {name} --set {o['id']}={o['decision']} "
             f"--unpair`; if the pairing is right: `taxjson crypto-sends "
             f"{name} --set {o['id']}=self`.")
-    for c in adoc.get("cross_account_moves") or []:
-        out.append(
-            f"{c['id']} ({c['summary']}) moved coins from crypto account "
-            f"{name} to {', '.join(c['to'])}. A US project keeps basis per "
-            f"account (US-BASIS-01) and taxjson cannot carry the moved "
-            f"coins' basis and holding period across accounts: {name} "
-            f"keeps a long it no longer holds and the receiving account sells short "
-            f"(a 0 gain). Keep both exchanges' exports in ONE crypto "
-            f"account, or report the sale of the moved coins by hand.")
     return out
 
 
@@ -2526,7 +2526,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         # The crypto parsers date UTC stamps in this zone: a change
         # re-parses.
         + ([f"setting/local_timezone={settings['local_timezone']}"]
-           if is_crypto and settings.get("local_timezone") else []))) + "\n"
+           if is_crypto and settings.get("local_timezone") else [])
+        # Moves between your own accounts (US-BASIS-05): the legs file
+        # going away must rebuild the books.
+        + ([f"moves/{name}{OWN_MOVES_SUFFIX}"]
+           if (cache / f"{name}{OWN_MOVES_SUFFIX}").is_file() else []))) \
+        + "\n"
     if _read_work_stamp(src_manifest) != src_txt:
         _write_work_stamp(src_manifest, src_txt)
     # Content, not just membership: `run --fast` compared mtimes only,
@@ -2850,7 +2855,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 "_raw_base_gains.json", "_merged.json", "_sorted.json",
                 "_filled.json", "_mapped.json", "_report.json",
                 "_pending_elections.json", "_manifest.json",
-                "_blend.diag")):
+                "_blend.diag", OWN_MOVES_SUFFIX)):
             continue
         # A parsed-source artifact with no surviving input group.
         for _victim in (_stale, _stale.with_name(_stale.name + ".diag")):
@@ -2860,6 +2865,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                       f"files are gone)")
 
     sources = tt_jsons + parsed + corp_files
+    # A US project's moves between your own taxable accounts, written by
+    # `taxjson run` before the accounts' books (stage_own_account_moves;
+    # US-BASIS-05): their TRANSFER legs are part of this account's books.
+    _own_moves = cache / f"{name}{OWN_MOVES_SUFFIX}"
+    if is_taxable and not include_transfers and _own_moves.is_file():
+        sources = sources + [_own_moves]
 
     # 4. merge → base.json (crypto path differs: needs fill-crypto mid-stream)
     base_json = cache / f"{name}_base.json"
@@ -3453,14 +3464,11 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
 _OWN_MOVE_DAYS = 10
 
 
-def own_account_custody_moves(names: List[str], cache: Path
-                              ) -> List[Dict[str, Any]]:
-    """Moves of a security between two of these accounts, read from the
-    transfer sidecars (transfers = false keeps TRANSFER rows out of the
-    books): an outbound leg in one account paired with an inbound leg
-    of the same symbol and quantity in another, within _OWN_MOVE_DAYS."""
+def _sidecar_transfer_rows(names: List[str], cache: Path
+                           ) -> List[Tuple[str, Dict[str, Any]]]:
+    """(account, TRANSFER row) of every `names` account's transfer
+    sidecars (transfers = false keeps TRANSFER rows out of the books)."""
     import json as _json
-    from datetime import date as _date
     rows = []
     for n in names:
         for sc in sorted(cache.glob(f"{n}_*_transfers.json")):
@@ -3474,65 +3482,221 @@ def own_account_custody_moves(names: List[str], cache: Path
                     or md.get("account") != n):
                 continue        # another account's (or a .tt) file
             for t in doc.get("transactions") or []:
-                if (t.get("action") == "TRANSFER" and t.get("symbol")
+                if (isinstance(t, dict) and t.get("action") == "TRANSFER"
+                        and t.get("symbol")
                         and abs(float(t.get("quantity") or 0)) > 1e-9):
                     rows.append((n, t))
+    return rows
+
+
+def _custody_pairing(names: List[str], cache: Path
+                     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """(moves, unpaired): moves of a security between two of these
+    accounts, read from the transfer sidecars — an outbound leg in one
+    account paired with inbound legs of the same symbol in ONE other
+    account, within _OWN_MOVE_DAYS: one leg of the same quantity, else
+    two that add up to it (a delivery in two parts). `unpaired`: the
+    outbound legs left over that still have an inbound leg of the
+    symbol in another of the accounts inside the window — they look
+    like a move whose quantities do not pair."""
+    from datetime import date as _date
+    rows = _sidecar_transfer_rows(names, cache)
 
     def _d(t):
         try:
             return _date.fromisoformat(str(t.get("date"))[:10])
         except ValueError:
             return None
+
+    def _near(t, u):
+        da, db = _d(t), _d(u)
+        return (da is not None and db is not None
+                and abs((db - da).days) <= _OWN_MOVE_DAYS)
     ins = [(n, t) for n, t in rows if float(t["quantity"]) > 0]
-    used = set()
-    out = []
-    for a, t in sorted(((n, t) for n, t in rows
-                        if float(t["quantity"]) < 0),
-                       key=lambda e: (str(e[1].get("date")), e[0])):
+    outs = sorted(((n, t) for n, t in rows if float(t["quantity"]) < 0),
+                  key=lambda e: (str(e[1].get("date")), e[0]))
+    used: set = set()
+    moves: List[Dict[str, Any]] = []
+    left = []
+    for a, t in outs:
         q = -float(t["quantity"])
-        da = _d(t)
-        for i, (b, u) in enumerate(ins):
-            db = _d(u)
-            if (i in used or b == a or u.get("symbol") != t.get("symbol")
-                    or abs(float(u["quantity"]) - q) > 1e-6
-                    or da is None or db is None
-                    or abs((db - da).days) > _OWN_MOVE_DAYS):
-                continue
-            used.add(i)
-            out.append({"symbol": t["symbol"], "qty": q, "from": a,
-                        "to": b, "date_out": str(t.get("date")),
-                        "date_in": str(u.get("date"))})
-            break
+        cands = [i for i, (b, u) in enumerate(ins)
+                 if i not in used and b != a
+                 and u.get("symbol") == t.get("symbol") and _near(t, u)]
+        pick = next(([i] for i in cands
+                     if abs(float(ins[i][1]["quantity"]) - q) <= 1e-6),
+                    None)
+        if pick is None:
+            for x in range(len(cands)):
+                for y in range(x + 1, len(cands)):
+                    i, j = cands[x], cands[y]
+                    if (ins[i][0] == ins[j][0]
+                            and abs(float(ins[i][1]["quantity"])
+                                    + float(ins[j][1]["quantity"]) - q)
+                            <= 1e-6):
+                        pick = [i, j]
+                        break
+                if pick:
+                    break
+        if pick is None:
+            left.append((a, t))
+            continue
+        used.update(pick)
+        for i in pick:
+            b, u = ins[i]
+            moves.append({"symbol": t["symbol"],
+                          "qty": float(u["quantity"]), "from": a, "to": b,
+                          "date_out": str(t.get("date")),
+                          "date_in": str(u.get("date"))})
+    unpaired = []
+    for a, t in left:
+        near = [(b, u) for i, (b, u) in enumerate(ins)
+                if i not in used and b != a
+                and u.get("symbol") == t.get("symbol") and _near(t, u)]
+        if near:
+            unpaired.append({
+                "symbol": t["symbol"], "qty": -float(t["quantity"]),
+                "from": a, "date_out": str(t.get("date")),
+                "ins": [(b, float(u["quantity"]), str(u.get("date")))
+                        for b, u in near]})
+    return moves, unpaired
+
+
+def own_account_custody_moves(names: List[str], cache: Path
+                              ) -> List[Dict[str, Any]]:
+    """Moves of a security between two of these accounts (the paired
+    legs of _custody_pairing)."""
+    return _custody_pairing(names, cache)[0]
+
+
+OWN_MOVES_SUFFIX = "_own_moves.json"
+
+
+def _move_legs(moves: List[Dict[str, Any]], currency: str = ""
+               ) -> Dict[str, List[Dict]]:
+    """{account: [TRANSFER lot_move rows]}: each move as an out leg in
+    the sender and an in leg in the receiver at the same moment (the
+    earlier of the two dates; securities at the start of that day), the
+    pair told apart from any other by its numbered description."""
+    from taxjson.lib.core import LOT_MOVE_TYPE
+    out: Dict[str, List[Dict]] = {}
+    for k, m in enumerate(sorted(
+            moves, key=lambda m: (m["date"], m.get("time") or "",
+                                  m["symbol"], m["from"], m["to"],
+                                  m["qty"])), 1):
+        desc = (f"own-account move #{k}: {m['from']} -> {m['to']} "
+                f"(basis and purchase dates carried)")
+        for acct, q in ((m["from"], -m["qty"]), (m["to"], m["qty"])):
+            out.setdefault(acct, []).append({
+                "action": "TRANSFER", "type": LOT_MOVE_TYPE,
+                "date": m["date"], "date_settle": m["date"],
+                "time": m.get("time") or "00:00:00",
+                "symbol": m["symbol"], "quantity": float(q),
+                "price": 0.0, "net_amount": 0.0, "currency": currency,
+                "account": acct, "description": desc})
     return out
 
 
-def _check_own_account_moves(names: List[str], settings: Dict[str, Any],
-                             cache: Path, *, strict: bool) -> None:
-    """US projects: a custody move between two of your own taxable
-    accounts carries the lot's basis and purchase date, but the US
-    engine keeps lots per account (US-BASIS-01) and the move's rows sit
-    in the transfer sidecar — the receiver's sale read as a short with
-    no basis, the sender kept the shares, and the run exited 0 (audit
-    A2-0032). Said loudly (ATTENTION), and --strict stops. Canada pools
-    the ACB across the accounts (s.47): nothing to say there."""
+def stage_own_account_moves(root: Path, cfg: Dict[str, Any],
+                            settings: Dict[str, Any], cache: Path, *,
+                            strict: bool = False) -> List[Dict[str, Any]]:
+    """US projects (tax-logic US-BASIS-05, US-CRYPTO-05): a move between
+    two of your own TAXABLE accounts is not a sale — the moved lots keep
+    their basis and purchase dates, and the US books keep lots per
+    account, so the run carries them. Securities pair from the transfer
+    sidecars; coins from the crypto-sends pairing. Each account gets
+    work/<account>_own_moves.json, a source of its books: the TRANSFER
+    legs the US engine books as a lot move (the blended pass hands the
+    sender's FIFO lots to the receiver). Legs that look like a move but
+    do not pair are said as ATTENTION (--strict stops). Canada pools
+    the ACB across the accounts (s.47): no legs, nothing to say.
+    Returns the moves."""
     from taxjson.lib.country import basis_pooled_across_accounts
-    if basis_pooled_across_accounts(_country(settings)):
-        return
-    moves = own_account_custody_moves(names, cache)
+    accounts = cfg.get("accounts") or {}
+    taxable = [n for n, c in accounts.items()
+               if (c or {}).get("type") == "taxable"
+               and not (c or {}).get("transfers")]
+    moves: List[Dict[str, Any]] = []
+    unpaired: List[Dict[str, Any]] = []
+    if not basis_pooled_across_accounts(_country(settings)):
+        equity = [n for n in taxable if not accounts[n].get("crypto")]
+        crypto = [n for n in taxable if accounts[n].get("crypto")]
+        if len(equity) >= 2:
+            em, unpaired = _custody_pairing(equity, cache)
+            for m in em:
+                m["date"] = min(m["date_out"][:10], m["date_in"][:10])
+                m["time"] = "00:00:00"
+            moves += em
+        if len(crypto) >= 2:
+            from taxjson.lib import crypto_sends as CS
+            try:
+                moves += CS.own_moves(root, cfg, crypto,
+                                      _crypto_broker_files(root, cfg))
+            except ValueError as e:
+                print(f"  warning: crypto moves between your accounts not "
+                      f"paired: {e}", file=sys.stderr)
+        moves = _mapped_moves(moves, root)
+    from taxjson.lib.country import home_currency
+    legs = _move_legs(moves, str(settings.get("base_currency")
+                                 or home_currency(_country(settings))
+                                 ).upper())
+    import json as _json
+    for n in accounts:
+        p = cache / f"{n}{OWN_MOVES_SUFFIX}"
+        rows = legs.get(n) if n in taxable else None
+        if not rows:
+            if p.exists():
+                p.unlink()
+            continue
+        text = _json.dumps({"transactions": rows,
+                            "metadata": {"kind": "own_account_moves",
+                                         "account": n}},
+                           indent=2, sort_keys=True) + "\n"
+        try:
+            same = p.read_text(encoding="utf-8") == text
+        except OSError:
+            same = False
+        if not same:
+            cache.mkdir(parents=True, exist_ok=True)
+            p.write_text(text, encoding="utf-8")
     for m in moves:
-        print(f"  warning: ATTENTION: {m['symbol']}: {m['qty']:g} moved "
-              f"from {m['from']} ({m['date_out']}) to {m['to']} "
-              f"({m['date_in']}) — a move between your own accounts is "
-              f"not a sale and the lot keeps its basis and purchase "
-              f"date, but taxjson keeps US lots per account and does not "
-              f"carry them: {m['to']}'s sales of these shares read as a "
-              f"short with no basis and {m['from']} still holds them. "
-              f"Report those sales by hand (US-BASIS-05).",
-              file=sys.stderr)
-    if moves and strict:
-        sys.exit(f"taxjson run --strict: {len(moves)} move(s) between "
-                 f"your own taxable accounts that the US books cannot "
-                 f"carry (ATTENTION above) — aborting.")
+        print(f"  own-account move: {m['symbol']} {m['qty']:g} "
+              f"{m['from']} -> {m['to']} ({m['date']}): not a sale — the "
+              f"lots' basis and purchase dates go to {m['to']}.")
+    for u in unpaired:
+        ins = ", ".join(f"{q:g} into {b} ({d})" for b, q, d in u["ins"])
+        print(f"  warning: ATTENTION: {u['symbol']}: {u['qty']:g} moved out "
+              f"of {u['from']} ({u['date_out']}) and {ins} look like a move "
+              f"between your own accounts, but the quantities do not pair "
+              f"— the lots are NOT carried: {u['from']} keeps them and the "
+              f"receiving account's sales read as a short. Check the "
+              f"transfer rows (`taxjson transfers`) and report those sales "
+              f"by hand (US-BASIS-05).", file=sys.stderr)
+    if unpaired and strict:
+        sys.exit(f"taxjson run --strict: {len(unpaired)} transfer(s) "
+                 f"between your own taxable accounts that do not pair "
+                 f"(ATTENTION above) — aborting.")
+    return moves
+
+
+def _mapped_moves(moves: List[Dict[str, Any]], root: Path
+                  ) -> List[Dict[str, Any]]:
+    """The moves' symbols through ticker.map's undated renames (the
+    books are mapped by the merge stage; the transfer evidence is not)."""
+    tm = root / "ticker.map"
+    if not moves or not tm.is_file():
+        return moves
+    try:
+        from taxjson.bin.taxjson_ticker_map import (load_map_file,
+                                                    map_symbol,
+                                                    merge_renames)
+        import contextlib as _cl
+        import io as _io
+        with _cl.redirect_stderr(_io.StringIO()):
+            renames = merge_renames(load_map_file(tm), to_base=True)
+    except (OSError, ValueError):
+        return moves
+    return [dict(m, symbol=map_symbol(m["symbol"], renames)) for m in moves]
 
 
 def stage_blended_wash_pass(names: List[str],
@@ -3540,7 +3704,10 @@ def stage_blended_wash_pass(names: List[str],
                             reports_dir: Path,
                             sheltered_base: Optional[Path],
                             incomplete_history: Optional[Path] = None,
-                            tag: str = "blend"
+                            tag: str = "blend",
+                            no_wash: bool = False,
+                            spot_crypto: bool = False,
+                            strict: bool = False
                             ) -> None:
     """ONE combined gains run over every taxable equity account, split
     back into the per-account `<name>_gains_wash.json` artifacts.
@@ -3581,7 +3748,13 @@ def stage_blended_wash_pass(names: List[str],
     ]
     if _normalize_country(country) in ("us", "usa"):
         cmd.append("--per-account-basis")
-    if sheltered_base is not None:
+    if no_wash:
+        # A US project's crypto accounts (§1091 does not reach digital
+        # assets): blended only so moves between them carry their lots.
+        cmd.append("--no-wash")
+    if spot_crypto:
+        cmd.append("--spot-crypto")
+    if sheltered_base is not None and not no_wash:
         cmd += ["--sheltered", str(sheltered_base)]
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
@@ -3595,6 +3768,15 @@ def stage_blended_wash_pass(names: List[str],
     from taxjson.lib.pipeline import ATTENTION_WASH_LOCKED
     echo_attention_lines(combined_wash,
                          prefix=ATTENTION_WASH_LOCKED[len("ATTENTION: "):])
+    # A move between your own accounts that the sender's lots cannot
+    # back (US-BASIS-05): on the console, and --strict stops.
+    echo_attention_lines(combined_wash, prefix="own-account move: ")
+    _mv = [ln for ln in _diag_lines(combined_wash)
+           if ln.startswith(ATTENTION_PREFIX + " own-account move: ")]
+    if _mv and strict:
+        sys.exit(f"taxjson run --strict: {len(_mv)} move(s) between your "
+                 f"own accounts the sending account's lots do not cover "
+                 f"(ATTENTION above) — aborting.")
     # The blended run's stderr lands in .blend_gains_wash.json.diag —
     # dot-prefixed, so collect_diagnostics' {account}_*.diag glob can
     # never surface it, and it is the ONLY pass that sees --sheltered
@@ -4342,6 +4524,34 @@ def cmd_run(args: argparse.Namespace) -> None:
                      "two crypto accounts (above) — every one would be "
                      "booked twice. Remove the copy.")
 
+    # US: a move between two of your own taxable accounts carries its
+    # lots (US-BASIS-05). Every taxable equity account's transfer
+    # evidence is parsed first (cached), so the moves are known before
+    # any account's books are merged; each account's legs file is then
+    # one of its sources.
+    from taxjson.lib.country import basis_pooled_across_accounts
+    if not basis_pooled_across_accounts(_country(settings)):
+        _equity_first = [(n, c) for n, c in accounts.items()
+                         if (c or {}).get("type") == "taxable"
+                         and not (c or {}).get("crypto")
+                         and not (c or {}).get("transfers")]
+        if len(_equity_first) >= 2:
+            for name, acfg in _equity_first:
+                try:
+                    stage_account(name, acfg, settings, inputs_dir, cache,
+                                  reports_dir, rates, ticker_map_arg,
+                                  sec_overrides_arg, args.force,
+                                  incomplete_history=mh_arg,
+                                  no_input=no_input,
+                                  strict=getattr(args, "strict", False),
+                                  parse_only=True)
+                except PendingElectionsError:
+                    pass
+    stage_own_account_moves(root, {"accounts": accounts,
+                                   "settings": settings},
+                            settings, cache,
+                            strict=getattr(args, "strict", False))
+
     sheltered_outputs: List[Tuple[str, Dict[str, Path]]] = []
     _skipped_no_input: List[str] = []       # no CSV/.tt — see B7 helper
     for name, acfg in sheltered_items:
@@ -4455,6 +4665,17 @@ def cmd_run(args: argparse.Namespace) -> None:
         not in ("us", "usa")
         and sum(1 for _c in accounts.values()
                 if _c.get("type") == "taxable" and _c.get("crypto")) >= 2)
+    # USA: taxable crypto accounts with a move of coins between them
+    # (stage_own_account_moves wrote their legs) run one blended crypto
+    # pass — FIFO stays per account and no wash-sale rule applies, but
+    # the move carries its lots (US-CRYPTO-05). Without a move they stay
+    # per account.
+    _us_crypto_blend = (
+        _country(settings) in ("us", "usa")
+        and any(_c.get("type") == "taxable" and _c.get("crypto")
+                and not _c.get("transfers")
+                and (cache / f"{_n}{OWN_MOVES_SUFFIX}").is_file()
+                for _n, _c in accounts.items()))
     if not args.account:
         # A per-account blend mirror is rewritten only for accounts IN
         # this run's blend: one that left it (re-typed, the other
@@ -4466,7 +4687,8 @@ def cmd_run(args: argparse.Namespace) -> None:
             for _tag, _in_blend in (
                     ("blend", _taxable and not _c.get("crypto")),
                     ("cryptoblend", _taxable and bool(_c.get("crypto"))
-                     and _crypto_blend)):
+                     and (_crypto_blend or (_us_crypto_blend
+                                            and not _c.get("transfers"))))):
                 _m = cache / f"{_n}_{_tag}.diag"
                 if not _in_blend and _m.exists():
                     _m.unlink()
@@ -4509,6 +4731,10 @@ def cmd_run(args: argparse.Namespace) -> None:
         elif _crypto_wash_covered and sheltered_base is not None:
             stage_wash_pass(name, settings, cache, reports_dir, sheltered_base,
                             incomplete_history=mh_arg)
+        elif _us_crypto_blend and not acfg.get("transfers"):
+            # USA, two or more crypto accounts: ONE blended crypto pass
+            # (no wash-sale rule) so own moves carry their lots.
+            _crypto_blend_names.append(name)
         elif not args.account and not pending_accounts:
             # A FULL run decided this crypto account gets no wash pass
             # (US policy excludes it, or the sheltered context vanished
@@ -4536,16 +4762,18 @@ def cmd_run(args: argparse.Namespace) -> None:
     if not pending_accounts:
         _check_renamed_late(root, strict=getattr(args, "strict", False))
     if _blend_names and not args.account and not pending_accounts:
-        _check_own_account_moves(_blend_names, settings, cache,
-                                 strict=getattr(args, "strict", False))
         stage_blended_wash_pass(_blend_names, settings, cache,
                                 reports_dir, sheltered_base,
-                                incomplete_history=mh_arg)
+                                incomplete_history=mh_arg,
+                                strict=getattr(args, "strict", False))
     if _crypto_blend_names and not args.account and not pending_accounts:
         stage_blended_wash_pass(_crypto_blend_names, settings, cache,
                                 reports_dir, sheltered_base,
                                 incomplete_history=mh_arg,
-                                tag="cryptoblend")
+                                tag="cryptoblend",
+                                no_wash=not _crypto_blend,
+                                spot_crypto=not _crypto_blend,
+                                strict=getattr(args, "strict", False))
     if not args.account and not pending_accounts:
         # A sheltered account never gets a wash pass. One re-typed from
         # taxable kept its old <name>_gains_wash.json / _wash.sum, which

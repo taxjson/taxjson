@@ -754,6 +754,20 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
     #   3. what survives is a real acquisition or disposal by the
     #      sheltered side — rewritten to BUYSELL so the wash walk sees
     #      it (as trigger and in still-held balances).
+    # Own-account custody moves `taxjson run` pairs into a US blended
+    # book (core.LOT_MOVE_TYPE, US-BASIS-05) are not transfers in or out
+    # of the taxpayer's hands: kept aside here, handed back unchanged.
+    from taxjson.lib.core import LOT_MOVE_TYPE
+    _lot_moves = [t for t in transactions
+                  if t.action == 'TRANSFER' and t.type == LOT_MOVE_TYPE]
+    if _lot_moves:
+        transactions = [t for t in transactions
+                        if not (t.action == 'TRANSFER'
+                                and t.type == LOT_MOVE_TYPE)]
+        transactions, sheltered_transactions = _handle_transfers(
+            transactions, sheltered_transactions, taxable=taxable,
+            base_currency=base_currency, country=country)
+        return transactions + _lot_moves, sheltered_transactions
     n_sh_before = sum(1 for t in sheltered_transactions
                       if t.action == 'TRANSFER')
     # The SHELTERED-side dropper gets main-book visibility so it applies

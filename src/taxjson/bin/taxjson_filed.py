@@ -373,6 +373,23 @@ def _lock_timing_flags(settings: Dict[str, Any], year: int,
     return option_timing_flags(settings)
 
 
+def _has_lot_moves(cache: Path, accounts: List[str]) -> bool:
+    """Whether these accounts' base books carry own-account move legs
+    (a US project's crypto accounts are then blended, as the run does —
+    US-CRYPTO-05)."""
+    from taxjson.lib.core import LOT_MOVE_TYPE
+    for a in accounts:
+        try:
+            doc = json.loads((cache / f"{a}_base.json").read_text(
+                encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if any(isinstance(t, dict) and t.get("type") == LOT_MOVE_TYPE
+               for t in (doc.get("transactions") or [])):
+            return True
+    return False
+
+
 def recompute_accounts(cache: Path, equity_accounts: List[str],
                        crypto_accounts: List[str], year: int,
                        settings: Dict[str, Any], basis: str,
@@ -390,12 +407,19 @@ def recompute_accounts(cache: Path, equity_accounts: List[str],
     # not reach digital assets) — the recompute must match or every US
     # crypto account with a wash-window loss drifts on every check.
     crypto_no_wash = _canonical_country(settings) == "usa"
-    if not crypto_no_wash and len(crypto_accounts) >= 2:
+    if len(crypto_accounts) >= 2 and (not crypto_no_wash
+                                      or _has_lot_moves(cache,
+                                                        crypto_accounts)):
+        # Canada: s.47 averaging across the exchanges; USA (only with a
+        # move of coins between them): FIFO per account with no
+        # wash-sale rule, blended so the move carries its lots
+        # (US-CRYPTO-05) — the pipeline's blended crypto pass.
         out.update(_recompute_blended(cache, crypto_accounts, year,
                                       settings, basis, run_gains_cmd,
-                                      per_account_basis=False,
+                                      per_account_basis=crypto_no_wash,
                                       option_timing=option_timing,
-                                      crypto=True))
+                                      crypto=True,
+                                      no_wash=crypto_no_wash))
     else:
         for a in crypto_accounts:
             out[a] = recompute_year(cache, a, year, settings, basis,
@@ -414,7 +438,8 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
                        run_gains_cmd, *,
                        per_account_basis: Optional[bool] = None,
                        option_timing: Optional[Dict[str, Any]] = None,
-                       crypto: bool = False
+                       crypto: bool = False,
+                       no_wash: bool = False
                        ) -> Dict[str, Optional[Dict[str, Any]]]:
     """ONE combined gains run over `accounts`' base books, split back
     into per-account aggregates (the pipeline's blended pass)."""
@@ -441,8 +466,10 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
         per_account_basis = country == "usa"
     if per_account_basis:
         cmd.append("--per-account-basis")
+    if no_wash:
+        cmd.append("--no-wash")
     sheltered = cache / "sheltered_base.json"
-    if basis == "wash-adjusted" and sheltered.exists():
+    if basis == "wash-adjusted" and sheltered.exists() and not no_wash:
         cmd += ["--sheltered", str(sheltered)]
     cmd += _lock_timing_flags(settings, year, option_timing)
     cmd += income_dating_flags(dict(settings, country=country))

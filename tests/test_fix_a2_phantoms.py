@@ -5,6 +5,7 @@ missing_history.json handling — the file was phantoms.json until 2026-10).
 Synthetic data only: fake account numbers (55500001 # pii-ok), all-CAD
 Questrade books, no FX fetch.
 """
+import contextlib
 import io
 import json
 import os
@@ -584,8 +585,10 @@ def _sidecar(cache, acct, rows):
 
 class TestOwnAccountCustodyMove(unittest.TestCase):
     """A2-0032: a US custody move between two of your own taxable
-    accounts is not carried by the per-account lots — said ATTENTION,
-    --strict stops. Canada pools the ACB across the accounts (s.47)."""
+    accounts carries the lots (basis and purchase dates) to the
+    receiving account — the stopgap ATTENTION + --strict stop is gone
+    (owner request). Canada pools the ACB across the accounts (s.47):
+    no legs are written."""
 
     def _cache(self, tmp):
         cache = Path(tmp)
@@ -620,30 +623,27 @@ class TestOwnAccountCustodyMove(unittest.TestCase):
 
     @rule("US-BASIS-05")
     @rule_absent("US-BASIS-05", country="canada")
-    def test_flagged_in_the_us_only(self):
+    def test_legs_are_written_in_the_us_only(self):
         from taxjson.bin import taxjson_run
+        cfg = {"accounts": {"qa": {"type": "taxable"},
+                            "qb": {"type": "taxable"}}}
         with tempfile.TemporaryDirectory() as tmp:
             cache = self._cache(tmp)
             for country, expect in (("usa", True), ("canada", False)):
-                err = io.StringIO()
-                with redirect_stderr(err):
-                    taxjson_run._check_own_account_moves(
-                        ["qa", "qb"], {"country": country}, cache,
-                        strict=False)
-                self.assertEqual("ATTENTION: XYZ.US: 100 moved from qa"
-                                 in err.getvalue(), expect, country)
-            with redirect_stderr(io.StringIO()), \
-                    self.assertRaises(SystemExit) as cm:
-                taxjson_run._check_own_account_moves(
-                    ["qa", "qb"], {"country": "usa"}, cache, strict=True)
-            self.assertIn("--strict", str(cm.exception))
-            # Canada never stops on it (s.47 blends the accounts).
-            with redirect_stderr(io.StringIO()):
-                taxjson_run._check_own_account_moves(
-                    ["qa", "qb"], {"country": "canada"}, cache, strict=True)
+                out = io.StringIO()
+                with redirect_stderr(io.StringIO()), \
+                        contextlib.redirect_stdout(out):
+                    moves = taxjson_run.stage_own_account_moves(
+                        Path(tmp), cfg, {"country": country}, cache,
+                        strict=True)
+                self.assertEqual(bool(moves), expect, country)
+                self.assertEqual((cache / "qb_own_moves.json").exists(),
+                                 expect, country)
+                self.assertEqual("own-account move: XYZ.US 100 qa -> qb"
+                                 in out.getvalue(), expect, country)
 
     @rule("US-BASIS-05")
-    def test_us_run_says_so_and_strict_stops(self):
+    def test_us_run_carries_the_lot_and_strict_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "taxjson.toml").write_text(
@@ -654,12 +654,17 @@ class TestOwnAccountCustodyMove(unittest.TestCase):
             for a, csv in (("qa", _QA), ("qb", _QB)):
                 (root / "inputs" / a).mkdir(parents=True)
                 (root / "inputs" / a / "questrade.csv").write_text(csv)
-            r = _run_cli(root, "run", "--no-input")
-            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
-            self.assertIn("ATTENTION: XYZ.US: 100 moved from qa", r.stderr)
             r = _run_cli(root, "run", "--no-input", "--strict")
-            self.assertEqual(r.returncode, 1, r.stderr[-2000:])
-            self.assertIn("between your own taxable accounts", r.stderr)
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertNotIn("ATTENTION", r.stderr)
+            qb = json.loads((root / "work" / "qb_gains_wash.json")
+                            .read_text())
+            sale = [t for t in qb["transactions"] if t.get("qty")]
+            self.assertEqual([(round(t["gain"], 2), t["acquired_date"])
+                              for t in sale], [(-1000.0, "2026-02-02")])
+            qa = json.loads((root / "work" / "qa_gains_wash.json")
+                            .read_text())
+            self.assertEqual(qa.get("inventory") or [], [])
 
 
 if __name__ == "__main__":
