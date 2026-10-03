@@ -3517,14 +3517,6 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
     _cash = _corp_cash((_boot_paid, tgt_cur), _frac_cash)
     if _cash:
         rows[0]['corp_cash'] = _cash
-    _frac_cash = _fraction_cash(
-        event, float(getattr(event, 'cash_in_lieu', 0.0) or 0.0),
-        event.cash_in_lieu_currency or tgt_cur, frac_qty,
-        (frac_qty * _fmv_paid / event.qty_received
-         if event.qty_received and _fmv_paid > 0 else 0.0), _fmv_paid_cur)
-    _cash = _corp_cash((_boot_paid, tgt_cur), _frac_cash)
-    if _cash:
-        rows[0]['corp_cash'] = _cash
     if whole_qty > 0:
         rows.append({
             'action': 'BUYSELL',

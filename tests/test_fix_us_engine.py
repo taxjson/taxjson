@@ -563,5 +563,35 @@ class TestOwnMoveFiledLock(unittest.TestCase):
             self.assertIn("filed 2025: OK", k.stdout)
 
 
+class TestCorpCashKeptOnPerLotRows(unittest.TestCase):
+    """The per-lot §356 and §355 rows keep the corp_cash evidence main
+    stamps on corp-action rows (fx-cash, A2-1014)."""
+
+    @rule("US-CORP-05")
+    def test_boot_sell_row_carries_the_cash(self):
+        rows = _boot_rows(boot=400.0)
+        sell = next(r for r in rows if r.quantity < 0)
+        self.assertEqual(sell.corp_cash, "400 USD")
+        self.assertEqual(sell.type, "reorg_356")
+
+    @rule("US-CORP-07")
+    def test_spinoff_rows_are_typed_and_keep_their_fields(self):
+        from taxjson.lib.core import TaxTransaction
+        from taxjson.lib.corp_actions import CorporateAction, resolve_event
+        ev = CorporateAction(
+            date="2025-04-01", time="09:30:00", action_type="spinoff",
+            source_symbol="PAR.US", source_isin="", target_symbol="SPN.US",
+            target_isin="", ratio_new=1, ratio_old=3, qty_disposed=0.0,
+            qty_received=20.5, fmv=0.0, currency="USD",
+            target_currency="USD", account="margin", event_id="ev-cil",
+            cash_in_lieu=12.0, cash_in_lieu_currency="USD")
+        with contextlib.redirect_stderr(io.StringIO()):
+            rows = resolve_event(ev, "tax_free_355", country="usa",
+                                 hints={"allocated_acb": 400.0})
+        self.assertTrue(all(r["type"] == "spinoff_355" for r in rows))
+        self.assertTrue(any(r.get("corp_cash") for r in rows), rows)
+        [TaxTransaction(**r) for r in rows]
+
+
 if __name__ == "__main__":
     unittest.main()
