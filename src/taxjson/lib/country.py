@@ -39,7 +39,8 @@ Ownership tables (who a setting, a CLI flag or a command belongs to):
   country. ``taxjson``'s dispatch refuses the other country's commands
   before they run.
 - ``PROJECT_FILE_COUNTRY``: project-root input files that belong to one
-  country (``capital_gains_dividends.map``: Canada).
+  country (none today: the box-18 list and the minimum tax carryover
+  are taxjson.toml entries, in ``CONFIG_COUNTRY``).
 
 Checks built on the tables (each returns messages; the caller dies):
 
@@ -291,6 +292,7 @@ CONFIG_COUNTRY: Dict[str, str] = {
     "[estimate] carrying_charges": CANADA,
     "[estimate] amt_carryover": CANADA,
     "[estimate] long_term_losses": USA,
+    "[capital_gains_dividends]": CANADA,
 }
 
 CONFIG_WHY: Dict[str, str] = {
@@ -304,6 +306,10 @@ CONFIG_WHY: Dict[str, str] = {
     "[estimate] long_term_losses": "the long-term capital loss carryover "
                                    "(Schedule D line 14); a Canadian net "
                                    "capital loss has no term",
+    "[capital_gains_dividends]": "T5 box 18 capital-gains dividends (ITA "
+                                 "s.130.1(4)/s.131(1), line 17400); a US "
+                                 "fund's capital-gain distributions "
+                                 "(1099-DIV box 2a) are not modelled",
 }
 
 # [accounts.X] plan kinds: each registered plan belongs to one country
@@ -420,23 +426,13 @@ COMMAND_WHY: Dict[str, str] = {
 }
 
 
-# Project-root input files owned by one country. The views that read
-# one refuse it in a project of the other country.
-PROJECT_FILE_COUNTRY: Dict[str, str] = {
-    "capital_gains_dividends.map": CANADA,
-    "amt_carryover.txt": CANADA,
-}
+# Project-root input files owned by one country. None today: the
+# Canada-only inputs that were files (capital_gains_dividends.map,
+# amt_carryover.txt) are taxjson.toml entries now, owned through
+# CONFIG_COUNTRY. The table stays for a future one-country file.
+PROJECT_FILE_COUNTRY: Dict[str, str] = {}
 
-PROJECT_FILE_WHY: Dict[str, str] = {
-    "capital_gains_dividends.map": "T5 box 18 capital-gains dividends "
-                                   "(ITA s.130.1(4)/s.131(1), line "
-                                   "17400); a US fund's capital-gain "
-                                   "distributions (1099-DIV box 2a) are "
-                                   "not modelled",
-    "amt_carryover.txt": "the Canadian minimum tax carryover (ITA "
-                         "s.120.2, T691); the US AMT credit (Form 8801) "
-                         "is not modelled",
-}
+PROJECT_FILE_WHY: Dict[str, str] = {}
 
 
 def project_file_problems(root: Any, country: str) -> List[str]:

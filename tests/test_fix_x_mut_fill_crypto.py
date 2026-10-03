@@ -343,8 +343,8 @@ class TestInputAndMapErrors(unittest.TestCase):
     def test_map_blank_and_comment_lines_are_silent(self):
         # m86: a blank line is skipped, not reported as malformed.
         with tempfile.TemporaryDirectory() as tmp:
-            Path(tmp, "crypto_ticker.map").write_text(
-                "# my coins\n\nZZQ ZZQ999\n   # indented comment\n")
+            Path(tmp, "ticker.map").write_text(
+                "# my coins\n\nCRYPTO ZZQ ZZQ999\n   # indented comment\n")
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
                 m = fc.load_symbol_overrides([tmp])
@@ -355,34 +355,34 @@ class TestInputAndMapErrors(unittest.TestCase):
         # m84 (line numbers start at 1), m88 (a skipped line maps
         # nothing).
         with tempfile.TemporaryDirectory() as tmp:
-            Path(tmp, "crypto_ticker.map").write_text(
-                "AAA AAA1 extra\nBBB\nCCC CCC1\n")
+            Path(tmp, "ticker.map").write_text(
+                "CRYPTO AAA AAA1 extra\nCRYPTO BBB\nCRYPTO CCC CCC1\n")
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
                 m = fc.load_symbol_overrides([tmp])
             self.assertNotIn("AAA", m)
             self.assertNotIn("BBB", m)
             self.assertEqual(m["CCC"], "CCC1")
-            self.assertIn("crypto_ticker.map:1: expected", err.getvalue())
-            self.assertIn("crypto_ticker.map:2: expected", err.getvalue())
+            self.assertIn("ticker.map:1: CRYPTO needs", err.getvalue())
+            self.assertIn("ticker.map:2: CRYPTO needs", err.getvalue())
 
     @unittest.skipIf(os.name != "posix" or os.geteuid() == 0,
                      "needs POSIX permissions and a non-root user")
     def test_unreadable_map_warns(self):
-        # m10: an unreadable map is a warning, the built-ins still apply.
+        # m10: the coin spellings are ticker.map CRYPTO lines now; a
+        # ticker.map that cannot be read is an error naming it (the
+        # project's run refuses it too) — never a silent fallback to the
+        # built-ins.
         with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp, "crypto_ticker.map")
-            p.write_text("ZZQ ZZQ1\n")
+            p = Path(tmp, "ticker.map")
+            p.write_text("CRYPTO ZZQ ZZQ1\n")
             p.chmod(0)
             try:
-                err = io.StringIO()
-                with contextlib.redirect_stderr(err):
-                    m = fc.load_symbol_overrides([tmp])
+                with self.assertRaises(OSError) as cm:
+                    fc.load_symbol_overrides([tmp])
             finally:
                 p.chmod(0o600)
-            self.assertEqual(m["TAO"], "TAO22974")
-            self.assertNotIn("ZZQ", m)
-            self.assertIn("could not read", err.getvalue())
+            self.assertIn("ticker.map", str(cm.exception))
 
     @unittest.skipIf(os.name != "posix" or os.geteuid() == 0,
                      "needs POSIX permissions and a non-root user")

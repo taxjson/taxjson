@@ -703,7 +703,7 @@ def yahoo_usd_price(project_root: Path) -> Callable[[str, str],
                                                     Tuple[Optional[float], str]]:
     """The fill-crypto price source: Yahoo `<id>-USD` daily close, the
     same cache (~/.crypto_price_cache.json) and the same symbol map
-    (built-ins + the project's crypto_ticker.map). Offline
+    (built-ins + the project's ticker.map CRYPTO lines). Offline
     (TAXJSON_OFFLINE) it answers from the cache only."""
     from taxjson.bin import fill_crypto_prices as F
     from taxjson.lib.offline import offline_enabled

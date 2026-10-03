@@ -211,7 +211,7 @@ def validate_transactions(transactions, filename="input",
                 f"price lookup failed, so this books $0 "
                 f"{'income' if action == 'DIVIDEND' else 'cost/proceeds'}"
                 f". Re-run online, add the price, or fix the symbol in "
-                f"crypto_ticker.map.")
+                f"ticker.map (`CRYPTO SYMBOL YAHOO_ID`).")
 
         # 6. Currency validation
         currency = _s("currency")

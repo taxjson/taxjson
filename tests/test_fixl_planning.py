@@ -432,7 +432,7 @@ class TestHarvestTotalsAndMap(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "work").mkdir()
-            (root / "yf_ticker.map").write_text("PNG.TO PNG.V\n")
+            (root / "ticker.map").write_text("QUOTE PNG.TO PNG.V\n")
             g = root / "work" / "margin_gains_wash.json"
             g.write_text(json.dumps(_inv(("PNG.TO", 100, 200.0, {}))))
             rc, _out, err = _harvest([str(g), "--no-ibkr",

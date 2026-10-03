@@ -64,7 +64,7 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "inputs/<crypto>/",
      "Every disposition of a coin, including swaps and fees, is a capital event."),
     ("roc-entered", 1, "Return of capital (T3 box 42) entered before trusting any ACB",
-     "ADJUST lines / distributions.map",
+     "ADJUST lines / [[distributions]] in taxjson.toml",
      "Some funds publish ROC factors only after year end; without them the ACB is overstated."),
     ("inputs-committed", 1, "Inputs, config, maps and manifests committed",
      "git status",
@@ -129,7 +129,7 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "taxjson t1135",
      "ITA 233.3: the test is on cost at any time in the year, not year-end value."),
     ("carryover", 4, "Net capital losses of other years applied and recorded",
-     "taxjson carryover, claimed_losses.txt",
+     "taxjson carryover, [carryover] claimed in taxjson.toml",
      "Line 25300; the ledger only knows what was claimed if you write it down — "
      "record the 100% loss applied (line 25300 divided by the inclusion rate)."),
     ("fx-cash", 4, "FX gain on foreign cash reviewed (ITA s.39(1.1), $200 de minimis)",
@@ -145,10 +145,10 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "taxjson estimate, taxjson instalments",
      "A sanity check on the tax owed and on what was already paid."),
     ("amt", 4, "Minimum tax (AMT) and its carryover checked",
-     "taxjson amt, amt_carryover.txt",
+     "taxjson amt, [estimate] amt_carryover",
      "Minimum tax paid in the 7 preceding years is recovered against regular tax above "
      "the minimum (ITA s.120.2, line 40427), and a year where AMT binds starts a new "
-     "carryover; the estimate applies one only when amt_carryover.txt (your notice of "
+     "carryover; the estimate applies one only when [estimate] amt_carryover (your notice of "
      "assessment / T691) or last year's close-year lock carries it."),
     ("filed-lock", 5, "Return filed and the year locked",
      "taxjson close-year",
@@ -168,7 +168,7 @@ US_STEPS: Dict[str, Any] = {
                          "An IRA/401(k) purchase within 30 days of a loss is a wash sale "
                          "(Rev. Rul. 2008-5) — the loss is gone for good."),
     "roc-entered": ("Nondividend distributions (1099-DIV box 3) entered before trusting any basis",
-                    "ADJUST lines / distributions.map",
+                    "ADJUST lines / [[distributions]] in taxjson.toml",
                     "Return of capital reduces basis; funds often reclassify after year end."),
     "crypto-sends": ("Crypto sends classified (own wallet, gift or payment)",
                      "taxjson crypto-sends",
@@ -200,7 +200,7 @@ US_STEPS: Dict[str, Any] = {
                     "The export is what goes on Form 8949 / Schedule D; the .sum is what the engine computed — they must agree."),
     "t1135": "US project (T1135 is a Canadian form)",
     "carryover": ("Capital loss carryover applied and recorded (Schedule D line 21 deduction)",
-                  "taxjson carryover, claimed_losses.txt",
+                  "taxjson carryover, [carryover] claimed in taxjson.toml",
                   "The ledger only knows what was claimed if you write it down — "
                   "record each year's Schedule D line 21 deduction, not the "
                   "line 6 / 14 carryover."),
@@ -599,8 +599,8 @@ def d_roc_entered(ctx: Ctx) -> Result:
                  for t in (d.get("transactions") or [])
                  if isinstance(t, dict) and t.get("action") == "ADJUST"
                  and str(when(t) or "").startswith(str(ctx.year)))
-    dmap = (ctx.root / "distributions.map").is_file()
-    detail = (f"{adjust} ADJUST row(s) in {ctx.year}; distributions.map "
+    dmap = bool((getattr(ctx, "cfg", None) or {}).get("distributions"))
+    detail = (f"{adjust} ADJUST row(s) in {ctx.year}; [[distributions]] "
               f"{'present' if dmap else 'absent'}")
     if dmap:
         # The same ROC in the books and in the map lowers the ACB twice
@@ -624,8 +624,7 @@ def d_inputs_committed(ctx: Ctx) -> Result:
     if not _is_git_repo(ctx.root):
         return Result("inputs-committed", "attention", "not a git repository")
     paths = ["inputs", "taxjson.toml", "ticker.map", "missing_history.json",
-             "phantoms.json", "distributions.map", "claimed_losses.txt",
-             "ticker_extraction_overrides.txt"]
+             "phantoms.json"]
     paths = [p for p in paths if (ctx.root / p).exists()]
     code, out = _git(ctx.root, "status", "--porcelain", "--", *paths)
     dirty = [ln for ln in out.splitlines() if ln.strip()]
@@ -798,9 +797,8 @@ FINGERPRINT_FILE = ".inputs_fingerprint.json"     # in work/
 FINGERPRINT_VERSION = 2
 # Project-root maps `taxjson run` reads (taxjson_run._PROJECT_ROOT_INPUTS
 # is the same list; a test keeps the two equal — A2-0363, A2-1158).
-PROJECT_ROOT_MAPS = ("ticker.map", "ticker_extraction_overrides.txt",
-                     "distributions.map", "missing_history.json",
-                     "phantoms.json", "crypto_ticker.map")
+PROJECT_ROOT_MAPS = ("ticker.map", "missing_history.json",
+                     "phantoms.json")
 # phantoms.json is the old name of missing_history.json (still read): a
 # fingerprint keys it by the new name, so renaming the file is not an
 # input change (_canon_fingerprint).
@@ -817,7 +815,8 @@ _ACCOUNT_SIDECARS = ("manifest.json", "sends.json")
 # the estimate's province, handoff's prior-year path, `sanity`'s
 # holdings files and `fetch`'s broker keys. An edit to them (or to a
 # comment) does not make the books stale (A2-0681, A2-1157).
-_PLANNING_TABLES = ("instalments", "estimate")
+_PLANNING_TABLES = ("instalments", "estimate", "carryover",
+                    "capital_gains_dividends")
 _PLANNING_SETTINGS = ("province", "prior_year_record")
 _PLANNING_ACCOUNT_KEYS = ("holdings", "brokerage", "account", "query_id")
 
@@ -1808,7 +1807,9 @@ def d_t1135(ctx: Ctx) -> Result:
 
 def d_carryover(ctx: Ctx) -> Result:
     code, out, err = ctx.sub("carryover", "--json")
-    claimed = (ctx.root / "claimed_losses.txt").is_file()
+    _cfg = getattr(ctx, "cfg", None) or {}
+    claimed = bool((_cfg.get("carryover") or {}).get("claimed")) \
+        if isinstance(_cfg.get("carryover"), dict) else False
     if code != 0 and not out:
         return Result("carryover", "blocked", _last_line(err) or f"exit {code}")
     try:
@@ -1821,10 +1822,10 @@ def d_carryover(ctx: Ctx) -> Result:
         # A claimed line the ledger could not read is not applied: the
         # carryforward is overstated by it (S001-04).
         return Result("carryover", "attention",
-                      f"{len(ignored)} claimed_losses.txt line(s) ignored "
+                      f"{len(ignored)} claimed line(s) ignored "
                       f"(not applied): {ignored[0]}"
                       + (" ..." if len(ignored) > 1 else "")
-                      + " — fix the line (`YEAR AMOUNT`)")
+                      + " — fix the entry")
     if is_us(ctx.settings.get("country")):
         what = ("record each year's Schedule D line 21 deduction against "
                 "ordinary income as far as taxable income absorbed it "
@@ -1834,7 +1835,8 @@ def d_carryover(ctx: Ctx) -> Result:
         what = ("record the 100% loss applied each year (line 25300 "
                 "divided by the inclusion rate: x2 at 50%)")
     return Result("carryover", "manual",
-                  "claimed_losses.txt " + ("present" if claimed else "absent")
+                  "[carryover] claimed " + ("present" if claimed
+                                            else "absent")
                   + " — " + what)
 
 
@@ -1898,7 +1900,7 @@ def d_amt(ctx: Ctx) -> Result:
                 f"federally (line 40427)")
     else:
         rest = ("no minimum tax carryover entered — if you paid AMT in "
-                "the last 7 years, put it in amt_carryover.txt")
+                "the last 7 years, put it in [estimate] amt_carryover")
     return Result("amt", "manual", f"{first}; {rest}")
 
 

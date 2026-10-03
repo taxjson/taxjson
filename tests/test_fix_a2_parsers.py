@@ -484,7 +484,7 @@ class TestSecurityOverrides(unittest.TestCase):
             _ib_trade("LEN B", "2025-03-03, 10:00:00", 100, 110)])
         td = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, td, True)
-        (td / "ov.txt").write_text("LEN | USD | LEN.NE\n")
+        (td / "ov.txt").write_text("EXTRACT LEN | USD | LEN.NE\n")
         r, txs = _brokerage("ib", {"ib.csv": stmt}, "--security-overrides",
                             str(td / "ov.txt"))
         self.assertEqual(r.returncode, 0, r.stderr)

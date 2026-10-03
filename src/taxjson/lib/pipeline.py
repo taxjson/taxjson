@@ -1423,8 +1423,8 @@ def run_gains(transactions, sheltered_transactions=(),
         # NOTE sat in the .sum while the income and ACB were short).
         # Only for the run's own year and a taxable book, and quiet once
         # the cost is in the books (an ADJUST on the symbol from 31 days
-        # before to 7 days after: a .tt line or distributions.map's
-        # record-date row). Adding it books the ACB only — the dividend
+        # before to 7 days after: a .tt line or a [[distributions]]
+        # entry's record-date row). Adding it books the ACB only — the dividend
         # is reported from the slip (re-audit A2-0709, A2-0711, A2-1220,
         # A2-1224; CA-DIST-01).
         from datetime import date as _d, timedelta as _td
@@ -1452,7 +1452,8 @@ def run_gains(transactions, sheltered_transactions=(),
                   f"{float(_t.quantity):g} share(s) on {_t.date} "
                   f"entered at $0 cost — in Canada it is a dividend at its "
                   f"declared amount, which is also the new shares' cost: "
-                  f"add that cost (distributions.map or a .tt ADJUST) for "
+                  f"add that cost ([[distributions]] in taxjson.toml or a "
+                  f".tt ADJUST) for "
                   f"the correct ACB. That books the ACB only: report the "
                   f"dividend itself from the T5/T3 slip (taxjson does not "
                   f"count it as income).", file=sys.stderr)

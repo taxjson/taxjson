@@ -9,43 +9,56 @@ credit. No broker export says which payments those are — IB prints
 books carry them as dividends. Only the slip (or IBKR's own dividends
 report, "T5: Capital Gains") tells.
 
-`capital_gains_dividends.map` at the project root names them. Canada
-only (lib/country PROJECT_FILE_COUNTRY): a US project refuses the file.
+The `[[capital_gains_dividends]]` entries of the project's taxjson.toml
+name them. Canada only (lib/country CONFIG_COUNTRY): a US project
+refuses the table.
 
-    # SYMBOL   WHEN         AMOUNT   [ACCOUNT]
-    LFE.TO     2025         all              # every 2025 LFE dividend
-    XTD.TO     2025-09-10   5.50             # 5.50 of the Sep-10 payment
-    FFN.TO     2024         1711.05  margin  # box 18 total for the year
+    [[capital_gains_dividends]]       # every 2025 LFE dividend
+    symbol = "LFE.TO"
+    year = 2025
+    amount = "all"
 
-- SYMBOL: the dividend row's symbol as the books spell it (after
+    [[capital_gains_dividends]]       # 5.50 of the Sep-10 payment
+    symbol = "XTD.TO"
+    date = 2025-09-10
+    amount = 5.50
+
+    [[capital_gains_dividends]]       # box 18 total for the year
+    symbol = "FFN.TO"
+    year = 2024
+    amount = 1711.05
+    account = "margin"
+
+- symbol: the dividend row's symbol as the books spell it (after
   ticker.map); a bare root without a suffix (LFE) matches that root's
   Canadian listings only (LFE.TO, LFE.V ...) — never another class or
   preferred series (LFE.PR.B.TO) nor a foreign listing (LFE.US): name
   those in full.
-- WHEN: a year (every dividend whose tax date is in it) or one date
-  (the payment's pay date, or its record date when the books date it
-  by the record date).
-- AMOUNT: `all`, or the box-18 amount in the row's currency — the
-  TOTAL over the matching rows, shared among them pro rata. A plain
-  decimal with a decimal point (thousands commas in groups of three):
-  a decimal comma is refused.
-- ACCOUNT: optional. Without it the entry covers the taxable accounts
+- year or date (exactly one): a year (every dividend whose tax date is
+  in it) or one date (the payment's pay date, or its record date when
+  the books date it by the record date).
+- amount: "all", or the box-18 amount in the row's currency (a
+  positive number) — the TOTAL over the matching rows, shared among
+  them pro rata.
+- account: optional. Without it the entry covers the taxable accounts
   (only they get a T5); name an account to restrict it.
 
+(Before, a project-root `capital_gains_dividends.map` held these as
+`SYMBOL WHEN AMOUNT [ACCOUNT]` lines; `taxjson migrate` converts it with
+parse_map below.)
+
 The ledger and ACB are never touched (a box-18 dividend does not change
-ACB). Only the income views read the file: `divs-sum` shows the amount
+ACB). Only the income views read the entries: `divs-sum` shows the amount
 apart from the dividends, and the Canadian estimate moves it from the
 grossed-up eligible dividends into capital gains.
 
 An entry that matches no dividend row, an amount above the rows' total,
-or matching rows in more than one currency is an error naming the line.
+or matching rows in more than one currency is an error naming the entry.
 """
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 MAP_NAME = "capital_gains_dividends.map"
@@ -57,20 +70,27 @@ _YEAR_RE = re.compile(r"^\d{4}$")
 _AMOUNT_RE = re.compile(r"(?:[1-9]\d{0,2}(?:,\d{3})+|\d+)(?:\.\d*)?|\.\d+")
 
 
+TABLE = "capital_gains_dividends"
+
+
 class CgDividendMapError(ValueError):
-    """A capital_gains_dividends.map the views cannot apply."""
+    """A [[capital_gains_dividends]] entry (or an old
+    capital_gains_dividends.map line) the views cannot apply."""
 
 
 @dataclass(frozen=True)
 class Entry:
-    line: int
+    line: int            # entry number (1-based; the old map's line)
     symbol: str          # upper-case
     when: str            # "YYYY" or "YYYY-MM-DD"
     amount: Optional[float]   # None = all
     account: str = ""
+    legacy: bool = False      # parsed from the old map file
 
     def where(self) -> str:
-        return f"{MAP_NAME} line {self.line}"
+        if self.legacy:
+            return f"{MAP_NAME} line {self.line}"
+        return f"taxjson.toml [[{TABLE}]] #{self.line}"
 
     def matches_symbol(self, symbol: str) -> bool:
         """Exact, or a bare root against ROOT.<Canadian listing suffix>:
@@ -132,27 +152,91 @@ def parse_map(text: str) -> List[Entry]:
                 raise CgDividendMapError(
                     f"{where}: AMOUNT must be positive, got {amt!r}")
         out.append(Entry(n, sym, when, amount,
-                         parts[3] if len(parts) == 4 else ""))
+                         parts[3] if len(parts) == 4 else "", True))
     return out
 
 
-def load_map(root: Path) -> Optional[List[Entry]]:
-    """The project's entries, or None when there is no map file."""
-    p = Path(root) / MAP_NAME
-    if not os.path.lexists(p):
+def entries_from_config(cfg: dict) -> Optional[List[Entry]]:
+    """The [[capital_gains_dividends]] entries of a taxjson.toml (parsed),
+    or None when it has none. Raises CgDividendMapError naming the first
+    entry that cannot be applied: a missing or unknown key, both or
+    neither of year/date, an amount that is not "all" or a positive
+    number, an account that is not configured, or an entry repeated."""
+    from taxjson.lib.project_tables import iso_date
+    v = cfg.get(TABLE)
+    if v is None:
         return None
-    if not p.is_file():
-        # A directory or a dangling symlink is not "no map": the box-18
-        # dividends would silently show as ordinary dividends (audit
-        # A2-0994).
+    if not isinstance(v, list) or not all(isinstance(e, dict) for e in v):
         raise CgDividendMapError(
-            f"{MAP_NAME}: cannot read it (not a regular file"
-            + (" — a dangling symlink" if p.is_symlink() else "") + ")")
-    try:
-        text = p.read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeDecodeError) as e:
-        raise CgDividendMapError(f"{MAP_NAME}: cannot read it ({e})")
-    return parse_map(text)
+            f"[[{TABLE}]] must be an array of tables (one [[{TABLE}]] "
+            f"section per entry), got `{TABLE} = {v!r}`")
+    accounts = cfg.get("accounts") if isinstance(cfg.get("accounts"),
+                                                 dict) else {}
+    out: List[Entry] = []
+    seen: Dict[Tuple[str, str, str], int] = {}
+    for n, e in enumerate(v, 1):
+        where = f"taxjson.toml [[{TABLE}]] #{n}"
+        extra = sorted(set(e) - {"symbol", "year", "date", "amount",
+                                 "account"})
+        if extra:
+            raise CgDividendMapError(
+                f"{where}: unknown key(s) {', '.join(extra)} (an entry has "
+                f"symbol, year or date, amount, and optionally account)")
+        sym = e.get("symbol")
+        if not isinstance(sym, str) or not sym.strip() \
+                or len(sym.split()) != 1:
+            raise CgDividendMapError(
+                f"{where}: symbol must be the books' symbol as a string, "
+                f"e.g. \"LFE.TO\" (got {sym!r})")
+        if ("year" in e) == ("date" in e):
+            raise CgDividendMapError(
+                f"{where}: give exactly one of `year = 2025` (every "
+                f"dividend of that tax year) or `date = 2025-09-10` (one "
+                f"payment)")
+        if "year" in e:
+            y = e["year"]
+            if isinstance(y, bool) or not isinstance(y, int) \
+                    or not 1900 <= y <= 2100:
+                raise CgDividendMapError(
+                    f"{where}: year must be a tax year such as 2025, "
+                    f"unquoted (got {y!r})")
+            when = f"{y:04d}"
+        else:
+            when = iso_date(e["date"]) or ""
+            if not when:
+                raise CgDividendMapError(
+                    f"{where}: date must be a date such as 2025-09-10 "
+                    f"(got {e['date']!r})")
+        amt = e.get("amount")
+        if isinstance(amt, str) and amt.strip().lower() == "all":
+            amount = None
+        elif (isinstance(amt, (int, float)) and not isinstance(amt, bool)
+              and amt > 0 and amt != float("inf")):
+            amount = float(amt)
+        else:
+            raise CgDividendMapError(
+                f"{where}: amount must be \"all\" or the positive box 18 "
+                f"amount in the dividend's currency, e.g. 5.50 (got "
+                f"{amt!r})")
+        acct = e.get("account", "")
+        if not isinstance(acct, str):
+            raise CgDividendMapError(f"{where}: account must be an account "
+                                     f"name string (got {acct!r})")
+        acct = acct.strip()
+        if acct and accounts and acct not in accounts:
+            raise CgDividendMapError(
+                f"{where}: account {acct!r} is not an [accounts.*] section "
+                f"of taxjson.toml")
+        key = (sym.strip().upper(), when, acct)
+        if key in seen:
+            raise CgDividendMapError(
+                f"{where}: {key[0]} {when}"
+                + (f" ({acct})" if acct else "")
+                + f" repeats entry #{seen[key]} — one entry per payment "
+                  f"or year")
+        seen[key] = n
+        out.append(Entry(n, key[0], when, amount, acct))
+    return out
 
 
 def row_amount(tx: dict) -> float:
@@ -212,7 +296,7 @@ def allocate(entries: Iterable[Entry],
             if k in out:
                 raise CgDividendMapError(
                     f"{e.where()}: a {e.symbol} dividend it matches is "
-                    f"already named by an earlier line — one line per "
+                    f"already named by an earlier entry — one entry per "
                     f"payment")
             out[k] = f
     return out

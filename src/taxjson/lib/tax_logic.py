@@ -604,7 +604,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "A stock dividend's new shares enter the pool at $0 cost. "
                  "Its declared amount (a dividend, and by law also the new "
                  "shares' cost) is not in the broker's export: add it "
-                 "(distributions.map or a .tt ADJUST) — that books the ACB "
+                 "([[distributions]] in taxjson.toml or a .tt ADJUST) — "
+                 "that books the ACB "
                  "only; the dividend itself is reported from the T5/T3 "
                  "slip (taxjson does not count it as income). A taxable "
                  "run of the dividend's year says so until the cost is in "
@@ -614,8 +615,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "dividend are not booked: the parse says UNBOOKED; enter "
                  "them by hand."),
             Rule("CA-DIST-01",
-                 "distributions.map: a non-cash distribution (a reinvested "
-                 "capital-gains distribution, a late return-of-capital "
+                 "[[distributions]] (taxjson.toml): a non-cash distribution "
+                 "(a reinvested capital-gains distribution, a late return-of-capital "
                  "factor) becomes an ACB adjustment sized on the shares "
                  "held on its record date — the settled position, each "
                  "ticker's own shares — and booked on those shares only "
@@ -915,7 +916,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "share or mutual-fund corporation's, ITA s.130.1(4)/"
                  "s.131(1)) is a capital gain, not a dividend. No export "
                  "labels it, so the books carry it as a dividend; list it "
-                 "in capital_gains_dividends.map (symbol — a bare root "
+                 "in taxjson.toml's [[capital_gains_dividends]] (symbol — "
+                 "a bare root "
                  "covers only its Canadian listings, never a preferred "
                  "series or a foreign listing —, the year of its tax date "
                  "or its pay date, amount or `all`) and divs-sum shows it "
@@ -1072,7 +1074,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "the export gives one, else a Canadian listing) are "
                  "treated as eligible (38% gross-up "
                  "and credit; a capital-gains dividend in "
-                 "capital_gains_dividends.map as a capital gain),",
+                 "[[capital_gains_dividends]] as a capital gain),",
                  cont=True),
             Rule("CA-RPT-05",
                  "foreign dividends as ordinary income with withholding "
@@ -1178,9 +1180,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "year's own excess.", cont=True),
             Rule("CA-AMT-08",
                  "The carryover by year of origin is read from "
-                 "amt_carryover.txt (`YEAR AMOUNT` lines, from the notice "
-                 "of assessment or T691) or [estimate] amt_carryover = "
-                 "{ YEAR = AMOUNT } (not both); else from the latest "
+                 "[estimate] amt_carryover = { YEAR = AMOUNT } (from the "
+                 "notice of assessment or T691); else from the latest "
                  "close-year lock before the project year (filed/<year>."
                  "json or prior_year_record). The estimate and `amt` say "
                  "which.", keys=("[estimate] amt_carryover",
@@ -1226,9 +1227,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-CARRY-05",
                  "`taxjson handoff` flags a next-year input that differs "
                  "from what the closed year carried out: [estimate] "
-                 "other_losses, claimed_losses.txt's line for that year "
-                 "(vs the loss applied), and amt_carryover.txt / "
-                 "[estimate] amt_carryover by year of origin.",
+                 "other_losses, [carryover] claimed's entry for that year "
+                 "(vs the loss applied), and [estimate] amt_carryover by "
+                 "year of origin.",
                  cont=True),
             Rule("CA-RPT-11",
                  "`taxjson instalments`: CRA instalments (ITA s.156) when "
@@ -1587,8 +1588,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "sender holds, are said ATTENTION (--strict stops); "
                  "those shares' sales are then reported by hand."),
             Rule("US-DIST-01",
-                 "distributions.map: a non-cash distribution (a reinvested "
-                 "capital-gain distribution, a late return-of-capital "
+                 "[[distributions]] (taxjson.toml): a non-cash distribution "
+                 "(a reinvested capital-gain distribution, a late return-of-capital "
                  "factor) becomes a basis adjustment sized on the shares "
                  "held on its record date — the settled position, each "
                  "ticker's own shares — and booked on those lots only "
@@ -2040,7 +2041,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "`taxjson carryover`: the short- and long-term capital "
                  "loss carryover (Schedule D worksheet), assuming the "
                  "$3,000 ordinary offset is used each year unless "
-                 "claimed_losses.txt records otherwise. A year before the "
+                 "taxjson.toml's [carryover] claimed records otherwise. A "
+                 "year before the "
                  "project year that has a close-year lock (filed/<year>.json "
                  "or prior_year_record) takes the lock's filed Form 8949 "
                  "Part I / Part II gains instead of the rebuilt ones; a "

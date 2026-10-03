@@ -65,7 +65,7 @@ class TestTvMapFromProjectRoot(_Tmp):
 
     def _project(self):
         root = self.tmp / "proj"
-        self.w("proj/tv_exchange.map", "NVO.US NYSE\n")
+        self.w("proj/ticker.map", "TRADINGVIEW NVO.US NYSE\n")
         g = self.w("proj/work/margin_gains.json",
                    _inv(("NVO.US", 10, 1000, "USD")))
         return root, g
@@ -76,7 +76,7 @@ class TestTvMapFromProjectRoot(_Tmp):
         # A decoy map in the cwd must not win either.
         other = self.tmp / "elsewhere"
         other.mkdir()
-        (other / "tv_exchange.map").write_text("NVO.US XETR\n")
+        (other / "ticker.map").write_text("TRADINGVIEW NVO.US XETR\n")
         old = os.getcwd()
         os.chdir(other)
         try:

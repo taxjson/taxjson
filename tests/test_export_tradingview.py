@@ -42,7 +42,7 @@ class TestTradingViewSort(unittest.TestCase):
     def _run_with_map(self, map_text, inventory):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            (tmp / 'tv_exchange.map').write_text(map_text)
+            (tmp / 'ticker.map').write_text(map_text)
             gains = tmp / 'gains.json'
             gains.write_text(json.dumps({'inventory': inventory}))
             cmd = [sys.executable, '-m', 'taxjson.bin.taxjson_export',
@@ -53,11 +53,11 @@ class TestTradingViewSort(unittest.TestCase):
             return r.stdout.strip().splitlines()
 
     def test_qualified_map_key_disambiguates_dual_listing(self):
-        """An `OR.US NYSE` entry prefixes only the US listing; the TSX
+        """A `TRADINGVIEW OR.US NYSE` line prefixes only the US listing; the TSX
         listing has no `.TO` entry so it falls through to the TSX
         default — a dual-listed name appears as both NYSE:OR and TSX:OR
         instead of collapsing onto one prefix."""
-        out = self._run_with_map('OR.US NYSE\n', [
+        out = self._run_with_map('TRADINGVIEW OR.US NYSE\n', [
             {'symbol': 'OR.US', 'qty': 10, 'total_cost': 100,
              'currency': 'USD'},
             {'symbol': 'OR.TO', 'qty': 10, 'total_cost': 100,
@@ -70,7 +70,7 @@ class TestTradingViewSort(unittest.TestCase):
         every listing — both OR.US and OR.TO take the NYSE prefix, then
         collapse to one entry via the formatted-ticker dedup. (Without
         the bare key the TSX listing would surface as a second TSX:OR.)"""
-        out = self._run_with_map('OR NYSE\n', [
+        out = self._run_with_map('TRADINGVIEW OR NYSE\n', [
             {'symbol': 'OR.US', 'qty': 10, 'total_cost': 100,
              'currency': 'USD'},
             {'symbol': 'OR.TO', 'qty': 10, 'total_cost': 100,

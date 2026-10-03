@@ -15,8 +15,9 @@ Directory layout:
                           # pipeline on first election; COMMIT this file —
                           # elections are decisions, not rebuildable data)
       rrsp/  tfsa/  ...
-    ticker.map            # optional — symbol rules (GLOBAL/TOBASE/JOURNAL/DELETE/DISTINCT)
-    ticker_extraction_overrides.txt  # optional — description-keyed ticker fixes
+    ticker.map            # optional — symbol rules (GLOBAL/TOBASE/JOURNAL/DELETE/
+                          # DISTINCT/RENAME) and lookups (QUOTE/TRADINGVIEW/
+                          # CRYPTO/EXTRACT)
     reports/              # all outputs land here, overwritten on re-run
     work/                 # intermediate JSON (--fast reuses these via mtime)
 
@@ -704,7 +705,9 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
 # which is why a misspelled [estimates] / [Estimate] / [instalment]
 # silently fell back to 0 other income or no instalment schedule
 # (R1-216, R1-257).
-_TOP_LEVEL_TABLES = ("settings", "accounts", "instalments", "estimate")
+_TOP_LEVEL_TABLES = ("settings", "accounts", "instalments", "estimate",
+                     "carryover", "capital_gains_dividends",
+                     "distributions")
 _INSTALMENTS_KEYS = ("basis", "prior_year_net_tax", "second_prior_net_tax",
                      "withheld", "prescribed_rate", "prescribed_rates",
                      "paid")
@@ -816,7 +819,7 @@ class _CappedHelpFormatter(argparse.HelpFormatter):
 # sits in exactly one group (tests/test_cli_polish.py); the README's
 # command table uses the same groups in the same order.
 _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Set up", ("init", "fetch", "elect")),
+    ("Set up", ("init", "migrate", "fetch", "elect")),
     ("Build the books", ("run", "crypto-sends", "find-missing-history")),
     ("Read the numbers", (
         "sum", "list", "divs-sum", "trades-sum", "fees-sum", "shares",
@@ -945,9 +948,20 @@ def _help_country(argv: List[str]) -> Optional[str]:
     try:
         if not (root / "taxjson.toml").is_file():
             return None
+        if not _legacy_free(root):
+            # The command itself says why the project cannot run; the
+            # help page needs only the country, read without the guards.
+            cfg = tomllib.loads((root / "taxjson.toml").read_bytes()
+                                .decode("utf-8-sig"))
+            return settings_country(cfg.get("settings") or {})
         return settings_country(_soft_settings(root.resolve()))
     except Exception:                                   # noqa: BLE001
         return None
+
+
+def _legacy_free(root: Path) -> bool:
+    from taxjson.lib.migrate import legacy_files
+    return not legacy_files(root)
 
 
 def _no_command(argv: List[str], commands) -> bool:
@@ -1076,7 +1090,7 @@ def _carry_inputs(root: Path, args, cfg: Dict[str, Any], ol: float,
                   ltl: float):
     """The carry-forwards the estimate uses (lib/carryforward):
     explicit input wins (--other-losses / --long-term-losses, their
-    [estimate] keys; amt_carryover.txt or [estimate] amt_carryover),
+    [estimate] keys; [estimate] amt_carryover),
     else the latest close-year lock before the project year. Returns
     (other_losses, lt_losses, amt_carryover_by_year | None, sources) —
     `sources` says where each figure came from (printed and in --json;
@@ -1125,12 +1139,6 @@ def _carry_inputs(root: Path, args, cfg: Dict[str, Any], ol: float,
         for n in a["notes"]:
             if n not in src["notes"]:
                 src["notes"].append(n)
-    else:
-        from taxjson.lib.country import project_file_problems
-        probs = [p for p in project_file_problems(root, country)
-                 if p.startswith(CF.AMT_FILE)]
-        if probs:
-            _die("; ".join(probs))
     return ol, ltl, amt, src
 
 
@@ -2572,7 +2580,7 @@ def _apply_override_log(corp_json: Path, log: Path, account: str) -> None:
             targets = renamed[key]
             if len(targets) > 1 or key in kept:
                 _die(f"{account}: a corporate action on {sym} ({cur}), "
-                     f"but ticker_extraction_overrides.txt renames some "
+                     f"but a ticker.map EXTRACT line renames some "
                      f"{sym} rows (to {', '.join(targets)}) and not "
                      f"others — two securities share that spelling, so "
                      f"the event cannot be assigned. Record it with a "
@@ -2587,11 +2595,22 @@ def _apply_override_log(corp_json: Path, log: Path, account: str) -> None:
         tmp.replace(corp_json)
 
 
+def _config_has_distributions() -> bool:
+    """True when the project's taxjson.toml has [[distributions]]
+    entries (checked by every config reader — lib/project_tables)."""
+    if _CONFIG_PATH is None or not _CONFIG_PATH.is_file():
+        return False
+    try:
+        return bool(tomllib.loads(_read_config_text(_CONFIG_PATH))
+                    .get("distributions"))
+    except Exception:                               # noqa: BLE001
+        return False
+
+
 # Project-root files the per-account stages read (their content is part
-# of each account's input fingerprint).
-_PROJECT_ROOT_INPUTS = ("ticker.map", "ticker_extraction_overrides.txt",
-                        "distributions.map", "missing_history.json",
-                        "phantoms.json", "crypto_ticker.map")
+# of each account's input fingerprint; taxjson.toml is added there too).
+_PROJECT_ROOT_INPUTS = ("ticker.map", "missing_history.json",
+                        "phantoms.json")
 # phantoms.json: the old name of missing_history.json, still read (one
 # NOTE per run asks to rename it; lib/missing_history).
 
@@ -2613,7 +2632,7 @@ def _unreadable_project_inputs(root: Path) -> List[str]:
     missing (or loops), or as a directory — never "absent" (A2-0313)."""
     import os
     out = []
-    for name in _PROJECT_ROOT_INPUTS + ("claimed_losses.txt",):
+    for name in _PROJECT_ROOT_INPUTS:
         p = root / name
         if p.is_symlink() and not p.exists():
             try:
@@ -2627,6 +2646,65 @@ def _unreadable_project_inputs(root: Path) -> List[str]:
     return out
 
 
+def _refuse_legacy_project_files(root: Path) -> None:
+    """Stop (exit 2) while the project still holds an old per-purpose
+    file whose contents now live in ticker.map / taxjson.toml
+    (yf_ticker.map, distributions.map, ...): it is no longer read, and
+    running on without it would silently drop its rules. Only `taxjson
+    migrate` (which moves them) runs past this."""
+    from taxjson.lib.migrate import legacy_files, legacy_message
+    names = legacy_files(root)
+    if names:
+        _die_input(legacy_message(names))
+
+
+def cmd_migrate(args: argparse.Namespace) -> None:
+    """`taxjson migrate [--dry-run]`: move an old project's per-purpose
+    files into ticker.map (QUOTE / TRADINGVIEW / CRYPTO / EXTRACT lines)
+    and taxjson.toml ([estimate] amt_carryover, [carryover] claimed,
+    [[capital_gains_dividends]], [[distributions]]) — appended, never
+    rewritten — and rename each old file to <name>.migrated. Refuses
+    (exit 2, nothing written) when a file cannot be converted or the
+    target already holds a conflicting entry."""
+    from taxjson.lib import migrate as M
+    root = Path(args.dir).resolve()
+    try:
+        pl = M.plan(root)
+    except M.MigrateError as e:
+        _die_input(f"{e} — nothing was changed.")
+    if not pl.names:
+        print(f"taxjson migrate: nothing to migrate in {root} (none of "
+              f"{', '.join(M.LEGACY_FILES)} is here).")
+        return
+    dry = bool(getattr(args, "dry_run", False))
+    print(f"taxjson migrate{' --dry-run' if dry else ''}: {root}")
+    for ln in pl.summary(dry):
+        print(f"  {ln}")
+    if dry:
+        if pl.map_append:
+            print("\n  would append to ticker.map:")
+            for ln in pl.map_append.strip("\n").splitlines():
+                print(f"    {ln}")
+        if pl.toml_text is not None:
+            import difflib
+            print("\n  would change taxjson.toml:")
+            for ln in difflib.unified_diff(
+                    pl.toml_before.splitlines(), pl.toml_text.splitlines(),
+                    "taxjson.toml", "taxjson.toml (migrated)", lineterm="",
+                    n=1):
+                print(f"    {ln}")
+        print("\n  (dry run: nothing was written)")
+        return
+    try:
+        M.apply(pl)
+    except OSError as e:
+        _die_input(f"could not write the migration: {e}")
+    print("  done. Review ticker.map and taxjson.toml and commit them "
+          "(in a git repository, `git rm` the old files too); delete the "
+          "*.migrated files once you are satisfied; run `taxjson run` to "
+          "rebuild.")
+
+
 def _refuse_unreadable_project_inputs(root: Path) -> None:
     """Die when a project-root input exists as a name but cannot be read.
     Every config reader calls it, so no command (scan, sanity, harvest,
@@ -2635,6 +2713,7 @@ def _refuse_unreadable_project_inputs(root: Path) -> None:
     refuses a project holding both missing_history.json and its old
     name phantoms.json (which one is current cannot be guessed), and
     says once per run that a lone phantoms.json should be renamed."""
+    _refuse_legacy_project_files(root)
     _missing_history_path(root)
     _unreadable = _unreadable_project_inputs(root)
     if _unreadable:
@@ -3028,7 +3107,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     if e.returncode == 3 and pending_path.exists():
                         raise PendingElectionsError(name, pending_path)
                     raise
-            # ticker_extraction_overrides.txt renamed this broker's
+            # ticker.map EXTRACT lines renamed this broker's
             # trade rows; the corp-action rows of the same security must
             # follow, or a merger consumed an empty un-overridden pool
             # while the real position stayed put (S004-00).
@@ -3176,23 +3255,24 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         elif (cache / f"{name}_mapped.json").exists():
             (cache / f"{name}_mapped.json").unlink()
         filled = cache / f"{name}_filled.json"
-        # The project-root crypto_ticker.map (README) is resolved from
-        # the project, never the cwd: `-C <proj>` from anywhere used to
-        # ignore it (and a map in the cwd leaked into other projects).
-        # Its state (content, or absence) is a rebuild dep through a
-        # stamp that changes only when the map does, so `run --fast`
-        # re-prices after the map is added, edited, or deleted.
-        # fill-crypto also reads the map in its input file's folder
-        # (work/), later wins: that one is part of the stamp too
-        # (re-audit A2-0585).
+        # The project ticker.map's CRYPTO lines (README) are resolved
+        # from the project, never the cwd: `-C <proj>` from anywhere
+        # used to ignore them (and a map in the cwd leaked into other
+        # projects). Their state (content, or absence) is a rebuild dep
+        # through a stamp that changes only when they do, so `run
+        # --fast` re-prices after a CRYPTO line is added, edited, or
+        # deleted. fill-crypto also reads a ticker.map in its input
+        # file's folder (work/), later wins: that one is part of the
+        # stamp too (re-audit A2-0585).
+        from taxjson.lib.ticker_map import side_rules_in as _side_in
         _cparts = []
-        for _cmap in (inputs_dir.parent / "crypto_ticker.map",
-                      mapped.parent / "crypto_ticker.map"):
+        for _cdir in (inputs_dir.parent, mapped.parent):
             try:
+                _crules = sorted(_side_in([_cdir]).crypto.items())
                 _cparts.append(("sha256:" + hashlib.sha256(
-                    _cmap.read_bytes()).hexdigest()) if _cmap.is_file()
+                    repr(_crules).encode()).hexdigest()) if _crules
                     else "absent")
-            except OSError:
+            except (OSError, ValueError):
                 _cparts.append("unreadable")
         _cstate = (_cparts[0] if _cparts[1] == "absent"
                    else " ".join(_cparts))
@@ -3253,14 +3333,13 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             cmd += ["--map", str(ticker_map)]
         cmd += [str(p) for p in sources]
         # Non-cash fund distributions (reinvested capital-gains dists /
-        # late-published ROC factors) never appear in broker CSVs; a
-        # project-root distributions.map turns them into ADJUST rows.
-        # Taxable books only — sheltered ACB is moot.
-        dist_map = inputs_dir.parent / "distributions.map"
-        _apply_dists = is_taxable and dist_map.exists()
+        # late-published ROC factors) never appear in broker CSVs;
+        # taxjson.toml's [[distributions]] turn them into ADJUST rows.
+        # Taxable books only — sheltered ACB is moot. (taxjson.toml is
+        # every stage's implicit dep — needs_rebuild.)
+        _apply_dists = is_taxable and _config_has_distributions()
         deps = list(sources) + [rates, src_manifest] \
             + ([ticker_map] if ticker_map else []) \
-            + ([dist_map] if _apply_dists else []) \
             + ([incomplete_history]
                if _apply_dists and incomplete_history else [])
         if force or needs_rebuild(base_json, *deps):
@@ -3277,11 +3356,11 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 _stage = base_json.with_name(base_json.name + ".stage")
                 try:
                     run_to_file(cmd, _stage)
-                    print("  apply-distributions (distributions.map)")
+                    print("  apply-distributions ([[distributions]])")
                     from taxjson.lib.dispatch import run_cmd as _run_cmd_d
                     _dres = _run_cmd_d(
                         _cmd("taxjson-apply-distributions") + [
-                            str(_stage), "--map", str(dist_map),
+                            str(_stage), "--config", str(_CONFIG_PATH),
                             "--account", name,
                             # Record-date balance = holder of record,
                             # i.e. the SETTLED position in BOTH
@@ -4644,7 +4723,10 @@ def cmd_run(args: argparse.Namespace) -> None:
         try:
             _tm_problems = map_file_problems(ticker_map)
         except OSError as e:        # not UTF-8 (S053-06)
-            _die(str(e))
+            # An input that cannot be read: exit 2, one line naming it
+            # (A2-0163, A2-1438 — the EXTRACT lines live here now).
+            from taxjson.lib.cli_diag import describe_input_error
+            _die_input(describe_input_error(e))
         if _tm_problems:
             _die(f"{len(_tm_problems)} ticker.map problem(s) — a "
                  f"malformed line's rule would be silently dropped, and "
@@ -4655,24 +4737,16 @@ def cmd_run(args: argparse.Namespace) -> None:
                  + "\n    ".join(_tm_problems)
                  + "\n  Fix the line (KEYWORD FROM TO, separated by "
                  "spaces; notes after `#`) or delete it.")
-    # ticker_extraction_overrides.txt — description-keyed ticker
-    # corrections for securities the currency->exchange suffix mislabels.
-    sec_overrides = root / "ticker_extraction_overrides.txt"
-    sec_overrides_arg = sec_overrides if sec_overrides.exists() else None
-    if sec_overrides_arg:
-        # Same up-front refusal as ticker.map (S053-04): a malformed
-        # line would drop its ticker fix and split an ACB pool.
-        from taxjson.bin.taxjson_brokerage import load_security_overrides
-        try:
-            load_security_overrides(sec_overrides)
-        except ValueError as e:
-            _die(str(e))
-        except OSError as e:
-            # Not UTF-8 (InputReadError), a directory, no permission:
-            # one line naming the file, exit 2, as for ticker.map
-            # (re-audit A2-0163, A2-0468, A2-0784, A2-1438).
-            from taxjson.lib.cli_diag import describe_input_error
-            _die_input(describe_input_error(e))
+    # ticker.map EXTRACT lines — description-keyed ticker corrections
+    # for securities the currency->exchange suffix mislabels. The parse
+    # stage gets the map as taxjson-brokerage --security-overrides when
+    # it has any (a malformed one was refused above with the rest of
+    # the map's problems).
+    sec_overrides_arg = None
+    if ticker_map_arg:
+        from taxjson.lib.ticker_map import read_side_rules
+        if read_side_rules(ticker_map).extract:
+            sec_overrides_arg = ticker_map
     # missing_history.json — optional project-wide list of (symbol,
     # account) pairs sold with no purchase in the files (bought before
     # the data; from `find-missing-history --write-missing-history`). Its
@@ -4707,25 +4781,23 @@ def cmd_run(args: argparse.Namespace) -> None:
         # that file.)
         for _f in [*cache.glob("*_base.json"), *cache.glob("*_raw.json")]:
             _os.utime(_f)
-        # distributions.map ADJUSTs in the taxable base books were
+        # [[distributions]] ADJUSTs in the taxable base books were
         # sized WITH the missing-history openings (S000-08): drop those books
         # so the merge stage rebuilds them, not just the gains.
-        if (root / "distributions.map").exists():
+        if cfg.get("distributions"):
             for _n, _c in accounts.items():
                 if isinstance(_c, dict) and _c.get("type") == "taxable":
                     (cache / f"{_n}_base.json").unlink(missing_ok=True)
 
-    # Same deletion-blindness class for the project-root map files:
-    # needs_rebuild only sees deps that EXIST, so deleting ticker.map /
-    # distributions.map / ticker_extraction_overrides.txt left their
-    # renames, ADJUST rows, and ticker fixes in the cached books under
-    # --fast forever. Track which are applied; on removal, bump every
+    # Same deletion-blindness class for the project-root map file:
+    # needs_rebuild only sees deps that EXIST, so deleting ticker.map
+    # left its renames and ticker fixes in the cached books under --fast
+    # forever. Track whether it is applied; on removal, bump every
     # account's sources manifest (a parse-stage dep) so the rebuild
-    # cascades through merge and gains.
+    # cascades through merge and gains. ([[distributions]] lives in
+    # taxjson.toml, which the input fingerprint covers.)
     _maps_marker = cache / ".project_maps_applied"
-    _maps_now = sorted(p.name for p in (ticker_map, sec_overrides,
-                                        root / "distributions.map")
-                       if p.exists())
+    _maps_now = sorted(p.name for p in (ticker_map,) if p.exists())
     _maps_before = (_read_work_stamp(_maps_marker) or "").split()
     _maps_removed = sorted(set(_maps_before) - set(_maps_now))
     if _maps_removed:
@@ -5367,7 +5439,20 @@ tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for c
 #   # combined_broker_accounts = true  # every broker account in this folder's statements is yours and
 #   #                                  #   taxable together: a multi-account statement is a note, not ATTENTION
 
-{account_sections}{instalments_section}"""
+{account_sections}
+# Losses actually applied on filed returns (`taxjson carryover`), by year:
+# [carryover]
+# claimed = {{ {prev_year} = 4000.00 }}
+
+# Non-cash fund distributions (a reinvested capital-gains distribution,
+# a late return-of-capital factor) — `taxjson run` books each as a cost
+# adjustment on the shares held on the record date. One table each:
+#
+# [[distributions]]
+# symbol      = "XAW.TO"
+# record_date = {prev_year}-12-29
+# per_share   = 0.4297         # base currency; negative = return of capital
+{instalments_section}"""
 
 # Canada only. ITA s.49(1) written-option premium timing is a Canadian
 # rule (the US engine always nets at close), so the US scaffold omits
@@ -5396,6 +5481,17 @@ _TEMPLATE_INSTALMENTS = """
 # other_losses = 0
 # deductions = 0            # RRSP 20800, FHSA, RPP ... (full under AMT)
 # carrying_charges = 0      # line 22100 (50% under AMT)
+# amt_carryover = { 2023 = 1200.50 }   # minimum tax carryover by year of
+#                           # origin (notice of assessment / T691)
+
+# T5 box 18 capital-gains dividends the books carry as dividends (one
+# table per payment or year; `taxjson divs-sum`, the estimate):
+#
+# [[capital_gains_dividends]]
+# symbol = "LFE.TO"
+# year   = 2025             # or: date = 2025-09-10 (one payment)
+# amount = "all"            # or the box 18 amount, e.g. 5.50
+# # account = "margin"        # optional; default: the taxable accounts
 
 # Tax instalments (`taxjson instalments`, and a summary inside
 # `taxjson estimate`). Uncomment and fill in YOUR figures.
@@ -5527,6 +5623,24 @@ _TEMPLATE_TICKER_MAP = """\
 #                     late=fold (the broker kept the old ticker). See
 #                     `taxjson renames`. Without a date it is GLOBAL.
 #
+# Lookups — they change no symbol in the books:
+#   QUOTE   SYMBOL YAHOO_SYMBOL [RATIO]
+#                     The Yahoo Finance spelling price lookups use
+#                     (`taxjson harvest`); RATIO converts the position's
+#                     quantity (a ticker consumed by a merger, quoted as
+#                     the acquirer: OLDCO.TO NEWCO 0.25).
+#   TRADINGVIEW SYMBOL EXCHANGE
+#                     The exchange prefix of the TradingView watchlist
+#                     export (reports/exports/*_TV.txt).
+#   CRYPTO  SYMBOL YAHOO_ID
+#                     A coin whose ticker collides with another asset on
+#                     Yahoo (prices are looked up as YAHOO_ID-USD).
+#   EXTRACT description words | CURRENCY | SYMBOL
+#                     Parser override: a broker row whose description has
+#                     these words and whose currency is CURRENCY ('*' =
+#                     any) gets SYMBOL (a USD unit that trades only on the
+#                     TSX would otherwise become a .US listing).
+#
 # Examples — uncomment and edit:
 # RENAME   FB.US      META.US   2022-06-09
 # GLOBAL   BRK-B.US   BRK.B.US
@@ -5534,6 +5648,10 @@ _TEMPLATE_TICKER_MAP = """\
 # JOURNAL  DLR.U.TO   DLR.TO
 # DELETE   CASH.US
 # DISTINCT UNH.US     UNH.TO
+# QUOTE    PNG.TO     PNG.V
+# TRADINGVIEW OR.US   NYSE
+# CRYPTO   TAO        TAO22974
+# EXTRACT  Global X US Dollar Currency ETF | USD | DLR.U.TO
 """
 
 # Keep generated artifacts out of version control. `taxjson run` rebuilds all
@@ -6525,7 +6643,7 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
         for acct, tx in _dist_adjust_rows(cache, accounts, keep):
             rows.append((tx.get("date") or "", tx.get("time") or "",
                          acct, tx))
-        # The same ROC as a book ADJUST and a distributions.map row
+        # The same ROC as a book ADJUST and a [[distributions]] entry
         # cuts the ACB twice: the roc-sum warning, here too (A2-1116).
         _warn_dist_double_entry(root, accounts, _rules, keep, label)
     if moved:
@@ -8274,7 +8392,7 @@ def _account_group_of(root: Path) -> Dict[str, str]:
 
 def _double_roc_warnings(root: Path, accounts, keep, rules=None
                          ) -> List[str]:
-    """One sentence per distributions.map row that books the same ROC an
+    """One sentence per [[distributions]] entry that books the same ROC an
     ADJUST in the books already books (same account, symbol and date):
     the ACB is reduced twice (audit R1-163). Matched over ALL rows, not
     the window's: the broker row is windowed on its record date and the
@@ -8308,20 +8426,20 @@ def _double_roc_warnings(root: Path, accounts, keep, rules=None
         w = book_keys.get((a, str(t.get("symbol") or ""), md))
         if w is not None and (keep(md) or keep(w)):
             out.append(f"{t.get('symbol')} {md} ({a}) has an ADJUST in the "
-                       f"books AND a distributions.map row — the ACB is "
+                       f"books AND a [[distributions]] entry — the ACB is "
                        f"reduced twice if both are the same distribution.")
     return out
 
 
 def _dist_adjust_rows(cache: Path, accounts, keep) -> List[Tuple[str, dict]]:
-    """distributions.map ACB adjustments: `run` books them (type 'dist',
+    """[[distributions]] ACB adjustments: `run` books them (type 'dist',
     id DIST-*) into <acct>_base.json only — the native books the
     transaction views read never see them, so `roc` / `roc-sum` said
     "No ACB adjustments" while the engine applied one (audit R1-163)."""
     out: List[Tuple[str, dict]] = []
-    # Only a project with a distributions.map has such rows; without one
+    # Only a project with [[distributions]] has such rows; without them
     # a missing base book hides nothing.
-    _has_map = (cache.parent / "distributions.map").exists()
+    _has_map = bool(_soft_config(cache.parent).get("distributions"))
     missing: List[str] = []
     for acct in accounts:
         p = cache / f"{acct}_base.json"
@@ -8349,7 +8467,7 @@ def _dist_adjust_rows(cache: Path, accounts, keep) -> List[Tuple[str, dict]]:
     if missing and not warned_missing_base_once(missing):
         # The map's adjustments live only in the base books: without
         # one they vanished from roc / roc-sum with rc 0 (A2-1128).
-        print(f"taxjson: warning: distributions.map is present but "
+        print(f"taxjson: warning: taxjson.toml has [[distributions]] but "
               f"{', '.join(missing)} is missing in {cache} (the last "
               f"`taxjson run` did not build it) — that account's map "
               f"ACB adjustments are NOT in this report.", file=sys.stderr)
@@ -8478,29 +8596,20 @@ def _foot_by_currency(pairs) -> Dict[str, float]:
 def _box18_fractions(root: Path, rules=None
                      ) -> Optional[Dict[Tuple[str, str], float]]:
     """{(account, row id): share of the DIVIDEND row that is a T5 box 18
-    capital-gains dividend} from the project's capital_gains_dividends.map
-    (lib/cg_dividends; tax-logic CA-INC-06), or None without the file.
-    Canada only: a US project's file is refused (lib/country
-    PROJECT_FILE_COUNTRY). Matched over EVERY year in the native books,
-    on the dividend's tax date; an entry without an account covers the
-    taxable accounts."""
-    from taxjson.lib.cg_dividends import (MAP_NAME, CgDividendMapError,
-                                          allocate, load_map)
-    # lexists: a directory or dangling symlink is refused by load_map,
-    # not taken as "no map" (audit A2-0994).
-    import os as _os
-    if not _os.path.lexists(root / MAP_NAME):
-        return None
-    settings = _soft_settings(root)
-    country = _country(settings)
-    from taxjson.lib.country import project_file_problems
-    probs = project_file_problems(root, country)
-    if probs:
-        _die("; ".join(probs))
+    capital-gains dividend} from the project's [[capital_gains_dividends]]
+    (taxjson.toml; lib/cg_dividends; tax-logic CA-INC-06), or None
+    without entries. Canada only: a US project's table is refused with
+    the rest of the config (lib/country CONFIG_COUNTRY). Matched over
+    EVERY year in the native books, on the dividend's tax date; an
+    entry without an account covers the taxable accounts."""
+    from taxjson.lib.cg_dividends import (CgDividendMapError, allocate,
+                                          entries_from_config)
     try:
-        entries = load_map(root) or []
+        entries = entries_from_config(_soft_config(root))
     except CgDividendMapError as e:
         _die(str(e))
+    if entries is None:
+        return None
     if rules is None:
         rules = _view_income_rules(root)
     date_of = (rules.income_date if rules is not None
@@ -8683,7 +8792,7 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
         print()
         print("CAPITAL-GAINS DIVIDENDS (T5 box 18, line 17400 — a capital "
               "gain at 50% inclusion, not a dividend; named in "
-              "capital_gains_dividends.map, NOT in the totals above)")
+              "[[capital_gains_dividends]], NOT in the totals above)")
         print()
         _print_report_table(["SYMBOL CUR AMOUNT"] + [
             " ".join([sym, cur, money(a)])
@@ -8899,10 +9008,11 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
     else:
         print(f"TOTAL CAPITAL RETURNED ({_cw} reduced): {_tot(totals)}")
     print(f"Positive = {_cw} reduced (capital returned). Negative rows are "
-          f"reversals or manual {_cw} increases (MAP_ROWS: distributions.map "
+          f"reversals or manual {_cw} increases (MAP_ROWS: [[distributions]] "
           f"adjustments, a reinvested distribution shows negative). Enter "
-          f"fund ROC from your {_slip} as .tt ADJUST lines OR in "
-          f"distributions.map, never both — see the README's ROC section.")
+          f"fund ROC from your {_slip} as .tt ADJUST lines OR as "
+          f"[[distributions]] in taxjson.toml, never both — see the "
+          f"README's ROC section.")
 
 
 def cmd_trades_sum(args: argparse.Namespace) -> None:
@@ -9865,7 +9975,7 @@ def _section_1256_gain(files: Dict[str, Path], accounts, year,
 def _box18_into_estimate(root: Path, est: Dict[str, float], accounts,
                          year, foreign_by_acct: Dict[str, float]) -> None:
     """Move the tax year's T5 box 18 capital-gains dividends named in
-    capital_gains_dividends.map out of the estimate's dividends and into
+    [[capital_gains_dividends]] out of the estimate's dividends and into
     `est["cg_div"]` (taxed as capital gains by estimate_canada). Base-
     currency amounts from each taxable account's base book (the native
     row's id is the base row's id). No map: nothing changes."""
@@ -9883,7 +9993,7 @@ def _box18_into_estimate(root: Path, est: Dict[str, float], accounts,
             data = _read_work_doc(p)
         except (OSError, ValueError) as e:
             _die(f"could not read {p.name} ({e}) for the capital-gains "
-                 f"dividends in capital_gains_dividends.map — re-run "
+                 f"dividends in [[capital_gains_dividends]] — re-run "
                  f"`taxjson run`.")
         for t in data.get("transactions", []):
             f = fr.get((acct, str(t.get("id"))))
@@ -10125,7 +10235,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
             # Its DIVIDEND column is staking rewards (S023-11).
             acct_rows[-1]["dividend_is_staking"] = True
     if want_estimate and cfg:
-        # T5 box 18 capital-gains dividends (capital_gains_dividends.map,
+        # T5 box 18 capital-gains dividends ([[capital_gains_dividends]],
         # tax-logic CA-INC-06): out of the dividends, into the gains.
         _box18_into_estimate(root, est, set(files) & taxable_accounts,
                              year or (cfg.get("settings") or {}).get("year"),
@@ -13414,7 +13524,7 @@ def cmd_t1135(args: argparse.Namespace) -> None:
 
 def _box18_by_year(root: Path, accounts) -> Dict[int, float]:
     """{tax year: T5 box 18 capital-gains dividends} named in
-    capital_gains_dividends.map, in the base currency, dated as the
+    [[capital_gains_dividends]], in the base currency, dated as the
     estimate dates them (_box18_into_estimate). {} without the map."""
     fr = _box18_fractions(root)
     if not fr:
@@ -13430,7 +13540,7 @@ def _box18_by_year(root: Path, accounts) -> Dict[int, float]:
             data = _read_work_doc(p)
         except (OSError, ValueError) as e:
             _die(f"could not read {p.name} ({e}) for the capital-gains "
-                 f"dividends in capital_gains_dividends.map — re-run "
+                 f"dividends in [[capital_gains_dividends]] — re-run "
                  f"`taxjson run`.")
         for t in data.get("transactions", []):
             f = fr.get((acct, str(t.get("id"))))
@@ -13448,9 +13558,9 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     """`taxjson carryover`: multi-year capital-loss carryforward/carryback
     ledger over all taxable accounts' full-history books. Passes the
     combined sheltered book for wash-window context and the project's
-    missing_history.json when present. A root `claimed_losses.txt` (YEAR AMOUNT
-    lines) is picked up automatically to fold in what was actually
-    claimed on filed returns."""
+    missing_history.json when present. taxjson.toml's [carryover] claimed
+    (`claimed = { 2023 = 4000.00 }`) folds in what was actually claimed
+    on filed returns."""
     from taxjson.bin import taxjson_carryover
 
     root = Path(args.dir).resolve()
@@ -13508,15 +13618,11 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     mh_file = _missing_history_path(root)
     if mh_file.exists():
         argv += ["--incomplete-history", str(mh_file)]
-    claimed = Path(args.claimed) if args.claimed else root / "claimed_losses.txt"
-    # A dangling symlink or a directory is not "no file": the ledger
-    # without the user's claims overstates the carryforward (A2-0355).
-    if claimed.is_file():
-        argv += ["--claimed", str(claimed)]
-    elif args.claimed or claimed.is_symlink() or claimed.exists():
-        _die_input(f"cannot read the claimed file "
-                   f"{claimed} (missing, a broken link or not a file) — "
-                   f"fix or remove it; the carryforward depends on it.")
+    # [carryover] claimed (taxjson.toml): the losses actually applied
+    # on filed returns (checked with the rest of the config).
+    from taxjson.lib.project_tables import claimed_losses
+    for _y, _amt in sorted(claimed_losses(cfg)[0].items()):
+        argv += ["--claimed-year", f"{_y}={_amt!r}"]
     # Each filed-year lock — this project's filed/<year>.json and the
     # prior_year_record lock of the per-year layout (A2-0338, A2-0121):
     # a year before the project year takes what the lock says was
@@ -13530,7 +13636,7 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     for _yr, _lp, _where in _locks:
         argv += ["--filed-lock", f"{_yr}={_lp}"]
     # T5 box 18 capital-gains dividends named in
-    # capital_gains_dividends.map are capital gains of their year: the
+    # [[capital_gains_dividends]] are capital gains of their year: the
     # estimate nets them, so the ledger does too (A2-0678).
     for _y, _amt in sorted(_box18_by_year(root, taxable).items()):
         argv += ["--slip-gains", f"{_y}={_amt!r}"]
@@ -13664,7 +13770,7 @@ def cmd_harvest(args: argparse.Namespace) -> None:
     over every taxable account's wash-adjusted books, harvestable losses
     first, each loss annotated with the wash radar's advisory. Prices
     resolve IBKR -> yfinance -> cache (work/.price_cache.json). Runs
-    with cwd=project root so a root yf_ticker.map is found. Accounts
+    with cwd=project root so the root ticker.map QUOTE lines are found. Accounts
     with `crypto = true` are excluded unless --crypto is given (the
     price chain serves stock snapshots)."""
     root = Path(args.dir).resolve()
@@ -14296,7 +14402,7 @@ def _carryforwards_summary(cf: Dict[str, Any], year: int) -> List[str]:
             out.append("  note: the minimum tax was computed with no "
                        "[estimate] other_income — compare it with the "
                        "T691 you filed; the next project's "
-                       "amt_carryover.txt (from your notice of "
+                       "[estimate] amt_carryover (from your notice of "
                        "assessment) wins over this record.")
     if out:
         out.append(f"  the {year + 1} project's estimate, carryover and "
@@ -17322,6 +17428,20 @@ def _build_parser(prog: str = "taxjson"
                               "document")
     p_elect.set_defaults(func=cmd_elect)
 
+    p_mig = sub.add_parser(
+        "migrate",
+        help="Move an old project's yf_ticker.map, tv_exchange.map, "
+             "crypto_ticker.map, ticker_extraction_overrides.txt, "
+             "amt_carryover.txt, claimed_losses.txt, "
+             "capital_gains_dividends.map and distributions.map into "
+             "ticker.map / taxjson.toml (appended; each old file is "
+             "renamed <name>.migrated). Every other command stops while "
+             "one of those files is present")
+    p_mig.add_argument("--dry-run", action="store_true",
+                       help="Show what would be appended and moved; "
+                            "write nothing")
+    p_mig.set_defaults(func=cmd_migrate)
+
     p_init = sub.add_parser("init", help="Scaffold a new project")
     p_init.add_argument("path", nargs="?", help="Directory to initialize (default: cwd)")
     p_init.add_argument("--country", required=True,
@@ -18102,10 +18222,7 @@ def _build_parser(prog: str = "taxjson"
         help="Multi-year capital-loss carryforward/carryback ledger "
              "(Canada: running balance + T1A carryback candidates; US: "
              "ST/LT carryover worksheet). Record filed reality in "
-             "claimed_losses.txt (YEAR AMOUNT lines)")
-    p_carry.add_argument("--claimed", metavar="FILE",
-                         help="Losses actually applied on filed returns "
-                              "(default: claimed_losses.txt if present)")
+             "taxjson.toml: [carryover] claimed = { 2023 = 4000.00 }")
     p_carry.add_argument("--json", action="store_true",
                          help="Emit the ledger as JSON instead of text")
     p_carry.set_defaults(func=cmd_carryover)
@@ -18378,6 +18495,10 @@ def _main() -> None:
             # `taxjson run` first)" — send the user to the real problem.
             _die_input(f"no such directory: {args.dir} (-C/--dir names the "
                  f"project root — the folder holding taxjson.toml)")
+        if args.cmd not in ("init", "help", "migrate"):
+            # An old per-purpose file (yf_ticker.map, distributions.map
+            # ...) stops every command, whatever it reads (lib/migrate).
+            _refuse_legacy_project_files(Path(args.dir).resolve())
         _enforce_command_country(args)
         _refuse_artifact_account(args)
         _refuse_path_account(args)

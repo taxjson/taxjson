@@ -179,7 +179,7 @@ class TestStockDividend(unittest.TestCase):
         # The Canadian declared-amount note never reaches a US run
         # (A2-0857, A2-1488).
         self.assertNotIn("declared amount", r24["usa"]["_stderr"])
-        self.assertNotIn("distributions.map", r24["usa"]["_stderr"])
+        self.assertNotIn("distributions", r24["usa"]["_stderr"])
         self.assertNotIn("§307", r["canada"]["_stderr"])
 
     @rule("CA-STKDIV-01")
@@ -660,9 +660,10 @@ class TestRecordDateHolder(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             ps = projects_both(Path(td), year=2025,
                                accounts='[accounts.ib]\ntype = "taxable"\n',
-                               files={"inputs/ib/ib.csv": csv,
-                                      "distributions.map":
-                                      "XYZ.US 2025-12-29 0.50\n"},
+                               files={"inputs/ib/ib.csv": csv},
+                               tail='\n[[distributions]]\nsymbol = "XYZ.US"\n'
+                                    'record_date = 2025-12-29\n'
+                                    'per_share = 0.50\n',
                                canada={"source_currencies": ["USD"],
                                        "option_grant_timing_since": 2025})
             _usd_rates(ps["canada"] / "work" / "to_base.csv")

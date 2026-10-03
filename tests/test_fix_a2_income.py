@@ -1,6 +1,6 @@
-"""Re-audit-2 fixes, income list (A2-...): distributions.map sizing and
+"""Re-audit-2 fixes, income list (A2-...): [[distributions]] sizing and
 dating, the per-account split of a blended pool, income dating of
-Canadian split-share corporations and trusts, capital_gains_dividends.map
+Canadian split-share corporations and trusts, [[capital_gains_dividends]]
 and ric_january_dividends matching.
 
 All data is synthetic (fake account ids, invented tickers).
@@ -313,21 +313,23 @@ class TestCgDividendsMap(unittest.TestCase):
             self.assertEqual(parse_map(f"FFN.TO 2024 {amt}\n")[0].amount,
                              want)
 
-    def test_directory_or_dangling_symlink_is_an_error(self):
-        import os
-        import tempfile
-        from pathlib import Path
-        from taxjson.lib.cg_dividends import (MAP_NAME, CgDividendMapError,
-                                              load_map)
-        with tempfile.TemporaryDirectory() as d:
-            self.assertIsNone(load_map(Path(d)))
-            (Path(d) / MAP_NAME).mkdir()
-            with self.assertRaises(CgDividendMapError):
-                load_map(Path(d))
-        with tempfile.TemporaryDirectory() as d:
-            os.symlink(Path(d) / "missing", Path(d) / MAP_NAME)
-            with self.assertRaises(CgDividendMapError):
-                load_map(Path(d))
+    def test_absent_table_is_none_and_a_bad_one_is_an_error(self):
+        # The entries live in taxjson.toml now (they were a project-root
+        # file whose directory / dangling-link form was A2-0994): no
+        # table is "none", a table that is not an array of tables is an
+        # error naming it, never "no entries".
+        from taxjson.lib.cg_dividends import (CgDividendMapError,
+                                              entries_from_config)
+        self.assertIsNone(entries_from_config({}))
+        for bad in ({"capital_gains_dividends": "LFE.TO 2025 all"},
+                    {"capital_gains_dividends": [{"symbol": "LFE.TO",
+                                                  "amount": "all"}]},
+                    {"capital_gains_dividends": [{"symbol": "LFE.TO",
+                                                  "year": 2025,
+                                                  "amount": "17,11"}]}):
+            with self.assertRaises(CgDividendMapError) as cm:
+                entries_from_config(bad)
+            self.assertIn("capital_gains_dividends", str(cm.exception))
 
     @rule("CA-INC-06")
     def test_date_entry_matches_pay_date_of_record_dated_row(self):

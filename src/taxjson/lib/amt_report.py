@@ -112,9 +112,9 @@ def render(doc: Dict[str, Any]) -> List[str]:
     c = a.get("carryover") or {}
     L.append("MINIMUM TAX CARRYOVER (s.120.2)")
     src = (doc.get("carry_sources") or {}).get("amt_carryover")
-    L.append("  From: " + (src or "nothing entered (amt_carryover.txt, "
-                                  "[estimate] amt_carryover) and no "
-                                  "earlier close-year record"))
+    L.append("  From: " + (src or "nothing entered ([estimate] "
+                                  "amt_carryover) and no earlier "
+                                  "close-year record"))
     avail = c.get("available_by_year") or {}
     if avail:
         L.append(f"  {'ORIGIN':<8}{'AVAILABLE':>14}  {'USABLE THROUGH':<15}"

@@ -756,8 +756,8 @@ def main(argv: Optional[List[str]] = None,
           f"{'; options: IBKR -> cache' if option_tickers else ''})...",
           file=sys.stderr if args.json else sys.stdout)
 
-    # The project's yf_ticker.map: next to the inputs, then the project
-    # root above work/ — the cwd only last. Looking in the cwd first
+    # The project's ticker.map QUOTE lines: next to the inputs, then the
+    # project root above work/ — the cwd only last. Looking in the cwd first
     # lost the map whenever the tool ran from elsewhere (audit R1-246).
     _dirs: List[Path] = []
     for f in files:
@@ -766,7 +766,7 @@ def main(argv: Optional[List[str]] = None,
                 _dirs.append(d)
     external_map = load_yf_map(_dirs + [Path(".")])
     # The coin spellings the books were priced with: fill-crypto's
-    # built-ins plus the project's crypto_ticker.map (audit A2-0364).
+    # built-ins plus the project's ticker.map CRYPTO lines (A2-0364).
     # Project root first — `taxjson run` reads the map from there.
     crypto_overrides = load_crypto_overrides(
         [d for d in reversed(_dirs)])
@@ -790,7 +790,7 @@ def main(argv: Optional[List[str]] = None,
     # The contract to QUOTE for each option position (see --ticker-map).
     # Not named (the console script run on <project>/work/*_gains_wash.
     # json): the project's ticker.map next to the inputs or one level
-    # up, as for yf_ticker.map — without it a TOBASE-renamed option was
+    # up, as for the QUOTE lines — without it a TOBASE-renamed option was
     # quoted as the other listing's contract (re-audit A2-0885).
     _tmap = args.ticker_map
     if _tmap is None and option_tickers:
@@ -874,7 +874,7 @@ def main(argv: Optional[List[str]] = None,
         if qcur is None:
             warn(PROG, f"cannot tell which currency the quote for "
                        f"{r['symbol']} ({yf_map.get(r['symbol'], r['symbol'])}"
-                       f") is in — omitted. Map it in yf_ticker.map to a "
+                       f") is in — omitted. Map it with a ticker.map QUOTE line to a "
                        f"listing with a known suffix (.US/.TO/.L/...).")
             continue
         fx = 1.0

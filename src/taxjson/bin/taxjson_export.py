@@ -119,22 +119,21 @@ def _passes_filters(item: Dict[str, Any], args) -> bool:
 
 
 def _find_tv_map(inputs):
-    """tv_exchange.map for a stand-alone --tradingview run: next to an
-    input, then in the input's parent (the project root for
-    work/<acct>_gains.json), then the current directory. The cwd used
-    to be searched FIRST and the project root never, so `taxjson -C
-    <proj> run` from another directory lost the project's prefixes, or
-    picked up a different project's map (audit R1-246, R1-285)."""
+    """The ticker.map whose TRADINGVIEW lines a stand-alone --tradingview
+    run uses: next to an input, then in the input's parent (the project
+    root for work/<acct>_gains.json), then the current directory. The
+    cwd used to be searched FIRST and the project root never, so
+    `taxjson -C <proj> run` from another directory lost the project's
+    prefixes, or picked up a different project's map (audit R1-246,
+    R1-285). A searched folder still holding the old tv_exchange.map is
+    refused (`taxjson migrate` moves its lines into ticker.map)."""
+    from taxjson.lib.ticker_map import find_ticker_map
     dirs = []
     for p in inputs:
         d = Path(p).resolve().parent
         dirs += [d, d.parent]
     dirs.append(Path.cwd())
-    for d in dirs:
-        f = d / "tv_exchange.map"
-        if f.is_file():
-            return f
-    return None
+    return find_ticker_map(dirs)
 
 
 def _is_dust(qty: float, total_cost: float, threshold: float) -> bool:
@@ -716,7 +715,7 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
         # blend across taxable accounts: a denied loss's bump and the
         # blended cost are NOT in it, so it can call a position a gain
         # that is a tax loss (S037-24). Said in the file itself.
-        # distributions.map adjustments are booked in the base books
+        # [[distributions]] adjustments are booked in the base books
         # only (amounts in the base currency), so neither cost here has
         # them (audit A2-0226): said too.
         # Each country's own words (re-audit A2-0745): a US project has
@@ -729,7 +728,7 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
         from taxjson.lib.country import COST_TERM
         lines.append(f'base_cost_basis = "per-account, per-listing, before '
                      f'{_adj} and '
-                     f'distributions.map adjustments (total_cost excludes '
+                     f'[[distributions]] adjustments (total_cost excludes '
                      f'those too; the filing {COST_TERM[_c]} is '
                      f'`taxjson list`)"')
     lines.append("")
@@ -919,10 +918,11 @@ def main():
     )
     parser.add_argument(
         "--tv-map", metavar="FILE", default=None,
-        help="tv_exchange.map for --tradingview (`taxjson run` passes the "
-             "project's). Default: the first tv_exchange.map found next "
-             "to an input or in its parent directory (the project root "
-             "for work/*_gains.json), then in the current directory.")
+        help="The ticker.map whose TRADINGVIEW lines (`TRADINGVIEW SYMBOL "
+             "EXCHANGE`) give --tradingview's exchange prefixes. Default: "
+             "the first ticker.map found next to an input or in its "
+             "parent directory (the project root for work/*_gains.json), "
+             "then in the current directory.")
     parser.add_argument(
         "--account-name", default=None,
         help="Account name to stamp into the --holdings-toml output.",
@@ -1000,30 +1000,23 @@ def main():
     agg: Dict[str, Dict[str, Any]] = {}
     tv_map: Dict[str, str] = {}
 
-    # Load TradingView map if needed
+    # Load TradingView map if needed: the TRADINGVIEW lines of the
+    # project's ticker.map (`TRADINGVIEW SYMBOL EXCHANGE`).
     if args.platform == "tradingview":
         map_file = (Path(args.tv_map) if args.tv_map
                     else _find_tv_map(args.inputs))
         if map_file is not None:
+            from taxjson.lib.ticker_map import read_side_rules
             try:
-                # utf-8-sig: a BOM became part of the first key and
-                # its rule was dropped in silence (A2-0806 / A2-1410).
-                text = map_file.read_text(encoding="utf-8-sig")
-            except (OSError, UnicodeDecodeError) as e:
+                _side = read_side_rules(map_file)
+            except (OSError, UnicodeDecodeError, ValueError) as e:
                 _die(f"{map_file}: cannot read ({e})")
-            for line in text.splitlines():
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                parts = line.split()
-                if len(parts) >= 2:
-                    tv_map[parts[0]] = parts[1]
-                else:
-                    # Warn like the sibling map loaders do (audit
-                    # S077-07: silently dropped).
-                    print(f"warning: {map_file}: expected `SYMBOL "
-                          f"EXCHANGE`, got {line!r} — line ignored",
-                          file=sys.stderr)
+            for _msg in _side.problems:
+                # Warn like the sibling map loaders do (audit S077-07:
+                # silently dropped).
+                print(f"warning: ticker.map problem: {_msg} — line "
+                      f"ignored", file=sys.stderr)
+            tv_map.update(_side.tradingview)
 
     # The holdings aggregation applies JOURNAL renames — they net
     # offsetting cross-currency legs (Norbert's Gambit) here, post-gains,

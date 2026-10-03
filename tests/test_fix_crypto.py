@@ -420,21 +420,21 @@ class TestCryptoTickerMapFromProjectRoot(unittest.TestCase):
             elsewhere = Path(td) / "elsewhere"
             elsewhere.mkdir()
             # A map in the unrelated cwd must NOT leak into this project.
-            (elsewhere / "crypto_ticker.map").write_text("SOL SOLOTHER\n")
+            (elsewhere / "ticker.map").write_text("CRYPTO SOL SOLOTHER\n")
             env = _env(home, TAXJSON_OFFLINE="1")
 
             r = _run_cli(root, "run", "--no-input", cwd=elsewhere, env=env)
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             self.assertEqual(self._filled_price(root), 5.0)
 
-            (root / "crypto_ticker.map").write_text("SOL SOLFIX\n")
+            (root / "ticker.map").write_text("CRYPTO SOL SOLFIX\n")
             r = _run_cli(root, "run", "--fast", "--no-input", cwd=elsewhere,
                          env=env)
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             self.assertEqual(self._filled_price(root), 100.0)
 
-            # Deleting the map re-prices under --fast too.
-            (root / "crypto_ticker.map").unlink()
+            # Deleting the CRYPTO line re-prices under --fast too.
+            (root / "ticker.map").unlink()
             r = _run_cli(root, "run", "--fast", "--no-input", cwd=elsewhere,
                          env=env)
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
@@ -444,7 +444,7 @@ class TestCryptoTickerMapFromProjectRoot(unittest.TestCase):
         import taxjson.bin.fill_crypto_prices as fc
         before = dict(fc.SYMBOL_OVERRIDES)
         with tempfile.TemporaryDirectory() as tmp:
-            (Path(tmp) / "crypto_ticker.map").write_text("ZZQ ZZQ999\n")
+            (Path(tmp) / "ticker.map").write_text("CRYPTO ZZQ ZZQ999\n")
             inp = Path(tmp) / "in.json"
             inp.write_text(json.dumps({"transactions": []}))
             saved = sys.argv

@@ -727,29 +727,35 @@ class TestT1135Report(unittest.TestCase):
         self.assertIn("NOT reliable", text)
 
     def test_other_user_maps_read_a_bom(self):
-        """S051-18: distributions.map, yf_ticker.map, crypto_ticker.map
-        and the security-overrides file keep their first rule."""
+        """S051-18: [[distributions]] (taxjson.toml) and the ticker.map
+        QUOTE / CRYPTO / EXTRACT lookups (once yf_ticker.map,
+        crypto_ticker.map and the security-overrides file) keep their
+        first rule behind a BOM."""
         from taxjson.bin.fill_crypto_prices import load_symbol_overrides
-        from taxjson.bin.taxjson_apply_distributions import load_map
+        from taxjson.bin.taxjson_apply_distributions import load_rows
         from taxjson.bin.taxjson_brokerage import load_security_overrides
         from taxjson.lib.price_chain import load_yf_map
-        bom = "﻿"
+        bom = "\ufeff"
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)
-            (d / "distributions.map").write_text(
-                bom + "ABC.TO 2025-06-30 1.00\n", encoding="utf-8")
-            (d / "yf_ticker.map").write_text(bom + "OLDCO.TO NEWCO 0.25\n",
-                                             encoding="utf-8")
-            (d / "crypto_ticker.map").write_text(bom + "MYCOIN mycoin-id\n",
-                                                 encoding="utf-8")
-            (d / "ov.txt").write_text(bom + "global x us dollar | USD | "
-                                            "DLR.U.TO\n", encoding="utf-8")
-            self.assertEqual(load_map(d / "distributions.map")[0][0],
-                             "ABC.TO")
-            self.assertIn("OLDCO.TO", load_yf_map([d]))
-            self.assertIn("MYCOIN", load_symbol_overrides([d]))
-            self.assertTrue(load_security_overrides(d / "ov.txt")[0][0]
-                            .startswith("global"))
+            (d / "taxjson.toml").write_text(
+                bom + '[[distributions]]\nsymbol = "ABC.TO"\n'
+                'record_date = 2025-06-30\nper_share = 1.00\n',
+                encoding="utf-8")
+            self.assertEqual(load_rows(d / "taxjson.toml")[0][0], "ABC.TO")
+            for first, check in (
+                    ("QUOTE OLDCO.TO NEWCO 0.25",
+                     lambda: self.assertIn("OLDCO.TO", load_yf_map([d]))),
+                    ("CRYPTO MYCOIN mycoin-id",
+                     lambda: self.assertIn("MYCOIN",
+                                           load_symbol_overrides([d]))),
+                    ("EXTRACT global x us dollar | USD | DLR.U.TO",
+                     lambda: self.assertTrue(
+                         load_security_overrides(d / "ticker.map")[0][0]
+                         .startswith("global")))):
+                (d / "ticker.map").write_text(bom + first + "\n",
+                                              encoding="utf-8")
+                check()
 
 
 class TestOptionBoundaryPhantoms(unittest.TestCase):

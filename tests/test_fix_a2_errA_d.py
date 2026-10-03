@@ -329,7 +329,7 @@ class TestExport(_Tmp):
         g.write_text('{"inventory":[{"symbol":"XYZ.TO","qty":10,'
                      '"total_cost":100.0,"currency":"CAD"}]}')
         m = self.root / "bom.map"
-        m.write_bytes(b"\xef\xbb\xbfXYZ NEO\n")
+        m.write_bytes(b"\xef\xbb\xbfTRADINGVIEW XYZ NEO\n")
         r = export("--tradingview", "--tv-map", str(m), str(g))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("NEO:XYZ", r.stdout)

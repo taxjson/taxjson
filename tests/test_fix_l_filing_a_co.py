@@ -84,7 +84,7 @@ class TestClaimedFile(unittest.TestCase):
                          year=2024, today=date(2025, 5, 1), run_sub=Sub())
             r = cl.d_carryover(ctx)
         self.assertEqual(r.status, "attention")
-        self.assertIn("1 claimed_losses.txt line(s) ignored", r.detail)
+        self.assertIn("1 claimed line(s) ignored", r.detail)
 
     def test_ignored_line_is_in_the_text_report(self):
         with tempfile.TemporaryDirectory() as td:

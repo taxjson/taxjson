@@ -185,11 +185,12 @@ class TestRunRefusesContradictoryMaps(unittest.TestCase):
         self.assertIn("rename cycle", r.stderr + r.stdout)
 
     def test_malformed_security_override_refused(self):
-        # S053-04 (second half): ticker_extraction_overrides.txt.
-        r = _run_project({"ticker_extraction_overrides.txt":
-                          "SOME FUND, USD, FUND.TO\n"})
+        # S053-04 (second half): an EXTRACT line (once
+        # ticker_extraction_overrides.txt) that cannot be read.
+        r = _run_project({"ticker.map":
+                          "EXTRACT SOME FUND, USD, FUND.TO\n"})
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("ticker_extraction_overrides.txt line 1",
+        self.assertIn("ticker.map:1: EXTRACT needs",
                       r.stderr + r.stdout)
 
 

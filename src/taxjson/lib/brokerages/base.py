@@ -522,13 +522,13 @@ def parse_strict_number(raw, *, field: str = 'value', where: str = '',
 # ROOT.TO for EVERY Canadian venue (TSX, TSX Venture, CSE, NEO):
 #   * IB, RBC and Webull cannot (RBC/Webull) or do not (IB) put the venue
 #     in the symbol -- they stamp every CAD listing .TO, and real books
-#     (ticker.map TOBASE rules, yf_ticker.map price aliases) are keyed on
+#     (ticker.map TOBASE rules, QUOTE price aliases) are keyed on
 #     that; Questrade alone named the venue (.VN/.CN/.NE), so a Venture
 #     name bought at Questrade and sold at IB split into two pools and a
 #     cross-account superficial loss was missed.
 #   * TSX and TSX Venture share one symbol namespace (TMX), so ROOT.TO is
 #     unambiguous for a Venture listing; price lookups that need the venue
-#     go through yf_ticker.map (PNG.TO -> PNG.V).
+#     go through a ticker.map QUOTE line (PNG.TO -> PNG.V).
 # TSX preferred shares are dotted per series: Questrade's FTN.PRA.TO is
 # the FTN.PR.A.TO every other parser emits.
 _CA_VENUE_SUFFIX_RE = re.compile(r'\.(VN|CN|NE)$', re.IGNORECASE)

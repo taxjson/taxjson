@@ -247,14 +247,14 @@ class TestToolInputContract(_Tmp):
         bad = {"trunc": self.write("trunc.json", '{"transactions": ['),
                "latin1": self.write("latin1.json", b'{"a": "caf\xe9"}'),
                "int": self.write("int.json", "5")}
-        good_map = self.write("dist.map", "")
+        good_map = self.write("taxjson.toml", "")
         slip = self.write("slip.csv", "symbol,quantity,proceeds\n")
 
         def argv(module, f):
             return {
                 "taxjson_lint_crosslistings": ["--taxable", f],
                 "taxjson_fees": [f],
-                "taxjson_apply_distributions": [f, "--map", good_map],
+                "taxjson_apply_distributions": [f, "--config", good_map],
                 "taxjson_form_export": ["--form", "schedule3",
                                         "--country", "canada", f],
                 "taxjson_split_gains": [f, "--account", "margin"],

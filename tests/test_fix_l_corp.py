@@ -1,5 +1,6 @@
 """Regression tests for the 2026-09 audit's LOW corporate-action and
-distributions.map findings (area `corp`, low round). All data
+distributions.map findings (area `corp`, low round; the map is
+taxjson.toml's [[distributions]] now). All data
 synthetic: fake tickers, fake ISINs, fake broker account ids."""
 import io
 import json
@@ -22,13 +23,17 @@ def _quiet(fn, *a, **kw):
     return out, buf.getvalue()
 
 
-def _map_file(tmp, text):
-    p = Path(tmp) / "distributions.map"
-    p.write_text(text)
+def _map_file(tmp, *entries):
+    """A taxjson.toml holding one [[distributions]] table per (symbol,
+    record_date, per_share) — each value is TOML text as written."""
+    p = Path(tmp) / "taxjson.toml"
+    p.write_text("".join(
+        f"[[distributions]]\nsymbol = {sym}\nrecord_date = {d}\n"
+        f"per_share = {amt}\n" for sym, d, amt in entries))
     return p
 
 
-# ======================================================= distributions.map
+# ======================================================= [[distributions]]
 @rule("CA-DIST-01")
 class TestDistributionsMapLow(unittest.TestCase):
     def _apply(self, txs, rows, **kw):
@@ -81,15 +86,15 @@ class TestDistributionsMapLow(unittest.TestCase):
                 {"action": "BUYSELL", "date": "2025-01-05",
                  "symbol": "XAW.TO", "quantity": 100.0,
                  "account": "margin"}]}))
-            m = _map_file(tmp, "XAW.TO 2025-06-30 0.50\n")
+            m = _map_file(tmp, ('"XAW.TO"', "2025-06-30", "0.50"))
             for bad in ("Margin", "bogus"):
-                rc, err = _quiet(main, [str(base), "--map", str(m),
+                rc, err = _quiet(main, [str(base), "--config", str(m),
                                         "--account", bad])
                 self.assertEqual(rc, 2, err)
                 self.assertIn("is not an account of", err)
             # Untouched by the refusals; the book's own label works.
             self.assertNotIn("ADJUST", base.read_text())
-            rc, err = _quiet(main, [str(base), "--map", str(m),
+            rc, err = _quiet(main, [str(base), "--config", str(m),
                                     "--account", "margin"])
             self.assertEqual(rc, 0, err)
             adj = [t for t in json.loads(base.read_text())["transactions"]
@@ -97,39 +102,47 @@ class TestDistributionsMapLow(unittest.TestCase):
         self.assertEqual([a["account"] for a in adj], ["margin"])
 
     def test_s025_14_amount_must_be_a_plain_decimal(self):
-        from taxjson.bin.taxjson_apply_distributions import load_map
+        # TOML numbers now: a non-finite number, a quoted amount or a
+        # boolean is refused naming per_share (S025-14's nan/inf/1e309).
+        from taxjson.bin.taxjson_apply_distributions import load_rows
         with tempfile.TemporaryDirectory() as tmp:
-            for bad in ("nan", "inf", "-inf", "1e309", "1_0", "0x10",
-                        "1e2", "+", "."):
-                p = _map_file(tmp, f"XYZ.TO 2025-03-31 {bad}\n")
+            for bad in ("nan", "inf", "-inf", "1e309", '"0.10"', '"1_0"',
+                        "true"):
+                p = _map_file(tmp, ('"XYZ.TO"', "2025-03-31", bad))
                 with self.assertRaises(SystemExit) as cm:
-                    load_map(p)
-                self.assertIn("bad per-share amount", str(cm.exception))
-            for ok, val in (("0.10", 0.1), ("-0.12", -0.12), (".5", 0.5),
-                            ("+2", 2.0), ("3.", 3.0)):
-                p = _map_file(tmp, f"XYZ.TO 2025-03-31 {ok}\n")
-                self.assertEqual(load_map(p), [("XYZ.TO", "2025-03-31",
-                                                val)])
+                    _quiet(load_rows, p)
+                self.assertIn("per_share must be a number",
+                              str(cm.exception), bad)
+            for ok, val in (("0.10", 0.1), ("-0.12", -0.12), ("0.5", 0.5),
+                            ("+2", 2.0), ("3.0", 3.0)):
+                p = _map_file(tmp, ('"XYZ.TO"', "2025-03-31", ok))
+                self.assertEqual(load_rows(p), [("XYZ.TO", "2025-03-31",
+                                                 val)])
 
     def test_s025_19_date_shape(self):
-        from taxjson.bin.taxjson_apply_distributions import load_map
+        from taxjson.bin.taxjson_apply_distributions import load_rows
         with tempfile.TemporaryDirectory() as tmp:
             for bad in ("2025/06/19", "2025-06/19", "2025/06-19",
                         "20250619", "2025-6-19", "2025-06-1x",
                         "2025-02-30", "2025-13-01"):
-                p = _map_file(tmp, f"XYZ.TO {bad} 0.10\n")
+                p = _map_file(tmp, ('"XYZ.TO"', f'"{bad}"', "0.10"))
                 with self.assertRaises(SystemExit) as cm:
-                    load_map(p)
-                self.assertIn("bad date", str(cm.exception), bad)
+                    _quiet(load_rows, p)
+                self.assertIn("record_date must be a date",
+                              str(cm.exception), bad)
+            # A TOML date and its "YYYY-MM-DD" string read the same.
+            for d in ("2025-06-19", '"2025-06-19"'):
+                p = _map_file(tmp, ('"XYZ.TO"', d, "0.10"))
+                self.assertEqual(load_rows(p)[0][1], "2025-06-19")
 
     def test_s025_16_repeated_key_warned_and_ids_unique(self):
-        from taxjson.bin.taxjson_apply_distributions import load_map
+        from taxjson.bin.taxjson_apply_distributions import load_rows
         with tempfile.TemporaryDirectory() as tmp:
-            p = _map_file(tmp, "ABC.TO 2026-06-30 1.00\n"
-                               "abc.to 2026-06-30 1.00\n")
-            rows, err = _quiet(load_map, p)
+            p = _map_file(tmp, ('"ABC.TO"', "2026-06-30", "1.00"),
+                          ('"abc.to"', "2026-06-30", "1.00"))
+            rows, err = _quiet(load_rows, p)
         self.assertEqual(len(rows), 2)
-        self.assertIn("repeats line 1", err)
+        self.assertIn("repeats entry #1", err)
         _, adj, n, _ = self._apply(
             [{"action": "BUYSELL", "date": "2026-01-05",
               "symbol": "ABC.TO", "quantity": 100.0}], rows)

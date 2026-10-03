@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### One mapping file, year data in taxjson.toml (owner request)
+
+- `ticker.map` is the project's one mapping file. Four lookup keywords
+  join the rename rules: `QUOTE SYMBOL YAHOO_SYMBOL [RATIO]` (was
+  `yf_ticker.map`; price lookups in `harvest` and the price chain),
+  `TRADINGVIEW SYMBOL EXCHANGE` (was `tv_exchange.map`; the TradingView
+  exports), `CRYPTO SYMBOL YAHOO_ID` (was `crypto_ticker.map`;
+  fill-crypto, crypto-sends and harvest) and `EXTRACT description words |
+  CURRENCY | SYMBOL` (was `ticker_extraction_overrides.txt`; the parsers'
+  symbol-extraction overrides — `taxjson-brokerage --security-overrides`
+  now takes a ticker.map and reads its EXTRACT lines). A malformed
+  lookup line stops `taxjson run` like any other ticker.map line;
+  TRADINGVIEW symbols are upper-cased like every ticker.map symbol.
+- Hand-entered year data lives in `taxjson.toml`, checked by every
+  command (types, dates, duplicates, the account an entry names, the
+  country): `[estimate] amt_carryover` (the `amt_carryover.txt` reader is
+  gone), `[carryover] claimed = { YEAR = AMOUNT }` (was
+  `claimed_losses.txt`; `taxjson carryover` passes it to
+  `taxjson-carryover --claimed-year` and has no `--claimed` option any
+  more), `[[capital_gains_dividends]]` (Canada only; was
+  `capital_gains_dividends.map`) and `[[distributions]]` (was
+  `distributions.map`; `taxjson-apply-distributions --config
+  taxjson.toml` replaces `--map`).
+- New `taxjson migrate [--dry-run]` converts an older project: the old
+  files' lines are appended to ticker.map / taxjson.toml with the old
+  readers' meaning (the user's content and comments are never
+  rewritten), each old file is renamed `<name>.migrated`, and it refuses,
+  writing nothing, on an unreadable line or a conflicting entry. While
+  one of the old files is in a project every other command stops
+  (exit 2) naming it — no silent fallback.
+- The `run --fast` and checklist input fingerprints track ticker.map
+  (and taxjson.toml, as before) instead of the old files.
+
 ### Minimum tax detail and carry-forwards (owner request)
 
 - New `taxjson amt [YEAR]` (Canada): the year's minimum tax line by line —
@@ -12,8 +45,8 @@
   carries forward. Every figure is the estimate's own. A US project
   refuses it (Form 6251 is not modelled). A `checklist` step.
 - The estimate now applies a prior-year minimum tax carryover: from
-  `amt_carryover.txt` (`YEAR AMOUNT` lines by year of origin) or
-  `[estimate] amt_carryover = { YEAR = AMOUNT }`, else from the latest
+  `[estimate] amt_carryover = { YEAR = AMOUNT }` (by year of origin),
+  else from the latest
   close-year lock before the project year — oldest first, up to regular
   federal tax minus federal minimum tax, the province's share at its
   minimum-tax factor; expired years drop off with a note. Instalments use

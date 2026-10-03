@@ -270,4 +270,8 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
             out.append(f"[settings] local_timezone must be an IANA zone "
                        f"name such as \"America/Toronto\" or "
                        f"\"America/Los_Angeles\", got {tz!r}")
-    return out + config_country_problems(cfg)
+    # The hand-entered year data ([[distributions]], [carryover] claimed,
+    # [[capital_gains_dividends]], [estimate] amt_carryover): types,
+    # dates, duplicates — lib/project_tables.
+    from taxjson.lib.project_tables import table_problems
+    return out + config_country_problems(cfg) + table_problems(cfg)

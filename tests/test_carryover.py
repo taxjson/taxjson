@@ -255,14 +255,14 @@ class TestRunWrapper(unittest.TestCase):
                 '[settings]\nyear = 2024\ncountry = "canada"\n'
                 'base_currency = "CAD"\n\n'
                 '[accounts.margin]\ntype = "taxable"\n\n'
-                '[accounts.rrsp]\ntype = "sheltered"\n')
+                '[accounts.rrsp]\ntype = "sheltered"\n\n'
+                # [carryover] claimed is read from taxjson.toml.
+                '[carryover]\nclaimed = { 2024 = 2500 }\n')
             work = root / "work"
             work.mkdir()
             (work / "margin_base.json").write_text(
                 json.dumps({"transactions": CA_HISTORY}))
-            # claimed_losses.txt auto-detected at the root.
-            (root / "claimed_losses.txt").write_text("2024 2500\n")
-            args = argparse.Namespace(dir=str(root), claimed=None, json=True)
+            args = argparse.Namespace(dir=str(root), json=True)
             out = io.StringIO()
             with redirect_stdout(out), redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as cm:

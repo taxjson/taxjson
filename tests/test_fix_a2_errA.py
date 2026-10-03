@@ -260,7 +260,7 @@ class TestExitCodes(unittest.TestCase):
             csv_.write_text("Statement,Header,Field Name,Field Value\n")
             b = td / "margin_base.json"
             b.write_text(json.dumps({"transactions": [_base_row()]}))
-            dmap = td / "distributions.map"
+            dmap = td / "taxjson.toml"     # no [[distributions]]
             dmap.write_text("")
             g = td / "margin_gains.json"
             g.write_text(json.dumps(_gains_doc()))
@@ -268,7 +268,7 @@ class TestExitCodes(unittest.TestCase):
                 "taxjson_corp_actions": ("--brokerage", "ib", "--country",
                                          "canada", "--list", "--ticker-map",
                                          nope, csv_),
-                "taxjson_apply_distributions": ("--map", dmap, "--ticker-map",
+                "taxjson_apply_distributions": ("--config", dmap, "--ticker-map",
                                                 nope, b),
                 "taxjson_harvest": ("--no-ibkr", "--country", "canada",
                                     "--ticker-map", nope, g),
@@ -484,11 +484,11 @@ class TestWorkDocShapes(unittest.TestCase):
             b = td / "margin_base.json"
             b.write_text(json.dumps({"transactions": [
                 _base_row(quantity="x")]}))
-            dmap = td / "distributions.map"
+            dmap = td / "taxjson.toml"     # no [[distributions]]
             dmap.write_text("")
             runs = {
                 "taxjson_harvest": ("--no-ibkr", "--country", "canada", g),
-                "taxjson_apply_distributions": ("--map", dmap, b),
+                "taxjson_apply_distributions": ("--config", dmap, b),
                 "taxjson_split_gains": ("--account", "margin", g),
             }
             for mod, args in runs.items():

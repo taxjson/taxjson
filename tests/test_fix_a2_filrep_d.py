@@ -527,7 +527,7 @@ class TestInterestAndSlipWording(unittest.TestCase):
         self.assertNotIn("capital gains on T3/T5 slips are not included",
                          CA_ASSUMPTIONS)
         self.assertIn("T5 box 18 amounts not named in "
-                      "capital_gains_dividends.map", CA_ASSUMPTIONS)
+                      "[[capital_gains_dividends]]", CA_ASSUMPTIONS)
 
     def test_checklist_and_filing_doc_wording(self):
         import inspect

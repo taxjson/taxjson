@@ -88,7 +88,7 @@ class DisclosuresAndWording(unittest.TestCase):
         # The carryover is applied now when entered (CA-AMT-08); with
         # none entered the note says where to put it.
         self.assertIn("none is entered", joined)
-        self.assertIn("amt_carryover.txt", joined)
+        self.assertIn("[estimate] amt_carryover", joined)
 
     def test_assumptions_do_not_point_at_divs_fees_for_interest(self):
         r = _ca(realized=1000.0)

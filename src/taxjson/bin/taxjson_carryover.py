@@ -33,12 +33,14 @@ taxable income absorbed it (Capital Loss Carryover Worksheet line 4 —
 less than line 21 when taxable income is negative). Claims fold into
 the running balance (a claim recorded before the loss exists — e.g. a
 carryback entered under the target year — is held pending and consumed
-when the loss arrives).
+when the loss arrives). In a project the claims are taxjson.toml's
+`[carryover] claimed = { 2023 = 4000.00 }`, which `taxjson carryover`
+passes as --claimed-year YEAR=AMOUNT.
 
 Usage:
     taxjson-carryover margin_base.json [more_base.json ...]
         --country canada [--sheltered sheltered_base.json]
-        [--incomplete-history missing_history.json] [--claimed claimed_losses.txt]
+        [--incomplete-history missing_history.json] [--claimed FILE | --claimed-year YEAR=AMOUNT ...]
         [--tax-date settle|trade] [--base-currency CAD] [--json]
 
 Or through the project wrapper: `taxjson carryover`.
@@ -323,7 +325,7 @@ def build_usa_ledger(nets: Dict[int, Dict[str, float]],
     carried = carried or {}
     # Every RETURN year matters, not just disposition years: while a
     # carryover exists, each intervening year's return absorbs up to
-    # $3,000 against ordinary income (or the claimed_losses.txt
+    # $3,000 against ordinary income (or the [carryover] claimed
     # override, 0 included), so iterating `sorted(nets)` alone silently
     # skipped gap years and overstated the final carryover. Walk the
     # full span of book+claim years; emit a row for a no-disposition
@@ -496,7 +498,7 @@ def lock_figure(path: Path, country: str) -> Dict[str, Any]:
 # loss"), including slip gains and the s.39(1.1) FX gain.
 SCOPE_NOTE = {
     'canada': ("NET GAIN(LOSS) counts the dispositions in these books "
-               "(plus the T5 box 18 dividends capital_gains_dividends.map "
+               "(plus the T5 box 18 dividends [[capital_gains_dividends]] "
                "names, when `taxjson carryover` passes them). Other "
                "capital gains reported on slips (T3 box 21, T5 "
                "box 18 -> lines 17400/17600) and the ITA s.39(1.1) FX "
@@ -651,7 +653,7 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
     slips = [r for r in rows if r.get('slip_gains')]
     if slips:
         lines.append("  - Includes the capital-gains dividends named in "
-                     "capital_gains_dividends.map (T5 box 18): "
+                     "[[capital_gains_dividends]] (T5 box 18): "
                      + ", ".join(f"{r['year']} {_money(r['slip_gains'])}"
                                  for r in slips) + ".")
     prior = [r['year'] for r in rows if r.get('prior_year')]
@@ -722,7 +724,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "the next year's Capital Loss Carryover "
                              "Worksheet; 0 when taxable income was "
                              "negative) — not the line 6/14 carryover "
-                             "coming in.")
+                             "coming in. (`taxjson carryover` passes the "
+                             "project's [carryover] claimed as "
+                             "--claimed-year instead.)")
+    parser.add_argument("--claimed-year", action="append", default=[],
+                        metavar="YEAR=AMOUNT",
+                        help="One year's claimed amount (same meaning as "
+                             "a --claimed line); repeatable. The wrapper "
+                             "passes taxjson.toml's [carryover] claimed "
+                             "this way. Not combined with --claimed.")
     parser.add_argument("--project-year", type=tax_year, default=None,
                         metavar="YEAR",
                         help="The project's tax year: earlier rows are "
@@ -749,7 +759,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--slip-gains", action="append", default=[],
                         metavar="YEAR=AMOUNT",
                         help="Canada: capital gains from slips (T5 box 18 "
-                             "dividends in capital_gains_dividends.map) "
+                             "dividends in [[capital_gains_dividends]]) "
                              "that year — added to the year's net (the "
                              "wrapper passes them).")
     parser.add_argument("--corporate-distribution", action="append",
@@ -819,6 +829,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not p.exists():
             print(f"taxjson-carryover: no such file: {p}", file=sys.stderr)
             return 2
+    if args.claimed is not None and args.claimed_year:
+        print("taxjson-carryover: give the claimed amounts once — "
+              "--claimed FILE or --claimed-year YEAR=AMOUNT, not both",
+              file=sys.stderr)
+        return 2
     if args.claimed is not None and not args.claimed.exists():
         print(f"taxjson-carryover: no such file: {args.claimed}",
               file=sys.stderr)
@@ -951,6 +966,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         slip = [_year_amount(i, "--slip-gains") for i in args.slip_gains]
+        for y, v in (_year_amount(i, "--claimed-year")
+                     for i in args.claimed_year):
+            if v < 0:
+                raise ValueError(f"--claimed-year {y}: the amount must be "
+                                 f">= 0, got {v!r}")
+            claimed[y] = claimed.get(y, 0.0) + v
         filed: Dict[int, float] = dict(
             _year_amount(i, "--filed") for i in args.filed)
     except ValueError as exc:
