@@ -34,6 +34,9 @@ Canada
   a Canadian dealer is a taxable (eligible) dividend (s.260(5)/(5.1),
   as the dealer's T5 box 24 reports it); every other payment in lieu is
   ordinary income. The slip is authoritative.
+- [CA-INC-07] s.260 deems a dividend on a share only: a payment in
+  lieu on a unit the books show to be a Canadian trust's (the
+  distribution test that dates trust income) stays ordinary income.
 
 United States
 - [US-INC-DATE-DIV] Dividends and payments in lieu: the pay date.
@@ -303,15 +306,46 @@ class IncomeRules:
             return ""
         return rec if self.is_canadian_trust(row) else ""
 
-    def pil_is_dividend(self, row: Any) -> bool:
-        """Canada: a payment in lieu on a Canadian issuer's share paid by
-        a Canadian dealer is a taxable dividend (ITA s.260(5)/(5.1))."""
+    def trust_units(self, rows: Iterable[Any]) -> FrozenSet[str]:
+        """Canada: the symbols the books show to be a Canadian trust's
+        units — the test that dates a trust's distribution
+        (trust_record_date): a DIVIDEND row the broker calls a
+        distribution on a Canadian issuer that is not on the corporate
+        list. Empty for the USA."""
+        if self.country != _C.CANADA:
+            return frozenset()
+        out = set()
+        for r in rows:
+            if (str(_get(r, "action")).upper() == "DIVIDEND"
+                    and str(_get(r, "income_label")).lower()
+                    == "distribution"
+                    and self.is_canadian_trust(r)):
+                out.add(str(_get(r, "symbol")).upper())
+        return frozenset(out)
+
+    def pil_is_dividend(self, row: Any,
+                        trust_units: Optional[Iterable[str]] = None
+                        ) -> bool:
+        """Canada: a payment in lieu on a Canadian corporation's share
+        paid by a Canadian dealer is a taxable dividend (ITA
+        s.260(5)/(5.1)). s.260 deems a dividend on a SHARE only: a
+        payment in lieu on a Canadian trust's unit — the row itself
+        labelled a distribution, or its symbol in `trust_units` (the
+        books' trust test, trust_units()) — stays ordinary income
+        (CA-INC-03 / CA-INC-07; audit A2-1465)."""
         if self.country != _C.CANADA:
             return False
         if str(_get(row, "action")).upper() != "DIVIDEND_IN_LIEU":
             return False
-        return (str(_get(row, "dealer_country")).upper() == "CA"
-                and is_canadian_issuer(row))
+        if not (str(_get(row, "dealer_country")).upper() == "CA"
+                and is_canadian_issuer(row)):
+            return False
+        if self.is_canadian_trust(row) and (
+                str(_get(row, "income_label")).lower() == "distribution"
+                or str(_get(row, "symbol")).upper()
+                in {str(s).upper() for s in (trust_units or ())}):
+            return False
+        return True
 
     # ------------------------------------------------------------ USA
     def ric_prior_year(self, row: Any) -> bool:

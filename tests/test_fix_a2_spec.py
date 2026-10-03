@@ -389,16 +389,17 @@ class TestIssuerCountryFromTheIsin(unittest.TestCase):
 
 
 class TestPilOnATrustUnit(unittest.TestCase):
-    """A2-1465: a payment in lieu on a Canadian ETF unit is deemed a
-    dividend (the export cannot tell a unit from a share); tax-logic
-    states it and the slip decides."""
+    """A2-1465: a payment in lieu on a Canadian ETF unit whose payouts
+    the books never call distributions (IB) cannot be told from a share
+    and is deemed a dividend; tax-logic states it and the slip decides
+    (a unit the books show to be a trust's: test_fix_d3_income)."""
 
     @rule("CA-INC-07")
     def test_etf_unit_pil_is_deemed(self):
         row = {"action": "DIVIDEND_IN_LIEU", "symbol": "ZZX.TO",
                "dealer_country": "CA", "date": "2025-06-02"}
         self.assertTrue(_rules().pil_is_dividend(row))
-        self.assertIn("trust unit", _text("canada", "CA-INC-07"))
+        self.assertIn("trust's unit", _text("canada", "CA-INC-07"))
 
 
 class TestIncomeDatingCitesKnownIds(unittest.TestCase):

@@ -7447,6 +7447,28 @@ def _view_income_rules(root: Path):
         _die(str(e))
 
 
+def _view_trust_units(root: Path, rules) -> frozenset:
+    """The symbols every account's books show to be a Canadian trust's
+    units (lib/income_dating.trust_units, over the whole history, not
+    the view's window): a payment in lieu on one is ordinary income,
+    as in the gains files (CA-INC-07; A2-1465)."""
+    if rules is None:
+        return frozenset()
+    cache = root / "work"
+    rows = []
+    for acct in _discover_tx_accounts(cache):
+        native = _native_tx_file(cache, acct)
+        if native is None:
+            continue
+        try:
+            data = _read_work_doc(native)
+        except (OSError, ValueError):
+            continue          # the view's own read names a bad file
+        rows += [t for t in (data.get("transactions") or [])
+                 if isinstance(t, dict) and t.get("action") == "DIVIDEND"]
+    return rules.trust_units(rows)
+
+
 def _warn_accounts_without_books(root: Path, have, label: str,
                                  what: str) -> None:
     """Warn naming each configured account that has inputs but no `what`
@@ -7798,8 +7820,9 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     omit it for the tax year."""
     # DIVIDEND rows, plus (Canada) a payment in lieu that ITA s.260
     # deems a dividend — a Canadian dealer's payment on a Canadian
-    # issuer's share, on the dealer's T5 box 24. Every other payment in
-    # lieu is ordinary income, reported by `dil-sum` only (counting it
+    # corporation's share (not a trust's unit, CA-INC-07), on the
+    # dealer's T5 box 24. Every other payment in lieu is ordinary
+    # income, reported by `dil-sum` only (counting it
     # in both views put it in the slip tie-out, audit R1-272). Rows are
     # windowed on their tax date (lib/income_dating: a Canadian trust's
     # distribution by its record date).
@@ -7807,9 +7830,10 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     rows, scope, bad, _keep = _collect_period_txs(
         args, "divs-sum", actions={"DIVIDEND", "DIVIDEND_IN_LIEU"},
         date_of=_rules.income_date if _rules else None)
+    _trusts = _view_trust_units(Path(args.dir).resolve(), _rules)
     rows = [(a, t) for a, t in rows
             if t.get("action") == "DIVIDEND"
-            or (_rules is not None and _rules.pil_is_dividend(t))]
+            or (_rules is not None and _rules.pil_is_dividend(t, _trusts))]
     n_pil_div = sum(1 for _a, t in rows
                     if t.get("action") == "DIVIDEND_IN_LIEU")
 
@@ -7974,6 +7998,7 @@ def cmd_dil_sum(args: argparse.Namespace) -> None:
     rows, scope, bad, _keep = _collect_period_txs(
         args, "dil-sum", actions={"DIVIDEND_IN_LIEU"},
         date_of=_rules.income_date if _rules else None)
+    _trusts = _view_trust_units(Path(args.dir).resolve(), _rules)
 
     money = fmt_money               # shared report-layer formatter
 
@@ -7995,7 +8020,7 @@ def cmd_dil_sum(args: argparse.Namespace) -> None:
         amt = (float(tx.get("gross_amount") or 0.0)
                or float(tx.get("net_amount") or 0.0))
         treat = ("dividend" if _rules is not None
-                 and _rules.pil_is_dividend(tx) else "ordinary")
+                 and _rules.pil_is_dividend(tx, _trusts) else "ordinary")
         key = (str(tx.get("symbol") or "?"), cur, treat)
         rec = agg.setdefault(key, {"amount": 0.0, "rows": 0})
         rec["amount"] += amt

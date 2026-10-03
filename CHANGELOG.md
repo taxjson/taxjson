@@ -767,6 +767,12 @@
 
 ### Income: dividends, distributions and return of capital
 
+- Canada: a payment in lieu on a Canadian trust's unit (an ETF, REIT or
+  fund unit the books show to be a trust's: they carry a distribution on
+  it) is ordinary income, no longer an ITA s.260 deemed dividend grossed
+  up in the estimate; s.260(5) covers shares only. A unit whose payouts
+  no export calls distributions (IB) still reads as a share (re-audit
+  A2-1465; CA-INC-03 / CA-INC-07).
 - Canada income dating: the January return-of-capital warning no longer
   calls every Canadian issuer a trust — it asks, and listing a
   corporation in [settings] corporate_distributions stops it; tax-logic

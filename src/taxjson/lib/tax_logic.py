@@ -860,9 +860,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("CA-INC-03",
                  "A payment in lieu of a dividend is ordinary income (no "
-                 "gross-up or credit), EXCEPT one on a Canadian issuer's "
-                 "share (its ISIN country when the export gives one, else "
-                 "a Canadian listing) paid by a "
+                 "gross-up or credit), EXCEPT one on a Canadian "
+                 "corporation's share (a Canadian issuer: its ISIN "
+                 "country when the export gives one, else a Canadian "
+                 "listing; not a trust's unit, CA-INC-07) paid by a "
                  "Canadian dealer (IB's statement names Interactive "
                  "Brokers Canada Inc.; Questrade and RBC Direct are "
                  "Canadian dealers, and their 'IN LIEU OF DIVIDEND' rows "
@@ -871,11 +872,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "eligible in the estimate, counted in divs-sum, and on "
                  "the dealer's T5 box 24. The slip is authoritative."),
             Rule("CA-INC-07",
-                 "The exports do not tell a trust's unit from a "
-                 "corporation's share, so a payment in lieu on a Canadian "
-                 "ETF or REIT unit is deemed a dividend too; by law "
-                 "s.260(5) covers shares only and a trust unit's payment "
-                 "in lieu is ordinary income — take it from the dealer's "
+                 "s.260(5) covers shares only: a payment in lieu on a "
+                 "Canadian trust's unit (an ETF, REIT or fund unit) is "
+                 "ordinary income. A unit is a trust's by the test that "
+                 "dates a trust's distribution (CA-INC-DATE-TRUST): the "
+                 "books carry a distribution on it (\"DIST ON\", RBC "
+                 "\"Distribution\") from a Canadian issuer that is not a "
+                 "split-share or listed corporation. A unit whose payouts "
+                 "no export calls distributions (IB calls them dividends) "
+                 "cannot be told from a share, so its payment in lieu is "
+                 "still deemed a dividend — take it from the dealer's "
                  "slip.", cont=True),
             Rule("CA-INC-04",
                  "Crypto staking rewards are income at fair value when "

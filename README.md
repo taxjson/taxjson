@@ -769,14 +769,17 @@ its printed (cent-rounded) rows.
   year's T3 box 42 and move it to Dec 31 with the two `.tt` ADJUST lines
   the warning prints; the warning stops once both lines are in the books,
   or once a corporation is listed in `corporate_distributions`).
-- Canada: a **payment in lieu** on a Canadian issuer's share paid by a
-  Canadian dealer (IB's statement names Interactive Brokers Canada Inc.) is
-  a taxable dividend (s.260(5)/(5.1)), as the dealer's T5 box 24 reports
-  it; any other payment in lieu is ordinary income. The exports do not
-  tell a trust's unit from a share, so a payment in lieu on a Canadian ETF
-  or REIT unit is deemed a dividend too — by law s.260(5) covers shares
-  only: take a unit's payment from the slip. US: a substitute
-  payment is ordinary, non-qualified income.
+- Canada: a **payment in lieu** on a Canadian corporation's share paid by
+  a Canadian dealer (IB's statement names Interactive Brokers Canada Inc.)
+  is a taxable dividend (s.260(5)/(5.1)), as the dealer's T5 box 24
+  reports it; any other payment in lieu is ordinary income. s.260(5)
+  covers shares only, so a payment in lieu on a Canadian trust's unit (an
+  ETF, REIT or fund unit) is ordinary income too — a unit is a trust's
+  when the books carry a distribution on it (the same test that dates
+  trust income above). IB calls a trust's distribution a dividend, so a
+  unit held only at IB cannot be told from a share and its payment in
+  lieu is still deemed a dividend: take it from the slip. US: a
+  substitute payment is ordinary, non-qualified income.
 - US: a fund (RIC) or REIT dividend declared in October–December and paid
   in January is received on Dec 31 (IRC §852(b)(7), §857(b)(9)). The
   exports cannot tell a fund from a company, so taxjson keeps the pay date,

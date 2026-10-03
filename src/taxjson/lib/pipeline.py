@@ -1357,6 +1357,12 @@ def run_gains(transactions, sheltered_transactions=(),
     # character of a payment in lieu — lib/income_dating, the same rules
     # the .sum income section and the views apply.
     _by_id = {getattr(t, 'id', None): t for t in transactions}
+    # The units the books show to be a Canadian trust's (their payouts
+    # are distributions): a payment in lieu on one is ordinary income,
+    # never an s.260 dividend (CA-INC-07; A2-1465).
+    _trusts = income_rules.trust_units(
+        list(transactions) + list(sheltered_transactions or [])
+        + list(affiliated_transactions or []))
     for _e in results.get('transactions', []):
         if _e.get('action') not in ('DIVIDEND', 'DIVIDEND_IN_LIEU'):
             continue
@@ -1368,9 +1374,9 @@ def run_gains(transactions, sheltered_transactions=(),
             _e['income_date'] = _idate
             if _src.record_date:
                 _e['record_date'] = _src.record_date
-        if income_rules.pil_is_dividend(_src):
+        if income_rules.pil_is_dividend(_src, _trusts):
             # ITA s.260(5)/(5.1): a Canadian dealer's payment in lieu
-            # on a Canadian issuer's share is a taxable dividend (the
+            # on a Canadian corporation's share is a taxable dividend (the
             # dealer's T5 box 24): counted with the dividends, kept
             # recognisable as a payment in lieu.
             _amt = float(_e.get('pil') or 0.0)
