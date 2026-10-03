@@ -1010,7 +1010,7 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         # carry a later year's deferral — an upper bound).
         added: Dict[str, float] = {}
         for w in wash:
-            added[w["symbol"]] = (added.get(w["symbol"], 0.0)
+            added[w["symbol"]] = (added.get(w["symbol"], 0.0)  # cov: a2-1596-t1135-year-deferral
                                   + float(w["net_amount"]))
         deferred = {k: round(v - added.get(k, 0.0), 2)
                     for k, v in _deferred_wash(gains_paths,

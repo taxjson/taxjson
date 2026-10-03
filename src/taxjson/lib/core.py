@@ -2416,7 +2416,7 @@ class CanadaTaxRules(TaxRules):
                             ref['_void'] = True
                     lref = lot.get('loss_ref')
                     if lref is not None:
-                        lref['qty'] -= take
+                        lref['qty'] -= take  # cov: a2-1596-grant-loss-ref
                         lref['loss_amount'] = max(
                             0.0, lref['loss_amount'] + _amt)
                         if lref['qty'] <= 1e-9 or lref['loss_amount'] <= 0.001:
@@ -2430,7 +2430,7 @@ class CanadaTaxRules(TaxRules):
                     _by['units'] += take
                     _by['premium'] += take * lot['per_unit']
             if rem > 1e-9:
-                cost += rem * other_avg
+                cost += rem * other_avg  # cov: a2-1596-short-lot-remainder
             pool['grants'] = [l for l in lots if l['units'] > 1e-9]
             return cost, recognised, g_units, by_year
 
@@ -2492,6 +2492,9 @@ class CanadaTaxRules(TaxRules):
                 iteration_losses.append(loss_d)
                 lot['loss_ref'] = loss_d
 
+        # Each sale's pre-loss bump placement, kept across passes (see
+        # _disp_last).
+        _disp_last_seen: Dict[int, Any] = {}
         solver_converged = False
         solver_iterations_used = 0
         for iteration in range(1000):
@@ -2792,7 +2795,7 @@ class CanadaTaxRules(TaxRules):
                             if pool['qty'] > 1e-6:
                                 _applied_adj = _mag
                             elif pool['qty'] < -1e-6:
-                                _applied_adj = -_mag
+                                _applied_adj = -_mag  # cov: a2-1596-wash-short-pool-sign
                             else:
                                 # FLAT pool: the sign cannot be decided
                                 # yet — it belongs to whichever
@@ -2943,7 +2946,7 @@ class CanadaTaxRules(TaxRules):
                                 # else keep parking.
                                 _src_pw = pool.pop('pending_wash', 0.0)
                                 if _src_pw > 1e-9:
-                                    if existing['qty'] > 1e-6:
+                                    if existing['qty'] > 1e-6:  # cov: a2-1596-rename-pending-wash
                                         existing['total_cost'] += D(
                                             _src_pw)
                                     elif existing['qty'] < -1e-6:
@@ -3518,10 +3521,19 @@ class CanadaTaxRules(TaxRules):
             # after it, so the sale's losing fills are costed alike and
             # the formula's denial is not carried out by one of them (a
             # later sale at a gain, even the same day, still sees it).
+            # The placement only ever moves LATER across passes
+            # (_disp_last_seen): a fill priced just above the ACB is a
+            # loss when costed after the bump and a gain before it, and
+            # moving the bump back and forth with it never converged
+            # (A2-1596).
             _disp_last: Dict[int, Any] = {}
             for _l in sorted(iteration_losses_to_check,
                              key=lambda l: _pkey(l['tx'])):
                 _disp_last[_disp_of.get(id(_l['tx']), id(_l['tx']))] = _l['tx']
+            for _g, _t in _disp_last_seen.items():
+                if _g in _disp_last and _pkey(_t) > _pkey(_disp_last[_g]):
+                    _disp_last[_g] = _t
+            _disp_last_seen.update(_disp_last)
             # A sale's loss units (S of the formula): its losing fills.
             _grp_units: Dict[int, float] = {}
             for _l in iteration_losses_to_check:
@@ -4065,6 +4077,23 @@ class CanadaTaxRules(TaxRules):
                     # underlying realized loss drifted.
                     existing_disallow = next((v for v in final_virtual_txs if v.id == tx.id and v.action == 'DISALLOW'), None)
                     if existing_disallow:
+                        # A pre-loss bump follows its sale's last losing
+                        # fill as it moves (see _disp_last; A2-1596).
+                        _moved = False
+                        _wa = _disp_last.get(_disp_of.get(id(tx)), tx).id
+                        for trg, _q, _amt in allocations:
+                            if _pkey(trg) >= _loss_pkey:
+                                continue
+                            _v = next((v for v in final_virtual_txs
+                                       if v.action == 'ADJUST'
+                                       and v.id == f"WASH_{tx.id}__{trg.id}"),
+                                      None)
+                            if (_v is not None
+                                    and getattr(_v, '_wash_after', _wa) != _wa):
+                                _v._wash_after = _wa
+                                _moved = True
+                        if _moved:
+                            found_new_wash_sale = True
                         if abs(float(existing_disallow.net_amount) - float(disallowed_amt)) < 0.001:
                             continue
                         existing_disallow.net_amount = disallowed_amt
@@ -4209,7 +4238,7 @@ class CanadaTaxRules(TaxRules):
                 for _v in [v for v in final_virtual_txs
                            if v.action == 'DISALLOW'
                            and _gain_by_id.get(v.id, 0.0) >= -0.001]:
-                    _pref = f"WASH_{_v.id}__"
+                    _pref = f"WASH_{_v.id}__"  # cov: a2-1596-stale-disallow-retract
                     final_virtual_txs[:] = [
                         x for x in final_virtual_txs
                         if x is not _v
@@ -4949,7 +4978,7 @@ class USATaxRules(TaxRules):
                 if abs(ev.quantity) >= epsilon:
                     if is_other_scope:
                         _ok = (ev.account, sym)
-                        other_qty_state[_ok] = (
+                        other_qty_state[_ok] = (  # cov: a2-1596-us-other-opening
                             other_qty_state.get(_ok, 0.0) + ev.quantity)
                     else:
                         _nk = _nkey(ev.account, sym)
@@ -4976,7 +5005,7 @@ class USATaxRules(TaxRules):
                         prev + ev.quantity
                 else:
                     _ok = (ev.account, sym)
-                    other_qty_state[_ok] = (other_qty_state.get(_ok, 0.0)
+                    other_qty_state[_ok] = (other_qty_state.get(_ok, 0.0)  # cov: a2-1596-us-other-stock-div
                                             + ev.quantity)
                 continue
 
