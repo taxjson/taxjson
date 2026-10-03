@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Command line (owner requests)
+
+- `taxjson` with no command (or only `-C DIR`) prints the help page and
+  exits 0; it was a usage error (exit 2).
+- The help page groups the commands by what they are for (Set up, Build
+  the books, Read the numbers, Before you trade, Before you file, Explain
+  and check, Tools) instead of one flat list; the README's command table
+  uses the same groups. Inside a project the page leaves out the other
+  country's commands and says how many it hid; `taxjson help --all` lists
+  every command, marking the one-country ones (Canada) / (USA), as the
+  page does outside a project.
+- `tjs` is a short name for `taxjson` (the same program; usage lines show
+  the name used). The installer links it beside `taxjson`.
+- New `taxjson stats [YEAR] [ACCOUNT] [--all-history] [--json]`: win/lose
+  statistics on closed trades per asset class (long and short shares,
+  long and written options, futures, crypto) plus a total — trades,
+  wins, losses, win rate, net P/L, average and largest win and loss,
+  profit factor. Economic P/L in the base currency before any
+  superficial-loss / wash-sale denial (the denied total on its own line),
+  taxable accounts unless a sheltered one is named. A written option is
+  one trade from write to close under either premium timing; an assigned
+  one's premium counts on the option and is taken back out of the shares
+  (tax-logic CA-RPT-16 / US-RPT-12).
+
 ### US engine (owner request: deferred re-audit work)
 
 - US wash sale: a purchase in another of your taxable accounts inside

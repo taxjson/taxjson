@@ -110,6 +110,8 @@ all = [
 # Stand-alone tools go through taxjson.bin._entry, which sets an
 # owner-only umask (files 0600, dirs 0700) before calling <module>.main().
 taxjson = "taxjson.bin.taxjson_run:main"
+# `tjs`: the same program under a shorter name (usage shows the name used).
+tjs = "taxjson.bin.taxjson_run:main"
 taxjson-brokerage = "taxjson.bin._entry:taxjson_brokerage"
 taxjson-convert-currency = "taxjson.bin._entry:taxjson_convert_currency"
 taxjson-convert-tt = "taxjson.bin._entry:taxjson_convert_tt"
