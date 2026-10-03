@@ -18,6 +18,12 @@
   "original is not in this statement" skip line) in the run output: under
   `taxjson-brokerage` those lines print after the cross-statement pass
   (A2-1091).
+- Canada: the stablecoin de-peg warning now also checks fills valued in
+  CAD, EUR or another fiat (Coinbase rows priced in CAD, Kraken `USDC/CAD`
+  or `USDT/EUR` pairs, ledger stablecoin-to-fiat conversions): `taxjson run`
+  passes its rates file to `taxjson-brokerage --rates`, and the fill is
+  turned into US dollars at the day's rate before the 2% test; a fill with
+  no rate is named as unchecked (A2-0590).
 
 ### Renames, ticker.map and warrants
 

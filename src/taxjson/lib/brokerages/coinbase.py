@@ -8,7 +8,8 @@ from typing import List, Dict, Any
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, read_broker_text,
                                          shown_name)
-from taxjson.lib.brokerages._crypto_common import (USD_STABLECOINS,
+from taxjson.lib.brokerages._crypto_common import (FIAT_CURRENCIES,
+                                                   USD_STABLECOINS,
                                                    strict_money, utc_to_local,
                                                    warn_depeg)
 
@@ -439,16 +440,19 @@ class CoinbaseBrokerage(BaseBrokerage):
                     # but a fill away from the peg is said (the
                     # approximation drops a de-peg gain or loss:
                     # partition INPUTS-12).
-                    if (self._col(row, header_map, 'price currency')
-                            or 'USD').strip().upper() in ('USD', ''):
-                        warn_depeg(
-                            asset.upper(),
-                            self._num(row, header_map,
-                                      'price at transaction'),
-                            abs(self._num(row, header_map,
-                                          'quantity transacted')),
-                            dt.strftime('%Y-%m-%d'),
-                            f"Coinbase {type_raw.strip()}")
+                    # A CAD- or EUR-priced row through the day's rate
+                    # (re-audit A2-0590).
+                    warn_depeg(
+                        asset.upper(),
+                        self._num(row, header_map,
+                                  'price at transaction'),
+                        abs(self._num(row, header_map,
+                                      'quantity transacted')),
+                        dt.strftime('%Y-%m-%d'),
+                        f"Coinbase {type_raw.strip()}",
+                        currency=(self._col(row, header_map,
+                                            'price currency')
+                                  or 'USD').strip().upper() or 'USD')
                     self.count_nonevent(
                         f"stablecoin conversion {type_raw.strip()} "
                         f"{asset.upper()} (USDC treated as USD cash, as "
@@ -593,7 +597,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                 }
                 if cb_id:
                     tx['id'] = cb_id
-                if self._cash_coins and currency == 'USD':
+                if self._cash_coins and currency in FIAT_CURRENCIES:
                     # "Bought 0.5 ETH for 1000 USDC on ETH-USDC" valued
                     # at 880 USD spent USDC at 0.88: off the peg the
                     # cash approximation drops a gain or loss — say so,
@@ -606,7 +610,8 @@ class CoinbaseBrokerage(BaseBrokerage):
                         if _sq:
                             warn_depeg(_am.group(5).upper(),
                                        abs(total) / _sq, _sq, date_str,
-                                       f"Coinbase {type_raw.strip()}")
+                                       f"Coinbase {type_raw.strip()}",
+                                       currency=currency)
                 if crypto_quote:
                     transactions.extend(self._crypto_pair_legs(
                         row, header_map, tx, type_raw, is_sell,
@@ -852,14 +857,14 @@ class CoinbaseBrokerage(BaseBrokerage):
         if cb_id:
             sell['id'] = f'{cb_id}-sell'
             buy['id'] = f'{cb_id}-buy'
-        if subtotal and currency == 'USD':
+        if subtotal and currency in FIAT_CURRENCIES:
             # A USD-valued convert spending or receiving a stablecoin
             # gives its implied price: off the peg the cash
             # approximation drops a gain or loss (A2-1003).
             for _sym, _q in ((from_asset, from_qty), (to_asset, to_qty)):
                 if _sym in self._cash_coins:
                     warn_depeg(_sym, subtotal / _q, _q, date_str,
-                               "Coinbase Convert")
+                               "Coinbase Convert", currency=currency)
         # Stablecoin legs are USD cash (see _STABLECOINS): converting
         # USDC into ETH is a cash purchase of ETH, ETH into USDC a cash
         # sale. The fee then lands on the one crypto leg — capitalized

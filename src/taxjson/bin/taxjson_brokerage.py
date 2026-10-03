@@ -451,6 +451,15 @@ Examples:
             "them. The map changes no row here — renames apply later."
         ),
     )
+    parser.add_argument(
+        "--rates", dest="rates", metavar="FILE", default=None,
+        help=(
+            "The run's currency rates (work/to_base.csv, `taxjson run` "
+            "passes it). Coinbase and Kraken turn a stablecoin fill valued "
+            "in CAD, EUR, ... into US dollars through it before the de-peg "
+            "check (a warning only; nothing is booked from it)."
+        ),
+    )
     args = parser.parse_args()
 
     brokerage_id = args.brokerage_id.lower()
@@ -478,6 +487,18 @@ Examples:
                 print(f"taxjson-brokerage: error: {args.ticker_map}: {e}",
                       file=sys.stderr)
                 sys.exit(2)
+    if args.rates:
+        if not Path(args.rates).exists():
+            print(f"taxjson-brokerage: error: no such file: --rates "
+                  f"{args.rates}", file=sys.stderr)
+            sys.exit(2)
+        from taxjson.lib.brokerages._crypto_common import set_depeg_rates
+        try:
+            set_depeg_rates(Path(args.rates), None)
+        except (OSError, ValueError) as e:
+            print(f"taxjson-brokerage: error: {args.rates}: {e}",
+                  file=sys.stderr)
+            sys.exit(2)
     try:
         extractor_class = load_brokerage(brokerage_id)
     except ValueError as e:

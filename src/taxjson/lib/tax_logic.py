@@ -944,9 +944,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "USD stablecoins (USDC, USDT, DAI, PYUSD and GUSD, on "
                  "Kraken and Coinbase alike) are treated as US-dollar "
                  "cash, an approximation (their own gain or loss, a "
-                 "de-peg, is not computed; a fill valued in US dollars "
-                 "more than 2% off 1.00 USD is warned about — a fill "
-                 "valued in another currency is not checked)."),
+                 "de-peg, is not computed; a fill more than 2% off 1.00 "
+                 "USD is warned about. A fill valued in another currency "
+                 "(CAD, EUR, ...) is first turned into US dollars through "
+                 "the day's rates from the run's rates file, the "
+                 "conversion stage's own; a fill with no rate for its day "
+                 "is said to be unchecked)."),
             Rule("CA-CRYPTO-03",
                  "A Kraken fee paid in a coin is a sale of that coin: on a "
                  "move of coins (a withdrawal, a deposit, a transfer to "
