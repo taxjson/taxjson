@@ -20,6 +20,7 @@ def _run(book):
         return get_tax_rules("usa").compute_gains(book)
 
 
+@rule("US-WASH-10")
 class TestPerShareTacking(unittest.TestCase):
     def test_unmatched_remainder_keeps_its_own_term(self):
         """Buy 100 (2024-06-01); sell 100 at a loss 2025-05-20 (353

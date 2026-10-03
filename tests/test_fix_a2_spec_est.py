@@ -238,7 +238,7 @@ class TestInstalmentRules(unittest.TestCase):
         return I.required_schedule(year=year, basis="current_year",
                                    current_net_tax=amount)
 
-    @rule("CA-INST-LEAST")
+    @rule("CA-RPT-11")
     def test_least_cumulative_per_date(self):
         from taxjson.bin import taxjson_instalments as I
         cands = I.candidate_schedules(year=2025, current_net_tax=40000.0,
@@ -251,7 +251,7 @@ class TestInstalmentRules(unittest.TestCase):
         for i in range(4):
             self.assertAlmostEqual(got[i], min(c[i] for c in cum.values()),
                                    places=2)
-        self.assertIn("161(4.01)", _text("canada", "CA-INST-LEAST"))
+        self.assertIn("161(4.01)", _text("canada", "CA-RPT-11"))
 
     @rule("CA-INST-INTEREST")
     def test_credit_offsets_and_25_dollar_floor(self):

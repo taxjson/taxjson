@@ -263,6 +263,8 @@ class TestGenericExplicitSuffix(unittest.TestCase):
 
 # ------------------------------------------------------ R1-123 / R1-185
 class TestGenericSettlement(unittest.TestCase):
+    @rule("CA-DATE-06")
+    @rule("US-DATE-06")
     def test_computed_settle_is_holiday_aware(self):
         csv = (_HDR + "2025-06-02,BUY,XEI,100,10,,0,CAD\n"
                       "2025-12-31,SELL,XEI,100,20,,0,CAD\n"
@@ -281,6 +283,8 @@ class TestGenericSettlement(unittest.TestCase):
             ("XEI.TO", "2025-12-31", "2025-12-31"),     # income: no cycle
         ])
 
+    @rule("CA-DATE-06")
+    @rule("US-DATE-06")
     def test_settle_column_honoured(self):
         csv = ("Date,Settle,Type,Ticker,Shares,Price,Currency\n"
                "2025-12-31,2026-01-05,SELL,XEI,100,20,CAD\n"
@@ -295,6 +299,8 @@ class TestGenericSettlement(unittest.TestCase):
                          {"2025-12-31": "2026-01-05",
                           "2025-12-30": "2025-12-31"})
 
+    @rule("CA-DATE-03")
+    @rule("US-DATE-04")
     def test_settle_before_trade_refused(self):
         csv = ("Date,Settle,Type,Ticker,Shares,Price,Currency\n"
                "2025-12-31,2025-12-30,SELL,XEI,100,20,CAD\n")

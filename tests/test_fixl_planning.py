@@ -533,6 +533,7 @@ class TestSafeToSellAlreadyFixed(unittest.TestCase):
     """The safe-to-sell findings closed by its rewrite as a radar view
     (R1-233); pinned here."""
 
+    @rule("CA-PLAN-01", "CA-PLAN-04")
     def test_full_exit_is_allowed_after_a_recent_add(self):   # S049-19
         rows, out = _sts([_row("2025-08-01", "AAA.TO", 100, 2000.0),
                           _row("2025-09-18", "AAA.TO", 50, 900.0)],
@@ -540,6 +541,7 @@ class TestSafeToSellAlreadyFixed(unittest.TestCase):
         self.assertEqual(rows["AAA.TO"], (150.0, "FULL-EXIT-ONLY"))
         self.assertIn("s.251.1", out)            # S054-22 scope note
 
+    @rule("CA-PLAN-01")
     def test_sub_milli_crypto_lot_is_listed(self):   # S049-20
         rows, _ = _sts([_row("2026-09-20", "BTC", 0.0009, 119.70),
                         _row("2026-09-20", "ETH", 0.5, 2000.0)],
@@ -547,6 +549,7 @@ class TestSafeToSellAlreadyFixed(unittest.TestCase):
         self.assertIn("BTC", rows)
         self.assertEqual(rows["BTC"][1], "FULL-EXIT-ONLY")
 
+    @rule("CA-PLAN-01")
     def test_day_31_edges(self):   # S050-02
         book = [_row("2025-03-03", "EDG.TO", 100, 2000.0)]
         self.assertEqual(_sts(book, "2025-03-03")[0]["EDG.TO"][1],
@@ -555,6 +558,7 @@ class TestSafeToSellAlreadyFixed(unittest.TestCase):
                          "FULL-EXIT-ONLY")
         self.assertEqual(_sts(book, "2025-04-03")[0]["EDG.TO"][1], "SAFE")
 
+    @rule("CA-PLAN-01")
     def test_split_applies_once_per_account(self):   # S050-04
         a = [_row("2025-01-06", "XYZ.TO", 100, 1000.0),
              _row("2025-03-03", "XYZ.TO", 2.0, 0.0, action="SPLIT")]
@@ -562,6 +566,7 @@ class TestSafeToSellAlreadyFixed(unittest.TestCase):
         rows, _ = _sts(a, "2025-09-29", taxable2=b)
         self.assertEqual(rows["XYZ.TO"][0], 400.0)
 
+    @rule("CA-PLAN-01")
     def test_duplicate_split_applies_once(self):   # S050-05
         book = [_row("2026-01-06", "XYZ.TO", 100, 1000.0),
                 dict(_row("2026-06-01", "XYZ.TO", 2.0, 0.0,
@@ -571,6 +576,7 @@ class TestSafeToSellAlreadyFixed(unittest.TestCase):
         rows, _ = _sts(book, "2026-09-01")
         self.assertEqual(rows["XYZ.TO"][0], 200.0)
 
+    @rule("CA-PLAN-01")
     def test_exited_sheltered_buy_does_not_lock(self):   # S050-08
         rows, _ = _sts(
             [_row("2026-01-05", "ABC.TO", 100, 2000.0),

@@ -24,6 +24,7 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 from unittest import mock
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -94,6 +95,8 @@ def _env(home, **extra):
 
 
 # ---------------------------------------------------------------- R1-102
+@rule("CA-CRYPTO-01")
+@rule("US-CRYPTO-01")
 class TestCoinbaseCryptoQuotedAdvancedTrade(unittest.TestCase):
     BUY = _cb_row("a2", "2026-03-02 15:00:00 UTC", "Advanced Trade Buy",
                   "ETH", "3", "CAD", "$4000.00", "$12000.00", "$12030.00",

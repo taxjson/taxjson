@@ -456,15 +456,15 @@ class TestT1135Scope(unittest.TestCase):
                 t1135_tx(date="2025-01-10", qty=100, net=net)]}))
             return build_report([base], [], 2025, {}, "CAD")
 
-    @rule("CA-RPT-13")
+    @rule("CA-RPT-15")
     def test_verdict_is_on_these_books(self):
         rep = self._rep(50000.0)
         self.assertFalse(rep["filing_required"])
         self.assertEqual(rep["scope"], "books_only")
         self.assertIn("outside them", rep["scope_note"])
-        self.assertIn("these books", _text("canada", "CA-RPT-13"))
+        self.assertIn("these books", _text("canada", "CA-RPT-15"))
 
-    @rule("CA-RPT-14")
+    @rule("CA-RPT-13")
     def test_simplified_below_250k(self):
         self.assertTrue(self._rep(240000.0)["simplified_method_available"])
         self.assertFalse(self._rep(250000.0)["simplified_method_available"])
@@ -687,7 +687,7 @@ class TestUsStockDividendWithNothingHeld(unittest.TestCase):
         self.assertEqual([(i["qty"], i["total_cost"])
                           for i in r["inventory"]], [(5.0, 0.0)])
         self.assertIn("warning: XYZ.US: stock dividend", r["_stderr"])
-        self.assertIn("$0 lot", _text("usa", "US-STKDIV-03"))
+        self.assertIn("$0 purchase", _text("usa", "US-STKDIV-03"))
 
 
 if __name__ == "__main__":

@@ -232,6 +232,39 @@ class TestAssignmentPremiumPairing(unittest.TestCase):
         self.assertEqual(self._unpaired(USATaxRules(), 'US', 'USD'),
                          (6150.0, {'2025': 1150.0, '2026': 150.0}))
 
+    # A2-0496: legs no identity pairs (two 50-share fills each, priced
+    # off the strike) fall to the proximity rule, which must still keep
+    # each premium on its own direction: the SELL fills (listed first)
+    # take the call's 200, never the put's 300.
+    UNPAIRED = """
+        BUYSELL 2024-06-03 10:00:00 QZX.{s} 100 {c} 50 5000
+        BUYSELL 2025-11-03 10:00:00 QZX251219P00061000.{s} -1 {c} 3 300
+        BUYSELL 2025-11-03 10:00:00 QZX251219C00060000.{s} -1 {c} 2 200
+        ASSIGN 2025-12-19 16:20:00 QZX251219P00061000.{s} 1 {c} 0 0
+        ASSIGN 2025-12-19 16:20:00 QZX251219C00060000.{s} 1 {c} 0 0
+        BUYSELL 2025-12-19 16:20:00 QZX.{s} -50 {c} 59.5 2975
+        BUYSELL 2025-12-19 16:20:00 QZX.{s} -50 {c} 59.5 2975
+        BUYSELL 2025-12-19 16:20:00 QZX.{s} 50 {c} 61.5 3075
+        BUYSELL 2025-12-19 16:20:00 QZX.{s} 50 {c} 61.5 3075
+        BUYSELL 2026-02-02 10:00:00 QZX.{s} -100 {c} 60 6000
+    """
+
+    def _unpaired(self, engine, s, c):
+        res, _ = _run(engine, _tt(self.UNPAIRED.format(s=s, c=c)))
+        sold = sum(r['proceeds'] for r in _rows(res, f'QZX.{s}')
+                   if r['date'] == '2025-12-19')
+        return round(sold, 2), _by_year(res)
+
+    @rule("CA-OPT-06", "CA-OPT-08")
+    def test_ca_unpaired_legs_keep_their_direction(self):
+        self.assertEqual(self._unpaired(CanadaTaxRules(), 'TO', 'CAD'),
+                         (6150.0, {'2025': 1150.0, '2026': 150.0}))
+
+    @rule("US-OPT-02", "US-OPT-05")
+    def test_us_unpaired_legs_keep_their_direction(self):
+        self.assertEqual(self._unpaired(USATaxRules(), 'US', 'USD'),
+                         (6150.0, {'2025': 1150.0, '2026': 150.0}))
+
     SPLIT_LEGS = """
         BUYSELL 2026-01-05 10:00:00 ABC.TO 100 CAD 50 5000
         BUYSELL 2026-02-02 10:00:00 ABC260320C00060000.TO -2 CAD 3 600

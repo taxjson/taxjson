@@ -12,6 +12,7 @@ from unittest import mock
 from taxjson.bin.taxjson_fetch import (flex_fetch, looks_like_ib_statement,
                                        qt_activities, qt_refresh, qt_to_csv,
                                        qt_window)
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -96,6 +97,8 @@ class TestQuestradeCsv(unittest.TestCase):
         self.assertIn("TC ENERGY CORP COM WE ACTED AS AGENT", text)
         self.assertNotIn("CORP  COM", text)
 
+    @rule("CA-DATE-14")
+    @rule("US-DATE-13")
     def test_rows_sorted_and_byte_stable(self):
         # Rows sort by trade date; rows of ONE day keep the API's order
         # (Questrade stamps midnight, so that order is the only record

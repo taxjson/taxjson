@@ -24,7 +24,8 @@ imports a test) and fails when:
   6. a [settings] key (lib/country.SETTING_COUNTRY) is named by no
      rule's `keys` and not listed in tax_logic.NON_RULE_SETTINGS, or a
      VARIANT_AXES key is not a known setting;
-  7. a statement in the Canada section has a US- id or the reverse;
+  7. a statement in the Canada section has a US- id or the reverse, or
+     one id names two statements;
   8. a country-ownership table (lib/country) is incomplete: an entry
      with no valid owner or no *_WHY reason, a FLAG_COUNTRY flag that no
      CLI defines or that refuse_foreign_flags cannot read (_FLAG_ATTRS),
@@ -304,6 +305,20 @@ def main(argv=None) -> int:
                                         f"tax-logic but has no {prefix} prefix")
                     if not ID_RE.match(r.id):
                         problems.append(f"{r.id}: malformed rule id")
+            # One id per claim: an id that names two statements in one
+            # rendering (re-audit: US-RPT-09, CA-RPT-13).
+            seen: Dict[str, int] = {}
+            prev = None
+            for _t, rules in TL.rule_sections(c, st):
+                for r in rules:
+                    if r.id != prev:
+                        seen[r.id] = seen.get(r.id, 0) + 1
+                    prev = r.id
+            for rid, n in seen.items():
+                msg = (f"{rid} names {n} statements in the {c} section "
+                       f"of tax-logic (one id per claim)")
+                if n > 1 and msg not in problems:
+                    problems.append(msg)
     for rid in known & retired:
         problems.append(f"{rid} is in retired.txt but tax-logic still "
                         f"states it")

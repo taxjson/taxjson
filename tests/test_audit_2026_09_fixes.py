@@ -15,6 +15,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from taxjson.lib.core import TaxTransaction, get_tax_rules
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -135,6 +136,7 @@ class TestPairDropClustering(unittest.TestCase):
         self.assertEqual([t for t in out if t.action == 'TRANSFER'], [])
 
 
+@rule("CA-SL-03", "CA-SL-09")
 class TestShelteredContributionIsATrigger(unittest.TestCase):
     def _run_with_sheltered(self, spelling, shel_date):
         from taxjson.lib.pipeline import prepare_books

@@ -165,6 +165,7 @@ class TestMatchTransfers(unittest.TestCase):
                      i["time"], i["date"]) for o, i in pairs]
 
     @rule("CA-CRYPTO-06")
+    @rule("US-CRYPTO-05")
     def test_window_edges(self):
         # m1242/m1243 (edges inclusive), m1040/m1041 (10 min, 3 days).
         send = _s(quantity=-1.0, date="2025-07-13", time="12:00:00")
@@ -178,6 +179,7 @@ class TestMatchTransfers(unittest.TestCase):
             self.assertEqual(len(un), 0 if ok else 1, when)
 
     @rule("US-CRYPTO-05")
+    @rule("CA-CRYPTO-06")
     def test_quantity_band(self):
         # m1244/m1412/m1340 (an equal arrival matches, also a tiny one),
         # m1439 (more than was sent never matches), m1140 (exactly 90%
@@ -189,11 +191,15 @@ class TestMatchTransfers(unittest.TestCase):
                                       self._arrive(quantity=got)])
             self.assertEqual(bool(pairs), ok, (sent, got))
 
+    @rule("CA-CRYPTO-06")
+    @rule("US-CRYPTO-05")
     def test_only_sends_are_sends(self):
         # m1338: an arrival with no send is neither unmatched nor paired.
         un, pairs = self._pairs([self._arrive(quantity=0.5)])
         self.assertEqual((un, pairs), ([], []))
 
+    @rule("CA-CRYPTO-06")
+    @rule("US-CRYPTO-05")
     def test_each_arrival_pairs_once_and_only_its_coin(self):
         # m1131 / m1132. The pairing is an assignment (re-audit
         # A2-0078): of two equal sends, the one closer in time to the
@@ -206,6 +212,8 @@ class TestMatchTransfers(unittest.TestCase):
         self.assertEqual(len(pairs), 1)
         self.assertEqual([u["time"] for u in un], ["07:00:00"])
 
+    @rule("CA-CRYPTO-06")
+    @rule("US-CRYPTO-05")
     def test_same_exchange_other_account_is_a_move(self):
         # m1241 (and m1134: the same exchange AND account is not).
         rows = [_s(quantity=-1.0, exchange="kraken", account="a"),
@@ -216,6 +224,8 @@ class TestMatchTransfers(unittest.TestCase):
         un, pairs = self._pairs(rows)
         self.assertEqual((len(un), pairs), (1, []))
 
+    @rule("CA-CRYPTO-06")
+    @rule("US-CRYPTO-05")
     def test_closest_in_time_then_least_loss_then_first(self):
         # m1246 (|delta|), m1247 (smaller loss), m1249 (first on a tie).
         send = _s(quantity=-1.0, time="12:00:00")
@@ -626,6 +636,7 @@ class TestUsdPool(unittest.TestCase):
         r = res["results"][ids[id(send)]]
         self.assertEqual((r["acb"], r["gain"]), (15.0, 0.0))
 
+    @rule("CA-CRYPTO-08")
     def test_other_coins_and_arrivals(self):
         # m1085 (a BTC send is not pool cash), m1187/m1371/m1372 (an
         # unpaired arrival of 0.5 USDC is an acquisition at the rate),
@@ -644,11 +655,13 @@ class TestUsdPool(unittest.TestCase):
         self.assertEqual(res["units_now"], 799.5)
         self.assertEqual(res["results"], {})
 
+    @rule("CA-CRYPTO-08")
     def test_unrated_acquisition_is_counted_and_skipped(self):
         # m1425 / m1380.
         res, _ = self._pool([_flow("2024-06-01", 10.0)], [])
         self.assertEqual((res["unrated"], res["units_now"]), (1, 0.0))
 
+    @rule("CA-CRYPTO-08")
     def test_us_dollar_send_has_no_fx_line(self):
         # m1290: only a STABLECOIN send gets the gain line.
         send = self._send("2025-03-01", 10.0, symbol="USD")
@@ -656,6 +669,7 @@ class TestUsdPool(unittest.TestCase):
         self.assertEqual(res["results"], {})
         self.assertEqual(res["units_now"], 90.0)
 
+    @rule("CA-CRYPTO-08")
     def test_pool_drained_exactly_restarts_its_average(self):
         # m1374/m1375: after a full drain, a new lot's cost is its own.
         send = self._send("2025-02-01", 100.0)
@@ -663,6 +677,7 @@ class TestUsdPool(unittest.TestCase):
                              _flow("2025-02-02", 10.0, -15.0)], [send])
         self.assertEqual((res["units_now"], res["avg_cost"]), (10.0, 1.5))
 
+    @rule("CA-CRYPTO-08")
     def test_cent_rounding(self):
         # m1449/m1450/m1452: value, ACB and gain in cents; m1201 units.
         send = self._send("2025-03-01", 33.333)
@@ -832,6 +847,8 @@ class TestNetworkFees(unittest.TestCase):
                          (0.01, 1.0, 0.99))
         self.assertTrue(f["id"].endswith("-SOL-1-fee"))
 
+    @rule("CA-CRYPTO-06")
+    @rule("US-CRYPTO-05")
     def test_skips(self):
         # m1103/m1104: another account's pair, and a send whose fee the
         # ledger states, are not this account's hidden fees; m1108: a

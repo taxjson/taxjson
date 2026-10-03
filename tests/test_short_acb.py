@@ -1,6 +1,7 @@
 import unittest
 from taxjson.lib.core import CanadaTaxRules
 from test_ported_tt_helper import parse_tt_lines
+from tax_rules import rule
 
 class TestShortPositionLogic(unittest.TestCase):
     def setUp(self):
@@ -12,6 +13,7 @@ class TestShortPositionLogic(unittest.TestCase):
     # §1091(e) rule); a LONG rebuy held at day 30 does, and the deferred
     # loss lands on that long position's ACB (s.53(1)(f)).
 
+    @rule("CA-SL-07")
     def test_re_short_after_cover_loss_is_not_superficial(self):
         content = """
         BUYSELL 2025-01-01 09:30:00 SHORT.US -100 USD 100.00 10000.00 0.00

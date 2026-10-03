@@ -8,6 +8,7 @@ from datetime import date
 
 from taxjson.lib.core import TaxTransaction
 from taxjson.lib.option_boundary import straddling
+from tax_rules import rule
 
 
 def T(**kw):
@@ -18,6 +19,7 @@ def T(**kw):
 TODAY = date(2026, 9, 29)
 
 
+@rule("CA-OPT-07")
 class TestFutureExpiryIsOpen(unittest.TestCase):
     """R1-36 / R1-174 / R1-190: a contract whose expiry is after today is
     simply open; only an expiry already passed with no close row is
@@ -51,6 +53,7 @@ class TestFutureExpiryIsOpen(unittest.TestCase):
         self.assertEqual(rows[0]["close_kind"], "expired?")
 
 
+@rule("CA-OPT-07")
 class TestRenameAndSign(unittest.TestCase):
     """R1-179."""
 
@@ -94,6 +97,7 @@ class TestCashSettledAssignment(unittest.TestCase):
                            price=3, net_amount=300.0, currency="USD",
                            account="margin")]
 
+    @rule("CA-DISP-05", "CA-OPT-07")
     def test_no_fold_no_amendment(self):
         rows = straddling(self.BOOK, 2026, "grant", 2025,
                           filed_years={2025}, today=TODAY)
@@ -106,6 +110,7 @@ class TestCashSettledAssignment(unittest.TestCase):
         self.assertIn("500.00", r["where"])
         self.assertIn("2025", r["where"])
 
+    @rule("CA-OPT-06", "CA-OPT-07")
     def test_stock_leg_present_is_a_real_assignment(self):
         book = self.BOOK + [TaxTransaction(
             action="ASSIGN", date="2026-01-16", date_settle="2026-01-19",
@@ -117,6 +122,7 @@ class TestCashSettledAssignment(unittest.TestCase):
         self.assertTrue(rows[0]["action"].startswith("T1-ADJ 2025"))
 
 
+@rule("CA-OPT-07")
 class TestLockRecordsCloseTiming(unittest.TestCase):
     """S075-10: the 2025 lock records CLOSE timing (the 2025 return did not
     report the premium) while this project puts 2025 writes on grant

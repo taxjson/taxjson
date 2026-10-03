@@ -273,6 +273,26 @@ class TestRateGapTolerance(unittest.TestCase):
     def test_usa_rate_gap_is_fill_plus_lookback(self):
         self._check()
 
+    @rule("CA-FX-02")
+    @rule("US-FX-02")
+    def test_lookback_is_five_days_in_the_converter_and_audit(self):
+        """A2-1492: a row with no rate that day takes the latest rate of
+        the 5 days before it; 6 days back is the placeholder — in the
+        converter and in `taxjson audit`'s twin of it."""
+        from decimal import Decimal
+        from taxjson.bin.taxjson_audit import rate_with_provenance
+        hist = {"USD": {"2025-03-03": Decimal("1.44")}}
+        self.assertEqual(get_rate_for_date("USD", "2025-03-08", hist,
+                                           Decimal("9")), Decimal("1.44"))
+        self.assertEqual(get_rate_for_date("USD", "2025-03-09", hist,
+                                           Decimal("9")), Decimal("9"))
+        self.assertEqual(rate_with_provenance("USD", "2025-03-08", hist,
+                                              Decimal("9")),
+                         (Decimal("1.44"), "carried", "2025-03-03"))
+        self.assertEqual(rate_with_provenance("USD", "2025-03-09", hist,
+                                              Decimal("9")),
+                         (Decimal("9"), "default", None))
+
     def _check(self):
         from decimal import Decimal
         with tempfile.TemporaryDirectory() as td:

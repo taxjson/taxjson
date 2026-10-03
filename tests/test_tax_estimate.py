@@ -169,6 +169,7 @@ class TestSumEstimateCli(unittest.TestCase):
              str(root), "sum", *args],
             cwd=REPO_ROOT, capture_output=True, text=True)
 
+    @rule("CA-INC-01", "CA-RPT-04")
     def test_estimate_block_canada(self):
         with tempfile.TemporaryDirectory() as tmp:
             r = self._sum(self._project(tmp),
@@ -306,6 +307,7 @@ class TestSumEstimateCli(unittest.TestCase):
 
 
 class TestFtcFromActualWithholding(unittest.TestCase):
+    @rule("CA-RPT-05")
     def test_actual_withholding_capped_at_treaty_rate(self):
         from taxjson.lib.tax_estimate import estimate_canada
         kw = dict(realized=0.0, eligible_div=0.0, foreign_div=1000.0,
@@ -456,6 +458,7 @@ class TestCanadaAmt(unittest.TestCase):
         base.update(kw)
         return estimate_canada(**base)
 
+    @rule("CA-RPT-03")
     def test_gains_heavy_no_salary_binds(self):
         # The motivating profile: big gains, no employment income —
         # regular tax enjoys 50% inclusion, AMT includes 100%.

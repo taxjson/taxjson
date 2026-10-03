@@ -43,6 +43,7 @@ class TestIbAsiaClock(unittest.TestCase):
     """A2-1302: every Asia-Pacific fill takes its exchange's date."""
 
     @rule("CA-DATE-SESSION")
+    @rule("US-DATE-SESSION")
     def test_jpy_hkd_cnh_evening_fills_move_to_the_local_day(self):
         from taxjson.lib.brokerages.ib_extractor import _ib_market_trade_date
         for cur in ("JPY", "HKD", "CNH", "SGD", "AUD", "NZD"):
@@ -147,6 +148,60 @@ class TestCoinbaseStablecoinQuote(unittest.TestCase):
         txs, _ = _cb(row, cash=True)
         self.assertEqual([(t["symbol"], t["quantity"], t["currency"])
                           for t in txs], [("ETH", 0.5, "USD")])
+
+    @rule("CA-CRYPTO-02")
+    @rule("US-CRYPTO-02")
+    def test_pyusd_and_gusd_cash_in_canada_property_in_the_us(self):
+        """A2-1490 / A2-1507: on Coinbase as on Kraken, PYUSD and GUSD
+        are US-dollar cash in the Canadian model (buying one books
+        nothing; a coin bought with one is a USD purchase) and property
+        in the US model (buying one is a purchase; spending one a sale)."""
+        for coin in ("PYUSD", "GUSD"):
+            buy = (f"2025-03-03T15:00:00Z,Buy,{coin},100,USD,1.00,100,100,"
+                   f"0,Bought 100 {coin} for 100 USD,cbid-3\n")
+            eth = (f"2025-03-03T15:00:00Z,Advanced Trade Buy,ETH,0.5,{coin},"
+                   f"2000,1000,1000,0,Bought 0.5 ETH for 1000 {coin} on "
+                   f"ETH-{coin},cbid-4\n")
+            with self.subTest(coin=coin, model="cash"):
+                self.assertEqual(_cb(buy, cash=True)[0], [])
+                self.assertEqual(
+                    [(t["symbol"], t["quantity"], t["currency"])
+                     for t in _cb(eth, cash=True)[0]],
+                    [("ETH", 0.5, "USD")])
+            with self.subTest(coin=coin, model="property"):
+                self.assertEqual(
+                    [(t["symbol"], t["quantity"])
+                     for t in _cb(buy, cash=False)[0]], [(coin, 100.0)])
+                self.assertEqual(
+                    sorted((t["symbol"], t["quantity"])
+                           for t in _cb(eth, cash=False)[0]),
+                    [("ETH", 0.5), (coin, -1000.0)])
+
+    @rule("CA-DATE-07")
+    @rule("CA-DATE-12")
+    @rule("US-DATE-07")
+    @rule("US-DATE-11")
+    def test_fills_are_dated_locally_and_settle_on_the_trade_date(self):
+        """Coinbase stamps UTC: a fill is dated in local time
+        (America/Toronto here) and settles on that date — a 03:30 UTC
+        New Year's Day sale is a Dec-31 disposition."""
+        rows = ("2025-12-31T23:30:00Z,Buy,BTC,0.01,USD,100000,1000,1010,10,"
+                "Bought 0.01 BTC for 1010 USD,cbid-5\n"
+                "2026-01-01T03:30:00Z,Sell,BTC,0.005,USD,100000,500,495,5,"
+                "Sold 0.005 BTC for 495 USD,cbid-6\n"
+                "2026-01-01T04:30:00Z,Advanced Trade Sell,BTC,0.001,USD,"
+                "100000,100,99,1,Sold 0.001 BTC for 99 USD on BTC-USD,"
+                "cbid-7\n")
+        from unittest import mock
+        with mock.patch.dict(os.environ,
+                             {"TAXJSON_LOCAL_TZ": "America/Toronto"}):
+            txs, _ = _cb(rows, cash=True)
+        self.assertEqual(
+            [(t["quantity"], t["date"], t["time"], t["date_settle"])
+             for t in txs],
+            [(0.01, "2025-12-31", "18:30:00", "2025-12-31"),
+             (-0.005, "2025-12-31", "22:30:00", "2025-12-31"),
+             (-0.001, "2025-12-31", "23:30:00", "2025-12-31")])
 
     def test_property_mode_with_pair_books_both_legs(self):
         row = ("2025-03-03T15:00:00Z,Advanced Trade Buy,ETH,0.5,PYUSD,2000,"

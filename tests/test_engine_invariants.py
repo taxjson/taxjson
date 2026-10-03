@@ -322,6 +322,7 @@ class TestCraGoldenExamples(unittest.TestCase):
         d.update(kw)
         return TaxTransaction(**d)
 
+    @rule("CA-SL-01", "CA-SL-02", "CA-SL-08")
     def test_cra_full_denial_rebuy_still_held(self):
         # CRA T4037 shape: sell at a loss, repurchase the same number
         # within 30 days, still hold at +30 -> the ENTIRE loss is
@@ -348,6 +349,7 @@ class TestCraGoldenExamples(unittest.TestCase):
             float(by_date["2025-06-02"]["gain"]),
             9000.0 - 10200.0, places=2)
 
+    @rule("CA-SL-01", "CA-SL-02", "CA-SL-08")
     def test_cra_least_of_three_formula(self):
         # CRA's published partial formula: denied = loss x
         # min(S, P, B) / S.  S=40 sold, B=10 substituted shares held
@@ -380,6 +382,7 @@ class TestCraGoldenExamples(unittest.TestCase):
         self.assertEqual(sum(float(w.get("disallowed_amount") or 0)
                              for w in r.get("wash_sales") or []), 0)
 
+    @rule("CA-SL-01", "CA-SL-02", "CA-SL-08")
     def test_cra_no_acquisition_no_denial(self):
         # s.54(a): mere affiliated OWNERSHIP is not an acquisition —
         # no buy in the window, loss fully allowed.

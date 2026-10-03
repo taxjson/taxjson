@@ -10,6 +10,7 @@ from pathlib import Path
 
 from taxjson.lib.core import TaxTransaction
 from taxjson.lib.corporate_timeline import SplitTimeline
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -43,6 +44,7 @@ type = "taxable"
 
 
 # --------------------------------------------------------------- R1-135
+@rule("CA-CORP-01")
 class TestSplitBookedOnTwoDates(unittest.TestCase):
     """R1-135: one split booked on two dates by two brokers must apply
     once (the event key used to include the exact date)."""
@@ -196,6 +198,7 @@ def _ib_spinoff_project(tmp, acct_type='taxable'):
 
 
 # --------------------------------------------------------------- R1-137
+@rule("CA-CORP-06")
 class TestIbSpinoffElection(unittest.TestCase):
     """R1-137: an IB 'Spinoff' row goes through the spin-off election
     (it was always booked as a dividend at IB's Value)."""
@@ -247,6 +250,7 @@ class TestIbSpinoffElection(unittest.TestCase):
 
 
 # --------------------------------------------------------------- R1-134
+@rule("CA-CORP-07")
 class TestSpinoffBrokerValue(unittest.TestCase):
     """R1-134: the deemed dividend uses the broker's value when it
     reported one; a $0 taxable spin-off warns on every run."""
@@ -316,6 +320,7 @@ class TestSpinoffBrokerValue(unittest.TestCase):
 
 
 # --------------------------------------------------------------- R1-136
+@rule("CA-CORP-03")
 class TestIbMergerShapes(unittest.TestCase):
     """R1-136: IB cash takeovers are sales; decimal-ratio and class-share
     mergers are booked; a stock+cash merger stops the run by name."""
@@ -380,6 +385,7 @@ class TestIbMergerShapes(unittest.TestCase):
 
 
 # --------------------------------------------------------------- R1-142 / S019-07
+@rule("CA-CORP-03")
 class TestOneValuation(unittest.TestCase):
     def _merger(self, **kw):
         from taxjson.lib.corp_actions import CorporateAction
@@ -467,6 +473,7 @@ class TestOneValuation(unittest.TestCase):
 
 
 # --------------------------------------------------------------- S002-04 / S019-04
+@rule("CA-CORP-03")
 class TestEventInTwoBrokerAccounts(unittest.TestCase):
     D = 'ABC(CA0000000001) Merged(Acquisition) WITH CA0000000002 1 for 2'
 
@@ -548,6 +555,7 @@ _QT_H = ('Transaction Date,Settlement Date,Action,Symbol,Description,'
          'Activity Type,Account #,Account Type\n')
 
 
+@rule("CA-CORP-06")
 class TestQuestradeSpinoffParent(unittest.TestCase):
     def test_s020_04_parent_from_another_export(self):
         from taxjson.bin.taxjson_corp_actions import extract_events

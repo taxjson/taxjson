@@ -65,6 +65,7 @@ def _http_error(code, body, ctype="text/html"):
         code, "Not Found", {"Content-Type": ctype}, io.BytesIO(body))
 
 
+@rule("CA-FX-03")
 class TestValet404IsNotSticky(_FxCase):
     def test_html_404_is_a_failed_fetch_not_series_not_found(self):
         err = _http_error(404, b"<html><body>Maintenance</body></html>")
@@ -155,6 +156,7 @@ def _tx(action="BUYSELL", date="2025-01-15", symbol="AAA.US", qty=0.0,
     return d
 
 
+@rule("CA-RPT-12")
 class TestT1135Futures(unittest.TestCase):
     """S008-04: a plain futures contract has a nil cost amount."""
 
@@ -195,6 +197,7 @@ class TestT1135Futures(unittest.TestCase):
         self.assertIn("futures", render_report(rep))
 
 
+@rule("CA-RPT-12", "CA-ACB-11")
 class TestT1135Phantoms(unittest.TestCase):
     """R1-321: `taxjson t1135` applies phantoms.json like the gains pass."""
 

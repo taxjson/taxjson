@@ -437,11 +437,10 @@
 
 ### Tax rules and engine: United States (experimental)
 
-- US tax-logic states the same-moment replacement order (taxable
-  accounts, then IRAs, then affiliated, then row order — never the
-  account's name; US-WASH-20) and the $0-lot fallback for a stock
-  dividend with no shares held, which is never a wash-sale replacement
-  (US-STKDIV-03) (re-audit A2-0485, A2-1486).
+- US-WASH-20 also says a same-moment tie never goes by the account's
+  name, and US-STKDIV-03 that the $0 purchase of a stock dividend with
+  no shares held is never a wash-sale replacement; each is pinned by an
+  engine test (re-audit A2-0485, A2-1486).
 - tax-logic states that a US taxable purchase whose shares were sold
   (first in, first out) before a loss no longer washes it, unlike an IRA
   purchase (US-WASH-21); the US engine's unreachable 'consumed
@@ -569,13 +568,21 @@
   A2-0826).
 - tax-logic states rules the code already applies: a US project keeps
   sheltered (IRA) accounts out of Form 8949 and the totals (US-
-  BASIS-07); the T1135 test covers these books only and the $250,000
-  simplified/detailed split (CA-RPT-13/14); the radar's IRA replacement
-  is lost for good (US-PLAN-01); cash in lieu of a fraction is a sale of
-  it (CA-CORP-05, US-CORP-09: in the US the units come from the oldest
-  lot), an all-cash merger is a sale and a stock-and-cash merger stops
-  the run (CA-CORP-09/10, US-CORP-10/11) (re-audit A2-0822, A2-1473,
-  A2-0821, A2-1474, A2-1475, A2-0824, A2-1477).
+  BASIS-07); the T1135 test covers these books only (CA-RPT-15); the
+  radar's IRA replacement is lost for good (US-PLAN-01); cash in lieu of
+  a fraction is a sale of it (CA-CORP-05, US-CORP-09: in the US the
+  units come from the oldest lot), an all-cash merger is a sale and a
+  stock-and-cash merger stops the run (CA-CORP-09/10, US-CORP-10/11)
+  (re-audit A2-0822, A2-1473, A2-0821, A2-1474, A2-1475, A2-0824,
+  A2-1477).
+- tax-logic states what the code already did: US-WASH-20 (US replacements
+  match in the order acquired, Reg. §1.1091-1(c), losses in the order
+  sold, same-moment purchases taxable, then IRA, then affiliated),
+  US-STKDIV-03 (a stock dividend with no shares held is a warned $0
+  purchase), CA-ACB-07 (a s.40(3) deemed gain shows on Schedule 3 with no
+  proceeds) and CA-DATE-08 / US-DATE-08 (a right or warrant expiry is
+  dated like an option's) (re-audit A2-1506, A2-1511, A2-0495, A2-0845,
+  A2-0833).
 - `scripts/check_tax_rules.py` check 8 also fails on a source message
   that refuses an option for one country ("--x ... is Canada-only")
   when lib/country does not own it, and checks PLAN_COUNTRY's owners;
@@ -1401,6 +1408,9 @@
 
 ### Broker parsers: Interactive Brokers
 
+- IB: a Dividends or Withholding Tax row on a currency-tagged symbol
+  (XYZ.CAD) gets the same "booked as a security of its own" warning as
+  its trades (re-audit A2-1493).
 - IB parser: an AUD/HKD/JPY/SGD/NZD fill on a system with no time-zone
   database is a one-line error saying to install `tzdata` (now a declared
   dependency on Windows), not a ZoneInfoNotFoundError traceback
@@ -5170,6 +5180,13 @@
 
 ### Docs and tests
 
+- Tests-tagging round (re-audit A2-0167 ... A2-1527, tests-tagging lists
+  01-03): fix and law-citing tests carry the @rule / @rule_absent ids they
+  pin; tests were added or strengthened wherever a mutant of a rule's
+  implementing line survived every tagged test; @rule_absent pairs now
+  fail when their country gate is removed (three that could not are
+  plain @rule tests now); the unpinned baseline is down to three negative
+  statements (CA-INC-02, US-BASIS-02, US-WASH-07).
 - Docs that contradicted each other or the code (re-audit A2-0947 to
   A2-0954, A2-1619 to A2-1629): `distributions.map` per-share amounts
   are in the project's base currency (README, `--help`, tax-logic

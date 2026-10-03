@@ -259,6 +259,7 @@ class TestSplitGainsFeeMap(unittest.TestCase):
         self.assertAlmostEqual(fees['CAD']['total'], 11.15, places=9)
 
 
+@rule("CA-ACB-01")
 class TestSplitGainsBlendedInventoryApportioned(unittest.TestCase):
     """S050-22: an account-less (s.47 blended) inventory row is split by
     each account's own units at the blended ACB per share."""
@@ -311,6 +312,7 @@ class TestDaysHeldDrivesScheduleThreeAcqYear(unittest.TestCase):
         self.assertEqual(schedule3(res, 2025)['XYZ.TO']['acq_year'], '2023')
 
 
+@rule("CA-SL-02")
 class TestWashWindowBalanceAtDayThirty(unittest.TestCase):
     """S069-18: wash_window.bal_at_end counts rows dated ON day +30."""
 
@@ -428,13 +430,13 @@ class TestUsReplacementOrderAcquiredByTime(unittest.TestCase):
         inv = {i['symbol']: i for i in res['inventory']}
         return res, inv['AAA.US']['total_cost']
 
-    @rule("US-WASH-09")
+    @rule("US-WASH-09", "US-WASH-20")
     def test_taxable_lot_first(self):
         res, basis = self._run('10:00:00', '14:00:00')
         self.assertEqual(basis, 2100.0)
         self.assertEqual(res['summary']['total_gain'], 0.0)
 
-    @rule("US-WASH-11")
+    @rule("US-WASH-11", "US-WASH-20")
     def test_earlier_ira_lot_makes_it_permanent(self):
         # The IRA lot was acquired first (10:00): it takes the wash, the
         # denial is permanent and the 14:00 taxable lot keeps its cost.
