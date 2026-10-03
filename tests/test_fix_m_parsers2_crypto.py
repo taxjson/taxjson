@@ -26,7 +26,6 @@ import unittest
 from pathlib import Path
 from tax_rules import rule
 from unittest import mock
-from tax_rules import rule
 
 CB_HEADER = ("ID,Timestamp,Transaction Type,Asset,Quantity Transacted,"
              "Price Currency,Price at Transaction,Subtotal,"
