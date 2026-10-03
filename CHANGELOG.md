@@ -3600,6 +3600,10 @@
 
 ### Planning: wash radar, harvest, buy/sell-check, estimate, instalments, web UI
 
+- `taxjson estimate` (Canada) says on the eligible-dividends row and in
+  its printed assumptions that a Canadian trust's distribution (ETF, REIT
+  or fund units) is grossed up as an eligible dividend; the T3 decides
+  (re-audit A2-0828; CA-EST-TRUST).
 - US wash radar, sell-check, buy-check and harvest no longer call a
   stock dividend a "Recent buy" and warn that a partial loss sale would
   be a wash sale: a stock dividend is not a purchase for §1091

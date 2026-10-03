@@ -634,7 +634,7 @@ TAX ESTIMATE — canada/ON, rates vintage 2026 (ESTIMATE ONLY, not filing number
 
   Other income                     200,000.00
   Capital gains (taxable)           15,000.00  [30,000.00 realized - 0.00 other losses, x50%]
-  Eligible dividends (grossed)       1,380.00  [1,000.00 x1.38, Canadian-listed]
+  Eligible dividends (grossed)       1,380.00  [1,000.00 x1.38, Canadian issuers, trust distributions included]
   Foreign dividends                    500.00  [FTC 75.00 — actual TAX rows (capped at 15% of foreign divs)]
   Payments in lieu                       0.00
 
@@ -658,10 +658,11 @@ the earliest table also says the post-2024 AMT shown did not apply).
   22100) lower net and taxable income — other income first, then the
   investment income; the AMT base takes the deductions in full and the
   carrying charges at 50%. Deductions not entered are not modelled, so
-  an RRSP year left at 0 overstates the tax. Canadian-listed
+  an RRSP year left at 0 overstates the tax. Canadian issuers'
   dividends are treated as eligible (38% gross-up + DTC) — non-eligible
   dividends are not modelled, and a Canadian trust's distribution (ETF,
-  REIT or fund units) is counted the same way, because the export does
+  REIT or fund units) is grossed up as an eligible dividend too (the
+  printed assumptions and the row say so), because the export does
   not carry its T3 split (box 49 eligible dividends, 26 other income, 21
   capital gains, 42 return of capital): take the real split from the T3; foreign dividends as ordinary income, credited (FTC) with the foreign
   tax the books actually withheld (TAX rows, capped at 15% of the

@@ -11,8 +11,12 @@
 All data is synthetic (fake account ids, invented tickers).
 """
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 from taxjson.lib import country as C
 from taxjson.lib.income_dating import IncomeRules
@@ -123,6 +127,37 @@ class TestPilOnATrustUnitIsOrdinary(unittest.TestCase):
         self.assertIn("covers shares only", rules["CA-INC-07"])
         self.assertIn("CA-INC-DATE-TRUST", rules["CA-INC-07"])
         self.assertIn("corporation's share", rules["CA-INC-03"])
+
+
+class TestEstimatePrintsTheTrustAssumption(unittest.TestCase):
+    """A2-0828: the printed estimate says a Canadian trust's
+    distribution is grossed up as an eligible dividend (CA-EST-TRUST)."""
+
+    @rule("CA-EST-TRUST", "CA-RPT-04")
+    def test_printed(self):
+        repo = Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "work").mkdir()
+            (root / "taxjson.toml").write_text(
+                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                'base_currency = "CAD"\nprovince = "ON"\n'
+                '[accounts.margin]\ntype = "taxable"\n')
+            (root / "work" / "margin_gains.json").write_text(json.dumps({
+                "summary": {"year": "2025"}, "transactions": [
+                    {"action": "DIVIDEND", "symbol": "ZQU.TO",
+                     "dividend": 1000.0, "currency": "CAD"}]}))
+            env = dict(os.environ, HOME=tmp)
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
+                 str(root), "estimate", "--other-income", "80000"],
+                cwd=repo, capture_output=True, text=True, env=env,
+                stdin=subprocess.DEVNULL)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = " ".join(r.stdout.split())
+        self.assertIn("trust distributions included", out)
+        self.assertIn("a Canadian trust's distribution (ETF, REIT or fund "
+                      "units) is grossed up as an eligible dividend", out)
 
 
 if __name__ == "__main__":
