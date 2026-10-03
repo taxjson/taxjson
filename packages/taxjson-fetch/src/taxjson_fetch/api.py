@@ -1,4 +1,7 @@
-"""taxjson fetch — pull broker activity straight into inputs/.
+"""taxjson-fetch — the broker API clients behind `taxjson fetch`.
+
+Part of the taxjson-fetch plugin (moved out of the taxjson core, which
+holds no broker client and reads no broker credential).
 
 Additive by design: each source downloads activity and writes a file
 in a format an EXISTING parser already reads — no parser changes, no
@@ -664,7 +667,7 @@ def qt_window(days: Optional[int], since: Optional[str],
 
 
 if __name__ == "__main__":                       # pragma: no cover
-    sys.exit("taxjson-fetch is not a standalone tool — use "
+    sys.exit("taxjson_fetch.api is not a standalone tool — use "
              "`taxjson fetch` (configured via `brokerage` + "
              "`account`/`query_id` under [accounts.<name>] in "
              "taxjson.toml).")

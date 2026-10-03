@@ -1,14 +1,11 @@
 """Planning-tool fixes (2026-09 audit): the wash radar and the tools
 built on it (wash-radar, watch, buy-check, sell-check, the run's
-reports/wash_radar_*), the web what-if, and `taxjson redact`.
+reports/wash_radar_*) and `taxjson redact`.
 
   R1-225  trades made but not yet settled are in the books
   R1-226  loss detection comes from the engine's gains (s.47 blend,
           denied-loss bump), not the radar's own per-account pool
   S006-09 missing_history.json openings are applied like the gains pass does
-  R1-227  web what-if applies the x100 option multiplier
-  S022-02 web what-if maps the symbol like the pipeline (options
-          follow their underlying's ticker.map rule)
   R1-250  redact removes holder names in Coinbase / IB Flex / IB HTML
           layouts and every IB id occurrence
 
@@ -323,91 +320,6 @@ class TestChecksEndToEnd(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-# ------------------------------------------------------------ web what-if
-def _web_project(tmp, txs, ticker_map=None, settings_extra=""):
-    root = Path(tmp)
-    (root / "work").mkdir()
-    (root / "reports").mkdir()
-    (root / "taxjson.toml").write_text(
-        '[settings]\nyear = 2026\ncountry = "canada"\n'
-        'base_currency = "CAD"\n' + settings_extra +
-        '[accounts.margin]\ntype = "taxable"\n')
-    (root / "work" / "margin_base.json").write_text(
-        json.dumps({"transactions": txs}))
-    if ticker_map is not None:
-        (root / "ticker.map").write_text(ticker_map)
-    from taxjson.web.context import ProjectContext
-    return ProjectContext.load(root)
-
-
-def _buy(symbol, qty, price, net, date_="2026-03-02"):
-    return {"action": "BUYSELL", "date": date_, "symbol": symbol,
-            "quantity": qty, "price": price, "net_amount": net,
-            "currency": "CAD", "account": "margin"}
-
-
-@rule("CA-PLAN-03")
-class TestWhatIfOptions(unittest.TestCase):
-    def test_option_sale_applies_the_contract_multiplier(self):
-        # R1-227: 1 call bought @5 (cost 500); what-if sell 1 @4.00
-        # is 400 of proceeds, a 100 loss — as the engine books it.
-        from taxjson.web import data
-        opt = "ABC270115C00050000.TO"
-        with tempfile.TemporaryDirectory() as tmp:
-            ctx = _web_project(tmp, [_buy(opt, 1, 5.0, 500.0)])
-            r = data.what_if_sell(ctx, "margin", opt, 1, 4.0,
-                                  on="2026-06-30")
-        self.assertTrue(r["ok"], r)
-        self.assertAlmostEqual(r["proceeds"], 400.0)
-        self.assertAlmostEqual(r["economic_gain"], -100.0)
-        self.assertEqual(r.get("multiplier"), 100)
-
-    def test_shares_are_unchanged(self):
-        from taxjson.web import data
-        with tempfile.TemporaryDirectory() as tmp:
-            ctx = _web_project(tmp, [_buy("ABC.TO", 2, 5.0, 10.0)])
-            r = data.what_if_sell(ctx, "margin", "ABC.TO", 2, 4.0,
-                                  on="2026-06-30")
-        self.assertAlmostEqual(r["proceeds"], 8.0)
-        self.assertEqual(r.get("multiplier"), 1)
-
-    def test_futures_option_is_refused_not_mispriced(self):
-        from taxjson.web import data
-        fop = "F:CL270115C00060000.US"
-        with tempfile.TemporaryDirectory() as tmp:
-            ctx = _web_project(tmp, [_buy(fop, 1, 2.0, 2000.0)])
-            r = data.what_if_sell(ctx, "margin", fop, 1, 2.5,
-                                  on="2026-06-30")
-        self.assertFalse(r["ok"])
-        self.assertIn("multiplier", r["reason"])
-
-    def test_cross_listed_option_follows_its_underlying(self):
-        # S022-02: TOBASE AEM.US -> AEM.TO; the holdings view links the
-        # .US option, the book holds it as .TO.
-        from taxjson.web import data
-        held = "AEM270115C00150000.TO"
-        with tempfile.TemporaryDirectory() as tmp:
-            ctx = _web_project(tmp, [_buy(held, 2, 8.0, 1600.0)],
-                               ticker_map="TOBASE AEM.US AEM.TO\n")
-            r = data.what_if_sell(ctx, "margin", "AEM270115C00150000.US",
-                                  2, 6.0, on="2026-06-30")
-        self.assertTrue(r["ok"], r)
-        self.assertEqual(r["symbol"], held)
-        self.assertAlmostEqual(r["cost_basis"], 1600.0)
-        self.assertAlmostEqual(r["economic_gain"], -400.0)
-
-    def test_unheld_option_is_refused_not_simulated_as_a_write(self):
-        from taxjson.web import data
-        with tempfile.TemporaryDirectory() as tmp:
-            ctx = _web_project(
-                tmp, [_buy("AEM.TO", 100, 50.0, 5000.0)],
-                settings_extra="option_premium_timing = \"grant\"\n"
-                               "option_grant_timing_since = 2026\n")
-            r = data.what_if_sell(ctx, "margin", "AEM270115C00150000.TO",
-                                  1, 1.0, on="2026-06-30")
-        self.assertFalse(r["ok"], r)
 
 
 # ----------------------------------------------------------------- redact

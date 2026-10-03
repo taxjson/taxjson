@@ -290,9 +290,9 @@ def main():
     parser.add_argument("--all", "-a", action="store_true", help="Show all tickers, not just relevant ones")
     parser.add_argument("--json-out", metavar="PATH", default=None,
                         help="Also write the report as structured JSON (the "
-                             ".rpt text is unchanged; consumers like the web "
-                             "UI read this and compute countdowns at VIEW "
-                             "time from the absolute clears_at dates)")
+                             ".rpt text is unchanged; readers such as "
+                             "harvest --radar compute countdowns at their "
+                             "own time from the absolute clears_at dates)")
     parser.add_argument("--account", default="",
                         help="Account label stamped into --json-out")
     parser.add_argument("--json", action="store_true",
@@ -2099,9 +2099,9 @@ def main():
 
     if args.json_out or args.json:
         # Structured sidecar: same rows/grouping as the printed .rpt, plus
-        # ABSOLUTE clears_at dates so consumers (the web UI) can compute
-        # "clears in Nd" at VIEW time instead of serving the generation-day
-        # countdown forever.
+        # ABSOLUTE clears_at dates so consumers (harvest --radar) can
+        # compute "clears in Nd" at their own time instead of reading the
+        # generation-day countdown.
         recs_by_cat = {}
         row_records.sort(key=lambda r: (_category_rank(r["category"]),
                                         r["ticker"]))

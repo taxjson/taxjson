@@ -590,35 +590,5 @@ class TestSafeToSellAlreadyFixed(unittest.TestCase):
         self.assertEqual(rows["XYZ.TO"][1], "FULL-EXIT-ONLY")
 
 
-class TestWhatIfScope(unittest.TestCase):
-    """S054-22 (web half): the what-if's "no" covers this project's
-    accounts only."""
-
-    def _whatif(self, country, sym):
-        from taxjson.web import data
-        from test_fixl_planning_webredact import _ctx, _d
-        from test_fixl_planning_webredact import _project as _wproj
-        from test_fixl_planning_webredact import _row as _wrow
-        with tempfile.TemporaryDirectory() as tmp:
-            row = dict(_wrow(sym, 100, -2000.0, _d(-200)),
-                       currency="USD" if country == "usa" else "CAD")
-            root = _wproj(tmp, {"margin": [row]}, country=country)
-            return data.what_if_sell(_ctx(root), "margin", sym, 100, 12.0)
-
-    @rule("CA-PLAN-04")
-    def test_canada_what_if_states_the_scope(self):
-        r = self._whatif("canada", "AAA.TO")
-        self.assertTrue(r["ok"], r)
-        self.assertFalse(r["is_wash_sale"])
-        self.assertIn("s.251.1", r["scope_note"])
-
-    @rule("US-PLAN-04")
-    def test_usa_what_if_states_the_scope(self):
-        r = self._whatif("usa", "AAA.US")
-        self.assertTrue(r["ok"], r)
-        self.assertIn("Pub. 550", r["scope_note"])
-        self.assertNotIn("s.251.1", r["scope_note"])
-
-
 if __name__ == "__main__":
     unittest.main()

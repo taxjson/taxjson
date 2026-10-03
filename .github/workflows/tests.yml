@@ -33,7 +33,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - run: ruff check --select E9,F63,F7,F82 src/ tests/
+      - run: ruff check --select E9,F63,F7,F82 src/ tests/ packages/
 
   gates:
     # The ci.sh stages besides lint and the suite: release consistency,
@@ -75,13 +75,18 @@ jobs:
       - name: Run tests
         run: python -m unittest discover -s tests -p "test_*.py"
 
+      # The broker-fetch plugin, installed the way a user installs it.
+      - name: Install and test taxjson-fetch
+        run: |
+          pip install -e packages/taxjson-fetch
+          python -m unittest discover -s packages/taxjson-fetch/tests -p "test_*.py"
+
 
   test-extras:
-    # One cell with every optional extra installed, so the web/fx/
-    # analytics code paths (fastapi, yfinance, pandas...) are actually
+    # One cell with every optional extra installed, so the fx/
+    # analytics code paths (yfinance, pandas...) are actually
     # imported in CI instead of silently skipping — the extras rotted
-    # undetected before this job existed. [dev] adds httpx so
-    # fastapi.testclient works and the web-route tests actually run.
+    # undetected before this job existed.
     name: ubuntu / 3.12 / all extras
     runs-on: ubuntu-latest
     steps:

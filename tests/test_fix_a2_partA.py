@@ -9,8 +9,6 @@ basis / §1091 / wash sale / 1099-DIV for the US). Synthetic data only.
 from __future__ import annotations
 
 import argparse
-import contextlib
-import io
 import json
 import os
 import subprocess
@@ -420,8 +418,8 @@ class TestApplyDistributionsNeutralWithoutCountry(unittest.TestCase):
 
 # ------------------------------------------------------------- A2-1373
 class TestSettingsYearIsShared(unittest.TestCase):
-    """The web context (settings_problems) refuses the [settings] year
-    values every CLI command refuses."""
+    """settings_problems refuses the [settings] year values every CLI
+    command refuses."""
 
     def test_settings_problems_checks_year(self):
         from taxjson.lib.config_check import settings_problems
@@ -431,17 +429,6 @@ class TestSettingsYearIsShared(unittest.TestCase):
             self.assertTrue(any("year" in p for p in probs), (bad, probs))
         self.assertEqual(settings_problems(
             {"settings": {"country": "usa", "year": 2025}}), [])
-
-    def test_web_context_refuses(self):
-        from taxjson.web.context import ProjectContext
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 1850\ncountry = "canada"\n'
-                'base_currency = "CAD"\n[accounts.m]\ntype = "taxable"\n')
-            with self.assertRaises(ValueError) as e:
-                ProjectContext.load(root)
-        self.assertIn("plausible tax year", str(e.exception))
 
 
 # ----------------------------------------- A2-1319 / A2-1287 / A2-1311

@@ -87,10 +87,6 @@ class TestFingerprintCoversEveryRunInput(_Built):
         r = cl.d_run_clean(ctx(p))
         self.assertEqual(r.status, "attention", r.detail)
         self.assertIn("inputs/margin/manifest.json", r.detail)
-        from taxjson.web.context import ProjectContext
-        from taxjson.web.data import freshness
-        fr = freshness(ProjectContext.load(p))
-        self.assertTrue(fr["stale"], fr)
 
     def test_empty_manifest_is_not_an_input_change(self):
         p = self.copy()

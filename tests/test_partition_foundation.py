@@ -104,11 +104,10 @@ class TestOneCountryResolver(unittest.TestCase):
     @rule("CA-CTRY-01")
     @rule("US-CTRY-01")
     def test_project_readers_agree(self):
-        """load_config (every `taxjson` command), the web UI and
+        """load_config (every `taxjson` command) and
         taxjson-missing-history read the same toml the same way."""
         from taxjson.bin import taxjson_run as R
         from taxjson.lib.missing_history import tax_date_near
-        from taxjson.web.context import ProjectContext
         for spelling, want in self.SPELLINGS.items():
             with self.subTest(spelling=spelling), \
                     tempfile.TemporaryDirectory() as td:
@@ -126,14 +125,10 @@ class TestOneCountryResolver(unittest.TestCase):
                         with redirect_stderr(io.StringIO()):
                             R.load_config(root)
                     with self.assertRaises(ValueError):
-                        ProjectContext.load(root)
-                    with self.assertRaises(ValueError):
                         tax_date_near(book)
                 else:
                     self.assertEqual(R.load_config(root)["settings"]
                                      ["country"], want)
-                    self.assertEqual(ProjectContext.load(root).country,
-                                     want)
                     self.assertEqual(tax_date_near(book),
                                      C.default_tax_date(want))
 
@@ -163,14 +158,6 @@ class TestOneCountryResolver(unittest.TestCase):
                                   r.stderr)
                     self.assertNotIn("s.49", r.stderr)
                     self.assertNotIn("SCHEDULE 3", r.stdout)
-
-    def test_web_refuses_missing_country(self):
-        from taxjson.web.context import ProjectContext
-        with tempfile.TemporaryDirectory() as td:
-            (Path(td) / "taxjson.toml").write_text('[settings]\nyear = 2025\n')
-            with self.assertRaises(ValueError) as cm:
-                ProjectContext.load(td)
-        self.assertIn("country is missing", str(cm.exception))
 
 
 # ------------------------------------------------------------ R2 settings

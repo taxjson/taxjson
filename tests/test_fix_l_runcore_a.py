@@ -445,7 +445,6 @@ class TestDiagnosticsBanner(unittest.TestCase):
             self.assertTrue(_PARSE_COUNT_RE.match(ln), ln)
 
 
-
 def _qt_row(d, s, act, q, p, sym="XEI.TO", acct="55500001", comm=0):
     g = abs(q) * p
     net = -g - comm if act == "Buy" else g - comm
@@ -651,7 +650,6 @@ class TestViewsSayWhatTheySkip(unittest.TestCase):
             self.assertIn("MANUAL reporting", r.stderr)
 
 
-
 _TT_A = ("BUYSELL 2025-02-03 09:30:00 ABC.TO 50 CAD 10.0 -500.0 0.0\n")
 _TT_B = ("BUYSELL 2025-02-04 09:30:00 DEF.TO 70 CAD 10.0 -700.0 0.0\n")
 
@@ -708,7 +706,6 @@ class TestFastCache(unittest.TestCase):
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("msft_gains.tt", r.stderr)
             self.assertIn("msft-gains.tt", r.stderr)
-
 
 
 def _write(path, doc):
@@ -907,7 +904,6 @@ class TestReportLabelsAndTotals(unittest.TestCase):
             self.assertTrue(kr and kr[0].get("dividend_is_staking"))
 
 
-
 class TestScanSanityFetch(unittest.TestCase):
     """R1-243, S042-04 (scan), R1-113 / R1-334 / R1-351 (sanity),
     R1-353 (Questrade auth hint)."""
@@ -969,27 +965,6 @@ class TestScanSanityFetch(unittest.TestCase):
             # R1-351: the id in the file name and label is masked.
             self.assertNotIn("U5550001", r.stdout)  # pii-ok
             self.assertIn("U5***_holdings.toml", r.stdout)
-
-    def test_questrade_auth_hint_names_the_skipped_env_token(self):
-        from taxjson.bin.taxjson_run import _qt_auth_hint
-        with tempfile.TemporaryDirectory() as tmp:
-            cache = Path(tmp) / "tok"
-            cache.write_text("DEADOLD\n")
-            old = os.environ.get("QUESTRADE_REFRESH_TOKEN")
-            os.environ["QUESTRADE_REFRESH_TOKEN"] = "NEWENV"
-            try:
-                h = _qt_auth_hint("DEADOLD", cache)
-            finally:
-                if old is None:
-                    os.environ.pop("QUESTRADE_REFRESH_TOKEN", None)
-                else:
-                    os.environ["QUESTRADE_REFRESH_TOKEN"] = old
-            self.assertIn("NOT $QUESTRADE_REFRESH_TOKEN", h)
-            self.assertIn("--refresh-token", h)
-            self.assertNotIn("DEADOLD", h)
-            self.assertNotIn("NEWENV", h)
-            h = _qt_auth_hint("ARG", cache, explicit=True)
-            self.assertIn("--refresh-token", h)
 
 
 def _zzz_short_csv():
@@ -1202,7 +1177,6 @@ class TestDefaultsAndTotalsPinned(unittest.TestCase):
                                        for r in j["rows"]), 2500.0)
             lt = _run_cli(root, "list").stdout
             self.assertIn("350.00", lt)           # deferred total
-
 
 
 class TestClassShareGrouping(unittest.TestCase):

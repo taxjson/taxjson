@@ -1,5 +1,5 @@
 """Regression pins for the re-audit-2 partition lists 05 and 06 (RBC
-parser notes, web holdings pages, phantom_holdings, taxjson-brokerage,
+parser notes, phantom_holdings, taxjson-brokerage,
 reconcile-slips, export, explain, harvest).
 
 Synthetic data only: fake account numbers (55500001 # pii-ok), no FX
@@ -371,74 +371,7 @@ class TestBrokerageStablecoinDefault(unittest.TestCase):
         self.assertIn("--foreign-roc", flat)
 
 
-# ------------------------------- holdings basis notes: web + export (05/06)
-
-try:
-    from fastapi.testclient import TestClient  # noqa: F401
-    _HAVE_WEB = True
-except Exception:          # pragma: no cover - extra not installed
-    _HAVE_WEB = False
-
-
-def _web_project(tmp, country):
-    root = Path(tmp)
-    (root / "work").mkdir()
-    (root / "reports").mkdir()
-    sfx, cur = ((".US", "USD") if country == "usa" else (".TO", "CAD"))
-    (root / "taxjson.toml").write_text(
-        f'[settings]\nyear = 2026\ncountry = "{country}"\n'
-        f'base_currency = "{cur}"\n[accounts.margin]\ntype = "taxable"\n')
-    (root / "work" / "margin_base.json").write_text(json.dumps(
-        {"transactions": [{"action": "BUYSELL", "date": "2026-06-01",
-                           "date_settle": "2026-06-01",
-                           "symbol": f"QZQ{sfx}", "quantity": 10,
-                           "price": 10.0, "net_amount": 100.0,
-                           "currency": cur, "account": "margin"}]}))
-    (root / "reports" / "margin_holdings.toml").write_text(
-        f'[[holding]]\nsymbol = "QZQ{sfx}"\nquantity = 10.0\n'
-        f'total_cost = 100.0\ncost_per_share = 10.0\ncurrency = "{cur}"\n')
-    return root, f"QZQ{sfx}"
-
-
-_CA_BASIS = ("s.47", "ACB", "superficial", "pre-blend", "Canadian")
-
-
-@unittest.skipUnless(_HAVE_WEB, "web extra not installed")
-class TestWebHoldingsBasisNote(unittest.TestCase):
-    """A2-0755, A2-1250, A2-1327, A2-1339, A2-1374, A2-1375, A2-1376,
-    A2-1300, A2-1353 (web half)."""
-
-    def _pages(self, country):
-        from taxjson.web.app import create_app
-        from taxjson.web.context import ProjectContext
-        with tempfile.TemporaryDirectory() as tmp:
-            root, sym = _web_project(tmp, country)
-            c = TestClient(create_app(ProjectContext.load(root)),
-                           base_url="http://127.0.0.1")
-            with redirect_stderr(io.StringIO()):
-                pages = [c.get("/holdings"),
-                         c.get(f"/holdings/margin/{sym}"),
-                         c.post("/whatif", data={
-                             "account": "margin", "symbol": sym,
-                             "qty": "5", "price": "8"})]
-        for r in pages:
-            self.assertEqual(r.status_code, 200, r.text[:500])
-        return [r.text for r in pages]
-
-    @rule("CA-ACB-01")
-    @rule("US-BASIS-01")
-    def test_dual_country_basis_notes(self):
-        ca = self._pages("canada")
-        us = self._pages("usa")
-        self.assertIn("s.47 blended", ca[0])
-        self.assertIn("s.47 blended", ca[1])
-        self.assertIn("Canadian project", ca[2])
-        for page in us:
-            for w in _CA_BASIS:
-                self.assertNotIn(w, page, w)
-        self.assertIn("FIFO", us[0])
-        self.assertIn("FIFO", us[1])
-        self.assertIn("FIFO per account", us[2])
+# ------------------------------------ holdings basis notes: export (05/06)
 
 
 class TestHoldingsTomlBasisNote(unittest.TestCase):

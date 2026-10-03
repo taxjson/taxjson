@@ -3,3 +3,5 @@
 # id            retired      why
 US-META-01      2026-09-30   audit-proposed id for "an unknown country renders Canada"; that fallback is gone (lib/country refuses it), so it is not a statement
 US-EST-CARRY-ORDER   2026-10-02   stated the single-number ST-first carryover; replaced in the same round by US-EST-CARRY-TERM (the estimate takes a short- and a long-term carryover)
+CA-PLAN-03      2026-10-03   stated the web what-if's s.47 pool and pricing; the web UI (taxjson serve) was removed
+US-PLAN-03      2026-10-03   stated the web what-if's wash-sale context and pricing; the web UI (taxjson serve) was removed

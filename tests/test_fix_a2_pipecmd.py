@@ -159,9 +159,9 @@ class TestConflictingSplitsAreErrors(unittest.TestCase):
 # ------------------------------------------ A2-0139 / A2-0201 / A2-0397
 class TestTrustRocRecordDateEverywhere(unittest.TestCase):
     """CA-INC-DATE-ROC-TRUST was applied only in pipeline.run_gains:
-    taxjson-audit, taxjson-explain and the web what-if booked a trust's
-    ROC on its pay date and contradicted the .sum (gain 500 there, 0
-    in audit/explain; what-if cost 10,000 instead of 9,500)."""
+    taxjson-audit and taxjson-explain booked a trust's ROC on its pay
+    date and contradicted the .sum (gain 500 there, 0 in
+    audit/explain)."""
 
     _LINES = [
         "BUYSELL 2025-01-06 10:00:00 ZZR.TO 2000 CAD 10 -20000 0",
@@ -200,19 +200,6 @@ class TestTrustRocRecordDateEverywhere(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             self.assertIn("500.00", r.stdout)
             self.assertNotIn("EMPTY pool", r.stdout + r.stderr)
-
-    @rule("CA-INC-DATE-ROC-TRUST")
-    def test_web_what_if_cost(self):
-        with tempfile.TemporaryDirectory() as td:
-            root, home = self._proj(td)
-            from taxjson.web import data
-            from taxjson.web.context import ProjectContext
-            res = data.what_if_sell(ProjectContext.load(root), "m",
-                                    "ZZR.TO", 1000, 10.0, on="2025-03-12")
-            self.assertTrue(res.get("ok"), res)
-            self.assertAlmostEqual(res["cost_basis"], 9500.0, places=2)
-            self.assertFalse(any("EMPTY" in w for w in res["warnings"]),
-                             res["warnings"])
 
 
 def _gains_one(book, country, **req):

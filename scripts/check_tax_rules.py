@@ -4,7 +4,8 @@
 Every statement `taxjson tax-logic` prints has a rule id (lib/tax_logic,
 `catalog()`). Tests cite the ids they pin with the markers in
 tests/tax_rules (`@rule("CA-SL-02")`, `@rule_absent("CA-SL-02",
-country="usa")`). This check reads the markers with the AST (it never
+country="usa")`), in tests/ and in the plugin packages' tests
+(packages/*/tests). This check reads the markers with the AST (it never
 imports a test) and fails when:
 
   1. an id is malformed, unknown to tax-logic, or retired
@@ -323,8 +324,11 @@ def main(argv=None) -> int:
         problems.append(f"{rid} is in retired.txt but tax-logic still "
                         f"states it")
 
+    # The plugin packages' tests (packages/*/tests) pin rules too: the
+    # moved `taxjson fetch` tests carry their @rule markers with them.
     files = sorted(p for p in TESTS.rglob("*.py")
                    if RULES_DIR not in p.parents)
+    files += sorted(p for p in (ROOT / "packages").glob("*/tests/**/*.py"))
     marked = collect(files)
     pinned: Dict[str, List[str]] = {}
     paired: Dict[str, List[str]] = {}

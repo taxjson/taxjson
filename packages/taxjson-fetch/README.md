@@ -1,0 +1,96 @@
+# taxjson-fetch
+
+Broker auto-fetch for [taxjson](https://github.com/taxjson/taxjson): the
+Questrade REST API and the IBKR Flex Web Service, as a `taxjson fetch`
+plugin.
+
+The taxjson core holds no broker API client and never reads a broker
+credential; its `taxjson fetch` command is a dispatcher over installed
+fetcher plugins. This package is that plugin for Questrade and
+Interactive Brokers. It depends on `taxjson` and registers itself under
+the entry-point group `taxjson.fetchers`.
+
+## Install
+
+Into the same Python environment as taxjson:
+
+```bash
+pip install taxjson-fetch
+# or, from a taxjson checkout:
+pip install -e packages/taxjson-fetch
+# or with the one-line installer:
+bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --with-fetch
+```
+
+`taxjson fetch --list` then shows `taxjson-fetch: questrade, ibkr_flex`.
+
+## Use
+
+Declare the source on the account in `taxjson.toml`:
+
+```toml
+[accounts.margin]
+type = "taxable"
+brokerage = "questrade"
+account = "12345678"     # Questrade account number
+
+[accounts.ibkr]
+type = "taxable"
+brokerage = "ibkr_flex"
+query_id = "123456"      # an Activity Flex query: format CSV, with
+                         # "include section code and line descriptor" ON
+```
+
+```bash
+taxjson fetch                 # every account with a brokerage
+taxjson fetch run             # fetch, then rebuild the books
+taxjson fetch margin --dry-run
+```
+
+Options this plugin adds to `taxjson fetch`: `--year N` (backfill a past
+tax year's whole window), `--days N` / `--from YYYY-MM-DD` (override the
+Questrade window), `--refresh-token` (Questrade, first run) /
+`--flex-token` (IBKR), `--positions` (snapshot live Questrade holdings
+into `work/<account>_live_holdings.toml` for `taxjson sanity`) and
+`--trim-overlap` (trim manually exported Questrade rows inside the
+fetched window, keeping a `.bak`). The core adds `--list`, `--fetcher`,
+`--json` and `--dry-run`.
+
+Downloads land as `inputs/<account>/questrade_<year>.csv` (the whole
+tax-year window, union-merged on every fetch) and
+`inputs/<account>/ib_flex.csv` (replaced, the previous copy kept as
+`.bak`; a download that would drop activity of the tax year is refused
+and saved as `ib_flex.csv.new`) — the formats the core's parsers read
+from manual exports, which keep working side by side.
+
+## Credentials and network
+
+Credentials never go in `taxjson.toml`. Questrade takes a refresh token
+once (`--refresh-token` or `$QUESTRADE_REFRESH_TOKEN`) and caches the
+rotated token in `~/.questrade_token` (0600, rotated atomically; shared
+machine-wide because Questrade runs one rotating chain per API app;
+`$QUESTRADE_TOKEN_FILE` overrides). IBKR reads `$IBKR_FLEX_TOKEN`.
+Prefer the environment variables over the flags, which show in `ps`.
+
+Network, only when you run `taxjson fetch`: `https://login.questrade.com`
+and the `https://*.questrade.com` API server it names, and
+`https://ndcdyn.interactivebrokers.com` (Flex). Credentialed requests
+refuse redirects; tokens never appear in logs or `work/` files.
+
+## Development
+
+Layout: `src/taxjson_fetch/api.py` (HTTP clients, CSV / TOML writers,
+the fetch window), `command.py` (the fetch: token file, merge, overlap
+trim, Flex span guard, live positions), `plugin.py` (the object the
+core loads). The plugin contract is `taxjson/lib/fetchers.py` in the
+core.
+
+Tests are offline (the HTTP layer is injected) and run from a checkout
+without installing (`tests/_support.py` registers the entry point):
+
+```bash
+PYTHONPATH=packages/taxjson-fetch/src python -m unittest discover -s packages/taxjson-fetch/tests -p "test_*.py"
+```
+
+`scripts/ci.sh` runs them; releases are cut in lockstep with taxjson
+(`scripts/release.sh` bumps both versions).

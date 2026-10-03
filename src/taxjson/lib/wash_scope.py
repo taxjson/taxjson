@@ -1,5 +1,5 @@
 """What the planning verdicts (wash radar, sell-check, buy-check, watch,
-harvest, web what-if) can and cannot see — one wording per country
+harvest) can and cannot see — one wording per country
 (tax-logic CA-PLAN-04 / US-PLAN-04; the two never mix).
 
 The superficial-loss rule (ITA s.54, s.251.1 affiliated persons) and the
