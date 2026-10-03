@@ -2544,8 +2544,11 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     parsed: List[Path] = []
     for broker, csvs in grouped.items():
         out = cache / f"{name}_{broker}.json"
+        # ticker_map dep: a parser's identity hint the map now answers
+        # is dropped (taxjson-brokerage --ticker-map, A2-1056).
         deps = (list(csvs) + [src_manifest]
-                + ([security_overrides] if security_overrides else []))
+                + ([security_overrides] if security_overrides else [])
+                + ([ticker_map] if ticker_map else []))
         if _is_generic_group(broker):
             # A mapping edit must rebuild the parse like a CSV edit.
             for _c in csvs:
@@ -2580,6 +2583,13 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 # An export's own timestamp vs the year (RBC "as of",
                 # S063-22).
                 cmd += ["--tax-year", str(year)]
+            if ticker_map:
+                cmd += ["--ticker-map", str(ticker_map)]
+            if rates and Path(rates).is_file() and Path(rates).stat().st_size:
+                # A stablecoin fill valued in CAD/EUR is checked against
+                # the peg through these rates (A2-0590; a warning only,
+                # so not a rebuild dep).
+                cmd += ["--rates", str(rates)]
             _sidecar = out.with_name(out.stem + "_transfers.json")
             if include_transfers:
                 cmd.append("--transfers")

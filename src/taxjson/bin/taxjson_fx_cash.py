@@ -81,12 +81,39 @@ def _non_cash(tx: Dict[str, Any]) -> bool:
         sym = str(tx.get("symbol") or "").upper().split(".")[0]
         return sym not in _CASH_LIKE
     # Corporate-action legs (share-for-share merger, spin-off ACB
-    # allocation, taxable exchange at FMV): stock for stock. The only
-    # cash is a standalone cash-in-lieu leg. A cash takeover is a sale
-    # the broker parser books, never a corp-action row.
+    # allocation, taxable exchange at FMV): stock for stock. Their cash
+    # (cash in lieu, boot) is the row's structured `corp_cash`, read by
+    # _cash_legs (A2-1014); a book built before it had the field keeps
+    # the standalone ': cash-in-lieu for' leg's wording. A cash takeover
+    # is a sale the broker parser books, never a corp-action row.
     if tx.get("corp_event_id"):
         return ": cash-in-lieu for" not in low
     return False
+
+
+def _cash_legs(tx: Dict[str, Any]) -> List[tuple]:
+    """[(currency, signed native flow)] a row moves through the ledger.
+    A corporate-action row with `corp_cash` ("<amount> <CUR>; ...")
+    received exactly that cash, in that currency, whatever its
+    description says (re-audit A2-1014); any other row is `_flows` in
+    its own currency."""
+    cc = str(tx.get("corp_cash") or "").strip()
+    if tx.get("corp_event_id") and cc:
+        out = []
+        for part in cc.split(";"):
+            bits = part.split()
+            if len(bits) != 2:
+                continue
+            try:
+                amt = float(bits[0])
+            except ValueError:
+                continue
+            out.append((bits[1].upper(), amt))
+        return out
+    flow = _flows(tx)
+    if flow is None:
+        return []
+    return [(str(tx.get("currency") or "").upper(), flow)]
 
 
 def _flows(tx: Dict[str, Any]) -> Optional[float]:
@@ -195,21 +222,14 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
         return {c: {"units": round(p[0], 2), "acb": round(p[1], 2)}
                 for c, p in sorted(pools.items()) if p[0] > 0.005}
 
-    for tx in rows:
-        if pools_ye is None and str(tx.get("date_settle")
-                                    or tx.get("date") or "") > year_end:
-            pools_ye = _snap()           # the balance at Dec 31
-        cur = str(tx.get("currency") or "").upper()
-        if not cur or cur == base:
-            continue
-        flow = _flows(tx)
-        if flow is None or flow == 0:
-            continue
+    def _walk_flow(tx, cur, flow) -> None:
+        if not cur or cur == base or not flow:
+            return
         d = str(tx.get("date_settle") or tx.get("date") or "")
         rate = _rate(cur, d)
         if rate is None:
             unrated[cur] = unrated.get(cur, 0) + 1
-            continue
+            return
         pool = pools.setdefault(cur, [0.0, 0.0])
         stat = per_cur.setdefault(cur, {"acquired": 0.0, "disposed": 0.0,
                                         "gain": 0.0})
@@ -218,7 +238,7 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
             pool[1] += flow * rate
             if d.startswith(ystr):
                 stat["acquired"] += flow
-            continue
+            return
         units = -flow                                    # dispose
         covered = min(units, pool[0])
         gain = 0.0
@@ -241,6 +261,13 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
                            "action": tx.get("action"),
                            "symbol": tx.get("symbol"),
                            "account": tx.get("account")})
+
+    for tx in rows:
+        if pools_ye is None and str(tx.get("date_settle")
+                                    or tx.get("date") or "") > year_end:
+            pools_ye = _snap()           # the balance at Dec 31
+        for cur, flow in _cash_legs(tx):
+            _walk_flow(tx, cur, flow)
 
     net = sum(s["gain"] for s in per_cur.values())
     return {"per_currency": {c: {k: round(v, 2) for k, v in s.items()}

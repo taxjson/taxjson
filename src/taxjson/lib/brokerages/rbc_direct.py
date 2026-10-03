@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         ticker_map_joins,
                                          combined_accounts_note,
                                          combined_accounts_refusal,
                                          DESC_NUMBER_RE, OPTION_STRIKE_RE,
@@ -1377,6 +1378,8 @@ def _detect_ticker_changes(ctx: RbcAccountContext, helper) -> None:
                 seen.add((a.symbol, b.symbol, cur))
                 sa = helper.apply_currency_suffix(a.symbol, cur)
                 sb = helper.apply_currency_suffix(b.symbol, cur)
+                if ticker_map_joins(sa, sb):
+                    continue    # ticker.map already pools them (A2-1056)
                 fb = ctx.exports[ctx.files[b.events[0][2]]].path.name
                 how = (f"first appears on {b.first} with a SALE of "
                        f"{-first_b:g}" if first_b < 0 else
@@ -1697,12 +1700,17 @@ class RbcBrokerage(BaseBrokerage):
                 and hasattr(self, '_usd_units_warned')
                 and symbol.upper() not in self._usd_units_warned):
             self._usd_units_warned.add(symbol.upper())
+            # The TSX unit's spelling: ROOT.U.TO whether the row says
+            # ZSP, ZSP.U or ZSP.U.TO (it suggested ZSP.U.TO.U.TO).
+            _root = re.sub(r'(\.U)?(\.(TO|US))?$', '', symbol.upper())
+            if ticker_map_joins(out, f"{_root}.U.TO"):
+                return out      # ticker.map already folds them (A2-1056)
             self._warn(f"{symbol} ({' '.join(r.symdesc.split())!r}) reads "
                        f"as the US-dollar class of a TSX-listed fund but is "
                        f"booked as {out}, a US listing (off the T1135, one "
                        f"pool with IB/Questrade's .U.TO only with a map "
                        f"line). If it trades on the TSX, add to ticker.map:"
-                       f"  GLOBAL {out} {symbol.upper()}.U.TO",
+                       f"  GLOBAL {out} {_root}.U.TO",
                        attention=True)
         return out
 
@@ -1770,6 +1778,11 @@ class RbcBrokerage(BaseBrokerage):
             listed = ', '.join(self.apply_currency_suffix(sym, c)
                                for c in curs)
             alt = 'TO' if 'USD' in curs else 'US'
+            _foreign = [c for c in curs if c != 'CAD']
+            if _foreign and all(
+                    ticker_map_joins(self.apply_currency_suffix(sym, c),
+                                     f"{sym}.{alt}") for c in _foreign):
+                continue    # ticker.map already joins the listings (A2-1056)
             kinds_txt = ', '.join(sorted({k for _, k in kinds}))
             msg = (f"{sym}: {kinds_txt} row(s) but no trade rows for {sym} "
                    f"in any RBC file of this account — booked as {listed}, "
@@ -1986,17 +1999,22 @@ class RbcBrokerage(BaseBrokerage):
         is_assign_leg = (r.cls == 'assignment' or r.code == 'ASN'
                          or any(x in activity for x in ('Assignment',
                                                         'Exercise')))
+        # A blank settle cell falls back to the cycle of the LISTING's
+        # market, not the row currency's (A2-1054): DLR.U.TO bought in USD
+        # settles through CDS on the Canadian calendar.
+        from taxjson.lib.dates import market_of
+        _mkt = market_of(symbol, r.currency)
         if r.settle:
             date_settle = r.settle
         elif occ and not is_assign_leg:
             date_settle = self.settlement_date_t1(r.date, "%Y-%m-%d",
-                                                  currency=r.currency)
+                                                  currency=_mkt)
         else:
             # Equities — and an assignment/exercise OPTION leg, which is
             # one event with its stock leg: T+1 on the option leg alone
             # split the two and let another trade consume the premium
             # (audit S065-06).
-            date_settle = self.equity_settlement_date(r.date, r.currency,
+            date_settle = self.equity_settlement_date(r.date, _mkt,
                                                       "%Y-%m-%d")
         date = r.date
         # An option EXPIRY has no settlement cycle, and RBC posts it the

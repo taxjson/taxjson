@@ -9,6 +9,8 @@ from typing import List, Dict, Any, Optional, Tuple
 
 from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         ticker_map_joins,
+                                         ticker_map_renames,
                                          combined_accounts_note,
                                          combined_accounts_refusal,
                                          _parse_div_qty_rate,
@@ -459,6 +461,8 @@ def _detect_qt_ticker_changes(ctx: QtAccountContext, by_name, where) -> None:
                 if (open_a <= 1e-9 or low >= -1e-9
                         or -low > open_a + 1e-6):
                     continue
+                if ticker_map_joins(a, b):
+                    continue    # ticker.map already pools them (A2-1056)
                 how = (f"first appears on {tb[0][0]} with a SALE of "
                        f"{-first_b:g}" if first_b < 0 else
                        f"first appears on {tb[0][0]} and goes {-low:g} "
@@ -715,6 +719,8 @@ class QuestradeBrokerage(BaseBrokerage):
             own = self.apply_currency_suffix(sym, cur)
             others = sorted({self.apply_currency_suffix(s, c)
                              for s, c in cands} - {own})
+            if all(ticker_map_joins(own, o) for o in others):
+                others = []     # ticker.map already folds them (A2-1056)
             if others:
                 key = (own, tuple(others))
                 if key not in self._ambiguous_warned:
@@ -731,6 +737,8 @@ class QuestradeBrokerage(BaseBrokerage):
             return next(iter(cands))
         if len(cands) > 1:
             key = (sym, tuple(sorted(cands)))
+            if ticker_map_renames(self.apply_currency_suffix(sym, currency)):
+                self._ambiguous_warned.add(key)  # mapped (A2-1056)
             if key not in self._ambiguous_warned:
                 self._ambiguous_warned.add(key)
                 print(f"warning: {self._qt_name}: {sym or '(blank)'!r} "
@@ -740,7 +748,9 @@ class QuestradeBrokerage(BaseBrokerage):
                       f"rebound; map it with a ticker.map rule (moot if "
                       f"ticker.map already maps it).",
                       file=sys.stderr)
-        elif _INTERNAL_CODE_RE.match(sym) and sym not in self._code_warned:
+        elif (_INTERNAL_CODE_RE.match(sym) and sym not in self._code_warned
+              and not ticker_map_renames(
+                  self.apply_currency_suffix(sym, currency))):
             # A row booked under Questrade's internal code that no trade
             # or transfer in any export of the account resolves: the
             # position fragments (a ROC hits an empty pool and becomes a
@@ -1205,22 +1215,10 @@ class QuestradeBrokerage(BaseBrokerage):
                 opt = None
             settle_dt = self._date(row, 'Settlement Date', lineno,
                                    required=False)
-            if settle_dt:
-                date_settle = settle_dt.strftime("%Y-%m-%d")
-            elif opt and not (code_assigned or word_assigned):
-                # Options settle T+1 in every era; the equity fallback
-                # (T+2 before the 2024 cutover) moved a Dec-28 option
-                # sale into the next tax year (audit R1-194). An
-                # exercise/assignment leg keeps its stock leg's cycle
-                # below — the two rows are one event.
-                date_settle = self.settlement_date_t1(
-                    date, "%Y-%m-%d", currency=currency)
-            else:
-                # Era- and market-aware fallback for a BLANK settlement
-                # cell only (T+2 pre-cutover equities); a present but
-                # unparseable cell is an error above, not a fallback.
-                date_settle = self.equity_settlement_date(
-                    date, currency, "%Y-%m-%d")
+            # A BLANK settlement cell falls back to the standard cycle,
+            # computed once the symbol (its listing) is known below.
+            date_settle = (settle_dt.strftime("%Y-%m-%d") if settle_dt
+                           else None)
 
             qty = self._num(row, 'Quantity', lineno)
             mult = float(self.OPTION_MULTIPLIER) if opt else 1.0
@@ -1372,6 +1370,28 @@ class QuestradeBrokerage(BaseBrokerage):
                 symbol = (row.get('Symbol') or '').strip().upper()
             symbol = self.apply_currency_suffix(symbol, listing_currency)
             self.note_row_consumed()
+            if date_settle is None:
+                # The LISTING's market decides the cycle and calendar,
+                # not the row currency (A2-1052 / A2-1054): DLR.U.TO in
+                # USD settles through CDS, a CAD-settled US stock on the
+                # US calendar (lib/dates.market_of, the rule every parser
+                # shares).
+                from taxjson.lib.dates import market_of
+                _mkt = market_of(symbol, listing_currency)
+                if opt and not (code_assigned or word_assigned):
+                    # Options settle T+1 in every era; the equity
+                    # fallback (T+2 before the 2024 cutover) moved a
+                    # Dec-28 option sale into the next tax year (audit
+                    # R1-194). An exercise/assignment leg keeps its stock
+                    # leg's cycle — the two rows are one event.
+                    date_settle = self.settlement_date_t1(
+                        date, "%Y-%m-%d", currency=_mkt)
+                else:
+                    # Era- and market-aware fallback for a BLANK
+                    # settlement cell only (T+2 pre-cutover equities); a
+                    # present but unparseable cell is an error above.
+                    date_settle = self.equity_settlement_date(
+                        date, _mkt, "%Y-%m-%d")
 
             if is_expired and not is_assigned:
                 # An expiry has no settlement cycle, and Questrade posts

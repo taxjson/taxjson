@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Second-audit deferred items
+
+- A blank settlement cell now settles on the listing's market in every
+  parser: a Questrade or RBC US-dollar TSX unit (DLR.U.TO) on the Canadian
+  calendar, a Questrade CAD-settled US stock on the US one, and a generic
+  `.L`/`.AX` line priced in USD on the UK/ASX cycle (A2-1052, A2-1054).
+- The Questrade, RBC and Webull "looks renamed" hints, RBC's untraded-income
+  listing hint and IB's one-contract-two-symbols ATTENTION are dropped once
+  ticker.map joins the pair: `taxjson run` now passes the map to
+  `taxjson-brokerage --ticker-map` (a map edit re-parses); `--lint` keeps
+  them (A2-1056).
+- IB: a stock dividend or cash takeover that a later statement's `Ca`
+  row cancels no longer leaves its ATTENTION / NOTE line (or the Ca row's
+  "original is not in this statement" skip line) in the run output: under
+  `taxjson-brokerage` those lines print after the cross-statement pass
+  (A2-1091).
+- Canada: the stablecoin de-peg warning now also checks fills valued in
+  CAD, EUR or another fiat (Coinbase rows priced in CAD, Kraken `USDC/CAD`
+  or `USDT/EUR` pairs, ledger stablecoin-to-fiat conversions): `taxjson run`
+  passes its rates file to `taxjson-brokerage --rates`, and the fill is
+  turned into US dollars at the day's rate before the 2% test; a fill with
+  no rate is named as unchecked (A2-0590).
+- fx-cash now counts the cash a corporate action pays wherever the emitter
+  puts it: cash in lieu folded into a taxable exchange's proceeds, an
+  all-fractional merger, a spin-off's fractional share and §356 boot (the
+  rows carry it as `corp_cash`; the description wording no longer decides)
+  (A2-1014).
+
 ### Renames, ticker.map and warrants
 
 - `taxjson-ticker-map` summary mode no longer "maps" every `.US`
@@ -85,6 +113,13 @@
 
 ### Tax rules and engine: Canada
 
+- The superficial-loss solver no longer oscillates on a sale split into
+  fills when a later fill is priced just above the ACB and the
+  replacement was bought before the sale: the bump moved before and
+  after that fill on alternate passes (a loss, then a gain), so 1000
+  passes ended unconverged with a summary that disagreed with the
+  records. The bump's place after the sale's last losing fill now only
+  moves later and an existing bump follows it (re-audit A2-1596).
 - A Canadian superficial loss is now sized with CRA's formula for each
   sale on its own (owner decision, audit A2-0167): the denied units are
   the least of the units sold, the units acquired in the window and the

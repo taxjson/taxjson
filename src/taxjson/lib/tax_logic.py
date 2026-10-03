@@ -321,10 +321,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Federal Reserve holidays; Canada: TSX holidays, "
                  "Remembrance Day, Truth and Reconciliation; elsewhere "
                  "weekends only). The cycle and calendar are the listing's "
-                 "market, not the quote currency's: an IB US-dollar unit "
-                 "listed on the TSX settles on the Canadian calendar, and "
-                 "a US-dollar line listed on the LSE is an LSE security "
-                 "(.L) on the UK cycle.", cont=True),
+                 "market, not the quote or settlement currency's, in every "
+                 "parser (IB, Questrade, RBC and the generic importer, "
+                 "one rule): a US-dollar unit listed on the TSX "
+                 "(DLR.U.TO) settles on the Canadian calendar, a US stock "
+                 "settled in Canadian dollars on the US one, and a "
+                 "US-dollar line listed on the LSE (.L) or the ASX (.AX) "
+                 "on that market's cycle.", cont=True),
             Rule("CA-DATE-06",
                  "The generic importer uses a mapped settle column (one "
                  "more than 31 days after the trade is refused, more than "
@@ -534,10 +537,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "year's net gain or net loss beyond the $200 annual "
                  "exemption (a net gain or loss within $200 is nil), from "
                  "a pooled average cost per currency. Cash moves only on "
-                 "a trade for cash, income, withholding and fees; a "
-                 "coin-for-coin swap, a fee paid in a coin and a reward "
-                 "in a coin move none (a USD stablecoin is US-dollar "
-                 "cash, CA-CRYPTO-02).",
+                 "a trade for cash, income, withholding, fees and the "
+                 "cash a corporate action pays (cash in lieu of a "
+                 "fraction, whether booked as its own sale or inside an "
+                 "exchange's proceeds, and boot); a share-for-share "
+                 "exchange, a coin-for-coin swap, a fee paid in a coin "
+                 "and a reward in a coin move none (a USD stablecoin is "
+                 "US-dollar cash, CA-CRYPTO-02).",
                  keys=("fx_cash_gains",)),
         ]),
         ("Cost base (ACB)", [
@@ -941,9 +947,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "USD stablecoins (USDC, USDT, DAI, PYUSD and GUSD, on "
                  "Kraken and Coinbase alike) are treated as US-dollar "
                  "cash, an approximation (their own gain or loss, a "
-                 "de-peg, is not computed; a fill valued in US dollars "
-                 "more than 2% off 1.00 USD is warned about — a fill "
-                 "valued in another currency is not checked)."),
+                 "de-peg, is not computed; a fill more than 2% off 1.00 "
+                 "USD is warned about. A fill valued in another currency "
+                 "(CAD, EUR, ...) is first turned into US dollars through "
+                 "the day's rates from the run's rates file, the "
+                 "conversion stage's own; a fill with no rate for its day "
+                 "is said to be unchecked)."),
             Rule("CA-CRYPTO-03",
                  "A Kraken fee paid in a coin is a sale of that coin: on a "
                  "move of coins (a withdrawal, a deposit, a transfer to "
@@ -1267,10 +1276,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "Federal Reserve holidays; Canada: TSX holidays, "
                  "Remembrance Day, Truth and Reconciliation; elsewhere "
                  "weekends only). The cycle and calendar are the listing's "
-                 "market, not the quote currency's: an IB US-dollar unit "
-                 "listed on the TSX settles on the Canadian calendar, and "
-                 "a US-dollar line listed on the LSE is an LSE security "
-                 "(.L) on the UK cycle.", cont=True),
+                 "market, not the quote or settlement currency's, in every "
+                 "parser (IB, Questrade, RBC and the generic importer, "
+                 "one rule): a US-dollar unit listed on the TSX "
+                 "(DLR.U.TO) settles on the Canadian calendar, a US stock "
+                 "settled in Canadian dollars on the US one, and a "
+                 "US-dollar line listed on the LSE (.L) or the ASX (.AX) "
+                 "on that market's cycle.", cont=True),
             Rule("US-DATE-06",
                  "The generic importer uses a mapped settle column (one "
                  "more than 31 days after the trade is refused, more than "
@@ -1415,7 +1427,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "a pooled average cost per currency (fx_cash_gains = "
                  "true runs it after `taxjson run`); the §988(e) "
                  "exclusion for personal transactions is not modelled, "
-                 "and there is no $200 annual exemption.",
+                 "and there is no $200 annual exemption. The cash a "
+                 "corporate action pays (cash in lieu of a fraction, "
+                 "§356 boot) is currency received; a share-for-share "
+                 "exchange moves none.",
                  keys=("fx_cash_gains",)),
         ]),
         ("Basis and holding period", [
