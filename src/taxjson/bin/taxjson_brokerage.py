@@ -441,6 +441,16 @@ Examples:
             "it). `taxjson run` passes the project year."
         ),
     )
+    parser.add_argument(
+        "--ticker-map", dest="ticker_map", metavar="FILE", default=None,
+        help=(
+            "The project's ticker.map (`taxjson run` passes it). The "
+            "parsers' identity hints (a ticker change booked without a "
+            "corporate-action row, an income row on an untraded listing) "
+            "are dropped for a pair the map already joins; --lint keeps "
+            "them. The map changes no row here — renames apply later."
+        ),
+    )
     args = parser.parse_args()
 
     brokerage_id = args.brokerage_id.lower()
@@ -454,6 +464,20 @@ Examples:
                   file=sys.stderr)
         sys.exit(2)
 
+    if args.ticker_map:
+        if not Path(args.ticker_map).exists():
+            print(f"taxjson-brokerage: error: no such file: --ticker-map "
+                  f"{args.ticker_map}", file=sys.stderr)
+            sys.exit(2)
+        if not args.lint:
+            # Hints the map already answers stay quiet (A2-1056).
+            from taxjson.lib.brokerages.base import set_ticker_map
+            try:
+                set_ticker_map(Path(args.ticker_map))
+            except (OSError, ValueError) as e:
+                print(f"taxjson-brokerage: error: {args.ticker_map}: {e}",
+                      file=sys.stderr)
+                sys.exit(2)
     try:
         extractor_class = load_brokerage(brokerage_id)
     except ValueError as e:

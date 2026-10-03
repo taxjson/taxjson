@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional, Tuple
 
 from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         ticker_map_joins,
                                          combined_accounts_note,
                                          combined_accounts_refusal,
                                          _parse_div_qty_rate,
@@ -459,6 +460,8 @@ def _detect_qt_ticker_changes(ctx: QtAccountContext, by_name, where) -> None:
                 if (open_a <= 1e-9 or low >= -1e-9
                         or -low > open_a + 1e-6):
                     continue
+                if ticker_map_joins(a, b):
+                    continue    # ticker.map already pools them (A2-1056)
                 how = (f"first appears on {tb[0][0]} with a SALE of "
                        f"{-first_b:g}" if first_b < 0 else
                        f"first appears on {tb[0][0]} and goes {-low:g} "

@@ -8,6 +8,11 @@
   parser: a Questrade or RBC US-dollar TSX unit (DLR.U.TO) on the Canadian
   calendar, a Questrade CAD-settled US stock on the US one, and a generic
   `.L`/`.AX` line priced in USD on the UK/ASX cycle (A2-1052, A2-1054).
+- The Questrade, RBC and Webull "looks renamed" hints, RBC's untraded-income
+  listing hint and IB's one-contract-two-symbols ATTENTION are dropped once
+  ticker.map joins the pair: `taxjson run` now passes the map to
+  `taxjson-brokerage --ticker-map` (a map edit re-parses); `--lint` keeps
+  them (A2-1056).
 
 ### Renames, ticker.map and warrants
 

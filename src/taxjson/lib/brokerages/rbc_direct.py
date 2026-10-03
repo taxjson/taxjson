@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         ticker_map_joins,
                                          combined_accounts_note,
                                          combined_accounts_refusal,
                                          DESC_NUMBER_RE, OPTION_STRIKE_RE,
@@ -1377,6 +1378,8 @@ def _detect_ticker_changes(ctx: RbcAccountContext, helper) -> None:
                 seen.add((a.symbol, b.symbol, cur))
                 sa = helper.apply_currency_suffix(a.symbol, cur)
                 sb = helper.apply_currency_suffix(b.symbol, cur)
+                if ticker_map_joins(sa, sb):
+                    continue    # ticker.map already pools them (A2-1056)
                 fb = ctx.exports[ctx.files[b.events[0][2]]].path.name
                 how = (f"first appears on {b.first} with a SALE of "
                        f"{-first_b:g}" if first_b < 0 else
@@ -1770,6 +1773,11 @@ class RbcBrokerage(BaseBrokerage):
             listed = ', '.join(self.apply_currency_suffix(sym, c)
                                for c in curs)
             alt = 'TO' if 'USD' in curs else 'US'
+            _foreign = [c for c in curs if c != 'CAD']
+            if _foreign and all(
+                    ticker_map_joins(self.apply_currency_suffix(sym, c),
+                                     f"{sym}.{alt}") for c in _foreign):
+                continue    # ticker.map already joins the listings (A2-1056)
             kinds_txt = ', '.join(sorted({k for _, k in kinds}))
             msg = (f"{sym}: {kinds_txt} row(s) but no trade rows for {sym} "
                    f"in any RBC file of this account — booked as {listed}, "

@@ -242,6 +242,54 @@ class BrokerageParseError(ValueError):
     into a one-line error and a nonzero exit."""
 
 
+# The project's ticker.map as `taxjson-brokerage --ticker-map` loaded it
+# (run passes it): (fixed-point renames incl. TOBASE/JOURNAL, the dated
+# RENAME pairs). None = no map given — every identity hint prints.
+_TICKER_JOINS: Optional[Tuple[Dict[str, str], frozenset]] = None
+
+
+def set_ticker_map(path) -> None:
+    """Load the ticker.map whose joins make a parser's identity hint
+    moot (re-audit A2-1056): a ticker-change or listing hint for a pair
+    the map already pools is not printed. None clears it. A map that
+    does not parse is ignored here (`taxjson run` refuses it up front)."""
+    global _TICKER_JOINS
+    if path is None:
+        _TICKER_JOINS = None
+        return
+    from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+                                                merge_renames)
+    tmap = _parse_map_file(Path(path))[0]
+    try:
+        ren = merge_renames(tmap, True)
+    except ValueError:
+        ren = {}
+    _TICKER_JOINS = (ren, frozenset((d.old, d.new) for d in tmap.dated))
+
+
+def ticker_map_loaded() -> bool:
+    return _TICKER_JOINS is not None
+
+
+def ticker_map_joins(a: str, b: str) -> bool:
+    """True when the loaded ticker.map already treats listings `a` and
+    `b` as one security: both rename to the same symbol (GLOBAL, TOBASE,
+    JOURNAL, undated RENAME, chains included), or a dated RENAME joins
+    them (either direction, after the undated renames)."""
+    if _TICKER_JOINS is None or not a or not b:
+        return False
+    from taxjson.bin.taxjson_ticker_map import map_symbol
+    ren, dated = _TICKER_JOINS
+    ma, mb = map_symbol(a.upper(), ren), map_symbol(b.upper(), ren)
+    if ma == mb:
+        return True
+    for old, new in dated:
+        mo, mn = map_symbol(old, ren), map_symbol(new, ren)
+        if {mo, mn} == {ma, mb}:
+            return True
+    return False
+
+
 def combined_accounts_note(where: str, broker: str, masked) -> str:
     """The one-line NOTE that replaces the 'statement spans N accounts'
     ATTENTION when the label declares combined_broker_accounts = true

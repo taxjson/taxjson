@@ -288,7 +288,9 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          encode_occ_strike,
                                          option_strike_text,
                                          is_roc_description,
-                                         parse_strict_number, shown_name)
+                                         parse_strict_number, shown_name,
+                                         ticker_map_joins,
+                                         ticker_map_loaded)
 from taxjson.lib.corp_actions import (ib_cash_merger, ib_merger_owned,
                                       ib_spinoff_parts, ib_tender_root)
 from taxjson.lib.trade_cancel import TRADE_CANCEL_TYPE, pair_cancellations
@@ -992,7 +994,11 @@ def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
         order = sorted(syms, key=lambda x: (first_seen.get(x) or '9999',
                                             x))
         full = [listing.get(x) or f"{x}.US" for x in order]
-        if mapping is not None:
+        if ticker_map_loaded():
+            # The map `taxjson-brokerage --ticker-map` loaded (A2-1056).
+            if all(ticker_map_joins(full[0], f) for f in full[1:]):
+                continue
+        elif mapping is not None:
             from taxjson.bin.taxjson_ticker_map import map_symbol
             if len({map_symbol(f, mapping) for f in full}) == 1:
                 continue
