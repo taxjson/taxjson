@@ -107,7 +107,7 @@ class TestOneCountryResolver(unittest.TestCase):
         """load_config (every `taxjson` command), the web UI and
         taxjson-missing-history read the same toml the same way."""
         from taxjson.bin import taxjson_run as R
-        from taxjson.lib.phantom_holdings import tax_date_near
+        from taxjson.lib.missing_history import tax_date_near
         from taxjson.web.context import ProjectContext
         for spelling, want in self.SPELLINGS.items():
             with self.subTest(spelling=spelling), \

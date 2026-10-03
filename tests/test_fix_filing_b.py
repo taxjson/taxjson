@@ -757,7 +757,7 @@ class TestOptionBoundaryPhantoms(unittest.TestCase):
         """S044-09: a phantom-backed long option sold to close."""
         from taxjson.lib.core import TaxTransaction
         from taxjson.lib.option_boundary import write_lots
-        from taxjson.lib.phantom_holdings import synthesize_openings
+        from taxjson.lib.missing_history import synthesize_openings
         opt = "ZZZ250919C00050000.TO"
         sale = TaxTransaction(action="BUYSELL", date="2025-06-10",
                               date_settle="2025-06-11", time="10:00:00",

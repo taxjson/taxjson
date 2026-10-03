@@ -218,7 +218,7 @@ class TestRbcThousandsRatios(unittest.TestCase):
         self.assertIn("BARCO INC", evs[0].raw_descriptions[0])
 
     def test_phantom_holdings_ratio_regex(self):
-        from taxjson.lib.phantom_holdings import _RATIO_RE
+        from taxjson.lib.missing_history import _RATIO_RE
         m = _RATIO_RE.search("MERGER TO BARCO INC 1 NEW = 1,000 OLD")
         self.assertEqual(m.group(2).replace(",", ""), "1000")
 

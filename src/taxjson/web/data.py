@@ -306,7 +306,7 @@ def freshness(ctx: ProjectContext) -> Optional[Dict[str, Any]]:
 
     The same rule as the checklist's run-clean step (S078-21): every
     input `taxjson run` reads counts — the project-root maps
-    (ticker.map, distributions.map, phantoms.json,
+    (ticker.map, distributions.map, missing_history.json,
     ticker_extraction_overrides.txt, crypto_ticker.map) as well as
     inputs/** and taxjson.toml — compared by CONTENT against what the
     last full run recorded, else by mtime against the OLDEST per-account
@@ -490,13 +490,21 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
 
     # Shared preprocessing: TRANSFER handling (incl. stripping sheltered
     # TRANSFERs so they can't act as wash triggers) + the root
-    # phantoms.json (the same file `taxjson run` auto-applies via
-    # --incomplete-history — without it, positions with pre-window
-    # history were falsely rejected). taxable=False so a stray TRANSFER
-    # in the main file is rewritten rather than sys.exit()ing the server.
+    # missing_history.json (the same file `taxjson run` auto-applies via
+    # --incomplete-history — without it, positions bought before the
+    # data were falsely rejected). Its old name phantoms.json is read
+    # too; both names at once are refused (said as a warning here).
+    # taxable=False so a stray TRANSFER in the main file is rewritten
+    # rather than sys.exit()ing the server.
     from taxjson.lib.pipeline import prepare_books
-    phantoms_file = ctx.root / "phantoms.json"
-    incomplete = phantoms_file if phantoms_file.exists() else None
+    from taxjson.lib.missing_history import (MissingHistoryFileConflict,
+                                              project_missing_history_file)
+    try:
+        incomplete = project_missing_history_file(ctx.root)
+        mh_name = incomplete.name if incomplete else "missing_history.json"
+    except MissingHistoryFileConflict as exc:
+        incomplete, mh_name = None, "missing_history.json"
+        warnings.append(f"{exc} Simulated on raw books.")
 
     def _prepare(main_rows):
         try:
@@ -504,13 +512,13 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
                 list(main_rows), list(sheltered_raw), [], taxable=False,
                 incomplete_history=incomplete, phantom_hint=False)
         except Exception as exc:
-            # A corrupt phantoms.json must not 500 the endpoint — but
+            # A corrupt missing-history file must not 500 the endpoint — but
             # neither may it be silent: the simulation runs on different
             # books than the .sum, and the user must know.
-            _w = (f"phantoms.json could not be applied ({exc}) — "
-                  f"simulated on raw books; positions with pre-window "
-                  f"history may be rejected or mispriced. Fix or "
-                  f"regenerate phantoms.json.")
+            _w = (f"{mh_name} could not be applied ({exc}) — "
+                  f"simulated on raw books; positions bought before the "
+                  f"data may be rejected or mispriced. Fix or "
+                  f"regenerate {mh_name}.")
             if _w not in warnings:
                 warnings.append(_w)
             m, sh, _aff, _log = prepare_books(

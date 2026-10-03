@@ -422,7 +422,7 @@ class TestFreshness(unittest.TestCase):
     def test_root_inputs_count(self):
         from taxjson.web import data
         for name, body in (("distributions.map", "XYZ.TO 2024-07-01 -1\n"),
-                           ("phantoms.json", "[]\n"),
+                           ("missing_history.json", "[]\n"),
                            ("ticker.map", "TOBASE A.US A.TO\n"),
                            ("ticker_extraction_overrides.txt", "x y\n"),
                            ("crypto_ticker.map", "XBT BTC\n")):

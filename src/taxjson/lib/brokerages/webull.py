@@ -93,7 +93,7 @@ class WebullBrokerage(BaseBrokerage):
                 f"row(s) with other action codes ({detail}); those "
                 f"events (a dividend, a transfer) are NOT booked. Enter "
                 f"any that matter via a .tt file, and check no position "
-                f"is left phantom.",
+                f"is left holding shares it no longer has.",
                 file=sys.stderr,
             )
             for code, rows in sorted(skipped_actions.items()):

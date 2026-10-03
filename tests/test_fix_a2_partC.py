@@ -115,7 +115,7 @@ class TestProjectTomlBom(unittest.TestCase):
 
     @rule("US-DATE-01")
     def test_bom_project_keeps_country_basis_and_types(self):
-        from taxjson.lib import phantom_holdings as ph
+        from taxjson.lib import missing_history as ph
         with tempfile.TemporaryDirectory() as tmp:
             base = self._project(tmp, _US_TOML)
             self.assertEqual(ph.tax_date_near(base), "trade")
@@ -123,7 +123,7 @@ class TestProjectTomlBom(unittest.TestCase):
                              {"margin": False, "ira": True})
 
     def test_unparseable_toml_stops_not_no_project(self):
-        from taxjson.lib import phantom_holdings as ph
+        from taxjson.lib import missing_history as ph
         from taxjson.lib.cli_diag import InputReadError
         with tempfile.TemporaryDirectory() as tmp:
             base = self._project(tmp, "[settings\ncountry = 'usa'\n")
@@ -637,7 +637,7 @@ class TestStandaloneTimingDefaults(unittest.TestCase):
                     "quantity": -10, "price": 10.0, "net_amount": 100.0,
                     "currency": "CAD", "account": "margin"}]}))
             r = _module("taxjson.bin.taxjson_run", "-C", str(root),
-                        "find-missing-history", "--gen-phantoms",
+                        "find-missing-history", "--write-missing-history",
                         str(root / "phantoms.new.json"))
         self.assertNotIn("--option-premium-timing not given", r.stderr,
                          r.stdout + r.stderr)

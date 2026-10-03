@@ -8,7 +8,8 @@ Usage:
     python -m taxjson.bin.taxjson_gains --country canada [--year 2026] input.json
 
 Thin CLI over taxjson.lib.pipeline.run_gains — argparse + load +
-json.dump. ALL gains-run semantics (transfer handling, phantom openings,
+json.dump. ALL gains-run semantics (transfer handling, missing-history
+openings,
 year filter, tainted split, warnings, fee aggregation) live in the
 pipeline module so taxjson-explain and the web what-if consume the exact
 same definition of "a gains run" and cannot drift from this CLI.
@@ -24,7 +25,7 @@ from pathlib import Path
 from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.country import add_country_argument, refuse_foreign_flags
 from taxjson.lib.core import load_transactions
-from taxjson.lib.phantom_holdings import detect_phantoms, format_suggestions
+from taxjson.lib.missing_history import detect_missing_history, format_suggestions
 # Back-compat re-exports: tests and older callers import these from here.
 from taxjson.lib.pipeline import (            # noqa: F401
     GainsRequest,
@@ -153,28 +154,33 @@ def _parse_args():
         "--incomplete-history",
         metavar="FILE",
         help=(
-            "JSON file listing (symbol, account) pairs whose pre-data-window "
-            "history is missing. The engine inserts a synthetic OPENING_BALANCE "
+            "JSON file (a project's missing_history.json) listing "
+            "(symbol, account) pairs sold with no purchase in the files "
+            "(bought before the data starts). The engine inserts a synthetic OPENING_BALANCE "
             "for each, taints the ACB pool, and excludes affected dispositions "
             "from the gains report (surfaced separately under "
             "'manual_reporting_required')."
         ),
     )
     parser.add_argument(
-        "--suggest-phantoms",
+        "--suggest-missing-history",
         metavar="FILE",
         help=(
             "Detect (symbol, account) pairs whose running position goes "
-            "negative and write a candidate phantoms file to FILE. Review, "
-            "remove entries that are actually real shorts, then re-run with "
-            "--incomplete-history FILE."
+            "negative (a sale with no purchase in the files) and write "
+            "them to FILE as a candidate missing-history file. Review, "
+            "remove entries that are actually real shorts, then re-run "
+            "with --incomplete-history FILE."
         ),
     )
+    # The flag's old name: hidden, still accepted with a note.
+    parser.add_argument("--suggest-phantoms", metavar="FILE",
+                        dest="suggest_phantoms_old", help=argparse.SUPPRESS)
     parser.add_argument(
         "--include-options-in-suggestions",
         action="store_true",
         help=(
-            "By default --suggest-phantoms skips option (OCC-format) symbols "
+            "By default --suggest-missing-history skips option (OCC-format) symbols "
             "because negative option positions are normal (sell-to-open for "
             "covered calls etc.). Use this flag to include them anyway."
         ),
@@ -183,7 +189,7 @@ def _parse_args():
         "--all-history",
         action="store_true",
         help=(
-            "By default, when --year is specified, --suggest-phantoms only "
+            "By default, when --year is specified, --suggest-missing-history only "
             "lists pairs whose dispositions fall within the tax year. Use "
             "--all-history to list every candidate regardless of year."
         ),
@@ -205,38 +211,45 @@ def _parse_args():
         ),
     )
     args = parser.parse_args()
+    if args.suggest_phantoms_old:
+        print("taxjson-gains: note: --suggest-phantoms is now "
+              "--suggest-missing-history (the old flag still works).",
+              file=sys.stderr)
+        if not args.suggest_missing_history:
+            args.suggest_missing_history = args.suggest_phantoms_old
     # --country is required (partition audit R1: a missing country was
     # a noted Canada here and a silent one elsewhere).
     return args
 
 
-def _suggest_phantoms_and_exit(args, transactions, sheltered_transactions,
-                               affiliated_transactions) -> None:
-    """--suggest-phantoms mode: detect candidates, write the file, exit
+def _suggest_missing_history_and_exit(args, transactions,
+                                      sheltered_transactions,
+                                      affiliated_transactions) -> None:
+    """--suggest-missing-history mode: detect candidates, write the file, exit
     before computing gains. The user reviews the candidate file, prunes
     any real shorts, then re-runs with --incomplete-history."""
     all_for_detection = transactions + sheltered_transactions + affiliated_transactions
     # Registered status from the project's configured account types when
     # the book sits in a project (work/<acct>_base.json), else from the
     # books' roles — never from the label alone (audit S076-08).
-    from taxjson.lib.phantom_holdings import (account_types_near,
+    from taxjson.lib.missing_history import (account_types_near,
                                               assess_tax_year_relevance)
     types = {t.account: not args.taxable for t in transactions if t.account}
     types.update({t.account: True for t in sheltered_transactions
                   if t.account})
     if args.input:
         types.update(account_types_near(args.input))
-    candidates = detect_phantoms(
+    candidates = detect_missing_history(
         all_for_detection,
         include_options=args.include_options_in_suggestions,
         registered_accounts=types,
         country=args.country,
     )
     # Year-scope unless --all-history, with the SAME rule as the
-    # find-missing-history report (phantom_holdings.
+    # find-missing-history report (missing_history.
     # assess_tax_year_relevance): a pair is year-relevant when an in-year
-    # row draws on the short/phantom state — a sale while short, or the
-    # BUY that covers a phantom short carried in (dropping that pair let
+    # row draws on the short (missing-purchase) state — a sale while
+    # short, or the BUY that covers a short carried in (dropping that pair let
     # the engine book the cover as a clean short-close gain in the target
     # year). The year of a row is its date on the tax_date basis, so a
     # Dec-31 cover settling in January counts for January's year (audit
@@ -258,14 +271,15 @@ def _suggest_phantoms_and_exit(args, transactions, sheltered_transactions,
                 f"{year_str}. Use --all-history to include them.",
                 file=sys.stderr,
             )
-    _out = Path(args.suggest_phantoms)
+    _out = Path(args.suggest_missing_history)
     # A reviewed file (real shorts pruned, pairs added by hand) is a
     # user record: never rewritten (audit A2-0312). An empty file (the
-    # `find-missing-history --gen-phantoms` wrapper's temp file) is ours.
+    # `find-missing-history --write-missing-history` wrapper's temp file)
+    # is ours.
     if _out.is_file() and _out.stat().st_size > 0:
-        print(f"taxjson-gains: error: --suggest-phantoms {_out} already "
-              f"exists — not overwritten (it may be a reviewed "
-              f"phantoms.json). Write to a new file and merge by hand, or "
+        print(f"taxjson-gains: error: --suggest-missing-history {_out} "
+              f"already exists — not overwritten (it may be a reviewed "
+              f"missing_history.json). Write to a new file and merge by hand, or "
               f"delete it first.", file=sys.stderr)
         raise SystemExit(2)
     # 'cannot write <path>: ...' for a directory or a missing folder,
@@ -274,10 +288,11 @@ def _suggest_phantoms_and_exit(args, transactions, sheltered_transactions,
     write_text_atomic(_out, format_suggestions(candidates))
     n_reg = sum(1 for c in candidates if c.registered)
     print(
-        f"Wrote {len(candidates)} candidate(s) to {args.suggest_phantoms} "
-        f"({n_reg} in registered accounts — almost certainly phantom). "
+        f"Wrote {len(candidates)} candidate(s) to {args.suggest_missing_history} "
+        f"({n_reg} in registered accounts — almost certainly a purchase "
+        f"missing from your files). "
         f"Review, remove any real shorts, then re-run with "
-        f"--incomplete-history {args.suggest_phantoms}.",
+        f"--incomplete-history {args.suggest_missing_history}.",
         file=sys.stderr,
     )
 
@@ -334,15 +349,16 @@ def _main():
     _timing_default_note(args, "taxjson-gains")
 
     # Argparse can't enforce flag dependencies; surface obvious mistakes early.
-    if args.include_options_in_suggestions and not args.suggest_phantoms:
+    if args.include_options_in_suggestions and not args.suggest_missing_history:
         print(
             "warning: --include-options-in-suggestions has no effect without "
-            "--suggest-phantoms; ignoring.",
+            "--suggest-missing-history; ignoring.",
             file=sys.stderr,
         )
-    if args.all_history and not args.suggest_phantoms:
+    if args.all_history and not args.suggest_missing_history:
         print(
-            "warning: --all-history has no effect without --suggest-phantoms; ignoring.",
+            "warning: --all-history has no effect without "
+            "--suggest-missing-history; ignoring.",
             file=sys.stderr,
         )
 
@@ -405,14 +421,15 @@ def _main():
         print(f"taxjson-gains: error: {e}", file=sys.stderr)
         raise SystemExit(2)
 
-    if args.suggest_phantoms:
+    if args.suggest_missing_history:
         # Transfer handling runs first, exactly as the normal path would —
         # a taxable input with TRANSFER rows hard-errors here too.
         transactions, sheltered_transactions = _handle_transfers(
             transactions, sheltered_transactions, taxable=args.taxable,
         )
-        _suggest_phantoms_and_exit(args, transactions, sheltered_transactions,
-                                   affiliated_transactions)
+        _suggest_missing_history_and_exit(args, transactions,
+                                          sheltered_transactions,
+                                          affiliated_transactions)
         return
 
     def trace_sink(results):
@@ -482,14 +499,15 @@ def write_traces_file(results, file_path, *, country, input_path, year, tax_date
             f.write("\n".join(render_gain_block(g)))
             f.write("\n")
 
-        # Phantom-basis dispositions (--incomplete-history): not in the
+        # Unknown-cost dispositions (--incomplete-history): not in the
         # totals above; shown for the manual report (audit R1-165).
         manual = [g for g in results.get('manual_reporting_required') or []
                   if g.get('trace')]
         if manual:
             f.write("\n# " + "=" * 90 + "\n")
-            f.write(f"# MANUAL REPORTING — {len(manual)} phantom-basis "
-                    f"disposition(s), cost unknown, excluded from the "
+            f.write(f"# MANUAL REPORTING — {len(manual)} sale(s) with "
+                    f"no purchase in your files, cost unknown, excluded "
+                    f"from the "
                     f"totals above\n")
             for g in sorted(manual, key=lambda g: (g.get('date', ''),
                                                    g.get('symbol', ''))):

@@ -831,8 +831,9 @@ class TestWashAdvice(unittest.TestCase):
         self.assertIn("INSIDE the 30-day window", line)
         ll["date"] = _days_ago(31)
         self.assertIn("outside the 30-day window", _last_loss_line(ll))
-        ll["phantom_basis"] = True
-        self.assertIn("phantom basis", _last_loss_line(ll))
+        ll["unknown_cost"] = True
+        self.assertIn("unknown cost (no purchase in your files)",
+                      _last_loss_line(ll))
 
     def test_last_loss_reads_routed_rows_and_warns(self):
         from taxjson.bin.taxjson_run import _last_loss_by_class
@@ -857,7 +858,7 @@ class TestWashAdvice(unittest.TestCase):
                     {"margin": g, "other": bad}, lambda s: s, set(),
                     usa=False)
             self.assertEqual(ll["KLM.TO"]["date"], "2026-09-22")
-            self.assertTrue(ll["KLM.TO"]["phantom_basis"])
+            self.assertTrue(ll["KLM.TO"]["unknown_cost"])
             self.assertEqual(ll["KLM.TO"]["date_kind"], "settled")
             self.assertIn("NOP.TO", ll)
             self.assertIn("other_gains.json", err.getvalue())
@@ -957,16 +958,17 @@ class TestAuditAndMissingHistory(unittest.TestCase):
         self.assertIn(r.returncode, (0, 1), r.stderr)
         return root
 
-    def test_gen_phantoms_hint_resolves_the_path(self):
+    def test_write_missing_history_hint_resolves_the_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._short_project(tmp)
             e = dict(os.environ, TAXJSON_OFFLINE="1")
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
-                 str(root), "find-missing-history", "--gen-phantoms",
-                 "phantoms.json"], cwd=root, capture_output=True,
+                 str(root), "find-missing-history", "--write-missing-history",
+                 "missing_history.json"], cwd=root, capture_output=True,
                 text=True, env=e, stdin=subprocess.DEVNULL)
-            self.assertTrue((root / "phantoms.json").exists(), r.stderr)
+            self.assertTrue((root / "missing_history.json").exists(),
+                            r.stderr)
             self.assertIn("`taxjson run` auto-detects it", r.stderr)
             self.assertNotIn("save it as", r.stderr)
 

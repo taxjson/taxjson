@@ -36,7 +36,7 @@ from taxjson.lib.core import (TaxTransaction,
                               _make_assign_underlying_resolver,
                               is_option_symbol, parse_option_expiry)
 from taxjson.lib.corporate_timeline import event_sort_key
-from taxjson.lib.phantom_holdings import OrderStarts, unbacked_close
+from taxjson.lib.missing_history import OrderStarts, unbacked_close
 
 
 def _sort_date(t: TaxTransaction) -> str:
@@ -178,7 +178,8 @@ def write_lots(transactions: List[TaxTransaction],
         p = pos.get(sym, 0.0)
         p_order = orders.prev(sym, t, p)
         if t.action == "OPENING_BALANCE":
-            # A phantom opening (phantoms.json, --include-options): the
+            # A missing-history opening (missing_history.json,
+            # --include-options): the
             # contracts were held LONG before the history starts, so the
             # sale that follows closes them — it is not a write (S044-09;
             # the engine books it the same way).
@@ -341,8 +342,9 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                           + "): the sale closed a LONG position bought "
                             "before the data — not a written option"),
                 "action": ("ATTENTION: add the missing purchase "
-                           "(`taxjson find-missing-history --gen-phantoms "
-                           "phantoms.json`, then `taxjson run`); until "
+                           "(`taxjson find-missing-history "
+                           "--write-missing-history`, then `taxjson run`); "
+                           "until "
                            "then the books treat the sale as a write "
                            "whose premium is a gain"),
                 "attention": True})

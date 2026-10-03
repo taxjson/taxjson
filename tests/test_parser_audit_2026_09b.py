@@ -463,7 +463,7 @@ class TestIbAccrualRevisedPayDate(unittest.TestCase):
 
 class TestFuturesShortNotPhantom(unittest.TestCase):
     def test_futures_sell_to_open_not_flagged(self):
-        from taxjson.lib.phantom_holdings import detect_phantoms
+        from taxjson.lib.missing_history import detect_missing_history
         body = (IB_TRADES_HDR
                 + _ib_trade('Futures', 'QZFK6', '2026-05-12, 15:48:20',
                             1, 78000, 7800, -2, 'O')
@@ -478,19 +478,19 @@ class TestFuturesShortNotPhantom(unittest.TestCase):
         fields = TaxTransaction.__dataclass_fields__
         tts = [TaxTransaction(**{k: v for k, v in r.items() if k in fields})
                for r in txs]
-        syms = {c.symbol for c in detect_phantoms(tts)}
+        syms = {c.symbol for c in detect_missing_history(tts)}
         self.assertNotIn('F:QZFK6.US', syms)
         # A stock sale IB codes O is a broker-declared short since
         # S058-02 / S060-12: listed as one, never as missing history.
         self.assertNotIn('QZS.US', syms)
-        marked = {c.symbol: c for c in detect_phantoms(
+        marked = {c.symbol: c for c in detect_missing_history(
             tts, include_options=True, include_broker_shorts=True)}
         self.assertTrue(marked['QZS.US'].broker_marked_short)
         self.assertTrue(marked['F:QZFK6.US'].broker_marked_short)
         # Without the code the sign-only walk still flags the equity.
         for t in tts:
             t.open_close = ''
-        self.assertIn('QZS.US', {c.symbol for c in detect_phantoms(tts)})
+        self.assertIn('QZS.US', {c.symbol for c in detect_missing_history(tts)})
 
 
 class TestForeignRocCli(unittest.TestCase):

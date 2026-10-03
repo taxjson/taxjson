@@ -197,7 +197,7 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
     return {
         'ticker_stats': ticker_stats,
         'returns_by_asset': returns_by_asset,
-        # Dispositions carrying a phantom OPENING_BALANCE basis.
+        # Dispositions carrying a missing-history OPENING_BALANCE basis.
         # PIPELINE-written gains files carry them in a separate
         # manual_reporting_required section (run_gains strips the rows
         # and pops the flag), so the aggregates above EXCLUDE them;

@@ -158,7 +158,7 @@ def aggregates_from_gains(doc: Dict[str, Any],
             st_gain += float(e.get("gain") or 0.0)
         elif term == "LONG_TERM":
             lt_gain += float(e.get("gain") or 0.0)
-    # Phantom-basis dispositions: the pipeline MOVES them to
+    # Unknown-cost dispositions: the pipeline MOVES them to
     # manual_reporting_required (its 'tainted' key popped), so the
     # 'tainted' test above only sees hand-run files. Count both.
     for e in doc.get("manual_reporting_required") or []:
@@ -446,13 +446,15 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
         cmd += ["--sheltered", str(sheltered)]
     cmd += _lock_timing_flags(settings, year, option_timing)
     cmd += income_dating_flags(dict(settings, country=country))
-    # phantoms.json lives at the PROJECT ROOT (cache is
-    # <root>/work) — looking in work/ made close-year snapshot WITH
-    # phantom openings and check-filed recompute WITHOUT them: a
-    # guaranteed false DRIFT on every phantom project (2026-09 audit).
-    phantoms = cache.parent / "phantoms.json"
-    if phantoms.exists():
-        cmd += ["--incomplete-history", str(phantoms)]
+    # missing_history.json (or its old name phantoms.json) lives at the
+    # PROJECT ROOT (cache is <root>/work) — looking in work/ made
+    # close-year snapshot WITH the missing-history openings and
+    # check-filed recompute WITHOUT them: a guaranteed false DRIFT on
+    # every such project (2026-09 audit).
+    from taxjson.lib.missing_history import missing_history_path
+    mh_file = missing_history_path(cache.parent)
+    if mh_file.exists():
+        cmd += ["--incomplete-history", str(mh_file)]
     with tempfile.TemporaryDirectory() as td:
         src = Path(td) / "combined_base.json"
         src.write_text(json.dumps(combined), encoding="utf-8")
@@ -495,13 +497,12 @@ def recompute_year(cache: Path, account: str, year: int,
         cmd += ["--sheltered", str(sheltered)]
     cmd += _lock_timing_flags(settings, year, option_timing)
     cmd += income_dating_flags(dict(settings, country=country))
-    # phantoms.json lives at the PROJECT ROOT (cache is
-    # <root>/work) — looking in work/ made close-year snapshot WITH
-    # phantom openings and check-filed recompute WITHOUT them: a
-    # guaranteed false DRIFT on every phantom project (2026-09 audit).
-    phantoms = cache.parent / "phantoms.json"
-    if phantoms.exists():
-        cmd += ["--incomplete-history", str(phantoms)]
+    # missing_history.json (or its old name) lives at the PROJECT ROOT
+    # (see _recompute_blended above).
+    from taxjson.lib.missing_history import missing_history_path
+    mh_file = missing_history_path(cache.parent)
+    if mh_file.exists():
+        cmd += ["--incomplete-history", str(mh_file)]
     cmd.append(str(base))
     with tempfile.TemporaryDirectory() as td:
         out = Path(td) / "recomputed_gains.json"

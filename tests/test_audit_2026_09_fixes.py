@@ -515,11 +515,12 @@ class TestFullAuditRound2Fixes(unittest.TestCase):
         self.assertIn("100", total,
                       f"income section still empty: {inc}")
 
-    def test_filed_phantoms_read_from_root(self):
+    def test_filed_missing_history_read_from_root(self):
         src = (REPO_ROOT / "src/taxjson/bin/taxjson_filed.py"
                ).read_text(encoding="utf-8")
-        self.assertNotIn('cache / "phantoms.json"', src)
-        self.assertIn('cache.parent / "phantoms.json"', src)
+        self.assertNotIn('cache / "missing_history.json"', src)
+        self.assertNotIn('missing_history_path(cache)', src)
+        self.assertIn('missing_history_path(cache.parent)', src)
 
     def test_ambiguous_error_handled_by_explain(self):
         src = (REPO_ROOT / "src/taxjson/bin/taxjson_explain.py"

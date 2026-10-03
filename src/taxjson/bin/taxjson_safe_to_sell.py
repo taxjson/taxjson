@@ -9,7 +9,7 @@ A thin view over the wash radar's walk (taxjson-wash-radar). This used
 to be a separate port of tt_safe_to_sell.pl with its own position walk,
 and every engine rule the radar learned since was missing here: a buy
 made today (settling tomorrow) was invisible, a short cover opened a
-phantom long lot while real short positions vanished, and a ticker
+nonexistent long lot while real short positions vanished, and a ticker
 rename left the old symbol "held" and SAFE (2026-09 audits R1-233,
 S007-09, S050-03). Quantities and verdicts now come from the radar, so
 the two can never disagree.
@@ -60,7 +60,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="The engine's gains files (passed to the radar: "
                              "the engine decides which sales were losses)")
     parser.add_argument("--incomplete-history", metavar="FILE", default=None,
-                        help="phantoms.json (passed to the radar)")
+                        help="missing_history.json (passed to the radar)")
     add_country_argument(parser, help="Project country (required; passed "
                                       "to the radar)")
     args = parser.parse_args(argv)

@@ -1439,7 +1439,7 @@ class QuestradeBrokerage(BaseBrokerage):
             # so the shares never enter the pool and their later sale
             # reads short — no gain at all. The remedy the pipeline
             # accepts is the real acquisition as a backdated .tt BUYSELL
-            # (or phantoms.json); a .tt TRANSFER is refused in a taxable
+            # (or missing_history.json); a .tt TRANSFER is refused in a taxable
             # account and there is no OPENING_BALANCE .tt action.
             # ATTENTION (re-audit A2-0276 / A2-0283): the sale reads
             # as a short and the year's gain is missing.
@@ -1452,8 +1452,8 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"read as a short: book the real acquisition (date, "
                   f"quantity, the sending broker's "
                   f"{self.law('ACB', 'cost basis', 'cost')}) as a .tt BUYSELL "
-                  f"row, or declare it in phantoms.json (`taxjson "
-                  f"find-missing-history --gen-phantoms`)."
+                  f"row, or declare it in missing_history.json (`taxjson "
+                  f"find-missing-history --write-missing-history`)."
                   f"{'' if taxable else ' (Account type unknown — ignore in a registered account.)'}",
                   file=sys.stderr)
         for _t in transactions[_acct_from:]:

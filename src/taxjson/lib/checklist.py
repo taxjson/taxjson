@@ -616,8 +616,8 @@ def d_roc_entered(ctx: Ctx) -> Result:
 def d_inputs_committed(ctx: Ctx) -> Result:
     if not _is_git_repo(ctx.root):
         return Result("inputs-committed", "attention", "not a git repository")
-    paths = ["inputs", "taxjson.toml", "ticker.map", "phantoms.json",
-             "distributions.map", "claimed_losses.txt",
+    paths = ["inputs", "taxjson.toml", "ticker.map", "missing_history.json",
+             "phantoms.json", "distributions.map", "claimed_losses.txt",
              "ticker_extraction_overrides.txt"]
     paths = [p for p in paths if (ctx.root / p).exists()]
     code, out = _git(ctx.root, "status", "--porcelain", "--", *paths)
@@ -792,11 +792,16 @@ FINGERPRINT_VERSION = 2
 # Project-root maps `taxjson run` reads (taxjson_run._PROJECT_ROOT_INPUTS
 # is the same list; a test keeps the two equal — A2-0363, A2-1158).
 PROJECT_ROOT_MAPS = ("ticker.map", "ticker_extraction_overrides.txt",
-                     "distributions.map", "phantoms.json",
-                     "crypto_ticker.map")
+                     "distributions.map", "missing_history.json",
+                     "phantoms.json", "crypto_ticker.map")
+# phantoms.json is the old name of missing_history.json (still read): a
+# fingerprint keys it by the new name, so renaming the file is not an
+# input change (_canon_fingerprint).
+_LEGACY_INPUT_NAMES = {"phantoms.json": "missing_history.json"}
 _ROOT_INPUTS = ("taxjson.toml",) + PROJECT_ROOT_MAPS
 _LEGACY_ROOT_INPUTS = ("taxjson.toml", "ticker.map", "distributions.map",
-                       "phantoms.json", "ticker_extraction_overrides.txt")
+                       "phantoms.json", "missing_history.json",
+                       "ticker_extraction_overrides.txt")
 # Per-account files `run` reads besides the activity files: the
 # corp-action elections (A2-0124, A2-0126) and a crypto account's send
 # decisions, which regenerate crypto_sends.tt (A2-0358).
@@ -995,10 +1000,12 @@ def inputs_changed(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
         since = (root / "work" / FINGERPRINT_FILE).stat().st_mtime
     except OSError:
         return why
-    legacy = set(doc["files"])
+    legacy = set(_canon_fingerprint(doc["files"]))
     newer = sorted(p.relative_to(root).as_posix()
                    for p in _input_paths(root, cfg)
-                   if p.relative_to(root).as_posix() not in legacy
+                   if _LEGACY_INPUT_NAMES.get(p.relative_to(root).as_posix(),
+                                              p.relative_to(root).as_posix())
+                   not in legacy
                    and p.name != "taxjson.toml"
                    and not (p.name == "manifest.json" and _empty_manifest(p))
                    and p.stat().st_mtime > since + 1)
@@ -1008,7 +1015,15 @@ def inputs_changed(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
     return ""
 
 
+def _canon_fingerprint(files: Dict[str, str]) -> Dict[str, str]:
+    """A fingerprint's files with legacy names keyed by their new name
+    (phantoms.json -> missing_history.json), so a rename alone — or a
+    record an older taxjson wrote — is not a change."""
+    return {_LEGACY_INPUT_NAMES.get(k, k): v for k, v in files.items()}
+
+
 def _fingerprint_diff(before: Dict[str, str], now: Dict[str, str]) -> str:
+    before, now = _canon_fingerprint(before), _canon_fingerprint(now)
     changed = sorted(k for k in before.keys() & now.keys()
                      if before[k] != now[k])
     added = sorted(now.keys() - before.keys())
@@ -1046,6 +1061,19 @@ def d_sanity(ctx: Ctx) -> Result:
     return Result("sanity", "attention", _last_line(out) or _last_line(err) or f"exit {code}")
 
 
+def _mh_name(ctx) -> str:
+    """The project's missing-history file name as the user has it
+    (missing_history.json, or the legacy phantoms.json)."""
+    from taxjson.lib.missing_history import (MISSING_HISTORY_FILE,
+                                              project_missing_history_file)
+    root = getattr(ctx, "root", None)
+    try:
+        p = project_missing_history_file(root, note=False) if root else None
+    except ValueError:
+        p = None
+    return p.name if p is not None else MISSING_HISTORY_FILE
+
+
 def d_missing_history(ctx: Ctx) -> Result:
     code, out, err = ctx.sub("find-missing-history")
     if code != 0:
@@ -1066,9 +1094,11 @@ def d_missing_history(ctx: Ctx) -> Result:
         if ln.startswith("AFFECTS"):
             in_affects = True
             continue
-        # phantoms.json entries on a real short / a written option
-        # (A2-0639): the run applies them, so they are work to do.
-        if ln.startswith("REMOVE from phantoms.json"):
+        # missing-history entries on a real short / a written option
+        # (A2-0639): the run applies them, so they are work to do. (The
+        # file is named as the user has it: missing_history.json or the
+        # legacy phantoms.json.)
+        if ln.startswith("REMOVE from "):
             in_remove = True
             continue
         if (not ln.strip() or ln.startswith(("##", "NOT relevant",
@@ -1076,7 +1106,7 @@ def d_missing_history(ctx: Ctx) -> Result:
                                               "COVERED"))):
             # A blank line ends the section; registered-account rows have
             # no reportable gain: never counted as affecting the year
-            # (audit S035-08); pairs phantoms.json covers are not work
+            # (audit S035-08); pairs the missing-history file covers are not work
             # to do (R1-339).
             in_affects = in_remove = False
             continue
@@ -1090,7 +1120,7 @@ def d_missing_history(ctx: Ctx) -> Result:
     if remove:
         shown = ", ".join(remove[:4]) + (" ..." if len(remove) > 4 else "")
         return Result("missing-history", "attention",
-                      f"{len(remove)} phantoms.json entr"
+                      f"{len(remove)} {_mh_name(ctx)} entr"
                       f"{'y is' if len(remove) == 1 else 'ies are'} a real "
                       f"short or a written option — remove: {shown}"
                       + (f"; {len(syms)} position(s) with missing basis "
@@ -1231,7 +1261,7 @@ def _books_state(ctx: Ctx) -> Optional[Result]:
     """blocked/attention for the steps that compare the taxable books
     (audit, form-export) when work/ was built for another tax year or a
     wash-adjusted file is older than its inputs — otherwise their
-    mismatch text blames phantoms or an export bug (S068-16) or they
+    mismatch text blames missing history or an export bug (S068-16) or they
     say done over stale numbers (S067-12). None when the books are fine
     or cannot be judged (the command's own error is then reported)."""
     from taxjson.lib.report_model import resolve_gains_files, stale_wash_inputs
@@ -1283,11 +1313,12 @@ def d_audit(ctx: Ctx) -> Result:
         events += int(m.group(1).replace(",", ""))
         bad += int(m.group(2).replace(",", ""))
         notfound += int(m.group(3).replace(",", ""))
-    # Phantom-basis sales the books route to manual reporting are tied
+    # Unknown-cost sales the books route to manual reporting are tied
     # out as such by the audit (A2-1150); form-export's step asks for
     # the hand-reported rows.
     manual = sum(int(m.group(1).replace(",", "")) for m in re.finditer(
-        r"([\d,]+) phantom-basis disposition\(s\) tied to MANUAL REPORTING", out))
+        r"([\d,]+) (?:unknown-cost|phantom-basis) disposition\(s\) "
+        r"tied to MANUAL REPORTING", out))
     if bad:
         return Result("audit", "attention", f"{bad} disposition(s) MISMATCHED")
     if notfound:
@@ -1297,7 +1328,8 @@ def d_audit(ctx: Ctx) -> Result:
     if code != 0:
         return Result("audit", "attention", _last_line(err) or f"exit {code}")
     return Result("audit", "done", f"{events} disposition(s) tied"
-                  + (f"; {manual} phantom-basis sale(s) routed to manual "
+                  + (f"; {manual} sale(s) with unknown cost (no purchase "
+                     f"in your files) routed to manual "
                      f"reporting (see the form-export step)" if manual else ""))
 
 
@@ -1729,13 +1761,14 @@ def d_form_export(ctx: Ctx) -> Result:
     if abs(cmp_gain - realized) > tol:
         problems.append(f"{label} gain {t['gain']:,.2f} vs realized {realized:,.2f} "
                         f"in the taxable accounts' .sum")
-    # Phantom-basis dispositions are not in the rows (their cost is
+    # Unknown-cost dispositions are not in the rows (their cost is
     # unknown) — the export is not complete until they are reported by
     # hand (audit R1-199: this step showed [x] while they were missing).
     manual = rep.get("manual_reporting_required") or []
     if manual:
         problems.append(
-            f"{len(manual)} phantom-basis disposition(s) (proceeds "
+            f"{len(manual)} sale(s) with no purchase in your files "
+            f"(unknown cost; proceeds "
             f"{float(rep.get('manual_proceeds') or 0.0):,.2f}) are not in "
             f"the {label} rows — report them by hand (form-export's "
             f"MANUAL REPORTING section)")

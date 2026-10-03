@@ -36,7 +36,7 @@ def _project(root, accounts, inputs, phantoms=None, extra_settings=''):
         d.mkdir(parents=True, exist_ok=True)
         (d / f"{a}_hist.tt").write_text("\n".join(lines) + "\n")
     if phantoms is not None:
-        (root / "phantoms.json").write_text(json.dumps(
+        (root / "missing_history.json").write_text(json.dumps(
             [{"symbol": s, "account": a} for s, a in phantoms]))
 
 
@@ -251,7 +251,7 @@ class TestSameStampTaxableBeforeRegistered(unittest.TestCase):
 
 
 class TestPhantomsNameUnknownAccount(unittest.TestCase):
-    """S021-05: renaming an account silently dropped its phantoms.json
+    """S021-05: renaming an account silently dropped its missing_history.json
     openings (keyed by the account label) and changed the filed gain."""
 
     def test_run_refuses_a_phantom_entry_for_an_unknown_account(self):
@@ -263,9 +263,9 @@ class TestPhantomsNameUnknownAccount(unittest.TestCase):
             ]}, phantoms=[("XEI.TO", "margin")])
             r = _run_cli(root, "run", "--no-input")
         self.assertNotEqual(r.returncode, 0,
-                            "a stale phantoms.json account label must "
+                            "a stale missing_history.json account label must "
                             "stop the run")
-        self.assertIn("phantoms.json", r.stderr)
+        self.assertIn("missing_history.json", r.stderr)
         self.assertIn("'margin'", r.stderr)
         self.assertIn("taxA", r.stderr)
 
@@ -347,7 +347,7 @@ class TestPhantomsReachTheShelteredContext(unittest.TestCase):
             _t('BUYSELL', '2025-03-13', 50, 'tfsa', price=20.0),
         ]
         with tempfile.TemporaryDirectory() as tmp:
-            ph = Path(tmp) / "phantoms.json"
+            ph = Path(tmp) / "missing_history.json"
             ph.write_text(json.dumps([{"symbol": "XYZ.TO",
                                        "account": "tfsa"}]))
             g, dis, perm = _gains(margin, tfsa, incomplete_history=ph)
@@ -359,7 +359,7 @@ class TestPhantomsReachTheShelteredContext(unittest.TestCase):
         import io
         aff = [_t('BUYSELL', '2025-01-16', -100, 'spouse', price=29.0)]
         with tempfile.TemporaryDirectory() as tmp:
-            ph = Path(tmp) / "phantoms.json"
+            ph = Path(tmp) / "missing_history.json"
             ph.write_text(json.dumps([{"symbol": "XYZ.TO",
                                        "account": "spouse"}]))
             with contextlib.redirect_stderr(io.StringIO()):
@@ -379,7 +379,7 @@ class TestDistributionsSizedWithPhantoms(unittest.TestCase):
     got the wrong ACB change (or none: 'no shares held')."""
 
     BOOK = {"transactions": [
-        # 100 pre-window shares (phantoms.json) sold in February.
+        # 100 pre-window shares (missing_history.json) sold in February.
         {"action": "BUYSELL", "date": "2025-02-03",
          "date_settle": "2025-02-04", "time": "10:00:00",
          "symbol": "XAW.TO", "quantity": -100.0, "price": 30.0,
@@ -419,7 +419,7 @@ class TestDistributionsSizedWithPhantoms(unittest.TestCase):
             base.write_text(json.dumps(self.BOOK))
             mp = Path(tmp) / "distributions.map"
             mp.write_text("XAW.TO 2025-12-29 0.5\n")
-            ph = Path(tmp) / "phantoms.json"
+            ph = Path(tmp) / "missing_history.json"
             ph.write_text(json.dumps([{"symbol": "XAW.TO",
                                        "account": "margin"}]))
             with contextlib.redirect_stderr(io.StringIO()):
@@ -529,7 +529,7 @@ class TestManualRowsReachFormExport(unittest.TestCase):
                                  "sum": (0, json.dumps(sm), "")})
             r = cl.d_form_export(ctx)
         self.assertEqual(r.status, "attention")
-        self.assertIn("phantom-basis", r.detail)
+        self.assertIn("no purchase in your files", r.detail)
 
 
 class TestFiledLockCountsManualRows(unittest.TestCase):

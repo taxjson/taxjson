@@ -217,13 +217,13 @@ class TestCheckFiledErrors(_Closed):
         # A2-0676
         with tempfile.TemporaryDirectory() as td:
             q = self._copy(td)
-            (q / "phantoms.json").write_text('{"x": [')
+            (q / "missing_history.json").write_text('{"x": [')
             r = _run_cli(q, "check-filed")
             self.assertNotEqual(r.returncode, 0)
             self.assertNotIn("CalledProcessError", r.stderr)
             self.assertNotIn("Command '[", r.stderr)
             self.assertIn("could not be checked", r.stderr)
-            self.assertIn("phantoms.json", r.stderr)
+            self.assertIn("missing_history.json", r.stderr)
 
 
 class TestDamagedBaseNamed(unittest.TestCase):

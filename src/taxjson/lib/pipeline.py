@@ -1,17 +1,19 @@
 """One definition of "a gains run".
 
 Historically the semantics of a correct gains computation lived only in
-taxjson_gains.py's main(): TRANSFER strip/rewrite, phantom opening
-synthesis, the year filter with per-action date-basis rules, the
+taxjson_gains.py's main(): TRANSFER strip/rewrite, missing-history
+opening synthesis, the year filter with per-action date-basis rules, the
 by_ticker rebuild, the tainted-split into manual_reporting_required,
 superficial-loss / partial-taint warnings, and fee aggregation. Every
 other consumer of compute_gains (taxjson-explain, the web what-if)
 re-implemented a subset and drifted — the tier-5 "explain contradicts
-the .sum" and "what-if ignores phantoms" bugs were symptoms.
+the .sum" and "what-if ignores the missing-history openings" bugs were
+symptoms.
 
 This module is the single home:
 
-    prepare_books(...)  — load-side preprocessing (transfers, phantoms)
+    prepare_books(...)  — load-side preprocessing (transfers, missing-
+                          history openings)
                           shared by every consumer, usable standalone
                           (the web needs books without a full run).
     run_gains(...)      — the full CLI-equivalent gains run, returning
@@ -30,10 +32,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from taxjson.lib.core import TaxTransaction, get_tax_rules, is_stock_dividend
 from taxjson.lib.numeric import round_floats
-from taxjson.lib.phantom_holdings import (
-    detect_phantoms,
+from taxjson.lib.missing_history import (
+    detect_missing_history,
     detect_superficial_loss_warnings,
-    load_phantoms,
+    load_missing_history,
     synthesize_openings,
 )
 
@@ -885,11 +887,13 @@ def prepare_books(transactions, sheltered_transactions=(),
                   spot_crypto: bool = False,
                   country: Optional[str] = None):
     """The load-side preprocessing every gains consumer must share:
-    TRANSFER handling (strip/drop/rewrite/reject) then phantom opening
-    synthesis. Returns (transactions, sheltered, affiliated, phantom_log).
+    TRANSFER handling (strip/drop/rewrite/reject) then missing-history
+    opening synthesis. Returns (transactions, sheltered, affiliated,
+    missing_history_log).
 
-    `phantom_hint` controls the advisory stderr NOTE emitted when NO
-    phantom file is supplied but positions go short (the gains CLI wants
+    `phantom_hint` (the name predates the missing-history rename) controls
+    the advisory stderr NOTE emitted when NO missing-history file is
+    supplied but positions go short (the gains CLI wants
     it; explain and the web keep their stderr quiet).
 
     With the hint on, a position that goes short where no short can
@@ -907,10 +911,11 @@ def prepare_books(transactions, sheltered_transactions=(),
         base_currency=base_currency, country=country,
     )
 
-    phantom_application_log: list = []
+    missing_history_log: list = []
     if incomplete_history:
-        phantoms = load_phantoms(Path(incomplete_history))
-        transactions, phantom_application_log = synthesize_openings(transactions, phantoms)
+        mh_pairs = load_missing_history(Path(incomplete_history))
+        transactions, missing_history_log = synthesize_openings(
+            transactions, mh_pairs)
         # The wash context too (audit S021-09): a registered or
         # affiliated account with truncated history otherwise looks
         # short here, so its in-window rebuy is not "still held at day
@@ -920,9 +925,9 @@ def prepare_books(transactions, sheltered_transactions=(),
         # (Stale-entry ATTENTION lines come from the main book only:
         # a context book's pair is its own account's stage to flag.)
         sheltered_transactions, _sh_log = synthesize_openings(
-            sheltered_transactions, phantoms, flag_stale=False)
+            sheltered_transactions, mh_pairs, flag_stale=False)
         affiliated_transactions, _af_log = synthesize_openings(
-            affiliated_transactions, phantoms, flag_stale=False)
+            affiliated_transactions, mh_pairs, flag_stale=False)
         _ctx = {}
         for _label, _log in (('sheltered', _sh_log),
                              ('affiliated', _af_log)):
@@ -930,23 +935,25 @@ def prepare_books(transactions, sheltered_transactions=(),
                 if _e.get('inserted'):
                     _ctx[(_e['symbol'], _e['account'])] = dict(
                         _e, context=_label)
-        from taxjson.lib.phantom_holdings import report_phantom_log
-        report_phantom_log(
-            [phantom_application_log, _sh_log, _af_log],
+        from taxjson.lib.missing_history import report_missing_history_log
+        report_missing_history_log(
+            [missing_history_log, _sh_log, _af_log],
             {t.account for t in (transactions + sheltered_transactions
-                                 + affiliated_transactions)})
-        phantom_application_log = [
+                                 + affiliated_transactions)},
+            file_name=getattr(mh_pairs, 'source_name', None)
+            or Path(incomplete_history).name)
+        missing_history_log = [
             _ctx.get((_e['symbol'], _e['account']), _e)
             if not _e.get('inserted') else _e
-            for _e in phantom_application_log]
+            for _e in missing_history_log]
     if phantom_hint:
         # If the data has positions that go negative, the user may have
         # truncated history they haven't told us about. Emit a one-time
         # hint so they notice. Options are filtered out (sell-to-open is
-        # normal, not phantom). With a phantom file, its listed pairs no
-        # longer go short (their openings are in the books now), so the
-        # hint names only the pairs the file does NOT cover (audit
-        # S076-05: any phantom file switched the hint off).
+        # normal, not missing history). With a missing-history file, its
+        # listed pairs no longer go short (their openings are in the books
+        # now), so the hint names only the pairs the file does NOT cover
+        # (audit S076-05: any such file switched the hint off).
         # Registered status from the books' roles, not the labels
         # (audit S076-08): the --sheltered context is registered, and so
         # is a main book that is not --taxable.
@@ -954,7 +961,7 @@ def prepare_books(transactions, sheltered_transactions=(),
         _types = {t.account: not taxable for t in transactions}
         _types.update({t.account: True for t in sheltered_transactions})
         _types = {a: v for a, v in _types.items() if a}
-        candidates = detect_phantoms(
+        candidates = detect_missing_history(
             transactions + sheltered_transactions + affiliated_transactions,
             registered_accounts=_types)
         # Options coded CLOSING that the books cannot back — a sale or a
@@ -981,8 +988,8 @@ def prepare_books(transactions, sheltered_transactions=(),
                       + f"), but the data holds no position to close — "
                         f"it is booked as a new short until the missing "
                         f"purchase is supplied (`taxjson "
-                        f"find-missing-history --gen-phantoms "
-                        f"phantoms.json`).", file=sys.stderr)
+                        f"find-missing-history --write-missing-history` "
+                        f"writes missing_history.json).", file=sys.stderr)
         # A short where none can exist (A2-0395 / A2-0137): the main
         # book's own accounts only — a context book's account says it in
         # its own stage.
@@ -1009,7 +1016,8 @@ def prepare_books(transactions, sheltered_transactions=(),
                   f"(a transfer-in, a deposit, or a purchase before the "
                   f"data). Until it is supplied, {tail}. Supply it (the "
                   f"transfer or purchase rows, or `taxjson "
-                  f"find-missing-history --gen-phantoms phantoms.json`).",
+                  f"find-missing-history --write-missing-history`, which "
+                  f"writes missing_history.json).",
                   file=sys.stderr)
         if candidates:
             n_reg = sum(1 for c in candidates if c.registered)
@@ -1019,15 +1027,17 @@ def prepare_books(transactions, sheltered_transactions=(),
                 f"NOTE: {len(candidates)} (symbol, account) pair(s) go short in this data: "
                 f"{preview}{more}. {n_reg} are in "
                 f"{_book_words(country)['reg']}. "
-                f"If any of these are from truncated history rather than real short trades, "
-                f"list them in phantoms.json: `taxjson find-missing-history "
-                f"--gen-phantoms phantoms.json` in a project (`taxjson run` "
-                f"picks the file up), or `taxjson-gains --country "
-                f"canada|usa --suggest-phantoms FILE` standalone.",
+                f"If any of these are sales of shares bought before your "
+                f"files start (no purchase in the data) rather than real "
+                f"short trades, list them in missing_history.json: "
+                f"`taxjson find-missing-history --write-missing-history` "
+                f"in a project (`taxjson run` picks the file up), or "
+                f"`taxjson-gains --country canada|usa "
+                f"--suggest-missing-history FILE` standalone.",
                 file=sys.stderr,
             )
     return (transactions, sheltered_transactions, affiliated_transactions,
-            phantom_application_log)
+            missing_history_log)
 
 
 @dataclass
@@ -1252,11 +1262,11 @@ def run_gains(transactions, sheltered_transactions=(),
 
     `trace_sink`, when given with req.trace, is called with the results
     dict after the year filter, fee aggregation and the tainted split
-    (clean rows in 'transactions', phantom-basis rows in
+    (clean rows in 'transactions', unknown-cost rows in
     'manual_reporting_required'), before traces are stripped.
 
     `books_prepared=True` skips prepare_books for callers that already
-    ran it (the CLI's --suggest-phantoms path preprocesses first).
+    ran it (the CLI's --suggest-missing-history path preprocesses first).
     """
     if req is None:
         raise TypeError("run_gains needs a GainsRequest (its country is "
@@ -1264,11 +1274,11 @@ def run_gains(transactions, sheltered_transactions=(),
     tax_date = req.effective_tax_date()
 
     if books_prepared:
-        phantom_application_log = []
+        missing_history_log = []
     else:
         from taxjson.lib.country import HOME_CURRENCY
         (transactions, sheltered_transactions, affiliated_transactions,
-         phantom_application_log) = prepare_books(
+         missing_history_log) = prepare_books(
             transactions, sheltered_transactions, affiliated_transactions,
             taxable=req.taxable, incomplete_history=req.incomplete_history,
             phantom_hint=req.phantom_hint, spot_crypto=req.spot_crypto,
@@ -1439,7 +1449,7 @@ def run_gains(transactions, sheltered_transactions=(),
     # on what looks like a single-year report.
     #
     # Skip `tainted` rows — they carry fabricated gain numbers (cost
-    # basis = 0 against a synthetic/phantom opening) which are about
+    # basis = 0 against a synthetic missing-history opening) which are about
     # to be routed to `manual_reporting_required` below. Letting them
     # into by_ticker totals would silently inflate any downstream
     # consumer that reads by_ticker instead of `transactions`.
@@ -1541,7 +1551,7 @@ def run_gains(transactions, sheltered_transactions=(),
         _emit_option_replacement_stderr(
             results['option_replacement_warnings'], country=req.country)
 
-    # Split tainted dispositions (those drawing from a phantom pool OR a
+    # Split tainted dispositions (those drawing from a missing-history pool OR a
     # TRANSFER opening) into a separate "manual_reporting_required"
     # section. Their gain values are bogus by construction (cost basis =
     # 0 on the synthetic opening), so they must not feed totals.
@@ -1554,7 +1564,7 @@ def run_gains(transactions, sheltered_transactions=(),
             # Strip the bogus gain numbers before surfacing — leave the
             # facts the user needs for manual reporting (date, qty,
             # proceeds, account) and drop the fabricated gain/cost.
-            # days_held too: the phantom opening is dated 1970-01-01
+            # days_held too: the missing-history opening is dated 1970-01-01
             # (a sentinel), so the engine's figure is ~20,000 days of
             # nothing (audit R1-165).
             tainted_txs.append({
@@ -1568,8 +1578,10 @@ def run_gains(transactions, sheltered_transactions=(),
     results['transactions'] = clean_txs
     if tainted_txs:
         results['manual_reporting_required'] = tainted_txs
-    if phantom_application_log:
-        results['phantom_application_log'] = phantom_application_log
+    if missing_history_log:
+        # Written as 'phantom_application_log' before 2026-10; readers
+        # (taxjson-split-gains) accept both keys.
+        results['missing_history_log'] = missing_history_log
     # Recompute total_gain from clean transactions only.
     if 'summary' in results and (tainted_txs or req.incomplete_history):
         results['summary']['total_gain'] = _trade_gain_total(clean_txs)
@@ -1579,7 +1591,7 @@ def run_gains(transactions, sheltered_transactions=(),
         results['summary']['count'] = len(clean_txs)
 
     # Traces after the split (audit R1-165): the trace file's header and
-    # per-symbol totals then match the gains JSON, and phantom-basis
+    # per-symbol totals then match the gains JSON, and unknown-cost
     # dispositions are rendered in their own manual-reporting section.
     if req.trace and trace_sink is not None:
         trace_sink(results)
@@ -1608,7 +1620,7 @@ def run_gains(transactions, sheltered_transactions=(),
     # CRA's superficial-loss rule BY HAND — previously there was zero signal.
     if tainted_txs and _loss_rule:
         from datetime import datetime as _dt
-        from taxjson.lib.phantom_holdings import LOSS_RULE, loss_window_date
+        from taxjson.lib.missing_history import LOSS_RULE, loss_window_date
         _rule_name, _basis = LOSS_RULE[req.country]
         _pt_warns = []
         for t in tainted_txs:
@@ -1638,7 +1650,7 @@ def run_gains(transactions, sheltered_transactions=(),
                         'loss_date': t.get('date'),
                         'raw_loss': raw,
                         'acquisition_date': a.date,
-                        'note': ('tainted (phantom-pool) loss with an '
+                        'note': ('tainted (unknown-cost) loss with an '
                                  f'in-window acquisition ({_basis} dates) — '
                                  'if you claim this loss manually, apply '
                                  f'{_rule_name} to the rebuy'),
@@ -1650,14 +1662,15 @@ def run_gains(transactions, sheltered_transactions=(),
     # Say it where the user reads it (audit R1-325): the warnings only
     # lived in the gains JSON, and the per-account split dropped them.
     # A `warning:` line reaches the .diag and the DIAGNOSTICS banner.
-    from taxjson.lib.phantom_holdings import LOSS_CHECK_LABEL, LOSS_RULE
+    from taxjson.lib.missing_history import LOSS_CHECK_LABEL, LOSS_RULE
     for w in results.get('superficial_loss_warnings') or []:
         if w.get('message'):
             print(f"warning: {LOSS_CHECK_LABEL[req.country]}: "
                   f"{w['message']}", file=sys.stderr)
         else:
             print(f"warning: {LOSS_CHECK_LABEL[req.country]}: "
-                  f"{w.get('symbol')} phantom-basis loss of "
+                  f"{w.get('symbol')} loss with unknown cost (no purchase "
+                  f"in your files) of "
                   f"{abs(float(w.get('raw_loss') or 0.0)):.2f} on "
                   f"{w.get('loss_date')} with a buy on "
                   f"{w.get('acquisition_date')} inside the window — if "

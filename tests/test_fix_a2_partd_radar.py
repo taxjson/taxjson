@@ -84,7 +84,7 @@ class TestBuyBackLossOutsideGainsYear(unittest.TestCase):
             (root / "taxjson.toml").write_text(
                 '[settings]\nyear = 2026\ncountry = "canada"\n'
                 'option_buyback_loss_superficial = true\n')
-            args = R._radar_engine_args([], root / "phantoms.json",
+            args = R._radar_engine_args([], root / "missing_history.json",
                                         "canada")
         self.assertIn("--option-buyback-wash", args)
 
