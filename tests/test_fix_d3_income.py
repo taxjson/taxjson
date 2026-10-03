@@ -160,5 +160,19 @@ class TestEstimatePrintsTheTrustAssumption(unittest.TestCase):
                       "units) is grossed up as an eligible dividend", out)
 
 
+class TestTraceIdsAreUnmaskedOnPurpose(unittest.TestCase):
+    """A2-1379 (owner decision): the gains trace prints a row's own id
+    unmasked — the handle `--id` takes (a synthetic Kraken-style txid)."""
+
+    def test_trace_line_carries_the_id(self):
+        from taxjson.lib.trace_format import render_gain_block
+        g = {"symbol": "ZQC", "date": "2025-03-03", "qty": 0.5,
+             "gain": 10.0, "raw_gain": 10.0, "disallowed_amount": 0.0,
+             "account": "crypto", "id": "LZZZZZ-AAAAA-BBBBBB-fee",
+             "trace": ["# x"]}
+        out = "\n".join(render_gain_block(g))
+        self.assertIn("id=LZZZZZ-AAAAA-BBB", out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -5050,6 +5050,10 @@
 
 ### Privacy and security
 
+- `taxjson audit` and the gains traces keep printing a row's own id
+  unmasked, on purpose: it is the `--id` handle (for Kraken, the
+  exchange's ledger txid — an exchange reference). Documented in
+  SECURITY.md, README and KNOWN_ISSUES (owner decision, re-audit A2-1379).
 - `taxjson redact` and the generate-parser privacy gate no longer lose a
   private-denylist pattern silently: a leading UTF-8 BOM is stripped,
   and a denylist that is UTF-16, not UTF-8, unreadable or a directory
