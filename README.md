@@ -174,7 +174,8 @@ otherwise buy/sell rows settle on the standard cycle — T+1 since May 2024, T+2
 before, T+3 before September 2017 (other markets on their own dates: tax-logic
 CA-DATE-04 / US-DATE-04), options T+1 — counted in settlement days of
 the listing's market (the Canadian calendar for `.TO`/`.V`/`.CN`/`.NE`, the US
-one for `.US`, else the row currency), skipping weekends and holidays. With
+one for `.US`, the UK and ASX cycles for `.L`/`.AX`, else the row currency —
+the rule every parser uses for a blank settle cell), skipping weekends and holidays. With
 `tax_date = "settle"` a sale on Dec 31 therefore lands in January. A settle
 date before the trade date, or more than 31 days after it, is refused; one more
 than 7 days after it is an ATTENTION line. Futures settle on the trade date, or

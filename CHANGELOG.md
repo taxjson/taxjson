@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Second-audit deferred items
+
+- A blank settlement cell now settles on the listing's market in every
+  parser: a Questrade or RBC US-dollar TSX unit (DLR.U.TO) on the Canadian
+  calendar, a Questrade CAD-settled US stock on the US one, and a generic
+  `.L`/`.AX` line priced in USD on the UK/ASX cycle (A2-1052, A2-1054).
+
 ### Renames, ticker.map and warrants
 
 - `taxjson-ticker-map` summary mode no longer "maps" every `.US`

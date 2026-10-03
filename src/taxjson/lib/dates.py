@@ -111,20 +111,38 @@ def settlement_lag_days(trade_iso: str, currency: str = 'USD',
 CA_LISTING_SUFFIXES = (".TO", ".V", ".CN", ".NE", ".VN")
 
 
-def listing_market_currency(symbol: str, fallback=None):
-    """The settlement calendar of a symbol's LISTING, as the currency key
-    the calendar helpers take: 'CAD' for a Canadian listing (an option on
-    one included), 'USD' for a US one (and an F:/'/' futures contract) —
-    whatever currency the trade is priced in. A TSX USD-class unit such
-    as DLR.U.TO settles through CDS on the Canadian calendar, and an
-    AEM.US sale priced in CAD on the US one (audit A2-0375 / A2-1183).
-    `fallback` for any other symbol."""
+# Listing suffixes of the other markets this tool models a cycle for
+# (the IB parser's .L / .AX lines; the generic importer passes symbols
+# through as mapped).
+_OTHER_LISTING_MARKETS = ((".L", "GBP"), (".AX", "AUD"))
+
+
+def market_of(symbol: str, row_currency=None):
+    """THE listing-market rule for a settlement fallback (CA-DATE-05 /
+    US-DATE-05), shared by every parser: the market whose cycle and
+    calendar a trade settles on, as the currency key the calendar
+    helpers take. 'CAD' for a Canadian listing (an option on one
+    included), 'USD' for a US one (and an F:/'/' futures contract),
+    'GBP' for an LSE line (.L), 'AUD' for an ASX one (.AX) -- whatever
+    currency the trade is priced or settled in. A TSX USD-class unit
+    such as DLR.U.TO settles through CDS on the Canadian calendar, and
+    an AEM.US trade settled in CAD on the US one (audits A2-0375,
+    A2-1183, A2-1052, A2-1054). Any other symbol: `row_currency`."""
     s = str(symbol or "").strip().upper()
     if s.endswith(CA_LISTING_SUFFIXES):
         return 'CAD'
     if s.endswith(".US") or s.startswith(("F:", "/", "\\")):
         return 'USD'
-    return fallback
+    for suffix, cur in _OTHER_LISTING_MARKETS:
+        if s.endswith(suffix):
+            return cur
+    return row_currency
+
+
+def listing_market_currency(symbol: str, fallback=None):
+    """`market_of` under its older name (the wash radar and the web
+    view's rescue deadline)."""
+    return market_of(symbol, fallback)
 
 
 def settlement_date(trade_iso: str, currency: str = 'USD',

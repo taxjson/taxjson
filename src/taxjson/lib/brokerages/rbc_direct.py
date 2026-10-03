@@ -1986,17 +1986,22 @@ class RbcBrokerage(BaseBrokerage):
         is_assign_leg = (r.cls == 'assignment' or r.code == 'ASN'
                          or any(x in activity for x in ('Assignment',
                                                         'Exercise')))
+        # A blank settle cell falls back to the cycle of the LISTING's
+        # market, not the row currency's (A2-1054): DLR.U.TO bought in USD
+        # settles through CDS on the Canadian calendar.
+        from taxjson.lib.dates import market_of
+        _mkt = market_of(symbol, r.currency)
         if r.settle:
             date_settle = r.settle
         elif occ and not is_assign_leg:
             date_settle = self.settlement_date_t1(r.date, "%Y-%m-%d",
-                                                  currency=r.currency)
+                                                  currency=_mkt)
         else:
             # Equities — and an assignment/exercise OPTION leg, which is
             # one event with its stock leg: T+1 on the option leg alone
             # split the two and let another trade consume the premium
             # (audit S065-06).
-            date_settle = self.equity_settlement_date(r.date, r.currency,
+            date_settle = self.equity_settlement_date(r.date, _mkt,
                                                       "%Y-%m-%d")
         date = r.date
         # An option EXPIRY has no settlement cycle, and RBC posts it the

@@ -1205,22 +1205,10 @@ class QuestradeBrokerage(BaseBrokerage):
                 opt = None
             settle_dt = self._date(row, 'Settlement Date', lineno,
                                    required=False)
-            if settle_dt:
-                date_settle = settle_dt.strftime("%Y-%m-%d")
-            elif opt and not (code_assigned or word_assigned):
-                # Options settle T+1 in every era; the equity fallback
-                # (T+2 before the 2024 cutover) moved a Dec-28 option
-                # sale into the next tax year (audit R1-194). An
-                # exercise/assignment leg keeps its stock leg's cycle
-                # below — the two rows are one event.
-                date_settle = self.settlement_date_t1(
-                    date, "%Y-%m-%d", currency=currency)
-            else:
-                # Era- and market-aware fallback for a BLANK settlement
-                # cell only (T+2 pre-cutover equities); a present but
-                # unparseable cell is an error above, not a fallback.
-                date_settle = self.equity_settlement_date(
-                    date, currency, "%Y-%m-%d")
+            # A BLANK settlement cell falls back to the standard cycle,
+            # computed once the symbol (its listing) is known below.
+            date_settle = (settle_dt.strftime("%Y-%m-%d") if settle_dt
+                           else None)
 
             qty = self._num(row, 'Quantity', lineno)
             mult = float(self.OPTION_MULTIPLIER) if opt else 1.0
@@ -1372,6 +1360,28 @@ class QuestradeBrokerage(BaseBrokerage):
                 symbol = (row.get('Symbol') or '').strip().upper()
             symbol = self.apply_currency_suffix(symbol, listing_currency)
             self.note_row_consumed()
+            if date_settle is None:
+                # The LISTING's market decides the cycle and calendar,
+                # not the row currency (A2-1052 / A2-1054): DLR.U.TO in
+                # USD settles through CDS, a CAD-settled US stock on the
+                # US calendar (lib/dates.market_of, the rule every parser
+                # shares).
+                from taxjson.lib.dates import market_of
+                _mkt = market_of(symbol, listing_currency)
+                if opt and not (code_assigned or word_assigned):
+                    # Options settle T+1 in every era; the equity
+                    # fallback (T+2 before the 2024 cutover) moved a
+                    # Dec-28 option sale into the next tax year (audit
+                    # R1-194). An exercise/assignment leg keeps its stock
+                    # leg's cycle — the two rows are one event.
+                    date_settle = self.settlement_date_t1(
+                        date, "%Y-%m-%d", currency=_mkt)
+                else:
+                    # Era- and market-aware fallback for a BLANK
+                    # settlement cell only (T+2 pre-cutover equities); a
+                    # present but unparseable cell is an error above.
+                    date_settle = self.equity_settlement_date(
+                        date, _mkt, "%Y-%m-%d")
 
             if is_expired and not is_assigned:
                 # An expiry has no settlement cycle, and Questrade posts

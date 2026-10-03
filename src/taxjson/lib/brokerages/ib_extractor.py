@@ -259,9 +259,10 @@ def get_ib_settlement(date_str: str, asset_cat: str,
       currency (lib/dates._T1_CUTOVER): LSE/EU T+2 until 2027-10-11,
       the ASX and the rest T+2.
     - Everything else (equity and index options, bonds): T+1.
-    Days are counted in the trade currency's settlement calendar (US:
-    NYSE + Federal Reserve holidays; Canada: TSX + bank holidays), see
-    lib/market_calendar.
+    `currency` is the listing's MARKET (lib/dates.market_of), not the
+    quote currency: days are counted in that market's settlement
+    calendar (US: NYSE + Federal Reserve holidays; Canada: TSX + bank
+    holidays), see lib/market_calendar.
     """
     from taxjson.lib.dates import settlement_lag_days
     from taxjson.lib.market_calendar import add_settlement_days
@@ -278,6 +279,7 @@ def get_ib_settlement(date_str: str, asset_cat: str,
     return add_settlement_days(date_str, days, currency).isoformat()
 
 from taxjson.lib.core import STOCK_DIVIDEND, is_option_symbol
+from taxjson.lib.dates import market_of
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          combined_accounts_note,
                                          combined_accounts_refusal,
@@ -605,12 +607,6 @@ _IB_LOCAL_TZ_BY_CURRENCY = {'AUD': 'Australia/Sydney',
                             # trade in CNH (re-audit A2-1302).
                             'CNH': 'Asia/Shanghai',
                             'NZD': 'Pacific/Auckland'}
-# The settlement market (calendar and cycle) of a stock/warrant listing
-# whose suffix names a venue in another currency: a USD unit listed on
-# the TSX settles through CDS, a USD line listed on the LSE on the UK
-# cycle (audit A2-0595 / A2-0081).
-_IB_EXT_SETTLE_MARKET = {'TO': 'CAD', 'L': 'GBP', 'AX': 'AUD', 'US': 'USD'}
-
 
 def _ib_next_trading_day(d, include_today: bool = False):
     from taxjson.lib.market_calendar import is_trading_day
@@ -2779,11 +2775,12 @@ class IbBrokerage(BaseBrokerage):
                 date, time, broker_time = _ib_market_trade_date(
                     date, time, asset_cat, currency, _listing,
                     symbol=symbol)
-                # Settled in the listing's market: a USD unit on the TSX
+                # Settled in the listing's market (lib/dates.market_of,
+                # the rule every parser shares): a USD unit on the TSX
                 # through CDS, a USD line on the LSE on the UK cycle.
                 date_settle = get_ib_settlement(
                     date, asset_cat,
-                    _IB_EXT_SETTLE_MARKET.get(_listing, currency),
+                    market_of(f".{_listing}" if _listing else "", currency),
                     futures_settle=self.futures_settle)
                 qty = _num('Quantity')
                 opt_exp = section == 'Options Expirations'

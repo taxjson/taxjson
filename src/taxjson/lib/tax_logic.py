@@ -321,10 +321,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Federal Reserve holidays; Canada: TSX holidays, "
                  "Remembrance Day, Truth and Reconciliation; elsewhere "
                  "weekends only). The cycle and calendar are the listing's "
-                 "market, not the quote currency's: an IB US-dollar unit "
-                 "listed on the TSX settles on the Canadian calendar, and "
-                 "a US-dollar line listed on the LSE is an LSE security "
-                 "(.L) on the UK cycle.", cont=True),
+                 "market, not the quote or settlement currency's, in every "
+                 "parser (IB, Questrade, RBC and the generic importer, "
+                 "one rule): a US-dollar unit listed on the TSX "
+                 "(DLR.U.TO) settles on the Canadian calendar, a US stock "
+                 "settled in Canadian dollars on the US one, and a "
+                 "US-dollar line listed on the LSE (.L) or the ASX (.AX) "
+                 "on that market's cycle.", cont=True),
             Rule("CA-DATE-06",
                  "The generic importer uses a mapped settle column (one "
                  "more than 31 days after the trade is refused, more than "
@@ -1267,10 +1270,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "Federal Reserve holidays; Canada: TSX holidays, "
                  "Remembrance Day, Truth and Reconciliation; elsewhere "
                  "weekends only). The cycle and calendar are the listing's "
-                 "market, not the quote currency's: an IB US-dollar unit "
-                 "listed on the TSX settles on the Canadian calendar, and "
-                 "a US-dollar line listed on the LSE is an LSE security "
-                 "(.L) on the UK cycle.", cont=True),
+                 "market, not the quote or settlement currency's, in every "
+                 "parser (IB, Questrade, RBC and the generic importer, "
+                 "one rule): a US-dollar unit listed on the TSX "
+                 "(DLR.U.TO) settles on the Canadian calendar, a US stock "
+                 "settled in Canadian dollars on the US one, and a "
+                 "US-dollar line listed on the LSE (.L) or the ASX (.AX) "
+                 "on that market's cycle.", cont=True),
             Rule("US-DATE-06",
                  "The generic importer uses a mapped settle column (one "
                  "more than 31 days after the trade is refused, more than "

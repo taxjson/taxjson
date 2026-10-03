@@ -206,7 +206,6 @@ _KEY_ALIASES = {
 # symbol is the LISTING and is kept; the row currency is only the
 # settlement currency (DLR.U.TO bought in USD is still DLR.U.TO).
 _KNOWN_SUFFIXES = ("TO", "V", "CN", "NE", "US", "AX", "L")
-_CA_SUFFIXES = (".TO", ".V", ".VN", ".CN", ".NE")
 # Futures symbol prefixes (lib/futures.py): the contract size is not in
 # the row, so it is never guessed.
 _FUTURES_PREFIXES = ("F:", "/", "\\")
@@ -1212,8 +1211,9 @@ class GenericBrokerage(BaseBrokerage):
         when the cell is filled, else the standard cycle from the
         shared holiday-aware helper (T+1 since the 2024 cutover, T+2
         before, T+3 before 2017-09-05; options T+1), on the listing's
-        market (a Canadian suffix settles on the Canadian calendar,
-        .US on the US one, otherwise the row currency). Booking the
+        market (lib/dates.market_of: a Canadian suffix settles on the
+        Canadian calendar, .US on the US one, .L/.AX on the UK/ASX cycle,
+        otherwise the row currency). Booking the
         trade date put a Dec-31 sale in the wrong Canadian tax year
         (audits R1-123/R1-185). `[options] settle_on_trade_date = true`
         settles on the trade date; futures (`F:`, `/`, `\\`)
@@ -1243,14 +1243,12 @@ class GenericBrokerage(BaseBrokerage):
             return settle
         if symbol.upper().startswith(_FUTURES_PREFIXES):
             if futures_settle == "next_day":
+                from taxjson.lib.dates import market_of
                 from taxjson.lib.market_calendar import add_settlement_days
-                market = "CAD" if symbol.upper().endswith(_CA_SUFFIXES) \
-                    else "USD" if symbol.upper().endswith(".US") else currency
-                return add_settlement_days(date, 1, market).isoformat()
+                return add_settlement_days(
+                    date, 1, market_of(symbol, currency)).isoformat()
             return date
         if settle_on_trade_date:
             return date
-        up = symbol.upper()
-        market = ("CAD" if up.endswith(_CA_SUFFIXES)
-                  else "USD" if up.endswith(".US") else currency)
-        return settlement_date(date, market, is_option)
+        from taxjson.lib.dates import market_of
+        return settlement_date(date, market_of(symbol, currency), is_option)
