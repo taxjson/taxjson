@@ -1725,7 +1725,9 @@ defended in layers rather than by tests alone:
   deliberately left, with the reasoning.
 - **Nothing personal leaves the machine.** `scripts/check-pii.sh` runs
   in every gate and as the `pre-push` hook, fails closed, and reads a
-  private denylist kept outside the repository; `taxjson redact` strips
+  private denylist kept outside the repository (the hook also refuses a
+  commit or tag message quoting a money amount such as 1,234,567.89 —
+  real book totals stay out of the public history; see CONTRIBUTING.md); `taxjson redact` strips
   the account numbers, names and contact details it recognises from an
   export — review the output before sharing it. One exception is by
   design: git publishes the author, committer and tagger name and e-mail

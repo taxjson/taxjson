@@ -5040,6 +5040,12 @@
 
 ### Privacy and security
 
+- The `pre-push` hook refuses a commit or tag message that quotes a
+  money-like amount with thousands separators and cents
+  (`1,234,567.89`), so no real book total reaches the public history
+  again; mark a synthetic number with the word `pii-ok` on its line
+  (`scripts/check-pii.sh --message`; A2-1384). Existing history is left
+  as is.
 - `taxjson redact` and the generate-parser privacy gate no longer lose a
   private-denylist pattern silently: a leading UTF-8 BOM is stripped,
   and a denylist that is UTF-16, not UTF-8, unreadable or a directory
