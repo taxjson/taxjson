@@ -13,6 +13,15 @@
   is left as filed: the amount is booked as a loss on the loss sale's
   date and an ATTENTION line names the earlier sale, whose return may
   need an amendment (tax-logic US-WASH-22).
+- US §355 spin-off (`tax_free_355`): every parent lot now gives up the
+  same fraction of its own basis (Reg. §1.358-2), and the spun-off shares
+  are one block per parent block with that block's purchase date and
+  holding period (§1223(1)). They were spread by share count over the
+  parent's lots, all dated on the spin date, and a low-basis lot could
+  book a §301(c)(3) "deemed gain" on a tax-free spin-off (re-audit
+  A2-0065). An allocation beyond the parent's basis is capped at it with
+  an ATTENTION line; the spun-off shares are not a wash-sale replacement
+  (§1091(a): not acquired by purchase).
 
 ### Renames, ticker.map and warrants
 

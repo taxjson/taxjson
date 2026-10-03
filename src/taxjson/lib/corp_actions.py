@@ -3806,8 +3806,14 @@ def _us_spinoff_tax_free_355(event: CorporateAction, hints: dict
         ),
         allocated_acb=float((hints or {}).get('allocated_acb') or 0.0),
         alloc_cur='USD')
-    return _allocation_in_listing_currency(event, hints, rows, 'USD',
+    rows = _allocation_in_listing_currency(event, hints, rows, 'USD',
                                            '§355')
+    # The US engine books the pair per parent lot (Reg. §1.358-2: each
+    # lot gives up the same fraction of its basis; one spun-off block per
+    # parent block, its holding period tacked, §1223(1)) — US-CORP-07.
+    for r in rows:
+        r['type'] = 'spinoff_355'
+    return rows
 
 
 def _canada_spinoff_rollover_s_86_1(event: CorporateAction, option: str, hints: dict) -> List[dict]:

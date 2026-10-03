@@ -1701,8 +1701,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "or tax_free_355 (§355: the basis moved to the spin-off "
                  "is the US-dollar amount you give, per the company's "
                  "Form 8937, booked exactly even on a non-US listing; "
-                 "§358(b); only a significant distributee attaches the "
-                 "Reg. §1.355-5 statement).", cont=True),
+                 "§358(b). Every parent lot gives up the same fraction of "
+                 "its own basis (Reg. §1.358-2), and each parent block "
+                 "gets its block of spun-off shares with that basis and "
+                 "the block's purchase date — the holding period tacks, "
+                 "§1223(1). It never books a gain: an amount beyond the "
+                 "parent's basis is capped at it, with an ATTENTION line. "
+                 "The spun-off shares are not a purchase for the "
+                 "wash-sale rule. Only a significant distributee attaches "
+                 "the Reg. §1.355-5 statement).", cont=True),
             Rule("US-CORP-08",
                  "ignore skips broker noise only; on a real event it "
                  "leaves the books wrong."),

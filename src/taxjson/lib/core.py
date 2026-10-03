@@ -1992,6 +1992,16 @@ def _fold_per_account_rename_ratios(taxable: List[TaxTransaction],
 STOCK_DIVIDEND = 'stock_dividend'
 
 
+# Corporate-action rows the US engine books per parent lot (types set by
+# lib/corp_actions): a §355 spin-off's two rows (the spun-off shares'
+# BUYSELL and the parent's ADJUST, joined by corp_event_id) and a §356
+# boot exchange's two rows (the old shares' SELL and the new shares'
+# BUYSELL). Neither acquisition is "by purchase" for §1091(a).
+SPINOFF_355_TYPE = 'spinoff_355'
+REORG_356_TYPE = 'reorg_356'
+_LOT_EVENT_TYPES = (SPINOFF_355_TYPE, REORG_356_TYPE)
+
+
 def is_stock_dividend(tx) -> bool:
     """A parser's stock-dividend row (a $0 BUYSELL of new shares)."""
     t = tx.get('type') if isinstance(tx, dict) else getattr(tx, 'type', '')
@@ -4980,6 +4990,21 @@ class USATaxRules(TaxRules):
                                             + ev.quantity)
                 continue
 
+            if (ev.quantity > 0 and ev.action == 'BUYSELL'
+                    and (ev.type or '') in _LOT_EVENT_TYPES):
+                # Shares received in a §355 spin-off or a §356 exchange
+                # are not acquired "by purchase or by an exchange on which
+                # the entire amount of gain or loss was recognized"
+                # (§1091(a)): never a replacement (US-CORP-05/-07).
+                if not is_other_scope:
+                    net_qty_state[_nkey(ev.account, sym)] = \
+                        prev + ev.quantity
+                else:
+                    _ok = (ev.account, sym)
+                    other_qty_state[_ok] = (other_qty_state.get(_ok, 0.0)
+                                            + ev.quantity)
+                continue
+
             if ev.quantity > 0:
                 # Taxable buys close any taxable shorts first; leftover
                 # opens long. Sheltered/affiliated buys live in a
@@ -5494,6 +5519,25 @@ class USATaxRules(TaxRules):
         def _ikey(acct, sym):
             return (acct, sym) if per_account_basis else sym
 
+        # §355 spin-offs booked per parent lot (US-CORP-07): the spun-off
+        # shares' BUYSELL and the parent's ADJUST of one event and
+        # account, joined by corp_event_id. The BUYSELL sorts first at
+        # their shared moment and books both; its ADJUST is then skipped.
+        _spin_adj: Dict[tuple, TaxTransaction] = {}
+        for _t in taxable_sorted:
+            if (_t.action == 'ADJUST' and _t.type == SPINOFF_355_TYPE
+                    and _t.corp_event_id):
+                _spin_adj.setdefault((_t.account, _t.corp_event_id), _t)
+        _spin_done: set = set()
+
+        def _insert_lots(ikey_, new_lots):
+            """Carried lots join a pool in acquisition order (their
+            actual dates; same-date lots by time, then arrival)."""
+            lots = inventory_long.setdefault(ikey_, [])
+            lots.extend(new_lots)
+            lots.sort(key=lambda l: (l['date'],
+                                     _lot_time.get(l.get('id'), '')))
+
         def _inv_keys_for(inv, sym):
             if per_account_basis:
                 return [k for k in inv if k[1] == sym]
@@ -5648,6 +5692,8 @@ class USATaxRules(TaxRules):
             # Before this branch, ADJUST rows fell through to the
             # qty-epsilon skip below and were silently dropped, leaving
             # lot basis unreduced and understating gains at sale.
+            if tx.action == 'ADJUST' and tx.id in _spin_done:
+                continue            # booked with its spin-off (US-CORP-07)
             if tx.action == 'ADJUST':
                 lots = inventory_long.get(ikey, [])
                 open_qty = sum(l['qty'] for l in lots)
@@ -5805,6 +5851,81 @@ class USATaxRules(TaxRules):
                          if _sold_out else
                          "add the missing purchase history so it can "
                          "share their basis (§307)."))
+
+            if (tx.action == 'BUYSELL' and tx.quantity > 0
+                    and tx.type == SPINOFF_355_TYPE):
+                _adj = _spin_adj.get((tx.account, tx.corp_event_id))
+                _par = (_adj.symbol if _adj is not None else '')
+                _pkey = _ikey(tx.account, _par)
+                _plots = [l for l in inventory_long.get(_pkey, [])
+                          if l['qty'] > epsilon]
+                _pbasis = sum((l['cost_basis'] for l in _plots),
+                              Decimal(0))
+                _alloc = (-D(_adj.net_amount) if _adj is not None
+                          else Decimal(0))
+                if (_adj is not None and _plots and _pbasis > 0
+                        and _alloc > 0
+                        and not inventory_short.get(_pkey)):
+                    # Reg. §1.358-2: every parent share gives up the same
+                    # fraction of its OWN basis; each parent block gets a
+                    # block of spun-off shares with its basis share and
+                    # its acquisition date (§1223(1)). Never below zero:
+                    # a §355 distribution recognizes no gain.
+                    _frac = _alloc / _pbasis
+                    _new_total = D(abs(tx.net_amount))
+                    if _frac > 1:
+                        _note(tx.date,
+                              f"warning: ATTENTION: {_par}: the §355 "
+                              f"spin-off on {tx.date} allocates "
+                              f"{float(_alloc):,.2f} but the parent's "
+                              f"basis held is {float(_pbasis):,.2f} — "
+                              f"capped at the basis (a tax-free spin-off "
+                              f"books no gain); check the allocated "
+                              f"amount (Form 8937 %).")
+                        _new_total = _new_total / _frac
+                        _frac = Decimal(1)
+                    _pq = sum(l['qty'] for l in _plots)
+                    _new = []
+                    _taken = Decimal(0)
+                    _cost_left = _new_total
+                    for _i, _l in enumerate(_plots):
+                        _take = _l['cost_basis'] * _frac
+                        _wd = _l.get('wash_deferred', Decimal(0))
+                        _l['cost_basis'] -= _take
+                        if _wd:
+                            _l['wash_deferred'] = _wd * (1 - _frac)
+                        _taken += _take
+                        _c = (_cost_left if _i == len(_plots) - 1
+                              else _new_total * _take / (_pbasis * _frac))
+                        _cost_left -= _c
+                        _new.append({
+                            'qty': tx.quantity * _l['qty'] / _pq,
+                            'cost_basis': _c,
+                            'wash_deferred': _wd * _frac if _wd
+                            else Decimal(0),
+                            'date': _l['date'],
+                            'effective_acq_date': _l.get(
+                                'effective_acq_date', _l['date']),
+                            'id': tx.id,
+                            **({'tainted': True} if _l.get('tainted')
+                               else {}),
+                        })
+                    _insert_lots(ikey, _new)
+                    _spin_done.add(_adj.id)
+                    if trace:
+                        symbol_traces[symbol].append(
+                            f"# {tx.date} SPIN-OFF  {tx.quantity:10.4f} "
+                            f"from {_par} | {len(_new)} block(s), "
+                            f"{float(_frac):.6f} of each parent lot's basis")
+                    continue
+                if _adj is not None:
+                    _note(tx.date,
+                          f"warning: {symbol}: the §355 spin-off on "
+                          f"{tx.date} finds no long {_par} lots with "
+                          f"basis in {tx.account} — the spun-off shares "
+                          f"are booked as one lot on the spin date and "
+                          f"the parent's basis reduction as a plain "
+                          f"adjustment (check the parent's history).")
 
             tx_qty_abs = abs(tx.quantity)
             # A BUY's cost is a magnitude (parsers spell it either sign);
