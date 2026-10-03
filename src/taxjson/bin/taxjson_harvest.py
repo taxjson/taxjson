@@ -668,7 +668,9 @@ def main(argv: Optional[List[str]] = None,
                         "KGC...US calls into K...TO) is quoted as the "
                         "contract actually held — found in the "
                         "account's <acct>_raw_gains.json — in its own "
-                        "currency")
+                        "currency. Default: ticker.map next to the "
+                        "inputs or in the folder above them (the "
+                        "project root for work/ files)")
     p.add_argument("--crypto-account", action="append", default=[],
                    metavar="ACCOUNT",
                    help="An input account marked `crypto = true` "
@@ -786,8 +788,15 @@ def main(argv: Optional[List[str]] = None,
                           verbose=args.verbose,
                           fetchers=fetchers)
     # The contract to QUOTE for each option position (see --ticker-map).
-    opt_quote = _option_quote_symbols(option_tickers, files,
-                                      args.ticker_map)
+    # Not named (the console script run on <project>/work/*_gains_wash.
+    # json): the project's ticker.map next to the inputs or one level
+    # up, as for yf_ticker.map — without it a TOBASE-renamed option was
+    # quoted as the other listing's contract (re-audit A2-0885).
+    _tmap = args.ticker_map
+    if _tmap is None and option_tickers:
+        _tmap = next((d / "ticker.map" for d in _dirs
+                      if (d / "ticker.map").is_file()), None)
+    opt_quote = _option_quote_symbols(option_tickers, files, _tmap)
     if option_tickers:
         _oq = fetch_option_prices(
             sorted({opt_quote[t] for t in option_tickers

@@ -2891,7 +2891,7 @@
   took the accounts alphabetically, so check-filed reported a false
   DRIFT right after close-year, audit a false tie-out mismatch, and
   t1135 / carryover showed another book's cost and gain (A2-0512,
-  A2-1592).
+  A2-1592, A2-0497, A2-0502).
 - `taxjson carryover` in a US project whose only taxable accounts are
   crypto accounts no longer applies the wash-sale rule to the coins: the
   books go to the ledger's no-wash crypto pass, as in a mixed project
@@ -3515,6 +3515,16 @@
 
 ### Planning: wash radar, harvest, buy/sell-check, estimate, instalments, web UI
 
+- US wash radar, sell-check, buy-check and harvest no longer call a
+  stock dividend a "Recent buy" and warn that a partial loss sale would
+  be a wash sale: a stock dividend is not a purchase for §1091
+  (US-STKDIV-01; re-audit A2-0550). Canada is unchanged (a $0
+  acquisition that counts for s.54, CA-STKDIV-01).
+- The `taxjson-harvest` console script run on a project's
+  work/*_gains_wash.json without --ticker-map finds the project's
+  ticker.map (next to the inputs or the folder above), so a TOBASE-renamed
+  option is quoted as the contract held, in its own currency, as
+  `taxjson harvest` does (re-audit A2-0885).
 - `taxjson watch` states its scope like the other planning tools
   (tax-logic CA-PLAN-04 / US-PLAN-04, re-audit A2-0909): a change report
   ends with the country's scope line (a CLEAR is safe only as far as
@@ -4066,6 +4076,10 @@
 
 ### Reports and views
 
+- `taxjson-export --holdings-toml` given --trades files of two accounts
+  applied each account's copy of a split to the summed balance, so a
+  closed round's trades stayed on the holding's `trades` list; a split is
+  one event there now (re-audit A2-1590).
 - `taxjson edge-cases` in a US project no longer lists a stock dividend
   as an in-window acquisition of a loss: it is not a purchase for the
   wash-sale rule (US-STKDIV-01), and the engine already allowed the
