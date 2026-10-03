@@ -26,11 +26,15 @@ transaction history, not the year-filtered gains file:
   taxjson-missing-history --year 2025 work/*_base.json
   taxjson-missing-history work/margin_base.json     # no year scope
 
-To actually fix an AFFECTS row, generate a phantom-opening file and re-run:
+To actually fix an AFFECTS row, list the sales with no purchase in your
+files (a missing-history file) and re-run. In a project:
+  taxjson find-missing-history --write-missing-history   # writes missing_history.json
+  # then prune any real shorts from it, and: taxjson run
+Standalone:
   taxjson-gains --country canada --year <year> \
-      --suggest-phantoms phantoms.json <base.json>
+      --suggest-missing-history missing_history.json <base.json>
   # review/prune, then: taxjson-gains --country canada \
-  #     --incomplete-history phantoms.json ...   (usa for a US project)
+  #     --incomplete-history missing_history.json ...   (usa for a US project)
 """
 
 import argparse
@@ -40,9 +44,9 @@ from pathlib import Path
 
 from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.core import load_transactions
-from taxjson.lib.phantom_holdings import (
-    detect_phantoms, assess_tax_year_relevance, detect_zero_basis_acquisitions,
-    detect_corp_action_links, detect_unbacked_covers, stale_phantom_entries,
+from taxjson.lib.missing_history import (
+    detect_missing_history, assess_tax_year_relevance, detect_zero_basis_acquisitions,
+    detect_corp_action_links, detect_unbacked_covers, stale_missing_history_entries,
     stale_entry_message,
 )
 
@@ -182,10 +186,14 @@ def main(argv=None):
                     help="an account the caller could not supply a book "
                          "for (repeatable): reported as NOT checked, so "
                          "the run never ends in an all-clear")
-    ap.add_argument("--phantoms", metavar="FILE",
-                    help="the project's phantoms.json: pairs it covers "
-                         "(the run applies them) are listed apart, not "
-                         "as work still to do")
+    ap.add_argument("--missing-history", metavar="FILE",
+                    help="the project's missing_history.json: pairs it "
+                         "covers (the run applies them) are listed apart, "
+                         "not as work still to do")
+    # The flag's old name (the file was phantoms.json): hidden, still
+    # accepted with a note.
+    ap.add_argument("--phantoms", metavar="FILE", dest="phantoms_old",
+                    help=argparse.SUPPRESS)
     ap.add_argument("--include-options", action="store_true",
                     help="also include OCC option symbols and futures (a "
                          "negative position is normal sell-to-open, so "
@@ -198,6 +206,16 @@ def main(argv=None):
                          "broker's own ticker, where a missing buy "
                          "belongs")
     args = ap.parse_args(argv)
+    if args.phantoms_old:
+        print("taxjson-missing-history: note: --phantoms is now "
+              "--missing-history (the old flag still works).",
+              file=sys.stderr)
+        if not args.missing_history:
+            args.missing_history = args.phantoms_old
+    # The file's name as the user has it (missing_history.json, or the
+    # legacy phantoms.json), for the report's wording.
+    mh_name = (Path(args.missing_history).name if args.missing_history
+               else "missing_history.json")
 
     txs, failed = _load_all(args.files)
     if not txs:
@@ -242,7 +260,7 @@ def main(argv=None):
     # --- 1. Truncated history (positions go negative) ---
     # The project's configured account types and tax_date basis, when
     # the base files sit in a project (audit S076-08, S075-16).
-    from taxjson.lib.phantom_holdings import account_types_near, tax_date_near
+    from taxjson.lib.missing_history import account_types_near, tax_date_near
     types = account_types_near(args.files[0])
     from taxjson.lib.country import CountryError
     try:
@@ -253,7 +271,7 @@ def main(argv=None):
     # The project's country names the registered-account rule in the
     # SHELTERED sections (superficial loss vs wash sale); None outside a
     # project (tax_date_near above already refused a bad country).
-    from taxjson.lib.phantom_holdings import _project_doc_near
+    from taxjson.lib.missing_history import _project_doc_near
     from taxjson.lib.country import settings_country
     country = (settings_country(_project_doc_near(args.files[0])
                                 .get('settings') or {})
@@ -268,17 +286,18 @@ def main(argv=None):
               "(run it on a project's work/ files to use the project's "
               "country and tax_date)", file=sys.stderr)
     # ticker.map JOURNAL symbols: a same-day Norbert's-gambit pair is
-    # not a one-day phantom short (audit A2-0636 / A2-0309).
+    # not a one-day short with a missing purchase (audit A2-0636 /
+    # A2-0309).
     journal = set()
     if args.ticker_map:
-        from taxjson.lib.phantom_holdings import journal_targets
+        from taxjson.lib.missing_history import journal_targets
         try:
             journal = journal_targets(args.ticker_map)
         except Exception as e:                      # noqa: BLE001
             print(f"taxjson-missing-history: warning: could not read "
                   f"{args.ticker_map} ({e}) — JOURNAL pairs are walked "
                   f"in clock order.", file=sys.stderr)
-    candidates = detect_phantoms(txs, include_options=args.include_options,
+    candidates = detect_missing_history(txs, include_options=args.include_options,
                                  include_broker_shorts=True,
                                  registered_accounts=types or None,
                                  journal_symbols=journal)
@@ -286,8 +305,8 @@ def main(argv=None):
         candidates = [c for c in candidates if c.account == args.account]
     # A short the broker itself marks as a short sale (RBC "SHORT." /
     # "COVER SHORT.") is a real short, not a missing buy: reported apart
-    # and never offered as a phantom (audit R1-8 — BK.TO's real 69.85
-    # loss vanished behind one).
+    # and never offered as missing history (audit R1-8 — a real loss
+    # vanished behind one).
     broker_shorts = [c for c in candidates if c.broker_marked_short]
     candidates = [c for c in candidates if not c.broker_marked_short]
     short_rows = [r for r in assess_tax_year_relevance(txs, candidates, args.year,
@@ -304,14 +323,14 @@ def main(argv=None):
                   date_basis=basis, journal_symbols=journal)
               if not args.account or c.account == args.account]
 
-    # --- 1c. phantoms.json entries today's detection would NOT propose
+    # --- 1c. missing-history entries today's detection would NOT propose
     #         (a broker-marked real short, a written option): applied by
     #         the run anyway, so listed for removal (A2-0639 / A2-0311). ---
     stale = []
     ph_pairs = set()
-    if args.phantoms:
+    if args.missing_history:
         try:
-            for e in json.loads(Path(args.phantoms).read_text(
+            for e in json.loads(Path(args.missing_history).read_text(
                     encoding="utf-8-sig")) or []:
                 if isinstance(e, dict) and e.get("symbol") \
                         and e.get("account"):
@@ -319,7 +338,8 @@ def main(argv=None):
                                   str(e["account"]).strip()))
         except (OSError, ValueError):
             pass                     # reported below (the _ph read)
-        stale = [e for e in stale_phantom_entries(txs, ph_pairs)
+        stale = [e for e in stale_missing_history_entries(
+                     txs, ph_pairs, file_name=mh_name)
                  if not args.account or e.account == args.account]
     stale_pairs = {(e.symbol.upper(), e.account) for e in stale}
 
@@ -343,15 +363,15 @@ def main(argv=None):
             print(f"  {c.symbol} [{c.account}] went short on "
                   f"{c.first_negative_date} (peak {c.peak_short:g}); the "
                   f"broker {_how} — "
-                  + ("but phantoms.json LISTS it: remove that entry."
+                  + (f"but {mh_name} LISTS it: remove that entry."
                      if _listed else
-                     "nothing to fix, do not add a phantom for it."))
+                     f"nothing to fix, do not add it to {mh_name}."))
 
     if stale:
         # Heading starts with REMOVE: the checklist counts these rows.
-        print(f"\n## phantoms.json entries that are not missing history: "
+        print(f"\n## {mh_name} entries that are not missing history: "
               f"{len(stale)}")
-        print("REMOVE from phantoms.json - the run applies them and they "
+        print(f"REMOVE from {mh_name} - the run applies them and they "
               "move a real gain or loss off the totals:")
         for e in stale:
             print(f"{e.symbol} {e.account}")
@@ -397,20 +417,20 @@ def main(argv=None):
         return 0
 
     yr = args.year
-    # phantoms.json pairs already covered (R1-339: the report kept
-    # asking for the --suggest-phantoms step the user had done, and the
+    # Pairs the missing-history file already covers (R1-339: the report
+    # kept asking for the file-writing step the user had done, and the
     # checklist step never cleared).
     _ph: set = set()
-    if args.phantoms:
+    if args.missing_history:
         try:
-            for e in json.loads(Path(args.phantoms).read_text(
+            for e in json.loads(Path(args.missing_history).read_text(
                     encoding="utf-8-sig")) or []:
                 if isinstance(e, dict):
                     _ph.add((str(e.get("symbol") or "").upper(),
                              str(e.get("account") or "").lower()))
         except (OSError, ValueError) as e:
             print(f"taxjson-missing-history: warning: could not read "
-                  f"{args.phantoms}: {e}", file=sys.stderr)
+                  f"{args.missing_history}: {e}", file=sys.stderr)
 
     def _covered(r) -> bool:
         c = r.candidate
@@ -444,15 +464,15 @@ def main(argv=None):
                          and r.candidate.registered]
             ignorable = [r for r in short_rows if not r.affects_year]
             print(f"   {len(affects) + len(covered)} affect tax year {yr}"
-                  + (f" ({len(covered)} covered by phantoms.json)"
+                  + (f" ({len(covered)} covered by {mh_name})"
                      if covered else "")
                   + f"; {len(sheltered)} are in registered accounts; "
                     f"{len(ignorable)} do not.")
             _print_section(f"AFFECTS {yr} - missing basis distorts this year's "
                            "gain; fix before filing:", affects, show_year_cols=True)
-            # Pairs phantoms.json already covers (the run applies them)
-            # are not work still to do (R1-339).
-            _print_section(f"COVERED by phantoms.json - the run applies these "
+            # Pairs the missing-history file already covers (the run
+            # applies them) are not work still to do (R1-339).
+            _print_section(f"COVERED by {mh_name} - the run applies these "
                            f"openings; nothing more to do unless `taxjson "
                            f"sum` lists the sale under manual reporting:",
                            covered, show_year_cols=True)
@@ -474,7 +494,7 @@ def main(argv=None):
     if zero_rows:
         print(f"\n## $0-cost corp-action shares that were later sold "
               f"(inflated gain): {len(zero_rows)} pair(s)")
-        from taxjson.lib.phantom_holdings import is_registered_account
+        from taxjson.lib.missing_history import is_registered_account
 
         def _reg(r):
             return is_registered_account(r.account, types or None, country)
@@ -515,15 +535,18 @@ def main(argv=None):
     if (yr and (any(r.affects_year and not _covered(r)
                     for r in short_rows)
                 or any(r.affects_year for r in zero_rows))):
-        # (registered rows included: their phantoms still feed the
+        # (registered rows included: their openings still feed the
         # cross-account loss walk)
-        print(f"\nTo fix truncated history: `taxjson find-missing-history "
-              "--gen-phantoms phantoms.json` in the project, review/prune "
-              "it, then `taxjson run` (it picks phantoms.json up). "
+        print(f"\nTo fix truncated history (sales with no purchase in "
+              "your files): `taxjson find-missing-history "
+              "--write-missing-history` in the project (it writes "
+              "missing_history.json), review/prune it, then `taxjson run` "
+              "(it picks missing_history.json up). "
               f"Standalone: taxjson-gains --country "
-              f"{country or 'canada|usa'} --year {yr} --suggest-phantoms "
-              "phantoms.json <base.json>, then --incomplete-history "
-              "phantoms.json.\nTo fix a $0-cost "
+              f"{country or 'canada|usa'} --year {yr} "
+              "--suggest-missing-history missing_history.json <base.json>, "
+              "then --incomplete-history missing_history.json."
+              "\nTo fix a $0-cost "
               "corp action: declare it (merger/spinoff basis) so the received "
               f"shares carry the correct {_cost}.")
     return _incomplete(0)

@@ -116,9 +116,10 @@ def parse_args():
     )
     parser.add_argument(
         "--incomplete-history", metavar="FILE",
-        help="phantoms.json of (symbol, account) pairs with missing pre-data "
-             "history — applied exactly like taxjson-gains, so traces match "
-             "the pipeline's books.")
+        help="missing_history.json: (symbol, account) pairs sold with no "
+             "purchase in the files (bought before the data) — applied "
+             "exactly like taxjson-gains, so traces match the pipeline's "
+             "books.")
     parser.add_argument("--option-premium-timing", choices=["grant", "close"],
                         default=None, help="Canada: s.49(1) grant timing "
                         "or close timing for written options (match the "
@@ -199,12 +200,13 @@ def fmt_summary(g) -> str:
     direction = g.get('direction', '')
     tag = ''
     if g.get('tainted'):
-        # Phantom-basis disposition (--incomplete-history): the pipeline
+        # Unknown-cost disposition (--incomplete-history): the pipeline
         # routes it to manual reporting with no gain (audit S029-22).
         return (
             f"{gid}  {date}  {sym:<14}  qty={qty:>10.4f}  "
-            f"proc={proc:>12.4f}  MANUAL REPORTING — phantom (pre-data) "
-            f"basis; gain not computed, not in the gains total"
+            f"proc={proc:>12.4f}  MANUAL REPORTING — no purchase in your "
+            f"files (cost unknown); gain not computed, not in the gains "
+            f"total"
             f"  ({direction})")
     if dis > 0.001:
         tag += f"  WASH+{dis:.2f}"
@@ -294,14 +296,14 @@ def main():
                   if args.affiliated else [])
 
     # SHARED preprocessing (lib/pipeline.prepare_books) so a trace can't
-    # contradict the .sum it explains: phantom opening balances
+    # contradict the .sum it explains: missing-history opening balances
     # (--incomplete-history, same file `taxjson run` auto-applies),
     # self-cancelling TRANSFER pairs dropped, remaining main-file
     # TRANSFERs rewritten to BUYSELL (sheltered approximation — explain
     # never hard-errors: taxable books coming out of the pipeline carry
     # no TRANSFERs, so the rewrite is a no-op for them), and
     # sheltered-context TRANSFERs stripped so they can't act as wash
-    # triggers. phantom_hint off: explain keeps its stderr to traces.
+    # triggers. Hint off: explain keeps its stderr to traces.
     transactions, sheltered, affiliated, _ = prepare_books(
         transactions, sheltered, affiliated, taxable=False,
         incomplete_history=(Path(args.incomplete_history)

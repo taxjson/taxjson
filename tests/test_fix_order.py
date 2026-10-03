@@ -191,14 +191,14 @@ class TestFixedRungsStay(unittest.TestCase):
         self.assertLess(radar_priority(_ev("ADJUST", 0)),
                         radar_priority(_ev("SPLIT", 2.0)))
 
-    def test_phantom_walk_stays_buy_first(self):
+    def test_missing_history_walk_stays_buy_first(self):
         # The missing-history walks are diagnostics: a same-moment pair
         # is not evidence of missing history, so they read it buys first
-        # whatever the order (audit S075-12 / S076-04) — see phantom_walk.
+        # whatever the order (audit S075-12 / S076-04) — see missing_history_walk.
         s, b = _ev("BUYSELL", -100), _ev("BUYSELL", 100)
         for rows in ([s, b], [b, s]):
             got = sorted(rows, key=lambda t: event_sort_key(
-                t, profile="phantom_walk"))
+                t, profile="missing_history_walk"))
             self.assertEqual([t.quantity for t in got], [100, -100])
 
 

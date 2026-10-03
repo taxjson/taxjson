@@ -514,7 +514,7 @@ class TestT1135Report(unittest.TestCase):
         text = T1.render_report(rep)
         self.assertIn("Simplified method (Part A) available (stayed under "
                       "250,000.00 CAD", text)
-        self.assertIn("unknown ACB (phantom opening) — cost understated",
+        self.assertIn("unknown ACB (bought before the data) — cost understated",
                       text)
         self.assertIn("unclassified — review / add to t1135.map", text)
         self.assertIn("T1135 instructions", text)

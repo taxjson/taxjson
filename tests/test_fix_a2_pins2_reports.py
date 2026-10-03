@@ -277,7 +277,7 @@ def _run_gains(country):
     sym, cur = (("ZZR.TO", "CAD") if country == "canada"
                 else ("ZZR.US", "USD"))
     with tempfile.TemporaryDirectory() as td:
-        ph = Path(td) / "phantoms.json"
+        ph = Path(td) / "missing_history.json"
         ph.write_text(json.dumps([{"symbol": "PHM" + sym[3:],
                                    "account": "m"}]))
         err = io.StringIO()

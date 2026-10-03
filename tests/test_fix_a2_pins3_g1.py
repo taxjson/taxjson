@@ -39,11 +39,11 @@ def _split(date_, symbol, ratio, account="margin", new="", **kw):
 
 
 def _gains(rows, listed, country="canada", year=2025):
-    """run_gains with phantoms.json listing `listed`; (results, stderr)."""
+    """run_gains with missing_history.json listing `listed`; (results, stderr)."""
     from taxjson.lib.core import TaxTransaction
     from taxjson.lib.pipeline import GainsRequest, run_gains
     with tempfile.TemporaryDirectory() as tmp:
-        ph = Path(tmp) / "phantoms.json"
+        ph = Path(tmp) / "missing_history.json"
         ph.write_text(json.dumps([{"symbol": s, "account": a}
                                   for s, a in listed]))
         err = io.StringIO()
@@ -56,7 +56,7 @@ def _gains(rows, listed, country="canada", year=2025):
 
 
 def _openings(rows, listed):
-    from taxjson.lib.phantom_holdings import synthesize_openings
+    from taxjson.lib.missing_history import synthesize_openings
     out, log = synthesize_openings(list(rows), set(listed), flag_stale=False)
     return ([(t.symbol, t.account, t.quantity, t.date)
              for t in out if t.action == "OPENING_BALANCE"], log)
@@ -72,7 +72,7 @@ class TestBuyCodedClosingIsMissingHistory(unittest.TestCase):
     with include_options) and option-boundary's expired_open."""
 
     def test_unbacked_close_buy_mirror(self):
-        from taxjson.lib.phantom_holdings import unbacked_close
+        from taxjson.lib.missing_history import unbacked_close
         buy = _tx("BUYSELL", "2025-03-03", "XYZ.US", 100, -1000.0,
                   currency="USD", open_close="C")
         self.assertTrue(unbacked_close(buy, 0.0))       # no short held
@@ -84,7 +84,7 @@ class TestBuyCodedClosingIsMissingHistory(unittest.TestCase):
         self.assertFalse(unbacked_close(both, -1.0))
 
     def test_futures_buy_coded_c_needs_include_options(self):
-        from taxjson.lib.phantom_holdings import detect_unbacked_covers
+        from taxjson.lib.missing_history import detect_unbacked_covers
         txs = [_tx("BUYSELL", "2025-11-03", "F:CLG6.US", 1, -62000.0,
                    currency="USD", open_close="C")]
         self.assertEqual(detect_unbacked_covers(txs), [])
@@ -95,7 +95,7 @@ class TestBuyCodedClosingIsMissingHistory(unittest.TestCase):
     def test_stock_cover_then_long_round_trip(self):
         # The finding's stock case: a C-coded buy, then an O buy and a
         # C sale — the first buy is still the unbacked cover.
-        from taxjson.lib.phantom_holdings import detect_unbacked_covers
+        from taxjson.lib.missing_history import detect_unbacked_covers
         txs = [
             _tx("BUYSELL", "2025-03-03", "TSQ.US", 100, -40000.0,
                 currency="USD", open_close="C"),
@@ -189,7 +189,7 @@ class TestRenameChains(unittest.TestCase):
     def test_rename_cycle_terminates(self):
         code = (
             "from taxjson.lib.core import TaxTransaction as T\n"
-            "from taxjson.lib.phantom_holdings import synthesize_openings\n"
+            "from taxjson.lib.missing_history import synthesize_openings\n"
             "def t(a,d,s,q,**k):\n"
             "    return T(action=a,date=d,date_settle=d,time='10:00:00',"
             "symbol=s,quantity=q,price=0.0,net_amount=k.pop('net',0.0),"
@@ -216,16 +216,16 @@ class TestRenameChains(unittest.TestCase):
 # -------------------------------------------- A2-0177 / A2-0541 / A2-0901
 
 class TestDetectPhantomsWalk(unittest.TestCase):
-    """detect_phantoms' position walk: the counted actions (ASSIGN,
+    """detect_missing_history' position walk: the counted actions (ASSIGN,
     TRANSFER — A2-0177 m1180/m1183), per-account split dedupe
     (A2-0177 m1145, A2-0541), the SPLIT branch and rename merge
     (A2-0177 m1288, A2-0901 m1053/m1223), and the candidate fields
     (A2-0901 m1054/m1154/m1227/m1291/m1294/m1297/m1298/m1389)."""
 
     def _detect(self, rows, **kw):
-        from taxjson.lib.phantom_holdings import detect_phantoms
+        from taxjson.lib.missing_history import detect_missing_history
         return [(c.symbol, c.account, c.peak_short)
-                for c in detect_phantoms(list(rows), country="canada", **kw)]
+                for c in detect_missing_history(list(rows), country="canada", **kw)]
 
     def test_assign_in_then_oversell_peak(self):
         rows = [
@@ -323,12 +323,12 @@ class TestDetectPhantomsWalk(unittest.TestCase):
             _split("2025-03-03", "SPL.TO", 2.0),
             _tx("BUYSELL", "2025-04-10", "SPL.TO", -30, 300.0),
         ]
-        from taxjson.lib.phantom_holdings import detect_phantoms
-        c, = detect_phantoms(rows)
+        from taxjson.lib.missing_history import detect_missing_history
+        c, = detect_missing_history(rows)
         self.assertEqual((c.peak_short, c.end_position), (-10.0, -10.0))
 
     def test_candidate_fields(self):
-        from taxjson.lib.phantom_holdings import detect_phantoms
+        from taxjson.lib.missing_history import detect_missing_history
         rows = [
             _tx("BUYSELL", "2025-01-10", "FLD.TO", 10, -100.0),
             _tx("BUYSELL", "2025-02-10", "FLD.TO", -10, 120.0),   # to 0
@@ -337,7 +337,7 @@ class TestDetectPhantomsWalk(unittest.TestCase):
             _tx("BUYSELL", "2025-05-10", "FLD.TO", -5, 60.0),     # to -10
             _tx("BUYSELL", "2025-06-10", "FLD.TO", 10, -90.0),    # to 0
         ]
-        c, = detect_phantoms(rows)
+        c, = detect_missing_history(rows)
         self.assertEqual(c.first_negative_date, "2025-04-10")
         self.assertEqual(c.disposition_count, 2)
         self.assertEqual(c.peak_short, -10.0)
@@ -350,18 +350,18 @@ class TestDetectPhantomsWalk(unittest.TestCase):
             _tx("BUYSELL", "2025-02-10", "FLT.TO", -10, 120.0),
             _tx("BUYSELL", "2025-03-10", "FLT.TO", -1, 12.0),
         ]
-        c, = detect_phantoms(rows)
+        c, = detect_missing_history(rows)
         self.assertEqual((c.disposition_count, c.first_negative_date),
                          (1, "2025-03-10"))
 
     def test_mixed_currency_candidate(self):
-        from taxjson.lib.phantom_holdings import detect_phantoms
+        from taxjson.lib.missing_history import detect_missing_history
         rows = [
             _tx("BUYSELL", "2025-01-10", "MIX.TO", 10, -100.0),
             _tx("BUYSELL", "2025-04-10", "MIX.TO", -30, 300.0,
                 currency="USD"),
         ]
-        c, = detect_phantoms(rows)
+        c, = detect_missing_history(rows)
         self.assertEqual(c.currency, "CAD/USD")
 
     def test_futures_short_left_out_by_default(self):
@@ -381,16 +381,16 @@ class TestTaxYearRelevance(unittest.TestCase):
     m1242), and plain-split scaling (A2-1554 / A2-1615 ph476)."""
 
     def _rel(self, rows, year=2025):
-        from taxjson.lib.phantom_holdings import (assess_tax_year_relevance,
-                                                  detect_phantoms)
+        from taxjson.lib.missing_history import (assess_tax_year_relevance,
+                                                  detect_missing_history)
         rows = list(rows)
-        cands = detect_phantoms(rows, include_options=True)
+        cands = detect_missing_history(rows, include_options=True)
         return {r.candidate.symbol: (r.affects_year, r.in_year_dispositions,
                                      r.in_year_proceeds)
                 for r in assess_tax_year_relevance(rows, cands, year)}
 
     def test_transfer_in_then_clean_sale_does_not_affect_year(self):
-        from taxjson.lib.phantom_holdings import (PhantomCandidate,
+        from taxjson.lib.missing_history import (MissingHistoryCandidate,
                                                   assess_tax_year_relevance)
         # A candidate from an earlier short; the 2025 sale is backed by
         # a TRANSFER-in.
@@ -440,7 +440,7 @@ class TestZeroBasisWalk(unittest.TestCase):
     A2-1615 ph586) and the rename carrying zero_qty * ratio (ph594)."""
 
     def _zb(self, rows):
-        from taxjson.lib.phantom_holdings import detect_zero_basis_acquisitions
+        from taxjson.lib.missing_history import detect_zero_basis_acquisitions
         return detect_zero_basis_acquisitions(list(rows), 2025)
 
     def test_first_acquisition_date_kept(self):
@@ -513,9 +513,9 @@ class TestSynthLogAndSuggestions(unittest.TestCase):
                                        "go negative for this pair"}])
 
     def test_format_suggestions_layout(self):
-        from taxjson.lib.phantom_holdings import (detect_phantoms,
+        from taxjson.lib.missing_history import (detect_missing_history,
                                                   format_suggestions)
-        c = detect_phantoms([_tx("BUYSELL", "2025-04-10", "FMT.TO", -5,
+        c = detect_missing_history([_tx("BUYSELL", "2025-04-10", "FMT.TO", -5,
                                  50.0)])
         text = format_suggestions(c)
         self.assertTrue(text.startswith('[\n  {\n    "symbol": "FMT.TO",'),
@@ -527,7 +527,7 @@ class TestSynthLogAndSuggestions(unittest.TestCase):
 
 class TestApplicationLogOrder(unittest.TestCase):
     """R1-318 (A2-0902): synthesize_openings iterates
-    sorted(min_running.items()), so phantom_application_log has one
+    sorted(min_running.items()), so missing_history_log has one
     order whatever the hash seed."""
 
     SYMS = ["QAA.TO", "QBB.TO", "QCC.TO", "QDD.TO", "QEE.TO", "QFF.TO",
@@ -548,7 +548,7 @@ class TestApplicationLogOrder(unittest.TestCase):
             books = Path(tmp) / "books.json"
             books.write_text(json.dumps({"transactions": [
                 t.to_dict() for t in self._rows()]}))
-            ph = Path(tmp) / "phantoms.json"
+            ph = Path(tmp) / "missing_history.json"
             ph.write_text(json.dumps([{"symbol": s, "account": "margin"}
                                       for s in reversed(self.SYMS)]))
             outs = []
@@ -563,7 +563,7 @@ class TestApplicationLogOrder(unittest.TestCase):
                     stdin=subprocess.DEVNULL)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 outs.append(r.stdout)
-                log = json.loads(r.stdout)["phantom_application_log"]
+                log = json.loads(r.stdout)["missing_history_log"]
                 self.assertEqual([x["symbol"] for x in log], self.SYMS)
             self.assertEqual(len(set(outs)), 1)
 
@@ -577,7 +577,7 @@ class TestSuperficialLossWarningBounds(unittest.TestCase):
     only tainted LOSSES (the raw >= -0.001 skip, m1442) warn."""
 
     def _warn(self, country):
-        from taxjson.lib.phantom_holdings import \
+        from taxjson.lib.missing_history import \
             detect_superficial_loss_warnings
         loss = {"symbol": "SLW.TO", "date": "2025-03-01",
                 "date_settle": "2025-03-01", "gain": -50.0,

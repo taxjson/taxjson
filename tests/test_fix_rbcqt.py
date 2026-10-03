@@ -805,14 +805,14 @@ class TestBrokerMarkedShorts(unittest.TestCase):
                 t('2024-04-19', 1000, 'QQA CORP COVER SHORT. UNSOLICITED')]
 
     def test_marked_short_is_not_a_phantom_candidate(self):
-        from taxjson.lib.phantom_holdings import detect_phantoms
-        self.assertEqual(detect_phantoms(self._txs()), [])
-        marked = detect_phantoms(self._txs(), include_broker_shorts=True)
+        from taxjson.lib.missing_history import detect_missing_history
+        self.assertEqual(detect_missing_history(self._txs()), [])
+        marked = detect_missing_history(self._txs(), include_broker_shorts=True)
         self.assertEqual([c.broker_marked_short for c in marked], [True])
 
     def test_unmarked_short_still_is(self):
-        from taxjson.lib.phantom_holdings import detect_phantoms
-        self.assertEqual(len(detect_phantoms(self._txs(marker=''))), 1)
+        from taxjson.lib.missing_history import detect_missing_history
+        self.assertEqual(len(detect_missing_history(self._txs(marker=''))), 1)
 
     def test_missing_history_reports_it_apart(self):
         with tempfile.TemporaryDirectory() as d:

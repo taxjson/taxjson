@@ -116,26 +116,26 @@ class TestIbOpenCloseCarried(unittest.TestCase):
 class TestPhantomsReadTheCode(unittest.TestCase):
 
     def test_ib_coded_short_is_not_missing_history(self):
-        from taxjson.lib.phantom_holdings import detect_phantoms
+        from taxjson.lib.missing_history import detect_missing_history
         book = _book(_parsed(STOCK_ROWS))
-        self.assertEqual(detect_phantoms(book), [])
-        c, = detect_phantoms(book, include_broker_shorts=True)
+        self.assertEqual(detect_missing_history(book), [])
+        c, = detect_missing_history(book, include_broker_shorts=True)
         self.assertTrue(c.broker_marked_short)
         self.assertEqual(c.short_marker, 'IB code O')
         self.assertEqual(c.peak_short, -40)
 
     def test_without_codes_the_same_rows_are_still_flagged(self):
         # The sign-only walk is unchanged for exports with no marker.
-        from taxjson.lib.phantom_holdings import detect_phantoms
+        from taxjson.lib.missing_history import detect_missing_history
         rows = _parsed(STOCK_ROWS)
         for r in rows:
             r.pop('open_close', None)
-        c, = detect_phantoms(_book(rows))
+        c, = detect_missing_history(_book(rows))
         self.assertFalse(c.broker_marked_short)
 
     def test_closing_option_sale_is_flagged_by_default(self):
-        from taxjson.lib.phantom_holdings import detect_phantoms
-        got = detect_phantoms(_book(_parsed(OPTION_ROWS)))
+        from taxjson.lib.missing_history import detect_missing_history
+        got = detect_missing_history(_book(_parsed(OPTION_ROWS)))
         self.assertEqual([c.symbol for c in got], ['QZQ251219C00030000.TO'])
         self.assertTrue(got[0].broker_says_closing)
         self.assertEqual(got[0].broker_basis, '450.00 CAD')
@@ -143,8 +143,8 @@ class TestPhantomsReadTheCode(unittest.TestCase):
     def test_c_o_sale_with_no_long_held_is_missing_history(self):
         # IB says the fill closed a long first: with none in the data,
         # the closed part was bought before it — the O does not excuse it.
-        from taxjson.lib.phantom_holdings import detect_phantoms
-        c, = detect_phantoms(_book(_parsed(
+        from taxjson.lib.missing_history import detect_missing_history
+        c, = detect_missing_history(_book(_parsed(
             _trade('QZX', '2025-11-03, 10:00:00', -100, 12, 1200, -1,
                    'C;O'))))
         self.assertTrue(c.broker_says_closing)
@@ -155,7 +155,7 @@ class TestPhantomsReadTheCode(unittest.TestCase):
         # sell 2 in two fills both coded C;O (the first closed the long,
         # the second opened the short), then a buy back (C). A real
         # short, not missing history (the owner's MBTK6 rows).
-        from taxjson.lib.phantom_holdings import detect_phantoms
+        from taxjson.lib.missing_history import detect_missing_history
         fut = (FII_H + 'Financial Instrument Information,Data,Futures,'
                'QZBK6,QZB MAY26,990000201,,QZB,CME,0.1,2026-05-29,'
                '2026-05,,,\n')
@@ -175,17 +175,17 @@ class TestPhantomsReadTheCode(unittest.TestCase):
         for t in txs:
             t['account'] = 'margin'
         book = _book(txs)
-        self.assertEqual(detect_phantoms(book), [])
-        c, = detect_phantoms(book, include_options=True,
+        self.assertEqual(detect_missing_history(book), [])
+        c, = detect_missing_history(book, include_options=True,
                              include_broker_shorts=True)
         self.assertTrue(c.broker_marked_short)
         self.assertFalse(c.broker_says_closing)
 
     def test_suggestions_name_the_code(self):
-        from taxjson.lib.phantom_holdings import (detect_phantoms,
+        from taxjson.lib.missing_history import (detect_missing_history,
                                                   format_suggestions)
         e, = json.loads(format_suggestions(
-            detect_phantoms(_book(_parsed(OPTION_ROWS)))))
+            detect_missing_history(_book(_parsed(OPTION_ROWS)))))
         self.assertIn('IB code C', e['_note'])
         self.assertIn('450.00 CAD', e['_note'])
 

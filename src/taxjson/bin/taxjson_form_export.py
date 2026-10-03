@@ -59,7 +59,8 @@ return reports). Column conventions:
          denial (the denied amount goes onto the replacement's ACB).
          Crypto is known by account: pass crypto books with --crypto.
 
-Tainted dispositions (phantom cost basis) have no computable gain: the
+Tainted dispositions (sales with no purchase in the files, cost unknown —
+listed in missing_history.json) have no computable gain: the
 pipeline routes them to `manual_reporting_required`. They are left out of the
 rows and totals above (which are the allowed, computed numbers), but NEVER
 silently: every one is listed in a MANUAL REPORTING section of the report
@@ -114,7 +115,7 @@ def load_json(path: Path) -> Any:
 
 def load_manual_rows(paths: List[Path], year: Optional[int],
                      date_key: str) -> List[Dict[str, Any]]:
-    """In-year phantom-basis dispositions: the pipeline's
+    """In-year unknown-cost dispositions: the pipeline's
     manual_reporting_required rows (its 'tainted' key is popped there,
     and gain/cost stripped) plus any hand-run file's rows still flagged
     'tainted' in transactions. Audit R1-199: keyed only on 'tainted',
@@ -169,12 +170,14 @@ def load_dispositions(paths: List[Path], year: Optional[int],
 
 def manual_section(rows: List[Dict[str, Any]], cur: str) -> List[str]:
     """The MANUAL REPORTING block every text report ends with when
-    phantom-basis dispositions exist in the year."""
+    unknown-cost dispositions (no purchase in the files) exist in the
+    year."""
     if not rows:
         return []
     total = sum(abs(float(r.get("proceeds") or 0.0)) for r in rows)
-    lines = [f"MANUAL REPORTING REQUIRED — {len(rows)} disposition(s) "
-             f"with unknown cost (phantoms.json), proceeds "
+    lines = [f"MANUAL REPORTING REQUIRED — {len(rows)} sale(s) with no "
+             f"purchase in your files (unknown cost, missing_history.json), "
+             f"proceeds "
              f"{total:,.2f} {cur}: NOT in the rows or totals above. "
              f"Report each by hand once its cost is known "
              f"(`taxjson find-missing-history`)."]
@@ -1160,7 +1163,7 @@ def _write_csv(rep: Dict[str, Any], path: Path) -> None:
                 w.writerow(["6781", f"{r['description']} ({r['kind']})",
                             r["date_acquired"], r["date_sold"], "", "",
                             "", "", r["gain"], r["account"]])
-            # Phantom-basis dispositions: cost unknown — flagged rows,
+            # Unknown-cost dispositions: flagged rows,
             # blank cost/gain, never mistaken for a computed row.
             for m in rep.get("manual_reporting_required") or []:
                 w.writerow(["MANUAL",
@@ -1185,8 +1188,8 @@ def _write_csv(rep: Dict[str, Any], path: Path) -> None:
                             m.get("symbol") or "", "",
                             round(abs(float(m.get("proceeds") or 0.0)), 2),
                             "", "", "", "",
-                            "cost unknown (phantoms.json) - report by "
-                            "hand"])
+                            "no purchase in your files, cost unknown "
+                            "(missing_history.json) - report by hand"])
 
 
 @guard_main("taxjson-form-export")
@@ -1375,8 +1378,8 @@ def _main(args) -> int:
             "a country=canada gains file (re-run `taxjson run` in the "
             "Canadian project).")
     # Each file once: the wrapper passes a crypto account's gains file
-    # positionally AND as --crypto, which listed every crypto phantom-
-    # basis disposition twice under MANUAL REPORTING (A2-0113).
+    # positionally AND as --crypto, which listed every crypto unknown-
+    # cost disposition twice under MANUAL REPORTING (A2-0113).
     _seen_manual: set = set()
     _manual_paths = []
     for _p in list(args.files) + list(args.crypto):
@@ -1393,7 +1396,8 @@ def _main(args) -> int:
             for m in manual[:8])
         _more = f" (+{len(manual) - 8} more)" if len(manual) > 8 else ""
         print(f"warning: {max(tainted, len(manual))} tainted "
-              f"disposition(s) with phantom cost basis are NOT in the "
+              f"disposition(s) with unknown cost (no purchase in your "
+              f"files) are NOT in the "
               f"{'TXF' if args.form == 'txf' else 'form'} rows or totals "
               f"— proceeds {manual_proceeds:,.2f}: {_names}{_more}. "
               f"Report them by hand once their cost is known "

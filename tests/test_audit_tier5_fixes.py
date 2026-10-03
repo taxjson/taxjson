@@ -14,7 +14,7 @@
 - taxjson-explain handles TRANSFER-funded positions and --incomplete-history.
 - Tainted losses with an in-window acquisition surface a partial-taint
   superficial-loss warning.
-- phantoms.json deletion invalidates cached gains (marker file).
+- missing_history.json deletion invalidates cached gains (marker file).
 """
 import contextlib
 import io
@@ -210,7 +210,7 @@ class TestExplainParity(unittest.TestCase):
                  "time": "09:30:00", "symbol": "PHX.TO", "quantity": -100,
                  "price": 50.0, "net_amount": 5000.0, "currency": "CAD",
                  "account": "m"}]}))
-            ph = Path(tmp) / "phantoms.json"
+            ph = Path(tmp) / "missing_history.json"
             ph.write_text(json.dumps([{"symbol": "PHX.TO", "account": "m"}]))
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_explain",
@@ -237,7 +237,7 @@ class TestPartialTaintWarning(unittest.TestCase):
                 {"action": "BUYSELL", "date": "2026-02-10", "time": "09:30:00",
                  "symbol": "PT.TO", "quantity": 500, "price": 40.0,
                  "net_amount": 20000.0, "currency": "CAD", "account": "m"}]}))
-            ph = Path(tmp) / "phantoms.json"
+            ph = Path(tmp) / "missing_history.json"
             ph.write_text(json.dumps([{"symbol": "PT.TO", "account": "m"}]))
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_gains",

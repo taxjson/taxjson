@@ -305,7 +305,7 @@ class TestOutputPaths(unittest.TestCase):
                 _base_row(quantity=-10, net_amount=100.0)]}))
             for out in (Path(td), Path(td) / "nodir" / "p.json"):
                 r = _tool("taxjson_gains", "--country", "canada",
-                          "--suggest-phantoms", out, b)
+                          "--suggest-missing-history", out, b)
                 self.assertEqual(r.returncode, 2, r.stderr)
                 self.assertIn("cannot write", r.stderr)
 
@@ -424,16 +424,16 @@ class TestBomJson(unittest.TestCase):
     def test_loaders_accept_a_bom(self):
         from taxjson.lib.core import load_transactions
         from taxjson.lib.json_input import read_json_doc
-        from taxjson.lib.phantom_holdings import load_phantoms
+        from taxjson.lib.missing_history import load_missing_history
         from taxjson.lib.report_model import load_report_json
         with tempfile.TemporaryDirectory() as td:
             book = self._bom(td, "b.json", {"transactions": [_base_row()]})
             self.assertEqual(len(read_json_doc(book)["transactions"]), 1)
             self.assertEqual(len(load_transactions(book)), 1)
             self.assertIn("transactions", load_report_json(book))
-            ph = self._bom(td, "phantoms.json",
+            ph = self._bom(td, "missing_history.json",
                            [{"symbol": "ZZQ.TO", "account": "margin"}])
-            self.assertTrue(load_phantoms(ph))
+            self.assertTrue(load_missing_history(ph))
 
     def test_merge_tools_accept_a_bom(self):
         with tempfile.TemporaryDirectory() as td:

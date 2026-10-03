@@ -5,7 +5,7 @@ reports/wash_radar_*), the web what-if, and `taxjson redact`.
   R1-225  trades made but not yet settled are in the books
   R1-226  loss detection comes from the engine's gains (s.47 blend,
           denied-loss bump), not the radar's own per-account pool
-  S006-09 phantoms.json openings are applied like the gains pass does
+  S006-09 missing_history.json openings are applied like the gains pass does
   R1-227  web what-if applies the x100 option multiplier
   S022-02 web what-if maps the symbol like the pipeline (options
           follow their underlying's ticker.map rule)
@@ -55,7 +55,7 @@ def _radar(tmp, taxable, as_of, sheltered=None, gains=None,
         gp.write_text(json.dumps(g))
         cmd += ["--gains", str(gp)]
     if phantoms is not None:
-        pp = tmp / "phantoms.json"
+        pp = tmp / "missing_history.json"
         pp.write_text(json.dumps(phantoms))
         cmd += ["--incomplete-history", str(pp)]
     r = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
@@ -306,7 +306,7 @@ class TestChecksEndToEnd(unittest.TestCase):
                 _config(2025, [("margin", "taxable")]))
             (root / "inputs" / "margin").mkdir(parents=True)
             (root / "inputs" / "margin" / "m.tt").write_text(tt)
-            (root / "phantoms.json").write_text(
+            (root / "missing_history.json").write_text(
                 '[{"symbol": "ZZZ.TO", "account": "margin"}]')
             r = _cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])

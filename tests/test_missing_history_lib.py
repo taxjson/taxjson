@@ -19,13 +19,13 @@ import unittest
 from pathlib import Path
 
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction
-from taxjson.lib.phantom_holdings import (
-    PhantomCandidate,
-    detect_phantoms,
+from taxjson.lib.missing_history import (
+    MissingHistoryCandidate,
+    detect_missing_history,
     detect_superficial_loss_warnings,
     format_suggestions,
     is_registered_account,
-    load_phantoms,
+    load_missing_history,
     synthesize_openings,
 )
 from tax_rules import rule
@@ -51,7 +51,7 @@ class TestDetection(unittest.TestCase):
         txs = [
             _tx('BUYSELL', '2024-03-20', 'AAPL.US', -100, 180.0, 18000, account='LIRA'),
         ]
-        candidates = detect_phantoms(txs)
+        candidates = detect_missing_history(txs)
         self.assertEqual(len(candidates), 1)
         c = candidates[0]
         self.assertEqual(c.symbol, 'AAPL.US')
@@ -65,17 +65,17 @@ class TestDetection(unittest.TestCase):
             _tx('BUYSELL', '2024-01-15', 'AAPL.US', 100, 150.0, 15009),
             _tx('BUYSELL', '2024-03-20', 'AAPL.US', -100, 180.0, 17991),
         ]
-        self.assertEqual(detect_phantoms(txs), [])
+        self.assertEqual(detect_missing_history(txs), [])
 
     def test_real_short_cycle_also_detected_as_candidate(self):
         """Case #6 detection-side: a real short open/close looks identical
         to a phantom from the detector's perspective. The user decides
-        which entries are real shorts by *not* listing them in phantoms.json."""
+        which entries are real shorts by *not* listing them in missing_history.json."""
         txs = [
             _tx('BUYSELL', '2024-06-15', 'NVDA.US', -50, 1000.0, 50000),   # short open
             _tx('BUYSELL', '2024-08-01', 'NVDA.US', 50, 900.0, 45000),    # buy to close
         ]
-        candidates = detect_phantoms(txs)
+        candidates = detect_missing_history(txs)
         self.assertEqual(len(candidates), 1)
         self.assertAlmostEqual(candidates[0].peak_short, -50.0)
         self.assertAlmostEqual(candidates[0].end_position, 0.0)
@@ -88,7 +88,7 @@ class TestDetection(unittest.TestCase):
             _tx('BUYSELL', '2024-04-10', 'AAPL.US', -50, 175.0, 8750, account='Margin'),
             _tx('BUYSELL', '2024-05-15', 'AAPL.US', 50, 170.0, 8500, account='Margin'),
         ]
-        candidates = detect_phantoms(txs)
+        candidates = detect_missing_history(txs)
         accounts = {c.account for c in candidates}
         self.assertEqual(accounts, {'LIRA', 'Margin'})
 
@@ -98,7 +98,7 @@ class TestDetection(unittest.TestCase):
             _tx('BUYSELL', '2024-03-20', 'AAPL.US', -60, 180.0, 10800, account='LIRA'),
             _tx('BUYSELL', '2024-04-10', 'AAPL.US', -40, 175.0, 7000, account='LIRA'),
         ]
-        candidates = detect_phantoms(txs)
+        candidates = detect_missing_history(txs)
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0].disposition_count, 2)
 
@@ -111,7 +111,7 @@ class TestDetection(unittest.TestCase):
             # Stock phantom should still show up.
             _tx('BUYSELL', '2024-03-20', 'AAPL.US', -100, 180.0, 17991, account='LIRA'),
         ]
-        candidates = detect_phantoms(txs)
+        candidates = detect_missing_history(txs)
         symbols = {c.symbol for c in candidates}
         self.assertEqual(symbols, {'AAPL.US'})
 
@@ -120,7 +120,7 @@ class TestDetection(unittest.TestCase):
         txs = [
             _tx('BUYSELL', '2024-03-20', 'AAPL250620C00190000.US', -2, 5.0, 999, account='TFSA'),
         ]
-        candidates = detect_phantoms(txs, include_options=True)
+        candidates = detect_missing_history(txs, include_options=True)
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0].symbol, 'AAPL250620C00190000.US')
 
@@ -140,7 +140,7 @@ class TestRegisteredAccount(unittest.TestCase):
 
 
 class TestLoaderAndSuggestions(unittest.TestCase):
-    def test_load_phantoms_strips_underscore_metadata(self):
+    def test_load_missing_history_strips_underscore_metadata(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             json.dump([
                 {
@@ -152,62 +152,62 @@ class TestLoaderAndSuggestions(unittest.TestCase):
             ], f)
             fname = f.name
         try:
-            result = load_phantoms(Path(fname))
+            result = load_missing_history(Path(fname))
             self.assertEqual(result, {('AAPL.US', 'LIRA'), ('MSFT.US', 'TFSA')})
         finally:
             os.remove(fname)
 
-    def test_load_phantoms_requires_symbol_and_account(self):
+    def test_load_missing_history_requires_symbol_and_account(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             json.dump([{"symbol": "AAPL.US"}], f)
             fname = f.name
         try:
             with self.assertRaises(ValueError):
-                load_phantoms(Path(fname))
+                load_missing_history(Path(fname))
         finally:
             os.remove(fname)
 
-    def test_load_phantoms_rejects_non_array_root(self):
+    def test_load_missing_history_rejects_non_array_root(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             json.dump({"phantoms": [{"symbol": "AAPL.US", "account": "LIRA"}]}, f)
             fname = f.name
         try:
             with self.assertRaises(ValueError):
-                load_phantoms(Path(fname))
+                load_missing_history(Path(fname))
         finally:
             os.remove(fname)
 
-    def test_load_phantoms_rejects_non_object_entries(self):
+    def test_load_missing_history_rejects_non_object_entries(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             json.dump(["AAPL.US"], f)
             fname = f.name
         try:
             with self.assertRaises(ValueError):
-                load_phantoms(Path(fname))
+                load_missing_history(Path(fname))
         finally:
             os.remove(fname)
 
-    def test_load_phantoms_empty_array_ok(self):
+    def test_load_missing_history_empty_array_ok(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             json.dump([], f)
             fname = f.name
         try:
-            self.assertEqual(load_phantoms(Path(fname)), set())
+            self.assertEqual(load_missing_history(Path(fname)), set())
         finally:
             os.remove(fname)
 
-    def test_load_phantoms_rejects_empty_symbol_or_account(self):
+    def test_load_missing_history_rejects_empty_symbol_or_account(self):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             json.dump([{"symbol": "", "account": "LIRA"}], f)
             fname = f.name
         try:
             with self.assertRaises(ValueError):
-                load_phantoms(Path(fname))
+                load_missing_history(Path(fname))
         finally:
             os.remove(fname)
 
     def test_format_suggestions_empty_list(self):
-        from taxjson.lib.phantom_holdings import format_suggestions
+        from taxjson.lib.missing_history import format_suggestions
         out = format_suggestions([])
         # Valid JSON, empty array.
         self.assertEqual(out.strip(), '[]')
@@ -273,13 +273,13 @@ class TestSynthesisAndTaint(unittest.TestCase):
         self.assertAlmostEqual(g['gain'], 4996, delta=2)
 
     def test_case9_listed_but_data_complete_is_no_op(self):
-        """Case #9: ticker in phantoms.json but data is complete → opening synthesized at 0, no taint propagates."""
+        """Case #9: ticker in missing_history.json but data is complete → opening synthesized at 0, no taint propagates."""
         txs = [
             _tx('BUYSELL', '2024-01-15', 'AAPL.US', 100, 150.0, 15009),
             _tx('BUYSELL', '2024-03-20', 'AAPL.US', -100, 180.0, 17991),
         ]
         # User mis-classified — data is actually fine.
-        new_txs, log = synthesize_openings(txs, phantoms={('AAPL.US', 'Margin')})
+        new_txs, log = synthesize_openings(txs, pairs={('AAPL.US', 'Margin')})
         # No OPENING_BALANCE should have been inserted.
         opening_count = sum(1 for t in new_txs if t.action == 'OPENING_BALANCE')
         self.assertEqual(opening_count, 0)
@@ -294,14 +294,14 @@ class TestSynthesisAndTaint(unittest.TestCase):
             _tx('BUYSELL', '2024-03-20', 'AAPL.US', -100, 180.0, 17991, account='LIRA'),
             _tx('BUYSELL', '2024-04-10', 'MSFT.US', -50, 400.0, 19998, account='TFSA'),
         ]
-        from taxjson.lib.phantom_holdings import format_suggestions
-        out1 = format_suggestions(detect_phantoms(txs))
-        out2 = format_suggestions(detect_phantoms(txs))
+        from taxjson.lib.missing_history import format_suggestions
+        out1 = format_suggestions(detect_missing_history(txs))
+        out2 = format_suggestions(detect_missing_history(txs))
         self.assertEqual(out1, out2)
 
 
 class TestCase4RegisteredAccountFlagInSuggestions(unittest.TestCase):
-    """Case #4: registered-account phantom shows up in --suggest-phantoms
+    """Case #4: registered-account phantom shows up in --suggest-missing-history
     output with a strong-warning note."""
 
     def test_lira_phantom_flagged_in_suggestions(self):
@@ -309,7 +309,7 @@ class TestCase4RegisteredAccountFlagInSuggestions(unittest.TestCase):
             _tx('BUYSELL', '2024-03-20', 'AAPL.US', -100, 180.0, 17991, account='LIRA'),
             _tx('BUYSELL', '2024-04-10', 'NVDA.US', -50, 1000.0, 49998, account='Margin'),
         ]
-        candidates = detect_phantoms(txs)
+        candidates = detect_missing_history(txs)
         rendered = format_suggestions(candidates)
         # Both candidates appear; LIRA has the strong warning.
         self.assertIn('AAPL.US', rendered)
@@ -351,7 +351,7 @@ class TestCase11MultiTaxYear(unittest.TestCase):
             _tx('BUYSELL', '2024-01-15', 'AAPL.US', 200, 170.0, 34009, account='Margin'),
             _tx('BUYSELL', '2024-09-10', 'AAPL.US', -100, 200.0, 19991, account='Margin'),
         ]
-        new_txs, _ = synthesize_openings(txs, phantoms={('AAPL.US', 'Margin')})
+        new_txs, _ = synthesize_openings(txs, pairs={('AAPL.US', 'Margin')})
         result = CanadaTaxRules().compute_gains(new_txs, detect_wash_sales=False)
         by_date = sorted(result['transactions'], key=lambda g: g['date'])
         # 2023 disposition: tainted (consumed the phantom opening).
@@ -378,7 +378,7 @@ class TestCase12RoundingEdge(unittest.TestCase):
         txs2 = [
             _tx('BUYSELL', '2024-01-15', 'BTC.US', -0.0001, 60000.0, 6, account='Margin', currency='USD'),
         ]
-        new_txs, _ = synthesize_openings(txs2, phantoms={('BTC.US', 'Margin')})
+        new_txs, _ = synthesize_openings(txs2, pairs={('BTC.US', 'Margin')})
         result = CanadaTaxRules().compute_gains(new_txs, detect_wash_sales=False)
         self.assertTrue(result['transactions'][0].get('tainted'))
 
@@ -446,7 +446,7 @@ class TestSuperficialLossWarning(unittest.TestCase):
 
 
 class TestSuggestPhantomsYearScope(unittest.TestCase):
-    """Year scoping for --suggest-phantoms with --year (Phase 2)."""
+    """Year scoping for --suggest-missing-history with --year (Phase 2)."""
 
     def test_year_scoped_filtering_in_caller_logic(self):
         # Detection produces a candidate. Year-scoping happens in the CLI
@@ -456,7 +456,7 @@ class TestSuggestPhantomsYearScope(unittest.TestCase):
             _tx('BUYSELL', '2023-09-15', 'AAPL.US', -100, 180.0, 17991, account='Margin'),
             _tx('BUYSELL', '2024-06-10', 'MSFT.US', -50, 400.0, 19998, account='Margin'),
         ]
-        candidates = detect_phantoms(txs)
+        candidates = detect_missing_history(txs)
         self.assertEqual({c.symbol for c in candidates}, {'AAPL.US', 'MSFT.US'})
         # Caller scopes to year 2024:
         year_str = '2024'
@@ -473,7 +473,7 @@ class TestSynthesisOpeningPlacement(unittest.TestCase):
         txs = [
             _tx('BUYSELL', '2024-03-20', 'AAPL.US', -100, 180.0, 17991, account='LIRA'),
         ]
-        new_txs, log = synthesize_openings(txs, phantoms={('AAPL.US', 'LIRA')})
+        new_txs, log = synthesize_openings(txs, pairs={('AAPL.US', 'LIRA')})
         openings = [t for t in new_txs if t.action == 'OPENING_BALANCE']
         self.assertEqual(len(openings), 1)
         self.assertEqual(openings[0].symbol, 'AAPL.US')
@@ -496,7 +496,7 @@ class TestSynthesisOpeningPlacement(unittest.TestCase):
             _tx('BUYSELL', '2021-01-05', 'AAPL.US', 50, 130.0, 6500, account='Margin'),
             _tx('BUYSELL', '2024-03-20', 'AAPL.US', -100, 180.0, 17991, account='LIRA'),
         ]
-        new_txs, _ = synthesize_openings(txs, phantoms={('AAPL.US', 'LIRA')})
+        new_txs, _ = synthesize_openings(txs, pairs={('AAPL.US', 'LIRA')})
         opening = next(t for t in new_txs if t.action == 'OPENING_BALANCE')
         self.assertEqual(opening.account, 'LIRA')
         # Anchored to LIRA's own earliest row (2024), NOT Margin's 2021.
@@ -522,7 +522,7 @@ class TestSplitRename(unittest.TestCase):
             self._split('2025-07-21', 'HES.US', 'CVX.US', 1.0),
             _tx('BUYSELL', '2025-12-23', 'CVX.US', -15, 150.0, 2250.0),
         ]
-        self.assertEqual(detect_phantoms(txs), [])
+        self.assertEqual(detect_missing_history(txs), [])
 
     def test_genuine_short_after_rename_still_flagged(self):
         # Selling MORE than the rename delivered is a real short.
@@ -531,7 +531,7 @@ class TestSplitRename(unittest.TestCase):
             self._split('2025-07-21', 'HES.US', 'CVX.US', 1.0),
             _tx('BUYSELL', '2025-12-23', 'CVX.US', -20, 150.0, 3000.0),
         ]
-        cands = detect_phantoms(txs)
+        cands = detect_missing_history(txs)
         self.assertEqual(len(cands), 1)
         self.assertEqual(cands[0].symbol, 'CVX.US')
         self.assertAlmostEqual(cands[0].peak_short, -5.0)
@@ -546,7 +546,7 @@ class TestWalkOrderingMatchesEngine(unittest.TestCase):
 
     def test_evening_stamped_split_with_same_day_sale(self):
         from taxjson.lib.core import CanadaTaxRules
-        from taxjson.lib.phantom_holdings import synthesize_openings
+        from taxjson.lib.missing_history import synthesize_openings
         txs = [
             _tx('BUYSELL', '2026-03-05', 'X.US', 10, 10.0, 100.0),
             TaxTransaction(action='SPLIT', date='2026-03-10',

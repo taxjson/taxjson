@@ -153,8 +153,9 @@ def load_json(path: Path) -> Any:
 def load_transactions(paths: List[Path],
                       phantoms: Optional[Path] = None) -> List[Dict[str, Any]]:
     """Every row of the base files. With `phantoms` (the project's
-    phantoms.json) each file first gets the phantom OPENING_BALANCE rows
-    the gains stage synthesizes for it (phantom_holdings.
+    missing_history.json; the parameter keeps its pre-rename name) each
+    file first gets the missing-history OPENING_BALANCE rows the gains
+    stage synthesizes for it (missing_history.
     synthesize_openings, per book like pipeline.prepare_books) — without
     them a sale with cut-off history opened a fake short that the next
     real purchases covered at zero cost, so their cost never reached the
@@ -162,8 +163,8 @@ def load_transactions(paths: List[Path],
     txs: List[Dict[str, Any]] = []
     ph = None
     if phantoms is not None:
-        from taxjson.lib.phantom_holdings import load_phantoms
-        ph = load_phantoms(phantoms)
+        from taxjson.lib.missing_history import load_missing_history
+        ph = load_missing_history(phantoms)
     for p in paths:
         try:
             raw = load_json(p)
@@ -181,7 +182,7 @@ def load_transactions(paths: List[Path],
         rows = [t for t in rows if isinstance(t, dict)]
         if ph:
             from taxjson.lib.core import coerce_transaction_row
-            from taxjson.lib.phantom_holdings import synthesize_openings
+            from taxjson.lib.missing_history import synthesize_openings
             objs = [coerce_transaction_row(t, i, str(p))
                     for i, t in enumerate(rows)]
             objs, _log = synthesize_openings(objs, ph)
@@ -256,7 +257,7 @@ class _Pool:
     def __init__(self) -> None:
         self.qty = 0.0
         self.cost = Decimal(0)
-        self.tainted = False           # phantom OPENING_BALANCE — unknown ACB
+        self.tainted = False           # missing-history OPENING_BALANCE — unknown ACB
         self.max_cost_in_year = 0.0
 
     def cost_amount(self) -> float:
@@ -462,7 +463,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
         pool = pools.setdefault(symbol, _Pool())
 
         if action == "OPENING_BALANCE":
-            # Phantom opening: shares with unknown ACB. Quantity enters at
+            # Missing-history opening: shares with unknown ACB. Quantity enters at
             # cost 0 and the pool is flagged so the report can say the cost
             # figures for this symbol are understated.
             pool.qty += qty
@@ -701,7 +702,7 @@ def join_income_gains(gains_paths: List[Path], year: int,
     from the pipeline's (already year-scoped) gains files. Defensively
     re-filters by year so a hand-run full-history gains file also works.
 
-    Phantom-basis dispositions (the pipeline's manual_reporting_required
+    Unknown-cost dispositions (the pipeline's manual_reporting_required
     rows — their 'tainted' key is popped there, so a 'tainted' test alone
     never saw them: audit R1-199) are excluded from the gain column with
     a warning naming them. With `overrides`, only T1135-scope (foreign)
@@ -741,7 +742,7 @@ def join_income_gains(gains_paths: List[Path], year: int,
                 rec["income"] += (float(e.get("pil") or 0.0)
                                   + float(e.get("dividend") or 0.0))
             elif "gain" in e:
-                # Tainted dispositions (phantom zero-cost basis) carry a
+                # Tainted dispositions (unknown cost, booked at zero) carry a
                 # fabricated gain — form-export and carryover exclude
                 # them with a warning; the T1135 GAIN(LOSS) column must
                 # not silently include what its sibling tools refuse.
@@ -763,7 +764,8 @@ def join_income_gains(gains_paths: List[Path], year: int,
         _named = (f" ({', '.join(sorted(set(manual_syms)))})"
                   if manual_syms else "")
         print(f"warning: {tainted_skipped} tainted disposition(s) with "
-              f"phantom cost basis{_named} EXCLUDED from the T1135 "
+              f"unknown cost (no purchase in your files){_named} "
+              f"EXCLUDED from the T1135 "
               f"gain(loss) column — resolve the missing history and "
               f"re-run (matches form-export/carryover).", file=sys.stderr)
     return out
@@ -794,7 +796,7 @@ def full_history_wash_sales(base_paths: List[Path],
     FULL history: one `run_gains` pass (year=None) over the taxable
     books together — ITA s.47 pools are symbol-global, as in the
     pipeline's blended pass — with the registered accounts as wash
-    context and the project's phantoms and option timing, the way
+    context and the project's missing-history file and option timing, the way
     `taxjson carryover` runs it. A loss denied in an earlier year whose
     replacement is still held is in the year's ACB (s.53(1)(f)), but not
     in the year-scoped gains files (S008-07, S009-01, S051-21)."""
@@ -1103,7 +1105,7 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
                            if r["country"] == CRYPTO],
         "unknown_acb_symbols": [r["symbol"] for r in rows if r["unknown_acb"]],
         "futures_symbols": sorted(futures),
-        "phantoms_applied": phantoms is not None,
+        "missing_history_applied": phantoms is not None,
         "unused_overrides": unused_overrides,
         # Only with the full-history pass off (--year-wash-only):
         # superficial losses the engine's inventory still defers
@@ -1201,7 +1203,8 @@ def render_report(rep: Dict[str, Any]) -> str:
         for r in rows:
             notes = []
             if r["unknown_acb"]:
-                notes.append("unknown ACB (phantom opening) — cost understated")
+                notes.append("unknown ACB (bought before the data) — cost "
+                             "understated")
             if r.get("futures"):
                 notes.append("futures — cost amount nil")
             if r["country"] == REVIEW:
@@ -1333,10 +1336,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "gain column and the year-end position "
                              "follow it (default: settle, CRA).")
     parser.add_argument("--incomplete-history", type=Path, default=None,
-                        metavar="PHANTOMS_JSON",
-                        help="phantoms.json: add the same phantom "
-                             "openings the gains stage adds (the project "
-                             "wrapper passes the project's file)")
+                        metavar="MISSING_HISTORY_JSON",
+                        help="missing_history.json: add the same "
+                             "missing-history openings the gains stage "
+                             "adds (the project wrapper passes the "
+                             "project's file)")
     # The full-history superficial-loss pass (S008-07) needs the same
     # inputs the filing pipeline's wash pass has; the wrapper passes the
     # project's.

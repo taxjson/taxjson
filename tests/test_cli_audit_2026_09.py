@@ -294,7 +294,7 @@ class TestAudit(unittest.TestCase):                  # B15
 
 
 class TestFindMissingHistoryCountry(unittest.TestCase):   # B16
-    def test_gen_phantoms_passes_country(self):
+    def test_write_missing_history_passes_country(self):
         seen = []
 
         class _P:
@@ -304,7 +304,8 @@ class TestFindMissingHistoryCountry(unittest.TestCase):   # B16
 
         def fake(cmd, **kw):
             seen.append(cmd)
-            Path(cmd[cmd.index("--suggest-phantoms") + 1]).write_text("[]")
+            Path(cmd[cmd.index("--suggest-missing-history") + 1]
+                 ).write_text("[]")
             return _P()
 
         with tempfile.TemporaryDirectory() as td:
@@ -316,7 +317,7 @@ class TestFindMissingHistoryCountry(unittest.TestCase):   # B16
             with mock.patch("taxjson.lib.dispatch.run_cmd", fake):
                 _call(R.cmd_find_missing_history, dir=str(root),
                       account=None, year=None, include_options=False,
-                      gen_phantoms=str(Path(td) / "ph.json"),
+                      write_missing_history=str(Path(td) / "mh.json"),
                       all_history=False)
         self.assertTrue(seen)
         cmd = seen[0]

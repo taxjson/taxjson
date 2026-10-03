@@ -730,7 +730,7 @@ class TestFlexReplaceKeepsTheYear(unittest.TestCase):
 
 class TestListAsOf(unittest.TestCase):
     """R1-4: `list --date` cut by TRADE date in a settle-basis project.
-    R1-187: it ignored phantoms.json (phantom-backed positions showed as
+    R1-187: it ignored missing_history.json (phantom-backed positions showed as
     large shorts). R1-282: the headers mislabelled both views."""
 
     _CSV = _QT_HEADER + (
@@ -775,7 +775,7 @@ class TestListAsOf(unittest.TestCase):
             "Individual\n")
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, csv=csv)
-            (root / "phantoms.json").write_text(
+            (root / "missing_history.json").write_text(
                 '[{"symbol": "ZZZ.TO", "account": "margin"}]')
             self.assertEqual(_run_cli(root, "run", "--no-input")
                              .returncode, 0)

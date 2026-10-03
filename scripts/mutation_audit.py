@@ -75,7 +75,7 @@ TEST_CMD = [PY, "-m", "unittest", "-q",
             "test_engines_expanded", "test_conservation",
             "test_blended_taxable", "test_usa_shorts",
             "test_canada_other_scope_isolation", "test_affiliated_flag",
-            "test_phantom_holdings", "test_audit_tier1_fixes",
+            "test_missing_history_lib", "test_audit_tier1_fixes",
             "test_audit_tier2_phantoms"]
 TEST_ENV = dict(os.environ, TAXJSON_FUZZ_BOOKS="30",
                 PYTHONDONTWRITEBYTECODE="1")

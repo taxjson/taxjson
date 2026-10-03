@@ -2215,9 +2215,9 @@ class CanadaTaxRules(TaxRules):
             # per-symbol walks were the reference model).
             sub: Dict[str, float] = {}
             for t in txs_sym:
-                # OPENING_BALANCE counts: phantom shares ARE held, and
+                # OPENING_BALANCE counts: missing-history shares ARE held, and
                 # excluding them made every walk that spans the opening
-                # under-count the position (a clean loss after a phantom
+                # under-count the position (a clean loss after a missing-history
                 # drain could net to zero and dodge a real wash sale).
                 if t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER',
                                 'OPENING_BALANCE'):
@@ -2443,7 +2443,7 @@ class CanadaTaxRules(TaxRules):
             # when the project opts in (option_buyback_loss_superficial,
             # CA-SL-11/12), and then the solver's denial is APPLIED to
             # the grant record (it used to reach wash_sales and the
-            # summary but not the record). A tainted (phantom) pool's
+            # summary but not the record). A tainted (missing-history) pool's
             # loss never feeds the solver (audit S069-00; the close
             # path's gate).
             if (_g < -0.001 and option_buyback_loss_superficial
@@ -2535,7 +2535,7 @@ class CanadaTaxRules(TaxRules):
                     # total_cost is held as Decimal to avoid drift across many
                     # accumulating transactions; qty stays float (share counts
                     # don't suffer the same way at sub-cent scales).
-                    # 'tainted' goes True when a phantom OPENING_BALANCE enters
+                    # 'tainted' goes True when a missing-history OPENING_BALANCE enters
                     # the pool (pre-data-window shares with unknown ACB) and
                     # back False when the pool drains to zero. Dispositions
                     # from a tainted pool are excluded from gain computation.
@@ -2968,10 +2968,10 @@ class CanadaTaxRules(TaxRules):
                                 f"ratio={qty:.6g} | pool moved to new ticker"
                             )
                 elif action == 'OPENING_BALANCE':
-                    # Phantom opening: pre-data-window shares with unknown
+                    # Missing-history opening: pre-data-window shares with unknown
                     # ACB. Quantity is added at cost=0 (won't be trusted —
                     # the pool is marked tainted, so any disposition while
-                    # phantom shares remain gets suppressed from gains).
+                    # missing-history shares remain gets suppressed from gains).
                     # When the pool later drains to zero, taint clears and
                     # subsequent buys form a fresh, fully-known ACB pool.
                     if not is_other_scope:
@@ -2987,14 +2987,14 @@ class CanadaTaxRules(TaxRules):
                         pool['tainted'] = True
                         if (qty < 0 and _grant_mode
                                 and is_option_symbol(symbol)):
-                            # Phantom short contracts hold a FIFO place
+                            # Missing-history short contracts hold a FIFO place
                             # (never recognised — their write predates
                             # the data).
                             _short_lot_open(pool, tx, abs(qty), 0.0, False)
                     if trace:
                         if symbol not in symbol_acb_traces:
                             symbol_acb_traces[symbol] = [f"# --- ACB CALCULATION TRACE: {symbol} ---"]
-                        symbol_acb_traces[symbol].append(f"# {tx.date} OPENING_BALANCE {qty:10.4f} | Phantom — pool TAINTED until drain to zero")
+                        symbol_acb_traces[symbol].append(f"# {tx.date} OPENING_BALANCE {qty:10.4f} | Missing history (bought before the data) — pool TAINTED until drain to zero")
                 else:
                     # Only an exact zero is skipped (audit R1-24 /
                     # R1-245): the 1e-6 share epsilon dropped every
@@ -3161,7 +3161,7 @@ class CanadaTaxRules(TaxRules):
                                 # per-trade fees.
                                 tx_qty_abs = abs(qty) if abs(qty) > 1e-9 else 1.0
                                 fee_share = closing_qty / tx_qty_abs
-                                # Tainted dispositions consume phantom shares (pool
+                                # Tainted dispositions consume missing-history shares (pool
                                 # has an OPENING_BALANCE that hasn't drained yet).
                                 # The 'gain' value is computed against cost=0 and
                                 # is bogus by construction. Surface tainted=True
@@ -3191,7 +3191,7 @@ class CanadaTaxRules(TaxRules):
                                 
                                 # Tainted losses never feed the superficial-
                                 # loss solver: they're computed against a
-                                # phantom zero-cost pool and are bogus by
+                                # missing-history zero-cost pool and are bogus by
                                 # construction. Letting them through spawned
                                 # DISALLOW/ADJUST virtual rows whose ACB bump
                                 # could land on CLEAN lots after the taint
@@ -3312,7 +3312,7 @@ class CanadaTaxRules(TaxRules):
                     # wants the date of the SECOND open, not the first.
                     pool['position_start_date'] = None
                     pool['grants'] = []
-                    # Phantom shares are fully drained — the pool re-cleans.
+                    # Missing-history shares are fully drained — the pool re-cleans.
                     # Subsequent buys form a fresh, fully-known ACB.
                     if pool.get('tainted', False):
                         pool['tainted'] = False
@@ -3674,7 +3674,7 @@ class CanadaTaxRules(TaxRules):
                     if row_cls(t) == loss_alias
                     and not _gone_by_end(t)
                     and get_sort_date(t) <= end_window_date
-                    # OPENING_BALANCE counts — phantom shares are held
+                    # OPENING_BALANCE counts — missing-history shares are held
                     # (see running_bal_by_tx walk above).
                     and t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER',
                                      'OPENING_BALANCE'))
@@ -4416,11 +4416,11 @@ class CanadaTaxRules(TaxRules):
 
             processed_gains.append(gain_entry)
             # Skip tainted entries from by_ticker totals. They carry
-            # fabricated numbers (cost basis = 0 against a phantom
+            # fabricated numbers (cost basis = 0 against a missing-history
             # OPENING_BALANCE) and the CLI will route them out of
             # `transactions` into `manual_reporting_required` later.
             # Without this skip, any downstream consumer reading
-            # by_ticker (rather than transactions) sees phantom gains
+            # by_ticker (rather than transactions) sees missing-history gains
             # mixed with real ones. The --year-rebuild path in
             # taxjson_gains.py has the same guard; this is the
             # primary-construction parallel.
@@ -4842,7 +4842,7 @@ class USATaxRules(TaxRules):
             # pass tracks in inventory_long/short. Mirror those
             # position changes in net_qty_state so a later BUYSELL is
             # classified against the correct running balance — without
-            # this, a SELL drawing from a phantom OPENING_BALANCE long
+            # this, a SELL drawing from a missing-history OPENING_BALANCE long
             # registers as a fake short-replacement (because the
             # pre-pass thought net_qty was 0), and a post-split SELL
             # mis-counts open/close against pre-split units.
@@ -5401,12 +5401,12 @@ class USATaxRules(TaxRules):
                         del symbol_currency[symbol]
                 continue
 
-            # ----- OPENING_BALANCE (phantom pre-data-window shares) -------
+            # ----- OPENING_BALANCE (missing-history pre-data-window shares) -------
             # Synthesized by --incomplete-history. The Canada engine
             # tracks a `tainted` flag per pool so dispositions from a
-            # phantom pool can be split out into `manual_reporting_required`.
+            # missing-history pool can be split out into `manual_reporting_required`.
             # The US engine doesn't have a pool concept (FIFO lot list
-            # instead), so we tag each phantom lot directly and the
+            # instead), so we tag each missing-history lot directly and the
             # disposition path below propagates the flag to its gain
             # entry — same end-state as Canada's tainted-pool model.
             if tx.action == 'OPENING_BALANCE':
@@ -5676,7 +5676,7 @@ class USATaxRules(TaxRules):
                     'wash_trigger': None,
                     'wash_window': None,
                     'wash_replacements': wash_reps if wash_reps else None,
-                    # True when the consumed lot was a phantom
+                    # True when the consumed lot was a missing-history
                     # OPENING_BALANCE (cost basis = 0 from synthesized
                     # `--incomplete-history` rows). The CLI's tainted-
                     # split path routes these to manual_reporting_required
@@ -5832,7 +5832,7 @@ class USATaxRules(TaxRules):
                     replacement_ids: List[str] = []
                     wash_reps: List[Dict[str, Any]] = []
 
-                    # Tainted (phantom OPENING_BALANCE) short lots have
+                    # Tainted (missing-history OPENING_BALANCE) short lots have
                     # proceeds=0, so covering them ALWAYS books a bogus loss
                     # — it must never feed §1091 matching (it would fabricate
                     # wash records and push proceeds-reductions onto clean
@@ -6606,7 +6606,7 @@ class USATaxRules(TaxRules):
 
         by_ticker: Dict[str, Dict[str, Any]] = {}
         for g in realized_gains:
-            # Mirror the Canada engine: tainted dispositions (phantom
+            # Mirror the Canada engine: tainted dispositions (missing-history
             # OPENING_BALANCE consumption) carry fabricated cost=0
             # numbers and the CLI splits them out into
             # `manual_reporting_required` after this point. Letting them

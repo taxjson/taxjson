@@ -920,7 +920,7 @@ def _main():
         date_basis = args.date_basis
         if date_basis is None:
             from taxjson.lib.country import CountryError
-            from taxjson.lib.phantom_holdings import tax_date_near
+            from taxjson.lib.missing_history import tax_date_near
             try:
                 date_basis = tax_date_near(input_path)
             except CountryError as e:

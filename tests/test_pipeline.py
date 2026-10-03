@@ -4,7 +4,7 @@ Covers: GainsRequest's country-aware defaults, run_gains parity with the
 taxjson-gains CLI (same inputs → byte-identical JSON), prepare_books'
 transfer/phantom handling, explain agreeing with the pipeline on a
 self-cancelling-transfer scenario, and the web what-if surfacing a
-corrupt phantoms.json as a warning instead of a silent pass.
+corrupt missing_history.json as a warning instead of a silent pass.
 """
 
 import io
@@ -164,7 +164,7 @@ class TestPrepareBooks(unittest.TestCase):
 
     def test_phantoms_applied(self):
         with tempfile.TemporaryDirectory() as td:
-            ph = Path(td) / "phantoms.json"
+            ph = Path(td) / "missing_history.json"
             ph.write_text(json.dumps(
                 [{"symbol": "AAA.TO", "account": "margin"}]))
             # Sell with no prior buy — the phantom file covers it.
@@ -270,7 +270,7 @@ class TestWhatIfWarnings(unittest.TestCase):
             {"transactions": [tx(date="2025-01-02", qty=100,
                                  net=1000.0)]}))
         if phantoms_text is not None:
-            (root / "phantoms.json").write_text(phantoms_text)
+            (root / "missing_history.json").write_text(phantoms_text)
         return root
 
     def test_corrupt_phantoms_warns_instead_of_silent(self):
@@ -284,7 +284,7 @@ class TestWhatIfWarnings(unittest.TestCase):
                                       on="2026-07-01")
         self.assertTrue(r["ok"], r)
         self.assertTrue(r["warnings"])
-        self.assertIn("phantoms.json", r["warnings"][0])
+        self.assertIn("missing_history.json", r["warnings"][0])
 
     def test_clean_run_has_empty_warnings(self):
         from taxjson.web.context import ProjectContext

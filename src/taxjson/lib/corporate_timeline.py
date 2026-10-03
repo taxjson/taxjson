@@ -2,7 +2,7 @@
 
 Five audit cycles kept finding the same bug class regenerating: split
 dedup keys, the (from, to] boundary for cumulative ratios, and rename-chain
-following were each hand-implemented at ~7 sites (both engines, the phantom
+following were each hand-implemented at ~7 sites (both engines, the missing-history
 walks, the wash radar), and the copies drifted. This module is the single
 definition; the call sites delegate.
 
@@ -37,7 +37,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 # Event ordering IS tax semantics here — it decides what is pre/post split,
 # whether the opening balance gets scaled, and which lot FIFO consumes.
 # It used to be defined by five hand-maintained sort keys (Canada main
-# pass, Canada balance walks, US engine, phantom walks); two historical
+# pass, Canada balance walks, US engine, missing-history walks); two historical
 # bugs (the OB/SPLIT 00:00:00 tie, the settle-lagged phase) were drift
 # between those copies. `event_sort_key` is the single definition; the
 # per-engine DIFFERENCES are explicit profiles, not implicit drift:
@@ -57,7 +57,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 #                                                  SPLIT-first. Deliberate
 #                                                  divergence, pinned in
 #                                                  tests.
-#   plain_walk   (date, time)                   — the phantom walks'
+#   plain_walk   (date, time)                   — the missing-history walks'
 #                                                  bare ordering.
 
 class Phase(IntEnum):
@@ -74,7 +74,7 @@ class Phase(IntEnum):
 
 
 class WalkPriority(IntEnum):
-    """Phantom-walk tie-break rung. The walks replay position on TRADE
+    """Missing-history-walk tie-break rung. The walks replay position on TRADE
     dates, where every row 'executed today' — so, matching the engines'
     split-effective-at-market-open semantics, a SPLIT precedes same-date
     executions regardless of its clock stamp (IB stamps corp actions
@@ -189,7 +189,7 @@ def _ca_priority(tx: Any) -> int:
 
 
 def _walk_rest(tx: Any) -> Tuple:
-    """Phantom-walk key after the trade date: (group, time, rung).
+    """Missing-history-walk key after the trade date: (group, time, rung).
 
     group -1: OPENING_BALANCE. group 0: SPLITs, and trades that SETTLE
     after their trade date — ordered among themselves by clock, so a
@@ -204,7 +204,7 @@ def _walk_rest(tx: Any) -> Tuple:
     the export's row order (CA-DATE-14 / US-DATE-13): these walks ask
     whether history is MISSING, and a same-moment sell + buy is no
     evidence of that in either order — reading it buys first never
-    invents a phantom short (or a larger synthesized opening) out of
+    invents a false short (or a larger synthesized opening) out of
     two rows that net to nothing."""
     act = tx.action
     if act == 'OPENING_BALANCE':
@@ -267,7 +267,7 @@ def event_sort_key(tx: Any, *, profile: str,
     profiles select the ladder — see the module comment for the table."""
     if profile == 'plain_walk':
         return (tx.date, tx.time or '00:00:00')
-    if profile == 'phantom_walk':
+    if profile in ('missing_history_walk', 'phantom_walk'):  # old name kept
         return (tx.date,) + _walk_rest(tx)
     # Default date basis per profile: Canada's ladders settle-first, the
     # US ladder the TRADE date — a US caller that omitted date_of got
@@ -296,7 +296,7 @@ def split_event_key(symbol: str, date: str, ratio: Any, symbol_new: Any,
                     account: Optional[str] = None) -> Tuple:
     """Identity of one corporate split event, for dedup. Global by default
     (a split is a property of the security); pass `account` for the
-    per-account walks (phantom detection, radar pools) where the same
+    per-account walks (missing-history detection, radar pools) where the same
     event must apply once per account pool. Known limitation (documented
     at the original core site): two brokers reporting slightly different
     ratios for the same event won't collapse."""

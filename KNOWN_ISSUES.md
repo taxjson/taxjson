@@ -23,7 +23,7 @@ The codebase has been through eight audit rounds and the re-audits that followed
 
 ### IB ISIN→market map `IE → L` is wrong for non-LSE IE-domiciled ETFs
 - **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` — the module-level `_ISIN_EXT` map (`'IE': 'L'`), read through `_isin_ext()` by the Dividends and Withholding Tax branches (the Corporate Actions and Transfers branches derive suffixes via `_ib_listing_ext` instead: the currency's suffix, with a TSX `.U` unit kept on `.TO` and an LSE-venue USD line on `.L`).
-- **Current behavior:** every Irish-domiciled (ISIN prefix `IE`) security is mapped to a `.L` (LSE) market suffix. Partially mitigated since the income-reattribution pass: DIVIDEND / DIVIDEND_IN_LIEU / TAX rows are re-bound to the suffix of the position actually held for that ticker in the statement (`_reattribute_income_to_holdings`; when the ticker is held under two listings during the statement, the one held on the payment date), so income no longer lands on a phantom `.L` symbol when the shares are held under another suffix. Since 2026-09 the holding may come from any of the account's IB statements (a statement with only a dividend row), and the rebind requires the held listing's ISIN (Financial Instrument Information) to match the income row's — a different issuer sharing the ticker keeps its own listing.
+- **Current behavior:** every Irish-domiciled (ISIN prefix `IE`) security is mapped to a `.L` (LSE) market suffix. Partially mitigated since the income-reattribution pass: DIVIDEND / DIVIDEND_IN_LIEU / TAX rows are re-bound to the suffix of the position actually held for that ticker in the statement (`_reattribute_income_to_holdings`; when the ticker is held under two listings during the statement, the one held on the payment date), so income no longer lands on a spurious `.L` symbol when the shares are held under another suffix. Since 2026-09 the holding may come from any of the account's IB statements (a statement with only a dividend row), and the rebind requires the held listing's ISIN (Financial Instrument Information) to match the income row's — a different issuer sharing the ticker keeps its own listing.
 - **Why deferred:** the user holds no IE-domiciled ETFs, so the bug doesn't fire on their data. Most IE-domiciled ETFs trade in EUR / multiple currencies, not all on LSE; a real fix needs an ISIN → exchange lookup or a per-ticker override.
 - **Workaround:** users who hold IE-domiciled ETFs should add a `ticker.map` GLOBAL rule rewriting the parsed `.L` symbol to the correct market suffix.
 
@@ -35,7 +35,7 @@ The codebase has been through eight audit rounds and the re-audits that followed
 
 ### IB `Trades / Forex` conversions are not modeled
 - **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` — the Trades branch, asset category `Forex` (rows like `Trades,Data,Order,Forex,CAD,U1,USD.CAD,"…",<qty>,<T. Price>,…`).
-- **Current behavior:** an explicit currency conversion is COUNTED as a recognized non-event (the calmer `taxjson-brokerage` note: `Trades/Forex (currency conversion, not modeled — KNOWN_ISSUES)`) and not translated. No phantom `USD` / `CASH.USD` asset is emitted — doing so would put a fake position in the book.
+- **Current behavior:** an explicit currency conversion is COUNTED as a recognized non-event (the calmer `taxjson-brokerage` note: `Trades/Forex (currency conversion, not modeled — KNOWN_ISSUES)`) and not translated. No fake `USD` / `CASH.USD` asset is emitted — doing so would put a fake position in the book.
 - **Why deferred:** `taxjson fx-cash` (`src/taxjson/bin/taxjson_fx_cash.py`) reconstructs foreign-cash ACB from the security cash flows in the taxable books, and its docstring assumes broker CSVs carry no explicit conversions — IB's do (this section), so on an IB account the ledger is asked to spend currency it saw acquired only through trades and overdrafts on the conversion side. Consuming Forex rows properly means booking each as a disposition of the sold currency at the conversion rate AND an acquisition of the bought one, together with the cash deposits/withdrawals the same statement lists — half of that (conversions only) would still overdraft.
 - **Evidence / work needed:** extend the fx-cash ledger to read Forex rows plus the `Deposits & Withdrawals` section as currency acquisitions/dispositions; until then the IB Forex count in the parse note is the size of the gap.
 
@@ -46,7 +46,7 @@ The codebase has been through eight audit rounds and the re-audits that followed
 
 ### Kraken fiat conversions are not modeled
 - **Where:** `src/taxjson/lib/brokerages/kraken.py` — `_parse_trades` (a fill whose BASE is fiat after stablecoin folding: `USD/CAD`, `USDC/USD`, `USDT/CAD`) and `_build_instant_trade` (a `spend`/`receive` pair whose both legs are fiat: USDC dust swept to USD, USD → CAD).
-- **Current behavior:** counted as recognized non-events (`forex conversion … not modeled — KNOWN_ISSUES`). Previously each emitted a BUYSELL of a phantom `USD` / `CAD` asset (the fiat base treated as the traded security), which put a fake position in the crypto book and a nonsense trade in the gains report.
+- **Current behavior:** counted as recognized non-events (`forex conversion … not modeled — KNOWN_ISSUES`). Previously each emitted a BUYSELL of a fake `USD` / `CAD` asset (the fiat base treated as the traded security), which put a fake position in the crypto book and a nonsense trade in the gains report.
 - **Why deferred:** same reason as the IB item above — foreign-cash gains live in `taxjson fx-cash`, which does not read conversion rows yet. Stablecoin↔USD swaps are additionally a wash by construction (folded 1:1 for pricing) — in a Canada project; a fill more than 2% off 1.00 USD prints a de-peg warning.
 - **US projects differ:** all five USD stablecoins (USDC, USDT, DAI, PYUSD, GUSD) are property there, on Kraken and Coinbase alike (tax-logic US-CRYPTO-02): `taxjson run` parses with `--country usa`, so a `USDC/USD` fill, a `Buy`/`Sell USDC` row, a swap against a stablecoin, a stablecoin reward or fee are booked as purchases and sales of the coin (a swap, reward or fee at the 1.00 USD par; a sale for dollars at its price). Kraken ledger-only instant trades between a stablecoin and dollars follow the same rule.
 - **Coinbase follows the same model:** `Buy USDC` / `Sell USDC` rows are counted as stablecoin conversions (non-events) and the USDC leg of an Advanced Trade on a `*-USDC` pair is cash, not a position. An Advanced Trade on a crypto-quoted pair (`ETH-BTC`) is a swap: the quote coin's leg is booked too, at the fill's stated value (2026-09 audit R1-102). Strictly (CRA) a stablecoin is a crypto-asset, so the USD/CAD movement while USDC is held is an unbooked gain/loss — a few dollars a year on real data.
@@ -130,7 +130,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 ### RBC in-kind transfers are emitted but excluded from taxable accounts (by design)
 - **Where:** `src/taxjson/lib/brokerages/rbc_direct.py:_build_transfer` (added 2026-06); `taxjson-brokerage` drops TRANSFER rows unless `--transfers`, driven by `transfers` in `[accounts.<name>]`.
 - **Current behavior:** RBC now emits a TRANSFER for an in-kind security move (Activity `Transfers`, e.g. a DTC transfer-in). For sheltered accounts (`transfers = true`) it's kept; for **taxable** accounts `transfers` stays **off**, so the row is dropped.
-- **Why this is intentional (decided 2026-06):** taxable cost basis must be computed from *actual* buys and sells — a transfer-in carries no reliable ACB (RBC's Value column is 0; the description's "BOOK VALUE nnn" is the sending side's book cost, which may not be the ACB — it is kept as `book_value` evidence, shown by `taxjson transfers`, and never booked), so accepting it would fabricate basis. Dropping it instead leaves the position looking short until the user supplies the real acquisition history; that phantom short is the **correct signal** (surfaced by `taxjson-missing-history`) that actual buys are missing, not something to paper over with a transfer. Do not flip the taxable default.
+- **Why this is intentional (decided 2026-06):** taxable cost basis must be computed from *actual* buys and sells — a transfer-in carries no reliable ACB (RBC's Value column is 0; the description's "BOOK VALUE nnn" is the sending side's book cost, which may not be the ACB — it is kept as `book_value` evidence, shown by `taxjson transfers`, and never booked), so accepting it would fabricate basis. Dropping it instead leaves the position looking short until the user supplies the real acquisition history; that apparent short is the **correct signal** (surfaced by `taxjson-missing-history`) that actual buys are missing, not something to paper over with a transfer. Do not flip the taxable default.
 
 ### IB income rows carry no record date
 - **Where:** `lib/brokerages/ib_extractor.py` (the Dividends section has only the pay date); `lib/income_dating.py`.
@@ -327,7 +327,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### T1135 cost amounts follow the books — custody transfer-ins carry only declared cost
 - **Where:** `src/taxjson/bin/taxjson_t1135.py` (`TRANSFER` in `_NON_CAPITAL`; taxable books post-sidecar contain no TRANSFER rows at all).
-- **Current behavior:** a position established by a custody transfer-in contributes to the T1135 cost-amount threshold only through whatever acquisition history the books carry (imported buys, `start_pos`/backdated `.tt` declarations). A transferred-in foreign position with lost history listed in `phantoms.json` shows as a phantom opening (`taxjson t1135` applies the project's phantoms.json the way the gains stage does, and flags a still-held phantom "cost understated") — the threshold test can understate until the true history is declared.
+- **Current behavior:** a position established by a custody transfer-in contributes to the T1135 cost-amount threshold only through whatever acquisition history the books carry (imported buys, `start_pos`/backdated `.tt` declarations). A transferred-in foreign position with lost history listed in `missing_history.json` shows as a missing-history opening with no cost (`taxjson t1135` applies the project's missing_history.json the way the gains stage does, and flags a still-held one "cost understated") — the threshold test can understate until the true history is declared.
 - **Why this is the design:** T1135 cost amount IS adjusted cost base; the tool refuses to invent one from a transfer's arrival market value. Declare the real history (the same `custody_fixes.tt` pattern the wash engine prescribes) and the threshold is right.
 
 ### T1135 sees only the brokerage books
@@ -401,7 +401,7 @@ Corner cases the engine handles conservatively or only flags (the first is flagg
 Kraken stablecoin (`USDC`/`USDT`/`DAI`) `earn/reward` rows were folded
 to the symbol `USD` before pricing, which `taxjson-fill-crypto` refuses
 to price — the income booked at $0; the reward now keeps its coin
-name and is priced at 1.0/unit (net = qty) with no phantom acquisition
+name and is priced at 1.0/unit (net = qty) with no fake acquisition
 leg. IB exercise code `Ex` (`C;Ex` option leg at T. Price 0) is an
 ASSIGN like `A`, so the premium rolls into the stock leg exactly as an
 assignment's does (verified in both engines: call exercise cost =
@@ -423,7 +423,7 @@ is an UNBOOKED warning — book the exchange by hand). Kraken `transfer/transfer
 custody evidence like a withdrawal; Kraken fiat-base fills and fiat-
 fiat instant trades, IB `Trades/Forex`, and Questrade `FXT` are
 recognized non-events (see the two "conversions are not modeled"
-items above) instead of phantom `USD`/`CAD` trades; Questrade `FCH`
+items above) instead of fake `USD`/`CAD` trades; Questrade `FCH`
 is a FEE row. IB row accounting reconciles under `--lint` for every
 section; the IB `Fees` sign now follows the repo FEE convention
 (positive = charged). Pinned by tests/test_parser_coverage_audit.py.

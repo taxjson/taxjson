@@ -69,7 +69,7 @@ def process_data(data, groups, *, direction: str, calls_only: bool):
         if _direction(tx) != direction:
             continue
         if tx.get('tainted'):
-            # Phantom-basis rows carry a fabricated cost: excluded (and
+            # Unknown-cost rows carry a fabricated cost: excluded (and
             # counted) exactly as ccd-sum / leaps-sum and every
             # filing-facing consumer do (audit R1-173).
             groups['_tainted'] = groups.get('_tainted', 0) + 1
@@ -251,6 +251,6 @@ def main(*, prog: str, description: str, direction: str, calls_only: bool,
         print("(mixed currencies: totals are per currency — run on the "
               "converted gains file for one base-currency total)")
     if tainted:
-        print(f"\nNOTE: {tainted} tainted disposition(s) with phantom cost "
-              f"basis excluded (report them by hand; form-export lists "
-              f"them).")
+        print(f"\nNOTE: {tainted} tainted disposition(s) with unknown cost "
+              f"(no purchase in your files) excluded (report them by "
+              f"hand; form-export lists them).")

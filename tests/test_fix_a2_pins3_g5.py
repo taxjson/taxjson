@@ -364,7 +364,7 @@ class TestCoinbaseNegativeDerivedTotal(unittest.TestCase):
 class TestS07619Messages(unittest.TestCase):
     """A2-0905: the two S076-19 message fixes nothing pinned —
     find-missing-history's closing advice names the project commands
-    (`taxjson find-missing-history --gen-phantoms`, `taxjson run`), and
+    (`taxjson find-missing-history --write-missing-history`, `taxjson run`), and
     pipeline._handle_transfers' rewrite NOTE scopes --taxable to the
     standalone `taxjson-gains` (the run never passes a flag the user
     typed)."""
@@ -382,11 +382,10 @@ class TestS07619Messages(unittest.TestCase):
                     contextlib.redirect_stderr(io.StringIO()):
                 main(["--year", "2025", str(f)])
         text = out.getvalue()
-        self.assertIn("To fix truncated history: `taxjson "
-                      "find-missing-history --gen-phantoms phantoms.json` "
-                      "in the project", text)
-        self.assertIn("then `taxjson run` (it picks phantoms.json up)",
-                      text)
+        self.assertIn("`taxjson find-missing-history "
+                      "--write-missing-history` in the project", text)
+        self.assertIn("then `taxjson run` (it picks missing_history.json "
+                      "up)", text)
         self.assertIn("Standalone: taxjson-gains", text)
 
     def test_transfer_rewrite_note_scopes_the_flag(self):

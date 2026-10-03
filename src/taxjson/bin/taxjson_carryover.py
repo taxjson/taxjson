@@ -6,7 +6,7 @@ Multi-year capital-loss carryforward / carryback ledger.
 
 Runs ONE full-history gains pass through lib/pipeline.run_gains (the same
 computation the yearly pipeline uses — wash/superficial-loss adjustments,
-phantom handling, tainted exclusion all included) and buckets the ALLOWED
+missing-history openings, tainted exclusion all included) and buckets the ALLOWED
 dispositions by tax year on the country's date basis. Then:
 
   CANADA  — per year: net capital gain/(loss); a running net-capital-loss
@@ -38,7 +38,7 @@ when the loss arrives).
 Usage:
     taxjson-carryover margin_base.json [more_base.json ...]
         --country canada [--sheltered sheltered_base.json]
-        [--incomplete-history phantoms.json] [--claimed claimed_losses.txt]
+        [--incomplete-history missing_history.json] [--claimed claimed_losses.txt]
         [--tax-date settle|trade] [--base-currency CAD] [--json]
 
 Or through the project wrapper: `taxjson carryover`.
@@ -83,7 +83,7 @@ def _parse_amount(text: str) -> float:
 
 # A claim's YEAR must be a plausible return year — the range
 # `taxjson init` / [settings] year accept. A typo ('2205', '0') became a
-# phantom ledger row that silently consumed the claim (S027-23).
+# spurious ledger row that silently consumed the claim (S027-23).
 CLAIM_MIN_YEAR = 1900
 
 
@@ -648,7 +648,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         default=None,
                         help="Year-attribution basis (default: country-aware)")
     parser.add_argument("--incomplete-history", type=Path, default=None,
-                        help="phantoms.json for truncated-history openings")
+                        help="missing_history.json: sales with no purchase "
+                             "in the files (truncated-history openings)")
     parser.add_argument("--claimed", type=Path, default=None,
                         help="`YEAR AMOUNT` lines: losses actually applied "
                              "on filed returns. Canada: the 100%% capital "
@@ -1046,8 +1047,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                   file=sys.stderr)
     if results.get('manual_reporting_required'):
         n = len(results['manual_reporting_required'])
-        print(f"warning: {n} tainted disposition(s) with phantom cost basis "
-              f"are EXCLUDED from the ledger (see "
+        print(f"warning: {n} tainted disposition(s) with unknown cost (no "
+              f"purchase in your files) are EXCLUDED from the ledger (see "
               f"manual_reporting_required in the gains output) — their "
               f"years' nets are incomplete until resolved.", file=sys.stderr)
 

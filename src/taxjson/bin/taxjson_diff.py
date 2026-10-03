@@ -68,7 +68,7 @@ def extract_records(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
     if isinstance(doc, list):
         return doc
     recs = list(doc.get('transactions', []) or [])
-    # The pipeline moves phantom-basis dispositions OUT of transactions
+    # The pipeline moves unknown-cost dispositions OUT of transactions
     # into manual_reporting_required; a diff that read only transactions
     # said "no change" when such a hand-reported disposition appeared,
     # vanished or moved (2026-09 audit S029-16). They are compared too,

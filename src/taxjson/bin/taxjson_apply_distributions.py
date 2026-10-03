@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Apply non-cash fund distributions from a `distributions.map` file.
 
-Canadian ETFs routinely declare REINVESTED (phantom) capital-gains
+Canadian ETFs routinely declare REINVESTED (non-cash) capital-gains
 distributions — usually each December — that never appear in any broker
 CSV yet increase the holder's ACB. Missing them silently overstates the
 gain at sale. Some funds likewise report annual return-of-capital
@@ -36,10 +36,10 @@ accounts whenever `distributions.map` exists; run it manually as:
 
     taxjson-apply-distributions work/margin_base.json --map distributions.map
 
-With `--incomplete-history phantoms.json` (the pipeline passes it when the
-project has one) the record-date balance includes the phantom openings the
-gains stage will synthesize, so a position with pre-window history gets the
-right share count.
+With `--incomplete-history missing_history.json` (the pipeline passes it
+when the project has one) the record-date balance includes the
+missing-history openings the gains stage will synthesize, so a position
+bought before the data gets the right share count.
 """
 
 import argparse
@@ -369,16 +369,16 @@ def _warn_roc_overlaps(txs: List[dict], symbol: str, key: str,
               f"slip ({slip} part is not income).", file=sys.stderr)
 
 
-def _phantom_openings(txs: List[dict], phantoms) -> List[dict]:
+def _missing_history_openings(txs: List[dict], phantoms) -> List[dict]:
     """The OPENING_BALANCE rows the gains stage will synthesize from
-    phantoms.json for this book — the SAME synthesize_openings call, so
+    missing_history.json for this book — the SAME synthesize_openings call, so
     the record-date balance here agrees with the position the engine
     books. Used for sizing only; never written to the base book (the
     gains stage adds its own)."""
     if not phantoms:
         return []
     from taxjson.lib.core import coerce_transaction_row
-    from taxjson.lib.phantom_holdings import synthesize_openings
+    from taxjson.lib.missing_history import synthesize_openings
     rows = [coerce_transaction_row(t, i, PROG) for i, t in enumerate(txs)]
     out, _log = synthesize_openings(rows, phantoms)
     return [t.to_dict() for t in out[len(rows):]
@@ -397,10 +397,11 @@ def apply_distributions(doc: dict, map_rows, account: str,
                         date_basis: str = "settle",
                         phantoms=None, renames=None,
                         country: Optional[str] = None) -> Tuple[dict, int]:
-    """`phantoms` — the (symbol, account) set from phantoms.json. The
-    record-date balance must include the phantom openings the gains
-    stage synthesizes (audit S000-08: sized on the phantom-less book, a
-    phantom-backed position got half the ADJUST, or none).
+    """`phantoms` — the (symbol, account) set from missing_history.json
+    (the parameter keeps its pre-rename name). The record-date balance
+    must include the missing-history openings the gains stage
+    synthesizes (audit S000-08: sized on the book without them, a
+    position bought before the data got half the ADJUST, or none).
 
     `renames` — the ticker.map renames the base book went through
     (GLOBAL + TOBASE + JOURNAL): a key naming the broker's listing is
@@ -410,7 +411,7 @@ def apply_distributions(doc: dict, map_rows, account: str,
     # Regenerate, never accumulate: drop rows this tool added before.
     txs = [t for t in txs
            if not str(t.get("id") or "").startswith("DIST-")]
-    sizing = txs + _phantom_openings(txs, phantoms)
+    sizing = txs + _missing_history_openings(txs, phantoms)
     applied = 0
     used_ids: set = set()
     for key, date, per_share in map_rows:
@@ -527,10 +528,11 @@ def main(argv=None) -> int:
                          "JOURNAL) before the lookup (`taxjson run` "
                          "passes it).")
     ap.add_argument("--incomplete-history", type=Path, default=None,
-                    metavar="PHANTOMS_JSON",
-                    help="phantoms.json: size each record-date balance "
-                         "with the phantom openings the gains stage "
-                         "will synthesize (`taxjson run` passes it).")
+                    metavar="MISSING_HISTORY_JSON",
+                    help="missing_history.json: size each record-date "
+                         "balance with the missing-history openings the "
+                         "gains stage will synthesize (`taxjson run` "
+                         "passes it).")
     args = ap.parse_args(argv)
 
     if args.ticker_map is not None and not args.ticker_map.exists():
@@ -568,9 +570,9 @@ def main(argv=None) -> int:
          if t.get("account")), "")
     phantoms = None
     if args.incomplete_history is not None:
-        from taxjson.lib.phantom_holdings import load_phantoms
+        from taxjson.lib.missing_history import load_missing_history
         try:
-            phantoms = load_phantoms(args.incomplete_history)
+            phantoms = load_missing_history(args.incomplete_history)
         except (OSError, ValueError) as e:
             cli_diag.error(PROG, f"could not read "
                                  f"{args.incomplete_history}: {e}")
