@@ -1052,6 +1052,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "premium follows the shares on exercise or assignment "
                  "(s.49(3) for a call, s.49(3.1) for a put), and a "
                  "futures contract has no cost amount."),
+            Rule("CA-RPT-16",
+                 "`taxjson stats` is a view, not a filing number: its "
+                 "win/lose statistics count each closed trade's economic "
+                 "P/L before any superficial-loss denial (the denied total "
+                 "on its own line), over the taxable accounts unless a "
+                 "registered account is named. A written option is one "
+                 "trade from write to close whatever the premium timing; "
+                 "an assigned one keeps its premium as the option's P/L, "
+                 "which the view takes back out of the shares the s.49(3) "
+                 "/ (3.1) fold put it in."),
             Rule("CA-RPT-03",
                  "`taxjson estimate`: federal and provincial tax (ON, BC, "
                  "AB) with AMT on top of your other income, for planning "
@@ -1996,6 +2006,16 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "= (d) - (e) + (g) on the rounded cells, so a half-cent "
                  "wash-sale adjustment shows as the allowed gain the other "
                  "reports print."),
+            Rule("US-RPT-12",
+                 "`taxjson stats` is a view, not a filing number: its "
+                 "win/lose statistics count each closed trade's economic "
+                 "P/L before any wash-sale denial (the denied total on its "
+                 "own line), over the taxable accounts unless a retirement "
+                 "account (IRA) is named. A written option is one trade "
+                 "from write to close; an assigned one keeps its premium "
+                 "as the option's P/L, which the view takes back out of "
+                 "the shares' amount realized or basis it was folded "
+                 "into."),
             Rule("US-RPT-04",
                  "`taxjson estimate`: federal tax only (single filer, "
                  "standard deduction, NIIT), for planning."),
