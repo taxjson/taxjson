@@ -188,8 +188,8 @@ NOID = "\x00no-id"
 
 def build_manual_index(paths: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
     """id -> [rows] of the saved gains files' MANUAL REPORTING REQUIRED
-    list (`manual_reporting_required`: dispositions drawn from a phantom
-    or transferred-in opening, reported by hand with no computed gain).
+    list (`manual_reporting_required`: dispositions drawn from a
+    missing-history or transferred-in opening, reported by hand with no computed gain).
     The audit ties the engine's tainted re-run rows to this list; it
     used to call them MISSING — "stale or truncated saved books" — and
     exit 1 on a fresh run (re-audit A2-0640, A2-1098)."""
@@ -751,8 +751,9 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
     tie = ev.get("tie_out") or {}
     if ev.get("manual_reporting"):
         _sec(out, paint, "MANUAL", paint(
-            "phantom (pre-data) basis — the gain above is not computed "
-            "on the return; report this sale by hand", "warn"))
+            "no purchase in your files (cost unknown) — the gain above "
+            "is not computed on the return; report this sale by hand",
+            "warn"))
     if tie.get("manual"):
         _sec(out, paint, "TIE-OUT",
              "saved gains file: listed under MANUAL REPORTING REQUIRED  "
@@ -838,7 +839,7 @@ def render_reconciliation(events: List[Dict[str, Any]],
                    + mark(untied + nocheck,
                           untied == 0 and nocheck == 0))
         if manual:
-            out.append(f"                     {manual:,} phantom-basis "
+            out.append(f"                     {manual:,} unknown-cost "
                        f"disposition(s) tied to MANUAL REPORTING "
                        f"REQUIRED — reported by hand, not in the total")
         if outside:
@@ -1143,7 +1144,7 @@ def main(argv=None) -> int:
                           futures_native=futures_native,
                           filled_index=filled_index)
               for g in merged]
-    # Phantom-basis dispositions: the books list them under MANUAL
+    # Unknown-cost dispositions: the books list them under MANUAL
     # REPORTING REQUIRED with no gain; the re-run's figure is fabricated
     # (cost 0 on the synthetic opening). Tie them to that list, never to
     # the gains total (A2-0640, A2-1098).
@@ -1164,7 +1165,7 @@ def main(argv=None) -> int:
         else:
             e["tie_out"] = {"records": 0, "ties": None}
             e["warnings"].append(
-                "phantom-basis disposition not found under MANUAL "
+                "unknown-cost disposition not found under MANUAL "
                 "REPORTING REQUIRED in the pipeline gains file(s) — "
                 "cannot tie out.")
     if args.check and args.check_year:
@@ -1229,7 +1230,7 @@ def main(argv=None) -> int:
                     f"check file lists {scoped[0].get('symbol')} "
                     f"{scoped[0].get('date')} (id {str(gid)[:12]}) under "
                     f"MANUAL REPORTING REQUIRED, but the engine re-run "
-                    f"has no phantom-basis disposition with that id.")
+                    f"has no unknown-cost disposition with that id.")
         for e in events:
             if e["tie_out"].get("manual"):
                 continue

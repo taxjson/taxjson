@@ -664,7 +664,7 @@ class TestPhantomRowsInTracesAndExplain(unittest.TestCase):
         """)
         self.base = self.tmp / 'margin_base.json'
         self.base.write_text(json.dumps([t.to_dict() for t in rows]))
-        self.ph = self.tmp / 'phantoms.json'
+        self.ph = self.tmp / 'missing_history.json'
         self.ph.write_text(json.dumps([{'symbol': 'OLD.TO',
                                         'account': 'margin'}]))
 
@@ -911,7 +911,7 @@ class TestDiagnosticsReachTheUser(unittest.TestCase):
         """)
         base = tmp / 'margin_base.json'
         base.write_text(json.dumps([t.to_dict() for t in rows]))
-        ph = tmp / 'phantoms.json'
+        ph = tmp / 'missing_history.json'
         ph.write_text(json.dumps([{'symbol': 'ABC.TO', 'account': 'margin'}]))
         r = _cli('taxjson.bin.taxjson_gains', '--country', 'canada',
                  '--year', '2025', '--taxable', '--incomplete-history', ph,
@@ -1020,8 +1020,8 @@ class TestPhantomWalks(unittest.TestCase):
     """phantom_holdings: detect / relevance / zero-basis / openings."""
 
     def _cand(self, sym, acct='margin'):
-        from taxjson.lib.phantom_holdings import PhantomCandidate
-        return PhantomCandidate(symbol=sym, account=acct, currency='CAD',
+        from taxjson.lib.missing_history import MissingHistoryCandidate
+        return MissingHistoryCandidate(symbol=sym, account=acct, currency='CAD',
                                 first_negative_date='2024-01-05',
                                 peak_short=-100.0, end_position=0.0,
                                 disposition_count=1, registered=False)
@@ -1034,16 +1034,16 @@ class TestPhantomWalks(unittest.TestCase):
     def test_evening_split_after_settle_lagged_buy(self):
         # S021-00: the buy executed before IB's 20:25 split is re-
         # denominated by the engine; the walk must not invent a short.
-        from taxjson.lib.phantom_holdings import detect_phantoms
+        from taxjson.lib.missing_history import detect_missing_history
         txs = _tt("""
             BUYSELL 2026-04-01 10:00:00 DEF.TO 100 CAD 10 1000 0 2026-04-02
             BUYSELL 2026-05-01 10:00:00 DEF.TO -200 CAD 6 1200 0 2026-05-02
         """) + [self._split('DEF.TO', '2026-04-01', '20:25:00', 2.0)]
-        self.assertEqual(detect_phantoms(txs), [])
+        self.assertEqual(detect_missing_history(txs), [])
 
     def test_cover_of_carried_short_affects_the_year(self):
         # S021-01 / S076-07.
-        from taxjson.lib.phantom_holdings import assess_tax_year_relevance
+        from taxjson.lib.missing_history import assess_tax_year_relevance
         txs = _tt("""
             BUYSELL 2024-03-04 10:00:00 SPY.US -300 USD 400 120000
             BUYSELL 2025-02-03 10:00:00 SPY.US 300 USD 500 150000
@@ -1054,7 +1054,7 @@ class TestPhantomWalks(unittest.TestCase):
     def test_relevance_ignores_tie_order_and_follows_renames(self):
         # S075-12: a same-moment sell+buy pair; S075-13: a clean sale
         # after a rename.
-        from taxjson.lib.phantom_holdings import assess_tax_year_relevance
+        from taxjson.lib.missing_history import assess_tax_year_relevance
         base = _tt("""
             BUYSELL 2024-01-05 10:00:00 XYZ.TO -50 CAD 10 500
             BUYSELL 2024-02-01 10:00:00 XYZ.TO 50 CAD 10 500
@@ -1078,7 +1078,7 @@ class TestPhantomWalks(unittest.TestCase):
 
     def test_year_is_the_settle_year(self):
         # S075-16: traded 2024-12-31, settles 2025-01-02.
-        from taxjson.lib.phantom_holdings import (
+        from taxjson.lib.missing_history import (
             assess_tax_year_relevance, detect_zero_basis_acquisitions)
         txs = _tt("""
             BUYSELL 2024-12-31 10:00:00 PPPX.US -100 USD 10 1000 0 2025-01-02
@@ -1096,7 +1096,7 @@ class TestPhantomWalks(unittest.TestCase):
 
     def test_zero_basis_follows_a_rename(self):
         # S075-19.
-        from taxjson.lib.phantom_holdings import detect_zero_basis_acquisitions
+        from taxjson.lib.missing_history import detect_zero_basis_acquisitions
         txs = _tt("""
             BUYSELL 2025-01-10 10:00:00 SPN.TO 100 CAD 0 0
             BUYSELL 2025-06-02 10:00:00 NSPN.TO -100 CAD 5 500
@@ -1110,18 +1110,18 @@ class TestPhantomWalks(unittest.TestCase):
         import json
         import tempfile
         from pathlib import Path
-        from taxjson.lib.phantom_holdings import (load_phantoms,
+        from taxjson.lib.missing_history import (load_missing_history,
                                                   synthesize_openings)
-        f = Path(tempfile.mkdtemp()) / 'phantoms.json'
+        f = Path(tempfile.mkdtemp()) / 'missing_history.json'
         f.write_text(json.dumps([{'symbol': 'xyz.to', 'account': 'margin'},
                                  {'symbol': 'NOPE.TO', 'account': 'margin'}]))
-        ph = load_phantoms(f)
+        ph = load_missing_history(f)
         self.assertIn(('XYZ.TO', 'margin'), ph)
         txs = _tt("BUYSELL 2025-03-03 10:00:00 XYZ.TO -100 CAD 20 2000")
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             # warn=True: the pipeline reports the project-level result
-            # once (report_phantom_log); a direct caller can ask here.
+            # once (report_missing_history_log); a direct caller can ask here.
             _, log = synthesize_openings(txs, ph, warn=True)
         by = {e['symbol']: e for e in log}
         self.assertTrue(by['XYZ.TO']['inserted'])
@@ -1130,7 +1130,7 @@ class TestPhantomWalks(unittest.TestCase):
 
     def test_opening_size_ignores_tie_order(self):
         # S076-04.
-        from taxjson.lib.phantom_holdings import synthesize_openings
+        from taxjson.lib.missing_history import synthesize_openings
         head = _tt("BUYSELL 2025-02-03 10:00:00 PPP.TO -100 CAD 20 2000")
         tie = _tt("""
             BUYSELL 2025-06-02 09:30:00 PPP.TO -50 CAD 22 1100
@@ -1152,7 +1152,7 @@ class TestPhantomWalks(unittest.TestCase):
             "sys.path.insert(0, %r)\n"
             "from test_fix_m_engine import _tt\n"
             "from taxjson.lib.core import TaxTransaction\n"
-            "from taxjson.lib.phantom_holdings import synthesize_openings\n"
+            "from taxjson.lib.missing_history import synthesize_openings\n"
             "t = _tt('''BUYSELL 2025-01-10 10:00:00 OLDX.TO -10 CAD 10 100\n"
             "BUYSELL 2025-02-10 10:00:00 OLDX.TO 20 CAD 10 200\n"
             "BUYSELL 2025-05-10 10:00:00 NEWX.TO -25 CAD 12 300''')\n"
@@ -1174,12 +1174,12 @@ class TestPhantomWalks(unittest.TestCase):
 
     def test_registered_from_configured_type(self):
         # S076-08.
-        from taxjson.lib.phantom_holdings import detect_phantoms
+        from taxjson.lib.missing_history import detect_missing_history
         txs = (_tt("BUYSELL 2025-03-03 10:00:00 XEI.TO -100 CAD 20 2000",
                    account='retireA')
                + _tt("BUYSELL 2025-03-03 10:00:00 XEI.TO -100 CAD 20 2000",
                      account='sunlife'))
-        c = {x.account: x.registered for x in detect_phantoms(
+        c = {x.account: x.registered for x in detect_missing_history(
             txs, registered_accounts={'retireA': True, 'sunlife': False})}
         self.assertEqual(c, {'retireA': True, 'sunlife': False})
 
@@ -1196,7 +1196,7 @@ class TestPhantomWalks(unittest.TestCase):
         """)]))
         out = tmp / 'cand.json'
         r = _cli('taxjson.bin.taxjson_gains', '--country', 'canada',
-                 '--taxable', '--year', '2026', '--suggest-phantoms', out, f)
+                 '--taxable', '--year', '2026', '--suggest-missing-history', out, f)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual([e['symbol'] for e in json.loads(out.read_text())],
                          ['COVR.TO'])

@@ -352,7 +352,7 @@ def render_gain_block(g: Dict[str, Any], align: bool = True,
     Returns the lines without trailing newlines. Returns an empty list when
     the gain has no trace attached.
 
-    `manual`: a phantom-basis disposition (the pipeline's
+    `manual`: an unknown-cost disposition (the pipeline's
     manual_reporting_required): its cost is unknown, so the header shows
     no gain and no holding period (the engine's figures come from a
     zero-cost pool and a 1970 sentinel date — audit R1-165 / S029-22).
@@ -384,8 +384,8 @@ def render_gain_block(g: Dict[str, Any], align: bool = True,
         proceeds = float(g.get('proceeds', 0.0) or 0.0)
         primary = [f"# {sym}", date, f"qty={qty:.4f}",
                    f"proceeds={_fmt_money(abs(proceeds))}",
-                   "MANUAL REPORTING — phantom (pre-data) basis: gain not "
-                   "computed, not in the gains total"]
+                   "MANUAL REPORTING — no purchase in your files (cost "
+                   "unknown): gain not computed, not in the gains total"]
         days = None
         dis = 0.0
         term = None

@@ -448,7 +448,7 @@ def load_computed(gains_paths: List[Path],
     short_close_qty: Dict[Tuple[str, str], float] = {}
     for p in gains_paths:
         data = load_json(p)
-        # Tainted (phantom-basis) dispositions live in
+        # Tainted (unknown-cost) dispositions live in
         # manual_reporting_required, NOT transactions — the pipeline
         # strips them there before writing the gains file, which made
         # every tainted_rows counter in this tool a permanent no-op
@@ -461,7 +461,7 @@ def load_computed(gains_paths: List[Path],
         for e in list(data.get("transactions", [])) + _manual:
             if e.get("action") in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
                 continue
-            # Manual (phantom-basis) rows carry qty and proceeds but no
+            # Manual (unknown-cost) rows carry qty and proceeds but no
             # `gain` (the pipeline strips it); requiring `gain` dropped
             # every one of them again (R1-206).
             if "qty" not in e or ("gain" not in e and not e.get("tainted")):
@@ -631,7 +631,7 @@ def _compare(label: str, s: Dict[str, Any], c: Dict[str, Any],
                          f"document the reason")
     if c.get("tainted_rows"):
         notes.append(f"{int(c['tainted_rows'])} tainted disposition(s) with "
-                     f"phantom basis included")
+                     f"unknown cost (no purchase in your files) included")
     return {"symbol": label, "status": "MISMATCH" if problems else "OK",
             "detail": "; ".join(problems + notes)}
 

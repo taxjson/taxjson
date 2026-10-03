@@ -4701,6 +4701,28 @@
   account unless the statement shows every account is the same plan
   (only Questrade's Account Type can), and a quoted value is refused by
   every config reader.
+- "Phantom" is gone (owner decision): the project file listing sales of
+  shares whose purchase is not in your broker files (bought before the
+  data starts) is now `missing_history.json`, and the console, reports,
+  checklist, help and docs say "missing purchase", "missing-history
+  opening" or "unknown cost" (e.g. "1 sale(s) with unknown cost (no
+  purchase in your files)"). An existing `phantoms.json` is still read,
+  with one NOTE per run asking you to `mv phantoms.json
+  missing_history.json` (taxjson never renames or edits it); a project
+  with both files is refused (exit 2) until you keep one. Flags:
+  `find-missing-history --write-missing-history [FILE]` (default: the
+  project's `missing_history.json`), `taxjson-gains
+  --suggest-missing-history FILE`, `taxjson-missing-history
+  --missing-history FILE`; the old `--gen-phantoms`, `--suggest-phantoms`
+  and `--phantoms` still work (hidden, with a note). Code:
+  `taxjson.lib.phantom_holdings` is now `taxjson.lib.missing_history` (the
+  old module and function names remain as aliases). The gains JSON
+  writes `missing_history_log` (`taxjson-split-gains` still reads an
+  older file's `phantom_application_log`); the `--json` keys
+  `phantom_openings` (edge-cases) and `phantoms_applied` (t1135) are now
+  `missing_history_openings` and `missing_history_applied`. Filed locks
+  are unaffected (they hold amounts only), and renaming the file is not
+  an input change for `run-clean` (CA-ACB-11 / US-BASIS-04).
 - After `country` changes in taxjson.toml, every report command
   (`list`, `wash-sales`, `sum`, `divs-sum`, `check-dates` ...) refuses
   the books the last full run built under the other country, instead of

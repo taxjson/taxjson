@@ -8,8 +8,8 @@ are reported as not-relevant so the user can ignore them.
 import unittest
 
 from taxjson.lib.core import TaxTransaction
-from taxjson.lib.phantom_holdings import (
-    detect_phantoms, assess_tax_year_relevance, detect_zero_basis_acquisitions,
+from taxjson.lib.missing_history import (
+    detect_missing_history, assess_tax_year_relevance, detect_zero_basis_acquisitions,
     detect_corp_action_links,
 )
 
@@ -23,7 +23,7 @@ def _tx(action, date, symbol, qty, net=0.0, account="margin", currency="USD",
 
 
 def _assess(txs, year):
-    cands = detect_phantoms(txs)
+    cands = detect_missing_history(txs)
     return {(r.candidate.symbol, r.candidate.account): r
             for r in assess_tax_year_relevance(txs, cands, year)}
 

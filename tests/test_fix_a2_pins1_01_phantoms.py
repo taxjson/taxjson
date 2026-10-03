@@ -1,4 +1,4 @@
-"""Re-audit-2 tests-pins-01: phantoms.json reaches every command that
+"""Re-audit-2 tests-pins-01: missing_history.json reaches every command that
 rebuilds the books (CA-ACB-11). Each test fails when its command's
 --incomplete-history / phantom wiring is dropped:
 
@@ -47,7 +47,7 @@ def _project(root, year, tt, *, settings="", phantoms=_PHANTOM):
     (root / "inputs" / "margin").mkdir(parents=True)
     (root / "inputs" / "margin" / "m.tt").write_text(tt)
     if phantoms is not None:
-        (root / "phantoms.json").write_text(phantoms)
+        (root / "missing_history.json").write_text(phantoms)
 
 
 def _run(tc, root):
@@ -56,7 +56,7 @@ def _run(tc, root):
     return r
 
 
-# A sale of 100 shares bought before the data (phantoms.json), then a
+# A sale of 100 shares bought before the data (missing_history.json), then a
 # 500 loss superficial by a rebuy. Without the phantom opening the first
 # sale is a short covered by the later buy: +1000 - 100 = 900.
 _BOOK_2025 = (
@@ -84,7 +84,7 @@ class TestRunAndCarryoverApplyPhantoms(unittest.TestCase):
         return json.loads((self.root / "work" / name).read_text())
 
     def test_gains_stage_routes_the_sale_to_manual_reporting(self):
-        # A2-0530: the per-account gains stage gets phantoms.json.
+        # A2-0530: the per-account gains stage gets missing_history.json.
         d = self._gains("margin_gains.json")
         self.assertEqual([(m["date"], m["symbol"])
                           for m in d["manual_reporting_required"]],
@@ -95,7 +95,7 @@ class TestRunAndCarryoverApplyPhantoms(unittest.TestCase):
 
     def test_blended_pass_routes_the_sale_to_manual_reporting(self):
         # A2-0048 / A2-0524: the blended taxable pass (which feeds
-        # Schedule 3) gets phantoms.json.
+        # Schedule 3) gets missing_history.json.
         d = self._gains("margin_gains_wash.json")
         self.assertEqual([(m["date"], m["symbol"])
                           for m in d["manual_reporting_required"]],
@@ -115,7 +115,7 @@ class TestRunAndCarryoverApplyPhantoms(unittest.TestCase):
         self.assertEqual(rows["ZZZ.TO"]["qty"], 100.0)
 
     def test_carryover_excludes_the_tainted_sale(self):
-        # A2-0503 / A2-0513: the carryover wrapper passes phantoms.json.
+        # A2-0503 / A2-0513: the carryover wrapper passes missing_history.json.
         r = _cli(self.root, "carryover", "--json")
         self.assertEqual(r.returncode, 0, r.stderr[-1500:])
         row = {x["year"]: x for x in json.loads(r.stdout)["rows"]}[2025]
@@ -128,7 +128,7 @@ class TestDistributionsSizedWithPhantomsThroughRun(unittest.TestCase):
     @rule("CA-DIST-01", "CA-ACB-11")
     def test_run_sizes_the_record_date_with_phantom_openings(self):
         # A2-0180 / A2-0903 (S000-08): 100 shares from before the data
-        # (phantoms.json) plus 200 bought, 100 sold: 200 held on the
+        # (missing_history.json) plus 200 bought, 100 sold: 200 held on the
         # record date, so the distribution is 200 x 0.50 = 100, not 50.
         tt = ("BUYSELL 2025-02-03 10:00:00 XAW.TO -100 CAD 30.00 3000.00 0\n"
               "BUYSELL 2025-03-03 10:00:00 XAW.TO 200 CAD 31.00 6200.00 0\n"
@@ -188,7 +188,7 @@ class TestChecksApplyPhantoms(unittest.TestCase):
         return json.loads(r.stdout)["results"][0]
 
     def test_sell_check_sees_the_violation(self):
-        # A2-0527 / A2-0182: without phantoms.json it said SAFE/COOLING.
+        # A2-0527 / A2-0182: without missing_history.json it said SAFE/COOLING.
         res = self._result("sell-check")
         self.assertEqual(res["verdict"], "ACTION")
         self.assertIn("VIOLATION", res["detail"][0])
@@ -227,7 +227,7 @@ class TestOptionBoundaryAppliesPhantoms(unittest.TestCase):
     @rule("CA-ACB-11")
     def test_phantom_long_call_sold_to_close_is_not_a_write(self):
         # A2-0893 (S044-09): a long call bought before the data and sold
-        # to close: with phantoms.json it is not an open written call.
+        # to close: with missing_history.json it is not an open written call.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "work").mkdir()
@@ -244,7 +244,7 @@ class TestOptionBoundaryAppliesPhantoms(unittest.TestCase):
                     "symbol": opt, "quantity": -2, "net_amount": 900.0,
                     "price": 4.5, "currency": "CAD", "account": "margin",
                     "id": "o1"}]}))
-            (root / "phantoms.json").write_text(json.dumps(
+            (root / "missing_history.json").write_text(json.dumps(
                 [{"symbol": opt, "account": "margin"}]))
             r = _cli(root, "option-boundary", "--json")
         self.assertEqual(r.returncode, 0, r.stderr[-1500:])
@@ -255,7 +255,7 @@ class TestHandoffAppliesPhantoms(unittest.TestCase):
     @rule("CA-ACB-11")
     def test_prior_year_snapshot_opens_the_phantom_shares(self):
         # A2-0517: handoff rebuilds the closed year's Dec-31 positions
-        # with phantoms.json; without it the 2025 books hold 200, not
+        # with missing_history.json; without it the 2025 books hold 200, not
         # 300, and handoff reports a false 'position missing' (rc 1).
         tt = ("BUYSELL 2025-01-10 10:00:00 ZZZ.TO -100 CAD 30.00 3000.00 0\n"
               "BUYSELL 2025-03-03 10:00:00 ZZZ.TO 300 CAD 20.00 6000.00 0\n"

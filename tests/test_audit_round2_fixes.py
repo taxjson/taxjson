@@ -183,10 +183,10 @@ class TestUsTaintedShortGate(unittest.TestCase):
 
 class TestSynthesizeRenameChain(unittest.TestCase):
     def test_deficit_behind_a_rename_sized_correctly(self):
-        from taxjson.lib.phantom_holdings import synthesize_openings
+        from taxjson.lib.missing_history import synthesize_openings
         from taxjson.lib.core import CanadaTaxRules
         # BUY 100 OLD → rename OLD→NEW (1:1) → SELL 150 NEW. True deficit 50.
-        # phantoms.json lists (NEW, acct) — detect reports under NEW.
+        # missing_history.json lists (NEW, acct) — detect reports under NEW.
         txs = [
             _tt("BUYSELL", "2026-01-05", "OLD.TO", 100, 10.0, 1000.0),
             _tt("SPLIT", "2026-02-01", "OLD.TO", 1.0, symbol_new="NEW.TO"),
@@ -204,7 +204,7 @@ class TestSynthesizeRenameChain(unittest.TestCase):
         self.assertAlmostEqual(qty, 0.0, places=6)
 
     def test_midnight_split_cannot_precede_opening(self):
-        from taxjson.lib.phantom_holdings import synthesize_openings
+        from taxjson.lib.missing_history import synthesize_openings
         from taxjson.lib.core import CanadaTaxRules
         # The SPLIT is the pair's earliest row AND stamped 00:00:00 (real
         # parsers do this). The opening must still be scaled by it.
@@ -363,7 +363,7 @@ class TestGenPhantomsYearScope(unittest.TestCase):
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_gains",
                  "--country", "canada", "--year", "2026",
-                 "--suggest-phantoms", str(out), str(base)],
+                 "--suggest-missing-history", str(out), str(base)],
                 cwd=REPO_ROOT, capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             entries = json.loads(out.read_text())

@@ -347,12 +347,12 @@ class TestBomUserFiles(_Built):
         self.assertNotIn("not a readable TOML", r.stderr)
 
     def test_phantoms_with_bom(self):
-        from taxjson.lib.phantom_holdings import load_phantoms
+        from taxjson.lib.missing_history import load_missing_history
         with tempfile.TemporaryDirectory() as td:
-            p = Path(td) / "phantoms.json"
+            p = Path(td) / "missing_history.json"
             p.write_bytes(b"\xef\xbb\xbf" + json.dumps(
                 [{"symbol": "ABC.TO", "account": "m"}]).encode())
-            self.assertEqual(load_phantoms(p), {("ABC.TO", "m")})
+            self.assertEqual(load_missing_history(p), {("ABC.TO", "m")})
 
 
 # -------------------------------------------- views, accounts, write errors
@@ -415,13 +415,13 @@ class TestViews(_Built):
     def test_audit_one_line_and_same_code_with_json(self):
         """A2-0796."""
         root = self.copy()
-        (root / "phantoms.json").write_text('{"x": "')
+        (root / "missing_history.json").write_text('{"x": "')
         for a in (["audit"], ["audit", "--json"]):
             with self.subTest(a=a):
                 r = self.cli(root, *a)
                 self.assertOneLine(r, 2)
                 lines = [ln for ln in r.stderr.splitlines()
-                         if "phantoms.json" in ln]
+                         if "missing_history.json" in ln]
                 self.assertEqual(len(lines), 1, r.stderr)
                 self.assertNotIn("produced no JSON", r.stderr)
 

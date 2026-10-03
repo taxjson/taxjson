@@ -312,10 +312,10 @@ def main():
                              "files' tax year fall back to the radar's pool.")
     parser.add_argument("--incomplete-history", metavar="FILE",
                         default=None,
-                        help="phantoms.json: synthesize the same opening "
-                             "balances the gains engine applies, so "
-                             "phantom-backed positions are not shown as "
-                             "shorts")
+                        help="missing_history.json: synthesize the same "
+                             "opening balances the gains engine applies, "
+                             "so positions bought before the data are not "
+                             "shown as shorts")
     parser.add_argument("--corporate-distribution", action="append",
                         default=[], metavar="SYMBOL",
                         help="Canada: a listing the project's [settings] "
@@ -465,7 +465,7 @@ def main():
     # (pre-split) quantity must be re-denominated into post-split units
     # (qty x ratio; money untouched) — the engine's rule (core.py, the
     # settle-lag straddle). Without it a pre-split sale of 84 left 8.4
-    # phantom post-split shares held (real FFN.TO 11-for-10, 2026-07).
+    # nonexistent post-split shares held (real FFN.TO 11-for-10, 2026-07).
     # (US: the walk orders by TRADE date, so a pre-split trade is booked
     # before the split scales it — nothing to re-denominate.)
     _lag_splits = [t for t in transactions if t.action == 'SPLIT' and t.date
@@ -507,17 +507,18 @@ def main():
         _shl_rows, main_transactions=_tax_rows, netted_out=_own_moves)
     _shl_rows = _shl_rows + _own_moves
 
-    # Phantom openings (phantoms.json): the SAME OPENING_BALANCE rows
-    # the gains pass synthesizes (lib/pipeline.prepare_books), or a
-    # phantom-backed position walks negative here — shown as a short,
+    # Missing-history openings (missing_history.json): the SAME
+    # OPENING_BALANCE rows the gains pass synthesizes
+    # (lib/pipeline.prepare_books), or a position bought before the data
+    # walks negative here — shown as a short,
     # its rebuys booked as short covers with invented losses, and real
     # superficial-loss violations missed (2026-09 audit). Pairs are
     # (symbol, account), so each group's rows are walked separately.
     if args.incomplete_history:
-        from taxjson.lib.phantom_holdings import (load_phantoms,
+        from taxjson.lib.missing_history import (load_missing_history,
                                                   synthesize_openings)
         try:
-            _phantoms = load_phantoms(Path(args.incomplete_history))
+            _mh_pairs = load_missing_history(Path(args.incomplete_history))
         except (OSError, ValueError) as e:
             # Exit 2 like gains/t1135/audit --incomplete-history; a
             # sys.exit(str) exited 1, the 'finding' code (A2-1435).
@@ -526,7 +527,7 @@ def main():
             sys.exit(2)
 
         def _with_openings(rows, group):
-            new_rows, _log = synthesize_openings(rows, _phantoms)
+            new_rows, _log = synthesize_openings(rows, _mh_pairs)
             for t in new_rows:
                 if not hasattr(t, '_group'):
                     t._group = group
@@ -776,7 +777,7 @@ def main():
         # fully-sold sheltered position look like +100.0533 held, triggering a
         # bogus "sheltered holdings exist" wash-sale warning). Only BUYSELL /
         # ASSIGN / SPLIT / TRANSFER / OPENING_BALANCE (+ ADJUST for ACB) move
-        # the pool, matching the gains engine and phantom-holdings walks.
+        # the pool, matching the gains engine and missing-history walks.
         if tx.action in ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST',
                          'FEE', 'DISALLOW'):
             continue
@@ -829,7 +830,7 @@ def main():
             # (e.g. 1.1 for a 1.1-for-1). Total ACB is unchanged by a split —
             # only per-share cost changes. The old no-op left the running
             # quantity off by the split factor, so post-split sells underflowed
-            # the pool into a phantom negative position (LFE.TO showed -780 for
+            # the pool into a false negative position (LFE.TO showed -780 for
             # a holding that is actually closed). A SPLIT carrying a non-empty
             # `symbol_new` also renames the pool to the new ticker.
             ratio = tx.quantity

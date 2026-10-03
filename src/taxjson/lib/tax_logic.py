@@ -111,7 +111,7 @@ PARTITION_RULES = frozenset({
     "CA-FX-07",        # fx-cash s.39(1.1) $200 exemption
     "CA-FX-04",        # futures P/L on average cost
     "CA-STKDIV-01",    # stock dividend: $0 acquisition (counts for s.54)
-    "CA-ACB-12",       # manual phantom-loss check on settle dates
+    "CA-ACB-12",       # manual missing-history loss check on settle dates
     "CA-CRYPTO-02",    # stablecoins as US-dollar cash
     "CA-DATE-01",      # settle-date tax year by default
     "CA-CTRY-02",      # US-only settings/commands/flags refused
@@ -137,7 +137,7 @@ PARTITION_RULES = frozenset({
     "US-CRYPTO-02",    # stablecoins are property (CA: US-dollar cash)
     "US-CRYPTO-08",    # under 1e-08 units is zero (CA keeps any amount)
     "US-STKDIV-01",    # stock dividend: §307 basis spread, no §1091
-    "US-BASIS-04",     # manual phantom-loss check on trade dates
+    "US-BASIS-04",     # manual missing-history loss check on trade dates
     "US-ROC-03",       # ROC with no shares held: not booked (CA books it)
     "US-ROC-04",       # basis increase with no shares: not applied (CA: next ACB)
     "CA-ACB-13",       # basis increase with no shares: next purchase's ACB
@@ -654,9 +654,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "A transfer into a taxable account stops the run until "
                  "the original purchase is declared (.tt ACQUIRED line)."),
             Rule("CA-ACB-11",
-                 "Shares with missing buy history go in phantoms.json: "
-                 "sales that draw on them are listed for manual reporting "
-                 "and left out of the totals, with no superficial-loss "
+                 "Shares sold with no purchase in your files (bought "
+                 "before the data starts) go in missing_history.json "
+                 "(its old name phantoms.json is still read): sales that "
+                 "draw on them have an unknown cost — they are listed "
+                 "for manual reporting and left out of the totals, with no superficial-loss "
                  "test, until the position is fully sold.", cont=True),
             Rule("CA-ACB-12",
                  "A loss within 30 days (settle dates) of such a sale, or "
@@ -1517,9 +1519,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "applied either: taxjson warns on the console (ATTENTION) "
                  "and you adjust the sale by hand."),
             Rule("US-BASIS-04",
-                 "Shares with missing buy history go in phantoms.json: "
-                 "sales that draw on them are listed for manual reporting "
-                 "and left out of the totals. A loss within 30 days "
+                 "Shares sold with no purchase in your files (bought "
+                 "before the data starts) go in missing_history.json "
+                 "(its old name phantoms.json is still read): sales that "
+                 "draw on them have an unknown cost — they are listed "
+                 "for manual reporting and left out of the totals. A loss within 30 days "
                  "(trade dates) of such a sale, or such a sale at a loss "
                  "with a purchase in that window, is flagged for a manual "
                  "wash-sale check (not for crypto accounts)."),

@@ -455,9 +455,9 @@ class TestFindMissingHistory(unittest.TestCase):
                                   "quantity": -100, "price": 50.0,
                                   "net_amount": 5000.0, "currency": "CAD",
                                   "account": "margin"}]}))
-            out = root / "phantoms.json"
+            out = root / "missing_history.json"
             r = _runsub(root, "find-missing-history", "margin",
-                        "--gen-phantoms", str(out))
+                        "--write-missing-history", str(out))
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertTrue(out.exists())
             entries = json.loads(out.read_text())
@@ -467,7 +467,7 @@ class TestFindMissingHistory(unittest.TestCase):
         self.assertEqual(entries[0]["account"], "margin")
 
     def test_gen_phantoms_output_is_consumed_by_gains(self):
-        # The whole point of the file: what --gen-phantoms emits must be
+        # The whole point of the file: what --write-missing-history emits must be
         # loadable by `taxjson-gains --incomplete-history` (the same path
         # `taxjson run` uses), so the tainted disposition is pulled out of the
         # gains total and surfaced under manual_reporting_required.
@@ -485,9 +485,9 @@ class TestFindMissingHistory(unittest.TestCase):
                  "date_settle": "2025-03-01", "time": "09:30:00",
                  "symbol": "XYZ.TO", "quantity": -100, "price": 50.0,
                  "net_amount": 4995.0, "currency": "CAD", "account": "margin"}]}))
-            ph = root / "phantoms.json"
+            ph = root / "missing_history.json"
             r = _runsub(root, "find-missing-history", "margin",
-                        "--gen-phantoms", str(ph))
+                        "--write-missing-history", str(ph))
             self.assertEqual(r.returncode, 0, r.stderr)
             g = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_gains",
@@ -517,9 +517,9 @@ class TestFindMissingHistory(unittest.TestCase):
                                       "quantity": -100, "price": 50.0,
                                       "net_amount": 5000.0, "currency": "CAD",
                                       "account": acct}]}))
-            out = root / "phantoms.json"
+            out = root / "missing_history.json"
             r = _runsub(root, "find-missing-history",
-                        "--gen-phantoms", str(out))
+                        "--write-missing-history", str(out))
             self.assertEqual(r.returncode, 0, r.stderr)
             entries = json.loads(out.read_text())
         pairs = {(e["symbol"], e["account"]) for e in entries}

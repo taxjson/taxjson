@@ -3,7 +3,7 @@ futures cost and phantoms, and a transient Bank of Canada 404 that must
 not switch a currency to Yahoo for good.
 
 Findings: R1-0 / R1-52 / R1-204 (futures notional FX), S008-04 (T1135
-futures notional), R1-321 (T1135 ignores phantoms.json), R1-145 (sticky
+futures notional), R1-321 (T1135 ignores missing_history.json), R1-145 (sticky
 Valet 404). Every fetcher is stubbed — no network."""
 import io
 import json
@@ -199,7 +199,7 @@ class TestT1135Futures(unittest.TestCase):
 
 @rule("CA-RPT-12", "CA-ACB-11")
 class TestT1135Phantoms(unittest.TestCase):
-    """R1-321: `taxjson t1135` applies phantoms.json like the gains pass."""
+    """R1-321: `taxjson t1135` applies missing_history.json like the gains pass."""
 
     def _books(self, td):
         base = Path(td) / "margin_base.json"
@@ -207,7 +207,7 @@ class TestT1135Phantoms(unittest.TestCase):
         base.write_text(json.dumps({"transactions": [
             _tx(date="2023-05-01", qty=-100, net=900.0),
             _tx(date="2024-03-01", qty=150, net=1500.0)]}))
-        phantoms = Path(td) / "phantoms.json"
+        phantoms = Path(td) / "missing_history.json"
         phantoms.write_text(json.dumps([
             {"symbol": "AAA.US", "account": "IB"}]))
         return base, phantoms
@@ -237,7 +237,7 @@ class TestT1135Phantoms(unittest.TestCase):
             base.write_text(json.dumps({"transactions": [
                 _tx(date="2023-01-10", qty=10, net=100.0),
                 _tx(date="2024-05-01", qty=-100, net=900.0)]}))
-            phantoms = Path(td) / "phantoms.json"
+            phantoms = Path(td) / "missing_history.json"
             phantoms.write_text(json.dumps([
                 {"symbol": "AAA.US", "account": "IB"}]))
             rep = build_report([base], [], 2023, {}, "CAD",
@@ -256,7 +256,7 @@ class TestT1135Phantoms(unittest.TestCase):
                 '[accounts.margin]\ntype = "taxable"\n')
             (root / "work").mkdir()
             base, _ph = self._books(root / "work")
-            (root / "work" / "phantoms.json").rename(root / "phantoms.json")
+            (root / "work" / "missing_history.json").rename(root / "missing_history.json")
             out, err = io.StringIO(), io.StringIO()
             with redirect_stdout(out), redirect_stderr(err):
                 with self.assertRaises(SystemExit) as cm:

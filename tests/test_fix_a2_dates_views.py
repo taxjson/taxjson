@@ -228,7 +228,7 @@ class TestEdgeCasesPositions(unittest.TestCase):
                     "XYZ.TO", -100, 1500.0)])
             p.gains("margin", [_gain("margin", "2025-12-31", "2026-01-02",
                                      "XYZ.TO", 100, 500.0)])
-            (p.root / "phantoms.json").write_text(json.dumps(
+            (p.root / "missing_history.json").write_text(json.dumps(
                 [{"symbol": "XYZ.TO", "account": "margin"}]))
             st = p.analyze()["year_boundary"]["straddles"]
             self.assertIn("2026 sale: a disposition", st[0]["why"])

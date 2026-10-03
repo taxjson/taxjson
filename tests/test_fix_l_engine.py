@@ -484,25 +484,25 @@ class TestQuantityKeysNotRounded(unittest.TestCase):
         from taxjson.lib.numeric import round_floats
         out = round_floats({"wash_trigger": {"trigger_qty": 6.76e-06,
                                              "trigger_price": 0.00001234},
-                            "phantom_application_log": [
+                            "missing_history_log": [
                                 {"opening_qty": 12.345678}],
                             "option_qty": 0.333333333})
         self.assertEqual(out["wash_trigger"]["trigger_qty"], 6.76e-06)
         self.assertEqual(out["wash_trigger"]["trigger_price"], 0.0)
-        self.assertEqual(out["phantom_application_log"][0]["opening_qty"],
+        self.assertEqual(out["missing_history_log"][0]["opening_qty"],
                          12.345678)
         self.assertEqual(out["option_qty"], 0.333333333)
 
     def test_suggestions_keep_precision(self):
-        from taxjson.lib.phantom_holdings import (PhantomCandidate,
+        from taxjson.lib.missing_history import (MissingHistoryCandidate,
                                                   format_suggestions)
         import dataclasses
-        fields = {f.name for f in dataclasses.fields(PhantomCandidate)}
+        fields = {f.name for f in dataclasses.fields(MissingHistoryCandidate)}
         kw = {k: None for k in fields}
         kw.update(symbol="BTC", account="crypto", registered=False,
                   first_negative_date="2025-01-02", peak_short=-3e-05,
                   end_position=-3e-05, disposition_count=1)
-        doc = json.loads(format_suggestions([PhantomCandidate(**kw)]))
+        doc = json.loads(format_suggestions([MissingHistoryCandidate(**kw)]))
         self.assertEqual(doc[0]["_peak_short"], -3e-05)
         self.assertEqual(doc[0]["_end_position"], -3e-05)
 
@@ -524,7 +524,7 @@ class TestMergerReceiptPostedLater(unittest.TestCase):
                    "MGR - CHEVRON CORPORATION SHRS RECEIVED THRU MERGER")]
 
     def test_next_day_receipt_links(self):
-        from taxjson.lib.phantom_holdings import detect_corp_action_links
+        from taxjson.lib.missing_history import detect_corp_action_links
         links = detect_corp_action_links(self._rows("2025-07-02"))
         self.assertEqual([(l.old_symbol, l.new_symbol) for l in links],
                          [("H015283.US", "CVX.US")])
@@ -638,6 +638,7 @@ class TestSplitGainsPerAccount(unittest.TestCase):
             "option_replacement_warnings": [
                 {"loss_id": "a1", "rule": "call_vs_share_loss"},
                 {"loss_id": "zz", "rule": "call_vs_share_loss"}],
+            # The log's pre-2026-10 key (a cached work/ file): still read.
             "phantom_application_log": [
                 {"account": "a", "symbol": "Q.US", "inserted": False},
                 {"account": "b", "symbol": "R.US", "inserted": False}],
@@ -659,7 +660,7 @@ class TestSplitGainsPerAccount(unittest.TestCase):
         self.assertEqual(out["summary"]["count"], 2)
         self.assertNotIn("option_replacement_warnings", out)
         self.assertEqual([e["symbol"] for e in
-                          out["phantom_application_log"]], ["R.US"])
+                          out["missing_history_log"]], ["R.US"])
         base_a = self._base(("2021-03-01", "XYZ.TO", 100))
         out = split_for_account(self._combined(), "a", base_a)
         self.assertEqual(out["inventory"][0]["position_start_date"],
@@ -774,9 +775,10 @@ class TestTraceColumns(unittest.TestCase):
         self.assertEqual(roles[("2025-03-10", "tfsa")], "cover")
 
 
-class TestPhantomFileDiagnostics(unittest.TestCase):
-    """S076-05: a stale or mistyped phantoms.json entry was noted only in
-    the gains JSON, and any phantom file switched the go-short hint off.
+class TestMissingHistoryFileDiagnostics(unittest.TestCase):
+    """S076-05: a stale or mistyped missing_history.json entry was noted
+    only in the gains JSON, and any such file switched the go-short hint
+    off.
     Also: every stage handed the whole project file printed a 'no rows'
     warning for every other account's entry."""
 
@@ -792,7 +794,7 @@ class TestPhantomFileDiagnostics(unittest.TestCase):
         from taxjson.lib.pipeline import prepare_books
         main, sh = self._books()
         with tempfile.TemporaryDirectory() as td:
-            ph = Path(td) / "phantoms.json"
+            ph = Path(td) / "missing_history.json"
             ph.write_text(json.dumps([
                 {"symbol": "ABC.TO", "account": "margin"},
                 {"symbol": "XYZ.TO", "account": "margin"},
@@ -809,7 +811,7 @@ class TestPhantomFileDiagnostics(unittest.TestCase):
         self.assertNotIn("ABC.TO / margin", e)
         # The go-short hint still names the pair the file does not list.
         self.assertIn("go short in this data: DEF.TO/margin", e)
-        self.assertIn("find-missing-history --gen-phantoms", e)
+        self.assertIn("find-missing-history --write-missing-history", e)
 
 
 class TestJournalNoteDirection(unittest.TestCase):

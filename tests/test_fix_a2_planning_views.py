@@ -10,7 +10,7 @@
            nothing
   A2-1182  all-accounts views name a configured account with inputs but
            no books
-  A2-0685  reports/<acct>_holdings.toml applies phantoms.json openings
+  A2-0685  reports/<acct>_holdings.toml applies missing_history.json openings
   A2-0693  grant timing: an expired written call counts as a close in
            ccd-sum, winners and the .sum TRADES line
   A2-1190  wrappers relay the child's error line, not a fixed prefix
@@ -229,7 +229,7 @@ class TestHoldingsTomlAppliesPhantoms(unittest.TestCase):
         import tomllib
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, [("margin", "taxable")], {"margin": self.TT})
-            (root / "phantoms.json").write_text(json.dumps(
+            (root / "missing_history.json").write_text(json.dumps(
                 [{"symbol": "ZZZ.TO", "account": "margin"}]))
             r = _cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])

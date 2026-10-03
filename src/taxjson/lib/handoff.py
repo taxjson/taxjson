@@ -257,7 +257,9 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
              run_gains: RunGains, common_flags: List[str],
              phantoms: Optional[Path] = None) -> Dict[str, Any]:
     """{group: {symbol: {qty, acb, deferred}}} for the taxable pools as
-    of the end of `as_of` (the engine's date basis)."""
+    of the end of `as_of` (the engine's date basis). `phantoms`: the
+    project's missing-history file (missing_history.json), applied when
+    it exists (the parameter keeps its pre-rename name)."""
     settings = cfg.get("settings", {}) or {}
     basis = _basis(settings)
     cut = _d(as_of)
@@ -561,13 +563,14 @@ def record_fields(root: Path, cfg: Dict[str, Any], year: int,
                   common_flags: List[str],
                   filed_csv: Optional[Path] = None) -> Dict[str, Any]:
     cache = Path(root) / "work"
-    phantoms = Path(root) / "phantoms.json"
+    from taxjson.lib.missing_history import missing_history_path
+    mh_file = missing_history_path(root)
     rec = {
         "record_version": RECORD_VERSION,
         "date_basis": _basis(cfg.get("settings", {}) or {}),
         "dispositions": dispositions(gains_files, year),
         "year_end": snapshot(cache, cfg, f"{year}-12-31", run_gains,
-                             common_flags, phantoms),
+                             common_flags, mh_file),
         "settle_next_year": straddlers(cache, cfg, year),
         "boundary_rows": boundary_rows(cache, cfg, year),
     }

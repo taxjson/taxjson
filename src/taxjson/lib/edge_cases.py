@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 WINDOW = 30
-# Rows that change a position (OPENING_BALANCE: a phantoms.json opening
+# Rows that change a position (OPENING_BALANCE: a missing_history.json opening
 # or a broker's opening position, A2-0389). SPLIT rows scale it (_walk).
 ACQ_ACTIONS = ('BUYSELL', 'ASSIGN', 'TRANSFER', 'OPENING_BALANCE')
 # The engine's income actions (it has no 'PIL' or 'ROC' action: a
@@ -164,7 +164,7 @@ class Book:
         self.year = int(settings.get("year") or 0)
         from taxjson.lib.country import (futures_settle_mode,
                                          settings_country, settings_tax_date)
-        from taxjson.lib.phantom_holdings import LOSS_RULE
+        from taxjson.lib.missing_history import LOSS_RULE
         from taxjson.lib.income_dating import IncomeRules
         self.country = settings_country(settings)
         self.usa = self.country == "usa"
@@ -190,16 +190,16 @@ class Book:
         self.only = account
         self.txs: List[Dict[str, Any]] = []
         self.missing: List[str] = []
-        self.phantom_openings = 0
-        phantoms = self._phantoms()
+        self.missing_history_openings = 0
+        mh_pairs = self._missing_history()
         for name in sorted(accounts):
             p = self.cache / f"{name}_base.json"
             if not p.exists():
                 self.missing.append(name)
                 continue
             rows = [dict(r, _acct=name) for r in _rows(p)]
-            if phantoms:
-                rows += self._openings(rows, phantoms)
+            if mh_pairs:
+                rows += self._openings(rows, mh_pairs)
             self.txs.extend(rows)
         # Position before each row, per (account, symbol), on the tax
         # date basis (year straddles, opening vs closing call buys).
@@ -223,25 +223,27 @@ class Book:
                 h["_acct"] = h.get("account") or acct
                 self.inventory.append(h)
 
-    def _phantoms(self):
-        """phantoms.json's (symbol, account) pairs, as every twin view
-        applies them (A2-1208); None without the file."""
-        p = self.root / "phantoms.json"
-        if not p.exists():
+    def _missing_history(self):
+        """missing_history.json's (symbol, account) pairs (or the legacy
+        phantoms.json's), as every twin view applies them (A2-1208);
+        None without the file. Both names present: ValueError."""
+        from taxjson.lib.missing_history import (load_missing_history,
+                                                  project_missing_history_file)
+        p = project_missing_history_file(self.root)
+        if p is None:
             return None
-        from taxjson.lib.phantom_holdings import load_phantoms
         try:
-            return load_phantoms(p) or None
+            return load_missing_history(p) or None
         except (OSError, ValueError) as e:
-            raise ValueError(f"phantoms.json cannot be read ({e})") from None
+            raise ValueError(f"{p.name} cannot be read ({e})") from None
 
-    def _openings(self, rows: List[Dict[str, Any]], phantoms
+    def _openings(self, rows: List[Dict[str, Any]], mh_pairs
                   ) -> List[Dict[str, Any]]:
         """The OPENING_BALANCE rows the gains stage synthesizes for this
-        account's phantom-backed positions."""
+        account's positions bought before the data (missing history)."""
         from dataclasses import asdict
         from taxjson.lib.core import TaxTransaction
-        from taxjson.lib.phantom_holdings import synthesize_openings
+        from taxjson.lib.missing_history import synthesize_openings
         name = rows[0]["_acct"] if rows else ""
         fields = TaxTransaction.__dataclass_fields__
         txs = []
@@ -252,12 +254,12 @@ class Book:
             except (TypeError, ValueError):
                 continue
         ids = {id(t) for t in txs}
-        new, _log = synthesize_openings(txs, phantoms, flag_stale=False)
+        new, _log = synthesize_openings(txs, mh_pairs, flag_stale=False)
         out = []
         for t in new:
             if id(t) not in ids and t.action == "OPENING_BALANCE":
                 out.append(dict(asdict(t), _acct=name))
-        self.phantom_openings += len(out)
+        self.missing_history_openings += len(out)
         return out
 
     def bdate(self, r: Dict[str, Any]) -> Optional[date]:
@@ -274,7 +276,7 @@ class Book:
     def wdate(self, r: Dict[str, Any]) -> Optional[date]:
         """The date the engine counts a loss window on: the settlement
         date in Canada (CA-SL-01), the trade date in the US (US-WASH-01)
-        — whatever tax_date says (phantom_holdings.loss_window_date)."""
+        — whatever tax_date says (missing_history.loss_window_date)."""
         if self.window_basis == "settle":
             return _d(r.get("date_settle")) or _d(r.get("date"))
         return _d(r.get("date"))
@@ -321,7 +323,7 @@ def year_straddles(book: Book) -> List[Dict[str, Any]]:
     """Trades whose trade date and settlement date fall in different
     years, around this project's two year ends."""
     y = book.year
-    # Opening balances (phantoms.json, a broker's opening position) and
+    # Opening balances (missing_history.json, a broker's opening position) and
     # splits count (A2-0389, A2-1208): Book.pre_pos.
     pre_pos = book.pre_pos
     gains_by_key: Dict[Tuple, List[Dict[str, Any]]] = {}
@@ -1000,7 +1002,7 @@ def analyze(root: Path, cfg: Dict[str, Any], *, margin: int = 3,
         "year": book.year, "basis": book.basis, "country": book.country,
         "window_basis": book.window_basis,
         "futures_settle": book.futures_settle, "margin": margin,
-        "phantom_openings": book.phantom_openings,
+        "missing_history_openings": book.missing_history_openings,
         "missing_books": book.missing,
         "year_boundary": {
             "straddles": year_straddles(book),

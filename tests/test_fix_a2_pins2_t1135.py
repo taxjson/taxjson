@@ -577,14 +577,14 @@ class TestPhantomRelevanceOnTradeDates(unittest.TestCase):
 
     def test_trade_basis_dates_the_row_by_its_trade_date(self):
         from taxjson.lib.core import TaxTransaction
-        from taxjson.lib.phantom_holdings import (assess_tax_year_relevance,
-                                                  detect_phantoms)
+        from taxjson.lib.missing_history import (assess_tax_year_relevance,
+                                                  detect_missing_history)
         txs = [TaxTransaction(action="BUYSELL", date="2025-12-31",
                               date_settle="2026-01-02", time="10:00:00",
                               symbol="QZP.US", quantity=-10,
                               net_amount=2000.0, account="margin",
                               currency="USD")]
-        cands = detect_phantoms(txs)
+        cands = detect_missing_history(txs)
         trade = assess_tax_year_relevance(txs, cands, 2025,
                                           date_basis="trade")[0]
         self.assertTrue(trade.affects_year)

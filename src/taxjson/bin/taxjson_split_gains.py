@@ -38,9 +38,20 @@ from taxjson.bin.taxjson_apply_distributions import balance_on, moment_rank
 PROG = "taxjson-split-gains"
 
 
-def _phantom_openings(combined: Dict[str, Any], account: str) -> List[dict]:
+def _mh_log(doc: Dict[str, Any]) -> List[dict]:
+    """The gains file's missing-history log: 'missing_history_log', or
+    'phantom_application_log' in a file an older taxjson wrote (a cached
+    work/ dir)."""
+    log = doc.get("missing_history_log")
+    if log is None:
+        log = doc.get("phantom_application_log")
+    return log or []
+
+
+def _missing_history_openings(combined: Dict[str, Any],
+                              account: str) -> List[dict]:
     out = []
-    for e in combined.get("phantom_application_log") or []:
+    for e in _mh_log(combined):
         if (e.get("account") == account and e.get("inserted")
                 and float(e.get("opening_qty") or 0.0) > 0):
             d = e.get("anchor_date") or "1970-01-01"
@@ -115,11 +126,12 @@ def split_for_account(combined: Dict[str, Any], account: str,
             if (w.get("loss_tx") or {}).get("account") == account
             or w.get("loss_tx_id") in _entry_ids]
 
-    # Phantom openings the blended pass synthesized for THIS account
-    # (phantoms.json): they are in the pool but not in the base book
+    # Missing-history openings the blended pass synthesized for THIS
+    # account (missing_history.json): they are in the pool but not in the
+    # base book
     # (audit R1-275 / R1-322 — SPY showed -379 shares at a negative cost,
     # BK.TO vanished).
-    openings = _phantom_openings(combined, account)
+    openings = _missing_history_openings(combined, account)
     _basis = (combined.get("summary") or {}).get("tax_date_basis") \
         or "settle"
     starts = (_position_starts(list(base_txs) + openings, _basis)
@@ -221,7 +233,7 @@ def split_for_account(combined: Dict[str, Any], account: str,
         "inventory": inventory,
         "summary": summary,
     }
-    # The manual superficial-loss warnings (phantom-basis neighbours)
+    # The manual superficial-loss warnings (unknown-cost neighbours)
     # follow their loss's account (audit R1-325: the split dropped them).
     slw = [w for w in combined.get("superficial_loss_warnings") or []
            if (w.get("account") or account) == account
@@ -230,7 +242,7 @@ def split_for_account(combined: Dict[str, Any], account: str,
     if slw:
         out["superficial_loss_warnings"] = slw
     # Option/right-replacement warnings follow their loss (by its id),
-    # and the phantom log its account (audit S050-11: both were dropped
+    # and the missing-history log its account (audit S050-11: both were dropped
     # from the canonical per-account file).
     _loss_ids = _entry_ids | {e.get("tx_id") or e.get("id")
                               for e in manual}
@@ -238,10 +250,10 @@ def split_for_account(combined: Dict[str, Any], account: str,
            if w.get("loss_id") in _loss_ids]
     if orw:
         out["option_replacement_warnings"] = orw
-    plog = [e for e in combined.get("phantom_application_log") or []
+    plog = [e for e in _mh_log(combined)
             if e.get("account") == account]
     if plog:
-        out["phantom_application_log"] = plog
+        out["missing_history_log"] = plog
     return out
 
 

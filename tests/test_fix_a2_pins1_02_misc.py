@@ -3,7 +3,7 @@ fails when the code it guards is reverted (a surviving mutant).
 
   A2-0537 / A2-0938  the tax_date variant in each consumer: the standalone
           audit's US default, check-filed's recorded date basis, the
-          handoff snapshot, --suggest-phantoms, find-missing-history, the
+          handoff snapshot, --suggest-missing-history, find-missing-history, the
           T1135 walk order, the checklist wash step, split-gains position
           starts, the trades view (window and .tt dates) and the web
           what-if grant-year basis
@@ -106,7 +106,7 @@ class TestCaTradeBasisConsumers(unittest.TestCase):
             out = root / "sugg.json"
             rc, _o, err = _call(G.main, [
                 "--country", "canada", "--tax-date", "trade", "--year",
-                "2025", "--suggest-phantoms", str(out),
+                "2025", "--suggest-missing-history", str(out),
                 str(root / "work" / "margin_base.json")], use_sys_argv=True)
             self.assertEqual(rc, 0, err)
             sugg = json.loads(out.read_text())

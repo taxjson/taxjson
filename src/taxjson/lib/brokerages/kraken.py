@@ -834,7 +834,7 @@ class KrakenBrokerage(BaseBrokerage):
                   f"of {unverified} fill(s) can't be verified — {where}. "
                   f"Kraken's trades CSV states every fee in quote units "
                   f"even when Kraken took it in the traded coin, which "
-                  f"books phantom coins; add the ledgers export covering "
+                  f"books coins that were never received; add the ledgers export covering "
                   f"these dates beside the trades file.",
                   file=sys.stderr)
         if margin_fills:

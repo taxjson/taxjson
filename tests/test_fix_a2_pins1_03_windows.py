@@ -87,7 +87,7 @@ class TestPartialTaintWarningWindowEdge(unittest.TestCase):
                 tx("BUYSELL", rebuy_date, "PT.TO", 500, 20000.0,
                    currency="CAD", account="m")]
         with tempfile.TemporaryDirectory() as tmp:
-            ph = Path(tmp) / "phantoms.json"
+            ph = Path(tmp) / "missing_history.json"
             ph.write_text(json.dumps([{"symbol": "PT.TO", "account": "m"}]))
             with contextlib.redirect_stderr(io.StringIO()):
                 res = run_gains(copy.deepcopy(book), [], [], req=GainsRequest(

@@ -55,7 +55,7 @@ class _Books:
                              encoding="utf-8")
         self.phantoms = None
         if phantoms is not None:
-            self.phantoms = tmp / "phantoms.json"
+            self.phantoms = tmp / "missing_history.json"
             self.phantoms.write_text(json.dumps(phantoms), encoding="utf-8")
         greq = GainsRequest(year=year, taxable=True,
                             incomplete_history=self.phantoms, **req)

@@ -451,7 +451,7 @@ class TestManualLossWarningsByCountry(unittest.TestCase):
         import tempfile
         from pathlib import Path
         with tempfile.TemporaryDirectory() as td:
-            ph = Path(td) / "phantoms.json"
+            ph = Path(td) / "missing_history.json"
             ph.write_text(json.dumps([{"symbol": "NNN.US",
                                        "account": "margin"}]))
             return gains_both(book, year=2025, incomplete_history=ph, **kw)
@@ -508,7 +508,7 @@ class TestManualLossWarningsByCountry(unittest.TestCase):
         # A2-1497: day 30 is inside the window, day 31 is not — on settle
         # dates for Canada (both the engine's partial-taint path and the
         # cross-year detector), on trade dates for the US.
-        from taxjson.lib.phantom_holdings import (
+        from taxjson.lib.missing_history import (
             detect_superficial_loss_warnings)
 
         def partial(rebuy_settle):
@@ -541,7 +541,7 @@ class TestManualLossWarningsByCountry(unittest.TestCase):
     @rule("US-BASIS-04")
     @rule_absent("US-BASIS-04", country="canada")
     def test_cross_year_window_dates(self):
-        from taxjson.lib.phantom_holdings import (
+        from taxjson.lib.missing_history import (
             detect_superficial_loss_warnings)
         loss = [{"date": "2025-04-06", "date_settle": "2025-04-03",
                  "symbol": "MMM.US", "gain": -200.0}]
@@ -573,7 +573,7 @@ class TestManualLossWarningsByCountry(unittest.TestCase):
         from pathlib import Path
         from taxjson.lib.pipeline import GainsRequest, run_gains
         with tempfile.TemporaryDirectory() as td:
-            ph = Path(td) / "phantoms.json"
+            ph = Path(td) / "missing_history.json"
             ph.write_text(json.dumps([{"symbol": "NNN.US",
                                        "account": "margin"}]))
             res = {nw: run_gains(list(book), req=GainsRequest(
@@ -626,7 +626,7 @@ class TestSharedHelpersSpeakTheCountry(unittest.TestCase):
                                    if r["action"] == "BUYSELL"), 100.0)
 
     def test_registered_label_fallback_knows_each_countrys_plans(self):
-        from taxjson.lib.phantom_holdings import is_registered_account
+        from taxjson.lib.missing_history import is_registered_account
         self.assertTrue(is_registered_account("ROTH_IRA", country="usa"))
         self.assertTrue(is_registered_account("IRA-2", country="usa"))
         self.assertFalse(is_registered_account("MIRAGE", country="usa"))

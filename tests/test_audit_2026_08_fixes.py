@@ -860,7 +860,7 @@ class TestLowSeverityBatch(unittest.TestCase):
             "account margin's banner absorbed margin_us's diagnostics")
 
     def test_zero_basis_walk_dedupes_broker_split_copies(self):
-        from taxjson.lib.phantom_holdings import (
+        from taxjson.lib.missing_history import (
             detect_zero_basis_acquisitions)
         txs = [
             # $0-cost acquisition (unhandled corp action).

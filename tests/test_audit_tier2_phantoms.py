@@ -36,7 +36,7 @@ def _tt(action, date, symbol, qty, price=0.0, net=0.0, account="acct",
 
 class TestSynthesizeOpeningsSplits(unittest.TestCase):
     def _synth(self, txs, pairs):
-        from taxjson.lib.phantom_holdings import synthesize_openings
+        from taxjson.lib.missing_history import synthesize_openings
         return synthesize_openings(txs, pairs)
 
     def _replay_qty(self, txs, symbol):
@@ -118,7 +118,7 @@ class TestWashPassGetsPhantoms(unittest.TestCase):
                      "currency": "CAD", "account": "margin"}]}))
             (cache / "sheltered_base.json").write_text(
                 json.dumps({"transactions": []}))
-            phantoms = root / "phantoms.json"
+            phantoms = root / "missing_history.json"
             phantoms.write_text(json.dumps(
                 [{"symbol": "PHM.TO", "account": "margin"}]))
             settings = {"year": 2026, "country": "canada",

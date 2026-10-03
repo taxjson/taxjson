@@ -2105,7 +2105,7 @@ def _crypto_sends_problems(name: str, adoc: Dict[str, Any]) -> List[str]:
             f"{name} to {', '.join(c['to'])}. A US project keeps basis per "
             f"account (US-BASIS-01) and taxjson cannot carry the moved "
             f"coins' basis and holding period across accounts: {name} "
-            f"keeps a phantom long and the receiving account sells short "
+            f"keeps a long it no longer holds and the receiving account sells short "
             f"(a 0 gain). Keep both exchanges' exports in ONE crypto "
             f"account, or report the sale of the moved coins by hand.")
     return out
@@ -2311,8 +2311,10 @@ def _apply_override_log(corp_json: Path, log: Path, account: str) -> None:
 # Project-root files the per-account stages read (their content is part
 # of each account's input fingerprint).
 _PROJECT_ROOT_INPUTS = ("ticker.map", "ticker_extraction_overrides.txt",
-                        "distributions.map", "phantoms.json",
-                        "crypto_ticker.map")
+                        "distributions.map", "missing_history.json",
+                        "phantoms.json", "crypto_ticker.map")
+# phantoms.json: the old name of missing_history.json, still read (one
+# NOTE per run asks to rename it; lib/missing_history).
 
 
 def _is_empty_manifest(path: Path) -> bool:
@@ -2349,8 +2351,12 @@ def _unreadable_project_inputs(root: Path) -> List[str]:
 def _refuse_unreadable_project_inputs(root: Path) -> None:
     """Die when a project-root input exists as a name but cannot be read.
     Every config reader calls it, so no command (scan, sanity, harvest,
-    fees, ...) builds as if ticker.map or phantoms.json were absent
-    (re-audit A2-0401 / A2-0144; `run` since A2-0313)."""
+    fees, ...) builds as if ticker.map or missing_history.json were
+    absent (re-audit A2-0401 / A2-0144; `run` since A2-0313). Also
+    refuses a project holding both missing_history.json and its old
+    name phantoms.json (which one is current cannot be guessed), and
+    says once per run that a lone phantoms.json should be renamed."""
+    _missing_history_path(root)
     _unreadable = _unreadable_project_inputs(root)
     if _unreadable:
         # exit 2: inputs that cannot be read (re-audit A2-0164, A2-1438)
@@ -2368,7 +2374,11 @@ def _inputs_fingerprint(paths: List[Path]) -> str:
             data = p.read_bytes()
         except OSError:
             continue
-        lines.append(f"{p.name} {len(data)} "
+        # The legacy phantoms.json is keyed by its new name: renaming
+        # it (same content) is not an input change.
+        _n = ("missing_history.json" if p.name == "phantoms.json"
+              else p.name)
+        lines.append(f"{_n} {len(data)} "
                      f"{hashlib.sha256(data).hexdigest()}")
     return "\n".join(lines) + "\n"
 
@@ -2770,11 +2780,11 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                        if _stem.endswith(x)), None)
         if _clash:
             # work/<acct>_tt_msft_gains.json read as the gains book of a
-            # phantom account "<acct>_tt_msft" in `sum`, its fees counted
+            # spurious account "<acct>_tt_msft" in `sum`, its fees counted
             # twice (S037-15): the artifact roles come from file names.
             _die(f"inputs/{name}/{tt.name}: a .tt file name may not end "
                  f"in {_clash!r} — its converted JSON would read as a "
-                 f"pipeline artifact (a phantom account in the reports). "
+                 f"pipeline artifact (a spurious extra account in the reports). "
                  f"Rename it, e.g. "
                  f"{tt.stem[:-len(_clash)] + _clash.replace('_', '-')}.tt")
         out = tt_json_path(cache, name, tt.name)
@@ -2985,8 +2995,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                         # as the book (S025-22).
                         + (["--ticker-map", str(ticker_map)]
                            if ticker_map else [])
-                        # Size record-date balances WITH the phantom
-                        # openings the gains stage synthesizes (S000-08).
+                        # Size record-date balances WITH the
+                        # missing-history openings the gains stage synthesizes (S000-08).
                         + (["--incomplete-history",
                             str(incomplete_history)]
                            if incomplete_history else []),
@@ -3074,8 +3084,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         # Spot coins cannot be short: a sale with nothing held is
         # missing history, said as ATTENTION (re-audit A2-0137).
         cmd.append("--spot-crypto")
-    # Project-wide phantom opening-balances (from `find-missing-history
-    # --gen-phantoms`). load_phantoms filters by (symbol, account), so passing
+    # Project-wide missing-history opening balances (from
+    # `find-missing-history --write-missing-history`). load_missing_history filters by (symbol, account), so passing
     # the whole file to every account's gains run is safe — non-matching pairs
     # are ignored. A rebuild dependency so editing the file re-runs gains.
     gains_deps = [base_json]
@@ -3090,7 +3100,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # EVERY run, cached or not: a broker-coded CLOSING row the books
     # cannot back (audit A2-0006), an unapplied basis adjustment
     # (A2-0199), income a record date moves across a year end (A2-0073,
-    # A2-0229), a phantoms.json entry on a real short or a written
+    # A2-0229), a missing_history.json entry on a real short or a written
     # option (A2-0637 / A2-0639). One call covers all.
     echo_attention_lines(gains_json)
     # A short where none can exist (a registered account, spot crypto,
@@ -3163,9 +3173,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                           file=sys.stderr)
         else:
             raw_gains = cache / f"{name}_raw_gains.json"
-            # phantoms.json applies to the native books too: without it
-            # holdings.toml (and the web positions) listed every
-            # phantom pair as a SHORT, and `taxjson gains` showed a
+            # missing_history.json applies to the native books too:
+            # without it holdings.toml (and the web positions) listed
+            # every listed pair as a SHORT, and `taxjson gains` showed a
             # tainted sale as a realized gain (audit A2-0111 / A2-0305,
             # R1-275 / R1-322). A pair spelled with a TOBASE target the
             # native books do not use simply has no rows here.
@@ -3354,9 +3364,9 @@ def stage_wash_pass(name: str, settings: Dict[str, Any], cache: Path, reports_di
     ]
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
-    # Same phantom opening-balances as the main gains pass — without this the
-    # wash-adjusted books (which `taxjson wash-sales` PREFERS when present)
-    # were computed on different, phantom-less books than <account>.sum.
+    # Same missing-history opening balances as the main gains pass — without
+    # this the wash-adjusted books (which `taxjson wash-sales` PREFERS when
+    # present) were computed on different books than <account>.sum.
     if incomplete_history is not None:
         cmd += ["--incomplete-history", str(incomplete_history)]
     cmd.append(str(base_json))
@@ -3534,7 +3544,7 @@ def stage_blended_wash_pass(names: List[str],
     # site — resolve_gains_files and the radar/missing-history fallback
     # globs — must ALSO filter `startswith(".")` explicitly. A visible
     # name here (or a glob site without the dot filter) would be
-    # discovered as a phantom account and every aggregate would
+    # discovered as a spurious account and every aggregate would
     # double-count.
     combined_base = cache / f".{tag}_base.json"
     run_to_file(_cmd("taxjson-merge") + [
@@ -3588,8 +3598,8 @@ def stage_blended_wash_pass(names: List[str],
                              blended=True)
     # Conservation check: the splitter apportions blended inventory
     # rows by each account's BASE-book balance, which does not include
-    # phantom (OPENING_BALANCE) shares synthesized in-memory from
-    # phantoms.json — those shares silently vanish from every
+    # missing-history (OPENING_BALANCE) shares synthesized in-memory
+    # from missing_history.json — those shares silently vanish from every
     # per-account holding. Compare Σ per-account qty vs the blended
     # row and say so instead of staying silent.
     try:
@@ -3623,11 +3633,12 @@ def _blend_conservation_gaps(blended_doc: Dict[str, Any],
     for sym, total in sorted(blended_inv.items()):
         got = split_sums.get(sym, 0.0)
         # Name the direction (audit A2-0021/A2-0074: an EXCESS was
-        # reported as 'only ... under-report' and blamed on phantoms).
+        # reported as 'only ... under-report' and blamed on the
+        # missing-history openings).
         if total - got > 1e-4:
             out.append(f"blended {sym} holds {total:g} but the per-account "
                        f"split accounts for only {got:g} — "
-                       f"{total - got:g} short. Shares from phantoms.json "
+                       f"{total - got:g} short. Shares from missing_history.json "
                        f"cannot be attributed to an account; otherwise a "
                        f"rename or split of {sym} is read differently by "
                        f"the per-account walk. Per-account holdings "
@@ -3837,7 +3848,7 @@ def stage_cross_reports(all_gains: List[Path],
                         sheltered_base: Optional[Path],
                         reports_dir: Path,
                         ticker_map: Optional[Path] = None,
-                        phantoms: Optional[Path] = None,
+                        missing_history: Optional[Path] = None,
                         *, country: str) -> None:
     if not all_gains:
         return
@@ -3865,7 +3876,7 @@ def stage_cross_reports(all_gains: List[Path],
                 "--taxable", str(tb),
                 "--json-out", str(reports_dir / f"wash_radar_{stem}.json"),
                 "--account", stem,
-            ] + _radar_engine_args([tb], phantoms, country)
+            ] + _radar_engine_args([tb], missing_history, country)
                 + sheltered_arg, reports_dir / f"wash_radar_{stem}.rpt",
                 capture_diag=False)
         if len(taxable_equity_base) > 1:
@@ -3881,7 +3892,8 @@ def stage_cross_reports(all_gains: List[Path],
                 "--json-out",
                 str(reports_dir / "wash_radar_COMBINED.json"),
                 "--account", "COMBINED",
-            ] + _radar_engine_args(taxable_equity_base, phantoms, country)
+            ] + _radar_engine_args(taxable_equity_base, missing_history,
+                                   country)
                 + sheltered_arg, reports_dir / "wash_radar_COMBINED.rpt",
                 capture_diag=False)
         else:
@@ -3926,19 +3938,34 @@ def stage_fees(cache: Path, settings: Dict[str, Any], rates: Path,
 
 # ---------------------------------------------------------------- entry points
 
-def _refuse_phantoms_for_unknown_accounts(phantoms: Path,
-                                          accounts: Dict[str, Any]) -> None:
-    """phantoms.json is keyed by account LABEL. An entry whose account is
+def _missing_history_path(root: Path) -> Path:
+    """The project's missing-history file: missing_history.json, or the
+    legacy phantoms.json when only that exists (it is read, with one
+    rename NOTE per run). The path may not exist — callers test
+    .exists(). Dies (exit 2) when both names exist."""
+    from taxjson.lib.missing_history import (MissingHistoryFileConflict,
+                                              missing_history_path)
+    try:
+        return missing_history_path(root)
+    except MissingHistoryFileConflict as e:
+        _die_input(str(e))
+        raise                                   # (unreachable)
+
+
+def _refuse_unknown_missing_history_accounts(mh_file: Path,
+                                             accounts: Dict[str, Any]
+                                             ) -> None:
+    """missing_history.json is keyed by account LABEL. An entry whose account is
     not in [accounts] (the account was renamed or removed) used to be
     skipped silently — its opening vanished and the filed gain changed
     (audit S021-05: a pure relabel moved a book by tens of thousands).
     Refuse the run and name each stale label with a suggestion."""
     import difflib
-    from taxjson.lib.phantom_holdings import load_phantoms
+    from taxjson.lib.missing_history import load_missing_history
     try:
-        pairs = load_phantoms(phantoms)
+        pairs = load_missing_history(mh_file)
     except (OSError, ValueError) as e:
-        sys.exit(f"taxjson run: {phantoms}: {e}")
+        sys.exit(f"taxjson run: {mh_file}: {e}")
     stale: Dict[str, List[str]] = {}
     for sym, acct in sorted(pairs):
         if acct not in accounts:
@@ -3955,7 +3982,7 @@ def _refuse_phantoms_for_unknown_accounts(phantoms: Path,
                      f"{'y' if len(syms) == 1 else 'ies'} "
                      f"({', '.join(syms[:5])}{more}){hint}")
     sys.exit(
-        f"taxjson run: {phantoms} names account(s) that are not in "
+        f"taxjson run: {mh_file} names account(s) that are not in "
         f"taxjson.toml [accounts] ({', '.join(known) or 'none'}):\n"
         + "\n".join(lines)
         + "\n  Those openings would be skipped and the gains would "
@@ -4164,34 +4191,42 @@ def cmd_run(args: argparse.Namespace) -> None:
             # (re-audit A2-0163, A2-0468, A2-0784, A2-1438).
             from taxjson.lib.cli_diag import describe_input_error
             _die_input(describe_input_error(e))
-    # phantoms.json — optional project-wide list of (symbol, account) pairs
-    # with missing pre-window history (from `find-missing-history
-    # --gen-phantoms`). Auto-detected at the root like ticker.map; when present
-    # it feeds every account's gains run via --incomplete-history.
-    phantoms = root / "phantoms.json"
-    phantoms_arg = phantoms if phantoms.exists() else None
-    if phantoms_arg:
-        _refuse_phantoms_for_unknown_accounts(phantoms_arg, accounts)
+    # missing_history.json — optional project-wide list of (symbol,
+    # account) pairs sold with no purchase in the files (bought before
+    # the data; from `find-missing-history --write-missing-history`). Its
+    # old name phantoms.json is still read, with a rename NOTE.
+    # Auto-detected at the root like ticker.map; when present it feeds
+    # every account's gains run via --incomplete-history.
+    mh_file = _missing_history_path(root)
+    mh_arg = mh_file if mh_file.exists() else None
+    if mh_arg:
+        _refuse_unknown_missing_history_accounts(mh_arg, accounts)
     # Deletion detection: needs_rebuild compares mtimes of EXISTING inputs,
-    # so removing phantoms.json left cached gains — built WITH phantoms —
+    # so removing the file left cached gains — built WITH its openings —
     # looking fresh forever. Track application with a marker; on removal,
     # bump the base files' mtimes so every gains stage rebuilds clean.
-    _ph_marker = cache / ".phantoms_applied"
-    if phantoms_arg:
-        print(f"==> phantom openings: {phantoms.name}")
+    # (.phantoms_applied: the marker's old name, in older work/ dirs.)
+    _ph_marker = cache / ".missing_history_applied"
+    _ph_marker_old = cache / ".phantoms_applied"
+    if mh_arg:
+        print(f"==> missing-history openings (sales with no purchase in "
+              f"the files): {mh_file.name}")
         cache.mkdir(parents=True, exist_ok=True, mode=0o700)
-        _ph_marker.write_text(str(phantoms))
-    elif _ph_marker.exists():
-        print("==> phantoms.json removed — invalidating cached gains built "
-              "with it")
-        _ph_marker.unlink()
+        _ph_marker.write_text(str(mh_file))
+        _ph_marker_old.unlink(missing_ok=True)
+    elif _ph_marker.exists() or _ph_marker_old.exists():
+        print("==> missing_history.json removed — invalidating cached "
+              "gains built with it")
+        _ph_marker.unlink(missing_ok=True)
+        _ph_marker_old.unlink(missing_ok=True)
         import os as _os
         # (*_raw.json too: the native raw-gains pass applies the
-        # phantoms since A2-0111 and depends on that file.)
+        # missing-history openings since A2-0111 and depends on
+        # that file.)
         for _f in [*cache.glob("*_base.json"), *cache.glob("*_raw.json")]:
             _os.utime(_f)
         # distributions.map ADJUSTs in the taxable base books were
-        # sized WITH the phantom openings (S000-08): drop those books
+        # sized WITH the missing-history openings (S000-08): drop those books
         # so the merge stage rebuilds them, not just the gains.
         if (root / "distributions.map").exists():
             for _n, _c in accounts.items():
@@ -4268,7 +4303,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             stage_account(name, acfg, settings, inputs_dir, cache,
                           reports_dir, rates, ticker_map_arg,
                           sec_overrides_arg, args.force,
-                          incomplete_history=phantoms_arg,
+                          incomplete_history=mh_arg,
                           no_input=no_input,
                           strict=getattr(args, "strict", False),
                           parse_only=True)
@@ -4288,7 +4323,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             out = stage_account(name, acfg, settings, inputs_dir, cache,
                                 reports_dir, rates, ticker_map_arg,
                                 sec_overrides_arg, args.force,
-                                incomplete_history=phantoms_arg,
+                                incomplete_history=mh_arg,
                                 no_input=no_input,
                                 strict=getattr(args, "strict", False))
         except PendingElectionsError as pe:
@@ -4414,7 +4449,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             out = stage_account(name, acfg, settings, inputs_dir, cache,
                                 reports_dir, rates, ticker_map_arg,
                                 sec_overrides_arg, args.force,
-                                incomplete_history=phantoms_arg,
+                                incomplete_history=mh_arg,
                                 no_input=no_input,
                                 strict=getattr(args, "strict", False))
         except PendingElectionsError as pe:
@@ -4447,7 +4482,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             _crypto_blend_names.append(name)
         elif _crypto_wash_covered and sheltered_base is not None:
             stage_wash_pass(name, settings, cache, reports_dir, sheltered_base,
-                            incomplete_history=phantoms_arg)
+                            incomplete_history=mh_arg)
         elif not args.account and not pending_accounts:
             # A FULL run decided this crypto account gets no wash pass
             # (US policy excludes it, or the sheltered context vanished
@@ -4479,11 +4514,11 @@ def cmd_run(args: argparse.Namespace) -> None:
                                  strict=getattr(args, "strict", False))
         stage_blended_wash_pass(_blend_names, settings, cache,
                                 reports_dir, sheltered_base,
-                                incomplete_history=phantoms_arg)
+                                incomplete_history=mh_arg)
     if _crypto_blend_names and not args.account and not pending_accounts:
         stage_blended_wash_pass(_crypto_blend_names, settings, cache,
                                 reports_dir, sheltered_base,
-                                incomplete_history=phantoms_arg,
+                                incomplete_history=mh_arg,
                                 tag="cryptoblend")
     if not args.account and not pending_accounts:
         # A sheltered account never gets a wash pass. One re-typed from
@@ -4592,7 +4627,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             o["base"] for _, o, is_crypto in taxable_outputs
             if not is_crypto or _crypto_wash_covered]
         stage_cross_reports(all_gains, taxable_equity_base, sheltered_base, reports_dir,
-                            ticker_map_arg, phantoms=phantoms_arg,
+                            ticker_map_arg, missing_history=mh_arg,
                             country=_country(settings))
         # Overlap notes per blended group — the note says the blended
         # pass covers the symbol, so it must only name accounts a blend
@@ -4717,7 +4752,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     # same-day trades that haven't reached the CSVs yet differ
     # routinely, and a hard failure there would teach the user to
     # ignore it. Only a self-vs-external compare catches a stranded
-    # position that every internal report agrees on (the FFN phantom
+    # position that every internal report agrees on (the FFN stranded
     # shares, the DFDV option class split).
     if not args.account and any((_a or {}).get("holdings")
                                 for _a in cfg.get("accounts", {}).values()):
@@ -6933,7 +6968,7 @@ def _leaps_closed(root: Path, account: Optional[str], leaps,
     """[(account, gains_entry)] for in-window dispositions of LEAPS
     contracts, from the wash-adjusted gains files (falling back to the
     plain gains files) — the lot-matched, superficial-loss-adjusted,
-    BASE-currency numbers a return reports. Tainted (phantom-basis)
+    BASE-currency numbers a return reports. Tainted (unknown-cost)
     dispositions are excluded, mirroring every filing-facing consumer.
     Second element: whether any gains file was found at all; third the
     resolved files' basis label ("wash-adjusted" only when the wash
@@ -6952,7 +6987,7 @@ def _leaps_closed(root: Path, account: Optional[str], leaps,
         data = _load_json_or_die(path)
         found = True
         _settle = _settle_basis(root, data)
-        # Phantom-basis LEAPS closes routed to manual reporting (or
+        # Unknown-cost LEAPS closes routed to manual reporting (or
         # flagged in-line) vanished with no word, and the view said
         # "No closed LEAPS positions" (S040-06): count them.
         for e in data.get("manual_reporting_required") or []:
@@ -6987,7 +7022,8 @@ def _leaps_closed(root: Path, account: Optional[str], leaps,
             entries.append((acct, e))
     if tainted:
         print(f"taxjson: warning: {tainted} LEAPS disposition(s) in this "
-              f"window have phantom cost basis and need MANUAL reporting "
+              f"window have an unknown cost (no purchase in your files) and "
+              f"need MANUAL reporting "
               f"— not shown here (see `taxjson sum`).", file=sys.stderr)
     return entries, found, basis
 
@@ -7126,7 +7162,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
             data.get("transactions") or [], data.get("inventory") or [],
             (data.get("summary") or {}).get("year"))
         _settle = _settle_basis(root, data)
-        # Routed phantom-basis rows (manual_reporting_required) are
+        # Routed unknown-cost rows (manual_reporting_required) are
         # tainted too — counted, never silent (audit S040-15 sibling).
         for t in data.get("manual_reporting_required") or []:
             sym = str(t.get("symbol") or "")
@@ -7144,7 +7180,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
             if not _ISO_DATE_RE.match(d) or not keep(d):
                 continue
             if t.get("tainted"):
-                # Phantom-basis rows are excluded by every filing-
+                # Unknown-cost rows are excluded by every filing-
                 # facing consumer; counting them here fabricated
                 # premium totals (REVIEW #2 sibling).
                 tainted_skipped += 1
@@ -7164,7 +7200,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
                 # heuristic taxjson-ccd-gains uses. A BREAK-EVEN row
                 # satisfies both orientations; classify it LONG
                 # (excluded) rather than fabricate a covered-call
-                # close with phantom premium/buyback totals (2026-09
+                # close with invented premium/buyback totals (2026-09
                 # audit).
                 direction = ("SHORT"
                              if abs(gain - (cost - proceeds)) < 0.01
@@ -7201,7 +7237,8 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     base_cur = _base_currency(root)
     if tainted_skipped:
         print(f"taxjson ccd-sum: warning: skipped {tainted_skipped} "
-              f"tainted disposition(s) with phantom cost basis — "
+              f"tainted disposition(s) with unknown cost (no purchase in "
+              f"your files) — "
               f"matches form-export/carryover/leaps.", file=sys.stderr)
     if getattr(args, "json", False):
         _json_out({"rows": [dict(rec, underlying=und,
@@ -7284,7 +7321,7 @@ def cmd_winners(args: argparse.Namespace) -> None:
             data.get("transactions") or [], data.get("inventory") or [],
             (data.get("summary") or {}).get("year"))
         _settle = _settle_basis(root, data)
-        # Pipeline files ROUTE phantom-basis rows out of transactions[]
+        # Pipeline files ROUTE unknown-cost rows out of transactions[]
         # into manual_reporting_required: count them too, or the
         # "nothing is silent" warning never fired on real books (audit
         # S040-15).
@@ -7299,7 +7336,7 @@ def cmd_winners(args: argparse.Namespace) -> None:
             if not _ISO_DATE_RE.match(d) or not keep(d):
                 continue
             if t.get("tainted"):
-                # Phantom OPENING_BALANCE basis fabricates gains — a
+                # A missing-history OPENING_BALANCE basis fabricates gains — a
                 # $0-cost row was ranked the portfolio's #2 winner and
                 # made the total irreconcilable with form-export
                 # (REVIEW #2). Excluded like every filing-facing
@@ -7334,7 +7371,8 @@ def cmd_winners(args: argparse.Namespace) -> None:
     base_cur = _base_currency(root)
     if tainted_skipped:
         print(f"taxjson winners: warning: skipped {tainted_skipped} "
-              f"tainted disposition(s) with phantom cost basis — "
+              f"tainted disposition(s) with unknown cost (no purchase in "
+              f"your files) — "
               f"matches form-export/carryover/leaps.", file=sys.stderr)
     if getattr(args, "json", False):
         _json_out({"rows": [dict(rec, ticker=t,
@@ -8417,7 +8455,7 @@ def cmd_gains(args: argparse.Namespace) -> None:
             continue
         data = _load_json_or_die(f)
         _settle = _settle_basis(root, data)
-        # phantoms.json sales (basis before the data) are routed out of
+        # missing_history.json sales (bought before the data) are routed out of
         # the gains, as in `sum`: count them so the view says so (audit
         # A2-0305).
         for g in data.get("manual_reporting_required") or []:
@@ -8442,8 +8480,8 @@ def cmd_gains(args: argparse.Namespace) -> None:
         print(f"taxjson: warning: {bad_dates} gain row(s) had a missing/unparseable "
               f"date and were excluded.", file=sys.stderr)
     if manual:
-        print(f"taxjson gains: note: {manual} phantom-basis disposition(s) "
-              f"(sales of shares bought before the data, phantoms.json) "
+        print(f"taxjson gains: note: {manual} sale(s) with unknown cost "
+              f"(shares bought before the data, missing_history.json) "
               f"are not shown — their basis is unknown; `taxjson "
               f"form-export` lists them for manual reporting.",
               file=sys.stderr)
@@ -8481,7 +8519,7 @@ def cmd_gains(args: argparse.Namespace) -> None:
 
 
 # One per-country plan table (lib/country.PLAN_COUNTRY): the HSA, LIF,
-# RDSP ... its phantom_holdings twin knew were missing, and the other
+# RDSP ... its missing_history twin knew were missing, and the other
 # country's plans were accepted silently (audit A2-0739, A2-1272,
 # A2-1332).
 from taxjson.lib.country import PLAN_COUNTRY as _PLAN_COUNTRY
@@ -9623,7 +9661,8 @@ def cmd_summary(args: argparse.Namespace) -> None:
     if tainted_included:
         # In-line tainted rows (raw engine output): counted in totals.
         print(f"taxjson sum: warning: totals include {tainted_included} "
-              f"tainted disposition(s) with phantom cost basis — "
+              f"tainted disposition(s) with unknown cost (no purchase in "
+              f"your files) — "
               f"form-export/carryover exclude them, so filing totals "
               f"will differ.", file=sys.stderr)
     if tainted_routed:
@@ -11163,13 +11202,14 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
     rows = []
     books = 0
     missing = []
-    _phantoms = None
-    if (root / "phantoms.json").exists():
-        from taxjson.lib.phantom_holdings import load_phantoms
+    _mh_pairs = None
+    _mh = _missing_history_path(root)
+    if _mh.exists():
+        from taxjson.lib.missing_history import load_missing_history
         try:
-            _phantoms = load_phantoms(root / "phantoms.json") or None
+            _mh_pairs = load_missing_history(_mh) or None
         except (OSError, ValueError) as e:
-            _die(f"phantoms.json is unreadable: {e}")
+            _die(f"{_mh.name} is unreadable: {e}")
     for name, acfg in sorted((cfg.get("accounts") or {}).items()):
         if not isinstance(acfg, dict) or acfg.get("type", "sheltered") != "taxable":
             continue
@@ -11190,12 +11230,12 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
                                              if k in TaxTransaction.__dataclass_fields__}))
             except TypeError:
                 continue
-        if _phantoms is not None:
-            # The same phantom openings the gains stage adds: a phantom-
-            # backed LONG option sold to close read as a WRITE, with a
+        if _mh_pairs is not None:
+            # The same missing-history openings the gains stage adds: a
+            # LONG option bought before the data and sold to close read as a WRITE, with a
             # false checklist ATTENTION when it had expired (S044-09).
-            from taxjson.lib.phantom_holdings import synthesize_openings
-            txs, _log = synthesize_openings(txs, _phantoms)
+            from taxjson.lib.missing_history import synthesize_openings
+            txs, _log = synthesize_openings(txs, _mh_pairs)
         for r in straddling(txs, year, timing, since, filed_years,
                             filed_timing=filed_timing,
                             tax_date=_tax_date_basis(settings),
@@ -11995,7 +12035,7 @@ def cmd_positions(args: argparse.Namespace) -> None:
         files = {}
         tmp_docs = {}
         _no_input = _accounts_skipped_for_no_inputs(root)
-        _phantoms = root / "phantoms.json"
+        _mh_file = _missing_history_path(root)
         for n in names:
             b = cache / f"{n}_base.json"
             if not b.exists():
@@ -12027,11 +12067,11 @@ def cmd_positions(args: argparse.Namespace) -> None:
             _acfg = accounts_cfg.get(n, {}) or {}
             cmd += _wash_flags(_acfg.get("type") == "taxable",
                                bool(_acfg.get("crypto")), country)
-            # The same phantom openings every other recompute applies:
-            # without them each phantom-backed position showed as a
+            # The same missing-history openings every other recompute
+            # applies: without them each such position showed as a
             # large short (R1-187).
-            if _phantoms.exists():
-                cmd += ["--incomplete-history", str(_phantoms)]
+            if _mh_file.exists():
+                cmd += ["--incomplete-history", str(_mh_file)]
             res = _run_cmd(cmd + [str(b)], capture_output=True)
             if res.returncode != 0:
                 # Dropping the account (a warning, then a table of the
@@ -12539,12 +12579,12 @@ def cmd_t1135(args: argparse.Namespace) -> None:
         sys.exit(f"taxjson t1135: cannot read {t1135_map.name} (a broken "
                  f"link or not a file) — fix or remove it; its country "
                  f"overrides change the verdict.")
-    # The same phantom openings the gains stage applies (R1-321): without
-    # them a phantom-backed position read as a short that later real
-    # buys covered at zero cost.
-    phantoms = root / "phantoms.json"
-    if phantoms.exists():
-        argv += ["--incomplete-history", str(phantoms)]
+    # The same missing-history openings the gains stage applies (R1-321):
+    # without them a position bought before the data read as a short that
+    # later real buys covered at zero cost.
+    mh_file = _missing_history_path(root)
+    if mh_file.exists():
+        argv += ["--incomplete-history", str(mh_file)]
     # The full-history superficial-loss pass (S008-07) sees what the
     # pipeline's wash pass sees: the registered accounts as context and
     # the project's written-option timing.
@@ -12596,7 +12636,7 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     """`taxjson carryover`: multi-year capital-loss carryforward/carryback
     ledger over all taxable accounts' full-history books. Passes the
     combined sheltered book for wash-window context and the project's
-    phantoms.json when present. A root `claimed_losses.txt` (YEAR AMOUNT
+    missing_history.json when present. A root `claimed_losses.txt` (YEAR AMOUNT
     lines) is picked up automatically to fold in what was actually
     claimed on filed returns."""
     from taxjson.bin import taxjson_carryover
@@ -12653,9 +12693,9 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         argv += ["--sheltered", str(sheltered_base)]
-    phantoms = root / "phantoms.json"
-    if phantoms.exists():
-        argv += ["--incomplete-history", str(phantoms)]
+    mh_file = _missing_history_path(root)
+    if mh_file.exists():
+        argv += ["--incomplete-history", str(mh_file)]
     claimed = Path(args.claimed) if args.claimed else root / "claimed_losses.txt"
     # A dangling symlink or a directory is not "no file": the ledger
     # without the user's claims overstates the carryforward (A2-0355).
@@ -12913,7 +12953,7 @@ def cmd_harvest(args: argparse.Namespace) -> None:
         _rcmd = _cmd("taxjson-wash-radar") + [
             "--taxable", *[str(b) for b in _bases],
             "--json-out", str(_live), "--account", "LIVE"]
-        _rcmd += _radar_engine_args(_bases, root / "phantoms.json",
+        _rcmd += _radar_engine_args(_bases, _missing_history_path(root),
                                     _country(settings))
         if (cache / "sheltered_base.json").exists():
             _rcmd += ["--sheltered", str(cache / "sheltered_base.json")]
@@ -13468,7 +13508,7 @@ def cmd_handoff(args: argparse.Namespace) -> None:
     try:
         opening = _handoff.snapshot(root / "work", cfg, f"{ry}-12-31",
                                     _filed_run_gains, _hflags,
-                                    root / "phantoms.json")
+                                    _missing_history_path(root))
         rep = _handoff.check(root, cfg, record, opening)
     except _handoff.BooksError as e:
         # Not a fabricated "a lot or a sale is missing" (A2-1137).
@@ -13853,10 +13893,11 @@ def _explain_wash_sales(root: Path, cache: Path,
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         common += ["--sheltered", str(sheltered_base)]
-    # Same phantom openings as the pipeline, so traces match the books.
-    phantoms = root / "phantoms.json"
-    if phantoms.exists():
-        common += ["--incomplete-history", str(phantoms)]
+    # Same missing-history openings as the pipeline, so traces match the
+    # books.
+    mh_file = _missing_history_path(root)
+    if mh_file.exists():
+        common += ["--incomplete-history", str(mh_file)]
     common += option_timing_flags(settings)
     common += income_dating_flags(settings)
 
@@ -14026,7 +14067,7 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
 
     cmd = _cmd("taxjson-wash-radar") + ["--taxable", *[str(b) for b in bases]]
     cmd += _radar_engine_args(
-        bases, root / "phantoms.json",
+        bases, _missing_history_path(root),
         _country(_radar_config(root, "taxjson wash-radar").get(
             "settings", {})))
     # Cross-account superficial-loss detection needs the pooled sheltered
@@ -14101,13 +14142,13 @@ def _radar_taxable_bases(root: Path, cache: Path,
 
 
 def _radar_engine_args(bases: List[Path],
-                       phantoms: Optional[Path],
+                       missing_history: Optional[Path],
                        country: str) -> List[str]:
     """The radar's engine context, shared by every radar run (wash-radar,
     watch, buy-check, sell-check and the run's reports/wash_radar_*):
     the taxable accounts' gains files (wash-adjusted, s.47-blended — the
     engine decides which sales were losses), the project's
-    phantoms.json (the same openings the gains pass applies) and its
+    missing_history.json (the same openings the gains pass applies) and its
     country (Canada's per-holder s.54 test vs the US s.1091 rules)."""
     from taxjson.lib.report_model import resolve_gains_files
     # --country is required by the radar (lib/country): never omitted.
@@ -14122,15 +14163,15 @@ def _radar_engine_args(bases: List[Path],
         g = found.get(name)
         if g is not None:
             out += ["--gains", str(g)]
-    if phantoms is not None and Path(phantoms).exists():
-        out += ["--incomplete-history", str(phantoms)]
-    if phantoms is not None and out[1] == "canada":
+    if missing_history is not None and Path(missing_history).exists():
+        out += ["--incomplete-history", str(missing_history)]
+    if missing_history is not None and out[1] == "canada":
         # The project's corporate_distributions list: the radar's own
         # pool moves a Canadian TRUST's return of capital to its record
         # date as the engine does, and leaves a listed corporation's on
         # its pay date (CA-INC-DATE-ROC-TRUST; audit A2-1174/A2-1178).
         try:
-            _s = _soft_settings(Path(phantoms).parent)
+            _s = _soft_settings(Path(missing_history).parent)
             _corp = (_s.get("corporate_distributions") or [])
             # CA-SL-11 / CA-SL-12 in the radar's own pool too (a loss
             # outside the gains files' year — audit A2-0442).
@@ -14172,7 +14213,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
         "--taxable", *[str(b) for b in bases], "--all", "--json"]
     _wcountry = _country(_radar_config(root, "taxjson watch").get(
         "settings", {}))
-    cmd += _radar_engine_args(bases, root / "phantoms.json", _wcountry)
+    cmd += _radar_engine_args(bases, _missing_history_path(root), _wcountry)
     # A CLEAR is "safe as far as this project's accounts show"
     # (CA-PLAN-04 / US-PLAN-04, re-audit A2-0909).
     from taxjson.lib.wash_scope import scope_note as _scope_note
@@ -14224,7 +14265,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
             state_path = root / state_path
         # A directory, a path under a file or an unwritable place gave
         # an 11-line traceback (S046-12) — one line, like
-        # --gen-phantoms.
+        # --write-missing-history.
         if state_path.is_dir():
             _die_input(f"--state {args.state} is a directory — pass a FILE "
                  f"path, e.g. {state_path / 'watch_state.json'}")
@@ -14405,7 +14446,7 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
         # equity leg in the live payload — 2026-09 audit). A .TO
         # EQUITY in the books no longer does: a CDR (AMZN.TO) made the
         # account's US AMZN option .TO live vs .US in the books, a
-        # phantom verify mismatch every run (S031-12).
+        # false verify mismatch every run (S031-12).
         _book_syms = set()
         try:
             import json as _json
@@ -15280,7 +15321,7 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
     cmd = _cmd("taxjson-wash-radar") + [
         "--taxable", *[str(b) for b in bases], "--all", "--json"]
     cmd += _radar_engine_args(
-        bases, root / "phantoms.json",
+        bases, _missing_history_path(root),
         _country(_radar_config(root, prog).get("settings", {})))
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
@@ -15487,7 +15528,7 @@ def _last_loss_by_class(gains_files, canon, taxable, *, usa: bool
                   f"({e}) — the 'last loss sale' line leaves out "
                   f"account {_a}; re-run `taxjson run`.", file=sys.stderr)
             continue
-        # A sale routed to manual reporting (phantom basis) is still a
+        # A sale routed to manual reporting (unknown cost) is still a
         # loss sale for the window: its row has no 'gain', only the
         # engine's raw_gain (S047-02).
         _rows = [(t, False) for t in _doc.get("transactions", [])] + [
@@ -15524,7 +15565,7 @@ def _last_loss_by_class(gains_files, canon, taxable, *, usa: bool
                                  "date_kind": "traded" if usa else "settled",
                                  "symbol": _t.get("symbol"),
                                  "gain": round(_g, 2),
-                                 "phantom_basis": _routed,
+                                 "unknown_cost": _routed,
                                  "account": _t.get("account") or _a}
     return last_loss
 
@@ -15704,8 +15745,9 @@ def _last_loss_line(ll) -> Optional[str]:
     return (f"last loss sale this tax year: {ll['symbol']} "
             + (f"{_kind} " if _kind else "")
             + f"{ll['date']} ({_ago_s}, {ll['gain']:,.2f}"
-            + (", phantom basis — routed to manual reporting"
-               if ll.get("phantom_basis") else "")
+            + (", unknown cost (no purchase in your files) — routed to "
+               "manual reporting"
+               if ll.get("unknown_cost") else "")
             + f") — {_inout}.")
 
 
@@ -16276,7 +16318,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
             crypto = []
 
     sheltered_base = cache / "sheltered_base.json"
-    phantoms = root / "phantoms.json"
+    mh_file = _missing_history_path(root)
     rates = cache / "to_base.csv"
     tmap = root / "ticker.map"
 
@@ -16343,8 +16385,8 @@ def cmd_audit(args: argparse.Namespace) -> None:
             fl += ["--rates", str(rates)]
         if tmap.exists():
             fl += ["--map", str(tmap)]
-        if phantoms.exists():
-            fl += ["--incomplete-history", str(phantoms)]
+        if mh_file.exists():
+            fl += ["--incomplete-history", str(mh_file)]
         fl += _timing_flags
         # The project's income-dating overrides, as the run applied
         # them (re-audit A2-0033: the trust ROC record date).
@@ -16568,6 +16610,19 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
     base file(s) from the project and default the year from taxjson.toml."""
     root = Path(args.dir).resolve()
     cache = root / "work"
+    # --gen-phantoms: the old spelling of --write-missing-history (hidden,
+    # still accepted with a note).
+    if getattr(args, "write_missing_history", None) is None:
+        args.write_missing_history = None
+    if getattr(args, "gen_phantoms", None):
+        print("taxjson find-missing-history: note: --gen-phantoms is now "
+              "--write-missing-history (the old flag still works).",
+              file=sys.stderr)
+        if args.write_missing_history is None:
+            args.write_missing_history = args.gen_phantoms
+    # Both missing_history.json and its old name phantoms.json: refused
+    # (exit 2) before any work; only the old name: read, with a NOTE.
+    mh_file = _missing_history_path(root)
     if args.account:
         f = cache / f"{args.account}_base.json"
         if not f.exists():
@@ -16590,43 +16645,61 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
     if year is None:
         year = _soft_settings(root).get("year")
 
-    # --gen-phantoms: instead of the diagnostic report, emit a phantom
-    # opening-balance file for the truncated-history rows (positions that go
-    # negative — the subset phantoms actually fix). $0-cost corp-action rows
-    # are intentionally NOT emitted; those need a merger/spinoff basis, not a
-    # synthetic opening balance. The emit itself (incl. year-scoping) lives in
-    # `taxjson-gains --suggest-phantoms`, which takes one base file, so we run
-    # it per account and merge the JSON arrays (keyed by symbol+account).
-    if args.gen_phantoms:
+    # --write-missing-history: instead of the diagnostic report, write a
+    # missing-history file (the sales with no purchase in the files, for
+    # the truncated-history rows — positions that go negative, the subset
+    # an opening balance actually fixes). $0-cost corp-action rows are
+    # intentionally NOT emitted; those need a merger/spinoff basis, not a
+    # synthetic opening balance. The emit itself (incl. year-scoping) lives
+    # in `taxjson-gains --suggest-missing-history`, which takes one base
+    # file, so we run it per account and merge the JSON arrays (keyed by
+    # symbol+account). Without FILE it writes the project's
+    # missing_history.json.
+    if args.write_missing_history is not None:
         import json
         import tempfile
+        from taxjson.lib.missing_history import (
+            LEGACY_MISSING_HISTORY_FILE, MISSING_HISTORY_FILE)
 
-        out = Path(args.gen_phantoms)
-        # A reviewed phantoms.json is a user record (real shorts pruned,
-        # pairs added by hand): rewriting it brought pruned shorts back
-        # and dropped the hand-added pairs, silently (audit A2-0312).
+        _flag = "--write-missing-history"
+        out = (Path(args.write_missing_history)
+               if args.write_missing_history else root / MISSING_HISTORY_FILE)
+        # Writing missing_history.json next to the old phantoms.json would
+        # leave the project with both names, which every command refuses.
+        if (out.resolve() == (root / MISSING_HISTORY_FILE).resolve()
+                and (root / LEGACY_MISSING_HISTORY_FILE).exists()):
+            _die_input(f"{_flag}: {root / LEGACY_MISSING_HISTORY_FILE} is "
+                       f"the old name of {MISSING_HISTORY_FILE} — rename it "
+                       f"first (`mv {LEGACY_MISSING_HISTORY_FILE} "
+                       f"{MISSING_HISTORY_FILE}`) and pass --force to "
+                       f"replace it, or write the candidates to another "
+                       f"file (e.g. missing_history.new.json).")
+        # A reviewed missing_history.json is a user record (real shorts
+        # pruned, pairs added by hand): rewriting it brought pruned shorts
+        # back and dropped the hand-added pairs, silently (audit A2-0312).
         # Refused up front — before the per-account work — unless
         # --force, which keeps a .bak like `init --force`.
         if out.exists() and not out.is_dir():
             if not getattr(args, "force", False):
-                sys.exit(f"taxjson find-missing-history --gen-phantoms: "
+                sys.exit(f"taxjson find-missing-history {_flag}: "
                          f"{out} already exists — not overwritten (a "
                          f"reviewed file keeps your prunes and hand-added "
                          f"pairs). Write the candidates to a new file "
-                         f"(e.g. phantoms.new.json) and merge by hand, or "
-                         f"pass --force to replace it (a .bak copy is "
-                         f"kept).")
+                         f"(e.g. missing_history.new.json) and merge by "
+                         f"hand, or pass --force to replace it (a .bak "
+                         f"copy is kept).")
 
         merged: Dict[Tuple[str, str], dict] = {}
         for f in files:
             with tempfile.NamedTemporaryFile(
                     "r", suffix=".json", delete=False) as tmp:
                 tmp_path = tmp.name
-            cmd = _cmd("taxjson-gains") + ["--suggest-phantoms", tmp_path]
+            cmd = _cmd("taxjson-gains") + ["--suggest-missing-history",
+                                           tmp_path]
             # The project's jurisdiction, as the pipeline passes it
             # (taxjson-gains requires it). (Sheltered books
             # stay in: a short in a registered account is the MOST
-            # certain phantom, and `run` applies phantoms.json to every
+            # certain missing purchase, and `run` applies the file to every
             # account's gains stage.)
             cmd += ["--country", _country(_soft_settings(root))]
             # The project's written-option timing and income dating,
@@ -16656,7 +16729,7 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
                 if line.strip():
                     print(f"  [{f.name}] {line}", file=sys.stderr)
             if proc.returncode != 0:
-                sys.exit(f"taxjson find-missing-history --gen-phantoms: "
+                sys.exit(f"taxjson find-missing-history {_flag}: "
                          f"taxjson-gains failed on {f.name} "
                          f"(exit {proc.returncode}).")
             try:
@@ -16676,7 +16749,7 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         # the walk that knows them.
         _tm_path = root / "ticker.map"
         if _tm_path.exists() and merged:
-            from taxjson.lib.phantom_holdings import (detect_phantoms,
+            from taxjson.lib.missing_history import (detect_missing_history,
                                                       journal_targets)
             from taxjson.lib.core import load_transactions
             try:
@@ -16692,7 +16765,7 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
                         _txs.extend(load_transactions(f))
                     except (OSError, ValueError):
                         pass
-                _still = {(c.symbol, c.account) for c in detect_phantoms(
+                _still = {(c.symbol, c.account) for c in detect_missing_history(
                     _txs, include_options=True, include_broker_shorts=True,
                     journal_symbols=_journal)}
                 for k in sorted(_js - _still):
@@ -16716,20 +16789,21 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
             # A directory (or unwritable path) argument crashed with a
             # raw traceback AFTER all the per-account work (REVIEW #40).
             _die_input(f"cannot write "
-                     f"--gen-phantoms {out}: {e} — pass a FILE path, "
-                     f"e.g. {out / 'phantoms.json' if out.is_dir() else 'phantoms.json'}")
+                     f"{_flag} {out}: {e} — pass a FILE path, "
+                     f"e.g. {out / MISSING_HISTORY_FILE if out.is_dir() else MISSING_HISTORY_FILE}")
         n_reg = sum(1 for e in rows
                     if "Registered" in (e.get("_note") or ""))
         # Resolved: a relative path names a file under the CWD, and
         # comparing it unresolved with the resolved root told the user
         # to save a file already in place (S047-19).
         hint = ("`taxjson run` auto-detects it"
-                if out.resolve() == (root / "phantoms.json").resolve()
-                else f"save it as {root / 'phantoms.json'} and `taxjson run` "
+                if out.resolve() == (root / MISSING_HISTORY_FILE).resolve()
+                else f"save it as {root / MISSING_HISTORY_FILE} and `taxjson run` "
                      f"picks it up, or pass it to taxjson-gains "
                      f"--incomplete-history")
-        print(f"\nWrote {len(rows)} phantom candidate(s) to {out} "
-              f"({n_reg} in registered accounts — almost certainly phantom).\n"
+        print(f"\nWrote {len(rows)} sale(s) with no purchase in your "
+              f"files to {out} ({n_reg} in registered accounts — almost "
+              f"certainly a missing purchase, not a short).\n"
               f"Review the file and remove any entries that are real short "
               f"positions. Then {hint}.", file=sys.stderr)
         return
@@ -16753,8 +16827,8 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         cmd += ["--year", str(year)]
     if args.include_options:
         cmd += ["--include-options"]
-    if (root / "phantoms.json").exists():
-        cmd += ["--phantoms", str(root / "phantoms.json")]
+    if mh_file.exists():
+        cmd += ["--missing-history", str(mh_file)]
     if (root / "ticker.map").exists():
         # Name the broker's ticker of a renamed symbol (S049-01).
         cmd += ["--ticker-map", str(root / "ticker.map")]
@@ -17412,7 +17486,7 @@ def _main() -> None:
                             "recomputed alone with the engine's --as-of "
                             "cutoff on the project's date basis "
                             "(settlement date unless tax_date = "
-                            "\"trade\"); phantoms.json applied; "
+                            "\"trade\"); missing_history.json applied; "
                             "each account alone (Canada: per-account "
                             "ACB, before the s.47 blend across taxable "
                             "accounts; USA: the per-account FIFO basis "
@@ -17949,19 +18023,26 @@ def _main() -> None:
                        help="Tax year to scope relevance (default: config year)")
     p_fmh.add_argument("--include-options", action="store_true",
                        help="Also check option positions")
+    p_fmh.add_argument("--write-missing-history", metavar="FILE",
+                       nargs="?", const="", default=None,
+                       help="Instead of the report, write the sales with "
+                            "no purchase in your files (truncated-history "
+                            "rows) to FILE for review (default: the "
+                            "project's missing_history.json). `taxjson run` "
+                            "applies missing_history.json at the project "
+                            "root via --incomplete-history")
+    # The flag's old name, hidden; it prints a note and still works.
     p_fmh.add_argument("--gen-phantoms", metavar="FILE",
-                       help="Instead of the report, emit a phantom "
-                            "opening-balance file (for the truncated-history "
-                            "rows) to FILE for review. Save it as "
-                            "phantoms.json at the project root and `taxjson "
-                            "run` auto-applies it via --incomplete-history")
+                       help=argparse.SUPPRESS)
     p_fmh.add_argument("--all-history", action="store_true",
-                       help="With --gen-phantoms, emit every candidate, not "
-                            "just those affecting the tax year")
+                       help="With --write-missing-history, emit every "
+                            "candidate, not just those affecting the tax "
+                            "year")
     p_fmh.add_argument("--force", action="store_true",
-                       help="With --gen-phantoms, replace an existing FILE "
-                            "(a reviewed phantoms.json is otherwise "
-                            "refused; the old file is kept as FILE.bak)")
+                       help="With --write-missing-history, replace an "
+                            "existing FILE (a reviewed missing_history.json "
+                            "is otherwise refused; the old file is kept as "
+                            "FILE.bak)")
     p_fmh.set_defaults(func=cmd_find_missing_history)
 
     p_fees = sub.add_parser(

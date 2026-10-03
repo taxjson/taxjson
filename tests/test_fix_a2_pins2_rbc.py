@@ -191,9 +191,9 @@ class TestPhantomRelevanceSplitDedup(unittest.TestCase):
     def test_a2_0933_split_booked_by_two_brokers_counts_once(self):
         """S033-14: one account fed by two broker files that both book
         the same 2:1 split. Counted twice, the walk saw a 4:1 split, the
-        2026 cover of the carried short vanished and --gen-phantoms
+        2026 cover of the carried short vanished and --write-missing-history
         wrote nothing."""
-        from taxjson.lib.phantom_holdings import (PhantomCandidate,
+        from taxjson.lib.missing_history import (MissingHistoryCandidate,
                                                   assess_tax_year_relevance)
 
         def tx(action, d, tm, qty, net=0.0, price=0.0):
@@ -208,7 +208,7 @@ class TestPhantomRelevanceSplitDedup(unittest.TestCase):
                 tx('BUYSELL', '2025-08-04', '10:00:00', -200, 1200, 6),
                 tx('BUYSELL', '2025-08-05', '10:00:00', -200, 1200, 6),
                 tx('BUYSELL', '2026-03-02', '10:00:00', 50, -350, 7)]
-        cand = PhantomCandidate(symbol='XYZ.US', account='margin',
+        cand = MissingHistoryCandidate(symbol='XYZ.US', account='margin',
                                 currency='USD',
                                 first_negative_date='2025-08-05',
                                 peak_short=-200.0, end_position=-150.0,

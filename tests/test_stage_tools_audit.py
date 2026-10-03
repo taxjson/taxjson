@@ -135,12 +135,12 @@ class TestD2TypeFunnel(unittest.TestCase):
             coerce_transaction_row(row, 0, 't')
         self.assertIn('action', str(cm.exception))
 
-    def test_string_quantity_survives_phantom_walk(self):
+    def test_string_quantity_survives_missing_history_walk(self):
         # phantom_holdings does `s['running'] += tx.quantity`; a str
         # quantity crashed it with a TypeError.
-        from taxjson.lib.phantom_holdings import detect_phantoms
+        from taxjson.lib.missing_history import detect_missing_history
         txs = [coerce_transaction_row({**ROW, 'quantity': '-10'}, 0, 't')]
-        cands = detect_phantoms(txs)   # must not raise
+        cands = detect_missing_history(txs)   # must not raise
         self.assertEqual(len(cands), 1)
 
 
