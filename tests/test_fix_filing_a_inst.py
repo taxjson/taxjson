@@ -5,6 +5,7 @@ from datetime import date, timedelta
 
 from taxjson.bin import taxjson_instalments as INST
 from taxjson.bin.taxjson_instalments import build, render
+from tax_rules import rule
 
 
 def _grow(start: date, end: date, rate_of) -> float:
@@ -33,6 +34,7 @@ def _rate_2025(d):
     return 0.08 if d < date(2025, 7, 1) else 0.07
 
 
+@rule("CA-RPT-11")
 class TestR1_42_InterestIsAMinusB(unittest.TestCase):
     """Catching up before the balance-due date must not freeze the
     accrued charge interest: CRA computes A - B, compounded daily."""
@@ -71,6 +73,7 @@ class TestR1_42_InterestIsAMinusB(unittest.TestCase):
         self.assertAlmostEqual(doc["net_interest"], want, places=1)
 
 
+@rule("CA-RPT-11")
 class TestR1_214_OnePriorYearUnknown(unittest.TestCase):
     """s.156.1(1): both preceding years must be at or below $3,000 to
     waive instalments; with one unknown the limb is unknown."""
@@ -105,6 +108,7 @@ class TestR1_214_OnePriorYearUnknown(unittest.TestCase):
         self.assertIn("not set", flat)
 
 
+@rule("CA-RPT-11")
 class TestR1_220_RatesBeforeTheTable(unittest.TestCase):
     """CRA's 2023 overdue-tax rates: Q1 8%, Q2-Q4 9% (prescribed-
     interest-rates/2023-q1..q4 pages); 10% from 2024-01-01."""
@@ -129,6 +133,7 @@ class TestR1_220_RatesBeforeTheTable(unittest.TestCase):
         self.assertIn(INST.PUBLISHED_RATES[0][0], text)
 
 
+@rule("CA-RPT-11")
 class TestS034_16_LeastCumulativePerDate(unittest.TestCase):
     """ITA 161(4.01): on each instalment day the deemed requirement is
     the method giving the LEAST total required BY THAT DAY."""

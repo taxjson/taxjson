@@ -427,6 +427,7 @@ def _qt(trade, settle, action, sym, qty, price):
             f"55500001,Trades,Individual\n")  # pii-ok
 
 
+@rule("CA-DATE-02")
 class TestTradeBasisProject(unittest.TestCase):
     """R1-192, R1-200, S052-10: a Canada project on tax_date = "trade"
     — the Dec-31 sale settling in January belongs to 2025 everywhere."""
@@ -453,6 +454,7 @@ class TestTradeBasisProject(unittest.TestCase):
     def tearDownClass(cls):
         cls._td.cleanup()
 
+    @rule("CA-DISP-03")
     def test_form_export_and_sum_keep_the_year_end_sale(self):
         fe = json.loads(_cli(self.root, "form-export", "--json").stdout)
         self.assertAlmostEqual(fe["totals"]["gain_all"], 350.0, places=2)
@@ -460,12 +462,14 @@ class TestTradeBasisProject(unittest.TestCase):
         self.assertAlmostEqual(sm["filing"]["totals"]["gain"], 350.0,
                                places=2)
 
+    @rule("CA-RPT-10")
     def test_carryover_uses_the_project_basis(self):
         co = json.loads(_cli(self.root, "carryover", "--json").stdout)
         rows = {r["year"]: r for r in co["rows"]}
         self.assertAlmostEqual(rows[2025]["net_gain"], 350.0, places=2)
         self.assertNotIn(2026, rows)
 
+    @rule("CA-RPT-01")
     def test_t1135_follows_the_basis(self):
         r = _cli(self.root, "t1135", "--json")
         rep = json.loads(r.stdout)
@@ -474,6 +478,7 @@ class TestTradeBasisProject(unittest.TestCase):
         self.assertAlmostEqual(row["year_end_cost"], 0.0, places=2)
 
 
+@rule("CA-RPT-10")
 class TestCarryoverAgainstLocks(unittest.TestCase):
     """S047-21, S048-20: a locked year the ledger disagrees with is
     flagged (and a moving option-timing default is warned about)."""
@@ -604,6 +609,7 @@ def _tx(action, date, symbol, qty, net, settle=None, time="10:00:00",
     return r
 
 
+@rule("CA-RPT-12")
 class TestT1135Walk(unittest.TestCase):
     def _walk(self, rows, year=2025, overrides=None, **kw):
         from taxjson.bin.taxjson_t1135 import walk_costs
@@ -631,7 +637,7 @@ class TestT1135Walk(unittest.TestCase):
         self.assertAlmostEqual(
             w["per_symbol"]["XYZ.US"]["year_end_cost"], 6400.0, places=2)
 
-    @rule("CA-DATE-14")
+    @rule("CA-RPT-01", "CA-DATE-14")
     def test_same_stamp_order_is_the_engines(self):
         """S008-05: the walk takes a same-stamp round trip in the
         engine's order — since CA-DATE-14 (audit R1-30, owner decision
@@ -644,6 +650,7 @@ class TestT1135Walk(unittest.TestCase):
         self.assertAlmostEqual(a["max_total_cost"], 0.0, places=2)
         self.assertAlmostEqual(b["max_total_cost"], 125000.0, places=2)
 
+    @rule("CA-RPT-01", "CA-CORP-01")
     def test_split_inside_settle_lag(self):
         """S008-06: a pre-split sale settling after the split."""
         rows = [_tx("BUYSELL", "2025-01-02", "ABC.US", 1000, -100000.0),
@@ -656,6 +663,7 @@ class TestT1135Walk(unittest.TestCase):
         self.assertAlmostEqual(
             w["per_symbol"]["ABC.US"]["year_end_cost"], 0.0, places=2)
 
+    @rule("CA-RPT-02")
     def test_override_follows_a_rename(self):
         """S051-17: t1135.map keyed on the old ticker."""
         rows = [_tx("BUYSELL", "2025-01-05", "USC.TO", 1000, -150000.0),
@@ -665,6 +673,7 @@ class TestT1135Walk(unittest.TestCase):
         self.assertAlmostEqual(w["max_total_cost"], 150000.0, places=2)
         self.assertIn("USD.TO", w["per_symbol"])
 
+    @rule("CA-RPT-01", "CA-DATE-02")
     def test_trade_basis_year_end(self):
         """S052-10: sold Dec 31 (settles Jan 2) on a trade basis."""
         rows = [_tx("BUYSELL", "2025-03-03", "ZZZ.US", 1000, -120000.0),
@@ -677,6 +686,7 @@ class TestT1135Walk(unittest.TestCase):
                                0.0, places=2)
 
 
+@rule("CA-RPT-02")
 class TestT1135Report(unittest.TestCase):
     def test_bom_map_first_line_applies(self):
         """S008-03 / S051-18."""

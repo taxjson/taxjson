@@ -91,6 +91,7 @@ class TestOverridesFile(unittest.TestCase):
 
 
 class TestWalkCosts(unittest.TestCase):
+    @rule("CA-RPT-12")
     def test_basic_buy_hold(self):
         txs = [tx(date="2024-06-01", qty=100, net=15000.0)]
         w = walk_costs(txs, 2025, {})
@@ -99,6 +100,7 @@ class TestWalkCosts(unittest.TestCase):
         self.assertAlmostEqual(s["year_end_cost"], 15000.0, places=2)
         self.assertAlmostEqual(w["max_total_cost"], 15000.0, places=2)
 
+    @rule("CA-RPT-12")
     def test_sell_reduces_year_end_but_not_max(self):
         txs = [
             tx(date="2024-06-01", qty=100, net=15000.0),
@@ -123,6 +125,7 @@ class TestWalkCosts(unittest.TestCase):
         self.assertAlmostEqual(w["per_symbol"]["AAA.US"]["max_cost"], 90000.0, places=2)
         self.assertAlmostEqual(w["per_symbol"]["BBB.US"]["max_cost"], 90000.0, places=2)
 
+    @rule("CA-RPT-02")
     def test_canadian_symbols_do_not_count(self):
         txs = [
             tx(symbol="RY.TO", qty=100, net=14000.0),
@@ -132,6 +135,7 @@ class TestWalkCosts(unittest.TestCase):
         self.assertNotIn("RY.TO", w["per_symbol"])
         self.assertAlmostEqual(w["max_total_cost"], 1500.0, places=2)
 
+    @rule("CA-RPT-12")
     def test_split_keeps_cost(self):
         txs = [
             tx(date="2025-01-10", qty=100, net=10000.0),
@@ -141,6 +145,7 @@ class TestWalkCosts(unittest.TestCase):
         s = w["per_symbol"]["AAPL.US"]
         self.assertAlmostEqual(s["year_end_cost"], 10000.0, places=2)
 
+    @rule("CA-RPT-12")
     def test_split_in_two_accounts_applies_once(self):
         # Each account's parser emits its own SPLIT row for one
         # corporate event; the symbol-global walk applied it per row
@@ -161,6 +166,7 @@ class TestWalkCosts(unittest.TestCase):
         self.assertAlmostEqual(s["year_end_cost"], 0.0, places=2)
         self.assertAlmostEqual(w["max_total_cost"], 120000.0, places=2)
 
+    @rule("CA-RPT-12")
     def test_rename_carries_cost_and_max(self):
         txs = [
             tx(date="2025-01-10", symbol="FB.US", qty=100, net=20000.0),
@@ -173,6 +179,7 @@ class TestWalkCosts(unittest.TestCase):
         self.assertAlmostEqual(s["year_end_cost"], 20000.0, places=2)
         self.assertAlmostEqual(s["max_cost"], 20000.0, places=2)
 
+    @rule("CA-RPT-12")
     def test_phantom_opening_flags_unknown_acb(self):
         txs = [
             tx(action="OPENING_BALANCE", date="2024-01-01", qty=100, net=0.0),
@@ -183,6 +190,7 @@ class TestWalkCosts(unittest.TestCase):
         self.assertTrue(s["unknown_acb"])
         self.assertAlmostEqual(s["year_end_cost"], 2000.0, places=2)
 
+    @rule("CA-RPT-12")
     def test_phantom_only_holding_still_listed(self):
         # A foreign position made ENTIRELY of phantom shares has tracked
         # cost 0 but is still specified foreign property — it must appear
@@ -194,12 +202,14 @@ class TestWalkCosts(unittest.TestCase):
         self.assertTrue(s["unknown_acb"])
         self.assertAlmostEqual(s["year_end_cost"], 0.0, places=2)
 
+    @rule("CA-RPT-12")
     def test_short_position_is_not_property(self):
         txs = [tx(date="2025-01-10", qty=-100, net=15000.0)]
         w = walk_costs(txs, 2025, {})
         self.assertNotIn("AAPL.US", w["per_symbol"])
         self.assertAlmostEqual(w["max_total_cost"], 0.0, places=2)
 
+    @rule("CA-RPT-12")
     def test_adjust_reduces_cost(self):
         txs = [
             tx(date="2025-01-10", qty=100, net=10000.0),
@@ -210,6 +220,7 @@ class TestWalkCosts(unittest.TestCase):
         self.assertAlmostEqual(s["year_end_cost"], 9000.0, places=2)
         self.assertAlmostEqual(s["max_cost"], 10000.0, places=2)
 
+    @rule("CA-RPT-12")
     def test_events_after_year_end_ignored(self):
         txs = [
             tx(date="2025-06-01", qty=100, net=10000.0),
@@ -218,12 +229,14 @@ class TestWalkCosts(unittest.TestCase):
         w = walk_costs(txs, 2025, {})
         self.assertAlmostEqual(w["max_total_cost"], 10000.0, places=2)
 
+    @rule("CA-RPT-12")
     def test_standing_position_with_no_in_year_events(self):
         txs = [tx(date="2023-06-01", qty=100, net=120000.0)]
         w = walk_costs(txs, 2025, {})
         self.assertAlmostEqual(w["max_total_cost"], 120000.0, places=2)
         self.assertEqual(w["max_total_date"], "2025-01-01")
 
+    @rule("CA-RPT-12")
     def test_income_rows_do_not_move_cost(self):
         txs = [
             tx(date="2025-01-10", qty=100, net=10000.0),
@@ -294,6 +307,7 @@ class TestBuildReport(unittest.TestCase):
         self.assertIn("USA", rep["by_country"])
         self.assertIn("GBR", rep["by_country"])
 
+    @rule("CA-RPT-13")
     def test_detailed_method_threshold(self):
         with tempfile.TemporaryDirectory() as td:
             base = self._write(td, "base.json", {"transactions": [
@@ -302,6 +316,14 @@ class TestBuildReport(unittest.TestCase):
             rep = build_report([base], [], 2025, {}, "CAD")
         self.assertTrue(rep["filing_required"])
         self.assertFalse(rep["simplified_method_available"])
+        # A2-1503: the edge — 249,999.99 keeps Part A, 250,000 needs B.
+        for cost, simple in ((249999.99, True), (250000.0, False)):
+            with tempfile.TemporaryDirectory() as td:
+                base = self._write(td, "base.json", {"transactions": [
+                    tx(date="2025-01-10", qty=100, net=cost)]})
+                rep = build_report([base], [], 2025, {}, "CAD")
+            self.assertEqual(rep["simplified_method_available"], simple,
+                             cost)
 
     @rule("CA-RPT-01")
     def test_below_threshold(self):

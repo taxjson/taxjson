@@ -314,7 +314,7 @@ class TestRoundTwoPins(unittest.TestCase):
                 actual_withheld=0.0)
         self.assertEqual(r["ftc_assumed"], 0.0)
 
-    @rule("US-RPT-07")
+    @rule("US-RPT-07", "US-EST-CARRY-ORDER")
     def test_carryover_nets_short_term_then_long_term(self):
         # m549: 1,500 of carryover: 1,000 absorbs the ST gain, the
         # remaining 500 reduces LT 5,000 -> 4,500.
@@ -324,7 +324,7 @@ class TestRoundTwoPins(unittest.TestCase):
         self.assertEqual((r["st_net"], r["lt_net"]), (0.0, 4500.0))
         self.assertEqual(r["ordinary_offset"], 0.0)
 
-    @rule("US-RPT-07")
+    @rule("US-RPT-07", "US-EST-CARRY-ORDER")
     def test_carryover_left_after_lt_offsets_ordinary(self):
         # m551: LT 1,000 absorbs 1,000 of 1,500; the 500 left offsets
         # ordinary income (under the 3,000 cap) and is used up.

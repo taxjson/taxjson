@@ -327,6 +327,8 @@ class TestKrakenLegacyLedger(unittest.TestCase):
         self.assertEqual(buys, ["BTC", "DOT", "ETH"])
         self.assertNotIn("unhandled type", err)
 
+    @rule("CA-INC-04")
+    @rule("US-INC-02")
     def test_feecurrency_other_than_asset(self):
         csv = ("txid,refid,time,type,subtype,aclass,subclass,asset,wallet,"
                "amount,fee,balance,amountusd,feeusd,balanceusd,feecurrency\n"
@@ -343,6 +345,8 @@ class TestKrakenLegacyLedger(unittest.TestCase):
         # ...it reduces the income.
         self.assertAlmostEqual(div["net_amount"], 22.5)
 
+    @rule("CA-INC-04")
+    @rule("US-INC-02")
     def test_same_ccy_fee_unchanged(self):
         csv = ("txid,refid,time,type,subtype,aclass,subclass,asset,wallet,"
                "amount,fee,balance,amountusd,feeusd,balanceusd,feecurrency\n"

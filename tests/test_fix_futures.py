@@ -156,6 +156,7 @@ def _tx(action="BUYSELL", date="2025-01-15", symbol="AAA.US", qty=0.0,
     return d
 
 
+@rule("CA-RPT-12")
 class TestT1135Futures(unittest.TestCase):
     """S008-04: a plain futures contract has a nil cost amount."""
 
@@ -196,6 +197,7 @@ class TestT1135Futures(unittest.TestCase):
         self.assertIn("futures", render_report(rep))
 
 
+@rule("CA-RPT-12", "CA-ACB-11")
 class TestT1135Phantoms(unittest.TestCase):
     """R1-321: `taxjson t1135` applies phantoms.json like the gains pass."""
 

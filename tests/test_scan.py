@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tax_rules import rule, rule_absent
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -58,6 +59,7 @@ def _project(tmp, *, accounts, holdings, raws, ticker_map=None):
 
 
 class TestScan(unittest.TestCase):
+    @rule("CA-SCAN-02")
     def test_us_listing_of_canadian_issuer_in_taxable(self):
         # ENB.US held in margin; the map knows ENB.US == ENB.TO; pays divs.
         with tempfile.TemporaryDirectory() as tmp:
@@ -73,6 +75,7 @@ class TestScan(unittest.TestCase):
         self.assertIn("ENB.US", r.stdout)
         self.assertIn("ENB.TO", r.stdout)           # the recommendation
 
+    @rule("CA-SCAN-02")
     def test_twin_detected_from_data_without_map(self):
         # No map entry, but the .TO line is held in another account —
         # still a Canadian issuer via US line, AND a MAP-GAP.
@@ -109,6 +112,7 @@ class TestScan(unittest.TestCase):
         # (audit S042-06; this line used to assert the opposite).
         self.assertNotIn("US-LISTING", r.stdout)
 
+    @rule("CA-SCAN-01")
     def test_us_domiciled_payer_in_tfsa(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(
@@ -121,6 +125,30 @@ class TestScan(unittest.TestCase):
         self.assertIn("TFSA-US-DIV", r.stdout)
         self.assertIn("unrecoverable", r.stdout)
 
+    @rule("CA-SCAN-01")
+    @rule_absent("CA-SCAN-01", country="usa")
+    def test_us_project_has_no_tfsa_or_listing_finding(self):
+        # A2-1500: the same books in a US project: no TFSA, no treaty
+        # advice, no Canadian-listing advice (the checks are Canada's).
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(
+                tmp,
+                accounts=[("tfsa", "sheltered"), ("margin", "taxable")],
+                holdings={"tfsa": _holdings_toml("KO.US"),
+                          "margin": _holdings_toml("ENB.US")},
+                raws={"tfsa": _raw_json("KO.US"),
+                      "margin": _raw_json("ENB.US")},
+                ticker_map="TOBASE ENB.US ENB.TO\n")
+            toml = (root / "taxjson.toml").read_text()
+            (root / "taxjson.toml").write_text(
+                toml.replace('country = "canada"', 'country = "usa"')
+                .replace('base_currency = "CAD"', 'base_currency = "USD"'))
+            r = _run(root)
+        self.assertNotIn("TFSA-US-DIV", r.stdout)
+        self.assertNotIn("US-LISTING", r.stdout)
+        self.assertNotIn("treaty", r.stdout)
+
+    @rule("CA-SCAN-01")
     def test_rrsp_is_exempt_no_finding(self):
         # Same US payer inside an RRSP: treaty-exempt — clean scan.
         with tempfile.TemporaryDirectory() as tmp:

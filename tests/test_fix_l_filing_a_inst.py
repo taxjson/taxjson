@@ -95,6 +95,7 @@ class TestConfiguredScheduleStartingLate(unittest.TestCase):
 
 class TestPins(unittest.TestCase):
 
+    @rule("CA-RPT-11")
     def test_offset_method_is_a_minus_b(self):
         # R1-221: four instalments paid 60 days late at 7% — CRA's A - B
         # (interest keeps compounding after the catch-up): 1,081.04.
@@ -108,12 +109,14 @@ class TestPins(unittest.TestCase):
                                     end=date(2027, 4, 30))
         self.assertEqual(ip["net_interest"], 1081.04)
 
+    @rule("CA-RPT-11")
     def test_saturday_due_date_rolls_to_monday(self):
         # S034-13: 2025-03-15 is a Saturday, 2025-06-15 a Sunday.
         self.assertEqual([d.isoformat() for d in I.due_dates(2025)],
                          ["2025-03-17", "2025-06-16", "2025-09-15",
                           "2025-12-15"])
 
+    @rule("CA-RPT-11")
     def test_render_at_exactly_the_threshold(self):
         # S034-17: the current-year limb, not the prior years, explains it.
         doc = I.build(year=2025, basis="current_year",
@@ -125,11 +128,13 @@ class TestPins(unittest.TestCase):
                       "3,000.00 threshold", text)
         self.assertNotIn("both at or below", text)
 
+    @rule("CA-RPT-11")
     def test_rate_change_on_the_end_date(self):
         # S034-18: a change effective ON the end date is in the schedule.
         sched = I.published_rates(date(2025, 3, 17), date(2025, 7, 1))
         self.assertEqual(sched[-1], {"from": "2025-07-01", "rate": 0.07})
 
+    @rule("CA-RPT-11")
     def test_published_through_day_is_not_extrapolated(self):
         doc = I.build(year=2026, basis="current_year",
                       current_net_tax=40000.0, payments=[],
