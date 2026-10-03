@@ -422,8 +422,10 @@ class TestSameMomentOrdering(unittest.TestCase):
 
     @rule("CA-SL-08", "CA-SL-09")
     def test_ca_pre_loss_bump_reaches_same_second_fill(self):
-        # R1-31: fill 2 of the loss order sees the bump whether it is
-        # 0, 1 or 2 seconds after fill 1.
+        # R1-31: the result does not depend on how far apart the fills
+        # are. They are one sale (CA-SL-08): 160 x min(80, 100, 20)/80
+        # = 40 denied, the bump landing after the last fill and carried
+        # by the 20 still held.
         for t2 in ('11:00:00', '11:00:01', '11:00:02', '11:00:30'):
             txs = _tt(f"""
                 BUYSELL 2024-12-02 10:00:00 ABC.TO 100 CAD 10 1000
@@ -433,8 +435,8 @@ class TestSameMomentOrdering(unittest.TestCase):
             """)
             res, _ = _run(CanadaTaxRules(), txs)
             yrs = _by_year(res)
-            self.assertAlmostEqual(yrs['2024'], -88.0, places=2, msg=t2)
-            self.assertAlmostEqual(yrs['2025'], -72.0, places=2, msg=t2)
+            self.assertAlmostEqual(yrs['2024'], -120.0, places=2, msg=t2)
+            self.assertAlmostEqual(yrs['2025'], -40.0, places=2, msg=t2)
 
     @rule("CA-SL-09")
     def test_ca_bump_follows_pool_on_rename_day(self):

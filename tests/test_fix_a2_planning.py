@@ -1,8 +1,9 @@
 """Re-audit-2 planning fixes: the wash radar and the tools built on it
 (wash-radar, sell-check, buy-check, safe-to-sell).
 
-Capacity sharing (CA-SL-08: each replacement unit backs a single
-denial) — A2-0009, A2-0038, A2-0377, A2-0689, A2-0691; split lineage
+Capacity (CA-SL-08: CRA's formula per sale; the fills of one sale
+share a replacement unit) — A2-0009, A2-0038, A2-0377, A2-0689, A2-0691,
+A2-0167; split lineage
 (A2-0382); declared contract sizes (A2-0373); futures options and
 class-share roots (A2-0378, A2-0690); the trust ROC record date and the
 s.40(3) floor in the radar's own pool (A2-0372, A2-1174, A2-1178); a
@@ -106,8 +107,10 @@ def _engine_gains(taxable, sheltered=(), year=2026):
 # ------------------------------------------------- CA-SL-08 capacity
 @rule("CA-SL-08", "CA-PLAN-01")
 class TestRadarSharesReplacementCapacity(unittest.TestCase):
-    """A2-0009 / A2-0038 / A2-0689: each replacement unit backs ONE
-    denial, as the engine applies it."""
+    """CA-SL-08 as the engine applies it: each sale on its own (owner
+    decision on A2-0167 — a held unit may back the denials of two
+    sales), the fills of one sale sharing a replacement unit
+    (A2-0689)."""
 
     BOOK_CLAIMED = [
         _row("2026-05-04", "XYZ.TO", 300, 15000.0, rid="b1"),
@@ -116,17 +119,20 @@ class TestRadarSharesReplacementCapacity(unittest.TestCase):
         _row("2026-09-12", "XYZ.TO", -100, 3500.0, rid="s2"),
     ]
 
-    def test_rebuy_claimed_by_an_older_loss_backs_no_new_violation(self):
+    def test_rebuy_backing_an_older_loss_backs_a_new_one_too(self):
+        # The 08-28 rebuy backs the 08-26 loss and, still held, the
+        # 09-12 loss as well: the engine denies both and the radar's
+        # VIOLATION follows it (100 units of the open loss).
         eng = _engine(self.BOOK_CLAIMED)
-        self.assertEqual(eng["2026-09-12"][0][1], 0.0)   # engine allows
+        self.assertEqual(eng["2026-08-26"][0][1], 1000.0)
+        self.assertEqual(eng["2026-09-12"][0][1], 1533.33)
         for gains in (None, [_engine_gains(self.BOOK_CLAIMED)]):
             row = _rows(self.BOOK_CLAIMED, "2026-10-01", gains=gains)[
                 "XYZ.TO"]
-            self.assertNotEqual(row["category"], "VIOLATION", row)
-            self.assertIsNone(row["denied_qty"])
-            self.assertNotIn("Sell 200", row["advisory"])
+            self.assertEqual(row["category"], "VIOLATION", row)
+            self.assertAlmostEqual(row["denied_qty"], 100.0)
 
-    def test_two_losses_share_one_rebuy(self):
+    def test_two_sales_each_backed_by_one_rebuy(self):
         book = [
             _row("2026-06-01", "XYZ.TO", 200, 10000.0, rid="b1"),
             _row("2026-09-01", "XYZ.TO", -100, 4000.0, rid="s1"),
@@ -135,27 +141,29 @@ class TestRadarSharesReplacementCapacity(unittest.TestCase):
         ]
         eng = _engine(book)
         self.assertEqual(eng["2026-09-01"][0][1] + eng["2026-09-02"][0][1],
-                         1000.0)                    # 100 units denied
+                         2000.0)                    # 100 units each
         row = _rows(book, "2026-09-15")["XYZ.TO"]
         self.assertEqual(row["category"], "VIOLATION")
-        self.assertAlmostEqual(row["denied_qty"], 100.0)
-        self.assertIn("(100 units denied as things stand)",
+        self.assertAlmostEqual(row["denied_qty"], 200.0)
+        self.assertIn("(200 units denied as things stand)",
                       row["advisory"])
+        self.assertIn("Sell 100.0000 shares", row["advisory"])
 
-    def test_registered_units_claimed_by_an_old_loss(self):
-        # A2-0038: the TFSA's 100 units back the 08-10 loss (its window
-        # closed long ago); the 09-20 loss is allowed.
+    def test_registered_units_back_an_old_and_a_new_loss(self):
+        # The TFSA's 100 units back the 08-10 loss (its window closed
+        # long ago) AND the 09-20 loss: both are denied for good.
         tax = [_row("2026-05-01", "XYZ.TO", 200, 10000.0, rid="b1"),
                _row("2026-08-10", "XYZ.TO", -100, 4000.0, rid="s1"),
                _row("2026-09-20", "XYZ.TO", -100, 3800.0, rid="s2")]
         shl = [_row("2026-09-01", "XYZ.TO", 100, 4000.0, account="tfsa",
                     rid="t1")]
         eng = _engine(tax, shl)
-        self.assertEqual(eng["2026-09-20"][0][1], 0.0)
+        self.assertEqual(eng["2026-09-20"][0][2], 1200.0)
         self.assertEqual(eng["2026-08-10"][0][2], 1000.0)
         row = _rows(tax, "2026-10-01", sheltered=shl)["XYZ.TO"]
-        self.assertNotEqual(row["category"], "VIOLATION", row)
-        self.assertIsNone(row["denied_qty"])
+        self.assertEqual(row["category"], "VIOLATION", row)
+        self.assertAlmostEqual(row["denied_qty"], 100.0)
+        self.assertIn("PERMANENTLY", row["advisory"])
 
     def test_split_fill_sale_counts_a_shared_rebuy_once(self):
         # A2-0689: 50+50 fills, 60 rebought -> 60 denied, not 100.
@@ -171,18 +179,20 @@ class TestRadarSharesReplacementCapacity(unittest.TestCase):
 
 @rule("CA-SL-08", "CA-PLAN-01")
 class TestRadarForwardViewSkipsSpentBacking(unittest.TestCase):
-    """A2-0377 / A2-0691 (Canada): a registered purchase that already
-    backs an earlier loss is not 'at risk' for a sale today."""
+    """Canada: a sale today is a disposition of its own (CA-SL-08 per
+    sale), so a registered purchase that backs an earlier loss still
+    puts a sale today at risk (A2-0377 / A2-0691 reversed by the owner's
+    decision on A2-0167)."""
 
-    def test_spent_registered_backing_is_not_locked(self):
+    def test_registered_backing_of_an_earlier_loss_still_locks(self):
         tax = [_row("2026-06-01", "XYZ.TO", 100, 2000.0, rid="b1"),
                _row("2026-08-20", "XYZ.TO", -25, 250.0, rid="s1")]
         shl = [_row("2026-09-09", "XYZ.TO", 20, 220.0, account="rrsp",
                     rid="r1")]
         self.assertEqual(_engine(tax, shl)["2026-08-20"][0][2], 200.0)
         row = _rows(tax, "2026-10-01", sheltered=shl)["XYZ.TO"]
-        self.assertNotEqual(row["category"], "LOCKED", row)
-        self.assertIsNone(row["at_risk_qty"])
+        self.assertEqual(row["category"], "LOCKED", row)
+        self.assertAlmostEqual(row["at_risk_qty"], 20.0)
 
     def test_unspent_registered_backing_stays_locked(self):
         tax = [_row("2026-06-01", "XYZ.TO", 100, 2000.0, rid="b1")]

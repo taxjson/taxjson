@@ -748,14 +748,20 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "again never replaces, including after a loss on covering "
                  "a short."),
             Rule("CA-SL-08",
-                 "Only units acquired in the window and still held count, "
-                 "per holder, and each one backs a single denial (a sale "
-                 "split into fills, or two losses, share it; losses at "
-                 "the same moment claim in the export's row order). A "
-                 "held call contract backs one denial however often its "
-                 "series was bought and sold in the window. The denied "
-                 "part is loss x (those units / units sold), capped at the "
-                 "whole loss."),
+                 "CRA's formula, for each sale on its own: denied units = "
+                 "the least of the units sold, the units acquired in the "
+                 "window and the units held at the end of day 30 — the "
+                 "last two taken per holder (your taxable accounts as one "
+                 "pool, each registered or affiliated account alone; a "
+                 "call at its contract size) and summed. The same held "
+                 "unit may back "
+                 "the denials of two sales. A sale split into fills (one "
+                 "account's same-day sales with no buy between them) is "
+                 "one sale: its fills share the denial pro rata, and a "
+                 "replacement's ACB is raised after its last fill. A held "
+                 "call contract counts once however often its series was "
+                 "bought and sold in the window. The denied part is loss "
+                 "x (those units / units sold)."),
             Rule("CA-SL-09",
                  "The denied amount is added to the replacement's ACB from "
                  "its acquisition (a sale listed after it at the same "
@@ -1177,10 +1183,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
          "safe-to-sell, harvest, watch, web)", [
             Rule("CA-PLAN-01",
                  "They apply the superficial-loss rule above on settle "
-                 "dates, each replacement unit backing one denial (an "
-                 "earlier loss's claim, even one whose window has closed, "
-                 "is spent; quantities across a split are compared in "
-                 "today's units): a loss whose replacement is still held "
+                 "dates, each sale on its own (a replacement that backs "
+                 "an earlier loss, even one whose window has closed, "
+                 "backs a sale today too; quantities across a split are "
+                 "compared in today's units): a loss whose replacement is still held "
                  "can be rescued by selling the replacement so that it is "
                  "no longer held when day 30 settles (VIOLATION prints the "
                  "last trade date that does it, on the listing's "

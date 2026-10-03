@@ -98,9 +98,10 @@ class TestCaRadarDatesAndQuantities(unittest.TestCase):
                       "20 of your 100 shares", r["advisory"])
 
     def test_rescue_deadline_follows_the_earliest_open_loss(self):
-        # Two losses (50 units on 05-01, 100 on 05-12) that share the
-        # 05-05 rebuy of 100 still held: both are open violations, and
-        # the deadline is the EARLIER loss's (day 30 of 05-01).
+        # Two losses (50 units on 05-01, 100 on 05-12) both backed by
+        # the 05-05 rebuy of 100 still held (each sale on its own,
+        # CA-SL-08): both are open violations, 150 units denied, and the
+        # deadline is the EARLIER loss's (day 30 of 05-01).
         book = [_row("2026-01-02", A, 300, 50),
                 _row("2026-05-01", A, -50, 40),
                 _row("2026-05-05", A, 100, 41),
@@ -110,7 +111,7 @@ class TestCaRadarDatesAndQuantities(unittest.TestCase):
         self.assertEqual(r["clears_at"], "2026-05-28")
         self.assertEqual(r["settle_deadline"], "2026-05-31")
         self.assertEqual(r["clears_in_at_generation"], "2026-05-28 (8d)")
-        self.assertEqual(r["denied_qty"], 100.0)
+        self.assertEqual(r["denied_qty"], 150.0)
         self.assertEqual(r["rescue"], [{"account": "", "holder": "taxable",
                                         "qty": 250.0, "symbol": A}])
 

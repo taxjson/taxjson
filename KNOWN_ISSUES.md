@@ -236,11 +236,6 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Current behavior:** the taxable-side disposition of an in-kind contribution is booked only if you record it as a `.tt` BUYSELL at fair market value in the taxable account. A loss on it is then denied indirectly (as a superficial loss against the plan's acquisition, permanent), which coincides with s.40(2)(g)(iv) — a loss on a transfer to an RRSP/TFSA is nil — in the common case; a gain is taxable as usual.
 - **Workaround:** record the contribution day as a BUYSELL sell at FMV in the taxable account (and the plan's acquisition with `transfers = true`).
 
-### Superficial loss: one held unit can back two losses of the same account (re-audit A2-0167)
-- **Where:** `src/taxjson/lib/core.py` replacement-capacity solver (the day-30 balance after an earlier loss's claim).
-- **Current behavior:** with two losses in one taxable pool and a rebuy between them that is still held at day 30, each loss is sized with CRA's per-disposition least-of formula (sold, acquired in the window, held at the end): the same held units back both denials, so more units can be denied in total than are held at day 30 (for example sell 300, rebuy 20, sell 10 of them: 10 units denied on each loss). Registered holders and call contracts claimed by an earlier loss no longer back a second one (A2-0198). tax-logic CA-SL-08 says each held unit backs a single denial.
-- **Why open:** an owner decision between the two readings — CRA's per-disposition formula (change CA-SL-08's text, keep the numbers) or one denial per held unit across losses (change the solver; earlier pins such as `TestCanadaBalanceWalkClockOrder` move). Year totals usually agree because the deferral comes back within the year.
-
 ### Second-order superficial losses from the ACB bump's date
 - **Where:** `src/taxjson/lib/core.py` (the deferral ADJUST is dated the trigger).
 - **Current behavior:** with a rebuy, a partial sale inside the window and the rest sold later, the inner sale inherits part of the bump and can itself be denied and re-deferred; T4037 attributes the whole denied amount to the shares still held at day 30. Year totals agree unless the inner and outer sales straddle a year end; the extra DISALLOW row shows in `wash-sales`.

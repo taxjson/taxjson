@@ -862,11 +862,12 @@ pool) and each registered account on its own back a denial only with units they
 account held before the window never do, and in Canada a new short sale or
 written option is not an acquisition (`country = "usa"` keeps §1091's re-short
 rule, and an IRA purchase in the window locks the loss even after the IRA sold).
-Each replacement unit backs **one** denial, as in the engine (CA-SL-08): a sale
-split into fills, two losses, or a loss whose window closed long ago share a
-rebuy, and units an earlier loss already used are not counted again — for an
-existing loss or for a sale today (a US IRA purchase the engine already matched
-is not "at risk" twice). Quantities on either side of a split are compared in
+In Canada each sale is judged on its own, as in the engine (CA-SL-08, CRA's
+formula: the least of units sold, units acquired in the window and units held
+at day 30): a rebuy still held backs two losses, or an old loss and a sale
+today, alike; only the fills of one sale (the same day, one account, no buy
+between them) share it. In the US each replacement share is matched once (a US
+IRA purchase the engine already matched is not "at risk" twice). Quantities on either side of a split are compared in
 today's units, and a long call counts at its declared contract size (100 for a
 standard equity option). A warrant, a call on an adjusted series (XYZ1) or a
 futures option on the loss's contract is a **note to check by hand**, as the

@@ -1539,6 +1539,39 @@ def _warn_ticker_reused_after_rename(txs, date_of, *, rule_text: str
                   f" (`taxjson renames`).", file=sys.stderr)
 
 
+def disposition_groups(rows) -> Dict[int, int]:
+    """Group the rows of one sale for Canada's superficial-loss formula
+    (CA-SL-08): consecutive BUYSELL rows of one account and symbol, the
+    same direction and the same date, with no row between them that moves
+    that position — a sale split into fills. The clock is no help here:
+    a broker stamps the partial fills of one order seconds or minutes
+    apart, or all at midnight, so a day's uninterrupted sell-down in one
+    account is one sale. `rows` are in processing order. Returns id(row)
+    -> id(the group's first row) for every BUYSELL row; income and
+    cost-adjustment rows never break a group."""
+    out: Dict[int, int] = {}
+    prev: Dict[tuple, tuple] = {}
+    for t in rows:
+        k = (t.account, t.symbol)
+        if t.action == 'SPLIT':            # corporate-wide: every account
+            for kk in [kk for kk in prev if kk[1] == t.symbol]:
+                prev.pop(kk)
+            continue
+        if t.action != 'BUYSELL' or abs(t.quantity or 0) < 1e-12:
+            if t.action in ('ASSIGN', 'TRANSFER', 'OPENING_BALANCE',
+                            'BUYSELL'):
+                prev.pop(k, None)
+            continue
+        p = prev.get(k)
+        if (p is not None and p[0].date == t.date
+                and (p[0].quantity > 0) == (t.quantity > 0)):
+            out[id(t)] = p[1]
+        else:
+            out[id(t)] = id(t)
+        prev[k] = (t, out[id(t)])
+    return out
+
+
 def _place_wash_adjusts(stream):
     """Move each pre-loss superficial-loss ADJUST (marked `_wash_after`
     = the loss row's id) to immediately after its loss row. s.53(1)(f)
@@ -3470,16 +3503,40 @@ class CanadaTaxRules(TaxRules):
             # has already produced realized gains assuming no disallowance,
             # so converging on iteration 1 with no virtual txs is correct.
             iteration_losses_to_check = [] if not detect_wash_sales else iteration_losses
-            # A replacement unit backs at most ONE denied unit across all
-            # the losses of a pass (a sale split into fills, or two losses
-            # sharing one rebuy or one call): audit #23/#48/#293,
-            # S069-17/S070-01. Claims are kept in the TRIGGER's own units
-            # (two losses can see it through different split factors) and
-            # taken in a fixed order, so every pass agrees.
+            # CRA's formula is applied PER SALE (CA-SL-08, owner decision
+            # on A2-0167): denied units = least of (units sold, units
+            # acquired in the window, units held at day 30), each sale on
+            # its own, so the same held unit may back the denials of two
+            # sales. Only the fills of ONE sale (disposition_groups: one
+            # account's same-day sell-down) share the units: the sale's
+            # ledger holds what its earlier fills claimed per holder (in
+            # loss-date units: one day, one symbol) and per trigger (in
+            # the trigger's own units, so no row is allocated twice),
+            # taken in processing order, so every pass agrees.
+            _disp_of = disposition_groups(current_tx_list)
+            # The last LOSING fill of each sale: a pre-loss bump lands
+            # after it, so the sale's losing fills are costed alike and
+            # the formula's denial is not carried out by one of them (a
+            # later sale at a gain, even the same day, still sees it).
+            _disp_last: Dict[int, Any] = {}
+            for _l in sorted(iteration_losses_to_check,
+                             key=lambda l: _pkey(l['tx'])):
+                _disp_last[_disp_of.get(id(_l['tx']), id(_l['tx']))] = _l['tx']
+            # A sale's loss units (S of the formula): its losing fills.
+            _grp_units: Dict[int, float] = {}
+            for _l in iteration_losses_to_check:
+                _g = _disp_of.get(id(_l['tx']), id(_l['tx']))
+                _grp_units[_g] = _grp_units.get(_g, 0.0) + _l['qty']
+            _ledgers: Dict[int, tuple] = {}
             _trg_used: Dict[str, float] = {}
+            _grp_claim: Dict[Any, float] = {}
+            _grp_state: Dict[str, float] = {}
             for loss in sorted(iteration_losses_to_check,
                                key=lambda l: _pkey(l['tx'])):
                 tx = loss['tx']
+                _gid = _disp_of.get(id(tx), id(tx))
+                _trg_used, _grp_claim, _grp_state = _ledgers.setdefault(
+                    _gid, ({}, {}, {}))
                 # SETTLEMENT-date basis for the whole ±30-day window (CRA's
                 # disposition timing; matches get_sort_date and the config's
                 # tax_date="settle" default). Mixing trade-date detection
@@ -3718,43 +3775,31 @@ class CanadaTaxRules(TaxRules):
                         _h = _holder(t)
                         _bal_end_h[_h] = (_bal_end_h.get(_h, 0.0)
                                           + _row_loss_units(t, t.quantity))
-                def _claimed_out(t, h) -> bool:
-                    # Units an earlier loss claimed are still in the
-                    # day-30 balance but cannot back this loss too
-                    # (CA-SL-08), so they leave it. The one exception is
-                    # a TAXABLE purchase made before this sale: the sale
-                    # draws on the taxable pool, so those units are what
-                    # it disposes of — already out of the balance. A
-                    # registered/affiliated holder's units (A2-0012) and
-                    # a call (A2-0057/0198) are never disposed of by a
-                    # taxable share sale. "After" is the main pass's
-                    # processing order: a rebuy listed after a
-                    # same-moment sale is acquired after it (A2-0193).
-                    if not _trg_used.get(t.id):
-                        return False
-                    return h != ('taxable',) or _pkey(t) > _pkey(tx)
+                # Each holder backs this sale with min(acquired in the
+                # window, held at day 30), less what an earlier fill of
+                # the same sale already claimed from it (CA-SL-08). A
+                # unit another sale claimed still backs this one.
                 _acq_h: Dict[Any, float] = {}
                 for t in potential_triggers:
                     if t.id in _call_ids:
                         continue
                     _h = _holder(t)
                     _acq_h[_h] = (_acq_h.get(_h, 0.0)
-                                  + _row_loss_units(t, _avail_native(t)))
-                    if _claimed_out(t, _h):
-                        _bal_end_h[_h] = _bal_end_h.get(_h, 0.0) - \
-                            _row_loss_units(t, min(_trg_used[t.id],
-                                                   _opening_qty(t, 'LONG')))
-                _held_h = {h: max(0.0, min(a, _bal_end_h.get(h, 0.0)))
+                                  + _row_loss_units(t, _opening_qty(t, 'LONG')))
+                _held_h = {h: max(0.0, min(a, _bal_end_h.get(h, 0.0))
+                                  - _grp_claim.get(h, 0.0))
                            for h, a in _acq_h.items()}
                 # Calls back a denial per (holder, contract): units of
                 # THAT series opened in the window and still held at day
-                # 30. Share balances never back a call and vice versa.
+                # 30 — a contract bought, sold and bought again counts
+                # once (A2-0057/0198). Share balances never back a call
+                # and vice versa.
                 if call_triggers:
                     _call_acq: Dict[Any, float] = {}
                     for t in call_triggers:
                         _k = ('call', _holder(t), t.symbol)
                         _call_acq[_k] = (_call_acq.get(_k, 0.0)
-                                         + _call_units(t, _avail_native(t)))
+                                         + _call_units(t, _opening_qty(t, 'LONG')))
                     _call_end: Dict[Any, float] = {}
                     # A call that expires before day 30 is not held at
                     # day 30, with or without an expiry row (S071-15).
@@ -3771,25 +3816,27 @@ class CanadaTaxRules(TaxRules):
                             _k = ('call', _holder(t), t.symbol)
                             _call_end[_k] = (_call_end.get(_k, 0.0)
                                              + _call_units(t, t.quantity))
-                    # Contracts an earlier loss claimed leave the day-30
-                    # balance (CA-SL-08): one held contract backs one
-                    # denial, even when the claim was charged to a call
-                    # row sold since (A2-0057/0198).
-                    for t in call_triggers:
-                        if _claimed_out(t, ('call',)):
-                            _k = ('call', _holder(t), t.symbol)
-                            _call_end[_k] = _call_end.get(_k, 0.0) - \
-                                _call_units(t, min(_trg_used[t.id],
-                                                   _opening_qty(t, 'LONG')))
                     for _k, a in _call_acq.items():
-                        _held_h[_k] = max(0.0, min(a, _call_end.get(_k, 0.0)))
+                        _held_h[_k] = max(0.0, min(a, _call_end.get(_k, 0.0))
+                                          - _grp_claim.get(_k, 0.0))
                 held_substituted = sum(_held_h.values())
+                # The sale's formula, min(S, P, B) / S, shared pro rata
+                # by its fills: each fill's denied units are its units x
+                # that fraction, so the result never depends on the
+                # fills' order or prices (the first fill sees the whole
+                # backing; later fills draw what is left of it).
+                if 'frac' not in _grp_state:
+                    _S = _grp_units.get(_gid, loss['qty'])
+                    _grp_state['frac'] = (min(1.0, held_substituted / _S)
+                                          if _S > 1e-12 else 1.0)
+                _want = min(loss['qty'] * _grp_state['frac'],
+                            held_substituted)
                 # Zero is the pool's own tolerance: 1e-6 for shares, float
                 # noise for a coin — a 0.0000009 BTC rebuy the pool keeps
                 # as a holding backs a denial too (CA-CRYPTO-09/CA-SL-13;
                 # A2-0552).
-                if held_substituted > pool_qty_eps(tx.symbol, loss['qty']):
-                    disallowed_qty = min(loss['qty'], held_substituted)
+                if _want > pool_qty_eps(tx.symbol, loss['qty']):
+                    disallowed_qty = _want
                     disallowed_amt = disallowed_qty * (loss['loss_amount'] / loss['qty'])
 
                     # --- Allocation across ALL in-window triggers ---
@@ -3875,6 +3922,7 @@ class CanadaTaxRules(TaxRules):
                             _trg_used[trg.id] = (_trg_used.get(trg.id, 0.0)
                                                  + (take / _per if _per
                                                     else 0.0))
+                            _grp_claim[_h] = _grp_claim.get(_h, 0.0) + take
                             if _hh != ('taxable',):
                                 perm_amt += amt
                             _rem -= take
@@ -3984,7 +4032,9 @@ class CanadaTaxRules(TaxRules):
                             _ev_key(_land))
                         # Applied right after its row in the main pass
                         # (see _place_wash_adjusts): a pre-loss bump
-                        # after the loss row; a post-loss bump after the
+                        # after the loss sale — its LAST fill (one sale,
+                        # one formula: CA-SL-08), so every later sale
+                        # sees it (R1-31); a post-loss bump after the
                         # trigger purchase itself, so a same-moment sale
                         # listed after that purchase sees the bumped ACB
                         # (s.53(1)(f) — the bump is part of the
@@ -3992,7 +4042,9 @@ class CanadaTaxRules(TaxRules):
                         # A2-0555). Sorted "cost adjustments last" it
                         # landed after every trade at the trigger's
                         # moment.
-                        v._wash_after = tx.id if _pre_loss else trg.id
+                        v._wash_after = (
+                            _disp_last.get(_disp_of.get(id(tx)), tx).id
+                            if _pre_loss else trg.id)
                         if trg.id in sheltered_ids:
                             sheltered_ids.add(a_id)
                         if trg.id in affiliated_ids:
@@ -4120,9 +4172,10 @@ class CanadaTaxRules(TaxRules):
                     final_virtual_txs.extend([disallow_vtx] + adjust_vtxs)
                     found_new_wash_sale = True
                 else:
-                    # Nothing left to back this loss (an earlier loss took
-                    # the replacement): withdraw a denial an earlier pass
-                    # attached.
+                    # Nothing left to back this loss (an earlier fill of
+                    # the same sale took the replacement, or a later pass
+                    # moved the balance): withdraw a denial an earlier
+                    # pass attached.
                     _stale = next((v for v in final_virtual_txs
                                    if v.id == tx.id and v.action == 'DISALLOW'
                                    and abs(float(v.net_amount)) > 0.001),

@@ -289,8 +289,9 @@ def _engine_report(rows, year=2025, sheltered=None, **kw):
 class TestWashAdditionPlacement(unittest.TestCase):
     """A2-0186, A2-0883, A2-0915, A2-1553: a replacement bought BEFORE
     the loss takes the s.53(1)(f) addition right after the losing sale
-    (wash_after), so a second fill at the same second sees it — the
-    walk's Dec-31 cost is the engine's ACB."""
+    (wash_after: after its last fill — one sale, one formula, CA-SL-08)
+    — the walk's Dec-31 cost is the engine's ACB. Each sale is sized on
+    its own with min(S, P, B) (A2-0167)."""
 
     @rule("CA-RPT-12")
     def test_pre_loss_replacement_then_same_second_fill(self):
@@ -299,7 +300,9 @@ class TestWashAdditionPlacement(unittest.TestCase):
                 _t("s1", "2025-02-03", "AAA.US", -100, 80.0),
                 _t("s2", "2025-02-03", "AAA.US", -100, 80.0)]
         _rep, props, inv = _engine_report(rows)
-        self.assertEqual(props["AAA.US"]["year_end_cost"], 20666.67)
+        # One sale of 200: min(200, 100, 200) = 100 units, all carried
+        # by the 200 still held (19500 + 1750).
+        self.assertEqual(props["AAA.US"]["year_end_cost"], 21250.0)
         self.assertEqual(props["AAA.US"]["year_end_cost"],
                          round(inv["AAA.US"]["total_cost"], 2))
 
@@ -310,8 +313,10 @@ class TestWashAdditionPlacement(unittest.TestCase):
                 _t("s1", "2024-11-08", "XYZ.US", -100, 5),
                 _t("s2", "2024-11-08", "XYZ.US", -50, 5)]
         _rep, props, inv = _engine_report(rows)
-        self.assertAlmostEqual(inv["XYZ.US"]["total_cost"], 625.0, 2)
-        self.assertEqual(props["XYZ.US"]["year_end_cost"], 625.0)
+        # One sale of 150: min(150, 100, 50) = 50 units (125 denied) on
+        # the 50 held at 7.50.
+        self.assertAlmostEqual(inv["XYZ.US"]["total_cost"], 500.0, 2)
+        self.assertEqual(props["XYZ.US"]["year_end_cost"], 500.0)
 
     @rule("CA-RPT-12")
     def test_two_same_second_loss_fills_part_sold_later(self):
@@ -323,7 +328,10 @@ class TestWashAdditionPlacement(unittest.TestCase):
         _rep, props, inv = _engine_report(rows)
         self.assertEqual(props["XYZ.US"]["year_end_cost"],
                          round(inv["XYZ.US"]["total_cost"], 2))
-        self.assertEqual(props["XYZ.US"]["year_end_cost"], 343.98)
+        # s1+s2 are one sale: 362.50 x min(100, 60, 30)/100 = 108.75;
+        # s3 is a sale of its own and the 11-01 rebuy, still held, backs
+        # its whole loss too (CA-SL-08 per sale).
+        self.assertEqual(props["XYZ.US"]["year_end_cost"], 416.25)
 
     @rule("CA-RPT-12")
     def test_denial_settling_dec_31_is_in_the_year_end_cost(self):

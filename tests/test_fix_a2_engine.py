@@ -34,24 +34,28 @@ def _sales(res, sym='XYZ.TO'):
 
 
 class TestCaClaimedUnitsLeaveTheBalance(unittest.TestCase):
-    """CA-SL-08: each held replacement unit backs ONE denial."""
+    """CA-SL-08: CRA's formula per sale — a held replacement unit backs
+    each sale's denial on its own (owner decision on A2-0167; these
+    books pinned one denial per unit before)."""
 
     @rule("CA-SL-08")
     def test_registered_units_claimed_on_a_pre_sale_row(self):
         # A2-0012: the TFSA buys 50 before both losses and sells 20: it
-        # holds 30 at day 30, so 30 units are denied in total (300).
+        # holds 30 at day 30, so each sale has min(100, 50, 30) = 30
+        # units denied for good.
         tax = [_row('2026-01-05', 200, 50), _row('2026-03-05', -100, 40),
                _row('2026-03-06', -100, 40)]
         tfsa = [_row('2026-03-02', 50, 41, 'tfsa'),
                 _row('2026-03-03', -20, 41, 'tfsa')]
         res = _ca(tax, tfsa)
         self.assertEqual(_sales(res), [('2026-03-05', 300.0, 300.0),
-                                       ('2026-03-06', 0.0, 0.0)])
+                                       ('2026-03-06', 300.0, 300.0)])
 
     @rule("CA-SL-08", "CA-SL-05")
-    def test_one_held_call_backs_one_denial(self):
+    def test_one_held_call_backs_each_sale(self):
         # A2-0057: a call bought, sold and bought again in the window;
-        # one contract is held at day 30 -> one 100-share loss denied.
+        # one contract is held at day 30 -> 100 units of each sale are
+        # denied (the churn never counts twice within one sale).
         C = 'XYZ261218C00020000.TO'
         base = [_row('2025-01-06', 200, 50), _row('2025-03-03', -100, 40),
                 _row('2025-03-05', -100, 40)]
@@ -60,14 +64,14 @@ class TestCaClaimedUnitsLeaveTheBalance(unittest.TestCase):
                _row('2025-03-10', 1, 3, 'rrsp', C)]
         res = _ca(base, rep)
         self.assertEqual(_sales(res), [('2025-03-03', 1000.0, 1000.0),
-                                       ('2025-03-05', 0.0, 0.0)])
-        self.assertAlmostEqual(res['summary']['total_disallowed'], 1000.0)
+                                       ('2025-03-05', 1000.0, 1000.0)])
+        self.assertAlmostEqual(res['summary']['total_disallowed'], 2000.0)
 
     @rule("CA-SL-08", "CA-SL-05")
     def test_call_lots_bought_after_both_losses(self):
         # A2-0198: lots X and Y bought after both losses, one sold:
-        # one contract (100 units) is held, so only loss 1 is denied —
-        # the same answer as with shares.
+        # one contract (100 units) is held, so 100 units of each loss
+        # are denied — the same answer as with shares.
         C = 'XYZ251219C00010000.TO'
         base = [_row('2025-01-06', 200, 20), _row('2025-03-03', -100, 10),
                 _row('2025-03-05', -100, 10)]
@@ -78,7 +82,7 @@ class TestCaClaimedUnitsLeaveTheBalance(unittest.TestCase):
             res = _ca(base + rep)
             got = _sales(res)[:2]
             self.assertEqual(got, [('2025-03-03', 1000.0, 0.0),
-                                   ('2025-03-05', 0.0, 0.0)], sym)
+                                   ('2025-03-05', 1000.0, 0.0)], sym)
 
 
 class TestCaSameMomentOrder(unittest.TestCase):
@@ -100,8 +104,9 @@ class TestCaSameMomentOrder(unittest.TestCase):
 
     @rule("CA-SL-08", "CA-DATE-14")
     def test_claim_subtraction_at_the_same_moment(self):
-        # A2-0193: a rebuy listed after a same-moment loss L2 and claimed
-        # by L1 cannot back L2 too: same result as one second later.
+        # A2-0193: a rebuy listed after a same-moment loss L2 is a
+        # purchase after it: the same result as one second later (each
+        # sale judged on its own, so it backs L1 and L2 alike).
         def book(t_rebuy):
             return [_row('2025-01-06', 200, 50), _row('2025-03-03', -100, 40),
                     _row('2025-03-05', -100, 40, t='00:00:00'),
@@ -110,30 +115,25 @@ class TestCaSameMomentOrder(unittest.TestCase):
                     _row('2025-03-07', -100, 41)]
         same, later = _ca(book('00:00:00')), _ca(book('00:00:01'))
         self.assertEqual(_sales(same), _sales(later))
-        self.assertEqual(_sales(same)[1], ('2025-03-05', 0.0, 0.0))
+        self.assertEqual(_sales(same)[1], ('2025-03-05', 1000.0, 0.0))
 
     @rule("CA-SL-08", "CA-DATE-14")
-    def test_same_moment_losses_claim_in_export_order(self):
-        # A2-0059 / A2-0551: two same-second fills share one rebuy; the
-        # first LISTED claims it, whatever the prices (row hashes).
+    def test_same_moment_fills_share_pro_rata_in_any_order(self):
+        # A2-0059 / A2-0551: two same-second fills are one sale sharing
+        # one rebuy: each fill has half its units denied, whatever the
+        # prices (row hashes) and whichever is listed first.
         for pa in ('40.00', '40.01', '40.02', '40.03'):
             a = _row('2025-03-03', -100, float(pa))
             b = _row('2025-03-03', -100, 30)
             book = [_row('2025-01-02', 100, 50), _row('2025-01-03', 100, 45),
                     a, b, _row('2025-03-10', 100, 30)]
-            res = _ca(book)
-            by = {e['tx_id'] if 'tx_id' in e else None: e
-                  for e in res['transactions'] if 'proceeds' in e}
-            den = [round(e['disallowed_amount'], 2)
-                   for e in res['transactions'] if 'proceeds' in e]
-            self.assertGreater(den[0], 0.0, pa)
-            self.assertEqual(den[1], 0.0, pa)
-            # Listed the other way round, the other fill claims.
-            res2 = _ca([book[0], book[1], b, a, book[4]])
-            den2 = {round(e['proceeds'], 2): round(e['disallowed_amount'], 2)
-                    for e in res2['transactions'] if 'proceeds' in e}
-            self.assertGreater(den2[3000.0], 0.0, pa)
-            self.assertEqual(den2[round(100 * float(pa), 2)], 0.0, pa)
+            for order in (book, [book[0], book[1], b, a, book[4]]):
+                res = _ca(order)
+                den = {round(e['proceeds'], 2):
+                       (e['disallowed_amount'] / (-e['raw_gain'] / e['qty']))
+                       for e in res['transactions'] if 'proceeds' in e}
+                self.assertEqual(sorted(round(u, 6) for u in den.values()),
+                                 [50.0, 50.0], pa)
 
     @rule("CA-SL-10", "CA-DATE-14")
     def test_same_moment_share_and_call_follow_export_order(self):

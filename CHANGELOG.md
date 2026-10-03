@@ -85,6 +85,23 @@
 
 ### Tax rules and engine: Canada
 
+- A Canadian superficial loss is now sized with CRA's formula for each
+  sale on its own (owner decision, audit A2-0167): the denied units are
+  the least of the units sold, the units acquired in the window and the
+  units held at day 30, so a replacement still held backs the denial of
+  every sale in its window — in the same account, across the taxable
+  accounts' one pool, in a registered or affiliated account and for a
+  call at its contract size. A held unit used to back one denial only;
+  books with two loss sales around one rebuy can show more denied (a
+  taxable deferral comes back when the replacement is sold). The fills
+  of one sale (one account's same-day sales with no buy between them)
+  share the denial pro rata — whatever their order or prices — and a
+  replacement bought before the sale takes the ACB increase after the
+  sale's last fill, so the result no longer depends on how many
+  seconds apart the fills are (R1-31). The wash radar, sell-check and
+  safe-to-sell follow: a replacement that backs an earlier loss puts a
+  sale today at risk too. The US engine (each replacement share matched
+  once) is unchanged (CA-SL-08, CA-PLAN-01).
 - A warrant/right, adjusted-series or futures-option flag in a loss's
   window (warn-only: nothing is denied) now keeps the checklist's
   `wash-reviewed` step open and is listed by `taxjson wash-sales`
