@@ -62,7 +62,6 @@ class TestNoCommandPrintsHelp(unittest.TestCase):
         r = _cli()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("Set up:", r.stdout)
-        self.assertIn("Exit codes:", r.stdout)
         self.assertEqual(r.stderr, "")
 
     def test_dir_only_is_help_rc0(self):
@@ -111,7 +110,6 @@ class TestGroupedHelp(unittest.TestCase):
             self.assertEqual(
                 [n for n in _listed(section)],
                 [n for n in names if n in sub.choices], title)
-        self.assertIn("Exit codes: 0 success", out)
 
     def test_readme_table_uses_the_same_groups_in_order(self):
         from taxjson.bin.taxjson_run import _COMMAND_GROUPS, _build_parser

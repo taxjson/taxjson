@@ -17257,13 +17257,7 @@ def _build_parser(prog: str = "taxjson"
     help page show it)."""
     p = _GroupedHelpParser(
         prog=prog, description=_TOP_DESCRIPTION,
-        formatter_class=_CappedHelpFormatter,
-        epilog="Exit codes: 0 success; 1 failure, or a command's finding "
-               "(drift, a handoff problem, an unsafe trade, a lint hit); "
-               "2 usage, or a named input or output that cannot be read "
-               "or written; 3 elections required (run --no-input); 130 "
-               "interrupted; 141 stdout closed (| head). `taxjson help "
-               "COMMAND` or `taxjson COMMAND --help` for one command.")
+        formatter_class=_CappedHelpFormatter)
     p.add_argument("-C", "--dir", default=".", help="Project root (default: cwd)")
     try:
         from importlib.metadata import version as _pkg_version
