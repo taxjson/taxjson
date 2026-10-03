@@ -271,6 +271,17 @@ def ticker_map_loaded() -> bool:
     return _TICKER_JOINS is not None
 
 
+def ticker_map_renames(sym: str) -> bool:
+    """True when the loaded ticker.map renames listing `sym` (an
+    undated rule or chain, or a dated RENAME of it)."""
+    if _TICKER_JOINS is None or not sym:
+        return False
+    from taxjson.bin.taxjson_ticker_map import map_symbol
+    ren, dated = _TICKER_JOINS
+    s = sym.upper()
+    return map_symbol(s, ren) != s or any(old == s for old, _n in dated)
+
+
 def ticker_map_joins(a: str, b: str) -> bool:
     """True when the loaded ticker.map already treats listings `a` and
     `b` as one security: both rename to the same symbol (GLOBAL, TOBASE,

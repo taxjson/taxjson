@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          ticker_map_joins,
+                                         ticker_map_renames,
                                          combined_accounts_note,
                                          combined_accounts_refusal,
                                          _parse_div_qty_rate,
@@ -718,6 +719,8 @@ class QuestradeBrokerage(BaseBrokerage):
             own = self.apply_currency_suffix(sym, cur)
             others = sorted({self.apply_currency_suffix(s, c)
                              for s, c in cands} - {own})
+            if all(ticker_map_joins(own, o) for o in others):
+                others = []     # ticker.map already folds them (A2-1056)
             if others:
                 key = (own, tuple(others))
                 if key not in self._ambiguous_warned:
@@ -734,6 +737,8 @@ class QuestradeBrokerage(BaseBrokerage):
             return next(iter(cands))
         if len(cands) > 1:
             key = (sym, tuple(sorted(cands)))
+            if ticker_map_renames(self.apply_currency_suffix(sym, currency)):
+                self._ambiguous_warned.add(key)  # mapped (A2-1056)
             if key not in self._ambiguous_warned:
                 self._ambiguous_warned.add(key)
                 print(f"warning: {self._qt_name}: {sym or '(blank)'!r} "
@@ -743,7 +748,9 @@ class QuestradeBrokerage(BaseBrokerage):
                       f"rebound; map it with a ticker.map rule (moot if "
                       f"ticker.map already maps it).",
                       file=sys.stderr)
-        elif _INTERNAL_CODE_RE.match(sym) and sym not in self._code_warned:
+        elif (_INTERNAL_CODE_RE.match(sym) and sym not in self._code_warned
+              and not ticker_map_renames(
+                  self.apply_currency_suffix(sym, currency))):
             # A row booked under Questrade's internal code that no trade
             # or transfer in any export of the account resolves: the
             # position fragments (a ROC hits an empty pool and becomes a
