@@ -975,6 +975,10 @@
 
 ### Corporate actions and elections
 
+- An IB corporate-action cancellation (`Ca`) now cancels the leg in its
+  own currency: a spin-off delivered on both the CAD and the USD listing
+  whose CAD leg IB cancelled used to drop the USD event and offer the
+  cancelled CAD one for election (re-audit A2-0518).
 - The elections manifest: a directory, an unreadable file, a symlink
   loop or a dangling link is one `manifest ... cannot be read` line in
   `elect`, `spinoffs` and run's FILING REQUIRED check (it was a
@@ -1408,6 +1412,10 @@
 
 ### Broker parsers: Interactive Brokers
 
+- When a statement cancels (`Ca`) a trade, transfer or cash in lieu
+  from an EARLIER statement and rebooks it, the earlier original is
+  cancelled and the rebook is booked; before, both disappeared from the
+  books (re-audit A2-0886, A2-1559, A2-1560).
 - IB: a Dividends or Withholding Tax row on a currency-tagged symbol
   (XYZ.CAD) gets the same "booked as a security of its own" warning as
   its trades (re-audit A2-1493).
@@ -2948,6 +2956,13 @@
   17399/17599. `check-filed` compares a 2024 lock written before the split
   on the Period 2 codes and says so in a note; `carryover` reads the
   Period 1 gain lines (tax-logic CA-DISP-03; re-audit A2-0166, A2-1482).
+- `taxjson close-year` blends the taxable accounts in taxjson.toml order,
+  as the run does: with two accounts trading one security at the same
+  moment, the year-end record could carry a superficial-loss deferral
+  (and a lower cost) that the return never had (re-audit A2-1556).
+- `taxjson t1135 --year-wash-only`: the superficial loss excluded from the
+  cost columns is the sum of each account's share of a blended pool's
+  deferral, not the largest account's share (re-audit A2-1552).
 - Two taxable accounts with rows at the same moment: check-filed and the
   run's filed-year drift check, `taxjson t1135`, `carryover`, `audit`,
   `wash-sales --explain` and the radar now merge the books in

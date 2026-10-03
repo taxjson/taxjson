@@ -1222,6 +1222,28 @@ def _ib_trade_key(t: Dict[str, Any], negate: bool = False) -> tuple:
             round(float(t.get('price') or 0.0), 8))
 
 
+def _ib_xfer_cancels(t: Dict[str, Any], leg: Dict[str, Any]) -> bool:
+    """True when `leg` (a Transfers `Ca` kept as a reversing leg, its
+    description suffixed ' (Ca)') reverses the TRANSFER row `t`: same
+    symbol and description, the negated quantity, dated on or before
+    the cancellation."""
+    desc = leg.get('description') or ''
+    return (t is not leg and t.get('action') == 'TRANSFER'
+            and t.get('symbol') == leg.get('symbol')
+            and desc.endswith(' (Ca)')
+            and t.get('description') == desc[:-len(' (Ca)')]
+            and (t.get('date') or '') <= (leg.get('date') or '')
+            and abs(float(t.get('quantity') or 0)
+                    + float(leg.get('quantity') or 0)) < 1e-9)
+
+
+def _ib_in_period(ex, t: Dict[str, Any]) -> bool:
+    """True unless `t` is dated before its statement's period (a
+    rebook of an earlier statement's row)."""
+    ps = getattr(ex, 'period_start', '') or ''
+    return not ps or (t.get('date') or '') >= ps
+
+
 def _ib_refund_hits(adj: Dict[str, Any], txs) -> List[Dict[str, Any]]:
     """The trade(s) of `txs` a Commission Adjustments refund names
     (ticker, signed quantity, trade date). An exact quantity first; else
@@ -1453,6 +1475,20 @@ class IbBrokerage(BaseBrokerage):
                       f"({ca['qty']:g} on {ca['date']}); its original in "
                       f"{nm(j)} is undone.", file=sys.stderr)
             if odate is None:
+                # No statement holds an original in its period: the Ca
+                # undoes the row dated before its own statement's period
+                # (held by parse_file, audit A2-1559) — on every copy.
+                for k in sorted(seen):
+                    eff = files[k][1].ca_undo(ca, rebook_ok=True)
+                    if eff:
+                        odate = eff['date']
+                        print(f"note: {nm(k)}: IB cancelled (Ca) "
+                              f"{ca['desc']!r} ({ca['qty']:g} on "
+                              f"{ca['date']}); no other statement holds "
+                              f"its original — the row of {eff['date']} "
+                              f"in this statement is undone.",
+                              file=sys.stderr)
+            if odate is None:
                 print(unmatched_ca_warning(ca), file=sys.stderr)
 
         # --- 2. Cash in lieu and its split.
@@ -1517,6 +1553,102 @@ class IbBrokerage(BaseBrokerage):
                       f"{k[5]:g} on {k[2]} was cancelled (Ca) by IB in "
                       f"{nm(owners[0])} — dropped from this overlapping "
                       f"statement too.", file=sys.stderr)
+
+        # --- 3b / 4b. A Trades or Transfers `Ca` row that parse_file
+        # held: IB cancelled a row of an EARLIER statement and rebooked
+        # it in this one, both dated before this statement's period. The
+        # Ca cancels the original in the account's other statements —
+        # on every one that holds it in its period (overlapping copies)
+        # — and the rebook stays. Paired in its own statement (as a
+        # lone statement is) only when no statement holds the original
+        # (audit A2-0886 / A2-1560). It used to pair with the rebook in
+        # its own statement, and step 3 then dropped the earlier
+        # original as an overlapping copy: neither was booked.
+        def _held_cross(attr, match, what):
+            done: set = set()
+            for i, (_p, ex, txs) in enumerate(files):
+                for ca in list(getattr(ex, attr, None) or ()):
+                    if not any(t is ca for t in txs):
+                        continue
+                    key = (ca.get('symbol'), ca.get('currency'),
+                           ca.get('date'), ca.get('time') or '',
+                           round(float(ca.get('quantity') or 0), 9),
+                           ca.get('description'))
+                    hit = key in done
+                    for j, (_p2, ex2, txs2) in enumerate(files):
+                        if hit or j == i or not same_acct(ex, ex2):
+                            continue
+                        cands = [t for t in txs2 if match(t, ca)
+                                 and _ib_in_period(ex2, t)]
+                        if not cands:
+                            continue
+                        same = [t for t in cands
+                                if t.get('date') == ca.get('date')
+                                and (t.get('time') or '')
+                                == (ca.get('time') or '')]
+                        orig = (same or cands)[-1]
+                        for k, (_p3, ex3, txs3) in enumerate(files):
+                            if k == i or not same_acct(ex, ex3):
+                                continue
+                            dup = [t for t in txs3 if match(t, ca)
+                                   and _ib_in_period(ex3, t)
+                                   and t.get('date') == orig.get('date')
+                                   and (t.get('time') or '')
+                                   == (orig.get('time') or '')]
+                            if dup:
+                                txs3[:] = [t for t in txs3
+                                           if t is not dup[-1]]
+                                print(f"note: {nm(i)}: IB cancelled (Ca) "
+                                      f"the {ca['symbol']} {what} of "
+                                      f"{-float(ca['quantity']):g} on "
+                                      f"{orig.get('date')} — its original "
+                                      f"in {nm(k)} is dropped; the "
+                                      f"rebooked row in {nm(i)} is kept.",
+                                      file=sys.stderr)
+                        hit = True
+                    if hit:
+                        done.add(key)
+                        txs[:] = [t for t in txs if t is not ca]
+
+        from taxjson.lib.trade_cancel import cancels as _cancels
+        _held_cross('held_trade_cas', _cancels, 'trade')
+        _held_cross('held_xfer_cas', _ib_xfer_cancels, 'transfer')
+        for _p, ex, txs in files:
+            nm_ = shown_name(_p)
+            held_t = [c for c in getattr(ex, 'held_trade_cas', None) or ()
+                      if any(t is c for t in txs)]
+            if held_t:
+                kept, tpairs, unpaired = pair_cancellations(txs)
+                txs[:] = kept
+                for _o, _c in tpairs:
+                    print(f"note: {nm_}: IB cancelled (Ca) the "
+                          f"{_o['symbol']} trade of {_o['quantity']:g} @ "
+                          f"{_o['price']:g} on {_o['date']} — no other "
+                          f"statement holds its original; the trade and "
+                          f"its cancellation are both dropped.",
+                          file=sys.stderr)
+                for _c in unpaired:
+                    if any(_c is h for h in held_t):
+                        print(f"note: {nm_}: IB cancelled (Ca) a "
+                              f"{_c['symbol']} trade of "
+                              f"{-_c['quantity']:g} @ {_c['price']:g} on "
+                              f"{_c['date']} whose original row is in "
+                              f"none of the account's statements — kept "
+                              f"as a cancellation leg.", file=sys.stderr)
+            for leg in [c for c in getattr(ex, 'held_xfer_cas', None) or ()
+                        if any(t is c for t in txs)]:
+                cands = [t for t in txs if _ib_xfer_cancels(t, leg)]
+                same = [t for t in cands if t.get('date') == leg['date']]
+                if cands:
+                    orig = (same or cands)[-1]
+                    txs[:] = [t for t in txs
+                              if t is not orig and t is not leg]
+                    print(f"note: {nm_}: IB cancelled (Ca) the "
+                          f"{leg['symbol']} transfer of "
+                          f"{-leg['quantity']:g} on {orig.get('date')} — "
+                          f"no other statement holds its original; the "
+                          f"transfer and its cancellation are both "
+                          f"dropped.", file=sys.stderr)
 
         # --- 4. Transfers `Ca` cancellations.
         xpairs: Dict[tuple, tuple] = {}
@@ -2261,7 +2393,8 @@ class IbBrokerage(BaseBrokerage):
                     and (eff.get('cat') or '') == (ca.get('cat') or ''))
 
         def _ca_undo(ca: Dict[str, Any], same_date_only: bool = False,
-                     exact_date: Optional[str] = None):
+                     exact_date: Optional[str] = None,
+                     rebook_ok: bool = False):
             """A `Ca` row: undo the latest matching original (same
             description, currency and category, negated quantity, dated
             on or before the cancellation; same date preferred).
@@ -2271,11 +2404,15 @@ class IbBrokerage(BaseBrokerage):
             end of the walk and the account's other statements take the
             latest earlier original. `exact_date` (an overlapping copy
             of the statement that already paired the Ca) undoes only
-            the original dated that day. Returns the undone original's
-            record, or None."""
+            the original dated that day. A row dated before the
+            statement's period is a rebook of an earlier statement's
+            row, undone only with `rebook_ok` (reconcile_files, when no
+            statement holds the original). Returns the undone
+            original's record, or None."""
             cands = [e for e in ca_effects if _ca_matches(ca, e)
                      and e['date'] <= ca['date']
-                     and (exact_date is None or e['date'] == exact_date)]
+                     and (exact_date is None or e['date'] == exact_date)
+                     and (rebook_ok or not _before_period(e['date']))]
             if not cands:
                 return None
             same = [e for e in cands if e['date'] == ca['date']]
@@ -2290,6 +2427,8 @@ class IbBrokerage(BaseBrokerage):
             arrived BEFORE it (same description, negated quantity)
             undoes it now."""
             ca_effects.append(eff)
+            if _before_period(eff['date']):
+                return                    # a rebook: reconcile_files
             for i, ca in enumerate(pending_ca):
                 if _ca_matches(ca, eff) and eff['date'] == ca['date']:
                     pending_ca.pop(i)
@@ -2331,6 +2470,27 @@ class IbBrokerage(BaseBrokerage):
         rows = self._read_rows(path)
         pre = _ib_prescan(rows, shown_name(path))
         ctx = self.account_context
+        # The statement's first day. A row dated before it (a Trades,
+        # Transfers or Corporate Actions row) is IB's cancel-and-rebook
+        # of a row of an EARLIER statement: under the account context
+        # its `Ca` looks for that statement's original first
+        # (reconcile_files) and pairs with the rebook in this statement
+        # only when no statement holds one (audit A2-0886 / A2-1559 /
+        # A2-1560). A lone parse pairs in this statement, as before.
+        self.period_start = ''
+        for _r in rows:
+            if (len(_r) >= 4 and _r[0] == 'Statement' and _r[1] == 'Data'
+                    and _r[2] == 'Period'):
+                _span = _ib_period(_r[3])
+                if _span:
+                    self.period_start = _span[0].isoformat()
+                break
+
+        def _before_period(d) -> bool:
+            return bool(ctx is not None and self.period_start
+                        and (d or '') < self.period_start)
+        self.held_trade_cas: List[Dict[str, Any]] = []
+        self.held_xfer_cas: List[Dict[str, Any]] = []
         if ctx:
             # Option-root aliases from ALL of the account's statements
             # (audit S059-15: next year's instrument list may name only
@@ -4016,7 +4176,8 @@ class IbBrokerage(BaseBrokerage):
                             and (_t.get('date') or '') <= date
                             and abs(float(_t.get('quantity') or 0)
                                     + qty) < 1e-9
-                            and _t.get('description') == xfer_desc)]
+                            and _t.get('description') == xfer_desc
+                            and not _before_period(_t.get('date')))]
                     _same = [_i for _i in _hits
                              if transactions[_i].get('date') == date]
                     if _hits:
@@ -4038,6 +4199,8 @@ class IbBrokerage(BaseBrokerage):
                             and _c['desc'] == xfer_desc
                             and date <= _c['date']
                             and abs(_c['qty'] + qty) < 1e-9]
+                if _waiting and _before_period(date):
+                    _waiting = []               # a rebook: reconcile_files
                 if _waiting:
                     _c = next((_c for _c in _waiting if _c['date'] == date),
                               _waiting[0])
@@ -4115,18 +4278,26 @@ class IbBrokerage(BaseBrokerage):
         # Transfers `Ca` rows no original in this statement claimed: the
         # original is in an earlier statement — kept as a reversing leg.
         for _c in pending_xfer_ca:
-            print(f"note: {_c['symbol']}: IB cancelled a {_c['kind']} "
-                  f"transfer of {-_c['qty']:g} on {_c['date']} whose "
-                  f"original row is not in this statement — kept as a "
-                  f"reversing TRANSFER leg.", file=sys.stderr)
-            transactions.append({
+            _leg = {
                 'action': 'TRANSFER', 'date': _c['date'],
                 'time': '09:30:00', 'date_settle': _c['date'],
                 'symbol': _c['symbol'], 'quantity': _c['qty'],
                 'currency': _c['currency'], 'price': _c['price'],
                 'net_amount': _c['net'], 'account': 'IB',
                 'description': f"{_c['desc']} (Ca)",
-            })
+            }
+            if any(_ib_xfer_cancels(t, _leg) for t in transactions):
+                # Only a rebook dated before this statement's period is
+                # here: the original is looked for in the account's
+                # other statements first (reconcile_files).
+                self.held_xfer_cas.append(_leg)
+            else:
+                print(f"note: {_c['symbol']}: IB cancelled a "
+                      f"{_c['kind']} transfer of {-_c['qty']:g} on "
+                      f"{_c['date']} whose original row is not in this "
+                      f"statement — kept as a reversing TRANSFER leg.",
+                      file=sys.stderr)
+            transactions.append(_leg)
             self.note_row_consumed()
 
         # Corporate Actions `Ca` rows with no same-date original: the
@@ -4144,10 +4315,19 @@ class IbBrokerage(BaseBrokerage):
         self.trade_ca_keys = {_ib_trade_key(c, negate=True)
                               for c in trade_cancels}
         self.trade_pairs: List[tuple] = []
-        if trade_cancels:
+        # A Ca dated before the statement's period (its candidates are
+        # too: a Ca shares its original's date) waits for
+        # reconcile_files, which looks in the account's earlier
+        # statements first (audit A2-0886).
+        self.held_trade_cas = [c for c in trade_cancels
+                               if _before_period(c.get('date'))]
+        _held = {id(c) for c in self.held_trade_cas}
+        if trade_cancels and len(_held) < len(trade_cancels):
             _partials: list = []
             _kept, _pairs, _unpaired = pair_cancellations(
-                transactions, partials=_partials)
+                [t for t in transactions if id(t) not in _held],
+                partials=_partials)
+            _kept += [t for t in transactions if id(t) in _held]
             self.trade_pairs = [(dict(_o), dict(_c)) for _o, _c in _pairs]
             # A Ca of one execution of a multi-fill order (A2-0298).
             for _o, _c, _r in _partials:

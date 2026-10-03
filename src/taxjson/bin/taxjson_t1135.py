@@ -899,10 +899,13 @@ def wash_adjustments(wash_sales: List[Dict[str, Any]],
 def _deferred_wash(gains_paths: List[Path],
                    overrides: Dict[str, Optional[str]]) -> Dict[str, float]:
     """{foreign symbol: denied superficial loss still in its ACB at year
-    end} from the gains files' inventory. The max per symbol, not the
-    sum: every account's inventory row of a blended symbol carries the
-    blended pool's deferral."""
-    out: Dict[str, float] = {}
+    end} from the gains files' inventory. Each account's split gains
+    file carries ITS share of a blended pool's deferral (split-gains
+    apportions it by units held, R1-160), so the shares are summed over
+    accounts; the same account given twice counts once (re-audit
+    A2-1552: the max per symbol kept only the largest account's
+    share)."""
+    per_acct: Dict[Tuple[str, str], float] = {}
     for p in gains_paths:
         try:
             data = load_json(p)
@@ -915,8 +918,12 @@ def _deferred_wash(gains_paths: List[Path],
             except (TypeError, ValueError):
                 continue
             if dw > 0.005 and classify_country(sym, overrides) is not None:
-                out[sym] = round(max(out.get(sym, 0.0), dw), 2)
-    return out
+                key = (sym, str(h.get("account") or p))
+                per_acct[key] = max(per_acct.get(key, 0.0), dw)
+    out: Dict[str, float] = {}
+    for (sym, _acct), dw in per_acct.items():
+        out[sym] = out.get(sym, 0.0) + dw
+    return {k: round(v, 2) for k, v in out.items()}
 
 
 # ---------------------------------------------------------------- report
