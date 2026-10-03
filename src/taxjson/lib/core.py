@@ -5467,16 +5467,11 @@ class USATaxRules(TaxRules):
                             # export's row order for same-stamp rows).
                             inv[_tk].sort(key=lambda l: (
                                 l['date'], _lot_time.get(l.get('id'), '')))
-                    # Move wash-sale replacement records too. Wash-sale
-                    # matching is by symbol key, so a post-rename SELL
-                    # of RGLD.US would otherwise miss any open
-                    # replacement window opened on SSL.TO. CRA / IRS
-                    # treat substantially-identical property across the
-                    # rename as continuous for wash purposes.
-                    for rep_dict in (long_replacements, short_replacements):
-                        if symbol in rep_dict:
-                            rep_dict.setdefault(target_symbol, []).extend(rep_dict[symbol])
-                            del rep_dict[symbol]
+                    # Wash-sale replacement records need no move: they
+                    # are keyed by the dated identity class (_rep_key),
+                    # which already joins OLD before the rename to NEW
+                    # and is never the renamed-away ticker itself
+                    # (A2-1596: the per-symbol move never ran).
                     # Carry the symbol→currency map too — without this,
                     # the currency guard above flags the post-rename
                     # ticker as "unseen" and the per-ticker stats lose
