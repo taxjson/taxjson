@@ -490,11 +490,10 @@ class Plan:
         self.moves: List[Tuple[str, str]] = []
 
     def summary(self, dry_run: bool) -> List[str]:
-        will = "would " if dry_run else ""
         out = list(self.done)
         out += [f"note: {n}" for n in self.notes]
         for a, b in self.moves:
-            out.append(f"{will}move {a} -> {b}")
+            out.append(f"{'would move' if dry_run else 'moved'} {a} -> {b}")
         return out
 
 

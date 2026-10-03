@@ -2699,9 +2699,10 @@ def cmd_migrate(args: argparse.Namespace) -> None:
         M.apply(pl)
     except OSError as e:
         _die_input(f"could not write the migration: {e}")
-    print("  done. Review ticker.map and taxjson.toml, commit them, and "
-          "delete the *.migrated files once you are satisfied; run "
-          "`taxjson run` to rebuild.")
+    print("  done. Review ticker.map and taxjson.toml and commit them "
+          "(in a git repository, `git rm` the old files too); delete the "
+          "*.migrated files once you are satisfied; run `taxjson run` to "
+          "rebuild.")
 
 
 def _refuse_unreadable_project_inputs(root: Path) -> None:

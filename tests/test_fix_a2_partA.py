@@ -394,10 +394,11 @@ class TestApplyDistributionsNeutralWithoutCountry(unittest.TestCase):
                  "date_settle": "2025-01-07", "time": "10:00:00",
                  "symbol": "XAW.TO", "quantity": 100, "currency": "CAD",
                  "price": 10, "net_amount": -1000, "account": "m"}]}))
-            m = Path(td) / "d.map"
-            m.write_text("XAW.TO 2025-06-30 0.5\n")
+            m = Path(td) / "taxjson.toml"
+            m.write_text('[[distributions]]\nsymbol = "XAW.TO"\n'
+                         'record_date = 2025-06-30\nper_share = 0.5\n')
             r = _py("taxjson.bin.taxjson_apply_distributions", str(book),
-                    "--map", str(m), "--account", "m", *extra)
+                    "--config", str(m), "--account", "m", *extra)
             doc = json.loads(book.read_text()) if r.returncode == 0 \
                 else {}
         self.assertEqual(r.returncode, 0, r.stderr)

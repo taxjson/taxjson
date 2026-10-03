@@ -599,7 +599,7 @@ def d_roc_entered(ctx: Ctx) -> Result:
                  for t in (d.get("transactions") or [])
                  if isinstance(t, dict) and t.get("action") == "ADJUST"
                  and str(when(t) or "").startswith(str(ctx.year)))
-    dmap = bool(ctx.cfg.get("distributions"))
+    dmap = bool((getattr(ctx, "cfg", None) or {}).get("distributions"))
     detail = (f"{adjust} ADJUST row(s) in {ctx.year}; [[distributions]] "
               f"{'present' if dmap else 'absent'}")
     if dmap:
@@ -1807,8 +1807,9 @@ def d_t1135(ctx: Ctx) -> Result:
 
 def d_carryover(ctx: Ctx) -> Result:
     code, out, err = ctx.sub("carryover", "--json")
-    claimed = bool((ctx.cfg.get("carryover") or {}).get("claimed")) \
-        if isinstance(ctx.cfg.get("carryover"), dict) else False
+    _cfg = getattr(ctx, "cfg", None) or {}
+    claimed = bool((_cfg.get("carryover") or {}).get("claimed")) \
+        if isinstance(_cfg.get("carryover"), dict) else False
     if code != 0 and not out:
         return Result("carryover", "blocked", _last_line(err) or f"exit {code}")
     try:
