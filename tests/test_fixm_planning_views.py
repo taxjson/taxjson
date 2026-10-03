@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -141,6 +142,7 @@ def _window_project(tmp, year=2026):
     return root
 
 
+@rule("CA-DATE-01")
 class TestSettleBasisWindows(unittest.TestCase):
     """R1-171 / R1-186 / R1-238 / R1-273: a tax-year window on a
     settle-basis project keeps a Dec-31 trade that settles in January

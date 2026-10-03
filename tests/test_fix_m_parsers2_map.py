@@ -313,6 +313,7 @@ class TestQtCsvBlankMoney(unittest.TestCase):
                           if t["action"] == "DIVIDEND"], [42.5])
 
 
+@rule("CA-SL-01")
 class TestQtWindowCoversSuperficialLoss(unittest.TestCase):
     """S002-05 / S031-13: the default window ended Jan 15 of the next
     year and started Dec 15 — a Jan 16-30 (or Dec 1-14) repurchase in a

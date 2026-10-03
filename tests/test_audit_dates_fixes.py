@@ -181,6 +181,7 @@ class TestUsWashRecordYearCoherence(unittest.TestCase):
         self.assertGreater(y26["summary"].get("total_disallowed", 0), 1.0)
 
 
+@rule("US-DATE-01", "US-BASIS-01")
 class TestUsFifoTradeOrder(unittest.TestCase):
     def test_lots_consumed_in_acquisition_order(self):
         from taxjson.lib.core import USATaxRules, TaxTransaction

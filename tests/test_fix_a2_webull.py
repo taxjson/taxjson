@@ -308,6 +308,8 @@ class TestNewestFirst(unittest.TestCase):
                     if t["date_settle"] == "2025-03-20"]
         self.assertEqual(same_day, [-4.0, 4.0])
 
+    @rule("CA-DATE-14")
+    @rule("US-DATE-13")
     def test_oldest_first_kept(self):
         tx, _, _ = _parse(
             'USD,15-01-2025,BUY,ABC,ABC CORP,SHS,10,9.00,,(91.00)\n'

@@ -36,6 +36,7 @@ def _stock_fii(sym, exch, conid='999000031'):
 # ------------------------------------------- A2-0082 / A2-0260 / A2-0607
 class TestIbClockTime(unittest.TestCase):
     @rule("CA-DATE-SESSION")
+    @rule("US-DATE-SESSION")
     def test_unpadded_hour_is_padded_before_any_compare(self):
         self.assertEqual(_ib_split_datetime('2025-12-31, 9:45:00', 'r'),
                          ('2025-12-31', '09:45:00'))
@@ -73,6 +74,7 @@ class TestIbClockTime(unittest.TestCase):
 # ------------------------------ A2-0253 / A2-1027 / A2-0252 / A2-0595
 class TestIbVenueLocalDate(unittest.TestCase):
     @rule("CA-DATE-SESSION")
+    @rule("US-DATE-SESSION")
     def test_asx_option_and_warrant_take_the_sydney_date(self):
         for cat in ('Equity and Index Options', 'Warrants', 'Stocks'):
             with self.subTest(cat=cat):
@@ -96,6 +98,7 @@ class TestIbVenueLocalDate(unittest.TestCase):
                 self.assertTrue(stamp)
 
     @rule("CA-DATE-SESSION")
+    @rule("US-DATE-SESSION")
     def test_hkd_sale_on_dec30_local_settles_in_january(self):
         _, txs, _ = _parse_ib(HEAD + TRADES_H + _trade(
             'QZH', '2025-12-29, 21:00:00', -10, 10.0, 100.0, code='C',
@@ -123,6 +126,7 @@ class TestIbFuturesEveningSession(unittest.TestCase):
                     self.assertEqual(stamp, f"{when[0]} {when[1]} ET")
 
     @rule("CA-DATE-SESSION")
+    @rule("US-DATE-SESSION")
     def test_day_session_and_friday_evening_are_unchanged(self):
         for when in (('2025-12-30', '10:00:00'), ('2025-12-30', '17:59:59'),
                      ('2026-07-10', '19:00:00'),            # Friday
@@ -133,6 +137,7 @@ class TestIbFuturesEveningSession(unittest.TestCase):
                     (when[0], when[1], ''))
 
     @rule("CA-DATE-SESSION")
+    @rule("US-DATE-SESSION")
     def test_fill_on_an_exchange_holiday_takes_the_next_day(self):
         # MLK day 2026-01-19: the Globex session's trade date is Tuesday.
         self.assertEqual(
@@ -211,6 +216,7 @@ class TestIbIndexOptionGth(unittest.TestCase):
             ('2025-12-31', '00:00:00'))
 
     @rule("CA-DATE-SESSION")
+    @rule("US-DATE-SESSION")
     def test_equity_options_and_regular_hours_are_unchanged(self):
         for sym, when in (('QZX 20JUN25 50 C', '21:00:00'),
                           ('SPXW 20JUN25 5900 C', '16:10:00'),
@@ -249,6 +255,7 @@ class TestIbOvernightAfterMidnightOnHoliday(unittest.TestCase):
                                   'US')[:2], ('2026-01-02', '00:00:00'))
 
     @rule("CA-DATE-SESSION")
+    @rule("US-DATE-SESSION")
     def test_after_midnight_on_a_trading_day_is_unchanged(self):
         self.assertEqual(
             _ib_market_trade_date('2025-11-26', '00:30:00', 'Stocks', 'USD',

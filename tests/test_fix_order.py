@@ -137,6 +137,7 @@ class TestFixedRungsStay(unittest.TestCase):
                 perm, key=lambda t: event_sort_key(t, profile=profile))))
         return out
 
+    @rule("CA-DATE-14")
     def test_canada_ladder(self):
         # Every rung but the trades is fixed; trades are one rung.
         self.assertEqual(CaPriority.TRADE, 3)
@@ -155,6 +156,7 @@ class TestFixedRungsStay(unittest.TestCase):
         self.assertEqual(got, [("SPLIT", 2.0), ("ASSIGN", 100),
                                ("BUYSELL", -100), ("ADJUST", 5)])
 
+    @rule("US-DATE-13")
     def test_us_ladder(self):
         fixed = [_ev("OPENING_BALANCE", 100), _ev("ASSIGN", -1, self.OPT),
                  _ev("ASSIGN", 100), _ev("SPLIT", 2.0), _ev("ADJUST", 5)]
@@ -279,6 +281,8 @@ class TestParsersEmitChronologicalOrder(unittest.TestCase):
     order for an oldest-first export, bottom-up for a newest-first one
     (RBC always did this; Questrade and the generic importer now too)."""
 
+    @rule("CA-DATE-14")
+    @rule("US-DATE-13")
     def test_questrade_oldest_first_keeps_file_order(self):
         body = (_qrow("2025-03-03", "Buy", 10, 50)
                 + _qrow("2025-06-02", "Sell", -10, 55)
@@ -288,6 +292,8 @@ class TestParsersEmitChronologicalOrder(unittest.TestCase):
         self.assertEqual(got, [("2025-03-03", 10), ("2025-06-02", -10),
                                ("2025-06-02", 10)])
 
+    @rule("CA-DATE-14")
+    @rule("US-DATE-13")
     def test_questrade_newest_first_is_read_bottom_up(self):
         # The same activity exported newest first.
         body = (_qrow("2025-06-02", "Buy", 10, 54)
@@ -298,6 +304,8 @@ class TestParsersEmitChronologicalOrder(unittest.TestCase):
         self.assertEqual(got, [("2025-03-03", 10), ("2025-06-02", -10),
                                ("2025-06-02", 10)])
 
+    @rule("CA-DATE-14")
+    @rule("US-DATE-13")
     def test_generic_both_directions(self):
         old_first = ("2025-03-03,BUY,QZG,10,50,500,USD\n"
                      "2025-06-02,SELL,QZG,10,55,550,USD\n"
@@ -308,6 +316,8 @@ class TestParsersEmitChronologicalOrder(unittest.TestCase):
             self.assertEqual(got, [("2025-03-03", 10), ("2025-06-02", -10),
                                    ("2025-06-02", 10)])
 
+    @rule("CA-DATE-14")
+    @rule("US-DATE-13")
     def test_one_date_file_keeps_file_order(self):
         # No second date to tell the direction: file order.
         body = ("2025-06-02,SELL,QZG,10,55,550,USD\n"

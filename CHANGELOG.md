@@ -548,6 +548,14 @@
 
 ### Canada/USA partition and tax-logic
 
+- tax-logic states what the code already did: US-WASH-20 (US replacements
+  match in the order acquired, Reg. §1.1091-1(c), losses in the order
+  sold, same-moment purchases taxable, then IRA, then affiliated),
+  US-STKDIV-03 (a stock dividend with no shares held is a warned $0
+  purchase), CA-ACB-07 (a s.40(3) deemed gain shows on Schedule 3 with no
+  proceeds) and CA-DATE-08 / US-DATE-08 (a right or warrant expiry is
+  dated like an option's) (re-audit A2-1506, A2-1511, A2-0495, A2-0845,
+  A2-0833).
 - `scripts/check_tax_rules.py` check 8 also fails on a source message
   that refuses an option for one country ("--x ... is Canada-only")
   when lib/country does not own it, and checks PLAN_COUNTRY's owners;
@@ -1372,6 +1380,9 @@
   from an EARLIER statement and rebooks it, the earlier original is
   cancelled and the rebook is booked; before, both disappeared from the
   books (re-audit A2-0886, A2-1559, A2-1560).
+- IB: a Dividends or Withholding Tax row on a currency-tagged symbol
+  (XYZ.CAD) gets the same "booked as a security of its own" warning as
+  its trades (re-audit A2-1493).
 - IB parser: an AUD/HKD/JPY/SGD/NZD fill on a system with no time-zone
   database is a one-line error saying to install `tzdata` (now a declared
   dependency on Windows), not a ZoneInfoNotFoundError traceback
@@ -5099,6 +5110,13 @@
 
 ### Docs and tests
 
+- Tests-tagging round (re-audit A2-0167 ... A2-1527, tests-tagging lists
+  01-03): fix and law-citing tests carry the @rule / @rule_absent ids they
+  pin; tests were added or strengthened wherever a mutant of a rule's
+  implementing line survived every tagged test; @rule_absent pairs now
+  fail when their country gate is removed (three that could not are
+  plain @rule tests now); the unpinned baseline is down to three negative
+  statements (CA-INC-02, US-BASIS-02, US-WASH-07).
 - Docs that contradicted each other or the code (re-audit A2-0947 to
   A2-0954, A2-1619 to A2-1629): `distributions.map` per-share amounts
   are in the project's base currency (README, `--help`, tax-logic

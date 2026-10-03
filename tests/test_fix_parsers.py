@@ -11,6 +11,7 @@ from pathlib import Path
 
 from taxjson.lib.brokerages.base import BrokerageParseError
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction
+from tax_rules import rule
 
 
 def _parse(parser, content, name='t.csv'):
@@ -137,6 +138,8 @@ def _qt(rows):
     return _parse(QuestradeBrokerage(), QT_HEAD + ''.join(rows))
 
 
+@rule("CA-OPT-06")
+@rule("US-OPT-02")
 class TestQuestradeAssignmentWords(unittest.TestCase):
     """R1-63: only zero-cash option legs are zeroed."""
 
@@ -213,6 +216,8 @@ class TestQuestradeAssignmentWords(unittest.TestCase):
                          'QZX CORP ASSIGNMENT OF PUT', 100, 0, 0, 0, 0)])
 
 
+@rule("CA-DIST-03")
+@rule("US-DIST-03")
 class TestQuestradeReversals(unittest.TestCase):
     """R1-66: CIL / REI keep their sign; a reversal cancels."""
 
@@ -312,6 +317,7 @@ class TestWebullProceeds(unittest.TestCase):
 
 
 # ----------------------------------------------- Canadian listing identity
+@rule("CA-ACB-04")
 class TestCanadianListingIdentity(unittest.TestCase):
     """S010-05 / S014-07: one spelling per Canadian listing, whichever
     parser read it."""

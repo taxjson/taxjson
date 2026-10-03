@@ -165,8 +165,10 @@ _PYUSD_REWARD = _KR_LEDGER_H + (
 
 class TestKrakenPyusdGusd(unittest.TestCase):
 
+    # The parser's switch set by hand: not a country pair (A2-0830);
+    # test_the_project_country_decides is.
     @rule("CA-CRYPTO-02")
-    @rule_absent("CA-CRYPTO-02", country="usa")
+    @rule("US-CRYPTO-02")
     def test_canada_cash_us_property(self):
         ca = _kraken(_PYUSD_TRADES, "kr_trades", cash=True)
         # Canada: no PYUSD/GUSD position at all; ETH bought for dollars.
@@ -182,8 +184,10 @@ class TestKrakenPyusdGusd(unittest.TestCase):
                                  if t["action"] == "BUYSELL"}),
                          ["ETH", "GUSD", "PYUSD"])
 
+    # The parser's switch set by hand: not a country pair (A2-0830);
+    # test_the_project_country_decides is.
     @rule("CA-CRYPTO-02")
-    @rule_absent("CA-CRYPTO-02", country="usa")
+    @rule("US-CRYPTO-02")
     def test_reward_is_dollar_income_in_canada_coin_in_us(self):
         ca = _kraken(_PYUSD_REWARD, "kr_ledgers", cash=True)
         self.assertEqual([(t["action"], t["price"], t["net_amount"])
@@ -191,6 +195,28 @@ class TestKrakenPyusdGusd(unittest.TestCase):
         us = _kraken(_PYUSD_REWARD, "kr_ledgers", cash=False)
         self.assertEqual(sorted((t["action"], t["symbol"]) for t in us),
                          [("BUYSELL", "PYUSD"), ("DIVIDEND", "PYUSD")])
+
+    @rule("CA-CRYPTO-02")
+    @rule_absent("CA-CRYPTO-02", country="usa")
+    @rule("US-CRYPTO-02")
+    def test_the_project_country_decides(self):
+        # A2-0830: the two tests above set the parser's switch by hand;
+        # here taxjson-brokerage sets it from --country.
+        def parse(country):
+            with tempfile.TemporaryDirectory() as td:
+                f = Path(td) / "kr_trades.csv"
+                f.write_text(_PYUSD_TRADES)
+                r = subprocess.run(
+                    [sys.executable, "-m", "taxjson.bin.taxjson_brokerage",
+                     "--brokerage", "kraken", "--country", country, str(f)],
+                    capture_output=True, text=True,
+                    stdin=subprocess.DEVNULL)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return sorted({t["symbol"] for t in
+                           json.loads(r.stdout)["transactions"]
+                           if t["action"] == "BUYSELL"})
+        self.assertEqual(parse("canada"), ["ETH"])
+        self.assertEqual(parse("usa"), ["ETH", "GUSD", "PYUSD"])
 
     @rule("CA-CRYPTO-08")
     def test_kraken_pyusd_send_is_stablecoin_cash(self):

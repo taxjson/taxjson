@@ -78,6 +78,10 @@ class TestUnresolvedOptionReplacementFlag(unittest.TestCase):
         # The US note says commodity futures are usually outside §1091.
         self.assertIn("§1256", r["usa"]["_stderr"])
         self.assertNotIn("§1256", r["canada"]["_stderr"])
+        # Each country's own loss term (A2-0830): never the CRA's in the
+        # US run.
+        self.assertIn("superficial", r["canada"]["_stderr"])
+        self.assertNotIn("superficial", r["usa"]["_stderr"])
 
     @rule("CA-SL-15")
     def test_futures_prefix_spellings_match(self):

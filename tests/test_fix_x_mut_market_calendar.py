@@ -91,12 +91,14 @@ class TestUsLists(unittest.TestCase):
 
 class TestCanadaGates(unittest.TestCase):
     @rule("CA-DATE-05")
+    @rule("US-DATE-05")
     def test_family_day_from_2008(self):
         # m1661 / m1713.
         self.assertIn(date(2008, 2, 18), mc.tsx_holidays(2008))
         self.assertNotIn(date(2007, 2, 19), mc.tsx_holidays(2007))
 
     @rule("CA-DATE-05")
+    @rule("US-DATE-05")
     def test_truth_and_reconciliation_from_2021(self):
         # m1663 / m1720.
         self.assertIn(date(2021, 9, 30), mc.cds_holidays(2021))

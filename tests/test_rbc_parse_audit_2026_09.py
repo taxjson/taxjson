@@ -19,6 +19,7 @@ from taxjson.lib.brokerages.rbc_direct import (
     RbcBrokerage, RbcFormatError, read_rbc_rows, rbc_number)
 from taxjson.lib.corp_actions import (
     parse_rbc_corporate_actions, pair_rbc_reorganizations)
+from tax_rules import rule
 
 REPO = Path(__file__).resolve().parent.parent
 HDR = ('"Date","Activity","Symbol","Symbol Description","Quantity","Price",'
@@ -320,6 +321,8 @@ class TestNamesAreNotIncome(unittest.TestCase):
 # ------------------------------------------------ M1 / M2 income variants
 
 class TestReinvestAndBookCost(unittest.TestCase):
+    @rule("CA-DIST-03")
+    @rule("US-DIST-03")
     def test_reinvestment_is_a_purchase_and_the_distribution_stays(self):
         body = (row("4/18/2022", "Dividends", "SRX.UN", "SMARTX REIT UNIT", "2", "",
                     "-64.48", "CAD", "REI - SMARTX REIT UNIT REINV@C$32.2399 REC "

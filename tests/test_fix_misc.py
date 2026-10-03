@@ -81,6 +81,7 @@ class TestCanadaTablesPinned(_EstimateCase):
 class TestCanadaAmtPinned(_EstimateCase):
     """G1-5: a binding AMT with every ATI term, to the cent."""
 
+    @rule("CA-RPT-03")
     def test_binding_amt_exact(self):
         r = te.estimate_canada(year=2026, realized=600000, eligible_div=0,
                                foreign_div=20000, pil=10000, staking=5000,
@@ -178,6 +179,7 @@ class TestFillCryptoAmountsPinned(unittest.TestCase):
         self.assertEqual(got[0]["gross_amount"], 210.375)
 
 
+@rule("CA-DATE-14")
 class TestCaPriorityLadderPinned(unittest.TestCase):
     """G1-7: every rung of the Canada same-timestamp ladder, through the
     function and through the ca_main sort."""
@@ -269,6 +271,7 @@ class TestOptionBoundaryAmountsPinned(unittest.TestCase):
             T(date="2024-12-10", date_settle="2024-12-11", symbol=self.OPT2, quantity=-2, price=1.5, net_amount=298.0),
         ]
 
+    @rule("CA-OPT-03", "CA-OPT-05", "CA-OPT-07")
     def test_close_timing_rows(self):
         from datetime import date
         from taxjson.lib.option_boundary import straddling
@@ -292,6 +295,7 @@ class TestOptionBoundaryAmountsPinned(unittest.TestCase):
         self.assertIn("298.00 premium", by["expired?"]["action"])
         self.assertEqual([r["attention"] for r in rows], [False, False, False, True])
 
+    @rule("CA-OPT-01", "CA-OPT-03")
     def test_grant_timing_rows(self):
         from datetime import date
         from taxjson.lib.option_boundary import straddling
@@ -526,6 +530,8 @@ class TestToBaseOptionCollision(unittest.TestCase):
 class TestNonNorthAmericanSettlement(unittest.TestCase):
     """G5-0: LSE (GBP) and ASX (AUD) shares settle T+2, not the US T+1."""
 
+    @rule("CA-DATE-04")
+    @rule("US-DATE-04")
     def test_gbp_and_aud_settle_t2(self):
         from taxjson.lib.brokerages.ib_extractor import get_ib_settlement
         from taxjson.lib.dates import settlement_lag_days

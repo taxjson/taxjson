@@ -83,6 +83,7 @@ class TestUnmarkedLegNotBlockedByLaterMarkedLeg(unittest.TestCase):
                 net_amount=1399.0, currency=cur),
         ]
 
+    @rule("CA-OPT-06", "CA-OPT-08")
     def test_canada(self):
         res = CanadaTaxRules().compute_gains(self._rows('TO', 'CAD'))
         by_year = {}
@@ -96,6 +97,7 @@ class TestUnmarkedLegNotBlockedByLaterMarkedLeg(unittest.TestCase):
         self.assertAlmostEqual(by_year.get('2026', 0.0), 98.0, places=2,
                                msg=f"premium landed on 2026: {by_year}")
 
+    @rule("US-OPT-02", "US-OPT-05")
     def test_usa(self):
         res = USATaxRules().compute_gains(self._rows('US', 'USD'))
         by_year = {}
@@ -129,6 +131,7 @@ def _t(action, date, qty, acct, sym='XYZ.TO', price=10.0):
                net_amount=abs(qty) * price, account=acct)
 
 
+@rule("CA-SL-02", "CA-SL-03", "CA-SL-08")
 class TestOwnRegisteredMoveKeepsHolderBalances(unittest.TestCase):
     """S018-05 / G2-0: a registered-to-registered move of the owner's
     own shares (rrspA -> rrspB) is netted out of the wash context at the
@@ -239,6 +242,7 @@ class TestSameStampTaxableBeforeRegistered(unittest.TestCase):
         self.assertEqual(seen, {(-850.0, 0.0)},
                          "the row hash decided deferral vs permanent")
 
+    @rule("US-WASH-04", "US-WASH-11", "US-WASH-20")
     def test_usa_same_stamp_is_deferred_whatever_the_price(self):
         seen = {self._run(USATaxRules, 'US', 'USD', p / 100)[1]
                 for p in range(1045, 1065)}
@@ -332,6 +336,7 @@ class TestPhantomsReachTheShelteredContext(unittest.TestCase):
     truncated history looked short, its in-window rebuy was not 'held
     at day 30', and a permanent denial was missed."""
 
+    @rule("CA-SL-03", "CA-SL-09", "CA-ACB-11")
     def test_tfsa_phantom_backs_a_permanent_denial(self):
         margin = [
             _t('BUYSELL', '2025-01-03', 100, 'margin', price=30.0),
@@ -367,6 +372,7 @@ class TestPhantomsReachTheShelteredContext(unittest.TestCase):
                          [('spouse', True)])
 
 
+@rule("CA-DIST-01")
 class TestDistributionsSizedWithPhantoms(unittest.TestCase):
     """S000-08: distributions.map ADJUSTs were sized on the record-date
     balance of the phantom-less base book, so a phantom-backed position

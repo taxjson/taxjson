@@ -25,6 +25,8 @@ def _iso(ds):
 
 
 class TestHolidayLists(unittest.TestCase):
+    @rule("CA-DATE-05")
+    @rule("US-DATE-05")
     def test_nyse_2025_2026(self):
         self.assertEqual(_iso(mc.nyse_holidays(2025)), [
             '2025-01-01', '2025-01-20', '2025-02-17', '2025-04-18',
@@ -35,6 +37,8 @@ class TestHolidayLists(unittest.TestCase):
             '2026-05-25', '2026-06-19', '2026-07-03', '2026-09-07',
             '2026-11-26', '2026-12-25'])
 
+    @rule("CA-DATE-05")
+    @rule("US-DATE-05")
     def test_tsx_2025_2026(self):
         self.assertEqual(_iso(mc.tsx_holidays(2025)), [
             '2025-01-01', '2025-02-17', '2025-04-18', '2025-05-19',
@@ -73,6 +77,7 @@ class TestHolidayLists(unittest.TestCase):
         self.assertFalse(mc.is_settlement_day('2026-07-03', 'USD'))
 
     @rule("CA-DATE-05")
+    @rule("US-DATE-05")
     def test_canadian_bank_holidays_trade_but_do_not_settle(self):
         for d in ('2025-11-11', '2023-11-13', '2025-09-30', '2023-10-02'):
             self.assertTrue(mc.is_trading_day(d, 'CAD'), d)
@@ -91,6 +96,7 @@ class TestHolidayLists(unittest.TestCase):
 
 class TestSettlementDates(unittest.TestCase):
     @rule("CA-DATE-05")
+    @rule("US-DATE-05")
     def test_holiday_inside_the_lag(self):
         cases = [('2025-04-17', 'USD', '2025-04-21'),   # Good Friday
                  ('2025-01-17', 'USD', '2025-01-21'),   # MLK
@@ -113,6 +119,15 @@ class TestSettlementDates(unittest.TestCase):
         self.assertEqual(settlement_lag_days('2024-05-27', 'USD'), 2)
         # T+3 across Labor Day 2017.
         self.assertEqual(settlement_date('2017-09-01', 'USD'), '2017-09-07')
+        # Options settle T+1 in every era and market (A2-0486, A2-1510).
+        for trade, cur in (('2016-12-28', 'USD'), ('2017-09-01', 'CAD'),
+                           ('2020-03-02', 'USD'), ('2025-03-04', 'GBP'),
+                           ('2016-12-28', 'AUD')):
+            self.assertEqual(settlement_lag_days(trade, cur, is_option=True),
+                             1, (trade, cur))
+        # A Friday option trade settles Monday; the stock trade T+3.
+        self.assertEqual(settlement_date('2017-09-01', 'USD', is_option=True),
+                         '2017-09-05')
 
     def test_rescue_deadline_walks_back_over_a_holiday(self):
         # Must settle by Canada Day 2026: a 06-30 CAD trade settles

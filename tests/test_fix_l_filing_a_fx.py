@@ -4,6 +4,7 @@ order), S033-06 (only the tax year's disposals count)."""
 import unittest
 
 from taxjson.bin.taxjson_fx_cash import _flows, build_ledger
+from tax_rules import rule
 
 
 def _tx(action, date, net, qty=0.0, time="10:00:00", **kw):
@@ -37,6 +38,8 @@ class TestNetDebitSale(unittest.TestCase):
         self.assertEqual(doc["pools"], {})
 
 
+@rule("CA-FX-07")
+@rule("US-FX-03")
 class TestSameDayClockOrder(unittest.TestCase):
     """S033-05: a 10:00 sale raises the USD a 14:00 buy spends, even when
     the file lists the buy first."""
@@ -52,6 +55,8 @@ class TestSameDayClockOrder(unittest.TestCase):
         self.assertEqual(doc["overdrafts"], {})
 
 
+@rule("CA-FX-07")
+@rule("US-FX-03")
 class TestTaxYearOnly(unittest.TestCase):
     """S033-06: disposals of other years walk the pool but are not the
     year's gain."""

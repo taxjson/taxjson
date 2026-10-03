@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -209,6 +210,8 @@ class TestRbcSignPreserved(unittest.TestCase):
                                msg="abs() reported $276 income for a fully "
                                    "reversed dividend")
 
+    @rule("CA-INC-05")
+    @rule("US-INC-03")
     def test_withholding_charge_positive_refund_negative(self):
         txs = self._parse(
             # Charge: cash out, negative Amount → +4.05 tax withheld.
@@ -1512,6 +1515,7 @@ class TestRepCapacityUnitsAcrossSplits(unittest.TestCase):
                 "lot A and disallowed the full $45")
 
 
+@rule("US-WASH-10")
 class TestSection1223TackingExcludesGap(unittest.TestCase):
     """Deep-audit 2026-08 #9: §1223(3) tacking inherited the wash-sold
     lot's calendar acquisition date, wrongly counting the sale→rebuy
@@ -1701,6 +1705,8 @@ class TestTickerMapSymbolNew(unittest.TestCase):
     ORPHAN identity while the acquirer's trades mapped elsewhere —
     phantom short plus stranded ACB."""
 
+    @rule("CA-ACB-04")
+    @rule("US-BASIS-06")
     def test_split_target_follows_the_mapping(self):
         from taxjson.bin.taxjson_ticker_map import apply_mapping
         tx = TaxTransaction(action='SPLIT', date='2025-06-01',

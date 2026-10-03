@@ -17,6 +17,7 @@ from datetime import date
 from pathlib import Path
 
 from taxjson.lib import checklist as cl
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -304,6 +305,7 @@ class TestFormExportRounding(unittest.TestCase):
         self.assertEqual(r.status, "attention")
 
 
+@rule("US-OPT-01")
 class TestUsExpiredOptions(unittest.TestCase):
     """S066-15: a US project checks for option positions (long or
     written) still open past expiry instead of marking the step n/a."""
