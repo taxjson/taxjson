@@ -17628,12 +17628,14 @@ def _build_parser(prog: str = "taxjson"
 
     p_fetch = sub.add_parser(
         "fetch",
-        help="Download broker activity straight into inputs/ through an "
-             "installed fetcher plugin (taxjson-fetch: Questrade REST "
-             "API, IBKR Flex Web Service), configured by `brokerage` "
-             "under [accounts.<name>]. Writes files the existing "
-             "parsers read; hand-exported CSVs keep working side by "
-             "side",
+        help="Download broker activity into inputs/ through a fetcher "
+             "plugin (taxjson-fetch: Questrade, IBKR Flex)",
+        description="Download broker activity straight into inputs/ "
+                    "through an installed fetcher plugin (taxjson-fetch: "
+                    "Questrade REST API, IBKR Flex Web Service), "
+                    "configured by `brokerage` under [accounts.<name>]. "
+                    "Writes files the existing parsers read; "
+                    "hand-exported CSVs keep working side by side.",
         conflict_handler="resolve")
     p_fetch.add_argument("account", nargs="*",
                          help="Accounts to fetch (default: every "
