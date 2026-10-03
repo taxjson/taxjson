@@ -945,7 +945,19 @@ def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
 from taxjson.lib.country import SETTING_COUNTRY as _SETTING_COUNTRY  # noqa: E402
 _SETTINGS_KEYS = tuple(_SETTING_COUNTRY)
 _ACCOUNT_KEYS = ("type", "crypto", "transfers", "plan",
-                 "brokerage", "account", "query_id", "holdings")
+                 "brokerage", "account", "query_id", "holdings",
+                 "combined_broker_accounts")
+
+
+def _brokerage_account_flags(acfg: Dict[str, Any]) -> List[str]:
+    """taxjson-brokerage flags an [accounts.<name>] table asks for:
+    `combined_broker_accounts = true` (every broker account in the
+    label's statements is the user's and taxable together — the
+    'statement spans N accounts' ATTENTION becomes a NOTE; the parser
+    refuses it on a sheltered label unless the statement shows one
+    plan). config_check refuses a non-boolean value."""
+    return (["--combined-broker-accounts"]
+            if (acfg or {}).get("combined_broker_accounts") is True else [])
 _ACCOUNT_TYPES = ("taxable", "sheltered")
 
 
@@ -2556,6 +2568,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                                                "--account-type",
                                                "taxable" if is_taxable
                                                else "sheltered"]
+            cmd += _brokerage_account_flags(acfg)
             # Always explicit: the parser's own default is the neutral
             # cost reduction; s.90(1) is the Canadian project's choice
             # (partition INPUTS-03).
@@ -4813,7 +4826,7 @@ tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for c
 {option_lines}
 # One [accounts.NAME] section per folder under inputs/. The folder name
 # is the account name. Required: type. Optional: transfers, crypto,
-# plan, holdings, and — to pull activity straight from the broker with
+# plan, holdings, combined_broker_accounts, and — to pull activity straight from the broker with
 # `taxjson fetch` — brokerage + account (Questrade) or query_id (IBKR):
 #
 #   [accounts.margin]
@@ -4822,6 +4835,8 @@ tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for c
 #   account   = "12345678"       # Questrade account number
 #   # query_id = "123456"        # ibkr_flex: the Flex query id instead
 #   holdings  = ["~/broker/12345678_holdings.toml"]   # `taxjson sanity` pairs the account with these files
+#   # combined_broker_accounts = true  # every broker account in this folder's statements is yours and
+#   #                                  #   taxable together: a multi-account statement is a note, not ATTENTION
 
 {account_sections}{instalments_section}"""
 
@@ -7485,6 +7500,28 @@ def _view_income_rules(root: Path):
         _die(str(e))
 
 
+def _view_trust_units(root: Path, rules) -> frozenset:
+    """The symbols every account's books show to be a Canadian trust's
+    units (lib/income_dating.trust_units, over the whole history, not
+    the view's window): a payment in lieu on one is ordinary income,
+    as in the gains files (CA-INC-07; A2-1465)."""
+    if rules is None:
+        return frozenset()
+    cache = root / "work"
+    rows = []
+    for acct in _discover_tx_accounts(cache):
+        native = _native_tx_file(cache, acct)
+        if native is None:
+            continue
+        try:
+            data = _read_work_doc(native)
+        except (OSError, ValueError):
+            continue          # the view's own read names a bad file
+        rows += [t for t in (data.get("transactions") or [])
+                 if isinstance(t, dict) and t.get("action") == "DIVIDEND"]
+    return rules.trust_units(rows)
+
+
 def _warn_accounts_without_books(root: Path, have, label: str,
                                  what: str) -> None:
     """Warn naming each configured account that has inputs but no `what`
@@ -7836,8 +7873,9 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     omit it for the tax year."""
     # DIVIDEND rows, plus (Canada) a payment in lieu that ITA s.260
     # deems a dividend — a Canadian dealer's payment on a Canadian
-    # issuer's share, on the dealer's T5 box 24. Every other payment in
-    # lieu is ordinary income, reported by `dil-sum` only (counting it
+    # corporation's share (not a trust's unit, CA-INC-07), on the
+    # dealer's T5 box 24. Every other payment in lieu is ordinary
+    # income, reported by `dil-sum` only (counting it
     # in both views put it in the slip tie-out, audit R1-272). Rows are
     # windowed on their tax date (lib/income_dating: a Canadian trust's
     # distribution by its record date).
@@ -7845,9 +7883,10 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     rows, scope, bad, _keep = _collect_period_txs(
         args, "divs-sum", actions={"DIVIDEND", "DIVIDEND_IN_LIEU"},
         date_of=_rules.income_date if _rules else None)
+    _trusts = _view_trust_units(Path(args.dir).resolve(), _rules)
     rows = [(a, t) for a, t in rows
             if t.get("action") == "DIVIDEND"
-            or (_rules is not None and _rules.pil_is_dividend(t))]
+            or (_rules is not None and _rules.pil_is_dividend(t, _trusts))]
     n_pil_div = sum(1 for _a, t in rows
                     if t.get("action") == "DIVIDEND_IN_LIEU")
 
@@ -8012,6 +8051,7 @@ def cmd_dil_sum(args: argparse.Namespace) -> None:
     rows, scope, bad, _keep = _collect_period_txs(
         args, "dil-sum", actions={"DIVIDEND_IN_LIEU"},
         date_of=_rules.income_date if _rules else None)
+    _trusts = _view_trust_units(Path(args.dir).resolve(), _rules)
 
     money = fmt_money               # shared report-layer formatter
 
@@ -8033,7 +8073,7 @@ def cmd_dil_sum(args: argparse.Namespace) -> None:
         amt = (float(tx.get("gross_amount") or 0.0)
                or float(tx.get("net_amount") or 0.0))
         treat = ("dividend" if _rules is not None
-                 and _rules.pil_is_dividend(tx) else "ordinary")
+                 and _rules.pil_is_dividend(tx, _trusts) else "ordinary")
         key = (str(tx.get("symbol") or "?"), cur, treat)
         rec = agg.setdefault(key, {"amount": 0.0, "rows": 0})
         rec["amount"] += amt
@@ -10365,7 +10405,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                "grossed up]")]
              if r.get("capital_gains_dividends") else []) + [
             ("Eligible dividends (grossed)", r["grossed_eligible"],
-             f"[{money(est['div_ca'])} x1.38, Canadian issuers]"),
+             f"[{money(est['div_ca'])} x1.38, Canadian issuers, "
+             f"trust distributions included]"),
             ("Foreign dividends", est["div_foreign"],
              f"[FTC {money(r['ftc_assumed'])} — "
              f"{r.get('ftc_source', 'assumed 15%')}]"),

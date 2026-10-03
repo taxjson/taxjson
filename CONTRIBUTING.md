@@ -59,6 +59,15 @@ line — the bare word does not count; bypass knowingly with
 `git push --no-verify`. Fixtures must be synthetic: fake account ids
 (`U1234567`, `99900001`), made-up ISINs, no real statements.
 
+Commit and tag messages are public history and cannot be scrubbed. Never
+quote your own books in them (or in CHANGELOG, comments or tests): no real
+amounts or totals, no symbol + quantity pairs or trade dates from real
+books, no account ids — write "the 2025 total is unchanged", not the
+number. The `pre-push` hook enforces part of this: a commit or tag message
+line with a money-like amount (thousands separators and cents, such as
+`1,234,567.89`) is refused (`scripts/check-pii.sh --message`). A synthetic
+number in a message is let through by the bare word `pii-ok` on its line.
+
 ## Running tests
 
 The package uses a `src/` layout, so tests import it **as installed** —

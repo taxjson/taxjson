@@ -1019,14 +1019,19 @@ def main():
             })
 
     # ---- who backs which denial (CA-SL-08 / US-WASH-02) ----
-    # Each replacement unit backs ONE denial: a sale split into fills,
-    # two losses, or a loss whose window closed long ago share it, in
-    # the engine's order. The radar evaluated every loss on its own, so
-    # a rebuy an earlier loss had already used up made a second, false
-    # VIOLATION (or a false LOCKED for a sale today) and the denied
-    # units were summed twice (audit A2-0009/0038/0377/0689/0691).
+    # Canada: CRA's formula PER SALE (CA-SL-08) — each sale is judged on
+    # its own, so a held unit may back the denials of two sales (and a
+    # sale today whatever backed an earlier loss); only the fills of ONE
+    # sale (core.disposition_groups) share a replacement unit, in the
+    # engine's order (audit A2-0689). USA: each replacement share is
+    # matched once, as the US engine matched it (A2-0377/0691).
     import bisect
-    _used: Dict[int, float] = {}       # id(acq event) -> native units claimed
+    from taxjson.lib.core import disposition_groups
+    _sale_of = disposition_groups([t for t in transactions if _booked(t)])
+    _sale_ledgers: Dict[int, Dict[int, float]] = {}
+    # The current sale's ledger: id(acq event) -> native units claimed.
+    # Empty outside _claim, so a sale today starts a ledger of its own.
+    _used: Dict[int, float] = {}
     _us_used: Dict[str, float] = {}    # US: replacement tx id -> units matched
     if us_mode:
         for _v in _us.values():
@@ -1050,7 +1055,8 @@ def main():
         return tl[i - 1][1] if i else 0.0
 
     def _ev_avail(e):
-        """Native units of an acquisition not yet backing a denial."""
+        """Native units of an acquisition not yet backing a denial (US),
+        or not yet backing another fill of the same sale (Canada)."""
         if us_mode:
             return max(0.0, e['qty'] - _us_used.get(e.get('tx_id') or '', 0.0))
         return max(0.0, e['qty'] - _used.get(id(e), 0.0))
@@ -1059,9 +1065,9 @@ def main():
         """The engine's per-holder test for a loss of class `cls_` whose
         window is [lo, hi] (Canada): each holder backs it with
         min(units it acquired in the window and has not spent on an
-        earlier denial, its balance at day 30 less the units earlier
-        denials claimed); a long call per (holder, series) at its
-        contract size. Returns (candidates, caps, claimed-out)."""
+        earlier fill of the same sale, its balance at day 30 less the
+        units those fills claimed); a long call per (holder, series) at
+        its contract size. Returns (candidates, caps, claimed-out)."""
         end_date = epoch_to_date(hi)
         asof = min(hi, today_epoch)
         cands = []
@@ -1096,10 +1102,10 @@ def main():
                 else:
                     bal[k] = _bal_at(cls_, k, asof)
             u = _used.get(id(e), 0.0)
-            # Units an earlier denial claimed are still in the day-30
-            # balance but back nothing more — except a TAXABLE purchase
-            # made before this sale, which the sale itself disposes of
-            # (the engine's _claimed_out).
+            # Units an earlier fill of this sale claimed are still in
+            # the day-30 balance but back nothing more for it — except a
+            # TAXABLE purchase made before this sale, which the sale
+            # itself disposes of (the engine's _claimed_out).
             if u > 0 and (k[0] != 'TAXABLE' or e['seq'] > loss_seq):
                 claimed[k] = claimed.get(k, 0.0) + min(u, e['qty']) * f
         caps = {k: max(0.0, min(a, bal.get(k, 0.0) - claimed.get(k, 0.0)))
@@ -1153,7 +1159,10 @@ def main():
         for _cls, _l in sorted(((c, l) for c, ls in recent_losses.items()
                                 for l in ls),
                                key=lambda cl: (cl[1]['epoch'], cl[1]['seq'])):
+            _used = _sale_ledgers.setdefault(
+                _sale_of.get(_l.get('tx_obj'), _l.get('tx_obj')), {})
             _claim(_cls, _l)
+        _used = {}
 
     # ---- rights the engines flag but never size (warn-only) ----
     # A warrant/right (CA-SL-14 / US-WASH-14), a call on an adjusted

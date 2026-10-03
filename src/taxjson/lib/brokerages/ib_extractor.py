@@ -279,6 +279,8 @@ def get_ib_settlement(date_str: str, asset_cat: str,
 
 from taxjson.lib.core import STOCK_DIVIDEND, is_option_symbol
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         combined_accounts_note,
+                                         combined_accounts_refusal,
                                          OPTION_STRIKE_RE,
                                          _parse_div_qty_rate,
                                          encode_occ_strike,
@@ -1314,7 +1316,8 @@ class IbBrokerage(BaseBrokerage):
     account_context = None
 
     @classmethod
-    def prepare_files(cls, paths, tax_year=None) -> Dict[str, Any]:
+    def prepare_files(cls, paths, tax_year=None, combined=False,
+                      taxable=None) -> Dict[str, Any]:
         """Read ALL of one account's IB statements once, before any is
         parsed: statement periods (coverage check below, per broker
         account and against `tax_year` when taxjson-brokerage passes it)
@@ -1381,8 +1384,20 @@ class IbBrokerage(BaseBrokerage):
         _warn_coverage_gaps(ctx['periods'], tax_year=tax_year)
         _accts = set().union(*ctx['file_accounts'].values()) \
             if ctx['file_accounts'] else set()
-        if len(_accts) > 1 and not any(
-                a >= _accts for a in ctx['file_accounts'].values()):
+        _spread = len(_accts) > 1 and not any(
+            a >= _accts for a in ctx['file_accounts'].values())
+        if _spread and combined:
+            # combined_broker_accounts = true: a NOTE (refused on a
+            # sheltered label — no plan per account in IB statements).
+            _masked = sorted(_mask_account(a) for a in _accts)
+            if taxable is False:
+                raise combined_accounts_refusal(
+                    "this account's IB statements", 'IB', _masked,
+                    "an IB statement does not say which plan each "
+                    "account is")
+            print(combined_accounts_note("this account's IB statements",
+                                         'IB', _masked), file=sys.stderr)
+        elif _spread:
             # Separate statements of several IB accounts in one label:
             # booked as ONE account (right only for one tax entity).
             print(f"{ATTENTION_PREFIX} this account's IB statements "
@@ -2522,7 +2537,20 @@ class IbBrokerage(BaseBrokerage):
                           else '')
         root_alias = pre['root_alias']
         aliased_roots: Dict[str, str] = {}
-        if len(pre['accounts']) > 1:
+        if len(pre['accounts']) > 1 and self.combined_broker_accounts:
+            # The label declares every broker account in its statements
+            # is the user's and taxable together (owner decision): a
+            # NOTE. IB's statement names no plan per account, so on a
+            # sheltered label that cannot be checked — refused.
+            _masked = sorted(_mask_account(a) for a in pre['accounts'])
+            if self.account_taxable is False:
+                raise combined_accounts_refusal(
+                    shown_name(path), 'IB', _masked,
+                    "an IB statement does not say which plan each "
+                    "account is")
+            print(combined_accounts_note(shown_name(path), 'IB', _masked),
+                  file=sys.stderr)
+        elif len(pre['accounts']) > 1:
             # ATTENTION (the run's console): a TFSA/RRSP inside a
             # consolidated statement lands in this book (audit A2-0610).
             print(f"{ATTENTION_PREFIX} {shown_name(path)}: IB statement spans "

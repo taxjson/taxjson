@@ -5,7 +5,7 @@
 #   .git/hooks/pre-push          the diff, the commit / tag messages and
 #                                the author/committer/tagger identities a
 #                                push would publish (--diff / --text /
-#                                --identity on stdin)
+#                                --message / --identity on stdin)
 #   scripts/check-pii.sh PATH…   ad hoc, on files or directories
 #
 # Two pattern sources:
@@ -58,8 +58,10 @@ BIN_EXT='pdf|png|jpe?g|gif|ico|webp|bmp|tiff?|svgz|xlsx|xlsm|xls|docx|doc|pptx|o
 is_bin() { printf '%s\n' "$1" | grep -qiE "\.($BIN_EXT)\$"; }
 
 mode=tree
+MSG=0        # --message: --text plus the money-amount check (A2-1384)
 case "${1:-}" in
   --diff) mode=diff; shift ;; --text) mode=text; shift ;;
+  --message) mode=text; MSG=1; shift ;;
   --identity) mode=identity; shift ;;
 esac
 hits=0
@@ -364,6 +366,9 @@ ssn_filter() {
   }'
 }
 
+# A message line with the bare word pii-ok is a declared synthetic number.
+amount_filter() { grep -avE '(^|[^A-Za-z0-9_-])pii-ok([^A-Za-z0-9_-]|$)' || true; }
+
 report() {   # report LABEL PATTERN [EXEMPT-REGEX [FILTER]]
   local out
   # -a throughout: a hit line with a stray non-UTF-8 byte must stay a
@@ -443,6 +448,15 @@ report "social insurance number (labelled SIN / NAS, valid check digit)" \
 report "social security number (labelled SSN / TIN / Tax ID)" \
   '(\b(SSN|I?TIN)\b|\b[Tt]ax ?[Ii][Dd]\b|[Ss]ocial [Ss]ecurity)[^0-9A-Za-z]{0,10}([Nn]umber|[Nn]o)?[^0-9A-Za-z]{0,20}[0-9]{3}[ .-]?[0-9]{2}[ .-]?[0-9]{4}([^0-9]|$)' '' ssn_filter
 report "credential-looking string"                      'ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|(api[_-]?key|secret|token|passw(or)?d)["'"'"' ]*[=:]["'"'"' ]*[A-Za-z0-9_\-]{20,}' ''
+# A commit or tag MESSAGE (--message) never quotes a money amount with
+# thousands separators and cents (1,234,567.89): owner-book totals once
+# reached the public history that way (A2-1384). A synthetic number in a
+# message carries the word pii-ok on its line (bare, as messages have no
+# comment syntax). Code, docs and fixtures are not checked for it.
+if [ "$MSG" = 1 ]; then
+report "money amount in a commit/tag message (thousands separators and cents; mark a synthetic one pii-ok)" \
+  '(^|[^0-9,.])[0-9]{1,3}(,[0-9]{3})+[.][0-9]{2}([^0-9]|$)' '' amount_filter
+fi
 fi
 # ---- account-number columns (tree / ad hoc / pre-push diff) ----------
 # A Questrade or RBC export names the account in a column ("Account #",

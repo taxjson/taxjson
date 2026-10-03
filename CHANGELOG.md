@@ -85,6 +85,23 @@
 
 ### Tax rules and engine: Canada
 
+- A Canadian superficial loss is now sized with CRA's formula for each
+  sale on its own (owner decision, audit A2-0167): the denied units are
+  the least of the units sold, the units acquired in the window and the
+  units held at day 30, so a replacement still held backs the denial of
+  every sale in its window — in the same account, across the taxable
+  accounts' one pool, in a registered or affiliated account and for a
+  call at its contract size. A held unit used to back one denial only;
+  books with two loss sales around one rebuy can show more denied (a
+  taxable deferral comes back when the replacement is sold). The fills
+  of one sale (one account's same-day sales with no buy between them)
+  share the denial pro rata — whatever their order or prices — and a
+  replacement bought before the sale takes the ACB increase after the
+  sale's last fill, so the result no longer depends on how many
+  seconds apart the fills are (R1-31). The wash radar, sell-check and
+  safe-to-sell follow: a replacement that backs an earlier loss puts a
+  sale today at risk too. The US engine (each replacement share matched
+  once) is unchanged (CA-SL-08, CA-PLAN-01).
 - A warrant/right, adjusted-series or futures-option flag in a loss's
   window (warn-only: nothing is denied) now keeps the checklist's
   `wash-reviewed` step open and is listed by `taxjson wash-sales`
@@ -767,6 +784,12 @@
 
 ### Income: dividends, distributions and return of capital
 
+- Canada: a payment in lieu on a Canadian trust's unit (an ETF, REIT or
+  fund unit the books show to be a trust's: they carry a distribution on
+  it) is ordinary income, no longer an ITA s.260 deemed dividend grossed
+  up in the estimate; s.260(5) covers shares only. A unit whose payouts
+  no export calls distributions (IB) still reads as a share (re-audit
+  A2-1465; CA-INC-03 / CA-INC-07).
 - Canada income dating: the January return-of-capital warning no longer
   calls every Canadian issuer a trust — it asks, and listing a
   corporation in [settings] corporate_distributions stops it; tax-logic
@@ -3594,6 +3617,10 @@
 
 ### Planning: wash radar, harvest, buy/sell-check, estimate, instalments, web UI
 
+- `taxjson estimate` (Canada) says on the eligible-dividends row and in
+  its printed assumptions that a Canadian trust's distribution (ETF, REIT
+  or fund units) is grossed up as an eligible dividend; the T3 decides
+  (re-audit A2-0828; CA-EST-TRUST).
 - US wash radar, sell-check, buy-check and harvest no longer call a
   stock dividend a "Recent buy" and warn that a partial loss sale would
   be a wash sale: a stock dividend is not a purchase for §1091
@@ -4666,6 +4693,14 @@
 
 ### Pipeline, configuration and errors
 
+- New per-account setting `combined_broker_accounts = true`
+  (`[accounts.<name>]`): every broker account in the folder's statements
+  is yours and taxable together, so the 'statement spans N accounts'
+  ATTENTION (IB per statement and across statements, Questrade, RBC)
+  becomes a one-line note with masked ids. Refused on a sheltered
+  account unless the statement shows every account is the same plan
+  (only Questrade's Account Type can), and a quoted value is refused by
+  every config reader.
 - "Phantom" is gone (owner decision): the project file listing sales of
   shares whose purchase is not in your broker files (bought before the
   data starts) is now `missing_history.json`, and the console, reports,
@@ -5062,6 +5097,16 @@
 
 ### Privacy and security
 
+- The `pre-push` hook refuses a commit or tag message that quotes a
+  money-like amount with thousands separators and cents
+  (`1,234,567.89`), so no real book total reaches the public history
+  again; mark a synthetic number with the word `pii-ok` on its line
+  (`scripts/check-pii.sh --message`; A2-1384). Existing history is left
+  as is.
+- `taxjson audit` and the gains traces keep printing a row's own id
+  unmasked, on purpose: it is the `--id` handle (for Kraken, the
+  exchange's ledger txid — an exchange reference). Documented in
+  SECURITY.md, README and KNOWN_ISSUES (owner decision, re-audit A2-1379).
 - `taxjson redact` and the generate-parser privacy gate no longer lose a
   private-denylist pattern silently: a leading UTF-8 BOM is stripped,
   and a denylist that is UTF-16, not UTF-8, unreadable or a directory

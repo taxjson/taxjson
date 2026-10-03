@@ -57,7 +57,10 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     fi
     rm -rf "$bt"
   fi
-  if ! git log --format=%B "${log_range[@]}" | "$check" --text; then
+  # Messages also refuse a money amount (1,234,567.89): no owner-book
+  # figure in public history (A2-1384); `pii-ok` on the line marks a
+  # synthetic one.
+  if ! git log --format=%B "${log_range[@]}" | "$check" --message; then
     refuse "$local_ref" "a commit MESSAGE hit the scan."
   fi
   # Identities of the commits this push adds (not of existing history).
@@ -66,7 +69,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     tagobj="$(git cat-file tag "$local_sha")"
     ids="$ids
 $(printf '%s\n' "$tagobj" | sed -nE 's/^tagger (.*) <([^>]*)> [0-9]+ [+-][0-9]{4}$/\1 <\2>/p')"
-    if ! printf '%s\n' "$tagobj" | sed '1,/^$/d' | "$check" --text; then
+    if ! printf '%s\n' "$tagobj" | sed '1,/^$/d' | "$check" --message; then
       refuse "$local_ref" "the annotated TAG message hit the scan."
     fi
   fi

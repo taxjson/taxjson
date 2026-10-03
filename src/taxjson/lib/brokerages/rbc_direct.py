@@ -27,6 +27,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         combined_accounts_note,
+                                         combined_accounts_refusal,
                                          DESC_NUMBER_RE, OPTION_STRIKE_RE,
                                          desc_number,
                                          _parse_div_qty_rate,
@@ -1092,7 +1094,21 @@ def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
         # RBC account, several taxable accounts pooled) — not flagged.
         accts = sorted({_norm_account(r.account)
                         for r in exports[k].rows if r.account.strip()})
-        if len(accts) > 1:
+        if len(accts) > 1 and getattr(helper, 'combined_broker_accounts',
+                                      False):
+            # combined_broker_accounts = true (owner decision): a NOTE.
+            # RBC writes no account type, so on a sheltered label the
+            # plans cannot be checked — refused.
+            accts = [f"#{i} {_mask_account(a)}"
+                     for i, a in enumerate(accts, 1)]
+            if getattr(helper, 'account_taxable', None) is False:
+                raise combined_accounts_refusal(
+                    name_of[k], 'RBC', accts,
+                    "an RBC export does not say which plan each account "
+                    "is")
+            ctx.messages.append(combined_accounts_note(name_of[k], 'RBC',
+                                                       accts))
+        elif len(accts) > 1:
             accts = [f"#{i} {_mask_account(a)}"
                      for i, a in enumerate(accts, 1)]
             ctx.messages.append(
@@ -1422,12 +1438,18 @@ class RbcBrokerage(BaseBrokerage):
         return rbc_terms(self.country)
 
     @classmethod
-    def prepare_files(cls, paths) -> RbcAccountContext:
+    def prepare_files(cls, paths, combined=False,
+                      taxable=None) -> RbcAccountContext:
         """Read ALL of one account's RBC exports once and build the
         identity maps every per-file parse shares (market currency per
         symbol, option code → contract, name → ticker) plus the overlap
-        plan for re-downloads. Account-level warnings print here, once."""
-        ctx = build_rbc_account_context(list(paths), helper=cls())
+        plan for re-downloads. Account-level warnings print here, once.
+        `combined` / `taxable`: the label's combined_broker_accounts and
+        type (taxjson-brokerage)."""
+        helper = cls()
+        helper.combined_broker_accounts = bool(combined)
+        helper.account_taxable = taxable
+        ctx = build_rbc_account_context(list(paths), helper=helper)
         ctx.emit()
         return ctx
 

@@ -580,6 +580,11 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
             f"{ev['date']}{settle}   {ev.get('account') or '?'}"
             + (" (short)" if ev.get("direction") == "SHORT" else ""))
     out.append(paint("\u2550" * W, "dim"))
+    # The row's own id, unmasked, on purpose (owner decision, audit
+    # A2-1379): it is the handle `--id` takes. For most brokers it is a
+    # content hash; a Kraken row's id is the exchange's ledger txid — an
+    # exchange reference, never an account number or wallet address —
+    # so it is shown as is, unlike the parser's masked messages.
     out.append(paint(head, "h")
                + paint(f"   #{ev['id'][:12]}", "dim"))
     out.append(paint("\u2500" * W, "dim"))

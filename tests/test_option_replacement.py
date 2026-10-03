@@ -196,8 +196,9 @@ class TestRuleOneCallVsShareLoss(unittest.TestCase):
         self.assertEqual(res['wash_sales'], [])
 
 class TestReplacementCapacity(unittest.TestCase):
-    """One replacement unit backs at most one denied unit, across the
-    fills of a sale and across separate losses."""
+    """One replacement unit backs at most one denied unit across the
+    fills of ONE sale; each separate sale is judged on its own (CRA's
+    per-disposition formula, CA-SL-08)."""
 
     @rule("CA-SL-08")
     def test_one_call_ten_fills(self):
@@ -221,8 +222,10 @@ class TestReplacementCapacity(unittest.TestCase):
             tx(date='2025-03-05', qty=-100, price=10.0, net=1000.0),
             tx(date='2025-03-20', symbol=CALL, qty=1, price=3.0, net=300.0)]
         res, _ = gains(CanadaTaxRules(), txs)
+        # Two sales on two days: min(100, 100, 100) on each — the one
+        # held call backs both denials (owner decision on A2-0167).
         denied = sum(w['amount'] for w in res['wash_sales'])
-        self.assertAlmostEqual(denied, 1000.0, places=2)
+        self.assertAlmostEqual(denied, 2000.0, places=2)
 
     @rule("CA-SL-08")
     def test_one_share_rebuy_two_fills(self):
