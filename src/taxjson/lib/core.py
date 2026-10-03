@@ -145,6 +145,12 @@ class TaxTransaction:
     # decision on audit A2-0090 / A2-0274). NOT part of compute_id,
     # omitted from to_dict() when empty.
     exercise_of: str = ''
+    # The cash a corporate-action row's event paid (cash in lieu of a
+    # fraction, boot), as "<amount> <CUR>[; <amount> <CUR>]" — set by
+    # the corp-action emitters and read by fx-cash, which used to tell
+    # cash from the description text (re-audit A2-1014). Evidence only:
+    # NOT part of compute_id, omitted from to_dict() when empty.
+    corp_cash: str = ''
 
     def __post_init__(self):
         if self.id is None:
@@ -199,7 +205,7 @@ INCOME_FACT_FIELDS = ('record_date', 'ex_date', 'income_label',
 # The other optional evidence fields, omitted from to_dict() when empty.
 EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
                    'broker_basis', 'multiplier', 'source', 'source_key',
-                   'source_account', 'exercise_of')
+                   'source_account', 'exercise_of', 'corp_cash')
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]
 # e.g. "AAPL250120C00150000.US", "MDA251219P00029000.TO", or
@@ -805,7 +811,7 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                  'record_date', 'ex_date', 'income_label',
                  'dealer_country', 'issuer_country', 'broker_time',
                  'security_name', 'open_close', 'broker_basis',
-                 'exercise_of'):
+                 'exercise_of', 'corp_cash'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]

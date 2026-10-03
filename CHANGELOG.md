@@ -24,6 +24,11 @@
   passes its rates file to `taxjson-brokerage --rates`, and the fill is
   turned into US dollars at the day's rate before the 2% test; a fill with
   no rate is named as unchecked (A2-0590).
+- fx-cash now counts the cash a corporate action pays wherever the emitter
+  puts it: cash in lieu folded into a taxable exchange's proceeds, an
+  all-fractional merger, a spin-off's fractional share and §356 boot (the
+  rows carry it as `corp_cash`; the description wording no longer decides)
+  (A2-1014).
 
 ### Renames, ticker.map and warrants
 

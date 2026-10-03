@@ -537,10 +537,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "year's net gain or net loss beyond the $200 annual "
                  "exemption (a net gain or loss within $200 is nil), from "
                  "a pooled average cost per currency. Cash moves only on "
-                 "a trade for cash, income, withholding and fees; a "
-                 "coin-for-coin swap, a fee paid in a coin and a reward "
-                 "in a coin move none (a USD stablecoin is US-dollar "
-                 "cash, CA-CRYPTO-02).",
+                 "a trade for cash, income, withholding, fees and the "
+                 "cash a corporate action pays (cash in lieu of a "
+                 "fraction, whether booked as its own sale or inside an "
+                 "exchange's proceeds, and boot); a share-for-share "
+                 "exchange, a coin-for-coin swap, a fee paid in a coin "
+                 "and a reward in a coin move none (a USD stablecoin is "
+                 "US-dollar cash, CA-CRYPTO-02).",
                  keys=("fx_cash_gains",)),
         ]),
         ("Cost base (ACB)", [
@@ -1424,7 +1427,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "a pooled average cost per currency (fx_cash_gains = "
                  "true runs it after `taxjson run`); the §988(e) "
                  "exclusion for personal transactions is not modelled, "
-                 "and there is no $200 annual exemption.",
+                 "and there is no $200 annual exemption. The cash a "
+                 "corporate action pays (cash in lieu of a fraction, "
+                 "§356 boot) is currency received; a share-for-share "
+                 "exchange moves none.",
                  keys=("fx_cash_gains",)),
         ]),
         ("Basis and holding period", [
