@@ -177,9 +177,18 @@ def _report_project(td):
     _doc(root / "work" / "margin_raw_gains.json", [
         g("AAA.TO", "2025-08-01", 200.0), g("BBB.TO", "2025-09-01", 300.0)],
         summary={"year": "all", "tax_date_basis": "settle"})
-    (root / "capital_gains_dividends.map").write_text(
-        "ZZS.TO 2025 all\nZZT.TO 2025 all\n")
+    _cgd(root, ("ZZS.TO", ""), ("ZZT.TO", ""))
     return root
+
+
+def _cgd(root, *entries):
+    """[[capital_gains_dividends]] entries (symbol, account) for 2025,
+    amount "all", appended to taxjson.toml."""
+    with (root / "taxjson.toml").open("a") as f:
+        for sym, acct in entries:
+            f.write(f'\n[[capital_gains_dividends]]\nsymbol = "{sym}"\n'
+                    f'year = 2025\namount = "all"\n'
+                    + (f'account = "{acct}"\n' if acct else ""))
 
 
 class TestPrintedReportTotals(unittest.TestCase):
@@ -301,8 +310,7 @@ class TestUnreadableBooksStopTheView(unittest.TestCase):
                 _t("DIVIDEND", "2025-03-10", "ZZS.TO", net=60.0,
                    gross_amount=60.0, id="d1")])
             (root / "work" / "cash_raw.json").write_text('{"transac')
-            (root / "capital_gains_dividends.map").write_text(
-                "ZZS.TO 2025 all margin\n")
+            _cgd(root, ("ZZS.TO", "margin"))
             with self.assertRaises(SystemExit) as cm:
                 R._box18_fractions(root)
         self.assertIn("cash_raw.json", str(cm.exception.code))
@@ -633,8 +641,7 @@ class TestBox18EstimateByIssuer(unittest.TestCase):
                        gross_amount=30.0, id="d2")]
             _doc(root / "work" / "margin_raw.json", rows)
             _doc(root / "work" / "margin_base.json", rows)
-            (root / "capital_gains_dividends.map").write_text(
-                "ZZS.TO 2025 all\nZZF.US 2025 all\n")
+            _cgd(root, ("ZZS.TO", ""), ("ZZF.US", ""))
             est = {"div_ca": 500.0, "div_foreign": 300.0}
             fb = {"margin": 300.0}
             R._box18_into_estimate(root, est, ["margin"], 2025, fb)

@@ -68,11 +68,10 @@ def save_cache(cache_data):
     save_json_cache(CACHE_FILE, cache_data, merge=True, prog=PROG, indent=2)
 
 # Built-in Yahoo ticker-collision disambiguations. Extended (or
-# overridden) per project by a `crypto_ticker.map` file — same idea as
-# yf_ticker.map: one `SYMBOL YF_ID` pair per line, `#` comments. The
-# hardcoded set covers only the coins it lists; any OTHER user with a
-# colliding coin needs the map file (KNOWN_ISSUES "SYMBOL_OVERRIDES is
-# hardcoded to the maintainer's coins").
+# overridden) per project by `CRYPTO SYMBOL YF_ID` lines in ticker.map
+# (`#` comments). The hardcoded set covers only the coins it lists; any
+# OTHER user with a colliding coin needs a CRYPTO line (KNOWN_ISSUES
+# "SYMBOL_OVERRIDES is hardcoded to the maintainer's coins").
 SYMBOL_OVERRIDES = {
     'TAO': 'TAO22974',
     'UNI': 'UNI7083',
@@ -94,30 +93,16 @@ from taxjson.lib.brokerages._crypto_common import (  # noqa: E402
 
 
 def load_symbol_overrides(dirs):
-    """Merge `crypto_ticker.map` files found in `dirs` (later dirs win)
-    over the built-in SYMBOL_OVERRIDES. Malformed lines are skipped
-    with a warning — a typo shouldn't kill a price-fill run."""
+    """Merge the CRYPTO lines (`CRYPTO SYMBOL YF_ID`) of the ticker.map
+    found in each of `dirs` (later dirs win) over the built-in
+    SYMBOL_OVERRIDES. A malformed line is skipped with a warning — a
+    typo shouldn't kill a price-fill run (`taxjson run` refuses the map
+    up front). A folder still holding the old crypto_ticker.map stops
+    the run (`taxjson migrate` moves it into ticker.map)."""
+    from taxjson.lib.ticker_map import side_rules_in
     merged = dict(SYMBOL_OVERRIDES)
     for d in dirs:
-        p = os.path.join(str(d), "crypto_ticker.map")
-        if not os.path.isfile(p):
-            continue
-        try:
-            with open(p, 'r', encoding='utf-8-sig') as f:
-                for lineno, line in enumerate(f, 1):
-                    line = line.split('#', 1)[0].strip()
-                    if not line:
-                        continue
-                    parts = line.split()
-                    if len(parts) != 2:
-                        print(f"{PROG}: warning: {p}:{lineno}: expected "
-                              f"'SYMBOL YF_ID', got {line!r} — skipped.",
-                              file=sys.stderr)
-                        continue
-                    merged[parts[0].upper()] = parts[1]
-        except OSError as exc:
-            print(f"{PROG}: warning: could not read {p}: {exc}",
-                  file=sys.stderr)
+        merged.update(side_rules_in([str(d)]).crypto)
     return merged
 
 def get_crypto_price(symbol, date_str):
@@ -162,7 +147,7 @@ def main():
     parser.add_argument("input", nargs="?", help="Input JSON file (taxjson schema)")
     parser.add_argument(
         "--project-root", metavar="DIR",
-        help="Read crypto_ticker.map from this project root (then the "
+        help="Read the CRYPTO lines of ticker.map from this project root (then the "
              "input file's folder) instead of the current directory. "
              "`taxjson run` always passes it, so the project's own map "
              "applies whatever the cwd and a map in the cwd never "
@@ -326,7 +311,7 @@ def _fill(args):
                     continue
                 # Key the cache on the RESOLVED Yahoo id, not the raw
                 # symbol: the fetch honours SYMBOL_OVERRIDES /
-                # crypto_ticker.map, so a raw-symbol key kept serving
+                # ticker.map CRYPTO lines, so a raw-symbol key kept serving
                 # the OLD coin's price after the user remapped the
                 # symbol (stage-tools audit).
                 y_symbol = SYMBOL_OVERRIDES.get(tx.symbol, tx.symbol)
@@ -408,7 +393,7 @@ def _fill(args):
             f"income/cost/proceeds): {shown}{more}. The price lookup "
             f"failed (see above); re-run when Yahoo is reachable, add "
             f"the price to the row, or map the symbol in "
-            f"crypto_ticker.map.")
+            f"ticker.map (`CRYPTO SYMBOL YAHOO_ID`).")
 
     output_data = {
         "transactions": [tx.to_dict() for tx in transactions]

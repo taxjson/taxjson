@@ -47,8 +47,9 @@ class TestFillCryptoPar(unittest.TestCase):
 
 class TestFastSeesTheWorkMap(unittest.TestCase):
     def test_work_map_reprices_under_fast(self):
-        # A2-0585: fill-crypto reads work/crypto_ticker.map, the --fast
-        # stamp hashed only the root map.
+        # A2-0585: fill-crypto reads the CRYPTO lines of a work/ticker.map
+        # (once work/crypto_ticker.map), the --fast stamp hashed only the
+        # root map.
         from test_fix_crypto import KR_LEDGER_H, _env, _project, _run_cli
         led = (KR_LEDGER_H
                + "LX1,RX1,2026-03-02 12:00:00,earn,reward,currency,crypto,"
@@ -71,7 +72,7 @@ class TestFastSeesTheWorkMap(unittest.TestCase):
             r = _run_cli(root, "run", "--no-input", env=env)
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             self.assertEqual(price(), 5.0)
-            (root / "work" / "crypto_ticker.map").write_text("SOL SOLFIX\n")
+            (root / "work" / "ticker.map").write_text("CRYPTO SOL SOLFIX\n")
             r = _run_cli(root, "run", "--fast", "--no-input", env=env)
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             self.assertEqual(price(), 100.0)

@@ -174,6 +174,10 @@ _CA_ONLY_TABLES = {
     "[estimate] deductions": "[estimate]\ndeductions = 1000\n",
     "[estimate] carrying_charges": "[estimate]\ncarrying_charges = 100\n",
     "[estimate] amt_carryover": "[estimate]\namt_carryover = { 2024 = 10 }\n",
+    # T5 box 18 (once capital_gains_dividends.map, a Canada-only file).
+    "[capital_gains_dividends]": ('[[capital_gains_dividends]]\n'
+                                  'symbol = "LFE.TO"\nyear = 2025\n'
+                                  'amount = "all"\n'),
 }
 
 

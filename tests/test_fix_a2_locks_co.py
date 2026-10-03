@@ -265,14 +265,17 @@ class TestCarryoverLocks(unittest.TestCase):
             self.assertAlmostEqual(rows[2024]["net_lt"], -3000.0)
             self.assertAlmostEqual(rows[2024]["lt_carryover"], 1000.0)
 
-    def test_dangling_claimed_file_is_refused(self):
-        # A2-0355: a dangling claimed_losses.txt read as "absent".
+    def test_unreadable_claimed_entry_is_refused(self):
+        # A2-0355: a claim that cannot be read was read as "absent" (a
+        # dangling claimed_losses.txt then). The claims are taxjson.toml's
+        # [carryover] claimed now: a bad entry stops, naming it.
         with tempfile.TemporaryDirectory() as td:
             p = _project(Path(td) / "p", 2025, self.BOOK)
-            os.symlink(Path(td) / "gone.txt", p / "claimed_losses.txt")
+            with (p / "taxjson.toml").open("a") as f:
+                f.write('\n[carryover]\nclaimed = { 2024 = "lots" }\n')
             r = _carryover(p)
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("claimed_losses.txt", r.stderr)
+            self.assertIn("[carryover] claimed", r.stderr)
 
 
 class TestCarryoverAfterProjectYear(unittest.TestCase):
@@ -301,7 +304,7 @@ class TestCarryoverAfterProjectYear(unittest.TestCase):
 class TestCarryoverBox18(unittest.TestCase):
     @rule("CA-INC-06")
     def test_box18_gain_nets_the_year(self):
-        # A2-0678: capital_gains_dividends.map names 3,000 of box-18
+        # A2-0678: [[capital_gains_dividends]] names 3,000 of box-18
         # gains in 2025; the ledger's 2025 net is -5,000 + 3,000.
         book = [_row("b1", "2025-02-01", "AAA.TO", 100, -10000.0),
                 _row("s1", "2025-03-03", "AAA.TO", -100, 5000.0),
@@ -311,7 +314,9 @@ class TestCarryoverBox18(unittest.TestCase):
             p = _project(Path(td) / "p", 2025, book)
             (p / "work" / "margin_raw.json").write_text(
                 json.dumps({"transactions": book}))
-            (p / "capital_gains_dividends.map").write_text("LFE.TO 2025 all\n")
+            with (p / "taxjson.toml").open("a") as f:
+                f.write('\n[[capital_gains_dividends]]\nsymbol = "LFE.TO"\n'
+                        'year = 2025\namount = "all"\n')
             r = _carryover(p, "--json")
             self.assertEqual(r.returncode, 0, r.stderr)
             row = _rows_by_year(r.stdout)[2025]

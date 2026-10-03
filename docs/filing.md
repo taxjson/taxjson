@@ -28,7 +28,7 @@ the open steps one at a time; `--quick` skips the slow detectors.
       taxable ones; without them a permanently denied loss is invisible.
 - [ ] **Crypto** ledgers and trades for the full year.
 - [ ] **T3 box 42 / return of capital** entered as `ADJUST` lines (or
-      `distributions.map`) before trusting any ACB — some funds publish
+      `[[distributions]]` in taxjson.toml) before trusting any ACB — some funds publish
       the factors only after year end.
 - [ ] Commit `inputs/`, `taxjson.toml`, `ticker.map`, every
       `inputs/<account>/manifest.json` and any `.tt` files, so the filed
@@ -109,8 +109,8 @@ the open steps one at a time; `--quick` skips the slow detectors.
 - [ ] `taxjson t1135` — required when the cost of foreign property
       exceeded CAD 100,000 at any time in the year.
 - [ ] `taxjson carryover` — net capital losses of other years (line
-      25300); record what is actually claimed in `claimed_losses.txt`
-      as the 100% loss applied (the line 25300 amount divided by the
+      25300); record what is actually claimed in taxjson.toml's
+      `[carryover] claimed = { YEAR = AMOUNT }` as the 100% loss applied (the line 25300 amount divided by the
       inclusion rate — twice it at 50%).
 - [ ] `taxjson fx-cash` — gains on foreign-currency cash above the $200
       de minimis (ITA s.39(1.1)).
@@ -128,8 +128,8 @@ the open steps one at a time; `--quick` skips the slow detectors.
       it binds, the carryover it creates, and the carryover of the 7
       preceding years recovered against regular tax above the minimum
       (ITA s.120.2, line 40427). Enter last years' carryover by year of
-      origin in `amt_carryover.txt` (`YEAR AMOUNT` lines, from the notice
-      of assessment) unless last year's close-year lock carries it.
+      origin in `[estimate] amt_carryover = { YEAR = AMOUNT }` (from the
+      notice of assessment) unless last year's close-year lock carries it.
 
 ## 5. File and lock
 
@@ -153,7 +153,7 @@ the open steps one at a time; `--quick` skips the slow detectors.
       (`prior_year_net_tax`, then `second_prior_net_tax` the year after).
       If it shows a minimum tax carryover or a net capital loss balance
       that differs from the lock, enter the notice's figures in next
-      year's `amt_carryover.txt` / `[estimate] other_losses` (explicit
+      year's `[estimate] amt_carryover` / `[estimate] other_losses` (explicit
       input wins over the lock; `taxjson handoff` names the difference).
 - [ ] `taxjson check-filed` on every later run: an assignment, a late
       election or a corrected export that changes a filed year is

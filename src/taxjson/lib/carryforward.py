@@ -7,9 +7,8 @@ wins; tax-logic CA-CARRY-02 / CA-AMT-08 / US-CARRY-02):
 
 1. what the user entered — `--other-losses` / `--long-term-losses`,
    `[estimate] other_losses` / `long_term_losses`; for the minimum tax
-   `amt_carryover.txt` (project root, `YEAR AMOUNT` lines by year of
-   origin, as on the notice of assessment / T691) or
-   `[estimate] amt_carryover = { 2023 = 1200.50 }` (not both);
+   `[estimate] amt_carryover = { 2023 = 1200.50 }` (by year of origin,
+   as on the notice of assessment / T691);
 2. else the latest close-year lock BEFORE the project year
    (filed/<year>.json, or the lock [settings] prior_year_record names)
    whose `carryforwards` block close-year wrote from the same estimate
@@ -27,8 +26,13 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# The old project-root files; only `taxjson migrate` reads them now
+# (load_amt_file) — the inputs are [estimate] amt_carryover and
+# [carryover] claimed in taxjson.toml.
 AMT_FILE = "amt_carryover.txt"
 CLAIMED_FILE = "claimed_losses.txt"
+AMT_KEY = "[estimate] amt_carryover"
+CLAIMED_KEY = "[carryover] claimed"
 BLOCK_VERSION = 1
 
 # A grouped amount's lead group has no leading zero; `$` allowed (the
@@ -38,8 +42,8 @@ _AMOUNT_RE = re.compile(
 
 
 class CarryInputError(ValueError):
-    """An amt_carryover.txt / [estimate] amt_carryover / lock block that
-    cannot be read. One line naming the file (and line)."""
+    """An [estimate] amt_carryover / old amt_carryover.txt / lock block
+    that cannot be read. One line naming the input (and line)."""
 
 
 def _amount(text: str) -> float:
@@ -57,7 +61,8 @@ def _plausible_year(y: int) -> bool:
 
 
 def load_amt_file(path: Path) -> Dict[int, float]:
-    """`YEAR AMOUNT` lines (`#` comments) -> {year of origin: amount}.
+    """The old amt_carryover.txt (read by `taxjson migrate` only):
+    `YEAR AMOUNT` lines (`#` comments) -> {year of origin: amount}.
     Loud: a line that cannot be read, a year twice or an implausible
     year raises CarryInputError naming file:line — a dropped line would
     understate the credit with no word."""
@@ -216,24 +221,12 @@ def resolve_amt(root: Path, settings: Dict[str, Any],
                 est_cfg: Dict[str, Any]) -> Dict[str, Any]:
     """{"by_year": {origin: amount} | None, "source": str | None,
     "notes": [str]} — the minimum tax carryover available to the
-    project year (Canada). Raises CarryInputError on unreadable input
-    or when both amt_carryover.txt and [estimate] amt_carryover are
-    given."""
-    import os
+    project year (Canada): [estimate] amt_carryover, else the prior
+    year's lock. Raises CarryInputError on unreadable input."""
     root = Path(root)
-    fpath = root / AMT_FILE
-    has_file = os.path.lexists(fpath)
-    has_cfg = "amt_carryover" in (est_cfg or {})
-    if has_file and has_cfg:
-        raise CarryInputError(
-            f"both {AMT_FILE} and [estimate] amt_carryover are given — "
-            f"keep one (which is current cannot be guessed)")
-    if has_file:
-        return {"by_year": load_amt_file(fpath), "source": AMT_FILE,
-                "notes": []}
-    if has_cfg:
+    if "amt_carryover" in (est_cfg or {}):
         return {"by_year": amt_from_config(est_cfg["amt_carryover"]),
-                "source": "[estimate] amt_carryover", "notes": []}
+                "source": AMT_KEY, "notes": []}
     return _from_lock(root, settings, "minimum_tax")
 
 
@@ -345,8 +338,8 @@ def handoff_issues(root: Path, cfg: Dict[str, Any],
                    record: Dict[str, Any]) -> List[Dict[str, Any]]:
     """What this (next) project's carry-forward inputs say vs what the
     closed year's record carried forward: [estimate] other_losses /
-    long_term_losses, claimed_losses.txt's line for the record year,
-    amt_carryover.txt / [estimate] amt_carryover (tax-logic CA-CARRY-05,
+    long_term_losses, [carryover] claimed's entry for the record year,
+    [estimate] amt_carryover (tax-logic CA-CARRY-05,
     US-CARRY-03). An input that is not set is not a
     mismatch (the estimate then reads the record)."""
     from taxjson.lib.country import CountryError, settings_country
@@ -381,29 +374,23 @@ def handoff_issues(root: Path, cfg: Dict[str, Any],
                  f"whichever is wrong (your notice of assessment "
                  f"decides; re-close {ry} with --force if the record "
                  f"is).")
-        cl = root / CLAIMED_FILE
-        if "applied" in ncl and cl.is_file():
-            from taxjson.bin.taxjson_carryover import load_claimed
-            import contextlib
-            import io
-            with contextlib.redirect_stderr(io.StringIO()):
-                claimed = load_claimed(cl)
+        if "applied" in ncl:
+            from taxjson.lib.project_tables import claimed_losses
+            claimed = claimed_losses(cfg)[0]
             if ry in claimed and not _close(claimed[ry], ncl["applied"]):
-                item(f"{CLAIMED_FILE} {ry}", claimed[ry],
+                item(f"{CLAIMED_KEY} {ry}", claimed[ry],
                      float(ncl["applied"]),
-                     f"{CLAIMED_FILE} records {claimed[ry]:,.2f} applied "
+                     f"{CLAIMED_KEY} records {claimed[ry]:,.2f} applied "
                      f"on the {ry} return; the {ry} record applied "
                      f"{float(ncl['applied']):,.2f}.")
         mt = block.get("minimum_tax")
-        import os
         given: Dict[str, Any] = {"source": None}
-        if isinstance(mt, dict) and (os.path.lexists(root / AMT_FILE)
-                                     or "amt_carryover" in est):
+        if isinstance(mt, dict) and "amt_carryover" in est:
             try:
                 given = resolve_amt(root, {"year": ry + 1}, est)
             except CarryInputError as e:
                 item("minimum tax carryover input", str(e), "", str(e))
-            if given.get("source") in (AMT_FILE, "[estimate] amt_carryover"):
+            if given.get("source") == AMT_KEY:
                 from taxjson.lib.tax_estimate import CA_AMT_CARRY_YEARS
                 cutoff = ry + 1 - CA_AMT_CARRY_YEARS
                 want = {int(y): float(a) for y, a in

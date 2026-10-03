@@ -176,7 +176,7 @@ class TestPastDeadlineViolation(unittest.TestCase):
 
 class TestCryptoTickerMap(unittest.TestCase):
     """A2-0364: harvest quotes a coin under the project's
-    crypto_ticker.map spelling — the one the books were priced with."""
+    ticker.map CRYPTO spelling — the one the books were priced with."""
 
     def test_project_map_spelling_is_asked(self):
         asked = {}
@@ -187,7 +187,7 @@ class TestCryptoTickerMap(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            (root / "crypto_ticker.map").write_text("FOO FOO123\n")
+            (root / "ticker.map").write_text("CRYPTO FOO FOO123\n")
             g = _write(root / "work" / "crypto_gains_wash.json", _gains([
                 {"symbol": "FOO", "qty": 1, "total_cost": 135.0,
                  "position_start_date": _iso(-50)}]))

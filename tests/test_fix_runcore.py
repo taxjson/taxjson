@@ -876,7 +876,8 @@ Corporate Actions,Data,Stocks,CAD,2025-10-27,"2025-10-22, 20:25:00","SSL(CA00000
 
 
 class TestCorpActionsFollowSecurityOverrides(unittest.TestCase):
-    """S004-00: ticker_extraction_overrides.txt renamed the trades but
+    """S004-00: an EXTRACT override (once ticker_extraction_overrides.txt)
+    renamed the trades but
     not the corporate-action rows, so a merger consumed an empty
     un-overridden pool and the real position stayed put."""
 
@@ -886,8 +887,8 @@ class TestCorpActionsFollowSecurityOverrides(unittest.TestCase):
             (root / "inputs" / "margin").mkdir(parents=True)
             _set_config(root, _CONFIG)
             (root / "inputs" / "margin" / "ib.csv").write_text(_IB_MERGER)
-            (root / "ticker_extraction_overrides.txt").write_text(
-                "SSL | CAD | SSLX.TO\n")
+            (root / "ticker.map").write_text(
+                "EXTRACT SSL | CAD | SSLX.TO\n")
             r = _run_cli(root, "run", "--no-input")
             if r.returncode == 3:
                 pend = json.loads((root / "work" / "pending_elections.json")
@@ -926,7 +927,7 @@ class TestHoldingsTomlStatesItsCostBasis(unittest.TestCase):
         self.assertIn("superficial-loss", doc["meta"]["base_cost_basis"])
         self.assertIn("taxjson list", doc["meta"]["base_cost_basis"])
         # A2-0226: the map adjustments are not in either cost.
-        self.assertIn("distributions.map", doc["meta"]["base_cost_basis"])
+        self.assertIn("[[distributions]]", doc["meta"]["base_cost_basis"])
 
 
 if __name__ == "__main__":

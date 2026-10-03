@@ -439,7 +439,7 @@ class TestRatesAndPriceSource(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "work").mkdir()
-            (root / "work" / "crypto_ticker.map").write_text("FOO FOO123\n")
+            (root / "work" / "ticker.map").write_text("CRYPTO FOO FOO123\n")
             (root / "home").mkdir()
             (root / "home" / ".crypto_price_cache.json").write_text(
                 json.dumps({"FOO123-2024-06-03": 150.0,

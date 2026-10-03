@@ -102,14 +102,16 @@ class TestProjectTextFilesNameThemselves(unittest.TestCase):
         return p
 
     def test_loaders_raise_input_read_error_naming_the_file(self):
-        from taxjson.bin.taxjson_apply_distributions import load_map
+        from taxjson.bin.taxjson_apply_distributions import load_rows
         from taxjson.bin.taxjson_brokerage import load_security_overrides
         from taxjson.bin.taxjson_carryover import load_claimed
         from taxjson.bin.taxjson_t1135 import load_overrides
         from taxjson.bin.taxjson_ticker_map import load_map_file
-        for fn, name in ((load_map, "distributions.map"),
-                         (load_security_overrides,
-                          "ticker_extraction_overrides.txt"),
+        # [[distributions]] are read from taxjson.toml and the EXTRACT
+        # overrides from ticker.map (once distributions.map and
+        # ticker_extraction_overrides.txt).
+        for fn, name in ((load_rows, "taxjson.toml"),
+                         (load_security_overrides, "ticker.map"),
                          (load_claimed, "claimed_losses.txt"),
                          (load_overrides, "t1135.map"),
                          (load_map_file, "ticker.map")):

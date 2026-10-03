@@ -355,8 +355,12 @@ class TestChecklistRunClean(unittest.TestCase):
             root = Path(td)
             cfg = _cl_project(root)
             self._clean(root, cfg)
-            m = root / "distributions.map"
-            m.write_text("XYZ.TO 2026-03-01 -1.00\n")
+            # [[distributions]] in taxjson.toml (once distributions.map)
+            # are a run input.
+            m = root / "taxjson.toml"
+            with m.open("a") as f:
+                f.write('\n[[distributions]]\nsymbol = "XYZ.TO"\n'
+                        'record_date = 2026-03-01\nper_share = -1.00\n')
             t = time.time() + 60
             os.utime(m, (t, t))
             r = cl.d_run_clean(_cl_ctx(root, cfg))

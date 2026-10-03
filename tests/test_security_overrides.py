@@ -67,12 +67,13 @@ class TestApplySecurityOverride(unittest.TestCase):
 class TestLoadSecurityOverrides(unittest.TestCase):
     def test_parses_and_skips_comments(self):
         with tempfile.TemporaryDirectory() as tmp:
-            f = Path(tmp) / 'security_overrides.txt'
+            f = Path(tmp) / 'ticker.map'
             f.write_text(
                 "# a comment\n"
                 "\n"
-                "US DLR CURRENCY ETF | USD | DLR.U.TO\n"
-                "  Some Fund | * | FUND.TO  \n"
+                "GLOBAL OLD.TO NEW.TO\n"
+                "EXTRACT US DLR CURRENCY ETF | USD | DLR.U.TO\n"
+                "  EXTRACT Some Fund | * | FUND.TO  \n"
             )
             overrides = load_security_overrides(f)
             self.assertEqual(overrides, [
@@ -85,13 +86,18 @@ class TestLoadSecurityOverrides(unittest.TestCase):
         # the line is refused, named by its number.
         from taxjson.bin.taxjson_brokerage import SecurityOverrideError
         with tempfile.TemporaryDirectory() as tmp:
-            f = Path(tmp) / 'security_overrides.txt'
+            f = Path(tmp) / 'ticker.map'
             # Missing the symbol field.
-            f.write_text("US DLR CURRENCY ETF | USD\n"
-                         "Good Fund | CAD | GF.TO\n")
+            f.write_text("EXTRACT US DLR CURRENCY ETF | USD\n"
+                         "EXTRACT Good Fund | CAD | GF.TO\n")
             with self.assertRaises(SecurityOverrideError) as cm:
                 load_security_overrides(f)
-            self.assertIn('line 1', str(cm.exception))
+            self.assertIn('ticker.map:1:', str(cm.exception))
+            # An old-format line (no keyword) is refused too.
+            f.write_text("Good Fund | CAD | GF.TO\n")
+            with self.assertRaises(SecurityOverrideError) as cm:
+                load_security_overrides(f)
+            self.assertIn('no ticker.map keyword', str(cm.exception))
 
 if __name__ == '__main__':
     unittest.main()

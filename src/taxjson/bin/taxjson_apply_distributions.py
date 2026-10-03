@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply non-cash fund distributions from a `distributions.map` file.
+"""Apply non-cash fund distributions from taxjson.toml's [[distributions]].
 
 Canadian ETFs routinely declare REINVESTED (non-cash) capital-gains
 distributions — usually each December — that never appear in any broker
@@ -8,11 +8,17 @@ gain at sale. Some funds likewise report annual return-of-capital
 factors only after year-end. This tool turns a small user-maintained
 table into the ADJUST rows the engines already understand.
 
-Map format (`distributions.map` at the project root, `#` comments):
+Entries (`[[distributions]]` tables in the project's taxjson.toml):
 
-    # SYMBOL   RECORD_DATE  PER_SHARE_AMOUNT
-    XAW.TO     2025-12-29   0.4297      # reinvested dist -> ACB up
-    ZRE.TO     2025-12-31   -0.1200     # return of capital -> ACB down
+    [[distributions]]           # reinvested dist -> ACB up
+    symbol = "XAW.TO"
+    record_date = 2025-12-29
+    per_share = 0.4297
+
+    [[distributions]]           # return of capital -> ACB down
+    symbol = "ZRE.TO"
+    record_date = 2025-12-31
+    per_share = -0.12
 
 Per-share amounts are in the project BASE currency (the tool runs on the
 already-converted base books). For each map row, the account's share
@@ -32,9 +38,9 @@ accumulates. Rows for symbols the account doesn't hold on the date are
 skipped with a NOTE. Only the ACB side is booked: a reinvested
 distribution is also income of the record year (T3/T5), which the
 user reports from the slip — the NOTE says so. The pipeline wires this in for taxable equity
-accounts whenever `distributions.map` exists; run it manually as:
+accounts whenever taxjson.toml has [[distributions]]; run it manually as:
 
-    taxjson-apply-distributions work/margin_base.json --map distributions.map
+    taxjson-apply-distributions work/margin_base.json --config taxjson.toml
 
 With `--incomplete-history missing_history.json` (the pipeline passes it
 when the project has one) the record-date balance includes the
@@ -45,7 +51,6 @@ bought before the data gets the right share count.
 import argparse
 import datetime as _dt
 import json
-import re
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -57,61 +62,26 @@ from taxjson.lib.country import country_arg
 PROG = "taxjson-apply-distributions"
 
 
-# A per-share amount is a plain decimal: float() also took 'nan', 'inf',
-# '1e309' and '1_0' (read as 10), which either failed later at the gains
-# stage under a wrong ROC/ACB-up label or silently applied 100x the
-# amount (audit S025-14).
-_AMOUNT_RE = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)")
-_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
-
-
-def load_map(path: Path) -> List[Tuple[str, str, float]]:
-    """[(symbol, date, per_share)] — malformed lines are fatal: a typo
-    here silently mis-adjusts ACB, so refuse rather than skip. A
-    repeated SYMBOL+DATE is kept (two components of one distribution
-    can be entered on two lines) but warned about: a pasted line or an
-    appended correction ADDS to the first one."""
-    rows: List[Tuple[str, str, float]] = []
-    seen: dict = {}
-    # utf-8-sig: an editor's byte-order mark used to become part of the
-    # first symbol, so that row was skipped as "no \ufeffXYZ.TO shares
-    # held" with the BOM invisible in the note (audit S000-06).
-    for lineno, raw in enumerate(
-            cli_diag.read_text_utf8(path).splitlines(), 1):
-        line = raw.split("#", 1)[0].strip()
-        if not line:
-            continue
-        parts = line.split()
-        if len(parts) != 3:
-            sys.exit(f"{PROG}: {path}:{lineno}: expected "
-                     f"'SYMBOL DATE PER_SHARE', got {raw!r}")
-        sym, date, amt = parts
-        if not _AMOUNT_RE.fullmatch(amt):
-            sys.exit(f"{PROG}: {path}:{lineno}: bad per-share amount "
-                     f"{amt!r} (want a plain decimal such as 0.4297 or "
-                     f"-0.12)")
-        per_share = float(amt)
-        # YYYY-MM-DD exactly, and a real date: '2025/06/19' or
-        # '2025-6-19' compared as strings against the book's ISO dates
-        # and sized the wrong record-date balance (audit S025-19).
-        try:
-            if not _DATE_RE.fullmatch(date):
-                raise ValueError
-            _dt.date.fromisoformat(date)
-        except ValueError:
-            sys.exit(f"{PROG}: {path}:{lineno}: bad date {date!r} "
-                     f"(want YYYY-MM-DD)")
-        # Book symbols are upper case: a lowercase key matched nothing
-        # and the row was skipped as "no shares held" (audit S025-13).
-        key = (sym.upper(), date)
-        if key in seen:
-            print(f"{PROG}: warning: {path}:{lineno}: {key[0]} {date} "
-                  f"repeats line {seen[key]} — both amounts are applied "
-                  f"(they ADD). If this line is a correction or a pasted "
-                  f"copy, delete the other one.", file=sys.stderr)
-        else:
-            seen[key] = lineno
-        rows.append((key[0], date, per_share))
+def load_rows(config_path: Path) -> List[Tuple[str, str, float]]:
+    """[(SYMBOL, record date, per share)] of the [[distributions]]
+    entries in the taxjson.toml at `config_path` — an entry that cannot
+    be read is fatal: a typo here silently mis-adjusts ACB, so refuse
+    rather than skip (lib/project_tables; every taxjson config reader
+    refuses the same entries). A repeated SYMBOL+DATE is kept (two
+    components of one distribution can be two entries) but warned
+    about: a pasted entry or an appended correction ADDS to the first
+    one."""
+    from taxjson.lib.project_tables import distribution_rows
+    from taxjson.lib.tomlcompat import tomllib
+    try:
+        cfg = tomllib.loads(cli_diag.read_text_utf8(config_path))
+    except (ValueError, TypeError) as e:
+        sys.exit(f"{PROG}: {config_path} is not valid TOML: {e}")
+    rows, problems, warnings = distribution_rows(cfg)
+    if problems:
+        sys.exit(f"{PROG}: {config_path}: " + "; ".join(problems))
+    for w in warnings:
+        print(f"{PROG}: warning: {config_path.name} {w}", file=sys.stderr)
     return rows
 
 
@@ -340,15 +310,15 @@ def _warn_roc_overlaps(txs: List[dict], symbol: str, key: str,
             continue
         dates = {str(t.get("date") or ""), str(t.get("record_date") or "")}
         if date in dates:
-            print(f"{PROG}: warning: distributions.map {key} {date}: the "
+            print(f"{PROG}: warning: [[distributions]] {key} {date}: the "
                   f"book already has a return-of-capital ADJUST of "
                   f"{float(t.get('net_amount') or 0.0):.2f} on {symbol} "
                   f"(dated {t.get('date')}"
                   + (f", record date {t.get('record_date')}"
                      if t.get("record_date") else "")
                   + ") — if both are the same distribution the cost is "
-                  f"reduced TWICE. Delete the map line (or the .tt "
-                  f"ADJUST).", file=sys.stderr)
+                  f"reduced TWICE. Delete the [[distributions]] entry "
+                  f"(or the .tt ADJUST).", file=sys.stderr)
     try:
         lo = _dt.date.fromisoformat(date)
     except ValueError:
@@ -361,7 +331,7 @@ def _warn_roc_overlaps(txs: List[dict], symbol: str, key: str,
             else "Form 1099-DIV box 3")
     if divs:
         d = min(divs, key=lambda t: str(t.get("date") or ""))
-        print(f"{PROG}: warning: distributions.map {key} {date}: the "
+        print(f"{PROG}: warning: [[distributions]] {key} {date}: the "
               f"return of capital ({amount:+.2f}) lowers the cost, but the "
               f"cash of the distribution paid {d.get('date')} is booked as "
               f"a DIVIDEND row and still counted IN FULL as income by "
@@ -420,7 +390,7 @@ def apply_distributions(doc: dict, map_rows, account: str,
             # a distribution: it used to be reported as an applied
             # "return of capital" and a $0 ADJUST that the checklist's
             # roc-entered step counted (audit S025-23).
-            print(f"NOTE: distributions.map: {key} {date} has per-share "
+            print(f"NOTE: [[distributions]]: {key} {date} has per-share "
                   f"amount 0 — a placeholder, NOT applied. Enter the "
                   f"fund's declared amount once it is published.",
                   file=sys.stderr)
@@ -441,7 +411,7 @@ def apply_distributions(doc: dict, map_rows, account: str,
         via = f" (as {sym})" if sym != key else ""
         bal = balance_on(sizing, sym, date, date_basis)
         if bal <= 1e-9:
-            print(f"NOTE: distributions.map: no {key}{via} shares held "
+            print(f"NOTE: [[distributions]]: no {key}{via} shares held "
                   f"on {date} in this book — row skipped.",
                   file=sys.stderr)
             continue
@@ -453,7 +423,7 @@ def apply_distributions(doc: dict, map_rows, account: str,
         kind = (f"reinvested distribution ({_cost} up)" if per_share > 0
                 else f"return of capital ({_cost} down)")
         # Deterministic AND unique: a SYMBOL+DATE entered twice (two
-        # components, or a pasted line load_map warned about) gives
+        # components, or a pasted entry load_rows warned about) gives
         # each ADJUST its own id (audit S025-16).
         rid = f"DIST-{sym}-{date}-{account}"
         n = 2
@@ -472,7 +442,7 @@ def apply_distributions(doc: dict, map_rows, account: str,
             "account": account,
             "id": rid,
             "description": f"{kind}: {bal:g} sh x {per_share:g}/sh "
-                           f"per distributions.map",
+                           f"per [[distributions]]",
         })
         # A reinvested distribution is income of the record year (T3
         # box 21/26/49, or a T5 stock dividend): the ACB rises only
@@ -499,14 +469,16 @@ def apply_distributions(doc: dict, map_rows, account: str,
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__.splitlines()[0],
-        epilog="Map lines are SYMBOL RECORD_DATE PER_SHARE. The per-share "
-               "amount is in the project BASE currency (the books this "
-               "tool reads are already converted): convert a US-listed "
-               "fund's published USD factor to the base currency first.")
+        epilog="Entries are [[distributions]] tables (symbol, record_date, "
+               "per_share). The per-share amount is in the project BASE "
+               "currency (the books this tool reads are already "
+               "converted): convert a US-listed fund's published USD "
+               "factor to the base currency first.")
     ap.add_argument("base_json", type=Path)
-    ap.add_argument("--map", type=Path, required=True,
-                    help="distributions.map (per-share amounts in the "
-                         "project base currency)")
+    ap.add_argument("--config", type=Path, required=True,
+                    help="the project's taxjson.toml: its [[distributions]] "
+                         "entries (per-share amounts in the project base "
+                         "currency)")
     ap.add_argument("--account", default="")
     ap.add_argument("--date-basis", choices=DATE_BASES, default="settle",
                     help="Which date a trade moves the record-date "
@@ -540,8 +512,8 @@ def main(argv=None) -> int:
         # skipped (re-audit A2-1436; reconcile-slips' twin refuses too).
         cli_diag.error(PROG, f"no such file: --ticker-map {args.ticker_map}")
         return 2
-    if not args.map.exists():
-        cli_diag.error(PROG, f"no such map file: {args.map}")
+    if not args.config.is_file():
+        cli_diag.error(PROG, f"no such config file: {args.config}")
         return 2
     from taxjson.lib.json_input import InputFileError, read_work_doc
     try:
@@ -583,7 +555,7 @@ def main(argv=None) -> int:
                                                     merge_renames)
         tmap, _problems, _notes = _parse_map_file(args.ticker_map)
         renames = merge_renames(tmap, to_base=True)
-    doc, applied = apply_distributions(doc, load_map(args.map), account,
+    doc, applied = apply_distributions(doc, load_rows(args.config), account,
                                        args.date_basis, phantoms=phantoms,
                                        renames=renames,
                                        country=args.country)

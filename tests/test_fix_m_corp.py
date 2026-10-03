@@ -1,5 +1,6 @@
 """Regression tests for the 2026-09 audit's MEDIUM corporate-action and
-distributions.map findings (area `corp`, medium round). All data
+distributions.map findings (area `corp`, medium round; the map is
+taxjson.toml's [[distributions]] now). All data
 synthetic: fake tickers, fake ISINs, fake broker account ids."""
 import io
 import json
@@ -29,7 +30,13 @@ def _quiet(fn, *a, **kw):
     return out, buf.getvalue()
 
 
-# ======================================================= distributions.map
+def _dist_toml(path, sym, date, amt):
+    path.write_text(f'[[distributions]]\nsymbol = "{sym}"\n'
+                    f'record_date = {date}\nper_share = {amt}\n')
+    return path
+
+
+# ======================================================= [[distributions]]
 @rule("CA-DIST-01")
 class TestDistributionsMap(unittest.TestCase):
     def _apply(self, txs, rows, **kw):
@@ -41,18 +48,21 @@ class TestDistributionsMap(unittest.TestCase):
         return adj, n, err
 
     def test_s000_06_bom_is_stripped(self):
-        from taxjson.bin.taxjson_apply_distributions import load_map
+        # An editor's byte-order mark on taxjson.toml is not part of it.
+        from taxjson.bin.taxjson_apply_distributions import load_rows
         with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp) / "distributions.map"
-            p.write_bytes("XYZ.TO 2025-06-30 0.50\n".encode("utf-8-sig"))
-            self.assertEqual(load_map(p), [("XYZ.TO", "2025-06-30", 0.5)])
+            p = Path(tmp) / "taxjson.toml"
+            p.write_bytes('[[distributions]]\nsymbol = "XYZ.TO"\n'
+                          'record_date = 2025-06-30\nper_share = 0.50\n'
+                          .encode("utf-8-sig"))
+            self.assertEqual(load_rows(p), [("XYZ.TO", "2025-06-30", 0.5)])
 
     def test_s025_13_symbol_case_insensitive(self):
-        from taxjson.bin.taxjson_apply_distributions import load_map
+        from taxjson.bin.taxjson_apply_distributions import load_rows
         with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp) / "distributions.map"
-            p.write_text("xaw.to 2025-06-30 0.50\n")
-            rows = load_map(p)
+            p = _dist_toml(Path(tmp) / "taxjson.toml", "xaw.to",
+                           "2025-06-30", "0.50")
+            rows = load_rows(p)
         self.assertEqual(rows, [("XAW.TO", "2025-06-30", 0.5)])
         adj, n, _ = self._apply(
             [{"action": "BUYSELL", "date": "2025-01-15", "symbol": "XAW.TO",
@@ -109,10 +119,10 @@ class TestDistributionsMap(unittest.TestCase):
                 {"action": "BUYSELL", "date": "2026-01-05",
                  "symbol": "ABC.TO", "quantity": 100.0,
                  "account": "margin"}]}))
-            (t / "distributions.map").write_text("ABC.US 2026-06-30 1.00\n")
+            _dist_toml(t / "taxjson.toml", "ABC.US", "2026-06-30", "1.00")
             (t / "ticker.map").write_text("TOBASE ABC.US ABC.TO\n")
-            rc, err = _quiet(main, [str(base), "--map",
-                                    str(t / "distributions.map"),
+            rc, err = _quiet(main, [str(base), "--config",
+                                    str(t / "taxjson.toml"),
                                     "--ticker-map", str(t / "ticker.map")])
             self.assertEqual(rc, 0)
             doc = json.loads(base.read_text())
@@ -142,8 +152,9 @@ class TestDistributionsMap(unittest.TestCase):
                 "BUYSELL 2026-01-05 10:00:00 ABC.US 100 CAD 10 -1000 0\n"
                 "BUYSELL 2026-09-01 10:00:00 ABC.TO -100 CAD 12 1200 0\n")
             (root / "ticker.map").write_text("GLOBAL ABC.US ABC.TO\n")
-            (root / "distributions.map").write_text(
-                "ABC.US 2026-06-30 1.00\n")
+            with (root / "taxjson.toml").open("a") as f:
+                f.write('[[distributions]]\nsymbol = "ABC.US"\n'
+                        'record_date = 2026-06-30\nper_share = 1.00\n')
             r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             self.assertIn("+100.00 ACB adjustment", r.stderr)

@@ -227,30 +227,31 @@ class TestFastMapDeletionInvalidates(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "inputs" / "margin").mkdir(parents=True)
-            (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2025\ncountry = "canada"\n'
-                'base_currency = "CAD"\nsource_currencies = []\n'
-                '[accounts.margin]\ntype = "taxable"\n')
+            cfg = ('[settings]\nyear = 2025\ncountry = "canada"\n'
+                   'base_currency = "CAD"\nsource_currencies = []\n'
+                   '[accounts.margin]\ntype = "taxable"\n')
+            dist = ('\n[[distributions]]\nsymbol = "XEI.TO"\n'
+                    'record_date = 2025-06-01\nper_share = 0.50\n')
+            (root / "taxjson.toml").write_text(cfg + dist)
             (root / "inputs" / "margin" / "questrade.csv").write_text(
                 _QT_HEADER +
                 "2025-01-15 09:30:00 AM,2025-01-16 12:00:00 AM,Buy,XEI.TO,"
                 "D,100,10.00,1000.00,0.00,-1000.00,CAD,1,Trades,"
                 "Individual\n")
-            (root / "distributions.map").write_text(
-                "XEI.TO 2025-06-01 0.50\n")
             r = _cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr)
             base = (root / "work" / "margin_base.json").read_text()
             self.assertIn('"ADJUST"', base,
-                          "distributions.map should have produced an "
+                          "[[distributions]] should have produced an "
                           "ADJUST row")
-            (root / "distributions.map").unlink()
+            # Deleting the entries (once: deleting distributions.map).
+            (root / "taxjson.toml").write_text(cfg)
             r = _cli(root, "run", "--fast", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr)
             base = (root / "work" / "margin_base.json").read_text()
         self.assertNotIn(
             '"ADJUST"', base,
-            "deleting distributions.map went unnoticed under --fast — "
+            "deleting [[distributions]] went unnoticed under --fast — "
             "its ADJUST rows survived in the cached books")
 
 

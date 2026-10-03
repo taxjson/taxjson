@@ -105,53 +105,41 @@ def stamp_source_accounts(rows, file_accounts) -> None:
 
 
 class SecurityOverrideError(ValueError):
-    """A ticker_extraction_overrides.txt line that cannot be read. A
-    skipped rule changes ACB pooling (the USD ETF leg lands in another
-    security's pool), so an unreadable line fails the parse like a
-    malformed distributions.map line does (audit S001-01)."""
-
-
-_OVR_CURRENCY_RE = re.compile(r'^(?:[A-Z]{3}|\*)$')
+    """A ticker.map EXTRACT line that cannot be read. A skipped rule
+    changes ACB pooling (the USD ETF leg lands in another security's
+    pool), so an unreadable line fails the parse like a malformed
+    [[distributions]] entry does (audit S001-01)."""
 
 
 def load_security_overrides(path: Path):
-    """Parse a security-overrides file.
+    """The symbol-extraction overrides: the EXTRACT lines of the
+    ticker.map at `path`.
 
-    Each non-comment line is `description-substring | currency | symbol`,
-    '|'-separated. These correct securities the currency->exchange-suffix
-    logic mislabels: a parser stamps `.US` on any USD row, but a security
-    can trade in USD on a non-US exchange — the Global X US Dollar ETF
-    trades only on the TSX (CAD class DLR.TO, USD class DLR.U.TO), so its
-    USD leg must not become a fictional `DLR.US` (which would collide
-    with US-listed Digital Realty Trust). Description is the only field
-    that reliably tells those two `DLR`s apart.
+    Each is `EXTRACT description words | CURRENCY | SYMBOL`. These
+    correct securities the currency->exchange-suffix logic mislabels: a
+    parser stamps `.US` on any USD row, but a security can trade in USD
+    on a non-US exchange — the Global X US Dollar ETF trades only on the
+    TSX (CAD class DLR.TO, USD class DLR.U.TO), so its USD leg must not
+    become a fictional `DLR.US` (which would collide with US-listed
+    Digital Realty Trust). Description is the only field that reliably
+    tells those two `DLR`s apart.
 
-    The currency field may be '*' to match any currency; a currency code
-    is case-insensitive ('usd' == 'USD'). A leading BOM is ignored. A
-    malformed line raises SecurityOverrideError naming the line.
-    Returns a list of (desc_substring_lower, CURRENCY, symbol) tuples.
+    CURRENCY may be '*' to match any currency; a currency code is
+    case-insensitive ('usd' == 'USD'). A malformed EXTRACT line (or a
+    line with no ticker.map keyword — an old
+    ticker_extraction_overrides.txt line pasted in) raises
+    SecurityOverrideError naming the line. Returns a list of
+    (desc_substring_lower, CURRENCY, symbol) tuples in file order.
     """
-    overrides = []
-    from taxjson.lib.cli_diag import read_text_utf8
-    text = read_text_utf8(path)   # names a non-UTF-8 file (S053-06)
-    for n, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip().lstrip('\ufeff')
-        if not line or line.startswith('#'):
-            continue
-        parts = [p.strip() for p in line.split('|')]
-        if len(parts) != 3 or not parts[0] or not parts[2]:
-            raise SecurityOverrideError(
-                f"{shown_name(path)} line {n}: malformed security-override line "
-                f"{raw.strip()!r} — expected `description | currency | "
-                f"symbol` (currency may be '*')")
-        desc_sub, currency, symbol = parts
-        currency = currency.upper()
-        if not _OVR_CURRENCY_RE.match(currency):
-            raise SecurityOverrideError(
-                f"{shown_name(path)} line {n}: currency {parts[1]!r} is not a "
-                f"3-letter code or '*'")
-        overrides.append((desc_sub.lower(), currency, symbol))
-    return overrides
+    from taxjson.lib.ticker_map import read_side_rules
+    rules = read_side_rules(path)
+    bad = [m for m in rules.problems
+           if ": EXTRACT" in m or "no ticker.map keyword" in m]
+    if bad:
+        raise SecurityOverrideError(
+            f"{shown_name(path)}: {bad[0]}"
+            + (f" (and {len(bad) - 1} more)" if len(bad) > 1 else ""))
+    return list(rules.extract)
 
 
 _FUTURES_PREFIXES = ('F:', '/', '\\')
@@ -338,12 +326,13 @@ Examples:
         metavar="FILE",
         default=None,
         help=(
-            "Path to a security-overrides file. Each line is "
-            "`description-substring | currency | symbol` and rewrites "
-            "the parsed ticker for securities the currency->exchange "
-            "suffix mislabels (e.g. the TSX-listed Global X US Dollar "
-            "ETF, whose USD class would otherwise collide with a "
-            "US-listed ticker of the same name)."
+            "A ticker.map whose EXTRACT lines (`EXTRACT description "
+            "words | CURRENCY | SYMBOL`) rewrite the parsed ticker for "
+            "securities the currency->exchange suffix mislabels (e.g. "
+            "the TSX-listed Global X US Dollar ETF, whose USD class "
+            "would otherwise collide with a US-listed ticker of the "
+            "same name). `taxjson run` passes the project's ticker.map "
+            "when it has EXTRACT lines."
         ),
     )
     parser.add_argument(
@@ -789,7 +778,7 @@ Examples:
                             not in _bare_warned):
                         _bare_warned.add((_before, t.get('symbol')))
                         print(f"warning: ATTENTION: "
-                              f"ticker_extraction_overrides.txt renames "
+                              f"a ticker.map EXTRACT line renames "
                               f"{_before} to {t.get('symbol')}, which has "
                               f"no market suffix — a bare symbol is read "
                               f"as crypto / an unknown listing (a Canadian "

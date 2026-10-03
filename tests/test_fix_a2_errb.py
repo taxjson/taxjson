@@ -165,16 +165,19 @@ class TestRunInputs(_Built):
 
     def test_overrides_not_utf8_is_one_line_exit_2(self):
         """A2-0163, A2-0468, A2-0784, A2-1438."""
+        # The EXTRACT overrides live in ticker.map now: an unreadable map
+        # is one line naming it, exit 2.
         root = self.copy()
-        (root / "ticker_extraction_overrides.txt").write_bytes(b"\xe9x\n")
+        (root / "ticker.map").write_bytes(b"EXTRACT \xe9x | USD | X.TO\n")
         self.assertOneLine(self.cli(root, "run", "--no-input"), 2,
-                           "ticker_extraction_overrides.txt: not UTF-8")
+                           "ticker.map")
 
     def test_overrides_directory_exit_2(self):
         root = self.copy()
-        (root / "ticker_extraction_overrides.txt").mkdir()
+        (root / "ticker.map").unlink(missing_ok=True)
+        (root / "ticker.map").mkdir()
         self.assertOneLine(self.cli(root, "run", "--no-input"), 2,
-                           "ticker_extraction_overrides.txt is a directory")
+                           "ticker.map is a directory")
 
     def test_non_utf8_work_stamps_are_rebuilt(self):
         """A2-0795, A2-1429: `run` is the recovery for work/ damage."""

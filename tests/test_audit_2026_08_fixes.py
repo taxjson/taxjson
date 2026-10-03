@@ -1245,17 +1245,17 @@ class TestStrictRunFlag(unittest.TestCase):
 
 class TestCryptoTickerMap(unittest.TestCase):
     """KNOWN_ISSUES "SYMBOL_OVERRIDES is hardcoded": a user-editable
-    crypto_ticker.map now extends/overrides the built-in Yahoo
-    collision disambiguations."""
+    ticker.map CRYPTO lines (once crypto_ticker.map) extend/override
+    the built-in Yahoo collision disambiguations."""
 
     def test_map_file_merges_over_builtins(self):
         from taxjson.bin.fill_crypto_prices import load_symbol_overrides
         with tempfile.TemporaryDirectory() as tmp:
-            (Path(tmp) / "crypto_ticker.map").write_text(
+            (Path(tmp) / "ticker.map").write_text(
                 "# my colliding coins\n"
-                "PEPE PEPE24478   # collision with the other PEPE\n"
-                "TAO  TAO99999\n"
-                "garbage line without two fields extra\n")
+                "CRYPTO PEPE PEPE24478   # collision with the other PEPE\n"
+                "CRYPTO TAO  TAO99999\n"
+                "CRYPTO garbage line without two fields extra\n")
             import io
             from contextlib import redirect_stderr
             buf = io.StringIO()
@@ -1264,7 +1264,7 @@ class TestCryptoTickerMap(unittest.TestCase):
         self.assertEqual(merged["PEPE"], "PEPE24478")   # added
         self.assertEqual(merged["TAO"], "TAO99999")     # overrides builtin
         self.assertEqual(merged["UNI"], "UNI7083")      # builtin kept
-        self.assertIn("skipped", buf.getvalue())        # malformed warned
+        self.assertIn("CRYPTO needs", buf.getvalue())   # malformed warned
 
 
 class TestShortSaleFormRendering(unittest.TestCase):

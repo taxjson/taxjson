@@ -1,6 +1,6 @@
 """Re-audit-2 fixes, filing-reports list (helper C): the taxjson_run.py
 query views — income dating in the `divs` / `roc` / `events` row views,
-missing-book notices, the roc view's distributions.map rows, `leaps`
+missing-book notices, the roc view's [[distributions]] rows, `leaps`
 inputs, the `ccd-sum` class-share heading, the Kraken withdrawal fee in
 `transfers`, and the income roll-ups outside a project.
 
@@ -180,8 +180,16 @@ class TestTxViewMissingBook(unittest.TestCase):
                 self.assertIn("NOT in this report", r.stderr, view)
 
 
+def _add_dist(root, symbol, record_date, per_share):
+    """One taxjson.toml [[distributions]] entry (was a distributions.map
+    line)."""
+    with (Path(root) / "taxjson.toml").open("a") as f:
+        f.write(f'\n[[distributions]]\nsymbol = "{symbol}"\n'
+                f'record_date = {record_date}\nper_share = {per_share}\n')
+
+
 class TestRocViewDistributions(unittest.TestCase):
-    """A2-0116, A2-1116, A2-1128: the roc views' distributions.map rows."""
+    """A2-0116, A2-1116, A2-1128: the roc views' [[distributions]] rows."""
 
     @rule("CA-DIST-02")
     def test_rbc_notional_distribution_counted_once(self):
@@ -208,7 +216,7 @@ class TestRocViewDistributions(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, _CA, native={"margin": [broker]},
                             base={"margin": [dict(broker), mapped]})
-            (root / "distributions.map").write_text("CRQ.TO 2025-06-16 -0.50\n")
+            _add_dist(root, "CRQ.TO", "2025-06-16", -0.50)
             r = _cli(root, "roc", "2025")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("reduced twice", r.stderr)
@@ -221,7 +229,7 @@ class TestRocViewDistributions(unittest.TestCase):
         broker = _row("ADJUST", "2025-06-16", "CRQ.TO", -50.0, type="roc")
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, _CA, native={"margin": [broker]})
-            (root / "distributions.map").write_text("ZRQ.TO 2025-12-31 -0.50\n")
+            _add_dist(root, "ZRQ.TO", "2025-12-31", -0.50)
             for view in ("roc", "roc-sum"):
                 r = _cli(root, view, "2025")
                 self.assertEqual(r.returncode, 0, r.stderr)

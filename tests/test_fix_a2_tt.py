@@ -363,8 +363,8 @@ class TestBareRenameTargets(unittest.TestCase):
                 '2025-01-15 09:30:00 AM,2025-01-16 12:00:00 AM,Buy,RY,'
                 'ROYAL BANK OF CANADA,10,150.00,-1500.00,0,-1500.00,CAD,'
                 '55500001,Trades,Individual\n')  # pii-ok
-            ovr = Path(d) / "ovr.txt"
-            ovr.write_text("ROYAL BANK | CAD | RY\n")
+            ovr = Path(d) / "ticker.map"
+            ovr.write_text("EXTRACT ROYAL BANK | CAD | RY\n")
             env = dict(os.environ, PYTHONPATH=str(
                 Path(__file__).resolve().parents[1] / "src"))
             r = subprocess.run([sys.executable, "-m",
@@ -373,7 +373,7 @@ class TestBareRenameTargets(unittest.TestCase):
                                 "--security-overrides", str(ovr), str(csv)],
                                capture_output=True, text=True, env=env)
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("warning: ATTENTION: ticker_extraction_overrides",
+            self.assertIn("warning: ATTENTION: a ticker.map EXTRACT line",
                           r.stderr)
 
 

@@ -538,8 +538,10 @@ class TestDanglingProjectMap(unittest.TestCase):
     not absent — the run stops."""
 
     def test_dangling_symlinks_stop_the_run(self):
-        for name in ("ticker.map", "missing_history.json", "phantoms.json",
-                     "distributions.map", "crypto_ticker.map"):
+        # (distributions.map / crypto_ticker.map are taxjson.toml and
+        # ticker.map contents now; an old file's name stops every
+        # command through the migrate refusal instead.)
+        for name in ("ticker.map", "missing_history.json", "phantoms.json"):
             with self.subTest(name=name), \
                     tempfile.TemporaryDirectory() as tmp:
                 root = _project(tmp)

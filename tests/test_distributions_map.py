@@ -1,4 +1,4 @@
-"""Non-cash distribution ingestion (`distributions.map`).
+"""Non-cash distribution ingestion (taxjson.toml `[[distributions]]`).
 
 Reinvested (phantom) capital-gains distributions never appear in broker
 CSVs but raise ACB; late-published ROC factors lower it. The map file →
@@ -91,9 +91,10 @@ class TestEndToEnd(unittest.TestCase):
                 "D,100,10.00,1000.00,0.00,-1000.00,CAD,1,Trades,Individual\n"
                 "2026-03-20 10:15:00 AM,2026-03-23 12:00:00 AM,Sell,XAW.TO,"
                 "D,-100,12.00,1200.00,0.00,1200.00,CAD,1,Trades,Individual\n")
-            (root / "distributions.map").write_text(
-                "# reinvested capital-gains distribution\n"
-                "XAW.TO 2025-12-29 0.50\n")
+            with (root / "taxjson.toml").open("a") as f:
+                f.write("# reinvested capital-gains distribution\n"
+                        "[[distributions]]\nsymbol = \"XAW.TO\"\n"
+                        "record_date = 2025-12-29\nper_share = 0.50\n")
             r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr)
             gains = json.loads(
@@ -117,8 +118,9 @@ class TestEndToEnd(unittest.TestCase):
                 _QT_HEADER +
                 "2025-01-15 09:30:00 AM,2025-01-16 12:00:00 AM,Buy,XEI.TO,"
                 "D,100,10.00,1000.00,0.00,-1000.00,CAD,1,Trades,Individual\n")
-            (root / "distributions.map").write_text(
-                "ZZZ.TO 2025-12-29 0.50\n")
+            with (root / "taxjson.toml").open("a") as f:
+                f.write("[[distributions]]\nsymbol = \"ZZZ.TO\"\n"
+                        "record_date = 2025-12-29\nper_share = 0.50\n")
             r = _run_cli(root, "run", "--no-input")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("no ZZZ.TO shares held", r.stderr + r.stdout)
@@ -197,8 +199,9 @@ class TestRecordDateBasis(unittest.TestCase):
                 "D,100,10.00,1000.00,0.00,-1000.00,CAD,1,Trades,Individual\n"
                 "2026-06-19 10:15:00 AM,2026-06-22 12:00:00 AM,Sell,XAW.TO,"
                 "D,-100,12.00,1200.00,0.00,1200.00,CAD,1,Trades,Individual\n")
-            (root / "distributions.map").write_text(
-                "XAW.TO 2026-06-19 0.50\n")
+            with (root / "taxjson.toml").open("a") as f:
+                f.write("[[distributions]]\nsymbol = \"XAW.TO\"\n"
+                        "record_date = 2026-06-19\nper_share = 0.50\n")
             r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("+50.00 ACB adjustment", r.stderr)

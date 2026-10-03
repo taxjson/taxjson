@@ -74,7 +74,8 @@ class _Built(unittest.TestCase):
 
 class TestFingerprintCoversEveryRunInput(_Built):
     """A2-0124, A2-0126, A2-0358, A2-0363, A2-1158: the elections
-    manifest, sends.json and crypto_ticker.map are run inputs."""
+    manifest, sends.json and ticker.map (its CRYPTO lines too) are run
+    inputs."""
 
     def test_clean_after_run(self):
         p = self.copy()
@@ -94,9 +95,13 @@ class TestFingerprintCoversEveryRunInput(_Built):
         self.assertEqual(cl.d_run_clean(ctx(p)).status, "done")
 
     def test_sends_json_and_crypto_ticker_map(self):
-        for rel in ("inputs/margin/sends.json", "crypto_ticker.map"):
+        # crypto_ticker.map's coin spellings are ticker.map CRYPTO lines
+        # now: adding one is a run-input change.
+        for rel in ("inputs/margin/sends.json", "ticker.map"):
             p = self.copy()
-            (p / rel).write_text("{}" if rel.endswith(".json") else "FOO FOO123\n")
+            with (p / rel).open("a") as f:
+                f.write("{}" if rel.endswith(".json")
+                        else "CRYPTO FOO FOO123\n")
             r = cl.d_run_clean(ctx(p))
             self.assertEqual(r.status, "attention", rel)
             self.assertIn(rel, r.detail)
@@ -542,12 +547,14 @@ class TestRocEntered(unittest.TestCase):
                 self.assertIn(f"{want} ADJUST row(s) in {y}", r.detail)
 
     def test_double_roc_is_flagged_by_run_and_checklist(self):
-        """A2-0361: the same ROC as a .tt ADJUST and a distributions.map row."""
+        """A2-0361: the same ROC as a .tt ADJUST and a [[distributions]] entry."""
         with tempfile.TemporaryDirectory() as td:
             p = make_project(Path(td), book=(
                 "BUYSELL 2025-01-06 09:30:00 QZR.TO 1000 CAD 20.00 -20000.00 0\n"
                 "ADJUST 2025-12-31 12:00:00 QZR.TO CAD -500.00\n"), run=False)
-            (p / "distributions.map").write_text("QZR.TO 2025-12-31 -0.50\n")
+            with (p / "taxjson.toml").open("a") as f:
+                f.write('\n[[distributions]]\nsymbol = "QZR.TO"\n'
+                        'record_date = 2025-12-31\nper_share = -0.50\n')
             r = tj(p, "run", "--no-input")
             self.assertIn("reduced twice", r.stderr.lower())   # apply-distributions
             res = cl.d_roc_entered(ctx(p))

@@ -9,7 +9,7 @@ tools need (stock snapshots only):
               shares ('BF.B' -> 'BF B'). Missing library / no gateway /
               unqualified symbols degrade silently to the next tier.
   2. yfinance — the [fx] extra, using each symbol's Yahoo
-              spelling (caller-provided; see yf_ticker.map).
+              spelling (caller-provided; see ticker.map QUOTE lines).
   3. cache  — work/.price_cache.json. Every tier-1/2 hit is written back;
               a symbol both tiers miss is served from the cache with its
               age in the source label ('cache:3d'), warning when older
@@ -112,14 +112,14 @@ def yf_symbol_for(symbol: str,
                   crypto_overrides: Optional[Dict[str, str]] = None
                   ) -> Optional[str]:
     """Best-effort Yahoo spelling for a taxjson symbol, used when
-    yf_ticker.map carries no override. THE single home for this
+    ticker.map carries no QUOTE line for it. THE single home for this
     translation (harvest consumes it — the
     audit found three drifting copies). Returns None for symbols Yahoo
     can't serve (exchange-prefixed 'X:SYM' forms).
 
     `crypto_overrides`: the coin spellings the books were priced with
     (fill-crypto's built-ins merged with the project's
-    crypto_ticker.map — `load_crypto_overrides`); the built-ins alone
+    ticker.map CRYPTO lines — `load_crypto_overrides`); the built-ins alone
     when not given (audit A2-0364: FOO mapped to FOO123 in the books
     was quoted as FOO-USD, another asset)."""
     import re
@@ -162,61 +162,31 @@ def yf_symbol_for(symbol: str,
 
 def load_crypto_overrides(search_dirs) -> Dict[str, str]:
     """fill-crypto's coin spellings: its built-in collision table merged
-    with the first crypto_ticker.map found in `search_dirs` (the
-    project root's map is the one `taxjson run` priced the books
-    with)."""
-    from taxjson.bin.fill_crypto_prices import (SYMBOL_OVERRIDES,
-                                                load_symbol_overrides)
-    for d in search_dirs:
-        if (Path(d) / "crypto_ticker.map").is_file():
-            return load_symbol_overrides([str(d)])
-    return dict(SYMBOL_OVERRIDES)
+    with the CRYPTO lines of the first ticker.map found in
+    `search_dirs` (the project root's map is the one `taxjson run`
+    priced the books with)."""
+    from taxjson.bin.fill_crypto_prices import SYMBOL_OVERRIDES
+    from taxjson.lib.ticker_map import side_rules_in
+    merged = dict(SYMBOL_OVERRIDES)
+    merged.update(side_rules_in(search_dirs).crypto)
+    return merged
 
 
 def load_yf_map(search_dirs) -> Dict[str, Tuple[str, float]]:
-    """First yf_ticker.map found in `search_dirs`, parsed to
-    {SYMBOL: (YF_SYMBOL, QTY_RATIO)}. Lines are `SYMBOL YF_SYMBOL
-    [QTY_RATIO]`; QTY_RATIO (default 1.0) converts a position's quantity
-    into the mapped ticker's units — for tickers consumed by a merger,
-    map to the acquirer with the exchange ratio, e.g.:
+    """The QUOTE lines of the first ticker.map found in `search_dirs`,
+    as {SYMBOL: (YF_SYMBOL, QTY_RATIO)}. Lines are `QUOTE SYMBOL
+    YF_SYMBOL [QTY_RATIO]`; QTY_RATIO (default 1.0) converts a
+    position's quantity into the mapped ticker's units — for tickers
+    consumed by a merger, map to the acquirer with the exchange ratio,
+    e.g.:
 
-        OLDCO.TO  NEWCO  0.25    # 4:1 merger — 4 OLDCO shares -> 1 NEWCO
-        ABC.TO    XYZ    1.5
-    """
-    mapping: Dict[str, Tuple[str, float]] = {}
-    for d in search_dirs:
-        map_file = Path(d) / "yf_ticker.map"
-        if not map_file.exists():
-            continue
-        try:
-            for line in map_file.read_text(encoding='utf-8-sig').splitlines():
-                line = line.split('#', 1)[0].strip()
-                if not line:
-                    continue
-                parts = line.split()
-                if len(parts) < 2:
-                    # Sibling loaders (t1135.map, ticker.map,
-                    # crypto_ticker.map) warn on a short line; this one
-                    # used to drop it silently (audit S077-07).
-                    print(f"warning: {map_file}: expected `SYMBOL "
-                          f"YF_SYMBOL [QTY_RATIO]`, got {line!r} — line "
-                          f"ignored", file=sys.stderr)
-                    continue
-                ratio = 1.0
-                if len(parts) >= 3:
-                    try:
-                        ratio = float(parts[2])
-                    except ValueError:
-                        print(f"warning: bad ratio in {map_file}: "
-                              f"{line!r}", file=sys.stderr)
-                # Keys are taxjson symbols, which are upper case: a
-                # lower-case line was never matched (audit S076-24).
-                mapping[parts[0].upper()] = (parts[1], ratio)
-        except OSError as e:
-            print(f"warning: could not read {map_file}: {e}",
-                  file=sys.stderr)
-        break                              # first map found wins
-    return mapping
+        QUOTE OLDCO.TO  NEWCO  0.25    # 4:1 merger — 4 OLDCO -> 1 NEWCO
+        QUOTE ABC.TO    XYZ    1.5
+
+    A folder still holding the old yf_ticker.map is refused
+    (lib/ticker_map.LegacyMapFileError): `taxjson migrate` moves it."""
+    from taxjson.lib.ticker_map import side_rules_in
+    return dict(side_rules_in(search_dirs).quote)
 
 
 def _split_suffix(symbol: str) -> Tuple[str, str]:

@@ -137,8 +137,9 @@ class TestDistributionsSizedWithPhantomsThroughRun(unittest.TestCase):
             root = Path(tmp)
             _project(root, 2025, tt, settings='tax_date = "settle"\n',
                      phantoms='[{"symbol": "XAW.TO", "account": "margin"}]')
-            (root / "distributions.map").write_text(
-                "XAW.TO  2025-12-29  0.50\n")
+            with (root / "taxjson.toml").open("a") as f:
+                f.write('\n[[distributions]]\nsymbol = "XAW.TO"\n'
+                        'record_date = 2025-12-29\nper_share = 0.50\n')
             _run(self, root)
             base = json.loads((root / "work" / "margin_base.json")
                               .read_text())

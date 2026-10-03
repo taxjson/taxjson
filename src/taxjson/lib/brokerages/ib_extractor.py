@@ -2850,7 +2850,7 @@ class IbBrokerage(BaseBrokerage):
                 # silently no-op'd on IB rows). For options the
                 # raw symbol is the verbose `BCE 16JAN26 100 P`
                 # form, which is exactly what the user keys on
-                # in `ticker_extraction_overrides.txt`.
+                # in ticker.map `EXTRACT` lines.
                 description = symbol
                 currency = self._cell(row, header_map, 'Currency')
                 if not symbol or not currency:

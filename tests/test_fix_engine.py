@@ -374,7 +374,7 @@ class TestPhantomsReachTheShelteredContext(unittest.TestCase):
 
 @rule("CA-DIST-01")
 class TestDistributionsSizedWithPhantoms(unittest.TestCase):
-    """S000-08: distributions.map ADJUSTs were sized on the record-date
+    """S000-08: [[distributions]] ADJUSTs were sized on the record-date
     balance of the phantom-less base book, so a phantom-backed position
     got the wrong ACB change (or none: 'no shares held')."""
 
@@ -417,13 +417,14 @@ class TestDistributionsSizedWithPhantoms(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "margin_base.json"
             base.write_text(json.dumps(self.BOOK))
-            mp = Path(tmp) / "distributions.map"
-            mp.write_text("XAW.TO 2025-12-29 0.5\n")
+            mp = Path(tmp) / "taxjson.toml"
+            mp.write_text('[[distributions]]\nsymbol = "XAW.TO"\n'
+                          'record_date = 2025-12-29\nper_share = 0.5\n')
             ph = Path(tmp) / "missing_history.json"
             ph.write_text(json.dumps([{"symbol": "XAW.TO",
                                        "account": "margin"}]))
             with contextlib.redirect_stderr(io.StringIO()):
-                rc = main([str(base), "--map", str(mp), "--account",
+                rc = main([str(base), "--config", str(mp), "--account",
                            "margin", "--incomplete-history", str(ph)])
             self.assertEqual(rc, 0)
             doc = json.loads(base.read_text())

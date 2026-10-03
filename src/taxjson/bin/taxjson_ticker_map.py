@@ -11,6 +11,12 @@ Usage:
     taxjson-ticker-map input.json ticker.map > mapped_input.json
     Applies the mappings from ticker.map to all transactions and outputs a new JSON file.
     Options are mapped by applying the underlying mapping (e.g. AEM.US -> AEM.TO applies to AEM250101C00100000.US -> AEM250101C00100000.TO).
+
+ticker.map is the project's one mapping file. Rename rules: GLOBAL, TOBASE,
+JOURNAL, DELETE, DISTINCT, RENAME. Lookups that change no symbol (read by
+other tools; this one skips them): QUOTE SYMBOL YAHOO_SYMBOL [RATIO],
+TRADINGVIEW SYMBOL EXCHANGE, CRYPTO SYMBOL YAHOO_ID, EXTRACT description
+words | CURRENCY | SYMBOL. See the README's ticker.map section.
 """
 
 import argparse
@@ -43,6 +49,10 @@ from taxjson.lib.ticker_map import map_ticker
 #   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
 #                     — a ticker change on that date: a DATED event
 #                       (lib/renames). Without a date it is GLOBAL.
+# Four more keywords are lookups that change no symbol (lib/ticker_map,
+# which parses them): QUOTE (Yahoo quote spelling), TRADINGVIEW
+# (TradingView exchange prefix), CRYPTO (a coin's Yahoo id) and EXTRACT
+# (a parser symbol-extraction override).
 _MAP_KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DELETE", "DISTINCT",
                  "RENAME")
 
@@ -90,6 +100,9 @@ def _parse_map_file(file_path: Path):
     distinct_where: Dict[frozenset, tuple] = {}
     from io import StringIO
     from taxjson.lib.cli_diag import read_text_utf8
+    from taxjson.lib.ticker_map import (SIDE_KEYWORDS, SideRules,
+                                        add_side_rule, parse_side_line)
+    side = SideRules()
     # A non-UTF-8 map is a one-line error naming it (S053-06).
     with StringIO(read_text_utf8(file_path)) as f:
         for lineno, raw in enumerate(f, 1):
@@ -100,10 +113,22 @@ def _parse_map_file(file_path: Path):
             parts = line.split()
             kw = parts[0].upper()
             syms = [p.upper() for p in parts[1:]]
+            if kw in SIDE_KEYWORDS:
+                # QUOTE / TRADINGVIEW / CRYPTO / EXTRACT: lookups that
+                # change no symbol (lib/ticker_map); checked here so
+                # `taxjson run` refuses a malformed one up front too.
+                try:
+                    _k, _key, _val = parse_side_line(kw, line)
+                except ValueError as e:
+                    problems.append(f"{where}: {e}: {line!r}")
+                    continue
+                add_side_rule(side, _k, _key, _val, where, line)
+                continue
             if kw not in _MAP_KEYWORDS:
                 problems.append(
-                    f"{where}: line has no GLOBAL/TOBASE/JOURNAL/DELETE/"
-                    f"DISTINCT/RENAME keyword: {line!r}")
+                    f"{where}: line has no ticker.map keyword "
+                    f"(GLOBAL/TOBASE/JOURNAL/DELETE/DISTINCT/RENAME/"
+                    f"QUOTE/TRADINGVIEW/CRYPTO/EXTRACT): {line!r}")
                 continue
             if kw == "RENAME" and len(syms) > 2:
                 # RENAME OLD NEW YYYY-MM-DD [late=fold|late=separate]
@@ -191,6 +216,7 @@ def _parse_map_file(file_path: Path):
                     f"the rename of {dr.old} on {prev.date} at "
                     f"{prev.where} — one event, one line: {dr.line!r}")
         _seen_dated.setdefault(dr.old, []).append(dr)
+    problems += side.problems
     tmap = TickerMap(glob, tobase, journal, delete, distinct,
                      tuple(dated), frozenset(undated_rename))
     for to_base in (False, True):
@@ -488,7 +514,21 @@ def apply_mapping(tx: TaxTransaction, mapping: Dict[str, str]) -> TaxTransaction
 
 @guard_main("taxjson-ticker-map")
 def main():
-    parser = argparse.ArgumentParser(description="Map tickers in a tax.json file")
+    parser = argparse.ArgumentParser(
+        description="Map tickers in a tax.json file",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "ticker.map keywords (one rule per line, notes after `#`):\n"
+            "  renames:  GLOBAL from to | TOBASE from to | JOURNAL from to |\n"
+            "            DELETE sym | DISTINCT a b |\n"
+            "            RENAME from to [YYYY-MM-DD [late=fold|late=separate]]\n"
+            "  lookups (change no symbol; read by other tools):\n"
+            "            QUOTE SYMBOL YAHOO_SYMBOL [QTY_RATIO]   price lookups\n"
+            "            TRADINGVIEW SYMBOL EXCHANGE           export --tradingview\n"
+            "            CRYPTO SYMBOL YAHOO_ID                a coin's Yahoo id\n"
+            "            EXTRACT words | CURRENCY | SYMBOL     parser symbol override\n"
+            "The old yf_ticker.map, tv_exchange.map, crypto_ticker.map and\n"
+            "ticker_extraction_overrides.txt are folded in by `taxjson migrate`."))
     parser.add_argument("input", help="Input JSON file with transactions")
     parser.add_argument("map_file", nargs="?", help="Optional map file (ticker.map). If provided, outputs updated JSON.")
     parser.add_argument("--map", dest="map_flag", default=None,

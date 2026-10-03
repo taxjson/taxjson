@@ -127,26 +127,26 @@ class TestYfMapLoader(unittest.TestCase):
 
     def test_case_and_short_line(self):
         with tempfile.TemporaryDirectory() as td:
-            (Path(td) / "yf_ticker.map").write_text(
-                "oldco.to newco.to\nABC.TO\n")
+            (Path(td) / "ticker.map").write_text(
+                "QUOTE oldco.to newco.to\nQUOTE ABC.TO\n")
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
                 m = PC.load_yf_map([td])
         self.assertEqual(m, {"OLDCO.TO": ("newco.to", 1.0)})
-        self.assertIn("'ABC.TO'", err.getvalue())
-        self.assertIn("line ignored", err.getvalue())
+        self.assertIn("'QUOTE ABC.TO'", err.getvalue())
+        self.assertIn("ticker.map:2", err.getvalue())
 
 
 class TestTvExchangeMapShortLine(unittest.TestCase):
-    """S077-07 (sibling): tv_exchange.map dropped a line with no
-    exchange silently."""
+    """S077-07 (sibling): a TRADINGVIEW line (once tv_exchange.map)
+    with no exchange is not dropped silently."""
 
     def test_warns(self):
         import subprocess
         import sys
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            (tmp / "tv_exchange.map").write_text("NVDA.US\n")
+            (tmp / "ticker.map").write_text("TRADINGVIEW NVDA.US\n")
             gains = tmp / "gains.json"
             gains.write_text(json.dumps({"inventory": [
                 {"symbol": "NVDA.US", "qty": 1, "total_cost": 100,

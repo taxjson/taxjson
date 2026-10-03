@@ -6,7 +6,8 @@ Every other parser (RBC, Webull, Questrade, Coinbase, Kraken) emits
 `description` on trade rows. IB Trades was the lone gap: the emit
 dict at `ib_extractor.py` had no `description` key, and
 `apply_security_override` keys on the description substring. Result:
-adding an IB ticker to `ticker_extraction_overrides.txt` silently
+adding an IB ticker to an EXTRACT line (ticker.map; once
+`ticker_extraction_overrides.txt`) silently
 no-op'd.
 """
 import os
@@ -52,18 +53,18 @@ class TestIbTradesDescriptionForOverrides(unittest.TestCase):
         self.assertEqual(trade.get('description'), 'DLR')
 
     def test_security_override_can_rewrite_ib_ticker(self):
-        """End-to-end: a `ticker_extraction_overrides.txt` entry keyed
+        """End-to-end: a ticker.map `EXTRACT` line keyed
         on the raw IB symbol must rewrite the parsed ticker. Pre-fix,
         the IB row's missing description silently failed to match."""
         with tempfile.TemporaryDirectory() as tmp:
             csv_path = Path(tmp) / 'ib.csv'
             csv_path.write_text(_IB_TRADES_CSV)
-            ov_path = Path(tmp) / 'overrides.txt'
+            ov_path = Path(tmp) / 'ticker.map'
             # Rewrite USD `DLR` (which IB would suffix to `DLR.US`) to
             # `DLR.U.TO` — the real TSX-listed Global X US Dollar ETF
             # USD class. This is the canonical use case for security
             # overrides (the user's own example).
-            ov_path.write_text('DLR | USD | DLR.U.TO\n')
+            ov_path.write_text('EXTRACT DLR | USD | DLR.U.TO\n')
 
             cmd = [sys.executable, '-m', 'taxjson.bin.taxjson_brokerage',
                    '--brokerage', 'ib', '--account', 'Margin',

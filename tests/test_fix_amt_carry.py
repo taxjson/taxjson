@@ -1,6 +1,6 @@
 """Minimum tax (AMT) detail and carry-forwards that flow from one year
 to the next (owner request): `taxjson amt`, the s.120.2 carryover in
-the estimate (amt_carryover.txt / [estimate] amt_carryover / the prior
+the estimate ([estimate] amt_carryover / the prior
 close-year lock), close-year's `carryforwards` record, `carryover` and
 `handoff` reading it. Synthetic figures only."""
 import json
@@ -62,7 +62,7 @@ class TestCarryoverArithmetic(unittest.TestCase):
             TE.ca_amt_carryover(2026, {2026: 1.0}, 1000.0)
         r = _ca(other_income=250000.0, realized=10000.0,
                 amt_carryover={2018: 100.0},
-                amt_carryover_source="amt_carryover.txt")
+                amt_carryover_source="[estimate] amt_carryover")
         self.assertIn("2018 minimum tax carryover", " ".join(r["notes"]))
         self.assertEqual(r["amt"]["carryover"]["recovered"], 0.0)
 
@@ -129,7 +129,7 @@ class TestCarryoverArithmetic(unittest.TestCase):
         self.assertEqual(r["estimated_tax_with_amt"],
                          round(r["estimated_tax"] + r["amt"]["topup"], 2))
         self.assertFalse(r["amt"]["carryover"]["entered"])
-        self.assertIn("amt_carryover.txt", " ".join(r["notes"]))
+        self.assertIn("amt_carryover", " ".join(r["notes"]))
         self.assertNotIn("no prior-year minimum tax carryover",
                          r["assumptions"])
 
@@ -168,29 +168,43 @@ class TestInputs(unittest.TestCase):
     def test_file_config_and_refusals(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            (root / "amt_carryover.txt").write_text(
-                "# from my NOA\n2023 1,200.50\n2024 800  # T691\n")
-            r = CF.resolve_amt(root, {"year": 2026}, {})
+            r = CF.resolve_amt(root, {"year": 2026},
+                               {"amt_carryover": {"2023": 1200.5,
+                                                  "2024": 800}})
             self.assertEqual(r["by_year"], {2023: 1200.5, 2024: 800.0})
-            self.assertEqual(r["source"], "amt_carryover.txt")
-            with self.assertRaises(CF.CarryInputError):
-                CF.resolve_amt(root, {"year": 2026},
-                               {"amt_carryover": {"2023": 1.0}})
-            (root / "amt_carryover.txt").write_text("2023 12,34\n")
-            with self.assertRaisesRegex(CF.CarryInputError, ":1:"):
-                CF.resolve_amt(root, {"year": 2026}, {})
-            (root / "amt_carryover.txt").write_text("2023 1\n2023 2\n")
-            with self.assertRaisesRegex(CF.CarryInputError, "twice"):
-                CF.resolve_amt(root, {"year": 2026}, {})
-            (root / "amt_carryover.txt").unlink()
+            self.assertEqual(r["source"], "[estimate] amt_carryover")
+            # The old file is no longer an input (taxjson migrate moves
+            # it; every command stops while it is there): the config
+            # alone decides.
+            (root / "amt_carryover.txt").write_text("2023 1\n")
             r = CF.resolve_amt(root, {"year": 2026},
                                {"amt_carryover": {"2022": 50}})
             self.assertEqual(r["by_year"], {2022: 50.0})
+            for bad in ({"2023": "12,34"}, {"2023": -1}, {"1850": 5},
+                        {"x": 5}):
+                with self.assertRaises(CF.CarryInputError, msg=bad):
+                    CF.resolve_amt(root, {"year": 2026},
+                                   {"amt_carryover": bad})
             with self.assertRaisesRegex(CF.CarryInputError, "by year"):
                 CF.resolve_amt(root, {"year": 2026},
                                {"amt_carryover": 5000})
             self.assertEqual(CF.resolve_amt(root, {"year": 2026}, {})
                              ["by_year"], None)
+
+    def test_legacy_file_reader_kept_for_migrate(self):
+        # load_amt_file reads the old amt_carryover.txt for `taxjson
+        # migrate`, as loudly as before.
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "amt_carryover.txt"
+            f.write_text("# from my NOA\n2023 1,200.50\n2024 800  # T691\n")
+            self.assertEqual(CF.load_amt_file(f), {2023: 1200.5,
+                                                   2024: 800.0})
+            f.write_text("2023 12,34\n")
+            with self.assertRaisesRegex(CF.CarryInputError, ":1:"):
+                CF.load_amt_file(f)
+            f.write_text("2023 1\n2023 2\n")
+            with self.assertRaisesRegex(CF.CarryInputError, "twice"):
+                CF.load_amt_file(f)
 
     @rule("CA-AMT-08", "CA-CARRY-02", "CA-CARRY-03")
     def test_lock_fallback_and_gap_note(self):
@@ -254,7 +268,8 @@ def _ok(r):
 
 class _CaChain(unittest.TestCase):
     """A closed 2025 Canada project where AMT binds (carryover in from
-    amt_carryover.txt, one origin expired), and its 2026 successor."""
+    [estimate] amt_carryover, one origin expired), and its 2026
+    successor."""
     tmp = None
 
     @classmethod
@@ -262,10 +277,10 @@ class _CaChain(unittest.TestCase):
         cls.tmp = tempfile.mkdtemp()
         t = Path(cls.tmp)
         p25 = _project(t / "ca25", "canada", 2025, _CA_BOOK_25,
-                       "[estimate]\nother_income = 40000\n",
+                       "[estimate]\nother_income = 40000\n"
+                       "amt_carryover = { 2017 = 999, 2019 = 3000, "
+                       "2023 = 5000 }\n",
                        province="ON")
-        (p25 / "amt_carryover.txt").write_text(
-            "2017 999\n2019 3000\n2023 5000\n")
         _ok(cli(p25, "close-year"))
         cls.lock25 = json.loads((p25 / "filed" / "2025.json").read_text())
         _project(t / "ca26", "canada", 2026, _CA_BOOK_26,
@@ -292,7 +307,7 @@ class TestCaChain(_CaChain):
         self.assertGreater(mt["created"], 0)
         self.assertEqual(mt["closing_by_year"]["2025"], mt["created"])
         self.assertEqual(mt["recovered_federal"], 0.0)
-        self.assertEqual(mt["opening_source"], "amt_carryover.txt")
+        self.assertEqual(mt["opening_source"], "[estimate] amt_carryover")
         ncl = cf["net_capital_loss"]
         self.assertEqual((ncl["created"], ncl["closing"]), (0.0, 0.0))
 
@@ -332,53 +347,58 @@ class TestCaChain(_CaChain):
         self.assertIn("2023 project", r.stderr)
 
     @rule("CA-AMT-08")
-    def test_explicit_file_wins_over_the_lock(self):
+    def test_explicit_input_wins_over_the_lock(self):
         root = self.root("ca26")
-        f = root / "amt_carryover.txt"
-        f.write_text("2024 100\n")
+        f = root / "taxjson.toml"
+        toml = f.read_text()
+        f.write_text(toml.replace(
+            "other_income = 250000",
+            "other_income = 250000\namt_carryover = { 2024 = 100 }"))
         try:
             amt = json.loads(_ok(cli(root, "amt", "--json")).stdout)
             self.assertEqual(amt["amt"]["carryover"]["available_by_year"],
                              {"2024": 100.0})
             self.assertEqual(amt["carry_sources"]["amt_carryover"],
-                             "amt_carryover.txt")
+                             "[estimate] amt_carryover")
         finally:
-            f.unlink()
+            f.write_text(toml)
 
     @rule("CA-CARRY-05")
     def test_handoff_flags_a_mismatched_amt_input(self):
         root = self.root("ca26")
         _ok(cli(root, "handoff"))
-        f = root / "amt_carryover.txt"
+        f = root / "taxjson.toml"
+        toml = f.read_text()
         mt = self.lock25["carryforwards"]["minimum_tax"]
-        f.write_text("2019 3000\n2023 4000\n"
-                     f"2025 {mt['closing_by_year']['2025']}\n")
+        f.write_text(toml.replace(
+            "other_income = 250000",
+            "other_income = 250000\namt_carryover = { 2019 = 3000, "
+            f"2023 = 4000, 2025 = {mt['closing_by_year']['2025']} }}"))
         try:
             r = cli(root, "handoff", "--json")
             self.assertEqual(r.returncode, 1, r.stderr)
             carry = json.loads(r.stdout)["carry"]
             self.assertEqual([i["what"] for i in carry],
-                             ["amt_carryover.txt 2023"])
+                             ["[estimate] amt_carryover 2023"])
         finally:
-            f.unlink()
+            f.write_text(toml)
 
     @rule("CA-CARRY-05")
     def test_handoff_flags_other_losses_and_claimed(self):
         root = self.root("ca26")
         toml = (root / "taxjson.toml").read_text()
-        (root / "claimed_losses.txt").write_text("2025 10\n")
         (root / "taxjson.toml").write_text(
             toml.replace("other_income = 250000",
-                         "other_income = 250000\nother_losses = 5"))
+                         "other_income = 250000\nother_losses = 5")
+            + "\n[carryover]\nclaimed = { 2025 = 10 }\n")
         try:
             r = cli(root, "handoff", "--json")
             self.assertEqual(r.returncode, 1, r.stderr)
             whats = [i["what"] for i in json.loads(r.stdout)["carry"]]
-            self.assertEqual(sorted(whats), ["[estimate] other_losses",
-                                             "claimed_losses.txt 2025"])
+            self.assertEqual(sorted(whats), ["[carryover] claimed 2025",
+                                             "[estimate] other_losses"])
         finally:
             (root / "taxjson.toml").write_text(toml)
-            (root / "claimed_losses.txt").unlink()
 
 
 class TestCaLossChain(unittest.TestCase):
@@ -446,17 +466,12 @@ class TestDualCountry(unittest.TestCase):
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("Canada-only", r.stderr)
             self.assertIn("Form 6251", r.stderr)
-            (us / "amt_carryover.txt").write_text("2024 100\n")
-            r = cli(us, "estimate")
-            self.assertNotEqual(r.returncode, 0)
-            self.assertIn("amt_carryover.txt is Canada-only", r.stderr)
-            (us / "amt_carryover.txt").unlink()
             toml = (us / "taxjson.toml").read_text()
             (us / "taxjson.toml").write_text(
                 toml + "[estimate]\namt_carryover = { 2024 = 100 }\n")
             r = cli(us, "estimate")
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("amt_carryover", r.stderr)
+            self.assertIn("amt_carryover is Canada-only", r.stderr)
             self.assertIn("Form 6251", _text("usa", "US-AMT-01"))
 
     @rule("CA-AMT-04")

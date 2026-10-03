@@ -100,7 +100,7 @@ class TestSecurityOverrides(unittest.TestCase):
 
     def test_bom_is_stripped(self):
         # S001-00: a BOM made the first line's key '﻿global x ...'.
-        ov = self._load(None, raw='﻿Global X US Dollar | USD | '
+        ov = self._load(None, raw='﻿EXTRACT Global X US Dollar | USD | '
                                   'DLR.U.TO\n'.encode('utf-8'))
         self.assertEqual(ov, [('global x us dollar', 'USD', 'DLR.U.TO')])
 
@@ -109,18 +109,18 @@ class TestSecurityOverrides(unittest.TestCase):
         # into Digital Realty's pool.
         from taxjson.bin.taxjson_brokerage import SecurityOverrideError
         with self.assertRaises(SecurityOverrideError) as cm:
-            self._load('# c\nUS DLR CURRENCY ETF | DLR.U.TO\n')
-        self.assertIn('line 2', str(cm.exception))
+            self._load('# c\nEXTRACT US DLR CURRENCY ETF | DLR.U.TO\n')
+        self.assertIn('ov.txt:2:', str(cm.exception))
 
     def test_lowercase_currency_is_normalized(self):
         # R1-143: 'usd' never matched 'USD', with no warning.
-        ov = self._load('shopify | usd | SHOP.US\n')
+        ov = self._load('EXTRACT shopify | usd | SHOP.US\n')
         self.assertEqual(ov, [('shopify', 'USD', 'SHOP.US')])
 
     def test_bad_currency_is_an_error(self):
         from taxjson.bin.taxjson_brokerage import SecurityOverrideError
         with self.assertRaises(SecurityOverrideError):
-            self._load('shopify | US Dollars | SHOP.US\n')
+            self._load('EXTRACT shopify | US Dollars | SHOP.US\n')
 
     def test_option_rows_are_not_rewritten(self):
         # R1-143: an issuer-name key rewrote the issuer's OPTION rows
@@ -165,7 +165,7 @@ class TestSecurityOverrides(unittest.TestCase):
         # S059-03 (IB TRANSFER description was only 'ACATS') and S027-01
         # (sidecar rows were split off before the override ran).
         files = {'ib.csv': self.IB_XFER,
-                 'ov.txt': 'QZDL | USD | QZDL.U.TO\n'}
+                 'ov.txt': 'EXTRACT QZDL | USD | QZDL.U.TO\n'}
         for extra in (('--transfers',), ('--transfers-out',
                                           '{TD}/side.json')):
             rc, out, err, side = _brokerage_cli(
@@ -180,10 +180,10 @@ class TestSecurityOverrides(unittest.TestCase):
 
     def test_malformed_file_fails_the_parse(self):
         rc, _, err, _ = _brokerage_cli(
-            {'ib.csv': self.IB_XFER, 'ov.txt': 'QZDL | QZDL.U.TO\n'},
+            {'ib.csv': self.IB_XFER, 'ov.txt': 'EXTRACT QZDL | QZDL.U.TO\n'},
             '--security-overrides', '{TD}/ov.txt')
         self.assertEqual(rc, 1)
-        self.assertIn('line 1', err)
+        self.assertIn('ov.txt:1:', err)
 
 
 class TestTransferSidecarDedup(unittest.TestCase):
