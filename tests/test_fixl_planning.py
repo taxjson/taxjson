@@ -257,6 +257,7 @@ class TestScopeDisclosure(unittest.TestCase):
         self.assertIn("s.251.1", json.loads(s.stdout)["scope_note"])
 
 
+@rule("CA-PLAN-01")
 class TestWindowEdges(unittest.TestCase):
     """S054-10 / S050-00: the edges are inclusive at day 30 and the
     Canadian window runs on SETTLE dates."""
