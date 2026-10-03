@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Minimum tax detail and carry-forwards (owner request)
+
+- New `taxjson amt [YEAR]` (Canada): the year's minimum tax line by line —
+  regular tax, adjusted taxable income item by item (ITA s.127.52), basic
+  exemption, rate, credits allowed, whether it binds, the provincial AMT,
+  the carryover created, the carryovers available by year of origin with
+  their 7-year limit (s.120.2), what is recovered this year and what
+  carries forward. Every figure is the estimate's own. A US project
+  refuses it (Form 6251 is not modelled). A `checklist` step.
+- The estimate now applies a prior-year minimum tax carryover: from
+  `amt_carryover.txt` (`YEAR AMOUNT` lines by year of origin) or
+  `[estimate] amt_carryover = { YEAR = AMOUNT }`, else from the latest
+  close-year lock before the project year — oldest first, up to regular
+  federal tax minus federal minimum tax, the province's share at its
+  minimum-tax factor; expired years drop off with a note. Instalments use
+  the full recovery; the incremental estimate counts the change the
+  investment income causes. It no longer says "no prior-year minimum tax
+  carryover".
+- `taxjson close-year` records the year's carry-forwards in
+  `filed/<year>.json` from the same estimate (Canada: net capital loss
+  carried in / created / applied / carried out, and the minimum tax
+  carryover by year of origin; US: the short-/long-term capital loss
+  carryover). The next year's `estimate` uses them when you enter none
+  (and says where each figure came from), `carryover` starts from the
+  recorded balance, and `handoff` flags an input that differs from it.
+
 ### US engine (owner request: deferred re-audit work)
 
 - US wash sale: a purchase in another of your taxable accounts inside

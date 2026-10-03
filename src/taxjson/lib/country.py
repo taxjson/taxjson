@@ -289,6 +289,7 @@ CONFIG_COUNTRY: Dict[str, str] = {
     "[instalments]": CANADA,
     "[estimate] deductions": CANADA,
     "[estimate] carrying_charges": CANADA,
+    "[estimate] amt_carryover": CANADA,
     "[estimate] long_term_losses": USA,
 }
 
@@ -297,6 +298,9 @@ CONFIG_WHY: Dict[str, str] = {
                      "not modelled",
     "[estimate] deductions": "lines 20700-23500 of the Canadian return",
     "[estimate] carrying_charges": "line 22100 of the Canadian return",
+    "[estimate] amt_carryover": "the Canadian minimum tax carryover (ITA "
+                                "s.120.2, T691); the US AMT credit "
+                                "(Form 8801) is not modelled",
     "[estimate] long_term_losses": "the long-term capital loss carryover "
                                    "(Schedule D line 14); a Canadian net "
                                    "capital loss has no term",
@@ -391,6 +395,7 @@ COMMAND_COUNTRY: Dict[str, str] = {
     "form-export:8949": USA,
     "form-export:txf": USA,
     "crypto-sends:gift": CANADA,
+    "amt": CANADA,
 }
 
 COMMAND_WHY: Dict[str, str] = {
@@ -409,6 +414,9 @@ COMMAND_WHY: Dict[str, str] = {
     "crypto-sends:gift": "a gift is a disposition at fair value only in "
                          "Canada (ITA s.69(1)(b)); for a US donor it is "
                          "not a sale — record it as `self`",
+    "amt": "the Canadian minimum tax (ITA s.127.5-127.55, form T691) and "
+           "its carryover (s.120.2); the US alternative minimum tax "
+           "(Form 6251) is not modelled",
 }
 
 
@@ -416,6 +424,7 @@ COMMAND_WHY: Dict[str, str] = {
 # one refuse it in a project of the other country.
 PROJECT_FILE_COUNTRY: Dict[str, str] = {
     "capital_gains_dividends.map": CANADA,
+    "amt_carryover.txt": CANADA,
 }
 
 PROJECT_FILE_WHY: Dict[str, str] = {
@@ -424,6 +433,9 @@ PROJECT_FILE_WHY: Dict[str, str] = {
                                    "17400); a US fund's capital-gain "
                                    "distributions (1099-DIV box 2a) are "
                                    "not modelled",
+    "amt_carryover.txt": "the Canadian minimum tax carryover (ITA "
+                         "s.120.2, T691); the US AMT credit (Form 8801) "
+                         "is not modelled",
 }
 
 

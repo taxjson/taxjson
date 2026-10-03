@@ -120,6 +120,9 @@ PARTITION_RULES = frozenset({
     "CA-INC-DATE-ROC-TRUST",  # trust ROC on the record date (D4)
     "CA-INC-DATE-TRUST",      # trust distribution by record date (D5)
     "CA-INC-06",       # T5 box 18 capital-gains dividends (map; R1-62)
+    "CA-AMT-01",       # minimum tax (s.127.5) and `taxjson amt`
+    "CA-AMT-04",       # s.120.2 carryover recovered in the estimate
+    "CA-CARRY-01",     # close-year records the net capital loss + AMT
     # United States
     "US-WASH-01",      # §1091 window on trade dates
     "US-WASH-06",      # no still-held test
@@ -145,6 +148,7 @@ PARTITION_RULES = frozenset({
     "CA-ACB-13",       # basis increase with no shares: next purchase's ACB
     "US-WASH-18",      # futures / futures options outside §1091 (CA denies)
     "US-INC-DATE-RIC", # §852(b)(7) January dividends: warn + list (D8)
+    "US-CARRY-01",     # close-year records the ST/LT carryover (CA: one NCL)
     # Planning tools (partition COMMANDS-01/02/05)
     "CA-PLAN-01",      # radar: settle dates, still-held rescue
     "CA-PLAN-02",      # radar: a long call is a replacement
@@ -1119,6 +1123,57 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "printed vintage and a note say so — for such an early "
                  "year the AMT shown is the post-2024 regime, which did "
                  "not apply then)."),
+            Rule("CA-AMT-01",
+                 "`taxjson amt [YEAR]`: the year's minimum tax line by "
+                 "line (ITA s.127.5-127.55, form T691) — regular tax, the "
+                 "adjusted taxable income (s.127.52) item by item, the "
+                 "basic exemption (s.127.53), the rate (s.127.51), the "
+                 "basic minimum tax credit (s.127.531) and the special "
+                 "foreign tax credit (s.127.54), whether it binds, the "
+                 "provincial AMT and the carryover. Every figure is the "
+                 "estimate's own, so the two agree to the cent; an "
+                 "earlier closed year prints what its close-year lock "
+                 "recorded."),
+            Rule("CA-AMT-02",
+                 "A year whose federal minimum tax exceeds its regular "
+                 "federal tax creates a minimum tax carryover equal to "
+                 "the excess (its additional tax, s.120.2(3)); the "
+                 "provincial AMT is not part of it.", cont=True),
+            Rule("CA-AMT-03",
+                 "A carryover can be applied only in the 7 years after "
+                 "the year it arose (s.120.2): an older one is dropped "
+                 "with a note, and one dated the project year or later is "
+                 "refused.", cont=True),
+            Rule("CA-AMT-04",
+                 "The carryovers still open are recovered oldest year "
+                 "first, up to the regular federal tax minus the federal "
+                 "minimum tax — nothing in a year AMT binds — on federal "
+                 "Schedule 1 line 40427, before the foreign tax credit.",
+                 cont=True),
+            Rule("CA-AMT-05",
+                 "The province's share is the federal amount recovered "
+                 "times the province's minimum-tax factor (the one "
+                 "applied to the federal excess), deducted from basic "
+                 "provincial tax before Ontario's surtax.", cont=True),
+            Rule("CA-AMT-06",
+                 "The estimate is incremental, so it counts against the "
+                 "investment income only the change in recovery it "
+                 "causes (the full return's recovery minus what the "
+                 "other income alone would recover); instalments use "
+                 "the full return's recovery.", cont=True),
+            Rule("CA-AMT-07",
+                 "What carries to the next year is each origin's "
+                 "unrecovered amount still inside its 7 years plus the "
+                 "year's own excess.", cont=True),
+            Rule("CA-AMT-08",
+                 "The carryover by year of origin is read from "
+                 "amt_carryover.txt (`YEAR AMOUNT` lines, from the notice "
+                 "of assessment or T691) or [estimate] amt_carryover = "
+                 "{ YEAR = AMOUNT } (not both); else from the latest "
+                 "close-year lock before the project year (filed/<year>."
+                 "json or prior_year_record). The estimate and `amt` say "
+                 "which.", keys=("[estimate] amt_carryover",
+                                 "prior_year_record")),
             Rule("CA-RPT-10",
                  "`taxjson carryover`: the net-capital-loss ledger in 100% "
                  "amounts (the inclusion rate is applied on the return); a "
@@ -1132,6 +1187,38 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "a locked later year is compared with it. A year after "
                  "the project year is partial: no carry-back is offered "
                  "and the carryforward stops at the project year."),
+            Rule("CA-CARRY-01",
+                 "`taxjson close-year` records in filed/<year>.json the "
+                 "year's carry-forwards, from the same estimate: the net "
+                 "capital loss carried in, created (the year's net loss), "
+                 "applied (up to the year's gains) and carried out (100% "
+                 "amounts); and the minimum tax carryover by year of "
+                 "origin — opening, expired, recovered, created, carried "
+                 "out. With no supported province it is estimated on "
+                 "Ontario's tables (every figure carried is federal)."),
+            Rule("CA-CARRY-02",
+                 "The estimate's net capital losses are --other-losses, "
+                 "else [estimate] other_losses, else the balance the "
+                 "latest close-year lock before the project year carried "
+                 "out (filed/<year>.json or prior_year_record); input you "
+                 "give always wins.", cont=True,
+                 keys=("prior_year_record",)),
+            Rule("CA-CARRY-03",
+                 "It prints where each carry-forward came from, and notes "
+                 "a lock older than last year (that year's changes are "
+                 "missing).", cont=True),
+            Rule("CA-CARRY-04",
+                 "`taxjson carryover` takes the balance a close-year lock "
+                 "recorded as carried out of its year as the running "
+                 "balance at that year end (the lock is the record).",
+                 cont=True),
+            Rule("CA-CARRY-05",
+                 "`taxjson handoff` flags a next-year input that differs "
+                 "from what the closed year carried out: [estimate] "
+                 "other_losses, claimed_losses.txt's line for that year "
+                 "(vs the loss applied), and amt_carryover.txt / "
+                 "[estimate] amt_carryover by year of origin.",
+                 cont=True),
             Rule("CA-RPT-11",
                  "`taxjson instalments`: CRA instalments (ITA s.156) when "
                  "net tax owing exceeds $3,000 this year and in one of the "
@@ -1950,6 +2037,32 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "Part I / Part II gains instead of the rebuilt ones; a "
                  "year after the project year is partial and the carryover "
                  "stops at the project year."),
+            Rule("US-CARRY-01",
+                 "`taxjson close-year` records in filed/<year>.json the "
+                 "short- and long-term capital loss carryover carried in "
+                 "and carried out, from the same estimate (the $3,000 "
+                 "deduction counted as used only as far as taxable income "
+                 "absorbs it, short-term first)."),
+            Rule("US-CARRY-02",
+                 "The estimate's carryovers are --other-losses / "
+                 "--long-term-losses (or their [estimate] keys); when "
+                 "neither is given, the short- and long-term carryover "
+                 "the latest close-year lock before the project year "
+                 "carried out — it prints where they came from.",
+                 cont=True, keys=("prior_year_record",)),
+            Rule("US-CARRY-03",
+                 "`taxjson handoff` flags [estimate] other_losses / "
+                 "long_term_losses that differ from what the closed year "
+                 "carried out.", cont=True),
+            Rule("US-CARRY-04",
+                 "`taxjson carryover` takes the short- and long-term "
+                 "carryover a close-year lock recorded as the running "
+                 "carryover at that year end.", cont=True),
+            Rule("US-AMT-01",
+                 "The alternative minimum tax (Form 6251) and its credit "
+                 "(Form 8801) are not modelled: there is no `amt` "
+                 "command and no minimum tax carryover in a US project.",
+                 cont=True),
             Rule("US-RPT-05",
                  "`taxjson edge-cases`: every trade whose tax year or "
                  "wash-sale verdict turns on a boundary, the window on "

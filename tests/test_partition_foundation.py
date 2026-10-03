@@ -186,6 +186,7 @@ _CA_ONLY_TABLES = {
     "[instalments]": '[instalments]\nbasis = "current_year"\n',
     "[estimate] deductions": "[estimate]\ndeductions = 1000\n",
     "[estimate] carrying_charges": "[estimate]\ncarrying_charges = 100\n",
+    "[estimate] amt_carryover": "[estimate]\namt_carryover = { 2024 = 10 }\n",
 }
 
 

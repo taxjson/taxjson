@@ -85,7 +85,10 @@ class DisclosuresAndWording(unittest.TestCase):
         self.assertGreater(r["amt"]["headroom"], 0)
         joined = " ".join(r["notes"])
         self.assertIn("40427", joined)
-        self.assertIn("not modelled", joined)
+        # The carryover is applied now when entered (CA-AMT-08); with
+        # none entered the note says where to put it.
+        self.assertIn("none is entered", joined)
+        self.assertIn("amt_carryover.txt", joined)
 
     def test_assumptions_do_not_point_at_divs_fees_for_interest(self):
         r = _ca(realized=1000.0)

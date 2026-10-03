@@ -162,13 +162,22 @@ def yearly_nets(results: dict, tax_date: str) -> Dict[int, Dict[str, float]]:
 
 
 def build_canada_ledger(nets: Dict[int, Dict[str, float]],
-                        claimed: Dict[int, float]) -> Dict[str, Any]:
+                        claimed: Dict[int, float],
+                        carried: Optional[Dict[int, float]] = None
+                        ) -> Dict[str, Any]:
+    """`carried`: {year: balance a close-year lock recorded as carried
+    out of that year} — at the end of that year the running balance
+    becomes the recorded one (the lock is the record; the books of a
+    later project rebuild earlier years only partly). Claims still
+    pending stay pending (a T1A carry-back recorded under its target
+    year)."""
+    carried = carried or {}
     # Union of book years and CLAIM years: a claim is applied on the
     # year of the RETURN it appears on, which may have no dispositions
     # in the broker book at all (T3 distributions, a no-trade year).
     # Iterating only disposition years silently ignored those claims —
     # the carryforward stayed overstated with no warning (REVIEW #23).
-    years = sorted(set(nets) | set(claimed))
+    years = sorted(set(nets) | set(claimed) | set(carried))
     _ZERO = {'net': 0.0, 'dispositions': 0}
     rows: List[Dict[str, Any]] = []
     balance = 0.0          # net-capital-loss carryforward (positive)
@@ -237,6 +246,11 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
             slack = 0.0
         pending_by_year = {k: v for k, v in pending_by_year.items()
                            if v > 0.005}
+        rebuilt_balance = None
+        if y in carried:
+            rebuilt_balance = balance
+            balance = max(0.0, float(carried[y]))
+            slack = 0.0
 
         carryback: List[Dict[str, float]] = []
         if loss:
@@ -253,7 +267,7 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
                 carryback.append({'year': target, 'amount': round(amt, 2)})
                 cb_capacity[target] = cap - amt
                 remaining -= amt
-        rows.append({
+        row = {
             'year': y,
             'net_gain': round(net, 2),
             'dispositions': nets.get(y, _ZERO)['dispositions'],
@@ -262,7 +276,11 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
             'available_to_apply': round(min(balance, max(0.0, net)), 2)
                                   if net > 0 else 0.0,
             'carryback_candidates': carryback,
-        })
+        }
+        if rebuilt_balance is not None:
+            row['balance_from_lock'] = True
+            row['rebuilt_balance'] = round(rebuilt_balance, 2)
+        rows.append(row)
     out = {'country': 'canada', 'rows': rows,
            'final_carryforward': round(balance, 2)}
     _unmatched = sum(pending_by_year.values()) + sum(expired.values())
@@ -296,7 +314,13 @@ def _us_worksheet(st_net: float, lt_net: float, allowed: float):
 
 
 def build_usa_ledger(nets: Dict[int, Dict[str, float]],
-                     claimed: Dict[int, float]) -> Dict[str, Any]:
+                     claimed: Dict[int, float],
+                     carried: Optional[Dict[int, Any]] = None
+                     ) -> Dict[str, Any]:
+    """`carried`: {year: (st, lt) carryover a close-year lock recorded
+    out of that year} — the running carryover becomes it at the end of
+    that year (US-CARRY-04)."""
+    carried = carried or {}
     # Every RETURN year matters, not just disposition years: while a
     # carryover exists, each intervening year's return absorbs up to
     # $3,000 against ordinary income (or the claimed_losses.txt
@@ -306,14 +330,14 @@ def build_usa_ledger(nets: Dict[int, Dict[str, float]],
     # year only when it actually does something (carry enters it or a
     # claim targets it). This is the USA twin of the Canada REVIEW #23
     # union fix.
-    all_years = set(nets) | set(claimed)
+    all_years = set(nets) | set(claimed) | set(carried)
     years = list(range(min(all_years), max(all_years) + 1)) if all_years else []
     _ZERO = {'net': 0.0, 'st': 0.0, 'lt': 0.0, 'dispositions': 0}
     rows: List[Dict[str, Any]] = []
     st_carry = lt_carry = 0.0        # positive loss magnitudes
     for y in years:
         rec = nets.get(y, _ZERO)
-        if (y not in nets and y not in claimed
+        if (y not in nets and y not in claimed and y not in carried
                 and st_carry + lt_carry <= 0.005):
             continue
         st_net = rec['st'] - st_carry
@@ -336,16 +360,23 @@ def build_usa_ledger(nets: Dict[int, Dict[str, float]],
         else:
             offset = 0.0
             st_carry = lt_carry = 0.0
-        rows.append({
+        row = {
             'year': y,
             'net_gain': round(rec['net'], 2),
             'net_st': round(rec['st'], 2),
             'net_lt': round(rec['lt'], 2),
             'dispositions': rec['dispositions'],
             'ordinary_income_offset': round(offset, 2),
-            'st_carryover': round(st_carry, 2),
-            'lt_carryover': round(lt_carry, 2),
-        })
+        }
+        if y in carried:
+            row['balance_from_lock'] = True
+            row['rebuilt_st_carryover'] = round(st_carry, 2)
+            row['rebuilt_lt_carryover'] = round(lt_carry, 2)
+            st_carry, lt_carry = (max(0.0, float(carried[y][0])),
+                                  max(0.0, float(carried[y][1])))
+        row['st_carryover'] = round(st_carry, 2)
+        row['lt_carryover'] = round(lt_carry, 2)
+        rows.append(row)
     return {'country': 'usa', 'rows': rows,
             'final_carryforward': round(st_carry + lt_carry, 2),
             'final_st_carryover': round(st_carry, 2),
@@ -442,6 +473,20 @@ def lock_figure(path: Path, country: str) -> Dict[str, Any]:
             else:
                 fig, source = realized, 'realized'
             out.update(figure=fig, st=0.0, lt=0.0, source=source)
+        # The balance close-year recorded as carried into the next year
+        # (lib/carryforward.record_block; tax-logic CA-CARRY-04 /
+        # US-CARRY-04). None for a lock written before it did.
+        cf = doc.get('carryforwards')
+        if isinstance(cf, dict):
+            if country == 'usa' and isinstance(cf.get('capital_loss'),
+                                               dict):
+                c = cf['capital_loss']
+                out['carried'] = (_finite(c['st_closing'], 'st_closing'),
+                                  _finite(c['lt_closing'], 'lt_closing'))
+            elif country != 'usa' and isinstance(
+                    cf.get('net_capital_loss'), dict):
+                out['carried'] = _finite(cf['net_capital_loss']['closing'],
+                                         'net_capital_loss.closing')
     except (KeyError, TypeError, ValueError) as e:
         raise LockUnreadable(f"{type(e).__name__}: {e}") from None
     return out
@@ -591,6 +636,18 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
             f"({LOCK_SOURCE_TEXT.get(r['filed_source'], r['filed_source'])})"
             for r in seeded)
             + " — not rebuilt from this project's books.")
+    from_lock = [r for r in rows if r.get('balance_from_lock')]
+    if from_lock:
+        lines.append("  - " + "; ".join(
+            f"the balance carried out of {r['year']} is the one its "
+            f"close-year lock recorded"
+            + (f" (these books rebuild "
+               f"{_money(r['rebuilt_balance'])})"
+               if country == 'canada'
+               and abs(r['rebuilt_balance'] - r['carryforward_balance'])
+               > 0.005 else "")
+            for r in from_lock)
+            + " — the lock is the record of the filed return.")
     slips = [r for r in rows if r.get('slip_gains')]
     if slips:
         lines.append("  - Includes the capital-gains dividends named in "
@@ -610,7 +667,11 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
                      f"({'Schedule D' if country == 'usa' else 'Schedule 3'}"
                      f") before trusting a "
                      f"carryforward or carryback from it.")
-    if first_tx_year is not None and rows and rows[0]['year'] <= first_tx_year:
+    if (first_tx_year is not None and rows
+            and rows[0]['year'] <= first_tx_year
+            and not any(r.get('balance_from_lock')
+                        and r['year'] >= first_tx_year - 1
+                        for r in rows)):
         lines.append(f"  - warning: this history starts in {first_tx_year} — "
                      f"if you traded before then, earlier gains/losses (and "
                      f"any pre-{first_tx_year} carryforward) are NOT "
@@ -908,6 +969,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # A2-0338, A2-0666). The project year (and later) is compared.
     seeded: Dict[int, Dict[str, Any]] = {}
     lock_info: Dict[int, Dict[str, Any]] = {}
+    carried: Dict[int, Any] = {}
     for item in args.filed_lock:
         try:
             y_s, lp = item.split("=", 1)
@@ -926,6 +988,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             continue
         info['path'] = lp
         lock_info[y] = info
+        if (args.project_year is not None and y < args.project_year
+                and info.get('carried') is not None):
+            carried[y] = info['carried']
         if args.project_year is not None and y < args.project_year:
             rebuilt = dict(nets.get(y, _zero))
             nets[y] = {'net': info['figure'], 'st': info['st'],
@@ -941,9 +1006,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         rec['net'] = rec.get('net', 0.0) + v
 
     if country == 'canada':
-        ledger = build_canada_ledger(nets, claimed)
+        ledger = build_canada_ledger(nets, claimed, carried)
     else:
-        ledger = build_usa_ledger(nets, claimed)
+        ledger = build_usa_ledger(nets, claimed, carried)
 
     tx_years = [int(t.date[:4]) for t in transactions
                 if t.date[:4].isdigit()]
