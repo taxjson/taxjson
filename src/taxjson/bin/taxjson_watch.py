@@ -255,11 +255,17 @@ def save_state(path: Path, radar: Dict[str, Dict[str, Any]],
 
 
 def render_report(changes: List[Dict[str, Any]], as_of: str,
-                  since: Optional[str] = None) -> str:
+                  since: Optional[str] = None,
+                  scope: Optional[str] = None) -> str:
+    """The change report; `scope` (lib/wash_scope.scope_note) closes it:
+    a CLEAR is "safe as far as this project's accounts show"
+    (tax-logic CA-PLAN-04 / US-PLAN-04, re-audit A2-0909)."""
     prev = f" (previous baseline {since})" if since else ""
     lines = [f"WATCH — {len(changes)} change(s) since the last run"
              f"{prev} (as of {as_of})", ""]
     lines += [f"  {ch['line']}" for ch in changes]
+    if scope:
+        lines += ["", scope]
     return "\n".join(lines)
 
 

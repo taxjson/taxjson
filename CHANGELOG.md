@@ -2884,6 +2884,14 @@
 
 ### Filing: form-export, locks, handoff, checklist, slips, T1135, carryover
 
+- Two taxable accounts with rows at the same moment: check-filed and the
+  run's filed-year drift check, `taxjson t1135`, `carryover`, `audit`,
+  `wash-sales --explain` and the radar now merge the books in
+  taxjson.toml order, as the run does (CA-DATE-14 / US-DATE-13). They
+  took the accounts alphabetically, so check-filed reported a false
+  DRIFT right after close-year, audit a false tie-out mismatch, and
+  t1135 / carryover showed another book's cost and gain (A2-0512,
+  A2-1592).
 - `taxjson carryover` in a US project whose only taxable accounts are
   crypto accounts no longer applies the wash-sale rule to the coins: the
   books go to the ledger's no-wash crypto pass, as in a mixed project
@@ -3507,6 +3515,12 @@
 
 ### Planning: wash radar, harvest, buy/sell-check, estimate, instalments, web UI
 
+- `taxjson watch` states its scope like the other planning tools
+  (tax-logic CA-PLAN-04 / US-PLAN-04, re-audit A2-0909): a change report
+  ends with the country's scope line (a CLEAR is safe only as far as
+  the project's accounts show — a spouse's or controlled corporation's
+  purchase is not seen), and `--json` carries `scope_note`. A quiet run
+  stays silent.
 - `buy-check` / `sell-check`: in a US project a bare coin held in a
   crypto account (`buy-check ETH`) is answered as outside the wash-sale
   rule instead of taking ETH.US's verdict or saying "no tracked taxable
@@ -4052,6 +4066,14 @@
 
 ### Reports and views
 
+- `taxjson edge-cases` in a US project no longer lists a stock dividend
+  as an in-window acquisition of a loss: it is not a purchase for the
+  wash-sale rule (US-STKDIV-01), and the engine already allowed the
+  loss. Canada still lists it (CA-STKDIV-01) (re-audit A2-1547).
+- `taxjson sum` FOR THE RETURN now names the per-row rounding gap of the
+  DENIED column (US: the Form 8949 code-W adjustment) the way it already
+  named the gain's, and `sum --json` adds `engine_denied_unrounded`
+  (re-audit A2-0912, the second half of R1-166).
 - `taxjson list --date` in a US project calls its cost the per-account
   FIFO basis (the return's own basis) and no longer claims a symbol held
   in two accounts has one blended s.47 ACB on the return; the note and
