@@ -521,7 +521,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson redact FILE... [--out DIR] [--also REGEX] [--check]` | Strips account numbers, names and contact details it recognises (plus wallet addresses and exchange transaction ids, and anything on the private denylist) while keeping every row shape (same-shape placeholders, consistent across every file of one run, so a redacted Kraken trades + ledgers set still links up) so a statement can be shared as a parser sample or bug report. The denylist must be UTF-8 text (a BOM is fine); a UTF-16, non-UTF-8, unreadable or directory denylist stops the run (exit 2, nothing written). Pattern-based, not a guarantee: **review the output before sharing** — the report lists the free-text lines to read. Writes `NAME.redacted.EXT`; never touches the input; refuses `.xlsx`/binary input (export CSV first); `--check` exits 1 when it finds something, an account id or denylisted word in the file NAME included. |
 | `taxjson sell-check SYMBOL ...` | Sell-side wash check: is selling this ticker **at a loss** today safe? **UNSAFE** when a registered account's recent buy it still holds would deny the loss on the whole position (LOCKED), or an open violation is backed by a registered account's in-window buy; **PARTIAL** when only some units are at risk (the line says how many; the rest of the loss stands); **ACTION** when a violation can be rescued by selling the taxable replacement before the deadline (Canada only — a US wash sale cannot be rescued, and a WASHED row is SAFE\* with the reason); **SAFE\*/SAFE** with the applicable caveats. Whether it *is* a loss at today's price is `harvest`'s job. `--json` for machines; exit 1 on UNSAFE or PARTIAL. |
 | `taxjson buy-check SYMBOL ...` | Buy-side wash check: is buying this ticker today safe? **UNSAFE** when a loss was sold within the past 30 days (the rebuy cancels it — permanently if bought sheltered), with the safe-from date when one is determinable (violations defer to `wash-radar` rather than print a date that would invite an early rebuy); **SAFE\*** when buying merely extends an open wash window. Root-matched (`buy-check NU` covers `NU.US` and cross-listings, folding in `ticker.map` pairs); `--json` for machines; exit 1 on unsafe. |
-| `taxjson audit [SYMBOL ...]` | The **authoritative justification** of every capital-gain figure: one block per disposition tracing the parsed broker row (nominal currency, original ticker, source file) through the ticker.map rename, the exact FX rate applied (provenance named, recomputed against the base books to the cent), the ACB/FIFO disposition math, and the wash-sale / superficial-loss determination with replacement lots resolved — ending in a tie-out against the pipeline's saved gains files and the full pool trace. Runs the same blended computation the pipeline runs, so the audited numbers ARE the filed numbers. `--summary` for one line per event, `--id/--date/--account` filters, `--json`; exit 1 when any cross-check disagrees. `--year Y` for a locked year (its `filed/Y.json`, or the lock `[settings] prior_year_record` names) recomputes it with the option timing and date basis the lock recorded, with a note. |
+| `taxjson audit [SYMBOL ...]` | The **authoritative justification** of every capital-gain figure: one block per disposition tracing the parsed broker row (nominal currency, original ticker, source file) through the ticker.map rename, the exact FX rate applied (provenance named, recomputed against the base books to the cent), the ACB/FIFO disposition math, and the wash-sale / superficial-loss determination with replacement lots resolved — ending in a tie-out against the pipeline's saved gains files and the full pool trace. Runs the same blended computation the pipeline runs, so the audited numbers ARE the filed numbers. `--summary` for one line per event, `--id/--date/--account` filters (each event prints its row's own id unmasked, on purpose: it is the `--id` handle — for Kraken the exchange's ledger txid, an exchange reference; SECURITY.md), `--json`; exit 1 when any cross-check disagrees. `--year Y` for a locked year (its `filed/Y.json`, or the lock `[settings] prior_year_record` names) recomputes it with the option timing and date basis the lock recorded, with a note. |
 | `taxjson wash-radar` / `wash-sales` | Wash-sale radar (forward) and denied-loss report (backward). |
 | `taxjson fx-cash` | FX capital gains on foreign-currency **cash** — foreign cash is property, so spending USD realizes the rate move since it was acquired. Canada: ITA s.39(1.1) with the $200/year de minimis; US: the §988 ordinary-income figure. A standalone report reconstructed from the taxable accounts' native books (`--events` for the per-disposal detail, `--json` for machines); changes NO other number. Set `fx_cash_gains = true` under `[settings]` to also print it (and write `reports/fx_cash.rpt`) at the end of every run — off by default. |
 | `taxjson watch` | Cron-able change detector: reports only what CHANGED since the last watch run — new/changed/cleared radar advisories, moved clear dates, and (with `--harvest`) the harvestable-now loss total moving more than `--threshold` (default 100). A report ends with the scope line (verdicts cover this project's accounts only — CA-PLAN-04 / US-PLAN-04). Silent with exit 0 when nothing changed, so a cron line mails only on news; `--exit-code` exits 1 on changes for scripting, `--json` for machines. State: `work/.watch_state.json`; `--state PATH` gives a cron cadence its own baseline (daily and weekly lines can coexist). |
@@ -656,7 +656,7 @@ TAX ESTIMATE — canada/ON, rates vintage 2026 (ESTIMATE ONLY, not filing number
 
   Other income                     200,000.00
   Capital gains (taxable)           15,000.00  [30,000.00 realized - 0.00 other losses, x50%]
-  Eligible dividends (grossed)       1,380.00  [1,000.00 x1.38, Canadian-listed]
+  Eligible dividends (grossed)       1,380.00  [1,000.00 x1.38, Canadian issuers, trust distributions included]
   Foreign dividends                    500.00  [FTC 75.00 — actual TAX rows (capped at 15% of foreign divs)]
   Payments in lieu                       0.00
 
@@ -680,10 +680,11 @@ the earliest table also says the post-2024 AMT shown did not apply).
   22100) lower net and taxable income — other income first, then the
   investment income; the AMT base takes the deductions in full and the
   carrying charges at 50%. Deductions not entered are not modelled, so
-  an RRSP year left at 0 overstates the tax. Canadian-listed
+  an RRSP year left at 0 overstates the tax. Canadian issuers'
   dividends are treated as eligible (38% gross-up + DTC) — non-eligible
   dividends are not modelled, and a Canadian trust's distribution (ETF,
-  REIT or fund units) is counted the same way, because the export does
+  REIT or fund units) is grossed up as an eligible dividend too (the
+  printed assumptions and the row say so), because the export does
   not carry its T3 split (box 49 eligible dividends, 26 other income, 21
   capital gains, 42 return of capital): take the real split from the T3; foreign dividends as ordinary income, credited (FTC) with the foreign
   tax the books actually withheld (TAX rows, capped at 15% of the
@@ -791,14 +792,17 @@ its printed (cent-rounded) rows.
   year's T3 box 42 and move it to Dec 31 with the two `.tt` ADJUST lines
   the warning prints; the warning stops once both lines are in the books,
   or once a corporation is listed in `corporate_distributions`).
-- Canada: a **payment in lieu** on a Canadian issuer's share paid by a
-  Canadian dealer (IB's statement names Interactive Brokers Canada Inc.) is
-  a taxable dividend (s.260(5)/(5.1)), as the dealer's T5 box 24 reports
-  it; any other payment in lieu is ordinary income. The exports do not
-  tell a trust's unit from a share, so a payment in lieu on a Canadian ETF
-  or REIT unit is deemed a dividend too — by law s.260(5) covers shares
-  only: take a unit's payment from the slip. US: a substitute
-  payment is ordinary, non-qualified income.
+- Canada: a **payment in lieu** on a Canadian corporation's share paid by
+  a Canadian dealer (IB's statement names Interactive Brokers Canada Inc.)
+  is a taxable dividend (s.260(5)/(5.1)), as the dealer's T5 box 24
+  reports it; any other payment in lieu is ordinary income. s.260(5)
+  covers shares only, so a payment in lieu on a Canadian trust's unit (an
+  ETF, REIT or fund unit) is ordinary income too — a unit is a trust's
+  when the books carry a distribution on it (the same test that dates
+  trust income above). IB calls a trust's distribution a dividend, so a
+  unit held only at IB cannot be told from a share and its payment in
+  lieu is still deemed a dividend: take it from the slip. US: a
+  substitute payment is ordinary, non-qualified income.
 - US: a fund (RIC) or REIT dividend declared in October–December and paid
   in January is received on Dec 31 (IRC §852(b)(7), §857(b)(9)). The
   exports cannot tell a fund from a company, so taxjson keeps the pay date,

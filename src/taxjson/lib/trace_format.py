@@ -375,6 +375,9 @@ def render_gain_block(g: Dict[str, Any], align: bool = True,
     days = g.get('days_held')
     account = g.get('account', '')
     term = g.get('term')
+    # Unmasked on purpose (owner decision, audit A2-1379): the id is
+    # the handle `taxjson audit --id` / explain take; a broker-issued id
+    # (a Kraken ledger txid) is an exchange reference, not an account id.
     gid = (g.get('id') or '')[:16]
 
     if manual:

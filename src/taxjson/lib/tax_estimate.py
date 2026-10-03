@@ -598,8 +598,10 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
 CA_ASSUMPTIONS = (
     "Assumes: Canadian issuers' dividends are all ELIGIBLE (non-eligible "
     "dividends would be taxed higher) — a Canadian trust's distribution "
+    "(ETF, REIT or fund units) is grossed up as an eligible dividend "
     "too (its T3 split into eligible dividends, other income, capital "
-    "gains and return of capital is not in the export) — except the T5 "
+    "gains and return of capital is not in the export; the T3 "
+    "decides) — except the T5 "
     "box 18 capital-gains "
     "dividends named in capital_gains_dividends.map (taxed as capital "
     "gains); foreign withholding creditable "

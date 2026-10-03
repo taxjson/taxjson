@@ -106,6 +106,10 @@ def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None
     # The tax withheld on a payment follows its dividend's date (A2-0396).
     wh_dates = (rules.withholding_dates(transactions)
                 if rules is not None else {})
+    # A Canadian trust's units (the books call their payouts
+    # distributions): a payment in lieu on one stays ordinary (A2-1465).
+    trusts = (rules.trust_units(transactions)
+              if rules is not None else frozenset())
     for tx in transactions:
         # `tx['date']` is sometimes explicitly None (came in as JSON
         # null) — `tx.get('date', '')` returns None in that case and
@@ -146,10 +150,10 @@ def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None
         # loaned out, so the issuer's dividend was paid to someone else and
         # you got a substitute payment. US: ordinary (non-qualified)
         # income. Canada: ordinary income, EXCEPT a Canadian dealer's
-        # payment on a Canadian issuer's share, which s.260 deems a
+        # payment on a Canadian corporation's share, which s.260 deems a
         # taxable dividend (moved to the dividend column above). The
         # rest stays per-ticker in its own column.
-        if rules is not None and rules.pil_is_dividend(tx):
+        if rules is not None and rules.pil_is_dividend(tx, trusts):
             # Canada, ITA s.260: a Canadian dealer's payment in lieu on
             # a Canadian issuer's share is a taxable dividend (T5 box
             # 24), so it is in the dividend column.

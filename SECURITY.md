@@ -91,6 +91,13 @@ statements (which carry your account numbers) `0600`. Directories
 created by earlier versions keep their old mode; tighten a project
 once with `chmod -R go-rwx <project>`.
 
+Ids in audit output: `taxjson audit` and the gains traces (`explain`,
+`--trace`) print each row's own id unmasked, on purpose — it is the
+handle `--id` takes. For most brokers it is a content hash; for Kraken
+it is the exchange's ledger txid (an exchange reference, never an
+account number or wallet address). Parser messages mask such refs
+(`LG***`). Review audit and trace output before sharing it.
+
 **Keep a tax project repository PRIVATE.** A project is designed to be
 versioned — `taxjson init` writes a `.gitignore` that commits
 `inputs/` (your broker statements) and `taxjson.toml` (your accounts)

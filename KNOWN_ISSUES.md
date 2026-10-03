@@ -313,11 +313,10 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Why not collapse them:** the pre/post comparison is the design's value-add. Future change candidate: bake the "POST-WASH (FILE FROM THIS)" / "PRE-WASH (DIAGNOSTIC)" label into a header line at the top of each file so the role is unambiguous when a user opens one in isolation.
 
 
-### `taxjson audit` and the gains traces show a row's own id (owner decision open)
+### `taxjson audit` and the gains traces show a row's own id (intentional)
 - **Where:** `src/taxjson/bin/taxjson_audit.py` (the EVENT header `#<id>`), `src/taxjson/lib/trace_format.py` (`id=` on the trace line, first 16 characters).
-- **Current behavior:** the id is printed so it can be pasted into `--id` (the `--summary` column is meant for that). For most brokers it is a content hash, but a Kraken row's id is the exchange's own ledger txid (`LG1GGG-...-fee`), so audit and the traces show it in full while the Kraken parser's own messages mask it as `LG***` (audit A2-1379).
-- **Options:** (a) keep it — a txid is an exchange reference, not an account number, and the id is the `--id` handle; (b) mask a broker-issued id in the printed output and accept a masked prefix (`LG1***`) in `--id`; (c) show a short stable hash of the id instead and let `--id` match on it. Until the owner chooses, review audit/trace output before sharing it.
-
+- **Behavior:** the id is printed unmasked so it can be pasted into `--id` (the `--summary` column is meant for that). For most brokers it is a content hash, but a Kraken row's id is the exchange's own ledger txid (`LG1GGG-...-fee`), so audit and the traces show it while the Kraken parser's own messages mask it as `LG***`.
+- **Why this is intentional:** owner decision (audit A2-1379): a txid is an exchange reference, not an account number or a wallet address, and the id is the `--id` handle. Review audit and trace output before sharing it outside your records (SECURITY.md).
 ---
 
 ### T1135 cost amounts follow the books — custody transfer-ins carry only declared cost

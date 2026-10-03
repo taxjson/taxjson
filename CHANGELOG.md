@@ -784,6 +784,12 @@
 
 ### Income: dividends, distributions and return of capital
 
+- Canada: a payment in lieu on a Canadian trust's unit (an ETF, REIT or
+  fund unit the books show to be a trust's: they carry a distribution on
+  it) is ordinary income, no longer an ITA s.260 deemed dividend grossed
+  up in the estimate; s.260(5) covers shares only. A unit whose payouts
+  no export calls distributions (IB) still reads as a share (re-audit
+  A2-1465; CA-INC-03 / CA-INC-07).
 - Canada income dating: the January return-of-capital warning no longer
   calls every Canadian issuer a trust — it asks, and listing a
   corporation in [settings] corporate_distributions stops it; tax-logic
@@ -3611,6 +3617,10 @@
 
 ### Planning: wash radar, harvest, buy/sell-check, estimate, instalments, web UI
 
+- `taxjson estimate` (Canada) says on the eligible-dividends row and in
+  its printed assumptions that a Canadian trust's distribution (ETF, REIT
+  or fund units) is grossed up as an eligible dividend; the T3 decides
+  (re-audit A2-0828; CA-EST-TRUST).
 - US wash radar, sell-check, buy-check and harvest no longer call a
   stock dividend a "Recent buy" and warn that a partial loss sale would
   be a wash sale: a stock dividend is not a purchase for §1091
@@ -5071,6 +5081,10 @@
   again; mark a synthetic number with the word `pii-ok` on its line
   (`scripts/check-pii.sh --message`; A2-1384). Existing history is left
   as is.
+- `taxjson audit` and the gains traces keep printing a row's own id
+  unmasked, on purpose: it is the `--id` handle (for Kraken, the
+  exchange's ledger txid — an exchange reference). Documented in
+  SECURITY.md, README and KNOWN_ISSUES (owner decision, re-audit A2-1379).
 - `taxjson redact` and the generate-parser privacy gate no longer lose a
   private-denylist pattern silently: a leading UTF-8 BOM is stripped,
   and a denylist that is UTF-16, not UTF-8, unreadable or a directory
