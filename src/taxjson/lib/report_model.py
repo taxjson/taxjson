@@ -386,7 +386,7 @@ def build_account_report(gains_data, account: str,
                       wash_sales records
 
     ADDITIVE artifact: the .sum text pipeline is unchanged; consumers
-    (`taxjson sum` today; future exports/web) read this instead of
+    (`taxjson sum` today; future exports) read this instead of
     re-deriving the same aggregates from the raw gains JSON."""
     from datetime import datetime
     # Deferred imports: bin tools import report_model, so a module-level

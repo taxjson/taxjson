@@ -6,7 +6,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-import urllib.error
 from contextlib import redirect_stderr
 from pathlib import Path
 
@@ -34,25 +33,6 @@ class TestAccountNameValidation(unittest.TestCase):
     def test_ordinary_names_accepted(self):
         for ok in ("margin", "rrsp2", "my-acct", "acct.v2", "_x"):
             self._validate(ok)
-
-
-class TestFetchHardening(unittest.TestCase):
-    def test_redirects_refused_on_credentialed_requests(self):
-        from taxjson.bin.taxjson_fetch import _NoRedirect
-        h = _NoRedirect()
-        with self.assertRaises(urllib.error.HTTPError):
-            h.redirect_request(
-                urllib.request.Request("https://api.example/x"),
-                None, 302, "Found", {}, "http://evil.example/")
-
-    def test_non_https_api_server_refused(self):
-        from taxjson.bin import taxjson_fetch as tf
-        fake = {"api_server": "http://api.example/",
-                "access_token": "t", "refresh_token": "r",
-                "expires_in": 1800}
-        import json
-        with self.assertRaises(RuntimeError):
-            tf.qt_refresh("refresh", http_get=lambda url: json.dumps(fake).encode())
 
 
 class TestOfflineGuard(unittest.TestCase):

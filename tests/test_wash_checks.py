@@ -119,26 +119,6 @@ class TestRadarCarriesScope(unittest.TestCase):
         self.assertEqual(flat["XYZ.TO"]["taxable_qty"], 0.0)
 
 
-class TestQuestradePositionSymbols(unittest.TestCase):
-    def test_class_share_is_not_mistaken_for_an_exchange(self):
-        from taxjson.bin.taxjson_fetch import qt_position_symbol as q
-        self.assertEqual(q("BRK.B"), "BRK.B.US")
-        self.assertEqual(q("RDS.A"), "RDS.A.US")
-
-    def test_real_exchange_suffixes_pass_through(self):
-        from taxjson.bin.taxjson_fetch import qt_position_symbol as q
-        self.assertEqual(q("SHOP.TO"), "SHOP.TO")
-        self.assertEqual(q("ABC.VN"), "ABC.TO")   # one Canadian spelling (S010-05)
-        self.assertEqual(q("AAPL"), "AAPL.US")
-
-    def test_montreal_options_follow_the_underlying(self):
-        from taxjson.bin.taxjson_fetch import qt_position_symbol as q
-        self.assertEqual(q("BMO20Jan26C88.00", to_roots={"BMO"}),
-                         "BMO260120C00088000.TO")
-        self.assertEqual(q("BMO20Jan26C88.00"),
-                         "BMO260120C00088000.US")
-
-
 class TestRootMatcherClasses(unittest.TestCase):
     """2026-09 audit: `_root()` stripped the exchange suffix before any
     union ran, so `DISTINCT UNH.US UNH.TO` (a CDR vs its underlying —

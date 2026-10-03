@@ -981,7 +981,7 @@ def inputs_changed(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
     """Why the books are not the result of the current inputs according
     to the last full run's record: a diff text, "" when they are, None
     when no record exists (the caller falls back to mtimes). The one
-    rule for run-clean, the filing banners and the web freshness flag."""
+    rule for run-clean and the filing banners."""
     try:
         doc = _load_fingerprint_doc(root)
     except FingerprintUnreadable as e:

@@ -5,8 +5,7 @@ fails when the code it guards is reverted (a surviving mutant).
           audit's US default, check-filed's recorded date basis, the
           handoff snapshot, --suggest-missing-history, find-missing-history, the
           T1135 walk order, the checklist wash step, split-gains position
-          starts, the trades view (window and .tt dates) and the web
-          what-if grant-year basis
+          starts and the trades view (window and .tt dates)
   A2-0892 / A2-1608  expiry cutoffs: expired_open's today cap and its
           last-data-date extension, the run warning's today clamp, the
           T1135 expired-option note's today clamp
@@ -192,27 +191,6 @@ class TestCaTradeBasisConsumers(unittest.TestCase):
                          today=date(2026, 3, 1), run_sub=None)
             r = cl.d_wash_reviewed(ctx)
         self.assertIn("200.00 denied", r.detail)
-
-    @rule("CA-OPT-01")
-    def test_web_what_if_grant_year_on_trade_dates(self):
-        # A call written 2024-12-31 (settles 2025-01-02), grant timing
-        # from 2025: on trade dates it is a 2024 write (close timing), so
-        # buying it back books the premium: 50 - 20 = 30.
-        from test_fix_a2_planning_web import _project, _row, _whatif
-        opt = "ABC250321C00050000.TO"
-        with tempfile.TemporaryDirectory() as tmp:
-            root = _project(tmp, {"margin": [_row(
-                opt, -1, 50.0, "2024-12-31", settle="2025-01-02",
-                price=0.5)]}, year=2025)
-            p = root / "taxjson.toml"
-            p.write_text(p.read_text().replace(
-                'base_currency = "CAD"\n',
-                'base_currency = "CAD"\ntax_date = "trade"\n'
-                'option_grant_timing_since = 2025\n'))
-            r = _whatif(root, "margin", opt, -1, 0.2, on="2025-03-03")
-        self.assertTrue(r["ok"], r)
-        self.assertAlmostEqual(r["allowed_gain"], 30.0)
-        self.assertAlmostEqual(r["cost_basis"], -50.0)
 
 
 @rule("CA-DATE-01", "CA-DATE-02")

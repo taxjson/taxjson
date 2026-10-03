@@ -491,23 +491,6 @@ class TestR6_CliRenderingHardening(unittest.TestCase):
         self.assertNotIn("Traceback", r.stderr)
         self.assertIn("cannot write --csv", r.stderr)
 
-    def test_serve_wildcard_host_accepts_lan_clients(self):
-        # #17: allowed_hosts=["0.0.0.0"] rejected every real Host
-        # header with 400.
-        try:
-            from fastapi.testclient import TestClient
-        except (ImportError, RuntimeError):
-            self.skipTest("fastapi not installed")
-        from taxjson.web.app import create_app
-        from taxjson.web.context import ProjectContext
-        with tempfile.TemporaryDirectory() as tmp:
-            root = self._proj(tmp)
-            ctx = ProjectContext.load(root)
-            app = create_app(ctx, allowed_hosts=["*"])
-            client = TestClient(app, base_url="http://127.0.0.1")
-            r = client.get("/", headers={"host": "192.168.1.5:8765"})
-            self.assertNotEqual(r.status_code, 400)
-
 
 class TestR7_NativeViewsRoundTrip(unittest.TestCase):
     """#18/#19/#20/#36/#37: the taxtext views' round-trip contract and
@@ -643,91 +626,6 @@ class TestR8_FilingTools(unittest.TestCase):
                 claims = load_claimed(f)
         self.assertEqual(claims, {2025: 10.0})
         self.assertEqual(err.getvalue().count("line ignored"), 2)
-
-
-class TestR9_WebWhatIf(unittest.TestCase):
-    """#26/#29/#30/#31: what-if input validation, the synthetic-id
-    collision, and live config reload."""
-
-    @classmethod
-    def setUpClass(cls):
-        try:
-            import fastapi  # noqa: F401
-            # Gate on what the tests actually use: TestClient's own
-            # transport dep varies by starlette version (httpx vs
-            # httpx2) — importing `httpx` by name silently skipped
-            # this whole class on envs where TestClient works fine.
-            from fastapi.testclient import TestClient  # noqa: F401
-        except (ImportError, RuntimeError):
-            raise unittest.SkipTest("fastapi test client not installed")
-
-    def _client(self, d):
-        from fastapi.testclient import TestClient
-        from taxjson.web.app import create_app
-        from taxjson.web.context import ProjectContext
-        return TestClient(create_app(ProjectContext.load(d)), base_url="http://127.0.0.1")
-
-    def _project(self, tmp):
-        from datetime import date
-        d = Path(tmp)
-        (d / "work").mkdir()
-        (d / "reports").mkdir()
-        (d / "taxjson.toml").write_text(
-            '[settings]\nyear = 2025\ncountry = "canada"\n'
-            'base_currency = "CAD"\nsource_currencies = []\n'
-            '[accounts.margin]\ntype = "taxable"\n')
-        today = date.today().isoformat()
-        (d / "work" / "margin_base.json").write_text(json.dumps(
-            {"transactions": [
-                {"action": "BUYSELL", "date": "2025-01-02",
-                 "date_settle": "2025-01-02", "time": "09:30:00",
-                 "symbol": "AAA.TO", "quantity": 100, "price": 10.0,
-                 "net_amount": 1000.0, "currency": "CAD",
-                 "account": "margin"},
-                # REAL same-day sale with the qty/price a what-if will
-                # ask about — used to content-hash to the SAME id as
-                # the synthetic sell and double the aggregates.
-                {"action": "BUYSELL", "date": today,
-                 "date_settle": today, "time": "09:31:00",
-                 "symbol": "AAA.TO", "quantity": -40, "price": 15.0,
-                 "net_amount": 600.0, "currency": "CAD",
-                 "account": "margin"}]}))
-        return d
-
-    def test_no_id_collision_with_real_same_day_sale(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            c = self._client(self._project(tmp))
-            r = c.get("/api/whatif",
-                      params={"account": "margin", "symbol": "AAA.TO",
-                              "qty": 40, "price": 15}).json()
-        self.assertTrue(r["ok"], r)
-        self.assertAlmostEqual(r["cost_basis"], 400.0)   # was 800
-
-    def test_nonfinite_and_nonpositive_inputs_rejected_no_500(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            c = self._client(self._project(tmp))
-            for q, p in (("nan", "15"), ("10", "inf"),
-                         ("10", "-15"), ("0", "15")):
-                resp = c.get("/api/whatif",
-                             params={"account": "margin",
-                                     "symbol": "AAA.TO",
-                                     "qty": q, "price": p})
-                self.assertEqual(resp.status_code, 200, (q, p))
-                self.assertFalse(resp.json()["ok"], (q, p))
-
-    def test_accounts_added_while_serving_are_visible(self):
-        import os
-        with tempfile.TemporaryDirectory() as tmp:
-            d = self._project(tmp)
-            c = self._client(d)
-            self.assertEqual(c.get("/healthz").json()["accounts"],
-                             ["margin"])
-            (d / "taxjson.toml").write_text(
-                (d / "taxjson.toml").read_text()
-                + '[accounts.tfsa]\ntype = "sheltered"\n')
-            os.utime(d / "taxjson.toml")
-            self.assertIn("tfsa",
-                          c.get("/healthz").json()["accounts"])
 
 
 if __name__ == "__main__":

@@ -13,6 +13,9 @@
 
 All data synthetic (fake account ids, invented tickers).
 """
+# First: puts the plugin, the core and its test helpers on sys.path and
+# registers the plugin's entry point when it is not pip-installed.
+import _support  # noqa: F401
 import csv
 import io
 import json
@@ -64,13 +67,13 @@ class TestFetchKeepsApiOrder(unittest.TestCase):
     @rule("CA-DATE-14")
     @rule("US-DATE-13")
     def test_qt_to_csv_keeps_same_day_api_order(self):
-        from taxjson.bin.taxjson_fetch import qt_to_csv
+        from taxjson_fetch.api import qt_to_csv
         self.assertEqual(_actions(qt_to_csv(_API, "1")),
                          [("2025-01-10", "Buy"), ("2025-06-10", "Sell"),
                           ("2025-06-10", "Buy")])
 
     def test_qt_to_csv_still_chronological_across_days(self):
-        from taxjson.bin.taxjson_fetch import qt_to_csv
+        from taxjson_fetch.api import qt_to_csv
         text = qt_to_csv([_API[1], _API[2], _API[0]], "1")
         self.assertEqual(_actions(text),
                          [("2025-01-10", "Buy"), ("2025-06-10", "Sell"),
@@ -81,8 +84,8 @@ class TestFetchKeepsApiOrder(unittest.TestCase):
     @rule("CA-DATE-14")
     @rule("US-DATE-13")
     def test_merge_keeps_api_order_of_new_rows(self):
-        from taxjson.bin.taxjson_fetch import qt_to_csv
-        from taxjson.bin.taxjson_run import _merge_csv_text
+        from taxjson_fetch.api import qt_to_csv
+        from taxjson_fetch.command import _merge_csv_text
         existing = qt_to_csv(_API[:1], "1")
         merged, added = _merge_csv_text(existing, qt_to_csv(_API, "1"))
         self.assertEqual(added, 2)
@@ -93,8 +96,8 @@ class TestFetchKeepsApiOrder(unittest.TestCase):
     def test_merge_reorders_a_file_written_buy_first(self):
         # A file written by the old fetch (Buy sorted before Sell) takes
         # the API's order for the rows the new download covers.
-        from taxjson.bin.taxjson_fetch import qt_to_csv
-        from taxjson.bin.taxjson_run import _merge_csv_text
+        from taxjson_fetch.api import qt_to_csv
+        from taxjson_fetch.command import _merge_csv_text
         new = qt_to_csv(_API, "1")
         rows = new.splitlines(keepends=True)
         old = rows[0] + rows[1] + rows[3] + rows[2]      # Buy, Buy, Sell
@@ -103,8 +106,8 @@ class TestFetchKeepsApiOrder(unittest.TestCase):
         self.assertEqual(merged, new)
 
     def test_merge_keeps_rows_outside_the_window_chronological(self):
-        from taxjson.bin.taxjson_fetch import qt_to_csv
-        from taxjson.bin.taxjson_run import _merge_csv_text
+        from taxjson_fetch.api import qt_to_csv
+        from taxjson_fetch.command import _merge_csv_text
         dec = _act("2025-12-01", "Sell", -50, 16.0)
         existing = qt_to_csv([_API[0], dec], "1")
         merged, added = _merge_csv_text(existing, qt_to_csv(_API[1:], "1"))
@@ -117,7 +120,7 @@ class TestFetchKeepsApiOrder(unittest.TestCase):
     def test_fetched_file_books_sale_before_rebuy(self):
         # End to end (Canada): the sale is made from the January shares
         # (ACB 1,000 -> gain 500), and the rebuy is the new pool (1,510).
-        from taxjson.bin.taxjson_fetch import qt_to_csv
+        from taxjson_fetch.api import qt_to_csv
         csv_text = qt_to_csv(_API, "55500001")  # pii-ok
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -154,7 +157,7 @@ class TestOverlapReadsUtf16(unittest.TestCase):
         "10,10.00,-100.00,0.00,-100.00,CAD,55500001,Trades,Individual\n")  # pii-ok
 
     def _check(self, raw):
-        from taxjson.bin.taxjson_run import _qt_trim_file, _qt_window_overlap
+        from taxjson_fetch.command import _qt_trim_file, _qt_window_overlap
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)
             sib = d / "manual.csv"
@@ -209,13 +212,13 @@ class TestFlexSpanIgnoresNumbers(unittest.TestCase):
             '"2026-01-06, 10:00:00","1","5"\n')
 
     def test_decimal_and_adjustment_do_not_widen_span(self):
-        from taxjson.bin.taxjson_run import _flex_lost_dates, _flex_span
+        from taxjson_fetch.command import _flex_lost_dates, _flex_span
         self.assertEqual(_flex_span(self._YTD), ("2026-01-01", "2026-01-20"))
         self.assertEqual(_flex_lost_dates(self._OLD, self._YTD, 2025),
                          ["2025-03-05", "2025-11-05"])
 
     def test_no_period_uses_activity_dates_only(self):
-        from taxjson.bin.taxjson_run import (_flex_dates, _flex_lost_dates,
+        from taxjson_fetch.command import (_flex_dates, _flex_lost_dates,
                                              _flex_span)
         ytd = "\n".join(l for l in self._YTD.splitlines()
                         if '"Period"' not in l) + "\n"
@@ -227,13 +230,13 @@ class TestFlexSpanIgnoresNumbers(unittest.TestCase):
     def test_headerless_rows_still_dated(self):
         # Rows with no section Header (older fixtures): a cell that IS a
         # date or date-time counts; a number containing digits does not.
-        from taxjson.bin.taxjson_run import _flex_dates
+        from taxjson_fetch.command import _flex_dates
         text = ('"Trades","Data","Order","Stocks","USD","XYZ",'
                 '"2025-03-05, 10:00:00","10","-26.20190219"\n')
         self.assertEqual(_flex_dates(text), ["2025-03-05"])
 
     def test_full_year_replacement_is_not_refused(self):
-        from taxjson.bin.taxjson_run import _flex_lost_dates
+        from taxjson_fetch.command import _flex_lost_dates
         self.assertEqual(_flex_lost_dates(self._OLD, self._OLD, 2025), [])
 
 
@@ -242,7 +245,7 @@ class TestQtWindowLocalMidnight(unittest.TestCase):
     boundary date (EDT -04:00 in summer, EST -05:00 in winter)."""
 
     def _queries(self, start, end):
-        from taxjson.bin.taxjson_fetch import qt_activities
+        from taxjson_fetch.api import qt_activities
         seen = []
 
         def http(url):
@@ -264,7 +267,7 @@ class TestQtWindowLocalMidnight(unittest.TestCase):
                               "2025-12-20T23:59:59-05:00")])
 
     def test_dst_switch_days(self):
-        from taxjson.bin.taxjson_fetch import _toronto_stamp
+        from taxjson_fetch.api import _toronto_stamp
         # 2025-03-09: midnight is still EST, 23:59:59 is EDT;
         # 2025-11-02: midnight is EDT, 23:59:59 is EST.
         self.assertEqual(_toronto_stamp(date(2025, 3, 9), "00:00:00"),
@@ -278,7 +281,7 @@ class TestQtWindowLocalMidnight(unittest.TestCase):
 
     def test_fallback_without_tz_database(self):
         from unittest import mock
-        from taxjson.bin.taxjson_fetch import _toronto_stamp
+        from taxjson_fetch.api import _toronto_stamp
         with mock.patch("zoneinfo.ZoneInfo", side_effect=KeyError("tz")):
             self.assertEqual(_toronto_stamp(date(2025, 7, 2), "00:00:00"),
                              "2025-07-02T00:00:00-04:00")

@@ -671,8 +671,7 @@ def _emit_option_replacement_stderr(warnings, *, country: str) -> None:
 
 def format_option_replacement_warning(w, *, country: str) -> str:
     """One option/right-replacement flag as the run prints it (after
-    "warning: "). The web what-if puts the same text in its result
-    (audit A2-0687: the flag went only to the server's stderr)."""
+    "warning: ")."""
     held = ''
     if w['held_at_window_end'] is not None:
         held = (' — still held at window end'

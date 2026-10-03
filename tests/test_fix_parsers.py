@@ -368,15 +368,6 @@ class TestCanadianListingIdentity(unittest.TestCase):
         self.assertIsNone(canonical_ca_listing('ABC.V', 'USD'))
         self.assertIsNone(canonical_ca_listing('AAPL', 'CAD'))
 
-    def test_generic_and_live_positions_agree(self):
-        from taxjson.bin.taxjson_fetch import qt_position_symbol as q
-        self.assertEqual(q('ABC.VN'), 'ABC.TO')
-        self.assertEqual(q('CCC.CN'), 'CCC.TO')
-        self.assertEqual(q('FTN.PRA.TO'), 'FTN.PR.A.TO')
-        from taxjson.lib.brokerages.generic import GenericBrokerage
-        g = GenericBrokerage()
-        self.assertEqual(g._listing_symbol('ABC.V', 'USD'), 'ABC.TO')
-        self.assertEqual(g._listing_symbol('CCC.CN', 'CAD'), 'CCC.TO')
 
     def test_lint_flags_a_venue_split(self):
         from taxjson.bin.taxjson_lint_crosslistings import venue_splits

@@ -3,7 +3,8 @@
 # same lint, consistency, PII (generic patterns: no private denylist on a
 # hosted runner) and suite stages for pull requests on the public repo.
 #
-#   scripts/ci.sh            lint + full suite + fuzzers at CI depth
+#   scripts/ci.sh            lint + full suite (core and the packages/
+#                            fetch plugin) + fuzzers at CI depth
 #   scripts/ci.sh --nightly  ...fuzzers at nightly depth (minutes)
 #   scripts/ci.sh --mutation ...plus the mutation harness (an hour+;
 #                            mutates engine files in place — run it
@@ -44,7 +45,7 @@ stage() {   # stage NAME cmd...
 #    the gate stayed green; release.sh tags on that). The [dev] extra
 #    installs ruff (S024-23).
 if "$PY" -m ruff --version >/dev/null 2>&1; then
-  stage lint "$PY" -m ruff check --select E9,F63,F7,F82 src/ tests/
+  stage lint "$PY" -m ruff check --select E9,F63,F7,F82 src/ tests/ packages/
 else
   printf '\n== lint ==\n   lint: FAILED (ruff is not installed: pip install -e ".[dev]")\n'
   FAILED+=("lint")
@@ -56,8 +57,14 @@ stage consistency bash scripts/check-consistency.sh
 # consistent, no rule without a test beyond the shrink-only baseline
 # (scripts/check_tax_rules.py; tests/tax_rules/).
 stage tax-rules "$PY" scripts/check_tax_rules.py
+# The tree scan covers packages/ (every tracked and untracked file).
 stage pii bash scripts/check-pii.sh
 stage suite "$PY" -m unittest discover -s tests -p "test_*.py" -q
+# The broker-fetch plugin (packages/taxjson-fetch): its own tests, run
+# from the checkout whether or not it is pip-installed here (its
+# tests/_support.py registers the entry point when it is not).
+stage fetch-plugin env PYTHONPATH="$PWD/packages/taxjson-fetch/src${PYTHONPATH:+:$PYTHONPATH}" \
+  "$PY" -m unittest discover -s packages/taxjson-fetch/tests -p "test_*.py" -q
 
 # 3. Property fuzzers at depth. The suite already runs them at the
 #    default (200/150/200); CI runs deeper, nightly deeper still.

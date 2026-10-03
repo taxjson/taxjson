@@ -1,4 +1,7 @@
 """taxjson fetch — broker auto-fetch (offline: injected HTTP)."""
+# First: puts the plugin, the core and its test helpers on sys.path and
+# registers the plugin's entry point when it is not pip-installed.
+import _support  # noqa: F401
 import json
 import os
 import subprocess
@@ -9,7 +12,7 @@ from datetime import date
 from pathlib import Path
 from unittest import mock
 
-from taxjson.bin.taxjson_fetch import (flex_fetch, looks_like_ib_statement,
+from taxjson_fetch.api import (flex_fetch, looks_like_ib_statement,
                                        qt_activities, qt_refresh, qt_to_csv,
                                        qt_window)
 from tax_rules import rule
@@ -254,24 +257,10 @@ class TestFetchCli(unittest.TestCase):
         self.assertIn("refresh token", r.stderr)
         self.assertNotIn("Traceback", r.stderr)
 
-    def test_retired_fetch_tables_point_at_the_account_keys(self):
-        # The v0.3.0 [fetch.*] tables are no longer read (fetch config
-        # lives on the account). Unknown top-level tables now warn
-        # (R1-216); the retired one says where its settings went.
-        from taxjson.bin.taxjson_run import validate_config
-        warnings = validate_config(
-            {"settings": {"year": 2026, "country": "canada"},
-             "accounts": {"margin": {"type": "taxable"}},
-             "fetch": {"margin": {"source": "questrade",
-                                  "number": "1"}}})
-        hits = [w for w in warnings if "fetch" in w]
-        self.assertEqual(len(hits), 1, warnings)
-        self.assertIn("brokerage", hits[0])
-
 
 class TestMergeCsvText(unittest.TestCase):
     def test_union_merge_dedups_and_counts_new(self):
-        from taxjson.bin.taxjson_run import _merge_csv_text
+        from taxjson_fetch.command import _merge_csv_text
         hdr = "A,B\n"
         merged, added = _merge_csv_text(hdr + "1,2\n2,3\n",
                                         hdr + "2,3\n3,4\n")
@@ -279,17 +268,15 @@ class TestMergeCsvText(unittest.TestCase):
         self.assertEqual(merged, "A,B\n1,2\n2,3\n3,4\n")
 
     def test_header_mismatch_refuses(self):
-        from taxjson.bin.taxjson_run import _merge_csv_text
+        from taxjson_fetch.command import _merge_csv_text
         with self.assertRaises(ValueError):
             _merge_csv_text("A,B\n1,2\n", "A,B,C\n1,2,3\n")
 
     def test_empty_existing_takes_new(self):
-        from taxjson.bin.taxjson_run import _merge_csv_text
+        from taxjson_fetch.command import _merge_csv_text
         merged, added = _merge_csv_text("", "A,B\n1,2\n")
         self.assertEqual(added, 1)
         self.assertEqual(merged, "A,B\n1,2\n")
-
-
 
 
 class TestMergeCsvVerifiedBugs(unittest.TestCase):
@@ -299,7 +286,7 @@ class TestMergeCsvVerifiedBugs(unittest.TestCase):
         # csv.writer quotes embedded newlines into multi-line rows; a
         # physical-line merge interleaved fragments of two rows into
         # data that PARSED without error but was garbage.
-        from taxjson.bin.taxjson_run import _merge_csv_text
+        from taxjson_fetch.command import _merge_csv_text
         import csv as _csv
         import io as _io
 
@@ -323,7 +310,7 @@ class TestMergeCsvVerifiedBugs(unittest.TestCase):
         # Two physically distinct fills can serialize byte-identically
         # (API dates are midnight) — set-union deleted one on the
         # overlap re-fetch. Multiset merge keeps the max count seen.
-        from taxjson.bin.taxjson_run import _merge_csv_text
+        from taxjson_fetch.command import _merge_csv_text
         hdr = "A,B\n"
         both = hdr + "fill,100\nfill,100\n"
         merged, added = _merge_csv_text(both, both)
@@ -364,8 +351,8 @@ class TestAccountLevelFetchConfig(unittest.TestCase):
     query_id keys); a stray standalone [fetch.*] table is ignored."""
 
     def test_account_keys_do_not_warn_and_resolve(self):
-        from taxjson.bin.taxjson_run import (_fetch_sources,
-                                             validate_config)
+        from taxjson.bin.taxjson_run import validate_config
+        from taxjson_fetch.command import _fetch_sources
         cfg = {"settings": {"year": 2026, "country": "canada"},
                "accounts": {"margin": {"type": "taxable",
                                        "brokerage": "questrade",
@@ -390,7 +377,7 @@ class TestAccountLevelFetchConfig(unittest.TestCase):
     def test_stray_fetch_table_is_simply_ignored(self):
         # [fetch.*] was never adopted — no aliasing, no deprecation
         # machinery; a stray table contributes nothing.
-        from taxjson.bin.taxjson_run import _fetch_sources
+        from taxjson_fetch.command import _fetch_sources
         src = _fetch_sources(
             {"accounts": {"m": {"type": "taxable"}},
              "fetch": {"m": {"source": "questrade", "number": "1"}}})
@@ -493,7 +480,7 @@ class TestOverlapTrim(unittest.TestCase):
         return p
 
     def test_overlap_detected_only_inside_window(self):
-        from taxjson.bin.taxjson_run import _qt_window_overlap
+        from taxjson_fetch.command import _qt_window_overlap
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)
             manual = self._manual(d)
@@ -514,7 +501,7 @@ class TestOverlapTrim(unittest.TestCase):
                              [])
 
     def test_trim_keeps_history_and_backs_up(self):
-        from taxjson.bin.taxjson_run import _qt_trim_file
+        from taxjson_fetch.command import _qt_trim_file
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)
             manual = self._manual(d)
@@ -528,7 +515,7 @@ class TestOverlapTrim(unittest.TestCase):
             self.assertIn("2026-02-01", bak.read_text())
 
     def test_trim_never_removes_post_window_rows(self):
-        from taxjson.bin.taxjson_run import _qt_trim_file
+        from taxjson_fetch.command import _qt_trim_file
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)
             manual = self._manual(d)
@@ -538,15 +525,13 @@ class TestOverlapTrim(unittest.TestCase):
             self.assertIn("2026-02-01", manual.read_text())
 
     def test_trim_noop_leaves_no_backup(self):
-        from taxjson.bin.taxjson_run import _qt_trim_file
+        from taxjson_fetch.command import _qt_trim_file
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)
             manual = self._manual(d)
             self.assertEqual(
                 _qt_trim_file(manual, "2027-01-01", "2027-12-31"), 0)
             self.assertFalse((d / "lira.csv.bak").exists())
-
-
 
 
 class TestYearBackfillAndJson(unittest.TestCase):
@@ -564,7 +549,7 @@ class TestYearBackfillAndJson(unittest.TestCase):
         self.assertEqual(e.isoformat(), "2026-08-20")
 
     def test_activity_type_counts(self):
-        from taxjson.bin.taxjson_fetch import activity_type_counts
+        from taxjson_fetch.api import activity_type_counts
         acts = [dict(_ACT), dict(_ACT),
                 dict(_ACT, type="Dividends"), dict(_ACT, type="")]
         self.assertEqual(activity_type_counts(acts),
@@ -601,7 +586,7 @@ class TestYearBackfillAndJson(unittest.TestCase):
 
 class TestFlexMultiAccountGuard(unittest.TestCase):
     def test_statement_count(self):
-        from taxjson.bin.taxjson_fetch import flex_statement_count
+        from taxjson_fetch.api import flex_statement_count
         one = ('"Statement","Header","Field Name","Field Value"\n'
                '"Statement","Data","BrokerName","IB"\n'
                '"Trades","Header","X"\n')
@@ -623,7 +608,7 @@ class TestLiveHoldings(unittest.TestCase):
             {"symbol": "BMO20Jan27C88.00", "openQuantity": -1.0}]
 
     def test_toml_renders_and_parses(self):
-        from taxjson.bin.taxjson_fetch import positions_to_holdings_toml
+        from taxjson_fetch.api import positions_to_holdings_toml
         from taxjson.lib.tomlcompat import tomllib
         text = positions_to_holdings_toml(self._POS, "lira", "123",
                                           "2026-08-24 10:00:00")
@@ -637,7 +622,7 @@ class TestLiveHoldings(unittest.TestCase):
         self.assertEqual(doc["meta"]["account"], "lira")
 
     def test_generated_file_round_trips_through_sanity(self):
-        from taxjson.bin.taxjson_fetch import positions_to_holdings_toml
+        from taxjson_fetch.api import positions_to_holdings_toml
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             work = root / "work"
@@ -668,7 +653,7 @@ class TestLiveHoldings(unittest.TestCase):
         self.assertIn("XEI.TO", r.stdout + r.stderr)
 
     def test_live_holdings_fetch_with_injected_http(self):
-        from taxjson.bin.taxjson_run import _qt_live_holdings
+        from taxjson_fetch.command import _qt_live_holdings
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.dict(os.environ, {"HOME": tmp},
                                 clear=False):
@@ -706,7 +691,7 @@ class QuestradeTokenFileTest(unittest.TestCase):
     """The shared ~/.questrade_token chain (portoml-ai uses the same file)."""
 
     def test_fresh_machine_defaults_to_the_shared_file(self):
-        from taxjson.bin.taxjson_run import _questrade_token_file
+        from taxjson_fetch.command import _questrade_token_file
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.dict(os.environ, {"HOME": tmp}, clear=False):
             os.environ.pop("QUESTRADE_TOKEN_FILE", None)
@@ -719,7 +704,7 @@ class QuestradeTokenFileTest(unittest.TestCase):
         # (and its one-time auto-migration) were removed: the resolver
         # returns the shared path regardless of what a project's work/
         # directory contains, and never reads or writes the old file.
-        from taxjson.bin.taxjson_run import _questrade_token_file
+        from taxjson_fetch.command import _questrade_token_file
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.dict(os.environ, {"HOME": tmp}, clear=False):
             os.environ.pop("QUESTRADE_TOKEN_FILE", None)
@@ -733,7 +718,7 @@ class QuestradeTokenFileTest(unittest.TestCase):
                              .read_text().strip(), "LEGACY")   # untouched
 
     def test_env_override_wins_over_both(self):
-        from taxjson.bin.taxjson_run import _questrade_token_file
+        from taxjson_fetch.command import _questrade_token_file
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.dict(os.environ,
                                 {"HOME": tmp,
@@ -744,7 +729,7 @@ class QuestradeTokenFileTest(unittest.TestCase):
                              Path(tmp) / "x")
 
     def test_write_is_atomic_and_mode_600(self):
-        from taxjson.bin.taxjson_run import _questrade_token_write
+        from taxjson_fetch.command import _questrade_token_write
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "sub" / ".questrade_token"
             _questrade_token_write(dest, "ROTATED")

@@ -6,8 +6,8 @@ Every filing command partitions accounts with an exact match on
 neither, so the account silently vanished from estimate, instalments,
 `sum` FOR THE RETURN, form-export and close-year, while only `taxjson
 run` (through validate_config) refused the same config (R1-268). This
-is the one home for that check, so the run, every read-only command
-and the web UI refuse the same configs with the same message.
+is the one home for that check, so the run and every read-only command
+refuse the same configs with the same message.
 """
 import difflib
 import re
@@ -28,7 +28,7 @@ RESERVED_NAMES = ("sheltered",)
 # Account names build file and directory names (inputs/<name>,
 # work/<name>_*, reports/<name>_holdings.toml) and sub-tool argv: a
 # "../x" name reads or writes outside the project, a "-x" name parses
-# as a flag. load_config refused these, the web loader did not (R1-349).
+# as a flag. Every config reader refuses them (R1-349).
 ACCOUNT_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
 
 
@@ -196,7 +196,7 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
     table the project's country does not own (lib/country
     SETTING_COUNTRY / CONFIG_COUNTRY), including a base currency that
     is not the country's. The one home for these checks: `taxjson`'s
-    config readers die on the list, the web UI raises it. Stops at the
+    config readers die on the list. Stops at the
     first country problem (the ownership checks need a country)."""
     from taxjson.lib.country import (CountryError, config_country_problems,
                                      settings_country, TAX_DATES)
@@ -219,8 +219,9 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
     except CountryError as e:
         return [str(e)]
     out: List[str] = []
-    # year: the one check every reader shares (the web UI accepted 1850,
-    # 2024.0, true or "2024" that every CLI command refuses; A2-1373).
+    # year: the one check every reader shares (a reader once accepted
+    # 1850, 2024.0, true or "2024" that every CLI command refuses;
+    # A2-1373).
     # Same plausible range as `taxjson init` and --year (cli_diag).
     year = settings.get("year")
     if year is not None:

@@ -136,7 +136,7 @@ ul { padding-left:18pt; margin:0 }
   <p class="eyebrow">Commands</p>
   <h2>One pipeline, a few dozen views on it</h2>
   <div class="row">
-    <div class="card"><h3>Build the books</h3><ul><li><code>init</code> scaffold a project</li><li><code>fetch</code> Questrade / IBKR activity</li><li><code>run</code> the whole pipeline + broker check</li><li><code>elect</code> corporate-action elections</li></ul></div>
+    <div class="card"><h3>Build the books</h3><ul><li><code>init</code> scaffold a project</li><li><code>fetch</code> Questrade / IBKR activity (plugin)</li><li><code>run</code> the whole pipeline + broker check</li><li><code>elect</code> corporate-action elections</li></ul></div>
     <div class="card"><h3>Read the numbers</h3><ul><li><code>sum</code> the year, by account</li><li><code>list</code> / <code>shares</code> positions</li><li><code>events</code> / <code>trades</code> / <code>divs</code> the rows</li><li><code>audit</code> the justification</li></ul></div>
     <div class="card"><h3>Before you trade</h3><ul><li><code>wash-radar</code> safe-to-sell dates</li><li><code>sell-check</code> / <code>buy-check</code></li><li><code>harvest</code> losses worth taking</li><li><code>scan</code> tax-efficiency lint</li></ul></div>
     <div class="card"><h3>Before you file</h3><ul><li><code>checklist</code> every step, auto-detected</li><li><code>form-export</code> Schedule 3 / 8949</li><li><code>reconcile-slips</code> / <code>t1135</code> / <code>carryover</code></li><li><code>option-boundary</code> / <code>close-year</code></li></ul></div>
@@ -151,7 +151,7 @@ ul { padding-left:18pt; margin:0 }
   <h2>Nothing personal leaves the machine</h2>
   <div class="row">
     <div class="card"><h3>Local by construction</h3><p>Parsing, pooling and the wash pass run on your computer. The pipeline's only network calls are FX rates (Bank of Canada, its noon rate before March 2017; Yahoo only before May 2007) and crypto prices for unpriced rows — both switchable off with <code>TAXJSON_OFFLINE=1</code>. SECURITY.md lists every egress.</p></div>
-    <div class="card"><h3>No credentials stored</h3><p>Broker fetch uses your own token file; it is never written into a project or sent anywhere but that broker.</p></div>
+    <div class="card"><h3>No credentials in the core</h3><p>The core holds no broker client and reads no credential. Broker fetch is a separate, optional package (taxjson-fetch): it uses your own token file, never writes it into a project, and sends it nowhere but that broker.</p></div>
     <div class="card"><h3>The project guards itself</h3><p>A personal-data scan runs in every gate and as the pre-push hook, fails closed, and reads a private denylist kept outside the repository. Redacted exports keep every row shape and drop the identifiers <code>redact</code> recognises — review before sharing.</p></div>
   </div>
   <div class="takeaway">Zero runtime dependencies in the core. A tax tool has to be trustworthy before it is clever.</div>
@@ -176,8 +176,8 @@ ul { padding-left:18pt; margin:0 }
   <h2>Reads the exports you already have</h2>
   <table class="t">
     <tr><th>Broker</th><th>Format</th><th>Notes</th></tr>
-    <tr><td class="k">Interactive Brokers</td><td>Activity / Flex statement CSV</td><td>Trades, options, corporate actions, transfers, fees, dividends; Flex auto-fetch</td></tr>
-    <tr><td class="k">Questrade</td><td>Activity CSV</td><td>Trades, DRIP, cash-in-lieu, transfers; REST auto-fetch and live positions</td></tr>
+    <tr><td class="k">Interactive Brokers</td><td>Activity / Flex statement CSV</td><td>Trades, options, corporate actions, transfers, fees, dividends; Flex auto-fetch (taxjson-fetch)</td></tr>
+    <tr><td class="k">Questrade</td><td>Activity CSV</td><td>Trades, DRIP, cash-in-lieu, transfers; REST auto-fetch and live positions (taxjson-fetch)</td></tr>
     <tr><td class="k">RBC Direct Investing</td><td>Activity export</td><td>Trades, dividends with withholding</td></tr>
     <tr><td class="k">Webull</td><td>Trading Summary CSV</td><td>Trades and options (BUY/SELL rows only); no income &mdash; T5 interest and dividends go in as <code>.tt</code> lines</td></tr>
     <tr><td class="k">Kraken · Coinbase</td><td>Ledgers / transaction history</td><td>Trades, rewards, sends and withdrawals as custody evidence</td></tr>
@@ -192,7 +192,7 @@ ul { padding-left:18pt; margin:0 }
   <p class="eyebrow">Install</p>
   <h2>Your first books in ten minutes</h2>
   <p><span class="cmdline">bash -c "$(curl -fsSL https://taxjson.com/install.sh)"</span></p>
-  <p class="small" style="margin:8pt 0 14pt">Installs the latest release into its own Python environment and links <code>taxjson</code> onto your PATH. Needs git and Python 3.9+, nothing else. Re-run to upgrade.</p>
+  <p class="small" style="margin:8pt 0 14pt">Installs the latest release into its own Python environment and links <code>taxjson</code> onto your PATH. Needs git and Python 3.9+, nothing else. Re-run to upgrade; add <code>--with-fetch</code> for Questrade / IBKR auto-fetch.</p>
   <pre class="term">mkdir -p ~/taxes/2026 &amp;&amp; cd ~/taxes/2026
 taxjson init --country canada     <span class="d"># writes taxjson.toml and inputs/</span>
 <span class="d"># drop broker CSVs into inputs/margin/, inputs/rrsp/, …</span>

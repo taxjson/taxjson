@@ -140,14 +140,6 @@ class TestAccountTypeCheckedEverywhere(unittest.TestCase):
         self.assertFalse((self.root / "filed").exists()
                          and any((self.root / "filed").iterdir()))
 
-    def test_web_context_refuses_an_invalid_type(self):
-        try:
-            from taxjson.web.context import ProjectContext
-        except ImportError:
-            self.skipTest("web extras not installed")
-        with self.assertRaises(ValueError) as cm:
-            ProjectContext.load(self.root)
-        self.assertIn("'Taxable'", str(cm.exception))
 
     def test_untyped_account_is_refused_too(self):
         with tempfile.TemporaryDirectory() as tmp:

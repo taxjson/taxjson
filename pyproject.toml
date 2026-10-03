@@ -69,27 +69,12 @@ generate-parser = [
 ibkr = [
     "ib_insync>=0.9.86",
 ]
-# Local web UI (taxjson serve). A 127.0.0.1 FastAPI app over the reports/
-# JSON with a live "what-if sell" engine. Server-rendered (Jinja), no build
-# step. Lazy-imported, so the core toolkit installs and runs without it.
-web = [
-    "fastapi>=0.110",
-    "uvicorn>=0.27",
-    "jinja2>=3.1",
-    "python-multipart>=0.0.18",  # required by FastAPI for the /whatif POST form
-]
-# Test/CI dependencies beyond the runtime extras. fastapi.testclient
-# needs httpx; without it the web-route tests SILENTLY SKIP (the
-# 2026-07b audit found the web layer had zero effective coverage in
-# every environment). Full suite: pip install -e ".[all,dev]".
+# Test/CI dependencies beyond the runtime extras.
+# Full suite: pip install -e ".[all,dev]".
 dev = [
     # The ci.sh / workflow lint stage (critical tier); a missing linter
     # fails the gate.
     "ruff>=0.4",
-    "httpx>=0.24",
-    # Newer starlette's TestClient imports httpx2; without it the web
-    # TestClient tests ERROR (not skip) on an up-to-date venv.
-    "httpx2",
 ]
 # Everything, for users who want one install command.
 all = [
@@ -100,10 +85,6 @@ all = [
     "anthropic>=0.40",
     "google-generativeai>=0.7",
     "ib_insync>=0.9.86",
-    "fastapi>=0.110",
-    "uvicorn>=0.27",
-    "jinja2>=3.1",
-    "python-multipart>=0.0.18",
 ]
 
 [project.scripts]
@@ -157,9 +138,3 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-# Ship the web UI's Jinja templates and static assets in the wheel/sdist so a
-# non-editable `pip install .[web]` can find them (editable installs read them
-# from the source tree directly).
-[tool.setuptools.package-data]
-"taxjson.web" = ["templates/*.html", "static/*", "static/**/*"]
