@@ -140,8 +140,8 @@ def market_of(symbol: str, row_currency=None):
 
 
 def listing_market_currency(symbol: str, fallback=None):
-    """`market_of` under its older name (the wash radar and the web
-    view's rescue deadline)."""
+    """`market_of` under its older name (the wash radar's rescue
+    deadline)."""
     return market_of(symbol, fallback)
 
 

@@ -2,9 +2,8 @@
 
 Covers: GainsRequest's country-aware defaults, run_gains parity with the
 taxjson-gains CLI (same inputs → byte-identical JSON), prepare_books'
-transfer/phantom handling, explain agreeing with the pipeline on a
-self-cancelling-transfer scenario, and the web what-if surfacing a
-corrupt missing_history.json as a warning instead of a silent pass.
+transfer/phantom handling, and explain agreeing with the pipeline on a
+self-cancelling-transfer scenario.
 """
 
 import io
@@ -156,7 +155,7 @@ class TestPrepareBooks(unittest.TestCase):
 
     def test_taxable_transfer_hard_errors(self):
         # Typed error, not SystemExit: lib code must never kill its host
-        # process (the web server calls prepare_books too).
+        # process (library callers use prepare_books too).
         main = [self._t(action="TRANSFER", qty=100, net=1000.0)]
         with redirect_stderr(io.StringIO()):
             with self.assertRaises(TransferValidationError):
@@ -255,50 +254,6 @@ class TestExplainAgreesWithPipeline(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("AAA.TO", proc.stdout)
         self.assertNotIn("CCC.TO", proc.stdout)   # journal pair = no-op
-
-
-class TestWhatIfWarnings(unittest.TestCase):
-    def _project(self, tmp, *, phantoms_text=None):
-        root = Path(tmp)
-        (root / "work").mkdir()
-        (root / "reports").mkdir()
-        (root / "taxjson.toml").write_text(
-            '[settings]\nyear = 2026\ncountry = "canada"\n'
-            'base_currency = "CAD"\n'
-            '[accounts.margin]\ntype = "taxable"\n')
-        (root / "work" / "margin_base.json").write_text(json.dumps(
-            {"transactions": [tx(date="2025-01-02", qty=100,
-                                 net=1000.0)]}))
-        if phantoms_text is not None:
-            (root / "missing_history.json").write_text(phantoms_text)
-        return root
-
-    def test_corrupt_phantoms_warns_instead_of_silent(self):
-        from taxjson.web.context import ProjectContext
-        from taxjson.web import data
-        with tempfile.TemporaryDirectory() as tmp:
-            root = self._project(tmp, phantoms_text="{not valid json")
-            ctx = ProjectContext.load(root)
-            with redirect_stderr(io.StringIO()):
-                r = data.what_if_sell(ctx, "margin", "AAA.TO", 50, 15.0,
-                                      on="2026-07-01")
-        self.assertTrue(r["ok"], r)
-        self.assertTrue(r["warnings"])
-        self.assertIn("missing_history.json", r["warnings"][0])
-
-    def test_clean_run_has_empty_warnings(self):
-        from taxjson.web.context import ProjectContext
-        from taxjson.web import data
-        with tempfile.TemporaryDirectory() as tmp:
-            root = self._project(tmp)
-            ctx = ProjectContext.load(root)
-            with redirect_stderr(io.StringIO()):
-                r = data.what_if_sell(ctx, "margin", "AAA.TO", 50, 15.0,
-                                      on="2026-07-01")
-        self.assertTrue(r["ok"], r)
-        self.assertEqual(r["warnings"], [])
-
-
 
 
 class TestTransferErrorCliContract(unittest.TestCase):

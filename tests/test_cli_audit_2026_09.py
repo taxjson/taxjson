@@ -227,32 +227,6 @@ class TestInit(unittest.TestCase):                   # B8 + polish
             self.assertIn("no [accounts.*] section", r.stdout)
 
 
-class TestServe(unittest.TestCase):                  # B11 + polish
-    def setUp(self):
-        try:
-            import uvicorn  # noqa: F401
-        except ModuleNotFoundError:
-            self.skipTest("web extra not installed")
-
-    def test_malformed_toml_is_reported_not_traceback(self):
-        from taxjson.web.server import serve
-        with tempfile.TemporaryDirectory() as td:
-            (Path(td) / "taxjson.toml").write_text("[settings\nyear=")
-            err = io.StringIO()
-            with redirect_stderr(err):
-                rc = serve(td)
-        self.assertEqual(rc, 1)
-        self.assertIn("is not valid TOML", err.getvalue())
-
-    def test_port_zero_rejected(self):
-        from taxjson.web.server import serve
-        err = io.StringIO()
-        with redirect_stderr(err):
-            rc = serve(".", port=0)
-        self.assertEqual(rc, 2)
-        self.assertIn("1-65535", err.getvalue())
-
-
 class TestElect(unittest.TestCase):                  # B12 + polish
     def _root(self, td):
         root = _project(td)
@@ -393,46 +367,6 @@ class TestNoFalseCleanBeforeRun(unittest.TestCase):  # B22
                 r = _tj(root, sub)
                 self.assertEqual(r.returncode, 1, sub)
                 self.assertIn(f"taxjson {sub}: no gains files", r.stderr)
-
-
-@unittest.skipUnless(__import__("importlib").util.find_spec("fastapi"),
-                     "web extra not installed")
-class TestWebStatus(unittest.TestCase):              # web polish
-    def _client(self, td):
-        from fastapi.testclient import TestClient
-        from taxjson.web.app import create_app
-        from taxjson.web.context import ProjectContext
-        root = _project(td)
-        return TestClient(create_app(ProjectContext.load(root)), base_url="http://127.0.0.1")
-
-    def test_unknown_account_pages_are_404(self):
-        with tempfile.TemporaryDirectory() as td:
-            c = self._client(td)
-            for url in ("/holdings?account=nope", "/holdings/nope/AAA.TO",
-                        "/wash-radar?account=nope"):
-                self.assertEqual(c.get(url).status_code, 404, url)
-
-    def test_negative_whatif_qty_rejected(self):
-        # A negative qty is a buy-to-cover since S079-00: on a LONG
-        # position it is refused, never simulated as a sale of abs(qty).
-        from taxjson.web.context import ProjectContext
-        from taxjson.web.data import what_if_sell
-        with tempfile.TemporaryDirectory() as td:
-            root = _project(td)
-            (root / "work" / "margin_base.json").write_text(json.dumps(
-                {"transactions": [{
-                    "action": "BUYSELL", "date": "2024-02-01",
-                    "symbol": "AAA.TO", "quantity": 10, "price": 10.0,
-                    "net_amount": 100.0, "currency": "CAD",
-                    "account": "margin"}]}))
-            ctx = ProjectContext.load(root)
-            r = what_if_sell(ctx, "margin", "AAA.TO", -10, 15.0,
-                             on="2024-06-03")
-            r0 = what_if_sell(ctx, "margin", "AAA.TO", 0, 15.0)
-        self.assertFalse(r["ok"])
-        self.assertIn("SHORT", r["reason"])
-        self.assertFalse(r0["ok"])
-        self.assertIn("non-zero", r0["reason"])
 
 
 if __name__ == "__main__":

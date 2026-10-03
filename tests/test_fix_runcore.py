@@ -622,36 +622,6 @@ class TestRadarSidecarNames(unittest.TestCase):
         self.assertIn("COMBINED", r.stderr)
 
 
-class TestWebRadarDefaultsToCombined(unittest.TestCase):
-    """R1-229: with two taxable accounts the web radar opened on the
-    first account's own report ('CLEAR — safe to sell') instead of the
-    cross-account one."""
-
-    def test_default_view_is_combined(self):
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:                      # [web] extra missing
-            self.skipTest("fastapi not installed")
-        from taxjson.web.app import create_app
-        from taxjson.web.context import ProjectContext
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "work").mkdir()
-            (root / "reports").mkdir()
-            (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2026\ncountry = "canada"\n'
-                'base_currency = "CAD"\n[accounts.margin]\n'
-                'type = "taxable"\n[accounts.margin2]\n'
-                'type = "taxable"\n')
-            for a in ("margin", "margin2", "COMBINED"):
-                (root / "reports" / f"wash_radar_{a}.rpt").write_text("")
-            c = TestClient(create_app(ProjectContext.load(root)), base_url="http://127.0.0.1")
-            page = c.get("/wash-radar").text
-            self.assertIn("radar — COMBINED", page)
-            page = c.get("/wash-radar?account=margin").text
-            self.assertIn("own book only", page)
-
-
 class TestFetchOverlapByHeader(unittest.TestCase):
     """R1-74: --trim-overlap found the date by column position (a
     manual export with Settlement Date first lost a trade the API file

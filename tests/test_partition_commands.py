@@ -1,15 +1,14 @@
 """Canada / USA partition — the commands (partition audit phase B,
 B-commands).
 
-The planning tools (wash radar, sell-check, buy-check, harvest, watch,
-web what-if), edge-cases, check-filed / handoff, the standalone
+The planning tools (wash radar, sell-check, buy-check, harvest, watch),
+edge-cases, check-filed / handoff, the standalone
 form-export and the wording of every command speak ONE country's law:
 
   COMMANDS-01/02/05, SPEC-07  the radar family in a US project takes the
                     US engine's own verdict (trade dates, every account
                     incl. IRAs, no still-held "rescue", a long call is a
                     note only); Canada unchanged (settle dates, s.54)
-  COMMANDS-07       web what-if (US) sees every taxable account and IRAs
   COMMANDS-06/SPEC-06  edge-cases explains a US project with §1091
   COMMANDS-08       check-filed / handoff refuse a lock of the other
                     country
@@ -261,49 +260,6 @@ class TestChecksFollowTheRadar(unittest.TestCase):
         self.assertIn("would be superficial", buy["canada"].stdout)
         self.assertIn("would be a wash sale", buy["usa"].stdout)
         self.assertNotIn("superficial", buy["usa"].stdout)
-
-
-class TestWebWhatIf(unittest.TestCase):
-    """COMMANDS-07: the web what-if sees a sibling taxable account's
-    purchase in the window in both countries — Canada through the
-    blended s.47 pool, the US through §1091 across accounts (own FIFO
-    basis)."""
-
-    @rule("CA-PLAN-03")
-    @rule("US-PLAN-03")
-    def test_sibling_purchase_in_window(self):
-        from taxjson.web.context import ProjectContext
-        from taxjson.web.data import what_if_sell
-        acc = ('[accounts.margin]\ntype = "taxable"\n'
-               '[accounts.margin2]\ntype = "taxable"\n')
-        out = {}
-        with tempfile.TemporaryDirectory() as td:
-            p = projects_both(td, year=2026, accounts=acc)
-            for c in COUNTRIES:
-                # Each project's books are in its own base currency.
-                cur = "CAD" if c == "canada" else "USD"
-                m = [_row("2026-01-15", "BND.US", 100, 1500.0,
-                          currency=cur)]
-                m2 = [_row("2026-09-24", "BND.US", 10, 120.0,
-                           account="margin2", currency=cur)]
-                (p[c] / "work").mkdir(exist_ok=True)
-                (p[c] / "work" / "margin_base.json").write_text(
-                    json.dumps({"transactions": m}))
-                (p[c] / "work" / "margin2_base.json").write_text(
-                    json.dumps({"transactions": m2}))
-            for c in COUNTRIES:
-                ctx = ProjectContext.load(p[c])
-                with contextlib.redirect_stderr(io.StringIO()):
-                    out[c] = what_if_sell(ctx, "margin", "BND.US", 100,
-                                          12.0, on="2026-09-30")
-        for c in COUNTRIES:
-            self.assertTrue(out[c]["ok"], out[c])
-            self.assertTrue(out[c]["is_wash_sale"], (c, out[c]))
-            self.assertGreater(out[c]["disallowed_amount"], 0.0, c)
-        self.assertIn("blended s.47", out["canada"]["basis"])
-        self.assertIn("FIFO per account", out["usa"]["basis"])
-        self.assertEqual(out["usa"]["rule_name"], "Wash sale (§1091)")
-        self.assertIn("Superficial", out["canada"]["rule_name"])
 
 
 def _gains_doc(res, account="margin"):

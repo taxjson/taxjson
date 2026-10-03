@@ -6,7 +6,7 @@
 # What it does: checks git and Python 3.9+, clones the LATEST RELEASE
 # (newest vX.Y.Z tag) into ~/.local/share/taxjson — or fast-forwards an
 # existing install to it — builds a private virtualenv there with the
-# [web,fx] extras, and links the `taxjson` command into ~/.local/bin.
+# [fx] extra, and links the `taxjson` command into ~/.local/bin.
 # Re-running is safe and is how you upgrade. Nothing touches your tax
 # project folders.
 #
@@ -14,14 +14,14 @@
 #   TAXJSON_DIR      install location        (default ~/.local/share/taxjson)
 #   TAXJSON_BIN      where `taxjson` is linked (default ~/.local/bin)
 #   TAXJSON_CHANNEL  release | dev           (dev tracks the main branch)
-#   TAXJSON_EXTRAS   pip extras to install   (default web,fx; "" for none)
+#   TAXJSON_EXTRAS   pip extras to install   (default fx; "" for none)
 #   TAXJSON_REPO     git remote              (default the GitHub repo)
 set -euo pipefail
 
 DIR="${TAXJSON_DIR:-$HOME/.local/share/taxjson}"
 BIN="${TAXJSON_BIN:-$HOME/.local/bin}"
 CHANNEL="${TAXJSON_CHANNEL:-release}"
-EXTRAS="${TAXJSON_EXTRAS-web,fx}"
+EXTRAS="${TAXJSON_EXTRAS-fx}"
 REPO="${TAXJSON_REPO:-https://github.com/taxjson/taxjson.git}"
 OS="$(uname -s)"
 

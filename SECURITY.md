@@ -113,25 +113,6 @@ it recognises from an export so it can be shared as a parser sample —
 it is pattern-based, so review the output (the report lists the lines
 to read) before attaching it anywhere.
 
-## Local web UI
-
-`taxjson serve` binds `127.0.0.1` by default and refuses requests whose
-`Host` header is not a loopback name (DNS rebinding). Binding any other
-address (`--host 0.0.0.0`) exposes the books over plain HTTP, so it
-also requires a random per-run access token: the startup line prints
-`http://HOST:PORT/?token=…`; the first request with it sets an
-HttpOnly, SameSite=Strict cookie, and every request without either gets
-401. Prefer an SSH tunnel to the loopback server. `/healthz` reports no
-filesystem paths.
-
-A loopback bind has no token: `127.0.0.1` is reachable by every account
-on the same machine, so while `taxjson serve` runs, any other local user
-(or anyone who can reach that host's loopback, e.g. through their own SSH
-tunnel) can read your holdings, cost bases and trade history through it,
-even though the project files themselves are owner-only (0600). On a
-shared or multi-user host, run it only while you use it, or pass
-`--token` to require the per-run token on loopback as well.
-
 ## Supported versions
 
 This project is pre-1.0. Security fixes are applied to `main` only. There are no LTS branches.

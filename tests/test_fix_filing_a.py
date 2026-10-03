@@ -248,12 +248,6 @@ class TestConfigNormalization(unittest.TestCase):
                 R.load_config(root)
         self.assertIn("tax_date", str(cm.exception.code))
 
-    def test_web_context_country(self):
-        from taxjson.web.context import ProjectContext
-        ctx = ProjectContext(root=Path("."), settings={"country": " CA "},
-                             accounts=[])
-        self.assertEqual(ctx.country, "canada")
-
 
 class TestReconcileManualRows(unittest.TestCase):
     """R1-206: reconcile-slips folds phantom-basis (manual) sales back
@@ -274,7 +268,6 @@ class TestReconcileManualRows(unittest.TestCase):
         rec = next(v for k, v in out.items() if "ZZZ" in k)
         self.assertEqual(rec["tainted_rows"], 1)
         self.assertAlmostEqual(rec["proceeds_net"], 500.0)
-
 
 
 # ------------------------------------------------------------ checklist

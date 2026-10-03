@@ -930,25 +930,6 @@ class TestLowSeverityBatch(unittest.TestCase):
                             "no venv → sourcing must fail, not print ✅")
         self.assertNotIn("✅", r.stdout)
 
-    def test_web_wash_radar_unreadable_rpt_is_banner_not_500(self):
-        import os as _os
-        from taxjson.web.context import ProjectContext
-        from taxjson.web import data
-        from taxjson.web.data import ReportArtifactError
-        from test_web_data import _project
-        if _os.geteuid() == 0:
-            self.skipTest("chmod 0 is not effective as root")
-        with tempfile.TemporaryDirectory() as tmp:
-            root = _project(tmp, [], wash_rpt="--- X ---\n")
-            rpt = Path(root) / "reports" / "wash_radar_margin.rpt"
-            _os.chmod(rpt, 0)
-            try:
-                ctx = ProjectContext.load(root)
-                with self.assertRaises(ReportArtifactError):
-                    data.wash_radar_sections(ctx, "margin")
-            finally:
-                _os.chmod(rpt, 0o600)
-
 
 class TestCanadaCryptoWashCoverage(unittest.TestCase):
     """Audit 2026-08 #14: the engine wash-checks Canadian crypto

@@ -11,7 +11,7 @@ Thin CLI over taxjson.lib.pipeline.run_gains — argparse + load +
 json.dump. ALL gains-run semantics (transfer handling, missing-history
 openings,
 year filter, tainted split, warnings, fee aggregation) live in the
-pipeline module so taxjson-explain and the web what-if consume the exact
+pipeline module so taxjson-explain and taxjson-audit consume the exact
 same definition of "a gains run" and cannot drift from this CLI.
 
 Output is a JSON object with per-security and aggregate totals.

@@ -440,8 +440,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "one is warned about (check the prior year's T3 box 42 "
                  "and move it to Dec 31 with a .tt ADJUST pair; the "
                  "warning stops once that pair is in the books). Every "
-                 "engine pass dates it the same way (run, audit, explain, "
-                 "the web what-if). When the record date falls in the "
+                 "engine pass dates it the same way (run, audit, "
+                 "explain). When the record date falls in the "
                  "year before the pay date, the pay-year run names, as "
                  "ATTENTION, each sale of that earlier year whose ACB it "
                  "lowers (that year may be filed without it).",
@@ -1199,7 +1199,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "recomputing it under Canadian law.", cont=True),
         ]),
         ("Planning tools (wash radar, sell-check, buy-check, "
-         "safe-to-sell, harvest, watch, web)", [
+         "safe-to-sell, harvest, watch)", [
             Rule("CA-PLAN-01",
                  "They apply the superficial-loss rule above on settle "
                  "dates, each sale on its own (a replacement that backs "
@@ -1222,19 +1222,6 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "adjusted-series call or a futures option is a note to "
                  "check by hand, which sell-check and harvest repeat "
                  "whatever the row's verdict.", cont=True),
-            Rule("CA-PLAN-03",
-                 "The web what-if runs a taxable sale on the blended s.47 "
-                 "pool of the taxable accounts of its kind, with the "
-                 "registered accounts as context, so a sibling account's "
-                 "purchase in the window denies the loss as the filing "
-                 "would. It prices an option at the contract size the "
-                 "book's rows declare (100 for an equity option with "
-                 "none), settles the sale on the listing's market "
-                 "calendar whatever currency the price is typed in, "
-                 "books a trust's return of capital on its record date "
-                 "first, refuses a plain futures contract (its gain is "
-                 "the settled P/L), and lists the engine's warn-only "
-                 "replacement flags for the sale."),
             Rule("CA-PLAN-04",
                  "Their verdicts cover the project's own accounts only and "
                  "say so: a purchase by your spouse or common-law partner, "
@@ -1975,7 +1962,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "under US law."),
         ]),
         ("Planning tools (wash radar, sell-check, buy-check, "
-         "safe-to-sell, harvest, watch, web)", [
+         "safe-to-sell, harvest, watch)", [
             Rule("US-PLAN-01",
                  "Each recent loss's verdict is the US engine's own, as "
                  "of the date: the window on trade dates, purchases in "
@@ -1998,17 +1985,6 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "notes are repeated by sell-check and harvest whatever "
                  "the row's verdict.",
                  cont=True),
-            Rule("US-PLAN-03",
-                 "The web what-if runs a sale with every taxable "
-                 "account's purchases and the IRAs as wash-sale context, "
-                 "on the account's own FIFO basis. It prices an option "
-                 "at the contract size the book's rows declare (100 for "
-                 "an equity option with none), settles the sale on the "
-                 "listing's market calendar whatever currency the price "
-                 "is typed in, refuses a plain futures contract (its "
-                 "gain is the settled P/L), and lists the engine's "
-                 "warn-only replacement flags for the sale (a long call "
-                 "bought in the window, US-WASH-12)."),
             Rule("US-PLAN-04",
                  "Their verdicts cover the project's own accounts only and "
                  "say so: a purchase by your spouse or by a corporation "

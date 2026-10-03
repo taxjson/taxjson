@@ -3214,7 +3214,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         else:
             raw_gains = cache / f"{name}_raw_gains.json"
             # missing_history.json applies to the native books too:
-            # without it holdings.toml (and the web positions) listed
+            # without it holdings.toml listed
             # every listed pair as a SHORT, and `taxjson gains` showed a
             # tainted sale as a realized gain (audit A2-0111 / A2-0305,
             # R1-275 / R1-322). A pair spelled with a TOBASE target the
@@ -4088,8 +4088,8 @@ def stage_cross_reports(all_gains: List[Path],
             # (S038-10).
             stem = (tb.name[:-len("_base.json")]
                     if tb.name.endswith("_base.json") else tb.stem)
-            # --json-out: structured sidecar next to the .rpt; the web UI
-            # reads it and computes countdowns at view time.
+            # --json-out: structured sidecar next to the .rpt (harvest
+            # --radar reads it and computes countdowns at its own time).
             run_to_file(_cmd("taxjson-wash-radar") + [
                 "--taxable", str(tb),
                 "--json-out", str(reports_dir / f"wash_radar_{stem}.json"),
@@ -4590,8 +4590,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         # `--account <sheltered>`: the named book is fresh, the other
         # sheltered books are whatever the last run left in work/. Fold
         # them together anyway — leaving sheltered_base.json untouched
-        # meant a later `wash-radar --account margin` (and the web/GUI
-        # what-if) read a sheltered book that predated this run's buys,
+        # meant a later `wash-radar --account margin` read a sheltered
+        # book that predated this run's buys,
         # exactly the rows a 30-day radar exists to see (2026-09 audit).
         _other_names = [n for n, c in accounts.items()
                         if c.get("type", "sheltered") == "sheltered"
@@ -17173,13 +17173,6 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
     _exec_tool(cmd)
 
 
-def cmd_serve(args: argparse.Namespace) -> None:
-    # Lazy import so the [web] extra is only needed for this subcommand.
-    from taxjson.web.server import serve
-    raise SystemExit(serve(args.dir, host=args.host, port=args.port,
-                           require_token=getattr(args, "token", False)))
-
-
 def cmd_init(args: argparse.Namespace) -> None:
     country = _normalize_country(args.country)
     if country not in _INIT_BY_COUNTRY:
@@ -18333,21 +18326,6 @@ def _main() -> None:
     p_fsum.add_argument("--json", action="store_true",
                         help="Machine-readable JSON instead of the report")
     p_fsum.set_defaults(func=cmd_fees_sum)
-
-    p_serve = sub.add_parser(
-        "serve", help="Launch the local web UI (needs the [web] extra)")
-    # No --dir here: inherit the global -C/--dir like every other subcommand.
-    # (A subparser --dir would silently clobber -C via the shared dest.)
-    p_serve.add_argument("--host", default="127.0.0.1",
-                         help="Bind host (default: 127.0.0.1, local-only)")
-    p_serve.add_argument("--port", type=int, default=8765,
-                         help="Bind port, 1-65535 (default: %(default)s)")
-    p_serve.add_argument("--token", action="store_true",
-                         help="Require the per-run access token on a "
-                              "loopback bind too (127.0.0.1 is reachable by "
-                              "every account on this machine; any other "
-                              "bind always requires it)")
-    p_serve.set_defaults(func=cmd_serve)
 
     p_help = sub.add_parser(
         "help", help="Show top-level help, or help for one COMMAND")

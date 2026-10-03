@@ -1,14 +1,14 @@
 #!/bin/bash
 # Developer setup (clone-then-run): venv + editable install with the extras the full
-# pipeline uses ([fx] = FX-rate fetching for taxjson run, [web] =
-# taxjson serve). Idempotent — safe to
+# pipeline uses ([fx] = FX-rate fetching for taxjson run, [dev] = the
+# CI linter). Idempotent — safe to
 # re-run after a pull. Activate afterwards with: source setup.sh. End users: see install.sh (curl one-liner).
 set -e
 cd "$(dirname "$0")/.."
 
 python3 -m venv venv                       # no-op if venv already exists
 venv/bin/pip install --upgrade pip --quiet
-venv/bin/pip install -e ".[web,fx,dev]"
+venv/bin/pip install -e ".[fx,dev]"
 
 # Pre-push personal-data scan (a push to a public repo IS publication).
 if [ -d .git/hooks ]; then

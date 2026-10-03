@@ -9,8 +9,6 @@
   spot row no longer overrides the noon rate (non-deterministic conversions).
 - .tt parser warns when total disagrees with qty*price±fee (silent typos).
 - Single-account `taxjson run` no longer overwrites combined reports (gated).
-- web what_if_sell: US multi-lot sells aggregate all closed lots; stale
-  rates surface an fx_note instead of a silent 1.35 fallback.
 - taxjson-explain handles TRANSFER-funded positions and --incomplete-history.
 - Tainted losses with an in-window acquisition surface a partial-taint
   superficial-loss warning.
@@ -125,60 +123,6 @@ class TestTtTotalValidation(unittest.TestCase):
                 "BUYSELL 2024-01-05 09:31:00 AAPL 100 USD 50.00 5005.00 5.00",
                 account_name="m")
         self.assertEqual(err.getvalue(), "")
-
-
-class TestWhatIfMultiLotAndStaleFx(unittest.TestCase):
-    def _project(self, tmp, country="usa"):
-        root = Path(tmp)
-        (root / "work").mkdir()
-        (root / "reports").mkdir()
-        (root / "taxjson.toml").write_text(
-            f'[settings]\nyear = 2026\ncountry = "{country}"\n'
-            f'base_currency = "{"USD" if country == "usa" else "CAD"}"\n'
-            f'[accounts.margin]\ntype = "taxable"\n')
-        return root
-
-    def test_us_multi_lot_sell_accepted(self):
-        from taxjson.web.context import ProjectContext
-        from taxjson.web import data
-        txs = [{"action": "BUYSELL", "date": "2025-01-02", "symbol": "AAPL",
-                "quantity": 100, "price": 10.0, "net_amount": 1000.0,
-                "currency": "USD", "account": "margin"},
-               {"action": "BUYSELL", "date": "2025-02-02", "symbol": "AAPL",
-                "quantity": 100, "price": 12.0, "net_amount": 1200.0,
-                "currency": "USD", "account": "margin"}]
-        with tempfile.TemporaryDirectory() as tmp:
-            root = self._project(tmp, country="usa")
-            (root / "work" / "margin_base.json").write_text(
-                json.dumps({"transactions": txs}))
-            ctx = ProjectContext.load(root)
-            r = data.what_if_sell(ctx, "margin", "AAPL", 200, 15.0,
-                                  on="2026-06-30")
-        self.assertTrue(r["ok"], r)
-        # 200 sold across two lots: proceeds 3000, cost 2200 → gain 800.
-        self.assertAlmostEqual(r["economic_gain"], 800.0, places=2)
-        self.assertAlmostEqual(r["cost_basis"], 2200.0, places=2)
-
-    def test_stale_rates_surface_fx_note(self):
-        from taxjson.web.context import ProjectContext
-        from taxjson.web import data
-        txs = [{"action": "BUYSELL", "date": "2025-01-02", "symbol": "AEM.US",
-                "quantity": 10, "price": 100.0, "net_amount": 1000.0,
-                "currency": "CAD", "account": "margin"}]
-        with tempfile.TemporaryDirectory() as tmp:
-            root = self._project(tmp, country="canada")
-            (root / "work" / "margin_base.json").write_text(
-                json.dumps({"transactions": txs}))
-            # Rates exist for the currency but END months before the what-if
-            # date → the default-rate fallback fires and must be flagged.
-            (root / "work" / "to_base.csv").write_text(
-                "2026-01-05 12:00:00 USD CAD 1.40000\n")
-            ctx = ProjectContext.load(root)
-            r = data.what_if_sell(ctx, "margin", "AEM.US", 10, 50.0,
-                                  on="2026-06-30", price_currency="USD")
-        self.assertTrue(r["ok"], r)
-        self.assertIsNotNone(r["fx_note"],
-                             "silent default-rate fallback must be flagged")
 
 
 class TestExplainParity(unittest.TestCase):

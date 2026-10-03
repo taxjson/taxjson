@@ -5,22 +5,21 @@ taxjson_gains.py's main(): TRANSFER strip/rewrite, missing-history
 opening synthesis, the year filter with per-action date-basis rules, the
 by_ticker rebuild, the tainted-split into manual_reporting_required,
 superficial-loss / partial-taint warnings, and fee aggregation. Every
-other consumer of compute_gains (taxjson-explain, the web what-if)
+other consumer of compute_gains (taxjson-explain, taxjson-audit)
 re-implemented a subset and drifted — the tier-5 "explain contradicts
-the .sum" and "what-if ignores the missing-history openings" bugs were
-symptoms.
+the .sum" bug was a symptom.
 
 This module is the single home:
 
     prepare_books(...)  — load-side preprocessing (transfers, missing-
                           history openings)
                           shared by every consumer, usable standalone
-                          (the web needs books without a full run).
+                          (books without a full run).
     run_gains(...)      — the full CLI-equivalent gains run, returning
                           the exact dict taxjson-gains serializes.
 
 taxjson_gains.py main() is now argparse + load + run_gains + json.dump;
-explain and the web call the same functions, so they cannot drift.
+explain and audit call the same functions, so they cannot drift.
 """
 
 import json
@@ -688,8 +687,8 @@ def _net_cross_account_transfers(transactions, main_transactions=(),
 class TransferValidationError(ValueError):
     """A taxable input contains TRANSFER rows the engine must not book.
 
-    Raised (never sys.exit) so library consumers — the web server, tests,
-    future embedders — decide the failure mode. CLI entry points catch it
+    Raised (never sys.exit) so library consumers — tests, future
+    embedders — decide the failure mode. CLI entry points catch it
     and exit 1 with the message on stderr."""
 
 
@@ -908,7 +907,7 @@ def prepare_books(transactions, sheltered_transactions=(),
     `phantom_hint` (the name predates the missing-history rename) controls
     the advisory stderr NOTE emitted when NO missing-history file is
     supplied but positions go short (the gains CLI wants
-    it; explain and the web keep their stderr quiet).
+    it; explain keeps its stderr quiet).
 
     With the hint on, a position that goes short where no short can
     exist — a registered account (TFSA/RRSP/IRA), or a spot-crypto book
@@ -1171,7 +1170,7 @@ def apply_trust_roc_record_dates(transactions, income_rules) -> list:
     becomes payable (s.53(2)(h)): an ADJUST with a printed record date is
     booked on it (tax-logic CA-INC-DATE-ROC-TRUST). The row keeps its id;
     only its dates move. Every engine caller applies it (run_gains,
-    taxjson-audit, taxjson-explain, the web what-if): applied only in
+    taxjson-audit, taxjson-explain): applied only in
     run_gains, the others booked the ROC on its pay date and contradicted
     the .sum (re-audit A2-0139 / A2-0201 / A2-0397). A no-op for the US
     (IncomeRules.roc_record_date is Canada-only). Returns [(row, pay

@@ -268,12 +268,11 @@ egress list). Optional extras:
 
 ```bash
 pip install -e ".[fx]"          # yfinance + pandas: the FX fallback for dates before 2007-05-01 (the Bank's noon rate covers 2007-05..2017-02) and currencies the Bank of Canada doesn't publish, and every rate for a non-CAD base (the Bank of Canada path itself needs no extra)
-pip install -e ".[web]"         # local web UI (`taxjson serve`) — included in [all]
 pip install -e ".[xlsx]"        # taxjson-xlsx-to-csv, for brokers that only ship Excel
 pip install -e ".[all]"         # everything
 ```
 
-Or run `scripts/dev-setup.sh` for a one-shot venv with the `[web,fx]` extras, then `source setup.sh` to activate it.
+Or run `scripts/dev-setup.sh` for a one-shot venv with the `[fx,dev]` extras, then `source setup.sh` to activate it.
 
 ## Everyday workflow (`taxjson run`)
 
@@ -322,7 +321,7 @@ never a Python traceback. Only one `taxjson run` runs in a project at a
 time (`work/.run.lock`); a second one refuses.
 
 - `<account>.sum`, `<account>_wash.sum` — realized gains and wash-sale detail
-- `wash_radar_<account>.rpt` / `.json` — superficial-loss "safe to sell at a loss?" advisor (the JSON sidecar carries absolute clear dates; the web UI computes countdowns from it at view time)
+- `wash_radar_<account>.rpt` / `.json` — superficial-loss "safe to sell at a loss?" advisor (the JSON sidecar carries absolute clear dates; `harvest --radar` computes countdowns from it)
 - `work/<account>_<broker>_transfers.json` — custody-transfer sidecar: TRANSFER rows the parse stage keeps OUT of the books (evidence, not tax events); `taxjson transfers` reads these
 - `work/<account>_own_moves.json` — US projects: the moves between two of your own taxable accounts the run paired from that evidence (and the crypto-sends pairing), as TRANSFER legs in both accounts' books; the US engine hands the sender's FIFO lots (basis, purchase dates) to the receiver with no sale (tax-logic US-BASIS-05)
 - `crosslistings.rpt` — flags cross-listed (`.TO`/`.US`) tickers the radar may not consolidate
@@ -538,7 +537,6 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson elect` | Review, redo, or non-interactively set (`--set ID=ELECTION`) a corporate-action tax election. |
 | `taxjson init --country canada\|usa [PATH] [--year YYYY]` | Scaffold a new project directory (config, currencies, and account folders per jurisdiction; `--force` to overwrite). |
 | `taxjson harvest [SYMBOL ...]` | Unrealized gain/(loss) per open position at current prices — "if I sold this today, is it a loss?" Losses first, wash-radar advisory on each loss, `LT_IN` days-to-long-term for US projects. |
-| `taxjson serve` | Launch the local web UI (needs the `[web]` extra). |
 
 **Renames:** a ticker change is a dated event in the books. On its date the position, its ACB (US: the basis lots and their holding periods) and the acquisition dates carry from the old symbol to the new one, and the superficial-loss / wash-sale rule treats the old symbol before the date and the new one after it as one security. The event comes from the broker (IB Corporate Actions, the corp-action stage's `rename` election), a `.tt` line `SPLIT <date> <time> OLD NEW 1`, or a ticker.map line `RENAME OLD NEW YYYY-MM-DD`, which books the rename in every account that held OLD before the date (nothing is added where the broker already booked it; a broker rename of OLD to another symbol stops the run). After the date the old ticker is NOT automatically the same security: a trade in it after the rename date is either the broker still booking the renamed shares under the old ticker, or another company that now uses the ticker. `taxjson renames` lists such trades, `taxjson run` prints an ATTENTION line and `run --strict` stops until the dated ticker.map line says which: `late=fold` books those rows as the new symbol, `late=separate` keeps them a separate security (the default while undeclared). An undated rule (`GLOBAL OLD NEW`, or `RENAME OLD NEW`) still renames every row of OLD at any date. A warrant or right exercised into shares is not a disposition either: the warrant's cost goes into the shares (IB and RBC pair the two legs; tax-logic CA-OPT-09 / US-OPT-06).
 

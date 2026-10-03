@@ -77,11 +77,10 @@ jobs:
 
 
   test-extras:
-    # One cell with every optional extra installed, so the web/fx/
-    # analytics code paths (fastapi, yfinance, pandas...) are actually
+    # One cell with every optional extra installed, so the fx/
+    # analytics code paths (yfinance, pandas...) are actually
     # imported in CI instead of silently skipping — the extras rotted
-    # undetected before this job existed. [dev] adds httpx so
-    # fastapi.testclient works and the web-route tests actually run.
+    # undetected before this job existed.
     name: ubuntu / 3.12 / all extras
     runs-on: ubuntu-latest
     steps:

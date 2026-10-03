@@ -86,7 +86,9 @@ class TestNoPhantomCommands(unittest.TestCase):
         self.assertEqual(missing, [], "README names unknown commands")
 
     def test_unreleased_names_real_commands(self):
-        subs = _subcommands() | {"verify"}   # "the removed taxjson verify"
+        # Removed commands the CHANGELOG still names: "the removed taxjson
+        # verify", and the web UI's `taxjson serve`.
+        subs = _subcommands() | {"verify", "serve"}
         named = set(re.findall(r"`taxjson ([a-z][a-z0-9-]+)", _unreleased()))
         self.assertEqual(sorted(named - subs), [])
 

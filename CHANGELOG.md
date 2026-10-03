@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Removed
+
+- The local web UI is gone: `taxjson serve` (and its `--host`, `--port`
+  and `--token` flags), the `src/taxjson/web` package and the `[web]`
+  extra (FastAPI, Uvicorn, Jinja2, python-multipart; the `[dev]` extra no
+  longer pulls httpx). The reports, the wash-radar JSON sidecar (read by
+  `harvest --radar`) and every other command are unchanged; the
+  what-if's tax-logic statements CA-PLAN-03 / US-PLAN-03 are retired
+  with it. The installer's default extras are now `fx`.
+
 ### US engine (owner request: deferred re-audit work)
 
 - US wash sale: a purchase in another of your taxable accounts inside
