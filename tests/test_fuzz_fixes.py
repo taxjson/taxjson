@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -231,6 +232,7 @@ class TestFuzzD_AllocationSplit(unittest.TestCase):
             self.assertAlmostEqual(out["summary"]["total_gain"], -490.0,
                                    places=2)
 
+    @rule("CA-SL-03", "CA-SL-09")
     def test_pure_sheltered_replacement_is_permanent(self):
         # #16: Canada reported permanently_disallowed = 0.0 even when
         # the ONLY replacement was in an RRSP — the denied dollars were

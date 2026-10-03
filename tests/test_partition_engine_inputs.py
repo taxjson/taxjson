@@ -174,8 +174,12 @@ class TestStockDividend(unittest.TestCase):
         self.assertAlmostEqual(r["canada"]["summary"]["total_gain"], 1300.0,
                                places=6)
         self.assertNotIn("declared amount", r["canada"]["_stderr"])
-        self.assertIn("declared amount",
-                      gains_both(book, year=2024)["canada"]["_stderr"])
+        r24 = gains_both(book, year=2024)
+        self.assertIn("declared amount", r24["canada"]["_stderr"])
+        # The Canadian declared-amount note never reaches a US run
+        # (A2-0857, A2-1488).
+        self.assertNotIn("declared amount", r24["usa"]["_stderr"])
+        self.assertNotIn("distributions.map", r24["usa"]["_stderr"])
         self.assertNotIn("§307", r["canada"]["_stderr"])
 
     @rule("CA-STKDIV-01")
@@ -214,7 +218,7 @@ class TestStockDividend(unittest.TestCase):
                           for g in rows], [(110.0, "a")])
         self.assertAlmostEqual(rows[0]["cost"], 5000.0, places=6)
 
-    @rule("US-STKDIV-02")
+    @rule("US-STKDIV-03")
     def test_no_shares_held_is_a_warned_zero_cost_purchase(self):
         from taxjson.lib.core import get_tax_rules
         import contextlib
@@ -452,10 +456,11 @@ class TestManualLossWarningsByCountry(unittest.TestCase):
                                        "account": "margin"}]))
             return gains_both(book, year=2025, incomplete_history=ph, **kw)
 
+    # Not a @rule_absent pair (A2-0830): US FIFO never reaches the
+    # partial-taint path, so this book cannot show the US date basis;
+    # test_cross_year_window_dates is the pair.
     @rule("CA-ACB-12")
-    @rule_absent("CA-ACB-12", country="usa")
     @rule("US-BASIS-04")
-    @rule_absent("US-BASIS-04", country="canada")
     def test_partial_taint_window_dates(self):
         # A phantom-basis loss that settles 03-07 (traded 03-03) and a
         # rebuy that settles 04-04 (traded 04-03): 28 settle days, 31
@@ -496,6 +501,40 @@ class TestManualLossWarningsByCountry(unittest.TestCase):
         r = self._run(trade_near)
         self.assertFalse(rebuy_warnings(r["canada"]))
         self.assertNotIn("superficial", r["usa"]["_stderr"])
+
+    @rule("CA-ACB-12")
+    @rule("US-BASIS-04")
+    def test_thirty_days_is_the_edge(self):
+        # A2-1497: day 30 is inside the window, day 31 is not — on settle
+        # dates for Canada (both the engine's partial-taint path and the
+        # cross-year detector), on trade dates for the US.
+        from taxjson.lib.phantom_holdings import (
+            detect_superficial_loss_warnings)
+
+        def partial(rebuy_settle):
+            book = [tx("BUYSELL", "2025-01-02", "NNN.US", 100, 2000,
+                       settle="2025-01-03"),
+                    tx("BUYSELL", "2025-03-03", "NNN.US", -150, 1500,
+                       settle="2025-03-04"),
+                    tx("BUYSELL", rebuy_settle, "NNN.US", 100, 1000,
+                       settle=rebuy_settle)]
+            return [w for w in self._run(book)["canada"].get(
+                        "superficial_loss_warnings") or []
+                    if w.get("acquisition_date")]
+        self.assertTrue(partial("2025-04-03"))
+        self.assertFalse(partial("2025-04-04"))
+        for c, key, day30, day31 in (
+                ("canada", "date_settle", "2025-04-03", "2025-04-04"),
+                ("usa", "date", "2025-04-02", "2025-04-03")):
+            tainted = [{"date": "2025-03-03", "date_settle": "2025-03-04",
+                        "symbol": "MMM.US", "qty": -50}]
+            for d, want in ((day30, 1), (day31, 0)):
+                loss = {"date": "2025-01-01", "date_settle": "2025-01-01",
+                        "symbol": "MMM.US", "gain": -200.0}
+                loss[key] = d
+                got = detect_superficial_loss_warnings([loss], tainted,
+                                                       country=c)
+                self.assertEqual(len(got), want, (c, d))
 
     @rule("CA-ACB-12")
     @rule_absent("CA-ACB-12", country="usa")

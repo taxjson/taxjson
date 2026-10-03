@@ -65,7 +65,7 @@ class TestAssignmentPremiumPairing(unittest.TestCase):
         BUYSELL 2026-02-02 10:00:00 QZX.US -100 USD 60 6000
     """
 
-    @rule("CA-OPT-08")
+    @rule("CA-OPT-06", "CA-OPT-08")
     def test_ca_opposite_direction_same_moment(self):
         # R1-28: put premium off the put shares' cost (5800), call
         # premium onto the call shares' proceeds (6200), whichever
@@ -135,6 +135,7 @@ class TestAssignmentPremiumPairing(unittest.TestCase):
             self.assertAlmostEqual(yrs['2025'], 1190.0, places=2)
             self.assertAlmostEqual(yrs['2026'], 190.0, places=2)
 
+    @rule("US-OPT-02", "US-OPT-05")
     def test_us_opposite_direction_either_row_order(self):
         # S071-11: 1200 LT / 200 ST whatever the row order.
         base = self.TWO_ASSIGN.strip().splitlines()
@@ -145,6 +146,7 @@ class TestAssignmentPremiumPairing(unittest.TestCase):
             self.assertAlmostEqual(yrs['2025'], 1200.0, places=2)
             self.assertAlmostEqual(yrs['2026'], 200.0, places=2)
 
+    @rule("CA-OPT-06", "CA-OPT-08")
     def test_ca_put_spread_each_leg_its_own_option(self):
         # R1-32: short 45P (359) assigned + long 44P (261) exercised on
         # one day; buy 200 @45 and sell 200 @44 with 500 already held.
@@ -166,6 +168,7 @@ class TestAssignmentPremiumPairing(unittest.TestCase):
         self.assertAlmostEqual(yrs['2025'], 355.86, places=2)
         self.assertAlmostEqual(yrs['2026'], 4542.14, places=2)
 
+    @rule("US-OPT-02", "US-OPT-05")
     def test_us_put_spread(self):
         # S070-20: 2025 = 539 LT, 2026 = 3000 LT + 1359 ST.
         rows = """
@@ -183,6 +186,39 @@ class TestAssignmentPremiumPairing(unittest.TestCase):
         self.assertAlmostEqual(yrs['2025'], 539.0, places=2)
         self.assertAlmostEqual(yrs['2026'], 4359.0, places=2)
 
+    # A2-0496: legs no identity pairs (two 50-share fills each, priced
+    # off the strike) fall to the proximity rule, which must still keep
+    # each premium on its own direction: the SELL fills (listed first)
+    # take the call's 200, never the put's 300.
+    UNPAIRED = """
+        BUYSELL 2024-06-03 10:00:00 QZX.{s} 100 {c} 50 5000
+        BUYSELL 2025-11-03 10:00:00 QZX251219P00061000.{s} -1 {c} 3 300
+        BUYSELL 2025-11-03 10:00:00 QZX251219C00060000.{s} -1 {c} 2 200
+        ASSIGN 2025-12-19 16:20:00 QZX251219P00061000.{s} 1 {c} 0 0
+        ASSIGN 2025-12-19 16:20:00 QZX251219C00060000.{s} 1 {c} 0 0
+        BUYSELL 2025-12-19 16:20:00 QZX.{s} -50 {c} 59.5 2975
+        BUYSELL 2025-12-19 16:20:00 QZX.{s} -50 {c} 59.5 2975
+        BUYSELL 2025-12-19 16:20:00 QZX.{s} 50 {c} 61.5 3075
+        BUYSELL 2025-12-19 16:20:00 QZX.{s} 50 {c} 61.5 3075
+        BUYSELL 2026-02-02 10:00:00 QZX.{s} -100 {c} 60 6000
+    """
+
+    def _unpaired(self, engine, s, c):
+        res, _ = _run(engine, _tt(self.UNPAIRED.format(s=s, c=c)))
+        sold = sum(r['proceeds'] for r in _rows(res, f'QZX.{s}')
+                   if r['date'] == '2025-12-19')
+        return round(sold, 2), _by_year(res)
+
+    @rule("CA-OPT-06", "CA-OPT-08")
+    def test_ca_unpaired_legs_keep_their_direction(self):
+        self.assertEqual(self._unpaired(CanadaTaxRules(), 'TO', 'CAD'),
+                         (6150.0, {'2025': 1150.0, '2026': 150.0}))
+
+    @rule("US-OPT-02", "US-OPT-05")
+    def test_us_unpaired_legs_keep_their_direction(self):
+        self.assertEqual(self._unpaired(USATaxRules(), 'US', 'USD'),
+                         (6150.0, {'2025': 1150.0, '2026': 150.0}))
+
     SPLIT_LEGS = """
         BUYSELL 2026-01-05 10:00:00 ABC.TO 100 CAD 50 5000
         BUYSELL 2026-02-02 10:00:00 ABC260320C00060000.TO -2 CAD 3 600
@@ -192,6 +228,7 @@ class TestAssignmentPremiumPairing(unittest.TestCase):
         BUYSELL 2027-02-10 10:00:00 ABC.TO 100 CAD 60 6000
     """
 
+    @rule("CA-OPT-06", "CA-OPT-08")
     def test_ca_split_legs_share_the_premium(self):
         # R1-178 E5: 300 per 100-share leg -> {2026: 1300, 2027: 300}.
         res, _ = _run(CanadaTaxRules(), _tt(self.SPLIT_LEGS))
@@ -199,6 +236,7 @@ class TestAssignmentPremiumPairing(unittest.TestCase):
         self.assertAlmostEqual(yrs['2026'], 1300.0, places=2)
         self.assertAlmostEqual(yrs['2027'], 300.0, places=2)
 
+    @rule("US-OPT-02", "US-OPT-05")
     def test_us_split_legs_share_the_premium(self):
         # S070-18 U5.
         rows = self.SPLIT_LEGS.replace('.TO', '.US').replace(' CAD ', ' USD ')
@@ -214,6 +252,7 @@ class TestAssignmentPremiumPairing(unittest.TestCase):
         BUYSELL 2026-06-10 10:00:00 ABC.TO 100 CAD 50 5000
     """
 
+    @rule("CA-OPT-06", "CA-OPT-08")
     def test_ca_missing_leg_not_folded_into_unrelated_trade(self):
         # R1-34 / R1-178 E2: the June buy is not the assignment's leg;
         # its cost stays 5000 and the run warns the premium is unconsumed.
@@ -222,6 +261,7 @@ class TestAssignmentPremiumPairing(unittest.TestCase):
         self.assertAlmostEqual(inv['ABC.TO']['total_cost'], 9500.0, places=2)
         self.assertIn('unconsumed option-assignment', err)
 
+    @rule("US-OPT-02", "US-OPT-05")
     def test_us_missing_leg_not_folded_into_unrelated_trade(self):
         rows = self.MISSING_LEG.replace('.TO', '.US').replace(' CAD ', ' USD ')
         res, err = _run(USATaxRules(), _tt(rows))
@@ -236,6 +276,7 @@ class TestAssignmentRootResolution(unittest.TestCase):
     from the delivered line (RCI for RCI.B.TO, BRKB for BRK.B.US, F:CL
     for F:CLG6.US) still rolls the premium into that line."""
 
+    @rule("CA-OPT-08")
     def test_ca_montreal_class_root(self):
         rows = """
             BUYSELL 2025-12-01 10:00:00 RCI260116P00050000.TO -1 CAD 2 199
@@ -249,6 +290,7 @@ class TestAssignmentRootResolution(unittest.TestCase):
         self.assertAlmostEqual(sale['cost'], 4801.0, places=2)
         self.assertEqual(_rows(res, 'RCI260116P00050000.TO'), [])
 
+    @rule("US-OPT-05")
     def test_us_brkb_root(self):
         rows = """
             BUYSELL 2025-06-02 10:00:00 BRKB251219C00050000.US 1 USD 5 500
@@ -262,6 +304,7 @@ class TestAssignmentRootResolution(unittest.TestCase):
         self.assertNotIn('2025', yrs)
         self.assertAlmostEqual(yrs['2026'], -301.0, places=2)
 
+    @rule("CA-OPT-08")
     def test_ca_futures_option_exercise(self):
         rows = """
             BUYSELL 2025-11-03 10:00:00 F:CL260114C00060000.US 1 USD 2000 2000
@@ -291,6 +334,7 @@ class TestSameMomentOrdering(unittest.TestCase):
     """S069-16 / S070-12 / R1-31 / S069-14: results must not depend on a
     content hash or a one-second clock gap."""
 
+    @rule("CA-SL-08", "CA-DATE-14")
     def test_ca_balance_walk_ignores_row_hash(self):
         # S069-16: an unrelated byte (the description) of a same-moment
         # short + cover pair used to flip the superficial-loss denial.
@@ -312,6 +356,7 @@ class TestSameMomentOrdering(unittest.TestCase):
                           round(s['total_disallowed'], 2)))
         self.assertEqual(len(outcomes), 1, outcomes)
 
+    @rule("US-WASH-09", "US-DATE-13")
     def test_us_same_moment_replacement_lots_in_row_order(self):
         # S070-12: the deferral rides the lot listed first (FIFO sells
         # it), whatever the rows' content hashes.
@@ -329,6 +374,7 @@ class TestSameMomentOrdering(unittest.TestCase):
             self.assertAlmostEqual(res['summary']['total_gain'], -850.0,
                                    places=2, msg=f"variant {i}")
 
+    @rule("CA-SL-08", "CA-SL-09")
     def test_ca_pre_loss_bump_reaches_same_second_fill(self):
         # R1-31: fill 2 of the loss order sees the bump whether it is
         # 0, 1 or 2 seconds after fill 1.
@@ -344,6 +390,7 @@ class TestSameMomentOrdering(unittest.TestCase):
             self.assertAlmostEqual(yrs['2024'], -88.0, places=2, msg=t2)
             self.assertAlmostEqual(yrs['2025'], -72.0, places=2, msg=t2)
 
+    @rule("CA-SL-09")
     def test_ca_bump_follows_pool_on_rename_day(self):
         # S069-14: a replacement booked under the OLD ticker on the
         # rename's own date stays in the OLD pool (the main pass runs
@@ -367,6 +414,7 @@ class TestSameMomentOrdering(unittest.TestCase):
 
 class TestSuperficialLossRules(unittest.TestCase):
 
+    @rule("CA-SL-07", "CA-SL-08")
     def test_cover_that_opens_long_counts_its_own_new_shares(self):
         # R1-29: one row (buy 150 while short 100) == two rows (100 + 50).
         one = _tt("""
@@ -411,6 +459,7 @@ class TestSuperficialLossRules(unittest.TestCase):
         self.assertAlmostEqual(
             self._buyback('2025-01-02', 'close', flag=True), 100.0)
 
+    @rule("CA-SL-08", "CA-ACB-01")
     def test_blended_cover_test_uses_the_pooled_balance(self):
         # S069-15: A holds 100; B sells 50 out of the pooled ACB at a
         # loss and rebuys 50 -> denied, exactly as in one account.
@@ -424,6 +473,7 @@ class TestSuperficialLossRules(unittest.TestCase):
         self.assertAlmostEqual(res['summary']['total_disallowed'], 500.0,
                                places=2)
 
+    @rule("CA-SL-02")
     def test_contract_expired_inside_window_is_not_held(self):
         # S071-17: no EXP row; the rebuy expired 12-19 < day 30 (12-31).
         txs = _tt("""
@@ -436,6 +486,8 @@ class TestSuperficialLossRules(unittest.TestCase):
         self.assertAlmostEqual(res['summary']['total_gain'], -152.0,
                                places=2)
 
+    @rule("CA-SL-14")
+    @rule("US-WASH-14")
     def test_warrant_bought_in_window_is_named(self):
         # S071-14: a warrant is a right to acquire the shares; the loss
         # is flagged for review (the shares per warrant are unknown).
@@ -466,6 +518,7 @@ class TestSuperficialLossRules(unittest.TestCase):
         self.assertIsNone(right_underlying('BRK.B.US'))
         self.assertIsNone(right_underlying('SNOW.US'))
 
+    @rule("US-WASH-04", "US-WASH-16")
     def test_us_other_scope_buy_to_close_is_not_a_replacement(self):
         # S070-10 case A: the IRA buys back its own written call.
         txs = _tt("""
@@ -607,6 +660,7 @@ class TestPhantomRowsInTracesAndExplain(unittest.TestCase):
                  '--no-wash', f)
         self.assertNotIn('WASH+', p.stdout)
 
+    @rule("CA-SL-04")
     def test_affiliated_help_excludes_related_persons(self):
         # S033-15.
         for mod in ('taxjson.bin.taxjson_gains', 'taxjson.bin.taxjson_explain'):
@@ -622,6 +676,7 @@ class TestReturnOfCapital(unittest.TestCase):
                               symbol=sym, currency='CAD', net_amount=amt,
                               account='margin', type='roc')
 
+    @rule("CA-ACB-06", "CA-ACB-07")
     def test_deemed_gain_has_no_proceeds(self):
         # R1-43: s.40(3) deemed gain -> 13199 = 0, 13200 = the gain.
         txs = _tt("BUYSELL 2013-05-01 10:00:00 RST.TO 100 CAD 10 1000")
@@ -641,6 +696,7 @@ class TestReturnOfCapital(unittest.TestCase):
         self.assertAlmostEqual(row['gain'], 80.0)
         self.assertAlmostEqual(row['proceeds'], 0.0)
 
+    @rule("CA-ACB-14")
     def test_roc_on_short_pool_is_a_compensation_payment(self):
         # R1-157: short 100 @20, ROC 300 debited, cover @15 -> +200 (cash).
         txs = _tt("""
@@ -695,6 +751,7 @@ class TestInputAndSigns(unittest.TestCase):
 
 class TestGrantTiming(unittest.TestCase):
 
+    @rule("CA-OPT-01", "CA-DATE-01")
     def test_year_end_write_grant_record_lands_in_settle_year(self):
         # R1-304: the s.49(1) grant record of a Dec-31 write settling in
         # January belongs to the settle year (the documented basis).
@@ -707,6 +764,7 @@ class TestGrantTiming(unittest.TestCase):
         self.assertEqual(rec['date_settle'], '2026-01-02')
         self.assertEqual(_by_year(res), {'2026': 599.0})
 
+    @rule("CA-OPT-01", "CA-OPT-02", "CA-DATE-02")
     def test_grant_since_follows_the_tax_date_basis(self):
         # S068-21: tax_date = trade -> a 2024-12-31 write (settling 2025)
         # is a pre-since contract on close timing: 2025 books +30.
@@ -762,6 +820,7 @@ class TestGrantTiming(unittest.TestCase):
         self.assertIn('--option-premium-timing not given', r.stderr)
 
 
+@rule("CA-CORP-02")
 class TestMergerFold(unittest.TestCase):
 
     def test_merger_booked_on_two_dates_folds_into_one_event(self):
@@ -790,6 +849,7 @@ class TestMergerFold(unittest.TestCase):
 
 class TestDiagnosticsReachTheUser(unittest.TestCase):
 
+    @rule("CA-ACB-12")
     def test_superficial_loss_warnings_printed_and_split(self):
         # R1-325: a clean loss next to a phantom-basis sale.
         import json
@@ -907,6 +967,7 @@ class TestPerAccountSplit(unittest.TestCase):
         self.assertAlmostEqual(y[0]['qty'], 2000.0)
 
 
+@rule("CA-ACB-11")
 class TestPhantomWalks(unittest.TestCase):
     """phantom_holdings: detect / relevance / zero-basis / openings."""
 
@@ -1200,6 +1261,8 @@ class TestFxSources(unittest.TestCase):
         self.assertEqual(src['2006-06-15'][1], 'yahoo')
         self.assertEqual(errors, [])
 
+    @rule("CA-FX-03")
+    @rule("US-FX-02")
     def test_failed_yahoo_download_is_asked_again(self):
         # S055-02: an empty answer with no later data is a failure.
         T = self.T

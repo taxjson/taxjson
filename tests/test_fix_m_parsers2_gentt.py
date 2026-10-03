@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
+from tax_rules import rule
 
 
 def _parse(csv_text, toml_text, return_parser=False):
@@ -263,6 +264,7 @@ class TestTtAcquiredQuantityComma(unittest.TestCase):
 
 
 # ------------------------------------------------------------ S029-08
+@rule("CA-ACB-10")
 class TestTtAcquiredIdenticalLots(unittest.TestCase):
     def test_identical_lots_keep_both_arrival_legs(self):
         txs, _ = _tt(
@@ -346,6 +348,7 @@ class TestTtEmitterDates(unittest.TestCase):
         self.assertEqual(parse_tt_line(lines[1])["multiplier"], 1000.0)
         self.assertNotIn("multiplier", err)
 
+    @rule("CA-DATE-01")
     def test_events_view_single_account_uses_settle_date(self):
         from taxjson.bin.taxjson_run import _tx_display_line
         self.assertTrue(_tx_display_line(self._SELL, settle=True)

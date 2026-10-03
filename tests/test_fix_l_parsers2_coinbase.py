@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 
 from taxjson.lib.brokerages.coinbase import CoinbaseBrokerage
+from tax_rules import rule
 
 _HDR = ("ID,Timestamp,Transaction Type,Asset,Quantity Transacted,"
         "Price Currency,Price at Transaction,Subtotal,"
@@ -115,6 +116,8 @@ class TestConvert(unittest.TestCase):
         self.assertAlmostEqual(sell["fee"], 0.99)
 
 
+@rule("CA-INC-04")
+@rule("US-INC-02")
 class TestStakingValue(unittest.TestCase):
     """S056-16."""
 

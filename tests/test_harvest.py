@@ -13,6 +13,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from taxjson.bin.taxjson_harvest import main as harvest_main
+from tax_rules import rule
 
 # margin: AAA.TO underwater (cost 1,240 vs value 1,085), BBB.US ahead,
 # one OCC option row (must be skipped — unpriceable by the chain).
@@ -150,6 +151,8 @@ class TestHarvest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("No open positions for X.TO, Y.US.", out)
 
+    @rule("US-HOLD-01")
+    @rule("CA-PLAN-01")
     def test_usa_shows_days_to_long_term(self):
         with tempfile.TemporaryDirectory() as td:
             gains, _ = _project(td)
@@ -163,6 +166,24 @@ class TestHarvest(unittest.TestCase):
         self.assertIn(" LT", bbb)           # held since 2024 — long-term
         aaa = next(ln for ln in out.splitlines() if "AAA.TO" in ln)
         self.assertRegex(aaa, r"\d+d")      # 2026 buy — still counting
+        self.assertIn("LT_IN approximates", out)
+        # A2-1496: the same books in a Canadian harvest have no LT_IN
+        # column, cell or note (no holding period in Canada).
+        with tempfile.TemporaryDirectory() as td:
+            gains, _ = _project(td)
+            rc, ca, _ = _run([str(gains), "--no-ibkr",
+                              "--country", "canada"])
+        self.assertEqual(rc, 0)
+        self.assertNotIn("LT_IN", ca)
+        ca_bbb = next(ln for ln in ca.splitlines() if "BBB.US" in ln)
+        self.assertNotIn(" LT ", ca_bbb + " ")
+        self.assertNotRegex(ca_bbb, r" \d+d ")
+        for o in (out, ca):
+            hdr = next(ln for ln in o.splitlines() if "ACCOUNT" in ln)
+            tot = next(ln for ln in o.splitlines()
+                       if ln.lstrip().startswith("TOTAL"))
+            # TOTAL has one cell per column, LT_IN included or not.
+            self.assertEqual(len(tot.split()), len(hdr.split()), (hdr, tot))
 
     def test_recovery_schedule_locked_loss_lands_in_its_bucket(self):
         # AAA.TO is the only loss (155), locked for 12 more days: not

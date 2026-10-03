@@ -29,6 +29,7 @@ def _map_file(tmp, text):
 
 
 # ======================================================= distributions.map
+@rule("CA-DIST-01")
 class TestDistributionsMapLow(unittest.TestCase):
     def _apply(self, txs, rows, **kw):
         from taxjson.bin.taxjson_apply_distributions import (
@@ -436,6 +437,7 @@ class TestElectionsLow(unittest.TestCase):
     def test_s073_21_s074_04_zero_allocation_355(self):
         self._zero_alloc('usa', 'tax_free_355', 'allocated_acb')
 
+    @rule("US-CORP-05")
     def test_s073_22_boot_merger_without_fmv_warns(self):
         from taxjson.lib.corp_actions import resolve_event
         hints = {'cash_boot': 500.0, 'source_basis_total': 1000.0}

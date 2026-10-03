@@ -742,6 +742,15 @@ class TestIncomeDating(unittest.TestCase):
                          usa={"ric_january_dividends": ("VNQ.US",)})
         self.assertEqual(self._years(got["usa"]), {("DIVIDEND", "2026")})
         self.assertEqual(self._years(got["canada"]), set())
+        # The list given to Canada is refused, or never applied there
+        # (A2-0830: the Canada side was never handed it).
+        try:
+            ca = gains_both(fund, year=2025,
+                            canada={"ric_january_dividends": ("VNQ.US",)})
+        except ValueError:
+            pass
+        else:
+            self.assertEqual(self._years(ca["canada"]), set())
 
     @rule("CA-DATE-11")
     @rule("US-DATE-03")
@@ -952,6 +961,8 @@ class TestEnginePartition(unittest.TestCase):
                     self.assertEqual(r[c]["summary"]["tax_date_basis"],
                                      basis)
 
+    @rule("CA-DATE-01")
+    @rule("US-DATE-01")
     def test_us_ladder_defaults_to_trade_dates(self):
         """ENGINE-13: event_sort_key's default basis follows the ladder's
         country (the US one used Canada's settle-first date)."""

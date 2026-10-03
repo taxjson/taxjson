@@ -23,6 +23,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tax_rules import rule
 
 try:
     import tomllib
@@ -246,6 +247,8 @@ class TestTradesFollowCorporateActions(_Tmp):
         self.assertEqual(got["SPL.TO"], [("2025-04-01", "BUY", 50.0)])
         self.assertEqual(got["NEW.TO"], [("2025-01-06", "BUY", 100.0)])
 
+    @rule("CA-DATE-14")
+    @rule("US-DATE-13")
     def test_tied_rows_follow_row_order(self):
         # The engines replay tied trades in the export's row order
         # (CA-DATE-14 / US-DATE-13); the trade list does the same.

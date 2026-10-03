@@ -27,6 +27,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -226,6 +227,7 @@ class TestWashIdsAndReplacementOrder(unittest.TestCase):
         self.assertEqual(ws[0].get("trigger_lot_id"), txs[2].id)
         self.assertIn("ADJUST", ws[0].get("adjust_cmd") or "")
 
+    @rule("US-WASH-20")
     def test_same_date_replacement_matches_order_acquired(self):
         from taxjson.lib.core import USATaxRules, TaxTransaction
         def T(**kw):

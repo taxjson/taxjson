@@ -275,6 +275,7 @@ class TestShortSaleWashCorrection(unittest.TestCase):
 
 
 class TestCliThreading(unittest.TestCase):
+    @rule("CA-OPT-01", "CA-OPT-05")
     def test_gains_cli_flags_reach_the_engine_and_the_summary(self):
         rows = [{"action": "BUYSELL", "date": "2025-12-15", "time": "09:30:00", "date_settle": "2025-12-16", "symbol": OPT, "quantity": -1, "price": 4.0, "net_amount": 399.0, "currency": "CAD", "account": "A0"},
                 {"action": "BUYSELL", "date": "2026-01-10", "time": "09:30:00", "date_settle": "2026-01-12", "symbol": OPT, "quantity": 1, "price": 1.0, "net_amount": 101.0, "currency": "CAD", "account": "A0"}]

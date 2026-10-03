@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fix_l_runcore_a import (_CONFIG, _QT_HEADER,  # noqa: E402
                                   REPO_ROOT, _project, _run_cli,
                                   _with_setting)
+from tax_rules import rule
 
 
 def _run_cli_env(root, *args, env=None, seed=None):
@@ -795,6 +796,7 @@ class TestWashAdvice(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         return root
 
+    @rule("US-WASH-13")
     def test_us_crypto_is_outside_1091_everywhere(self):
         cfg = ('[settings]\nyear = 2025\ncountry = "usa"\n'
                'base_currency = "USD"\nsource_currencies = []\n\n'

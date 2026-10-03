@@ -25,6 +25,7 @@ from taxjson.lib.corp_actions import (
     _emit_taxable_exchange,
     _snap_qty_to_whole_shares,
 )
+from tax_rules import rule
 
 
 def _event(**kwargs):
@@ -91,6 +92,7 @@ class TestSnapHelper(unittest.TestCase):
         self.assertEqual(frac, 0.0)
 
 
+@rule("CA-CORP-05")
 class TestMergerTaxableSnap(unittest.TestCase):
     def test_fractional_residue_snapped(self):
         """The motivating case: SSL.TO 1-for-16 merger leaving

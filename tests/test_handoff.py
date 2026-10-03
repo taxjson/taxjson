@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -50,6 +51,7 @@ def _project(root, year, files, extra_settings=""):
     return root
 
 
+@rule("CA-RPT-08")
 class TestHandoff(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -168,6 +170,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
+@rule("CA-RPT-08")
 class TestChecklistStep(unittest.TestCase):
     def _ctx(self, root, settings, out, code=0):
         from datetime import date as _date
