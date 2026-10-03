@@ -21,9 +21,10 @@ Deliberately NOT modelled:
   settled, and RBC's printed settle dates agree, so such days stay
   settlement days.
 - Currencies other than USD and CAD: weekends only.
-- The calendar is keyed on a market currency: the IB parser passes the
-  listing's market (a USD-quoted TSX listing -> 'CAD'); the generic
-  importer passes the row currency for a suffix it does not know.
+- The calendar is keyed on a market currency: every parser passes the
+  listing's market (lib/dates.market_of: a USD-quoted TSX listing ->
+  'CAD', a CAD-settled US stock -> 'USD'); a symbol with no known
+  listing suffix falls back to the row currency.
 """
 from datetime import date, datetime, timedelta
 from functools import lru_cache

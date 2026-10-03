@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         ticker_map_joins,
                                          OPTION_STRIKE_RE, parse_strict_number,
                                          read_broker_text,
                                          shown_name)
@@ -804,6 +805,8 @@ class WebullBrokerage(BaseBrokerage):
                     continue
                 if id(t) not in own_ids:
                     continue
+                if ticker_map_joins(prev_sym, sym):
+                    continue    # ticker.map already joins them (A2-1056)
                 # ATTENTION: on the run console (re-audit A2-0279; the
                 # plain warning reached only the .sum).
                 print(f"warning: ATTENTION: Webull {source}: {sym} goes "

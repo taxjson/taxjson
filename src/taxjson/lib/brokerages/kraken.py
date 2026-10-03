@@ -606,14 +606,20 @@ class KrakenBrokerage(BaseBrokerage):
                 _rq = _normalize_asset(quote, fold_stable=False)
                 if not self.stablecoins_as_cash:
                     pass            # property: the fill books the price
-                elif _rb in _CASH_STABLECOINS and _rq == 'USD':
+                elif (_rb in _CASH_STABLECOINS
+                      and _rq in _FIAT_CURRENCIES):
+                    # USDC/USD, USDC/CAD, USDT/EUR: a CAD or EUR price
+                    # through the day's rate (re-audit A2-0590).
                     warn_depeg(_rb, price, abs(vol),
                                dt.strftime('%Y-%m-%d'),
-                               f"Kraken trades {shown_name(path)}")
-                elif _rq in _CASH_STABLECOINS and _rb == 'USD' and price:
+                               f"Kraken trades {shown_name(path)}",
+                               currency=_rq)
+                elif (_rq in _CASH_STABLECOINS
+                      and _rb in _FIAT_CURRENCIES and price):
                     warn_depeg(_rq, 1.0 / price, abs(cost),
                                dt.strftime('%Y-%m-%d'),
-                               f"Kraken trades {shown_name(path)}")
+                               f"Kraken trades {shown_name(path)}",
+                               currency=_rb)
                 base = self._norm(base)
                 quote = self._norm(quote)
                 self._check_fill_money(ctx, pair, price, cost, fee, vol,
@@ -1586,14 +1592,19 @@ class KrakenBrokerage(BaseBrokerage):
             # de-peg gain or loss under the cash model: said, as the
             # trades path and Coinbase say it (CA-CRYPTO-02; re-audit
             # A2-1284). A leg with amountusd already warned on its row.
+            # A stablecoin swapped for CAD, EUR, ...: through the day's
+            # rate (re-audit A2-0590).
             for _coin, _cl, _usd in ((_rs, spend, recv), (_rr, recv, spend)):
+                _fiat = _usd.get('raw', _usd['asset'])
                 if (self.stablecoins_as_cash and _coin in _CASH_STABLECOINS
                         and _cl.get('usd') is None
-                        and _usd.get('raw', _usd['asset']) == 'USD'
+                        and _fiat in _FIAT_CURRENCIES
+                        and _fiat not in _CASH_STABLECOINS
                         and _cl['amount']):
                     warn_depeg(_coin, _usd['amount'] / _cl['amount'],
                                _cl['amount'], _cl['date'],
-                               f"Kraken ledger refid {refid[:2]}***")
+                               f"Kraken ledger refid {refid[:2]}***",
+                               currency=_fiat)
             self.count_nonevent(
                 f"forex conversion {_rs}->{_rr} "
                 f"(instant trade / dust sweep, not modeled — "

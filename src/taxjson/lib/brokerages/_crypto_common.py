@@ -174,22 +174,89 @@ def utc_to_local(dt_utc: datetime, tz_name: Optional[str] = None) -> datetime:
 DEPEG_TOLERANCE = 0.02
 
 
+# The run's rates table (work/to_base.csv, the conversion stage's own
+# rates and lookback), installed by `taxjson-brokerage --rates`: a fill
+# valued in CAD, EUR, ... is turned into US dollars through it before
+# the peg test (re-audit A2-0590). None = no rates given.
+_DEPEG_RATES = None
+# Currencies already named as "not checked" (one note each per parse run).
+_DEPEG_UNCHECKED: set = set()
+
+
+def set_depeg_rates(path, base) -> None:
+    """Load the rates file (`DATE TIME FROM TO RATE [SOURCE]`, rates to
+    `base`) the de-peg test converts a non-USD fill with; None clears."""
+    global _DEPEG_RATES
+    _DEPEG_UNCHECKED.clear()
+    if path is None:
+        _DEPEG_RATES = None
+        return
+    from pathlib import Path
+    from taxjson.lib.crypto_sends import Rates, load_rates
+    if not base:
+        # The file's own target currency (its TO column).
+        base = 'CAD'
+        for line in Path(path).read_text(encoding='utf-8-sig').splitlines():
+            parts = line.split()
+            if len(parts) >= 5:
+                base = parts[3]
+                break
+    _DEPEG_RATES = Rates(load_rates(Path(path)), str(base))
+
+
+def usd_value(amount: float, currency: str, date: str):
+    """`amount` of `currency` in US dollars on `date` through the loaded
+    rates (each currency's rate to the base, the conversion stage's
+    lookback), or None when a rate is missing."""
+    cur = (currency or 'USD').strip().upper() or 'USD'
+    if cur == 'USD':
+        return amount
+    if _DEPEG_RATES is None:
+        return None
+    a = _DEPEG_RATES.get(cur, str(date)[:10])
+    u = _DEPEG_RATES.get('USD', str(date)[:10])
+    if not a or not u:
+        return None
+    return amount * a[0] / u[0]
+
+
 def warn_depeg(coin: str, usd_price: float, qty: float, date: str,
-               where: str) -> bool:
+               where: str, currency: str = 'USD') -> bool:
     """Print a warning when a stablecoin fill's USD price is more than
-    DEPEG_TOLERANCE from 1.00. Returns whether it warned."""
+    DEPEG_TOLERANCE from 1.00. `usd_price` is the fill's price in
+    `currency`: a non-USD price is converted through the loaded rates
+    first (re-audit A2-0590); with no rate the fill is said to be
+    unchecked, never guessed. Returns whether it warned."""
     import sys
     try:
         price = float(usd_price)
     except (TypeError, ValueError):
         return False
-    if not price or abs(price - 1.0) <= DEPEG_TOLERANCE:
+    if not price:
+        return False
+    cur = (currency or 'USD').strip().upper() or 'USD'
+    native = price
+    if cur != 'USD':
+        conv = usd_value(price, cur, date)
+        if conv is None:
+            if cur not in _DEPEG_UNCHECKED:
+                _DEPEG_UNCHECKED.add(cur)
+                print(f"note: {where}: a {coin} fill valued in {cur} on "
+                      f"{date} is not checked for a de-peg: no {cur} and "
+                      f"USD rate for that day (`taxjson run` passes its "
+                      f"rates; add {cur} to source_currencies). Further "
+                      f"{cur} fills are not named.", file=sys.stderr)
+            return False
+        price = conv
+    if abs(price - 1.0) <= DEPEG_TOLERANCE:
         return False
     # The ATTENTION channel: `taxjson run` echoes it on the console
     # (it was only in the .sum, re-audit A2-1001) — money the books
     # leave out.
-    print(f"warning: ATTENTION: {where}: {coin} traded at {price:.4f} USD "
-          f"on {date} "
+    via = (f" ({native:.4f} {cur} at the day's rate)" if cur != 'USD'
+           else "")
+    print(f"warning: ATTENTION: {where}: {coin} traded at {price:.4f} USD"
+          f"{via} on {date} "
           f"— stablecoins are booked as US-dollar cash (an "
           f"approximation), so the {abs(price - 1.0) * qty:,.2f} USD "
           f"de-peg difference on {qty:g} {coin} is not in the gains; "

@@ -3013,6 +3013,29 @@ def _snap_received(event: CorporateAction, qty_received: float,
     return _snap_qty_to_whole_shares(qty_received, total_fmv)
 
 
+def _corp_cash(*parts) -> str:
+    """The cash an event paid, for the row's `corp_cash` evidence
+    ("<amount> <CUR>; ..."): cash in lieu of a fraction, boot. fx-cash
+    reads it (re-audit A2-1014) — the description used to be the only
+    sign of it, and only one emitter's wording matched."""
+    return '; '.join(f"{float(a):.10g} {str(c).upper()}"
+                     for a, c in parts
+                     if a and abs(float(a)) >= 0.005 and c)
+
+
+def _fraction_cash(event: CorporateAction, cil_amt: float, cil_cur: str,
+                   frac_qty: float, frac_value: float, frac_cur: str):
+    """(amount, currency) of the cash for the fractional entitlement: the
+    broker's own cash in lieu when it reported one, else the snapped
+    fraction's value (the implicit cash in lieu, see
+    _snap_qty_to_whole_shares)."""
+    if cil_amt and cil_amt > 0:
+        return cil_amt, cil_cur
+    if frac_qty > 0 and frac_value > 0:
+        return frac_value, frac_cur
+    return 0.0, ''
+
+
 # Reserved key resolve_event puts on the (copied) hints dict: a currency
 # converter `fx(amount, from_cur, to_cur, date) -> Optional[float]` built
 # from the project's rates file. Never persisted in the manifest.
@@ -3168,6 +3191,13 @@ def _emit_taxable_exchange(event: CorporateAction, hints: dict,
             'description': description,
         },
     ]
+    # The cash the holder received (fx-cash, A2-1014): the broker's
+    # cash in lieu (folded into the proceeds above), else the snapped
+    # fraction's value.
+    _cash = _corp_cash(_fraction_cash(event, cil_amt, cil_cur, frac_qty,
+                                      cost - fmv_acquired, cost_cur))
+    if _cash:
+        rows[0]['corp_cash'] = _cash
     # Emit the target BUY only when at least one whole share was
     # received. A 100%-fractional merger (rare: tiny source holding
     # below the ratio's reciprocal) settles entirely as cash; the
@@ -3275,6 +3305,7 @@ def _emit_basis_carryover_rename(event: CorporateAction, hints: dict,
             'price': cash_in_lieu / frac,
             'net_amount': cash_in_lieu,
             'fee': 0.0,
+            'corp_cash': _corp_cash((cash_in_lieu, cil_currency)),
             'account': event.account,
             'description': (
                 f"Merger {event.source_symbol}→{event.target_symbol}: "
@@ -3394,10 +3425,13 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
     if tgt_fmv <= 0 and hint_ps > 0:
         tgt_fmv = hint_ps * event.qty_received
         fmv_cur = tgt_cur
-    # One currency for the arithmetic: US dollars (the boot and the new
-    # shares' value are in the target listing's currency); each leg is
-    # then booked in its own listing's currency at the event-date rate
-    # (A2-0216).
+    # The cash as paid, before the USD arithmetic (fx-cash, A2-1014).
+    _boot_paid, _fmv_paid, _fmv_paid_cur = boot, tgt_fmv, fmv_cur
+    # One currency for the §356 arithmetic: US dollars. The boot and the
+    # new shares' value are in the target listing's currency, the basis
+    # in USD (what a US project's `taxjson list` shows); each leg is
+    # then booked in its own listing's currency at the event-date rate.
+    # The hints used to be added unconverted across currencies (A2-0216).
     usd_boot = _convert(hints, boot, tgt_cur, 'USD', event.date)
     usd_fmv = _convert(hints, tgt_fmv, fmv_cur, 'USD', event.date)
     in_usd = usd_boot is not None and usd_fmv is not None
@@ -3475,6 +3509,22 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
         'description': description + ' (amount realized: new shares\' '
                                      'value + boot; gross_amount = boot)',
     }]
+    _frac_cash = _fraction_cash(
+        event, float(getattr(event, 'cash_in_lieu', 0.0) or 0.0),
+        event.cash_in_lieu_currency or tgt_cur, frac_qty,
+        (frac_qty * _fmv_paid / event.qty_received
+         if event.qty_received and _fmv_paid > 0 else 0.0), _fmv_paid_cur)
+    _cash = _corp_cash((_boot_paid, tgt_cur), _frac_cash)
+    if _cash:
+        rows[0]['corp_cash'] = _cash
+    _frac_cash = _fraction_cash(
+        event, float(getattr(event, 'cash_in_lieu', 0.0) or 0.0),
+        event.cash_in_lieu_currency or tgt_cur, frac_qty,
+        (frac_qty * _fmv_paid / event.qty_received
+         if event.qty_received and _fmv_paid > 0 else 0.0), _fmv_paid_cur)
+    _cash = _corp_cash((_boot_paid, tgt_cur), _frac_cash)
+    if _cash:
+        rows[0]['corp_cash'] = _cash
     if whole_qty > 0:
         rows.append({
             'action': 'BUYSELL',
@@ -3628,6 +3678,11 @@ def _emit_distribution(event: CorporateAction, hints: dict,
         description += f"; cash-in-lieu for {frac_qty:.6g} fractional share(s)"
     if total_fmv <= 0:
         description += "; ZERO VALUE — no FMV given"
+    # The fraction is paid in cash (fx-cash, A2-1014).
+    _cash = _corp_cash(_fraction_cash(
+        event, float(getattr(event, 'cash_in_lieu', 0.0) or 0.0),
+        event.cash_in_lieu_currency or currency, frac_qty,
+        total_fmv - adjusted_fmv, currency))
     rows = [
         {
             'action': 'DIVIDEND',
@@ -3639,6 +3694,8 @@ def _emit_distribution(event: CorporateAction, hints: dict,
             'description': description,
         },
     ]
+    if _cash:
+        rows[0]['corp_cash'] = _cash
     if whole_qty > 0:
         rows.append({
             'action': 'BUYSELL',
@@ -3753,6 +3810,17 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
     description = description_base
     if frac_qty > 0:
         description += f"; cash-in-lieu for {frac_qty:.6g} fractional share(s)"
+    # The fraction is paid in cash (fx-cash, A2-1014), at the value the
+    # election or the broker gives the new shares.
+    _ps = float((hints or {}).get('fmv_per_share') or 0.0)
+    _ps_cur = event.target_currency or event.currency
+    if _ps <= 0 and event.qty_received:
+        _bv, _bcur = spinoff_broker_value(event)
+        _ps, _ps_cur = _bv / event.qty_received, _bcur or _ps_cur
+    _cash = _corp_cash(_fraction_cash(
+        event, float(getattr(event, 'cash_in_lieu', 0.0) or 0.0),
+        event.cash_in_lieu_currency or _ps_cur, frac_qty,
+        frac_qty * _ps, _ps_cur))
     rows = []
     if whole_qty > 0:
         rows.append({
@@ -3778,6 +3846,8 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
             # Canada's "ACB" in a US §355 row (A2-1278).
             'description': description + ' (parent cost reduction)',
         })
+    if _cash and rows:
+        rows[0]['corp_cash'] = _cash
     return rows
 
 
