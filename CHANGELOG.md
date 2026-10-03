@@ -4666,6 +4666,14 @@
 
 ### Pipeline, configuration and errors
 
+- New per-account setting `combined_broker_accounts = true`
+  (`[accounts.<name>]`): every broker account in the folder's statements
+  is yours and taxable together, so the 'statement spans N accounts'
+  ATTENTION (IB per statement and across statements, Questrade, RBC)
+  becomes a one-line note with masked ids. Refused on a sheltered
+  account unless the statement shows every account is the same plan
+  (only Questrade's Account Type can), and a quoted value is refused by
+  every config reader.
 - After `country` changes in taxjson.toml, every report command
   (`list`, `wash-sales`, `sum`, `divs-sum`, `check-dates` ...) refuses
   the books the last full run built under the other country, instead of

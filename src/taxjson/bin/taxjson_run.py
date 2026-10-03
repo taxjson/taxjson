@@ -945,7 +945,19 @@ def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
 from taxjson.lib.country import SETTING_COUNTRY as _SETTING_COUNTRY  # noqa: E402
 _SETTINGS_KEYS = tuple(_SETTING_COUNTRY)
 _ACCOUNT_KEYS = ("type", "crypto", "transfers", "plan",
-                 "brokerage", "account", "query_id", "holdings")
+                 "brokerage", "account", "query_id", "holdings",
+                 "combined_broker_accounts")
+
+
+def _brokerage_account_flags(acfg: Dict[str, Any]) -> List[str]:
+    """taxjson-brokerage flags an [accounts.<name>] table asks for:
+    `combined_broker_accounts = true` (every broker account in the
+    label's statements is the user's and taxable together — the
+    'statement spans N accounts' ATTENTION becomes a NOTE; the parser
+    refuses it on a sheltered label unless the statement shows one
+    plan). config_check refuses a non-boolean value."""
+    return (["--combined-broker-accounts"]
+            if (acfg or {}).get("combined_broker_accounts") is True else [])
 _ACCOUNT_TYPES = ("taxable", "sheltered")
 
 
@@ -2546,6 +2558,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                                                "--account-type",
                                                "taxable" if is_taxable
                                                else "sheltered"]
+            cmd += _brokerage_account_flags(acfg)
             # Always explicit: the parser's own default is the neutral
             # cost reduction; s.90(1) is the Canadian project's choice
             # (partition INPUTS-03).
@@ -4778,7 +4791,7 @@ tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for c
 {option_lines}
 # One [accounts.NAME] section per folder under inputs/. The folder name
 # is the account name. Required: type. Optional: transfers, crypto,
-# plan, holdings, and — to pull activity straight from the broker with
+# plan, holdings, combined_broker_accounts, and — to pull activity straight from the broker with
 # `taxjson fetch` — brokerage + account (Questrade) or query_id (IBKR):
 #
 #   [accounts.margin]
@@ -4787,6 +4800,8 @@ tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for c
 #   account   = "12345678"       # Questrade account number
 #   # query_id = "123456"        # ibkr_flex: the Flex query id instead
 #   holdings  = ["~/broker/12345678_holdings.toml"]   # `taxjson sanity` pairs the account with these files
+#   # combined_broker_accounts = true  # every broker account in this folder's statements is yours and
+#   #                                  #   taxable together: a multi-account statement is a note, not ATTENTION
 
 {account_sections}{instalments_section}"""
 

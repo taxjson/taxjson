@@ -139,6 +139,13 @@ def account_type_problems(cfg: Dict[str, Any]) -> List[str]:
             out.append(
                 f"[accounts.{name}] crypto must be true or false (no "
                 f"quotes), got {acfg['crypto']!r}")
+        _cba = acfg.get("combined_broker_accounts")
+        if _cba is not None and not isinstance(_cba, bool):
+            # A quoted "false" is truthy: it would silence the 'statement
+            # spans N accounts' ATTENTION the user never waived.
+            out.append(
+                f"[accounts.{name}] combined_broker_accounts must be true "
+                f"or false (no quotes), got {_cba!r}")
     return (out + account_pair_problems(accounts.keys())
             + bool_setting_problems(cfg))
 
