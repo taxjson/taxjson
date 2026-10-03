@@ -437,6 +437,14 @@
 
 ### Tax rules and engine: United States (experimental)
 
+- US-WASH-20 also says a same-moment tie never goes by the account's
+  name, and US-STKDIV-03 that the $0 purchase of a stock dividend with
+  no shares held is never a wash-sale replacement; each is pinned by an
+  engine test (re-audit A2-0485, A2-1486).
+- tax-logic states that a US taxable purchase whose shares were sold
+  (first in, first out) before a loss no longer washes it, unlike an IRA
+  purchase (US-WASH-21); the US engine's unreachable 'consumed
+  replacement' branches are removed (re-audit A2-0817).
 - **US: an unapplied return of capital or notional distribution is on
   the console.** A basis adjustment the US engine cannot apply (no
   shares held after a full sale, or the position short) printed only to
@@ -548,6 +556,25 @@
 
 ### Canada/USA partition and tax-logic
 
+- tax-logic states the date rules the parsers already apply: an expiry
+  posted at most 7 days late is moved back to the contract's expiry
+  date, a same-contract trade on the expiry day settles no later than
+  the expiry, Webull's printed date is the settle date with the trade
+  date walked back one cycle, and same-moment rows of one account from
+  two input files follow the files' name order (CA-DATE-15..18, US-
+  DATE-14..17; re-audit A2-0483, A2-1478, A2-0823).
+- tax-logic gives the close-timing buy-back claim its own id (CA-OPT-10;
+  CA-OPT-05 named two claims), each pinned on the engine (re-audit
+  A2-0826).
+- tax-logic states rules the code already applies: a US project keeps
+  sheltered (IRA) accounts out of Form 8949 and the totals (US-
+  BASIS-07); the T1135 test covers these books only (CA-RPT-15); the
+  radar's IRA replacement is lost for good (US-PLAN-01); cash in lieu of
+  a fraction is a sale of it (CA-CORP-05, US-CORP-09: in the US the
+  units come from the oldest lot), an all-cash merger is a sale and a
+  stock-and-cash merger stops the run (CA-CORP-09/10, US-CORP-10/11)
+  (re-audit A2-0822, A2-1473, A2-0821, A2-1474, A2-1475, A2-0824,
+  A2-1477).
 - tax-logic states what the code already did: US-WASH-20 (US replacements
   match in the order acquired, Reg. §1.1091-1(c), losses in the order
   sold, same-moment purchases taxable, then IRA, then affiliated),
@@ -740,6 +767,15 @@
 
 ### Income: dividends, distributions and return of capital
 
+- Canada income dating: the January return-of-capital warning no longer
+  calls every Canadian issuer a trust — it asks, and listing a
+  corporation in [settings] corporate_distributions stops it; tax-logic
+  states that every Canadian issuer counts as a trust for the record-
+  date rules unless it is on the corporate list (CA-INC-DATE-ISSUER),
+  that the issuer's ISIN country decides over its listing, and that a
+  payment in lieu on a Canadian ETF or REIT unit is deemed a dividend
+  because the export cannot tell a unit from a share (CA-INC-07) (re-
+  audit A2-0810, A2-1466, A2-1470, A2-1465, A2-1468).
 - `taxjson-sum-income` reads its rows through the same checks as
   taxjson-gains: an impossible date, a NaN/inf amount or a text amount is
   a one-line error with exit 2 instead of being summed (or a traceback)
@@ -2309,6 +2345,18 @@
 
 ### Crypto
 
+- Inside a project with no [settings] local_timezone, crypto rows are
+  dated in the default zone tax-logic names: the TAXJSON_LOCAL_TZ
+  environment variable applies only outside a project, as documented,
+  and a project run says so when it is set (re-audit A2-0165).
+- tax-logic states the crypto rules the parsers and the US engine apply:
+  Coinbase's ETH2 is ETH (a Convert between them is not a sale), a
+  Kraken dust sweep splits its receipt over the coins by amountusd or
+  equally, and the US engine counts under 1e-08 units as zero — a lot
+  residue that small is folded into the sale that closes the lot and a
+  sale's excess that small opens no position, each now named in a
+  warning (CA-CRYPTO-10/11, US-CRYPTO-06/07/08; re-audit A2-0479,
+  A2-0815, A2-1469, A2-0808, A2-0818, A2-1471, A2-1484, A2-1485).
 - Crypto sends in a US project: `taxjson run`'s note, the parse NOTE in
   the crypto .sum, and `crypto-sends`' hints, listing and decision error
   no longer say a gift is a disposition or offer `gift` (refused there):
@@ -2884,6 +2932,22 @@
 
 ### Filing: form-export, locks, handoff, checklist, slips, T1135, carryover
 
+- Form 8949 from tax year 2025: a crypto account's sales are digital
+  assets on boxes G/H/I (short-term) and J/K/L (long-term), grouped apart
+  from the securities' A/B/C and D/E/F with their own totals in the
+  export, `sum` and the close-year lock; the box note names them, and the
+  TXF (which has no G-L code) leaves them out with a warning (tax-logic
+  US-RPT-11, US-RPT-03; re-audit A2-0482, A2-0829). The checklist's
+  1099-DA statement is tax-logic US-RPT-10 (US-RPT-09 had two meanings).
+- Schedule 3 for 2024 follows the 2024 form's two periods: dispositions
+  from January 1 to June 24, 2024 go on the Period 1 codes 10689/10690
+  (shares) and 10693/10694 (options, futures, crypto and other
+  properties), the rest on 13199/13200 and 15199/15300, in `form-export`,
+  `sum`'s FOR THE RETURN and the close-year lock; a security sold in both
+  periods has two rows, and the notes name the Period 1 slip lines
+  17399/17599. `check-filed` compares a 2024 lock written before the split
+  on the Period 2 codes and says so in a note; `carryover` reads the
+  Period 1 gain lines (tax-logic CA-DISP-03; re-audit A2-0166, A2-1482).
 - Two taxable accounts with rows at the same moment: check-filed and the
   run's filed-year drift check, `taxjson t1135`, `carryover`, `audit`,
   `wash-sales --explain` and the radar now merge the books in
@@ -3525,6 +3589,27 @@
   ticker.map (next to the inputs or the folder above), so a TOBASE-renamed
   option is quoted as the contract held, in its own currency, as
   `taxjson harvest` does (re-audit A2-0885).
+- US estimate: a capital loss carryover keeps its term — --other-losses
+  is the short-term carryover (Schedule D line 6) and the new --long-
+  term-losses (or [estimate] long_term_losses) the long-term one (line
+  14); each offsets its own term's gains first. A long-term carryover
+  used to be applied to short-term gains first, understating the tax.
+  The --other-losses help no longer cites the Canadian 50% inclusion in
+  a US project; --long-term-losses is refused in a Canada project (US-
+  EST-CARRY-TERM; re-audit A2-0481, A2-0809).
+- tax-logic states every rule the estimate and instalments apply:
+  Canada's loss netting and s.111(1)(b) cap, deductions and carrying
+  charges (50% in the AMT base), the BPA phase-down, the provinces
+  modelled (ON surtax and Health Premium; QC refused), the provincial
+  foreign tax credit (T2036), the AMT base, the rate-table vintage
+  fallback (both countries), that a Canadian trust's distribution is
+  counted as an eligible dividend because the T3 split is not in the
+  export (also in the printed assumptions), and the instalment rules —
+  the ITA 161(4.01) least-cumulative schedule, credit interest
+  offsetting but never refunded, the $25 floor, the s.163.1 penalty and
+  an unknown prior year assumed to meet the test (CA-EST-*, US-EST-
+  VINTAGE, CA-INST-*; re-audit A2-0821, A2-0824, A2-1463, A2-1464,
+  A2-0828, A2-0825).
 - `taxjson watch` states its scope like the other planning tools
   (tax-logic CA-PLAN-04 / US-PLAN-04, re-audit A2-0909): a change report
   ends with the country's scope line (a CLEAR is safe only as far as

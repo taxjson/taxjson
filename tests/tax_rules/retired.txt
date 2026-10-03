@@ -2,3 +2,4 @@
 # names an id listed here fails scripts/check_tax_rules.py.
 # id            retired      why
 US-META-01      2026-09-30   audit-proposed id for "an unknown country renders Canada"; that fallback is gone (lib/country refuses it), so it is not a statement
+US-EST-CARRY-ORDER   2026-10-02   stated the single-number ST-first carryover; replaced in the same round by US-EST-CARRY-TERM (the estimate takes a short- and a long-term carryover)

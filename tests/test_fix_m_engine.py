@@ -44,6 +44,16 @@ def _run(engine, txs, **kw):
     return res, err.getvalue()
 
 
+def _assign_orders(rows):
+    """`rows` as given and with its two ASSIGN rows swapped."""
+    lines = [l for l in rows.strip().splitlines() if l.strip()]
+    idx = [i for i, l in enumerate(lines) if l.split()[0] == 'ASSIGN']
+    assert len(idx) == 2, idx
+    swapped = list(lines)
+    swapped[idx[0]], swapped[idx[1]] = lines[idx[1]], lines[idx[0]]
+    return ["\n".join(lines), "\n".join(swapped)]
+
+
 def _rows(result, symbol):
     return [r for r in result['transactions'] if r['symbol'] == symbol]
 
@@ -160,13 +170,15 @@ class TestAssignmentPremiumPairing(unittest.TestCase):
             BUYSELL 2025-12-19 16:20:00 QRS.TO -200 CAD 44 8800
             BUYSELL 2026-01-06 10:00:00 QRS.TO -500 CAD 50 25000
         """
-        res, _ = _run(CanadaTaxRules(), _tt(rows))
-        sale = [r for r in _rows(res, 'QRS.TO')
-                if r['date'] == '2025-12-19'][0]
-        self.assertAlmostEqual(sale['proceeds'], 8539.0, places=2)
-        yrs = _by_year(res)
-        self.assertAlmostEqual(yrs['2025'], 355.86, places=2)
-        self.assertAlmostEqual(yrs['2026'], 4542.14, places=2)
+        # Both ASSIGN row orders (re-audit A2-0484).
+        for order in _assign_orders(rows):
+            res, _ = _run(CanadaTaxRules(), _tt(order))
+            sale = [r for r in _rows(res, 'QRS.TO')
+                    if r['date'] == '2025-12-19'][0]
+            self.assertAlmostEqual(sale['proceeds'], 8539.0, places=2)
+            yrs = _by_year(res)
+            self.assertAlmostEqual(yrs['2025'], 355.86, places=2)
+            self.assertAlmostEqual(yrs['2026'], 4542.14, places=2)
 
     @rule("US-OPT-02", "US-OPT-05")
     def test_us_put_spread(self):
@@ -181,10 +193,44 @@ class TestAssignmentPremiumPairing(unittest.TestCase):
             BUYSELL 2025-12-19 16:20:00 QRS.US -200 USD 44 8800
             BUYSELL 2026-01-06 10:00:00 QRS.US -500 USD 50 25000
         """
-        res, _ = _run(USATaxRules(), _tt(rows))
-        yrs = _by_year(res)
-        self.assertAlmostEqual(yrs['2025'], 539.0, places=2)
-        self.assertAlmostEqual(yrs['2026'], 4359.0, places=2)
+        for order in _assign_orders(rows):          # A2-0484
+            res, _ = _run(USATaxRules(), _tt(order))
+            yrs = _by_year(res)
+            self.assertAlmostEqual(yrs['2025'], 539.0, places=2)
+            self.assertAlmostEqual(yrs['2026'], 4359.0, places=2)
+
+    # A2-0496: legs no identity pairs (two 50-share fills each, priced
+    # off the strike) fall to the proximity rule, which must still keep
+    # each premium on its own direction: the SELL fills (listed first)
+    # take the call's 200, never the put's 300.
+    UNPAIRED = """
+        BUYSELL 2024-06-03 10:00:00 QZX.{s} 100 {c} 50 5000
+        BUYSELL 2025-11-03 10:00:00 QZX251219P00061000.{s} -1 {c} 3 300
+        BUYSELL 2025-11-03 10:00:00 QZX251219C00060000.{s} -1 {c} 2 200
+        ASSIGN 2025-12-19 16:20:00 QZX251219P00061000.{s} 1 {c} 0 0
+        ASSIGN 2025-12-19 16:20:00 QZX251219C00060000.{s} 1 {c} 0 0
+        BUYSELL 2025-12-19 16:20:00 QZX.{s} -50 {c} 59.5 2975
+        BUYSELL 2025-12-19 16:20:00 QZX.{s} -50 {c} 59.5 2975
+        BUYSELL 2025-12-19 16:20:00 QZX.{s} 50 {c} 61.5 3075
+        BUYSELL 2025-12-19 16:20:00 QZX.{s} 50 {c} 61.5 3075
+        BUYSELL 2026-02-02 10:00:00 QZX.{s} -100 {c} 60 6000
+    """
+
+    def _unpaired(self, engine, s, c):
+        res, _ = _run(engine, _tt(self.UNPAIRED.format(s=s, c=c)))
+        sold = sum(r['proceeds'] for r in _rows(res, f'QZX.{s}')
+                   if r['date'] == '2025-12-19')
+        return round(sold, 2), _by_year(res)
+
+    @rule("CA-OPT-06", "CA-OPT-08")
+    def test_ca_unpaired_legs_keep_their_direction(self):
+        self.assertEqual(self._unpaired(CanadaTaxRules(), 'TO', 'CAD'),
+                         (6150.0, {'2025': 1150.0, '2026': 150.0}))
+
+    @rule("US-OPT-02", "US-OPT-05")
+    def test_us_unpaired_legs_keep_their_direction(self):
+        self.assertEqual(self._unpaired(USATaxRules(), 'US', 'USD'),
+                         (6150.0, {'2025': 1150.0, '2026': 150.0}))
 
     # A2-0496: legs no identity pairs (two 50-share fills each, priced
     # off the strike) fall to the proximity rule, which must still keep

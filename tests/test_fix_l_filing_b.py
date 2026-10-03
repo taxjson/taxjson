@@ -996,8 +996,11 @@ class TestSchedule3Render(unittest.TestCase):
         # S032-23: the note's own year test was unpinned.
         ents = FE.mark_crypto([_g(symbol="BTC", qty=-1.0)])
         for year, want in ((2025, "crypto-assets on 15200/15301"),
-                           (2024, "crypto-assets with the other "
-                                  "properties (15199/15300)")):
+                           (2023, "crypto-assets with the other "
+                                  "properties (15199/15300)"),
+                           # The 2024 form's two periods (A2-0166).
+                           (2024, "crypto-assets and other properties "
+                                  "on 10693/10694")):
             with self.subTest(year=year):
                 rep = FE.build_schedule3(ents, year)
                 self.assertIn(want, FE.render_schedule3(rep, year, "CAD"))

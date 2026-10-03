@@ -269,6 +269,11 @@ class TestKrakenLedgerTradeCoverage(unittest.TestCase):
     def test_complete_trades_export_is_quiet(self):
         err = self._parse_ledger(cover_sell=True)
         self.assertNotIn("UNBOOKED", err)
+        # The covered case says so, and never asks for the export it
+        # already has (re-audit A2-0812: restoring the old note passed).
+        self.assertIn("booked from the trades export", err)
+        self.assertIn("every one matched", err)
+        self.assertNotIn("supply the trades export", err)
 
     def test_no_trades_export_at_all_is_an_unbooked_warning(self):
         err = self._parse_ledger(trades=False)

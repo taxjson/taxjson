@@ -67,7 +67,9 @@ class TestSchedule3PreFormShareLine(unittest.TestCase):
 
     @rule("CA-DISP-03")
     def test_2024_share_sale_stays_on_13199_13200(self):
-        share = ent("AAA.TO", 5000.0, 4900.0, date="2024-05-02")
+        # Period 2 of the 2024 form (Jun 25 - Dec 31): the period
+        # split itself is pinned in test_fix_a2_spec_forms.
+        share = ent("AAA.TO", 5000.0, 4900.0, date="2024-08-02")
         coin = mark_crypto([ent("BTC", 3000.0, 2000.0, date="2024-07-02",
                                 account="kr1")])
         rep = build_schedule3([share] + coin, 2024)

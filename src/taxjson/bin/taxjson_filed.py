@@ -47,38 +47,68 @@ NOT_LOCKED = ("interest, foreign tax withheld and the FX gain on foreign "
 
 
 def form_lines(entries: List[Dict[str, Any]], *, crypto: bool = False,
-               year: Optional[int] = None) -> Dict[str, float]:
+               year: Optional[int] = None,
+               date_key: str = "date_settle") -> Dict[str, float]:
     """The amounts the export puts on the return for these disposition
     entries: Schedule 3 {proceeds/gain line code: amount} (Canadian
-    gains), or Form 8949 part totals {"I_proceeds": ..} (US gains carry
-    a term). The lock records them so a change that moves amounts
-    BETWEEN lines (13199 vs 15199 vs 15200), or changes how proceeds are
-    presented (outlays, short sales), is drift even when the total gain
-    is unchanged (R1-205, R1-281)."""
+    gains; the 2024 form's Period 1 codes 10689/10690 and 10693/10694
+    apart, A2-0166), or Form 8949 part totals {"I_proceeds": ..} (US
+    gains carry a term), with, from 2025, the digital-asset boxes' own
+    totals {"I_da_proceeds": ..} (boxes G-L, A2-0482). The lock records
+    them so a change that moves amounts BETWEEN lines (13199 vs 15199 vs
+    15200), or changes how proceeds are presented (outlays, short
+    sales), is drift even when the total gain is unchanged (R1-205,
+    R1-281)."""
     import contextlib
     import io
     from taxjson.bin import taxjson_form_export as FE
     if not entries:
         return {}
+    marked = FE.mark_crypto(entries) if crypto else entries
     with contextlib.redirect_stderr(io.StringIO()):
         if any(e.get("term") in ("SHORT_TERM", "LONG_TERM")
                for e in entries):
-            rep = FE.build_8949(entries)
+            rep = FE.build_8949(marked, year)
             out = {f"{part}_{k}": float(v)
                    for part in ("I", "II")
                    for k, v in (rep.get(f"part_{part}_totals") or {}).items()
                    if rep.get(f"part_{part}")}
+            for g in rep.get("groups") or []:
+                if g.get("digital_asset"):
+                    for k, v in g["totals"].items():
+                        out[f"{g['part']}_da_{k}"] = float(v)
             if rep.get("section_1256"):
                 # §1256 contracts are off Form 8949 (Form 6781 by hand,
                 # US-FUT-02): their net is locked on its own line.
                 out["6781_gain"] = float(
                     rep["section_1256_totals"]["gain"])
             return out
-        rep = FE.build_schedule3(FE.mark_crypto(entries) if crypto
-                                 else entries, year)
+        rep = FE.build_schedule3(marked, year, date_key)
     return {k.split("_", 1)[1]: float(v)
             for k, v in (rep.get("totals") or {}).items()
             if k not in ("proceeds_all", "gain_all")}
+
+
+# A 2024 lock closed before the 2024 form's Period 1 codes were modelled
+# (A2-0166) put every 2024 disposition on the Period 2 codes: compared
+# with today's split, Period 1 folds onto its Period 2 code.
+_PERIOD1_TO_2 = {"10689": "13199", "10690": "13200",
+                 "10693": "15199", "10694": "15300"}
+
+
+def _fold_old_2024(fl_filed: Dict[str, Any], fl_cur: Dict[str, Any]
+                   ) -> Optional[Dict[str, float]]:
+    """`fl_cur` with its Period 1 codes folded onto the Period 2 ones
+    when `fl_filed` is an old-shape 2024 lock (no Period 1 code) and
+    `fl_cur` has one; else None."""
+    if any(k in fl_filed for k in _PERIOD1_TO_2) or not any(
+            k in fl_cur for k in _PERIOD1_TO_2):
+        return None
+    out: Dict[str, float] = {}
+    for k, v in fl_cur.items():
+        k2 = _PERIOD1_TO_2.get(k, k)
+        out[k2] = round(out.get(k2, 0.0) + float(v or 0.0), 2)
+    return out
 
 
 def aggregates_from_gains(doc: Dict[str, Any],
@@ -94,6 +124,11 @@ def aggregates_from_gains(doc: Dict[str, Any],
     ONCE — S031-20)."""
     if not isinstance(doc, dict):
         raise ValueError("not a gains document (expected a JSON object)")
+    # The date the file was year-scoped on also places a 2024
+    # disposition in Period 1 or 2 of the 2024 Schedule 3 (A2-0166).
+    _basis = str(((doc.get("summary") or {}) if isinstance(
+        doc.get("summary"), dict) else {}).get("tax_date_basis") or "")
+    date_key = "date" if _basis == "trade" else "date_settle"
     entries: List[Dict[str, Any]] = []
     realized = disallowed = income = 0.0
     dividend = pil = 0.0
@@ -156,8 +191,8 @@ def aggregates_from_gains(doc: Dict[str, Any],
         "st_gain": round(st_gain, 2),
         "lt_gain": round(lt_gain, 2),
         "form_lines": {k: round(v, 2) for k, v in
-                       form_lines(entries, crypto=crypto,
-                                  year=year).items()},
+                       form_lines(entries, crypto=crypto, year=year,
+                                  date_key=date_key).items()},
     }
 
 
@@ -484,7 +519,8 @@ _LOCKED_KEYS = ("realized", "disallowed", "dispositions", "income",
 
 def diff_snapshot(snapshot: Dict[str, Any],
                   recomputed: Dict[str, Optional[Dict[str, Any]]],
-                  unconfigured: Optional[set] = None
+                  unconfigured: Optional[set] = None,
+                  notes: Optional[List[str]] = None
                   ) -> List[str]:
     """Human-readable drift lines ([] == clean).
 
@@ -492,7 +528,12 @@ def diff_snapshot(snapshot: Dict[str, Any],
     (missing book), and an account in `recomputed` that the lock does
     not list but that has activity in the filed year (added after
     close-year, renamed, or left out) — its dispositions were never on
-    the locked totals, so check-filed must not say OK."""
+    the locked totals, so check-filed must not say OK.
+
+    `notes` (a list) collects what is compared differently and is not
+    drift: a 2024 lock closed before the Period 1 line codes compared
+    on the Period 2 codes, digital-asset box totals a pre-2025-split
+    lock did not record."""
     lines: List[str] = []
     locked = snapshot.get("accounts", {})
     for acct, cur in sorted(recomputed.items()):
@@ -551,6 +592,22 @@ def diff_snapshot(snapshot: Dict[str, Any],
         fl_filed = filed.get("form_lines")
         fl_cur = cur.get("form_lines")
         if isinstance(fl_filed, dict) and isinstance(fl_cur, dict):
+            _folded = _fold_old_2024(fl_filed, fl_cur)
+            if _folded is not None:
+                fl_cur = _folded
+                if notes is not None:
+                    notes.append(
+                        f"{acct}: the lock puts every 2024 disposition on "
+                        f"the Period 2 lines (13199/13200, 15199/15300); "
+                        f"the 2024 Schedule 3 puts January 1 - June 24 on "
+                        f"the Period 1 lines (10689/10690, 10693/10694) — "
+                        f"compared on the Period 2 lines (same dollars; "
+                        f"see `taxjson form-export` for the split)")
+            if not any("_da_" in k for k in fl_filed):
+                # Locked before the 8949 digital-asset boxes (A2-0482):
+                # the part totals still compare every row.
+                fl_cur = {k: v for k, v in fl_cur.items()
+                          if "_da_" not in k}
             for code in sorted(set(fl_filed) | set(fl_cur)):
                 a = float(fl_filed.get(code) or 0.0)
                 b = float(fl_cur.get(code) or 0.0)

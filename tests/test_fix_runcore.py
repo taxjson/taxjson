@@ -101,6 +101,21 @@ class TestSettingsValidatedEverywhere(unittest.TestCase):
                 r = _run_cli(root, "sum")
                 self.assertNotEqual(r.returncode, 0)
 
+    def test_implausible_year_is_refused_by_sum_on_built_books(self):
+        # Re-audit A2-1481: with no built books `sum` exits 1 ('no gains
+        # files') for any year, so the check above alone proved nothing
+        # for `sum`. Build valid books, then type the year wrong.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertEqual(_run_cli(root, "sum").returncode, 0)
+            _set_config(root, _CONFIG.replace("year = 2025", "year = 2204"))
+            r = _run_cli(root, "sum")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("year = 2204 is not a plausible tax year",
+                          r.stderr)
+
     def test_year_with_no_activity_warns(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, _CONFIG.replace("year = 2025",
@@ -193,6 +208,9 @@ class TestInstalmentMoneyInputs(unittest.TestCase):
         r = self._instalments(
             'prescribed_rates = [{ from = "2025-01-01", rate = -0.07 }]\n')
         self.assertNotEqual(r.returncode, 0)
+        # The refusal itself, not the helper project's 'no gains files'
+        # (re-audit A2-0811: any config exits 1 there).
+        self.assertIn("prescribed_rates[1].rate", r.stderr)
 
     def test_estimate_boolean_other_income_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:

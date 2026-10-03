@@ -4746,6 +4746,16 @@ class USATaxRules(TaxRules):
         # Rows below the lot epsilon (1e-8 units) are not booked; they
         # are named once instead of vanishing silently (audit S070-09).
         _us_dust: List[TaxTransaction] = []
+        # A lot residue of at most epsilon units folded into the sale
+        # that closes the lot, and a sale's excess of at most epsilon
+        # over the lots (no position opened): named too (US-CRYPTO-08,
+        # re-audit A2-0808 / A2-1485). (symbol, units) per case; float
+        # noise (under 1e-11 of the quantities) is not named.
+        _us_dust_absorbed: List[Tuple[str, float]] = []
+        _us_dust_dropped: List[Tuple[str, float]] = []
+
+        def _dust_noise(*q: float) -> float:
+            return 1e-11 * max([1.0] + [abs(x) for x in q])
         # Notes tied to one dated row (stock dividends, an unapplied
         # basis adjustment): printed now by a direct caller, or by
         # run_gains after its year filter (audit A2-0956: a 2023 stock
@@ -5737,17 +5747,20 @@ class USATaxRules(TaxRules):
                 while qty_remaining > epsilon and inventory_short[ikey]:
                     short_lot = inventory_short[ikey][0]
                     if short_lot['qty'] <= qty_remaining + epsilon:
+                        if (short_lot['qty'] - qty_remaining
+                                > _dust_noise(short_lot['qty'])):
+                            _us_dust_absorbed.append(
+                                (symbol, short_lot['qty'] - qty_remaining))
                         chunk_qty = short_lot['qty']
                         chunk_open_proceeds_d = short_lot['proceeds']
                         inventory_short[ikey].pop(0)
-                        # Mark any short_replacement records that pointed at
-                        # this lot as fully consumed. A later wash-sale match
-                        # against this rep would otherwise silently mutate
-                        # the detached dict and lose the disallowance — see
-                        # `fully_consumed` branch in the wash-match below.
+                        # A short_replacement record that pointed at this
+                        # lot is consumed: no lot reference (a later match
+                        # must not mutate the detached dict) and no
+                        # capacity, so find_replacements_in_window skips it
+                        # (tax-logic US-WASH-21, re-audit A2-0817).
                         for r in short_replacements.get(_rep_key(symbol, tx.date), []):
                             if r.get('short_lot_ref') is short_lot:
-                                r['fully_consumed'] = True
                                 r['short_lot_ref'] = None
                                 # Covered shares can no longer serve as
                                 # §1091 replacement (FUZZ #A): leaving
@@ -5861,19 +5874,10 @@ class USATaxRules(TaxRules):
                                 # adjustment belongs to THEIR position,
                                 # never to a lot in these books (ENGINE-I1).
                                 permanently_disallowed_amt += match_disallowed
-                            elif rep.get('fully_consumed'):
-                                # Replacement short was already opened AND
-                                # closed before this wash sale fired. The
-                                # proceeds reduction has nowhere to land —
-                                # the gain entry for the replacement's close
-                                # has already been emitted. Treat as
-                                # permanently disallowed; the loss is
-                                # disallowed under §1091 but the deferral
-                                # mechanism is unavailable. (This mirrors
-                                # Rev. Rul. 2008-5's "no basis transfer"
-                                # treatment for unrecoverable replacements.)
-                                permanently_disallowed_amt += match_disallowed
                             else:
+                                # (A replacement short covered before the
+                                # loss has no capacity left and is never a
+                                # candidate: US-WASH-21.)
                                 disallowed_amt += match_disallowed
                                 if rep.get('short_lot_ref') is not None:
                                     # Replacement short is already open —
@@ -6017,6 +6021,9 @@ class USATaxRules(TaxRules):
                     qty_remaining -= chunk_qty
 
                 # --- buy-to-open: any leftover quantity opens a new long lot ---
+                if (_dust_noise(tx_qty_abs) < qty_remaining <= epsilon
+                        and not inventory_short[ikey]):
+                    _us_dust_dropped.append((symbol, qty_remaining))
                 if qty_remaining > epsilon:
                     rep_record = next(
                         (r for r in long_replacements.get(_rep_key(symbol, tx.date), [])
@@ -6122,17 +6129,18 @@ class USATaxRules(TaxRules):
             while qty_remaining > epsilon and inventory_long[ikey]:
                 lot = inventory_long[ikey][0]
                 if lot['qty'] <= qty_remaining + epsilon:
+                    if lot['qty'] - qty_remaining > _dust_noise(lot['qty']):
+                        _us_dust_absorbed.append(
+                            (symbol, lot['qty'] - qty_remaining))
                     chunk_qty = lot['qty']
                     chunk_cost_d = lot['cost_basis']
                     inventory_long[ikey].pop(0)
-                    # Same defensive marker as the short side: if any
-                    # long_replacement rep was pointing at this lot, a
-                    # future wash-sale bump would otherwise hit a detached
-                    # dict and disappear. Mark `fully_consumed` so the
-                    # match falls through to permanent disallowance.
+                    # As on the short side: a long_replacement rep that
+                    # pointed at this sold lot loses its lot reference and
+                    # its capacity, so it never washes a later loss
+                    # (US-WASH-21, re-audit A2-0817).
                     for r in long_replacements.get(_rep_key(symbol, tx.date), []):
                         if r.get('lot_ref') is lot:
-                            r['fully_consumed'] = True
                             r['lot_ref'] = None
                             # Sold shares can no longer serve as §1091
                             # replacement (FUZZ #A): stale capacity made
@@ -6296,16 +6304,10 @@ class USATaxRules(TaxRules):
                             # deferred amount nothing recovers
                             # (partition ENGINE-I1, tax-logic US-WASH-16).
                             permanently_disallowed_amt += match_disallowed
-                        elif rep.get('fully_consumed'):
-                            # Replacement lot was already sold before this
-                            # wash sale fired. The basis bump has nowhere
-                            # to land — the gain entry for the replacement's
-                            # sale has already been emitted. Treat as
-                            # permanently disallowed; the loss is
-                            # disallowed under §1091 but the deferral
-                            # mechanism is unavailable.
-                            permanently_disallowed_amt += match_disallowed
                         else:
+                            # (A taxable replacement sold before the loss
+                            # has no capacity left and is never a
+                            # candidate: US-WASH-21.)
                             disallowed_amt += match_disallowed
                             if _tack_lot is not None:
                                 _tack_lot['cost_basis'] += match_disallowed_d
@@ -6397,6 +6399,9 @@ class USATaxRules(TaxRules):
                 qty_remaining -= chunk_qty
 
             # --- sell-to-open: any leftover quantity opens a new short lot ---
+            if (_dust_noise(tx_qty_abs) < qty_remaining <= epsilon
+                    and not inventory_long[ikey]):
+                _us_dust_dropped.append((symbol, -qty_remaining))
             if qty_remaining > epsilon:
                 rep_record = next(
                     (r for r in short_replacements.get(_rep_key(symbol, tx.date), [])
@@ -6525,6 +6530,21 @@ class USATaxRules(TaxRules):
                       for s_, q in sorted(_by.items()))
                   + " — their units and money are left out of the lots "
                   "and Form 8949.", file=sys.stderr)
+        for _what, _rows in (
+                ("a lot residue of at most 1e-08 units was folded into "
+                 "the sale that closed the lot (its cost is in that "
+                 "sale's basis)", _us_dust_absorbed),
+                ("a sale exceeded the units held by at most 1e-08 (no "
+                 "position was opened for the excess; the whole proceeds "
+                 "are on the units held)", _us_dust_dropped)):
+            if _rows:
+                _agg: Dict[str, List[float]] = {}
+                for _s, _q in _rows:
+                    _agg.setdefault(_s, []).append(_q)
+                print(f"warning: {_what}: " + ", ".join(
+                    f"{s_} ({len(q)} time(s), {sum(q):+.3g} units)"
+                    for s_, q in sorted(_agg.items()))
+                    + " (US-CRYPTO-08).", file=sys.stderr)
 
         # Warn-only call-as-replacement scan (the experimental US engine
         # does not enforce it; always on — cross_asset is retired).

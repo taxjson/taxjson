@@ -675,8 +675,11 @@ class TestCoinbaseActivities(unittest.TestCase):
         """Subscription/staking-transfer/etc. shouldn't produce tax
         records. Since 2026-09, Send/Receive produce TRANSFER
         EVIDENCE rows (custody sidecar — an off-platform gift is a
-        taxable disposition at FMV that deserves a trace); Deposit is
-        not a Coinbase Receive and stays ignored."""
+        taxable disposition at FMV that deserves a trace). A USDC
+        Deposit here (stablecoins as US-dollar cash, the Canada mode,
+        CA-CRYPTO-02) is a cash deposit; a COIN Deposit is never
+        dropped silently — see test_coin_deposit_is_unbooked
+        (A2-0566, re-audit A2-1480)."""
         csv = COINBASE_HEADER + (
             '2025-06-01 10:00:00 UTC,Send,BTC,0.01,USD,60000,0,600\n'
             '2025-06-02 10:00:00 UTC,Deposit,USDC,100,USD,1,0,100\n'
@@ -687,6 +690,32 @@ class TestCoinbaseActivities(unittest.TestCase):
         self.assertEqual([t.get('action') for t in txs], ['TRANSFER'])
         self.assertEqual(txs[0]['symbol'], 'BTC')
         self.assertEqual(txs[0]['quantity'], -0.01)
+
+    def test_coin_deposit_is_unbooked(self):
+        """A coin Deposit (and, with stablecoins as property, a USDC
+        one) moves coins: an UNBOOKED warning, never a silent drop
+        (re-audit A2-1480; Kraken books its deposit as TRANSFER
+        evidence)."""
+        import contextlib
+        import io
+        for cash, asset in ((True, 'BTC'), (False, 'USDC')):
+            csv = COINBASE_HEADER + (
+                f'2025-06-02 10:00:00 UTC,Deposit,{asset},100,USD,1,0,100\n')
+            f = tempfile.NamedTemporaryFile(mode='w', suffix='.csv',
+                                            delete=False)
+            f.write(csv)
+            f.close()
+            try:
+                p = CoinbaseBrokerage()
+                p.stablecoins_as_cash = cash
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    txs = p.parse_file(Path(f.name))
+            finally:
+                os.remove(f.name)
+            self.assertEqual(txs, [])
+            self.assertIn('UNBOOKED', err.getvalue())
+            self.assertIn(asset, err.getvalue())
 
     def test_convert_row_raises_rather_than_silent_drop(self):
         """A Coinbase 'Convert from BTC to ETH' row is a taxable

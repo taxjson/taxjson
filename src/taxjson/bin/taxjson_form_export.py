@@ -7,7 +7,10 @@ Render computed gains into filing-shaped artifacts:
   --form 8949       IRS Form 8949 rows (Part I short-term / Part II
                     long-term) with wash-sale code W adjustments, plus
                     Schedule D part totals. Needs a country=usa gains file
-                    (entries carry ST/LT terms).
+                    (entries carry ST/LT terms). From tax year 2025 the
+                    crypto accounts' rows (--crypto) are digital assets,
+                    grouped on boxes G/H/I and J/K/L with their own
+                    totals; the TXF leaves them out (no reference number).
 
   --form txf        TurboTax-importable TXF (V042) built from the 8949
                     rows — one TD record per disposition with the
@@ -21,7 +24,9 @@ Render computed gains into filing-shaped artifacts:
                     (13199/13200), line 6 options, futures and other
                     properties (15199/15300, per T4037), line 7
                     crypto-assets (15200/15301; before 2025 crypto went
-                    on 15199/15300). Per row: units, acquisition year,
+                    on 15199/15300). The 2024 form splits each line by
+                    period: Jan 1 - Jun 24 on 10689/10690 (shares) and
+                    10693/10694 (other), the rest as above. Per row: units, acquisition year,
                     proceeds of disposition, ACB, outlays, gain(loss)
                     with superficial-loss notes; per-line totals.
 
@@ -216,7 +221,25 @@ def _cents(x: float) -> float:
     return round_half_up(float(x or 0.0), 2) + 0.0
 
 
-def build_8949(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+# Form 8949 checkboxes by part: securities on A/B/C (short-term) and
+# D/E/F (long-term); from tax year 2025 digital assets on their own
+# G/H/I and J/K/L (2025 Instructions for Form 8949: "Use box G, H, or I
+# to report short-term digital asset transactions. Do not use box C";
+# A2-0482, A2-0829). Digital assets are the dispositions of `crypto =
+# true` accounts (flagged `_crypto` by mark_crypto).
+DIGITAL_ASSET_BOXES_FROM = 2025
+_BOXES = {("I", False): "A/B/C", ("II", False): "D/E/F",
+          ("I", True): "G/H/I", ("II", True): "J/K/L"}
+
+
+def build_8949(entries: List[Dict[str, Any]],
+               year: Optional[int] = None) -> Dict[str, Any]:
+    """Form 8949 rows by part. `year` (default: the latest year among
+    the rows) decides whether `_crypto` rows go on the digital-asset
+    boxes (2025 and later) or with the securities."""
+    if year is None:
+        year = _infer_year(entries)
+    da_boxes = year is not None and int(year) >= DIGITAL_ASSET_BOXES_FROM
     parts: Dict[str, List[Dict[str, Any]]] = {"I": [], "II": []}
     sec1256: List[Dict[str, Any]] = []
     drift_warned = 0
@@ -301,7 +324,10 @@ def build_8949(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         # drift check above still compares the unrounded gain.
         _d, _e = _cents(proceeds), _cents(cost)
         _g = _cents(adj) if code else 0.0
+        _da = bool(da_boxes and e.get("_crypto"))
         parts[part].append({
+            "boxes": _BOXES[(part, _da)],
+            "digital_asset": _da,
             "description": desc,
             "date_acquired": acquired,
             "date_sold": sold,
@@ -316,8 +342,10 @@ def build_8949(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         print(f"warning: {drift_warned} row(s) where (d)-(e)+(g) differs "
               f"from the engine's allowed gain by more than $0.02 — "
               f"inspect before filing.", file=sys.stderr)
-    for rows in list(parts.values()) + [sec1256]:
-        rows.sort(key=lambda r: (r["date_sold"], r["description"]))
+    for rows in list(parts.values()):
+        rows.sort(key=lambda r: (r["digital_asset"], r["date_sold"],
+                                 r["description"]))
+    sec1256.sort(key=lambda r: (r["date_sold"], r["description"]))
 
     def totals(rows: List[Dict[str, Any]]) -> Dict[str, float]:
         return {
@@ -326,8 +354,20 @@ def build_8949(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
             "adjustment": round(sum(r["adjustment"] for r in rows), 2),
             "gain": round(sum(r["gain"] for r in rows), 2),
         }
+    groups = []
+    for part in ("I", "II"):
+        for _da in (False, True):
+            g_rows = [r for r in parts[part] if r["digital_asset"] == _da]
+            if g_rows:
+                groups.append({"part": part, "boxes": _BOXES[(part, _da)],
+                               "digital_asset": _da,
+                               "rows": len(g_rows),
+                               "totals": totals(g_rows)})
     return {
-        "form": "8949",
+        "form": "8949", "year": year,
+        # Per checkbox group (a 2025+ digital-asset group apart): each
+        # group is its own Form 8949 page(s) with its own totals.
+        "groups": groups,
         "part_I": parts["I"], "part_I_totals": totals(parts["I"]),
         "part_II": parts["II"], "part_II_totals": totals(parts["II"]),
         # The engine's unrounded sums over the same rows (the export
@@ -385,6 +425,10 @@ def build_txf(rep_8949: Dict[str, Any], box: str) -> str:
     for part in ("I", "II"):
         refnum = _TXF_REFNUM[(part, box)]
         for row in rep_8949[f"part_{part}"]:
+            if row.get("digital_asset"):
+                # Boxes G-L have no TXF reference number taxjson knows:
+                # left out, and _main says so (A2-0482).
+                continue
             _desc = " ".join(str(row['description']).split())
             _desc = _desc.replace("^", " ").encode(
                 "ascii", "replace").decode("ascii")
@@ -411,44 +455,85 @@ def build_txf(rep_8949: Dict[str, Any], box: str) -> str:
 #   line 7  crypto-assets (new for 2025)                      15200 / 15301
 # For 2024 and earlier returns crypto-assets were reported with the
 # other properties on 15199 / 15300 (there was no separate line).
+# The 2024 form (5000-S3 E (24)) splits Part 3 by the date of the
+# disposition (A2-0166): Period 1, January 1 to June 24, 2024, on
+# 10689 / 10690 (shares) and 10693 / 10694 (bonds, crypto-assets and
+# other properties), slip lines 17399 / 17599; Period 2, June 25 to
+# December 31, on 13199 / 13200 and 15199 / 15300, slips 17400 / 17600.
 _FUTURES_PREFIXES = ("F:", "/", "\\")
-_LINE_ORDER = ("shares", "other", "crypto")
+_LINE_ORDER = ("shares_p1", "other_p1", "shares", "other", "crypto")
+PERIOD_YEAR = 2024
+PERIOD_1_END = "2024-06-24"
+_PERIOD_TEXT = {1: "Period 1 (January 1 to June 24, 2024)",
+                2: "Period 2 (June 25 to December 31, 2024)"}
 
 
-def schedule3_line(key: str, year: Optional[int]) -> Dict[str, str]:
+def schedule3_period(e: Dict[str, Any], year: Optional[int],
+                     date_key: str = "date_settle") -> Optional[int]:
+    """1 or 2 for a disposition on the 2024 form (its date on the
+    gains files' tax-date basis: settle by default, CA-DATE-01); None
+    for every other year (one period)."""
+    if year is None or int(year) != PERIOD_YEAR:
+        return None
+    d = str(e.get(date_key) or e.get("date_settle") or e.get("date") or "")
+    return 1 if d[:10] <= PERIOD_1_END else 2
+
+
+def schedule3_line(key: str, year: Optional[int],
+                   period: Optional[int] = None) -> Dict[str, str]:
     """The Schedule 3 line a property class lands on for `year`.
-    `key` is shares | other | crypto; crypto folds into `other` before
-    2025 (the separate crypto-assets line starts with the 2025 form)."""
+    `key` is shares | other | crypto (or a period-1 key, shares_p1 |
+    other_p1); crypto folds into `other` before 2025 (the separate
+    crypto-assets line starts with the 2025 form). `period` (2024 only,
+    schedule3_period) picks the 2024 form's Period 1 or Period 2
+    codes."""
     new_form = year is None or int(year) >= 2025
+    if key.endswith("_p1"):
+        key, period = key[:-3], 1
     if key == "crypto" and not new_form:
         key = "other"
+    split = (not new_form and int(year) == PERIOD_YEAR
+             and period in (1, 2))
+    p1 = split and period == 1
+    tag = f" — {_PERIOD_TEXT[period]}" if split else ""
     if key == "shares":
-        return {"key": "shares", "line": "4" if new_form else "",
+        return {"key": "shares_p1" if p1 else "shares",
+                "line": "4" if new_form else "",
                 "label": "Publicly traded shares, mutual fund units, "
                          "deferral of eligible small business "
-                         "corporation shares, and other shares",
-                "short": "shares & fund units",
-                "proceeds_code": "13199", "gain_code": "13200"}
+                         "corporation shares, and other shares" + tag,
+                "short": "shares & fund units"
+                         + (f" (P{period})" if split else ""),
+                "period": period if split else None,
+                "proceeds_code": "10689" if p1 else "13199",
+                "gain_code": "10690" if p1 else "13200"}
     if key == "crypto":
         return {"key": "crypto", "line": "7",
                 "label": "Crypto-assets", "short": "crypto-assets",
+                "period": None,
                 "proceeds_code": "15200", "gain_code": "15301"}
-    return {"key": "other", "line": "6" if new_form else "",
+    return {"key": "other_p1" if p1 else "other",
+            "line": "6" if new_form else "",
             "label": ("Bonds, debentures, promissory notes, and other "
                       "similar properties (options, futures, foreign "
                       "currency)" if new_form else
                       "Bonds, debentures, promissory notes, crypto-"
                       "assets, and other similar properties (options, "
-                      "futures, foreign currency)"),
+                      "futures, foreign currency)") + tag,
             "short": ("options & other properties" if new_form else
-                      "options, crypto & other properties"),
-            "proceeds_code": "15199", "gain_code": "15300"}
+                      "options, crypto & other properties")
+                     + (f" (P{period})" if split else ""),
+            "period": period if split else None,
+            "proceeds_code": "10693" if p1 else "15199",
+            "gain_code": "10694" if p1 else "15300"}
 
 
 def line_title(spec: Dict[str, str]) -> str:
     """'Part 3, line 4 (13199/13200)' — or, for pre-2025 forms whose
     line numbering this tool does not pin, just the line codes."""
     codes = f"lines {spec['proceeds_code']}/{spec['gain_code']}"
+    if spec.get("period"):
+        return f"{_PERIOD_TEXT[spec['period']]}, {codes}"
     return (f"Part 3, line {spec['line']} ({codes})" if spec["line"]
             else codes)
 
@@ -525,18 +610,24 @@ def grant_buyback_units(e: Dict[str, Any], year: Optional[int]) -> float:
 
 
 def build_schedule3(entries: List[Dict[str, Any]],
-                    year: Optional[int] = None) -> Dict[str, Any]:
+                    year: Optional[int] = None,
+                    date_key: str = "date_settle") -> Dict[str, Any]:
     """Per-property rows grouped by Schedule 3 line. Every row FOOTS:
     PROCEEDS − ACB − OUTLAYS = GAIN (the allowed gain), so a denied
     superficial loss shows as an ACB reduced by the denial — the denied
-    amount is what gets added to the replacement property's ACB."""
+    amount is what gets added to the replacement property's ACB.
+    `date_key`: the date the gains files were scoped on (date_settle,
+    or date under tax_date = "trade"); on the 2024 form it also picks
+    the Period 1 / Period 2 line codes (A2-0166), so a symbol sold in
+    both periods is two rows."""
     if year is None:
         year = _infer_year(entries)
     recs: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for e in entries:
         symbol = e.get("symbol") or "?"
         pclass = property_class(e)
-        lkey = schedule3_line(_line_key(pclass), year)["key"]
+        lkey = schedule3_line(_line_key(pclass), year,
+                              schedule3_period(e, year, date_key))["key"]
         rec = recs.setdefault((lkey, symbol), {
             "symbol": symbol, "units": 0.0, "acq_year": None,
             "proceeds": 0.0, "outlays": 0.0, "gain": 0.0,
@@ -626,7 +717,7 @@ def build_schedule3(entries: List[Dict[str, Any]],
             _LINE_ORDER.index(k[0]), k[1])):
         r = recs[(lkey, symbol)]
         r["units"] += max(0.0, r["grant_units"] - r["short_close_units"])
-        spec = schedule3_line(lkey, year)
+        spec = schedule3_line(lkey, year, 2)
         notes = []
         _perm = r["perm_denied"]
         _defer = r["denied"] - _perm
@@ -688,7 +779,7 @@ def build_schedule3(entries: List[Dict[str, Any]],
         lrows = [r for r in rows if r["line_key"] == lkey]
         if not lrows:
             continue
-        spec = schedule3_line(lkey, year)
+        spec = schedule3_line(lkey, year, 2)
         agg = {k: round(sum(r[k] for r in lrows), 2) + 0.0
                for k in ("proceeds", "acb", "outlays", "gain", "denied")}
         lines.append({**spec, "title": line_title(spec), **agg,
@@ -714,16 +805,18 @@ def build_schedule3(entries: List[Dict[str, Any]],
 
 
 def filing_lines(entries: List[Dict[str, Any]],
-                 year: Optional[int] = None) -> List[Dict[str, Any]]:
+                 year: Optional[int] = None,
+                 date_key: str = "date_settle") -> List[Dict[str, Any]]:
     """One dict per Schedule 3 line that has dispositions: the line
     number / codes / label plus PROCEEDS, ACB, OUTLAYS, GAIN, DENIED and
     the disposition count — the rows of `taxjson sum`'s FOR THE RETURN
     block, identical to form-export's line totals by construction."""
-    return build_schedule3(entries, year)["lines"]
+    return build_schedule3(entries, year, date_key)["lines"]
 
 
 def filing_totals(entries: List[Dict[str, Any]],
-                  year: Optional[int] = None) -> Dict[str, float]:
+                  year: Optional[int] = None,
+                  date_key: str = "date_settle") -> Dict[str, float]:
     """The amounts a return's capital-gains entry asks for, summed over
     `entries` (all Schedule 3 lines) on the Schedule 3 convention (a
     short sale's proceeds as PROCEEDS and its cover as ACB, sell-side
@@ -732,7 +825,7 @@ def filing_totals(entries: List[Dict[str, Any]],
     gain: a denied superficial loss REDUCES the ACB shown here (the
     denied amount is added to the replacement property's ACB instead).
     `denied` reports how much that is."""
-    rep = build_schedule3(entries, year)
+    rep = build_schedule3(entries, year, date_key)
     # Each column is the sum of its row cells, as the line totals are:
     # re-deriving ACB as a residual of the sums was a second residual
     # site that showed ACB -0.01 for a zero-ACB sale (A2-1107).
@@ -745,22 +838,30 @@ def filing_totals(entries: List[Dict[str, Any]],
             "dispositions": len(entries)}
 
 
-def filing_parts_8949(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Form 8949's own part totals — (d) proceeds, (e) cost, (g)
-    adjustment, (h) gain — for `taxjson sum`'s US FOR THE RETURN block,
-    so it shows exactly what the 8949 export carries to Schedule D."""
-    rep = build_8949(entries)
+def filing_parts_8949(entries: List[Dict[str, Any]],
+                      year: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Form 8949's own totals per part and checkbox group — (d)
+    proceeds, (e) cost, (g) adjustment, (h) gain — for `taxjson sum`'s
+    US FOR THE RETURN block, so it shows exactly what the 8949 export
+    carries to Schedule D. From 2025 the digital-asset boxes (G/H/I,
+    J/K/L) are rows of their own (A2-0482)."""
+    rep = build_8949(entries, year)
+    has_da = any(g["digital_asset"] for g in rep["groups"])
+    names = {"I": ("Part I — short-term", "Schedule D Part I"),
+             "II": ("Part II — long-term", "Schedule D Part II")}
     out = []
-    for part, label, sched_d in (("I", "Part I — short-term", "Schedule D Part I"),
-                                 ("II", "Part II — long-term", "Schedule D Part II")):
-        rows = rep[f"part_{part}"]
-        if not rows:
-            continue
-        t = rep[f"part_{part}_totals"]
-        out.append({"part": part, "label": label, "schedule_d": sched_d,
+    for g in rep["groups"]:
+        label, sched_d = names[g["part"]]
+        if has_da:
+            label += (" digital assets" if g["digital_asset"] else "") \
+                + f" (box {g['boxes']})"
+        t = g["totals"]
+        out.append({"part": g["part"], "boxes": g["boxes"],
+                    "digital_asset": g["digital_asset"],
+                    "label": label, "schedule_d": sched_d,
                     "proceeds": t["proceeds"], "cost": t["cost"],
                     "adjustment": t["adjustment"], "gain": t["gain"],
-                    "dispositions": len(rows)})
+                    "dispositions": g["rows"]})
     return out
 
 
@@ -868,19 +969,47 @@ def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str) -> str:
     if rep.get("year_not_ended"):
         lines.append(rep["year_not_ended"])
     lines.append("")
+    header = ("(a) DESCRIPTION", "(b) ACQUIRED", "(c) SOLD",
+              "(d) PROCEEDS", "(e) COST", "(f)", "(g) ADJ",
+              "(h) GAIN(LOSS)")
+
+    def _rows_table(rows):
+        return _table(header, [
+            (r["description"], r["date_acquired"], r["date_sold"],
+             f"{r['proceeds']:,.2f}", f"{r['cost']:,.2f}", r["code"],
+             f"{r['adjustment']:,.2f}" if r["code"] else "",
+             f"{r['gain']:,.2f}") for r in rows], right={3, 4, 6, 7})
+
+    has_da = any(r.get("digital_asset") for p in ("I", "II")
+                 for r in rep[f"part_{p}"])
     for part, label in (("I", "PART I — SHORT-TERM"),
                         ("II", "PART II — LONG-TERM")):
         rows = rep[f"part_{part}"]
         t = rep[f"part_{part}_totals"]
         lines.append(label)
-        header = ("(a) DESCRIPTION", "(b) ACQUIRED", "(c) SOLD",
-                  "(d) PROCEEDS", "(e) COST", "(f)", "(g) ADJ",
-                  "(h) GAIN(LOSS)")
-        table = [(r["description"], r["date_acquired"], r["date_sold"],
-                  f"{r['proceeds']:,.2f}", f"{r['cost']:,.2f}", r["code"],
-                  f"{r['adjustment']:,.2f}" if r["code"] else "",
-                  f"{r['gain']:,.2f}") for r in rows]
-        lines += _table(header, table, right={3, 4, 6, 7})
+        if has_da:
+            # One table per checkbox group: securities, then the 2025+
+            # digital-asset boxes (A2-0482).
+            for g in rep.get("groups") or []:
+                if g["part"] != part:
+                    continue
+                boxes = g["boxes"].replace("/", ", ", 1).replace(
+                    "/", " OR ")
+                lines.append(f"BOX {boxes} — "
+                             + ("digital assets (Form 1099-DA)"
+                                if g["digital_asset"] else
+                                "securities (Form 1099-B)"))
+                lines += _rows_table([r for r in rows
+                                      if r["digital_asset"]
+                                      == g["digital_asset"]])
+                gt = g["totals"]
+                lines.append(f"  box {g['boxes']} totals: proceeds "
+                             f"{gt['proceeds']:,.2f} | cost "
+                             f"{gt['cost']:,.2f} | adjustments "
+                             f"{gt['adjustment']:,.2f} | gain "
+                             f"{gt['gain']:,.2f}")
+        else:
+            lines += _rows_table(rows)
         if rows:
             lines.append(f"  TOTALS (to Schedule D part {part}): proceeds "
                          f"{t['proceeds']:,.2f} | cost {t['cost']:,.2f} | "
@@ -893,8 +1022,17 @@ def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str) -> str:
     lines.append("Notes:")
     lines.append("  - Code W rows are wash sales; column (g) is the "
                  "disallowed loss added back, so (h) is the allowed amount.")
-    lines.append("  - Check the correct 8949 box (A/B/C, D/E/F) against "
-                 "whether your broker reported basis on the 1099-B.")
+    _y = year or rep.get("year")
+    if _y is not None and int(_y) >= DIGITAL_ASSET_BOXES_FROM:
+        lines.append("  - Check the correct 8949 box: securities A/B/C "
+                     "(short-term) or D/E/F (long-term) by whether the "
+                     "1099-B reported basis; digital assets (crypto "
+                     "accounts) G/H/I or J/K/L by whether a Form 1099-DA "
+                     "reported them and their basis — never A-F.")
+    else:
+        lines.append("  - Check the correct 8949 box (A/B/C, D/E/F) "
+                     "against whether your broker reported basis on the "
+                     "1099-B.")
     lines.append("  - Short sales show the cover date in both date columns.")
     lines += _rounding_note(rep)
     lines.append("  - Not tax advice; reconcile against your 1099-B before "
@@ -935,15 +1073,25 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
     lines += manual_section(rep.get("manual_reporting_required") or [],
                             cur)
     lines.append("Notes:")
-    lines.append("  - Each disposition is on the line for its property "
-                 "type: shares and fund units on 13199/13200; options, "
-                 "futures and other properties on 15199/15300 (T4037); "
-                 # The same routing the rows use (S032-23): a second,
-                 # separate year test could contradict them.
-                 + ("crypto-assets on 15200/15301."
-                    if schedule3_line("crypto", year)["key"] == "crypto"
-                    else "crypto-assets with the other properties "
-                         "(15199/15300) for this year."))
+    if year is not None and int(year) == PERIOD_YEAR:
+        # The 2024 form's two periods (A2-0166).
+        lines.append("  - The 2024 Schedule 3 splits each line by the date "
+                     "of the disposition: Period 1 (January 1 to June 24, "
+                     "2024) — shares and fund units on 10689/10690, "
+                     "options, futures, crypto-assets and other "
+                     "properties on 10693/10694; Period 2 (June 25 to "
+                     "December 31) — 13199/13200 and 15199/15300. A "
+                     "security sold in both periods has a row in each.")
+    else:
+        lines.append("  - Each disposition is on the line for its property "
+                     "type: shares and fund units on 13199/13200; options, "
+                     "futures and other properties on 15199/15300 (T4037); "
+                     # The same routing the rows use (S032-23): a second,
+                     # separate year test could contradict them.
+                     + ("crypto-assets on 15200/15301."
+                        if schedule3_line("crypto", year)["key"] == "crypto"
+                        else "crypto-assets with the other properties "
+                             "(15199/15300) for this year."))
     lines.append("  - GAIN(LOSS) is the ALLOWED amount. Every row foots: "
                  "PROCEEDS − ACB − OUTLAYS = GAIN(LOSS); where a "
                  "superficial loss was denied the ACB shown is reduced "
@@ -964,7 +1112,12 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
                  "line 15300.")
     lines.append("  - Capital gains paid out by funds and trusts are not "
                  "in these rows either: T3 box 21 goes on line 17600 and "
-                 "T5/T5013 box 18 on line 17400. Enter them from the "
+                 "T5/T5013 box 18 on line 17400"
+                 + (" (for 2024, the slips' Period 1 amounts on 17599 "
+                    "and 17399, Period 2 on 17600 and 17400)"
+                    if year is not None and int(year) == PERIOD_YEAR
+                    else "")
+                 + ". Enter them from the "
                  "slips; the books carry those distributions as "
                  "dividends, so line 19700 is these rows plus the slip "
                  "lines.")
@@ -995,13 +1148,13 @@ def _write_csv(rep: Dict[str, Any], path: Path) -> None:
         if rep["form"] == "8949":
             w.writerow(["part", "description", "date_acquired", "date_sold",
                         "proceeds", "cost", "code", "adjustment",
-                        "gain", "account"])
+                        "gain", "account", "boxes"])
             for part in ("I", "II"):
                 for r in rep[f"part_{part}"]:
                     w.writerow([part, r["description"], r["date_acquired"],
                                 r["date_sold"], r["proceeds"], r["cost"],
                                 r["code"], r["adjustment"], r["gain"],
-                                r["account"]])
+                                r["account"], r.get("boxes", "")])
             # §1256 contracts: Form 6781 by hand, never an 8949 row.
             for r in rep.get("section_1256") or []:
                 w.writerow(["6781", f"{r['description']} ({r['kind']})",
@@ -1046,11 +1199,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "(prefer the wash-adjusted variants)")
     parser.add_argument("--crypto", action="append", type=Path,
                         default=[], metavar="FILE",
-                        help="Schedule 3: a gains file whose dispositions "
-                             "are crypto-assets (repeatable; line 7 — "
-                             "15200/15301 — from 2025, 15199/15300 "
-                             "before). The `taxjson form-export` wrapper "
-                             "passes the crypto = true accounts here.")
+                        help="A gains file whose dispositions are "
+                             "crypto-assets (repeatable). Schedule 3: "
+                             "line 7 — 15200/15301 — from 2025, "
+                             "15199/15300 before. Form 8949: from 2025 "
+                             "the digital-asset boxes G/H/I and J/K/L. "
+                             "The `taxjson form-export` wrapper passes "
+                             "the crypto = true accounts here.")
     parser.add_argument("--form", required=True,
                         choices=["8949", "schedule3", "txf"])
     from taxjson.lib.country import add_country_argument
@@ -1059,10 +1214,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "(--form 8949 / txf). The `taxjson form-export` "
                          "wrapper passes the project's country.")
     parser.add_argument("--box", default="A", choices=["A", "B", "C"],
-                        help="TXF only: 8949 checkbox pairing — A/D "
-                             "(basis on the 1099-B, the default for "
-                             "covered securities), B/E (1099-B without "
-                             "basis), C/F (no 1099-B)")
+                        help="TXF only: 8949 checkbox pairing for "
+                             "securities — A/D (basis on the 1099-B, the "
+                             "default for covered securities), B/E "
+                             "(1099-B without basis), C/F (no 1099-B). "
+                             "From 2025 digital assets (--crypto) belong "
+                             "on boxes G-L, which TXF cannot carry: they "
+                             "are left out with a warning")
     parser.add_argument("--out", type=Path, default=None,
                         help="TXF only: write the .txf here instead of "
                              "stdout")
@@ -1242,8 +1400,8 @@ def _main(args) -> int:
               f"(`taxjson find-missing-history`); they are listed in the "
               f"MANUAL REPORTING section.", file=sys.stderr)
 
-    rep_8949 = (build_8949(entries) if args.form in ("8949", "txf")
-                else None)
+    rep_8949 = (build_8949(entries, args.year)
+                if args.form in ("8949", "txf") else None)
     if rep_8949 is not None:
         _s1256 = rep_8949["section_1256_totals"]
         if _s1256["dispositions"]:
@@ -1264,6 +1422,15 @@ def _main(args) -> int:
         if _ynote:
             print(f"warning: {_ynote}", file=sys.stderr)
         doc = build_txf(rep, args.box)
+        _da_rows = [r for p in ("I", "II") for r in rep[f"part_{p}"]
+                    if r.get("digital_asset")]
+        if _da_rows:
+            print(f"warning: {len(_da_rows)} digital-asset disposition(s) "
+                  f"(proceeds {sum(r['proceeds'] for r in _da_rows):,.2f}) "
+                  f"are NOT in the TXF: from 2025 they go on Form 8949 "
+                  f"boxes G-L, which have no TXF reference number taxjson "
+                  f"knows — enter them by hand (`--form 8949` lists them "
+                  f"by box).", file=sys.stderr)
         if args.out:
             tmp = args.out.with_name(args.out.name + ".part")
             try:
@@ -1273,7 +1440,8 @@ def _main(args) -> int:
                 tmp.unlink(missing_ok=True)
                 sys.exit(f"taxjson-form-export: cannot write --out "
                          f"{args.out}: {e}")
-            n = len(rep["part_I"]) + len(rep["part_II"])
+            n = sum(1 for p in ("I", "II") for r in rep[f"part_{p}"]
+                    if not r.get("digital_asset"))
             print(f"wrote {n} TXF record(s) (box {args.box}) to "
                   f"{args.out}", file=sys.stderr)
         else:
@@ -1284,7 +1452,7 @@ def _main(args) -> int:
         rep = rep_8949
         rep["currency"] = _home
     else:
-        rep = build_schedule3(entries, args.year)
+        rep = build_schedule3(entries, args.year, date_key)
         rep["currency"] = _home
     rep["manual_reporting_required"] = manual
     rep["manual_proceeds"] = manual_proceeds

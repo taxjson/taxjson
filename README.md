@@ -393,6 +393,7 @@ option_grant_timing_since = 2025    # contracts written before this year keep cl
 # other_losses = 0
 # deductions = 0               # Canada: RRSP 20800, FHSA, RPP ... (full under AMT)
 # carrying_charges = 0         # Canada: line 22100 (50% under the 2024+ AMT)
+# long_term_losses = 0         # US: long-term carryover (other_losses is then the short-term one)
 
 # Optional — Canadian tax instalments (`taxjson instalments`, and a
 # compact block inside `taxjson estimate`):
@@ -483,8 +484,8 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson ccd-sum` | Covered-call (short call) realized-gain summary per underlying over a window (default: tax year) — the windowed query twin of `reports/ccd.rpt`. Covers every account; the total is split into TAXABLE and SHELTERED parts when registered accounts contribute. |
 | `taxjson leaps-sum` | Per-contract LEAPS summary — long option buys placed >3 months to expiry (default: tax year); only the long position's dispositions (a later write/buy-back of the same contract is covered-call P&L, in `ccd-sum`); the total is split into TAXABLE and SHELTERED parts when registered accounts contribute. |
 | `taxjson instalments` | Canadian tax instalments: what each of the four dates (Mar/Jun/Sep/Dec 15) calls for under your chosen basis, what you have paid, and the **offset interest** plus **s.163.1 penalty** that follow from any gap. The current-year basis is driven by `taxjson estimate` itself (AMT included). Interest uses CRA's published quarterly rates (built in; `prescribed_rate(s)` overrides), credit interest runs from the later of the payment date and January 1, and net interest of $25 or less is not charged; CRA charges instalment interest only if it sent you a reminder for the year, which the report says. Configure `[instalments]` in `taxjson.toml`; `--json` for machines. |
-| `taxjson estimate` | The realized-gains summary table followed by the marginal tax **estimate**: tax(other income + investment income) − tax(other income). Canada projects also get an **AMT check** (post-2024 rules: gains at 100%, no DTC, 20.5% over the exemption + provincial piggyback) — shown binding-or-not, with the top-up and 7-year carryforward when it binds. Canada: 50% inclusion, eligible gross-up/DTC, FTC from the books' actual TAX rows, ON/BC/AB (`--province`, or `province` under `[settings]`). `--other-income`/`--other-losses`, and for Canada `--deductions` (RRSP 20800, FHSA, RPP ...) / `--carrying-charges` (line 22100) (or the `[estimate]` config block, which `instalments` reads too), `--verbose` trace, `--json`. Planning numbers, never filing numbers. |
-| `taxjson sum` / `list` / `divs-sum` / `trades-sum` / `fees-sum` | Roll-up summaries — see below. `list --date YYYY-MM-DD` shows positions AS OF that date (each account's books recomputed alone via the engine's `--as-of` cutoff, on the project's date basis — the settlement date unless `tax_date = "trade"`, so a sale traded Dec 31 that settles in January is still held at Dec 31, as in the gains year and `t1135`: Canada: per-account ACB — not the s.47 blend across taxable accounts that plain `list` and the return use; USA: the per-account FIFO basis the return uses, so no note — with in-account deferred wash and phantoms.json applied; the books are already ticker.map-consolidated, and the cross-account wash pass is not in it); plain `list` shows the positions at the end of the books (the header names the date); `list --negative` shows only negative-quantity positions — real shorts, or (in accounts that can't short) missed corporate actions / import gaps. Ends with a **FOR THE RETURN** block over the taxable accounts — Canada: one row per Schedule 3 line (line 4 shares & fund units 13199/13200; line 6 options, futures & other properties 15199/15300; line 7 crypto-assets 15200/15301 — 15199/15300 before 2025) with PROCEEDS, COST(ACB), OUTLAYS, GAIN and the superficial losses DENIED, on the Schedule 3 convention (a short sale's proceeds as PROCEEDS and its cover as ACB, sell commissions as outlays; a denied loss REDUCES the ACB shown so proceeds − ACB − outlays is the allowed gain, the denial going onto the replacement's ACB), plus the `fx-cash` estimate for line 15300; USA: Form 8949's own Part I/II (d) proceeds, (e) cost, (g) adjustment, (h) gain. Rows equal `form-export`'s line totals (each row rounded to the cent, as filed — when that differs from the gains files' unrounded total gain or denied amount (US: the (g) adjustment) by a cent or more the block says so, and `--json` carries `engine_gain_unrounded` and `engine_denied_unrounded`); `--json` adds the per-account split. |
+| `taxjson estimate` | The realized-gains summary table followed by the marginal tax **estimate**: tax(other income + investment income) − tax(other income). Canada projects also get an **AMT check** (post-2024 rules: gains at 100%, no DTC, 20.5% over the exemption + provincial piggyback) — shown binding-or-not, with the top-up and 7-year carryforward when it binds. Canada: 50% inclusion, eligible gross-up/DTC, FTC from the books' actual TAX rows, ON/BC/AB (`--province`, or `province` under `[settings]`). `--other-income`/`--other-losses` (in a US project the short-term carryover; `--long-term-losses` the long-term one), and for Canada `--deductions` (RRSP 20800, FHSA, RPP ...) / `--carrying-charges` (line 22100) (or the `[estimate]` config block, which `instalments` reads too), `--verbose` trace, `--json`. Planning numbers, never filing numbers. |
+| `taxjson sum` / `list` / `divs-sum` / `trades-sum` / `fees-sum` | Roll-up summaries — see below. `list --date YYYY-MM-DD` shows positions AS OF that date (each account's books recomputed alone via the engine's `--as-of` cutoff, on the project's date basis — the settlement date unless `tax_date = "trade"`, so a sale traded Dec 31 that settles in January is still held at Dec 31, as in the gains year and `t1135`: Canada: per-account ACB — not the s.47 blend across taxable accounts that plain `list` and the return use; USA: the per-account FIFO basis the return uses, so no note — with in-account deferred wash and phantoms.json applied; the books are already ticker.map-consolidated, and the cross-account wash pass is not in it); plain `list` shows the positions at the end of the books (the header names the date); `list --negative` shows only negative-quantity positions — real shorts, or (in accounts that can't short) missed corporate actions / import gaps. Ends with a **FOR THE RETURN** block over the taxable accounts — Canada: one row per Schedule 3 line (line 4 shares & fund units 13199/13200; line 6 options, futures & other properties 15199/15300; line 7 crypto-assets 15200/15301 — 15199/15300 before 2025; for 2024, January 1 – June 24 on the Period 1 codes 10689/10690 and 10693/10694) with PROCEEDS, COST(ACB), OUTLAYS, GAIN and the superficial losses DENIED, on the Schedule 3 convention (a short sale's proceeds as PROCEEDS and its cover as ACB, sell commissions as outlays; a denied loss REDUCES the ACB shown so proceeds − ACB − outlays is the allowed gain, the denial going onto the replacement's ACB), plus the `fx-cash` estimate for line 15300; USA: Form 8949's own Part I/II (d) proceeds, (e) cost, (g) adjustment, (h) gain (from 2025 the crypto accounts' digital-asset boxes G/H/I and J/K/L on rows of their own). Rows equal `form-export`'s line totals (each row rounded to the cent, as filed — when that differs from the gains files' unrounded total gain or denied amount (US: the (g) adjustment) by a cent or more the block says so, and `--json` carries `engine_gain_unrounded` and `engine_denied_unrounded`); `--json` adds the per-account split. |
 | `taxjson shares [--options] [--taxable\|--sheltered] [--sort qty] [--json]` | Combined quantity held of each symbol across all accounts (post ticker.map, wash-adjusted where built) with a per-account breakdown and combined book cost; shorts net against longs. Option contracts only with `--options`; futures contracts are left out. Like `list`, it is the end of the books (the header says the date), not the tax year's Dec 31. |
 | `taxjson option-boundary [--json]` | Written options whose write and close straddle a tax-year boundary, or that are open at year end: where the premium and any later amount land under ITA s.49 for the timing in force, and — using the `filed/` locks — whether a filed year needs a T1-ADJ (an assignment after the grant year was filed, s.49(4)). |
 | `taxjson tax-logic [--country canada\|usa] [--ids] [--json]` | A short statement of every rule taxjson applies for the project's country, one line per rule, with the project's own settings filled in (`tax_date`, option premium timing and `option_grant_timing_since`, `futures_settle`, `foreign_return_of_capital`, `option_buyback_loss_superficial`) — read through the same resolvers the engine uses, so a value the run reads differently or refuses is refused here too: tax-year dating and settle dates (income by pay date; in Canada a Canadian trust's distribution and return of capital by the record date the export prints; in the US the January fund/REIT dividends you list on Dec 31), currency conversion, ACB pooling and identity, Schedule 3 lines, the superficial-loss rule including options, option premium timing and exercise, corporate-action elections, income lines, crypto, the reports, and which settings and commands the project's country refuses. tax-logic is the spec the code is tested against: every statement has a stable rule id (`CA-SL-02`, `US-WASH-01`, ...) that `--ids` shows and `--json` lists, and that the tests cite (see CONTRIBUTING.md). Outside a project, pass `--country`. |
@@ -659,7 +660,10 @@ the earliest table also says the post-2024 AMT shown did not apply).
   carrying charges at 50%. Deductions not entered are not modelled, so
   an RRSP year left at 0 overstates the tax. Canadian-listed
   dividends are treated as eligible (38% gross-up + DTC) — non-eligible
-  dividends are not modelled; foreign dividends as ordinary income, credited (FTC) with the foreign
+  dividends are not modelled, and a Canadian trust's distribution (ETF,
+  REIT or fund units) is counted the same way, because the export does
+  not carry its T3 split (box 49 eligible dividends, 26 other income, 21
+  capital gains, 42 return of capital): take the real split from the T3; foreign dividends as ordinary income, credited (FTC) with the foreign
   tax the books actually withheld (TAX rows, capped at 15% of the
   dividends; the treaty 15% is assumed for an account whose books carry
   no TAX rows). A crypto account's dividends are staking rewards:
@@ -687,8 +691,11 @@ the earliest table also says the post-2024 AMT shown did not apply).
   instalments due); the output says so. See KNOWN_ISSUES.
 - **USA**: single filer, standard deduction. ST gains are ordinary; LT
   gains and (assumed-qualified) dividends stack on top at the 0/15/20%
-  brackets; losses net ST first, then LT, then up to $3,000 of ordinary
-  income (a net-loss year shows a negative estimate — a saving), and
+  brackets; a capital loss carryover keeps its term — `--other-losses`
+  is the short-term carryover (Schedule D line 6) and
+  `--long-term-losses` (or `[estimate] long_term_losses`) the long-term
+  one (line 14): each nets against its own term's gains first, then the
+  other term's, then up to $3,000 of ordinary income (a net-loss year shows a negative estimate — a saving), and
   that deduction also reduces net investment income; the carryforward
   shown counts as used only what taxable income absorbs (Capital Loss
   Carryover Worksheet line 4); NIIT 3.8% above $200k MAGI; no foreign
@@ -727,8 +734,9 @@ its printed (cent-rounded) rows.
   belong to the year they are PAID (ITA s.82(1); US: the pay date).
 - Canada: a **Canadian trust's distribution** belongs to the year it became
   PAYABLE (s.104(13)). A row the broker calls a distribution (Questrade/RBC
-  "DIST ON ...", RBC activity "Distribution") on a Canadian issuer (a
-  Canadian listing, or a CA ISIN) is dated by the record date it prints
+  "DIST ON ...", RBC activity "Distribution") on a Canadian issuer (its
+  ISIN country when the export gives one, else a Canadian listing) is
+  dated by the record date it prints
   ("REC 12/30/24 PAY 01/06/25" is 2024 income) — in `divs-sum`, the .sum,
   the estimate, instalments and the tax-year window of the `divs` / `roc` /
   `events` views (the row still shows its pay date). Split-share corporations (BK, DF, DFN, DGS,
@@ -753,14 +761,21 @@ its printed (cent-rounded) rows.
   a sale between the record date and a January pay date is on the reduced
   ACB (and any s.40(3) gain is in the record year). A corporation's
   (s.53(2)(a)) or a foreign issuer's return of capital lowers it when paid.
-  IB prints no record date: a January-paid ROC on a Canadian trust is
-  warned about — check the prior year's T3 box 42 and move it to Dec 31
-  with the two `.tt` ADJUST lines the warning prints (the warning stops
-  once both lines are in the books).
+  The exports do not say which Canadian issuer is a trust: every Canadian
+  issuer counts as one except the split-share corporations and the issuers
+  in `corporate_distributions` — list a corporation there so its return of
+  capital keeps the pay date. IB prints no record date: a January-paid ROC
+  on a Canadian issuer is warned about (if it is a trust, check the prior
+  year's T3 box 42 and move it to Dec 31 with the two `.tt` ADJUST lines
+  the warning prints; the warning stops once both lines are in the books,
+  or once a corporation is listed in `corporate_distributions`).
 - Canada: a **payment in lieu** on a Canadian issuer's share paid by a
   Canadian dealer (IB's statement names Interactive Brokers Canada Inc.) is
   a taxable dividend (s.260(5)/(5.1)), as the dealer's T5 box 24 reports
-  it; any other payment in lieu is ordinary income. US: a substitute
+  it; any other payment in lieu is ordinary income. The exports do not
+  tell a trust's unit from a share, so a payment in lieu on a Canadian ETF
+  or REIT unit is deemed a dividend too — by law s.260(5) covers shares
+  only: take a unit's payment from the slip. US: a substitute
   payment is ordinary, non-qualified income.
 - US: a fund (RIC) or REIT dividend declared in October–December and paid
   in January is received on Dec 31 (IRC §852(b)(7), §857(b)(9)). The
@@ -1059,7 +1074,11 @@ FILE` writes importable rows, `--json` the raw report.
   gain in (h) = (d) − (e) + (g) (each row foots on its rounded cents, so
   the part totals and the TXF agree) — split into Part I (short-term) / Part II
   (long-term) with the Schedule D totals per part. Pick the 8949 box (A–F)
-  yourself from whether the broker reported basis on your 1099-B. §1256
+  yourself from whether the broker reported basis on your 1099-B. From tax
+  year 2025 the `crypto = true` accounts' sales are digital assets: their
+  own group on boxes G/H/I (short-term) and J/K/L (long-term) with their own
+  totals (in `sum`'s FOR THE RETURN and the close-year lock too); the TXF
+  carries only boxes A–F and leaves those rows out with a warning. §1256
   contracts — futures, options on futures and broad-based index options
   (SPX, XSP, NDX, RUT, VIX and their weekly roots) — are **not** on Form
   8949: they are kept out of the rows, the totals and the TXF, and listed
@@ -1072,6 +1091,12 @@ FILE` writes importable rows, `--json` the raw report.
   properties (15199 / 15300 — T4037 lists options there), **line 7**
   crypto-assets from the `crypto = true` accounts (15200 / 15301; for 2024
   and earlier returns crypto goes on 15199 / 15300), with per-line totals.
+  The 2024 form splits Part 3 by period: dispositions from January 1 to
+  June 24, 2024 go on 10689 / 10690 (shares) and 10693 / 10694 (options,
+  futures, crypto and other properties), the rest on the codes above, so a
+  security sold in both periods has two rows; slip gains go on 17399 /
+  17599 for Period 1. A 2024 close-year lock written before this split is
+  compared on the Period 2 codes (`check-filed` says so in a note).
   A futures contract is booked on its settled P/L, not its notional (the
   notional never changes hands): the P/L of each close, commissions
   included, is converted at that closing leg's rate and shown the way the

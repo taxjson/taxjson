@@ -135,6 +135,7 @@ PARTITION_RULES = frozenset({
     "US-CTRY-03",      # base currency USD
     "US-FUT-01",       # futures P/L FIFO
     "US-CRYPTO-02",    # stablecoins are property (CA: US-dollar cash)
+    "US-CRYPTO-08",    # under 1e-08 units is zero (CA keeps any amount)
     "US-STKDIV-01",    # stock dividend: §307 basis spread, no §1091
     "US-BASIS-04",     # manual phantom-loss check on trade dates
     "US-ROC-03",       # ROC with no shares held: not booked (CA books it)
@@ -290,7 +291,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-OPT-05",
                  "Writing an option: nothing is taxed until it closes "
                  "(option_premium_timing = \"close\").", keys=tk),
-            Rule("CA-OPT-05",
+            Rule("CA-OPT-10",
                  "Buying it back or expiry: the premium minus the cost is "
                  "a gain or loss on that date.", keys=tk),
             Rule("CA-OPT-04",
@@ -339,6 +340,22 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "description, \"AS OF\" or \"EXP\", when it is at most "
                  "7 days before the posting date; else the posting "
                  "date), settled the same day.", cont=True),
+            Rule("CA-DATE-15",
+                 "An expiry the broker posts later (Questrade and RBC post "
+                 "it the next business day) is moved back to the "
+                 "contract's expiry date when posted at most 7 days after "
+                 "it; one posted later keeps its posting date.",
+                 cont=True),
+            Rule("CA-DATE-16",
+                 "A trade in the same contract on its expiry day settles "
+                 "no later than the expiry, even when the broker prints a "
+                 "later settle date.", cont=True),
+            Rule("CA-DATE-17",
+                 "Webull prints the SETTLE date: it is the row's settle "
+                 "date and the trade date is walked back one settlement "
+                 "cycle over business days (a sale printed Jan 2 traded "
+                 "Dec 31); an option expiry row's date is the expiry "
+                 "itself.", cont=True),
             (Rule("CA-DATE-09",
                   "Futures and futures options settle on the TRADE date "
                   "(futures_settle = \"trade\": variation margin settles "
@@ -389,6 +406,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "moment: an opening balance first, then a split (effective "
                  "at the open), an assignment's option leg before its "
                  "stock leg, then the trades; cost adjustments last."),
+            Rule("CA-DATE-18",
+                 "Rows of ONE account at one moment that come from "
+                 "different input files follow the files' name order "
+                 "(a.tt before b.tt); give such rows distinct times or "
+                 "put them in one file.", cont=True),
             Rule("CA-DATE-11",
                  "Interest and other income belong to the year they are "
                  "PAID."),
@@ -423,7 +445,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "A Canadian trust's distribution belongs to the year it "
                  "became PAYABLE (s.104(13)): a row the broker calls a "
                  "distribution (\"DIST ON\", RBC \"Distribution\") on a "
-                 "Canadian issuer (a Canadian listing or a CA ISIN) is "
+                 "Canadian issuer (its ISIN country when the export gives "
+                 "one, else a Canadian listing) is "
                  "dated by its printed record date — in divs-sum, the "
                  ".sum, the estimate, instalments and the divs / roc / "
                  "events views' windows (each row still shows its pay "
@@ -446,6 +469,18 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "distribution a dividend, so a trust cannot be told from "
                  "a corporation (the ex date IB's accruals give is not "
                  "used). The T3 slip is authoritative.",
+                 keys=("corporate_distributions",)),
+            Rule("CA-INC-DATE-ISSUER",
+                 "The exports do not say which Canadian issuer is a "
+                 "trust: for the two record-date rules above every "
+                 "Canadian issuer is a trust except the split-share "
+                 "corporations and the issuers in corporate_distributions. "
+                 "So a corporation's return of capital with a printed "
+                 "record date is dated by it until its issuer is listed "
+                 "there (when that date crosses a year, the ATTENTION "
+                 "line points out a description naming a Corp, Inc or "
+                 "Ltd), and the January return-of-capital warning asks "
+                 "whether the issuer is a trust rather than assuming it.",
                  keys=("corporate_distributions",)),
             Rule("CA-DATE-12",
                  f"Crypto is dated in local time: {tz} ([settings] "
@@ -639,7 +674,15 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Line 4 (13199/13200): shares, fund units and other "
                  "securities. Line 6 (15199/15300): options and futures. "
                  "Line 7 (15200/15301): accounts marked crypto, from 2025; "
-                 "on 15199/15300 before."),
+                 "on 15199/15300 before. The 2024 form splits Part 3 by "
+                 "the disposition's date (its tax_date): Period 1, "
+                 "January 1 to June 24, 2024, on 10689/10690 (shares) "
+                 "and 10693/10694 (options, futures, crypto and other "
+                 "properties); Period 2 on the codes above. A security "
+                 "sold in both periods has a row in each; slip gains go "
+                 "on 17399/17599 (Period 1) and 17400/17600. A 2024 "
+                 "close-year lock written before the split is compared "
+                 "on the Period 2 codes."),
             Rule("CA-DISP-04",
                  "A short sale's gain or loss is realized when it is "
                  "covered."),
@@ -785,8 +828,18 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "or rollover_s_85_1_5 (share-for-share; cost carries "
                  "over).", cont=True),
             Rule("CA-CORP-05",
-                 "Cash for fractional shares is handled; other cash in a "
-                 "merger is not modelled.", cont=True),
+                 "Cash in lieu of a fractional share is a sale of the "
+                 "fraction for the cash, on the pool's average cost "
+                 "(Questrade books the fraction at $0 the same day "
+                 "first).", cont=True),
+            Rule("CA-CORP-09",
+                 "A merger paid wholly in cash (IB \"Merged(Acquisition) "
+                 "FOR CAD 30.00 PER SHARE\") is a sale of the shares at "
+                 "the cash proceeds;", cont=True),
+            Rule("CA-CORP-10",
+                 "one paying shares AND cash is not modelled: it stops "
+                 "the run as an UNSUPPORTED event to enter by hand (.tt "
+                 "lines).", cont=True),
             Rule("CA-CORP-06",
                  "Spin-offs: rollover_s_86_1 (ACB split between the two "
                  "by the CAD amount you enter, s.86.1(3), booked exactly "
@@ -808,7 +861,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-INC-03",
                  "A payment in lieu of a dividend is ordinary income (no "
                  "gross-up or credit), EXCEPT one on a Canadian issuer's "
-                 "share (a Canadian listing or a CA ISIN) paid by a "
+                 "share (its ISIN country when the export gives one, else "
+                 "a Canadian listing) paid by a "
                  "Canadian dealer (IB's statement names Interactive "
                  "Brokers Canada Inc.; Questrade and RBC Direct are "
                  "Canadian dealers, and their 'IN LIEU OF DIVIDEND' rows "
@@ -816,6 +870,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "s.260(5)/(5.1) deems that a taxable dividend — "
                  "eligible in the estimate, counted in divs-sum, and on "
                  "the dealer's T5 box 24. The slip is authoritative."),
+            Rule("CA-INC-07",
+                 "The exports do not tell a trust's unit from a "
+                 "corporation's share, so a payment in lieu on a Canadian "
+                 "ETF or REIT unit is deemed a dividend too; by law "
+                 "s.260(5) covers shares only and a trust unit's payment "
+                 "in lieu is ordinary income — take it from the dealer's "
+                 "slip.", cont=True),
             Rule("CA-INC-04",
                  "Crypto staking rewards are income at fair value when "
                  "received; that value is the coins' cost."),
@@ -845,6 +906,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "DOT28.S, ETH2, ETH2.S, the .M/.F/.B/.P/.HOLD suffixes) "
                  "name the same coin as the bare code, so a 1:1 swap "
                  "between them is not a sale."),
+            Rule("CA-CRYPTO-10",
+                 "So is Coinbase's ETH2 (its staked ETH): it is booked as "
+                 "ETH, and a \"Converted ETH to ETH2\" row is not a sale "
+                 "(unequal quantities stop the parse).", cont=True),
+            Rule("CA-CRYPTO-11",
+                 "A Kraken dust sweep (several coins converted at once "
+                 "into one receipt) is a sale of each coin: the receipt "
+                 "is split over them by the export's amountusd, or "
+                 "equally when the export has none (the parse says "
+                 "which).", cont=True),
             Rule("CA-CRYPTO-09",
                  "Any amount of a coin is property: a residue left after a "
                  "sale, however small, stays in the holdings with its "
@@ -938,6 +1009,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "a line that matches no symbol in the books is named in "
                  "a warning.",
                  cont=True),
+            Rule("CA-RPT-15",
+                 "The test covers these books only: specified foreign "
+                 "property held outside them (a foreign bank account or "
+                 "cash, shares held elsewhere) adds to the same $100,000, "
+                 "so the report, its JSON (scope) and the checklist say "
+                 "\"on these books\".", cont=True),
             Rule("CA-RPT-12",
                  "A property's cost amount is its adjusted cost base as "
                  "the gains engine computes it, day by day over the full "
@@ -961,6 +1038,62 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "foreign dividends as ordinary income with withholding "
                  "credited up to 15%;", cont=True),
             Rule("CA-RPT-06", "interest is left out.", cont=True),
+            Rule("CA-EST-TRUST",
+                 "A Canadian trust's distribution (an ETF, REIT or fund "
+                 "unit's T3 income) is counted with the eligible "
+                 "dividends too: the export does not give the T3 split "
+                 "(box 49 eligible dividends, box 26 other income, box "
+                 "21 capital gains, box 42 return of capital), so the "
+                 "estimate is close for an equity fund that flows out "
+                 "eligible dividends and off for a REIT or bond fund — "
+                 "the T3 decides.", cont=True),
+            Rule("CA-EST-LOSSES",
+                 "Net capital losses carried forward (--other-losses, "
+                 "full dollars) are netted against the year's gains "
+                 "before the 50% inclusion and used only up to them "
+                 "(s.111(1)(b)); the rest is shown as unused. They are "
+                 "deducted below net income (line 25300), so the "
+                 "net-income tests (the BPA phase-down) still see the "
+                 "gain."),
+            Rule("CA-EST-DEDUCT",
+                 "--deductions (lines 20700-23500 the AMT allows in "
+                 "full: RRSP, FHSA, RPP ...) and --carrying-charges "
+                 "(line 22100) lower net and taxable income, other "
+                 "income first, never below zero; the AMT base takes the "
+                 "deductions in full and the carrying charges at 50%."),
+            Rule("CA-EST-BPA",
+                 "The federal basic personal amount phases down on net "
+                 "income from the enhanced amount to the minimum between "
+                 "the starts of the 29% and 33% brackets; it is the only "
+                 "non-refundable credit modelled.", cont=True),
+            Rule("CA-EST-PROV",
+                 "Provinces: Ontario (with its surtax and the Ontario "
+                 "Health Premium, added after every credit), British "
+                 "Columbia and Alberta. Quebec and the other provinces "
+                 "are refused (no Quebec abatement, no low-income "
+                 "reductions)."),
+            Rule("CA-EST-FTC",
+                 "Foreign withholding is credited up to 15% of the "
+                 "foreign dividends (the books' TAX rows, else 15% "
+                 "assumed); what federal tax cannot absorb is credited "
+                 "against provincial tax (form T2036), limited to the "
+                 "provincial tax times foreign income over net income.",
+                 cont=True),
+            Rule("CA-EST-AMT",
+                 "The AMT check (post-2024 rules): 20.5% over an "
+                 "exemption at the start of the 29% bracket, on gains at "
+                 "100% (the claimable carryforward at 50%), dividends at "
+                 "their actual amount with no credit, the other income, "
+                 "the BPA credit at 50% and the foreign tax credit in "
+                 "full; the provincial share is the province's factor of "
+                 "the federal excess (Ontario's surtax recomputed on it)."),
+            Rule("CA-EST-VINTAGE",
+                 "Rates, brackets and credits are the tax year's own "
+                 "table; a year with none uses the newest earlier table "
+                 "and a year before the earliest uses the earliest (the "
+                 "printed vintage and a note say so — for such an early "
+                 "year the AMT shown is the post-2024 regime, which did "
+                 "not apply then)."),
             Rule("CA-RPT-10",
                  "`taxjson carryover`: the net-capital-loss ledger in 100% "
                  "amounts (the inclusion rate is applied on the return); a "
@@ -988,6 +1121,19 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "offset method, nothing charged at $25 or less). A payment "
                  "made before January 1 counts only when its row says "
                  "`tax_year = YEAR`, and earns credit from January 1."),
+            Rule("CA-INST-PRIOR",
+                 "The prior-year test fails only when both earlier years' "
+                 "net tax is given and both are $3,000 or less; a year "
+                 "not given is assumed to meet it, so instalments are "
+                 "reported as required.", cont=True),
+            Rule("CA-INST-INTEREST",
+                 "Interest credited on early or extra payments only "
+                 "offsets the charge: it is never refunded.",
+                 cont=True),
+            Rule("CA-INST-PENALTY",
+                 "The s.163.1 penalty is 50% of the net interest over "
+                 "the greater of $1,000 and 25% of the interest had "
+                 "nothing been paid.", cont=True),
             Rule("CA-SCAN-01",
                  "`taxjson scan`: a US-listed dividend payer held in a "
                  "TFSA is flagged — the 15% US withholding is "
@@ -1126,6 +1272,23 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "description, \"AS OF\" or \"EXP\", when it is at most "
                  "7 days before the posting date; else the posting "
                  "date), settled the same day.", cont=True),
+            Rule("US-DATE-14",
+                 "An expiry the broker posts later (Questrade and RBC post "
+                 "it the next business day) is moved back to the "
+                 "contract's expiry date when posted at most 7 days after "
+                 "it; one posted later keeps its posting date.",
+                 cont=True),
+            Rule("US-DATE-15",
+                 "A trade in the same contract on its expiry day settles "
+                 "no later than the expiry, even when the broker prints a "
+                 "later settle date.", cont=True),
+            Rule("US-DATE-16",
+                 "Webull prints the SETTLE date: it is the row's settle "
+                 "date and the trade date is walked back one settlement "
+                 "cycle over business days (a sale printed Jan 2 traded "
+                 "Dec 31, so under trade dates it is the earlier year's); "
+                 "an option expiry row's date is the expiry itself.",
+                 cont=True),
             (Rule("US-DATE-09",
                   "Futures and futures options settle on the TRADE date "
                   "(futures_settle = \"trade\": variation margin settles "
@@ -1171,6 +1334,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "balance first, an assignment's option leg before its "
                  "stock leg, a split before the trades; basis adjustments "
                  "last."),
+            Rule("US-DATE-17",
+                 "Rows of ONE account at one moment that come from "
+                 "different input files follow the files' name order "
+                 "(a.tt before b.tt), which decides which lot FIFO "
+                 "takes; give such rows distinct times or put them in "
+                 "one file.", cont=True),
             Rule("US-DATE-03",
                  "Interest and other income belong to the year they are "
                  "paid."),
@@ -1281,6 +1450,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "stop `run --strict` until declared. An undated rename "
                  "(GLOBAL, or RENAME without a date) applies to every row "
                  "of OLD.", cont=True),
+            Rule("US-BASIS-07",
+                 "Accounts typed \"sheltered\" (an IRA, Roth IRA, "
+                 "401(k)...) are tracked but kept out of the filing "
+                 "totals (Form 8949, `sum`, the carryover); for the "
+                 "wash-sale rule they count (US-WASH-04, US-WASH-11)."),
             Rule("US-BASIS-05",
                  "A transfer into a taxable account stops the run until "
                  "the original purchase is declared (.tt ACQUIRED line). "
@@ -1353,8 +1527,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-STKDIV-03",
                  "Received with no shares held (history missing, or sold "
                  "before the pay date), the new shares are booked as a $0 "
-                 "purchase with a warning: add the missing history (or "
-                 "adjust the sold lots) so §307 can spread the basis.",
+                 "purchase with a warning — still not a wash-sale "
+                 "replacement: add the missing history (or adjust the "
+                 "sold lots) so §307 can spread the basis.",
                  cont=True),
         ]),
         ("Wash sales (§1091)", [
@@ -1375,6 +1550,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "cover) — one row, or the same-second fills of one order "
                  "— never replace each other's losses; shares kept after "
                  "that sale still do,", cont=True),
+            Rule("US-WASH-21",
+                 "and a purchase in a taxable account replaces only with "
+                 "the shares of it still unsold at the loss: shares sold "
+                 "(first in, first out) before the loss no longer wash "
+                 "it — unlike an IRA purchase (US-WASH-11) —",
+                 cont=True),
             Rule("US-WASH-07",
                  "and look-alike securities are not detected.", cont=True),
             Rule("US-WASH-08",
@@ -1388,7 +1569,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "first. Purchases at the same moment go to your taxable "
                  "accounts first, then IRAs, then affiliated accounts, "
                  "then in the export's row order (accounts in "
-                 "taxjson.toml order).", cont=True),
+                 "taxjson.toml order), never by the account's name.",
+                 cont=True),
             Rule("US-WASH-09",
                  "The disallowed loss is added to the replacement lot's "
                  "basis"),
@@ -1462,6 +1644,20 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "received, a loss never; new basis = old basis - cash + "
                  "gain; the holding period restarts in this model).",
                  cont=True),
+            Rule("US-CORP-09",
+                 "Cash in lieu of a fractional share is a sale of the "
+                 "fraction for the cash (Questrade books the fraction at "
+                 "$0 the same day first); FIFO takes the units sold from "
+                 "the oldest lot, with its basis and holding period."),
+            Rule("US-CORP-10",
+                 "A merger paid wholly in cash (IB \"Merged(Acquisition) "
+                 "FOR USD 30.00 PER SHARE\") is a sale of the shares at "
+                 "the cash proceeds;", cont=True),
+            Rule("US-CORP-11",
+                 "one paying shares AND cash is not booked from the "
+                 "export: it stops the run as an UNSUPPORTED event to "
+                 "enter by hand (.tt lines, e.g. per reorg_368_boot's "
+                 "§356 rule).", cont=True),
             Rule("US-CORP-06",
                  "Spin-offs: taxable_distribution_301 (a §301 "
                  "distribution: income at FMV, which is also the new "
@@ -1497,6 +1693,26 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "DOT28.S, ETH2, ETH2.S, the .M/.F/.B/.P/.HOLD suffixes) "
                  "name the same coin as the bare code, so a 1:1 swap "
                  "between them is not a sale."),
+            Rule("US-CRYPTO-06",
+                 "So is Coinbase's ETH2 (its staked ETH): it is booked as "
+                 "ETH, and a \"Converted ETH to ETH2\" row is not a sale "
+                 "(unequal quantities stop the parse).", cont=True),
+            Rule("US-CRYPTO-07",
+                 "A Kraken dust sweep (several coins converted at once "
+                 "into one receipt) is a sale of each coin: the receipt "
+                 "is split over them by the export's amountusd, or "
+                 "equally when the export has none (the parse says "
+                 "which).", cont=True),
+            Rule("US-CRYPTO-08",
+                 "The US engine counts less than 1e-08 units as zero: a "
+                 "purchase or sale row under 1e-08 units is not booked "
+                 "(its units and money are left out of the lots and Form "
+                 "8949), a lot residue of at most 1e-08 units is folded "
+                 "into the sale that closes the lot (its cost goes with "
+                 "that sale), and a sale's excess of at most 1e-08 units "
+                 "over the units held opens no position (the whole "
+                 "proceeds are on the units held). Each case is named in "
+                 "a warning."),
             Rule("US-CRYPTO-02",
                  "USD stablecoins (USDC, USDT, DAI, PYUSD and GUSD, on "
                  "Kraken and Coinbase alike) are property like any coin: "
@@ -1606,8 +1822,18 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "`taxjson form-export --form 8949`: Form 8949 rows (Part "
                  "I short-term, Part II long-term;"),
             Rule("US-RPT-02", "wash sales as code W).", cont=True),
+            Rule("US-RPT-11",
+                 "From tax year 2025 a crypto account's dispositions are "
+                 "digital assets: their own Form 8949 group on boxes "
+                 "G/H/I (short-term) or J/K/L (long-term), with their own "
+                 "totals in the export, `sum` and the close-year lock; "
+                 "securities stay on A/B/C and D/E/F. Earlier years put "
+                 "them with the securities.", cont=True),
             Rule("US-RPT-03",
-                 "`--form txf` writes a TurboTax TXF file.", cont=True),
+                 "`--form txf` writes a TurboTax TXF file of the "
+                 "securities rows (boxes A-F); boxes G-L have no TXF "
+                 "code, so their rows are left out with a warning.",
+                 cont=True),
             Rule("US-RPT-09",
                  "Form 8949 cells are rounded half-up to the cent and (h) "
                  "= (d) - (e) + (g) on the rounded cells, so a half-cent "
@@ -1624,13 +1850,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "offsetting up to "
                  "$3,000 of ordinary income; foreign tax credits, "
                  "interest and state tax are left out.", cont=True),
-            Rule("US-EST-CARRY-ORDER",
-                 "A capital loss carryover entered as other losses has no "
-                 "character in the estimate: it offsets short-term gains "
-                 "first, then long-term gains, then up to $3,000 of "
-                 "ordinary income (Schedule D keeps a short- and a "
-                 "long-term carryover apart; the estimate does not).",
-                 cont=True),
+            Rule("US-EST-CARRY-TERM",
+                 "A capital loss carryover keeps its term: --other-losses "
+                 "is the short-term carryover (Schedule D line 6) and "
+                 "--long-term-losses the long-term one (line 14); each "
+                 "offsets gains of its own term first, the rest the other "
+                 "term's (line 16).", cont=True),
             Rule("US-EST-NIIT-LOSS",
                  "That up-to-$3,000 capital loss deduction also reduces "
                  "net investment income for NIIT (Form 8960 line 5a).",
@@ -1639,6 +1864,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "The carryforward it shows counts as used only the part "
                  "of the $3,000 that taxable income absorbs (Capital Loss "
                  "Carryover Worksheet line 4).", cont=True),
+            Rule("US-EST-VINTAGE",
+                 "Brackets, the standard deduction and the capital-gain "
+                 "brackets are the tax year's own table; a year with none "
+                 "uses the newest earlier table and a year before the "
+                 "earliest uses the earliest (the printed vintage and a "
+                 "note say so).", cont=True),
             Rule("US-RPT-08",
                  "`taxjson carryover`: the short- and long-term capital "
                  "loss carryover (Schedule D worksheet), assuming the "
@@ -1657,7 +1888,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "is listed as a warning only, a stock dividend is not a "
                  "purchase (never an in-window acquisition), and crypto "
                  "has no window."),
-            Rule("US-RPT-09",
+            Rule("US-RPT-10",
                  "`taxjson checklist`'s slip step names Form 1099-B for "
                  "securities and, from tax year 2025, Form 1099-DA for a "
                  "broker's digital-asset (crypto) sales (gross proceeds "
@@ -1681,7 +1912,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "every account, IRAs included, and no still-held test — "
                  "a washed loss shows as WASHED, and no later sale "
                  "undoes it (the disallowed loss is in the replacement's "
-                 "basis)."),
+                 "basis, or lost for good when the replacement is in an "
+                 "IRA, US-WASH-11)."),
             Rule("US-PLAN-02",
                  "A long call bought in the window is a note only, for an "
                  "existing loss and for a loss sale today, as are a "

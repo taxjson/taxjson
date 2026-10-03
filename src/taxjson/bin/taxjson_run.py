@@ -661,11 +661,19 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
     # The zone crypto UTC stamps are dated in (the parsers and
     # crypto-sends read TAXJSON_LOCAL_TZ): the project's setting wins
     # over the environment, so every command and stage of this project
-    # dates a crypto row the same way (partition INPUTS-09).
-    _tz = settings.get("local_timezone")
-    if _tz:
-        import os as _os
-        _os.environ["TAXJSON_LOCAL_TZ"] = _tz
+    # dates a crypto row the same way (partition INPUTS-09). With no
+    # setting the project uses the default zone, never the environment
+    # (CA-DATE-12 / US-DATE-11: the variable applies OUTSIDE a project,
+    # and tax-logic names the zone in force — re-audit A2-0165).
+    import os as _os
+    from taxjson.lib.brokerages._crypto_common import DEFAULT_LOCAL_TZ
+    _tz = settings.get("local_timezone") or DEFAULT_LOCAL_TZ
+    _env_tz = (_os.environ.get("TAXJSON_LOCAL_TZ") or "").strip()
+    if _env_tz and _env_tz != _tz and not settings.get("local_timezone"):
+        print(f"note: TAXJSON_LOCAL_TZ={_env_tz} is ignored inside a "
+              f"project: crypto rows are dated in {_tz}; set [settings] "
+              f"local_timezone to change it.", file=sys.stderr)
+    _os.environ["TAXJSON_LOCAL_TZ"] = _tz
     srcs = settings.get("source_currencies")
     if isinstance(srcs, list) and all(isinstance(c, str) for c in srcs):
         settings["source_currencies"] = [c.strip().upper() for c in srcs]
@@ -839,7 +847,7 @@ def _die_input(msg: str) -> None:
 
 
 _ESTIMATE_KEYS = ("other_income", "other_losses", "deductions",
-                  "carrying_charges")
+                  "carrying_charges", "long_term_losses")
 
 
 def _estimate_deductions(root: Path, args) -> Tuple[float, float]:
@@ -869,6 +877,30 @@ def _estimate_deductions(root: Path, args) -> Tuple[float, float]:
                  f"amount you deduct, as a positive figure), got {v!r}")
         out.append(f)
     return out[0], out[1]
+
+
+def _estimate_lt_losses(root: Path, args) -> float:
+    """The US long-term capital loss carryover (Schedule D line 14):
+    --long-term-losses, else [estimate] long_term_losses, else 0
+    (`--other-losses` is then the short-term carryover; tax-logic
+    US-EST-CARRY-TERM, re-audit A2-0481 / A2-0809). Both are refused in
+    a Canada project (lib/country FLAG_COUNTRY / CONFIG_COUNTRY)."""
+    import math as _math
+    v = getattr(args, "long_term_losses", None)
+    src = "--long-term-losses"
+    if v is None:
+        cfg = _soft_config(root).get("estimate") or {}
+        v, src = cfg.get("long_term_losses"), "[estimate] long_term_losses"
+    if isinstance(v, bool):
+        _die(f"{src} must be a number, got {v!r}")
+    try:
+        f = float(v or 0.0)
+    except (TypeError, ValueError):
+        _die(f"{src} must be a number, got {v!r}")
+    if not _math.isfinite(f) or f < 0:
+        _die(f"{src} must be a non-negative finite number (enter loss "
+             f"carryovers as positive amounts), got {v!r}")
+    return f
 
 
 def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
@@ -9176,9 +9208,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
                      or getattr(args, "other_losses", None) is not None
                      or getattr(args, "deductions", None) is not None
                      or getattr(args, "carrying_charges", None) is not None
+                     or getattr(args, "long_term_losses", None) is not None
                      or getattr(args, "estimate", False))
     _oi, _ol = _estimate_inputs(root, args)
     _ded, _cc = _estimate_deductions(root, args)
+    _ltl = _estimate_lt_losses(root, args)
     _foreign_by_acct: Dict[str, float] = {}
     cfg = load_config(root) if (root / "taxjson.toml").exists() else {}
     taxable_accounts = {n for n, c in cfg.get("accounts", {}).items()
@@ -9436,7 +9470,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _filing_ents += _ents
         if _is_us:
             try:
-                _parts = filing_parts_8949(_ents)
+                _parts = filing_parts_8949(_ents, _fyear)
             except SystemExit as e:
                 # Dropping the account (and, below, every account's
                 # Part I/II lines) printed RETURN 0.00 next to a nonzero
@@ -9451,12 +9485,14 @@ def cmd_summary(args: argparse.Namespace) -> None:
                 "dispositions": len(_ents)})
         else:
             filing_rows.append({"account": acct,
-                                **filing_totals(_ents, _fyear)})
+                                **filing_totals(_ents, _fyear,
+                                                _date_key)})
     filing_line_rows: List[Dict[str, Any]] = []
     _filing_6781: Optional[Dict[str, Any]] = None
     if _is_us:
         try:
-            filing_line_rows = filing_parts_8949(_filing_ents)
+            filing_line_rows = filing_parts_8949(_filing_ents,
+                                                 _fyear)
             # §1256 contracts stay off Form 8949 (Form 6781 by hand,
             # US-FUT-02 / US-OPT-04; A2-0324): shown beside the block.
             _filing_6781 = filing_6781(_filing_ents)
@@ -9464,7 +9500,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
             filing_line_rows = []           # warned per account above
         _fkeys = ("proceeds", "cost", "adjustment", "gain")
     else:
-        filing_line_rows = filing_lines(_filing_ents, _fyear)
+        filing_line_rows = filing_lines(_filing_ents, _fyear, _date_key)
         _fkeys = ("proceeds", "acb", "outlays", "gain", "denied")
     filing_total = {k: round(sum(r[k] for r in filing_line_rows), 2)
                     for k in _fkeys}
@@ -9600,7 +9636,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
             doc["estimate"] = _tax_estimate_result(
                 cfg, est,
                 other_income=_oi, other_losses=_ol,
-                deductions=_ded, carrying_charges=_cc,
+                deductions=_ded, carrying_charges=_cc, lt_losses=_ltl,
                 province=getattr(args, "province", None),
                 actual_withheld=_actual_withholding(
                     cache, set(files) & taxable_accounts,
@@ -9772,7 +9808,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _print_tax_estimate(
             cfg, est, base,
             other_income=_oi, other_losses=_ol,
-            deductions=_ded, carrying_charges=_cc,
+            deductions=_ded, carrying_charges=_cc, lt_losses=_ltl,
             province=getattr(args, "province", None),
             verbose=getattr(args, "verbose", False),
             actual_withheld=_actual_withholding(
@@ -10177,7 +10213,8 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
                          province: Optional[str],
                          actual_withheld: Optional[float] = None,
                          deductions: float = 0.0,
-                         carrying_charges: float = 0.0
+                         carrying_charges: float = 0.0,
+                         lt_losses: float = 0.0
                          ) -> Dict[str, Any]:
     """Resolve country/province and run the estimator — shared by the
     text block and `sum --json` so the two can never disagree. For usa,
@@ -10226,8 +10263,11 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
                      qualified_div=est["div_ca"] + est["div_foreign"],
                      pil=est["pil"] + est.get("staking", 0.0),
                      other_income=other_income,
-                     other_losses=other_losses)
+                     other_losses=other_losses,
+                     lt_losses=lt_losses)
     r["st_input"] = round(st_in, 2)
+    r["carryover_short_term"] = round(other_losses, 2)
+    r["carryover_long_term"] = round(lt_losses, 2)
     s1256 = float(est.get("s1256") or 0.0)
     r["section_1256_gain"] = round(s1256, 2)
     if abs(s1256) > 0.005:
@@ -10248,6 +10288,7 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                         province: Optional[str],
                         deductions: float = 0.0,
                         carrying_charges: float = 0.0,
+                        lt_losses: float = 0.0,
                         verbose: bool = False,
                         actual_withheld: Optional[float] = None,
                         root: Optional[Path] = None,
@@ -10262,7 +10303,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                              other_losses=other_losses, province=province,
                              actual_withheld=actual_withheld,
                              deductions=deductions,
-                             carrying_charges=carrying_charges)
+                             carrying_charges=carrying_charges,
+                             lt_losses=lt_losses)
     # The result carries the vintage apply_vintage() actually selected
     # for the project year — never the import-time module default.
     RATE_VINTAGE = r.get("vintage", "?")
@@ -10461,9 +10503,11 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
         rows = [
             ("Other income", other_income, ""),
             ("Short-term gains (net)", r["st_net"],
-             f"[{money(st_in)} before other losses]"),
+             f"[{money(st_in)} before carryovers; short-term "
+             f"carryover {money(r.get('carryover_short_term', 0.0))}]"),
             ("Long-term gains (net)", r["lt_net"],
-             f"[{money(est['lt'])} before other losses]"),
+             f"[{money(est['lt'])} before carryovers; long-term "
+             f"carryover {money(r.get('carryover_long_term', 0.0))}]"),
             ("Qualified dividends",
              est["div_ca"] + est["div_foreign"], ""),
             ("Payments in lieu", est["pil"], "[ordinary]"),
@@ -13514,8 +13558,12 @@ def _check_filed_years(root: Path, cache: Path,
                 snap.get("basis", ""), _filed_run_gains,
                 option_timing=_lock_timing)
             _stage = "lock"
+            _diff_notes: List[str] = []
             lines = taxjson_filed.diff_snapshot(snap, recomputed,
-                                                unconfigured=_gone)
+                                                unconfigured=_gone,
+                                                notes=_diff_notes)
+            for _dn in _diff_notes:
+                print(f"  note: filed {year}: {_dn}")
         except SystemExit:
             raise
         except Exception as e:          # this lock only
@@ -16859,6 +16907,16 @@ def cmd_init(args: argparse.Namespace) -> None:
     print(f"  3. run: taxjson -C {_shlex.quote(str(root))} run")
 
 
+# The carryover flag means what each country's return does with it
+# (re-audit A2-0481: the help cited the Canadian 50% inclusion in a US
+# project).
+_OTHER_LOSSES_HELP = ("Prior-year capital loss carryover applied, in "
+                      "FULL dollars (Canada: net capital losses, netted "
+                      "against the gains before the 50%% inclusion; US: "
+                      "the SHORT-term carryover — give the long-term one "
+                      "with --long-term-losses)")
+
+
 def _add_deduction_flags(p: argparse.ArgumentParser) -> None:
     """--deductions / --carrying-charges for the Canada estimate
     (`sum` and `estimate`); [estimate] deductions / carrying_charges
@@ -16874,6 +16932,13 @@ def _add_deduction_flags(p: argparse.ArgumentParser) -> None:
                         "22100), deducted in full from regular income "
                         "and at 50%% in the AMT base (default: "
                         "[estimate] carrying_charges, else 0)")
+    p.add_argument("--long-term-losses", type=float, default=None,
+                   metavar="AMT",
+                   help="US: the LONG-term capital loss carryover "
+                        "(Schedule D line 14), netted against long-term "
+                        "gains first; --other-losses is then the "
+                        "short-term one (default: [estimate] "
+                        "long_term_losses, else 0)")
 
 
 def _interrupt_note() -> str:
@@ -17154,10 +17219,8 @@ def _main() -> None:
                             "investment income stacks on top of — turns "
                             "on the tax-estimate block")
     p_sum.add_argument("--other-losses", type=float, default=None,
-                       metavar="AMT",
-                       help="Prior-year capital losses (full dollars) to "
-                            "net against this year's gains — turns on "
-                            "the tax-estimate block")
+                       metavar="AMT", help=_OTHER_LOSSES_HELP
+                       + " — turns on the tax-estimate block")
     for _p in (p_sum,):
         _add_deduction_flags(_p)
     p_sum.add_argument("account", nargs="?",
@@ -17190,10 +17253,7 @@ def _main() -> None:
                        help="Employment/other income the investment "
                             "income stacks on top of (default: 0)")
     p_est.add_argument("--other-losses", type=float, default=None,
-                       metavar="AMT",
-                       help="Prior-year capital losses applied, in "
-                            "FULL dollars (netted before the 50%% "
-                            "inclusion)")
+                       metavar="AMT", help=_OTHER_LOSSES_HELP)
     _add_deduction_flags(p_est)
     p_est.add_argument("--province", default=None,
                        help="Canada: ON|BC|AB (default: `province` "
@@ -17743,8 +17803,11 @@ def _main() -> None:
                               "importable file built from the 8949 "
                               "rows, US projects only)")
     p_forms.add_argument("--box", default=None, choices=["A", "B", "C"],
-                         help="txf only: 8949 checkbox pairing (A/D "
-                              "basis-reported, the default; B/E, C/F)")
+                         help="txf only: 8949 checkbox pairing for "
+                              "securities (A/D basis-reported, the "
+                              "default; B/E, C/F); from 2025 a crypto "
+                              "account's rows belong on boxes G-L, which "
+                              "the TXF leaves out with a warning")
     p_forms.add_argument("--out", metavar="FILE", default=None,
                          help="txf only: write the .txf here instead "
                               "of stdout")
