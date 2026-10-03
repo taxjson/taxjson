@@ -20,6 +20,14 @@
   engine already applies: order acquired, and at the same moment taxable
   accounts first, then IRAs, then affiliated accounts (US-WASH-20, re-audit
   A2-0941).
+- `taxjson audit`, `taxjson carryover` and `taxjson t1135` merge the
+  taxable books in the accounts' taxjson.toml order, as `taxjson run`
+  does (CA-DATE-14 / US-DATE-13; re-audit A2-0497, A2-0502). Sorted by
+  account name, a same-moment sale in one account and buy in another
+  could be pooled the other way round: the audit then denied a loss the
+  run never denied and failed its own tie-out, and carryover showed a
+  different net for the year than the run and the lock.
+
 - Errors are one line with a consistent exit code in more places
   (re-audit A2-0161, A2-0791, A2-0770, A2-1421, A2-1435, A2-1436,
   A2-1428, A2-1432): `taxjson <tool>` runs a tool under the same guard

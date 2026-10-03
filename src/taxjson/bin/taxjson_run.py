@@ -12265,7 +12265,9 @@ def cmd_t1135(args: argparse.Namespace) -> None:
     base_argv: List[str] = []
     gains_argv: List[str] = []
     missing: List[str] = []
-    for name in sorted(taxable):
+    # taxjson.toml order, as the run merges the books (CA-DATE-14 /
+    # US-DATE-13; the A2-0502 twin).
+    for name in taxable:
         base = cache / f"{name}_base.json"
         if not base.exists():
             missing.append(name)
@@ -12385,7 +12387,10 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     base_argv: List[str] = []
     crypto_argv: List[str] = []
     missing: List[str] = []
-    for name in sorted(taxable):
+    # taxjson.toml order, as the run's blended pass merges the books
+    # (CA-DATE-14 / US-DATE-13): sorted() gave a year a different net
+    # than the run and the lock (A2-0502).
+    for name in taxable:
         base = cache / f"{name}_base.json"
         if not base.exists():
             missing.append(name)
@@ -15879,8 +15884,12 @@ def cmd_audit(args: argparse.Namespace) -> None:
                if (c or {}).get("type") == "taxable"}
     if not taxable:
         _die("no taxable accounts in taxjson.toml — nothing to audit.")
-    equity = sorted(n for n, c in taxable.items() if not c.get("crypto"))
-    crypto = sorted(n for n, c in taxable.items() if c.get("crypto"))
+    # taxjson.toml order, as the run's blended pass merges them: rows
+    # of different accounts at one moment follow the accounts' order
+    # (CA-DATE-14 / US-DATE-13). sorted() made the audit deny a loss
+    # the run never denied and fail its own tie-out (A2-0497).
+    equity = [n for n, c in taxable.items() if not c.get("crypto")]
+    crypto = [n for n, c in taxable.items() if c.get("crypto")]
     _acct = getattr(args, "account", None)
     if _acct:
         if _acct not in taxable:
