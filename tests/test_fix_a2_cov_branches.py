@@ -250,6 +250,45 @@ class TestRoutedBumpLandsOnAnotherPool(unittest.TestCase):
                          [('2025-02-03', 1000.0)])
 
 
+class TestRemovedBranches(unittest.TestCase):
+    """Branches removed as unreachable (A2-1596), with the invariant
+    that made each dead:
+
+    * _short_lot_close's `rem > 0` remainder: every short opening of an
+      option pool under grant timing opens a lot (a write, the short
+      leftover of a crossing sell, a missing-history short opening), a
+      split scales the lots with the pool, a rename merges both, a drain
+      clears both and a close takes the same quantity from each, so the
+      lots always cover the closed quantity.
+    * _opening_qty's short side: every caller asks for the long side,
+      because only a long acquisition replaces in Canada (CA-SL-07).
+    * The US engine's per-symbol move of replacement records at a
+      rename: they are keyed by the dated identity class (_rep_key ->
+      SplitTimeline.class_at), whose root is never the renamed-away
+      ticker, so the moved key never existed."""
+
+    P = 'XYZ251219C00010000.TO'
+
+    @rule("CA-OPT-01", "CA-OPT-03")
+    def test_grant_lots_cover_every_close(self):
+        # Long 1, sell 3 (closes 1, writes 2), write 1 more, buy back 3:
+        # the pool drains to zero and the records add up to the cash.
+        book = [_tx('2025-03-03', 1, 100, sym=self.P),
+                _tx('2025-03-10', -3, 450, sym=self.P),
+                _tx('2025-03-17', -1, 120, sym=self.P),
+                _tx('2025-04-01', 3, 240, sym=self.P)]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            res = CanadaTaxRules().compute_gains(
+                book, option_premium_timing='grant', option_grant_since=2025)
+        self.assertEqual([i for i in res['inventory']
+                          if i['symbol'] == self.P
+                          and abs(i.get('qty') or 0) > 1e-9], [])
+        total = round(sum(e['gain'] for e in res['transactions']
+                          if e.get('symbol') == self.P and 'gain' in e), 2)
+        self.assertEqual(total, round(-100 + 450 + 120 - 240, 2))
+
+
 class TestT1135YearOnlyDeferral(unittest.TestCase):
     """The T1135 --year-wash-only deferral loop (a2-1596-t1135-year-
     deferral) is pinned by test_fix_a2_pins2_t1135 (A2-0916); this

@@ -2429,8 +2429,12 @@ class CanadaTaxRules(TaxRules):
                                                 'premium': 0.0})
                     _by['units'] += take
                     _by['premium'] += take * lot['per_unit']
-            if rem > 1e-9:
-                cost += rem * other_avg  # cov: a2-1596-short-lot-remainder
+            # The lots always cover the close (A2-1596): every short
+            # opening of an option pool opens a lot (write, crossing
+            # sell, missing-history opening), a split scales lots and
+            # pool alike, a rename merges both, a drain clears both, and
+            # a close takes the same quantity from each — so `rem` ends
+            # at zero and no closed unit is left uncosted.
             pool['grants'] = [l for l in lots if l['units'] > 1e-9]
             return cost, recognised, g_units, by_year
 
@@ -3491,17 +3495,16 @@ class CanadaTaxRules(TaxRules):
                         _dk = (_kk[0], _dst_sym)
                         _running[_dk] = _running.get(_dk, 0.0) + _moved
 
-            def _opening_qty(t, direction: str) -> float:
-                """The portion of candidate `t` that OPENS/extends a
-                position on the loss's side (vs closing the opposite
-                side), from the running balance in t's own account."""
+            def _opening_qty(t) -> float:
+                """The portion of buy `t` that OPENS/extends a long
+                position (vs covering a short), from the running balance
+                of its holder. Only a long acquisition replaces (s.54;
+                CA-SL-07), so there is no short-side variant (A2-1596:
+                its branch was never reached)."""
                 bal = _bal_before.get(t.id, 0.0)
                 q = t.quantity
-                if direction == 'LONG':          # candidate is a buy
-                    covering = min(q, max(0.0, -bal))
-                    return max(0.0, q - covering)
-                closing = min(-q, max(0.0, bal))  # candidate is a sell
-                return max(0.0, -q - closing)
+                covering = min(q, max(0.0, -bal))
+                return max(0.0, q - covering)
             # Skip wash-sale detection entirely when disabled. The main loop
             # has already produced realized gains assuming no disallowance,
             # so converging on iteration 1 with no virtual txs is correct.
@@ -3593,7 +3596,7 @@ class CanadaTaxRules(TaxRules):
                             # Only the OPENING portion is replacement
                             # property; a pure cover/close is not a
                             # trigger (FUZZ #B).
-                            if _opening_qty(t, 'LONG') > pool_qty_eps(
+                            if _opening_qty(t) > pool_qty_eps(
                                     t.symbol, t.quantity):
                                 if getattr(t, 'type', '') \
                                         == 'transfer_rewrite':
@@ -3661,7 +3664,7 @@ class CanadaTaxRules(TaxRules):
                         t_date = datetime.strptime(get_sort_date(t), '%Y-%m-%d')
                         if abs((t_date - loss_date).days) > 30:
                             continue
-                        if _opening_qty(t, 'LONG') <= 1e-6:
+                        if _opening_qty(t) <= 1e-6:
                             continue          # a buy-to-close acquires nothing
                         call_triggers.append(t)
                 potential_triggers.extend(call_triggers)
@@ -3725,7 +3728,7 @@ class CanadaTaxRules(TaxRules):
                         loss_sort, from_inclusive=pre, ref_inclusive=loss_pre)
 
                 def _avail_native(t) -> float:
-                    return max(0.0, _opening_qty(t, 'LONG')
+                    return max(0.0, _opening_qty(t)
                                - _trg_used.get(t.id, 0.0))
 
                 # A contract that expires before day 30 is not owned at
@@ -3797,7 +3800,7 @@ class CanadaTaxRules(TaxRules):
                         continue
                     _h = _holder(t)
                     _acq_h[_h] = (_acq_h.get(_h, 0.0)
-                                  + _row_loss_units(t, _opening_qty(t, 'LONG')))
+                                  + _row_loss_units(t, _opening_qty(t)))
                 _held_h = {h: max(0.0, min(a, _bal_end_h.get(h, 0.0))
                                   - _grp_claim.get(h, 0.0))
                            for h, a in _acq_h.items()}
@@ -3811,7 +3814,7 @@ class CanadaTaxRules(TaxRules):
                     for t in call_triggers:
                         _k = ('call', _holder(t), t.symbol)
                         _call_acq[_k] = (_call_acq.get(_k, 0.0)
-                                         + _call_units(t, _opening_qty(t, 'LONG')))
+                                         + _call_units(t, _opening_qty(t)))
                     _call_end: Dict[Any, float] = {}
                     # A call that expires before day 30 is not held at
                     # day 30, with or without an expiry row (S071-15).
@@ -4155,7 +4158,7 @@ class CanadaTaxRules(TaxRules):
                         elif (t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER')
                               and t.quantity > 0
                               and loss['direction'] == 'LONG'
-                              and _opening_qty(t, 'LONG') <= pool_qty_eps(
+                              and _opening_qty(t) <= pool_qty_eps(
                                   t.symbol, t.quantity)):
                             # A buy that only closes a short (a written
                             # call bought back) acquires nothing: never
