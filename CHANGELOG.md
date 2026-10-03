@@ -113,6 +113,13 @@
 
 ### Tax rules and engine: Canada
 
+- The superficial-loss solver no longer oscillates on a sale split into
+  fills when a later fill is priced just above the ACB and the
+  replacement was bought before the sale: the bump moved before and
+  after that fill on alternate passes (a loss, then a gain), so 1000
+  passes ended unconverged with a summary that disagreed with the
+  records. The bump's place after the sale's last losing fill now only
+  moves later and an existing bump follows it (re-audit A2-1596).
 - A Canadian superficial loss is now sized with CRA's formula for each
   sale on its own (owner decision, audit A2-0167): the denied units are
   the least of the units sold, the units acquired in the window and the
