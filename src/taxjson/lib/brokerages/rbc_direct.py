@@ -1700,12 +1700,17 @@ class RbcBrokerage(BaseBrokerage):
                 and hasattr(self, '_usd_units_warned')
                 and symbol.upper() not in self._usd_units_warned):
             self._usd_units_warned.add(symbol.upper())
+            # The TSX unit's spelling: ROOT.U.TO whether the row says
+            # ZSP, ZSP.U or ZSP.U.TO (it suggested ZSP.U.TO.U.TO).
+            _root = re.sub(r'(\.U)?(\.(TO|US))?$', '', symbol.upper())
+            if ticker_map_joins(out, f"{_root}.U.TO"):
+                return out      # ticker.map already folds them (A2-1056)
             self._warn(f"{symbol} ({' '.join(r.symdesc.split())!r}) reads "
                        f"as the US-dollar class of a TSX-listed fund but is "
                        f"booked as {out}, a US listing (off the T1135, one "
                        f"pool with IB/Questrade's .U.TO only with a map "
                        f"line). If it trades on the TSX, add to ticker.map:"
-                       f"  GLOBAL {out} {symbol.upper()}.U.TO",
+                       f"  GLOBAL {out} {_root}.U.TO",
                        attention=True)
         return out
 

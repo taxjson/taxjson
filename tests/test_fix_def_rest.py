@@ -218,6 +218,16 @@ class TestTickerChangeHintMootOnceMapped(unittest.TestCase):
                              'GLOBAL A020626.TO QZO.TO\n')
         self.assertNotIn('keeps internal symbol code', err)
 
+    def test_rbc_usd_units_hint_names_the_tsx_spelling(self):
+        for sym in ('QZS', 'QZS.U', 'QZS.U.TO'):
+            buy = rbc_row("March 3, 2025", "Buy", sym,
+                          "QZ S&P FUND US DOLLAR UNITS", "10", "10", "-100",
+                          "USD", "QZ S&P FUND US DOLLAR UNITS UNSOLICITED")
+            rc, err = _brokerage('rbc', {'rbc.csv': RBC_HDR + buy})
+            self.assertIn('QZS.U.TO', err, sym)
+            self.assertNotIn('.U.TO.U.TO', err, sym)
+            self.assertNotIn('.U.U.TO', err, sym)
+
     def test_run_passes_the_map(self):
         from test_fix_a2_rbcqt import _project, _cli_run
         with tempfile.TemporaryDirectory() as d:
