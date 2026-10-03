@@ -24,6 +24,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tax_rules import rule
 from unittest import mock
 
 CB_HEADER = ("ID,Timestamp,Transaction Type,Asset,Quantity Transacted,"
@@ -234,6 +235,8 @@ class TestSymbolCase(unittest.TestCase):
         self.assertEqual({t["symbol"] for t in _bs(txs)}, {"SOL"})
 
 
+@rule("CA-CRYPTO-01")
+@rule("US-CRYPTO-01")
 class TestBondedStakingCodes(unittest.TestCase):
     """S014-01 / S061-08."""
 
@@ -251,6 +254,8 @@ class TestBondedStakingCodes(unittest.TestCase):
                           ("C98.S", "C98"), ("L3", "L3")):
             self.assertEqual(_normalize_asset(raw), want, raw)
 
+    @rule("CA-INC-04")
+    @rule("US-INC-02")
     def test_reward_books_to_bare_coin(self):
         led = KR_LEDGER_H + ("LS1,RS1,2025-06-01 10:00:00,staking,,"
                              "currency,,DOT28.S,spot,2.0,0,2.0\n")
@@ -259,6 +264,8 @@ class TestBondedStakingCodes(unittest.TestCase):
         self.assertEqual({t["symbol"] for t in txs}, {"DOT"})
 
 
+@rule("CA-CRYPTO-01")
+@rule("US-CRYPTO-01")
 class TestEth2IsEth(unittest.TestCase):
     """R1-110 (Coinbase) / S061-11 (Kraken)."""
 
@@ -351,6 +358,8 @@ class TestCoinbaseLayout(unittest.TestCase):
             _parse_cb(row + ",extra\n")
 
 
+@rule("CA-CRYPTO-01")
+@rule("US-CRYPTO-01")
 class TestSwapOneValue(unittest.TestCase):
     """S013-08."""
 

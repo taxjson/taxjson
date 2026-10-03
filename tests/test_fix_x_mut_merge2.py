@@ -84,6 +84,7 @@ class TestReconcileDividendTax(unittest.TestCase):
     its own TAX row)."""
 
     @rule("CA-INC-05")
+    @rule("US-INC-03")
     def test_tax_row_by_action_or_type(self):
         # m812: a TAX row with no `type` still pairs (action == TAX).
         d, t = _tx(_div()), _tx(_tax())
@@ -91,6 +92,8 @@ class TestReconcileDividendTax(unittest.TestCase):
         self.assertEqual(d.net_amount, 85.0)
         self.assertEqual((t.quantity, t.price), (100.0, 0.15))
 
+    @rule("CA-INC-05")
+    @rule("US-INC-03")
     def test_withholding_typed_row_pairs_whatever_its_action(self):
         # m812: a row typed "tax" is withholding even under another
         # action label.
@@ -101,6 +104,8 @@ class TestReconcileDividendTax(unittest.TestCase):
         self.assertEqual(d.net_amount, 85.0)
         self.assertEqual((t.quantity, t.price), (100.0, 0.15))
 
+    @rule("CA-INC-05")
+    @rule("US-INC-03")
     def test_zero_gross_row_in_a_split_payment_keeps_zero(self):
         # m771/m790: a 0-gross row in the group takes no share.
         d1 = _tx(_div(gross_amount=0.0, net_amount=0.0, quantity=0.0))
@@ -109,6 +114,8 @@ class TestReconcileDividendTax(unittest.TestCase):
         M.reconcile_dividend_tax([d1, d2, t])
         self.assertEqual((d1.net_amount, d2.net_amount), (0.0, 85.0))
 
+    @rule("CA-INC-05")
+    @rule("US-INC-03")
     def test_only_tax_rows_pair_with_a_dividend(self):
         # m768: a same-day trade of the symbol (no description) is not
         # withholding for a same-day dividend without one.
@@ -118,6 +125,8 @@ class TestReconcileDividendTax(unittest.TestCase):
         self.assertEqual(d.net_amount, 100.0)
         self.assertEqual((trade.quantity, trade.price), (10.0, 5.0))
 
+    @rule("CA-INC-05")
+    @rule("US-INC-03")
     def test_split_payment_apportions_pro_rata(self):
         # m791 (x -> /), m773 / m794 (8-decimal rounding): 15 withheld
         # on 10 + 20 gross -> nets 5 and 10... with 1.0 withheld on
@@ -131,6 +140,8 @@ class TestReconcileDividendTax(unittest.TestCase):
         self.assertEqual(d2.net_amount, 19.33333333)
         self.assertEqual((t.quantity, t.price), (3.0, 0.33333333))
 
+    @rule("CA-INC-05")
+    @rule("US-INC-03")
     def test_zero_withholding_row_withholds_nothing(self):
         # m788/m802, m813/m818: a TAX row of 0 adds no withholding and a
         # 0 per-share rate (not 1.00).
@@ -139,6 +150,8 @@ class TestReconcileDividendTax(unittest.TestCase):
         self.assertEqual(d.net_amount, 100.0)
         self.assertEqual(t.price, 0.0)
 
+    @rule("CA-INC-05")
+    @rule("US-INC-03")
     def test_zero_gross_dividend_is_left_alone(self):
         # m733 (<= -> <: 0/0), m789/m803: nothing to apportion.
         d = _tx(_div(gross_amount=0.0, net_amount=0.0))
@@ -147,6 +160,8 @@ class TestReconcileDividendTax(unittest.TestCase):
         self.assertEqual(d.net_amount, 0.0)
         self.assertEqual((t.quantity, t.price), (0.0, 0.0))
 
+    @rule("CA-INC-05")
+    @rule("US-INC-03")
     def test_small_dividend_on_a_fractional_holding(self):
         # m753 (> 1 gross), m755 (> 1 shares): 0.80 on half a share,
         # 0.12 withheld.
@@ -156,6 +171,8 @@ class TestReconcileDividendTax(unittest.TestCase):
         self.assertEqual(d.net_amount, 0.68)
         self.assertEqual((t.quantity, t.price), (0.5, 0.24))
 
+    @rule("CA-INC-05")
+    @rule("US-INC-03")
     def test_unknown_share_count_leaves_the_tax_row(self):
         # m735 (>= 0: 0/0), m792/m805: no share count -> no per-share
         # rate.

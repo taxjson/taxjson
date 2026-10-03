@@ -14,6 +14,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -28,6 +29,7 @@ def _run_cli(root, *args):
          *args], cwd=REPO_ROOT, capture_output=True, text=True)
 
 
+@rule("CA-DIST-01")
 class TestBalanceWalk(unittest.TestCase):
     def test_split_and_rename_aware(self):
         from taxjson.bin.taxjson_apply_distributions import balance_on
@@ -71,6 +73,7 @@ class TestBalanceWalk(unittest.TestCase):
         self.assertAlmostEqual(adjusts[0]["net_amount"], 43.0, places=4)
 
 
+@rule("CA-DIST-01")
 class TestEndToEnd(unittest.TestCase):
     def test_map_reduces_gain_at_sale(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -121,6 +124,7 @@ class TestEndToEnd(unittest.TestCase):
         self.assertIn("no ZZZ.TO shares held", r.stderr + r.stdout)
 
 
+@rule("CA-DIST-01")
 class TestRecordDateBasis(unittest.TestCase):
     """2026-09 audit: the record-date balance walked TRADE dates, so a
     sale traded 06-19 settling 06-22 made the seller NOT a holder on a

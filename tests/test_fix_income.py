@@ -214,6 +214,12 @@ class TestReturnOfCapitalDating(unittest.TestCase):
         # with no shares held (US-ROC-03: not booked, warned).
         self.assertEqual(_gains(r24["usa"]), [0.0])
         self.assertEqual(_gains(r25["usa"]), [])
+        # A record date before the US trade date too: the US books never
+        # move the ROC to it, so the sale keeps its full basis (A2-0857:
+        # the 12-30 record date sat on the trade date and hid the gate).
+        early = gains_both(self._book(record="2024-12-20"), year=2024)
+        self.assertEqual(_gains(early["canada"]), [500.0])
+        self.assertEqual(_gains(early["usa"]), [0.0])
 
     @rule("CA-INC-DATE-ROC")
     def test_corporations_and_foreign_issuers_use_the_pay_date(self):
@@ -430,6 +436,14 @@ class TestUsJanuaryFundDividends(unittest.TestCase):
         self.assertEqual(
             self._years(self._book(), usa={"ric_january_dividends": (
                 "SPY.US 2025-01-30",)})["usa"], [2025])
+        # Canada's rules never apply the list, even when one reaches
+        # them past the settings check (A2-0830, A2-0857).
+        from taxjson.lib.income_dating import IncomeRules
+        ca = IncomeRules(country="canada")
+        object.__setattr__(ca, "ric_january_dividends", (("SPY.US", ""),))
+        div = self._book()[1]
+        self.assertFalse(ca.ric_prior_year(div))
+        self.assertEqual(ca.income_date(div), "2025-01-31")
 
     @rule("US-INC-DATE-RIC")
     @rule_absent("US-INC-DATE-RIC", country="canada")

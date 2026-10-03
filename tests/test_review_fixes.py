@@ -10,6 +10,7 @@ import unittest
 from contextlib import redirect_stderr
 
 from taxjson.lib.core import TaxTransaction, CanadaTaxRules, USATaxRules
+from tax_rules import rule
 
 
 class TestC5ShelteredPoolSemantics(unittest.TestCase):
@@ -117,6 +118,7 @@ class TestC7USWashSaleBasisAdjustment(unittest.TestCase):
         self.assertAlmostEqual(loss_sale['gain'], -1400.0, places=2)
         self.assertAlmostEqual(loss_sale['raw_gain'], -2000.0, places=2)
 
+    @rule("US-WASH-11")
     def test_sheltered_replacement_permanent_disallowance(self):
         """Rev. Rul. 2008-5: replacement in IRA → loss is permanently denied."""
         rules = USATaxRules()
@@ -140,6 +142,7 @@ class TestC7USWashSaleBasisAdjustment(unittest.TestCase):
 class TestUSHoldingPeriod(unittest.TestCase):
     """ST/LT classification: 'more than one year' via anniversary, not 365 days."""
 
+    @rule("US-HOLD-01")
     def test_one_year_exact_is_short_term(self):
         rules = USATaxRules()
         txs = [

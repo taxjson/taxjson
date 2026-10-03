@@ -195,6 +195,7 @@ class TestCli(unittest.TestCase):
             rep = json.loads(out.getvalue())
             self.assertEqual(len(rep["part_I"]), 1)
 
+    @rule("CA-DISP-02", "CA-DISP-03")
     def test_schedule3_text(self):
         with tempfile.TemporaryDirectory() as td:
             g = self._gains(td, [ca_entry()])
@@ -204,6 +205,11 @@ class TestCli(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertIn("Line 13199", out.getvalue())
             self.assertIn("SHOP.TO", out.getvalue())
+            # CA-DISP-02 (A2-0851): the full gain, never the taxable half;
+            # the inclusion rate is applied on Schedule 3 itself.
+            self.assertIn("2,000.00", out.getvalue())
+            self.assertNotIn("1,000.00", out.getvalue())
+            self.assertIn("these are 100% amounts", out.getvalue())
 
     def test_tainted_warning(self):
         with tempfile.TemporaryDirectory() as td:
@@ -284,6 +290,7 @@ class TestTxf(unittest.TestCase):
         self.assertEqual(lines.count("TD"), 2)
         self.assertEqual(lines.count("^"), 3)  # header + 2 records
 
+    @rule("US-RPT-03")
     def test_wash_sale_amount_rides_along(self):
         doc = self._txf([
             us_entry(proceeds=4000.0, cost=5000.0, disallowed=1000.0,

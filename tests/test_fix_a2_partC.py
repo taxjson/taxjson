@@ -68,6 +68,8 @@ class TestCryptoSendsRateLookback(unittest.TestCase):
     def test_usa_usd_base(self):
         self._check("USD", "CAD")
 
+    @rule("CA-FX-02")
+    @rule("US-FX-02")
     def test_usd_pool_rate_is_bounded_too(self):
         from taxjson.lib import crypto_sends as cs
         rates = cs.Rates({"USD": {"2025-01-02": (1.44, "boc")}}, "CAD")

@@ -1192,7 +1192,7 @@ class TestDefaultsAndTotalsPinned(unittest.TestCase):
             w = _run_cli(root, "winners").stdout
             self.assertIn("TOTAL REALIZED GAIN: 600.00 CAD", w)
             ws = _run_cli(root, "wash-sales").stdout
-            self.assertIn("2 wash sale(s); 350.00 CAD of losses denied",
+            self.assertIn("2 superficial loss(es); 350.00 CAD of losses denied",
                           ws)
             ts = _run_cli(root, "trades-sum").stdout
             self.assertIn("sold 5,750.00", ts)

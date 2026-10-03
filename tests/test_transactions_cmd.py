@@ -716,7 +716,7 @@ class TestWashSalesCmd(unittest.TestCase):
         self.assertNotIn("AAA.TO", out)               # ordinary gain excluded
         # GAIN -100, DENIED 100, ALLOWED 0
         self.assertRegex(out, r"ZZA\.US\s+100\s+900\.00\s+1,000\.00\s+-100\.00\s+100\.00\s+0\.00")
-        self.assertRegex(out, r"1 wash sale\(s\); 100\.00 CAD")
+        self.assertRegex(out, r"1 superficial loss\(es\); 100\.00 CAD")  # Canada (A2-1249)
 
     def test_prefers_gains_wash_file(self):
         # When the cross-account wash pass ran, its _gains_wash.json is used.
@@ -787,7 +787,7 @@ class TestWashSalesExplain(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("XYZ.TO", r.stdout)
         self.assertIn("CALCULATION TRACE", r.stdout)
-        self.assertIn("WASH SALE", r.stdout)
+        self.assertIn("SUPERFICIAL LOSS (ITA s.54)", r.stdout)  # Canada (A2-1352)
         # Color is off by default → no ANSI escapes leak into the output.
         self.assertNotIn("\x1b[", r.stdout)
 

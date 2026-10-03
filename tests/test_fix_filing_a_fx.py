@@ -51,6 +51,8 @@ class TestAssignMovesCash(unittest.TestCase):
         self.assertEqual(doc["per_currency"], {})
 
 
+@rule("CA-FX-07")
+@rule("US-FX-03")
 class TestNonCashLegs(unittest.TestCase):
     """S003-05: swaps, in-kind rewards and stock-for-stock corporate
     actions move no foreign cash."""

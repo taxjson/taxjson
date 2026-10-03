@@ -259,7 +259,7 @@ if __name__ == "__main__":
 from unittest import mock  # noqa: E402
 
 from taxjson.bin import taxjson_t1135 as T1  # noqa: E402
-from tax_rules import rule  # noqa: E402
+from tax_rules import rule, rule  # noqa: E402
 
 
 def _tx(action="BUYSELL", date="2025-01-15", symbol="AAPL.US", qty=0.0,
@@ -395,6 +395,7 @@ class TestT1135Walk(unittest.TestCase):
         self.assertEqual(w["max_total_cost"], 120000.0)
         self.assertEqual(w["max_total_date"], "2025-01-01")
 
+    @rule("CA-RPT-12")
     def test_out_of_year_rows_are_not_walked(self):
         w = self.walk([_tx(date="2025-03-03", qty=10, net=-1000.0),
                        _tx(date="2026-01-05", qty=10, net=-500000.0)])
@@ -402,6 +403,7 @@ class TestT1135Walk(unittest.TestCase):
         self.assertEqual(w["per_symbol"]["AAPL.US"]["year_end_cost"],
                          1000.0)
 
+    @rule("CA-RPT-12")
     def test_non_capital_row_with_a_quantity_is_skipped(self):
         w = self.walk([_tx(date="2025-02-03", qty=1.0, net=-50000.0,
                            symbol="BTC"),
@@ -412,6 +414,7 @@ class TestT1135Walk(unittest.TestCase):
         self.assertEqual(w["per_symbol"]["BTC"]["year_end_cost"], 50000.0)
         self.assertEqual(w["max_total_cost"], 50000.0)
 
+    @rule("CA-RPT-12")
     def test_partial_close_keeps_average_cost(self):
         w = self.walk([_tx(date="2025-02-03", qty=100, net=-10000.0),
                        _tx(date="2025-03-03", qty=-40, net=5000.0)])
@@ -419,6 +422,7 @@ class TestT1135Walk(unittest.TestCase):
         self.assertEqual(s["max_cost"], 10000.0)
         self.assertEqual(s["year_end_cost"], 6000.0)
 
+    @rule("CA-RPT-12")
     def test_short_cover_crossing_to_long(self):
         # Short 100 (proceeds 5,000), buy 140 for 7,000: covers 100 and
         # opens a long 40 at 7,000 x 40/140 = 2,000.
@@ -428,6 +432,7 @@ class TestT1135Walk(unittest.TestCase):
         self.assertEqual(s["year_end_cost"], 2000.0)
         self.assertEqual(w["max_total_cost"], 2000.0)
 
+    @rule("CA-RPT-12")
     def test_long_sold_past_zero_then_covered(self):
         # Long 100 at 5,000; sell 150 (closes the long, opens a short
         # 50); cover 50; buy 30 at 3,000.
@@ -439,6 +444,7 @@ class TestT1135Walk(unittest.TestCase):
         self.assertEqual(s["max_cost"], 5000.0)
         self.assertEqual(s["year_end_cost"], 3000.0)
 
+    @rule("CA-RPT-12")
     def test_sub_micro_crypto_rows_add_cost(self):
         # S052-02: 20 staking rewards of 9e-7 BTC at 100,000 CAD/BTC were
         # skipped by the 1e-6 share epsilon (the engine books them).
@@ -449,6 +455,7 @@ class TestT1135Walk(unittest.TestCase):
         w = self.walk(rows)
         self.assertAlmostEqual(w["max_total_cost"], 100001.30, places=2)
 
+    @rule("CA-RPT-12")
     def test_expired_long_option_is_named(self):
         # S052-22: a long option still in the books after its expiry.
         rows = [_tx(date="2025-02-03", qty=100, net=-40001.0,

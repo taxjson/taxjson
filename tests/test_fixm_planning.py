@@ -39,6 +39,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, timedelta
 from pathlib import Path
+from tax_rules import rule
 
 from test_fix_planning import (REPO_ROOT, _QT_HEADER, _cli, _config, _disp,
                                _gains, _qt, _row)
@@ -70,6 +71,7 @@ def _cat(rows, t):
     return (rows.get(t) or {}).get("category", "")
 
 
+@rule("CA-PLAN-01", "CA-SL-08")
 class TestPerHolderRule(unittest.TestCase):
     """The engine's s.54 test: per holder, min(acquired in the window,
     held at its end). Units a registered account held before the window
@@ -146,6 +148,7 @@ class TestDirection(unittest.TestCase):
     """Canada: every loss uses the LONG criteria (a new short or a
     written option acquires nothing)."""
 
+    @rule("CA-PLAN-01", "CA-SL-07")
     def test_reshort_is_not_a_trigger(self):   # S054-00 (D)
         tax = [_row("2026-06-01", "XYZ.TO", -100, 5000.0),
                _row("2026-09-10", "XYZ.TO", 100, 5500.0),
@@ -154,6 +157,7 @@ class TestDirection(unittest.TestCase):
             rows = _radar(tmp, tax, "2026-09-20")
         self.assertNotEqual(_cat(rows, "XYZ.TO"), "VIOLATION")
 
+    @rule("CA-PLAN-01", "CA-SL-07")
     def test_written_call_is_not_a_recent_buy(self):   # S054-00 (B)
         opt = "XYZ270115C00060000.TO"
         tax = [_row("2026-03-01", "XYZ.TO", 100, 5000.0),
@@ -163,6 +167,7 @@ class TestDirection(unittest.TestCase):
         self.assertNotEqual(_cat(rows, opt), "EXITABLE")
         self.assertNotEqual(_cat(rows, "XYZ.TO"), "EXITABLE")
 
+    @rule("CA-PLAN-01", "CA-SL-07")
     def test_long_rebuy_after_short_cover_loss(self):   # S054-00 (G)
         tax = [_row("2026-07-01", "XYZ.TO", -100, 5000.0),
                _row("2026-08-10", "XYZ.TO", 100, 5500.0),
@@ -173,6 +178,7 @@ class TestDirection(unittest.TestCase):
         self.assertEqual(r["category"], "VIOLATION")
         self.assertIn("Sell 100.0000 shares", r["advisory"])
 
+    @rule("CA-PLAN-01", "CA-SL-07")
     def test_cover_into_long_two_rows_vs_one_row(self):   # S053-14
         two = [_row("2026-08-03", "XYZ.TO", -100, 1000.0),
                _row("2026-09-14", "XYZ.TO", 100, 1200.0),
@@ -189,6 +195,7 @@ class TestDirection(unittest.TestCase):
         # leg is not a replacement for its own loss.
         self.assertNotEqual(r1["category"], "VIOLATION")
 
+    @rule("US-PLAN-01", "US-WASH-05")
     def test_us_keeps_the_reshort_rule(self):
         tax = [_row("2026-06-01", "XYZ.US", -100, 5000.0, currency="USD"),
                _row("2026-09-10", "XYZ.US", 40, 2400.0, currency="USD"),
@@ -204,6 +211,7 @@ class TestDirection(unittest.TestCase):
 
 
 class TestEdgeShapes(unittest.TestCase):
+    @rule("CA-PLAN-01")
     def test_dust_replacement_backs_the_denial(self):   # S054-15
         tax = [_row("2026-01-12", "BTC", 1, 150000.0),
                _row("2026-09-01", "BTC", -1, 100000.0),
@@ -212,6 +220,7 @@ class TestEdgeShapes(unittest.TestCase):
             rows = _radar(tmp, tax, "2026-09-10")
         self.assertEqual(_cat(rows, "BTC"), "VIOLATION")
 
+    @rule("CA-PLAN-01")
     def test_exercised_call_is_not_a_loss(self):   # S054-04
         opt = "JKL260320C00060000.TO"
         tax = [_row("2026-09-01", opt, 1, 400.0),
@@ -222,6 +231,7 @@ class TestEdgeShapes(unittest.TestCase):
         self.assertNotIn(_cat(rows, opt), ("COOLING", "VIOLATION",
                                            "BLOCKED"))
 
+    @rule("CA-PLAN-01")
     def test_split_inside_a_sale_settle_lag(self):   # R1-241
         shl = [_row("2026-06-16", "FFN.TO", 220, 2200.0, account="rrsp"),
                _row("2026-06-30", "FFN.TO", 150, 1500.0, account="rrsp",
@@ -240,6 +250,7 @@ class TestEdgeShapes(unittest.TestCase):
             (rows.get("FFN.TO") or {}).get("sheltered_qty", 0.0), 0.0,
             places=6)
 
+    @rule("CA-PLAN-01")
     def test_own_account_move_keeps_balances(self):   # S053-20 R1
         shl = [_row("2025-05-01", "XYZ.TO", 100, 1000.0, account="rrspA"),
                _row("2025-05-20", "XYZ.TO", -100, 0.0, account="rrspA",
@@ -253,6 +264,7 @@ class TestEdgeShapes(unittest.TestCase):
             rows = _radar(tmp, tax, "2025-06-10", sheltered=shl)
         self.assertEqual(_cat(rows, "XYZ.TO"), "COOLING")
 
+    @rule("CA-PLAN-01")
     def test_rebuy_after_own_account_move_is_a_trigger(self):   # S053-20 R2
         shl = [_row("2024-03-01", "XYZ.TO", 100, 1000.0, account="rrspA"),
                _row("2024-04-10", "XYZ.TO", -100, 0.0, account="rrspA",
@@ -267,6 +279,8 @@ class TestEdgeShapes(unittest.TestCase):
             rows = _radar(tmp, tax, "2025-06-15", sheltered=shl)
         self.assertEqual(_cat(rows, "XYZ.TO"), "VIOLATION")
 
+    @rule("US-PLAN-01", "US-WASH-11")
+    @rule("CA-PLAN-01", "CA-SL-02")
     def test_usa_ira_buy_locks_even_after_it_sold(self):   # S054-20
         tax = [_row("2026-01-05", "XYZ.US", 100, 5000.0, currency="USD")]
         shl = [_row("2026-09-10", "XYZ.US", 10, 450.0, account="roth",
@@ -294,6 +308,7 @@ class TestBuybackSettings(unittest.TestCase):   # R1-234
         return _gains(rows, option_premium_timing="grant",
                       option_buyback_loss_superficial=strict)
 
+    @rule("CA-SL-12", "CA-PLAN-01")
     def test_strict_buyback_loss_then_rebuy_is_a_violation(self):
         rows = [_disp("w1", "2026-09-02", self.OPT, 1, 200.0, cost=0.0,
                       direction="SHORT", is_option=True, grant=True),
@@ -309,6 +324,7 @@ class TestBuybackSettings(unittest.TestCase):   # R1-234
         self.assertEqual(_cat(before, self.OPT), "COOLING")
         self.assertEqual(_cat(after, self.OPT), "VIOLATION")
 
+    @rule("CA-SL-11", "CA-PLAN-01")
     def test_default_rewrite_after_buyback_is_not_a_violation(self):
         rows = [_disp("w1", "2026-09-02", self.OPT, 1, 200.0, cost=0.0,
                       direction="SHORT", is_option=True, grant=True),

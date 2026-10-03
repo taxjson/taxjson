@@ -363,6 +363,31 @@ class TestUnpricedDoesNotBlock(unittest.TestCase):
             self.assertIn(pay["tt"], tt.read_text())
 
 
+class TestPaymentIsASale(unittest.TestCase):
+    """CA-CRYPTO-07 / US-SEND-01: paying with crypto disposes of the
+    coins in both countries — a `payment` send is written to
+    crypto_sends.tt as a sale; a `self` move is not."""
+
+    def _doc(self, decision):
+        return {"sends": [{"id": "cb-20250710T060000-ZZQ-0.5",
+                           "decision": decision, "stable": False,
+                           "tt": "BUYSELL 2025-07-10 06:00:00 ZZQ -0.5 "
+                                 "USD 2 1.00 0"}],
+                "network_fees": []}
+
+    @rule("CA-CRYPTO-07")
+    @rule("US-SEND-01")
+    def test_a_payment_is_written_as_a_sale(self):
+        doc = self._doc("payment")
+        write, unpriced = cs.tt_entries(doc)
+        self.assertEqual([e["id"] for e in write],
+                         ["cb-20250710T060000-ZZQ-0.5"])
+        self.assertEqual(unpriced, [])
+        self.assertEqual(cs.tt_want_ids(doc), {"cb-20250710T060000-ZZQ-0.5"})
+        self.assertEqual(len(cs.disposing_entries(doc)), 1)
+        self.assertEqual(cs.tt_entries(self._doc("self")), ([], []))
+
+
 class TestRatesAndPriceSource(unittest.TestCase):
     def test_bad_rate_is_refused_not_skipped(self):
         # A2-0999: a NaN rate priced the send at the prior day's rate.

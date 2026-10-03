@@ -46,6 +46,7 @@ class TestShortBasic(unittest.TestCase):
         self.assertLess(g['cost'], 0)
         self.assertLess(g['proceeds'], 0)
 
+    @rule("US-HOLD-03")
     def test_short_loss(self):
         """Sell-to-open at $100, buy-to-close at $120 → loss = -$20."""
         rules = USATaxRules()

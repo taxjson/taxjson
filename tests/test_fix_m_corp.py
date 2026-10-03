@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -29,6 +30,7 @@ def _quiet(fn, *a, **kw):
 
 
 # ======================================================= distributions.map
+@rule("CA-DIST-01")
 class TestDistributionsMap(unittest.TestCase):
     def _apply(self, txs, rows, **kw):
         from taxjson.bin.taxjson_apply_distributions import (
@@ -187,6 +189,7 @@ def _rbc_events(tmp, *rows, context=()):
 
 
 class TestRbcThousandsRatios(unittest.TestCase):
+    @rule("CA-CORP-01")
     def test_s073_19_one_for_one_thousand(self):
         from taxjson.lib.corp_actions import _rbc_stated_ratio
         self.assertAlmostEqual(_rbc_stated_ratio(
@@ -196,6 +199,7 @@ class TestRbcThousandsRatios(unittest.TestCase):
         self.assertAlmostEqual(_rbc_stated_ratio(
             "REV - FOO CORP REV SPLIT TO FOO CORP NEW; 1 FOR 10"), 0.1)
 
+    @rule("CA-CORP-03")
     def test_s073_14_merger_ratio_with_comma(self):
         with tempfile.TemporaryDirectory() as tmp:
             evs, err = _rbc_events(
@@ -294,6 +298,7 @@ class TestRbcPairing(unittest.TestCase):
             "MER - THOMSON REUTERS CORP COM NEW DEFAULT: ROC OF C$6.1585 "
             "+ .963957 NEW SHS PER 1 OLD"))
 
+    @rule("CA-CORP-03")
     def test_s072_00_cross_issuer_xch_to_needs_election(self):
         with tempfile.TemporaryDirectory() as tmp:
             evs, err = _rbc_events(
@@ -316,6 +321,7 @@ class TestRbcPairing(unittest.TestCase):
                          ("MPLE.TO", "OVRX.TO"))
         self.assertAlmostEqual(ev.ratio, 0.2)
 
+    @rule("CA-CORP-02")
     def test_same_issuer_exchange_stays_a_reorg(self):
         rows = [
             _rbc_row("2024-04-30", "Reorganization", "C005166",
@@ -705,6 +711,7 @@ def _event(**kw):
 
 
 class TestElections(unittest.TestCase):
+    @rule("CA-CORP-04")
     def test_r1_138_s85_1_rollover_described_as_automatic(self):
         from taxjson.lib.corp_actions import (CANADA_MERGER,
                                               FILING_REQUIRED_ELECTIONS)
@@ -716,6 +723,7 @@ class TestElections(unittest.TestCase):
         # s.85.1 needs a Canadian purchaser or a foreign target.
         self.assertIn('foreign', text['rollover_s_85_1_5'].lower())
 
+    @rule("CA-CORP-06")
     def test_s072_15_s019_09_s86_1_allocates_cad_cost(self):
         from taxjson.lib.corp_actions import (HINTS_BY_ELECTION,
                                               resolve_event)
@@ -731,6 +739,7 @@ class TestElections(unittest.TestCase):
         self.assertEqual((adj['symbol'], adj['currency'],
                           adj['net_amount']), ('PAR.US', 'CAD', -1300.0))
 
+    @rule("CA-CORP-06")
     def test_legacy_source_currency_allocation_still_books_and_warns(self):
         from taxjson.lib.corp_actions import resolve_event
         rows, err = _quiet(resolve_event, _event(), 'rollover_s_86_1',
@@ -740,6 +749,7 @@ class TestElections(unittest.TestCase):
                          ('USD', 1000.0))
         self.assertIn('allocated_acb_cad', err)
 
+    @rule("CA-CORP-06", "CA-CORP-07")
     def test_s072_07_unknown_or_missing_hint_is_refused(self):
         from taxjson.lib.corp_actions import resolve_event
         with self.assertRaises(ValueError) as cm:
@@ -782,6 +792,7 @@ class TestElections(unittest.TestCase):
         self.assertIn("fmv_per_share", r.stderr)
         self.assertNotIn("Traceback", r.stderr)
 
+    @rule("CA-CORP-03")
     def test_s020_06_s074_00_zero_fmv_with_cash_in_lieu_warns(self):
         from taxjson.lib.corp_actions import (resolve_event,
                                               zero_value_merger_rows)

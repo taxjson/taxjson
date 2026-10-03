@@ -229,6 +229,7 @@ class TestSwapValuedOnce(unittest.TestCase):
             self.assertNotIn("UNPRICED", err)
 
     @rule("CA-CRYPTO-01")
+    @rule("US-CRYPTO-01")
     def test_received_unpriced_falls_back_to_the_spent_value(self):
         # The received coin has no close: the spent coin's value (a
         # tiny one, 0.5 USD) values both legs (m62) and both leave the
@@ -243,6 +244,8 @@ class TestSwapValuedOnce(unittest.TestCase):
             self.assertEqual(by["BBB"]["net_amount"], 0.5)
             self.assertNotIn("UNPRICED", err)
 
+    @rule("CA-CRYPTO-01")
+    @rule("US-CRYPTO-01")
     def test_spent_unpriced_takes_the_received_value(self):
         # The SPENT coin has no close: valued from the received leg and
         # removed from the unpriced list (m94).
@@ -254,6 +257,8 @@ class TestSwapValuedOnce(unittest.TestCase):
             self.assertEqual(by["BBB"]["net_amount"], 300.0)
             self.assertNotIn("UNPRICED", err)
 
+    @rule("CA-CRYPTO-01")
+    @rule("US-CRYPTO-01")
     def test_neither_leg_priced_stays_unpriced(self):
         # No value at all: nothing invented (m61 "else 1.0", m36), both
         # legs reported unpriced (m20 path).
@@ -264,6 +269,8 @@ class TestSwapValuedOnce(unittest.TestCase):
             self.assertIn("2 row(s) left UNPRICED", err)
             self.assertNotIn("swap(s) valued", err)
 
+    @rule("CA-CRYPTO-01")
+    @rule("US-CRYPTO-01")
     def test_received_leg_with_a_negative_broker_total_values_the_swap(self):
         # Only UNPRICED legs pair; a leg carrying a total of either sign
         # is priced (m45, m47) — and so is not a swap leg at all.
@@ -281,6 +288,8 @@ class TestSwapValuedOnce(unittest.TestCase):
             self.assertEqual(calls, [("BBB", "2025-03-03")])
             self.assertNotIn("swap(s) valued", err)
 
+    @rule("CA-CRYPTO-01")
+    @rule("US-CRYPTO-01")
     def test_same_direction_legs_are_not_a_swap(self):
         # Two buys under one id stem are not an exchange (m17).
         with tempfile.TemporaryDirectory() as tmp:

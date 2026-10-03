@@ -182,8 +182,14 @@ def _ownership(country: str) -> List[Rule]:
     keys = sorted(_C.owners(_C.SETTING_COUNTRY, other))
     cfg = sorted(_C.owners(_C.CONFIG_COUNTRY, other))
     cmds = sorted(_C.owners(_C.COMMAND_COUNTRY, other))
-    flags = sorted(_C.owners(_C.FLAG_COUNTRY, other))
+    # A one-country VALUE of a two-country flag (FLAG_VALUE_COUNTRY,
+    # "--foreign-roc dividend") reads as the flag with that value.
+    flags = sorted(list(_C.owners(_C.FLAG_COUNTRY, other))
+                   + [f"{f} {v}" for (f, v), o
+                      in _C.FLAG_VALUE_COUNTRY.items() if o == other])
     files = sorted(_C.owners(_C.PROJECT_FILE_COUNTRY, other))
+    plans = [k for k in _C.PLAN_COUNTRY
+             if _C.PLAN_COUNTRY[k] == other]
 
     def _cmd(c: str) -> str:
         name, _, var = c.partition(":")
@@ -203,6 +209,9 @@ def _ownership(country: str) -> List[Rule]:
     if flags:
         parts.append("the flag" + ("s " if len(flags) > 1 else " ")
                      + ", ".join(flags))
+    if plans:
+        parts.append(f"the {other_name} account plans ([accounts.X] "
+                     f"plan = " + ", ".join(plans) + ")")
     if files:
         parts.append(f"the {other_name}-only project file"
                      + ("s " if len(files) > 1 else " ")
@@ -212,7 +221,10 @@ def _ownership(country: str) -> List[Rule]:
         Rule(f"{p}-CTRY-01",
              f"The project's country is required ([settings] country = "
              f"\"{country}\"); taxjson never assumes one, and a spelling "
-             f"other than canada, ca, usa or us is refused.",
+             f"other than canada, ca, usa or us is refused. Books built "
+             f"under the other country (the country was changed) are "
+             f"refused by every report until `taxjson run` rebuilds "
+             f"them.",
              keys=("country",)),
         Rule(f"{p}-CTRY-02",
              "Refused in this project: " + "; ".join(parts) + ".",
@@ -321,8 +333,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "below.", cont=True),
             Rule("CA-DATE-07", "Crypto settles on the trade date;",
                  cont=True),
-            Rule("CA-DATE-08", "an option expiry is dated its expiry day.",
-                 cont=True),
+            Rule("CA-DATE-08",
+                 "an option expiry is dated its expiry day, and so is a "
+                 "right or warrant expiry (the date in the row's "
+                 "description, \"AS OF\" or \"EXP\", when it is at most "
+                 "7 days before the posting date; else the posting "
+                 "date), settled the same day.", cont=True),
             (Rule("CA-DATE-09",
                   "Futures and futures options settle on the TRADE date "
                   "(futures_settle = \"trade\": variation margin settles "
@@ -361,7 +377,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "and a re-fetch merge keeps it too. A newest-first export "
                  "is read "
                  "bottom-up; rows of different accounts at one moment "
-                 "follow the accounts' order in taxjson.toml. Rows that "
+                 "follow the accounts' order in taxjson.toml, in the run "
+                 "and in every recompute of the blended book (check-"
+                 "filed, audit, t1135, carryover, wash-sales --explain). "
+                 "Rows that "
                  "settle on the same day but traded on different days "
                  "(a Friday trade and the next trading day's trade both "
                  "settling after a settlement holiday) go in TRADE order, "
@@ -454,7 +473,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "uses the latest row of the 5 days before, so a rate up "
                  "to 12 days old is used (real Bank of Canada gaps are 4 "
                  "days or less); a longer gap converts the row at a "
-                 "placeholder rate and is a validation ERROR (the .sum "
+                 "placeholder rate (1.35 for USD->CAD) and is a "
+                 "validation ERROR (the .sum "
                  "DIAGNOSTICS, `taxjson checklist`; `run --strict` "
                  "stops), and a currency with no rates at all stops the "
                  "run. `taxjson fx-cash` counts a cash event with no rate "
@@ -552,7 +572,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "held on its record date — the settled position, each "
                  "ticker's own shares — and booked on those shares only "
                  "(a trade straddling the record date is not the "
-                 "holder's). Its "
+                 "holder's). The per-share amount is in the project's "
+                 "base currency (a US-listed fund's USD factor is "
+                 "converted by the user first). Its "
                  "income is on the T3/T5 slip; taxjson does not count "
                  "it. A return-of-capital row warns when the book already "
                  "has that ROC or still counts its cash as a dividend."),
@@ -567,10 +589,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "REI or \"Reinvest @\") is the income row plus a purchase "
                  "of the new units at the amount reinvested — their cost, "
                  "and an acquisition for the superficial-loss rule."),
-            Rule("CA-ACB-06", "Return of capital lowers the ACB."),
+            Rule("CA-ACB-06", "Return of capital lowers the ACB "
+                 "(`roc-sum` totals it against T3 box 42)."),
             Rule("CA-ACB-07",
                  "Received with no shares held, or beyond the ACB, it is a "
-                 "capital gain and the ACB is nil (s.40(3)).", cont=True),
+                 "capital gain and the ACB is nil (s.40(3)); Schedule 3 "
+                 "shows that gain with no proceeds (13199 = 0, the gain on "
+                 "13200).", cont=True),
             Rule("CA-ACB-13",
                  "A basis increase (a notional distribution) posted after "
                  "the position was fully sold has no shares to raise: it "
@@ -875,7 +900,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Canada rate of the send date, or a price you give "
                  "(`--price`, finite and at least 0.00000001; a network fee "
                  "takes one too). A sale that cannot be priced is not "
-                 "booked: it is warned about and `run --strict` stops.",
+                 "booked: it is warned about and `run --strict` stops. "
+                 "When sends.json cannot be read, a crypto_sends.tt "
+                 "written from earlier decisions is not booked: `taxjson "
+                 "run` stops until it is fixed.",
                  cont=True),
             Rule("CA-CRYPTO-08",
                  "A gift or payment of a stablecoin is not written as a "
@@ -891,13 +919,24 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-RPT-01",
                  "`taxjson t1135`: Form T1135 is required when the total "
                  "cost of specified foreign property in taxable accounts "
-                 "exceeds $100,000 at any time in the year."),
+                 "exceeds $100,000 at any time in the year. The holdings "
+                 "are walked on the project's tax_date basis (settle "
+                 "dates by default: a Dec 31 sale that settles in January "
+                 "is still held at year end), rows at one moment in the "
+                 "gains engine's order."),
+            Rule("CA-RPT-13",
+                 "Below $250,000 at every time in the year the simplified "
+                 "method (Part A) is available; at $250,000 or more the "
+                 "detailed method (Part B) is required.", cont=True),
             Rule("CA-RPT-02",
                  "Country comes from the listing suffix (t1135.map "
                  "overrides; a foreign listing whose rows carry a "
                  "Canadian ISIN is named for a `SYMBOL CA` line, since a "
                  "Canadian corporation's shares are not foreign "
-                 "property); crypto held on an exchange counts.",
+                 "property); crypto held on an exchange counts. A "
+                 "t1135.map line follows its symbol through a rename, and "
+                 "a line that matches no symbol in the books is named in "
+                 "a warning.",
                  cont=True),
             Rule("CA-RPT-12",
                  "A property's cost amount is its adjusted cost base as "
@@ -941,9 +980,25 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "two previous years — due March, June, September and "
                  "December 15 (the next business day on a weekend), on the "
                  "current-year, prior-year or CRA-reminder basis, with "
-                 "s.161 interest at CRA's prescribed rate. A payment "
+                 "s.161 interest at CRA's prescribed rate: on each due "
+                 "date the least cumulative amount any supported method "
+                 "requires by then (s.161(4.01)), interest charged on "
+                 "each instalment from its due date less interest "
+                 "credited on each payment from its date (CRA's A - B "
+                 "offset method, nothing charged at $25 or less). A payment "
                  "made before January 1 counts only when its row says "
                  "`tax_year = YEAR`, and earns credit from January 1."),
+            Rule("CA-SCAN-01",
+                 "`taxjson scan`: a US-listed dividend payer held in a "
+                 "TFSA is flagged — the 15% US withholding is "
+                 "unrecoverable there, while an RRSP is exempt under the "
+                 "Canada-US treaty (not checked) and a taxable account "
+                 "can claim the foreign tax credit."),
+            Rule("CA-SCAN-02",
+                 "A Canadian issuer held through its US listing in a "
+                 "taxable account or TFSA while it pays dividends is "
+                 "flagged: its .TO line pays the eligible dividend in CAD "
+                 "with no conversion.", cont=True),
             Rule("CA-RPT-07",
                  "`taxjson edge-cases`: every trade whose year or "
                  "superficial-loss verdict turns on a boundary — window "
@@ -972,8 +1027,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "`handoff` refuse one closed under US rules instead of "
                  "recomputing it under Canadian law.", cont=True),
         ]),
-        ("Planning tools (wash radar, sell-check, buy-check, harvest, "
-         "watch, web)", [
+        ("Planning tools (wash radar, sell-check, buy-check, "
+         "safe-to-sell, harvest, watch, web)", [
             Rule("CA-PLAN-01",
                  "They apply the superficial-loss rule above on settle "
                  "dates, each replacement unit backing one denial (an "
@@ -990,7 +1045,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "gains files' year too."),
             Rule("CA-PLAN-02",
                  "A long call on the shares bought in the window counts "
-                 "as a replacement at its contract size; a warrant, an "
+                 "as a replacement at its contract size (buy-check states "
+                 "the denial per share and per standard contract); a "
+                 "warrant, an "
                  "adjusted-series call or a futures option is a note to "
                  "check by hand, which sell-check and harvest repeat "
                  "whatever the row's verdict.", cont=True),
@@ -1063,8 +1120,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "below.", cont=True),
             Rule("US-DATE-07", "Crypto settles on the trade date;",
                  cont=True),
-            Rule("US-DATE-08", "an option expiry is dated its expiry day.",
-                 cont=True),
+            Rule("US-DATE-08",
+                 "an option expiry is dated its expiry day, and so is a "
+                 "right or warrant expiry (the date in the row's "
+                 "description, \"AS OF\" or \"EXP\", when it is at most "
+                 "7 days before the posting date; else the posting "
+                 "date), settled the same day.", cont=True),
             (Rule("US-DATE-09",
                   "Futures and futures options settle on the TRADE date "
                   "(futures_settle = \"trade\": variation margin settles "
@@ -1103,7 +1164,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "it too. "
                  "A newest-first export is read bottom-up; rows of "
                  "different accounts at one moment follow the accounts' "
-                 "order in taxjson.toml. Fixed places at one moment: an "
+                 "order in taxjson.toml, in the run and in every "
+                 "recompute of the blended book (check-filed, audit, "
+                 "wash-sales --explain). Fixed places at one moment: an "
                  "opening "
                  "balance first, an assignment's option leg before its "
                  "stock leg, a split before the trades; basis adjustments "
@@ -1154,8 +1217,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "each rate over weekends and holidays for up to 7 days, "
                  "and a day with no row there uses the latest row of the "
                  "5 days before, so a rate up to 12 days old is used; a "
-                 "longer gap converts the row at a placeholder rate and "
-                 "is a validation ERROR (`run --strict` stops), and a "
+                 "longer gap converts the row at a placeholder rate (for "
+                 "CAD->USD the inverse of 1.35, never a USD->CAD rate) "
+                 "and is a validation ERROR (`run --strict` stops), and a "
                  "currency with no rates at all stops the run. `taxjson "
                  "fx-cash` counts a cash event with no rate row in those "
                  "5 days as unrated (named in its report), and `taxjson "
@@ -1232,7 +1296,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "held on its record date — the settled position, each "
                  "ticker's own shares — and booked on those lots only "
                  "(a trade straddling the record date is not the "
-                 "holder's). Its "
+                 "holder's). The per-share amount is in the project's "
+                 "base currency (a US-listed fund's USD factor is "
+                 "converted by the user first). Its "
                  "income is on Form 1099-DIV; taxjson does not count it. "
                  "A return-of-capital row warns when the book already has "
                  "that ROC or still counts its cash as a dividend."),
@@ -1249,7 +1315,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-ROC-01",
                  "A return of capital (nondividend distribution, "
                  "§301(c)(2)) lowers the basis of the shares held, pro rata "
-                 "over the open lots, for every issuer."),
+                 "over the open lots, for every issuer (`roc-sum` totals it "
+                 "against Form 1099-DIV box 3)."),
             Rule("US-ROC-02",
                  "The part beyond a lot's basis is a capital gain in the "
                  "year received (§301(c)(3)), short- or long-term by that "
@@ -1283,6 +1350,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "ANOTHER security (another class) paid as a stock "
                  "dividend are not booked: the parse says UNBOOKED; enter "
                  "them and the §307 basis split by hand.", cont=True),
+            Rule("US-STKDIV-03",
+                 "Received with no shares held (history missing, or sold "
+                 "before the pay date), the new shares are booked as a $0 "
+                 "purchase with a warning: add the missing history (or "
+                 "adjust the sold lots) so §307 can spread the basis.",
+                 cont=True),
         ]),
         ("Wash sales (§1091)", [
             Rule("US-WASH-01",
@@ -1307,6 +1380,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-WASH-08",
                  "Matching across accounts needs a full `taxjson run` "
                  "(not `--account`)."),
+            Rule("US-WASH-20",
+                 "Replacements are matched in the order acquired (Reg. "
+                 "§1.1091-1(c)): the earliest purchase in the window first, "
+                 "before or after the sale alike, and losses in the order "
+                 "sold, so an earlier loss takes a shared replacement "
+                 "first. Purchases at the same moment go to your taxable "
+                 "accounts first, then IRAs, then affiliated accounts, "
+                 "then in the export's row order (accounts in "
+                 "taxjson.toml order).", cont=True),
             Rule("US-WASH-09",
                  "The disallowed loss is added to the replacement lot's "
                  "basis"),
@@ -1465,7 +1547,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-SEND-01",
                  "Paying with crypto is a sale at fair value; `taxjson "
                  "crypto-sends` records it (`payment`) and writes the sale "
-                 "to crypto_sends.tt."),
+                 "to crypto_sends.tt. When sends.json cannot be read, a "
+                 "crypto_sends.tt written from earlier decisions is not "
+                 "booked: `taxjson run` stops until it is fixed."),
             Rule("US-SEND-02",
                  "A gift is not a sale for the donor, so `gift` is refused "
                  "in a US project: record it as `self`. A gift already "
@@ -1546,6 +1630,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "offsetting up to "
                  "$3,000 of ordinary income; foreign tax credits, "
                  "interest and state tax are left out.", cont=True),
+            Rule("US-EST-CARRY-ORDER",
+                 "A capital loss carryover entered as other losses has no "
+                 "character in the estimate: it offsets short-term gains "
+                 "first, then long-term gains, then up to $3,000 of "
+                 "ordinary income (Schedule D keeps a short- and a "
+                 "long-term carryover apart; the estimate does not).",
+                 cont=True),
             Rule("US-EST-NIIT-LOSS",
                  "That up-to-$3,000 capital loss deduction also reduces "
                  "net investment income for NIIT (Form 8960 line 5a).",
@@ -1569,8 +1660,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "wash-sale verdict turns on a boundary, the window on "
                  "trade dates whatever tax_date says; with no still-held "
                  "test, a sale near day 30 decides nothing, a long call "
-                 "is listed as a warning only, and crypto has no "
-                 "window."),
+                 "is listed as a warning only, a stock dividend is not a "
+                 "purchase (never an in-window acquisition), and crypto "
+                 "has no window."),
             Rule("US-RPT-09",
                  "`taxjson checklist`'s slip step names Form 1099-B for "
                  "securities and, from tax year 2025, Form 1099-DA for a "
@@ -1587,8 +1679,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "closed under Canadian rules instead of recomputing it "
                  "under US law."),
         ]),
-        ("Planning tools (wash radar, sell-check, buy-check, harvest, "
-         "watch, web)", [
+        ("Planning tools (wash radar, sell-check, buy-check, "
+         "safe-to-sell, harvest, watch, web)", [
             Rule("US-PLAN-01",
                  "Each recent loss's verdict is the US engine's own, as "
                  "of the date: the window on trade dates, purchases in "
@@ -1629,7 +1721,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-PLAN-05",
                  "harvest counts a loss in an account marked crypto as "
                  "claimable now, with no wash-sale advice: those "
-                 "accounts are outside the wash-sale rule (US-WASH-13)."),
+                 "accounts are outside the wash-sale rule (US-WASH-13); "
+                 "buy-check and sell-check answer a coin held there "
+                 "(a bare symbol, ETH) the same way, and an equity "
+                 "sharing its root (ETH.US) keeps its own verdict under "
+                 "its own name."),
         ]),
         ("Project country", _ownership(c)),
     ]

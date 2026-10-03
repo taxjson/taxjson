@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -138,6 +139,8 @@ class TestSumShelteredScopeNote(unittest.TestCase):
         self.assertNotIn("sheltered account", out)
 
 
+@rule("CA-INC-05")
+@rule("US-INC-03")
 class TestRbcTaxRowSuffix(unittest.TestCase):
     def test_tax_row_follows_market_currency_like_dividend(self):
         # A .TO listing paying USD dividends: the TAX row got a phantom

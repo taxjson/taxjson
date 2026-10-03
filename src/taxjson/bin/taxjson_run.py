@@ -978,12 +978,23 @@ def validate_config(cfg: Dict[str, Any],
     except ValueError as e:
         _die(str(e))
     if "cross_asset" in settings:
+        # Each country's own rule (audit A2-1241, A2-1273): the US
+        # engine only flags a long call (US-WASH-12).
+        try:
+            _ca_usa = _country(settings) == "usa"
+        except SystemExit:
+            _ca_usa = False
         warnings.append(
-            "[settings] cross_asset is retired and ignored: a long call "
-            "on the same shares is always replacement property for a "
-            "share loss (s.54 'a right to acquire'); shares never replace "
-            "an option, and only the identical contract replaces an "
-            "option. Delete the line.")
+            "[settings] cross_asset is retired and ignored: "
+            + ("a long call bought in a share loss's window is always "
+               "flagged as a warning (§1091 'option to acquire'; the US "
+               "engine does not deny on it); the identical option is a "
+               "replacement for an option loss. Delete the line."
+               if _ca_usa else
+               "a long call on the same shares is always replacement "
+               "property for a share loss (s.54 'a right to acquire'); "
+               "shares never replace an option, and only the identical "
+               "contract replaces an option. Delete the line."))
     src = settings.get("source_currencies")
     if src is not None and (not isinstance(src, list)
                             or not all(isinstance(c, str) for c in src)):
@@ -1013,10 +1024,21 @@ def validate_config(cfg: Dict[str, Any],
         _plan = acfg.get("plan")
         if _plan is not None and str(_plan).strip().lower() \
                 not in _PLAN_KINDS:
+            # Name and suggest only the project's own country's plans
+            # (a US 'hsa' was offered Canada's 'fhsa'; A2-1272).
+            try:
+                _pk = _plan_kinds(_country(cfg.get("settings") or {}))
+            except SystemExit:
+                _pk = list(_PLAN_KINDS)
             warnings.append(
                 f"[accounts.{name}] plan {_plan!r} is not a known plan "
-                f"kind ({' | '.join(_PLAN_KINDS)}) and is ignored"
-                f"{_suggest(str(_plan).strip().lower(), _PLAN_KINDS)}")
+                f"kind ({' | '.join(_pk)}) and is ignored"
+                f"{_suggest(str(_plan).strip().lower(), _pk)}")
+        elif _plan is not None and _ptype_conflict(acfg):
+            warnings.append(
+                f"[accounts.{name}] plan {str(_plan).strip().lower()!r} "
+                f"contradicts type = {acfg.get('type')!r} — the type "
+                f"decides how the account is taxed; fix one of them")
         brok = acfg.get("brokerage")
         if brok is not None and str(brok) not in ("questrade",
                                                   "ibkr_flex"):
@@ -1565,8 +1587,12 @@ def _raw_mixed_currency_symbols(raw_json: Path) -> List[str]:
         # USD return of capital on a CAD listing that
         # _raw_align_adjust_currency could not price (A2-0055/0191/0204),
         # would stop the native gains pass.
-        if t.get("action") not in ("BUYSELL", "ASSIGN", "TRANSFER",
-                                   "ADJUST", "DISALLOW"):
+        # Every action the engines' currency guards check (an
+        # OPENING_BALANCE too; a TRANSFER is never checked) — the list
+        # here missed OPENING_BALANCE and flagged TRANSFER (audit
+        # A2-0440). lib/core.POOL_FREE_ACTIONS is the one list.
+        from taxjson.lib.core import POOL_FREE_ACTIONS
+        if t.get("action") in POOL_FREE_ACTIONS:
             continue
         c, sym = t.get("currency"), t.get("symbol")
         if c and sym:
@@ -1945,8 +1971,9 @@ def _crypto_sends_tt(root: Path, acct: str, report: Dict[str, Any]
               "the price is not cached) — NOT booked. Re-run online, or "
               f"give the value per coin in {report['base_currency']}: "
             + "; ".join(
-                ([f"`taxjson crypto-sends {acct} --set {i}=gift|payment "
-                  f"--price P`" for i in _dec[:1]] if _dec else [])
+                ([f"`taxjson crypto-sends {acct} --set {i}="
+                  f"{_disposing_word(report['country']).replace('/', '|')}"
+                  f" --price P`" for i in _dec[:1]] if _dec else [])
                 + ([f"`taxjson crypto-sends {acct} --set {i}=fee "
                     f"--price P` (the network fee hidden in a send that "
                     f"arrived short)" for i in _fee[:1]] if _fee else []))
@@ -1956,6 +1983,23 @@ def _crypto_sends_tt(root: Path, acct: str, report: Dict[str, Any]
         _exc.status = status
         raise _exc
     return status, CS.duplicate_lines(root / "inputs" / acct, entries)
+
+
+def _send_decisions(country: str) -> List[str]:
+    """The crypto-sends decisions the project's country accepts (a US
+    project refuses `gift`, lib/country COMMAND_COUNTRY
+    "crypto-sends:gift"; US-SEND-02)."""
+    from taxjson.lib import crypto_sends as CS
+    return [d for d in CS.DECISIONS
+            if command_country_problem("crypto-sends", country, d) is None]
+
+
+def _disposing_word(country: str) -> str:
+    """'gift/payment' in Canada, 'payment' in the US: the decisions that
+    write a sale (audit A2-1283, A2-1285, A2-1329)."""
+    from taxjson.lib import crypto_sends as CS
+    return "/".join(d for d in _send_decisions(country)
+                    if d in CS.DISPOSING)
 
 
 def _dup_warning(acct: str, dups: List[Dict[str, Any]]) -> List[str]:
@@ -2076,24 +2120,24 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
                 f"current, so a send to it may look unmatched (or a "
                 f"network fee be missed) — run without --account."))
         if adoc["undecided"]:
-            # The decisions the country allows (a gift is a disposition
-            # only in Canada, s.69(1)(b); US-SEND-02, re-audit A2-1378).
-            _gift_ok = command_country_problem(
-                "crypto-sends", _country(cfg.get("settings")),
-                "gift") is None
+            # A US donor's gift is not a sale (US-SEND-02; audit A2-0721,
+            # A2-0740, A2-1286): the US note names payments only.
+            _ctry = _country(cfg.get("settings"))
+            _decs = " / ".join(_send_decisions(_ctry))
+            _why = ("a payment is a sale at fair value; a gift is not a "
+                    "sale for a US donor" if _ctry == "usa" else
+                    "a gift or payment is a disposition at fair value")
             print(f"  note: {adoc['undecided']} crypto send(s) not yet "
-                  f"classified as "
-                  f"{'self / gift / payment' if _gift_ok else 'self / payment'}"
-                  f" — `taxjson crypto-sends {name}` lists them ("
-                  f"{'a gift or payment is a disposition at fair value' if _gift_ok else 'a payment is a sale at fair value'}"
-                  f").", file=sys.stderr)
+                  f"classified as {_decs} — `taxjson "
+                  f"crypto-sends {name}` lists them ({_why}).",
+                  file=sys.stderr)
             if strict and not unparsed:
                 # A pending decision, like a pending election: a send
                 # that may be a disposition is not in the books (A2-0362).
                 _diag.unlink(missing_ok=True)
                 sys.exit(f"taxjson run --strict: {name}: "
                          f"{adoc['undecided']} crypto send(s) not yet "
-                         f"classified as self / gift / payment — decide "
+                         f"classified as {_decs} — decide "
                          f"each with `taxjson crypto-sends {name} --set "
                          f"ID=...` — aborting.")
         if adoc.get("orphans"):
@@ -2125,6 +2169,19 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
         # A decided gift/payment that cannot be written is a missing
         # disposition: the .sum DIAGNOSTICS carries it (A2-0112).
         tt = root / "inputs" / name / CS.TT_NAME
+        if tt.exists():
+            # The old generated file was written from decisions that can
+            # no longer be read: it may book a send since reclassified
+            # (gift -> self), or a gift a US project refuses (US-SEND-02).
+            # Booking it on a guess is worse than stopping (audit A2-0415).
+            _diag.unlink(missing_ok=True)
+            sys.exit(f"taxjson run: {name}: crypto sends: {e} The "
+                     f"generated inputs/{name}/{CS.TT_NAME} was written "
+                     f"from the earlier decisions and is not booked on a "
+                     f"guess — fix the cause above (the decisions are "
+                     f"in inputs/{name}/{CS.MANIFEST_NAME}), or delete "
+                     f"{CS.TT_NAME} to run without the decided sales, "
+                     f"and run again.")
         msg = (f"{e} The decided gift(s)/payment(s) it names are NOT "
                f"booked"
                + (f"; the previous inputs/{name}/{CS.TT_NAME} is still "
@@ -2684,7 +2741,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
 
     # Broker groups REMOVED from inputs/: their parsed JSON, .diag and
     # corp files would otherwise persist forever — stale .diag lines in
-    # every .sum, dead fees counted by `taxjson-fees --cache`, dead
+    # every .sum, dead fees counted by `taxjson-fees-sum --cache`, dead
     # sources fed to the audit (2026-09 audit).
     _present = {f"{name}_{b}" for b in grouped} \
         | {f"{name}_{b}_corp" for b in grouped} \
@@ -3809,7 +3866,7 @@ def stage_fees(cache: Path, settings: Dict[str, Any], rates: Path,
     cross-broker comparison. Reads the parsed per-broker JSONs in the cache
     (the only place the brokerage tag survives), year-scoped to the tax year."""
     print("==> fees report")
-    # capture_diag=True: taxjson-fees emits FX default-rate fallback and
+    # capture_diag=True: taxjson-fees-sum emits FX default-rate fallback and
     # skipped-file warnings on stderr; persist them to the .diag so a silently
     # wrong rate can't slip through (the report body carries them too).
     _tm = cache.parent / "ticker.map"
@@ -4653,9 +4710,13 @@ def cmd_run(args: argparse.Namespace) -> None:
         # exports/ccd/leaps/crosslistings with one-account truncations).
         # `<account>_wash.sum` and the combined reports keep whatever the
         # last FULL run wrote.
+        # Canada's rule is the superficial-loss rule (audit A2-1360).
+        _rule_n = ("wash-sale" if _country(settings) == "usa"
+                   else "superficial-loss")
         print(
-            f"\n  ! Single-account run ({args.account}): cross-account wash-sale "
-            f"detection and the combined exports/cross reports were skipped — "
+            f"\n  ! Single-account run ({args.account}): cross-account "
+            f"{_rule_n} detection and the combined exports/cross reports "
+            f"were skipped — "
             f"they keep the last full run's contents. Run `taxjson run` "
             f"with no --account before filing.",
             file=sys.stderr,
@@ -5198,8 +5259,12 @@ def cmd_elect(args: argparse.Namespace) -> None:
         from taxjson.lib.corp_actions import (ElectionRecord,
                                               RULES_BY_COUNTRY)
         if "=" not in args.set:
-            sys.exit("taxjson elect --set expects EVENT_ID=ELECTION, e.g. "
-                     "--set 20251022-ssl-rgld-51d7=rollover_s_85_1_5")
+            # The example names a key this country accepts (a US
+            # project refuses the Canadian s.85.1 key; audit A2-0718).
+            _ex = "reorg_368" if country == "usa" else "rollover_s_85_1_5"
+            sys.exit(f"taxjson elect --set expects EVENT_ID=ELECTION, "
+                     f"e.g. --set 20251022-ssl-rgld-51d7={_ex} (`taxjson "
+                     f"elect {name}` lists each event's choices)")
         event_id, election = args.set.split("=", 1)
         event_id, election = event_id.strip(), election.strip()
         if not event_id:
@@ -6184,7 +6249,7 @@ def _cannot_write_decisions(path, e: OSError) -> str:
 
 def cmd_crypto_sends(args: argparse.Namespace) -> None:
     """`taxjson crypto-sends`: every outgoing crypto transfer that did
-    not arrive on another of your exchanges, with your decision (self /
+    not arrive in another of your crypto accounts, with your decision (self /
     gift / payment), its fair value and the ready .tt line; --set
     records a decision, --write regenerates inputs/<acct>/crypto_sends.tt."""
     from taxjson.lib import crypto_sends as CS
@@ -6203,7 +6268,8 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
     if (sets or unsets or args.write) and not acct:
         if len(accts) != 1:
             _die(f"--set/--unset/--write need an account: `taxjson "
-                 f"crypto-sends <{'|'.join(accts)}> --set ID=gift`.")
+                 f"crypto-sends <{'|'.join(accts)}> --set ID="
+                 f"{'|'.join(_send_decisions(_country(cfg.get('settings'))))}`.")
         acct = accts[0]
     if (args.note is not None or args.price is not None
             or getattr(args, "unpair", False)) and not sets:
@@ -6285,7 +6351,7 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
                     continue
                 if dec not in CS.DECISIONS:
                     _die(f"decision {dec!r} for {sid} — expected one of "
-                         f"{', '.join(CS.DECISIONS)}.")
+                         f"{', '.join(_send_decisions(_country(cfg.get('settings'))))}.")
                 _gift_no = command_country_problem(
                     "crypto-sends", _country(cfg.get("settings")), dec)
                 if _gift_no:
@@ -6356,15 +6422,15 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
     if _usa:
         # A US donor's gift is not a disposition (the recipient takes
         # over the basis); `gift` is refused (COMMAND_COUNTRY).
-        print("CRYPTO SENDS — outgoing transfers that did not arrive on "
-              "another of your exchanges. A move to your own wallet is "
-              "not a sale (self); a payment is a sale at fair market "
+        print("CRYPTO SENDS — outgoing transfers that did not arrive in "
+              "another of your crypto accounts. A move to your own wallet "
+              "is not a sale (self); a payment is a sale at fair market "
               "value. A gift is not a sale for a US donor: record it as "
               "self.")
     else:
-        print("CRYPTO SENDS — outgoing transfers that did not arrive on "
-              "another of your exchanges. A move to your own wallet is not a "
-              "sale (self); a gift or a payment is a disposition at fair "
+        print("CRYPTO SENDS — outgoing transfers that did not arrive in "
+              "another of your crypto accounts. A move to your own wallet is "
+              "not a sale (self); a gift or a payment is a disposition at fair "
               "market value.")
     fx_by_year: Dict[str, float] = {}
     for acct, adoc in report["accounts"].items():
@@ -6435,7 +6501,7 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
                           "sale line (FX gain unavailable: no USD rate)")
             elif e["tt"]:
                 lead = ".tt" if e["decision"] in CS.DISPOSING else \
-                    ".tt if gift/payment"
+                    f".tt if {_disposing_word(report['country'])}"
                 print(f"  {lead}: {e['tt']}")
             if e["note"]:
                 print(f"  note: {e['note']}")
@@ -6449,12 +6515,15 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
         if unpriced:
             print(f"NOT BOOKED — no fair value for "
                   f"{', '.join(e['id'] for e in unpriced)}: give it with "
-                  f"`--set ID=gift|payment --price P` (a `-fee` id: "
+                  f"`--set ID="
+                  f"{_disposing_word(report['country']).replace('/', '|')}"
+                  f" --price P` (a `-fee` id: "
                   f"`--set ID=fee --price P`).")
         if want == have:
             print(f"inputs/{acct}/{CS.TT_NAME}: up to date "
                   f"({len(entries)} line(s))." if have else
-                  "No gift/payment or network fee needs a sale line.")
+                  f"No {_disposing_word(report['country'])} or network "
+                  f"fee needs a sale line.")
         else:
             print(f"inputs/{acct}/{CS.TT_NAME}: OUT OF DATE — run "
                   f"`taxjson crypto-sends {acct} --write` (or `taxjson "
@@ -6763,7 +6832,7 @@ def cmd_leaps(args: argparse.Namespace) -> None:             # `leaps` view
     print()
     _print_report_table(out_lines)
     print(f"\nTOTAL REALIZED GAIN: {money(total)} {base_cur}")
-    _print_scope_split(_split, base_cur)
+    _print_scope_split(_split, base_cur, root)
     print(f"Amounts are the engine's allowed figures — lot-matched, "
           f"basis: {basis}. Partial closes of a contract "
           f"appear as they are realized; still-open contracts are absent.")
@@ -6784,13 +6853,17 @@ def _scope_split(root: Path, pairs) -> Dict[str, float]:
     return {k: round(v, 2) for k, v in out.items()}
 
 
-def _print_scope_split(split: Dict[str, float], base_cur: str) -> None:
+def _print_scope_split(split: Dict[str, float], base_cur: str,
+                       root: Optional[Path] = None) -> None:
     if abs(split.get("sheltered", 0.0)) < 0.005:
         return
     money = fmt_money
+    # An IRA is not "registered" (a Canadian term; audit A2-1324).
+    _kind = ("retirement (IRA)" if root is not None
+             and _country(_soft_settings(root)) == "usa" else "registered")
     print(f"  TAXABLE accounts:   {money(split['taxable'])} {base_cur}")
     print(f"  SHELTERED accounts: {money(split['sheltered'])} {base_cur}"
-          f"  (registered — not taxable events; the return uses the "
+          f"  ({_kind} — not taxable events; the return uses the "
           f"taxable figure)")
 
 
@@ -6944,7 +7017,7 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
     print()
     _print_report_table(out_lines)
     print(f"\nTOTAL REALIZED GAIN: {money(total)} {base_cur}")
-    _print_scope_split(_split, base_cur)
+    _print_scope_split(_split, base_cur, root)
     print(f"Engine-allowed amounts (lot-matched, basis: {basis}, "
           f"base currency); closed portions only — still-open "
           f"contracts carry no mark-to-market here.")
@@ -7114,7 +7187,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     print()
     _print_report_table(out_lines)
     print(f"\nTOTAL COVERED-CALL GAIN: {money(total)} {base_cur}")
-    _print_scope_split(_scope_split(root, _ccd_pairs), base_cur)
+    _print_scope_split(_scope_split(root, _ccd_pairs), base_cur, root)
     print("PREMIUM = proceeds of the sold calls; BUYBACK = cost to "
           "close (0 for expiries); assignments' share gains are NOT "
           "here — they land in the stock's own rows. CLOSES/QTY count "
@@ -7817,11 +7890,15 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     def _tot(d):
         return ", ".join(f"{money(v)} {c}" for c, v in sorted(d.items()))
     print()
+    # The slips a dividend ties to: T5/T3 in Canada, Form 1099-DIV in the
+    # US (audit A2-0741, A2-1354).
+    _usa_v = _country(_soft_settings(Path(args.dir).resolve())) == "usa"
+    _slips_w = "Form 1099-DIV" if _usa_v else "T5/T3 slips"
     if shel_accts or staking_taxable:
         # Registered accounts get no T5/T3 and their dividends are not
         # income: the slip tie-out figure is the TAXABLE line (audit
         # S041-04), without crypto staking (S048-24).
-        print(f"TAXABLE (compare with T5/T3 slips"
+        print(f"TAXABLE (compare with {_slips_w}"
               + ("; crypto staking excluded" if staking_taxable else "")
               + f"): {_tot(slips) or '0.00'}")
         if shel_accts:
@@ -7834,7 +7911,8 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     if staking_accts:
         print(f"  of which crypto staking rewards "
               f"({', '.join(sorted(staking_accts))} — other income, not "
-              f"dividends; no T5/T3 slip): {_tot(staking)}")
+              f"dividends; no {'1099-DIV' if _usa_v else 'T5/T3 slip'})"
+              f": {_tot(staking)}")
     if cg_agg:
         print()
         print("CAPITAL-GAINS DIVIDENDS (T5 box 18, line 17400 — a capital "
@@ -8330,28 +8408,54 @@ def cmd_gains(args: argparse.Namespace) -> None:
         f"{v:,.2f} {c}" for c, v in sorted(totals.items())))
 
 
-_PLAN_NAMES = ("tfsa", "rrsp", "lira", "rrif", "fhsa", "resp", "401k",
-               "roth", "ira")
+# One per-country plan table (lib/country.PLAN_COUNTRY): the HSA, LIF,
+# RDSP ... its phantom_holdings twin knew were missing, and the other
+# country's plans were accepted silently (audit A2-0739, A2-1272,
+# A2-1332).
+from taxjson.lib.country import PLAN_COUNTRY as _PLAN_COUNTRY
+from taxjson.lib.country import plan_kinds as _plan_kinds
+_PLAN_NAMES = tuple(k for k in _PLAN_COUNTRY
+                    if k not in ("taxable", "sheltered"))
+_PLAN_KINDS = tuple(_PLAN_COUNTRY)
 
 
-_PLAN_KINDS = _PLAN_NAMES + ("taxable", "sheltered")
+def _ptype_conflict(acfg: Dict[str, Any]) -> bool:
+    """A registered plan on a taxable account, or plan = "taxable" on a
+    sheltered one (audit A2-1332): the scan read the plan and skipped
+    the account's checks."""
+    plan = str(acfg.get("plan") or "").strip().lower()
+    typ = acfg.get("type")
+    if plan in ("", "sheltered"):
+        return plan == "sheltered" and typ == "taxable"
+    if plan == "taxable":
+        return typ == "sheltered"
+    return plan in _PLAN_NAMES and typ == "taxable"
 
 
-def _account_plan(name: str, acfg: Dict[str, Any]) -> str:
+def _account_plan(name: str, acfg: Dict[str, Any],
+                  country: Optional[str] = None) -> str:
     """Registered-plan kind for scan checks: explicit `plan = "tfsa"` in
     taxjson.toml wins (an unknown value is ignored — validate_config
     warns); else inferred from a plan word that is a whole TOKEN of the
     account NAME (the init scaffold names folders tfsa/rrsp/...; `rrsp2`
     and `my-tfsa` count, `admiral` and `spiral` no longer read as an IRA
     and silently skipped the US-LISTING check, R1-243); else the type."""
+    # Only the project country's plans count, and a taxable account is
+    # taxable whatever its plan says (the scan skipped one with plan =
+    # "401k"; validate_config warns on the contradiction, the other
+    # country's plan is refused — audit A2-0739, A2-1332).
+    kinds = _plan_kinds(country) if country else list(_PLAN_KINDS)
+    if acfg.get("type") == "taxable":
+        return "taxable"
     explicit = str(acfg.get("plan") or "").strip().lower()
-    if explicit in _PLAN_KINDS:
+    if explicit in kinds:
         return explicit
     low = name.lower()
     for p in _PLAN_NAMES:
-        if re.search(rf"(?<![a-z]){re.escape(p)}(?![a-z])", low):
+        if p in kinds and re.search(
+                rf"(?<![a-z]){re.escape(p)}(?![a-z])", low):
             return p
-    return "taxable" if acfg.get("type") == "taxable" else "sheltered"
+    return "sheltered"
 
 
 def _scan_symbol_root(sym: str) -> Tuple[str, str]:
@@ -8589,7 +8693,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
     findings = []                     # (check, account, symbol, message)
     if country == "canada":
         for name, acfg in accounts.items():
-            plan = _account_plan(name, acfg)
+            plan = _account_plan(name, acfg, country)
             if plan not in ("taxable", "tfsa"):
                 continue              # RRSP/LIRA: treaty-exempt, no check
             for h in holdings.get(name, []):
@@ -9386,6 +9490,19 @@ def cmd_summary(args: argparse.Namespace) -> None:
                              for e in _ents_8949), 2)
     _round_gap = (round(filing_total.get("gain", 0.0) - _engine_gain, 2)
                   if filing_line_rows else 0.0)
+    # The DENIED column (US: the code-W adjustment) has the same per-row
+    # rounding gap; R1-166's headline mismatch was a denied total, and
+    # form-export already names it (A2-0912).
+    _denied_key = "adjustment" if _is_us else "denied"
+    _engine_denied = round(sum(
+        float(e.get("disallowed_amount") or 0.0) for e in _ents_8949
+        # Form 8949 adds back only a positive disallowance (code W).
+        if not _is_us or float(e.get("disallowed_amount") or 0.0) > 1e-9),
+        2)
+    _denied_gap = (round(filing_total.get(_denied_key, 0.0)
+                         - _engine_denied, 2)
+                   if filing_line_rows else 0.0)
+    _denied_label = "adjustment (g)" if _is_us else "denied"
     # FX on foreign cash (s.39(1.1)) is reported on line 15300 too
     # (T4037) but lives outside the engine's dispositions; show the
     # estimate beside the block when the ledger builds, else a pointer.
@@ -9473,6 +9590,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                            filing_line_rows,
                        "fx_cash": _fx_note,
                        "engine_gain_unrounded": _engine_gain,
+                       "engine_denied_unrounded": _engine_denied,
                        "date_basis": _date_key},
             "sheltered_included": sheltered_included,
             "run_state_problems": _run_state,
@@ -9572,6 +9690,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
                       f"files' unrounded total gain is "
                       f"{money(_engine_gain)} ({_round_gap:+,.2f} on the "
                       f"RETURN row).")
+            if abs(_denied_gap) >= 0.005:
+                print(f"Rows are rounded to the cent, as filed: the gains "
+                      f"files' unrounded total {_denied_label} is "
+                      f"{money(_engine_denied)} ({_denied_gap:+,.2f} on "
+                      f"the RETURN row).")
         else:
             print(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
                   f"(Schedule 3, tax year {_fyear})")
@@ -9617,6 +9740,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
                       f"files' unrounded total gain is "
                       f"{money(_engine_gain)} ({_round_gap:+,.2f} on the "
                       f"RETURN row).")
+            if abs(_denied_gap) >= 0.005:
+                print(f"Rows are rounded to the cent, as filed: the gains "
+                      f"files' unrounded total {_denied_label} is "
+                      f"{money(_engine_denied)} ({_denied_gap:+,.2f} on "
+                      f"the RETURN row).")
             if _fx_note is not None:
                 print(f"FX on foreign cash (s.39(1.1), ESTIMATE — not in "
                       f"the rows above): net {money(_fx_note['net_gain'])}, "
@@ -11839,7 +11967,16 @@ def cmd_positions(args: argparse.Namespace) -> None:
         # pass (R1-282, S044-21).
         _asof_word = ("settlement date" if _asof_basis == "settle"
                       else "trade date")
-        basis = (f"as of {as_of} by {_asof_word} (per-account ACB, "
+        # Canada pools a symbol's ACB across the taxable accounts
+        # (s.47); the US return keeps FIFO basis per account, so the
+        # per-account figure IS the filing basis there and neither "ACB"
+        # nor the s.47 note applies (CA-ACB-01 / US-BASIS-01; audit
+        # A2-0154, A2-0410, A2-0720, A2-0734).
+        from taxjson.lib.country import basis_pooled_across_accounts
+        _pooled = basis_pooled_across_accounts(country)
+        _basis_word = ("per-account ACB" if _pooled
+                       else "per-account FIFO basis")
+        basis = (f"as of {as_of} by {_asof_word} ({_basis_word}, "
                  f"before the cross-account wash pass)")
         # A symbol held in two taxable accounts has ONE s.47 ACB on the
         # return (plain `list` shows it); this view recomputes each
@@ -11853,7 +11990,7 @@ def cmd_positions(args: argparse.Namespace) -> None:
                 if abs(float(it.get("qty") or 0.0)) > 1e-9:
                     _held.setdefault(str(it.get("symbol")), []).append(n)
         _shared = sorted(s_ for s_, a in _held.items() if len(set(a)) > 1)
-        if _shared:
+        if _shared and _pooled:
             print(f"taxjson list: note: --date shows each account's OWN "
                   f"ACB; {len(_shared)} symbol(s) held in more than one "
                   f"taxable account ({', '.join(_shared[:5])}"
@@ -12178,6 +12315,8 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
                    "manual_check_flags": sorted(flags)})
         return
 
+    # The rule's own name: never "wash sale" in a Canadian project
+    # (audit A2-0748, A2-1249, A2-1326, A2-1352, A2-1371, A2-1372).
     if not rows:
         scope = f" for account {args.account!r}" if args.account else ""
         # Each country's own term (A2-1366): a Canadian project has
@@ -12204,7 +12343,8 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
         total_perm += perm
 
     base = _base_currency(root)
-    print(f"WASH SALES — {base}, tax year {year}, basis: "
+    print(f"{'WASH SALES' if _usa else 'SUPERFICIAL LOSSES'} — {base}, "
+          f"tax year {year}, basis: "
           f"{gains_basis_label(resolved)}  "
           f"(losses denied under "
           f"{'the wash-sale rule, §1091' if _usa else 'the superficial-loss rule, s.54'})")
@@ -12212,13 +12352,17 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     _print_report_table(out_lines)
     perm_note = (f" ({money(total_perm)} permanently denied)"
                  if total_perm > 0.005 else "")
-    print(f"\n{len(rows)} wash sale(s); {money(total_denied)} {base} of losses "
-          f"denied{perm_note}.")
+    print(f"\n{len(rows)} "
+          f"{'wash sale(s)' if _usa else 'superficial loss(es)'}; "
+          f"{money(total_denied)} {base} of losses denied{perm_note}.")
     if embedded > 0.005:
         print(f"Currently embedded in OPEN positions: {money(embedded)} "
               f"{base} of deferred losses (see `taxjson list` DEFERRED).")
-    print("DENIED is added to the cost basis of the repurchased shares (you "
-          "recover it on a later sale) — except any permanently-denied amount"
+    print(("DENIED is added to the cost basis of the repurchased shares "
+           "(you recover it on a later sale)" if _usa else
+           "DENIED is added to the ACB of the substituted property "
+           "(s.53(1)(f); you recover it on a later sale)")
+          + " — except any permanently-denied amount"
           + (" from a repurchase in an IRA, which is lost for good."
              if _usa else
              # An affiliated person's purchase: their own ACB, not
@@ -12265,9 +12409,7 @@ def cmd_t1135(args: argparse.Namespace) -> None:
     base_argv: List[str] = []
     gains_argv: List[str] = []
     missing: List[str] = []
-    # taxjson.toml order, as the run merges the books (CA-DATE-14 /
-    # US-DATE-13; the A2-0502 twin).
-    for name in taxable:
+    for name in taxable:          # taxjson.toml order (CA-DATE-14)
         base = cache / f"{name}_base.json"
         if not base.exists():
             missing.append(name)
@@ -12387,10 +12529,7 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     base_argv: List[str] = []
     crypto_argv: List[str] = []
     missing: List[str] = []
-    # taxjson.toml order, as the run's blended pass merges the books
-    # (CA-DATE-14 / US-DATE-13): sorted() gave a year a different net
-    # than the run and the lock (A2-0502).
-    for name in taxable:
+    for name in taxable:          # taxjson.toml order (CA-DATE-14)
         base = cache / f"{name}_base.json"
         if not base.exists():
             missing.append(name)
@@ -12410,13 +12549,9 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     if not base_argv and not crypto_argv:
         sys.exit(f"taxjson carryover: no taxable base files in {cache} "
                  f"(run `taxjson run` first).")
-    if not base_argv:
-        # positional FILEs are required; a crypto-only project feeds
-        # its books positionally (the standalone folds/splits them by
-        # country policy either way).
-        base_argv = [crypto_argv[i + 1]
-                     for i in range(0, len(crypto_argv), 2)]
-        crypto_argv = []
+    # A crypto-only project passes its books as --crypto only: fed as
+    # positional FILEs they lost the US no-wash pass (US-WASH-13; audit
+    # A2-0146, A2-0411, A2-0412).
 
     argv = base_argv + crypto_argv + [
         "--country", _country(settings),
@@ -12833,8 +12968,30 @@ def _run_state_problems(root: Path, cfg: Dict[str, Any]) -> List[str]:
     return [x.strip() for x in res.detail.split("; ") if x.strip()]
 
 
+def _refuse_other_country_books(root: Path, cfg: Dict[str, Any]) -> None:
+    """Die when work/ was built under the other country: its figures
+    follow that country's law (a superficial-loss denial, an s.47 pool,
+    CAD amounts) and every view would print them under this country's
+    labels and citations at exit 0 (audit A2-0147). The country comes
+    from the last full run's record."""
+    from taxjson.lib.checklist import books_country
+    from taxjson.lib.country import CountryError, settings_country
+    built = books_country(root)
+    try:
+        now = settings_country(cfg.get("settings") or {})
+    except CountryError:
+        return
+    if built and built != now:
+        _die(f"the books in work/ were built by the last full run for country = \"{built}\", but "
+             f"taxjson.toml now says \"{now}\" — their figures follow the "
+             f"other country's law. Run `taxjson run` to rebuild them "
+             f"before using any report.")
+
+
 def _warn_run_state(root: Path, cfg: Dict[str, Any]) -> List[str]:
-    """Loud stderr banner for _run_state_problems; returns them."""
+    """Loud stderr banner for _run_state_problems; returns them. Books
+    built under the other country are refused outright."""
+    _refuse_other_country_books(root, cfg)
     probs = _run_state_problems(root, cfg)
     if probs:
         _pfx = f"taxjson {_CURRENT_CMD}" if _CURRENT_CMD else "taxjson"
@@ -13337,6 +13494,15 @@ def _check_filed_years(root: Path, cache: Path,
                 a for a in _taxable_cfg
                 if a not in _snap_accts
                 and (cache / f"{a}_base.json").exists())
+            # Merge in taxjson.toml order, as the run's blended pass
+            # does (CA-DATE-14 / US-DATE-13: rows of different accounts
+            # at one moment follow the accounts' order). The lock's
+            # keys are alphabetical (sort_keys), so its order gave a
+            # false DRIFT right after close-year (A2-0512).
+            if _acct_cfg:
+                _toml_order = {a: i for i, a in enumerate(_acct_cfg)}
+                _snap_accts.sort(key=lambda a: _toml_order.get(
+                    a, len(_toml_order)))
             _crypto = [a for a in _snap_accts
                        if (_acct_cfg.get(a) or {}).get("crypto")]
             _equity = [a for a in _snap_accts if a not in _crypto]
@@ -13568,7 +13734,7 @@ def _explain_wash_sales(root: Path, cache: Path,
         if names is not None and not names:
             _no_wash_checkable("taxjson wash-sales")
         if names is not None:
-            bases = [cache / f"{n}_base.json" for n in sorted(names)
+            bases = [cache / f"{n}_base.json" for n in names
                      if (cache / f"{n}_base.json").exists()]
         else:
             bases = [p for p in sorted(cache.glob("*_base.json"))
@@ -13621,9 +13787,15 @@ def _explain_wash_sales(root: Path, cache: Path,
             if (n != account and bool((_acfg.get(n) or {}).get("crypto"))
                     == _is_c and (cache / f"{n}_base.json").exists()):
                 _by_name[n] = cache / f"{n}_base.json"
-    equity = [p for n, p in sorted(_by_name.items())
+    # Merged in taxjson.toml order, as the pipeline's blend: rows of
+    # different accounts at one moment follow that order (CA-DATE-14 /
+    # US-DATE-13); an alphabetical merge traced another book (A2-1592).
+    _toml_pos = {n: i for i, n in enumerate(_acfg)}
+    _ordered = sorted(_by_name.items(), key=lambda kv: (
+        _toml_pos.get(kv[0], len(_toml_pos)), kv[0]))
+    equity = [p for n, p in _ordered
               if not (_acfg.get(n) or {}).get("crypto")]
-    crypto = [p for n, p in sorted(_by_name.items())
+    crypto = [p for n, p in _ordered
               if (_acfg.get(n) or {}).get("crypto")]
     groups = ([equity] if equity else []) + (
         [crypto] if crypto and _crypto_blend
@@ -13812,7 +13984,7 @@ def _radar_taxable_bases(root: Path, cache: Path,
             return []
         _no_wash_checkable(prog)
     if names is not None:
-        bases = [cache / f"{n}_base.json" for n in sorted(names)
+        bases = [cache / f"{n}_base.json" for n in names
                  if (cache / f"{n}_base.json").exists()]
         # A configured taxable account without books used to vanish
         # from the checks in silence — a sibling's recent buy then read
@@ -13909,10 +14081,13 @@ def cmd_watch(args: argparse.Namespace) -> None:
     bases = _radar_taxable_bases(root, cache, "taxjson watch")
     cmd = _cmd("taxjson-wash-radar") + [
         "--taxable", *[str(b) for b in bases], "--all", "--json"]
-    cmd += _radar_engine_args(
-        bases, root / "phantoms.json",
-        _country(_radar_config(root, "taxjson watch").get(
-            "settings", {})))
+    _wcountry = _country(_radar_config(root, "taxjson watch").get(
+        "settings", {}))
+    cmd += _radar_engine_args(bases, root / "phantoms.json", _wcountry)
+    # A CLEAR is "safe as far as this project's accounts show"
+    # (CA-PLAN-04 / US-PLAN-04, re-audit A2-0909).
+    from taxjson.lib.wash_scope import scope_note as _scope_note
+    _scope = _scope_note(_wcountry)
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         cmd += ["--sheltered", str(sheltered_base)]
@@ -13987,7 +14162,8 @@ def cmd_watch(args: argparse.Namespace) -> None:
         if getattr(args, "json", False):
             _json_out({"baseline": True, "changes": [],
                        "tracked": len(cur_radar),
-                       "actionable": actionable, "as_of": as_of})
+                       "actionable": actionable, "as_of": as_of,
+                       "scope_note": _scope})
         else:
             print(f"watch: baseline recorded — {len(cur_radar)} "
                   f"ticker(s) tracked, {actionable} actionable "
@@ -14016,10 +14192,12 @@ def cmd_watch(args: argparse.Namespace) -> None:
         _json_out({"baseline": False, "changes": changes,
                    "tracked": len(cur_radar),
                    "actionable": actionable,
-                   "as_of": as_of, "since": state.get("as_of")})
+                   "as_of": as_of, "since": state.get("as_of"),
+                   "scope_note": _scope})
     elif changes:
         print(_watch.render_report(changes, as_of,
-                                   since=state.get("as_of")))
+                                   since=state.get("as_of"),
+                                   scope=_scope))
     if changes and getattr(args, "exit_code", False):
         raise SystemExit(1)
 
@@ -14942,6 +15120,62 @@ def _radar_country_is_usa(root: Path) -> bool:
         return False
 
 
+def _us_crypto_coins(root: Path, cache: Path, prog: str
+                     ) -> Dict[str, List[str]]:
+    """{SYMBOL: [account, ...]} for the coins in a US project's crypto
+    accounts' books ({} in Canada, where crypto accounts are radar'd
+    like any other: CA-SL-13)."""
+    import json as _json
+    from taxjson.lib.core import is_option_symbol
+    cfg = _radar_config(root, prog) or {}
+    if _country(cfg.get("settings") or {}) != "usa":
+        return {}
+    out: Dict[str, List[str]] = {}
+    for n, c in sorted((cfg.get("accounts") or {}).items()):
+        if not ((c or {}).get("type") == "taxable"
+                and (c or {}).get("crypto")):
+            continue
+        try:
+            doc = _json.loads((cache / f"{n}_base.json").read_text(
+                encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        rows = (doc if isinstance(doc, list)
+                else (doc.get("transactions") or [])
+                if isinstance(doc, dict) else [])
+        for t in rows:
+            if not isinstance(t, dict):
+                continue
+            sy = str(t.get("symbol") or "").strip().upper()
+            if sy and "." not in sy and not is_option_symbol(sy):
+                if n not in out.setdefault(sy, []):
+                    out[sy].append(n)
+    return out
+
+
+def _us_coin_answer(canon, radar: Dict[str, Dict[str, Any]],
+                    q: str) -> Optional[List[str]]:
+    """buy-check / sell-check lines for a bare coin query in a US
+    project's crypto account, or None: the coin is outside the
+    wash-sale rule (US-WASH-13; US-PLAN-05); an equity sharing its root
+    (ETH.US) keeps its own verdict under its own name."""
+    coins = getattr(canon, "us_crypto_coins", None) or {}
+    q = q.strip().upper()
+    if q not in coins:
+        return None
+    lines = [f"{q}: a coin in crypto account(s) "
+             f"{', '.join(coins[q])} — crypto is not subject to the "
+             f"wash-sale rule (US-WASH-13): no wash-sale exposure."]
+    others = sorted({t for t in radar
+                     if t.strip().upper().rpartition(".")[0] == q})
+    if others:
+        lines.append(f"{', '.join(others)} "
+                     f"{'is a separate listing' if len(others) == 1 else 'are separate listings'}"
+                     f" — query {'it' if len(others) == 1 else 'them'} "
+                     f"by name.")
+    return lines
+
+
 def _wash_class_context(root: Path, cache: Path, prog: str):
     """(radar, canon, last_loss) shared by buy-check and sell-check:
     the combined radar document flattened per ticker, a symbol-class
@@ -15108,6 +15342,12 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
     # query that names one of them means that listing, never also the
     # equity sharing its root (ETH.US) (S047-06).
     canon.bare_listings = {_sy for _sy in _shares if "." not in _sy}
+    # A US project leaves its crypto accounts out of the radar (§1091
+    # does not reach digital assets, US-WASH-13), so a coin there is
+    # in no radar row: `buy-check ETH` took ETH.US's verdict and
+    # `sell-check BTC` said "no tracked taxable position" (audit
+    # A2-0749, A2-0750, A2-1340). {coin: [crypto accounts]}.
+    canon.us_crypto_coins = _us_crypto_coins(root, cache, prog)
 
     _acct_cfg = _soft_config(root).get("accounts") or {}
     _taxable = {a for a, c in _acct_cfg.items()
@@ -15416,6 +15656,12 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
     from taxjson.lib.core import parse_option_right as _opt_right
     for want in args.symbol:
         want = _fold_class_separator(want)
+        _coin = _us_coin_answer(_canon, radar, want)
+        if _coin is not None:
+            results.append({"symbol": want.strip().upper(),
+                            "verdict": "SAFE", "clears_at": None,
+                            "detail": _coin, "last_loss": None})
+            continue
         wroot, matches, _note = _class_matches(radar, _canon, want)
         _q = want.strip().upper()
         # Short this very contract: the buy closes it and acquires
@@ -15509,6 +15755,19 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                 _per = (f" on as many units as you buy (about "
                         f"${float(_rl) / float(_rq):,.2f} of it per unit)"
                         if _rl and _rq and float(_rq) > 1e-9 else "")
+                if (_per and _is_opt_sym(_q)
+                        and not _is_opt_sym(t.strip().upper())):
+                    # A call replaces the shares it is a right to: one
+                    # standard contract is 100 of them (CA-SL-05; the
+                    # per-unit figure read as per contract, audit
+                    # A2-0752).
+                    from taxjson.lib.core import OPTION_CONTRACT_SHARES
+                    _ps = float(_rl) / float(_rq)
+                    _per = (f" on as many shares as the calls cover "
+                            f"(about ${_ps:,.2f} of it per share, "
+                            f"${_ps * OPTION_CONTRACT_SHARES:,.2f} per "
+                            f"standard {OPTION_CONTRACT_SHARES:g}-share "
+                            f"contract)")
                 lines.append(
                     f"{t}: {cat} — a loss sold within the past 30 "
                     f"days; buying now cancels it{_per}"
@@ -15538,7 +15797,23 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                         f"{t}: {r.get('advisory')} Buying now changes "
                         f"nothing for that loss, but it starts a new "
                         f"30-day window for a later loss sale.")
-            elif cat in ("LOCKED", "EXITABLE", "CAUTION"):
+            elif cat == "LOCKED":
+                # A registered account's / IRA's in-window buy denies a
+                # taxable loss sale even as a full exit: the generic
+                # "a full exit is not" contradicted sell-check's LOCKED
+                # verdict (audit A2-0408). The radar's advisory states
+                # the case in the project's law.
+                if verdict == "SAFE":
+                    verdict = "SAFE*"
+                _adv = str(r.get("advisory") or "")
+                _adv = _adv.split(":", 1)[1].strip() if \
+                    _adv.startswith("LOCKED:") else _adv
+                lines.append(
+                    f"{t}: LOCKED — no recent loss sale, buying is safe "
+                    f"TODAY, but selling even the full taxable position "
+                    f"at a loss does not escape the rule: {_adv} Buying "
+                    f"more extends the wash window.")
+            elif cat in ("EXITABLE", "CAUTION"):
                 if verdict == "SAFE":
                     verdict = "SAFE*"
                 lines.append(
@@ -15627,6 +15902,13 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
     results = []
     for want in args.symbol:
         want = _fold_class_separator(want)
+        _coin = _us_coin_answer(_canon, radar, want)
+        if _coin is not None:
+            results.append({"symbol": want.strip().upper(),
+                            "verdict": "SAFE", "clears_at": None,
+                            "act_by": None, "detail": _coin,
+                            "last_loss": None})
+            continue
         wroot, matches, _note = _class_matches(radar, _canon, want)
         matches = _replacement_rows(want, matches, "sell")
         verdict, lines = "SAFE", ([_note] if _note else [])
@@ -15884,10 +16166,9 @@ def cmd_audit(args: argparse.Namespace) -> None:
                if (c or {}).get("type") == "taxable"}
     if not taxable:
         _die("no taxable accounts in taxjson.toml — nothing to audit.")
-    # taxjson.toml order, as the run's blended pass merges them: rows
-    # of different accounts at one moment follow the accounts' order
-    # (CA-DATE-14 / US-DATE-13). sorted() made the audit deny a loss
-    # the run never denied and fail its own tie-out (A2-0497).
+    # taxjson.toml order, as the pipeline's blended pass merges them
+    # (CA-DATE-14 / US-DATE-13); alphabetical failed the tie-out on a
+    # book with same-moment rows in two accounts (A2-1592 sibling).
     equity = [n for n, c in taxable.items() if not c.get("crypto")]
     crypto = [n for n, c in taxable.items() if c.get("crypto")]
     _acct = getattr(args, "account", None)
@@ -16392,11 +16673,11 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
 
 
 def cmd_fees_sum(args: argparse.Namespace) -> None:
-    """Convenience wrapper over `taxjson-fees`: trading-fee report by brokerage
+    """Convenience wrapper over `taxjson-fees-sum`: trading-fee report by brokerage
     (converted to the base currency), reading the parsed per-broker JSONs in
     work/. Resolves cache / base currency / rates from the project. Like the
     other roll-ups it takes an optional PERIOD window (30d/6w/…, wired to
-    `taxjson-fees --since`), defaulting to the tax year; a lone non-period
+    `taxjson-fees-sum --since`), defaulting to the tax year; a lone non-period
     positional is read as an account (its per-broker files only)."""
     root = Path(args.dir).resolve()
     cache = root / "work"
@@ -16415,7 +16696,7 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
     cmd = _cmd("taxjson-fees")
     if account:
         # Scope to one account by feeding only its parsed per-broker files;
-        # non-broker JSONs (…_base.json etc.) are skipped by taxjson-fees.
+        # non-broker JSONs (…_base.json etc.) are skipped by taxjson-fees-sum.
         # Exclude files that actually belong to a LONGER-named sibling
         # account sharing this prefix (accounts `margin` and `margin_us`:
         # the glob "margin_*.json" also matches margin_us_ib.json, leaking
@@ -16449,7 +16730,7 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
         if year:
             cmd += ["--year", str(year)]
 
-    # taxjson-fees needs --rates alongside --to; pass both only when the rate
+    # taxjson-fees-sum needs --rates alongside --to; pass both only when the rate
     # file exists, else report native per-brokerage amounts (no conversion).
     rates = cache / "to_base.csv"
     if rates.exists():
@@ -16619,9 +16900,15 @@ def _main() -> None:
     # shell umask — SECURITY.md promises it.
     from taxjson.bin._entry import private_umask
     private_umask()
-    p = argparse.ArgumentParser(prog="taxjson",
-                                description=__doc__.splitlines()[0],
-                                formatter_class=_CappedHelpFormatter)
+    p = argparse.ArgumentParser(
+        prog="taxjson", description=__doc__.splitlines()[0],
+        formatter_class=_CappedHelpFormatter,
+        epilog="Exit codes: 0 success; 1 failure, or a command's finding "
+               "(drift, a handoff problem, an unsafe trade, a lint hit); "
+               "2 usage, or a named input or output that cannot be read "
+               "or written; 3 elections required (run --no-input); 130 "
+               "interrupted; 141 stdout closed (| head). `taxjson help "
+               "COMMAND` or `taxjson COMMAND --help` for one command.")
     p.add_argument("-C", "--dir", default=".", help="Project root (default: cwd)")
     try:
         from importlib.metadata import version as _pkg_version
@@ -16670,7 +16957,10 @@ def _main() -> None:
                          action="append",
                          help="Write one election non-interactively "
                               "(headless/CI bootstrap), e.g. --set "
-                              "20251022-ssl-rgld-51d7=rollover_s_85_1_5")
+                              "20251022-ssl-rgld-51d7=rollover_s_85_1_5 "
+                              "(Canada) or =reorg_368 (USA); the "
+                              "event's own choices are listed by "
+                              "`taxjson elect ACCOUNT`")
     p_elect.add_argument("--hint", action="append", metavar="KEY=VALUE",
                          help="Hint for --set (repeatable), e.g. "
                               "--hint fmv_per_share=12.5")
@@ -16723,7 +17013,8 @@ def _main() -> None:
              "journals, broker migrations, and crypto "
              "withdrawals/sends (matched pairs read as self-custody "
              "moves; unmatched out-legs are gift/payment candidates "
-             "— dispositions at FMV if they left your ownership). "
+             "— dispositions at FMV if they left your ownership; in a "
+             "US project only a payment is a sale). "
              "The TRANSFER rows the books deliberately exclude; "
              "sidecar rows from taxable parses + in-book rows from "
              "sheltered accounts.")
@@ -16735,21 +17026,34 @@ def _main() -> None:
 
     p_csend = sub.add_parser(
         "crypto-sends",
-        help="Crypto withdrawals/sends that did not arrive on another of "
-             "your exchanges: decide self (own wallet) / gift / payment, "
-             "see the fair value and the .tt BUYSELL line; --write "
-             "generates inputs/<acct>/crypto_sends.tt. Stablecoins get "
-             "the currency-gain calculation instead of a sale line.")
+        help="Crypto withdrawals/sends that did not arrive in another of "
+             "your crypto accounts: decide self (own wallet) / gift "
+             "(Canada only) / payment, see the fair value and the .tt "
+             "BUYSELL line; --write generates inputs/<acct>/crypto_sends.tt. "
+             "Stablecoins get the currency-gain calculation instead of a "
+             "sale line.",
+        description="Crypto withdrawals/sends that did not arrive in "
+                    "another of your crypto accounts. A send is paired "
+                    "with an arrival of the same coin on another "
+                    "exchange, or on the same exchange in another "
+                    "account, from 10 minutes before to 3 days after the "
+                    "send, losing at most 10% to the network fee; a "
+                    "paired send is your own move. Decide each unpaired "
+                    "send: self (own wallet) / gift (Canada only) / "
+                    "payment; --write generates "
+                    "inputs/<acct>/crypto_sends.tt.")
     p_csend.add_argument("account", nargs="?",
                          help="Crypto account (default: all)")
     p_csend.add_argument("--set", action="append", metavar="ID=DECISION",
-                         help="Record a decision (self | gift | payment) "
+                         help="Record a decision (self | gift | payment; "
+                              "a US project refuses gift) "
                               "for a send id from the listing; "
                               "repeatable. A `-fee` id (a network fee "
                               "hidden in a send that arrived short) takes "
                               "`ID-fee=fee --price P`")
     p_csend.add_argument("--unpair", action="store_true",
-                         help="With --set ID=gift|payment on a send the "
+                         help="With --set ID=gift|payment (US: payment) "
+                              "on a send the "
                               "tool paired with an arrival: keep it "
                               "unpaired (that arrival was unrelated)")
     p_csend.add_argument("--unset", action="append", metavar="ID",
@@ -16784,8 +17088,9 @@ def _main() -> None:
 
     p_roc = sub.add_parser(
         "roc",
-        help="Like `events` but only ADJUST rows — return-of-capital ACB "
-             "reductions (broker-classified) and manual .tt adjustments")
+        help="Like `events` but only ADJUST rows — return-of-capital "
+             "ACB / basis reductions (broker-classified) and manual .tt "
+             "adjustments")
     p_roc.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_roc.add_argument("account", nargs="?", help="Account (default: all)")
     p_roc.add_argument("--json", action="store_true",
@@ -16942,8 +17247,9 @@ def _main() -> None:
 
     p_rsum = sub.add_parser(
         "roc-sum",
-        help="Return-of-capital / ACB-adjustment total per ticker over a "
-             "window (default: tax year)")
+        help="Return-of-capital total per ticker over a window "
+             "(default: tax year): the ACB (Canada, T3 box 42) or basis "
+             "(USA, Form 1099-DIV box 3) adjustments")
     p_rsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_rsum.add_argument("account", nargs="?", help="Account (default: all)")
     p_rsum.add_argument("--json", action="store_true",
@@ -17006,8 +17312,10 @@ def _main() -> None:
                             "cutoff on the project's date basis "
                             "(settlement date unless tax_date = "
                             "\"trade\"); phantoms.json applied; "
-                            "per-account ACB (no s.47 blend across "
-                            "taxable accounts), with the in-account "
+                            "each account alone (Canada: per-account "
+                            "ACB, before the s.47 blend across taxable "
+                            "accounts; USA: the per-account FIFO basis "
+                            "the return uses), with the in-account "
                             "superficial-loss / wash-sale deferral but "
                             "before the cross-account wash pass")
     p_pos.add_argument("--negative", action="store_true",
@@ -17774,6 +18082,7 @@ _RUN_STATE_BANNER_CMDS = frozenset({
     "shares", "list", "ccd-sum", "trades", "divs", "dil", "roc", "events",
     "wash-radar", "sell-check", "buy-check", "harvest", "watch",
     "edge-cases", "option-boundary", "spinoffs", "splits",
+    "check-dates",
 })
 
 
