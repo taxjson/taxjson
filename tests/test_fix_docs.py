@@ -48,11 +48,13 @@ def _bullets(section):
 
 def _subcommands():
     """The subcommand names `taxjson --help` lists."""
+    # `help --all`: every command, whatever project the cwd is in; the
+    # grouped page lists each at a 2-space indent under its heading.
     r = subprocess.run([sys.executable, "-m", "taxjson.bin.taxjson_run",
-                        "--help"], capture_output=True, text=True,
+                        "help", "--all"], capture_output=True, text=True,
                        stdin=subprocess.DEVNULL, env=dict(os.environ,
                                                           COLUMNS="78"))
-    names = set(re.findall(r"^    ([a-z][a-z0-9-]+)(?:\s|$)", r.stdout,
+    names = set(re.findall(r"^  ([a-z][a-z0-9-]+)(?:\s|$)", r.stdout,
                            re.M))
     assert {"run", "renames", "crypto-sends", "help"} <= names, r.stdout
     return names

@@ -368,7 +368,8 @@ case "$1" in
     case "$2" in
       venv) mkdir -p "$3/bin"; cp "$0" "$3/bin/python"
             printf '#!/bin/sh\\necho "taxjson 0.0.0"\\n' > "$3/bin/taxjson"
-            chmod +x "$3/bin/taxjson" ;;
+            chmod +x "$3/bin/taxjson"
+            cp "$3/bin/taxjson" "$3/bin/tjs" ;;
     esac ;;
 esac
 exit 0
@@ -426,6 +427,8 @@ class TestInstallerTagSelection(unittest.TestCase):
             self.assertEqual(install(), "v0.10.0",
                              "an rc / four-part / two-part tag never ships")
             self.assertTrue((d / "bin" / "taxjson").is_symlink())
+            # The short name `tjs` is linked beside it (owner request).
+            self.assertTrue((d / "bin" / "tjs").is_symlink())
             (src / "f.txt").write_text("next\n")
             self._git(src, "commit", "-q", "-am", "next")
             self._git(src, "tag", "-a", "v0.10.1", "-m", "v0.10.1")

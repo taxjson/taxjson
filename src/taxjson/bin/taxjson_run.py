@@ -811,6 +811,166 @@ class _CappedHelpFormatter(argparse.HelpFormatter):
         super().__init__(prog, **kw)
 
 
+# The help page lists the subcommands by what they are for, not as one
+# flat list of 55+ names (owner request). Every registered subcommand
+# sits in exactly one group (tests/test_cli_polish.py); the README's
+# command table uses the same groups in the same order.
+_COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("Set up", ("init", "fetch", "elect")),
+    ("Build the books", ("run", "crypto-sends", "find-missing-history")),
+    ("Read the numbers", (
+        "sum", "list", "divs-sum", "trades-sum", "fees-sum", "shares",
+        "estimate", "instalments", "events", "divs", "dil", "trades",
+        "gains", "fees", "roc", "leaps", "transfers", "roc-sum", "dil-sum",
+        "winners", "stats", "ccd-sum", "leaps-sum", "fx-cash")),
+    ("Before you trade", ("wash-radar", "buy-check", "sell-check",
+                          "harvest", "scan", "watch")),
+    ("Before you file", ("checklist", "form-export", "t1135",
+                         "reconcile-slips", "carryover", "option-boundary",
+                         "close-year", "check-filed", "handoff")),
+    ("Explain and check", ("audit", "wash-sales", "tax-logic", "edge-cases",
+                           "check-dates", "sanity", "renames", "spinoffs",
+                           "splits")),
+    ("Tools", ("redact", "help")),
+)
+
+_TOP_DESCRIPTION = (
+    "taxjson — one-command orchestrator for the full tax pipeline. "
+    "`tjs` is the same program under a shorter name. Run with no "
+    "command for this page.")
+
+# The name the program was invoked as: `tjs` (the short console script)
+# or `taxjson` (also for `python -m taxjson.bin.taxjson_run`). Set by
+# main(); usage lines and error prefixes show it.
+_PROG = "taxjson"
+
+
+def _invoked_name(argv0: Optional[str] = None) -> str:
+    """"tjs" when invoked through the `tjs` console script (tjs, tjs.exe,
+    tjs-script.py on Windows), else "taxjson"."""
+    import os
+    name = os.path.basename(argv0 if argv0 is not None
+                            else (sys.argv[0] if sys.argv else ""))
+    stem = name.lower().split(".", 1)[0]
+    return "tjs" if stem in ("tjs", "tjs-script") else "taxjson"
+
+
+class _GroupedHelpParser(argparse.ArgumentParser):
+    """The top-level parser: its help page lists the subcommands under
+    _COMMAND_GROUPS' headings (argparse can only print one flat
+    COMMAND list). Usage, description, options and epilog are argparse's
+    own. A subcommand missing from the groups is still listed, under
+    "Other commands", never hidden.
+
+    Inside a project whose country is known (`help_country`), a command
+    the OTHER country owns (lib/country.COMMAND_COUNTRY) is left out and
+    a closing line counts them; `help --all` (`show_all`) lists every
+    command. Outside a project, or with --all, a one-country command is
+    marked "(Canada)" / "(USA)". Running a hidden command still gets the
+    dispatcher's refusal naming why."""
+
+    help_country: Optional[str] = None
+    show_all: bool = False
+
+    def format_help(self) -> str:
+        import copy
+        from taxjson.lib.country import COMMAND_COUNTRY
+
+        def display_name(c: str) -> str:
+            return {"canada": "Canada", "usa": "USA"}.get(c, c)
+        formatter = self._get_formatter()
+        formatter.add_usage(self.usage, self._actions,
+                            self._mutually_exclusive_groups)
+        formatter.add_text(self.description)
+        subs = next((a for a in self._actions
+                     if isinstance(a, argparse._SubParsersAction)), None)
+        by_name = {}
+        hidden = 0
+        for a in getattr(subs, "_choices_actions", []):
+            owner = COMMAND_COUNTRY.get(a.dest)
+            if owner and self.help_country and not self.show_all \
+                    and owner != self.help_country:
+                hidden += 1
+                continue
+            if owner and (self.show_all or not self.help_country):
+                a = copy.copy(a)
+                a.help = f"({display_name(owner)}) {a.help or ''}"
+            by_name[a.dest] = a
+        placed = set()
+        sections = []
+        for title, names in _COMMAND_GROUPS:
+            acts = [by_name[n] for n in names if n in by_name]
+            placed.update(n for n in names if n in by_name)
+            sections.append((title, acts))
+        rest = [a for n, a in by_name.items() if n not in placed]
+        if rest:
+            sections.append(("Other commands", rest))
+        for title, acts in sections:
+            if not acts:
+                continue
+            formatter.start_section(title)
+            formatter.add_arguments(acts)
+            formatter.end_section()
+        for group in self._action_groups:
+            acts = [a for a in group._group_actions if a is not subs]
+            if not acts:
+                continue
+            formatter.start_section(group.title)
+            formatter.add_text(group.description)
+            formatter.add_arguments(acts)
+            formatter.end_section()
+        formatter.add_text(self.epilog)
+        if hidden:
+            formatter.add_text(
+                f"{hidden} command{'s' if hidden != 1 else ''} hidden for "
+                f"{display_name(self.help_country)} — `{self.prog} help "
+                f"--all` lists every command.")
+        return formatter.format_help()
+
+
+def _help_country(argv: List[str]) -> Optional[str]:
+    """The country of the project the help page is shown for (-C/--dir,
+    else the current directory): None outside a project or when its
+    country is not set (lib/country's resolver, never a guess)."""
+    from taxjson.lib.country import settings_country
+    d = "."
+    for i, tok in enumerate(argv):
+        if tok in ("-C", "--dir") and i + 1 < len(argv):
+            d = argv[i + 1]
+        elif tok.startswith("--dir="):
+            d = tok[len("--dir="):]
+        elif tok.startswith("-C") and len(tok) > 2:
+            d = tok[2:]
+    root = Path(d)
+    try:
+        if not (root / "taxjson.toml").is_file():
+            return None
+        return settings_country(_soft_settings(root.resolve()))
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def _no_command(argv: List[str], commands) -> bool:
+    """True when argv names no command and holds nothing but -C/--dir
+    DIR: `taxjson` or `taxjson -C DIR` alone prints the help page. Any
+    other token (-h, --version, a mistyped command) keeps argparse's
+    own handling."""
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok in ("-C", "--dir"):
+            if i + 1 >= len(argv):
+                return False            # argparse names the missing DIR
+            i += 2
+            continue
+        if tok.startswith("--dir=") or (tok.startswith("-C")
+                                         and len(tok) > 2):
+            i += 1
+            continue
+        return False
+    return not any(t in commands for t in argv)
+
+
 def _child_error(stderr: Optional[str], limit: int = 400) -> str:
     """What a wrapper relays of a failed child's stderr: all of it when
     short, else its error line. A fixed-length PREFIX cut a traceback off
@@ -839,7 +999,7 @@ def _child_error(stderr: Optional[str], limit: int = 400) -> str:
 
 
 def _die(msg: str) -> None:
-    prefix = f"taxjson {_CURRENT_CMD}: " if _CURRENT_CMD else "taxjson: "
+    prefix = f"{_PROG} {_CURRENT_CMD}: " if _CURRENT_CMD else f"{_PROG}: "
     sys.exit(prefix + msg)
 
 
@@ -850,7 +1010,7 @@ def _die_input(msg: str) -> None:
     so cron and the checklist can tell 'broken input' from 'finding' —
     the cli_diag convention every console script follows (re-audit
     A2-0164)."""
-    prefix = f"taxjson {_CURRENT_CMD}: " if _CURRENT_CMD else "taxjson: "
+    prefix = f"{_PROG} {_CURRENT_CMD}: " if _CURRENT_CMD else f"{_PROG}: "
     print(prefix + msg, file=sys.stderr)
     sys.exit(2)
 
@@ -7740,6 +7900,134 @@ def cmd_winners(args: argparse.Namespace) -> None:
               f"{money(total)} {base_cur}")
     print("Realized dispositions only (engine-allowed amounts) — "
           "dividends/PIL are not included; see divs-sum.")
+
+
+def cmd_stats(args: argparse.Namespace) -> None:
+    """`taxjson stats [YEAR] [ACCOUNT] [--all-history] [--json]`: win/lose
+    statistics on closed trades per asset class (lib/trade_stats) —
+    economic P/L in the base currency before any superficial-loss /
+    wash-sale denial, the denied total on its own line. A view, never a
+    filing number."""
+    from taxjson.lib import trade_stats
+    from taxjson.lib.report_model import resolve_gains_files
+    root = Path(args.dir).resolve()
+    cache = root / "work"
+    if args.all_history:
+        if args.period and _is_period(args.period):
+            _die_input("give a YEAR or --all-history, not both")
+        if args.period and args.account is None:
+            args.account, args.period = args.period, None
+        args.period = "all"
+    keep, scope, account = _view_window(args, root)
+    settings = _soft_settings(root)
+    country = _country(settings)
+    usa = country == "usa"
+    groups = _account_group_of(root)
+    resolved = resolve_gains_files(cache, account or None)
+    _warn_gains_artifact_scope(resolved, _period_token(args), root)
+    if not account:
+        # Taxable accounts by default; a sheltered one only when named.
+        resolved = {a: f for a, f in resolved.items()
+                    if groups.get(a) != "sheltered"}
+        if resolved:
+            _warn_accounts_without_books(
+                root, list(resolved) + [a for a, g in groups.items()
+                                        if g == "sheltered"],
+                "stats", "gains file")
+    if not resolved:
+        what = (f"account {account!r}" if account else "a taxable account")
+        sys.exit(f"taxjson stats: no books for {what} in {cache} — run "
+                 f"`taxjson run` first.")
+    books: Dict[str, list] = {}
+    gains: Dict[str, Dict[str, Any]] = {}
+    for acct, path in resolved.items():
+        gains[acct] = _load_json_or_die(path)
+        bpath = cache / f"{acct}_base.json"
+        if not bpath.is_file():
+            sys.exit(f"taxjson stats: no base-currency book for account "
+                     f"{acct!r} ({bpath.name}) — run `taxjson run` first.")
+        books[acct] = list(_load_json_or_die(bpath).get("transactions")
+                           or [])
+    settle = _settle_basis(root, next(iter(gains.values())))
+    from taxjson.lib.crypto_sends import crypto_accounts
+    # The gains files of a year project hold that tax year only; the
+    # written options (rebuilt from the whole-history base book) keep
+    # to the same span.
+    _years = {str((d.get("summary") or {}).get("year") or "")
+              for d in gains.values()}
+    _by = next(iter(_years)) if len(_years) == 1 else ""
+    in_books = None
+    if re.fullmatch(r"\d{4}", _by):
+        def in_books(r, _y=_by):
+            d = (r.get("date_settle") if settle else None) or r.get("date")
+            return str(d or "").startswith(_y)
+    res = trade_stats.compute(
+        gains, books, keep, lambda r: _gains_row_date(r, keep, settle),
+        crypto_accounts(_soft_config(root)), in_books)
+    base = _base_currency(root)
+    sheltered = bool(account) and groups.get(account) == "sheltered"
+    rule = "wash-sale" if usa else "superficial-loss"
+    if getattr(args, "json", False):
+        _json_out(dict(res, scope=scope, currency=base,
+                       accounts=sorted(resolved),
+                       sheltered=sheltered,
+                       basis=f"economic P/L before any {rule} denial",
+                       option_premium_timing=(
+                           None if usa else
+                           settings.get("option_premium_timing")
+                           or "grant")))
+        return
+    money = fmt_money
+
+    def _m(v):
+        return "-" if v is None else money(v)
+
+    def _row(label, st):
+        wr = ("-" if st["win_rate"] is None
+              else f"{st['win_rate'] * 100:.1f}%")
+        pf = ("-" if st["profit_factor"] is None
+              else f"{st['profit_factor']:.2f}")
+        return " ".join([label, str(st["trades"]), str(st["wins"]),
+                         str(st["losses"]), wr, money(st["net_pl"]),
+                         _m(st["avg_win"]), _m(st["avg_loss"]),
+                         _m(st["largest_win"]), _m(st["largest_loss"]),
+                         pf])
+    kind = ("retirement (IRA)" if usa else "registered")
+    who = (f"account {account}" + (f" — {kind}, not taxable events"
+                                   if sheltered else "")
+           if account else
+           f"taxable accounts: {', '.join(sorted(resolved))}")
+    print(f"CLOSED-TRADE STATISTICS — {scope} ({base}; {who})")
+    print(f"Economic P/L in {base} before any {rule} denial — a view of "
+          f"how the trades went, not a filing number.")
+    print()
+    lines = ["CLASS TRADES WINS LOSSES WIN_RATE NET_P/L AVG_WIN AVG_LOSS "
+             "LARGEST_WIN LARGEST_LOSS PROFIT_FACTOR"]
+    for cls, _desc in trade_stats.CLASSES:
+        lines.append(_row(cls, res["classes"][cls]))
+    lines.append(_row("TOTAL", res["total"]))
+    _print_report_table(lines, rule_before_last=True)
+    print()
+    print(f"Denied by the {rule} rule (NOT subtracted above): "
+          f"{money(res['denied_total'])} {base} over "
+          f"{res['denied_count']} disposition(s).")
+    print("WIN_RATE = wins / trades (a break-even trade is neither); "
+          "PROFIT_FACTOR = gross wins / gross losses.")
+    print("One trade per closing disposition (a partial close is its "
+          "own trade). A written option is one trade from write to "
+          "close, whatever the premium timing: the premium minus the "
+          "buy-back, or the premium kept at expiry or assignment.")
+    if res["assigned_written_options"]:
+        print(f"{res['assigned_written_options']} assigned written "
+              f"option close(s): the premium counts on the option row "
+              f"and is taken out of the shares' P/L (the tax rules fold "
+              f"it into the shares' proceeds or cost).")
+    if res["exercised_long_options"]:
+        print(f"{res['exercised_long_options']} exercised long option(s) "
+              f"are not trades: their cost carried into the shares.")
+    if res["tainted_skipped"]:
+        print(f"{res['tainted_skipped']} disposition(s) with an unknown "
+              f"cost (no purchase in your files) are not counted.")
 
 
 def _is_period(s: Optional[str]) -> bool:
@@ -16656,19 +16944,20 @@ def main() -> None:
     traceback (re-audit A2-0782, A2-0785); report text the terminal
     cannot encode degrades to '?' (A2-0786)."""
     from taxjson.lib.cli_diag import run_top_level
-    run_top_level(lambda: (f"taxjson {_CURRENT_CMD}" if _CURRENT_CMD
-                           else "taxjson"),
+    global _PROG
+    _PROG = _invoked_name()
+    run_top_level(lambda: (f"{_PROG} {_CURRENT_CMD}" if _CURRENT_CMD
+                           else _PROG),
                   _main, interrupt_note=_interrupt_note)
 
 
-def _main() -> None:
-    # Tax data is private: everything this process and its pipeline
-    # stages create is owner-only (files 0600, dirs 0700) whatever the
-    # shell umask — SECURITY.md promises it.
-    from taxjson.bin._entry import private_umask
-    private_umask()
-    p = argparse.ArgumentParser(
-        prog="taxjson", description=__doc__.splitlines()[0],
+def _build_parser(prog: str = "taxjson"
+                  ) -> Tuple[argparse.ArgumentParser, Any]:
+    """The `taxjson` / `tjs` argument parser and its subparsers action.
+    `prog` is the name the program was invoked as (usage lines and the
+    help page show it)."""
+    p = _GroupedHelpParser(
+        prog=prog, description=_TOP_DESCRIPTION,
         formatter_class=_CappedHelpFormatter,
         epilog="Exit codes: 0 success; 1 failure, or a command's finding "
                "(drift, a handoff problem, an unsafe trade, a lint hit); "
@@ -17051,6 +17340,29 @@ def _main() -> None:
     p_lsum.add_argument("--json", action="store_true",
                        help="Emit JSON instead of text")
     p_lsum.set_defaults(func=cmd_leaps_sum)
+
+    p_stats = sub.add_parser(
+        "stats",
+        help="Win/lose statistics on closed trades per asset class (long "
+             "and short shares, long and written options, futures, "
+             "crypto): trades, wins, losses, win rate, net P/L, average "
+             "and largest win and loss, profit factor — economic P/L in "
+             "the base currency before any superficial-loss / wash-sale "
+             "denial (default: tax year, taxable accounts)")
+    p_stats.add_argument("period", nargs="?", metavar="YEAR",
+                         help="Tax year (default: the project's year); "
+                              "any window token works too (30d, ytd, "
+                              "all ...)")
+    p_stats.add_argument("account", nargs="?",
+                         help="One account (default: every taxable "
+                              "account); a sheltered account is shown "
+                              "only when named")
+    p_stats.add_argument("--all-history", action="store_true",
+                         help="Every closed trade the books hold, not "
+                              "one year")
+    p_stats.add_argument("--json", action="store_true",
+                         help="Emit JSON instead of text")
+    p_stats.set_defaults(func=cmd_stats)
 
     p_tsum = sub.add_parser(
         "trades-sum",
@@ -17646,8 +17958,13 @@ def _main() -> None:
     p_help = sub.add_parser(
         "help", help="Show top-level help, or help for one COMMAND")
     p_help.add_argument("topic", nargs="?", help="Subcommand to explain")
+    p_help.add_argument("--all", action="store_true",
+                        help="List every command, also the ones the "
+                             "other country owns (hidden inside a project)")
 
     def _help(a: argparse.Namespace) -> None:
+        if a.all:
+            p.show_all = True
         if a.topic and a.topic in sub.choices:
             sub.choices[a.topic].print_help()
         elif a.topic:
@@ -17676,8 +17993,23 @@ def _main() -> None:
         # Same width cap as the top-level parser — add_parser doesn't
         # inherit formatter_class, and 40 call-site edits would drift.
         _sp.formatter_class = _CappedHelpFormatter
+    return p, sub
 
+
+def _main() -> None:
+    # Tax data is private: everything this process and its pipeline
+    # stages create is owner-only (files 0600, dirs 0700) whatever the
+    # shell umask — SECURITY.md promises it.
+    from taxjson.bin._entry import private_umask
+    private_umask()
+    p, sub = _build_parser(_PROG)
     argv = sys.argv[1:]
+    p.help_country = _help_country(argv)
+    if _no_command(argv, set(sub.choices)):
+        # `taxjson` / `taxjson -C DIR` alone: the help page, exit 0
+        # (it was an argparse "COMMAND is required" error, exit 2).
+        p.print_help()
+        return
     commands = set(sub.choices)
     segments = _split_command_segments(p, argv, commands)
     if "fetch" in argv:
@@ -17762,7 +18094,7 @@ def _main() -> None:
 def _guarded_func(args: argparse.Namespace) -> None:
     from taxjson.lib.cli_diag import error, guard_main
     from taxjson.lib.json_input import InputFileError
-    prog = f"taxjson {args.cmd}"
+    prog = f"{_PROG} {args.cmd}"
     try:
         guard_main(prog)(args.func)(args)
     except InputFileError as e:
@@ -17836,7 +18168,7 @@ _RUN_STATE_BANNER_CMDS = frozenset({
     "shares", "list", "ccd-sum", "trades", "divs", "dil", "roc", "events",
     "wash-radar", "sell-check", "buy-check", "harvest", "watch",
     "edge-cases", "option-boundary", "spinoffs", "splits",
-    "check-dates",
+    "check-dates", "stats",
 })
 
 
@@ -17857,7 +18189,7 @@ def _banner_run_state(args: argparse.Namespace) -> None:
 # run (audit A2-0684, A2-1167). Refused in one line here.
 _ACCOUNT_ARG_CMDS = frozenset({
     "edge-cases", "spinoffs", "splits", "check-dates", "winners",
-    "leaps", "leaps-sum",
+    "leaps", "leaps-sum", "stats",
 })
 
 

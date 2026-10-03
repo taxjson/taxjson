@@ -7,16 +7,16 @@
 # What it does: checks git and Python 3.9+, clones the LATEST RELEASE
 # (newest vX.Y.Z tag) into ~/.local/share/taxjson — or fast-forwards an
 # existing install to it — builds a private virtualenv there with the
-# [fx] extra, and links the `taxjson` command into ~/.local/bin. The core
-# only: broker auto-fetch (`taxjson fetch` for Questrade / IBKR Flex) is
-# the separate taxjson-fetch package, installed into the same environment
-# with --with-fetch (or TAXJSON_WITH_FETCH=1).
+# [fx] extra, and links the `taxjson` command (and its short name `tjs`)
+# into ~/.local/bin. The core only: broker auto-fetch (`taxjson fetch` for
+# Questrade / IBKR Flex) is the separate taxjson-fetch package, installed
+# into the same environment with --with-fetch (or TAXJSON_WITH_FETCH=1).
 # Re-running is safe and is how you upgrade. Nothing touches your tax
 # project folders.
 #
 # Knobs (environment variables):
 #   TAXJSON_DIR      install location        (default ~/.local/share/taxjson)
-#   TAXJSON_BIN      where `taxjson` is linked (default ~/.local/bin)
+#   TAXJSON_BIN      where `taxjson` and `tjs` are linked (default ~/.local/bin)
 #   TAXJSON_CHANNEL  release | dev           (dev tracks the main branch)
 #   TAXJSON_EXTRAS   pip extras to install   (default fx; "" for none)
 #   TAXJSON_REPO     git remote              (default the GitHub repo)
@@ -130,6 +130,15 @@ if [ -e "$BIN/taxjson" ] && [ ! -L "$BIN/taxjson" ]; then
   die "$BIN/taxjson exists and is not a symlink (another install, e.g. pipx?). Move it aside or set TAXJSON_BIN."
 fi
 ln -sfn "$DIR/venv/bin/taxjson" "$BIN/taxjson"
+# `tjs`: the same program under a shorter name (releases that have it).
+if [ -x "$DIR/venv/bin/tjs" ]; then
+  if [ -e "$BIN/tjs" ] && [ ! -L "$BIN/tjs" ]; then
+    echo "   NOTE: $BIN/tjs exists and is not a symlink — left alone; use \`taxjson\`."
+  else
+    ln -sfn "$DIR/venv/bin/tjs" "$BIN/tjs"
+    echo "   also linked $BIN/tjs (the same program, shorter)"
+  fi
+fi
 case ":$PATH:" in
   *":$BIN:"*) ;;
   *) echo "   NOTE: $BIN is not on your PATH. Add this to your shell profile:"
