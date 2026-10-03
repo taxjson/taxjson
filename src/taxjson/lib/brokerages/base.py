@@ -242,6 +242,33 @@ class BrokerageParseError(ValueError):
     into a one-line error and a nonzero exit."""
 
 
+def combined_accounts_note(where: str, broker: str, masked) -> str:
+    """The one-line NOTE that replaces the 'statement spans N accounts'
+    ATTENTION when the label declares combined_broker_accounts = true
+    (`masked`: the ids, already masked to their first 2 chars + ***)."""
+    masked = list(masked)
+    return (f"note: {where}: {len(masked)} {broker} accounts "
+            f"({', '.join(masked)}) booked together under this account "
+            f"label (combined_broker_accounts = true).")
+
+
+def combined_accounts_refusal(where: str, broker: str, masked,
+                              why: str) -> 'BrokerageParseError':
+    """combined_broker_accounts = true on a SHELTERED label whose
+    statement spans several broker accounts that are not provably one
+    plan: refused — one registered plan's rows booked in another's
+    account would mis-state both (and a taxable account's rows would
+    vanish from the return)."""
+    masked = list(masked)
+    return BrokerageParseError(
+        f"{where}: the statement spans {len(masked)} {broker} accounts "
+        f"({', '.join(masked)}) and this account is sheltered — "
+        f"combined_broker_accounts = true is honoured on a sheltered "
+        f"account only when every account is the same registered plan, "
+        f"and {why}. Export each plan into its own inputs/<account>/ "
+        f"folder (or drop the setting).")
+
+
 # An account id inside a file NAME: IB names its downloads after the
 # account (U1234567_20250101_20251231.csv). A digit run of 7+ that is
 # not a YYYYMMDD date counts too (a bank account number).
@@ -510,6 +537,17 @@ class BaseBrokerage:
     # section and a Canadian one never reads an IRC one (re-audit
     # A2-0723 / A2-1304 / A2-1308).
     country: Optional[str] = None
+
+    # [accounts.<name>] combined_broker_accounts = true (taxjson-brokerage
+    # --combined-broker-accounts): the user declares that every broker
+    # account in this label's statements is theirs and taxable together,
+    # so a statement spanning several broker accounts is a one-line NOTE,
+    # not an ATTENTION. Refused on a sheltered label unless the statement
+    # itself shows every account is the same plan (combined_accounts_*).
+    combined_broker_accounts: bool = False
+    # Whether the label is a taxable account (taxjson-brokerage
+    # --account-type); None when the caller did not say.
+    account_taxable: Optional[bool] = None
 
     def law(self, canada: str, usa: str, neutral: str = "") -> str:
         """The wording for the project's country: `canada` / `usa`, or

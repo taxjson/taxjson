@@ -526,6 +526,80 @@ class TestReaudit2Gaps(_Sandbox):
         self.assertEqual(self.scan("--diff", stdin=diff).returncode, 0, self.scan("--diff", stdin=diff).stdout)
 
 
+class TestCommitMessageAmounts(_Sandbox):
+    """A2-1384: a pushed commit or tag MESSAGE may not quote a money-like
+    amount (thousands separators and cents) — owner-book totals once
+    reached the public history that way. `pii-ok` on the line lets a
+    synthetic number through. Every amount here is synthetic."""
+
+    _AMT = "1" + ",234,567" + ".89"
+
+    def test_message_mode_refuses_amounts(self):
+        for text in (f"owner 2025 total {self._AMT}",
+                     "gain moved 12" + ",345.67 -> 12" + ",300.00",
+                     "(-71" + ",734.84 on a book)",
+                     "max cost $1" + ",139,811.07"):
+            r = self.scan("--message", stdin=text + "\n")
+            self.assertEqual(r.returncode, 1, text + r.stdout)
+            self.assertIn("money amount", r.stdout)
+            self.assertNotIn(self._AMT, r.stdout)
+
+    def test_message_mode_lets_other_numbers_through(self):
+        for text in ("fix 1234.56 rounding", "list 1,2,3.45", "id 1,000",
+                     "v1.2.3, 4,500 rows", "ratio 0.25 and 12.50",
+                     "a 1" + ",234.5 one-decimal value"):
+            r = self.scan("--message", stdin=text + "\n")
+            self.assertEqual(r.returncode, 0, text + r.stdout)
+
+    def test_pii_ok_marks_a_synthetic_amount(self):
+        for mark in ("pii-ok", "(pii-ok: synthetic)", "# pii-ok"):
+            text = f"test books sum to {self._AMT} {mark}"
+            r = self.scan("--message", stdin=text + "\n")
+            self.assertEqual(r.returncode, 0, text + r.stdout)
+        # the marker covers only its own line
+        r = self.scan("--message",
+                      stdin="synthetic 1" + f",000.00 pii-ok\nreal {self._AMT}\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        # a word merely containing it does not count
+        r = self.scan("--message", stdin=f"{self._AMT} not-pii-okay\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+
+    def test_plain_text_and_tree_modes_unchanged(self):
+        self.assertEqual(self.scan("--text", stdin=f"x {self._AMT}\n").returncode, 0)
+        (self.repo / "README.md").write_text(f"example total {self._AMT}\n")
+        self.assertEqual(self.scan().returncode, 0)
+
+    def _pre_push(self, lines):
+        return subprocess.run(["bash", str(self.repo / "scripts" / "hooks" / "pre-push"),
+                               "origin", "unused-url"], cwd=self.repo,
+                              capture_output=True, text=True, input=lines, env=self.env)
+
+    def test_pre_push_refuses_an_amount_in_a_commit_message(self):
+        remote = self.tmp / "remote.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True,
+                       env=self.env, capture_output=True)
+        self.git("remote", "add", "origin", str(remote))
+        (self.repo / "a.txt").write_text("hello\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", f"engine fix\n\nOwner books: {self._AMT}")
+        sha = self.git("rev-parse", "HEAD").strip()
+        z = "0" * 40
+        r = self._pre_push(f"refs/heads/main {sha} refs/heads/main {z}\n")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("commit MESSAGE", r.stderr)
+        self.git("commit", "-q", "--amend", "-m",
+                 f"engine fix\n\nSynthetic test total {self._AMT} (pii-ok)")
+        sha = self.git("rev-parse", "HEAD").strip()
+        r = self._pre_push(f"refs/heads/main {sha} refs/heads/main {z}\n")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        # an annotated tag message is a message too
+        self.git("tag", "-a", "v1", "-m", f"release; total {self._AMT}")
+        tag = self.git("rev-parse", "v1").strip()
+        r = self._pre_push(f"refs/tags/v1 {tag} refs/tags/v1 {z}\n")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("TAG message", r.stderr)
+
+
 class TestReleaseAndCiGates(unittest.TestCase):
     """S025-06, S024-23, S023-00: static checks of the gate wiring."""
 

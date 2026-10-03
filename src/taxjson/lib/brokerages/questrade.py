@@ -9,6 +9,8 @@ from typing import List, Dict, Any, Optional, Tuple
 
 from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         combined_accounts_note,
+                                         combined_accounts_refusal,
                                          _parse_div_qty_rate,
                                          DESC_NUMBER_RE,
                                          canonical_ca_listing,
@@ -639,6 +641,28 @@ class QuestradeBrokerage(BaseBrokerage):
                       and not _QT_REGISTERED_RE.search(t) for t in types)
             if (taxable is True and reg) or (taxable is False and tax):
                 wrong.append(_mask(a))
+        if not wrong and self.combined_broker_accounts:
+            # combined_broker_accounts = true (owner decision): a NOTE —
+            # on a sheltered label only when every account is the SAME
+            # registered plan (Questrade's Account Type names it).
+            masked = [_mask(a) for a in sorted(accts)]
+            if taxable is False:
+                plans = {m.group(1).upper()
+                         for types in accts.values() for t in types
+                         for m in [_QT_REGISTERED_RE.search(t)] if m}
+                untyped = any(not any(_QT_REGISTERED_RE.search(t)
+                                      for t in types)
+                              for types in accts.values())
+                if len(plans) != 1 or untyped:
+                    raise combined_accounts_refusal(
+                        shown_name(path), 'Questrade', masked,
+                        f"their Account Types differ ({desc})"
+                        if len(plans) > 1 else
+                        f"the Account Type does not name one plan for "
+                        f"every account ({desc})")
+            print(combined_accounts_note(shown_name(path), 'Questrade',
+                                         masked), file=sys.stderr)
+            return
         if wrong:
             raise BrokerageParseError(
                 f"{shown_name(path)}: the export holds rows of {len(accts)} "

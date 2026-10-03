@@ -420,6 +420,18 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--combined-broker-accounts", dest="combined_broker_accounts",
+        action="store_true",
+        help=(
+            "Every broker account in these statements is yours and "
+            "taxable together (`[accounts.<name>] combined_broker_accounts "
+            "= true`, passed by `taxjson run`): a statement spanning "
+            "several broker accounts is a one-line note, not an ATTENTION "
+            "line. With --account-type sheltered it is refused unless the "
+            "statement shows every account is the same plan."
+        ),
+    )
+    parser.add_argument(
         "--tax-year", dest="tax_year", type=tax_year, default=None,
         metavar="YYYY",
         help=(
@@ -489,10 +501,17 @@ Examples:
         try:
             # The tax year, for a parser whose account-level coverage
             # check needs it (IB statement periods, audit A2-0262).
-            shared_context = (
-                _prepare(input_paths, tax_year=args.tax_year)
-                if 'tax_year' in inspect.signature(_prepare).parameters
-                else _prepare(input_paths))
+            _pp = inspect.signature(_prepare).parameters
+            _pkw: dict = {}
+            if 'tax_year' in _pp:
+                _pkw['tax_year'] = args.tax_year
+            # The label's combined_broker_accounts and type, for an
+            # account-level 'statements span N accounts' check.
+            if 'combined' in _pp:
+                _pkw['combined'] = args.combined_broker_accounts
+            if 'taxable' in _pp and args.account_type:
+                _pkw['taxable'] = args.account_type == 'taxable'
+            shared_context = _prepare(input_paths, **_pkw)
         except csv.Error as e:
             print(f"taxjson-brokerage: error: the CSV module refused an "
                   f"input file ({e}) — see the per-file error below by "
@@ -558,6 +577,7 @@ Examples:
             extractor.stablecoins_as_cash = args.country == "canada"
         if args.account_type and hasattr(extractor, 'account_taxable'):
             extractor.account_taxable = args.account_type == 'taxable'
+        extractor.combined_broker_accounts = args.combined_broker_accounts
         try:
             _cut = final_record_cut(input_path)
             transactions = extractor.parse_file(input_path)

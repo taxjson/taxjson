@@ -435,6 +435,9 @@ type = "taxable"               # REQUIRED: taxable | sheltered
 # holdings = ["~/portoml-run/U1_holdings.toml",   # broker positions files
 #             "~/portoml-run/U2_holdings.toml"]   # (`taxjson sanity` with no
 #                                                 #  arguments; `run` warns)
+# combined_broker_accounts = true  # every broker account in this folder's
+#                              # statements is yours and taxable together
+#                              # (see "Several broker accounts in one folder")
 
 [accounts.rrsp]
 type = "sheltered"
@@ -445,6 +448,25 @@ transfers = true               # keep TRANSFER rows (contributions/withdrawals)
 type = "taxable"
 crypto = true                  # splices the crypto price filler into the pipeline
 ```
+
+**Several broker accounts in one folder.** Every row of an account folder is
+booked to that one taxjson account. When a statement spans several broker
+accounts (an IB statement or Flex query covering two IB accounts, IB
+statements of different IB accounts in one folder, a Questrade or RBC export
+holding rows of two accounts), `taxjson run` prints an ATTENTION line naming
+them (ids masked to their first two characters): it is right only when they
+are one tax entity, and a TFSA/RRSP exported together with a margin account
+would land in the wrong book. When you have checked that every broker account
+in the folder's statements is yours and taxable together (a second taxable IB
+account exported with the main one), set `combined_broker_accounts = true` on
+the account: the ATTENTION becomes a one-line `note:` in the parse
+diagnostics, with the masked ids. On a `type = "sheltered"` account the
+setting is refused unless the statement itself shows every account is the
+same registered plan (Questrade's Account Type column); IB and RBC statements
+do not name the plan per account, so there it stops the parse — export each
+plan into its own folder. A Questrade export mixing a registered plan and a
+taxable account is refused with or without the setting. The value must be an
+unquoted `true` / `false`.
 
 Files the pipeline reads and writes (all map files are optional):
 
@@ -1726,7 +1748,9 @@ defended in layers rather than by tests alone:
   deliberately left, with the reasoning.
 - **Nothing personal leaves the machine.** `scripts/check-pii.sh` runs
   in every gate and as the `pre-push` hook, fails closed, and reads a
-  private denylist kept outside the repository; `taxjson redact` strips
+  private denylist kept outside the repository (the hook also refuses a
+  commit or tag message quoting a money amount such as 1,234,567.89 —
+  real book totals stay out of the public history; see CONTRIBUTING.md); `taxjson redact` strips
   the account numbers, names and contact details it recognises from an
   export — review the output before sharing it. One exception is by
   design: git publishes the author, committer and tagger name and e-mail
