@@ -5193,6 +5193,148 @@ class USATaxRules(TaxRules):
             # other lot, audit S070-12.)
             return out
 
+        # §1091 has no still-held test: a purchase in another of your
+        # TAXABLE accounts inside the window replaces the loss even when
+        # that account sold the shares before the loss sale (tax-logic
+        # US-WASH-22, owner decision on audit A2-0544). Its sold,
+        # never-matched shares are kept here per purchase, each with
+        # the gain row of the sale that closed them, so a later loss
+        # can add its disallowed amount to that sale's basis (the
+        # §1091(d) basis of shares no longer held changes their sale).
+        _long_rep_of: Dict[str, Dict[str, Any]] = {}
+        for _rl in long_replacements.values():
+            for _r in _rl:
+                if not (_r['is_sheltered'] or _r['is_affiliated']):
+                    _long_rep_of.setdefault(_r['tx'].id, _r)
+
+        def _record_sold_replacement(lot, entry, chunk_qty, sale_tx):
+            """The sale of a purchase's never-matched shares: kept on the
+            purchase's replacement record (US-WASH-22)."""
+            rep = _long_rep_of.get(lot.get('id'))
+            if (rep is None or lot.get('tainted')
+                    or lot.get('wash_deferred', Decimal(0))
+                    or not detect_wash_sales):
+                return
+            _uf = _rep_units_factor(sale_tx.symbol, rep['date'],
+                                    sale_tx.date) or 1.0
+            rep.setdefault('sold', []).append({
+                'entry': entry, 'avail': chunk_qty / _uf,
+                'sale_tx': sale_tx})
+
+        def _sold_replacements_in_window(rep_list, loss_tx):
+            """[(rep, chunk)] a long loss of `loss_tx` may still match:
+            shares of a taxable purchase in ANOTHER account, bought in
+            the window and sold before the loss, never matched and not
+            sold at a disallowed loss of their own (US-WASH-22)."""
+            try:
+                loss_dt = datetime.strptime(loss_tx.date, '%Y-%m-%d')
+            except ValueError:
+                return []
+            out = []
+            for rep in rep_list:
+                if (rep['is_sheltered'] or rep['is_affiliated']
+                        or rep['tx'].account == loss_tx.account
+                        or not rep.get('sold')):
+                    continue
+                try:
+                    rep_dt = datetime.strptime(rep['date'], '%Y-%m-%d')
+                except ValueError:
+                    continue
+                if not (0 <= (loss_dt - rep_dt).days
+                        <= self.WASH_WINDOW_DAYS):
+                    continue
+                for ch in rep['sold']:
+                    e = ch['entry']
+                    if (ch['avail'] <= epsilon
+                            or ch['sale_tx'].id == loss_tx.id
+                            or ch['sale_tx'].account == loss_tx.account
+                            or e.get('tainted')):
+                        continue
+                    if e.get('disallowed_amount', 0.0) > epsilon:
+                        # That sale's own loss was disallowed: a basis
+                        # add there would need its wash redone — named
+                        # for a manual check instead (US-WASH-22).
+                        _note(loss_tx.date,
+                              f"warning: {loss_tx.symbol}: the {loss_tx.date}"
+                              f" loss ({loss_tx.account}) has a "
+                              f"replacement bought {rep['date']} in "
+                              f"{rep['tx'].account} and sold "
+                              f"{e.get('date')} at a loss that was itself "
+                              f"disallowed — not matched; check this "
+                              f"wash sale by hand (§1091).")
+                        ch['avail'] = 0.0
+                        continue
+                    out.append((rep, ch))
+            return out
+
+        def _split_gain_entry(entry, q):
+            """Split a gain row so its first `q` units are their own row
+            (returned); the rest stays right behind it in the list."""
+            if entry['qty'] <= q + epsilon:
+                return entry
+            frac = q / entry['qty']
+            head = dict(entry)
+            for k in ('qty', 'cost', 'proceeds', 'gain', 'raw_gain',
+                      'commission', 'fee'):
+                head[k] = entry[k] * frac
+                entry[k] = entry[k] - head[k]
+            entry['trace'] = []
+            for i_, e_ in enumerate(realized_gains):
+                if e_ is entry:
+                    realized_gains.insert(i_, head)
+                    break
+            # The rest keeps the record of unmatched shares; the head
+            # takes their place there.
+            return head
+
+        def _apply_sold_replacement(rep, ch, match_qty, uf, amt_d,
+                                    loss_tx, loss_lot):
+            """Add `amt_d` (the disallowed loss of `match_qty` units, in
+            loss-date units) to the basis of the matched shares of the
+            earlier sale, with the loss shares' holding period tacked on
+            (§1091(d), §1223(3))."""
+            sale = ch['sale_tx']
+            _ufs = _rep_units_factor(sale.symbol, rep['date'],
+                                     sale.date) or 1.0
+            q_sale = match_qty / uf * _ufs
+            entry = _split_gain_entry(ch['entry'], q_sale)
+            amt = float(amt_d)
+            if 'pre_retro' not in entry:
+                entry['pre_retro'] = {
+                    k: entry.get(k) for k in ('cost', 'gain', 'raw_gain',
+                                              'term', 'days_held')}
+            entry['cost'] += amt
+            entry['raw_gain'] -= amt
+            entry['gain'] -= amt
+            _leff = loss_lot.get('effective_acq_date', loss_lot['date'])
+            try:
+                _prior = (datetime.strptime(loss_tx.date, '%Y-%m-%d')
+                          - datetime.strptime(_leff, '%Y-%m-%d'))
+                _tack = (datetime.strptime(rep['date'], '%Y-%m-%d')
+                         - _prior).strftime('%Y-%m-%d')
+                _eff0 = (datetime.strptime(entry['date'], '%Y-%m-%d')
+                         - timedelta(days=int(entry.get('days_held') or 0))
+                         ).strftime('%Y-%m-%d')
+            except ValueError:
+                _tack = _eff0 = None
+            tacked_term = entry.get('term')
+            if _tack and _eff0 and _tack < _eff0:
+                entry['days_held'] = (
+                    datetime.strptime(entry['date'], '%Y-%m-%d')
+                    - datetime.strptime(_tack, '%Y-%m-%d')).days
+                tacked_term = ('LONG_TERM'
+                               if held_more_than_one_year(_tack,
+                                                          entry['date'])
+                               else 'SHORT_TERM')
+                entry['term'] = tacked_term
+            entry.setdefault('wash_basis_added', []).append({
+                'amount': amt, 'qty': q_sale,
+                'loss_id': loss_tx.id, 'loss_date': loss_tx.date,
+                'loss_date_settle': loss_tx.date_settle or loss_tx.date,
+                'loss_account': loss_tx.account,
+                'term': tacked_term})
+            return entry
+
         # §1091 covers "stock or securities": a commodity or broad-index
         # futures contract (or an option on one) is a §1256 contract,
         # marked to market, usually outside it. Its loss is never denied;
@@ -6255,17 +6397,64 @@ class USATaxRules(TaxRules):
                     remaining_loss_qty = chunk_qty
                     chunk_loss = abs(raw_gain)
                     loss_per_share_d = D(chunk_loss) / D(chunk_qty)
+                    _reps_here = long_replacements.get(
+                        _rep_key(symbol, tx.date), [])
                     candidates = find_replacements_in_window(
-                        long_replacements.get(_rep_key(symbol, tx.date), []),
-                        tx.date,
-                    )
+                        _reps_here, tx.date)
                     if _outside_1091(symbol):
                         if candidates:
                             _flag_futures_loss(tx, raw_gain, candidates)
                         candidates = []
+                    else:
+                        # Replacements another taxable account bought
+                        # and sold before this loss (US-WASH-22), in the
+                        # order acquired; a purchase's still-held shares
+                        # match before its sold ones.
+                        _sold = _sold_replacements_in_window(_reps_here, tx)
+                        if _sold:
+                            _rank = {id(r): i for i, r in
+                                     enumerate(_reps_here)}
+
+                            def _ck(c):
+                                r = c[0] if isinstance(c, tuple) else c
+                                return (r['date'], r['tx'].time or '',
+                                        2 if r['is_affiliated'] else 1
+                                        if r['is_sheltered'] else 0,
+                                        _rank.get(id(r), 0),
+                                        1 if isinstance(c, tuple) else 0)
+                            candidates = sorted(list(candidates) + _sold,
+                                                key=_ck)
                     for rep in candidates:
                         if remaining_loss_qty <= epsilon:
                             break
+                        if isinstance(rep, tuple):
+                            _srep, _sch = rep
+                            _uf = _rep_units_factor(symbol, _srep['date'],
+                                                    tx.date) or 1.0
+                            match_qty = min(remaining_loss_qty,
+                                            _sch['avail'] * _uf)
+                            match_disallowed_d = (D(match_qty)
+                                                  * loss_per_share_d)
+                            _sch['avail'] -= match_qty / _uf
+                            remaining_loss_qty -= match_qty
+                            disallowed_amt += float(match_disallowed_d)
+                            _se = _apply_sold_replacement(
+                                _srep, _sch, match_qty, _uf,
+                                match_disallowed_d, tx, lot)
+                            replacement_ids.append(_srep['tx'].id)
+                            wash_reps.append({
+                                'tx_id': _srep['tx'].id,
+                                'date': _srep['date'],
+                                'qty_total': float(_srep['tx'].quantity),
+                                'price': float(_srep['tx'].price),
+                                'account': _srep['tx'].account,
+                                'match_qty': match_qty,
+                                'basis_bump': float(match_disallowed_d),
+                                'is_sheltered': False,
+                                'is_affiliated': False,
+                                'sold_before_loss': _se.get('date'),
+                            })
+                            continue
                         # Convert the rep's own-units quantity into loss-date
                         # units for matching; consume in rep units.
                         _uf = _rep_units_factor(symbol, rep['date'], tx.date)
@@ -6435,6 +6624,7 @@ class USATaxRules(TaxRules):
                     tainted=lot.get('tainted', False),
                 )
                 realized_gains.append(entry)
+                _record_sold_replacement(lot, entry, chunk_qty, tx)
 
                 total_disallowed = disallowed_amt + permanently_disallowed_amt
                 if total_disallowed > epsilon:

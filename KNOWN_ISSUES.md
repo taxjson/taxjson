@@ -171,10 +171,10 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Current behavior:** short 100 @100; cover 200 @110 (loss −1,000, opens 100 long); sell 100 @105 two weeks later → the −1,000 cover loss is allowed. §1091(e)(1) ("substantially identical stock ... were **sold**" within the window) would wash it. Same-year totals coincide; cross-year attribution and 8949 code-W reporting can differ.
 - **Why deferred:** rare shape (a cover that flips long, then a sale inside the window); documenting the gap is the honest state until a fixture demands it (2026-09 US-engine audit). `taxjson tax-logic` states it (US-WASH-19, audit A2-0062).
 
-### US: sheltered (IRA) replacements already sold before the loss still deny it; taxable ones don't
-- **Where:** `core.py` US pass — sheltered BUYs register their full quantity with no lot reference and are never decremented by later sheltered SELLs; taxable replacement lots are zeroed on consumption.
-- **Current behavior:** IRA buys 100 on 05-20 and sells 100 on 05-25; taxable loss 06-15 → `permanently_disallowed`. The identical pattern in a second taxable account (`per_account_basis`) → loss allowed. §1091(a) keys on ACQUISITION within the window (no still-held test), so the IRA reading is the literal statute and the taxable reading follows Reg. 1.1091-1's lot consumption — the two books apply different theories.
-- **Why deferred:** which reading is right for shares acquired AND disposed inside the window before the loss is not settled authority; flagged so the asymmetry is known (2026-09 audit). `taxjson tax-logic` states both readings: the IRA one (US-WASH-11, audit A2-0962) and the taxable one (US-WASH-21, re-audit A2-0817).
+### US: a replacement bought and sold in the loss's OWN account before the loss does not wash it
+- **Where:** `core.py` US pass — a purchase in the account that sells at the loss replaces it only with the shares still unsold at the loss (FIFO consumption, US-WASH-21).
+- **Current behavior:** an IRA purchase (US-WASH-11) and, since the owner's decision on re-audit A2-0544, a purchase in ANOTHER taxable account (US-WASH-22) wash the loss even when sold before it — §1091(a) keys on acquisition in the window, with no still-held test; in the other-account case the disallowed loss is added to the basis of that earlier sale (and booked in the loss's year, with an ATTENTION line, when that sale is in a filed year). A purchase in the SAME account that was sold before the loss shares were bought (buy R, sell R, buy L, sell L at a loss) is still not matched.
+- **Why open:** within one account the same reading would chain through every buy/sell cycle (each loss moving into the previous cycle's sale); kept as the documented exception until a case needs it.
 
 ### US: options as replacement property are advisory-only
 - **Where:** `core.py` `detect_option_replacement_matches` (warn-only in the US engine; the Canada engine enforces the call rule).

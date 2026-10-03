@@ -342,6 +342,7 @@ FLAG_COUNTRY: Dict[str, str] = {
     "--corporate-distribution": CANADA,
     "--ric-january-dividend": USA,
     "--slip-gains": CANADA,
+    "--locked-year": USA,
 }
 
 FLAG_WHY: Dict[str, str] = {
@@ -350,6 +351,9 @@ FLAG_WHY: Dict[str, str] = {
     "--option-buyback-wash": "ITA s.54",
     "--per-account-basis": "US FIFO basis per account; Canada pools "
                            "identical property across accounts (s.47)",
+    "--locked-year": "a §1091 basis add to a replacement sold in a filed "
+                     "year (US-WASH-22); a Canadian denied loss is added "
+                     "to the ACB of the shares still held (s.53(1)(f))",
     "--province": "provincial tax in the Canadian estimate",
     "--deductions": "lines 20700-23500 of the Canadian return",
     "--carrying-charges": "line 22100 of the Canadian return",
@@ -600,6 +604,7 @@ _FLAG_ATTRS = {"--option-premium-timing": "option_premium_timing",
                "--corporate-distribution": "corporate_distribution",
                "--ric-january-dividend": "ric_january_dividend",
                "--slip-gains": "slip_gains",
+               "--locked-year": "locked_year",
                "--foreign-roc": "foreign_roc"}
 
 

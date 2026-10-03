@@ -123,6 +123,7 @@ PARTITION_RULES = frozenset({
     # United States
     "US-WASH-01",      # §1091 window on trade dates
     "US-WASH-06",      # no still-held test
+    "US-WASH-22",      # a replacement sold before the loss still washes
     "US-WASH-12",      # a long call is a warning only
     "US-HOLD-01",      # short-/long-term
     "US-BASIS-01",     # FIFO per account
@@ -1567,10 +1568,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "— never replace each other's losses; shares kept after "
                  "that sale still do,", cont=True),
             Rule("US-WASH-21",
-                 "and a purchase in a taxable account replaces only with "
-                 "the shares of it still unsold at the loss: shares sold "
-                 "(first in, first out) before the loss no longer wash "
-                 "it — unlike an IRA purchase (US-WASH-11) —",
+                 "and a purchase in the account that sells at the loss "
+                 "replaces only with the shares of it still unsold at the "
+                 "loss: shares sold (first in, first out) before the loss "
+                 "no longer wash it — unlike an IRA purchase (US-WASH-11) "
+                 "or one in another of your taxable accounts "
+                 "(US-WASH-22) —",
                  cont=True),
             Rule("US-WASH-07",
                  "and look-alike securities are not detected.", cont=True),
@@ -1596,6 +1599,22 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "A replacement bought in an IRA makes it permanent, even "
                  "when the IRA sold it again before your loss.",
                  cont=True),
+            Rule("US-WASH-22",
+                 "A purchase in ANOTHER of your taxable accounts inside "
+                 "the window replaces the loss even when that account "
+                 "sold the shares before the loss sale (§1091 has no "
+                 "still-held test): the disallowed loss is added to the "
+                 "basis of those shares, so that earlier sale's gain "
+                 "falls by it, and the loss shares' holding period "
+                 "carries over to them — unless that sale's own loss was "
+                 "disallowed (then it is named for a manual check and not "
+                 "matched). When that sale is in an earlier, filed year "
+                 "(filed/<year>.json), the filed year is left as filed: "
+                 "the amount is booked as a loss of that term on the loss "
+                 "sale's date, and an ATTENTION line names the earlier "
+                 "sale, whose return may need an amendment (Form "
+                 "1040-X); an earlier year not filed changes, with a "
+                 "note."),
             Rule("US-WASH-16",
                  "A purchase by your spouse or a corporation you control "
                  "in the window disallows the loss too, when their trades "

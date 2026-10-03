@@ -446,6 +446,7 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
         cmd += ["--sheltered", str(sheltered)]
     cmd += _lock_timing_flags(settings, year, option_timing)
     cmd += income_dating_flags(dict(settings, country=country))
+    cmd += locked_year_flags(cache.parent, settings)
     # missing_history.json (or its old name phantoms.json) lives at the
     # PROJECT ROOT (cache is <root>/work) — looking in work/ made
     # close-year snapshot WITH the missing-history openings and
@@ -497,6 +498,7 @@ def recompute_year(cache: Path, account: str, year: int,
         cmd += ["--sheltered", str(sheltered)]
     cmd += _lock_timing_flags(settings, year, option_timing)
     cmd += income_dating_flags(dict(settings, country=country))
+    cmd += locked_year_flags(cache.parent, settings)
     # missing_history.json (or its old name) lives at the PROJECT ROOT
     # (see _recompute_blended above).
     from taxjson.lib.missing_history import missing_history_path
@@ -696,6 +698,23 @@ def project_locks(root: Path, settings: Dict[str, Any]
                 and y not in {yy for yy, _p, _w in out}):
             out.append((y, pr, "prior_year_record"))
     out.sort(key=lambda t: t[0])
+    return out
+
+
+def locked_year_flags(root: Path, settings: Dict[str, Any]) -> List[str]:
+    """`--locked-year Y` for every filed-year lock of a US project (the
+    gains engine then books a wash-sale basis add that reaches a sale
+    in a filed year in the loss's year instead, US-WASH-22). Canada
+    has no such flag ([] — lib/country.FLAG_COUNTRY)."""
+    if _canonical_country(settings) != "usa":
+        return []
+    try:
+        locks = project_locks(root, settings)
+    except ValueError:
+        return []
+    out: List[str] = []
+    for y, _p, _w in locks:
+        out += ["--locked-year", str(y)]
     return out
 
 

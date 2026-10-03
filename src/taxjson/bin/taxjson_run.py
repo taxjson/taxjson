@@ -1874,6 +1874,24 @@ def _resolve_manifest(acct_dir: Path, cache: Path, name: str,
     return user_manifest
 
 
+def _locked_year_flags(root: Path, settings: Dict[str, Any]) -> List[str]:
+    """`--locked-year Y` per filed-year lock (US projects; US-WASH-22)."""
+    from taxjson.bin.taxjson_filed import locked_year_flags
+    return locked_year_flags(root, settings)
+
+
+def _lock_files(root: Path, settings: Dict[str, Any]) -> List[Path]:
+    """The filed-year locks a US gains run depends on (US-WASH-22): a
+    new or removed lock rebuilds the cached gains."""
+    if _country(settings) not in ("us", "usa"):
+        return []
+    from taxjson.bin.taxjson_filed import project_locks
+    try:
+        return [p for _y, p, _w in project_locks(root, settings)]
+    except ValueError:
+        return []
+
+
 def _wash_flags(is_taxable: bool, is_crypto: bool, country: str) -> List[str]:
     """Wash-detection flags for an account's gains run. US crypto gets
     --no-wash: the IRS treats digital assets as property, not "securities",
@@ -3080,6 +3098,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
               "losses are allowed in full.")
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
+    cmd += _locked_year_flags(cache.parent, settings)
     if is_crypto:
         # Spot coins cannot be short: a sale with nothing held is
         # missing history, said as ATTENTION (re-audit A2-0137).
@@ -3088,7 +3107,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # `find-missing-history --write-missing-history`). load_missing_history filters by (symbol, account), so passing
     # the whole file to every account's gains run is safe — non-matching pairs
     # are ignored. A rebuild dependency so editing the file re-runs gains.
-    gains_deps = [base_json]
+    gains_deps = [base_json] + _lock_files(cache.parent, settings)
     if incomplete_history is not None:
         cmd += ["--incomplete-history", str(incomplete_history)]
         gains_deps.append(incomplete_history)
@@ -3364,6 +3383,7 @@ def stage_wash_pass(name: str, settings: Dict[str, Any], cache: Path, reports_di
     ]
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
+    cmd += _locked_year_flags(cache.parent, settings)
     # Same missing-history opening balances as the main gains pass — without
     # this the wash-adjusted books (which `taxjson wash-sales` PREFERS when
     # present) were computed on different books than <account>.sum.
@@ -3565,10 +3585,16 @@ def stage_blended_wash_pass(names: List[str],
         cmd += ["--sheltered", str(sheltered_base)]
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
+    cmd += _locked_year_flags(cache.parent, settings)
     if incomplete_history is not None:
         cmd += ["--incomplete-history", str(incomplete_history)]
     cmd.append(str(combined_base))
     run_to_file(cmd, combined_wash)
+    # A wash-sale basis add that reaches a sale in a filed year (US-WASH-22)
+    # is decided only here, across accounts: on the console.
+    from taxjson.lib.pipeline import ATTENTION_WASH_LOCKED
+    echo_attention_lines(combined_wash,
+                         prefix=ATTENTION_WASH_LOCKED[len("ATTENTION: "):])
     # The blended run's stderr lands in .blend_gains_wash.json.diag —
     # dot-prefixed, so collect_diagnostics' {account}_*.diag glob can
     # never surface it, and it is the ONLY pass that sees --sheltered

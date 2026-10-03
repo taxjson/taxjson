@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### US engine (owner request: deferred re-audit work)
+
+- US wash sale: a purchase in another of your taxable accounts inside
+  the 61-day window now replaces a loss even when that account sold the
+  shares before the loss sale (§1091 has no still-held test; re-audit
+  A2-0544). The disallowed loss is added to the basis of that earlier
+  sale (its gain falls; the loss shares' holding period carries over).
+  When that sale is in a filed year (`filed/<year>.json`), the filed year
+  is left as filed: the amount is booked as a loss on the loss sale's
+  date and an ATTENTION line names the earlier sale, whose return may
+  need an amendment (tax-logic US-WASH-22).
+
 ### Renames, ticker.map and warrants
 
 - `taxjson-ticker-map` summary mode no longer "maps" every `.US`
