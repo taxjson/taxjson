@@ -437,10 +437,6 @@
 
 ### Tax rules and engine: United States (experimental)
 
-- `taxjson tax-logic` (US) states the wash-sale replacement order the
-  engine already applies: order acquired, and at the same moment taxable
-  accounts first, then IRAs, then affiliated accounts (US-WASH-20, re-audit
-  A2-0941).
 - **US: an unapplied return of capital or notional distribution is on
   the console.** A basis adjustment the US engine cannot apply (no
   shares held after a full sale, or the position short) printed only to
