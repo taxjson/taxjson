@@ -578,6 +578,11 @@ Examples:
         extractor = extractor_class()
         if shared_context is not None:
             extractor.account_context = shared_context
+            if hasattr(extractor, 'defer_ca_messages') and getattr(
+                    extractor_class, 'reconcile_files', None) is not None:
+                # Printed after the cross-statement pass below, which
+                # may undo an event of this file (A2-1091).
+                extractor.defer_ca_messages = True
         # Which law the parser's messages cite (never a tax choice).
         extractor.country = args.country
         # Which law the parser's messages cite (never a tax choice).

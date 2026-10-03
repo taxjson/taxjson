@@ -1011,6 +1011,48 @@ def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
               file=sys.stderr)
 
 
+_IB_UNMATCHED_CA_SKIP = ("Corporate Actions Ca row whose original is not "
+                         "in this statement (see warning)")
+
+
+def _flush_ca_side_effects(path, late_warnings, cash_takeovers,
+                           corp_owned_rows, stock_dividends, unbooked_ca,
+                           unhandled_ca_tickers) -> None:
+    """Print one statement's Corporate Actions side-effect lines (see
+    IbBrokerage.parse_file's `_print_ca_side_effects`)."""
+    for _w in late_warnings:
+        print(_w, file=sys.stderr)
+    for _ct in cash_takeovers:
+        print(f"NOTE: cash takeover booked as a sale: {_ct} "
+              f"({shown_name(path)}).", file=sys.stderr)
+    if corp_owned_rows:
+        print(f"note: {len(corp_owned_rows)} merger/spin-off "
+              f"Corporate Action row(s) in {shown_name(path)} are booked by "
+              f"taxjson-corp-actions after the tax election (`taxjson "
+              f"run` runs it), not by this parser.", file=sys.stderr)
+    for _m in stock_dividends:
+        print(f"{ATTENTION_PREFIX} {_m}", file=sys.stderr)
+    for _m in unbooked_ca:
+        print(f"{UNBOOKED_PREFIX} {_m}", file=sys.stderr)
+    if unhandled_ca_tickers:
+        total = sum(unhandled_ca_tickers.values())
+        tickers = ', '.join(sorted(unhandled_ca_tickers.keys()))
+        # UNBOOKED (console; fatal under run --strict): a row that
+        # moved shares and nothing booked. The old advice — a
+        # manual TRANSFER row — is dropped in a taxable account and
+        # double-booked what corp-actions already books (R1-140).
+        print(
+            f"{UNBOOKED_PREFIX} {total} unhandled Corporate Action "
+            f"row(s) in {shown_name(path)} for: {tickers}. Only splits, cash "
+            f"in lieu, stock dividends, tenders and cash takeovers are "
+            f"booked here (mergers and spin-offs by "
+            f"taxjson-corp-actions). If the event changed your "
+            f"position or basis, book it by hand in a .tt file "
+            f"(BUYSELL / SPLIT rows).",
+            file=sys.stderr,
+        )
+
+
 def _project_ticker_map(paths):
     """The rename map of the project ticker.map next to inputs/<account>/
     <statement>, or None (a statement outside a project, no map, or a
@@ -1316,6 +1358,13 @@ class IbBrokerage(BaseBrokerage):
 
     # Account-wide context (set by taxjson-brokerage from prepare_files).
     account_context = None
+    # Set by taxjson-brokerage when it will run reconcile_files: the
+    # Corporate Actions side-effect lines (stock-dividend ATTENTION,
+    # cash-takeover NOTE, ...) wait in `ca_side_effects` until the
+    # cross-statement Ca pass, so an event another statement cancels
+    # prints nothing (re-audit A2-1091).
+    defer_ca_messages = False
+    ca_side_effects = None
 
     @classmethod
     def prepare_files(cls, paths, tax_year=None, combined=False,
@@ -1418,6 +1467,41 @@ class IbBrokerage(BaseBrokerage):
 
     @classmethod
     def reconcile_files(cls, parsed) -> None:
+        """See `_reconcile_files`; then every statement's deferred
+        Corporate Actions side-effect lines print, minus the events the
+        cross-statement pass undid (re-audit A2-1091)."""
+        try:
+            cls._reconcile_files(parsed)
+        finally:
+            for _p, ex, _t in parsed:
+                flush = getattr(ex, 'ca_side_effects', None)
+                if flush is not None:
+                    ex.ca_side_effects = None
+                    flush()
+                name = getattr(ex, 'deferred_skip_summary', None)
+                if name is not None:
+                    ex.deferred_skip_summary = None
+                    ex.emit_skip_summary(name)
+
+    def resolve_unmatched_ca(self, key_fn, key) -> None:
+        """A `Ca` row this statement could not pair was paired by the
+        cross-statement pass: it is consumed, not a skipped row (its
+        'original is not in this statement (see warning)' skip line
+        named a warning that never comes)."""
+        for i, ca in enumerate(getattr(self, 'unmatched_ca', None) or ()):
+            if key_fn(ca) != key:
+                continue
+            self.unmatched_ca.pop(i)
+            cat = _IB_UNMATCHED_CA_SKIP
+            if self._skip_counts.get(cat):
+                self._skip_counts[cat] -= 1
+                if not self._skip_counts[cat]:
+                    del self._skip_counts[cat]
+                self.note_row_consumed()
+            return
+
+    @classmethod
+    def _reconcile_files(cls, parsed) -> None:
         """Cross-statement pass over one account's parsed statements
         (taxjson-brokerage calls it with [(path, extractor, txs)], every
         txs list mutated in place), before the books de-duplicate the
@@ -1507,6 +1591,9 @@ class IbBrokerage(BaseBrokerage):
                               file=sys.stderr)
             if odate is None:
                 print(unmatched_ca_warning(ca), file=sys.stderr)
+            else:
+                for k in seen:
+                    files[k][1].resolve_unmatched_ca(_ca_key, _ca_key(ca))
 
         # --- 2. Cash in lieu and its split.
         cils: Dict[tuple, Dict[str, Any]] = {}
@@ -4448,8 +4535,7 @@ class IbBrokerage(BaseBrokerage):
         for _ca in pending_ca:
             if self.account_context is None:
                 print(unmatched_ca_warning(_ca), file=sys.stderr)
-            self.count_skip("Corporate Actions Ca row whose original is "
-                            "not in this statement (see warning)")
+            self.count_skip(_IB_UNMATCHED_CA_SKIP)
 
         # Transaction Fees are inside Comm/Fee while the Cash Report
         # books them on their own line, so the commission identity is
@@ -4620,37 +4706,23 @@ class IbBrokerage(BaseBrokerage):
                 tx['quantity'] = q
                 tx['price'] = round(abs(amt) / meta['po_qty'], 8)
 
-        for _w in late_warnings:
-            print(_w, file=sys.stderr)
-        for _ct in cash_takeovers:
-            print(f"NOTE: cash takeover booked as a sale: {_ct} "
-                  f"({shown_name(path)}).", file=sys.stderr)
-        if corp_owned_rows:
-            print(f"note: {len(corp_owned_rows)} merger/spin-off "
-                  f"Corporate Action row(s) in {shown_name(path)} are booked by "
-                  f"taxjson-corp-actions after the tax election (`taxjson "
-                  f"run` runs it), not by this parser.", file=sys.stderr)
-        for _m in stock_dividends:
-            print(f"{ATTENTION_PREFIX} {_m}", file=sys.stderr)
-        for _m in unbooked_ca:
-            print(f"{UNBOOKED_PREFIX} {_m}", file=sys.stderr)
-        if unhandled_ca_tickers:
-            total = sum(unhandled_ca_tickers.values())
-            tickers = ', '.join(sorted(unhandled_ca_tickers.keys()))
-            # UNBOOKED (console; fatal under run --strict): a row that
-            # moved shares and nothing booked. The old advice — a
-            # manual TRANSFER row — is dropped in a taxable account and
-            # double-booked what corp-actions already books (R1-140).
-            print(
-                f"{UNBOOKED_PREFIX} {total} unhandled Corporate Action "
-                f"row(s) in {shown_name(path)} for: {tickers}. Only splits, cash "
-                f"in lieu, stock dividends, tenders and cash takeovers are "
-                f"booked here (mergers and spin-offs by "
-                f"taxjson-corp-actions). If the event changed your "
-                f"position or basis, book it by hand in a .tt file "
-                f"(BUYSELL / SPLIT rows).",
-                file=sys.stderr,
-            )
+        def _print_ca_side_effects() -> None:
+            """The lines a translated Corporate Actions row leaves (a
+            late cash in lieu, a cash takeover, a stock dividend, an
+            unbooked or unhandled row). `_ca_apply_undo` takes an undone
+            event's line out of these lists, so they print only after
+            every cancellation that can reach this statement has run."""
+            _flush_ca_side_effects(path, late_warnings, cash_takeovers,
+                                   corp_owned_rows, stock_dividends,
+                                   unbooked_ca, unhandled_ca_tickers)
+
+        if self.defer_ca_messages:
+            # taxjson-brokerage runs reconcile_files, whose Ca pass can
+            # undo an event of this statement from another one (re-audit
+            # A2-1091): it prints the lines after that pass.
+            self.ca_side_effects = _print_ca_side_effects
+        else:
+            _print_ca_side_effects()
 
         if skipped_dateless_fees:
             total = sum(skipped_dateless_fees)
@@ -4834,6 +4906,10 @@ class IbBrokerage(BaseBrokerage):
         # One note for recognized non-events (Forex conversions,
         # subtotals, metadata sections) and one for rows the parser
         # could not classify — the other parsers already do this; IB
-        # counted but never reported.
-        self.emit_skip_summary(shown_name(path))
+        # counted but never reported. Deferred with the Corporate Actions
+        # lines: a Ca row another statement resolves is not a skip.
+        if self.defer_ca_messages:
+            self.deferred_skip_summary = shown_name(path)
+        else:
+            self.emit_skip_summary(shown_name(path))
         return transactions

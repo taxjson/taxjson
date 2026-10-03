@@ -13,6 +13,11 @@
   ticker.map joins the pair: `taxjson run` now passes the map to
   `taxjson-brokerage --ticker-map` (a map edit re-parses); `--lint` keeps
   them (A2-1056).
+- IB: a stock dividend or cash takeover that a later statement's `Ca`
+  row cancels no longer leaves its ATTENTION / NOTE line (or the Ca row's
+  "original is not in this statement" skip line) in the run output: under
+  `taxjson-brokerage` those lines print after the cross-statement pass
+  (A2-1091).
 
 ### Renames, ticker.map and warrants
 
