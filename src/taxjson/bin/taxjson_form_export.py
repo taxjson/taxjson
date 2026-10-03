@@ -313,9 +313,11 @@ def build_8949(entries: List[Dict[str, Any]],
             sold = e.get("date") or ""
         desc = f"{_qty_str(abs(float(e.get('qty') or 0)))} {e.get('symbol')}"
         if e.get("deemed"):
-            # §301(c)(3): no shares were sold (US-ROC-02).
-            desc = (f"{e.get('symbol')} nondividend distribution in excess "
-                    f"of basis (§301(c)(3))")
+            # §301(c)(3): no shares were sold (US-ROC-02); a row says
+            # its own kind when it is another (US-WASH-22).
+            desc = e.get("deemed_desc") or (
+                f"{e.get('symbol')} nondividend distribution in excess "
+                f"of basis (§301(c)(3))")
         if e.get("is_option"):
             desc += " (option)"
         if direction == "SHORT":

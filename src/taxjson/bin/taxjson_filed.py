@@ -373,6 +373,23 @@ def _lock_timing_flags(settings: Dict[str, Any], year: int,
     return option_timing_flags(settings)
 
 
+def _has_lot_moves(cache: Path, accounts: List[str]) -> bool:
+    """Whether these accounts' base books carry own-account move legs
+    (a US project's crypto accounts are then blended, as the run does —
+    US-CRYPTO-05)."""
+    from taxjson.lib.core import LOT_MOVE_TYPE
+    for a in accounts:
+        try:
+            doc = json.loads((cache / f"{a}_base.json").read_text(
+                encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if any(isinstance(t, dict) and t.get("type") == LOT_MOVE_TYPE
+               for t in (doc.get("transactions") or [])):
+            return True
+    return False
+
+
 def recompute_accounts(cache: Path, equity_accounts: List[str],
                        crypto_accounts: List[str], year: int,
                        settings: Dict[str, Any], basis: str,
@@ -390,12 +407,19 @@ def recompute_accounts(cache: Path, equity_accounts: List[str],
     # not reach digital assets) — the recompute must match or every US
     # crypto account with a wash-window loss drifts on every check.
     crypto_no_wash = _canonical_country(settings) == "usa"
-    if not crypto_no_wash and len(crypto_accounts) >= 2:
+    if len(crypto_accounts) >= 2 and (not crypto_no_wash
+                                      or _has_lot_moves(cache,
+                                                        crypto_accounts)):
+        # Canada: s.47 averaging across the exchanges; USA (only with a
+        # move of coins between them): FIFO per account with no
+        # wash-sale rule, blended so the move carries its lots
+        # (US-CRYPTO-05) — the pipeline's blended crypto pass.
         out.update(_recompute_blended(cache, crypto_accounts, year,
                                       settings, basis, run_gains_cmd,
-                                      per_account_basis=False,
+                                      per_account_basis=crypto_no_wash,
                                       option_timing=option_timing,
-                                      crypto=True))
+                                      crypto=True,
+                                      no_wash=crypto_no_wash))
     else:
         for a in crypto_accounts:
             out[a] = recompute_year(cache, a, year, settings, basis,
@@ -414,7 +438,8 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
                        run_gains_cmd, *,
                        per_account_basis: Optional[bool] = None,
                        option_timing: Optional[Dict[str, Any]] = None,
-                       crypto: bool = False
+                       crypto: bool = False,
+                       no_wash: bool = False
                        ) -> Dict[str, Optional[Dict[str, Any]]]:
     """ONE combined gains run over `accounts`' base books, split back
     into per-account aggregates (the pipeline's blended pass)."""
@@ -441,11 +466,14 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
         per_account_basis = country == "usa"
     if per_account_basis:
         cmd.append("--per-account-basis")
+    if no_wash:
+        cmd.append("--no-wash")
     sheltered = cache / "sheltered_base.json"
-    if basis == "wash-adjusted" and sheltered.exists():
+    if basis == "wash-adjusted" and sheltered.exists() and not no_wash:
         cmd += ["--sheltered", str(sheltered)]
     cmd += _lock_timing_flags(settings, year, option_timing)
     cmd += income_dating_flags(dict(settings, country=country))
+    cmd += locked_year_flags(cache.parent, settings)
     # missing_history.json (or its old name phantoms.json) lives at the
     # PROJECT ROOT (cache is <root>/work) — looking in work/ made
     # close-year snapshot WITH the missing-history openings and
@@ -497,6 +525,7 @@ def recompute_year(cache: Path, account: str, year: int,
         cmd += ["--sheltered", str(sheltered)]
     cmd += _lock_timing_flags(settings, year, option_timing)
     cmd += income_dating_flags(dict(settings, country=country))
+    cmd += locked_year_flags(cache.parent, settings)
     # missing_history.json (or its old name) lives at the PROJECT ROOT
     # (see _recompute_blended above).
     from taxjson.lib.missing_history import missing_history_path
@@ -696,6 +725,23 @@ def project_locks(root: Path, settings: Dict[str, Any]
                 and y not in {yy for yy, _p, _w in out}):
             out.append((y, pr, "prior_year_record"))
     out.sort(key=lambda t: t[0])
+    return out
+
+
+def locked_year_flags(root: Path, settings: Dict[str, Any]) -> List[str]:
+    """`--locked-year Y` for every filed-year lock of a US project (the
+    gains engine then books a wash-sale basis add that reaches a sale
+    in a filed year in the loss's year instead, US-WASH-22). Canada
+    has no such flag ([] — lib/country.FLAG_COUNTRY)."""
+    if _canonical_country(settings) != "usa":
+        return []
+    try:
+        locks = project_locks(root, settings)
+    except ValueError:
+        return []
+    out: List[str] = []
+    for y, _p, _w in locks:
+        out += ["--locked-year", str(y)]
     return out
 
 

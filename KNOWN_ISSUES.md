@@ -155,24 +155,14 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Current behavior:** short 100 @100; cover 200 @110 (loss −1,000, opens 100 long); sell 100 @105 two weeks later → the −1,000 cover loss is allowed. §1091(e)(1) ("substantially identical stock ... were **sold**" within the window) would wash it. Same-year totals coincide; cross-year attribution and 8949 code-W reporting can differ.
 - **Why deferred:** rare shape (a cover that flips long, then a sale inside the window); documenting the gap is the honest state until a fixture demands it (2026-09 US-engine audit). `taxjson tax-logic` states it (US-WASH-19, audit A2-0062).
 
-### US: sheltered (IRA) replacements already sold before the loss still deny it; taxable ones don't
-- **Where:** `core.py` US pass — sheltered BUYs register their full quantity with no lot reference and are never decremented by later sheltered SELLs; taxable replacement lots are zeroed on consumption.
-- **Current behavior:** IRA buys 100 on 05-20 and sells 100 on 05-25; taxable loss 06-15 → `permanently_disallowed`. The identical pattern in a second taxable account (`per_account_basis`) → loss allowed. §1091(a) keys on ACQUISITION within the window (no still-held test), so the IRA reading is the literal statute and the taxable reading follows Reg. 1.1091-1's lot consumption — the two books apply different theories.
-- **Why deferred:** which reading is right for shares acquired AND disposed inside the window before the loss is not settled authority; flagged so the asymmetry is known (2026-09 audit). `taxjson tax-logic` states both readings: the IRA one (US-WASH-11, audit A2-0962) and the taxable one (US-WASH-21, re-audit A2-0817).
+### US: a replacement bought and sold in the loss's OWN account before the loss does not wash it
+- **Where:** `core.py` US pass — a purchase in the account that sells at the loss replaces it only with the shares still unsold at the loss (FIFO consumption, US-WASH-21).
+- **Current behavior:** an IRA purchase (US-WASH-11) and, since the owner's decision on re-audit A2-0544, a purchase in ANOTHER taxable account (US-WASH-22) wash the loss even when sold before it — §1091(a) keys on acquisition in the window, with no still-held test; in the other-account case the disallowed loss is added to the basis of that earlier sale (and booked in the loss's year, with an ATTENTION line, when that sale is in a filed year). A purchase in the SAME account that was sold before the loss shares were bought (buy R, sell R, buy L, sell L at a loss) is still not matched.
+- **Why open:** within one account the same reading would chain through every buy/sell cycle (each loss moving into the previous cycle's sale); kept as the documented exception until a case needs it.
 
 ### US: options as replacement property are advisory-only
 - **Where:** `core.py` `detect_option_replacement_matches` (warn-only in the US engine; the Canada engine enforces the call rule).
 - **Current behavior:** §1091(a) covers "a contract or option so to acquire"; a deep-ITM call bought inside the window leaves the stock loss allowed, with a warning. A user policy choice, not a bug — the statute itself is mandatory, so treat the warning as an instruction (2026-09 audit).
-
-### US: §355 spin-off basis is spread by quantity, with no per-block tacking (A2-0065)
-- **Where:** `lib/corp_actions.py` `_us_spinoff_tax_free_355` (one BUYSELL of the spin-off on the spin date plus one parent ADJUST) and the US engine's ADJUST branch in `core.py` (spread per share across the open lots).
-- **Current behavior:** the allocated basis is taken from each parent lot in proportion to its SHARES, not its basis (Reg. §1.358-2: each share gives up the same fraction of its own basis), so a low-basis lot can go below zero and book a §301(c)(3) "deemed gain" on a tax-free spin-off; and the spun-off shares are one new lot dated on the spin date instead of one block per parent lot with the parent's holding period (§1223(1)).
-- **Why deferred:** needs the engine to apply a basis-allocation event per parent lot (a fraction of each lot's basis, and a spin-off lot per parent lot carrying its acquisition date); the corp-actions stage does not see lots. Workaround: book the spin-off in a `.tt` file as one BUYSELL per parent block with the block's date, and a per-lot ADJUST.
-
-### US: `reorg_368_boot` is computed on the whole pool, not per block (A2-0066)
-- **Where:** `lib/corp_actions.py` `_emit_boot_exchange` (one engineered SELL at proceeds = total basis + recognized gain, split by the engine across lots by quantity).
-- **Current behavior:** with lots of different basis, one lot books a gain and another a LOSS, though §356(c) recognizes no loss; Reg. §1.356-1(b) / Rev. Rul. 68-23 compute the recognized gain block by block (each block: min(its realized gain, its share of the boot), never below zero). Totals are right only when every lot is in a gain.
-- **Why deferred:** needs per-lot data the corp-actions stage does not have; the fix is an engine-applied boot exchange (per lot: realized = its share of new-share FMV + boot − basis, recognized = max(0, min(realized, boot share)), new basis = basis − boot share + recognized, holding period tacked). Workaround: book it by hand in a `.tt` file, one SELL/BUY pair per block.
 
 ### US: specific-lot identification is not supported (FIFO only)
 - **Where:** the US engine consumes lots FIFO (Reg. 1.1012-1(c)(1) default). Reg. 1.1012-1(c)(2)–(3) specific identification, and a broker's non-FIFO default (e.g. highest-cost), are not modeled.
@@ -332,11 +322,6 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 Corner cases the engine handles conservatively or only flags (the first is flagged on every `taxjson run`); documented so they are known.
 
-### US: a move between two of your own taxable accounts does not carry the lot
-- **Where:** `taxjson run` with `transfers = false` (the default) in a US project.
-- **Current behaviour:** a security moved from one of your taxable accounts to another keeps its basis and purchase date (the move is not a sale), but the US books keep FIFO lots per account and the move's TRANSFER rows sit in the transfer sidecar, so the receiving account's sale of those shares reads as a short with no basis and the sending account still holds them. Since the re-audit (A2-0032) the run prints an `ATTENTION` line naming each such move (paired out/in legs of one symbol and quantity within 10 days) and `run --strict` stops; report those sales by hand. Canada pools the ACB across the accounts (s.47), so it is not affected.
-- **Fix sketch:** for each paired move, replay the sender's FIFO lots up to the move date, hand the consumed lots (date, cost) to the receiver as carried lots, and remove them from the sender without a disposition (a lot-transfer row both US engines understand), then drop the ATTENTION.
-
 ### RESP accounts are treated as affiliated for the superficial-loss rule
 - **Where:** every account with `type = "sheltered"` is an affiliated person in `lib/core.py`'s wash pass.
 - **Question:** s.251.1(1)(g) affiliates a trust with its majority-interest beneficiary. CRA's T4037 treats an RRSP or TFSA as affiliated with its annuitant/holder, but an RESP subscriber is usually not a beneficiary, so whether an RESP purchase can deny the subscriber's loss is not settled.
@@ -455,9 +440,9 @@ Hybrid Earn move is never paired, a saved gift/payment the pairing
 overrides is warned about (`--unpair` keeps it), and a full `run` parses
 every crypto account before pairing (re-audit 2). Limits: pairing reads the crypto accounts'
 sidecars only (a send to an equity or `transfers = true` account looks
-unmatched); a US move between two crypto accounts does not carry the
-basis (warned; `run --strict` stops — keep both exchanges in one
-account); the stablecoin pool is rebuilt from Kraken ledgers and
+unmatched); a US move between two crypto accounts carries the moved
+lots to the receiving account (blended crypto pass, 2026-10, re-audit
+A2-0003); the stablecoin pool is rebuilt from Kraken ledgers and
 Coinbase exports (a Kraken trades export without its ledger is not
 read for it) and does not add a superficial loss back into the pool's
 cost.

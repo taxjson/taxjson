@@ -1231,11 +1231,10 @@ def build_report(root: Path, cfg: Dict[str, Any],
                     "arrival": (f"{fmt_qty(i['quantity'])} {i['symbol']} "
                                 f"on {_EXCH_NAME.get(i['exchange'], i['exchange'])}"
                                 f" ({i['account']}) {i['date']} {i['time']}")})
-        # US: basis is per account (US-BASIS-01) and nothing carries a
-        # moved lot's basis and holding period from one account to
-        # another, so a paired move between two crypto accounts leaves
-        # a short on one side and a phantom long on the other
-        # (re-audit A2-0003): listed so the run can stop.
+        # US: basis is per account (US-BASIS-01): a paired move between
+        # two crypto accounts carries the moved lots (basis and purchase
+        # dates) to the receiving account in the run's blended crypto
+        # pass (re-audit A2-0003, US-CRYPTO-05). Listed for the views.
         cross = []
         if country == "usa":
             for o, i in mine:
@@ -1258,6 +1257,47 @@ def build_report(root: Path, cfg: Dict[str, Any],
         }
     if pool is not None:
         out["pool"] = {k: v for k, v in pool.items() if k != "results"}
+    return out
+
+
+def own_moves(root: Path, cfg: Dict[str, Any],
+              accounts: Optional[Iterable[str]] = None,
+              broker_files: Optional[Dict[str, List[Tuple[str, Path]]]]
+              = None) -> List[Dict[str, Any]]:
+    """Coins moved between two of `accounts` (default: every crypto
+    account): each paired send whose arrival (or one of its two parts)
+    landed in ANOTHER account, as {symbol, qty (the coins that arrived),
+    from, to, date, time (the earlier of send and arrival), id (the send
+    id)}. A US project carries the moved lots' basis and purchase dates
+    from `from` to `to` (tax-logic US-CRYPTO-05 / US-BASIS-05); the coins
+    that did not arrive are the network fee, sold by crypto_sends.tt.
+    `broker_files`: only the exports still in inputs/ count."""
+    accts = list(accounts) if accounts is not None else crypto_accounts(cfg)
+    present = None
+    if broker_files is not None:
+        present = {(a, b) for a, fs in broker_files.items() for b, _p in fs}
+    rows = load_transfer_rows(Path(root) / "work", accts, present)
+    assign_send_ids(rows)
+    unpaired = set()
+    for a in accts:
+        for sid, rec in load_decisions(
+                Path(root) / "inputs" / a / MANIFEST_NAME)["sends"].items():
+            if rec.get("unpair"):
+                unpaired.add((a, sid))
+    _u, pairs = match_transfers(rows, unpaired)
+    out: List[Dict[str, Any]] = []
+    for o, i in pairs:
+        parts = arrival_rows(i)
+        for r in parts:
+            if r["account"] == o["account"]:
+                continue
+            q = i["quantity"] if len(parts) == 1 else r["quantity"]
+            when = min(_dt(o), _dt(r))
+            out.append({"symbol": o["symbol"], "qty": float(q),
+                        "from": o["account"], "to": r["account"],
+                        "date": when.strftime("%Y-%m-%d"),
+                        "time": when.strftime("%H:%M:%S"),
+                        "id": o.get("sid", "")})
     return out
 
 

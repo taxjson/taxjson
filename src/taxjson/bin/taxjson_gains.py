@@ -118,6 +118,14 @@ def _parse_args():
              "account); kept for old scripts. Refused with --country "
              "canada — its ACB pools blend per ITA s.47.")
     parser.add_argument(
+        "--locked-year", action="append", type=int, default=None,
+        metavar="YEAR",
+        help="USA: a filed (locked) tax year, repeatable (`taxjson run` "
+             "passes every filed/<year>.json). A wash-sale loss whose "
+             "replacement was sold in such an earlier year is not added "
+             "to that sale's basis: the adjustment is booked in the "
+             "loss's year with an ATTENTION line (US-WASH-22).")
+    parser.add_argument(
         "--no-wash",
         action="store_true",
         help=(
@@ -330,6 +338,7 @@ def _request(args) -> GainsRequest:
         corporate_distributions=tuple(args.corporate_distribution or ()),
         ric_january_dividends=tuple(args.ric_january_dividend or ()),
         spot_crypto=args.spot_crypto,
+        locked_years=tuple(args.locked_year or ()),
     )
 
 

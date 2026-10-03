@@ -1201,11 +1201,10 @@ def d_crypto_sends(ctx: Ctx) -> Result:
     except ValueError as e:
         return Result("crypto-sends", "attention", str(e))
     undecided, stale, total, refused, dups = [], [], 0, [], []
-    overridden, cross = [], []
+    overridden = []
     for n, a in rep["accounts"].items():
         total += len(a["sends"])
         overridden += [o["id"] for o in a.get("overridden") or []]
-        cross += [c["id"] for c in a.get("cross_account_moves") or []]
         if a["undecided"]:
             undecided.append(f"{n}: {a['undecided']}")
         refused += [e["id"] for e in cs.refused_entries(a)]
@@ -1238,12 +1237,6 @@ def d_crypto_sends(ctx: Ctx) -> Result:
                       f"(booked as your own move, NOT as the decision): "
                       f"{', '.join(overridden)} — `taxjson crypto-sends "
                       f"ACCOUNT` says how to unpair or confirm it")
-    if cross:
-        return Result("crypto-sends", "attention",
-                      f"US: coins moved between two crypto accounts "
-                      f"(basis is not carried across accounts): "
-                      f"{', '.join(cross)} — keep both exchanges in one "
-                      f"crypto account")
     if undecided:
         return Result("crypto-sends", "attention",
                       f"undecided send(s) — {', '.join(undecided)}; "

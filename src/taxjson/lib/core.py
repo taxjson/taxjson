@@ -1801,7 +1801,10 @@ def _verify_share_conservation(position_rows, actual_qty_by_symbol,
                 if tk != k:
                     expected[tk] = expected.get(tk, 0.0) + expected.pop(k, 0.0)
                     redirect[k] = tk
-        elif t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE'):
+        elif t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
+                          'TRANSFER'):
+            # (TRANSFER: the US engine's own-account move legs only —
+            # the callers pass no other.)
             k = rkey(t.symbol)
             expected[k] = expected.get(k, 0.0) + t.quantity
 
@@ -1998,6 +2001,25 @@ def _fold_per_account_rename_ratios(taxable: List[TaxTransaction],
 STOCK_DIVIDEND = 'stock_dividend'
 
 
+# Corporate-action rows the US engine books per parent lot (types set by
+# lib/corp_actions): a §355 spin-off's two rows (the spun-off shares'
+# BUYSELL and the parent's ADJUST, joined by corp_event_id) and a §356
+# boot exchange's two rows (the old shares' SELL and the new shares'
+# BUYSELL). Neither acquisition is "by purchase" for §1091(a).
+SPINOFF_355_TYPE = 'spinoff_355'
+# A custody move between two of your own TAXABLE accounts, as a pair of
+# TRANSFER rows (out of one account, into the other; same symbol,
+# moment, quantity and description) that `taxjson run` adds to a US
+# blended book: the US engine moves the sender's FIFO lots — basis and
+# purchase dates — to the receiver, with no disposition (US-BASIS-05).
+# Canada pools the ACB across the accounts (s.47): nothing to move.
+LOT_MOVE_TYPE = 'lot_move'
+# "own-account move #N: FROM -> TO (...)" — the legs' description.
+_MOVE_DESC_RE = re.compile(r'own-account move #\d+: (\S+) -> (\S+)')
+REORG_356_TYPE = 'reorg_356'
+_LOT_EVENT_TYPES = (SPINOFF_355_TYPE, REORG_356_TYPE)
+
+
 def is_stock_dividend(tx) -> bool:
     """A parser's stock-dividend row (a $0 BUYSELL of new shares)."""
     t = tx.get('type') if isinstance(tx, dict) else getattr(tx, 'type', '')
@@ -2035,6 +2057,11 @@ class CanadaTaxRules(TaxRules):
         candidate-replacement trades.
         """
         _check_engine_allowed("canada")  # test-only guard (lib/country)
+        # A move between two of your own taxable accounts changes nothing
+        # in Canada: the ACB is one pool across them (s.47).
+        transactions = [t for t in transactions
+                        if not (t.action == 'TRANSFER'
+                                and t.type == LOT_MOVE_TYPE)]
         _disambiguate_duplicate_ids(transactions, sheltered_transactions,
                                     affiliated_transactions)
         # One corporate split = one application: collapse per-account SPLIT
@@ -4920,6 +4947,14 @@ class USATaxRules(TaxRules):
                 other_qty_state[_ok] = (other_qty_state.get(_ok, 0.0)
                                         + ev.quantity)
                 continue
+            if ev.action == 'TRANSFER' and ev.type == LOT_MOVE_TYPE:
+                # An own-account custody move: never an acquisition, but
+                # the per-account position moves with it (US-BASIS-05).
+                if per_account_basis and abs(ev.quantity or 0.0) >= epsilon:
+                    _nk = _nkey(ev.account, ev.symbol)
+                    net_qty_state[_nk] = (net_qty_state.get(_nk, 0.0)
+                                          + ev.quantity)
+                continue
             if non_capital(ev.action, ev.type):
                 continue
             sym = ev.symbol
@@ -5015,6 +5050,21 @@ class USATaxRules(TaxRules):
                 else:
                     _ok = (ev.account, sym)
                     other_qty_state[_ok] = (other_qty_state.get(_ok, 0.0)  # cov: a2-1596-us-other-stock-div
+                                            + ev.quantity)
+                continue
+
+            if (ev.quantity > 0 and ev.action == 'BUYSELL'
+                    and (ev.type or '') in _LOT_EVENT_TYPES):
+                # Shares received in a §355 spin-off or a §356 exchange
+                # are not acquired "by purchase or by an exchange on which
+                # the entire amount of gain or loss was recognized"
+                # (§1091(a)): never a replacement (US-CORP-05/-07).
+                if not is_other_scope:
+                    net_qty_state[_nkey(ev.account, sym)] = \
+                        prev + ev.quantity
+                else:
+                    _ok = (ev.account, sym)
+                    other_qty_state[_ok] = (other_qty_state.get(_ok, 0.0)
                                             + ev.quantity)
                 continue
 
@@ -5231,6 +5281,148 @@ class USATaxRules(TaxRules):
             # other lot, audit S070-12.)
             return out
 
+        # §1091 has no still-held test: a purchase in another of your
+        # TAXABLE accounts inside the window replaces the loss even when
+        # that account sold the shares before the loss sale (tax-logic
+        # US-WASH-22, owner decision on audit A2-0544). Its sold,
+        # never-matched shares are kept here per purchase, each with
+        # the gain row of the sale that closed them, so a later loss
+        # can add its disallowed amount to that sale's basis (the
+        # §1091(d) basis of shares no longer held changes their sale).
+        _long_rep_of: Dict[str, Dict[str, Any]] = {}
+        for _rl in long_replacements.values():
+            for _r in _rl:
+                if not (_r['is_sheltered'] or _r['is_affiliated']):
+                    _long_rep_of.setdefault(_r['tx'].id, _r)
+
+        def _record_sold_replacement(lot, entry, chunk_qty, sale_tx):
+            """The sale of a purchase's never-matched shares: kept on the
+            purchase's replacement record (US-WASH-22)."""
+            rep = _long_rep_of.get(lot.get('id'))
+            if (rep is None or lot.get('tainted')
+                    or lot.get('wash_deferred', Decimal(0))
+                    or not detect_wash_sales):
+                return
+            _uf = _rep_units_factor(sale_tx.symbol, rep['date'],
+                                    sale_tx.date) or 1.0
+            rep.setdefault('sold', []).append({
+                'entry': entry, 'avail': chunk_qty / _uf,
+                'sale_tx': sale_tx})
+
+        def _sold_replacements_in_window(rep_list, loss_tx):
+            """[(rep, chunk)] a long loss of `loss_tx` may still match:
+            shares of a taxable purchase in ANOTHER account, bought in
+            the window and sold before the loss, never matched and not
+            sold at a disallowed loss of their own (US-WASH-22)."""
+            try:
+                loss_dt = datetime.strptime(loss_tx.date, '%Y-%m-%d')
+            except ValueError:
+                return []
+            out = []
+            for rep in rep_list:
+                if (rep['is_sheltered'] or rep['is_affiliated']
+                        or rep['tx'].account == loss_tx.account
+                        or not rep.get('sold')):
+                    continue
+                try:
+                    rep_dt = datetime.strptime(rep['date'], '%Y-%m-%d')
+                except ValueError:
+                    continue
+                if not (0 <= (loss_dt - rep_dt).days
+                        <= self.WASH_WINDOW_DAYS):
+                    continue
+                for ch in rep['sold']:
+                    e = ch['entry']
+                    if (ch['avail'] <= epsilon
+                            or ch['sale_tx'].id == loss_tx.id
+                            or ch['sale_tx'].account == loss_tx.account
+                            or e.get('tainted')):
+                        continue
+                    if e.get('disallowed_amount', 0.0) > epsilon:
+                        # That sale's own loss was disallowed: a basis
+                        # add there would need its wash redone — named
+                        # for a manual check instead (US-WASH-22).
+                        _note(loss_tx.date,
+                              f"warning: {loss_tx.symbol}: the {loss_tx.date}"
+                              f" loss ({loss_tx.account}) has a "
+                              f"replacement bought {rep['date']} in "
+                              f"{rep['tx'].account} and sold "
+                              f"{e.get('date')} at a loss that was itself "
+                              f"disallowed — not matched; check this "
+                              f"wash sale by hand (§1091).")
+                        ch['avail'] = 0.0
+                        continue
+                    out.append((rep, ch))
+            return out
+
+        def _split_gain_entry(entry, q):
+            """Split a gain row so its first `q` units are their own row
+            (returned); the rest stays right behind it in the list."""
+            if entry['qty'] <= q + epsilon:
+                return entry
+            frac = q / entry['qty']
+            head = dict(entry)
+            for k in ('qty', 'cost', 'proceeds', 'gain', 'raw_gain',
+                      'commission', 'fee'):
+                head[k] = entry[k] * frac
+                entry[k] = entry[k] - head[k]
+            entry['trace'] = []
+            for i_, e_ in enumerate(realized_gains):
+                if e_ is entry:
+                    realized_gains.insert(i_, head)
+                    break
+            # The rest keeps the record of unmatched shares; the head
+            # takes their place there.
+            return head
+
+        def _apply_sold_replacement(rep, ch, match_qty, uf, amt_d,
+                                    loss_tx, loss_lot):
+            """Add `amt_d` (the disallowed loss of `match_qty` units, in
+            loss-date units) to the basis of the matched shares of the
+            earlier sale, with the loss shares' holding period tacked on
+            (§1091(d), §1223(3))."""
+            sale = ch['sale_tx']
+            _ufs = _rep_units_factor(sale.symbol, rep['date'],
+                                     sale.date) or 1.0
+            q_sale = match_qty / uf * _ufs
+            entry = _split_gain_entry(ch['entry'], q_sale)
+            amt = float(amt_d)
+            if 'pre_retro' not in entry:
+                entry['pre_retro'] = {
+                    k: entry.get(k) for k in ('cost', 'gain', 'raw_gain',
+                                              'term', 'days_held')}
+            entry['cost'] += amt
+            entry['raw_gain'] -= amt
+            entry['gain'] -= amt
+            _leff = loss_lot.get('effective_acq_date', loss_lot['date'])
+            try:
+                _prior = (datetime.strptime(loss_tx.date, '%Y-%m-%d')
+                          - datetime.strptime(_leff, '%Y-%m-%d'))
+                _tack = (datetime.strptime(rep['date'], '%Y-%m-%d')
+                         - _prior).strftime('%Y-%m-%d')
+                _eff0 = (datetime.strptime(entry['date'], '%Y-%m-%d')
+                         - timedelta(days=int(entry.get('days_held') or 0))
+                         ).strftime('%Y-%m-%d')
+            except ValueError:
+                _tack = _eff0 = None
+            tacked_term = entry.get('term')
+            if _tack and _eff0 and _tack < _eff0:
+                entry['days_held'] = (
+                    datetime.strptime(entry['date'], '%Y-%m-%d')
+                    - datetime.strptime(_tack, '%Y-%m-%d')).days
+                tacked_term = ('LONG_TERM'
+                               if held_more_than_one_year(_tack,
+                                                          entry['date'])
+                               else 'SHORT_TERM')
+                entry['term'] = tacked_term
+            entry.setdefault('wash_basis_added', []).append({
+                'amount': amt, 'qty': q_sale,
+                'loss_id': loss_tx.id, 'loss_date': loss_tx.date,
+                'loss_date_settle': loss_tx.date_settle or loss_tx.date,
+                'loss_account': loss_tx.account,
+                'term': tacked_term})
+            return entry
+
         # §1091 covers "stock or securities": a commodity or broad-index
         # futures contract (or an option on one) is a §1256 contract,
         # marked to market, usually outside it. Its loss is never denied;
@@ -5390,6 +5582,119 @@ class USATaxRules(TaxRules):
         def _ikey(acct, sym):
             return (acct, sym) if per_account_basis else sym
 
+        # §355 spin-offs booked per parent lot (US-CORP-07): the spun-off
+        # shares' BUYSELL and the parent's ADJUST of one event and
+        # account, joined by corp_event_id. The BUYSELL sorts first at
+        # their shared moment and books both; its ADJUST is then skipped.
+        _spin_adj: Dict[tuple, TaxTransaction] = {}
+        for _t in taxable_sorted:
+            if (_t.action == 'ADJUST' and _t.type == SPINOFF_355_TYPE
+                    and _t.corp_event_id):
+                _spin_adj.setdefault((_t.account, _t.corp_event_id), _t)
+        _spin_done: set = set()
+        # §356 boot exchanges booked per block (US-CORP-05): the SELL of
+        # the old shares (sorted first) leaves its blocks here for the
+        # BUY of the new shares, keyed (account, corp_event_id).
+        _boot_blocks: Dict[tuple, tuple] = {}
+        # Own-account custody moves (US-BASIS-05): each TRANSFER lot_move
+        # leg -> its other leg (out of one account, into another: same
+        # symbol, moment, quantity and description).
+        _move_pair: Dict[str, TaxTransaction] = {}
+        _moves_done: set = set()
+        _book_accounts = {t.account for t in taxable_sorted}
+        _move_ins = [t for t in taxable_sorted
+                     if t.action == 'TRANSFER' and t.type == LOT_MOVE_TYPE
+                     and (t.quantity or 0.0) > 0]
+        for _o in taxable_sorted:
+            if not (_o.action == 'TRANSFER' and _o.type == LOT_MOVE_TYPE
+                    and (_o.quantity or 0.0) < 0):
+                continue
+            for _i in _move_ins:
+                if (_i.id not in _move_pair and _i.account != _o.account
+                        and _i.symbol == _o.symbol and _i.date == _o.date
+                        and (_i.time or '') == (_o.time or '')
+                        and _i.description == _o.description
+                        and abs(_i.quantity + _o.quantity)
+                        <= 1e-9 * max(1.0, abs(_i.quantity))):
+                    _move_pair[_o.id] = _i
+                    _move_pair[_i.id] = _o
+                    break
+
+        def _move_long_lots(src, dst, sym, q, on_date):
+            """Hand `q` units of `src`'s FIFO lots (the lot objects
+            themselves: basis, purchase dates, wash-sale deferrals and
+            replacement links travel with them) to `dst`. Returns the
+            units moved."""
+            lots = inventory_long.get(src, [])
+            moved = []
+            left = q
+            while left > epsilon and lots:
+                lot = lots[0]
+                if lot['qty'] <= left + epsilon:
+                    moved.append(lots.pop(0))
+                    left -= lot['qty']
+                    continue
+                frac = D(left) / D(lot['qty'])
+                part = dict(lot)
+                part['qty'] = left
+                part['cost_basis'] = lot['cost_basis'] * frac
+                _wd = lot.get('wash_deferred', Decimal(0))
+                part['wash_deferred'] = _wd * frac
+                lot['qty'] -= left
+                lot['cost_basis'] -= part['cost_basis']
+                lot['wash_deferred'] = _wd - part['wash_deferred']
+                moved.append(part)
+                left = 0.0
+            if moved and dst is not None:
+                _insert_lots(dst, moved)
+            return sum(l['qty'] for l in moved)
+
+        def _draw_long_lots(ikey_, sym, q, on_date):
+            """Take `q` units off the front of a long pool (FIFO) with no
+            disposition row: [(units, lot fields)] — the boundary lot is
+            split. Replacement records lose the drawn shares' capacity,
+            as on a sale."""
+            out = []
+            lots = inventory_long.get(ikey_, [])
+            reps = long_replacements.get(_rep_key(sym, on_date), [])
+            left = q
+            while left > epsilon and lots:
+                lot = lots[0]
+                if lot['qty'] <= left + epsilon:
+                    lots.pop(0)
+                    out.append(dict(lot))
+                    left -= lot['qty']
+                    for r in reps:
+                        if r.get('lot_ref') is lot:
+                            r['lot_ref'] = None
+                            r['remaining_qty'] = 0.0
+                    continue
+                frac = D(left) / D(lot['qty'])
+                part = dict(lot)
+                part['qty'] = left
+                part['cost_basis'] = lot['cost_basis'] * frac
+                _wd = lot.get('wash_deferred', Decimal(0))
+                part['wash_deferred'] = _wd * frac
+                lot['qty'] -= left
+                lot['cost_basis'] -= part['cost_basis']
+                lot['wash_deferred'] = _wd - part['wash_deferred']
+                for r in reps:
+                    if r.get('lot_ref') is lot:
+                        _cuf = _rep_units_factor(sym, r['date'], on_date)
+                        r['remaining_qty'] = max(
+                            0.0, r['remaining_qty'] - left / (_cuf or 1.0))
+                out.append(part)
+                left = 0.0
+            return out
+
+        def _insert_lots(ikey_, new_lots):
+            """Carried lots join a pool in acquisition order (their
+            actual dates; same-date lots by time, then arrival)."""
+            lots = inventory_long.setdefault(ikey_, [])
+            lots.extend(new_lots)
+            lots.sort(key=lambda l: (l['date'],
+                                     _lot_time.get(l.get('id'), '')))
+
         def _inv_keys_for(inv, sym):
             if per_account_basis:
                 return [k for k in inv if k[1] == sym]
@@ -5402,6 +5707,76 @@ class USATaxRules(TaxRules):
             inventory_short.setdefault(ikey, [])
             if trace and symbol not in symbol_traces:
                 symbol_traces[symbol] = [f"# --- FIFO CALCULATION TRACE: {symbol} ---"]
+
+            if tx.action == 'TRANSFER' and tx.type == LOT_MOVE_TYPE:
+                # A custody move between two of your own taxable
+                # accounts: not a sale — the lots keep their basis and
+                # purchase dates and go to the receiving account
+                # (US-BASIS-05). One leg books the pair.
+                if tx.id in _moves_done:
+                    continue
+                _other = _move_pair.get(tx.id)
+                if _other is None:
+                    _mm = _MOVE_DESC_RE.match(tx.description or '')
+                    _peer = (_mm.group(2) if _mm and tx.quantity < 0
+                             else _mm.group(1) if _mm else None)
+                    if _peer is None or _peer in _book_accounts:
+                        _note(tx.date,
+                              f"warning: ATTENTION: own-account move: "
+                              f"{symbol} {tx.quantity:+g} in {tx.account} "
+                              f"on {tx.date} has no matching leg — not "
+                              f"booked.")
+                        continue
+                    # A book without the other account (one account's
+                    # own view): the shares leave the sender with no
+                    # disposition; the receiver holds them with their
+                    # basis unknown HERE — the blended pass, which has
+                    # both accounts, carries the basis (US-BASIS-05).
+                    if tx.quantity < 0:
+                        _move_long_lots(ikey, None, symbol,
+                                        -tx.quantity, tx.date)
+                    else:
+                        _insert_lots(ikey, [{
+                            'qty': tx.quantity,
+                            'cost_basis': Decimal(0),
+                            'wash_deferred': Decimal(0),
+                            'date': tx.date,
+                            'effective_acq_date': tx.date,
+                            'id': tx.id, 'tainted': True}])
+                    _note(tx.date,
+                          f"note: {symbol}: {abs(tx.quantity):g} moved "
+                          f"{'to' if tx.quantity < 0 else 'from'} {_peer} "
+                          f"on {tx.date} (your own account): this book has "
+                          f"only {tx.account}, so "
+                          + ("the lots leave it with no sale"
+                             if tx.quantity < 0 else
+                             "their basis is unknown here")
+                          + " — the blended pass of `taxjson run` carries "
+                            "the basis and purchase dates (US-BASIS-05).")
+                    continue
+                _moves_done.update((tx.id, _other.id))
+                _out, _in = ((tx, _other) if tx.quantity < 0
+                             else (_other, tx))
+                if not per_account_basis:
+                    continue          # one pool: nothing moves
+                _q = -_out.quantity
+                _got = _move_long_lots(_ikey(_out.account, symbol),
+                                       _ikey(_in.account, symbol),
+                                       symbol, _q, tx.date)
+                if _q - _got > max(epsilon, _dust_noise(_q)):
+                    _note(tx.date,
+                          f"warning: ATTENTION: own-account move: "
+                          f"{symbol}: {_q:g} moved from {_out.account} to "
+                          f"{_in.account} on {tx.date}, but {_out.account} "
+                          f"held {_got:g} — the other {_q - _got:g} have "
+                          f"no purchase in the books (missing history in "
+                          f"{_out.account}); {_in.account}'s sales of them "
+                          f"read as a short.")
+                if trace:
+                    symbol_traces[symbol].append(
+                        f"# {tx.date} OWN MOVE {_got:10.4f} | "
+                        f"{_out.account} -> {_in.account}, lots carried")
+                continue
 
             if non_capital(tx.action, tx.type):
                 continue
@@ -5539,6 +5914,8 @@ class USATaxRules(TaxRules):
             # Before this branch, ADJUST rows fell through to the
             # qty-epsilon skip below and were silently dropped, leaving
             # lot basis unreduced and understating gains at sale.
+            if tx.action == 'ADJUST' and tx.id in _spin_done:
+                continue            # booked with its spin-off (US-CORP-07)
             if tx.action == 'ADJUST':
                 lots = inventory_long.get(ikey, [])
                 open_qty = sum(l['qty'] for l in lots)
@@ -5696,6 +6073,197 @@ class USATaxRules(TaxRules):
                          if _sold_out else
                          "add the missing purchase history so it can "
                          "share their basis (§307)."))
+
+            if (tx.action == 'BUYSELL' and tx.quantity > 0
+                    and tx.type == SPINOFF_355_TYPE):
+                _adj = _spin_adj.get((tx.account, tx.corp_event_id))
+                _par = (_adj.symbol if _adj is not None else '')
+                _pkey = _ikey(tx.account, _par)
+                _plots = [l for l in inventory_long.get(_pkey, [])
+                          if l['qty'] > epsilon]
+                _pbasis = sum((l['cost_basis'] for l in _plots),
+                              Decimal(0))
+                _alloc = (-D(_adj.net_amount) if _adj is not None
+                          else Decimal(0))
+                if (_adj is not None and _plots and _pbasis > 0
+                        and _alloc > 0
+                        and not inventory_short.get(_pkey)):
+                    # Reg. §1.358-2: every parent share gives up the same
+                    # fraction of its OWN basis; each parent block gets a
+                    # block of spun-off shares with its basis share and
+                    # its acquisition date (§1223(1)). Never below zero:
+                    # a §355 distribution recognizes no gain.
+                    _frac = _alloc / _pbasis
+                    _new_total = D(abs(tx.net_amount))
+                    if _frac > 1:
+                        _note(tx.date,
+                              f"warning: ATTENTION: {_par}: the §355 "
+                              f"spin-off on {tx.date} allocates "
+                              f"{float(_alloc):,.2f} but the parent's "
+                              f"basis held is {float(_pbasis):,.2f} — "
+                              f"capped at the basis (a tax-free spin-off "
+                              f"books no gain); check the allocated "
+                              f"amount (Form 8937 %).")
+                        _new_total = _new_total / _frac
+                        _frac = Decimal(1)
+                    _pq = sum(l['qty'] for l in _plots)
+                    _new = []
+                    _taken = Decimal(0)
+                    _cost_left = _new_total
+                    for _i, _l in enumerate(_plots):
+                        _take = _l['cost_basis'] * _frac
+                        _wd = _l.get('wash_deferred', Decimal(0))
+                        _l['cost_basis'] -= _take
+                        if _wd:
+                            _l['wash_deferred'] = _wd * (1 - _frac)
+                        _taken += _take
+                        _c = (_cost_left if _i == len(_plots) - 1
+                              else _new_total * _take / (_pbasis * _frac))
+                        _cost_left -= _c
+                        _new.append({
+                            'qty': tx.quantity * _l['qty'] / _pq,
+                            'cost_basis': _c,
+                            'wash_deferred': _wd * _frac if _wd
+                            else Decimal(0),
+                            'date': _l['date'],
+                            'effective_acq_date': _l.get(
+                                'effective_acq_date', _l['date']),
+                            'id': tx.id,
+                            **({'tainted': True} if _l.get('tainted')
+                               else {}),
+                        })
+                    _insert_lots(ikey, _new)
+                    _spin_done.add(_adj.id)
+                    if trace:
+                        symbol_traces[symbol].append(
+                            f"# {tx.date} SPIN-OFF  {tx.quantity:10.4f} "
+                            f"from {_par} | {len(_new)} block(s), "
+                            f"{float(_frac):.6f} of each parent lot's basis")
+                    continue
+                if _adj is not None:
+                    _note(tx.date,
+                          f"warning: {symbol}: the §355 spin-off on "
+                          f"{tx.date} finds no long {_par} lots with "
+                          f"basis in {tx.account} — the spun-off shares "
+                          f"are booked as one lot on the spin date and "
+                          f"the parent's basis reduction as a plain "
+                          f"adjustment (check the parent's history).")
+
+            if (tx.action == 'BUYSELL' and tx.type == REORG_356_TYPE
+                    and tx.quantity < 0):
+                # §356 per block (Reg. §1.356-1(b), Rev. Rul. 68-23): each
+                # lot realizes its share of (new shares' value + boot)
+                # less its basis and recognizes min(realized, its boot
+                # share) — never a loss (§356(c)); new basis = basis −
+                # boot share + recognized (§358(a)), dates carried
+                # (§1223(1)). One row per block: proceeds = its boot,
+                # cost = boot − recognized, gain = recognized.
+                _q = -tx.quantity
+                _ar = D(tx.net_amount)
+                _boot = D(tx.gross_amount or 0)
+                _drawn = _draw_long_lots(ikey, symbol, _q, tx.date)
+                _got = sum(c['qty'] for c in _drawn)
+                if _q - _got > epsilon:
+                    _note(tx.date,
+                          f"warning: ATTENTION: {symbol}: the §356 "
+                          f"exchange on {tx.date} gives up {_q:g} shares "
+                          f"but {tx.account} holds {_got:g} — the other "
+                          f"{_q - _got:g} have no basis in the books "
+                          f"(missing history): booked at zero basis for "
+                          f"manual reporting.")
+                    _drawn.append({'qty': _q - _got,
+                                   'cost_basis': Decimal(0),
+                                   'date': tx.date,
+                                   'effective_acq_date': tx.date,
+                                   'tainted': True})
+                _blocks = []
+                for _c in _drawn:
+                    _f = D(_c['qty']) / D(_q)
+                    _arb, _bb = _ar * _f, _boot * _f
+                    _rec = max(Decimal(0), min(_arb - _c['cost_basis'],
+                                               _bb))
+                    _acq = _c.get('effective_acq_date', _c['date'])
+                    _blocks.append((_f, _c['cost_basis'] - _bb + _rec,
+                                    _c['date'], _acq,
+                                    bool(_c.get('tainted')),
+                                    _c.get('wash_deferred', Decimal(0))))
+                    if _bb <= 0:
+                        continue
+                    try:
+                        _held = (datetime.strptime(tx.date, '%Y-%m-%d')
+                                 - datetime.strptime(_acq, '%Y-%m-%d')
+                                 ).days
+                    except ValueError:
+                        _held = 0
+                    realized_gains.append({
+                        'date': tx.date,
+                        'date_settle': tx.date_settle or tx.date,
+                        'symbol': symbol, 'qty': _c['qty'],
+                        'cost': float(_bb - _rec),
+                        'proceeds': float(_bb),
+                        'gain': float(_rec), 'raw_gain': float(_rec),
+                        'disallowed_amount': 0.0,
+                        'permanently_disallowed': 0.0,
+                        'replacement_lot_ids': [],
+                        'days_held': max(0, _held),
+                        'acquired_date': _c['date'],
+                        'account': tx.account,
+                        'currency': tx.currency,
+                        'commission': 0.0, 'fee': 0.0,
+                        'is_wash_sale': False,
+                        'is_option': is_option_symbol(symbol),
+                        'id': tx.id, 'trace': [],
+                        'direction': 'LONG',
+                        'term': ('LONG_TERM'
+                                 if held_more_than_one_year(_acq, tx.date)
+                                 else 'SHORT_TERM'),
+                        'wash_trigger': None, 'wash_window': None,
+                        'wash_replacements': None,
+                        'tainted': bool(_c.get('tainted')),
+                        'reorg_356': True,
+                        'note': (f"§356 boot: realized "
+                                 f"{float(_arb - _c['cost_basis']):.2f}, "
+                                 f"recognized {float(_rec):.2f} "
+                                 f"(never a loss)"),
+                    })
+                _boot_blocks[(tx.account, tx.corp_event_id)] = (
+                    _blocks, _ar - _boot)
+                if trace:
+                    symbol_traces[symbol].append(
+                        f"# {tx.date} §356 EXCHANGE {_q:10.4f} | "
+                        f"{len(_blocks)} block(s), boot {float(_boot):.4f}")
+                continue
+            if (tx.action == 'BUYSELL' and tx.type == REORG_356_TYPE
+                    and tx.quantity > 0):
+                _st = _boot_blocks.pop((tx.account, tx.corp_event_id),
+                                       None)
+                if _st is not None:
+                    _blocks, _src_value = _st
+                    _val = D(abs(tx.net_amount))
+                    # The new shares' value in this leg's currency over
+                    # the same value in the old leg's: the currency
+                    # rate (and the whole-share fraction) between them.
+                    _r = (_val / _src_value
+                          if _src_value > 0 and _val > 0 else Decimal(1))
+                    _insert_lots(ikey, [{
+                        'qty': tx.quantity * float(_f),
+                        'cost_basis': _nb * _r,
+                        'wash_deferred': _wd * _r if _wd else Decimal(0),
+                        'date': _d, 'effective_acq_date': _e,
+                        'id': tx.id,
+                        **({'tainted': True} if _t else {}),
+                    } for _f, _nb, _d, _e, _t, _wd in _blocks])
+                    if trace:
+                        symbol_traces[symbol].append(
+                            f"# {tx.date} §356 NEW SHARES "
+                            f"{tx.quantity:10.4f} | {len(_blocks)} "
+                            f"block(s), basis carried")
+                    continue
+                _note(tx.date,
+                      f"warning: ATTENTION: {symbol}: the new shares of "
+                      f"the §356 exchange on {tx.date} have no old-share "
+                      f"leg in {tx.account} — booked at their value, not "
+                      f"the carried basis; check the merger's rows.")
 
             tx_qty_abs = abs(tx.quantity)
             # A BUY's cost is a magnitude (parsers spell it either sign);
@@ -6288,17 +6856,64 @@ class USATaxRules(TaxRules):
                     remaining_loss_qty = chunk_qty
                     chunk_loss = abs(raw_gain)
                     loss_per_share_d = D(chunk_loss) / D(chunk_qty)
+                    _reps_here = long_replacements.get(
+                        _rep_key(symbol, tx.date), [])
                     candidates = find_replacements_in_window(
-                        long_replacements.get(_rep_key(symbol, tx.date), []),
-                        tx.date,
-                    )
+                        _reps_here, tx.date)
                     if _outside_1091(symbol):
                         if candidates:
                             _flag_futures_loss(tx, raw_gain, candidates)
                         candidates = []
+                    else:
+                        # Replacements another taxable account bought
+                        # and sold before this loss (US-WASH-22), in the
+                        # order acquired; a purchase's still-held shares
+                        # match before its sold ones.
+                        _sold = _sold_replacements_in_window(_reps_here, tx)
+                        if _sold:
+                            _rank = {id(r): i for i, r in
+                                     enumerate(_reps_here)}
+
+                            def _ck(c):
+                                r = c[0] if isinstance(c, tuple) else c
+                                return (r['date'], r['tx'].time or '',
+                                        2 if r['is_affiliated'] else 1
+                                        if r['is_sheltered'] else 0,
+                                        _rank.get(id(r), 0),
+                                        1 if isinstance(c, tuple) else 0)
+                            candidates = sorted(list(candidates) + _sold,
+                                                key=_ck)
                     for rep in candidates:
                         if remaining_loss_qty <= epsilon:
                             break
+                        if isinstance(rep, tuple):
+                            _srep, _sch = rep
+                            _uf = _rep_units_factor(symbol, _srep['date'],
+                                                    tx.date) or 1.0
+                            match_qty = min(remaining_loss_qty,
+                                            _sch['avail'] * _uf)
+                            match_disallowed_d = (D(match_qty)
+                                                  * loss_per_share_d)
+                            _sch['avail'] -= match_qty / _uf
+                            remaining_loss_qty -= match_qty
+                            disallowed_amt += float(match_disallowed_d)
+                            _se = _apply_sold_replacement(
+                                _srep, _sch, match_qty, _uf,
+                                match_disallowed_d, tx, lot)
+                            replacement_ids.append(_srep['tx'].id)
+                            wash_reps.append({
+                                'tx_id': _srep['tx'].id,
+                                'date': _srep['date'],
+                                'qty_total': float(_srep['tx'].quantity),
+                                'price': float(_srep['tx'].price),
+                                'account': _srep['tx'].account,
+                                'match_qty': match_qty,
+                                'basis_bump': float(match_disallowed_d),
+                                'is_sheltered': False,
+                                'is_affiliated': False,
+                                'sold_before_loss': _se.get('date'),
+                            })
+                            continue
                         # Convert the rep's own-units quantity into loss-date
                         # units for matching; consume in rep units.
                         _uf = _rep_units_factor(symbol, rep['date'], tx.date)
@@ -6468,6 +7083,7 @@ class USATaxRules(TaxRules):
                     tainted=lot.get('tainted', False),
                 )
                 realized_gains.append(entry)
+                _record_sold_replacement(lot, entry, chunk_qty, tx)
 
                 total_disallowed = disallowed_amt + permanently_disallowed_amt
                 if total_disallowed > epsilon:
@@ -6683,9 +7299,10 @@ class USATaxRules(TaxRules):
                 - sum(l['qty'] for l in _lots)
         _verify_share_conservation(
             [t for t in taxable_sorted
-             if not non_capital(t.action, t.type)
-             and t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
-                              'SPLIT')],
+             if (not non_capital(t.action, t.type)
+                 and t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
+                                  'SPLIT'))
+             or (t.action == 'TRANSFER' and t.type == LOT_MOVE_TYPE)],
             _inv_qty, 'usa',
             zero_ratio_skips=True)      # US: ratio-0 skips the scale,
                                         # rename still migrates

@@ -754,6 +754,20 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
     #   3. what survives is a real acquisition or disposal by the
     #      sheltered side — rewritten to BUYSELL so the wash walk sees
     #      it (as trigger and in still-held balances).
+    # Own-account custody moves `taxjson run` pairs into a US blended
+    # book (core.LOT_MOVE_TYPE, US-BASIS-05) are not transfers in or out
+    # of the taxpayer's hands: kept aside here, handed back unchanged.
+    from taxjson.lib.core import LOT_MOVE_TYPE
+    _lot_moves = [t for t in transactions
+                  if t.action == 'TRANSFER' and t.type == LOT_MOVE_TYPE]
+    if _lot_moves:
+        transactions = [t for t in transactions
+                        if not (t.action == 'TRANSFER'
+                                and t.type == LOT_MOVE_TYPE)]
+        transactions, sheltered_transactions = _handle_transfers(
+            transactions, sheltered_transactions, taxable=taxable,
+            base_currency=base_currency, country=country)
+        return transactions + _lot_moves, sheltered_transactions
     n_sh_before = sum(1 for t in sheltered_transactions
                       if t.action == 'TRANSFER')
     # The SHELTERED-side dropper gets main-book visibility so it applies
@@ -1081,6 +1095,11 @@ class GainsRequest:
     # country (lib/income_dating.IncomeRules).
     corporate_distributions: Tuple[str, ...] = ()
     ric_january_dividends: Tuple[str, ...] = ()
+    # USA: filed (locked) tax years. A wash-sale loss whose replacement
+    # was sold in one of them, before the loss's year, does not change
+    # that sale: the basis add is booked in the loss's year instead,
+    # said as ATTENTION (tax-logic US-WASH-22).
+    locked_years: Tuple[int, ...] = ()
 
     def __post_init__(self):
         from taxjson.lib.country import canonical_country
@@ -1218,6 +1237,108 @@ def _warn_roc_moved_into_prior_year(results, moved, tax_date, year):
               f"{rec[:4]} was filed without this ROC, that return needs an "
               f"adjustment (T1-ADJ) for the gain.", file=sys.stderr)
 
+# The run's ATTENTION channel for a wash-sale basis add that reaches a
+# replacement sold in a filed year (`taxjson run` echoes it).
+ATTENTION_WASH_LOCKED = "ATTENTION: wash sale reaches a filed year: "
+
+
+def place_retro_wash_adjustments(results, tax_date: str,
+                                 locked_years=(), year=None) -> None:
+    """USA (tax-logic US-WASH-22): the US engine adds a disallowed loss
+    to the basis of a replacement another taxable account bought AND
+    sold before the loss (`wash_basis_added` on that sale's gain row).
+    When that sale is in an earlier year that is filed (locked), its row
+    is NOT changed: the add is booked as its own row on the loss's date
+    (a loss of the same amount and term), and an ATTENTION line names
+    the earlier sale — that return may need an amendment. When the
+    earlier year is not locked, the sale's row carries the add and a
+    note says the earlier year changed. In place."""
+    locked = {int(y) for y in (locked_years or ())}
+    key = 'date_settle' if tax_date == 'settle' else 'date'
+    rows = results.get('transactions') or []
+    added: list = []
+    for e in rows:
+        adds = e.get('wash_basis_added')
+        if not adds:
+            continue
+        e_year = str(e.get(key) or e.get('date') or '')[:4]
+        moved = []
+        for a in adds:
+            l_year = str(a.get('loss_date_settle' if key == 'date_settle'
+                               else 'loss_date') or '')[:4]
+            if not (e_year and l_year and e_year < l_year):
+                continue
+            if e_year.isdigit() and int(e_year) in locked:
+                moved.append(a)
+                continue
+            if year is None or str(year) in (e_year, l_year):
+                print(f"note: {e.get('symbol')}: the {a['loss_date']} "
+                      f"wash-sale loss ({a['loss_account']}) adds "
+                      f"{a['amount']:,.2f} to the basis of the "
+                      f"replacement sold {e.get('date')} in "
+                      f"{e.get('account')} — that {e_year} sale's gain "
+                      f"changes (US-WASH-22). If {e_year} was filed "
+                      f"without it, amend that return, or lock the year "
+                      f"(`taxjson close-year`) to book the add in "
+                      f"{l_year} instead.", file=sys.stderr)
+        if not moved:
+            continue
+        amt = sum(float(a['amount']) for a in moved)
+        e['cost'] -= amt
+        e['raw_gain'] += amt
+        e['gain'] += amt
+        if len(moved) == len(adds) and e.get('pre_retro'):
+            for k, v in e['pre_retro'].items():
+                e[k] = v
+        e['wash_basis_added'] = [a for a in adds if a not in moved]
+        for a in moved:
+            amt_a = float(a['amount'])
+            if year is None or str(year) in (e_year,
+                                             str(a['loss_date'])[:4],
+                                             str(a['loss_date_settle'])[:4]):
+                print(f"warning: {ATTENTION_WASH_LOCKED}{e.get('symbol')}: "
+                      f"the {a['loss_date']} loss ({a['loss_account']}) "
+                      f"is a wash sale whose replacement was bought and "
+                      f"sold {e.get('date')} in {e.get('account')}, in "
+                      f"filed year {e_year}. That sale's basis grows by "
+                      f"{amt_a:,.2f} (§1091(d)); the filed year is left "
+                      f"as filed and the {amt_a:,.2f} is booked as a "
+                      f"{str(a.get('term') or '').replace('_', '-').lower()}"
+                      f" loss on {a['loss_date']} instead. Your {e_year} "
+                      f"return may need an amendment (Form 1040-X) for "
+                      f"that sale.", file=sys.stderr)
+            added.append({
+                'date': a['loss_date'],
+                'date_settle': a['loss_date_settle'],
+                'symbol': e.get('symbol'), 'qty': 0.0,
+                'cost': amt_a, 'proceeds': 0.0,
+                'gain': -amt_a, 'raw_gain': -amt_a,
+                'disallowed_amount': 0.0, 'permanently_disallowed': 0.0,
+                'replacement_lot_ids': [],
+                'days_held': e.get('days_held', 0),
+                'acquired_date': e.get('acquired_date', ''),
+                'account': e.get('account'),
+                'currency': e.get('currency'),
+                'commission': 0.0, 'fee': 0.0,
+                'is_wash_sale': False,
+                'is_option': e.get('is_option', False),
+                'id': f"{a['loss_id']}-wash-basis", 'trace': [],
+                'direction': 'LONG',
+                'term': a.get('term') or e.get('term'),
+                'wash_trigger': None, 'wash_window': None,
+                'wash_replacements': None, 'tainted': False,
+                'deemed': True,
+                'deemed_desc': (f"{e.get('symbol')} wash-sale basis add "
+                                f"to the {e.get('date')} sale (filed "
+                                f"{e_year}; §1091(d))"),
+                'note': (f"WASH-SALE BASIS ADD to the replacement sold "
+                         f"{e.get('date')} in filed year {e_year} "
+                         f"(§1091(d)); booked here, not in the filed "
+                         f"year — that return may need an amendment"),
+            })
+    rows.extend(added)
+
+
 def apply_roc_record_dates(transactions, req: GainsRequest) -> list:
     """Canada: a Canadian trust's return of capital lowers the ACB when
     it becomes payable (s.53(2)(h)): an ADJUST with a printed record
@@ -1354,6 +1475,9 @@ def run_gains(transactions, sheltered_transactions=(),
     annotate_inventory_multipliers(results, transactions)
     _warn_roc_moved_into_prior_year(results, _roc_moved, tax_date,
                                     _warn_year)
+    if req.country == 'usa':
+        place_retro_wash_adjustments(results, tax_date,
+                                     req.locked_years, _warn_year)
 
     # Capture tainted dispositions across ALL years before the year filter
     # strips them. The superficial-loss warning below pairs in-year clean

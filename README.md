@@ -14,7 +14,7 @@ Website: **[taxjson.com](https://taxjson.com)** · one-line install below · eve
 
 - Parses CSV exports from major retail brokerages into a normalized JSON format
 - Computes per-lot cost basis (Canadian ACB or US FIFO) across multiple accounts and years
-- Blends multi-account taxable books for the filing numbers: Canadian ACB averages across all non-registered accounts (ITA s.47); US wash sales match across accounts while FIFO basis stays per account
+- Blends multi-account taxable books for the filing numbers: Canadian ACB averages across all non-registered accounts (ITA s.47); US wash sales match across accounts while FIFO basis stays per account (a move of shares or coins between two of your own taxable accounts carries its lots — basis and purchase dates — to the receiving account)
 - Detects and applies wash sales (US §1091) and superficial losses (Canada s.40(2)(g))
 - Handles option assignments / exercises / expiries, stock splits, mergers, spinoffs, and ticker renames
 - Aggregates dividends and interest with per-share rate extraction and withholding-tax back-out
@@ -324,6 +324,7 @@ time (`work/.run.lock`); a second one refuses.
 - `<account>.sum`, `<account>_wash.sum` — realized gains and wash-sale detail
 - `wash_radar_<account>.rpt` / `.json` — superficial-loss "safe to sell at a loss?" advisor (the JSON sidecar carries absolute clear dates; the web UI computes countdowns from it at view time)
 - `work/<account>_<broker>_transfers.json` — custody-transfer sidecar: TRANSFER rows the parse stage keeps OUT of the books (evidence, not tax events); `taxjson transfers` reads these
+- `work/<account>_own_moves.json` — US projects: the moves between two of your own taxable accounts the run paired from that evidence (and the crypto-sends pairing), as TRANSFER legs in both accounts' books; the US engine hands the sender's FIFO lots (basis, purchase dates) to the receiver with no sale (tax-logic US-BASIS-05)
 - `crosslistings.rpt` — flags cross-listed (`.TO`/`.US`) tickers the radar may not consolidate
 - `fees.rpt` — trading fees by brokerage, with comparison stats
 - `ccd.rpt`, `leaps.rpt` — cross-account covered-call / long-option views (`leaps.rpt` lists every long option close of any tenor; `taxjson leaps-sum` is the LEAPS-only figure; unknown-cost rows (no purchase in your files) are excluded and counted, as in `ccd-sum`)

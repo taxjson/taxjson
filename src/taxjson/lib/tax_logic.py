@@ -123,6 +123,8 @@ PARTITION_RULES = frozenset({
     # United States
     "US-WASH-01",      # §1091 window on trade dates
     "US-WASH-06",      # no still-held test
+    "US-WASH-22",      # a replacement sold before the loss still washes
+    "US-BASIS-05",     # an own-account move carries the lots (CA: s.47)
     "US-WASH-12",      # a long call is a warning only
     "US-HOLD-01",      # short-/long-term
     "US-BASIS-01",     # FIFO per account
@@ -1488,10 +1490,16 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "A transfer into a taxable account stops the run until "
                  "the original purchase is declared (.tt ACQUIRED line). "
                  "With transfers = false (the default) a move between two "
-                 "of your own taxable accounts is flagged ATTENTION: the "
-                 "lot keeps its basis and purchase date, but the books do "
-                 "not carry it to the receiving account, so its sales "
-                 "there are reported by hand (--strict stops)."),
+                 "of your own taxable accounts is not a sale: the run "
+                 "pairs its out and in rows (one symbol, within 10 days, "
+                 "the same quantity or two deliveries adding up to it; "
+                 "coins by the crypto-sends pairing, US-CRYPTO-05) and the "
+                 "sending account's lots, first in first out, go to the "
+                 "receiving account with their basis and purchase dates "
+                 "(holding period). Out and in rows that look like a move "
+                 "but do not pair, or a move larger than the lots the "
+                 "sender holds, are said ATTENTION (--strict stops); "
+                 "those shares' sales are then reported by hand."),
             Rule("US-DIST-01",
                  "distributions.map: a non-cash distribution (a reinvested "
                  "capital-gain distribution, a late return-of-capital "
@@ -1582,10 +1590,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "— never replace each other's losses; shares kept after "
                  "that sale still do,", cont=True),
             Rule("US-WASH-21",
-                 "and a purchase in a taxable account replaces only with "
-                 "the shares of it still unsold at the loss: shares sold "
-                 "(first in, first out) before the loss no longer wash "
-                 "it — unlike an IRA purchase (US-WASH-11) —",
+                 "and a purchase in the account that sells at the loss "
+                 "replaces only with the shares of it still unsold at the "
+                 "loss: shares sold (first in, first out) before the loss "
+                 "no longer wash it — unlike an IRA purchase (US-WASH-11) "
+                 "or one in another of your taxable accounts "
+                 "(US-WASH-22) —",
                  cont=True),
             Rule("US-WASH-07",
                  "and look-alike securities are not detected.", cont=True),
@@ -1611,6 +1621,22 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "A replacement bought in an IRA makes it permanent, even "
                  "when the IRA sold it again before your loss.",
                  cont=True),
+            Rule("US-WASH-22",
+                 "A purchase in ANOTHER of your taxable accounts inside "
+                 "the window replaces the loss even when that account "
+                 "sold the shares before the loss sale (§1091 has no "
+                 "still-held test): the disallowed loss is added to the "
+                 "basis of those shares, so that earlier sale's gain "
+                 "falls by it, and the loss shares' holding period "
+                 "carries over to them — unless that sale's own loss was "
+                 "disallowed (then it is named for a manual check and not "
+                 "matched). When that sale is in an earlier, filed year "
+                 "(filed/<year>.json), the filed year is left as filed: "
+                 "the amount is booked as a loss of that term on the loss "
+                 "sale's date, and an ATTENTION line names the earlier "
+                 "sale, whose return may need an amendment (Form "
+                 "1040-X); an earlier year not filed changes, with a "
+                 "note."),
             Rule("US-WASH-16",
                  "A purchase by your spouse or a corporation you control "
                  "in the window disallows the loss too, when their trades "
@@ -1671,9 +1697,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "significant holder attaches the Reg. §1.368-3 "
                  "statement),", cont=True),
             Rule("US-CORP-05",
-                 "or reorg_368_boot (§356: gain recognised up to the cash "
-                 "received, a loss never; new basis = old basis - cash + "
-                 "gain; the holding period restarts in this model).",
+                 "or reorg_368_boot (§356, per lot of old shares — Reg. "
+                 "§1.356-1(b): each lot's gain is its share of the new "
+                 "shares' value and the cash less its basis, recognised "
+                 "up to its share of the cash, a loss never; its new "
+                 "shares' basis = its basis - its cash + its gain, and "
+                 "they keep its purchase date (§1223(1)); the new shares "
+                 "are not a purchase for the wash-sale rule).",
                  cont=True),
             Rule("US-CORP-09",
                  "Cash in lieu of a fractional share is a sale of the "
@@ -1697,8 +1727,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "or tax_free_355 (§355: the basis moved to the spin-off "
                  "is the US-dollar amount you give, per the company's "
                  "Form 8937, booked exactly even on a non-US listing; "
-                 "§358(b); only a significant distributee attaches the "
-                 "Reg. §1.355-5 statement).", cont=True),
+                 "§358(b). Every parent lot gives up the same fraction of "
+                 "its own basis (Reg. §1.358-2), and each parent block "
+                 "gets its block of spun-off shares with that basis and "
+                 "the block's purchase date — the holding period tacks, "
+                 "§1223(1). It never books a gain: an amount beyond the "
+                 "parent's basis is capped at it, with an ATTENTION line. "
+                 "The spun-off shares are not a purchase for the "
+                 "wash-sale rule. Only a significant distributee attaches "
+                 "the Reg. §1.355-5 statement).", cont=True),
             Rule("US-CORP-08",
                  "ignore skips broker noise only; on a real event it "
                  "leaves the books wrong."),
@@ -1772,10 +1809,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "arrivals are paired to pair the most sends, then lose the "
                  "fewest coins, then the closest in time, and a Kraken "
                  "Hybrid Earn withdrawal is never paired. Basis stays per "
-                 "account and is not carried from one crypto account to "
-                 "another: a move paired between two accounts is warned "
-                 "about and `run --strict` stops (keep both exchanges in "
-                 "one crypto account). When fewer coins arrive and the "
+                 "account; a move paired between two of your taxable "
+                 "crypto accounts carries the coins that arrived — the "
+                 "sending account's lots, first in first out, with their "
+                 "basis and purchase dates — to the receiving account "
+                 "(US-BASIS-05; the run then blends those crypto accounts, "
+                 "with no wash-sale rule). When fewer coins arrive and the "
                  "sending "
                  "exchange states no fee (a Coinbase Send hides the "
                  "network fee in the quantity), the coins that did not "

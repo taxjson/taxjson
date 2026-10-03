@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+### US engine (owner request: deferred re-audit work)
+
+- US wash sale: a purchase in another of your taxable accounts inside
+  the 61-day window now replaces a loss even when that account sold the
+  shares before the loss sale (§1091 has no still-held test; re-audit
+  A2-0544). The disallowed loss is added to the basis of that earlier
+  sale (its gain falls; the loss shares' holding period carries over).
+  When that sale is in a filed year (`filed/<year>.json`), the filed year
+  is left as filed: the amount is booked as a loss on the loss sale's
+  date and an ATTENTION line names the earlier sale, whose return may
+  need an amendment (tax-logic US-WASH-22).
+- US §355 spin-off (`tax_free_355`): every parent lot now gives up the
+  same fraction of its own basis (Reg. §1.358-2), and the spun-off shares
+  are one block per parent block with that block's purchase date and
+  holding period (§1223(1)). They were spread by share count over the
+  parent's lots, all dated on the spin date, and a low-basis lot could
+  book a §301(c)(3) "deemed gain" on a tax-free spin-off (re-audit
+  A2-0065). An allocation beyond the parent's basis is capped at it with
+  an ATTENTION line; the spun-off shares are not a wash-sale replacement
+  (§1091(a): not acquired by purchase).
+- US `reorg_368_boot` (§356): the recognized gain is now computed per lot
+  of old shares (Reg. §1.356-1(b)): each lot's realized gain is its share
+  of the new shares' value and the cash less its own basis, recognized up
+  to its share of the cash, never a loss; its new shares get basis − cash
+  + gain and keep its purchase date (§1223(1)). The whole pool was one
+  engineered sale before: with lots of different basis one lot booked a
+  gain and another a LOSS, and the holding period restarted (re-audit
+  A2-0066). The engine uses your own lots, so `source_basis_total` is no
+  longer asked (an older manifest's value is ignored).
+- US: a move of shares or coins between two of your own taxable accounts
+  now carries the lots (re-audit A2-0032 securities, A2-0003 crypto).
+  `taxjson run` pairs the move's out and in rows (securities from the
+  transfer evidence: one symbol within 10 days, the same quantity or two
+  deliveries adding up to it; coins from the crypto-sends pairing), adds
+  them to both accounts' books as `work/<account>_own_moves.json`, and the
+  US engine hands the sending account's FIFO lots — basis and purchase
+  dates — to the receiving one with no sale. Before, the receiver's sale
+  read as a short with no basis and the sender kept a phantom long (since
+  the first re-audit fix: an ATTENTION line and a `--strict` stop, now
+  removed). US crypto accounts with such a move run one blended crypto
+  pass (FIFO per account, no wash-sale rule); `check-filed` recomputes
+  the same way. Rows that look like a move but do not pair, and a move larger
+  than the sender's lots, are ATTENTION (`--strict` stops). Canada pools
+  the ACB across the accounts (s.47) and is unchanged (tax-logic
+  US-BASIS-05, US-CRYPTO-05).
+
 ### Second-audit deferred items
 
 - A blank settlement cell now settles on the listing's market in every

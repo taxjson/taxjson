@@ -697,18 +697,26 @@ US_ACOIN = (CB_HEADER
 
 class TestUsMoveBetweenAccounts(unittest.TestCase):
     @rule("US-CRYPTO-05")
-    def test_strict_stops_and_a_plain_run_warns(self):
-        # A2-0003: run --strict was rc 0 with a 0 gain.
+    def test_the_move_carries_the_lot(self):
+        # A2-0003: run --strict was rc 0 with a 0 gain (then a stopgap
+        # stop). The move now carries the lot: 10,000 USD in acoin, no
+        # phantom long in bkr, and --strict passes.
         with tempfile.TemporaryDirectory() as td:
             root, home = _proj(td, {"bkr": {"cb_bkr.csv": US_BKR},
                                     "acoin": {"cb_acoin.csv": US_ACOIN}},
                                country="usa")
             r = _cli(root, home, "run", "--no-input", "--strict")
-            self.assertNotEqual(r.returncode, 0)
-            self.assertIn("cannot carry the moved coins' basis", r.stderr)
-            r = _cli(root, home, "run", "--no-input")
-            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
-            self.assertIn("ONE crypto account", r.stderr)
+            self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+            self.assertNotIn("ONE crypto account", r.stderr)
+            acoin = json.loads((root / "work" / "acoin_gains_wash.json")
+                               .read_text())
+            sales = [t for t in acoin["transactions"] if t.get("qty")]
+            self.assertEqual([(round(t["gain"], 2), t["acquired_date"])
+                              for t in sales], [(10000.0, "2025-05-01")])
+            bkr = json.loads((root / "work" / "bkr_gains_wash.json")
+                             .read_text())
+            self.assertEqual([i for i in bkr.get("inventory") or []
+                              if i["symbol"] == "BTC"], [])
 
 
 if __name__ == "__main__":

@@ -827,12 +827,15 @@ class TestUsBootCurrencies(unittest.TestCase):
                                   'fmv_per_share': 10.0})
         sell = next(r for r in rows if r['quantity'] < 0)
         buy = next(r for r in rows if r['quantity'] > 0)
-        # realized 1000 + 500 - 730 = 770; recognized min(770, 500) = 500
+        # Amount realized (1000 of new shares + 500 boot, USD) on the
+        # CAD leg; the boot beside it; the new shares' value in USD. The
+        # engine computes the per-lot gain from its own lots (A2-0066).
         self.assertEqual(sell['currency'], 'CAD')
-        self.assertAlmostEqual(sell['net_amount'], (730 + 500) * 1.37,
+        self.assertAlmostEqual(sell['net_amount'], (1000 + 500) * 1.37,
                                places=6)
+        self.assertAlmostEqual(sell['gross_amount'], 500 * 1.37, places=6)
         self.assertEqual(buy['currency'], 'USD')
-        self.assertAlmostEqual(buy['net_amount'], 730.0, places=6)
+        self.assertAlmostEqual(buy['net_amount'], 1000.0, places=6)
 
     def test_same_currency_boot_unchanged(self):
         from taxjson.lib.corp_actions import resolve_event
@@ -847,7 +850,7 @@ class TestUsBootCurrencies(unittest.TestCase):
                                     'fmv_per_share': 10.0})
             self.assertEqual([(r['currency'], round(r['net_amount'], 6))
                               for r in rows],
-                             [('USD', 1230.0), ('USD', 730.0)])
+                             [('USD', 1500.0), ('USD', 1000.0)])
 
 
 if __name__ == "__main__":
