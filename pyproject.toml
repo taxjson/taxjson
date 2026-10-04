@@ -43,9 +43,10 @@ Issues = "https://github.com/taxjson/taxjson/issues"
 
 [project.optional-dependencies]
 # FX-rate fallback (taxjson-to-base-curr). The Bank of Canada Valet API
-# is the primary source for a CAD base and needs no extra; Yahoo Finance
-# (via yfinance) covers dates before 2017-01-03, currencies the Bank
-# does not publish, and non-CAD bases.
+# is the primary source for a CAD base and needs no extra (its daily
+# rate from 2017-03-01, its legacy noon rate from 2007-05-01); Yahoo
+# Finance (via yfinance) covers dates before 2007-05-01, currencies the
+# Bank does not publish, and non-CAD bases.
 fx = [
     "yfinance>=0.2",
     "pandas>=1.5",

@@ -34,6 +34,8 @@
   shows the token (was a traceback printing the Authorization header).
 - fill-crypto quotes the coin's Yahoo id into the request URL and closes
   the response.
+- The `[fx]` extra's comment in pyproject.toml dates the Yahoo fallback
+  as the code does (before 2007-05-01).
 
 ### One mapping file, year data in taxjson.toml (owner request)
 

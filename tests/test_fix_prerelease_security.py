@@ -351,5 +351,17 @@ class TestFillCryptoUrl(unittest.TestCase):
                         seen[0])
         self.assertTrue(_Resp.closed_by_with)
 
+
+# ----------------------------------------------------------------- I1
+
+class TestFxExtraComment(unittest.TestCase):
+    def test_pyproject_dates_the_yahoo_fallback_like_the_code(self):
+        text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        block = text[text.index("[project.optional-dependencies]"):
+                     text.index("fx = [")]
+        self.assertIn("2007-05-01", block)
+        self.assertNotIn("2017-01-03", block)
+
+
 if __name__ == "__main__":
     unittest.main()
