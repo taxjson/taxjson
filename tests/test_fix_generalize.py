@@ -16,6 +16,24 @@ from taxjson.lib.ticker_map import read_side_rules  # noqa: E402
 from tax_rules import rule, rule_absent  # noqa: E402
 
 
+_SAVED_TZ = None
+
+
+def setUpModule():
+    # The crypto parsers outside a project need a named zone (no default
+    # since the same generalisation, A2): set one, restore it after.
+    global _SAVED_TZ
+    _SAVED_TZ = os.environ.get("TAXJSON_LOCAL_TZ")
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+
+
+def tearDownModule():
+    if _SAVED_TZ is None:
+        os.environ.pop("TAXJSON_LOCAL_TZ", None)
+    else:
+        os.environ["TAXJSON_LOCAL_TZ"] = _SAVED_TZ
+
+
 class _MapCase(unittest.TestCase):
     """A ticker.map in a temp dir, read through TAXJSON_TICKER_MAP."""
 
