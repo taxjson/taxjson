@@ -2525,7 +2525,9 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
     for w in _dups:
         print(f"taxjson: WARNING: {w}", file=sys.stderr)
     _problems += [(ATTENTION_PREFIX, w) for w in _dups]
-    _id_notes = [f"crypto id: {w}" for w in _price_fn.attention]
+    # (a stand-in price function, as in tests, has no .attention)
+    _id_notes = [f"crypto id: {w}"
+                 for w in getattr(_price_fn, "attention", ())]
     for w in _id_notes:
         print(f"taxjson: WARNING: {name}: crypto sends: {w}",
               file=sys.stderr)
@@ -7160,7 +7162,7 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
         _price_fn = CS.yahoo_usd_price(root)
         report = CS.build_report(root, cfg, files, _price_fn, want=acct,
                                  exports_only=True)
-        for w in _price_fn.attention:
+        for w in getattr(_price_fn, "attention", ()):
             print(f"taxjson: WARNING: crypto id: {w}", file=sys.stderr)
         if args.write:
             status, dups = _crypto_sends_tt(root, acct, report)
