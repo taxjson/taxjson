@@ -5641,15 +5641,15 @@ _TEMPLATE_TICKER_MAP = """\
 #
 #   GLOBAL  from to   Plain rename — the same security under a wrong/old
 #                     ticker. Applied in EVERY stage (main + holdings).
-#   TOBASE  from to   Currency-equivalent cross-listing (e.g. AEM.US / AEM.TO).
+#   TOBASE  from to   Currency-equivalent cross-listing (e.g. XYZQ.US / XYZQ.TO).
 #                     Consolidated only in the to-base main pipeline; the
 #                     holdings view keeps the two listings separate.
-#   JOURNAL from to   A Norbert's Gambit pair (e.g. DLR.U.TO / DLR.TO):
+#   JOURNAL from to   A Norbert's Gambit pair (e.g. ABCX.U.TO / ABCX.TO):
 #                     consolidated for ACB AND netted in the holdings view.
 #   DELETE  from      Nuke that ticker's transactions (a pure artifact).
 #   DISTINCT a b      Declares two look-alike listings are SEPARATE
-#                     securities (a CDR vs its US underlying — UNH.TO
-#                     is a fractional CAD-hedged receipt over UNH.US,
+#                     securities (a CDR vs its US underlying — WXYQ.TO
+#                     is a fractional CAD-hedged receipt over WXYQ.US,
 #                     never map it). Changes no symbol; silences the
 #                     scan's MAP-GAP nag for the pair.
 #   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
@@ -5683,16 +5683,16 @@ _TEMPLATE_TICKER_MAP = """\
 #                     (`taxjson t1135`).
 #
 # Examples — uncomment and edit:
-# RENAME   FB.US      META.US   2022-06-09
-# GLOBAL   BRK-B.US   BRK.B.US
-# TOBASE   AEM.US     AEM.TO
-# JOURNAL  DLR.U.TO   DLR.TO
-# DELETE   CASH.US
-# DISTINCT UNH.US     UNH.TO
-# QUOTE    PNG.TO     PNG.V
+# RENAME   OLDQ.US    NEWQ.US   2024-06-10
+# GLOBAL   ABCX-B.US  ABCX.B.US
+# TOBASE   XYZQ.US    XYZQ.TO
+# JOURNAL  ABCX.U.TO  ABCX.TO
+# DELETE   ZZZQ.US
+# DISTINCT WXYQ.US    WXYQ.TO
+# QUOTE    XYZQ.TO    XYZQ.V
 # CRYPTO   ABC        ABC12345
-# EXTRACT  Global X US Dollar Currency ETF | USD | DLR.U.TO
-# T1135    ENB.US     CA
+# EXTRACT  Example US Dollar Unit Fund | USD | ABCX.U.TO
+# T1135    XYZQ.US    CA
 """
 
 # Keep generated artifacts out of version control. `taxjson run` rebuilds all
