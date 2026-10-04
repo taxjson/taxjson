@@ -39,6 +39,11 @@
   description is a word prefix of the transfer's), and a class
   designation keeps its letter for every class (`CLASS B` and `CL B`
   are one key; only `CLASS A` used to be stripped).
+- **IB return of capital: Canada is never "home" in a US project.** The
+  IB parser's foreign-issuer test (a non-Canadian issuer's return of
+  capital is a dividend, ITA s.90(1)) now runs only in a Canadian
+  project; in a US project every issuer's return of capital lowers
+  basis, a Canadian one included, even if the parser is asked otherwise.
 
 ### Command line
 

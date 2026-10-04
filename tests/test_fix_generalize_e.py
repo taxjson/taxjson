@@ -335,3 +335,66 @@ class TestQuestradeKeyWithoutDealerNames(unittest.TestCase):
         self.assertEqual(_get_desc_key("ZZ TRANSFER LP WE ACTED AS AGENT"),
                          "ZZ TRANSFER LP")
 
+
+# ------------------------------------------------- partition: IB ROC home
+
+_IB_STMT = ('Statement,Header,Field Name,Field Value\n'
+            'Statement,Data,BrokerName,Interactive Brokers\n'
+            'Dividends,Header,Currency,Account,Date,Description,Amount\n'
+            'Dividends,Data,USD,U5550001,2026-06-30,'  # pii-ok
+            'QZRX(US0000000017) Return of Capital USD 0.12 per Share,'
+            '24.00\n'
+            'Dividends,Data,CAD,U5550001,2026-06-30,'  # pii-ok
+            'QZRT(CA0000000011) Return of Capital CAD 0.12 per Share,'
+            '12.00\n')
+
+
+def _ib_parse(country, foreign_roc):
+    from taxjson.lib.brokerages.ib_extractor import IbBrokerage
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "ib.csv"
+        p.write_text(_IB_STMT)
+        ib = IbBrokerage()
+        ib.country = country
+        ib.foreign_return_of_capital = foreign_roc
+        txs = ib.parse_file(p)
+    return {t['symbol']: t['action'] for t in txs
+            if t['action'] in ('ADJUST', 'DIVIDEND')}
+
+
+def _brokerage_cli(country):
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "ib.csv"
+        p.write_text(_IB_STMT)
+        r = subprocess.run(
+            [sys.executable, "-m", "taxjson.bin.taxjson_brokerage", str(p),
+             "--brokerage", "ib", "--country", country], cwd=REPO_ROOT,
+            capture_output=True,
+            text=True, env=dict(os.environ,
+                                PYTHONPATH=str(REPO_ROOT / "src")))
+    doc = json.loads(r.stdout)
+    return {t['symbol']: t['action'] for t in doc['transactions']
+            if t['action'] in ('ADJUST', 'DIVIDEND')}
+
+
+class TestIbRocHomeCountry(unittest.TestCase):
+    """Partition: the IB parser's s.90(1) "foreign issuer" test is
+    Canadian law; in a US project no issuer's return of capital becomes
+    a dividend, a Canadian one included."""
+
+    @rule("CA-ACB-08")
+    @rule_absent("CA-ACB-08", country="usa")
+    @rule("US-ROC-01")
+    def test_same_statement_under_both_countries(self):
+        ca = _brokerage_cli("canada")
+        us = _brokerage_cli("usa")
+        self.assertEqual(ca, {"QZRX.US": "DIVIDEND", "QZRT.TO": "ADJUST"})
+        self.assertEqual(us, {"QZRX.US": "ADJUST", "QZRT.TO": "ADJUST"})
+
+    @rule("CA-ACB-08")
+    @rule_absent("CA-ACB-08", country="usa")
+    def test_us_parser_never_applies_s90_even_if_asked(self):
+        self.assertEqual(_ib_parse("canada", "dividend"),
+                         {"QZRX.US": "DIVIDEND", "QZRT.TO": "ADJUST"})
+        self.assertEqual(_ib_parse("usa", "dividend"),
+                         {"QZRX.US": "ADJUST", "QZRT.TO": "ADJUST"})

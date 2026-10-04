@@ -1623,8 +1623,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-ROC-01",
                  "A return of capital (nondividend distribution, "
                  "§301(c)(2)) lowers the basis of the shares held, pro rata "
-                 "over the open lots, for every issuer (`roc-sum` totals it "
-                 "against Form 1099-DIV box 3)."),
+                 "over the open lots, for every issuer wherever it is "
+                 "resident — Canada's foreign-issuer rule never applies "
+                 "(`roc-sum` totals it against Form 1099-DIV box 3)."),
             Rule("US-ROC-02",
                  "The part beyond a lot's basis is a capital gain in the "
                  "year received (§301(c)(3)), short- or long-term by that "
