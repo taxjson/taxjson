@@ -59,6 +59,22 @@ from typing import Any, Dict, List, Optional, Tuple
 
 DUE_MONTHS = (3, 6, 9, 12)
 DUE_DAY = 15
+# The balance-due date (ITA s.248(1) "balance-due day": April 30 of the
+# next year for an individual): instalment interest runs to it, and a
+# payment dated after it is not an instalment of the year.
+BALANCE_DUE_MONTH_DAY = (4, 30)
+
+
+def balance_due_date(year: int) -> date:
+    """April 30 of the year after `year`."""
+    return date(int(year) + 1, *BALANCE_DUE_MONTH_DAY)
+
+
+def balance_due_label() -> str:
+    """'April 30' (from the constant)."""
+    import calendar
+    m, d = BALANCE_DUE_MONTH_DAY
+    return f"{calendar.month_name[m]} {d}"
 THRESHOLD = 3000.0          # net tax owing above which instalments apply
 PENALTY_FLOOR = 1000.0      # interest below this can never be penalized
 PENALTY_SHARE = 0.50        # of the excess over the floor
@@ -350,7 +366,7 @@ def build(*, year: int, basis: str, current_net_tax: float,
     # Interest runs to the balance-due date (April 30 following the
     # year) or to today, whichever comes first — a year in progress
     # keeps accruing.
-    end = min(today, date(year + 1, 4, 30))
+    end = min(today, balance_due_date(year))
     # No configured rate: CRA's published quarterly rates for the
     # window (the last one carried forward past the table's end).
     rate_source = "configured"
@@ -565,7 +581,8 @@ def render(doc: Dict[str, Any], base: str) -> str:
         else:
             lines.append(wrap(
                 f"Behind by {fmt_money(doc['shortfall'])} with no "
-                f"dates left — the balance is due April 30."))
+                f"dates left — the balance is due "
+                f"{balance_due_label()}."))
     elif doc.get("remaining_total", 0.0) > 0.005:
         lines.append(wrap(
             f"On schedule so far. "

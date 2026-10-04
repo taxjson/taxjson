@@ -1079,13 +1079,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-RPT-04",
                  "Canadian dividends (a Canadian issuer: its CA ISIN when "
                  "the export gives one, else a Canadian listing) are "
-                 "treated as eligible (38% gross-up "
-                 "and credit; a capital-gains dividend in "
+                 f"treated as eligible ({_pct(_te().CA_ELIGIBLE_GROSSUP - 1)} "
+                 "gross-up and credit; a capital-gains dividend in "
                  "[[capital_gains_dividends]] as a capital gain),",
                  cont=True),
             Rule("CA-RPT-05",
-                 "foreign dividends as ordinary income with withholding "
-                 "credited up to 15%;", cont=True),
+                 f"foreign dividends as ordinary income with withholding "
+                 f"credited up to {_pct(_te().CA_FOREIGN_WITHHOLDING)};",
+                 cont=True),
             Rule("CA-RPT-06", "interest is left out.", cont=True),
             Rule("CA-EST-TRUST",
                  "A Canadian trust's distribution (an ETF, REIT or fund "
@@ -1098,8 +1099,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "the T3 decides.", cont=True),
             Rule("CA-EST-LOSSES",
                  "Net capital losses carried forward (--other-losses, "
-                 "full dollars) are netted against the year's gains "
-                 "before the 50% inclusion and used only up to them "
+                 f"full dollars) are netted against the year's gains "
+                 f"before the {_pct(_te().CA_INCLUSION)} inclusion and used only up to them "
                  "(s.111(1)(b)); the rest is shown as unused. They are "
                  "deducted below net income (line 25300), so the "
                  "net-income tests (the BPA phase-down) still see the "
@@ -1109,7 +1110,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "full: RRSP, FHSA, RPP ...) and --carrying-charges "
                  "(line 22100) lower net and taxable income, other "
                  "income first, never below zero; the AMT base takes the "
-                 "deductions in full and the carrying charges at 50%."),
+                 "deductions in full and the carrying charges at "
+                 f"{_pct(_te().CA_AMT_CARRYING_CHARGE_ALLOWANCE)}."),
             Rule("CA-EST-BPA",
                  "The federal basic personal amount phases down on net "
                  "income from the enhanced amount to the minimum between "
@@ -1122,18 +1124,22 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "are refused (no Quebec abatement, no low-income "
                  "reductions)."),
             Rule("CA-EST-FTC",
-                 "Foreign withholding is credited up to 15% of the "
-                 "foreign dividends (the books' TAX rows, else 15% "
-                 "assumed); what federal tax cannot absorb is credited "
+                 f"Foreign withholding is credited up to "
+                 f"{_pct(_te().CA_FOREIGN_WITHHOLDING)} of the "
+                 f"foreign dividends (the books' TAX rows, else "
+                 f"{_pct(_te().CA_FOREIGN_WITHHOLDING)} assumed); what federal tax cannot absorb is credited "
                  "against provincial tax (form T2036), limited to the "
                  "provincial tax times foreign income over net income.",
                  cont=True),
             Rule("CA-EST-AMT",
-                 "The AMT check (post-2024 rules): 20.5% over an "
+                 f"The AMT check (post-2024 rules): "
+                 f"{_pct(_te().CA_AMT_RATE)} over an "
                  "exemption at the start of the 29% bracket, on gains at "
-                 "100% (the claimable carryforward at 50%), dividends at "
+                 f"100% (the claimable carryforward at "
+                 f"{_pct(_te().CA_AMT_LOSS_ALLOWANCE)}), dividends at "
                  "their actual amount with no credit, the other income, "
-                 "the BPA credit at 50% and the foreign tax credit in "
+                 f"the BPA credit at {_pct(_te().CA_AMT_CREDIT_ALLOWANCE)} "
+                 "and the foreign tax credit in "
                  "full; the provincial share is the province's factor of "
                  "the federal excess (Ontario's surtax recomputed on it)."),
             Rule("CA-EST-VINTAGE",
@@ -1143,6 +1149,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "printed vintage and a note say so — for such an early "
                  "year the AMT shown is the post-2024 regime, which did "
                  "not apply then)."),
+            *_ca_estimate_tables(),
             Rule("CA-AMT-01",
                  "`taxjson amt [YEAR]`: the year's minimum tax line by "
                  "line (ITA s.127.5-127.55, form T691) — regular tax, the "
@@ -1240,7 +1247,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("CA-RPT-11",
                  "`taxjson instalments`: CRA instalments (ITA s.156) when "
-                 "net tax owing exceeds $3,000 this year and in one of the "
+                 f"net tax owing exceeds {_usd(_inst().THRESHOLD)} this "
+                 "year and in one of the "
                  "two previous years — due March, June, September and "
                  "December 15 (the next business day on a weekend), on the "
                  "current-year, prior-year or CRA-reminder basis, with "
@@ -1249,12 +1257,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "requires by then (s.161(4.01)), interest charged on "
                  "each instalment from its due date less interest "
                  "credited on each payment from its date (CRA's A - B "
-                 "offset method, nothing charged at $25 or less). A payment "
+                 f"offset method, nothing charged at "
+                 f"{_usd(_inst().INTEREST_MIN)} or less). A payment "
                  "made before January 1 counts only when its row says "
                  "`tax_year = YEAR`, and earns credit from January 1."),
             Rule("CA-INST-PRIOR",
                  "The prior-year test fails only when both earlier years' "
-                 "net tax is given and both are $3,000 or less; a year "
+                 f"net tax is given and both are {_usd(_inst().THRESHOLD)} "
+                 "or less; a year "
                  "not given is assumed to meet it, so instalments are "
                  "reported as required.", cont=True),
             Rule("CA-INST-INTEREST",
@@ -1262,9 +1272,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "offsets the charge: it is never refunded.",
                  cont=True),
             Rule("CA-INST-PENALTY",
-                 "The s.163.1 penalty is 50% of the net interest over "
-                 "the greater of $1,000 and 25% of the interest had "
+                 f"The s.163.1 penalty is {_pct(_inst().PENALTY_SHARE)} of "
+                 f"the net interest over the greater of "
+                 f"{_usd(_inst().PENALTY_FLOOR)} and "
+                 f"{_pct(_inst().PENALTY_ALT_FRACTION)} of the interest had "
                  "nothing been paid.", cont=True),
+            *_ca_instalment_tables(),
             Rule("CA-SCAN-01",
                  "`taxjson scan`: a US-listed dividend payer held in a "
                  "TFSA is flagged — the 15% US withholding is "
@@ -1788,8 +1801,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "reorg_368 (all-stock §368(a) reorganization: basis "
                  "carries over, §358, and the holding period tacks, "
                  "§1223(1); tax-free by law when it qualifies, and only a "
-                 "significant holder attaches the Reg. §1.368-3 "
-                 "statement),", cont=True),
+                 "significant holder ("
+                 + _corp().us_significant_holder_test()
+                 + ") attaches the Reg. §1.368-3 statement),", cont=True),
             Rule("US-CORP-05",
                  "or reorg_368_boot (§356, per lot of old shares — Reg. "
                  "§1.356-1(b): each lot's gain is its share of the new "
@@ -1828,8 +1842,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "§1223(1). It never books a gain: an amount beyond the "
                  "parent's basis is capped at it, with an ATTENTION line. "
                  "The spun-off shares are not a purchase for the "
-                 "wash-sale rule. Only a significant distributee attaches "
-                 "the Reg. §1.355-5 statement).", cont=True),
+                 "wash-sale rule. Only a significant distributee (the "
+                 "same test) attaches the Reg. §1.355-5 statement).",
+                 cont=True),
             Rule("US-CORP-08",
                  "ignore skips broker noise only; on a real event it "
                  "leaves the books wrong."),
@@ -2022,7 +2037,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "short-term, §1256 P/L as short-term (no 60/40 split; "
                  "it names the amount), and a net capital loss as "
                  "offsetting up to "
-                 "$3,000 of ordinary income; foreign tax credits, "
+                 f"{_usd(_te().US_ORDINARY_LOSS_CAP)} of ordinary income; foreign tax credits, "
                  "interest and state tax are left out.", cont=True),
             Rule("US-EST-CARRY-TERM",
                  "A capital loss carryover keeps its term: --other-losses "
@@ -2031,12 +2046,14 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "offsets gains of its own term first, the rest the other "
                  "term's (line 16).", cont=True),
             Rule("US-EST-NIIT-LOSS",
-                 "That up-to-$3,000 capital loss deduction also reduces "
+                 f"That up-to-{_usd(_te().US_ORDINARY_LOSS_CAP)} capital "
+                 "loss deduction also reduces "
                  "net investment income for NIIT (Form 8960 line 5a).",
                  cont=True),
             Rule("US-EST-CARRY-TI",
                  "The carryforward it shows counts as used only the part "
-                 "of the $3,000 that taxable income absorbs (Capital Loss "
+                 f"of the {_usd(_te().US_ORDINARY_LOSS_CAP)} that taxable "
+                 "income absorbs (Capital Loss "
                  "Carryover Worksheet line 4).", cont=True),
             Rule("US-EST-VINTAGE",
                  "Brackets, the standard deduction and the capital-gain "
@@ -2044,10 +2061,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "uses the newest earlier table and a year before the "
                  "earliest uses the earliest (the printed vintage and a "
                  "note say so).", cont=True),
+            *_us_estimate_tables(),
             Rule("US-RPT-08",
                  "`taxjson carryover`: the short- and long-term capital "
                  "loss carryover (Schedule D worksheet), assuming the "
-                 "$3,000 ordinary offset is used each year unless "
+                 f"{_usd(_te().US_ORDINARY_LOSS_CAP)} ordinary offset is "
+                 "used each year unless "
                  "taxjson.toml's [carryover] claimed records otherwise. A "
                  "year before the "
                  "project year that has a close-year lock (filed/<year>.json "
@@ -2058,7 +2077,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-CARRY-01",
                  "`taxjson close-year` records in filed/<year>.json the "
                  "short- and long-term capital loss carryover carried in "
-                 "and carried out, from the same estimate (the $3,000 "
+                 "and carried out, from the same estimate (the "
+                 f"{_usd(_te().US_ORDINARY_LOSS_CAP)} "
                  "deduction counted as used only as far as taxable income "
                  "absorbs it, short-term first)."),
             Rule("US-CARRY-02",
@@ -2240,3 +2260,183 @@ def rule_country(rule_id: str) -> str:
     if rule_id.startswith("US-"):
         return _C.USA
     raise ValueError(f"rule id {rule_id!r} has no CA-/US- prefix")
+
+
+# ---------------------------------------------------------------------
+# Law constants, rendered from the constants the code computes with
+# (lib/tax_estimate, bin/taxjson_instalments, lib/corp_actions): one
+# source, so the statement cannot drift from the number used. Each
+# country's tables are rendered only in that country's section.
+
+_PROVINCE_NAMES = {"ON": "Ontario", "BC": "British Columbia",
+                   "AB": "Alberta"}
+
+
+def _te():
+    from taxjson.lib import tax_estimate
+    return tax_estimate
+
+
+def _corp():
+    from taxjson.lib import corp_actions
+    return corp_actions
+
+
+def _inst():
+    from taxjson.bin import taxjson_instalments
+    return taxjson_instalments
+
+
+def _pct(rate: float) -> str:
+    from taxjson.lib.tax_estimate import fmt_pct
+    return fmt_pct(rate)
+
+
+def _usd(amount: float) -> str:
+    from taxjson.lib.tax_estimate import fmt_dollars
+    return fmt_dollars(amount)
+
+
+def _bands(brackets) -> str:
+    """'15% to $55,867, 20.5% to $111,733, 33% above'."""
+    out = []
+    for upper, rate in brackets:
+        out.append(f"{_pct(rate)} above" if upper == float("inf")
+                   else f"{_pct(rate)} to {_usd(upper)}")
+    return ", ".join(out)
+
+
+def _vintages() -> List[Tuple[str, Dict[str, Any]]]:
+    from taxjson.lib.tax_estimate import _VINTAGES
+    return sorted(_VINTAGES.items(), key=lambda kv: int(kv[0]))
+
+
+def _ca_fed_table() -> str:
+    parts = [f"{y}: {_bands(t['CA_FED_BRACKETS'])}; basic personal "
+             f"amount {_usd(t['CA_FED_BPA'])} down to "
+             f"{_usd(t['CA_FED_BPA_MIN'])}"
+             for y, t in _vintages()]
+    return ("Federal tax by year (taxable income bands; the basic "
+            "personal amount, enhanced down to minimum): "
+            + ". ".join(parts) + ".")
+
+
+def _ca_prov_table(code: str) -> str:
+    parts = []
+    for y, t in _vintages():
+        p = t["CA_PROVINCES"].get(code)
+        if p is None:
+            continue
+        bits = [_bands(p["brackets"]), f"basic personal amount "
+                f"{_usd(p['bpa'])}"]
+        if p.get("surtax"):
+            bits.append("surtax " + " plus ".join(
+                f"{_pct(r)} of basic provincial tax over {_usd(thr)}"
+                for thr, r in p["surtax"]))
+        bits.append(f"minimum tax factor {_pct(p['amt_factor'])}"
+                    + (" (assumed until the year's form is published)"
+                       if p.get("amt_factor_assumed") else ""))
+        parts.append(f"{y}: " + "; ".join(bits))
+    return (f"{_PROVINCE_NAMES.get(code, code)} by year: "
+            + ". ".join(parts) + ".")
+
+
+def _ca_provinces() -> List[str]:
+    seen: List[str] = []
+    for _y, t in _vintages():
+        for code in t["CA_PROVINCES"]:
+            if code not in seen:
+                seen.append(code)
+    return seen
+
+
+def _ca_dtc_text() -> str:
+    from taxjson.lib.tax_estimate import (CA_ELIGIBLE_GROSSUP,
+                                          CA_FED_DTC_ELIGIBLE)
+    prov = []
+    for code in _ca_provinces():
+        rates = {y: t["CA_PROVINCES"][code]["dtc_eligible"]
+                 for y, t in _vintages() if code in t["CA_PROVINCES"]}
+        if len(set(rates.values())) == 1:
+            prov.append(f"{code} {_pct(next(iter(rates.values())))}")
+        else:
+            prov.append(f"{code} " + ", ".join(
+                f"{_pct(r)} in {y}" for y, r in rates.items()))
+    return (f"Eligible dividends are grossed up "
+            f"{_pct(CA_ELIGIBLE_GROSSUP - 1)} (x{CA_ELIGIBLE_GROSSUP:g}); "
+            f"the dividend tax credit is a share of the grossed-up "
+            f"amount: federal {_pct(CA_FED_DTC_ELIGIBLE)}, "
+            + ", ".join(prov) + ".")
+
+
+def _on_health_premium_text() -> str:
+    from taxjson.lib.tax_estimate import ON_HEALTH_PREMIUM
+    parts = [f"over {_usd(floor)}: {_usd(at)} plus {_pct(rate)} of the "
+             f"excess, at most {_usd(cap)}"
+             for floor, at, rate, cap in ON_HEALTH_PREMIUM]
+    return (f"The Ontario Health Premium on taxable income (not indexed): "
+            f"nil to {_usd(ON_HEALTH_PREMIUM[0][0])}; "
+            + "; ".join(parts) + ".")
+
+
+def _ca_prescribed_rates_text() -> str:
+    from taxjson.bin.taxjson_instalments import (PUBLISHED_FROM,
+                                                 PUBLISHED_RATES,
+                                                 PUBLISHED_THROUGH)
+    segs: List[str] = []
+    last = None
+    for eff, r in PUBLISHED_RATES:
+        if r != last:
+            segs.append(f"{_pct(r)} from {eff}")
+            last = r
+    return (f"Without [instalments] prescribed_rate(s), the interest rate "
+            f"is CRA's published rate on overdue taxes by quarter: "
+            + ", ".join(segs) + f". Days after {PUBLISHED_THROUGH} assume "
+            f"the last rate ({_pct(PUBLISHED_RATES[-1][1])}) and days "
+            f"before {PUBLISHED_FROM} the first; the report says when it "
+            f"assumed one.")
+
+
+def _ca_balance_due_text() -> str:
+    from taxjson.bin.taxjson_instalments import balance_due_label
+    return (f"Instalment interest runs to the balance-due day, "
+            f"{balance_due_label()} of the next year (or today, if "
+            f"earlier); a payment dated after it is not an instalment of "
+            f"the year.")
+
+
+def _ca_estimate_tables() -> List[Rule]:
+    """The Canadian estimate's per-year tables (after CA-EST-VINTAGE)."""
+    out = [Rule("CA-EST-FED-TABLE", _ca_fed_table()),
+           Rule("CA-EST-DTC", _ca_dtc_text())]
+    for code in _ca_provinces():
+        out.append(Rule(f"CA-EST-{code}-TABLE", _ca_prov_table(code)))
+    out.append(Rule("CA-EST-OHP", _on_health_premium_text()))
+    return out
+
+
+def _ca_instalment_tables() -> List[Rule]:
+    return [Rule("CA-INST-RATES", _ca_prescribed_rates_text(), cont=True),
+            Rule("CA-INST-DUE", _ca_balance_due_text(), cont=True)]
+
+
+def _us_estimate_tables() -> List[Rule]:
+    """The US estimate's per-year tables and NIIT (after
+    US-EST-VINTAGE)."""
+    from taxjson.lib.tax_estimate import (US_NIIT_MAGI_THRESHOLD,
+                                          US_NIIT_RATE)
+    parts = [f"{y}: standard deduction {_usd(t['US_STD_DEDUCTION'])}; "
+             f"ordinary income {_bands(t['US_ORD_BRACKETS'])}; long-term "
+             f"gains and qualified dividends "
+             f"{_bands(t['US_LTCG_BRACKETS'])}"
+             for y, t in _vintages()]
+    return [
+        Rule("US-EST-TABLE",
+             "Federal tax by year (single filer; taxable income bands): "
+             + ". ".join(parts) + "."),
+        Rule("US-EST-NIIT",
+             f"NIIT is {_pct(US_NIIT_RATE)} of the lesser of net "
+             f"investment income and modified AGI over "
+             f"{_usd(US_NIIT_MAGI_THRESHOLD)} (single filer, IRC §1411).",
+             cont=True),
+    ]

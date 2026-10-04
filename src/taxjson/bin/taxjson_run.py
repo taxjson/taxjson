@@ -10666,7 +10666,9 @@ def _instalment_config(root: Path,
             # table after bumping [settings] year made the schedule
             # read "met" with zero interest and fabricated credit
             # interest — silently the maximally wrong answer.
-            lo, hi = f"{year}-01-01", f"{int(year) + 1}-04-30"
+            from taxjson.bin.taxjson_instalments import balance_due_date
+            lo, hi = (f"{year}-01-01",
+                      balance_due_date(int(year)).isoformat())
             # A prepayment made before January 1 counts only when the
             # row designates this year (`tax_year = YEAR`): an
             # undesignated prior-year date is the rollover trap above.
@@ -11137,7 +11139,10 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
     accounts only, incremental on top of --other-income. Assumptions
     are printed with the numbers; these are never filing figures.
     `verbose` appends the CALCULATION TRACE: every bracket slice,
-    credit and surtax tier for the base and with-investments runs."""
+    credit and surtax tier for the base and with-investments runs.
+    Every printed rate is read from lib/tax_estimate's constants (the
+    ones tax-logic states), never a literal."""
+    from taxjson.lib import tax_estimate as _TE
     money = fmt_money
     r = _tax_estimate_result(cfg, est, other_income=other_income,
                              other_losses=other_losses, province=province,
@@ -11162,17 +11167,19 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
              f"[{money(est['realized'])} realized"
              + (f" + {money(r['capital_gains_dividends'])} box 18"
                 if r.get("capital_gains_dividends") else "")
-             + f" - {money(r['losses_applied'])} other losses, x50%]"),
+             + f" - {money(r['losses_applied'])} other losses, "
+               f"x{_TE.fmt_pct(_TE.CA_INCLUSION)}]"),
         ] + ([("Capital-gains dividends", r["capital_gains_dividends"],
                "[T5 box 18, line 17400: in the gains above, not "
                "grossed up]")]
              if r.get("capital_gains_dividends") else []) + [
             ("Eligible dividends (grossed)", r["grossed_eligible"],
-             f"[{money(est['div_ca'])} x1.38, Canadian issuers, "
+             f"[{money(est['div_ca'])} x{_TE.CA_ELIGIBLE_GROSSUP:g}, "
+             f"Canadian issuers, "
              f"trust distributions included]"),
             ("Foreign dividends", est["div_foreign"],
              f"[FTC {money(r['ftc_assumed'])} — "
-             f"{r.get('ftc_source', 'assumed 15%')}]"),
+             f"{r.get('ftc_source') or 'assumed ' + _TE.fmt_pct(_TE.CA_FOREIGN_WITHHOLDING)}]"),
             ("Payments in lieu", est["pil"], ""),
         ] + ([("Crypto staking (ordinary)", r["staking"],
                "[no withholding, no FTC]")]
@@ -11181,7 +11188,9 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                "[lines 20700-23500, e.g. RRSP 20800; in full under AMT]")]
              if r.get("deductions") else []) \
           + ([("Carrying charges", -r["carrying_charges"],
-               "[line 22100; 50% under AMT]")]
+               f"[line 22100; "
+               f"{_TE.fmt_pct(_TE.CA_AMT_CARRYING_CHARGE_ALLOWANCE)} under "
+               f"AMT]")]
              if r.get("carrying_charges") else [])
         for label, amt, note in rows:
             print(f"  {label:<30}{money(amt):>14}"
@@ -11234,7 +11243,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                       f"{base_cur}")
                 print(_wrap_note(
                     f"AMT binds because capital gains enter at 100% "
-                    f"(vs 50%) and the dividend tax credit is denied. "
+                    f"(vs {_TE.fmt_pct(_TE.CA_INCLUSION)}) and the "
+                    f"dividend tax credit is denied. "
                     f"The federal excess ({money(amt['carryforward'])}) "
                     f"is creditable against REGULAR tax for 7 years, "
                     f"but recovery needs a future year where regular "
@@ -11244,8 +11254,9 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 print(f"  {'=> does not bind':<30}"
                       f"{money(amt['headroom']):>14}  [headroom]")
                 print(_wrap_note(
-                    "AMT recomputes with capital gains at 100% (vs "
-                    "50%) and the dividend tax credit denied; on "
+                    f"AMT recomputes with capital gains at 100% (vs "
+                    f"{_TE.fmt_pct(_TE.CA_INCLUSION)}) and the dividend "
+                    f"tax credit denied; on "
                     "these numbers regular tax still exceeds the "
                     "minimum, so no top-up is owed."))
             _cy = amt.get("carryover") or {}
@@ -11301,14 +11312,17 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 (f"BPA credit ({CA_FED_BPA:,.0f} max @ "
                  f"{CA_FED_BRACKETS[0][1] * 100:g}%)",
                  -tb["fed_bpa"], -tw["fed_bpa"]),
-                (f"DTC 15.0198% x {money(r['grossed_eligible'])}",
+                (f"DTC {_TE.fmt_pct(_TE.CA_FED_DTC_ELIGIBLE)} x "
+                 f"{money(r['grossed_eligible'])}",
                  -tb["fed_dtc"], -tw["fed_dtc"]),
                 # The credit's source, as the summary line says: the
                 # actual TAX rows capped at 15%, or the 15% assumption
                 # (a fixed "15% x" label contradicted it, R1-224).
-                (("FTC TAX rows, max 15% x " if str(r.get(
-                    "ftc_source", "")).startswith("actual")
-                  else "FTC 15% x ") + money(est['div_foreign']),
+                (("FTC TAX rows, max "
+                  + _TE.fmt_pct(_TE.CA_FOREIGN_WITHHOLDING) + " x "
+                  if str(r.get("ftc_source", "")).startswith("actual")
+                  else "FTC " + _TE.fmt_pct(_TE.CA_FOREIGN_WITHHOLDING)
+                  + " x ") + money(est['div_foreign']),
                  -tb["fed_ftc"], -tw["fed_ftc"]),
                 ("= FEDERAL", r["tax_base"]["federal"],
                  r["tax_with"]["federal"]),
@@ -11365,7 +11379,9 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                           f"{money(_idoc['per_remaining_date'] or 0.0):>14}"
                           f"  [taxjson instalments]")
                 else:
-                    print(f"  {'=> balance due April 30':<30}"
+                    from taxjson.bin.taxjson_instalments import \
+                        balance_due_label
+                    print(f"  {'=> balance due ' + balance_due_label():<30}"
                           f"{money(_idoc['shortfall']):>14}"
                           f"  [taxjson instalments]")
         print()
@@ -11406,7 +11422,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                  if r["avg_rate_pct"] is not None else ""))
         if r["ordinary_offset"]:
             print(f"  Ordinary income offset by losses: "
-                  f"{money(r['ordinary_offset'])} (max 3,000)")
+                  f"{money(r['ordinary_offset'])} (max "
+                  f"{_TE.US_ORDINARY_LOSS_CAP:,.0f})")
         if r["losses_unused"]:
             print(f"  Unused capital losses: {money(r['losses_unused'])} "
                   f"(carry forward)")
@@ -11444,10 +11461,11 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 hi_s = ("inf" if hi == float("inf") else f"{hi:,.0f}")
                 print(f"    {f'{lo:,.0f}-{hi_s} @ {rate * 100:.0f}%':<34}"
                       f"{'':>14}{money(tax):>14}")
-            print(f"  NIIT: 3.8% x min(investment income, MAGI "
+            _niit = _TE.fmt_pct(_TE.US_NIIT_RATE)
+            print(f"  NIIT: {_niit} x min(investment income, MAGI "
                   f"{money(r['magi'])} - "
                   f"{money(US_NIIT_MAGI_THRESHOLD)}) = "
-                  f"3.8% x {money(r['niit_base'])} = {money(r['niit'])}")
+                  f"{_niit} x {money(r['niit_base'])} = {money(r['niit'])}")
             _print_trace_table(
                 [("TOTAL (before NIIT)", r["tax_base"]["total"],
                   r["tax_with"]["total"])], money)

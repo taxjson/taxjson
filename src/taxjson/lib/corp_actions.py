@@ -1111,11 +1111,27 @@ FILING_REQUIRED_ELECTIONS: Dict[str, str] = {
 # §1.355-5(c)): a holder of at least 5% of a publicly traded company's
 # stock, 1% of a non-public one, or securities with a basis of $1M or
 # more.
+# The thresholds as constants: tax-logic US-CORP-04 renders the same
+# figures (one source).
+US_SIGNIFICANT_HOLDER_PUBLIC = .05     # of a publicly traded company's stock
+US_SIGNIFICANT_HOLDER_PRIVATE = .01    # of a non-public company's stock
+US_SIGNIFICANT_HOLDER_BASIS = 1_000_000.0
+
+
+def us_significant_holder_test() -> str:
+    """'at least 5% of a public company's stock, 1% of a private one,
+    or a basis of $1,000,000 or more' from the constants."""
+    from taxjson.lib.tax_estimate import fmt_pct
+    return (f"at least {fmt_pct(US_SIGNIFICANT_HOLDER_PUBLIC)} of a "
+            f"public company's stock, "
+            f"{fmt_pct(US_SIGNIFICANT_HOLDER_PRIVATE)} of a private one, "
+            f"or a basis of ${US_SIGNIFICANT_HOLDER_BASIS:,.0f} or more")
+
+
 _US_SIGNIFICANT_HOLDER = (
-    "Only a significant holder (at least 5% of a public company's "
-    "stock, 1% of a private one, or a basis of $1 million or more) "
-    "attaches the Reg. §{reg} statement to the return; others file "
-    "nothing.")
+    "Only a significant holder (" + us_significant_holder_test().replace(
+        "{", "{{").replace("}", "}}") + ") attaches the Reg. §{reg} "
+    "statement to the return; others file nothing.")
 
 # Universal election available alongside every country/event-type rule.
 # Useful for IB's cross-listing replay-noise rows that look like real

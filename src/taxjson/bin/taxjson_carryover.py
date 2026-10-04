@@ -62,7 +62,10 @@ from taxjson.lib.report_model import fmt_money
 from taxjson.bin.taxjson_convert_currency import norm_currency
 
 _INCOME_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST', 'FEE')
-US_ORDINARY_OFFSET = 3000.0
+# The §1211(b) cap, from the one constant the estimate uses too
+# (tax-logic US-RPT-07 states it).
+from taxjson.lib.tax_estimate import (  # noqa: E402
+    US_ORDINARY_LOSS_CAP as US_ORDINARY_OFFSET)
 
 
 # A grouped amount's lead group has no leading zero ('0,125' is not
