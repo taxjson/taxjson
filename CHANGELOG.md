@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Release channels: tag → latest, promote → beta / stable (owner request)
+
+- **New installs take `stable`**, a release named in `channels.json` on
+  `main` (`stable` and `beta`); `latest` is always the newest `vX.Y.Z`
+  tag. `scripts/release.sh` makes a release `latest` and nothing more;
+  `scripts/promote.sh vX.Y.Z [stable|beta]` moves a channel (tag must
+  exist, from `main`, clean `channels.json`, asks before moving a channel
+  backwards; commits "Promote vX.Y.Z to stable" and pushes; trailers only
+  from `TAXJSON_PROMOTE_TRAILERS`). docs/releasing.md has the rhythm.
+- **Installer:** `--channel stable|beta|latest|dev|vX.Y.Z` (or
+  `TAXJSON_CHANNEL`; the old `release` means `latest`), printed as
+  `channel stable → release vX.Y.Z` and remembered in
+  `~/.config/taxjson/channel`, so re-running upgrades along the same
+  channel. A channel never moves an install backwards (a version does).
+  Only an annotated release tag on `main`'s history is installed.
+  `TAXJSON_DRY_RUN=1` shows the pick and changes nothing. A `taxjson` or
+  `tjs` in the bin directory that is not the installer's own link (a
+  file, or a link to another program) is left alone with a note — a
+  foreign link used to be replaced silently, a file stopped the install.
+  The `[fx]` fallback warning now names the right date (2007-05-01).
+- **`taxjson channels [all] [--json] [--offline]`** (and
+  `scripts/channels.sh`): where stable / beta / latest point, what this
+  machine's production copy runs and on which channel, and the newest 20
+  releases with ←stable / beta / latest / this-box marks; offline it says
+  so. On a development machine, **`taxjson promote [vX.Y.Z]
+  [stable|beta]`** and **`taxjson deploy [vX.Y.Z]`** (the production copy
+  → the newest or the named release, through the installer); elsewhere
+  they refuse with a pointer to the installer. Help group "Release".
+- `scripts/check-consistency.sh` checks that `channels.json` parses and
+  names existing tags.
+
 ### One mapping file, year data in taxjson.toml (owner request)
 
 - `ticker.map` is the project's one mapping file. Three lookup keywords
