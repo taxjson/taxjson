@@ -172,7 +172,7 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
                 "date": date, "action": "fee", "symbol": "",
                 "reason": "no rate in the rates file"}]))
         return convert_currency(amount, curr, to_curr,
-                                {(curr, to_curr): rate}, float(_fb))
+                                {(curr, to_curr): rate}, float(rate))
 
     # Every parsed row first, then ONE dedup over all of them with the
     # books' own rule (taxjson_sort.plan_dedup): an id-only pass here
