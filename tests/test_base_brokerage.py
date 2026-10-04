@@ -212,10 +212,10 @@ class TestBackComputeFee(unittest.TestCase):
         )
 
     def test_option_uses_100_multiplier(self):
-        # 10 contracts @ $1.60 × 100 = $1600 theoretical. Net $1609.92 → $9.92 fee.
+        # 10 contracts @ $1.40 × 100 = $1400 theoretical. Net $1409.87 → $9.87 fee.
         self.assertAlmostEqual(
-            self.b.back_compute_fee(10, 1.60, 1609.92, is_option=True),
-            9.92, places=2,
+            self.b.back_compute_fee(10, 1.40, 1409.87, is_option=True),
+            9.87, places=2,
         )
 
     def test_subcent_residual_returns_zero(self):

@@ -61,16 +61,45 @@ line — the bare word does not count; bypass knowingly with
 `git push --no-verify`. Fixtures must be synthetic: fake account ids
 (`U1234567`, `99900001`), made-up ISINs, no real statements.
 
-Commit and tag messages are public history and cannot be scrubbed. Never
-quote your own books in them (or in CHANGELOG, comments or tests): no real
-amounts or totals, no symbol + quantity pairs or trade dates from real
-books, no account ids — write "the 2025 total is unchanged", not the
-number. The `pre-push` hook enforces part of this: a commit or tag message
+**Never put figures, ids or names from a real person's books into code,
+tests, docs, the CHANGELOG or commit messages** — yours or anyone else's.
+Use synthetic inputs: made-up amounts, quantities, dates, tickers and
+ids (a test builds its expected numbers from a synthetic input it
+states). CHANGELOG entries describe a change in words; a worked example
+with numbers is allowed only when it is computed from a synthetic input
+stated next to it. Commit and tag messages are public history and cannot
+be scrubbed: no real amounts or totals, no symbol + quantity pairs or
+trade dates from real books, no account ids — write "the 2025 total is
+unchanged", not the number. The `pre-push` hook enforces part of this: a commit or tag message
 line with a money-like amount (thousands separators and cents, such as
 `1,234,567.89`) is refused (`scripts/check-pii.sh --message`), and so is <!-- pii-ok: the synthetic example -->
 one added to a CHANGELOG or markdown doc line or a code comment in a pushed
 commit (`--diff`). A synthetic number is let through by the word `pii-ok`
 on its line (in a doc, `<!-- pii-ok -->`).
+
+The maintainer also keeps a **private figure list**: the distinctive
+money figures (amounts with cents, five or more digits, cents other than
+.00/.25/.50/.75) of their own projects' outputs — `reports/`,
+`work/*.sum`, `*.toml`, `*.tt` — stored only as salted SHA-256 hashes
+(mode `0600`, no plain figure on disk) at
+`~/.config/taxjson/pii-amounts` (override with `TAXJSON_PII_AMOUNTS`).
+Build or refresh it after a run with
+
+```bash
+scripts/check-pii.sh --collect-amounts path/to/project-2025 path/to/project-2026
+```
+
+(it merges into the existing list). Every check-pii mode — the tree scan
+in `ci.sh`, the pre-push diff and per-commit scan, commit and tag
+messages, ref names — then refuses a line holding one of those figures,
+naming the file and line ("matches a figure from your own books") but
+never the figure. There is no `pii-ok` escape: if a synthetic number
+collides with one, pick another number. Contributors have no list, and a
+missing list at the default path is skipped silently; a list named by
+`TAXJSON_PII_AMOUNTS` that does not exist, or one that cannot be read,
+fails the scan. The hashes keep the figures out of plain sight on disk;
+they are not a defence against someone who already has the file, so keep
+it private like the denylist.
 
 ## Running tests
 

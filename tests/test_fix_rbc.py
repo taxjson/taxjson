@@ -218,22 +218,22 @@ class TestMarketCurrencyAcrossFiles(unittest.TestCase):
 
 # ------------------------------- R1-79 / S016-06: option identity per account
 
-TRP_BUY = row("March 5, 2024", "Buy", "8ZZTRP1", "", "5", "2.00", "-1038.20",
+TRP_BUY = row("March 12, 2024", "Buy", "8ZZTRP1", "", "5", "1.80", "-938.20",
               "CAD", "CALL .TRX   01/16/26    55 TRX ENERGY INC DA OPEN CONTRACT")
 TRP_XCH_OUT = row("October 2, 2024", "Reorganization", "8ZZTRP1", "", "-5", "",
                   "0", "CAD", "XCH - CALL .TRX   01/16/26    55 TRX ENERGY INC")
 TRP_XCH_IN = row("October 2, 2024", "Reorganization", "8ZZTRP2", "", "5", "",
                  "0", "CAD", "XCH - CALL .TRX1   01/16/26    55 TRX ENERGY INC")
-TRP_SELL = row("June 3, 2025", "Sell", "8ZZTRP2", "", "-5", "18.00", "8986.80",
+TRP_SELL = row("June 10, 2025", "Sell", "8ZZTRP2", "", "-5", "17.00", "8486.80",
                "CAD", "CALL .TRX1   01/16/26    55 TRX ENERGY INC CA CLOSE "
                "CONTRACT")
 
-RCI_BUY = row("December 23, 2024", "Buy", "8ZZRCI1", "", "3", "3.55",
-              "-1075.70", "CAD",
+RCI_BUY = row("December 16, 2024", "Buy", "8ZZRCI1", "", "3", "3.20",
+              "-970.70", "CAD",
               "CALL .RCX   01/15/27    46 ROGERX COMMUNICATIONS INC DA OPEN "
               "CONTRACT")
-RCI_SELL = row("December 29, 2025", "Sell", "8ZZRCI1", "", "-3", "5.00",
-               "1489.30", "CAD",
+RCI_SELL = row("December 15, 2025", "Sell", "8ZZRCI1", "", "-3", "5.40",
+               "1609.30", "CAD",
                "CALL .RCX.B   01/15/27    46 ROGERX COMMUNICATIONS INC CA "
                "CLOSE CONTRACT")
 

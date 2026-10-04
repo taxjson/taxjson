@@ -146,6 +146,18 @@ public repo's own `.gitignore` ignores `inputs/`, `work/`, `reports/`,
 `filed/`, `export/`, spreadsheets and PDFs so a run inside a dev clone
 cannot be staged by accident.
 
+The development scan `scripts/check-pii.sh` (run by `scripts/ci.sh` and
+the `pre-push` hook) reads two private files that live outside every
+repository: the maintainer's denylist (`~/.config/taxjson/pii-denylist`,
+regexes for account numbers and names) and the maintainer's private
+figure list (`~/.config/taxjson/pii-amounts`, written by
+`scripts/check-pii.sh --collect-amounts PROJECT_DIR...`: the distinctive
+money figures of the maintainer's own project outputs as salted SHA-256
+hashes, mode `0600`, no plain figures). A tree line, a pushed diff line,
+or a commit or tag message holding one of those figures is refused with
+its file and line only. Neither file is ever committed; a contributor
+without them gets the generic checks.
+
 `taxjson redact` strips the account numbers, names and contact details
 it recognises from an export so it can be shared as a parser sample —
 it is pattern-based, so review the output (the report lists the lines

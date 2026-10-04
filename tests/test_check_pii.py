@@ -693,6 +693,194 @@ class TestPushEveryCommitAndDiffAmounts(_Sandbox):
                 self.assertEqual(r.returncode, 0, path + r.stdout)
 
 
+class TestPrivateFigureList(_Sandbox):
+    """The maintainer's private figure list: `--collect-amounts` hashes the
+    distinctive figures of a project's outputs into a salted SHA-256 list
+    (mode 0600, no plain figures), and every scan mode refuses a line that
+    holds one of them — tree, --diff (the pre-push per-commit scan),
+    --message and --text — naming file:line, never the figure, with no
+    pii-ok escape. A missing list at the default path is skipped. Every
+    figure here is synthetic and assembled at run time."""
+
+    _BOOK = "48" + ",213.97"          # a figure "from the books"
+    _BARE = "48213" + ".97"
+    _ONE = "73016" + ".4"             # one decimal: 73016.40 in the books
+    _NEW = "91" + ",357.03"           # added by a second collection
+
+    def setUp(self):
+        super().setUp()
+        self.amounts = self.tmp / "figs" / "pii-amounts"
+        self.env["TAXJSON_PII_AMOUNTS"] = str(self.amounts)
+        self.proj = self.tmp / "books" / "2025"
+        (self.proj / "reports").mkdir(parents=True)
+        (self.proj / "work").mkdir()
+        (self.proj / "inputs").mkdir()
+        (self.proj / "reports" / "margin.sum").write_text(
+            f"GRAND TOTAL {self._BOOK} CAD\n"
+            # round or short figures are not distinctive: never listed
+            "fees 1,500.00  div 250.25  small 99.87  cost 1234.50\n")
+        (self.proj / "work" / "x.sum").write_text(f"other {self._ONE}0\n")
+        # inputs are not an output: their figures are not collected
+        (self.proj / "inputs" / "b.csv").write_text("Net,62418.33\n")
+
+    def collect(self, *dirs):
+        return subprocess.run(
+            ["bash", str(self.repo / "scripts" / "check-pii.sh"),
+             "--collect-amounts", *map(str, dirs)], cwd=self.tmp,
+            capture_output=True, text=True, env=self.env)
+
+    def test_collect_writes_a_private_hashed_list_and_merges(self):
+        r = self.collect(self.proj)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("2 figure(s), 2 new", r.stdout)
+        self.assertEqual(self.amounts.stat().st_mode & 0o777, 0o600)
+        body = self.amounts.read_text()
+        for plain in (self._BOOK, self._BARE, self._BARE.replace(".", ""),
+                      self._ONE, "73016"):
+            self.assertNotIn(plain, body)
+        lines = [ln for ln in body.splitlines() if not ln.startswith("#")]
+        self.assertRegex(lines[0], r"^salt [0-9a-f]{32}$")
+        self.assertTrue(all(len(h) == 64 for h in lines[1:]), lines)
+        self.assertEqual(len(lines) - 1, 2)
+        salt = lines[0]
+        # a second project merges into the same list, same salt
+        other = self.tmp / "books" / "2026"
+        (other / "reports").mkdir(parents=True)
+        (other / "reports" / "y.txt").write_text(
+            f"{self._NEW}\n{self._BOOK}\n")
+        r = self.collect(self.proj, other)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("3 figure(s), 1 new", r.stdout)
+        self.assertIn(salt, self.amounts.read_text())
+        self.assertEqual(self.amounts.stat().st_mode & 0o777, 0o600)
+        # a relative project path resolves against the caller's folder
+        self.assertEqual(self.collect("books/2025").returncode, 0)
+        self.assertNotEqual(self.collect(self.tmp / "nope").returncode, 0)
+
+    def test_tree_scan_refuses_a_figure_without_printing_it(self):
+        self.collect(self.proj)
+        (self.repo / "t.py").write_text(
+            "a = 1\n"
+            f"b = {self._BARE}  # pii-ok\n"     # no escape for these
+            f'c = "x {self._ONE}"\n'           # 73016.4 == 73016.40
+            "d = 1500.00, 62418.33, 99.87\n")  # not listed
+        r = self.scan()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("matches a figure from your own books", r.stdout)
+        self.assertIn("t.py:2", r.stdout)
+        self.assertIn("t.py:3", r.stdout)
+        self.assertNotIn("t.py:4", r.stdout)
+        for plain in (self._BOOK, self._BARE, self._ONE):
+            self.assertNotIn(plain, r.stdout)
+        (self.repo / "t.py").write_text(f"b = {self._BARE[:-1]}8\n")
+        r = self.scan()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        # a CSV row whose cells sit side by side: 1,48213.97 is two cells
+        (self.repo / "t.csv").write_text(f"Qty,Net\n1,{self._BARE}\n")
+        r = self.scan()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("t.csv:2", r.stdout)
+        (self.repo / "t.csv").unlink()
+        # text inside a binary: drawing coordinates (73016.4) are not
+        # amounts there, an exact two-decimal one still is
+        pdf = self.repo / "d.pdf"
+        pdf.write_bytes(b"%PDF-1.4\n0 0 m " + self._ONE.encode()
+                        + b" 10 l S\n")
+        r = self.scan()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        pdf.write_bytes(b"%PDF-1.4\nBT (" + self._BARE.encode() + b") Tj ET\n")
+        r = self.scan()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("d.pdf (embedded text):2", r.stdout)
+
+    def test_message_and_text_modes_refuse(self):
+        self.collect(self.proj)
+        for mode in ("--message", "--text"):
+            for text in (f"the total moved to {self._BOOK}",
+                         f"synthetic {self._BOOK} pii-ok"):
+                r = self.scan(mode, stdin="subject\n\n" + text + "\n")
+                self.assertEqual(r.returncode, 1, mode + r.stdout)
+                self.assertIn("line 3", r.stdout)
+                self.assertNotIn(self._BOOK, r.stdout)
+        r = self.scan("--message", stdin="the total is unchanged\n")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        # identities are names, not figures
+        r = self.scan("--identity", stdin="Sam <sam@example.com>\n")
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def _commit(self, path, text, msg="c"):
+        (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / path).write_text(text)
+        self.git("add", "-A")
+        self.git("commit", "-q", "--allow-empty", "-m", msg)
+        return self.git("rev-parse", "HEAD").strip()
+
+    def test_diff_names_the_file_and_new_line(self):
+        self.collect(self.proj)
+        base = self._commit("src/a.py", "one\ntwo\nthree\nfour\n", "base")
+        self._commit("src/a.py",
+                     f"one\ntwo\nthree\nX = {self._BARE}\nfour\n")
+        r = self.scan("--diff", stdin=self.git("diff", base, "HEAD"))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("src/a.py:4", r.stdout)
+        self.assertNotIn(self._BARE, r.stdout)
+
+    def test_pre_push_refuses_a_figure_added_then_removed(self):
+        remote = self.tmp / "remote.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)],
+                       check=True, env=self.env, capture_output=True)
+        self.git("remote", "add", "origin", str(remote))
+        base = self._commit("a.txt", "hello\n", "base")
+        self.git("push", "-q", "--no-verify", "origin", "main")
+        self.collect(self.proj)
+        self._commit("tests/t.py", f"X = {self._BARE}\n", "add")
+        tip = self._commit("tests/t.py", "X = 1\n", "remove")
+
+        def push(new):
+            return subprocess.run(
+                ["bash", str(self.repo / "scripts" / "hooks" / "pre-push"),
+                 "origin", "unused-url"], cwd=self.repo, capture_output=True,
+                text=True, env=self.env,
+                input=f"refs/heads/main {new} refs/heads/main {base}\n")
+        r = push(tip)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("matches a figure from your own books", r.stdout)
+        self.assertNotIn(self._BARE, r.stdout + r.stderr)
+        # the same figure in a commit message
+        self.git("reset", "-q", "--hard", base)
+        tip = self._commit("a.txt", "bye\n", f"fix\n\nTotal {self._BOOK}")
+        r = push(tip)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("commit MESSAGE", r.stderr)
+
+    def test_missing_or_broken_list(self):
+        (self.repo / "t.py").write_text(f"b = {self._BARE}\n")
+        # contributors have no list: the default path is skipped silently
+        del self.env["TAXJSON_PII_AMOUNTS"]
+        r = self.scan()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertNotIn("figure", r.stdout)
+        # a list named explicitly must exist
+        self.env["TAXJSON_PII_AMOUNTS"] = str(self.amounts)
+        r = self.scan()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("does not exist", r.stdout)
+        # a list that cannot be parsed fails closed
+        self.amounts.parent.mkdir(parents=True)
+        self.amounts.write_text(f"{self._BARE}\n")
+        r = self.scan()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("could not be checked", r.stdout)
+        self.assertNotIn(self._BARE, r.stdout)
+        # the default path is used when the variable is unset
+        del self.env["TAXJSON_PII_AMOUNTS"]
+        self.amounts.unlink()
+        self.assertEqual(self.collect(self.proj).returncode, 0)
+        default = self.tmp / ".config" / "taxjson" / "pii-amounts"
+        self.assertTrue(default.is_file())
+        self.assertEqual(self.scan().returncode, 1)
+
+
 class TestReleaseAndCiGates(unittest.TestCase):
     """S025-06, S024-23, S023-00: static checks of the gate wiring."""
 

@@ -164,7 +164,7 @@ class TestT1135Futures(unittest.TestCase):
         from taxjson.bin.taxjson_t1135 import walk_costs
         txs = [_tx(date="2025-01-10", qty=100, net=30000.0),
                _tx(date="2025-10-20", symbol="F:CLZ5.US", qty=1,
-                   net=80569.97, price=80.56)]
+                   net=80000.0, price=80.00)]
         w = walk_costs(txs, 2025, {})
         self.assertAlmostEqual(w["max_total_cost"], 30000.0, places=2)
         self.assertEqual(w["per_symbol"].get("F:CLZ5.US", {}).get(
@@ -184,11 +184,11 @@ class TestT1135Futures(unittest.TestCase):
             base.write_text(json.dumps({"transactions": [
                 _tx(date="2025-01-10", qty=100, net=30000.0),
                 _tx(date="2025-10-20", symbol="F:CLZ5.US", qty=1,
-                    net=80569.97)]}))
+                    net=80000.0)]}))
             gains = Path(td) / "margin_gains.json"
             gains.write_text(json.dumps({"transactions": [
                 {"symbol": "F:CLZ5.US", "date": "2025-10-23",
-                 "gain": 6052.34}]}))
+                 "gain": 5000.0}]}))
             rep = build_report([base], [gains], 2025, {}, "CAD")
         self.assertFalse(rep["filing_required"])
         row = {r["symbol"]: r for r in rep["properties"]}["F:CLZ5.US"]

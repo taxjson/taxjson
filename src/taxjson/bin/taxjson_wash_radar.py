@@ -468,8 +468,8 @@ def main():
     # orders by settle date, so the pool splits first and the executed
     # (pre-split) quantity must be re-denominated into post-split units
     # (qty x ratio; money untouched) — the engine's rule (core.py, the
-    # settle-lag straddle). Without it a pre-split sale of 84 left 8.4
-    # nonexistent post-split shares held (real FFN.TO 11-for-10, 2026-07).
+    # settle-lag straddle). Without it a pre-split sale of 80 in an
+    # 11-for-10 split left 8 nonexistent post-split shares held.
     # (US: the walk orders by TRADE date, so a pre-split trade is booked
     # before the split scales it — nothing to re-denominate.)
     _lag_splits = [t for t in transactions if t.action == 'SPLIT' and t.date

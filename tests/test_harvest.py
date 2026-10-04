@@ -35,7 +35,7 @@ GAINS = {
     ],
 }
 
-PRICES = {"AAA.TO": 10.85, "BBB.US": 95.20, "ETN.US": 399.56}
+PRICES = {"AAA.TO": 10.85, "BBB.US": 95.20, "ETN.US": 380.00}
 
 USD_CAD = 1.25
 
@@ -578,7 +578,7 @@ class TestFxConversion(unittest.TestCase):
     with no usable rate the row is OMITTED loudly, never mixed in raw."""
 
     ETN = {"summary": {"year": 2026}, "transactions": [], "inventory": [
-        {"symbol": "ETN.US", "qty": 40, "total_cost": 22200.47,
+        {"symbol": "ETN.US", "qty": 40, "total_cost": 21150.00,
          "position_start_date": "2026-05-01"}]}
 
     def test_usd_quote_converts_to_base(self):
@@ -592,10 +592,10 @@ class TestFxConversion(unittest.TestCase):
                                "--country", "canada",
                                "--rates", str(rates)])
         self.assertEqual(rc, 0)
-        # 40 * 399.56 * 1.37 = 21,895.89 CAD -> loss -304.58, NOT the
-        # -6,218 the unconverted USD comparison produced.
-        self.assertIn("-304.58", out)
-        self.assertNotIn("-6,218", out)
+        # 40 * 380.00 * 1.37 = 20,824.00 CAD -> loss -326.00, NOT the  # pii-ok
+        # -5,950 the unconverted USD comparison produced.
+        self.assertIn("-326.00", out)
+        self.assertNotIn("-5,950", out)
 
     def test_no_rate_omits_row_with_warning(self):
         with tempfile.TemporaryDirectory() as td:
@@ -618,7 +618,7 @@ class TestFxConversion(unittest.TestCase):
                                  "--country", "canada",
                                  "--rates", str(rates)])
         self.assertEqual(rc, 0)
-        self.assertIn("-304.58", out)               # converted anyway
+        self.assertIn("-326.00", out)               # converted anyway
         self.assertIn("30d old", err)               # but said so
 
 

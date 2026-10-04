@@ -2097,8 +2097,8 @@ class CanadaTaxRules(TaxRules):
         # The execution side compares clock time because IB posts
         # corporate actions in an evening batch (20:25) dated the
         # trade day: a sale executed that morning was pre-split, and
-        # a date-only "strictly between" test left 84 x 0.1 phantom
-        # shares (real FFN 11-for-10, 2026-07-02). A split with no
+        # a date-only "strictly between" test left phantom
+        # fractional shares after an 11-for-10 split. A split with no
         # meaningful time (00:00:01, parser default) still sorts
         # before every same-day execution — the ladder's convention.
         # A RENAME-split (symbol changes) straddling the lag would

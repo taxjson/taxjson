@@ -43,17 +43,17 @@ class TestFetchAndWatch(unittest.TestCase):
         import io
         import urllib.error
         from taxjson_fetch import api as F
-        self.assertEqual(F.mask_account_number("59998888"), "59***")  # pii-ok
+        self.assertEqual(F.mask_account_number("55500009"), "55***")  # pii-ok
 
         def boom(url):
             raise urllib.error.HTTPError(url, 400, "Bad Request", {},
                                          io.BytesIO(b'{"code": 1}'))
         with self.assertRaises(RuntimeError) as cm:
             F._qt_get("https://api01.iq.questrade.com/", "tok",
-                      "/v1/accounts/59998888/activities?startTime=x",  # pii-ok
+                      "/v1/accounts/55500009/activities?startTime=x",  # pii-ok
                       boom)
-        self.assertNotIn("59998888", str(cm.exception))
-        self.assertIn("/v1/accounts/59***/activities", str(cm.exception))
+        self.assertNotIn("55500009", str(cm.exception))
+        self.assertIn("/v1/accounts/55***/activities", str(cm.exception))
         src = (_support.PLUGIN_SRC / "command.py").read_text()
         self.assertNotIn('questrade #{number}', src)
 

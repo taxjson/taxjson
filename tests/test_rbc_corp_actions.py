@@ -31,7 +31,7 @@ _MERGER = (
     'RECEIVED THRU MERGER"\n'
 )
 _SALE = ('"2025-12-23 00:00:00","Sell","CVX","CHEVRON CORPORATION","-15",'
-         '"150.36","2025-12-24 00:00:00","123","2245.45","USD","CHEVRON SALE"\n')
+         '"148.00","2025-12-24 00:00:00","123","2215.05","USD","CHEVRON SALE"\n')
 # A HESS dividend row — carries the *real* ticker (HES) under the same
 # company name as the merger removal's temp code (H015283), so the
 # extractor can resolve H015283 → HES.

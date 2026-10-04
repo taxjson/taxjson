@@ -1,4 +1,4 @@
-# taxjson
+# <img src="docs/brand/logo.svg" alt="" width="40" height="40" align="top"> taxjson
 
 [![tests](https://github.com/taxjson/taxjson/actions/workflows/tests.yml/badge.svg)](https://github.com/taxjson/taxjson/actions/workflows/tests.yml)
 
@@ -711,12 +711,11 @@ per-currency `TOTAL BUY / SELL / DIVIDEND` footers.
 
 ```
 $ taxjson events 5d margin
-BUYSELL  2026-06-26  14:23:05  SLV.US   100  USD  53.365  5337.50  1.00
-DIVIDEND 2026-06-30  09:30:00  NVDA.US  100  USD  0.25    25.00
+BUYSELL  2026-06-26  14:23:05  XYZ.US    10  USD  50.00   501.00  1.00
+DIVIDEND 2026-06-30  09:30:00  ABC.US   100  USD  0.25    25.00
 
-TOTAL BUY:      31,447.50 CAD, 29,894.61 USD
-TOTAL SELL:     45,886.74 USD
-TOTAL DIVIDEND: 1,577.79 USD
+TOTAL BUY:      501.00 USD
+TOTAL DIVIDEND: 25.00 USD
 ```
 
 **`taxjson divs PERIOD [ACCOUNT]`** — `events` filtered to `DIVIDEND` +
@@ -772,7 +771,7 @@ $ taxjson sum
 TAXABLE ACCOUNTS
 ACCOUNT    NON-OPT      OPTION       REALIZED     DIVIDEND    PIL        FEES       TOTAL
 ------------------------------------------------------------------------------------------
-margin     24,310.55    -1,204.10    23,106.45    1,842.30    0.00       318.60     24,948.75
+margin     900.00       -100.00      800.00       80.00       0.00       15.00      865.00
 ...
 SUBTOTAL   ...
 
@@ -781,7 +780,7 @@ SHELTERED ACCOUNTS
 
 ALL ACCOUNTS
 ...
-TOTAL      31,905.20    -2,617.35    29,287.85    2,611.05    0.00       447.15     31,898.90
+TOTAL      950.00       -200.00      750.00       120.00      0.00       25.00      845.00
 ```
 
 `TOTAL` = REALIZED + DIVIDEND. NON-OPT is every non-option disposition
@@ -1504,7 +1503,7 @@ cases differently:
    line dated in the tax year, with a **negative** amount (ACB reduction):
 
    ```
-   ADJUST 2025-12-31 12:00:00 XEI.TO CAD -184.23   # T3 box 42 ROC
+   ADJUST 2025-12-31 12:00:00 XYZ.TO CAD -120.00   # T3 box 42 ROC
    ```
 
 **When a ROC lowers the ACB** (see "Income dating"): a Canadian trust's ROC
@@ -1746,7 +1745,7 @@ BUYSELL  <date>  <time>  <symbol>  <qty>  <currency>  <price>  <total>  <fee>
 | `total` | net cash amount: **buy = qty×price + commission; sell = qty×price − commission** (your confirmation's net amount), written as a positive number. A sale whose commission exceeds its gross (a penny option close) has a NEGATIVE total, qty×price − commission (e.g. `-8.95` for a 0.01 close with a 9.95 commission): it is read when the line's commission explains it (a futures line also needs its `x<size>`); any other negative sell total is refused (a cash-signed `-2000` used to be booked as negative proceeds). `0` there leaves the excess commission out of the loss and warns. |
 | `fee` | commission (optional) |
 | income facts | optional `key=value` tokens at the END of a DIVIDEND / DIVIDEND_IN_LIEU / TAX / ADJUST line: `record=YYYY-MM-DD` (the record date that dates trust income and ROC), `ex=YYYY-MM-DD`, `label=distribution`, `dealer=CA` / `issuer=CA` (a Canadian dealer's payment in lieu is an s.260 deemed dividend), and on ADJUST `type=roc` (a return of capital, listed by `roc`). `taxjson-convert-tt book.json` writes them, so a json→tt→json round trip keeps them. Not part of the row id. |
-| INTEREST lines | `INTEREST date time CURRENCY amount` — income with no symbol, e.g. a T5 box-13 interest figure a broker's trade export does not carry (Webull): `INTEREST 2025-12-31 16:00:00 USD 1149.27`. |
+| INTEREST lines | `INTEREST date time CURRENCY amount` — income with no symbol, e.g. a T5 box-13 interest figure a broker's trade export does not carry (Webull): `INTEREST 2025-12-31 16:00:00 USD 100.00`. |
 | FEE lines | `FEE date time CURRENCY amount` — a charge is POSITIVE, a refund or rebate NEGATIVE (the sign `fees` and `fx-cash` read; the opposite of a cash-statement sign). |
 
 Example — a confirmation for "bought 100 XYZ.US @ $45.00, $5 commission":
@@ -1959,7 +1958,9 @@ defended in layers rather than by tests alone:
   in every gate and as the `pre-push` hook, fails closed, and reads a
   private denylist kept outside the repository (the hook also refuses a
   commit or tag message quoting a money amount such as 1,234,567.89 —
-  real book totals stay out of the public history; see CONTRIBUTING.md); `taxjson redact` strips
+  real book totals stay out of the public history — and, for the
+  maintainer, any line holding a figure from their own books, checked
+  against a private list of salted hashes; see CONTRIBUTING.md); `taxjson redact` strips
   the account numbers, names and contact details it recognises from an
   export — review the output before sharing it. One exception is by
   design: git publishes the author, committer and tagger name and e-mail

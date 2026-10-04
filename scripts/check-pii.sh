@@ -18,6 +18,19 @@
 #      outside every repository, so the strings it guards against are
 #      never themselves committed. scripts/dev-setup.sh scaffolds it.
 #
+#   3. Private figure list ~/.config/taxjson/pii-amounts (override:
+#      TAXJSON_PII_AMOUNTS) — the maintainer's own money figures, as
+#      salted SHA-256 hashes (no plain figure on disk), written by
+#        scripts/check-pii.sh --collect-amounts PROJECT_DIR...
+#      from each project's reports/, work/*.sum, *.toml and *.tt. Every
+#      mode except --identity refuses a line holding an amount with cents
+#      whose hash is listed ("matches a figure from your own books"),
+#      naming file:line, never the figure. There is NO pii-ok escape: a
+#      synthetic number that collides gets a different number. A missing
+#      list at the default path is skipped silently (contributors have
+#      none); one named by TAXJSON_PII_AMOUNTS that is missing, or a list
+#      that cannot be read or parsed, fails the scan.
+#
 # Fails CLOSED: a scanner error (bad pattern, unreadable file, a
 # non-binary file of any extension that contains NUL bytes — UTF-16
 # exports read as "binary" and would otherwise be skipped — or a
@@ -57,12 +70,155 @@ ALLOW_EMAILS='noreply@anthropic\.com|noreply@github\.com|users\.noreply\.github\
 BIN_EXT='pdf|png|jpe?g|gif|ico|webp|bmp|tiff?|svgz|xlsx|xlsm|xls|docx|doc|pptx|odt|ods|zip|gz|tgz|bz2|xz|7z|whl|woff2?|ttf|otf|eot|mp3|mp4|mov|pyc'
 is_bin() { printf '%s\n' "$1" | grep -qiE "\.($BIN_EXT)\$"; }
 
+AMOUNTS="${TAXJSON_PII_AMOUNTS:-$HOME/.config/taxjson/pii-amounts}"
+
+# The private figure list (source 3 above): one Python helper shared by
+# --collect-amounts and every scan, so both read figures the same way.
+# A figure is an amount with cents — 1,234.56 or 1234.5 — normalized to  # pii-ok
+# plain digits with two decimals; it is "distinctive" (worth listing)
+# with 5+ digits and cents other than 00/25/50/75, the figures a
+# synthetic example is unlikely to hit by chance.
+FIG_PY='
+import hashlib, os, re, secrets, sys
+AMT = re.compile(r"(?<![\d.])(\d{1,3}(?:,\d{3})+\.\d{1,2}|\d{3,}\.\d{1,2})(?![\d])")
+# Text pulled out of a binary (a PDF content stream) is full of drawing
+# coordinates such as 172.1: there only an exact two-decimal amount counts.
+AMT2 = re.compile(r"(?<![\d.])(\d{1,3}(?:,\d{3})+\.\d{2}|\d{3,}\.\d{2})(?![\d])")
+SUFFIXES = (".txt", ".sum", ".json", ".toml", ".tt", ".csv", ".md", "")
+HEAD = "# taxjson private figure list: salted SHA-256 of figures from your own books (scripts/check-pii.sh --collect-amounts)"
+def normalize(tok):
+    whole, frac = tok.replace(",", "").split(".")
+    return (whole.lstrip("0") or "0") + "." + (frac + "0")[:2]
+def distinctive(v):
+    return (float(v) >= 100 and v[-2:] not in ("00", "25", "50", "75")
+            and len(v.replace(".", "")) >= 5)
+def figures(line, strict=False):
+    return [normalize(tok) for tok in (AMT2 if strict else AMT).findall(line)]
+def digest(salt, v):
+    return hashlib.sha256((salt + ":" + v).encode()).hexdigest()
+def load(path):
+    salt, hashes = None, set()
+    with open(path, encoding="utf-8") as f:
+        for n, line in enumerate(f, 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if salt is None:
+                if not re.fullmatch(r"salt [0-9a-f]{32,}", line):
+                    raise SystemExit("figure list: line %d: expected the salt line" % n)
+                salt = line.split()[1]
+            elif re.fullmatch(r"[0-9a-f]{64}", line):
+                hashes.add(line)
+            else:
+                raise SystemExit("figure list: line %d is not a SHA-256 hash" % n)
+    if salt is None:
+        raise SystemExit("figure list has no salt line")
+    return salt, hashes
+def project_files(d):
+    found = []
+    for sub, _dirs, names in os.walk(os.path.join(d, "reports")):
+        found += [os.path.join(sub, x) for x in names]
+    w = os.path.join(d, "work")
+    if os.path.isdir(w):
+        found += [os.path.join(w, x) for x in os.listdir(w) if x.endswith(".sum")]
+    found += [os.path.join(d, x) for x in os.listdir(d)
+              if x.endswith((".toml", ".tt"))]
+    return sorted(p for p in found if os.path.isfile(p)
+                  and os.path.splitext(p)[1] in SUFFIXES)
+def collect(path, dirs):
+    if os.path.exists(path):
+        salt, hashes = load(path)
+    else:
+        salt, hashes = secrets.token_hex(16), set()
+    before = len(hashes)
+    for d in dirs:
+        if not os.path.isdir(d):
+            raise SystemExit("not a directory: " + d)
+        got = set()
+        for p in project_files(d):
+            with open(p, encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    got.update(v for v in figures(line) if distinctive(v))
+        if not got:
+            print("check-pii: warning: no figures found under %s (a project folder with reports/?)" % d, file=sys.stderr)
+        hashes.update(digest(salt, v) for v in got)
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, mode=0o700, exist_ok=True)
+    tmp = path + ".tmp%d" % os.getpid()
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(HEAD + "\nsalt " + salt + "\n")
+        f.writelines(h + "\n" for h in sorted(hashes))
+        f.flush(); os.fsync(f.fileno())
+    os.replace(tmp, path)
+    os.chmod(path, 0o600)
+    print("check-pii: figure list %s: %d figure(s), %d new"
+          % (sys.argv[3], len(hashes), len(hashes) - before))
+def hit(salt, hashes, line, strict=False):
+    return any(digest(salt, v) in hashes
+               for v in figures(line, strict) if distinctive(v))
+def main():
+    cmd, path = sys.argv[1], sys.argv[2]
+    if cmd == "collect":
+        return collect(path, sys.argv[4:])
+    salt, hashes = load(path)
+    sep = sys.argv[3]
+    if cmd == "files":           # paths on stdin -> path SEP line
+        xt = sys.argv[4] + "/" if len(sys.argv) > 4 and sys.argv[4] else None
+        for p in sys.stdin.read().splitlines():
+            if not p:
+                continue
+            strict = bool(xt) and p.startswith(xt)
+            with open(p, encoding="utf-8", errors="ignore") as f:
+                for n, line in enumerate(f, 1):
+                    if hit(salt, hashes, line, strict):
+                        print(p + sep + str(n))
+    elif cmd == "diff":          # a unified diff -> new path SEP new line
+        path_, n, old, new = "?", 0, 0, 0
+        for line in sys.stdin.read().splitlines():
+            if old > 0 or new > 0:   # inside a hunk: count both sides
+                if line.startswith("+"):
+                    if hit(salt, hashes, line[1:]):
+                        print(path_ + sep + str(n))
+                    n += 1; new -= 1
+                elif line.startswith("-"):
+                    old -= 1
+                elif line.startswith("\\"):
+                    pass             # "\ No newline at end of file"
+                else:
+                    n += 1; old -= 1; new -= 1
+                continue
+            m = re.match(r"@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", line)
+            if m:
+                old = int(m.group(1) if m.group(1) is not None else 1)
+                n = int(m.group(2))
+                new = int(m.group(3) if m.group(3) is not None else 1)
+            elif line.startswith("+++ "):
+                path_ = line[4:]
+                path_ = path_[2:] if path_.startswith("b/") else path_
+            elif line.startswith("diff --git "):
+                path_ = "?"
+    elif cmd == "text":          # lines on stdin -> LABEL line N
+        for n, line in enumerate(sys.stdin.read().splitlines(), 1):
+            if hit(salt, hashes, line):
+                print(sys.argv[4] + " line " + str(n))
+main()
+'
+
 mode=tree
 MSG=0        # --message: --text plus the money-amount check (A2-1384)
 case "${1:-}" in
   --diff) mode=diff; shift ;; --text) mode=text; shift ;;
   --message) mode=text; MSG=1; shift ;;
   --identity) mode=identity; shift ;;
+  --collect-amounts)
+    shift
+    [ $# -gt 0 ] || { echo "usage: scripts/check-pii.sh --collect-amounts PROJECT_DIR..." >&2; exit 2; }
+    PYB="$(command -v "${PYTHON:-python3}" 2>/dev/null)" || { echo "check-pii: python3 is needed to collect figures" >&2; exit 2; }
+    dirs=()
+    for d in "$@"; do case "$d" in /*) dirs+=("$d") ;; *) dirs+=("$PWD0/$d") ;; esac; done
+    exec "$PYB" -c "$FIG_PY" collect "$AMOUNTS" "$(printf '%s' "$AMOUNTS" | sed "s#^$HOME#~#")" "${dirs[@]}"
+    ;;
 esac
 hits=0
 CI=""        # "-i" while scanning the (case-insensitive) denylist
@@ -632,8 +788,41 @@ else
   denynote="no private denylist at $DENYSHOW — generic patterns only (scripts/dev-setup.sh scaffolds one)"
 fi
 
+# ---- private figure list ----------------------------------------------
+# Hashes of the maintainer's own figures (source 3 above). No pii-ok
+# escape: a synthetic number that collides gets a different number.
+AMTSHOW="$(printf '%s' "$AMOUNTS" | sed "s#^$HOME#~#")"
+FIGMSG="matches a figure from your own books (private figure list $AMTSHOW) — use a different, synthetic number"
+if [ "$mode" = identity ]; then
+  :
+elif [ ! -e "$AMOUNTS" ]; then
+  if [ -n "${TAXJSON_PII_AMOUNTS:-}" ]; then
+    fail "private figure list $AMTSHOW (TAXJSON_PII_AMOUNTS) does not exist"
+  fi
+elif [ ! -f "$AMOUNTS" ] || [ ! -r "$AMOUNTS" ]; then
+  fail "private figure list $AMTSHOW cannot be read — that guard is DISABLED until fixed"
+elif ! PYF="$(command -v "${PYTHON:-python3}" 2>/dev/null)" || [ -z "$PYF" ]; then
+  fail "private figure list $AMTSHOW present but no python3 to check it — cannot be scanned"
+else
+  case "$mode" in
+    tree) fig_out="$(printf '%s\n' "$SCANLIST" | grep -v '^$' \
+                     | "$PYF" -c "$FIG_PY" files "$AMOUNTS" "$SEP" "$XT" 2>&1)"; rc=$? ;;
+    diff) fig_out="$(tr -d '\0' < "$RAWF" | "$PYF" -c "$FIG_PY" diff "$AMOUNTS" "$SEP" 2>&1)"; rc=$? ;;
+    text) fig_out="$(printf '%s\n' "$INPUT" | "$PYF" -c "$FIG_PY" text "$AMOUNTS" "$SEP" "$([ "$MSG" = 1 ] && echo message || echo text)" 2>&1)"; rc=$? ;;
+  esac
+  if [ "$rc" -ne 0 ]; then
+    fail "private figure list $AMTSHOW could not be checked — that guard is DISABLED until fixed" "$(printf '%s\n' "$fig_out" | tail -3 | mask)"
+  elif [ -n "$fig_out" ]; then
+    # Location only: the path (XT mirror shown as the binary's own path)
+    # and line number — never the line, which holds the figure.
+    fail "$FIGMSG" "$(printf '%s\n' "$fig_out" \
+      | sed "s#^${XT:-/nonexistent}/\(.*\)$SEP#\1 (embedded text)$SEP#; s#^$HOME/#~/#" | tr "$SEP" ':' | head -50)"
+  fi
+  denynote="$denynote; figure list: $AMTSHOW"
+fi
+
 if [ "$hits" -gt 0 ]; then
-  echo; echo "check-pii: $hits problem(s) — fix the content, or mark a genuine false positive with a '# pii-ok' (or 'pii-ok:') comment on that line."
+  echo; echo "check-pii: $hits problem(s) — fix the content, or mark a genuine false positive with a '# pii-ok' (or 'pii-ok:') comment on that line (a figure-list match has no such escape: change the number)."
   exit 1
 fi
 echo "check-pii: clean ($denynote)"

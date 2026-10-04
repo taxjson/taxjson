@@ -77,14 +77,14 @@ class TestExplicitZeroAmount(unittest.TestCase):
 
 
 class TestFeeShareMessage(unittest.TestCase):
-    """S057-00: 5.20 on 100.00 read '5% of the gross'."""
+    """S057-00: 5.25 on 100.00 read '5% of the gross'."""
 
     def test_share_has_two_decimals_and_names_the_limit(self):
         with self.assertRaises(ValueError) as cm:
             _parse("Date,Type,Ticker,Qty,Price,Amount,Fee\n"
-                   "2025-01-02,BUY,XYZ,10,10.00,-105.20,5.20\n", _toml())
+                   "2025-01-02,BUY,XYZ,10,10.00,-105.25,5.25\n", _toml())
         msg = str(cm.exception)
-        self.assertIn("5.20% of the gross 100.00", msg)
+        self.assertIn("5.25% of the gross 100.00", msg)
         self.assertIn("limit 5%", msg)
 
 

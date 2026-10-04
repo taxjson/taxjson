@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Privacy
+
+- **Private figure list.** `scripts/check-pii.sh --collect-amounts
+  PROJECT_DIR...` records the distinctive money figures of the
+  maintainer's own project outputs as salted SHA-256 hashes (mode 0600,
+  no plain figures; default `~/.config/taxjson/pii-amounts`, override
+  `TAXJSON_PII_AMOUNTS`). Every check-pii mode — tree scan, pre-push diff
+  and per-commit scan, commit and tag messages, ref names — then refuses a
+  line holding one of them, naming the file and line only; there is no
+  `pii-ok` escape. A missing list is skipped (contributors have none).
+- **No figures from real books in the repository.** CONTRIBUTING states
+  the rule: code, tests, docs, the CHANGELOG and commit messages use
+  synthetic inputs only, and CHANGELOG entries describe changes in words.
+  Test fixtures, README sample outputs and older CHANGELOG entries that
+  carried such figures were reworded or given fresh synthetic numbers;
+  every test pins the same behaviour.
+
 
 ## v0.17.0 (2026-10-04)
 
@@ -751,8 +768,8 @@
 - **Negative proceeds (Canada).** A sell whose commission exceeds its
   gross — closing a worthless option at $0.01, writing one for less
   than the fee — now books its proceeds signed (negative) instead of
-  as a positive amount: the loss grows by twice the shortfall (-201.00
-  was booked for a -220.90 loss). Buys are unchanged.
+  as a positive amount (the loss was understated by twice the
+  shortfall). Buys are unchanged.
 - **s.49 grant timing: an assignment folds each premium once.** Every
   short opening — a write before `option_grant_since`, the short
   leftover of a sell that crosses zero — is now a lot, consumed FIFO by
@@ -1492,7 +1509,7 @@
   accounts received different whole-share counts (15 → 15 in one, 40 → 41
   in another) emitted one rename per account at its own ratio; the
   symbol-wide pool was renamed at the first account's ratio and the
-  second found no pool (1,100 booked for 1,220, a phantom short share).
+  second found no pool (a phantom short share).
   The rows now fold into one event at the holdings-weighted ratio, so
   the pool lands on the shares actually delivered.
 
@@ -1553,7 +1570,7 @@
   A2-0268).
 - **RBC / Questrade / Webull / Coinbase: a Buy row signed as a sale is
   refused.** An RBC Buy with a negative Quantity was booked as a sale
-  with negative proceeds (a 4,880 swing under `--strict`); Questrade
+  with negative proceeds (a sign swing under `--strict`); Questrade
   flipped it to a buy silently; a Webull BUY whose quantity and cash
   both said sale, and a Coinbase Buy carrying Coinbase's own sale
   signature (negative quantity and total), were booked as purchases.
@@ -1753,8 +1770,8 @@
   margin statements, now 0). Every real 2025/2026 input parses with zero
   schema errors, so `taxjson run` now passes `--strict`: schema errors
   stop the run instead of scrolling past.
-- **Parsers: parentheses are negative.** `clean_number` read "(1,352.97)"
-  as +1352.97; it is now -1352.97 and it warns on unparseable text.
+- **Parsers: parentheses are negative.** `clean_number` read "(1,234.56)" <!-- pii-ok -->
+  as +1234.56; it is now -1234.56 and it warns on unparseable text.
   Webull (the one real user of parentheses) takes the magnitude itself,
   so its outputs are unchanged.
 
@@ -1789,8 +1806,8 @@
   none of the inputs" warning). The order is now reduced pro rata to
   400 shares, in the statement and across statements (audit A2-0298).
 - **IB: a futures fill at a negative price keeps its money sign.** A
-  sale at -37.63 (WTI, April 2020) was booked as receiving 37,630, a
-  loss of 57,630 became a gain; the parser now keeps the notional's
+  sale at a negative price (WTI, April 2020) was booked as receiving
+  money, so a loss became a gain; the parser now keeps the notional's
   sign, the futures settlement books a buy's cost signed and the schema
   accepts the negative buy (tax-logic CA-FX-04 / US-FUT-01; audit
   A2-0092). The generic importer and `.tt` lines still read the
@@ -2484,7 +2501,7 @@
   labels, refuses an unrecognised layout instead of guessing, and fails
   on any row-accounting mismatch. Tests pin the amounts of both layouts.
   (A different, older flow read the 2024 layout by position and booked
-  15 Webull purchases at $0 cost on a filed return.)
+  Webull purchases at $0 cost on a filed return.)
 - **Webull: option assignment and exercise detected.** The Trading
   Summary shows an assignment or exercise only as a $0 option close plus
   a stock trade at the strike. Both legs are now marked ASSIGN when the
@@ -2947,8 +2964,8 @@
 - **Canada: crypto rows under a millionth of a unit are booked.**
   Staking rewards below 1e-6 units were dropped by the ACB pool (their
   income was taxed with no matching cost, and the holdings fell short of
-  the exchange balance); a sub-micro sale was never reported. Owner-size
-  effect: cents of ACB. The US engine still skips rows under 1e-8 units
+  the exchange balance); a sub-micro sale was never reported. The effect
+  on a typical book is negligible. The US engine still skips rows under 1e-8 units
   but now names them (KNOWN_ISSUES).
 - **crypto-sends: a Kraken PYUSD or GUSD send is a coin send.** The
   Kraken parser books those two as coins, but crypto-sends treated them
@@ -3080,7 +3097,7 @@
   between the two exports raises. Without a ledger the parser warns that
   the fee currency can't be verified. Every crypto asset's parsed units
   now equal the ledger's amount − fee exactly. Crypto gains on real books
-  move by tens of dollars a year (mostly this fix); staking income is
+  move slightly (mostly this fix); staking income is
   unchanged.
 - **Kraken: legacy ledger rows, suffixes, fee currency, required
   columns.** `staking` and `dividend` rows are income (they were
@@ -3100,8 +3117,8 @@
   Advanced Trade on a `*-USDC` pair is cash. Before, the USDC bought was a
   position that the Advanced-Trade spends never reduced (a phantom USDC
   long). Strictly a stablecoin is a crypto-asset for the CRA; what the
-  cash model leaves out is the USD/CAD movement while it is held — a few
-  dollars a year on real data.
+  cash model leaves out is the USD/CAD movement while it is held — small
+  on real data.
 - **Kraken and Coinbase rows are dated in local time.** Both exchanges
   stamp UTC; rows are now converted to America/Toronto (override with
   `TAXJSON_LOCAL_TZ`), so a trade at 03:00 UTC on January 1 lands in
@@ -3893,8 +3910,8 @@
   account gets `n/a` rather than blocked for the taxable-only steps.
 - **`taxjson carryover` ignored the option-timing settings**: the ledger
   ran every year on close timing while the returns were filed on grant
-  timing (a filed 2025 of -601 showed as -1,000). The wrapper now passes
-  `option_premium_timing` / `option_grant_timing_since` /
+  timing (a grant-timing year showed its close-timing figure). The
+  wrapper now passes `option_premium_timing` / `option_grant_timing_since` /
   `option_buyback_loss_superficial` (new `--option-*` flags on
   `taxjson-carryover`), as do the `list --date` as-of recompute and the
   raw base-currency holdings pass.
@@ -4468,7 +4485,8 @@
   flat 33.67%, the pre-2024 factor), and the Ontario surtax is now
   recomputed on basic ON tax plus that amount (5006-D "Line 72"). The
   2026 factor is marked assumed until the 2026 form is published.
-  Gains-only $400k, ON 2026: provincial AMT 1,216.75 → 1,388.50.
+  On a gains-only Ontario estimate the provincial AMT now comes out
+  higher than under the old flat factor.
 - **Estimate: BC AMT factor by year** — 33.7% (2024), 34.9% (2025),
   40.0% (2026), per BC Income Tax Act s.4.8 (was 33.7% for all years).
 - **Estimate: Alberta 2026 eligible dividend credit** is 8.12% (the
@@ -4476,8 +4494,7 @@
 - **Estimate: federal BPA phase-down** — the enhanced basic personal
   amount now falls linearly on net income between the 29% and 33%
   bracket thresholds (2026: 16,452 → 14,829), in regular tax and in
-  the AMT's 50% credit. ON, 250k other income + 300k gains, 2026:
-  estimate 79,955.12 → 79,980.14.
+  the AMT's 50% credit, so a high-income estimate rises slightly.
 - **Estimate: Ontario Health Premium** (up to $900) is modelled for ON
   and shown in the `--verbose` trace.
 - **Estimate: crypto staking** rewards (a crypto account's dividends)
@@ -5747,7 +5764,7 @@ the engine against the Act (docs/design/canada-rules-2026-09.md):
   (symbol, account, CURRENCY) and had no buy-before-sell tie-break at
   equal timestamps, so a Norbert's-gambit pair (sell DLR.TO in CAD, buy
   DLR.U.TO in USD the same morning, one symbol after the ticker map)
-  read as a 5,140-share phantom short "affecting 2025" while the engine
+  read as a phantom short "affecting" the year while the engine
   had matched every sale correctly. Pools are per (symbol, account) like
   the engine's, and buys sort before sells at equal times.
 - Questrade: a US-listed security bought in a CAD-only account (RESP)
@@ -5914,9 +5931,9 @@ fixed:
   split's, not dates alone. IB posts corporate actions in an evening
   batch (20:25) dated the trade day, so a sale executed that morning
   and settling T+1 was pre-split — the date-only "strictly between"
-  test skipped it, the ladder split the pool first, and a real FFN
-  11-for-10 (2026-07-02) left 84 x 0.1 = 8.4 phantom shares with
-  $83.81 of stranded cost in a sheltered account. Found by `taxjson
+  test skipped it, the ladder split the pool first, and a fractional
+  split of that shape left phantom shares with stranded cost in a
+  sheltered account. Found by `taxjson
   sanity` against the broker's positions; taxable books unchanged.
   The straddle fuzzer gains an "evening" placement for this shape.
 - `taxjson sanity` matches an option row through its `underlying`
@@ -6018,7 +6035,7 @@ git HISTORY still holds real account numbers and disclosing commit
 messages — see the release checklist: squash before going public.
 
 - Questrade DRIP (`REI` / "Dividend reinvestment") rows are booked as
-  purchases at the reinvestment price (`REINV@C$7.12500` in the
+  purchases at the reinvestment price (`REINV@C$10.12500` in the
   description; Price column is 0) — the DRIP shares never entered
   inventory before (counted skip). The cash dividend keeps its own
   Dividends row. Questrade `CIL` (cash in lieu of a fractional
@@ -6528,12 +6545,12 @@ Web/GUI/reporting:
   gutter (SOURCE / MAPPING / FX / DISPOSITION / WASH / TIE-OUT /
   TRACE) with dim/bold weighting and tty-aware color (auto-on for
   terminals, `--no-color` and NO_COLOR honored); parsed rows read as
-  verbs (`SELL 20 CLS.US @ 284.99`) instead of raw
-  `BUYSELL -20`; cross-checks are \u2713/\u2717 marks instead of
+  verbs (`SELL 10 ABC.US @ 25.00`) instead of raw
+  `BUYSELL -10`; cross-checks are \u2713/\u2717 marks instead of
   `== ties`; figures right-aligned; the redundant raw-gain line
   dropped on non-wash events; prose (permanent-denial explanations,
   warnings) wraps inside the 86-column frame; the reconciliation
-  footer aligns and carries per-line marks; proceeds and cost basis carry the per-share figure (`(20 sh @ 426.1292)`) for statement sanity-checks. JSON output unchanged.
+  footer aligns and carries per-line marks; proceeds and cost basis carry the per-share figure (`(10 sh @ 25.0000)`) for statement sanity-checks. JSON output unchanged.
 
 Full audit, round two (2026-09-04): four parallel audits over the
 layers never previously deep-audited — reporting/filing, pipeline
@@ -6904,8 +6921,8 @@ called out below. 1,903 tests.
 - The derived-dividend-rate snap now requires the shortened rate to
   be UNAMBIGUOUS — if a neighbouring value at the same precision
   also explains the cash, the raw quotient stands. Where the cash
-  genuinely cannot resolve the rate (7 shares paying $0.26 fits both
-  0.037 and a declared 0.0375) the shorter form is kept and claims
+  genuinely cannot resolve the rate (a small payment that fits both a
+  three- and a four-decimal rate) the shorter form is kept and claims
   no precision the data cannot back.
 - `fx-cash` labels its report ESTIMATE ONLY — it is reconstructed
   from broker cash flows, which do not carry conversions or
@@ -6957,8 +6974,8 @@ called out below. 1,903 tests.
 - Dividends: a DERIVED per-share rate (broker states only the cash
   and the share count) snaps to the fewest decimals that still
   explain the paid amount to the cent. Back-computing manufactured
-  spurious precision — 43 shares paid $17.85 showed 0.41511628 for a
-  dividend declared at 0.415, disagreeing with the same payment in
+  spurious precision — an eight-decimal rate shown for a dividend
+  declared at three decimals, disagreeing with the same payment in
   another account whose statement states the rate. Genuinely
   fine-grained rates (0.3728) survive; stated rates are untouched;
   cash amounts never move.

@@ -203,8 +203,8 @@ class TestHoldingsToml(unittest.TestCase):
 
     def test_option_holding_broken_out(self):
         doc, _ = _export_toml([
-            {'symbol': 'BCE260116C00046000.TO', 'qty': 64.0,
-             'total_cost': 11977.8, 'currency': 'CAD'},
+            {'symbol': 'BCE260116C00046000.TO', 'qty': 60.0,
+             'total_cost': 11400.0, 'currency': 'CAD'},
         ])
         h = doc['holding'][0]
         self.assertEqual(h['asset_type'], 'option')
@@ -214,7 +214,7 @@ class TestHoldingsToml(unittest.TestCase):
         # tomllib parses a TOML local date into a date object.
         self.assertEqual(h['expiry'].isoformat(), '2026-01-16')
         self.assertEqual(h['contract_multiplier'], 100)
-        self.assertEqual(h['quantity'], 64.0)
+        self.assertEqual(h['quantity'], 60.0)
 
     def test_zero_quantity_dropped(self):
         doc, _ = _export_toml([

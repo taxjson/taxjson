@@ -95,25 +95,25 @@ class TestReconcileSlipRows(unittest.TestCase):
 class TestReconcileGrantPair(unittest.TestCase):
     def test_grant_write_and_buyback_count_once(self):
         """R1-18: a WRITE record plus its buy-back is ONE slip row."""
-        opt = "AA250620P00022500.US"
-        write = _sell(symbol=opt, qty=5, proceeds=0.0, cost=651.59,
+        opt = "ZZA250620P00022500.US"
+        write = _sell(symbol=opt, qty=5, proceeds=0.0, cost=612.34,
                       direction="SHORT", grant=True)
-        close = _sell(symbol=opt, qty=5, proceeds=-160.59, cost=0.0,
+        close = _sell(symbol=opt, qty=5, proceeds=-148.21, cost=0.0,
                       direction="SHORT")
         with tempfile.TemporaryDirectory() as td:
             code, rep, err = _reconcile(
                 td, "Symbol,Box 16,Box 21,Box 20\n"
-                    f"{opt},5,651.59,160.59\n", [write, close])
+                    f"{opt},5,612.34,148.21\n", [write, close])
         self.assertEqual(code, 0, rep)
 
     def test_open_write_still_counts(self):
         from taxjson.bin.taxjson_reconcile_slips import load_computed
-        opt = "AA250620P00022500.US"
+        opt = "ZZA250620P00022500.US"
         with tempfile.TemporaryDirectory() as td:
             out = load_computed([_gains(td, [_sell(
-                symbol=opt, qty=5, proceeds=0.0, cost=651.59,
+                symbol=opt, qty=5, proceeds=0.0, cost=612.34,
                 direction="SHORT", grant=True)])], 2025)
-        self.assertAlmostEqual(out["AA250620P00022500"]["qty"], 5.0)
+        self.assertAlmostEqual(out["ZZA250620P00022500"]["qty"], 5.0)
 
 
 class TestReconcileSymbols(unittest.TestCase):

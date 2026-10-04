@@ -464,7 +464,7 @@ class TestFullAuditRound2Fixes(unittest.TestCase):
         self.assertIsNotNone(m, "README lost its ADJUST example")
         row = parse_tt_line(m.group(1).strip())
         self.assertEqual(row["action"], "ADJUST")
-        self.assertAlmostEqual(row["net_amount"], -184.23, places=2)
+        self.assertAlmostEqual(row["net_amount"], -120.00, places=2)
 
     def test_reconcile_slips_short_swap(self):
         # Engine short convention needs the proceeds/cost SWAP; sign

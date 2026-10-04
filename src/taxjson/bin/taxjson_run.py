@@ -5361,8 +5361,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     # same-day trades that haven't reached the CSVs yet differ
     # routinely, and a hard failure there would teach the user to
     # ignore it. Only a self-vs-external compare catches a stranded
-    # position that every internal report agrees on (the FFN stranded
-    # shares, the DFDV option class split).
+    # position that every internal report agrees on (shares stranded
+    # by a split, an option class split).
     if not args.account and any((_a or {}).get("holdings")
                                 for _a in cfg.get("accounts", {}).values()):
         print("\n==> holdings sanity (taxjson.toml `holdings`)")

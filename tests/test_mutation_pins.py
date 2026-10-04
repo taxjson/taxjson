@@ -813,13 +813,12 @@ class TestRoundSixPins(unittest.TestCase):
                           if abs(i.get("qty") or 0) > 1e-9], [])
 
     def test_evening_split_on_trade_date_redenominates_lagged_sale(self):
-        """Real FFN 11-for-10 (2026-07-02): IB posts corporate actions
-        in an evening batch (20:25) DATED the trade day, so the
-        84-share sale executed that morning (settling T+1) was
-        pre-split. A date-only 'strictly between' straddle test
-        skipped it, the ladder split the pool first, and 84 x 0.1 =
-        8.4 phantom shares (and $83.81 of stranded cost) stayed in
-        inventory — caught by `taxjson sanity` against the broker's
+        """An 11-for-10 split: IB posts corporate actions in an
+        evening batch (20:25) DATED the trade day, so the 80-share
+        sale executed that morning (settling T+1) was pre-split. A
+        date-only 'strictly between' straddle test skipped it, the
+        ladder split the pool first, and 80 x 0.1 = 8 phantom shares
+        (and their stranded cost) stayed in inventory — caught by `taxjson sanity` against the broker's
         positions. The straddle test now compares the execution
         MOMENT (date, clock time) against the split's."""
         def _t(**kw):
@@ -828,22 +827,22 @@ class TestRoundSixPins(unittest.TestCase):
                                      "currency": "CAD",
                                      "account": "A0", **kw})
         book = [
-            _t(date="2026-06-16", time="11:03:12",
-               date_settle="2026-06-17", quantity=220,
-               net_amount=2296.8),
-            _t(date="2026-06-30", time="10:59:06",
-               date_settle="2026-07-02", quantity=150,
-               net_amount=1764.0),
-            _t(date="2026-07-02", time="10:54:31",
-               date_settle="2026-07-03", quantity=-84,
-               net_amount=983.48),
-            TaxTransaction(action="SPLIT", date="2026-07-02",
+            _t(date="2026-02-10", time="11:00:00",
+               date_settle="2026-02-11", quantity=200,
+               net_amount=2100.0),
+            _t(date="2026-02-24", time="11:00:00",
+               date_settle="2026-02-25", quantity=100,
+               net_amount=1150.0),
+            _t(date="2026-03-03", time="10:30:00",
+               date_settle="2026-03-04", quantity=-80,
+               net_amount=944.0),
+            TaxTransaction(action="SPLIT", date="2026-03-03",
                            time="20:25:00", symbol="Q.TO",
                            quantity=1.1, currency="CAD",
                            account="A0"),
-            _t(date="2026-07-21", time="10:25:13",
-               date_settle="2026-07-22", quantity=-314.6,
-               net_amount=3400.83),
+            _t(date="2026-03-20", time="10:30:00",
+               date_settle="2026-03-23", quantity=-242,
+               net_amount=2637.8),
         ]
         err = io.StringIO()
         with redirect_stderr(err):
@@ -854,13 +853,13 @@ class TestRoundSixPins(unittest.TestCase):
         gains = [t for t in r["transactions"]
                  if t.get("qty") and "gain" in t]
         self.assertEqual([round(float(g["qty"]), 6) for g in gains],
-                         [92.4, 314.6])
-        self.assertIn("re-denominated a -84-share trade",
+                         [88.0, 242.0])
+        self.assertIn("re-denominated a -80-share trade",
                       err.getvalue())
         # Total realized = total proceeds - total cost, nothing
-        # stranded: (983.48 + 3400.83) - (2296.8 + 1764.0).
+        # stranded: (944.00 + 2637.80) - (2100.00 + 1150.00).
         self.assertAlmostEqual(sum(float(g["gain"]) for g in gains),
-                               323.51, places=2)
+                               331.80, places=2)
         # A same-day split with a MORNING-default time (no meaningful
         # clock) keeps the ladder's convention: the sale is post-split.
         book2 = [TaxTransaction(**{**t.to_dict(), "time": "00:00:01"})
@@ -870,7 +869,7 @@ class TestRoundSixPins(unittest.TestCase):
         self.assertEqual([round(float(g["qty"]), 6)
                           for g in r2["transactions"]
                           if g.get("qty") and "gain" in g],
-                         [84.0, 314.6])
+                         [80.0, 242.0])
 
     def test_straddled_trigger_diagnostics_use_redenominated_price(self):
         """Mutation core-A5: the re-denominated trigger's DIAGNOSTIC

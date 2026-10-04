@@ -975,8 +975,8 @@ class TestPerAccountSplit(unittest.TestCase):
         # R1-275 / R1-322: a phantom opening of 380 is in the pool but
         # not in the base book.
         from taxjson.bin.taxjson_split_gains import split_for_account
-        comb = {'inventory': [self._row('SPY.US', 0.6724, 581.35),
-                              self._row('BK.TO', 1000, 10766.95)],
+        comb = {'inventory': [self._row('SPY.US', 0.6125, 490.00),
+                              self._row('BK.TO', 1000, 12000.0)],
                 'phantom_application_log': [
                     {'symbol': 'SPY.US', 'account': 'margin',
                      'opening_qty': 380.0, 'inserted': True,
@@ -986,12 +986,12 @@ class TestPerAccountSplit(unittest.TestCase):
                      'anchor_date': '2024-04-15', 'anchor_symbol': 'BK.TO'}]}
         base = self._b("""
             BUYSELL 2024-01-05 10:00:00 SPY.US -380 CAD 500 190000
-            BUYSELL 2024-06-03 10:00:00 SPY.US 0.6724 CAD 864 581.35
+            BUYSELL 2024-06-03 10:00:00 SPY.US 0.6125 CAD 800 490.00
         """, 'margin')
         inv = {r['symbol']: r for r in
                split_for_account(comb, 'margin', base)['inventory']}
-        self.assertAlmostEqual(inv['SPY.US']['qty'], 0.6724, places=4)
-        self.assertAlmostEqual(inv['SPY.US']['total_cost'], 581.35, places=2)
+        self.assertAlmostEqual(inv['SPY.US']['qty'], 0.6125, places=4)
+        self.assertAlmostEqual(inv['SPY.US']['total_cost'], 490.00, places=2)
         self.assertAlmostEqual(inv['BK.TO']['qty'], 1000.0)
 
     def test_settle_lagged_sale_across_a_split(self):

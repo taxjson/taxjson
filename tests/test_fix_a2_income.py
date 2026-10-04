@@ -412,13 +412,13 @@ class TestIncomeDating(unittest.TestCase):
     @rule("CA-INC-DATE-TRUST")
     def test_a2_0073_cross_year_trust_income_is_flagged(self):
         r = self._ca()
-        jan = _dist("XIC.TO", "2025-01-03", "2024-12-30", amt=576.91)
+        jan = _dist("XIC.TO", "2025-01-03", "2024-12-30", amt=488.37)
         dec = _dist("XIC.TO", "2026-01-05", "2025-12-30", amt=10.0)
         w = r.warnings([jan, dec], 2025)
         self.assertEqual(len(w), 2)
         self.assertIn("is income of 2024", w[0])
         self.assertIn("NOT in 2025's numbers", w[0])
-        self.assertIn("576.91", w[0])
+        self.assertIn("488.37", w[0])
         self.assertIn("counted in 2025 here", w[1])
         # Out of the project's two years: quiet.
         self.assertEqual(r.warnings([jan], 2027), [])

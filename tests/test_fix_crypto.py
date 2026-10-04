@@ -171,7 +171,7 @@ class TestCoinbaseCryptoQuotedAdvancedTrade(unittest.TestCase):
         with self.assertRaises(ValueError):
             _parse_cb(_cb_row(
                 "a8", "2026-03-02 15:00:00 UTC", "Advanced Trade Buy",
-                "USDC", "100", "CAD", "$1.37", "$137", "$137.20", "$0.20",
+                "USDC", "100", "CAD", "$1.37", "$137", "$137.25", "$0.25",
                 "Bought 100 USDC for 0.0014 BTC on USDC-BTC"))
 
     def test_end_to_end_btc_disposition_is_realized(self):

@@ -425,13 +425,13 @@ class TestPartialTradeCancel(unittest.TestCase):
         base = dict(action='BUYSELL', date='2025-03-03', time='10:00:00',
                     symbol='QZK.US', currency='USD', price=10.0,
                     account='m')
-        order = TaxTransaction(**base, quantity=440, net_amount=4402.2,
-                               fee=2.2)
-        ca = TaxTransaction(**base, quantity=-40, net_amount=400.2,
-                            fee=-0.2, type=TRADE_CANCEL_TYPE)
+        order = TaxTransaction(**base, quantity=500, net_amount=5002.5,
+                               fee=2.5)
+        ca = TaxTransaction(**base, quantity=-50, net_amount=500.25,
+                            fee=-0.25, type=TRADE_CANCEL_TYPE)
         kept, err = _quiet(cancel_trade_pairs, [order, ca])
         self.assertEqual([(t.quantity, round(t.net_amount, 6))
-                          for t in kept], [(400, 4002.0)])
+                          for t in kept], [(450, 4502.25)])
         self.assertNotIn("none of this account's inputs", err)
 
     def test_two_candidate_orders_stay_unmatched(self):

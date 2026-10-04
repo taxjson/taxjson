@@ -50,8 +50,8 @@ class TestOntarioAmt(unittest.TestCase):
         #   (6,080) - 12,989 x .0505 (655.94) = 17,788.05 (both surtax
         #   thresholds already exceeded)
         # ON add 3,613.74 x .2463 = 890.06; surtax on it .56 x 890.06
-        #   = 498.43 -> ON AMT 1,388.50 (the old flat .3367 gave
-        #   1,216.75 and no surtax)
+        #   = 498.43 -> ON AMT 1,388.50 (the old flat .3367 factor  # pii-ok
+        #   gave a lower figure and no surtax)
         r = _ca(realized=400000.0)
         amt = r["amt"]
         self.assertTrue(amt["binding"])

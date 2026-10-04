@@ -543,7 +543,7 @@ class TestDuplicateLines(unittest.TestCase):
         # A2-0575: the UTC date, the fee folded in, a thousands comma,
         # a sale split over two lines.
         for lines in (["BUYSELL 2026-05-05 02:00:00 SOL -1000 CAD 1 1 0"],
-                      ["BUYSELL 2026-05-04 22:00:00 SOL -1000.01 CAD 1 1 0"],
+                      ["BUYSELL 2026-05-04 22:00:00 SOL -1000.4 CAD 1 1 0"],
                       ["BUYSELL 2026-05-04 22:00:00 SOL -1,000 CAD 1 1 0"],
                       ["BUYSELL 2026-05-04 22:00:00 SOL -600 CAD 1 1 0",
                        "BUYSELL 2026-05-04 22:00:00 SOL -400 CAD 1 1 0"]):

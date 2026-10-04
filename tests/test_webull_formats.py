@@ -28,16 +28,16 @@ _H24 = ('"Currency\nDevise",Date,"Action Code\nCode d\'action","Symbol\nSymbole"
 _H25 = _H24.replace('"Price\nPrix",', '"Price\nPrix",,')
 
 F24 = (_PRE + _H24 +
-       'USD,02-12-2024,BUY,@ZZQ,CALL ZZQ01/17/25 50,OPC,2,3.10,"(621.97)"\n'
-       'USD,18-12-2024,BUY,,,,2,2.20,(441.98)\n'
+       'USD,02-12-2024,BUY,@ZZQ,CALL ZZQ01/17/25 50,OPC,2,2.90,"(581.97)"\n'
+       'USD,18-12-2024,BUY,,,,2,2.05,(411.98)\n'
        'USD,,,,,,,,\n'
-       'USD,31-12-2024,BUY,ZZR,ZZR HOLDINGS INC CLASS A,SHS,140,38.49,"(5,388.60)"\n')
+       'USD,31-12-2024,BUY,ZZR,ZZR HOLDINGS INC CLASS A,SHS,140,37.50,"(5,250.00)"\n')
 F25 = (_PRE.replace("2024", "2025") + _H25 +
-       'USD,22-01-2025,SELL,ZZR,ZZR HOLDINGS INC CLASS A,SHS,-40,48.41,,"1,933.36"\n'
-       'USD,03-02-2025,SELL,,,,-100,52.40,,"5,236.86"\n' + _H25 +
-       'USD,12-06-2025,BUY,@ZZS,PUT ZZS06/20/25 305,OPC,1,0.00,,\n'
-       'USD,05-06-2025,SELL,,,,-1,8.00,,799.35\n'
-       'USD,13-06-2025,BUY,ZZS,ZZS INC,SHS,100,305.00,,"(30,501.00)"\n')
+       'USD,22-01-2025,SELL,ZZR,ZZR HOLDINGS INC CLASS A,SHS,-40,47.00,,"1,877.36"\n'
+       'USD,03-02-2025,SELL,,,,-100,51.00,,"5,096.86"\n' + _H25 +
+       'USD,12-06-2025,BUY,@ZZS,PUT ZZS06/20/25 300,OPC,1,0.00,,\n'
+       'USD,05-06-2025,SELL,,,,-1,7.50,,749.35\n'
+       'USD,13-06-2025,BUY,ZZS,ZZS INC,SHS,100,300.00,,"(30,001.00)"\n')
 
 
 def _parse(text):
@@ -54,17 +54,17 @@ class TestBothLayouts(unittest.TestCase):
         opt = [t for t in tx if t["symbol"].startswith("ZZQ250117C")]
         self.assertEqual([t["quantity"] for t in opt], [2.0, 2.0])
         # The purchase amount is the NET, never 0 and never the fee.
-        self.assertEqual([t["net_amount"] for t in opt], [621.97, 441.98])
+        self.assertEqual([t["net_amount"] for t in opt], [581.97, 411.98])
         self.assertTrue(all(0 < t["fee"] < 5 for t in opt))
         stk = [t for t in tx if t["symbol"] == "ZZR.US"][0]
-        self.assertEqual((stk["quantity"], stk["net_amount"]), (140.0, 5388.60))
+        self.assertEqual((stk["quantity"], stk["net_amount"]), (140.0, 5250.00))
         self.assertEqual(stk["date_settle"], "2024-12-31")
 
     def test_2025_layout_amounts_across_a_repeated_page_header(self):
         tx = _parse(F25)
         sells = [t for t in tx if t["symbol"] == "ZZR.US"]
         self.assertEqual([t["quantity"] for t in sells], [-40.0, -100.0])
-        self.assertEqual([t["net_amount"] for t in sells], [1933.36, 5236.86])
+        self.assertEqual([t["net_amount"] for t in sells], [1877.36, 5096.86])
 
     def test_unknown_layout_fails_loudly(self):
         bad = F24.replace("Proceeds of", "Montant")
@@ -85,12 +85,12 @@ class TestAssignmentDetection(unittest.TestCase):
         self.assertGreater(stock["time"], close["time"])
 
     def test_zero_price_close_without_a_stock_leg_stays_an_expiry(self):
-        tx = _parse(F25.replace('USD,13-06-2025,BUY,ZZS,ZZS INC,SHS,100,305.00,,"(30,501.00)"\n', ""))
+        tx = _parse(F25.replace('USD,13-06-2025,BUY,ZZS,ZZS INC,SHS,100,300.00,,"(30,001.00)"\n', ""))
         close = [t for t in tx if t["symbol"].startswith("ZZS250620P") and t["quantity"] > 0][0]
         self.assertEqual(close["action"], "BUYSELL")
 
     def test_stock_at_a_different_price_is_not_an_assignment(self):
-        tx = _parse(F25.replace("100,305.00,,", "100,300.00,,"))
+        tx = _parse(F25.replace("100,300.00,,", "100,295.00,,"))
         self.assertFalse([t for t in tx if t["action"] == "ASSIGN"])
 
 

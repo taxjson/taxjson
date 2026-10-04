@@ -290,21 +290,21 @@ class TestQuestradeParser(unittest.TestCase):
             'Account #,Activity Type,Account Type\n'
             # Trade row teaches the parser that "REALTY INCOME CORP" is O.
             '2026-03-10 12:00:00 AM,2026-03-11 12:00:00 AM,Sell,O,'
-            'REALTY INCOME CORP WE ACTED AS AGENT,-3,64.73,194.20,0,'
-            '194.20,USD,123,Trades,Individual LIRA\n'
-            # Transfer-in: internal code R223608, book value in the desc.
-            '2026-03-03 12:00:00 AM,2026-03-03 12:00:00 AM,TF6,R223608,'
-            'REALTY INCOME CORP RBC DOMINION SECURITIES 146.16 TRANSFER '
-            'BOOK VALUE 173.64,3,0,0,0,0,USD,123,Transfers,Individual LIRA\n'
+            'REALTY INCOME CORP WE ACTED AS AGENT,-3,61.50,184.50,0,'
+            '184.50,USD,123,Trades,Individual LIRA\n'
+            # Transfer-in: internal code R555608, book value in the desc.
+            '2026-03-03 12:00:00 AM,2026-03-03 12:00:00 AM,TF6,R555608,'
+            'REALTY INCOME CORP RBC DOMINION SECURITIES 139.22 TRANSFER '
+            'BOOK VALUE 158.37,3,0,0,0,0,USD,123,Transfers,Individual LIRA\n'
         )
         txs = self._parse(csv)
         transfer = next(t for t in txs if t['action'] == 'TRANSFER')
-        # Internal code R223608 resolved to the real ticker.
+        # Internal code R555608 resolved to the real ticker.
         self.assertEqual(transfer['symbol'], 'O.US')
-        # Cost basis recovered from "BOOK VALUE 173.64", not the 0 column.
-        self.assertAlmostEqual(transfer['net_amount'], 173.64)
+        # Cost basis recovered from "BOOK VALUE 158.37", not the 0 column.
+        self.assertAlmostEqual(transfer['net_amount'], 158.37)
         self.assertAlmostEqual(transfer['quantity'], 3.0)
-        self.assertAlmostEqual(transfer['price'], 173.64 / 3, places=4)
+        self.assertAlmostEqual(transfer['price'], 158.37 / 3, places=4)
 
     def test_assignment_maps_to_assign_action(self):
         csv = (

@@ -288,7 +288,7 @@ class TestTrustDistributionYear(unittest.TestCase):
               pay="2025-01-06", **kw):
         return [tx("BUYSELL", "2024-06-03", sym, 500, 15000,
                    currency="CAD"),
-                tx("DIVIDEND", pay, sym, 0, 143.87, gross_amount=143.87,
+                tx("DIVIDEND", pay, sym, 0, 131.45, gross_amount=131.45,
                    type="dividend", currency="CAD", record_date=record,
                    income_label=label,
                    description=f"DIST ON 500 SHS REC {record} PAY {pay}",
@@ -340,7 +340,7 @@ class TestTrustDistributionYear(unittest.TestCase):
                 "work/margin_raw.json": json.dumps(base)})
             r24 = cli_both(p, "divs-sum", "--json")
         got = {c: json.loads(r24[c].stdout)["totals"] for c in C.COUNTRIES}
-        self.assertEqual(got, {"canada": {"CAD": 143.87}, "usa": {}})
+        self.assertEqual(got, {"canada": {"CAD": 131.45}, "usa": {}})
         from taxjson.bin.taxjson_sum_income import summarize_income
         rows = base["transactions"]
         for c, y in (("canada", 2024), ("usa", 2025)):
@@ -352,8 +352,8 @@ class TestTrustDistributionYear(unittest.TestCase):
     def test_parsers_record_the_facts(self):
         from test_fix_rbcqt import qdiv, qt_parse, rrow, rbc_parse
         txs, _, _ = qt_parse(qdiv(
-            "XIC.TO", "ISHARES CORE S&P/TSX DIST ON 512 SHS REC 12/30/24 "
-            "PAY 01/06/25", "143.87", td="2025-01-06", cur="CAD"))
+            "XIC.TO", "ISHARES CORE S&P/TSX DIST ON 500 SHS REC 12/30/24 "
+            "PAY 01/06/25", "131.45", td="2025-01-06", cur="CAD"))
         (t,) = txs
         self.assertEqual((t["action"], t["date"], t["record_date"],
                           t["income_label"]),

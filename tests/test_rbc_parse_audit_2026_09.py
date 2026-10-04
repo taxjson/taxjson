@@ -233,16 +233,16 @@ class TestOptionAdjustments(unittest.TestCase):
 
     def test_xch_keeps_the_contract_and_the_later_close_matches(self):
         txs, err, par = parse(
-            row("January 31, 2025", "Sell", "8ZZTUX2", "", "-8", "4.3",
-                "3423.05", "CAD", self.OLD + " UNSOLICITED CA")
+            row("January 31, 2025", "Sell", "8ZZTUX2", "", "-8", "4.1",
+                "3263.05", "CAD", self.OLD + " UNSOLICITED CA")
             + row("November 15, 2024", "Reorganization", "8ZZTUX2", "", "8", "",
                   "0", "CAD", "XCH - CALL .TUX   03/21/25    63.50 TUXEDO OIL CORP "
                   "ADJ: SPCL CASH DIVD CAD $0.50 ADJ FOR SPECIAL CASH DIV")
             + row("November 15, 2024", "Reorganization", "8ZZTUX1", "", "-8", "",
                   "0", "CAD", "XCH - CALL .TUX   03/21/25    64 TUXEDO OIL CORP "
                   "ADJ: SPCL CASH DIVD CAD $0.50 ADJ FOR SPECIAL CASH DIV")
-            + row("November 1, 2024", "Buy", "8ZZTUX1", "", "8", "4.3",
-                  "-3456.95", "CAD", self.OLD + " UNSOLICITED DA"))
+            + row("November 1, 2024", "Buy", "8ZZTUX1", "", "8", "4.1",
+                  "-3296.95", "CAD", self.OLD + " UNSOLICITED DA"))
         occ = 'TUX250321C00064000.TO'
         self.assertEqual({t['symbol'] for t in txs}, {occ})
         self.assertAlmostEqual(position(txs, occ), 0.0)
@@ -252,14 +252,14 @@ class TestOptionAdjustments(unittest.TestCase):
 
     def test_xch_renames_when_the_new_code_trades_under_new_terms(self):
         txs, err, _ = parse(
-            row("January 31, 2025", "Sell", "8ZZTUX2", "", "-8", "4.3",
-                "3423.05", "CAD", "CALL .TUX   03/21/25    63.50 TUXEDO OIL CA")
+            row("January 31, 2025", "Sell", "8ZZTUX2", "", "-8", "4.1",
+                "3263.05", "CAD", "CALL .TUX   03/21/25    63.50 TUXEDO OIL CA")
             + row("November 15, 2024", "Reorganization", "8ZZTUX2", "", "8", "",
                   "0", "CAD", "XCH - CALL .TUX   03/21/25    63.50 TUXEDO OIL CORP")
             + row("November 15, 2024", "Reorganization", "8ZZTUX1", "", "-8", "",
                   "0", "CAD", "XCH - CALL .TUX   03/21/25    64 TUXEDO OIL CORP")
-            + row("November 1, 2024", "Buy", "8ZZTUX1", "", "8", "4.3",
-                  "-3456.95", "CAD", self.OLD + " UNSOLICITED DA"))
+            + row("November 1, 2024", "Buy", "8ZZTUX1", "", "8", "4.1",
+                  "-3296.95", "CAD", self.OLD + " UNSOLICITED DA"))
         split = of(txs, action='SPLIT')
         self.assertEqual(len(split), 1)
         self.assertEqual(split[0]['symbol'], 'TUX250321C00064000.TO')
@@ -456,9 +456,9 @@ class TestOptionIdentity(unittest.TestCase):
 
     def test_one_code_two_descriptions_keeps_the_first(self):
         txs, err, _ = parse(
-            row("December 29, 2025", "Sell", "8ZZRCI1", "", "-3", "7.25", "2161.3",
+            row("December 15, 2025", "Sell", "8ZZRCI1", "", "-3", "7.25", "2161.3",
                 "CAD", "CALL .RCX.B   01/15/27    46 ROGERX CA CLOSE CONTRACT")
-            + row("December 23, 2024", "Buy", "8ZZRCI1", "", "3", "3.55", "-1075.7",
+            + row("December 16, 2024", "Buy", "8ZZRCI1", "", "3", "3.20", "-970.7",
                   "CAD", "CALL .RCX   01/15/27    46 ROGERX DA OPEN CONTRACT"))
         self.assertEqual({t['symbol'] for t in txs}, {'RCX270115C00046000.TO'})
         self.assertIn('more than one contract', err)

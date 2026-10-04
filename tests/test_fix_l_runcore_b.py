@@ -175,8 +175,8 @@ class TestAuditSources(unittest.TestCase):
 
 _RICH_TT = (
     "BUYSELL 2025-01-10 09:30:00 XEI.TO 100 CAD 10.0 -1000.0 0.0\n"
-    "BUYSELL 2025-02-02 09:30:00 ABC261218C00050000.TO -1 CAD 1.5 "
-    "150.004 0.0\n"
+    "BUYSELL 2025-02-02 09:30:00 ABC261218C00050000.TO -1 CAD 1.6 "
+    "160.004 0.0\n"
     "BUYSELL 2025-04-01 09:30:00 XEI.TO -100 CAD 11.0 1100.004 0.0\n"
     "DIVIDEND 2025-04-15 09:30:00 XEI.TO 0 CAD 0 30.00\n"
     "DIVIDEND_IN_LIEU 2025-05-01 09:30:00 XEI.TO 0 CAD 0 10.00\n")
@@ -221,15 +221,15 @@ class TestSumTable(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             doc = json.loads(r.stdout)
             row = doc["accounts"][0]
-            # cap 100.004 + option 150.004: REALIZED rounds once
-            # (250.01); OPTION takes the cent so the row foots.
+            # cap 100.004 + option 160.004: REALIZED rounds once
+            # (260.01); OPTION takes the cent so the row foots.
             self.assertEqual(
                 {k: row[k] for k in ("stock", "option", "realized",
                                      "dividend", "pil", "fees", "total")},
-                {"stock": 100.0, "option": 150.01, "realized": 250.01,
+                {"stock": 100.0, "option": 160.01, "realized": 260.01,
                  "dividend": 30.0, "pil": 10.0, "fees": 0.0,
-                 "total": 290.01})
-            self.assertEqual(doc["totals"]["total"], 290.01)
+                 "total": 300.01})
+            self.assertEqual(doc["totals"]["total"], 300.01)
             self.assertEqual(str(doc["year"]), "2025")
             self.assertEqual(doc["tainted_routed"], 0)
             self.assertEqual(doc["tainted_included"], 0)
@@ -237,7 +237,7 @@ class TestSumTable(unittest.TestCase):
             self.assertIn("TOTAL = REALIZED + DIVIDEND + PIL", txt)
             # The .sum's GRAND TOTAL is the same figure.
             dot_sum = (root / "reports" / "margin_wash.sum").read_text()
-            self.assertIn("290.01", dot_sum)
+            self.assertIn("300.01", dot_sum)
 
     def test_fx_note_reportable_is_pinned(self):
         with tempfile.TemporaryDirectory() as tmp:

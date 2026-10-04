@@ -50,15 +50,15 @@ def _project(root, year, files, extra_settings="", ticker_map=""):
 
 # RBC re-describes one contract between yearly exports: ".RCI" with the
 # 2024 OPEN CONTRACT buy, ".RCI.B" with the 2025 CLOSE CONTRACT sale.
-RCI_BUY = row("December 23, 2024", "Buy", "8ZZZZZ1", "", "3", "3.55",
-              "-1075.70", "CAD",
+RCI_BUY = row("December 16, 2024", "Buy", "8ZZZZZ1", "", "3", "3.20",
+              "-970.70", "CAD",
               "CALL .RCI   01/15/27    46 ROGERS COMMUNICATIONS INC DA "
-              "OPEN CONTRACT", settle="December 24, 2024")
-RCI_SELL = row("December 29, 2025", "Sell", "8ZZZZZ1", "", "-3", "5.00",
-               "1489.30", "CAD",
+              "OPEN CONTRACT", settle="December 17, 2024")
+RCI_SELL = row("December 15, 2025", "Sell", "8ZZZZZ1", "", "-3", "5.40",
+               "1609.30", "CAD",
                "CALL .RCI.B   01/15/27    46 ROGERS COMMUNICATIONS INC CA "
-               "CLOSE CONTRACT", settle="December 30, 2025")
-TT_RCI = "BUYSELL 2024-12-24 09:30:00 RCI270115C00046000.TO 3 CAD 3.55 1075.70 10.70\n"
+               "CLOSE CONTRACT", settle="December 16, 2025")
+TT_RCI = "BUYSELL 2024-12-17 09:30:00 RCI270115C00046000.TO 3 CAD 3.20 970.70 10.70\n"
 TT_RCIB = TT_RCI.replace("RCI270115", "RCI.B270115")
 
 
@@ -97,10 +97,10 @@ class TestRbcOpenCloseMarker(unittest.TestCase):
 
     def test_close_sale_under_other_root_names_the_held_contract(self):
         books = [
-            _tx(date="2024-12-24", symbol="RCI270115C00046000.TO",
-                quantity=3, net_amount=1075.70),
-            _tx(date="2025-12-29", symbol="RCI.B270115C00046000.TO",
-                quantity=-3, net_amount=1489.30, open_close="C"),
+            _tx(date="2024-12-17", symbol="RCI270115C00046000.TO",
+                quantity=3, net_amount=970.70),
+            _tx(date="2025-12-15", symbol="RCI.B270115C00046000.TO",
+                quantity=-3, net_amount=1609.30, open_close="C"),
         ]
         msgs = unbacked_option_close_messages(books)
         self.assertEqual(len(msgs), 1)
@@ -113,7 +113,7 @@ class TestRbcOpenCloseMarker(unittest.TestCase):
         # says CLOSE CONTRACT under RCX.B.
         books = [
             _tx(date="2024-12-20", symbol="RCX270115C00046000.TO",
-                quantity=-3, net_amount=1054.70),
+                quantity=-3, net_amount=949.70),
             _tx(date="2025-06-02", symbol="RCX.B270115C00046000.TO",
                 quantity=3, net_amount=310.70, open_close="C"),
         ]
@@ -127,20 +127,20 @@ class TestRbcOpenCloseMarker(unittest.TestCase):
         # A2-0095: the .tt holds TRX, the XCH-renamed close says TRX1.
         books = [
             _tx(date="2024-05-01", symbol="TRX260116C00055000.TO",
-                quantity=5, net_amount=1038.20),
+                quantity=5, net_amount=938.20),
             _tx(date="2025-03-03", symbol="TRX1260116C00055000.TO",
-                quantity=-5, net_amount=8986.80, open_close="C"),
+                quantity=-5, net_amount=8486.80, open_close="C"),
         ]
         self.assertIn("GLOBAL TRX260116C00055000.TO TRX1260116C00055000.TO",
                       unbacked_option_close_messages(books)[0])
 
     def test_backed_close_and_opening_write_are_silent(self):
         books = [
-            _tx(date="2024-12-24", symbol="RCI.B270115C00046000.TO",
-                quantity=3, net_amount=1075.70),
-            _tx(date="2025-12-29", symbol="RCI.B270115C00046000.TO",
-                quantity=-3, net_amount=1489.30, open_close="C"),
-            _tx(date="2025-12-29", symbol="ZZZ270115C00010000.TO",
+            _tx(date="2024-12-17", symbol="RCI.B270115C00046000.TO",
+                quantity=3, net_amount=970.70),
+            _tx(date="2025-12-15", symbol="RCI.B270115C00046000.TO",
+                quantity=-3, net_amount=1609.30, open_close="C"),
+            _tx(date="2025-12-15", symbol="ZZZ270115C00010000.TO",
                 quantity=-1, net_amount=100.0, open_close="O"),
         ]
         self.assertEqual(unbacked_option_close_messages(books), [])
@@ -159,10 +159,10 @@ class TestRbcOpenCloseMarker(unittest.TestCase):
 
     def test_unrelated_root_is_not_a_partner(self):
         books = [
-            _tx(date="2024-12-24", symbol="ABC270115C00046000.TO",
-                quantity=3, net_amount=1075.70),
-            _tx(date="2025-12-29", symbol="XYZ270115C00046000.TO",
-                quantity=-3, net_amount=1489.30, open_close="C"),
+            _tx(date="2024-12-17", symbol="ABC270115C00046000.TO",
+                quantity=3, net_amount=970.70),
+            _tx(date="2025-12-15", symbol="XYZ270115C00046000.TO",
+                quantity=-3, net_amount=1609.30, open_close="C"),
         ]
         (m,) = unbacked_option_close_messages(books)
         self.assertNotIn("GLOBAL ABC", m)
@@ -221,8 +221,8 @@ class TestRbcCloseContractEndToEnd(unittest.TestCase):
                   "", "0", "CAD",
                   "EXP - CALL .RCX.B   01/16/26    46 ROGERX COMMUNICATIONS "
                   "INC OPTION EXPIRATION - EXPIRED")
-        tt = ("BUYSELL 2025-06-23 10:00:00 RCX260116C00046000.TO 3 CAD 3.55 "
-              "1075.70 10.70\n")
+        tt = ("BUYSELL 2025-06-23 10:00:00 RCX260116C00046000.TO 3 CAD 3.20 "
+              "970.70 10.70\n")
         p = _project(self.base / "exp", 2026,
                      {"rbc.csv": HDR + exp, "start.tt": tt})
         r = _cli_run(p, "run", "--no-input")

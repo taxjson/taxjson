@@ -1539,7 +1539,7 @@ def disposing_entries(acct_doc: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 # A hand-written quantity this close to a generated one sells the same
-# coins: a network fee folded in (-1000.01 for 1000), or the ledger
+# coins: a network fee folded in (-1000.4 for 1000), or the ledger
 # quantity rounded (re-audit A2-0575 / A2-1005).
 DUP_REL_TOL = 0.005
 

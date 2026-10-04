@@ -261,7 +261,7 @@ class TestRbcRowsLow(unittest.TestCase):
     def test_option_transfer_takes_the_contract_symbol(self):
         """S065-02: an in-kind option transfer kept the RBC code."""
         body = (rrow("March 3, 2025", "Buy", "8QZQQQ1",
-                     "CALL .QZT 01/15/27 22 QZT CORP", "2", "1.50", "-311.95",
+                     "CALL .QZT 01/15/27 22 QZT CORP", "2", "1.40", "-291.95",
                      "USD", "CALL .QZT 01/15/27 22 QZT CORP")
                 + rrow("June 2, 2025", "Transfers", "8QZQQQ1",
                        "CALL .QZT 01/15/27 22 QZT CORP", "-2", "", "0", "USD",
