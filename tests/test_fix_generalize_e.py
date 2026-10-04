@@ -112,3 +112,111 @@ class TestNoBuiltInFxRate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------- B14
+
+import json  # noqa: E402
+import subprocess  # noqa: E402
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+_FAKE_YF = '''
+import os
+class _H:
+    empty = True
+class Ticker:
+    def __init__(self, s):
+        with open(os.environ["FAKE_YF_LOG"], "a") as f:
+            f.write(s + "\\n")
+        self.info = {}
+        self.history_metadata = {}
+    def history(self, **kw):
+        return _H()
+'''
+
+
+def _holdings_toml(*symbols):
+    out = ['schema_version = "1.2"']
+    for sym in symbols:
+        out.append(f'[[holding]]\nsymbol = "{sym}"\nquantity = 100.0\n'
+                   f'currency = "USD"\ntotal_cost = 1000.0\n'
+                   f'cost_per_share = 10.0')
+    return "\n".join(out) + "\n"
+
+
+def _raw_json(*div_symbols):
+    return json.dumps({"transactions": [
+        {"action": "DIVIDEND", "date": "2026-03-01", "symbol": s,
+         "quantity": 0, "gross_amount": 10.0, "net_amount": 10.0,
+         "currency": "USD"} for s in div_symbols]})
+
+
+def _scan_project(tmp, *, accounts, holdings, raws, ticker_map=None):
+    root = Path(tmp) / "proj"
+    (root / "work").mkdir(parents=True)
+    (root / "reports").mkdir()
+    acct_toml = "".join(
+        f'[accounts.{n}]\ntype = "{t}"\n' for n, t in accounts)
+    (root / "taxjson.toml").write_text(
+        '[settings]\nyear = 2026\ncountry = "canada"\n'
+        'base_currency = "CAD"\n' + acct_toml)
+    for name, text in holdings.items():
+        (root / "reports" / f"{name}_holdings.toml").write_text(text)
+    for name, text in raws.items():
+        (root / "work" / f"{name}_raw.json").write_text(text)
+    if ticker_map:
+        (root / "ticker.map").write_text(ticker_map)
+    return root
+
+
+def _scan(root, *args, fake_yf_dir=None, log=None):
+    env = dict(os.environ)
+    env.pop("TAXJSON_OFFLINE", None)
+    src = str(REPO_ROOT / "src")
+    env["PYTHONPATH"] = os.pathsep.join(
+        ([str(fake_yf_dir)] if fake_yf_dir else []) + [src])
+    if log:
+        env["FAKE_YF_LOG"] = str(log)
+    return subprocess.run(
+        [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
+         "scan", *args], cwd=REPO_ROOT, capture_output=True, text=True,
+        env=env)
+
+
+class TestYahooSpelling(unittest.TestCase):
+    """B14: no named-security special case; any class letter."""
+
+    def test_class_shares_any_letter(self):
+        from taxjson.lib.price_chain import yf_symbol_for as y
+        self.assertEqual(y("ZZQ.B.US"), "ZZQ-B")
+        self.assertEqual(y("ZZQ.C.TO"), "ZZQ-C.TO")
+        self.assertEqual(y("ZZQ.B.TO"), "ZZQ-B.TO")
+        self.assertEqual(y("ZZQ.PR.A.TO"), "ZZQ-PA.TO")
+        self.assertEqual(y("ZZQ.PR.G.TO"), "ZZQ-PG.TO")
+        self.assertEqual(y("ZZQ.UN.TO"), "ZZQ-UN.TO")
+        self.assertEqual(y("ZZQ.TO"), "ZZQ.TO")
+
+    def test_no_named_security_in_the_converter(self):
+        import inspect
+        from taxjson.lib import price_chain
+        src = inspect.getsource(price_chain.yf_symbol_for)
+        self.assertNotIn("BRK", src)
+
+    def test_scan_online_asks_yahoo_for_its_spelling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "fakeyf"
+            fake.mkdir()
+            (fake / "yfinance.py").write_text(_FAKE_YF)
+            log = Path(tmp) / "yf.log"
+            root = _scan_project(
+                tmp, accounts=[("margin", "taxable")],
+                holdings={"margin": _holdings_toml("ZZQ.B.US", "ZZR.US")},
+                raws={"margin": _raw_json("ZZQ.B.US")},
+                ticker_map="QUOTE ZZR.US ZZRX\n")
+            _scan(root, "--online", fake_yf_dir=fake, log=log)
+            asked = set(log.read_text().split()) if log.exists() else set()
+        self.assertIn("ZZQ-B", asked)            # not ZZQ.B.US
+        self.assertIn("ZZRX", asked)             # the QUOTE line
+        self.assertNotIn("ZZQ.B.US", asked)
+        self.assertNotIn("ZZR.US", asked)

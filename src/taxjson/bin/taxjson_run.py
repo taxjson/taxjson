@@ -9595,13 +9595,35 @@ def cmd_scan(args: argparse.Namespace) -> None:
                   "(pip install -e '.[fx]'); skipping the probe.",
                   file=sys.stderr)
         else:
+            # The book symbol (ZZQ.US, ZZQ.B.TO) is not Yahoo's spelling:
+            # every probe goes through the project's QUOTE lines, else
+            # the one converter the price chain uses (lib/price_chain).
+            # A raw `ZZQ.US` lookup came back empty for every US symbol,
+            # so MAP-BAD? could never be raised.
+            from taxjson.lib.price_chain import load_yf_map, yf_symbol_for
+            try:
+                _quote = load_yf_map([str(root)])
+            except Exception:
+                _quote = {}
+
+            def _yf(sym: str) -> Optional[str]:
+                s = str(sym or "").upper()
+                if s in _quote:
+                    return _quote[s][0]
+                return yf_symbol_for(s)
+
             def _issuer_names(sym: str) -> Tuple[str, str]:
                 """(longName, shortName) — BOTH matter: for a CDR the
                 longName is the clean issuer ('Abbott Laboratories')
                 and only the shortName carries the receipt marker
                 ('ABBOTT LABS CDR (CAD HEDGED)'). Falls back to the
-                chart metadata when the info endpoint is throttled."""
+                chart metadata when the info endpoint is throttled.
+                `sym` is the book symbol; Yahoo is asked for its
+                spelling (_yf)."""
                 ln = sn = ""
+                sym = _yf(sym)
+                if not sym:
+                    return ln, sn
                 try:
                     info = yf.Ticker(sym).info or {}
                     ln = str(info.get("longName") or "")
@@ -9625,9 +9647,12 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 if (suf != "US" or _has_ca_twin(rt, sym.upper())
                         or _declared_distinct(f"{rt}.US", f"{rt}.TO")):
                     continue
+                _twin = _yf(f"{rt}.TO")
+                if not _twin:
+                    continue
                 try:
-                    hist = yf.Ticker(f"{rt}.TO").history(period="5d",
-                                                         timeout=5)
+                    hist = yf.Ticker(_twin).history(period="5d",
+                                                    timeout=5)
                     if hist is not None and not hist.empty:
                         probed.append(rt)
                 except Exception:

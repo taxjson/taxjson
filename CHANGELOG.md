@@ -20,6 +20,13 @@
   flagged as a validation error; it now stops the conversion, naming the
   row's date and currency pair. The stand-alone converters still accept
   your own rate with `--default-rate`.
+- **Yahoo spellings without a special case.** The price chain's Yahoo
+  spelling no longer carries a rule for one named US class share; any
+  class or series letter is spelled the Yahoo way (`ZZQ.C.TO` ->
+  `ZZQ-C.TO`, which the old `.A`/`.B`-only replace missed). `taxjson scan
+  --online` now asks Yahoo for that spelling (or the symbol's `QUOTE`
+  line) instead of the book symbol, which returned nothing for every US
+  listing, so a wrongly paired map entry can be flagged.
 
 ### Command line
 
