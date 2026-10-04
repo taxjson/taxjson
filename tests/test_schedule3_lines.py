@@ -6,6 +6,7 @@ similar properties — options per T4037 — (15199/15300) and line 7
 crypto-assets (15200/15301; before 2025 crypto went on 15199/15300).
 Every exported row must foot: proceeds − ACB − outlays = allowed gain.
 """
+import os
 import csv
 import io
 import json
@@ -21,6 +22,7 @@ from taxjson.bin.taxjson_form_export import (build_8949, build_schedule3,
                                              filing_totals, main, mark_crypto,
                                              property_class)
 from tax_rules import rule
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -183,7 +185,7 @@ class TestFooting(unittest.TestCase):
 def _project(td, country="canada", crypto=False):
     root = Path(td)
     (root / "taxjson.toml").write_text(
-        f'[settings]\nyear = 2025\ncountry = "{country}"\n'
+        f'[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "{country}"\n'
         f'base_currency = "{"USD" if country == "usa" else "CAD"}"\n'
         '[accounts.margin]\ntype = "taxable"\n'
         + ('[accounts.kr1]\ntype = "taxable"\ncrypto = true\n'

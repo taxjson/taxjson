@@ -9,12 +9,20 @@ leaks, US return of capital.
 
 All data is synthetic (fake account numbers only).
 """
+import os
 import unittest
 from decimal import Decimal
 
 from taxjson.lib import country as C
 from tax_rules import rule, rule_absent
 from tax_rules.dual import gains_both, tx
+
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
 
 
 def _gain_rows(res):
@@ -375,7 +383,7 @@ class TestSavedCryptoGift(unittest.TestCase):
                 root, home = _project(td, country=c)
                 if c == "usa":
                     (root / "taxjson.toml").write_text(
-                        '[settings]\nyear = 2026\ncountry = "usa"\n'
+                        '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2026\ncountry = "usa"\n'
                         'base_currency = "USD"\n'
                         'source_currencies = ["CAD"]\n'
                         '[accounts.crypto]\ntype = "taxable"\n'

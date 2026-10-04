@@ -1,5 +1,6 @@
 """`taxjson checklist` — the filing checklist with auto-detected steps and
 manual marks (lib/checklist.py + the CLI wrapper)."""
+import os
 import json
 import subprocess
 import sys
@@ -9,6 +10,7 @@ from datetime import date
 from pathlib import Path
 
 from taxjson.lib import checklist as cl
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -20,7 +22,7 @@ CFG = {"settings": {"year": 2025, "country": "canada", "base_currency": "CAD"},
 
 def _project(root: Path, *, activity_to="2026-02-02", with_reports=True):
     (root / "taxjson.toml").write_text(
-        '[settings]\nyear = 2025\ncountry = "canada"\nbase_currency = "CAD"\n'
+        '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\nbase_currency = "CAD"\n'
         '[accounts.margin]\ntype = "taxable"\nholdings = ["h.toml"]\n'
         '[accounts.rrsp]\ntype = "sheltered"\n'
         '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')

@@ -10,6 +10,7 @@ fee in another coin is disposed of), A2-0583 (all-non-event file),
 A2-1004/1020 (US: all five stablecoins at par), A2-1017 (earn
 migration), A2-1019 (instant-trade leg signs). Synthetic data only.
 """
+import os
 import io
 import re
 import tempfile
@@ -20,6 +21,13 @@ from pathlib import Path
 from tax_rules import rule, rule_absent
 
 from taxjson.lib.brokerages.kraken import KrakenBrokerage
+
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
 
 _KT_H = ("txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,"
          "margin,misc,ledgers\n")

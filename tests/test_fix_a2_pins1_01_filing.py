@@ -24,6 +24,7 @@ from pathlib import Path
 
 from tax_rules import rule
 
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -39,7 +40,7 @@ def _cli(root, *args, home=None):
 
 def _project(root, accounts, year=2025):
     """accounts: {name: (type, .tt text)}."""
-    t = (f'[settings]\nyear = {year}\ncountry = "canada"\n'
+    t = (f'[settings]\nlocal_timezone = "America/Toronto"\nyear = {year}\ncountry = "canada"\n'
          f'province = "ON"\nbase_currency = "CAD"\nsource_currencies = []\n'
          f'tax_date = "settle"\noption_grant_timing_since = 2025\n')
     for name, (typ, tt) in accounts.items():

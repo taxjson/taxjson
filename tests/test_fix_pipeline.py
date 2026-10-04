@@ -12,10 +12,12 @@ import unittest
 from pathlib import Path
 from tax_rules import rule
 
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _CONFIG = """\
 [settings]
+local_timezone = "America/Toronto"
 year = 2025
 country = "canada"
 base_currency = "CAD"

@@ -7,6 +7,7 @@ sources are cited in lib/tax_estimate.py and bin/taxjson_instalments.py.
 181,440-258,482 (1,623 over 77,042); AMT 20.5% over 181,440.
 """
 
+import os
 import json
 import subprocess
 import sys
@@ -20,6 +21,7 @@ from taxjson.lib.tax_estimate import (apply_vintage, ca_fed_bpa,
                                       estimate_canada,
                                       ontario_health_premium)
 from tax_rules import rule
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -251,7 +253,7 @@ class TestStakingIsOrdinaryIncome(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2026\ncountry = "canada"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2026\ncountry = "canada"\n'
                 'base_currency = "CAD"\nprovince = "ON"\n'
                 '[accounts.margin]\ntype = "taxable"\n'
                 '[accounts.cb_main]\ntype = "taxable"\ncrypto = true\n')

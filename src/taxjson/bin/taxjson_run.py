@@ -659,6 +659,12 @@ def _read_config_text(path: Path) -> str:
              f"save it as UTF-8.")
 
 
+# Commands that never date a crypto row: a crypto project without
+# [settings] local_timezone still runs them (`taxjson format` shows the
+# key to add; `migrate` moves old files).
+_ZONE_FREE_CMDS = ("format", "migrate", "init", "help")
+
+
 def _normalize_settings(cfg: Dict[str, Any]) -> None:
     """Canonical `country` (canada|usa) and a checked `tax_date` for
     EVERY config reader, not only `run`'s validate_config: check-filed,
@@ -681,19 +687,34 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
     # The zone crypto UTC stamps are dated in (the parsers and
     # crypto-sends read TAXJSON_LOCAL_TZ): the project's setting wins
     # over the environment, so every command and stage of this project
-    # dates a crypto row the same way (partition INPUTS-09). With no
-    # setting the project uses the default zone, never the environment
-    # (CA-DATE-12 / US-DATE-11: the variable applies OUTSIDE a project,
-    # and tax-logic names the zone in force — re-audit A2-0165).
+    # dates a crypto row the same way (partition INPUTS-09); the
+    # variable applies only OUTSIDE a project (re-audit A2-0165). There
+    # is no default zone (CA-DATE-12 / US-DATE-11): a project with a
+    # crypto account and no setting stops here, naming the key — one
+    # user's zone silently dated everyone's midnight fills. `taxjson
+    # format` / `migrate` do not come through here.
     import os as _os
-    from taxjson.lib.brokerages._crypto_common import DEFAULT_LOCAL_TZ
-    _tz = settings.get("local_timezone") or DEFAULT_LOCAL_TZ
-    _env_tz = (_os.environ.get("TAXJSON_LOCAL_TZ") or "").strip()
-    if _env_tz and _env_tz != _tz and not settings.get("local_timezone"):
-        print(f"note: TAXJSON_LOCAL_TZ={_env_tz} is ignored inside a "
-              f"project: crypto rows are dated in {_tz}; set [settings] "
-              f"local_timezone to change it.", file=sys.stderr)
-    _os.environ["TAXJSON_LOCAL_TZ"] = _tz
+    from taxjson.lib.brokerages._crypto_common import (
+        ENV_LOCAL_TZ, missing_timezone_message)
+    _tz = settings.get("local_timezone")
+    if not _tz and _CURRENT_CMD in _ZONE_FREE_CMDS:
+        pass                # they only read or rewrite the config text
+    elif not _tz:
+        _crypto = sorted(str(n) for n, a in
+                         (cfg.get("accounts") or {}).items()
+                         if isinstance(a, dict) and a.get("crypto") is True)
+        if _crypto:
+            _die(f"[accounts.{_crypto[0]}] is a crypto account"
+                 + (f" (and {len(_crypto) - 1} more)" if len(_crypto) > 1
+                    else "")
+                 + " but [settings] has no local_timezone — "
+                 + missing_timezone_message("project"))
+        # No crypto account: an outer TAXJSON_LOCAL_TZ still never dates
+        # this project's rows (a crypto file in another account is
+        # refused by its parser with the same message).
+        _os.environ.pop(ENV_LOCAL_TZ, None)
+    else:
+        _os.environ[ENV_LOCAL_TZ] = _tz
     srcs = settings.get("source_currencies")
     if isinstance(srcs, list) and all(isinstance(c, str) for c in srcs):
         settings["source_currencies"] = [c.strip().upper() for c in srcs]
@@ -973,7 +994,9 @@ def _help_country(argv: List[str]) -> Optional[str]:
                                 .decode("utf-8-sig"))
             return settings_country(cfg.get("settings") or {})
         return settings_country(_soft_settings(root.resolve()))
-    except Exception:                                   # noqa: BLE001
+    except (Exception, SystemExit):                     # noqa: BLE001
+        # (SystemExit: a config the command itself refuses — e.g. a
+        # crypto project with no local_timezone — still gets help.)
         return None
 
 
@@ -5445,7 +5468,8 @@ def _render_init_config(country_canon: str,
     """(toml_text, account_names) for `taxjson init` — the same tuple
     drives the inputs/ folder scaffold so config sections and input dirs
     can't drift apart. local_timezone is this machine's zone when it can
-    be read, else left commented (the default zone)."""
+    be read, else left commented (there is no default: `taxjson run`
+    then asks for it when the project has a crypto account)."""
     from taxjson.lib import config_template as CT
     return CT.render_init(country_canon, year, tz=CT.system_timezone())
 
@@ -7190,12 +7214,25 @@ def cmd_roc(args: argparse.Namespace) -> None:               # `roc` view
     _run_tx_view(args, actions={"ADJUST"}, label="roc")
 
 
-# A LEAPS position, per the project definition: a LONG option BUY placed
-# with more than 3 calendar months left to expiry. The contract set is
-# identified over FULL history (not the viewing window), so a sale,
-# assignment, or expiry inside the window still shows even when the
-# qualifying buy happened before it.
-_LEAPS_MONTHS = 3
+# A LEAPS position: a LONG option BUY placed with more than
+# `[settings] leaps_months` calendar months left to expiry (default 9,
+# the market convention; a views-only setting — no tax figure uses it).
+# The contract set is identified over FULL history (not the viewing
+# window), so a sale, assignment, or expiry inside the window still
+# shows even when the qualifying buy happened before it.
+LEAPS_MONTHS_DEFAULT = 9
+
+
+def _leaps_months(root: Path) -> int:
+    """The project's LEAPS cut-off in months ([settings] leaps_months)."""
+    cfg = load_config(root) if (root / "taxjson.toml").exists() else {}
+    v = (cfg.get("settings") or {}).get("leaps_months")
+    return int(v) if v is not None else LEAPS_MONTHS_DEFAULT
+
+
+def _leaps_rule(root: Path) -> str:
+    """The definition the LEAPS views print."""
+    return f"long option buys placed >{_leaps_months(root)} months to expiry"
 
 
 def _add_months(iso_date: str, months: int) -> str:
@@ -7270,6 +7307,7 @@ def _leaps_contracts(root: Path, account: Optional[str],
     TRUE still-open quantity regardless of any viewing window."""
     import json
     from taxjson.lib.core import is_option_symbol, parse_option_expiry
+    months = _leaps_months(root)
     cache = root / "work"
     if account:
         accounts = [account]
@@ -7380,15 +7418,16 @@ def _leaps_contracts(root: Path, account: Optional[str],
             d = tx.get("date") or ""
             if not expiry or not _ISO_DATE_RE.match(d):
                 continue
-            if expiry > _add_months(d, _LEAPS_MONTHS):
+            if expiry > _add_months(d, months):
                 leaps.add(msym)
     return {sym: qty_by_symbol.get(sym, 0.0) for sym in leaps}
 
 
 def cmd_leaps(args: argparse.Namespace) -> None:             # `leaps` view
     """Closed LEAPS positions over the window: one row per engine
-    disposition of a qualifying contract (long option buy placed >3
-    months to expiry), with lot-matched base-currency gains."""
+    disposition of a qualifying contract (long option buy placed more
+    than [settings] leaps_months to expiry), with lot-matched
+    base-currency gains."""
     root = Path(args.dir).resolve()
     keep, scope, account = _view_window(args, root)
     _leaps_scope_guard(root, account, args)
@@ -7397,8 +7436,7 @@ def cmd_leaps(args: argparse.Namespace) -> None:             # `leaps` view
         if getattr(args, "json", False):
             _json_out(_leaps_empty_doc(root, account))
             return
-        print("No LEAPS contracts found (long option buys placed more than "
-              "3 months before expiry).")
+        print(f"No LEAPS contracts found ({_leaps_rule(root)}).")
         return
     entries, found, basis = _leaps_closed(root, account, leaps, keep)
     if not found:
@@ -7437,8 +7475,8 @@ def cmd_leaps(args: argparse.Namespace) -> None:             # `leaps` view
             money(float(e.get("proceeds") or 0.0)),
             money(float(e.get("cost") or 0.0)),
             money(gain), str(int(e.get("days_held") or 0))]))
-    print(f"CLOSED LEAPS POSITIONS — {scope} ({base_cur}; long option "
-          f"buys placed >3 months to expiry)")
+    print(f"CLOSED LEAPS POSITIONS — {scope} ({base_cur}; "
+          f"{_leaps_rule(root)})")
     print()
     _print_report_table(out_lines)
     print(f"\nTOTAL REALIZED GAIN: {money(total)} {base_cur}")
@@ -7560,7 +7598,7 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
     """Realized-gain summary for closed LEAPS positions over a window
     (default: the tax year): per contract — quantity closed, proceeds,
     cost, gain, expiry — plus the total. A contract qualifies via its
-    FULL-history entry buy (>3 months to expiry), so in-window exits of
+    FULL-history entry buy (>leaps_months to expiry), so in-window exits of
     older entries are included."""
     from taxjson.lib.core import parse_option_expiry, parse_option_underlying
     root = Path(args.dir).resolve()
@@ -7572,8 +7610,7 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
         if getattr(args, "json", False):
             _json_out(_leaps_empty_doc(root, account))
             return
-        print("No LEAPS contracts found (long option buys placed more than "
-              "3 months before expiry).")
+        print(f"No LEAPS contracts found ({_leaps_rule(root)}).")
         return
     entries, found, basis = _leaps_closed(root, account, leaps, keep)
     if not found:
@@ -7623,8 +7660,8 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
             sym, parse_option_expiry(sym) or "?", f"{rec['qty']:g}",
             money(rec["proceeds"]), money(rec["cost"]),
             money(rec["gain"])]))
-    print(f"LEAPS REALIZED GAINS — {scope} ({base_cur}; long option buys "
-          f"placed >3 months to expiry)")
+    print(f"LEAPS REALIZED GAINS — {scope} ({base_cur}; "
+          f"{_leaps_rule(root)})")
     print()
     _print_report_table(out_lines)
     print(f"\nTOTAL REALIZED GAIN: {money(total)} {base_cur}")
@@ -9963,8 +10000,8 @@ def cmd_summary(args: argparse.Namespace) -> None:
         # --other-income/--other-losses were checked by _estimate_inputs
         # above (one guard, A2-1123).
         _settings0 = cfg.get("settings") or {}
-        if _country(_settings0) \
-                == "canada":
+        if _country(_settings0) == "canada" \
+                and not getattr(args, "federal_only", False):
             # Validate the province BEFORE printing anything: a missing
             # or unsupported one used to fail only after the whole sum
             # table had scrolled past (2026-09 CLI audit B20).
@@ -10372,6 +10409,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                 deductions=_ded, carrying_charges=_cc, lt_losses=_ltl,
                 amt_carryover=_amt_in, carry_sources=_carry_src,
                 province=getattr(args, "province", None),
+                federal_only=bool(getattr(args, "federal_only", False)),
                 actual_withheld=_actual_withholding(
                     cache, set(files) & taxable_accounts,
                     year or (cfg.get("settings") or {}).get("year"),
@@ -11035,7 +11073,8 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
                          carrying_charges: float = 0.0,
                          lt_losses: float = 0.0,
                          amt_carryover: Optional[Dict[int, float]] = None,
-                         carry_sources: Optional[Dict[str, Any]] = None
+                         carry_sources: Optional[Dict[str, Any]] = None,
+                         federal_only: bool = False
                          ) -> Dict[str, Any]:
     """Resolve country/province and run the estimator — shared by the
     text block and `sum --json` so the two can never disagree. For usa,
@@ -11048,7 +11087,11 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
     country = _country(settings)
     if country == "canada":
         prov = (province or str(settings.get("province", "") or "")).strip()
-        if not prov:
+        if federal_only:
+            # close-year with no supported province: the federal
+            # carry-forwards, no province standing in (CA-CARRY-01).
+            prov = None
+        elif not prov:
             _die("the canada estimate needs a province — pass "
                  "--province ON|BC|AB or set `province` under "
                  "[settings] in taxjson.toml.")
@@ -14341,9 +14384,9 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any]
     carryover (USA), and the Canadian minimum tax carryover — from the
     estimate itself (`taxjson estimate --json`, the computation `amt`
     prints), with the inputs the project gives it. A Canada project
-    with no supported province is estimated on Ontario's tables: every
-    figure the block carries forward is federal (the provincial
-    recovery is left out). A failing estimate stops the close (its
+    with no supported province gets a federal-only estimate (no other
+    province's tables stand in; every figure the block carries forward
+    is federal), with a note. A failing estimate stops the close (its
     inputs are wrong), naming the reason."""
     import json as _json
     from taxjson.lib import carryforward as CF
@@ -14354,11 +14397,16 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any]
     argv = [sys.executable, "-m", "taxjson.bin.taxjson_run",
             "-C", str(root), "estimate", "--json"]
     prov = str(settings.get("province") or "").strip().upper()
-    stand_in = False
+    federal_only = False
     if country == "canada" and prov not in {
             k for v in _VINTAGES.values() for k in v["CA_PROVINCES"]}:
-        argv += ["--province", "ON"]
-        stand_in = True
+        argv += ["--federal-only"]
+        federal_only = True
+        print(f"  note: "
+              + (f"province {prov} is not modelled" if prov else
+                 "no [settings] province")
+              + " — the carry-forwards are computed federal-only (no "
+              "provincial tax or minimum-tax recovery).")
     res = _run(argv, capture_output=True)
     if res.returncode != 0:
         sys.exit(f"taxjson close-year: could not compute the carry-"
@@ -14373,7 +14421,7 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any]
     src["other_income_value"] = (est_cfg or {}).get("other_income") or 0.0
     block = CF.record_block(country, r, src)
     mt = block.get("minimum_tax")
-    if stand_in and isinstance(mt, dict):
+    if federal_only and isinstance(mt, dict):
         mt["province"] = None
         mt.pop("recovered_provincial", None)
     return block
@@ -17379,6 +17427,13 @@ def cmd_init(args: argparse.Namespace) -> None:
     import shlex as _shlex
     print("\nNext:")
     print(f"  1. edit {cfg} — set the year, accounts, and source currencies")
+    from taxjson.lib.config_template import system_timezone as _systz
+    if _systz() is None:
+        # Left commented (UTC or unreadable here): there is no default,
+        # and a crypto account stops the run until it is set.
+        print("     and [settings] local_timezone (your IANA zone, e.g. "
+              "\"America/Vancouver\": crypto rows are dated in it; this "
+              "machine's zone could not be read or is UTC)")
     print("  2. drop broker CSV exports into inputs/<account>/")
     print(f"  3. run: taxjson -C {_shlex.quote(str(root))} run")
 
@@ -17704,7 +17759,8 @@ def _build_parser(prog: str = "taxjson"
         help="Closed LEAPS positions over a window",
         description="Closed LEAPS positions over a window (default: the "
                     "tax year) — the engine's dispositions of long "
-                    "option buys placed more than 3 months to expiry, "
+                    "option buys placed more than [settings] "
+                    "leaps_months (default 9) months to expiry, "
                     "with lot-matched base-currency gains.")
     p_leaps.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_leaps.add_argument("account", nargs="?", help="Account (default: all)")
@@ -17811,6 +17867,11 @@ def _build_parser(prog: str = "taxjson"
     p_est.add_argument("--province", default=None,
                        help="Canada: ON|BC|AB (default: `province` "
                             "under [settings])")
+    # close-year's hand-off (with --json): the federal carry-forwards
+    # of a Canadian project with no supported province. Not a user
+    # option: the printed estimate needs a province.
+    p_est.add_argument("--federal-only", action="store_true",
+                       help=argparse.SUPPRESS)
     p_est.add_argument("--verbose", "-v", action="store_true",
                        help="Full CALCULATION TRACE: every bracket "
                             "slice, credit and surtax tier for the "

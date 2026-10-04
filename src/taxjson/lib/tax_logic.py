@@ -92,6 +92,7 @@ NON_RULE_SETTINGS: Dict[str, str] = {
     "prior_year_record": "a file path for the handoff check",
     "source_currencies": "which FX rate series are fetched",
     "cross_asset": "retired; warned about and ignored",
+    "leaps_months": "the LEAPS views' cut-off; no tax figure reads it",
 }
 
 
@@ -267,10 +268,25 @@ def _ownership(country: str) -> List[Rule]:
     ]
 
 
-def _local_tz(s: Dict[str, Any]) -> str:
-    """The zone crypto rows are dated in, as the parsers read it."""
-    from taxjson.lib.brokerages._crypto_common import DEFAULT_LOCAL_TZ
-    return str(s.get("local_timezone") or DEFAULT_LOCAL_TZ)
+def _local_tz(s: Dict[str, Any]) -> Optional[str]:
+    """The zone crypto rows are dated in ([settings] local_timezone);
+    None when the project names none (there is no default)."""
+    tz = s.get("local_timezone")
+    return str(tz) if tz else None
+
+
+def _tz_rule_text(s: Dict[str, Any]) -> str:
+    tz = _local_tz(s)
+    now = (f"this project: {tz}" if tz else
+           "this project names none, so a crypto account stops the run "
+           "until it does")
+    return ("Crypto exchange rows are stamped in UTC and dated in the "
+            "user's local time zone, [settings] local_timezone (outside a "
+            "project the TAXJSON_LOCAL_TZ environment variable). It has no "
+            "default: a project with a crypto account and no zone stops "
+            "with a message naming the key (and this machine's zone as a "
+            f"suggestion) — {now}. Changing it re-dates the rows and "
+            "re-keys crypto sends.")
 
 
 def _canada(s: Dict[str, Any]) -> List[RuleSection]:
@@ -283,7 +299,6 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
     fut = _C.futures_settle_mode(s)
     froc = _C.foreign_roc_mode(dict(s, country=c))
     buyback = kw["option_buyback_loss_superficial"]
-    tz = _local_tz(s)
 
     if basis == "settle":
         year_rule = Rule(
@@ -526,11 +541,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Ltd), and the January return-of-capital warning asks "
                  "whether the issuer is a trust rather than assuming it.",
                  keys=("corporate_distributions",)),
-            Rule("CA-DATE-12",
-                 f"Crypto is dated in local time: {tz} ([settings] "
-                 f"local_timezone; outside a project TAXJSON_LOCAL_TZ). "
-                 f"Changing it re-dates the rows and re-keys crypto "
-                 f"sends.", keys=("local_timezone",)),
+            Rule("CA-DATE-12", _tz_rule_text(s),
+                 keys=("local_timezone",)),
             Rule("CA-DATE-13",
                  "A .tt line has one date, used as both its trade and its "
                  "settle date; `taxjson-convert-tt` writes a book's rows "
@@ -1264,8 +1276,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "applied (up to the year's gains) and carried out (100% "
                  "amounts); and the minimum tax carryover by year of "
                  "origin — opening, expired, recovered, created, carried "
-                 "out. With no supported province it is estimated on "
-                 "Ontario's tables (every figure carried is federal)."),
+                 "out. With no supported [settings] province it uses a "
+                 "federal-only estimate (no provincial tax, credit or "
+                 "minimum-tax factor) and says so; the carry-forwards it "
+                 "records are federal either way — never another "
+                 "province's tables standing in."),
             Rule("CA-CARRY-02",
                  "The estimate's net capital losses are --other-losses, "
                  "else [estimate] other_losses, else the balance the "
@@ -1538,11 +1553,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "A .tt line has one date, used as both its trade and its "
                  "settle date; `taxjson-convert-tt` writes a book's rows "
                  "with the project's tax_date."),
-            Rule("US-DATE-11",
-                 f"Crypto is dated in local time: {_local_tz(s)} "
-                 f"([settings] local_timezone; outside a project "
-                 f"TAXJSON_LOCAL_TZ). Changing it re-dates the rows and "
-                 f"re-keys crypto sends.", keys=("local_timezone",)),
+            Rule("US-DATE-11", _tz_rule_text(s),
+                 keys=("local_timezone",)),
             Rule("US-INC-DATE-RIC",
                  "A fund (RIC) or REIT dividend declared in October-"
                  "December, payable to holders of record then, and paid in "

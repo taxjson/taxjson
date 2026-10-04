@@ -87,10 +87,15 @@ def gains_both(book: Iterable[TaxTransaction], *, sheltered=(),
 
 
 def settings_for(country: str, **extra: Any) -> str:
-    """The [settings] table of a project of `country` (TOML text)."""
+    """The [settings] table of a project of `country` (TOML text). A
+    fixture's crypto rows need a named zone (there is no default):
+    local_timezone is America/Toronto unless given; None leaves it out."""
     lines = [f'country = "{country}"',
              f'base_currency = "{HOME_CURRENCY[country]}"']
+    extra = dict({"local_timezone": "America/Toronto"}, **extra)
     for k, v in extra.items():
+        if v is None:
+            continue
         lines.append(f"{k} = {json.dumps(v)}")
     return "[settings]\n" + "\n".join(lines) + "\n"
 

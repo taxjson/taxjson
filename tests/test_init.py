@@ -1,4 +1,5 @@
 """Tests for `taxjson init` — scaffolding a new, ready-to-populate project."""
+import os
 import argparse
 import io
 import tempfile
@@ -8,12 +9,19 @@ from pathlib import Path
 
 from taxjson.bin.taxjson_run import cmd_init, load_config
 
+
 _CA_ACCOUNTS = ["crypto", "margin", "rrsp", "tfsa"]
 _US_ACCOUNTS = ["401k", "crypto", "margin", "roth"]
 
 
 def _init(path, force=False, country="canada", year=None):
-    with redirect_stdout(io.StringIO()):           # mute the "Next:" banner
+    # A machine whose zone can be read: the scaffold names it, so its
+    # crypto account loads (there is no default zone; a UTC machine's
+    # scaffold leaves the key commented — test_fix_generalize_a).
+    from unittest import mock
+    with redirect_stdout(io.StringIO()), \
+            mock.patch("taxjson.lib.config_template.system_timezone",
+                       return_value="America/Toronto"):
         cmd_init(argparse.Namespace(path=str(path), dir=".", force=force,
                                     country=country, year=year))
 

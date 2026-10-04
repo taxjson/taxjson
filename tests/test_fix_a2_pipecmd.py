@@ -14,6 +14,7 @@ from pathlib import Path
 
 from tax_rules import rule
 
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -48,7 +49,7 @@ def _tt_project(td, lines, *, country="canada", year=2026, accounts=None,
     root = Path(td) / f"proj-{country}"
     base, src = (("CAD", "USD") if country == "canada" else ("USD", "CAD"))
     accounts = accounts or {"m": ("taxable", lines)}
-    cfg = (f'[settings]\nyear = {year}\ncountry = "{country}"\n'
+    cfg = (f'[settings]\nlocal_timezone = "America/Toronto"\nyear = {year}\ncountry = "{country}"\n'
            + ('province = "ON"\n' if country == "canada" else "")
            + f'base_currency = "{base}"\nsource_currencies = ["{src}"]\n'
            + (f'option_grant_timing_since = {year}\n'

@@ -3,6 +3,7 @@ Canada/USA wording and country gates in `taxjson run`'s commands,
 edge-cases, currency conversion and the country ownership tables."""
 from __future__ import annotations
 
+import os
 import json
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ from pathlib import Path
 
 from tax_rules import rule, rule_absent
 from tax_rules.dual import cli, cli_both, projects_both
+
 
 
 def _book(rows):
@@ -147,7 +149,7 @@ class TestStaleSendsFileWithUnreadableDecisions(unittest.TestCase):
             root, home = _project(td, country=country)
             if country == "usa":
                 (root / "taxjson.toml").write_text(
-                    '[settings]\nyear = 2026\ncountry = "usa"\n'
+                    '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2026\ncountry = "usa"\n'
                     'base_currency = "USD"\nsource_currencies = ["CAD"]\n'
                     '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
                 _cad_usd_rates_file(root / "work" / "to_base.csv")
@@ -182,7 +184,7 @@ def _sends_project(td, country):
     root, home = _project(td, country=country)
     if country == "usa":
         (root / "taxjson.toml").write_text(
-            '[settings]\nyear = 2026\ncountry = "usa"\n'
+            '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2026\ncountry = "usa"\n'
             'base_currency = "USD"\nsource_currencies = ["CAD"]\n'
             '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
         _cad_usd_rates_file(root / "work" / "to_base.csv")

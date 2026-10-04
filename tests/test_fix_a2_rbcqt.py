@@ -22,6 +22,13 @@ from test_fix_rbcqt import q, qdiv, qt_parse
 from tax_rules import rule, rule_absent
 from tax_rules.dual import gains_both
 
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+
 REPO = Path(__file__).resolve().parent.parent
 ACCT = "55500001"  # pii-ok (synthetic)
 
@@ -38,7 +45,7 @@ def _project(root, year, files, extra_settings="", ticker_map=""):
     root = Path(root)
     (root / "inputs" / "margin").mkdir(parents=True, exist_ok=True)
     (root / "taxjson.toml").write_text(
-        f'[settings]\nyear = {year}\ncountry = "canada"\n'
+        f'[settings]\nlocal_timezone = "America/Toronto"\nyear = {year}\ncountry = "canada"\n'
         f'base_currency = "CAD"\nsource_currencies = []\n'
         f'option_grant_timing_since = 2024\n{extra_settings}'
         f'[accounts.margin]\ntype = "taxable"\n')

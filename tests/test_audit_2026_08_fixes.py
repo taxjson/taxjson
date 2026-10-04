@@ -3,6 +3,7 @@
 One class per finding; each test pins the exact divergence the audit
 reproduced, so a reintroduction fails with the original wrong number.
 """
+import os
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,13 @@ from pathlib import Path
 
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
 from tax_rules import rule
+
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -311,7 +319,7 @@ class TestFastSeesTtAndGroupDeletions(unittest.TestCase):
             root = Path(tmp)
             (root / "inputs" / "margin").mkdir(parents=True)
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\nsource_currencies = []\n'
                 '[accounts.margin]\ntype = "taxable"\n')
             (root / "inputs" / "margin" / "questrade.csv").write_text(
@@ -345,7 +353,7 @@ class TestFastSeesTtAndGroupDeletions(unittest.TestCase):
             root = Path(tmp)
             (root / "inputs" / "margin").mkdir(parents=True)
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\nsource_currencies = []\n'
                 '[accounts.margin]\ntype = "taxable"\n')
             (root / "inputs" / "margin" / "questrade.csv").write_text(
@@ -370,7 +378,7 @@ class TestFastSeesTtAndGroupDeletions(unittest.TestCase):
             root = Path(tmp)
             (root / "inputs" / "wallet").mkdir(parents=True)
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2024\ncountry = "canada"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2024\ncountry = "canada"\n'
                 'base_currency = "CAD"\nsource_currencies = []\n'
                 '[accounts.wallet]\ntype = "taxable"\ncrypto = true\n')
             cb = root / "inputs" / "wallet" / "cb_wallet.csv"
@@ -477,7 +485,7 @@ class TestSumBasisMatchesBanner(unittest.TestCase):
             for acct in ("margin", "rrsp"):
                 (root / "inputs" / acct).mkdir(parents=True)
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\nsource_currencies = []\n'
                 '[accounts.margin]\ntype = "taxable"\n'
                 '[accounts.rrsp]\ntype = "sheltered"\n')
@@ -843,7 +851,7 @@ class TestLowSeverityBatch(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\n'
                 '[accounts.margin]\ntype = "taxable"\n'
                 '[accounts.margin_us]\ntype = "taxable"\n')
@@ -943,7 +951,7 @@ class TestCanadaCryptoWashCoverage(unittest.TestCase):
         (root / "inputs" / "wallet").mkdir(parents=True)
         (root / "inputs" / "rrsp").mkdir(parents=True)
         (root / "taxjson.toml").write_text(
-            f'[settings]\nyear = 2024\ncountry = "{country}"\n'
+            f'[settings]\nlocal_timezone = "America/Toronto"\nyear = 2024\ncountry = "{country}"\n'
             f'base_currency = "{base_currency}"\nsource_currencies = []\n'
             f'[accounts.wallet]\ntype = "taxable"\ncrypto = true\n'
             f'[accounts.rrsp]\ntype = "sheltered"\n')
@@ -1114,7 +1122,7 @@ class TestKnownIssuesGraduated(unittest.TestCase):
             root = Path(tmp)
             (root / "inputs" / "margin").mkdir(parents=True)
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2024\ncountry = "canada"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2024\ncountry = "canada"\n'
                 'base_currency = "CAD"\nsource_currencies = []\n'
                 '[accounts.margin]\ntype = "taxable"\n')   # no crypto flag
             (root / "inputs" / "margin" / "kr_trades.csv").write_text(
@@ -1157,7 +1165,7 @@ class TestCrossTaxableOverlapWarning(unittest.TestCase):
         for acct in ("rbc", "ib2"):
             (root / "inputs" / acct).mkdir(parents=True)
         (root / "taxjson.toml").write_text(
-            '[settings]\nyear = 2025\ncountry = "canada"\n'
+            '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
             'base_currency = "CAD"\nsource_currencies = []\n'
             '[accounts.rbc]\ntype = "taxable"\n'
             '[accounts.ib2]\ntype = "taxable"\n')
@@ -1199,7 +1207,7 @@ class TestStrictRunFlag(unittest.TestCase):
         root = Path(tmp)
         (root / "inputs" / "margin").mkdir(parents=True)
         (root / "taxjson.toml").write_text(
-            '[settings]\nyear = 2025\ncountry = "canada"\n'
+            '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
             'base_currency = "CAD"\nsource_currencies = []\n'
             '[accounts.margin]\ntype = "taxable"\n')
         (root / "inputs" / "margin" / "questrade.csv").write_text(
@@ -1954,7 +1962,7 @@ class TestDeferredLowTail(unittest.TestCase):
             for acct in ("margin", "rrsp"):
                 (root / "inputs" / acct).mkdir(parents=True)
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\nsource_currencies = []\n'
                 '[accounts.margin]\ntype = "taxable"\n'
                 '[accounts.rrsp]\ntype = "sheltered"\n')
@@ -2171,7 +2179,7 @@ class TestReAuditRegressions(unittest.TestCase):
             for acct in ("margin", "rrsp"):
                 (root / "inputs" / acct).mkdir(parents=True)
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\nsource_currencies = []\n'
                 '[accounts.margin]\ntype = "taxable"\n'
                 '[accounts.rrsp]\ntype = "sheltered"\n')

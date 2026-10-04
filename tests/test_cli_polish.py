@@ -25,6 +25,7 @@ from pathlib import Path
 
 from tax_rules import rule
 
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC = REPO_ROOT / "src"
 
@@ -141,7 +142,7 @@ class TestCountryAwareHelp(unittest.TestCase):
     def _project(self, d, country):
         base = "USD" if country == "usa" else "CAD"
         Path(d, "taxjson.toml").write_text(
-            f'[settings]\nyear = 2025\ncountry = "{country}"\n'
+            f'[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "{country}"\n'
             f'base_currency = "{base}"\n[accounts.margin]\n'
             f'type = "taxable"\n')
 
@@ -226,7 +227,7 @@ class TestTjsAlias(unittest.TestCase):
 # ---------------------------------------------------------------- 4. stats
 def _toml(country, extra=""):
     base = "USD" if country == "usa" else "CAD"
-    return (f'[settings]\nyear = 2026\ncountry = "{country}"\n'
+    return (f'[settings]\nlocal_timezone = "America/Toronto"\nyear = 2026\ncountry = "{country}"\n'
             f'base_currency = "{base}"\nsource_currencies = []\n{extra}'
             f'[accounts.margin]\ntype = "taxable"\n'
             f'[accounts.coins]\ntype = "taxable"\ncrypto = true\n'

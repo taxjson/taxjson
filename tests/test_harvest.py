@@ -4,6 +4,7 @@ Offline throughout: prices come from an injected fake fetcher (the
 price chain's `fetchers` test hook), never the network.
 """
 
+import os
 import io
 import json
 import tempfile
@@ -14,6 +15,7 @@ from pathlib import Path
 
 from taxjson.bin.taxjson_harvest import main as harvest_main
 from tax_rules import rule
+
 
 # margin: AAA.TO underwater (cost 1,240 vs value 1,085), BBB.US ahead,
 # one OCC option row (must be skipped — unpriceable by the chain).
@@ -531,7 +533,7 @@ class TestHarvestWrapperCrypto(unittest.TestCase):
         acct = "" if crypto_only else (
             '[accounts.margin]\ntype = "taxable"\n')
         (root / "taxjson.toml").write_text(
-            '[settings]\nyear = 2026\ncountry = "canada"\n'
+            '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2026\ncountry = "canada"\n'
             'base_currency = "CAD"\n' + acct +
             '[accounts.btc]\ntype = "taxable"\ncrypto = true\n')
         empty = json.dumps({"inventory": []})

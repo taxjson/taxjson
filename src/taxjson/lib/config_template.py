@@ -103,7 +103,10 @@ def _pick(v: Any, country: str) -> Any:
     return v.get(country, v.get("*")) if isinstance(v, Mapping) else v
 
 
-_DEFAULT_TZ = "America/Toronto"   # lib/brokerages/_crypto_common.DEFAULT_LOCAL_TZ
+# The example zone a commented-out local_timezone line shows. NOT a
+# default: there is none (a project with a crypto account must name its
+# zone; `taxjson init` writes this machine's zone when it can read one).
+_EXAMPLE_TZ = "America/New_York"
 
 
 def _provinces() -> str:
@@ -151,10 +154,18 @@ SETTINGS_GROUPS: Tuple[Tuple[Tuple[str, ...], Tuple[Key, ...]], ...] = (
              "usa": "trade | settle (default trade: the IRS dates a sale "
                     "by trade date)"}),
         Key("local_timezone", '"{tz}"',
-            "zone crypto UTC times are dated in (IANA name; default {tz})"),
+            "zone crypto UTC times are dated in (IANA name; no default — "
+            "required with a crypto account)"),
         Key("prior_year_record", '"../{prev_year}/filed/{prev_year}.json"',
             "last year's close-year record (`taxjson handoff`; no "
             "default)"),
+    )),
+    (("# Report views:",), (
+        Key("leaps_months", "9",
+            "LEAPS views (leaps, leaps-sum): a long option bought more "
+            "than this many",
+            ("months before expiry (default 9; no effect on any tax "
+             "figure)",)),
     )),
     (("# Futures and foreign-currency cash:",), (
         Key("futures_settle", '"trade"',
@@ -515,6 +526,7 @@ def _hash(norm: str) -> str:
 # instead of keeping them as the user's notes. Hashes, not text: the old
 # examples are not carried in the source.
 _LEGACY_TEMPLATE_HASHES = frozenset("""
+e7866667d98a969c 8210ac89894ed17f
 001abf630b6115d0 002632fa29f5bc3d 00b37cf395b3dd0b 02add596de115d47
 03d445a98351bec2 06af278016053226 084cbf481f008f28 0ea1fe5c78966f11
 1048885439f16fe2 10899c5c906ee14f 10ea6239ba4c1830 10f8df2f5b5ea99d
@@ -609,7 +621,7 @@ class _Renderer:
             "{next_year}": str(year + 1), "{country}": country,
             "{home}": C.home_currency(country),
             "{tax_date}": C.default_tax_date(country),
-            "{tz}": _DEFAULT_TZ,
+            "{tz}": _EXAMPLE_TZ,
             "{provinces}": _provinces() if country == C.CANADA else "",
             "{plans}": _plans(country),
             "{bases}": _bases() if country == C.CANADA else "",

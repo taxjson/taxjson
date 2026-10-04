@@ -7,6 +7,7 @@ coin-moving row of an unknown type is UNBOOKED), S056-16 (staking value:
 Subtotal wins; no Subtotal -> qty x price), S056-18 (a dust convert's
 excess fee reaches the loss). Synthetic data only.
 """
+import os
 import contextlib
 import io
 import tempfile
@@ -15,6 +16,13 @@ from pathlib import Path
 
 from taxjson.lib.brokerages.coinbase import CoinbaseBrokerage
 from tax_rules import rule
+
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
 
 _HDR = ("ID,Timestamp,Transaction Type,Asset,Quantity Transacted,"
         "Price Currency,Price at Transaction,Subtotal,"

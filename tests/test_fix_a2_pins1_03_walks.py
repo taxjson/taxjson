@@ -4,6 +4,7 @@ once; the apply-distributions split key includes the account), A2-1539
 (ASSIGN and TRANSFER rows move every walk's position) — and A2-1564
 (a US Kraken stablecoin withdrawal fee is a sale at par). Synthetic
 data only."""
+import os
 import json
 import tempfile
 import unittest
@@ -11,6 +12,13 @@ from datetime import date
 from pathlib import Path
 
 from tax_rules import rule
+
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
 
 SYM = "QZT.US"
 

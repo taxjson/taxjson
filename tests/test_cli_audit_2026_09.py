@@ -1,6 +1,7 @@
 """2026-09 CLI usability audit: wrong-year close-year lock, untyped
 accounts, false "run first" warnings, exit codes, and argument hygiene."""
 
+import os
 import argparse
 import io
 import json
@@ -15,6 +16,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from taxjson.bin import taxjson_run as R  # noqa: E402
+
 
 
 def _tj(root, *args):
@@ -34,7 +36,7 @@ def _call(fn, **kw):
     return code, out.getvalue(), err.getvalue()
 
 
-_TOML = ('[settings]\nyear = {year}\ncountry = "canada"\n'
+_TOML = ('[settings]\nlocal_timezone = "America/Toronto"\nyear = {year}\ncountry = "canada"\n'
          'base_currency = "CAD"\nsource_currencies = []\n'
          '[accounts.margin]\ntype = "taxable"\n'
          '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')

@@ -26,6 +26,13 @@ from pathlib import Path
 from unittest import mock
 from tax_rules import rule
 
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 CB_HEADER = ("ID,Timestamp,Transaction Type,Asset,Quantity Transacted,"
@@ -74,7 +81,7 @@ def _project(td, name="crypto", source_currencies=("USD",)):
     (root / "work").mkdir()
     sc = ", ".join(f'"{c}"' for c in source_currencies)
     (root / "taxjson.toml").write_text(
-        '[settings]\nyear = 2026\ncountry = "canada"\nprovince = "ON"\n'
+        '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2026\ncountry = "canada"\nprovince = "ON"\n'
         f'base_currency = "CAD"\nsource_currencies = [{sc}]\n'
         f'[accounts.{name}]\ntype = "taxable"\ncrypto = true\n')
     if source_currencies:

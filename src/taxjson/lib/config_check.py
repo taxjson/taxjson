@@ -287,6 +287,14 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
     if pyr is not None and not (isinstance(pyr, str) and pyr.strip()):
         out.append(f"[settings] prior_year_record must be a path string "
                    f"such as \"../2024/filed/2024.json\" (got {pyr!r})")
+    # The LEAPS views' cut-off (leaps, leaps-sum): months from the buy to
+    # expiry. A quoted "3" or 2.5 would compare oddly.
+    lm = settings.get("leaps_months")
+    if lm is not None and not (isinstance(lm, int)
+                               and not isinstance(lm, bool)
+                               and 1 <= lm <= 120):
+        out.append(f"[settings] leaps_months must be a whole number of "
+                   f"months such as 9, unquoted (got {lm!r})")
     tz = settings.get("local_timezone")
     if tz is not None:
         from taxjson.lib.brokerages._crypto_common import utc_to_local

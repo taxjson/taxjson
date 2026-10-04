@@ -239,14 +239,17 @@ they are crypto-assets (Schedule 3 line 7, pooled across your crypto accounts,
 and outside §1091 in a US project). A generic file in a `crypto = true` account
 is refused.
 
-Kraken and Coinbase timestamps are UTC; rows are dated in local time
-(America/Toronto by default; set `[settings] local_timezone =
-"America/Vancouver"` etc., or the `TAXJSON_LOCAL_TZ` environment variable
-outside a project, to change it — the setting wins, and a change re-dates the
-rows and re-keys crypto sends), so a fill at 03:00 UTC on January 1 belongs to
-the previous tax year. The USD stablecoins (USDC, USDT, DAI, PYUSD, GUSD,
-RLUSD and FDUSD in the shipped market data; a ticker.map `STABLE SYMBOL USD`
-line adds one, `STABLE SYMBOL NO` removes one) are treated
+Kraken and Coinbase timestamps are UTC; rows are dated in YOUR local time,
+`[settings] local_timezone` (an IANA name such as "America/Vancouver"; the
+`TAXJSON_LOCAL_TZ` environment variable outside a project — the setting wins,
+and a change re-dates the rows and re-keys crypto sends), so in Eastern time a
+fill at 03:00 UTC on January 1 belongs to the previous tax year. There is no
+default zone: `taxjson init` writes this machine's zone when it can read one
+(not a server's UTC), and a project with a `crypto = true` account and no
+`local_timezone` stops (`taxjson format` and `migrate` still run), naming the
+key and suggesting this machine's zone. The USD stablecoins (USDC, USDT, DAI,
+PYUSD, GUSD, RLUSD and FDUSD in the shipped market data; a ticker.map `STABLE
+SYMBOL USD` line adds one, `STABLE SYMBOL NO` removes one) are treated
 as US-dollar cash in a Canada project (an approximation; a fill valued in US
 dollars more than 2% off 1.00 USD is warned about, a CAD- or EUR-valued one is
 not checked) and as property, like any coin, in a US project.
@@ -414,7 +417,8 @@ base_currency = "CAD"          # the country's currency: CAD for canada, USD for
 tax_date = "settle"            # settle (CRA default) | trade (IRS default)
 # futures_settle = "trade"     # futures & futures options (IB, generic): TRADE date (daily variation
 #                              # margin settles the P/L) | next_day (clearing premium date)
-# local_timezone = "America/Toronto"  # crypto UTC timestamps are dated in this zone
+# local_timezone = "America/New_York" # crypto UTC timestamps are dated in this zone (no default;
+#                              # required with a crypto account)
 source_currencies = ["USD"]    # currencies you hold besides base_currency (FX rates fetched)
 # province = "ON"              # canada tax-estimate default (ON/BC/AB)
 #   Canada-only keys (province, option_*, foreign_return_of_capital, and the
@@ -630,7 +634,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson dil-sum` | Payment-in-lieu total per symbol (default: tax year) — DIVIDEND_IN_LIEU rows only, with each row's treatment: ordinary income (no dividend gross-up/credit or qualified rate), except, in a Canada project, a Canadian dealer's payment on a Canadian issuer's share, which ITA s.260 deems a taxable dividend (on the dealer's T5 box 24; counted in `divs-sum` and the estimate's eligible dividends). |
 | `taxjson divs-sum` | Roll-up summary (see below): dividends received per ticker over a window (default: tax year). |
 | `taxjson fees-sum` | Roll-up summary (see below): trading-fee report by brokerage over a window (default: tax year). |
-| `taxjson leaps-sum` | Per-contract LEAPS summary — long option buys placed >3 months to expiry (default: tax year); only the long position's dispositions (a later write/buy-back of the same contract is covered-call P&L, in `ccd-sum`); the total is split into TAXABLE and SHELTERED parts when registered accounts contribute. |
+| `taxjson leaps-sum` | Per-contract LEAPS summary — long option buys placed more than `[settings] leaps_months` (default 9) months to expiry (default: tax year); only the long position's dispositions (a later write/buy-back of the same contract is covered-call P&L, in `ccd-sum`); the total is split into TAXABLE and SHELTERED parts when registered accounts contribute. |
 | `taxjson roc-sum` | Return-of-capital / ACB-adjustment total per ticker (default: tax year). |
 | `taxjson trades-sum` | Roll-up summary (see below): per ticker buy/sell counts, value and fees over a window (default: tax year). |
 | `taxjson winners [PERIOD] [--top N]` | Per-ticker realized gains RANKED — biggest winners and losers over a window (default: tax year); options grouped under their underlying. A tax-year window (default, `tax_year`, `2025`) follows the project's `tax_date` in `winners`, `gains`, `ccd-sum`, `leaps` and `leaps-sum`: on the settle basis a Dec-31 trade that settles in January belongs to the next year, as in `sum`. These views refuse when `work/` was built for another year than `[settings] year`. |
@@ -656,7 +660,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson reconcile-slips SLIP.csv [SLIP.csv ...]` | Diff broker T5008 / 1099-B slips against computed dispositions before filing (exit 1 on mismatch); several slip files (one per broker) are reconciled together. |
 | `taxjson carryover` | Multi-year capital-loss carryforward/carryback ledger (Canada balance + T1A carryback candidates; US ST/LT worksheet). A close-year lock's recorded balance (this project's or `prior_year_record`'s) becomes the running balance at its year end. |
 | `taxjson option-boundary [--json]` | Written options whose write and close straddle a tax-year boundary, or that are open at year end: where the premium and any later amount land under ITA s.49 for the timing in force, and — using the `filed/` locks — whether a filed year needs a T1-ADJ (an assignment after the grant year was filed, s.49(4)). |
-| `taxjson close-year [--filed-dispositions CSV]` | Snapshot the current tax year's filing aggregates to `filed/<year>.json` — the filed-year lock. Commit it with your records. It also records what the next year needs for `taxjson handoff`: every sale, the positions and cost at Dec 31 (superficial-loss deferrals included), and the trades that settle in January. It also records the year's carry-forwards — the net capital loss (US: the short-/long-term capital loss carryover) and, in Canada, the minimum tax carryover by year of origin — from the year's own estimate (see "Carry-forwards"). When the return was prepared with another tool, `--filed-dispositions` stores the sales it actually reported (CSV: `symbol,date,qty,proceeds,cost,gain`, optional `account`). `--force` keeps the filed dispositions of the lock it replaces (unless a new CSV is given) and warns when that lock recorded other totals. It refuses books whose last run did not finish (no reports, an unreadable `work/<acct>_base.json`). Without `--force` it refuses a year that has not ended, a year with no disposition and no income in the taxable books (a typo'd `year`), and books built with another option timing than `taxjson.toml` now says (that one even with `--force`). |
+| `taxjson close-year [--filed-dispositions CSV]` | Snapshot the current tax year's filing aggregates to `filed/<year>.json` — the filed-year lock. Commit it with your records. It also records what the next year needs for `taxjson handoff`: every sale, the positions and cost at Dec 31 (superficial-loss deferrals included), and the trades that settle in January. It also records the year's carry-forwards — the net capital loss (US: the short-/long-term capital loss carryover) and, in Canada, the minimum tax carryover by year of origin — from the year's own estimate (see "Carry-forwards"; a Canadian project with no supported `province` gets a federal-only estimate, said in the output — every figure carried forward is federal anyway). When the return was prepared with another tool, `--filed-dispositions` stores the sales it actually reported (CSV: `symbol,date,qty,proceeds,cost,gain`, optional `account`). `--force` keeps the filed dispositions of the lock it replaces (unless a new CSV is given) and warns when that lock recorded other totals. It refuses books whose last run did not finish (no reports, an unreadable `work/<acct>_base.json`). Without `--force` it refuses a year that has not ended, a year with no disposition and no income in the taxable books (a typo'd `year`), and books built with another option timing than `taxjson.toml` now says (that one even with `--force`). |
 | `taxjson check-filed` | Recompute every filed year from the current books and report drift vs the locks; exit 1 on drift. A taxable account the books have but the lock does not (with activity in that year), or a locked account the books no longer have, is drift too; a locked account that is no longer a taxable account in `taxjson.toml` is reported, never recomputed from its old `work/` book. Each year is recomputed with the written-option timing its lock recorded. Dividends and payments in lieu are compared separately, and so are the amounts the export puts on each return line (Schedule 3 line codes, Form 8949 part totals), so a change that moves an amount between lines is drift even when the gain is unchanged; interest, foreign tax withheld and the FX gain on foreign cash are not locked (every OK says so). An unreadable lock is named and counts as a failure. A lock closed under the other country (every lock records its `country`) is refused by name and never recomputed under this project's law; a lock is recomputed on the date basis it recorded, and a note says when this project's `tax_date` or `option_buyback_loss_superficial` now differs from the lock's (its own reports for that year then differ from the filed return). A lock account entry that records none of the locked totals, or whose `form_lines` is not a table, is damaged, never OK. A bad `[settings]` value is refused as a settings error before any lock is checked; when the recompute itself fails on an input the child's own error is shown and the exit code is 2 (1 is drift or a damaged lock). Every full run also auto-checks (`taxjson run --strict` aborts on drift or an unreadable lock). |
 | `taxjson handoff [--prior PATH] [--json]` | Checks that this year's project starts from exactly what last year's return carried forward, using last year's `close-year` record (`[settings] prior_year_record`, or `filed/<year-1>.json` here). Checks: opening positions and cost at Dec 31 against last year's year-end books; every trade made last year that settles in January is booked here, once; no sale is reported in both years (a closed-year sale that is its own row here is a different sale); rows the two projects put on different sides of Dec 31 — income a trust's record date or a RIC entry moves, a row `local_timezone` re-dates, an overnight fill moved into January — are reported in neither or both years; written options carried out of last year on another premium timing than its record (taxed twice, or in no return). A record closed before its year ended is flagged as a partial-year snapshot. A cost difference is listed with the two consistent choices: keep last year as filed and open with the cost that return implied, or amend it and open with the corrected cost. A record closed under the other country is refused by name. The carry-forward inputs (`[estimate] other_losses` / `long_term_losses`, `[carryover] claimed`'s entry for that year, `[estimate] amt_carryover`) are compared with what the record carried out (see "Carry-forwards"). Exit 1 on any problem; `checklist` runs it. |
 
@@ -1531,8 +1535,10 @@ compensation payment you make: it lowers the cover's gain.
 
 ### LEAPS views
 
-A **LEAPS** position here is a **long option buy placed more than 3 calendar
-months before expiry** (calls and puts alike). Contracts qualify over your
+A **LEAPS** position here is a **long option buy placed more than
+`[settings] leaps_months` calendar months before expiry** (default 9, the
+market convention; calls and puts alike). The setting changes only these
+views, never a tax figure. Contracts qualify over your
 FULL history, so an exit inside the viewing window shows up even when the
 qualifying buy predates it; short premium and near-dated buys never qualify.
 Both views report the ENGINE's numbers — lot-matched, superficial-loss/

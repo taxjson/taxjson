@@ -25,6 +25,7 @@ from pathlib import Path
 
 from tax_rules import rule, rule_absent
 
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 COUNTRIES = ("canada", "usa")
 
@@ -44,7 +45,7 @@ def _project(root, country, accounts, year=2025):
     {S} suffix (TO / US) and {C} currency placeholders."""
     cur = "USD" if country == "usa" else "CAD"
     suf = "US" if country == "usa" else "TO"
-    t = (f'[settings]\nyear = {year}\ncountry = "{country}"\n'
+    t = (f'[settings]\nlocal_timezone = "America/Toronto"\nyear = {year}\ncountry = "{country}"\n'
          f'base_currency = "{cur}"\nsource_currencies = []\n'
          + ('option_grant_timing_since = 2025\n'
             if country == "canada" else ""))
@@ -76,7 +77,7 @@ class TestCryptoSendsWordingByCountry(unittest.TestCase):
                 root, home = T._project(td, country=c)
                 if c == "usa":
                     (root / "taxjson.toml").write_text(
-                        '[settings]\nyear = 2026\ncountry = "usa"\n'
+                        '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2026\ncountry = "usa"\n'
                         'base_currency = "USD"\n'
                         'source_currencies = ["CAD"]\n'
                         '[accounts.crypto]\ntype = "taxable"\n'

@@ -9,6 +9,7 @@ deleting them, and the `transfers` view must surface sidecar + in-book
 rows.
 """
 
+import os
 import argparse
 import io
 import json
@@ -18,6 +19,13 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -125,7 +133,7 @@ class TestTransfersView(unittest.TestCase):
     def _project(self, td):
         root = Path(td)
         (root / "taxjson.toml").write_text(
-            '[settings]\nyear = 2026\ncountry = "canada"\n'
+            '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2026\ncountry = "canada"\n'
             'base_currency = "CAD"\n'
             '[accounts.margin]\ntype = "taxable"\n'
             '[accounts.rrsp]\ntype = "sheltered"\ntransfers = true\n')

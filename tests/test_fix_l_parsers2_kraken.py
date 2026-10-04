@@ -9,6 +9,7 @@ coin is disposed of), S061-17 (no coin fee in the money `fee` field),
 S060-22 (the ledger's own USD values), S061-22 (fiat-only ignored note).
 Synthetic data only.
 """
+import os
 import io
 import tempfile
 import unittest
@@ -18,6 +19,13 @@ from pathlib import Path
 from tax_rules import rule
 
 from taxjson.lib.brokerages.kraken import KrakenBrokerage, _split_pair
+
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
 
 _KT_H = ("txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,"
          "margin,misc,ledgers\n")

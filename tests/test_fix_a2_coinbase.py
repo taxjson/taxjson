@@ -16,6 +16,7 @@ A2-0998: Convert legs of an export without an ID column share an id stem.
 A2-1003 (Coinbase half): a USD-valued Convert / Advanced Trade spending a
   stablecoin away from its peg is warned about.
 """
+import os
 import contextlib
 import io
 import tempfile
@@ -23,6 +24,13 @@ import unittest
 from pathlib import Path
 
 from taxjson.lib.brokerages.coinbase import CoinbaseBrokerage
+
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
 
 _HDR = ("ID,Timestamp,Transaction Type,Asset,Quantity Transacted,"
         "Price Currency,Price at Transaction,Subtotal,"

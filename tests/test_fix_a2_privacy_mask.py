@@ -5,6 +5,7 @@ error or a skip summary is masked to its first 2 characters + ***),
 A2-0461 (the file-name account-id mask is pinned at the IB and generic
 broker diagnostics). Synthetic data only.
 """
+import os
 import io
 import tempfile
 import unittest
@@ -12,6 +13,13 @@ from contextlib import redirect_stderr
 from pathlib import Path
 
 from taxjson.lib.brokerages.kraken import KrakenBrokerage
+
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
 
 _KT_H = ("txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,"
          "margin,misc,ledgers\n")

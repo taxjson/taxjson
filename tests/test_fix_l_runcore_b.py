@@ -31,6 +31,7 @@ def _run_cli_env(root, *args, env=None, seed=None):
 # in $FAKE_YF_LOG) and answers .info / .history from $FAKE_YF_NAMES.
 _FAKE_YF = '''
 import json, os
+
 _names = json.loads(os.environ.get("FAKE_YF_NAMES") or "{}")
 def _log(sym):
     p = os.environ.get("FAKE_YF_LOG")
@@ -513,6 +514,7 @@ def _gains_project(tmp, inventory=(), transactions=(), config=_CONFIG,
 
 _US_CFG = """\
 [settings]
+local_timezone = "America/Toronto"
 year = 2025
 country = "usa"
 base_currency = "USD"
@@ -793,7 +795,7 @@ class TestWashAdvice(unittest.TestCase):
 
     @rule("US-WASH-13")
     def test_us_crypto_is_outside_1091_everywhere(self):
-        cfg = ('[settings]\nyear = 2025\ncountry = "usa"\n'
+        cfg = ('[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "usa"\n'
                'base_currency = "USD"\nsource_currencies = []\n\n'
                '[accounts.kr1]\ntype = "taxable"\ncrypto = true\n')
         with tempfile.TemporaryDirectory() as tmp:

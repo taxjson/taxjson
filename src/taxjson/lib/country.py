@@ -258,6 +258,7 @@ SETTING_COUNTRY: Dict[str, str] = {
     "futures_settle": BOTH,
     "prior_year_record": BOTH,
     "local_timezone": BOTH,         # the zone crypto UTC stamps are dated in
+    "leaps_months": BOTH,           # the LEAPS views' cut-off (no tax effect)
     "province": CANADA,
     "option_premium_timing": CANADA,
     "option_grant_timing_since": CANADA,

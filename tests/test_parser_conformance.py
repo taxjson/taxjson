@@ -5,6 +5,7 @@ tests/fixtures/<broker>/sample.csv (synthetic rows only), and run once
 with UPDATE_GOLDEN=1 to mint the golden. See parser_conformance.py.
 """
 
+import os
 import unittest
 
 from parser_conformance import ParserConformance
@@ -15,6 +16,13 @@ from taxjson.lib.brokerages.kraken import KrakenBrokerage
 from taxjson.lib.brokerages.questrade import QuestradeBrokerage
 from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
 from taxjson.lib.brokerages.webull import WebullBrokerage
+
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
 
 
 class TestQuestradeConformance(ParserConformance, unittest.TestCase):
