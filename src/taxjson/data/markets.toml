@@ -1,0 +1,145 @@
+# taxjson market reference data — the SHIPPED DEFAULTS.
+#
+# Everything here is a market fact or a list of securities that taxjson
+# cannot read from a broker export: which listing suffix is which
+# exchange, which coins are US-dollar stablecoins, which Canadian
+# issuers are split-share corporations, ... It is read by one module,
+# taxjson/lib/markets.py; no other code carries a copy.
+#
+# These lists go stale. Your project's ticker.map extends or overrides
+# them, one line per symbol (README "ticker.map"):
+#
+#   STABLE      SYMBOL USD|NO     a US-dollar stablecoin (or: not one)
+#   SPLITSHARE  ROOT [NO]         a Canadian split-share corporation
+#   INDEXOPT    ROOT [NO]         a US broad-based index option root (§1256)
+#   EVENING     ROOT [NO]         an option root with a Cboe evening session
+#   MULT        SYMBOL N          an option's contract size
+#   VENUE       IBCODE SUFFIX|NO  an IB listing exchange and its suffix
+#   GLOBAL      CODE SYMBOL       a broker asset code (Kraken XXYZ → XYZ)
+#
+# Whenever a list here decides an outcome, the run says so once per
+# symbol (a "note: ... built-in market list" line), naming the line to
+# add if it is wrong.
+
+# Listing suffix (SYMBOL.SUFFIX in the books) → exchange country
+# (ISO 3166 alpha-3) and trading currency. A Canadian suffix is a
+# Canadian listing (TSX, TSX Venture, CSE, Cboe Canada/NEO).
+[venues.TO]
+country = "CAN"
+currency = "CAD"
+[venues.V]
+country = "CAN"
+currency = "CAD"
+[venues.CN]
+country = "CAN"
+currency = "CAD"
+[venues.NE]
+country = "CAN"
+currency = "CAD"
+[venues.VN]
+country = "CAN"
+currency = "CAD"
+[venues.US]
+country = "USA"
+currency = "USD"
+[venues.L]
+country = "GBR"
+currency = "GBP"
+[venues.AX]
+country = "AUS"
+currency = "AUD"
+
+# A broker row that names only its currency: the listing suffix it
+# gets. A currency missing here has no suffix (the parser says so).
+[currency_suffix]
+CAD = "TO"
+USD = "US"
+AUD = "AX"
+GBP = "L"
+
+# An ISIN's country prefix → the listing suffix of its home market (IB
+# income rows name the security by ISIN). IE (Irish UCITS funds) is
+# assumed to be an LSE line.
+[isin_country_suffix]
+CA = "TO"
+US = "US"
+GB = "L"
+IE = "L"
+AU = "AX"
+
+# Interactive Brokers "Listing Exch" codes (Financial Instrument
+# Information) → listing suffix. A USD `.U` unit on a Canadian venue is
+# a Canadian listing (SYMBOL.U.TO); a line on an LSE venue is `.L`
+# whatever its currency.
+[ib_venues]
+TSE = "TO"
+VENTURE = "V"
+TSXV = "V"
+CSE = "CN"
+NEO = "NE"
+AEQLIT = "NE"
+PURE = "CN"
+OMEGA = "TO"
+CHIXCA = "TO"
+ALPHA = "TO"
+LYNX = "TO"
+LSE = "L"
+LSEETF = "L"
+LSEIOB1 = "L"
+
+[lists]
+# Fiat currencies (ISO 4217) an exchange or broker row can be priced
+# or quoted in. Anything else on a crypto exchange is a crypto-asset:
+# erring toward "crypto" books a visible position, while a coin taken
+# for cash would drop a disposition silently.
+fiat = [
+  "USD", "CAD", "EUR", "GBP", "AUD", "NZD", "JPY", "CHF", "SGD", "HKD",
+  "SEK", "NOK", "DKK", "PLN", "CZK", "HUF", "BRL", "MXN", "INR", "ZAR",
+  "TRY", "KRW", "CNY", "CNH", "AED", "ILS",
+]
+
+# US-dollar stablecoins. Canada: US-dollar cash (tax-logic
+# CA-CRYPTO-02); USA: property valued at par in a swap (US-CRYPTO-02).
+usd_stablecoins = ["USDC", "USDT", "DAI", "PYUSD", "GUSD", "RLUSD", "FDUSD"]
+
+# Canada: split-share corporations (ticker root, every class and
+# preferred series). Their "distributions" are a corporation's
+# dividends (dated when paid, s.82(1)) and their return of capital a
+# PUC reduction (when paid) — not a trust's (tax-logic CA-INC-DATE-*).
+# A description naming a "SPLIT CORP" is matched too.
+split_share_corporations = [
+  "BK", "DF", "DFN", "DGS", "ENS", "FFN", "FTN", "GDV", "LBS", "LCS",
+  "LFE", "PDV", "PIC", "PWI", "SBC", "SBN", "WFS", "XMF", "XTD", "YCM",
+]
+
+# USA: cash-settled options on a broad-based index listed on a US
+# exchange — §1256 nonequity options (Form 6781, never Form 8949;
+# tax-logic US-OPT-04). Option ROOTS: standard, weekly / PM-settled,
+# mini and European-style roots.
+us_1256_index_option_roots = [
+  "SPX", "SPXW", "SPXPM", "XSP", "NDX", "NDXP", "XND", "RUT", "RUTW",
+  "MRUT", "VIX", "VIXW", "DJX", "OEX", "XEO",
+]
+
+# Option roots with a Cboe Global Trading Hours (evening) session:
+# from 20:15 Eastern, Sunday to Thursday, a fill trades on the NEXT
+# trading day (tax-logic CA-DATE / US-DATE evening-session rule).
+cboe_evening_session_roots = ["SPX", "SPXW", "XSP", "VIX", "VIXW"]
+
+# Kraken's legacy asset codes → the common ticker. (Fiat Z-codes —
+# ZUSD, ZCAD — are derived from the fiat list; bonded staking codes
+# such as DOT28.S from the shape.)
+[kraken_assets]
+XXBT = "BTC"
+XBT = "BTC"
+XETH = "ETH"
+XLTC = "LTC"
+XXRP = "XRP"
+XXLM = "XLM"
+XXMR = "XMR"
+XZEC = "ZEC"
+XXDG = "DOGE"
+XDG = "DOGE"
+XETC = "ETC"
+XMLN = "MLN"
+XREP = "REP"

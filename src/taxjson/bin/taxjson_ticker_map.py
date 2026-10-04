@@ -104,7 +104,8 @@ def _parse_map_file(file_path: Path):
     distinct_where: Dict[frozenset, tuple] = {}
     from io import StringIO
     from taxjson.lib.cli_diag import read_text_utf8
-    from taxjson.lib.ticker_map import (RETIRED_KEYWORDS, SIDE_KEYWORDS,
+    from taxjson.lib.ticker_map import (RENAME_KEYWORDS,
+                                        RETIRED_KEYWORDS, SIDE_KEYWORDS,
                                         SideRules, add_side_rule,
                                         parse_side_line)
     side = SideRules()
@@ -136,8 +137,8 @@ def _parse_map_file(file_path: Path):
             if kw not in _MAP_KEYWORDS:
                 problems.append(
                     f"{where}: line has no ticker.map keyword "
-                    f"(GLOBAL/TOBASE/JOURNAL/DELETE/DISTINCT/RENAME/"
-                    f"QUOTE/CRYPTO/EXTRACT/T1135): {line!r}")
+                    f"({'/'.join(RENAME_KEYWORDS + SIDE_KEYWORDS)}): "
+                    f"{line!r}")
                 continue
             if kw == "RENAME" and len(syms) > 2:
                 # RENAME OLD NEW YYYY-MM-DD [late=fold|late=separate]

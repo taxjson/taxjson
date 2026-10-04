@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### No built-in security data in the flow (owner request)
+
+- **One shipped market-data file.** The market facts and security lists
+  taxjson cannot read from an export — listing suffixes and their
+  currencies, fiat currencies, US-dollar stablecoins, Canadian split-share
+  corporations, US §1256 index-option roots, Cboe evening-session roots,
+  Kraken's legacy asset codes and IB's listing venues — now live in one
+  labelled file, `taxjson/data/markets.toml`, read by one module. A
+  project's `ticker.map` extends or overrides it one symbol at a time with
+  `STABLE`, `SPLITSHARE`, `INDEXOPT`, `EVENING`, `MULT` and `VENUE` lines,
+  and the run prints one note per symbol whenever a built-in entry decided
+  an outcome, naming the line that would change it.
+
 ### Command line
 
 - **`taxjson init` scaffolds the common accounts:** margin, TFSA, RRSP and a

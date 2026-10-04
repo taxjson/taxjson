@@ -464,6 +464,11 @@ Examples:
                   file=sys.stderr)
         sys.exit(2)
 
+    # The market lists' per-symbol overrides (lib/markets: STABLE,
+    # VENUE, EVENING, MULT, GLOBAL crypto codes) come from this map;
+    # without one, from TAXJSON_TICKER_MAP (`taxjson run` sets it).
+    from taxjson.lib.markets import use_ticker_map
+    use_ticker_map(args.ticker_map)
     if args.ticker_map:
         if not Path(args.ticker_map).exists():
             print(f"taxjson-brokerage: error: no such file: --ticker-map "

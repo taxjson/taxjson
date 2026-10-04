@@ -16,8 +16,9 @@ Directory layout:
                           # elections are decisions, not rebuildable data)
       rrsp/  tfsa/  ...
     ticker.map            # optional — symbol rules (GLOBAL/TOBASE/JOURNAL/DELETE/
-                          # DISTINCT/RENAME) and lookups (QUOTE/CRYPTO/
-                          # EXTRACT/T1135)
+                          # DISTINCT/RENAME), lookups (QUOTE/CRYPTO/
+                          # EXTRACT/T1135) and market-list entries
+                          # (STABLE/SPLITSHARE/INDEXOPT/EVENING/MULT/VENUE)
     reports/              # all outputs land here, overwritten on re-run
     work/                 # intermediate JSON (--fast reuses these via mtime)
 
@@ -627,6 +628,16 @@ def load_config(root: Path) -> Dict[str, Any]:
         _die(f"{path} is not valid TOML: {e}")
     _refuse_bad_account_types(cfg)
     _normalize_settings(cfg)
+    # The project's ticker.map extends the shipped market lists
+    # (lib/markets: STABLE, SPLITSHARE, INDEXOPT, EVENING, MULT, VENUE):
+    # every command and stage of this project reads the same one; an
+    # empty value means the project has none (a stray outer setting
+    # never applies).
+    from taxjson.lib.markets import ENV_TICKER_MAP
+    _tm = root / "ticker.map"
+    import os as _os
+    _os.environ[ENV_TICKER_MAP] = (str(_tm.resolve()) if _tm.is_file()
+                                   else "")
     return cfg
 
 
@@ -5489,6 +5500,22 @@ _TEMPLATE_TICKER_MAP = """\
 #                     or CA/CAN/CANADA/EXCLUDE for "not foreign property"
 #                     (`taxjson t1135`).
 #
+# Market lists — extend or override taxjson's shipped list (data/markets.toml;
+# the run notes once per symbol when a built-in entry decided something):
+#   STABLE     SYMBOL USD|NO   A US-dollar stablecoin (NO: not one).
+#   SPLITSHARE ROOT [NO]       A Canadian split-share corporation (dividends
+#                              dated when paid, not a trust's distribution).
+#   INDEXOPT   ROOT [NO]       US: a broad-based index option root (§1256).
+#   EVENING    ROOT [NO]       An option root with a Cboe evening session
+#                              (a fill from 20:15 ET is the next trading day).
+#   MULT       SYMBOL N        An option's contract size where the export
+#                              does not give it (SYMBOL: the option or root).
+#   VENUE      IBCODE SUFFIX   An IB listing exchange and its suffix (NO:
+#                              drop a built-in one).
+#   GLOBAL     CODE SYMBOL     Between bare crypto codes: folded by the
+#                              Coinbase/Kraken parsers before reading a row
+#                              (a staked-coin code into its coin).
+#
 # Examples — uncomment and edit:
 # RENAME   OLDQ.US    NEWQ.US   2024-06-10
 # GLOBAL   ABCX-B.US  ABCX.B.US
@@ -5500,6 +5527,10 @@ _TEMPLATE_TICKER_MAP = """\
 # CRYPTO   ABC        ABC12345
 # EXTRACT  Example US Dollar Unit Fund | USD | ABCX.U.TO
 # T1135    XYZQ.US    CA
+# STABLE   ZZUSD      USD
+# SPLITSHARE ZZQ
+# MULT     ZZQ1       50
+# GLOBAL   ZZC2       ZZC
 """
 
 # Keep generated artifacts out of version control. `taxjson run` rebuilds all

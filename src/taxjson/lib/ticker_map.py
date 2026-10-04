@@ -154,6 +154,20 @@ def underlying_of(symbol: str, aliases: dict) -> str:
 #       CA/CAN/CANADA/EXCLUDE for "not specified foreign property"
 #       (lib/t1135_country). Read by taxjson-t1135 / `taxjson t1135`.
 #
+# and the market-list keywords, each extending or overriding one entry
+# of the shipped market data (taxjson/data/markets.toml, lib/markets):
+#
+#   STABLE      SYMBOL USD|NO     a US-dollar stablecoin (NO: not one)
+#   SPLITSHARE  ROOT [YES|NO]     a Canadian split-share corporation
+#   INDEXOPT    ROOT [YES|NO]     a US broad-based index option root
+#                                 (§1256; US projects)
+#   EVENING     ROOT [YES|NO]     an option root traded in a Cboe evening
+#                                 session (dated the next trading day)
+#   MULT        SYMBOL N          an option's contract size (SYMBOL: the
+#                                 option, or its root for every series)
+#   VENUE       IBCODE SUFFIX|NO  an IB "Listing Exch" code and the listing
+#                                 suffix its lines get
+#
 # These used to be files of their own (yf_ticker.map,
 # crypto_ticker.map, ticker_extraction_overrides.txt, t1135.map);
 # `taxjson migrate` folds an old project's files into ticker.map.
@@ -167,7 +181,12 @@ def underlying_of(symbol: str, aliases: dict) -> str:
 # ---------------------------------------------------------------------------
 
 TICKER_MAP_NAME = "ticker.map"
-SIDE_KEYWORDS = ("QUOTE", "CRYPTO", "EXTRACT", "T1135")
+SIDE_KEYWORDS = ("QUOTE", "CRYPTO", "EXTRACT", "T1135", "STABLE",
+                 "SPLITSHARE", "INDEXOPT", "EVENING", "MULT", "VENUE")
+# The market-list keywords (lib/markets): each extends or overrides one
+# entry of taxjson's shipped market data (taxjson/data/markets.toml).
+MARKET_KEYWORDS = ("STABLE", "SPLITSHARE", "INDEXOPT", "EVENING", "MULT",
+                   "VENUE")
 # Keywords of removed features: lines carrying them are skipped by every
 # reader (read_side_rules lists where they are) — {keyword: what went}.
 RETIRED_KEYWORDS = {"TRADINGVIEW": "TradingView export removed"}
@@ -216,13 +235,22 @@ class SideRules:
         self.crypto: dict = {}
         self.extract: list = []
         self.t1135: dict = {}
+        # market-list lines (lib/markets): {KEY: value}
+        self.stable: dict = {}
+        self.splitshare: dict = {}
+        self.indexopt: dict = {}
+        self.evening: dict = {}
+        self.mult: dict = {}
+        self.venue: dict = {}
         self.problems: list = []
         self.t1135_problems: list = []
         self.retired: list = []
 
     def empty(self) -> bool:
         return not (self.quote or self.crypto or self.extract
-                    or self.t1135)
+                    or self.t1135 or self.stable or self.splitshare
+                    or self.indexopt or self.evening or self.mult
+                    or self.venue)
 
 
 def _comment_free(raw: str) -> str:
@@ -284,6 +312,43 @@ def parse_side_line(kw: str, line: str):
                 f"alpha-3 code, or {'/'.join(NOT_FOREIGN_WORDS)} for not "
                 f"foreign property)")
         return "t1135", toks[0].upper(), parse_country(toks[1])
+    if kw in ("SPLITSHARE", "INDEXOPT", "EVENING"):
+        if len(toks) not in (1, 2) or (
+                len(toks) == 2 and toks[1].upper() not in ("YES", "NO")):
+            raise ValueError(f"{kw} needs `{kw} ROOT` or `{kw} ROOT NO`")
+        root = toks[0].upper().split(".", 1)[0]
+        return (kw.lower(), root,
+                not (len(toks) == 2 and toks[1].upper() == "NO"))
+    if kw == "STABLE":
+        if len(toks) != 2 or toks[1].upper() not in ("USD", "NO"):
+            raise ValueError("STABLE needs `STABLE SYMBOL USD` (a "
+                             "US-dollar stablecoin) or `STABLE SYMBOL NO`")
+        return "stable", toks[0].upper(), toks[1].upper() == "USD"
+    if kw == "MULT":
+        if len(toks) != 2:
+            raise ValueError("MULT needs `MULT SYMBOL N` (SYMBOL an option "
+                             "or its root, N the shares per contract)")
+        try:
+            n = float(toks[1])
+        except ValueError:
+            n = float("nan")
+        if not (0 < n < float("inf")):
+            raise ValueError(f"MULT contract size {toks[1]!r} must be a "
+                             f"positive number")
+        return "mult", toks[0].upper(), n
+    if kw == "VENUE":
+        if len(toks) != 2:
+            raise ValueError("VENUE needs `VENUE IBCODE SUFFIX` (SUFFIX a "
+                             "listing suffix such as TO or L) or `VENUE "
+                             "IBCODE NO`")
+        suf = toks[1].upper().lstrip(".")
+        if suf != "NO":
+            from taxjson.lib.markets import known_suffixes
+            if suf not in known_suffixes():
+                raise ValueError(
+                    f"VENUE suffix {toks[1]!r} is not a listing suffix "
+                    f"taxjson knows ({', '.join(sorted(known_suffixes()))})")
+        return "venue", toks[0].upper(), (None if suf == "NO" else suf)
     raise ValueError(f"{kw} is not a ticker.map lookup keyword")
 
 
