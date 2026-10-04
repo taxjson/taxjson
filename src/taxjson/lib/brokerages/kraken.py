@@ -814,8 +814,8 @@ class KrakenBrokerage(BaseBrokerage):
                 # Preserve Kraken's per-fill txid as the transaction id. Split
                 # fills land in the same second with identical qty/price/cost,
                 # so without a unique id the sort-stage dedup collapses them
-                # into one and the inventory loses real fills (e.g. 8 BNB
-                # fills on 2025-10-17 within ~1.5s).
+                # into one and the inventory loses fills (e.g. several
+                # partial fills of one order within the same second).
                 if _txid:
                     tx['id'] = _txid
                 transactions.append(tx)
@@ -1196,7 +1196,7 @@ class KrakenBrokerage(BaseBrokerage):
                        txid, fee_usd=None) -> List[Dict[str, Any]]:
         """[the sale of the fee coins] when a ledger fee was taken IN A
         COIN, else []. A network/withdrawal fee Kraken took in a coin
-        (0.002 TAO on a 0.1 TAO withdrawal; or, with `feecurrency`, in
+        (0.05 ABC on a 4 ABC withdrawal; or, with `feecurrency`, in
         another coin — audit S061-16) left your ownership: a disposition
         at FMV (tax-logic CA-CRYPTO-03 / US-CRYPTO-03). The same for a
         fee in a coin on a fiat withdrawal (A2-1018) or on a reward

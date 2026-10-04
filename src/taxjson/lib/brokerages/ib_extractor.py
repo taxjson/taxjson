@@ -83,7 +83,7 @@ def _ib_refine_split_ratio(info: Dict[str, Any]) -> None:
 
 
 # A dotted symbol whose last part is a currency code is an IB currency or
-# venue line (RGLD.CAD: the temporary line a merger fraction sat on), not
+# venue line (ABH.CAD: the temporary line a merger fraction sat on), not
 # a class share like BBD.B or a unit like DIR.UN (audit R1-59 / S059-00).
 _IB_CURRENCY_TAGS = frozenset({
     'CAD', 'USD', 'EUR', 'GBP', 'AUD', 'CHF', 'JPY', 'HKD', 'SEK', 'NOK',
@@ -336,7 +336,7 @@ _IB_MONEY_COLUMNS = frozenset({
 _IB_CASH_TOL = 0.02
 _IB_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 _IB_TIME_RE = re.compile(r'^\d{1,2}:\d{2}(?::\d{2})?$')
-# FII option symbol, OCC-style with IB's padding: "DFDV  251121P00012500".
+# FII option symbol, OCC-style with IB's padding: "QZD   261218P00012500".
 _IB_FII_OCC_RE = re.compile(r'^([A-Z0-9.]+)\s+(\d{6})([CP])(\d{8})$')
 _MON_MAP = {
     'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04', 'MAY': '05',
@@ -894,8 +894,8 @@ def _ib_require_date(raw: str, where: str, field: str = 'Date') -> str:
 
 def _canonical_root(roots) -> str:
     """The canonical option root among aliases IB lists for ONE conid.
-    OCC renames an adjusted contract by appending a digit (DFDV ->
-    DFDV1), so the root every other alias extends is the original;
+    OCC renames an adjusted contract by appending a digit (QZD ->
+    QZD1), so the root every other alias extends is the original;
     otherwise the shortest (then alphabetical) wins."""
     roots = sorted(set(roots), key=lambda r: (len(r), r))
     for r in roots:
@@ -906,7 +906,7 @@ def _canonical_root(roots) -> str:
 
 def _root_aliases(occ_by_conid, underlying_by_conid):
     """(root_alias, alias_conids) for conids listed under several option
-    roots (DFDV 251121P..., DFDV1 251121P... after a corporate action
+    roots (QZD 251121P..., QZD1 251121P... after a corporate action
     renamed the adjusted contract): every alias root maps to the
     canonical one. The canonical root is the contract's UNDERLYING when
     it is one of the roots — after a ticker rename (SQ -> XYZ) the
@@ -920,7 +920,7 @@ def _root_aliases(occ_by_conid, underlying_by_conid):
             continue
         und = underlying_by_conid.get(conid) or ''
         # Every Underlying any of the account's statements names for the
-        # conid: one statement said DFDV and a re-download DFDV1, and
+        # conid: one statement said QZD and a re-download QZD1, and
         # the file being parsed won — one put series split across two
         # symbols (audit A2-0087). Among several, the prefix rule.
         unds = ({u.strip() for u in und} if isinstance(und, (set, frozenset))
@@ -1248,10 +1248,10 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
         out['accounts'] |= out.get('account_field', set())
     return out
 
-# `Commission Adjustments` description: `Refund (KWEB, -200 2025-02-07)`
+# `Commission Adjustments` description: `Refund (QZA, -150 2024-02-07)`
 # — the ticker sits first inside the parenthetical.
 _IB_COMM_ADJ_TICKER_RE = re.compile(r'\(\s*([A-Z0-9][A-Z0-9 .\-]*?)\s*,')
-# ... and the trade it adjusts: `Refund (KWEB, 400, 2026-05-13)`.
+# ... and the trade it adjusts: `Refund (QZA, 250, 2024-05-14)`.
 _IB_COMM_ADJ_TRADE_RE = re.compile(
     r'\(\s*([A-Z0-9][A-Z0-9 .\-]*?)\s*,\s*([-+]?[\d,]*\.?\d+)\s*,?\s*'
     r'(\d{4}-\d{2}-\d{2})\s*\)')
@@ -1930,7 +1930,7 @@ class IbBrokerage(BaseBrokerage):
 
     def _check_symbol_tag(self, root: str, where: str) -> None:
         """Say once per symbol when an IB stock symbol carries a
-        currency/venue tag (RGLD.CAD): it is booked as a security of
+        currency/venue tag (ABH.CAD): it is booked as a security of
         its own, apart from the plain listing."""
         root = (root or '').strip().replace(' ', '.')
         if '.' not in root:
@@ -2034,11 +2034,11 @@ class IbBrokerage(BaseBrokerage):
                        root_alias: Dict[str, str],
                        aliased_roots: Dict[str, str], where: str,
                        strict: bool = True) -> str:
-        """OCC symbol for an IB option row ("XSP 16JAN26 68.5 P",
-        futures-option monthly "CL JAN26 52 P", legacy "SPX 20241220 P
+        """OCC symbol for an IB option row ("ABC 15JAN27 12.5 P",
+        futures-option monthly "CL MAR27 40 P", legacy "SPX 20241220 P
         4000"). The root is canonicalized through the statement's
-        option-root aliases (one conid listed as DFDV 251121P... and
-        DFDV1 251121P... after a corporate action), so the opening and
+        option-root aliases (one conid listed as QZD 251121P... and
+        QZD1 251121P... after a corporate action), so the opening and
         the assigned leg share ONE symbol and the premium folds."""
         symbol = raw
 
@@ -3349,8 +3349,8 @@ class IbBrokerage(BaseBrokerage):
                     continue
                 # Keyed on the EX date, not the pay date: IB revises
                 # a dividend's pay date between the Po and the Re row
-                # (a real ENB accrual posted pay 03-01, reversed pay
-                # 03-02), and a pay-date key split the pair into two
+                # (an accrual can post with one pay date and reverse
+                # with the next day's), and a pay-date key split the pair into two
                 # half-open accruals — a false "accrued but not
                 # booked" warning for a dividend already paid. The
                 # pay date is only a fallback key when IB omits the

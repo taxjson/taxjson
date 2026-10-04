@@ -13,15 +13,15 @@ The `[[capital_gains_dividends]]` entries of the project's taxjson.toml
 name them. Canada only (lib/country CONFIG_COUNTRY): a US project
 refuses the table.
 
-    [[capital_gains_dividends]]       # every 2025 LFE dividend
-    symbol = "LFE.TO"
+    [[capital_gains_dividends]]       # every 2025 ABD dividend
+    symbol = "ABD.TO"
     year = 2025
     amount = "all"
 
-    [[capital_gains_dividends]]       # 5.50 of the Sep-10 payment
+    [[capital_gains_dividends]]       # 1.25 of the Jun-16 payment
     symbol = "XTD.TO"
-    date = 2025-09-10
-    amount = 5.50
+    date = 2025-06-16
+    amount = 1.25
 
     [[capital_gains_dividends]]       # box 18 total for the year
     symbol = "FFN.TO"
@@ -30,9 +30,9 @@ refuses the table.
     account = "margin"
 
 - symbol: the dividend row's symbol as the books spell it (after
-  ticker.map); a bare root without a suffix (LFE) matches that root's
-  Canadian listings only (LFE.TO, LFE.V ...) — never another class or
-  preferred series (LFE.PR.B.TO) nor a foreign listing (LFE.US): name
+  ticker.map); a bare root without a suffix (ABD) matches that root's
+  Canadian listings only (ABD.TO, ABD.V ...) — never another class or
+  preferred series (ABD.PR.B.TO) nor a foreign listing (ABD.US): name
   those in full.
 - year or date (exactly one): a year (every dividend whose tax date is
   in it) or one date (the payment's pay date, or its record date when
@@ -128,13 +128,13 @@ def parse_map(text: str) -> List[Entry]:
         if len(parts) not in (3, 4):
             raise CgDividendMapError(
                 f"{where}: expected SYMBOL WHEN AMOUNT [ACCOUNT] (e.g. "
-                f"`LFE.TO 2025 all` or `XTD.TO 2025-09-10 5.50`), got "
+                f"`ABD.TO 2025 all` or `ABD.TO 2025-06-16 1.25`), got "
                 f"{raw.strip()!r}")
         sym, when, amt = parts[0].upper(), parts[1], parts[2]
         if not (_YEAR_RE.match(when) or _DATE_RE.match(when)):
             raise CgDividendMapError(
                 f"{where}: WHEN must be a year (2025) or a date "
-                f"(2025-09-10), got {when!r}")
+                f"(2025-06-16), got {when!r}")
         if amt.lower() == "all":
             amount = None
         else:
@@ -191,7 +191,7 @@ def entries_from_config(cfg: dict) -> Optional[List[Entry]]:
         if ("year" in e) == ("date" in e):
             raise CgDividendMapError(
                 f"{where}: give exactly one of `year = 2025` (every "
-                f"dividend of that tax year) or `date = 2025-09-10` (one "
+                f"dividend of that tax year) or `date = 2025-06-16` (one "
                 f"payment)")
         if "year" in e:
             y = e["year"]
@@ -205,7 +205,7 @@ def entries_from_config(cfg: dict) -> Optional[List[Entry]]:
             when = iso_date(e["date"]) or ""
             if not when:
                 raise CgDividendMapError(
-                    f"{where}: date must be a date such as 2025-09-10 "
+                    f"{where}: date must be a date such as 2025-06-16 "
                     f"(got {e['date']!r})")
         amt = e.get("amount")
         if isinstance(amt, str) and amt.strip().lower() == "all":
@@ -216,7 +216,7 @@ def entries_from_config(cfg: dict) -> Optional[List[Entry]]:
         else:
             raise CgDividendMapError(
                 f"{where}: amount must be \"all\" or the positive box 18 "
-                f"amount in the dividend's currency, e.g. 5.50 (got "
+                f"amount in the dividend's currency, e.g. 1.25 (got "
                 f"{amt!r})")
         acct = e.get("account", "")
         if not isinstance(acct, str):

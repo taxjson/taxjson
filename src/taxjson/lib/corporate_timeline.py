@@ -307,8 +307,8 @@ def split_event_key(symbol: str, date: str, ratio: Any, symbol_new: Any,
     return (symbol, account, date, rounded, new_sym)
 
 
-# Brokers date one corporate split differently: IB books KLAC's 10:1 on
-# 06-11, Questrade on 06-15. A key on the exact date kept both copies and
+# Brokers date one corporate split differently: IB can book a 10:1 split on
+# one day and Questrade the same split a few days later. A key on the exact date kept both copies and
 # scaled the pool by ratio**2 (2026-09 audit). Copies of the same split
 # (symbol, ratio, rename target[, account]) within this many calendar
 # days are ONE event — use `split_seen`, not a bare `key in seen`. Two

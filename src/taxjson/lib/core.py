@@ -208,8 +208,8 @@ EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
                    'source_account', 'exercise_of', 'corp_cash')
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]
-# e.g. "AAPL250120C00150000.US", "MDA251219P00029000.TO", or
-# "F:CL251220P00053000.US" for futures options.
+# e.g. "AAPL250120C00150000.US", "ABC271217P00029000.TO", or
+# "F:CL271116P00040000.US" for futures options.
 #
 # Single regex covering every option-detection / underlying-extraction
 # need across the codebase:
@@ -487,7 +487,7 @@ _RIGHT_RE = re.compile(r'^(.+?)[.\-](WTS|WT|WS|WR|RT|W|R)([.\-][A-Z])?$')
 def right_underlying(symbol: str) -> Optional[str]:
     """The share line a WARRANT or RIGHT names, from the dotted/dashed
     listing spelling ('SLH.WT.TO' -> 'SLH.TO', 'ABC.RT.TO' -> 'ABC.TO',
-    'XYZ.WS.US' -> 'XYZ.US'), else None. Undotted US forms ('DFDVW')
+    'XYZ.WS.US' -> 'XYZ.US'), else None. Undotted US forms ('QZDW')
     are ambiguous with ordinary tickers and are not recognised."""
     if not symbol or is_option_symbol(symbol):
         return None
@@ -981,8 +981,8 @@ def _effective_fee_for_trace(tx) -> float:
     When both are zero — some brokers fold fees into net_amount only (RBC
     being the canonical case) — back-compute from |qty * price * multiplier|
     vs |net_amount|. OCC option symbols get the 100x contract multiplier so
-    a -75 @ 0.4193 option sale shows the ~$100 commission RBC charged instead
-    of a misleading 0.
+    a cheap option sale shows the commission RBC charged instead of a
+    misleading 0.
 
     The math the engine uses for cost basis / proceeds is unaffected — it
     already keys off net_amount, which includes the fee. This is purely a
@@ -1014,7 +1014,7 @@ def _effective_fee_for_trace(tx) -> float:
     # Units-mismatch guard (a per-contract quote against a per-share
     # net): only a residual both large and most of the trade's value.
     # The old 25%-of-net test hid real commissions on cheap options
-    # (11.95 on a 32.00 buy showed as 0).
+    # (11.70 on a 30.00 buy showed as 0).
     if abs(derived) > max(50.0, 0.5 * theoretical):
         return 0.0
     return derived
@@ -1357,7 +1357,7 @@ def class_root_aliases(symbols) -> Dict[str, str]:
     """{option underlying: share line} for an option root that names no
     share line among `symbols` but exactly ONE class share of that root
     on the same market: RBC books Rogers' Montreal calls under the root
-    RCI (RCI251219C00045000.TO) while the shares are RCI.B.TO; OCC spells
+    RCI (RCI271217C00030000.TO) while the shares are RCI.B.TO; OCC spells
     Berkshire B calls BRKB. Used by both engines' call-replacement rules
     (CA-SL-05 / US-WASH-12; audit A2-0015/0016/0207), the way the
     assignment resolver and the reports already map the root (S030-02,
@@ -1886,7 +1886,7 @@ def _fold_per_account_rename_ratios(taxable: List[TaxTransaction],
     corp_actions emits a rename-SPLIT per account with the ratio the
     broker actually delivered (qty_received / qty_disposed, so a snapped
     fractional entitlement leaves no dust). Two accounts of one merger
-    can therefore carry different ratios (15 HES -> 15 CVX, 40 -> 41).
+    can therefore carry different ratios (12 ABC -> 12 ABD, 40 -> 42).
     Canada pools are symbol-global (s.47), so those rows neither dedupe
     (the ratio is part of the event key) nor scale their own account:
     the first renamed the WHOLE pool at its account's ratio and the
@@ -2232,10 +2232,10 @@ class CanadaTaxRules(TaxRules):
 
         # Symbol-alias map for SPLIT-renames. CRA s. 85.1(5) and
         # similar reorgs treat the pre- and post-rename security as
-        # substantially identical for wash-sale purposes — so SSL.TO
-        # and RGLD.US must share a single time-series when computing
-        # the 30-day affiliated balance, and a loss on SSL.TO must
-        # consider RGLD.US buys as potential wash triggers.
+        # substantially identical for wash-sale purposes — so ABG.TO
+        # and ABH.US must share a single time-series when computing
+        # the 30-day affiliated balance, and a loss on ABG.TO must
+        # consider ABH.US buys as potential wash triggers.
         #
         # Build equivalence classes via simple union-find on every
         # SPLIT with a non-empty symbol_new. The map sends every
@@ -2261,10 +2261,10 @@ class CanadaTaxRules(TaxRules):
         # for SPLIT). Independent of the iteration loop because virtual
         # DISALLOW/ADJUST txs don't move this balance.
         #
-        # Group trades by equivalence class (not raw symbol) so SSL.TO
-        # → RGLD.US shares one chronological running balance. Without
-        # this, post-rename RGLD.US buys wouldn't show up in the 30-day
-        # affiliated check for an SSL.TO loss.
+        # Group trades by equivalence class (not raw symbol) so ABG.TO
+        # → ABH.US shares one chronological running balance. Without
+        # this, post-rename ABH.US buys wouldn't show up in the 30-day
+        # affiliated check for an ABG.TO loss.
         running_bal_by_tx: Dict[str, float] = {}
         for rep in set(row_cls(t) for t in all_txs):
             txs_sym = sorted(
@@ -2731,7 +2731,7 @@ class CanadaTaxRules(TaxRules):
                         # ACB of nil — and must not touch total_cost
                         # (it used to leak into the NEXT purchase's
                         # ACB, understating that position's later
-                        # gain; seen on real 2026 data).
+                        # gain).
                         _empty_roc = (abs(pool['qty']) <= 1e-6
                                       and not str(tx.id or '').startswith('WASH_')
                                       and float(tx.net_amount) < -0.005)
@@ -2920,7 +2920,7 @@ class CanadaTaxRules(TaxRules):
                     # Rename the pool when symbol_new is set and differs
                     # from the source symbol — that's how mergers and
                     # corporate reorganizations move ACB onto a new
-                    # ticker (e.g. SSL.TO → RGLD.US 1-for-16 via the
+                    # ticker (e.g. ABG.TO → ABH.US 1-for-16 via the
                     # s. 85.1(5) rollover election). Before this, the
                     # SPLIT silently dropped symbol_new and any future
                     # trade of the new ticker started from a zero-cost
@@ -3592,8 +3592,8 @@ class CanadaTaxRules(TaxRules):
                 # but settle-day +32 was admitted as a trigger the balance
                 # walk then excluded.
                 loss_date = datetime.strptime(get_sort_date(tx), '%Y-%m-%d')
-                # Bridge SPLIT-renames: a post-rename RGLD.US buy in the
-                # 30-day window after an SSL.TO loss is a candidate
+                # Bridge SPLIT-renames: a post-rename ABH.US buy in the
+                # 30-day window after an ABG.TO loss is a candidate
                 # trigger under CRA's substantially-identical rule. Match
                 # on equivalence-class representative instead of raw
                 # symbol. `alias_of` is identity for symbols never

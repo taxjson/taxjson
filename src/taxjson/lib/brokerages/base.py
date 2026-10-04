@@ -905,8 +905,8 @@ class BaseBrokerage:
             implicit = abs(theoretical_gross - abs(net_amount))
         if implicit < min_fee:
             return 0.0
-        # net == 0 is exempt on purpose: a real RBC sale of 30 contracts
-        # at 0.01 nets $0 because the commission ate the whole $30 gross.
+        # net == 0 is exempt on purpose: an RBC sale of a few contracts
+        # at 0.01 can net $0 when the commission eats the whole gross.
         # A $0 net that is a MISSING cell (audit R1-91) must be refused
         # by the parser before it gets here (Webull does).
         allowance = 10.0 + (2.0 * abs(qty) if is_option else 0.0)

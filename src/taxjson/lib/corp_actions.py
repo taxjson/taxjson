@@ -59,9 +59,9 @@ class CorporateAction:
     date: str
     time: str
     action_type: str        # 'merger' | 'spinoff' | 'split' | 'name_change'
-    source_symbol: str      # e.g. 'SSL.TO'
+    source_symbol: str      # e.g. 'ABG.TO'
     source_isin: str
-    target_symbol: str      # e.g. 'RGLD.US'
+    target_symbol: str      # e.g. 'ABH.US'
     target_isin: str
     ratio_new: float        # "1 for 16" → 1
     ratio_old: float        # "1 for 16" → 16
@@ -74,7 +74,7 @@ class CorporateAction:
     raw_descriptions: List[str] = field(default_factory=list)
     event_id: str = ""
     # Acquisition-side FMV in the target currency. Critical when the
-    # merger crosses currencies (SSL.TO CAD → RGLD.US USD): the BUY
+    # merger crosses currencies (ABG.TO CAD → ABH.US USD): the BUY
     # leg's new-basis is the USD value, not the source-side CAD figure.
     # Defaults to 0 for back-compat / unknown — rules that need it
     # should fall back to `fmv` rather than emit a zero-value row.
@@ -94,8 +94,8 @@ class CorporateAction:
     fractional_delivery: bool = False
     # Currency `target_fmv` is denominated in, when it differs from
     # `target_currency`: a cross-listing chain keeps the value of the
-    # ECONOMIC merger hop (RGLD.CAD in-leg, CAD) while the position
-    # lands on the final hop's listing (RGLD.US, USD). '' = the target
+    # ECONOMIC merger hop (ABH.CAD in-leg, CAD) while the position
+    # lands on the final hop's listing (ABH.US, USD). '' = the target
     # currency.
     target_fmv_currency: str = ''
     # The broker account the event was read from (IB statement account,
@@ -168,7 +168,7 @@ class CorporateAction:
     @staticmethod
     def _sym_root(symbol: str) -> str:
         """Lowercased symbol with its market suffix and punctuation
-        stripped: SSL.TO -> ssl, RGLD.CAD.TO -> rgldcad, BRK.B.US ->
+        stripped: ABG.TO -> abg, ABH.CAD.TO -> abhcad, BRK.B.US ->
         brkb. Used only for the readable part of the event id."""
         parts = (symbol or '').rsplit('.', 1)
         if len(parts) == 2 and parts[1].upper() in set(
@@ -179,7 +179,7 @@ class CorporateAction:
 
     def _compute_id(self, *, account_salted: bool = False) -> str:
         """Human-legible id: `YYYYMMDD-src-tgt-hhhh`, e.g.
-        `20251022-ssl-rgld-51d7`. The readable part carries date and
+        `20250317-abg-abh-1a2b`. The readable part carries date and
         symbols; the 4-hex suffix (hashed from the FULL identifying
         fields: ISINs, ratio — not the account name) keeps ids unique
         when the readable part collides. Older manifests used the bare
@@ -210,9 +210,9 @@ class CorporateAction:
 
 
 # Matches an IB "Merged(Acquisition)" Corporate Action description, e.g.:
-#   SSL(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 (RGLD.CAD, ROYAL GOLD INC, US0000000002)
+#   ABG(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 (ABH.CAD, ABH GOLD INC, US0000000002)
 # The trailing parenthetical block also carries a target ticker (which may be
-# the cross-listing intermediate like "RGLD.CAD") that we use to chain the
+# the cross-listing intermediate like "ABH.CAD") that we use to chain the
 # subsequent .CAD→.US journal into a single logical event.
 #
 # Tickers may carry a class-share space ('BRK B') and ratios a decimal
@@ -547,7 +547,7 @@ def _ib_leg_symbol(sym: str, currency: str, fii: Dict[tuple, Any],
 
 def _ib_warn_currency_tags(events: List[CorporateAction]) -> None:
     """Say once per symbol when an event's leg is an IB currency/venue
-    tagged line (RGLD.CAD): booked as a security of its own, apart from
+    tagged line (ABH.CAD): booked as a security of its own, apart from
     the plain listing. The statement parser's R1-59 warning never saw a
     symbol that appears only in a merger or spin-off (A2-0556)."""
     from taxjson.lib.brokerages.ib_extractor import _IB_CURRENCY_TAGS
@@ -676,7 +676,7 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
     * Cross-listing journals (a CAD-side merger entry immediately followed
       by a 1-for-1 CAD→US "Merged(Acquisition) WITH ..." that's really
       just IB moving the position from the .TO sub-account to the .US one)
-      get collapsed into the original SSL→RGLD.US event.
+      get collapsed into the original ABG→ABH.US event.
     """
     own = _read_ib_corporate_actions(csv_path)
     statement_account = own['statement_account']
@@ -713,8 +713,8 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
 
     # Group rows that describe the same merger. IB emits two rows per
     # event but uses inconsistent target tickers in each leg's parenthetical
-    # — the in-leg names the acquirer (e.g. RGLD.CAD), the out-leg re-names
-    # the source itself (e.g. SSL). The one invariant across both legs is
+    # — the in-leg names the acquirer (e.g. ABH.CAD), the out-leg re-names
+    # the source itself (e.g. ABG). The one invariant across both legs is
     # the "WITH <ISIN>" — the merger counterparty. Key on that.
     grouped: Dict[tuple, Dict[str, Any]] = {}
     multi_grouped: Dict[tuple, Dict[str, Any]] = {}
@@ -1148,12 +1148,12 @@ def _apply_suffix(symbol: str, suffix: str) -> str:
 def _collapse_cross_listing_chains(events: List[CorporateAction]) -> List[CorporateAction]:
     """Fold IB's cross-listing journals into the upstream merger.
 
-    Pattern (real example):
-        Event A: SSL.TO  → RGLD.CAD  (16-for-1, the actual merger)
-        Event B: RGLD.CAD → RGLD     (1-for-1, IB's currency-side journal
+    Pattern (example):
+        Event A: ABG.TO  → ABH.CAD  (16-for-1, the actual merger)
+        Event B: ABH.CAD → ABH     (1-for-1, IB's currency-side journal
                                        reported again as Merged(Acquisition))
 
-    The user's economic position is `SSL.TO → RGLD at 16-for-1`. The
+    The user's economic position is `ABG.TO → ABH at 16-for-1`. The
     .CAD intermediate is bookkeeping. We walk forward through every
     1-for-1 journal we can find rooted at the current target until
     exhausted — this handles deeper chains (A→B→C→D) without a separate
@@ -1233,7 +1233,7 @@ def _collapse_cross_listing_chains(events: List[CorporateAction]) -> List[Corpor
                 # Taking the final hop's value dated a later journal's
                 # figure (once a row IB then cancelled and rebooked)
                 # back to the merger and valued the exchange twice
-                # (2026-09 audit: SSL->RGLD, 1,774 CAD apart).
+                # (2026-09 audit).
                 target_currency=current.target_currency,
                 target_fmv=(ev.target_fmv if ev.target_fmv > 0
                             else current.target_fmv),
@@ -1443,7 +1443,7 @@ def parse_questrade_corporate_actions(
         date = _parse_qt_date(row.get('Transaction Date', ''))
 
         # Group rows belonging to the same distribution CHAIN.
-        # Keying on target symbol alone broke the real DFDVW case:
+        # Keying on target symbol alone broke a warrant distribution:
         # Questrade's placeholder row carries NO symbol (an event
         # with an EMPTY target — an invalid book row downstream),
         # while its reversal/repost pair carries the real symbol
@@ -1492,8 +1492,8 @@ def parse_questrade_corporate_actions(
         # The chain's target symbol: the first row that carries one
         # (placeholder rows don't). Suffix it by currency exactly like
         # the Questrade parser does (USD -> .US, CAD -> .TO) — a bare
-        # target emitted book rows on 'DFDVW' while the trades carry
-        # 'DFDVW.US', splitting one position across two symbols.
+        # target emitted book rows on 'QZDW' while the trades carry
+        # 'QZDW.US', splitting one position across two symbols.
         symbol = next((r['symbol'] for r in rows if r['symbol']), '')
         internal = bool(symbol and _INTERNAL_CODE_RE.match(symbol.upper()))
         if not symbol:
@@ -1581,8 +1581,8 @@ def parse_questrade_corporate_actions(
         symbol = _suffix(bare, listing)
         if internal and not _renamed(symbol, renames):
             # A manual web export writes the distributed warrant/right
-            # under Questrade's internal code (D056068) while its later
-            # sale carries the real ticker (DFDVW): booked as-is the
+            # under Questrade's internal code (D012345) while its later
+            # sale carries the real ticker (QZDW): booked as-is the
             # spinoff is a phantom long and the sale an open short, and
             # in a taxable account the sale drops out of the year's
             # gains (audit R1-3). Nothing in the export links the two.
@@ -1654,9 +1654,9 @@ parse_questrade_corporate_actions.accepts_renames = True
 #   REV  reverse split         "REV - ... REV SPLIT TO ...; 1 FOR 10" / "...
 #                               RESULT OF REVERSE SPLIT" (+ "REVERSE ENTRY"
 #                               corrections that cancel a leg)
-#   MER  reorganization w/ ROC "MER - THOMSON REUTERS CORP COM NEW DEFAULT: ROC
-#                               OF C$6.1585 + .963957 NEW SHS PER 1 OLD"
-#   XCH  option adjustment     "XCH - CALL .TOU 03/21/25 64 ... ADJ FOR
+#   MER  reorganization w/ ROC "MER - ABC HOLDINGS CORP COM NEW DEFAULT: ROC
+#                               OF C$2.40 + .950000 NEW SHS PER 1 OLD"
+#   XCH  option adjustment     "XCH - CALL .ABC 03/19/27 40 ... ADJ FOR
 #                               SPECIAL CASH DIV" (old code out, new code in)
 # `pair_rbc_reorganizations` pairs each removal with its receipt; only true
 # mergers ("MERGER TO") need a tax election and become CorporateActions here.
@@ -2957,8 +2957,8 @@ def _snap_qty_to_whole_shares(
     cleanly into the user's source holding. (We floor, not round: the
     user keeps N whole shares and gets cash for the leftover fraction.)
 
-    Without this, an SSL.TO 1-for-16 merger applied to a holding that
-    isn't a multiple of 16 would leave a phantom 0.00XX RGLD.US dust
+    Without this, an ABG.TO 1-for-16 merger applied to a holding that
+    isn't a multiple of 16 would leave a phantom 0.00XX ABH.US dust
     position in the inventory forever — the engine has no other path
     to nuke it (the user already DELETEs the broker's cash-in-lieu
     rows via `ticker.map`, but those rows are on the source side; the
@@ -3246,9 +3246,9 @@ def _emit_basis_carryover_rename(event: CorporateAction, hints: dict,
 
     Share count: we scale by the EMPIRICAL `qty_received / qty_disposed`
     rather than the nominal `ratio_new/ratio_old`. When a broker snaps a
-    fractional entitlement to whole shares plus cash-in-lieu (RBC delivers
-    15 whole CVX for a 1.025-for-1 merger on 15 HES, not 15.375), the
-    nominal ratio would leave a phantom 0.375-share dust position the
+    fractional entitlement to whole shares plus cash-in-lieu (a broker delivers
+    12 whole ABD for a 1.05-for-1 merger on 12 ABC, not 12.6), the
+    nominal ratio would leave a phantom 0.6-share dust position the
     engine can never clear. The empirical factor lands the pool on exactly
     the shares the broker delivered.
 

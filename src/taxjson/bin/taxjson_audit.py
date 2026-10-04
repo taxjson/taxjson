@@ -1084,9 +1084,9 @@ def main(argv=None) -> int:
     date_key = "date_settle" if args.tax_date == "settle" else "date"
 
     # The symbol filter also takes the broker's own ticker: every block
-    # prints the source row (SELL 200 CCJ.US) and its MAPPING, yet
-    # `audit CCJ.US` matched nothing because the books carry the
-    # ticker.map target (CCO.TO) (S048-17).
+    # prints the source row (SELL 120 ABC.US) and its MAPPING, yet
+    # `audit ABC.US` matched nothing because the books carry the
+    # ticker.map target (ABC.TO) (S048-17).
     _want_syms = [str(w).upper() for w in (args.symbol or [])]
     if _want_syms and tmap is not None:
         for _attr in ("glob", "tobase", "journal"):

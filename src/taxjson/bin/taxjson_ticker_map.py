@@ -36,7 +36,7 @@ from taxjson.lib.ticker_map import map_ticker
 
 # A ticker-map line is `KEYWORD from [to]`. One file, four rule types:
 #   GLOBAL  from to   — a plain rename; applies in every stage (a
-#                       security's true ticker, e.g. DFDV1 -> DFDV).
+#                       security's true ticker, e.g. QZD1 -> QZD).
 #   TOBASE  from to   — currency-equivalent consolidation; applies only
 #                       when converting to base currency (the main
 #                       pipeline). The raw holdings view keeps the two
@@ -478,9 +478,9 @@ def guard_option_listing_collisions(symbols, mapping: Dict[str, str],
                                     ) -> Dict[str, str]:
     """`mapping` plus an identity rule for every OPTION the underlying
     rule would move onto a contract code the book already carries
-    under that code natively (R1-16). `TOBASE BCE.US BCE.TO` renames
-    BCE270115C00025000.US (a USD-strike OCC contract) to ...TO — when
-    the book also trades the Montreal BCE270115C00025000.TO (a
+    under that code natively (R1-16). `TOBASE ABC.US ABC.TO` renames
+    ABC271217C00030000.US (a USD-strike OCC contract) to ...TO — when
+    the book also trades the Montreal ABC271217C00030000.TO (a
     CAD-strike CDCC contract), the rename pooled two different
     properties' ACB (not identical under s.47/s.54) and changed the
     reported gain without a word. The US contract now keeps its own
@@ -510,8 +510,8 @@ def apply_mapping(tx: TaxTransaction, mapping: Dict[str, str]) -> TaxTransaction
         tx.symbol = mapped_symbol
     # A SPLIT-rename's TARGET must consolidate under the same identity
     # as the trades it renames INTO. Mapping only tx.symbol left e.g.
-    # `HES.US -> symbol_new=CVX.US` pointing at an orphan CVX.US pool
-    # while the later CVX trades mapped to CVX.TO — the engine renamed
+    # `ABC.US -> symbol_new=ABD.US` pointing at an orphan ABD.US pool
+    # while the later ABD trades mapped to ABD.TO — the engine renamed
     # the basis into a pool no sale ever draws from (phantom short +
     # stranded ACB).
     new_sym = getattr(tx, 'symbol_new', '') or ''

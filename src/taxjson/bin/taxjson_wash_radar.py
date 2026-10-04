@@ -777,8 +777,8 @@ def main():
         # Cash-flow events don't change the share count. Their `quantity` is
         # the number of shares the dividend/tax/interest was computed ON (for
         # reconciliation), NOT shares acquired — counting it inflated the
-        # running position (e.g. two WSP.TO dividends of 50 + 50.053 made a
-        # fully-sold sheltered position look like +100.0533 held, triggering a
+        # running position (e.g. two dividend rows quoting 40 shares each made a
+        # fully-sold sheltered position look like +80 held, triggering a
         # bogus "sheltered holdings exist" wash-sale warning). Only BUYSELL /
         # ASSIGN / SPLIT / TRANSFER / OPENING_BALANCE (+ ADJUST for ACB) move
         # the pool, matching the gains engine and missing-history walks.
@@ -834,8 +834,8 @@ def main():
             # (e.g. 1.1 for a 1.1-for-1). Total ACB is unchanged by a split —
             # only per-share cost changes. The old no-op left the running
             # quantity off by the split factor, so post-split sells underflowed
-            # the pool into a false negative position (LFE.TO showed -780 for
-            # a holding that is actually closed). A SPLIT carrying a non-empty
+            # the pool into a false negative position (a closed holding showed a
+            # negative quantity). A SPLIT carrying a non-empty
             # `symbol_new` also renames the pool to the new ticker.
             ratio = tx.quantity
             if not ratio or abs(ratio) <= 1e-12:

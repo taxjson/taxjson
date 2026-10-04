@@ -97,7 +97,7 @@ $ python -m taxjson.bin.taxjson_harvest /tmp/qf-zoo/work/margin_gains.json --opt
 
 ```
 # repro
-mkdir -p /tmp/p/inputs/margin; write taxjson.toml (canada/CAD, [accounts.margin] taxable) and the SSL->RGLD merger CSV from tests/test_pending_elections.py into inputs/margin/; python -m taxjson.bin.taxjson_run -C /tmp/p elect margin --set '75f5b42990df=ignore'; python -m taxjson.bin.taxjson_run -C /tmp/p elect margin --redo < /dev/null; cat /tmp/p/inputs/margin/manifest.json
+mkdir -p /tmp/p/inputs/margin; write taxjson.toml (canada/CAD, [accounts.margin] taxable) and the merger CSV from tests/test_pending_elections.py into inputs/margin/; python -m taxjson.bin.taxjson_run -C /tmp/p elect margin --set '75f5b42990df=ignore'; python -m taxjson.bin.taxjson_run -C /tmp/p elect margin --redo < /dev/null; cat /tmp/p/inputs/margin/manifest.json
 ```
 
 ### 6. Non-numeric hint value accepted by elect --set (and the GUI hint field) then crashes the next run with a raw ValueError traceback

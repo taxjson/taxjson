@@ -64,7 +64,7 @@ BTC and ETH trades using Kraken's `XXBT/ZUSD` and `XETH/ZUSD` pair notation with
 BTC and ETH buys/sells plus two `Staking Income` rows. Each staking row produces a paired `DIVIDEND` (income at FMV) and zero-net `BUYSELL` (adds tokens to the inventory pool at cost basis = FMV).
 
 ### `webull_demo.csv`
-AAPL position built in two lots (100 @ 185, 50 @ 170), partial sell (75 @ 200), an ABBV call option round-trip (buy 10 @ 1.55 → sell 10 @ 2.50), and a CAD-listed SHOP buy. Exercises Webull's day-first dates (`%d-%m-%Y`), the `@` symbol prefix, the `(parentheses for negative)` Proceeds format, the option-symbol reconstruction from `CALL ABBV01/17/25 190`, and the currency→exchange suffix mapping (`USD`→`.US`, `CAD`→`.TO`).
+AAPL position built in two lots (100 @ 185, 50 @ 170), partial sell (75 @ 200), an ABCD call option round-trip (buy 10 @ 1.55 → sell 10 @ 2.50), and a CAD-listed SHOP buy. Exercises Webull's day-first dates (`%d-%m-%Y`), the `@` symbol prefix, the `(parentheses for negative)` Proceeds format, the option-symbol reconstruction from `CALL ABCD02/19/27 45`, and the currency→exchange suffix mapping (`USD`→`.US`, `CAD`→`.TO`).
 
 ## Expected output
 

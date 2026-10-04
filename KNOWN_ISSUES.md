@@ -24,7 +24,7 @@ The codebase has been through eight audit rounds and two full-coverage audits; e
 ### IB ISIN→market map `IE → L` is wrong for non-LSE IE-domiciled ETFs
 - **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` — the module-level `_ISIN_EXT` map (`'IE': 'L'`), read through `_isin_ext()` by the Dividends and Withholding Tax branches (the Corporate Actions and Transfers branches derive suffixes via `_ib_listing_ext` instead: the currency's suffix, with a TSX `.U` unit kept on `.TO` and an LSE-venue USD line on `.L`).
 - **Current behavior:** every Irish-domiciled (ISIN prefix `IE`) security is mapped to a `.L` (LSE) market suffix. Partially mitigated since the income-reattribution pass: DIVIDEND / DIVIDEND_IN_LIEU / TAX rows are re-bound to the suffix of the position actually held for that ticker in the statement (`_reattribute_income_to_holdings`; when the ticker is held under two listings during the statement, the one held on the payment date), so income no longer lands on a spurious `.L` symbol when the shares are held under another suffix. Since 2026-09 the holding may come from any of the account's IB statements (a statement with only a dividend row), and the rebind requires the held listing's ISIN (Financial Instrument Information) to match the income row's — a different issuer sharing the ticker keeps its own listing.
-- **Why deferred:** the user holds no IE-domiciled ETFs, so the bug doesn't fire on their data. Most IE-domiciled ETFs trade in EUR / multiple currencies, not all on LSE; a real fix needs an ISIN → exchange lookup or a per-ticker override.
+- **Why deferred:** it fires only for IE-domiciled ETFs, which are uncommon in a Canadian retail account. Most IE-domiciled ETFs trade in EUR / multiple currencies, not all on LSE; a real fix needs an ISIN → exchange lookup or a per-ticker override.
 - **Workaround:** users who hold IE-domiciled ETFs should add a `ticker.map` GLOBAL rule rewriting the parsed `.L` symbol to the correct market suffix.
 
 ### IB cash-in-lieu row wording is unverified
@@ -53,7 +53,7 @@ The codebase has been through eight audit rounds and two full-coverage audits; e
 ### Canadian listings carry no venue (`ROOT.TO` for TSX, TSXV, CSE and NEO)
 - **Where:** `src/taxjson/lib/brokerages/base.py` — `canonical_ca_listing`, used by `apply_currency_suffix` (Questrade, RBC, Webull, generic) and the taxjson-fetch plugin's `taxjson_fetch.api.qt_position_symbol`; IB stamps every CAD listing `.TO`.
 - **Current behavior:** one Canadian security has one symbol whichever broker reports it: `ROOT.TO`, with a TSX preferred series dotted (`FTN.PR.A.TO`). RBC and Webull exports do not name the venue, and real books (ticker.map `TOBASE` rules) are keyed on `.TO`, so the venue suffixes `.V` / `.CN` / `.NE` are not used as identities. A `.tt` line is read the same way (`ABC.V` on a CAD line, `ABC.VN`, `FTN.PRA.TO` become `ABC.TO` / `FTN.PR.A.TO`). A ticker.map rule that writes `ROOT.V` still splits the pool from `ROOT.TO`; `taxjson-lint-crosslistings` flags it (CANADIAN VENUE SPLIT), `.VN` and undotted preferred series included.
-- **Why this is the choice:** the alternative (venue suffixes everywhere) needs every parser to know the venue; RBC and Webull cannot, and IB would rename the owner's Venture/CSE holdings. TSX and TSX Venture share one symbol namespace, so `.TO` is unambiguous for Venture names; a CSE/NEO ticker that duplicates a different TSX ticker would share a pool (as it already did in IB statements).
+- **Why this is the choice:** the alternative (venue suffixes everywhere) needs every parser to know the venue; RBC and Webull cannot, and IB would rename a holder's Venture/CSE positions. TSX and TSX Venture share one symbol namespace, so `.TO` is unambiguous for Venture names; a CSE/NEO ticker that duplicates a different TSX ticker would share a pool (as it already did in IB statements).
 - **Workaround:** price lookups that need the venue use a ticker.map `QUOTE` line (`QUOTE PNG.TO PNG.V`).
 
 ### Trade reversals across export files
@@ -120,7 +120,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** `lib/brokerages/ib_extractor.py` (the Dividends section has only the pay date); `lib/income_dating.py`.
 - **Current behavior:** in a Canada project a Canadian trust's distribution or return of capital is dated by the record date Questrade and RBC print (s.104(13), s.53(2)(h); tax-logic CA-INC-DATE-TRUST / CA-INC-DATE-ROC-TRUST). An IB row has no record date, so a December-record trust distribution IB pays in January stays in the pay year of `divs-sum` and the estimate, and a January-paid IB ROC on a Canadian trust stays on its pay date — the run warns about the ROC with the two `.tt` ADJUST lines that move it to Dec 31.
 - **Also:** a Canadian issuer is recognised by its listing (or an IB CA ISIN); the split-share corporations that also say "Distribution" are a short built-in list (`SPLIT_SHARE_ROOTS`) — add any other corporation to `[settings] corporate_distributions`.
-- **Why the pay date is kept (owner decision 2026-10-01, audit S057-23):** IB's Dividends section prints only the pay date and labels a trust's distribution a cash dividend, so nothing on the row says the payer is a trust rather than a corporation or split-share issuer (which s.82 dates when paid). The ex date IB's "Change in Dividend Accruals" section gives is kept on the row (`ex_date`, a US project reads it for §852(b)(7)) but is not a record date and does not identify a trust, so a Canada project does not date income by it. Every January CAD payer in the owner's IB books is a corporation, so no current return moves.
+- **Why the pay date is kept (owner decision 2026-10-01, audit S057-23):** IB's Dividends section prints only the pay date and labels a trust's distribution a cash dividend, so nothing on the row says the payer is a trust rather than a corporation or split-share issuer (which s.82 dates when paid). The ex date IB's "Change in Dividend Accruals" section gives is kept on the row (`ex_date`, a US project reads it for §852(b)(7)) but is not a record date and does not identify a trust, so a Canada project does not date income by it.
 - **Workaround:** compare the TAXABLE line of `divs-sum` with the T3; the slip is authoritative.
 
 ### RBC exports by Date miss back-dated year-end book-cost rows
@@ -325,7 +325,7 @@ Corner cases the engine handles conservatively or only flags (the first is flagg
 ### RESP accounts are treated as affiliated for the superficial-loss rule
 - **Where:** every account with `type = "sheltered"` is an affiliated person in `lib/core.py`'s wash pass.
 - **Question:** s.251.1(1)(g) affiliates a trust with its majority-interest beneficiary. CRA's T4037 treats an RRSP or TFSA as affiliated with its annuitant/holder, but an RESP subscriber is usually not a beneficiary, so whether an RESP purchase can deny the subscriber's loss is not settled.
-- **Current behaviour:** conservative — an RESP purchase inside the window that is still held at its end denies the loss (permanently, as for any registered account). A filer who takes the other position has to adjust by hand; the 2026-09 audit found one such case on real books.
+- **Current behaviour:** conservative — an RESP purchase inside the window that is still held at its end denies the loss (permanently, as for any registered account). A filer who takes the other position has to adjust by hand.
 
 ### Foreign return of capital is only reclassified for IBKR (Canada projects)
 - **Where:** in a Canada project, `lib/brokerages/ib_extractor.py` treats a "(Return of Capital)" distribution from a non-Canadian ISIN as a dividend (ITA s.90(1)) and a payment in lieu as income; a US project (and `taxjson-brokerage` without `--country canada`) keeps every return of capital as a basis reduction. Questrade and RBC exports carry no ISIN, and a `.US` listing does not prove a foreign issuer, so their ROC rows stay ACB reductions — check US-issuer ROC on those brokers by hand.
@@ -423,7 +423,7 @@ pricing. Kraken Earn allocation/deallocation shuffles (paired rows)
 remain ignored — internal moves; a `hybridearnwithdrawal` row has no
 counter-leg and is custody evidence like a withdrawal (a TRANSFER in the
 sidecar). A Kraken coin fee on a withdrawal/deposit is named in the
-TRANSFER's description (`withdrawal (fee 0.002 TAO)`) and booked as its
+TRANSFER's description (`withdrawal (fee 0.05 ABC)`) and booked as its
 own sale of the fee coin (CA-CRYPTO-03), never in the row's money `fee`
 field. Tax semantics still not assumed: only the
 user knows gift vs self-custody move; genuine gifts are declared as

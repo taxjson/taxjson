@@ -463,13 +463,13 @@ option_grant_timing_since = 2025    # contracts written before this year keep cl
 # Optional — non-cash fund distributions (`taxjson run` books each as a cost
 # adjustment), and (Canada) T5 box 18 capital-gains dividends — one table each:
 # [[distributions]]
-# symbol = "XAW.TO"
+# symbol = "ABC.TO"
 # record_date = 2025-12-29
-# per_share = 0.4297           # base currency; negative = return of capital
+# per_share = 0.2500           # base currency; negative = return of capital
 # [[capital_gains_dividends]]
-# symbol = "LFE.TO"
-# year = 2025                  # or date = 2025-09-10 (one payment)
-# amount = "all"               # or the box 18 amount, e.g. 5.50
+# symbol = "ABD.TO"
+# year = 2025                  # or date = 2025-06-16 (one payment)
+# amount = "all"               # or the box 18 amount, e.g. 1.25
 # account = "margin"           # optional (default: the taxable accounts)
 
 # Optional — Canadian tax instalments (`taxjson instalments`, and a
@@ -1552,7 +1552,7 @@ Lints the whole project for placement mistakes the pipeline can see:
 - **MAP-UNUSED** (a note, never a finding) — `ticker.map` rules whose
   FROM symbol matches nothing in the parsed sources. The check is
   root-aware: a rule with no stock rows is still live when option trades
-  carry its root (`BCE251121C00050000.US` needs `TOBASE BCE.US BCE.TO`),
+  carry its root (`ABC271217C00050000.US` needs `TOBASE ABC.US ABC.TO`),
   and a rule reached through another rule's target (a rename chain) is
   live. It judges a rule the way the engine applies it: FROM must match
   exactly, so a suffix-less `GLOBAL QQOL QQNW` is reported (with a hint
@@ -1738,7 +1738,7 @@ BUYSELL  <date>  <time>  <symbol>  <qty>  <currency>  <price>  <total>  <fee>
 | --- | --- |
 | `date` / `time` | `YYYY-MM-DD` / `HH:MM:SS` (time REQUIRED — the parser's field positions depend on it; `09:30:00` is fine). A `.tt` line has a **single date**, used as both the trade and settlement date — enter the date matching your `tax_date` setting (**settlement date** when `tax_date = "settle"`). Lines with the same date and time are taken in file order, as rows of a broker export are (tax-logic CA-DATE-14 / US-DATE-13): write a same-day sell and rebuy in the order they happened. |
 | ADJUST lines | `ADJUST date time symbol CURRENCY amount` — FIVE payload fields, not the BUYSELL shape (negative amount = ACB reduction, e.g. T3 box-42 ROC). |
-| `symbol` | with exchange suffix — `AGI.TO`, `XYZ.US` (match how the account labels it; options use OCC, e.g. `ALA250117C00036000.TO`). Upper-cased on read (`agi.to` is `AGI.TO`); a suffix that is not a market (`XYZ.TSX`, `XYZ.CA`) is a warning naming the line, since it would be a separate ACB pool. Futures lines (`F:`/`/`) skip the total-vs-qty×price typo check unless the line ends with the contract size (below). |
+| `symbol` | with exchange suffix — `AGI.TO`, `XYZ.US` (match how the account labels it; options use OCC, e.g. `ABC271217C00036000.TO`). Upper-cased on read (`agi.to` is `AGI.TO`); a suffix that is not a market (`XYZ.TSX`, `XYZ.CA`) is a warning naming the line, since it would be a separate ACB pool. Futures lines (`F:`/`/`) skip the total-vs-qty×price typo check unless the line ends with the contract size (below). |
 | `x<size>` | optional, last on a BUYSELL/ASSIGN line: the contract size — `x1000` for a CL futures option, `x50` for ES, `x0.1` for a micro crypto future. The typo check then uses qty×price×size (an equity option is checked at 100 without it), and the size is kept on the row for the holdings export. `taxjson-convert-tt book.json` writes it for futures rows and for any option whose size is not 100. |
 | `qty` | shares — **positive = buy, negative = sell** |
 | `price` | per-share price |

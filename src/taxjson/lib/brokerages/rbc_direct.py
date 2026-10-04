@@ -155,7 +155,7 @@ _RBC_TRANSFER_OUT_RE = re.compile(
     r'^\s*(?:TF[OW]\b|(?:[A-Z]{2,4}\s*-\s*)?(?:TRANSFER\s+OUT|DELIVER)\b)',
     re.I)
 # RBC's open/close marker at the end of an option trade's description:
-# "CALL .RCI.B 01/15/27 46 ROGERS COMMUNICATIONS INC CA CLOSE CONTRACT".
+# "CALL .ABC.B 03/19/27 30 ABC COMMUNICATIONS INC CA CLOSE CONTRACT".
 _RBC_OPEN_CLOSE_RE = re.compile(r'\b(OPEN|CLOSE)\s+CONTRACT\b', re.I)
 # A payment in lieu of a dividend ("CASH IN LIEU OF DIVIDEND", "PAYMENT
 # IN LIEU OF DIVIDEND", Questrade's "SUBST PAY ... IN LIEU OF DIVIDEND"),
@@ -1127,7 +1127,7 @@ def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
 
     # Option code → contract: its chronologically FIRST description in
     # ANY of the account's files (RBC re-describes a contract over time,
-    # 8D*** "CALL .RCI" later "CALL .RCI.B"; keying each file on its own
+    # "CALL .ABC" in one export, "CALL .ABC.B" in a later one; keying each file on its own
     # text split one position across two symbols).
     where: Dict[str, str] = {}
     others: Dict[str, Dict[str, str]] = {}
@@ -1350,7 +1350,7 @@ def _short_reach(events) -> Tuple[float, str, float]:
 
 def _detect_ticker_changes(ctx: RbcAccountContext, helper) -> None:
     """A ticker change RBC applied WITHOUT a reorganization row
-    (ORCC → OBDC in 2023): the old symbol stops with shares still open
+    (e.g. ABC → ABD): the old symbol stops with shares still open
     and a new symbol with the same Symbol Description and currency goes
     SHORT by no more than those shares (its first row a sale, or a buy
     followed by a larger sale). The export carries no CUSIP, so this is
@@ -2188,7 +2188,7 @@ class RbcBrokerage(BaseBrokerage):
         gross) and of commission size. A Value off by a factor (a
         shifted or mislabelled column) used to book with only a schema
         warning; the same row from Questrade or IB is refused. The
-        bounds sit far outside every real RBC row (commission $0-$132)."""
+        bounds sit far outside any plausible retail commission."""
         if not price or abs(qty) < 1e-12 or r.cls == 'expiry':
             return
         mult = self.OPTION_MULTIPLIER if is_option else 1
@@ -2544,8 +2544,8 @@ class RbcBrokerage(BaseBrokerage):
         underlying's name change, a security-code change). The SAME
         contract continues — the position, its ACB and its open date carry
         over. RBC's own trade rows keep describing the adjusted contract
-        with the ORIGINAL terms (TOU 64 after the $0.50 adjustment to
-        63.50; TRP after .TRP1), so the position keeps its original OCC
+        with the ORIGINAL terms (a 40 strike after a $0.50 adjustment to
+        39.50; ABC after .ABC1), so the position keeps its original OCC
         symbol unless the new code's own trade rows — in ANY file of the
         account, so a close in next year's export counts — describe a
         different contract, in which case it is renamed (factor 1)."""

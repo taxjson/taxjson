@@ -11,15 +11,15 @@ project's taxjson.toml (`taxjson migrate` moves an old project's files):
                                            #   each filed return (both
                                            #   countries; `taxjson carryover`)
     [[capital_gains_dividends]]            # Canada: T5 box 18
-    symbol = "LFE.TO"
-    year = 2025                            # or: date = 2025-09-10
-    amount = "all"                         # or the box 18 amount: 5.50
+    symbol = "ABD.TO"
+    year = 2025                            # or: date = 2025-06-16
+    amount = "all"                         # or the box 18 amount: 1.25
     # account = "margin"                   # optional
 
     [[distributions]]                      # non-cash fund distributions
-    symbol = "XAW.TO"
+    symbol = "ABC.TO"
     record_date = 2025-12-29
-    per_share = 0.4297                     # base currency; negative = ROC
+    per_share = 0.2500                     # base currency; negative = ROC
 
 `table_problems(cfg)` is the one check every config reader applies
 (lib/config_check.settings_problems): types, dates, duplicates and the

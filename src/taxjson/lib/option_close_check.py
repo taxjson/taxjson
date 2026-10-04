@@ -5,8 +5,8 @@ neutral `open_close` evidence code ('O' / 'C'): IB's Trades Code, RBC's
 "... OPEN CONTRACT" / "... CLOSE CONTRACT". A row marked closing that
 the data holds nothing to close is missing history for certain — but for
 an option it has a commoner cause: the position IS in the books under
-another ROOT. RBC re-describes a contract between yearly exports (".RCI"
-in 2024, ".RCI.B" in 2025; an adjusted ".TRX1" after an XCH), and a .tt
+another ROOT. RBC re-describes a contract between yearly exports (".ABC"
+one year, ".ABC.B" the next; an adjusted ".ABC1" after an XCH), and a .tt
 hand-off or an earlier export keeps the old spelling. The close then
 opens a NEW written (or long) option, its premium is taxed in full and
 the real position stays open — with no warning (audit A2-0006, A2-0095,
@@ -131,8 +131,8 @@ def unbacked_option_close_messages(transactions: Iterable[Any]) -> List[str]:
             msgs.append(
                 f"{head}, and the books still hold {pq:g} {p} (the same "
                 f"expiry, right and strike under another root: the "
-                f"broker re-described the contract, e.g. RBC's RCI → "
-                f"RCI.B or an adjusted TRX → TRX1). If it is the same "
+                f"broker re-described the contract, e.g. RBC's ABC → "
+                f"ABC.B or an adjusted ABC → ABC1). If it is the same "
                 f"contract, add to ticker.map:  GLOBAL {p} {f['symbol']}"
                 f"  (or write the .tt with {f['symbol']}).")
         elif f['partners']:

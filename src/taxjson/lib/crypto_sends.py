@@ -130,7 +130,7 @@ def fmt_price(p: float) -> str:
 
 def send_id(exchange: str, date: str, time: str, symbol: str,
             qty: float) -> str:
-    """Stable, typeable, private: kr-20260504T185014-TAO-0.1."""
+    """Stable, typeable, private: kr-20250312T091500-ABC-2.5."""
     ex = _EXCH_ABBR.get(exchange, (exchange or "xx")[:2].lower())
     return (f"{ex}-{date.replace('-', '')}T{time.replace(':', '')}-"
             f"{symbol.upper()}-{fmt_qty(qty)}")

@@ -29,7 +29,7 @@ def get_base_ticker_info(symbol: str):
         full_ticker = symbol
 
     # Handle OCC Options (extract symbol before the date/strike block)
-    # e.g., RCI.B270115C00045000 -> RCI.B
+    # e.g., ABC.B271217C00030000 -> ABC.B
     match = re.match(r'^((?:F:|[\/\\])?[A-Z0-9\.]+?)\d{6}[CP]\d+', full_ticker, re.IGNORECASE)
     if match:
         return match.group(1), ext
@@ -46,9 +46,9 @@ def map_ticker(symbol: str, target_currency: str = "CAD") -> str:
     Maps a ticker symbol to its equivalent in the target currency (usually CAD).
     Example: SHOP.US -> SHOP.TO if target is CAD.
     Also handles converting dotted option strings to OCC syntax.
-    Example: U.19SEP25.26.P -> U250919P00026000
+    Example: ABC.17DEC27.12.P -> ABC271217P00012000
     """
-    # 1. Handle Dotted Options (e.g. U.19SEP25.26.P)
+    # 1. Handle Dotted Options (e.g. ABC.17DEC27.12.P)
     option_pattern = r'^([A-Z0-9]+)\.(\d{1,2}[A-Z]{3}\d{2})\.(\d+(?:\.\d+)?)\.([CP])$'
     match = re.match(option_pattern, symbol, re.IGNORECASE)
     if match:
@@ -97,7 +97,7 @@ def class_share_aliases(symbols) -> dict:
     """{option-root listing: class share} for an option root that names
     no share listing among `symbols` but exactly ONE class share of that
     root on the same exchange: RBC books Rogers' Montreal calls under the
-    root RCI (RCI260320C00055000.TO) while the shares are RCI.B.TO, and
+    root RCI (RCI271217C00030000.TO) while the shares are RCI.B.TO, and
     the per-underlying reports filed the covered-call gain under a
     phantom RCI.TO ticker (S040-11). Same rule as buy/sell-check
     (S047-01)."""

@@ -518,8 +518,8 @@ def main(argv=None):
                 irr)
 
     # The rows show the books' symbol — AFTER ticker.map — in the base
-    # currency: K.TO / CAD for a short the broker booked as KGC.US in
-    # USD. A missing buy entered as reported lands on a listing the
+    # currency: ABC.TO / CAD for a short the broker booked as ABC.US
+    # in USD (TOBASE ABC.US ABC.TO). A missing buy entered as reported lands on a listing the
     # broker never used and breaks the holdings hand-off (S049-01).
     _renamed = _rename_sources(args.ticker_map,
                                {r.candidate.symbol for r in short_rows}

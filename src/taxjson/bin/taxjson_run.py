@@ -1876,8 +1876,8 @@ def _split_generic_groups(grouped: Dict[str, List[Path]]
 
 def _raw_mixed_currency_symbols(raw_json: Path) -> List[str]:
     """Symbols whose NATIVE-currency pool would mix currencies —
-    following SPLIT renames. A cross-currency rollover (e.g. SSL.TO
-    [CAD] --s.85.1(5)--> RGLD.US [USD]) renames the CAD pool onto a
+    following SPLIT renames. A cross-currency rollover (e.g. ABG.TO
+    [CAD] --s.85.1(5)--> ABH.US [USD]) renames the CAD pool onto a
     symbol whose later trades are USD; the raw (unconverted) gains
     stage then dies with a currency-mismatch error and killed the
     whole run. Such positions are unrepresentable in the native view
@@ -5458,9 +5458,9 @@ tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for c
 # adjustment on the shares held on the record date. One table each:
 #
 # [[distributions]]
-# symbol      = "XAW.TO"
+# symbol      = "ABC.TO"
 # record_date = {prev_year}-12-29
-# per_share   = 0.4297         # base currency; negative = return of capital
+# per_share   = 0.2500         # base currency; negative = return of capital
 {instalments_section}"""
 
 # Canada only. ITA s.49(1) written-option premium timing is a Canadian
@@ -5497,9 +5497,9 @@ _TEMPLATE_INSTALMENTS = """
 # table per payment or year; `taxjson divs-sum`, the estimate):
 #
 # [[capital_gains_dividends]]
-# symbol = "LFE.TO"
-# year   = 2025             # or: date = 2025-09-10 (one payment)
-# amount = "all"            # or the box 18 amount, e.g. 5.50
+# symbol = "ABD.TO"
+# year   = 2025             # or: date = 2025-06-16 (one payment)
+# amount = "all"            # or the box 18 amount, e.g. 1.25
 # # account = "margin"        # optional; default: the taxable accounts
 
 # Tax instalments (`taxjson instalments`, and a summary inside
@@ -6003,7 +6003,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
             # project refuses the Canadian s.85.1 key; audit A2-0718).
             _ex = "reorg_368" if country == "usa" else "rollover_s_85_1_5"
             sys.exit(f"taxjson elect --set expects EVENT_ID=ELECTION, "
-                     f"e.g. --set 20251022-ssl-rgld-51d7={_ex} (`taxjson "
+                     f"e.g. --set 20250317-abg-abh-1a2b={_ex} (`taxjson "
                      f"elect {name}` lists each event's choices)")
         event_id, election = args.set.split("=", 1)
         event_id, election = event_id.strip(), election.strip()
@@ -6853,7 +6853,7 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
 
     def _coin_fee(t: Dict[str, Any]) -> Tuple[float, str]:
         # A fee paid IN COINS (Kraken: fee_qty/fee_currency; never the
-        # money `fee` field, S061-17), else the "(fee 0.002 TAO)" the
+        # money `fee` field, S061-17), else the "(fee 0.05 ABC)" the
         # description of a sidecar from an older parse carries — the
         # FEE column was empty on every real withdrawal (A2-0663).
         try:
@@ -9634,8 +9634,8 @@ def cmd_scan(args: argparse.Namespace) -> None:
     # the map (taxjson_ticker_map.map_symbol): FROM must equal a symbol
     # exactly, or an option's underlying (ROOT-aware on purpose — a
     # rule with no stock rows is still live through OPTION trades:
-    # BCE251121C00050000.US needs `TOBASE BCE.US BCE.TO`; a root-blind
-    # check once pruned ten live rules from a real map, 2026-09-15).
+    # ABC271217C00050000.US needs `TOBASE ABC.US ABC.TO`; a root-blind
+    # check would prune such live rules).
     # Chains count: a rule reached through another rule's target is
     # live (R1-139). A suffix-less FROM (`GLOBAL QQOL QQNW`) matches
     # only a suffix-less symbol — the engine never applies it to
@@ -12771,11 +12771,11 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         """(book, file labels, alt) — `alt` maps an option's symbol
         as the FILE spells it to the same contract keyed by the
         row's `underlying` root. Brokers and tools disagree on the
-        option ROOT: IB names the Montréal contract on RCI.B
-        `RCI.B 16JUL27 55 C` (taxjson keys RCI.B270716C00055000.TO)
+        option ROOT: IB names a Montréal contract on a class share ABC.B
+        `ABC.B 17DEC27 30 C` (taxjson keys ABC.B271217C00030000.TO)
         while a positions export keys it by the exchange option
-        root `RCI...` — same contract, and the export's `underlying
-        = "RCI.B.TO"` field says so. The compare below falls back to
+        root `ABC...` — same contract, and the export's `underlying
+        = "ABC.B.TO"` field says so. The compare below falls back to
         the underlying spelling only when the file's spelling has no
         taxjson counterpart, so a real mismatch still shows."""
         book: Dict[str, float] = {}
@@ -15841,7 +15841,7 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
     # An option root that names no share listing in the books but
     # matches exactly ONE class share of that root on the same exchange
     # is that class: RBC books Rogers' Montreal options under the root
-    # RCI (RCI270115C00046000.TO) while the shares are RCI.B.TO, and the
+    # RCI (RCI271217C00030000.TO) while the shares are RCI.B.TO, and the
     # call — a right to acquire those shares — fell into an empty
     # RCI.TO class, so buy-check said SAFE (S047-01).
     from taxjson.lib.core import is_option_symbol as _is_opt
@@ -17550,7 +17550,7 @@ def _build_parser(prog: str = "taxjson"
                          action="append",
                          help="Write one election non-interactively "
                               "(headless/CI bootstrap), e.g. --set "
-                              "20251022-ssl-rgld-51d7=rollover_s_85_1_5 "
+                              "20250317-abg-abh-1a2b=rollover_s_85_1_5 "
                               "(Canada) or =reorg_368 (USA); the "
                               "event's own choices are listed by "
                               "`taxjson elect ACCOUNT`")

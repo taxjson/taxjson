@@ -70,9 +70,8 @@ def save_cache(cache_data):
 
 # Built-in Yahoo ticker-collision disambiguations. Extended (or
 # overridden) per project by `CRYPTO SYMBOL YF_ID` lines in ticker.map
-# (`#` comments). The hardcoded set covers only the coins it lists; any
-# OTHER user with a colliding coin needs a CRYPTO line (KNOWN_ISSUES
-# "SYMBOL_OVERRIDES is hardcoded to the maintainer's coins").
+# (`#` comments). The hardcoded set covers only the coins it lists; a
+# user with another colliding coin needs a CRYPTO line.
 SYMBOL_OVERRIDES = {
     'TAO': 'TAO22974',
     'UNI': 'UNI7083',

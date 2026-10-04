@@ -15,7 +15,7 @@ from taxjson.lib.core import is_option_symbol, parse_option_expiry
 
 
 # Webull's option descriptions run the ticker directly into the date with
-# no separator: "CALL ABBV01/17/25 190". The base regex requires whitespace
+# no separator: "CALL ABCD02/19/27 45". The base regex requires whitespace
 # between the two — override it here.
 _WEBULL_OPTION_RE = re.compile(
     r'(CALL|PUT)\s+([A-Z.\d]+?)\s*(\d{2}/\d{2}/\d{2})\s+'

@@ -729,7 +729,7 @@ def _redescribed_options(prev: Dict[str, Any], now: Dict[str, Any]
     option position under two roots: the record holds it only as one,
     the opening only as the other, with the same expiry, right, strike,
     listing, quantity and cost and roots naming the same company
-    (core._root_matches_stock: RCI / RCI.B, TRX / TRX1). RBC
+    (core._root_matches_stock: ABC / ABC.B, ABC / ABC1). RBC
     re-describes a contract between yearly exports, and the opening
     must use this year's spelling (audit A2-0006) — reporting that as a
     missing lot pushed the user to the symbol that books the close as a
@@ -1063,8 +1063,8 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
             issues["notes"].append(
                 f"{old} in the {ry} books opens here as {new}: the same "
                 f"expiry, right, strike, quantity and cost under another "
-                f"root — the broker re-described the contract (RBC: RCI "
-                f"→ RCI.B). Accepted as one position; this year's "
+                f"root — the broker re-described the contract (RBC: ABC "
+                f"→ ABC.B). Accepted as one position; this year's "
                 f"closing rows must use {new}.")
         _skip = {s for pair in renamed for s in pair}
         for sym in sorted(set(prev) | set(now)):
@@ -1120,7 +1120,7 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
 
     # 1b. An option row this year's export marks CLOSING whose position
     # the opening holds only under another root (a .tt written with the
-    # closed year's RCI while the export closes RCI.B): the opening
+    # closed year's ABC while the export closes ABC.B): the opening
     # matches the record, yet the close is booked as a NEW written call
     # and the carried long never closes (audit A2-0006).
     from taxjson.lib.core import load_transactions

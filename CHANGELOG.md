@@ -18,6 +18,13 @@
   Test fixtures, README sample outputs and older CHANGELOG entries that
   carried such figures were reworded or given fresh synthetic numbers;
   every test pins the same behaviour.
+- **No trades from real books in the repository.** Test fixtures,
+  examples, source comments and documentation no longer mirror real
+  trades — under their own or disguised tickers: no real trade dates,
+  symbol and quantity pairs, option contracts or corporate-action cases.
+  Each was replaced by a fictional case with its own dates, quantities
+  and contracts, and the expected results were recomputed so every test
+  pins the same behaviour; comments describe the shape in words.
 
 
 ## v0.17.0 (2026-10-04)
@@ -1231,7 +1238,7 @@
   1711) or an underscore is refused, a map that is a directory or a
   dangling symlink is an error instead of "no map", and a date entry
   matches the pay date of a distribution the books date by its record
-  date (the documented `XTD.TO 2025-09-10 5.50` example was refused)
+  date (the documented `ABD.TO 2025-06-16 1.25` example was refused)
   (A2-0075, A2-0227, A2-0228, A2-0560, A2-0987, A2-0990, A2-0994).
 - **distributions.map adjustments reach the holder of record's lots in
   the US.** The ADJUST was stamped at the end of the record date, so in
@@ -1471,7 +1478,7 @@
   instead of booking $0, and a taxable merger at $0 FMV warns on every
   run even when cash-in-lieu was paid.
 - **One split booked on two dates applies once.** IB and Questrade date
-  the same split days apart (KLAC 10:1: 06-11 vs 06-15); both copies
+  the same split days apart; both copies
   were applied, scaling the pool by the ratio twice. Copies of one split
   (same security and ratio) within 7 days are one event, applied on the
   earlier date, with a note.
@@ -1827,7 +1834,7 @@
   ISIN listing because two listings were held that day gets a note.
 - IB: one option contract keeps one root across the account's
   statements, whichever statement is parsed (a re-download naming the
-  adjusted root DFDV1 split one put series in two, audit A2-0087); the
+  adjusted root QZD1 split one put series in two, audit A2-0087); the
   ticker-change hint names the old symbol first with the listing
   suffix it is booked under and goes quiet once ticker.map joins the
   two (A2-0611); an assigned adjusted (QZX1) or class-share (BRKB)
@@ -1876,7 +1883,7 @@
   A2-0259, A2-1038).
 - **IB: a commission refund folds into its trade in another statement**
   (a December trade refunded in January), and a refund naming one
-  execution of an Order row (`Refund (KWEB, -400, ...)` for a -440
+  execution of an Order row (`Refund (ABC, -150, ...)` for a -250
   order) or an option trade folds too (tax-logic CA-ACB-COMMREFUND /
   US-BASIS-COMMREFUND; audit A2-0604, A2-0605, A2-1032, A2-1036). A
   cash in lieu paid in the statement after its split joins that split
@@ -1908,7 +1915,7 @@
 - IB corporate actions use the statement parser's listing rule: a
   merger or spin-off of a TSX-listed USD unit (QZAA.U) is booked on
   `.U.TO`, where its trades are, not on a phantom `.US` line (A2-0209,
-  A2-0219), and a leg on a currency-tagged IB line (RGLD.CAD) is
+  A2-0219), and a leg on a currency-tagged IB line (ABC.CAD) is
   warned about with the ticker.map fix (A2-0556).
 - **IB: a cancelled (`Ca`) corporate action is no longer offered for
   election** (A2-0018, A2-0019, A2-0020, A2-0068, A2-0069, A2-0212,
@@ -1918,7 +1925,7 @@
   book. Only the corrected rebook is offered; overlapping statement
   vintages no longer let the cancelled original win. The Code cell is
   split on `;`, `,` and spaces as the statement parser does. A
-  cross-listing journal IB cancelled and rebooked (the RGLD.CAD shape)
+  cross-listing journal IB cancelled and rebooked (on a currency-tagged line)
   no longer needs a manual `ignore`.
 - IB corporate-action times are zero-padded before they are compared,
   so a merger takes its earlier leg's time (A2-0984); copies of one
@@ -1937,7 +1944,7 @@
   an expiry row. Order-level codes are read per order, not per fill
   (audit S013-00, S058-02, S060-12).
 - **IB: a commission refund lowers the trade's cost.** A Commission
-  Adjustments row naming its trade ("Refund (KWEB, 400, 2026-05-13)")
+  Adjustments row naming its trade ("Refund (ABC, 250, 2024-05-14)")
   is folded into that trade — a refunded purchase commission comes off
   the ACB, a refunded sale commission off the outlays — instead of a
   stand-alone FEE row the gains never saw; one whose trade is not in the
@@ -1963,7 +1970,7 @@
   no-op instead of two warnings, and the cash-tender NOTE no longer
   points at a corp-actions election that cannot exist. A cancelled
   untranslated row no longer stays in the skip count. A symbol with a
-  currency tag (RGLD.CAD) is warned about in every section — it is a
+  currency tag (ABC.CAD) is warned about in every section — it is a
   pool of its own.
 - **IB: payment-in-lieu share counts and the open-accrual warning.** A
   PIL's share count/rate comes from the accrual of the listing that
@@ -2091,10 +2098,10 @@
   2.0 (both were booked). A cancellation whose original is not in the
   statement is a loud skip.
 - **IB: option root renames share one symbol.** When IB relists an
-  adjusted option under a new root after a corporate action (DFDV ->
-  DFDV1, one contract id in the instrument list), both legs are booked
+  adjusted option under a new root after a corporate action (ABC ->
+  ABC1, one contract id in the instrument list), both legs are booked
   under the original root, so the assignment folds the premium; a
-  ticker.map DFDV1 -> DFDV rule becomes a no-op. Monthly futures options
+  ticker.map QZD1 -> QZD rule becomes a no-op. Monthly futures options
   use their real expiry from the instrument list instead of day 20 of
   the delivery month.
 - **IB: smaller fixes.** `ADR;Po` / `ADR;Re` dividend accruals pair by
@@ -2146,8 +2153,8 @@
   quiet once ticker.map renames it (A2-0966); a spin-off parent held only
   in a start `.tt` can be named with a `GLOBAL <SEC#> <PARENT>` ticker.map
   line, which the warning now suggests (A2-0980).
-- **Questrade:** the ADR custody fee binds to its ticker ('500 SHARES
-  XPEV'); a row whose cell spans a line break (an unescaped quote) or
+- **Questrade:** the ADR custody fee binds to its ticker ('300 SHARES
+  ABCD'); a row whose cell spans a line break (an unescaped quote) or
   has extra cells is refused; a cash dividend mentioning STOCK SPLIT
   stays a dividend; an REI row with units and no cash is refused (its
   units were dropped); the internal-code warning says it is moot once
@@ -2278,8 +2285,8 @@
   last trading day before a weekend year end is not told its weekend
   is missing (re-audit A2-0272, A2-0275, A2-1049).
 - **RBC: a CLOSE CONTRACT row the books cannot back is said out loud.**
-  RBC re-describes an option between yearly exports (.RCI in 2024,
-  .RCI.B in 2025; an adjusted .TRX1). With the opening position in a
+  RBC re-describes an option between yearly exports (.ABC one year,
+  .ABC.B the next; an adjusted .ABC1). With the opening position in a
   `.tt` under the old root, the close was booked as a NEW written (or
   long) option — its premium taxed in full, the real position left
   open — with rc 0 and no warning. The parser now carries RBC's OPEN /
@@ -2380,7 +2387,7 @@
   longer lands on the TSX listing that shares its bare ticker (its dividends
   and withholding move from .TO to .US; no gain changes). A TSX stock's USD dividend or return of capital in a
   year with no trades keeps its .TO listing. An option re-described
-  between exports (RCI vs RCI.B, XCH-adjusted TRP1) keeps one symbol, so
+  between exports (ABC vs ABC.B, XCH-adjusted ABC1) keeps one symbol, so
   its close is no longer booked as a new written option. A name change
   under a temporary code finds the old ticker in an earlier export, and
   warns with the `ticker.map` line when no file names it.
@@ -2392,7 +2399,7 @@
   Account column are never matched, and a warning says so.
 - **RBC: ticker change without a reorganization row.** When one symbol
   stops with shares open and another with the same Symbol Description
-  and currency opens with a sale they cover (ORCC to OBDC in 2023), the
+  and currency opens with a sale they cover (e.g. ABC to ABD), the
   parser warns and prints the `GLOBAL` line for `ticker.map`.
 - **RBC: every reorganization booked as one event.** RBC books name
   changes (NAC), reverse splits (REV), 1-for-1 exchanges and blank "MGR -"
@@ -4309,7 +4316,7 @@
   roots.** RCI-B, "RCI B", RCI/B and RCI-B.TO are read as RCI.B(.TO) (they
   answered SAFE beside a loss on RCI.B.TO), and an option on a root that
   names no share listing but exactly one class share of it (RBC's
-  RCI270115C00046000.TO for RCI.B.TO shares) is in that share's class
+  RCI271217C00030000.TO for RCI.B.TO shares) is in that share's class
   (audit S007-02, S047-01).
 - **The wash tools name a taxable account with no books.** wash-radar,
   watch, buy-check and sell-check warned about nothing when a configured
@@ -4474,7 +4481,7 @@
 - **No security identity by suffix stripping.** `buy-check`, `sell-check`,
   `harvest` and `scan` matched listings by root, so `XYZ.TO` and `XYZ.US`
   were one security unless ticker.map said `DISTINCT` (it merged Digital
-  Realty DLR.US with the Global X DLR.TO currency ETF on real books). Two
+  Realty DLR.US with the Global X DLR.TO currency ETF). Two
   listings are now the same security ONLY through a ticker.map rule
   (GLOBAL/TOBASE/JOURNAL), a split rename, or an option's own underlying,
   exactly as the engine pools them. A bare query (`buy-check XYZ`) still
@@ -4695,8 +4702,8 @@
   `--force`, which keeps a `.bak` (audit A2-0312).
 - **audit and find-missing-history follow ticker.map and the locks.**
   `audit SYMBOL` also matches the broker's own ticker of a renamed
-  security (`audit CCJ.US` found nothing although every block prints
-  `SELL ... CCJ.US` and its MAPPING); `audit --year <locked year>`
+  security (`audit ABC.US` found nothing although every block prints
+  `SELL ... ABC.US` and its MAPPING); `audit --year <locked year>`
   recomputes with the option timing the lock recorded, and says so;
   the merged `audit --json` total is summed over the events and
   rounded once (it was a cent off wash-sales). find-missing-history
@@ -5914,7 +5921,7 @@ fixed:
   row. IB levies UK Stamp Tax per fill while the Trades section
   carries one Order row, so a buy filled in two lots had two levy
   rows; the taken-once fold sent the second out as a standalone FEE
-  that never reached the ACB (seen on a real LSE buy). Each trade now keeps an unlevied quantity so several
+  that never reached the ACB (an LSE buy). Each trade now keeps an unlevied quantity so several
   rows can fold into it; two same-day trades with one levy each still
   pair 1:1.
 - `taxjson.toml` accounts accept `holdings = [...]` — paths of the
@@ -5956,10 +5963,10 @@ fixed:
   rules that match no parsed symbol — counting OPTION roots (a rule
   with no stock rows is still live when option trades carry its root,
   since identical-property matching folds the option's underlying
-  through it) and suffix-less codes. A root-blind dead-rule check had
-  pruned ten live TOBASE/GLOBAL rules from a real map, splitting every
-  affected option's identity class (the DFDV1 assignment legs stopped
-  netting against the DFDV short puts). A note only: it never fails
+  through it) and suffix-less codes. A root-blind dead-rule check could
+  prune live TOBASE/GLOBAL rules, splitting every
+  affected option's identity class (an adjusted root's assignment legs
+  stopped netting against the original root's short puts). A note only: it never fails
   the scan.
 
 Deep audit, round eight (2026-09-14/15): a privacy/secrets sweep of
@@ -6367,8 +6374,8 @@ Scan/CLI/consistency:
   book's TRANSFER rows are deliberately not tax events (basis comes
   from the buy/sell history) — but the parse stage silently DELETED
   them, leaving no way to discover a depot flip, listing journal, or
-  broker migration later (the OR.US/OR.TO mystery: IBKR's InterDepot
-  row existed in the CSV all along). Excluded rows now land in a
+  broker migration later (an IBKR InterDepot row can sit in the CSV
+  all along). Excluded rows now land in a
   per-broker sidecar (`work/<acct>_<broker>_transfers.json`) with a
   parse-time note, and the new `taxjson transfers [ACCOUNT]` view
   shows them (plus in-book TRANSFERs from `transfers = true`
@@ -6693,7 +6700,7 @@ found on its first runs.
   collect a deferral that parked on an empty pool and never recovered
   — denied-but-sheltered-backed portions are PERMANENT (s.53(1)(f)
   bumps the basis of property still owned; a bump inside a registered
-  account is moot). This is the FFH.TO shape, now accounted
+  account is moot). This shape is now accounted
   correctly: permanent, not deferred-and-stranded.
 - Fuzzer find #2: **a deferral landing on a FLAT pool now parks
   direction-agnostically and takes its sign from the NEXT opening.**
@@ -6787,7 +6794,7 @@ that changed NUMBERS or ADVICE:
   held-at-+30) and old sheltered shares keep the still-held term
   alive — a full TAXABLE exit still leaves up to the sheltered
   balance denied permanently. The advisory now says so with the
-  quantity (encoded heuristic disproved by a real FFH.TO trade).
+  quantity (the encoded heuristic did not hold for an in-window buy).
 - **Ambiguous transfer dates refuse to guess.** A sheltered
   TRANSFER-in whose ARRIVAL date lands inside a superficial-loss /
   wash-sale trigger window now raises a hard error naming both
@@ -7038,7 +7045,7 @@ fixes proven on real data. 1,807 tests.
   DRIPs/sheltered adds for 30 days after selling; an affiliated buy
   makes the denial permanent). Previously bucketed as unharvestable.
 - **Questrade spinoff chains**: the placeholder/reversal/delivery
-  triple (real DFDVW warrant case) is grouped by its REC/PAY +
+  triple (a warrant distribution) is grouped by its REC/PAY +
   ON-N-SHS chain identity — no more empty-symbol events (which
   emitted invalid book rows) or skipped net-zero chains; targets are
   currency-suffixed like trade rows; unresolvable chains skip

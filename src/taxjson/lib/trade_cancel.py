@@ -9,8 +9,8 @@ the remaining shares' ACB is wrong (audit R1-51).
 
 The IB parser marks each `Ca` trade row with `type = TRADE_CANCEL_TYPE`
 and drops it together with its original when both are in the same
-statement. The original may sit in an EARLIER statement (a real RRSP
-statement for 2026 cancelled a 2025-10-22 fill booked in the 2025 one),
+statement. The original may sit in an EARLIER statement (a statement
+for one year can cancel a fill booked in the previous year's statement),
 so taxjson-merge2 runs the same pairing over every input of the account.
 A cancellation whose original is in none of the inputs stays booked as a
 reversing trade, with a warning.

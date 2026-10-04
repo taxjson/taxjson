@@ -11,9 +11,9 @@ table into the ADJUST rows the engines already understand.
 Entries (`[[distributions]]` tables in the project's taxjson.toml):
 
     [[distributions]]           # reinvested dist -> ACB up
-    symbol = "XAW.TO"
+    symbol = "ABC.TO"
     record_date = 2025-12-29
-    per_share = 0.4297
+    per_share = 0.2500
 
     [[distributions]]           # return of capital -> ACB down
     symbol = "ZRE.TO"

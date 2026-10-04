@@ -125,8 +125,8 @@ _BOOK_VALUE_RE = re.compile(
     r'BOOK\s+VALUE\s+([\d,]+(?:\.\d+)?)', re.IGNORECASE
 )
 # FCH fee rows name the security only in the description, after the
-# share count: "ADR CUSTODY FEE 500 SHARES XPEV RECORD DATE 8/1/25" (the
-# real wording; audit R1-77 — only the '# SHARES TKR' placeholder form
+# share count: "ADR CUSTODY FEE 300 SHARES ABCD RECORD DATE 3/3/25" (Questrade's
+# wording; audit R1-77 — only the '# SHARES TKR' placeholder form
 # used to match, and the real fee landed on CASH).
 _FEE_SHARES_TICKER_RE = re.compile(
     r'(?:#|\b\d[\d,]*(?:\.\d+)?)\s*SHARES\s+([A-Z][A-Z0-9.\-]*)',
@@ -700,7 +700,7 @@ class QuestradeBrokerage(BaseBrokerage):
                         lineno: Optional[int] = None):
         """(symbol, suffix currency) for a non-trade row. Questrade
         writes some rows under an internal code (S098765, a TF6's
-        R223608) or a dotted dividend code (.BTO for B2Gold held as
+        R123456) or a dotted dividend code (.BTO for B2Gold held as
         BTG on the NYSE); ONLY those are rebound to the traded symbol
         of the same security (matched on the description, in ANY of
         the account's exports). A real ticker is kept: first-match-wins

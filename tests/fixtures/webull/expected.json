@@ -35,13 +35,13 @@
   "currency": "USD",
   "date": "2024-12-12",
   "date_settle": "2024-12-15",
-  "description": "CALL ABBV01/17/25 190",
+  "description": "CALL ABCD02/19/27 45",
   "fee": 1.0,
   "gross_amount": 250.0,
   "net_amount": 251.0,
   "price": 2.5,
   "quantity": 1.0,
-  "symbol": "ABBV250117C00190000.US",
+  "symbol": "ABCD270219C00045000.US",
   "time": "09:30:00"
  }
 ]
