@@ -2048,7 +2048,7 @@ def _rates_coverage_stale(rates_path: Path, today: Optional[date_cls] = None,
     the data, not the file's mtime: coverage ends at the generation date,
     so on a stable install (no package/config mtime bumps to invalidate
     the cache) the file would otherwise be reused forever and every trade
-    after its last row would silently convert at the --default-rate.
+    after its last row would have no rate (and stop the conversion).
     Stale when the newest rate row is more than 3 days old (tolerates
     weekends/short holidays without refetching daily) — judged PER
     CURRENCY when `currencies` is given: the file concatenates one block
@@ -2126,8 +2126,9 @@ def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
         if had_previous:
             print(f"taxjson: warning: FX rate refresh failed ({exc}); keeping the "
                   f"existing to_base.csv. Transactions dated after its "
-                  f"coverage will fall back to the default rate — re-run "
-                  f"online to refresh.", file=sys.stderr)
+                  f"coverage (beyond its last rate and the look-back) "
+                  f"have no rate and stop the conversion — re-run online "
+                  f"to refresh.", file=sys.stderr)
             return rates_path
         raise
     # Atomic: to_base.csv is mtime-cached, so a kill mid-write must never
@@ -9263,8 +9264,12 @@ def _account_plan(name: str, acfg: Dict[str, Any],
 
 
 def _scan_symbol_root(sym: str) -> Tuple[str, str]:
+    """(root, suffix) of a US or Canadian listing (every Canadian venue:
+    lib/markets), else (symbol, '')."""
+    from taxjson.lib.markets import canadian_suffixes
     parts = sym.rsplit(".", 1)
-    if len(parts) == 2 and parts[1].upper() in ("TO", "US", "V", "CN", "NE"):
+    if len(parts) == 2 and (parts[1].upper() == "US"
+                            or parts[1].upper() in canadian_suffixes()):
         return parts[0].upper(), parts[1].upper()
     return sym.upper(), ""
 
@@ -9480,19 +9485,26 @@ def cmd_scan(args: argparse.Namespace) -> None:
         _see(old)
         _see(new)
 
-    def _has_ca_twin(rt: str, sym_u: str) -> bool:
-        # ticker.map (GLOBAL/TOBASE onto a .TO listing) is the identity
-        # ruling; without one, a .TO sighting of the same root is only
-        # evidence (MAP-GAP asks for the ruling too). A DISTINCT ruling
-        # settles it the other way: the .TO line is a CDR or another
+    from taxjson.lib.markets import canadian_suffixes as _ca_sufs
+    _CA_SUFS = tuple(sorted(_ca_sufs()))
+
+    def _ca_twins(rt: str, sym_u: str) -> List[str]:
+        # ticker.map (GLOBAL/TOBASE onto a Canadian listing) is the
+        # identity ruling; without one, a sighting of the same root on
+        # ANY Canadian venue (.TO, .V, .CN, .NE, .VN — not only the TSX)
+        # is only evidence (MAP-GAP asks for the ruling too). A DISTINCT
+        # ruling settles it the other way: that line is a CDR or another
         # issuer, and "hold it instead" is wrong advice (audit S042-06,
         # S049-09).
         tgt = renames_u.get(sym_u, "")
-        if tgt.endswith(".TO"):
-            return not _declared_distinct(sym_u, tgt)
-        if _declared_distinct(sym_u, f"{rt}.TO"):
-            return False
-        return "TO" in (seen_suffixes.get(rt) or set())
+        if _scan_symbol_root(tgt)[1] in _CA_SUFS:
+            return [] if _declared_distinct(sym_u, tgt) else [tgt]
+        return [f"{rt}.{s}" for s in sorted(seen_suffixes.get(rt) or ())
+                if s in _CA_SUFS
+                and not _declared_distinct(sym_u, f"{rt}.{s}")]
+
+    def _has_ca_twin(rt: str, sym_u: str) -> bool:
+        return bool(_ca_twins(rt, sym_u))
 
     findings = []                     # (check, account, symbol, message)
     if country == "canada":
@@ -9515,7 +9527,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 if not pays:
                     continue
                 if _has_ca_twin(rt, sym_u):
-                    _ca = renames_u.get(sym_u) or f"{rt}.TO"
+                    _ca = " or ".join(_ca_twins(rt, sym_u))
                     findings.append((
                         "US-LISTING", name, sym,
                         f"Canadian issuer held via its US listing in a "
@@ -9533,13 +9545,16 @@ def cmd_scan(args: argparse.Namespace) -> None:
     # MAP-GAP: both listings seen, no consolidating entry either way.
     for rt in sorted(seen_suffixes):
         sufs = seen_suffixes[rt]
-        if "TO" in sufs and "US" in sufs:
-            if _declared_distinct(f"{rt}.US", f"{rt}.TO"):
+        if "US" not in sufs:
+            continue
+        for _cs in sorted(s for s in sufs if s in _CA_SUFS):
+            _ca = f"{rt}.{_cs}"
+            if _declared_distinct(f"{rt}.US", _ca):
                 continue        # user's DISTINCT ruling — settled
             if (f"{rt}.US" not in renames_u
-                    and f"{rt}.TO" not in renames_u):
+                    and _ca not in renames_u):
                 findings.append((
-                    "MAP-GAP", "-", f"{rt}.TO/{rt}.US",
+                    "MAP-GAP", "-", f"{_ca}/{rt}.US",
                     "both listings appear in this project but "
                     "ticker.map has no GLOBAL/TOBASE entry — the "
                     "engine treats them as two securities (splits the "
@@ -9640,13 +9655,35 @@ def cmd_scan(args: argparse.Namespace) -> None:
                   "(pip install -e '.[fx]'); skipping the probe.",
                   file=sys.stderr)
         else:
+            # The book symbol (ZZQ.US, ZZQ.B.TO) is not Yahoo's spelling:
+            # every probe goes through the project's QUOTE lines, else
+            # the one converter the price chain uses (lib/price_chain).
+            # A raw `ZZQ.US` lookup came back empty for every US symbol,
+            # so MAP-BAD? could never be raised.
+            from taxjson.lib.price_chain import load_yf_map, yf_symbol_for
+            try:
+                _quote = load_yf_map([str(root)])
+            except Exception:
+                _quote = {}
+
+            def _yf(sym: str) -> Optional[str]:
+                s = str(sym or "").upper()
+                if s in _quote:
+                    return _quote[s][0]
+                return yf_symbol_for(s)
+
             def _issuer_names(sym: str) -> Tuple[str, str]:
                 """(longName, shortName) — BOTH matter: for a CDR the
                 longName is the clean issuer ('Abbott Laboratories')
                 and only the shortName carries the receipt marker
                 ('ABBOTT LABS CDR (CAD HEDGED)'). Falls back to the
-                chart metadata when the info endpoint is throttled."""
+                chart metadata when the info endpoint is throttled.
+                `sym` is the book symbol; Yahoo is asked for its
+                spelling (_yf)."""
                 ln = sn = ""
+                sym = _yf(sym)
+                if not sym:
+                    return ln, sn
                 try:
                     info = yf.Ticker(sym).info or {}
                     ln = str(info.get("longName") or "")
@@ -9670,9 +9707,12 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 if (suf != "US" or _has_ca_twin(rt, sym.upper())
                         or _declared_distinct(f"{rt}.US", f"{rt}.TO")):
                     continue
+                _twin = _yf(f"{rt}.TO")
+                if not _twin:
+                    continue
                 try:
-                    hist = yf.Ticker(f"{rt}.TO").history(period="5d",
-                                                         timeout=5)
+                    hist = yf.Ticker(_twin).history(period="5d",
+                                                    timeout=5)
                     if hist is not None and not hist.empty:
                         probed.append(rt)
                 except Exception:
@@ -9697,7 +9737,6 @@ def cmd_scan(args: argparse.Namespace) -> None:
             # DIFFERENT-root dual listings (SAMPLQ.US/SAMPLP.TO) and typo'd
             # map pairs, which same-root scanning can never see.
 
-            _CA_SUFS = ("TO", "V", "CN", "NE")
             held_syms = {str(h.get("symbol") or "").upper()
                          for rows in holdings.values() for h in rows}
             held_syms = {s for s in held_syms

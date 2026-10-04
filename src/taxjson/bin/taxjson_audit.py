@@ -48,7 +48,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.cli_diag import guard_main, tax_year
-from taxjson.bin.taxjson_convert_currency import (default_rate_for,
+from taxjson.bin.taxjson_convert_currency import (LOOKBACK_DAYS,
+                                                  default_rate_for,
                                                   positive_rate)
 from taxjson.lib.core import (get_tax_rules, is_option_symbol,
                               load_transactions)
@@ -281,20 +282,22 @@ def rate_with_provenance(currency: str, date_str: str,
                          default_rate: Decimal
                          ) -> Tuple[Decimal, str, Optional[str]]:
     """The converter's exact date-resolution rules (exact date, else
-    walk back up to 5 days, else the default rate), returning WHERE
-    the rate came from as well: (rate, kind, source_date). kind is
-    'exact' | 'carried' | 'default'."""
+    walk back up to LOOKBACK_DAYS days, else an explicit --default-rate,
+    else None — no rate), returning WHERE the rate came from as well:
+    (rate, kind, source_date). kind is 'exact' | 'carried' | 'default'
+    | 'missing'."""
     from datetime import datetime, timedelta
     curr_history = history.get(currency) or {}
+    miss = "default" if default_rate is not None else "missing"
     try:
         dt = datetime.strptime(date_str, "%Y-%m-%d")
     except ValueError:
-        return default_rate, "default", None
-    for i in range(6):
+        return default_rate, miss, None
+    for i in range(LOOKBACK_DAYS + 1):
         d = (dt - timedelta(days=i)).strftime("%Y-%m-%d")
         if d in curr_history:
             return curr_history[d], ("exact" if i == 0 else "carried"), d
-    return default_rate, "default", None
+    return default_rate, miss, None
 
 
 # ---------------------------------------------------------------------------
@@ -432,9 +435,8 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
             rate_date = str(raw.get("date_settle") or raw.get("date") or "")
             rate, kind, src_date = rate_with_provenance(
                 cur, rate_date, fx_history,
-                # The converter's own fallback of this direction (a
-                # USD->CAD 1.35 never prices a CAD row in a USD book,
-                # audit A2-0148).
+                # The converter's own fallback: an explicit
+                # --default-rate, else none (no built-in rate).
                 default_rate_for(cur, base_currency, default_rate))
             nominal = float(raw.get("net_amount") or 0.0)
             priced_by_fill = False
@@ -448,6 +450,17 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
                 nominal = float(_filled.get("net_amount") or 0.0)
                 priced_by_fill = True
             book = float(base_row.get("net_amount") or 0.0)
+            if rate is None:
+                # No rate and no explicit --default-rate: the converter
+                # stops on such a row, so these books cannot hold it.
+                fx = {"from": cur, "to": base_currency, "rate": None,
+                      "rate_kind": "missing", "rate_date": rate_date}
+                ev["failures"].append(
+                    f"FX: no {cur}->{base_currency} rate for {rate_date} "
+                    f"(nor in the {LOOKBACK_DAYS} days before) in the "
+                    f"rates file — the conversion stops on this row; "
+                    f"refresh the rates with `taxjson run`.")
+        if cur and cur != base_currency and rate is not None:
             settled = base_row.get("type") == "futures_settlement"
             notional = nominal
             if settled:
@@ -469,15 +482,15 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
                 fx["notional"] = notional
             if kind == "default":
                 ev["warnings"].append(
-                    f"FX fell back to the default rate {float(rate):g} "
-                    f"— no {cur} rate within 5 days of {rate_date} in "
-                    f"the rates file.")
+                    f"FX fell back to the --default-rate {float(rate):g} "
+                    f"— no {cur} rate within {LOOKBACK_DAYS} days of "
+                    f"{rate_date} in the rates file.")
             if not ties:
                 ev["failures"].append(
                     f"FX cross-check FAILED: {_fmt(nominal)} {cur} x "
                     f"{float(rate):g} = {_fmt(computed)} but the base "
                     f"book row carries {_fmt(book)} {base_currency}.")
-        else:
+        elif not (cur and cur != base_currency):
             fx = {"from": cur or base_currency, "to": base_currency,
                   "native": True}
     ev["fx"] = fx
@@ -620,6 +633,10 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
         if fx.get("native"):
             _sec(out, paint, "CURRENCY",
                  paint(f"native {fx['to']} — no conversion", "dim"))
+        elif fx.get("rate_kind") == "missing":
+            _sec(out, paint, "FX",
+                 f"{fx['from']}\u2192{fx['to']}  " + paint(
+                     f"(NO RATE on file for {fx['rate_date']})", "dim"))
         else:
             kind = {"exact": f"exact rate for {fx['rate_date']}",
                     "carried": f"carried forward from "

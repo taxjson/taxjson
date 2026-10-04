@@ -149,16 +149,18 @@ def yf_symbol_for(symbol: str,
         # after the .TO strip and could never match).
         yf_ticker = re.sub(r'\.UN$', '-UN', yf_ticker, flags=re.IGNORECASE)
         yf_ticker = re.sub(r'\.U$', '-U', yf_ticker, flags=re.IGNORECASE)
-        yf_ticker = yf_ticker.replace('.B', '-B')
-        yf_ticker = yf_ticker.replace('.A', '-A')
         # Preferred-share styles (.PR.A / .PR-A / .PR_A / bare .PR)
         # -> Yahoo's -PA / -P forms (e.g. SAMPMH.PR.A.TO -> SAMPMH-PA.TO).
-        for letter in 'ABCDEF':
-            yf_ticker = re.sub(rf'\.PR[\.\-_]{letter}', f'-P{letter}',
-                               yf_ticker, flags=re.IGNORECASE)
-        yf_ticker = re.sub(r'\.PR', '-P', yf_ticker, flags=re.IGNORECASE)
+        yf_ticker = re.sub(r'\.PR[.\-_]([A-Z])$', r'-P\1', yf_ticker,
+                           flags=re.IGNORECASE)
+        yf_ticker = re.sub(r'\.PR$', '-P', yf_ticker, flags=re.IGNORECASE)
+        # Any other class or series: the trailing `.X` / `.XX` is
+        # Yahoo's `-X` (SAMPLC.B -> SAMPLC-B, a .C or .DB likewise). The
+        # old blind '.B'/'.A' replace missed every other class letter
+        # and rewrote a '.B' / '.A' anywhere in the symbol.
+        yf_ticker = re.sub(r'\.([A-Z]{1,2})$', r'-\1', yf_ticker,
+                           flags=re.IGNORECASE)
         yf_ticker = yf_ticker + '.TO'
-    yf_ticker = yf_ticker.replace('BRK.B', 'BRK-B')
     if ':' in yf_ticker:
         return None
     return yf_ticker

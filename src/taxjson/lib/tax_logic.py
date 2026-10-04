@@ -563,12 +563,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "holidays for up to 7 days, and a day with no row there "
                  "uses the latest row of the 5 days before, so a rate up "
                  "to 12 days old is used (real Bank of Canada gaps are 4 "
-                 "days or less); a longer gap converts the row at a "
-                 "placeholder rate (1.35 for USD->CAD) and is a "
-                 "validation ERROR (the .sum "
-                 "DIAGNOSTICS, `taxjson checklist`; `run --strict` "
-                 "stops), and a currency with no rates at all stops the "
-                 "run. `taxjson fx-cash` counts a cash event with no rate "
+                 "days or less); a row with no rate after that, or a "
+                 "currency with no rates at all, stops the run naming the "
+                 "row's date and currency pair — taxjson carries no "
+                 "built-in rate (the stand-alone converters accept your "
+                 "own rate with --default-rate). "
+                 "`taxjson fx-cash` counts a cash event with no rate "
                  "row in those 5 days as unrated (named in its report), "
                  "and `taxjson crypto-sends` leaves a send (and a "
                  "stablecoin pool row) with none unpriced.",
@@ -1352,8 +1352,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-SCAN-02",
                  "A Canadian issuer held through its US listing in a "
                  "taxable account or TFSA while it pays dividends is "
-                 "flagged: its .TO line pays the eligible dividend in CAD "
-                 "with no conversion.", cont=True),
+                 "flagged: its Canadian line pays the eligible dividend "
+                 "in CAD with no conversion. The Canadian line is the "
+                 "ticker.map target, else a listing of the same root on "
+                 "any Canadian venue (.TO, .V, .CN, .NE, .VN) seen in the "
+                 "books; a DISTINCT pair is not one.", cont=True),
             Rule("CA-RPT-07",
                  "`taxjson edge-cases`: every trade whose year or "
                  "superficial-loss verdict turns on a boundary — window "
@@ -1588,11 +1591,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "each rate over weekends and holidays for up to 7 days, "
                  "and a day with no row there uses the latest row of the "
                  "5 days before, so a rate up to 12 days old is used; a "
-                 "longer gap converts the row at a placeholder rate (for "
-                 "CAD->USD the inverse of 1.35, never a USD->CAD rate) "
-                 "and is a validation ERROR (`run --strict` stops), and a "
-                 "currency with no rates at all stops the run. `taxjson "
-                 "fx-cash` counts a cash event with no rate row in those "
+                 "row with no rate after that, or a currency with no "
+                 "rates at all, stops the run naming the row's date and "
+                 "currency pair — taxjson carries no built-in rate (the "
+                 "stand-alone converters accept your own rate with "
+                 "--default-rate). `taxjson fx-cash` counts a cash event with no rate row in those "
                  "5 days as unrated (named in its report), and `taxjson "
                  "crypto-sends` leaves a send (and a stablecoin pool row) "
                  "with none unpriced.", cont=True),
@@ -1700,8 +1703,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-ROC-01",
                  "A return of capital (nondividend distribution, "
                  "§301(c)(2)) lowers the basis of the shares held, pro rata "
-                 "over the open lots, for every issuer (`roc-sum` totals it "
-                 "against Form 1099-DIV box 3)."),
+                 "over the open lots, for every issuer wherever it is "
+                 "resident — Canada's foreign-issuer rule never applies "
+                 "(`roc-sum` totals it against Form 1099-DIV box 3)."),
             Rule("US-ROC-02",
                  "The part beyond a lot's basis is a capital gain in the "
                  "year received (§301(c)(3)), short- or long-term by that "

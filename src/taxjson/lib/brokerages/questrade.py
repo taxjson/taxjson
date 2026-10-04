@@ -99,22 +99,25 @@ _DESC_NOISE_RES = [
     re.compile(r'\s+WE ACTED AS AGENT.*$', re.IGNORECASE),
     re.compile(r'\s+AVG PRICE.*$', re.IGNORECASE),
     re.compile(r'\s+REC\s+\d{2}/\d{2}/\d{2}.*$', re.IGNORECASE),
-    # Transfer-specific suffixes — broker names and book-value notes
-    # arrive on transfer-in rows from RBC, BMO, TD, CIBC, Scotia.
-    re.compile(r'\s+(?:RBC|BMO|TD|CIBC|SCOTIA|NATIONAL BANK)\s.*$', re.IGNORECASE),
-    re.compile(r'\s+DOMINION SECURITIES.*$', re.IGNORECASE),
+    # Transfer-specific suffixes. A transfer-in row may also name the
+    # delivering dealer after the security ("<SECURITY> <DEALER> 41.75
+    # TRANSFER BOOK VALUE ..."): no list of dealer names is kept — such a
+    # key is matched to the security's by word prefix
+    # (QtAccountContext.key_candidates).
     re.compile(r'\s+TFER\s+(?:FROM|TO).*$', re.IGNORECASE),
-    re.compile(r'\s+TRANSFER\s+(?:FROM|TO|IN\b|BOOK\s+VALUE).*$',
+    # "... TRANSFER FROM/TO/IN ...", "... TRANSFER BOOK VALUE ..." or a
+    # final "TRANSFER" ("<SECURITY> <DEALER> 135.79 TRANSFER"); a name
+    # with TRANSFER inside it ("ZZ TRANSFER LP") is left alone.
+    re.compile(r'\s+TRANSFER(?:\s+(?:FROM|TO|IN|BOOK\s+VALUE)\b.*)?$',
                re.IGNORECASE),
-    # Interactive Brokers' two transfer wordings (audit S063-09):
-    # "<name> TRANSFER IN INTERACTIVE BROKER" (above) and
-    # "<name> INTERACTIVE BROKERS LLC 135.79 TRANSFER".
-    re.compile(r'\s+INTERACTIVE\s+BROKERS?\s+LLC\b.*$', re.IGNORECASE),
     re.compile(r'\s+BOOK\s+VALUE.*$', re.IGNORECASE),
     # Cosmetic suffixes seen on various row types.
     re.compile(r'\s+COMMON STOCK.*$', re.IGNORECASE),
-    re.compile(r'\s+CLASS A.*$', re.IGNORECASE),
 ]
+# A class designation: "CLASS B SUB VTG" and "CL B" are one key, "CL B",
+# whatever the letter (only CLASS A used to be stripped, so a class-A
+# key lost its letter and a class-B key kept the whole wording).
+_CLASS_RE = re.compile(r'\s+CLASS\s+([A-Z])\b.*$', re.IGNORECASE)
 _SPINOFF_PARENT_RE = re.compile(
     r'SPINOFF ON .* FROM SEC# \S+ (.*?)\s+REC', re.IGNORECASE
 )
@@ -167,7 +170,8 @@ def _get_desc_key(desc: str) -> str:
         desc = m.group(1)
     for pat in _DESC_NOISE_RES:
         desc = pat.sub('', desc)
-    return desc.strip().upper()
+    desc = _CLASS_RE.sub(lambda m: f" CL {m.group(1).upper()}", desc)
+    return re.sub(r'\s+', ' ', desc).strip().upper()
 
 
 # Questrade writes 'Buy'/'Sell' and upper-case codes (DIV, TF6, DIS, ...).
@@ -273,6 +277,36 @@ class QtAccountContext:
     # cancels (every overlapping copy), and of the reversals paired.
     rev_drop: Dict[str, set] = field(default_factory=dict)
     rev_paired: Dict[str, set] = field(default_factory=dict)
+    # Keys learned from Transfers rows that no Trades key prefixes: they
+    # may carry the delivering dealer's name after the security's.
+    transfer_keys: set = field(default_factory=set)
+
+    def key_candidates(self, key: str, transfer_row: bool = False) -> set:
+        """{(symbol, currency)} for a description key: the exact key;
+        else, for a TRANSFER row (whose description may name the
+        delivering dealer after the security), the longest known key
+        that is a word prefix of it; else, for any other row, the
+        transfer keys it is a word prefix of; else, a class share's
+        key (KEY CL X) when exactly one class is known. Derived from the
+        rows — no list of dealer names (owner, 2026-10-04)."""
+        if not key:
+            return set()
+        hit = self.desc_to_ticker.get(key)
+        if hit:
+            return hit
+        if transfer_row:
+            best = max((k for k in self.desc_to_ticker
+                        if key.startswith(k + " ")), key=len, default=None)
+            return set(self.desc_to_ticker[best]) if best else set()
+        out: set = set()
+        for t in self.transfer_keys:
+            if t.startswith(key + " "):
+                out |= self.desc_to_ticker.get(t, set())
+        if out:
+            return out
+        cls = [k for k in self.desc_to_ticker
+               if re.fullmatch(re.escape(key) + r" CL [A-Z]", k)]
+        return set(self.desc_to_ticker[cls[0]]) if len(cls) == 1 else set()
 
     def emit(self) -> None:
         if self.emitted:
@@ -294,6 +328,7 @@ def build_qt_account_context(paths, *, helper=None) -> QtAccountContext:
                            timelines={})
     by_name: Dict[tuple, set] = {}
     where: Dict[str, str] = {}
+    trade_keys: set = set()
     for k in files:
         for lineno, row in _read_qt_rows(Path(k)):
             act = (row.get('Activity Type') or '').strip()
@@ -309,6 +344,8 @@ def build_qt_account_context(paths, *, helper=None) -> QtAccountContext:
             key = _get_desc_key(desc)
             if key:
                 ctx.desc_to_ticker.setdefault(key, set()).add((sym, cur))
+                (trade_keys.add(key) if act == 'Trades'
+                 else ctx.transfer_keys.add(key))
             if helper.parse_option_from_description(desc):
                 continue             # a contract, not a listing
             ctx.sym_curs.setdefault(sym, set()).add(cur)
@@ -333,6 +370,20 @@ def build_qt_account_context(paths, *, helper=None) -> QtAccountContext:
             where.setdefault(listing, Path(k).name)
             if key:
                 by_name.setdefault((key, cur), set()).add(listing)
+    # A transfer key that a trade key prefixes ("<SECURITY> <DEALER>")
+    # is that security's key.
+    for tk in sorted(ctx.transfer_keys - trade_keys):
+        base = max((k for k in trade_keys if tk.startswith(k + " ")),
+                   key=len, default=None)
+        if base is None:
+            continue
+        ctx.desc_to_ticker.setdefault(base, set()).update(
+            ctx.desc_to_ticker.pop(tk, set()))
+        for (bk, bc) in [x for x in by_name if x[0] == tk]:
+            by_name.setdefault((base, bc), set()).update(
+                by_name.pop((bk, bc)))
+    ctx.transfer_keys -= trade_keys
+    ctx.transfer_keys &= set(ctx.desc_to_ticker)
     for tl in ctx.timelines.values():
         tl.sort(key=lambda e: (e[0], -e[1]))
     _detect_qt_ticker_changes(ctx, by_name, where)
@@ -713,8 +764,10 @@ class QuestradeBrokerage(BaseBrokerage):
         sym = raw.lstrip('.')
         code_like = (not sym or bool(_INTERNAL_CODE_RE.match(sym))
                      or raw.startswith('.'))
-        cands = self._desc_to_ticker.get(
-            _get_desc_key(row.get('Description') or ''), set())
+        cands = self._ctx.key_candidates(
+            _get_desc_key(row.get('Description') or ''),
+            transfer_row=((row.get('Activity Type') or '').strip()
+                          == 'Transfers'))
         if not code_like:
             cur = self._listing_currency(sym, currency)
             own = self.apply_currency_suffix(sym, cur)

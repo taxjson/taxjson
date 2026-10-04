@@ -172,15 +172,21 @@ class TestFees(unittest.TestCase):
         self.assertRegex(r.stdout, r"ib\s+CAD")
 
     def test_fx_fallback_is_surfaced(self):
-        # Rate file lacks the trade date → default-rate fallback must be loud.
+        # Rate file lacks the trade date: there is no built-in rate
+        # (owner, 2026-10-04) — the report stops naming the date and
+        # pair; an explicit --default-rate is used, and said.
         with tempfile.TemporaryDirectory() as d:
             _write(d, "m_ib.json", "ib", [_tx(id="a", currency="USD",
                                               commission=10.0)])
             rates = Path(d) / "rates.csv"
             rates.write_text("2020-01-01 12:00:00 USD CAD 1.30000\n")
             r = _run("--cache", d, "--to", "CAD", "--rates", str(rates))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("default-rate", (r.stdout + r.stderr))
+            r2 = _run("--cache", d, "--to", "CAD", "--rates", str(rates),
+                      "--default-rate", "1.4")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("USD->CAD on 2026-03-01", r.stderr)
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        self.assertIn("default-rate", (r2.stdout + r2.stderr))
 
     def test_zero_fee_broker_listed(self):
         with tempfile.TemporaryDirectory() as d:

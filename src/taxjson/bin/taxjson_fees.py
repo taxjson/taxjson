@@ -45,7 +45,9 @@ from pathlib import Path
 from taxjson.lib.report_model import fmt_money
 from taxjson.lib import cli_diag
 from taxjson.lib.cli_diag import guard_main, tax_year
-from taxjson.bin.taxjson_convert_currency import (default_rate_for,
+from taxjson.bin.taxjson_convert_currency import (MissingRateError,
+                                                  default_rate_for,
+                                                  missing_rate_message,
                                                   positive_rate)
 from typing import Any, Dict, List, Optional
 
@@ -162,8 +164,15 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
         # The fallback of this direction (audit A2-0148).
         _fb = default_rate_for(curr, to_curr, default_rate)
         rate = get_rate_for_date(curr, date, history, _fb)
+        if rate is None:
+            # No rate and no explicit --default-rate: never a built-in
+            # placeholder (owner, 2026-10-04).
+            raise MissingRateError(missing_rate_message([{
+                "currency": norm_currency(curr), "target": to_curr,
+                "date": date, "action": "fee", "symbol": "",
+                "reason": "no rate in the rates file"}]))
         return convert_currency(amount, curr, to_curr,
-                                {(curr, to_curr): rate}, float(_fb))
+                                {(curr, to_curr): rate}, float(rate))
 
     # Every parsed row first, then ONE dedup over all of them with the
     # books' own rule (taxjson_sort.plan_dedup): an id-only pass here
@@ -488,9 +497,10 @@ def main():
     p.add_argument("--rates", metavar="FILE",
                    help="Historical FX rates file (e.g. work/to_base.csv).")
     p.add_argument("--default-rate", type=positive_rate, default=None,
-                   help="FX fallback when a date/currency is missing "
-                        "(default 1.35 for USD->CAD, its inverse for "
-                        "CAD->USD); usage is reported, not silent.")
+                   help="Your own FX fallback rate when a date/currency is "
+                        "missing (no default: such a fee stops the "
+                        "report, naming its date and currency pair); "
+                        "usage is reported, not silent.")
     p.add_argument("--ticker-map", metavar="FILE",
                    help="The project's ticker.map: rows of a DELETE'd "
                         "symbol are left out, as the books leave them out.")

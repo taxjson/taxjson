@@ -165,10 +165,10 @@ class TestMerge2DefaultRateWarnings(unittest.TestCase):
     the tally was added to prevent. These tests pin the wiring."""
 
     def test_to_without_rates_warns_upfront(self):
-        """Running --to USD without --rates must emit a loud upfront
-        stderr warning, mirroring the standalone CLI's behavior. A
-        user who forgot --rates would otherwise get every cross-
-        currency row converted at 1.35 with no indication."""
+        """Running --to without --rates: with an explicit --default-rate
+        a loud upfront warning; without one there is no rate at all and
+        the merge stops naming the row (no built-in 1.35, owner
+        2026-10-04)."""
         with tempfile.TemporaryDirectory() as tmp:
             inp = Path(tmp) / 'in.json'
             _write_json(inp, [{
@@ -176,10 +176,14 @@ class TestMerge2DefaultRateWarnings(unittest.TestCase):
                 'symbol': 'AAPL.US', 'quantity': 100, 'price': 150.0,
                 'net_amount': 15000.0, 'currency': 'USD', 'account': 'Margin',
             }])
-            result = _run_merge2('--to', 'CAD', str(inp))
+            result = _run_merge2('--to', 'CAD', '--default-rate', '1.4',
+                                 str(inp))
             self.assertEqual(result.returncode, 0)
             self.assertIn('given without --rates', result.stderr)
             self.assertIn('--default-rate', result.stderr)
+            bare = _run_merge2('--to', 'CAD', str(inp))
+            self.assertNotEqual(bare.returncode, 0)
+            self.assertIn('USD->CAD on 2025-01-15', bare.stderr)
 
     def test_default_rate_summary_fires_on_missing_dates(self):
         """When a rates file is present but doesn't cover the tx date,

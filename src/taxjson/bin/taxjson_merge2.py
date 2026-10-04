@@ -431,10 +431,10 @@ def main():
     )
     parser.add_argument(
         '--default-rate', type=positive_rate, default=None,
-        help="Fallback rate when the rates file is missing a date "
-             "(default: 1.35). Passing it explicitly also allows a "
-             "currency that is entirely absent from --rates to convert "
-             "at this rate; without it that is a fatal error.",
+        help="Your own fallback rate for a row whose date has no rate "
+             "in the rates file, or a currency entirely absent from "
+             "--rates. There is no built-in rate: without it such a row "
+             "stops the merge, naming its date and currency pair.",
     )
     parser.add_argument(
         '--require-inputs', action='store_true',
@@ -541,14 +541,14 @@ def main():
     target_currency = (args.target_currency or '').upper() or None
     fx_issues = {}
     if target_currency:
-        if not args.rates_file:
+        if not args.rates_file and args.default_rate is not None:
             # Mirror the standalone CLI's loud warning — running merge2's
-            # --to without --rates would otherwise stamp every cross-
-            # currency row at --default-rate with no signal.
+            # --to without --rates stamps every cross-currency row at the
+            # explicit --default-rate (without it such a row stops).
             print(
                 f"warning: --to {target_currency} given without --rates; "
                 f"every cross-currency row will be converted with the "
-                f"hardcoded --default-rate ({describe_default_rate(resolve_default_rate(args.default_rate))}). Pass "
+                f"--default-rate ({describe_default_rate(resolve_default_rate(args.default_rate))}). Pass "
                 f"--rates rates.csv to use real historical rates.",
                 file=sys.stderr,
             )

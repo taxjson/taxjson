@@ -3171,8 +3171,17 @@ class IbBrokerage(BaseBrokerage):
                     #  * Canadian issuer (T3 box 42 style): ACB
                     #    reduction, as before.
                     # No ISIN → issuer unknown → kept as ADJUST.
+                    # s.90(1) is CANADIAN law, so "foreign" means a
+                    # non-Canadian issuer and the test exists only in a
+                    # Canadian project (or a parse that chose
+                    # --foreign-roc dividend with no country). In a US
+                    # project every issuer's return of capital lowers
+                    # basis (§301(c)(2), US-ROC-01) — a Canadian issuer
+                    # is the foreign one there, and it changes nothing
+                    # (partition: Canada is never "home" in a US book).
                     _issuer_cc = isin[:2].upper() if len(isin) >= 2 else ''
-                    _foreign = bool(_issuer_cc) and _issuer_cc != 'CA'
+                    _foreign = (self.country != 'usa'
+                                and bool(_issuer_cc) and _issuer_cc != 'CA')
                     if is_pil:
                         description = (
                             f"{description} [payment in lieu of an "

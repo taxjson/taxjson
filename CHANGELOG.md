@@ -93,6 +93,36 @@
   decided an exercise, an assignment or a replacement quantity. A
   `MULT ROOT N` line in ticker.map sets the size for a mini or an adjusted
   series. Ordinary 100-share options book exactly as before.
+- **No built-in exchange rate.** A row whose date has no rate in the
+  rates file (after the weekend/holiday carry-forward and the 5-day
+  look-back) used to be converted at a placeholder 1.35 USD->CAD rate and
+  flagged as a validation error; it now stops the conversion, naming the
+  row's date and currency pair. The stand-alone converters still accept
+  your own rate with `--default-rate`.
+- **Yahoo spellings without a special case.** The price chain's Yahoo
+  spelling no longer carries a rule for one named US class share; any
+  class or series letter is spelled the Yahoo way (`ZZQ.C.TO` ->
+  `ZZQ-C.TO`, which the old `.A`/`.B`-only replace missed). `taxjson scan
+  --online` now asks Yahoo for that spelling (or the symbol's `QUOTE`
+  line) instead of the book symbol, which returned nothing for every US
+  listing, so a wrongly paired map entry can be flagged.
+- **`taxjson scan` finds a Canadian twin on any Canadian venue.** The
+  US-LISTING and MAP-GAP checks looked for a US listing's Canadian line
+  only as `ROOT.TO`; a TSX Venture, CSE or Cboe Canada line of the same
+  root (or a ticker.map target there) now counts too.
+- **Questrade income matching keeps no list of dealer names.** A
+  dividend row under an internal code is matched to its security through
+  the description; a transfer-in row naming the delivering dealer after
+  the security used to be matched only for a hard-coded list of Canadian
+  banks and one US broker. Any dealer is now matched (the security's own
+  description is a word prefix of the transfer's), and a class
+  designation keeps its letter for every class (`CLASS B` and `CL B`
+  are one key; only `CLASS A` used to be stripped).
+- **IB return of capital: Canada is never "home" in a US project.** The
+  IB parser's foreign-issuer test (a non-Canadian issuer's return of
+  capital is a dividend, ITA s.90(1)) now runs only in a Canadian
+  project; in a US project every issuer's return of capital lowers
+  basis, a Canadian one included, even if the parser is asked otherwise.
 
 ### Command line
 

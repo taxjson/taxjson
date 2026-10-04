@@ -556,8 +556,14 @@ class TestFxFallbackDirection(unittest.TestCase):
                                net_amount=-1000.0, currency=cur)
             return CC.convert_transaction(t, tgt, {}, None).net_amount
 
-        self.assertAlmostEqual(conv("USD", "CAD"), -1350.0, places=2)
-        self.assertAlmostEqual(conv("CAD", "USD"), -740.74, places=2)
+        # No built-in placeholder in either direction (owner,
+        # 2026-10-04): the row is left unconverted here and
+        # process_transactions stops on it (test_fix_generalize_e).
+        self.assertAlmostEqual(conv("USD", "CAD"), -1000.0, places=2)
+        self.assertAlmostEqual(conv("CAD", "USD"), -1000.0, places=2)
+        self.assertEqual([r["rate"] for r in CC.fallback_rows()],
+                         [None, None])
+        CC.reset_fallback_tally()
         # An explicit --default-rate is the user's own, applied as given.
         t = TaxTransaction(action="BUYSELL", date="1995-06-01",
                            time="09:30:00", date_settle="1995-06-01",
@@ -567,10 +573,7 @@ class TestFxFallbackDirection(unittest.TestCase):
             t, "USD", {}, CC.resolve_default_rate(0.8)).net_amount,
             -800.0, places=2)
         rows = CC.fallback_rows()
-        self.assertTrue(rows)
-        msg = "\n".join(m for v in CC.fallback_validation_issues(
-            "USD", None).values() for m in v)
-        self.assertIn("0.740741", msg)
+        self.assertEqual([r["rate"] for r in rows], ["0.8"])
         CC.reset_fallback_tally()
 
 

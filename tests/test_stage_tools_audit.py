@@ -282,7 +282,10 @@ class TestD6CurrencyNormalization(unittest.TestCase):
             r = _run('taxjson.bin.taxjson_convert_currency', str(p),
                      '--to', 'CAD', '--rates', str(rates))
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn('no rates at all for EUR', r.stderr)
+            # No built-in rate (owner, 2026-10-04): the row's pair and
+            # date are named.
+            self.assertIn('EUR->CAD on', r.stderr)
+            self.assertIn('no rates for currency', r.stderr)
             r2 = _run('taxjson.bin.taxjson_convert_currency', str(p),
                       '--to', 'CAD', '--rates', str(rates),
                       '--default-rate', '1.5')
@@ -292,7 +295,7 @@ class TestD6CurrencyNormalization(unittest.TestCase):
             m = _run('taxjson.bin.taxjson_merge2', '--to', 'CAD',
                      '--rates', str(rates), str(p))
             self.assertNotEqual(m.returncode, 0)
-            self.assertIn('no rates at all for EUR', m.stderr)
+            self.assertIn('EUR->CAD on', m.stderr)
 
 
 class TestD7RatesFileParser(unittest.TestCase):
