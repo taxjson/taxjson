@@ -340,8 +340,8 @@ For a configured project the entire pipeline runs from a **single command**. Set
 ```
 taxjson.toml          # year, country, base_currency, and [accounts.*] sections
 inputs/
-  margin/ tfsa/ rrsp/ lira/ crypto/   # canada scaffold — one folder per account, drop broker CSVs in
-  margin/ crypto/ roth/ 401k/         # usa scaffold
+  margin/ tfsa/ rrsp/                 # canada scaffold — one folder per account, drop broker CSVs in
+  margin/ roth/ 401k/                 # usa scaffold (add a section + folder for any other account, e.g. crypto)
 work/                 # intermediate per-stage artifacts (rebuildable; gitignored)
 reports/              # all outputs land here
 ```
