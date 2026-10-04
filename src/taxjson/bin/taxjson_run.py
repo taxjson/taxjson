@@ -15874,7 +15874,7 @@ def _class_matches(radar: Dict[str, Dict[str, Any]], canon, want: str):
     from taxjson.lib.brokerages.schema import KNOWN_SUFFIXES
     q = want.strip().upper()
     base, _, ext = q.rpartition(".")
-    if base and ext in (set(KNOWN_SUFFIXES) | {"VN"}):
+    if base and ext in KNOWN_SUFFIXES:
         wroot = canon(q)
         return wroot, {t: r for t, r in radar.items()
                        if canon(t) == wroot}, None

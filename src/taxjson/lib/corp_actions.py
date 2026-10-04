@@ -350,7 +350,9 @@ def ib_tender_root(description: str) -> Optional[str]:
         root = root[:-4]
     return root
 
-_CURRENCY_SUFFIX = {'CAD': 'TO', 'USD': 'US', 'AUD': 'AX', 'GBP': 'L'}
+# Currency -> listing suffix: the market data's table (lib/markets).
+from taxjson.lib.markets import currency_suffixes as _cur_sfx  # noqa: E402
+_CURRENCY_SUFFIX = _cur_sfx()
 
 
 def _f(x: str, where: str = '') -> float:
@@ -1138,9 +1140,11 @@ def _apply_suffix(symbol: str, suffix: str) -> str:
     broad — class-share tickers like `SAMPLC.B`, `SAMPLC.A`, `QZR.A` would
     never get a market suffix appended, fragmenting their pool from
     the .TO / .US-suffixed equivalents downstream tools expect."""
-    known_suffixes = set(_CURRENCY_SUFFIX.values())  # {'TO','US','AX','L'}
+    # Every known listing suffix (lib/markets): X.V used to become
+    # X.V.TO (only TO/US/AX/L were known here).
+    from taxjson.lib.markets import known_suffixes
     parts = symbol.rsplit('.', 1)
-    if len(parts) == 2 and parts[1] in known_suffixes:
+    if len(parts) == 2 and parts[1].upper() in known_suffixes():
         return symbol
     return f"{symbol}.{suffix}"
 

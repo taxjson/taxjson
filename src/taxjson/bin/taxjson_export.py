@@ -105,7 +105,8 @@ def _passes_filters(item: Dict[str, Any], args) -> bool:
     # and NEO (.NE) are CAD listings too — matching only .TO let them
     # pass BOTH --no-cad and --no-usd and land in every currency-split
     # export.
-    is_cad = ext in ('TO', 'V', 'CN', 'NE')
+    from taxjson.lib.markets import canadian_suffixes
+    is_cad = ext in canadian_suffixes()      # .VN too (lib/markets)
     if is_cad and args.no_cad:
         return False
     if ext == 'US' and args.no_usd:

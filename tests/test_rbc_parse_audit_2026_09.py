@@ -573,16 +573,19 @@ class TestAccountingAndSpinoffs(unittest.TestCase):
 # ------------------------------------------------------ LOW + FEE + misc
 
 class TestLowItems(unittest.TestCase):
-    def test_horizons_and_global_x_usd_dlr_line(self):
-        txs, _, _ = parse(
-            row("March 15, 2024", "Buy", "DLR", "HORIZONS U S DLR CURRENCY ETF UNIT",
-                "100", "10", "-1009.95", "USD", "HORIZONS U S DLR CURRENCY ETF DA")
-            + row("March 14, 2024", "Buy", "DLR", "GLOBAL X US DLR CURRENCY ETF UNIT CL A",
-                  "100", "10", "-1009.95", "USD", "GLOBAL X US DLR CURRENCY ETF DA")
-            + row("March 13, 2024", "Sell", "DLR", "GLOBAL X US DLR CURRENCY ETF UNIT CL A",
-                  "-100", "13.5", "1340.05", "CAD", "GLOBAL X US DLR CURRENCY ETF CA"))
-        self.assertEqual([t['symbol'] for t in txs],
-                         ['DLR.U.TO', 'DLR.U.TO', 'DLR.TO'])
+    def test_usd_class_of_a_tsx_fund_is_said_with_the_extract_line(self):
+        # No security is named in the parser (owner 2026-10-04): the USD
+        # rows of a TSX fund's US-dollar class read as a .US listing, said
+        # out loud with the ticker.map EXTRACT line that moves them
+        # (test_fix_generalize pins the line moving them).
+        txs, err, _ = parse(
+            row("March 15, 2024", "Buy", "ZZD", "SAMPLE U S DLR CURRENCY ETF UNIT",
+                "100", "10", "-1009.95", "USD", "SAMPLE U S DLR CURRENCY ETF DA")
+            + row("March 13, 2024", "Sell", "ZZD", "SAMPLE U S DLR CURRENCY ETF UNIT",
+                  "-100", "13.5", "1340.05", "CAD", "SAMPLE U S DLR CURRENCY ETF CA"))
+        self.assertEqual([t['symbol'] for t in txs], ['ZZD.US', 'ZZD.TO'])
+        self.assertIn("EXTRACT SAMPLE U S DLR CURRENCY ETF | USD | ZZD.U.TO",
+                      err)
 
     def test_same_day_order_follows_the_file(self):
         # Newest-first: the rebuy is listed ABOVE the sell it followed.

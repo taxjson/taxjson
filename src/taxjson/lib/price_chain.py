@@ -36,8 +36,15 @@ DEFAULT_IBKR_PORT = 4001
 IBKR_CONNECT_TIMEOUT = 5.0
 IBKR_SNAPSHOT_WAIT = 8.0
 
-_SUFFIX_CURRENCY = {"US": "USD", "TO": "CAD", "V": "CAD", "CN": "CAD",
-                    "NE": "CAD", "L": "GBP", "AX": "AUD"}
+# A quoted (Yahoo) spelling's suffix -> its trading currency: the market
+# data's one venue table (lib/markets), every venue Yahoo spells as the
+# books do (or bare: .US). Questrade's .VN is Yahoo's .V (Yahoo's own
+# .VN is another market), so it is not read here.
+from taxjson.lib.markets import (known_suffixes as _known_sfx,  # noqa: E402
+                                 suffix_currency as _sfx_cur,
+                                 yahoo_suffix as _yh_sfx)
+_SUFFIX_CURRENCY = {s: _sfx_cur(s) for s in _known_sfx()
+                    if _yh_sfx(s) in (s, "")}
 
 
 # Yahoo's minor-unit currencies: the quote is in pence / cents / agorot
@@ -45,12 +52,12 @@ _SUFFIX_CURRENCY = {"US": "USD", "TO": "CAD", "V": "CAD", "CN": "CAD",
 # reports the major currency (audit S077-04 — VOD.L valued at 100x).
 _MINOR_UNITS = {"GBp": "GBP", "GBX": "GBP", "ZAc": "ZAR", "ZAC": "ZAR",
                 "ILA": "ILS"}
-# Currency codes a Yahoo pair spelling can end in ('ETH-CAD').
-_PAIR_CURRENCIES = frozenset({"USD", "CAD", "EUR", "GBP", "AUD", "JPY",
-                              "CHF", "HKD", "NZD", "SGD", "SEK", "NOK",
-                              "DKK", "MXN", "BRL", "INR", "KRW", "CNY",
-                              "ZAR", "ILS"})
-from taxjson.lib.income_dating import CA_LISTING_SUFFIXES as _CA_SUFFIXES
+# Currency codes a Yahoo pair spelling can end in ('ETH-CAD'): the one
+# fiat list (lib/markets).
+from taxjson.lib.markets import fiat_currencies as _fiat  # noqa: E402
+_PAIR_CURRENCIES = _fiat()
+from taxjson.lib.markets import canadian_suffixes as _ca_sfx  # noqa: E402
+_CA_SUFFIXES = _ca_sfx()
 
 # Listings whose quote may come in MINOR units (LSE pence, JSE cents,
 # TASE agorot): a quote that does not state its unit cannot be valued —

@@ -118,11 +118,11 @@ def load_security_overrides(path: Path):
     Each is `EXTRACT description words | CURRENCY | SYMBOL`. These
     correct securities the currency->exchange-suffix logic mislabels: a
     parser stamps `.US` on any USD row, but a security can trade in USD
-    on a non-US exchange — the Global X US Dollar ETF trades only on the
-    TSX (CAD class SAMPLF.TO, USD class SAMPLF.U.TO), so its USD leg must not
-    become a fictional `SAMPLF.US` (which would collide with US-listed
-    an unrelated NYSE issuer). Description is the only field that reliably
-    tells those two `SAMPLF`s apart.
+    on a non-US exchange — a TSX fund with a US-dollar class (CAD class
+    ZZD.TO, USD class ZZD.U.TO) whose USD leg must not become a
+    fictional `ZZD.US` (which would collide with an unrelated US-listed
+    issuer). Description is the only field that reliably tells those
+    two `ZZD`s apart.
 
     CURRENCY may be '*' to match any currency; a currency code is
     case-insensitive ('usd' == 'USD'). A malformed EXTRACT line (or a
@@ -146,11 +146,10 @@ _FUTURES_PREFIXES = ('F:', '/', '\\')
 
 
 def _override_matches(desc_sub: str, desc: str) -> bool:
-    """`desc_sub` occurs in `desc` as whole words: IB's description is
-    the bare ticker, so a plain substring test made 'QZ' rewrite QQZX
-    and QZTX (audit S012-09)."""
-    return re.search(r'(?<![a-z0-9])' + re.escape(desc_sub)
-                     + r'(?![a-z0-9])', desc) is not None
+    """`desc_sub` occurs in `desc` as whole words (base.
+    extract_words_match, the one rule)."""
+    from taxjson.lib.brokerages.base import extract_words_match
+    return extract_words_match(desc_sub, desc)
 
 
 def apply_security_override(tx: dict, overrides, hits=None) -> None:
@@ -331,9 +330,9 @@ Examples:
             "A ticker.map whose EXTRACT lines (`EXTRACT description "
             "words | CURRENCY | SYMBOL`) rewrite the parsed ticker for "
             "securities the currency->exchange suffix mislabels (e.g. "
-            "the TSX-listed Global X US Dollar ETF, whose USD class "
-            "would otherwise collide with a US-listed ticker of the "
-            "same name). `taxjson run` passes the project's ticker.map "
+            "a TSX-listed fund's US-dollar class, which would otherwise "
+            "collide with a US-listed ticker of the same name). "
+            "`taxjson run` passes the project's ticker.map "
             "when it has EXTRACT lines."
         ),
     )
@@ -602,8 +601,9 @@ Examples:
                 extractor.defer_ca_messages = True
         # Which law the parser's messages cite (never a tax choice).
         extractor.country = args.country
-        # Which law the parser's messages cite (never a tax choice).
-        extractor.country = args.country
+        # The EXTRACT lines: a parser's listing hint the map answers is
+        # not printed.
+        extractor.security_overrides = list(overrides or [])
         if hasattr(extractor, 'foreign_return_of_capital'):
             extractor.foreign_return_of_capital = foreign_roc
         if hasattr(extractor, 'futures_settle'):

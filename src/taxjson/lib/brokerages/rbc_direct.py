@@ -116,19 +116,16 @@ _RBC_SPLIT_ON_SHS_RE = re.compile(r'\bON\s+' + DESC_NUMBER_RE + r'\s+SHS\b',
 # Legacy description tokens for rows whose Activity label is unknown.
 _TRADE_DESC_RE = re.compile(r'\b(?:Buy|Sell)\b')
 
-# The Global X (formerly Horizons) US Dollar Currency ETF trades only on
-# the TSX, in a CAD class (DLR.TO) and a USD class (DLR.U.TO). RBC books
-# both under the bare symbol "DLR"; the USD row would otherwise become
-# DLR.US — the NYSE ticker of Digital Realty Trust, a different security.
-# The issuer has used two spellings: "HORIZONS U S DLR CURRENCY
-# ETF" (to ~2023) and "GLOBAL X US DLR CURRENCY ETF".
-_RBC_USD_DLR_RE = re.compile(r'\bU\s?\.?\s?S\.?\s+DLR\s+CURRENCY\s+ETF\b',
-                             re.I)
-# Any other TSX ETF's US-dollar class ("BMO S&P 500 INDEX ETF US DOLLAR
-# UNITS"): RBC's spelling for these is unverified, so it is not renamed
-# — the row's .US listing is said out loud (re-audit A2-1043).
+# A TSX fund's US-dollar class ("... ETF US DOLLAR UNITS", "... U S DLR
+# CURRENCY ETF"): RBC books it under the bare symbol in USD, which reads
+# as a US listing (ROOT.US — often another, NYSE issuer). No security is
+# named in the code (owner, 2026-10-04): the project's ticker.map
+# `EXTRACT description words | USD | ROOT.U.TO` line moves the rows, and
+# until it does the row's .US listing is said out loud with that line
+# (re-audit A2-1043).
 _RBC_USD_UNITS_RE = re.compile(
-    r'\b(?:U\.?\s?S\.?\s+DOLLAR|USD)\s+(?:UNITS?|CLASS|SERIES)\b', re.I)
+    r'\b(?:U\.?\s?S\.?\s+(?:DOLLAR|DLR)|USD)\s+'
+    r'(?:UNITS?|CLASS|SERIES|CURRENCY)\b', re.I)
 
 # Option description as RBC writes it, with the codes that may prefix it
 # (EXP expiry, ASN assignment, XCH adjustment/exchange). Overrides the
@@ -911,7 +908,8 @@ def _names_underlying(root: str, symbol: str) -> bool:
     A2-1059)."""
     from taxjson.lib.core import _root_matches_stock
     root = (root or '').strip().upper()
-    stock = re.sub(r'\.(TO|US|V|CN|NE)$', '', (symbol or '').strip().upper())
+    from taxjson.lib.markets import strip_listing_suffix
+    stock = strip_listing_suffix((symbol or '').strip().upper())
     if not root:
         return False
     if root == stock:
@@ -920,6 +918,20 @@ def _names_underlying(root: str, symbol: str) -> bool:
     # carry 'SAMPLG.OPT'-shaped symbols, which must stay the option.
     return (bool(re.fullmatch(r'[A-Z]+\.[A-Z]{1,2}', stock))
             and _root_matches_stock(root, stock))
+
+
+def _extract_words(symdesc: str, desc: str) -> str:
+    """The words a suggested EXTRACT line names: the longest start (up to
+    six words) of the security description that the row's Description —
+    what EXTRACT matches — also carries; else the Description's first
+    words."""
+    from taxjson.lib.brokerages.base import extract_words_match
+    words = (symdesc or '').split()
+    for k in range(min(6, len(words)), 0, -1):
+        cand = ' '.join(words[:k])
+        if extract_words_match(cand, desc):
+            return cand
+    return ' '.join((desc or '').split()[:4])
 
 
 # ------------------------------------------------------- account context
@@ -1686,12 +1698,10 @@ class RbcBrokerage(BaseBrokerage):
                        market: bool = False) -> str:
         """Suffix a bare equity symbol by the row's currency — or, for
         income rows (`market=True`), by the LISTING the account holds
-        (see `_income_currency`) — with the built-in USD DLR ETF rule
-        (the USD class of the TSX-listed US-dollar ETF is DLR.U.TO)."""
-        if r is not None and currency == 'USD' and symbol.upper() in (
-                'DLR', 'DLR.U') and (_RBC_USD_DLR_RE.search(r.symdesc or '')
-                                     or _RBC_USD_DLR_RE.search(r.desc or '')):
-            return 'DLR.U.TO'
+        (see `_income_currency`). A row that reads as a TSX fund's
+        US-dollar class but becomes a .US listing is an ATTENTION line
+        naming the ticker.map EXTRACT line that moves it (none when the
+        project's EXTRACT lines already match it)."""
         if market and r is not None:
             currency = self._income_currency(r) or currency
         out = self.apply_currency_suffix(symbol, currency)
@@ -1705,12 +1715,15 @@ class RbcBrokerage(BaseBrokerage):
             _root = re.sub(r'(\.U)?(\.(TO|US))?$', '', symbol.upper())
             if ticker_map_joins(out, f"{_root}.U.TO"):
                 return out      # ticker.map already folds them (A2-1056)
+            if self._extract_covers(r.desc, currency):
+                return out      # an EXTRACT line rewrites the row
+            _words = _extract_words(r.symdesc, r.desc)
             self._warn(f"{symbol} ({' '.join(r.symdesc.split())!r}) reads "
                        f"as the US-dollar class of a TSX-listed fund but is "
                        f"booked as {out}, a US listing (off the T1135, one "
                        f"pool with IB/Questrade's .U.TO only with a map "
                        f"line). If it trades on the TSX, add to ticker.map:"
-                       f"  GLOBAL {out} {_root}.U.TO",
+                       f"  EXTRACT {_words} | USD | {_root}.U.TO",
                        attention=True)
         return out
 
@@ -2138,10 +2151,10 @@ class RbcBrokerage(BaseBrokerage):
                      and t['date'] == w['date']
                      and t.get('currency') == w.get('currency')]
             if len(cands) > 1:
-                wr = re.sub(r'\.(TO|US|V|CN|NE)$', '', w['symbol'])
+                from taxjson.lib.markets import strip_listing_suffix
+                wr = strip_listing_suffix(w['symbol'])
                 cands = [t for t in cands if wr.replace('.', '').startswith(
-                    re.sub(r'\.(TO|US|V|CN|NE)$', '',
-                           t['symbol']).replace('.', ''))]
+                    strip_listing_suffix(t['symbol']).replace('.', ''))]
             if len(cands) != 1:
                 raise _err(Path(self._fname), line,
                     f"an Exercise of {w['symbol']} (a warrant or right) "

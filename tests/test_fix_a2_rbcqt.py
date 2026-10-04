@@ -836,7 +836,9 @@ class TestRbcSmallRowChecks(unittest.TestCase):
             "UNITS", "10", "50", "-509.95", "USD", "BMO S&P 500 INDEX ETF "
             "US DOLLAR UNITS UNSOLICITED"))
         self.assertEqual([t["symbol"] for t in txs], ["ZSP.US"])
-        self.assertTrue(any("GLOBAL ZSP.US ZSP.U.TO" in ln
+        # the line to add is an EXTRACT on the row's description words:
+        # a GLOBAL would also move the real US listing (owner 2026-10-04)
+        self.assertTrue(any("EXTRACT " in ln and "| USD | ZSP.U.TO" in ln
                             for ln in _attention(err)), err)
 
 

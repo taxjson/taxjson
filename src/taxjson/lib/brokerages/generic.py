@@ -205,7 +205,10 @@ _KEY_ALIASES = {
 # Exchange suffixes a user may write explicitly. One of these on the
 # symbol is the LISTING and is kept; the row currency is only the
 # settlement currency (SAMPLF.U.TO bought in USD is still SAMPLF.U.TO).
-_KNOWN_SUFFIXES = ("TO", "V", "CN", "NE", "US", "AX", "L")
+# The market data's one venue table (lib/markets): .VN was missing here.
+from taxjson.lib.markets import (canadian_suffixes as _ca_sfx,  # noqa: E402
+                                 known_suffixes as _known_sfx)
+_KNOWN_SUFFIXES = tuple(sorted(_known_sfx(), key=lambda s: (-len(s), s)))
 # Futures symbol prefixes (lib/futures.py): the contract size is not in
 # the row, so it is never guessed.
 _FUTURES_PREFIXES = ("F:", "/", "\\")
@@ -588,7 +591,7 @@ class GenericBrokerage(BaseBrokerage):
         # listing, audit S010-05): an explicit .V here must not split
         # the pool from the same shares bought at IB. The venue, not the
         # row currency, decides -- SAMPLF.U.TO bought in USD stays .TO.
-        for suf in ("TO", "V", "VN", "CN", "NE"):
+        for suf in sorted(_ca_sfx()):
             if up.endswith("." + suf) and len(up) > len(suf) + 1:
                 return canonical_ca_listing(sym, "CAD")
         for suf in _KNOWN_SUFFIXES:

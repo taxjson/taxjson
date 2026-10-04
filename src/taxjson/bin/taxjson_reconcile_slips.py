@@ -89,7 +89,9 @@ _WORDS = {
 }
 from taxjson.lib.numeric import nonneg_float_arg
 
-_SUFFIX_RE = re.compile(r"\.(US|TO|AX|L|V|CN|NE)$", re.IGNORECASE)
+# Every known listing suffix (lib/markets; .VN was missing here).
+from taxjson.lib.markets import listing_suffix_re  # noqa: E402
+_SUFFIX_RE = listing_suffix_re()
 
 _HEADER_SYNONYMS = {
     "symbol": ("symbol", "ticker", "security symbol", "security", "sym",

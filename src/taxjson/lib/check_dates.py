@@ -40,7 +40,7 @@ from taxjson.lib.dates import settlement_date
 TRADE_ACTIONS = ("BUYSELL", "ASSIGN")
 INCOME_ACTIONS = ("DIVIDEND", "DIVIDEND_IN_LIEU", "INTEREST", "TAX",
                   "ROC", "PIL")
-CA_SUFFIXES = (".TO", ".V", ".CN", ".NE", ".VN")
+from taxjson.lib.dates import CA_LISTING_SUFFIXES as CA_SUFFIXES  # noqa: E402
 # Corporate events a parser books as a trade (a spin-off leg, a stock
 # dividend, cash in lieu, a dividend reinvestment): dated the event or
 # payment day, no settlement cycle.

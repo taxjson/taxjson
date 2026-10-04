@@ -213,10 +213,40 @@ def suffix_currency(suffix: str) -> Optional[str]:
     return v.get("currency") if v else None
 
 
+def yahoo_suffix(suffix: str) -> Optional[str]:
+    """Yahoo Finance's suffix for a book listing suffix ("" = bare)."""
+    s = str(suffix or "").upper()
+    v = _venues().get(s)
+    return None if v is None else v.get("yahoo", s)
+
+
 def suffix_country(suffix: str) -> Optional[str]:
     """ISO 3166 alpha-3 country of a listing suffix's exchange."""
     v = _venues().get(str(suffix or "").upper())
     return v.get("country") if v else None
+
+
+_SUFFIX_RE_CACHE: Dict[FrozenSet[str], Any] = {}
+
+
+def listing_suffix_re(suffixes=None):
+    """A compiled `\\.(SUFFIX|...)$` (any case) for `suffixes` (default:
+    every known listing suffix), longest alternative first."""
+    import re
+    key = frozenset(s.upper() for s in (suffixes if suffixes is not None
+                                        else known_suffixes()))
+    rx = _SUFFIX_RE_CACHE.get(key)
+    if rx is None:
+        alt = "|".join(sorted(key, key=lambda s: (-len(s), s)))
+        rx = re.compile(rf"\.({alt})$", re.IGNORECASE)
+        _SUFFIX_RE_CACHE[key] = rx
+    return rx
+
+
+def strip_listing_suffix(symbol: str, suffixes=None) -> str:
+    """`symbol` without a trailing listing suffix (default: any known
+    one): ZZQ.B.TO -> ZZQ.B, ZZQ.VN -> ZZQ; ZZQ.B stays."""
+    return listing_suffix_re(suffixes).sub("", str(symbol or ""))
 
 
 def currency_suffixes() -> Dict[str, str]:
@@ -235,11 +265,12 @@ def isin_country_suffix(cc: str) -> Optional[str]:
 
 def ib_venue_suffix(code: str) -> Optional[str]:
     """The listing suffix of an IB "Listing Exch" code (VENUE lines
-    first), None for an unknown venue."""
+    first); "" for a venue a `VENUE CODE NO` line removed, None for an
+    unknown venue."""
     c = str(code or "").strip().upper()
     o = overrides().venue
     if c in o:
-        return o[c]
+        return o[c] or ""
     return data()["ib_venues"].get(c)
 
 

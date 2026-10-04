@@ -23,7 +23,9 @@
 
 # Listing suffix (SYMBOL.SUFFIX in the books) → exchange country
 # (ISO 3166 alpha-3) and trading currency. A Canadian suffix is a
-# Canadian listing (TSX, TSX Venture, CSE, Cboe Canada/NEO).
+# Canadian listing (TSX, TSX Venture, CSE, Cboe Canada/NEO). `yahoo`:
+# Yahoo Finance's suffix for the venue where it differs from the book's
+# ("" = a bare symbol; Yahoo's own ".VN" is another market).
 [venues.TO]
 country = "CAN"
 currency = "CAD"
@@ -39,9 +41,11 @@ currency = "CAD"
 [venues.VN]
 country = "CAN"
 currency = "CAD"
+yahoo = "V"
 [venues.US]
 country = "USA"
 currency = "USD"
+yahoo = ""
 [venues.L]
 country = "GBR"
 currency = "GBP"
@@ -70,7 +74,8 @@ AU = "AX"
 # Interactive Brokers "Listing Exch" codes (Financial Instrument
 # Information) → listing suffix. A USD `.U` unit on a Canadian venue is
 # a Canadian listing (SYMBOL.U.TO); a line on an LSE venue is `.L`
-# whatever its currency.
+# whatever its currency. A venue missing here keeps its currency's
+# suffix and is noted once (a ticker.map VENUE line adds it).
 [ib_venues]
 TSE = "TO"
 VENTURE = "V"
@@ -86,6 +91,22 @@ LYNX = "TO"
 LSE = "L"
 LSEETF = "L"
 LSEIOB1 = "L"
+NYSE = "US"
+NASDAQ = "US"
+ARCA = "US"
+AMEX = "US"
+BATS = "US"
+BYX = "US"
+EDGX = "US"
+IEX = "US"
+PINK = "US"
+OTC = "US"
+PSX = "US"
+NYSENAT = "US"
+CHX = "US"
+LTSE = "US"
+MEMX = "US"
+PEARL = "US"
 
 [lists]
 # Fiat currencies (ISO 4217) an exchange or broker row can be priced

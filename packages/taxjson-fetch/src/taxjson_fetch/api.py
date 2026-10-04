@@ -442,7 +442,8 @@ def qt_position_symbol(sym: str, to_roots=frozenset(),
     if "." not in sym:
         return f"{sym}.US"
     base, _, ext = sym.rpartition(".")
-    if ext.upper() in ("TO", "V", "VN", "CN", "NE"):
+    from taxjson.lib.markets import canadian_suffixes
+    if ext.upper() in canadian_suffixes():
         # One spelling per Canadian listing, the parsers' own
         # (base.canonical_ca_listing): ABC.VN / CCC.CN -> ABC.TO /
         # CCC.TO, FTN.PRA.TO -> FTN.PR.A.TO. A different spelling here

@@ -90,15 +90,14 @@ DETAILED_THRESHOLD = 250_000.0
 # 90% heuristic: domicile (what T1135 cares about) usually matches the
 # listing exchange for the retail case. Interlisted exceptions are
 # ticker.map T1135 lines.
+# The market data's one venue table (lib/markets); a Canadian exchange
+# is None — not specified foreign property (.VN was a '??' REVIEW here,
+# audit A2-1077).
+from taxjson.lib.markets import (known_suffixes as _known_sfx,  # noqa: E402
+                                 suffix_country as _sfx_country)
 _SUFFIX_COUNTRY: Dict[str, Optional[str]] = {
-    "US": "USA",
-    "L": "GBR",
-    "AX": "AUS",
-}
-# Canadian exchanges — not specified foreign property. The shared set
-# (lib/income_dating): .VN was a '??' REVIEW here (audit A2-1077).
-from taxjson.lib.income_dating import CA_LISTING_SUFFIXES as _CA_VENUES
-_SUFFIX_COUNTRY.update({_v: None for _v in _CA_VENUES})
+    _s: (None if _sfx_country(_s) == "CAN" else _sfx_country(_s))
+    for _s in _known_sfx()}
 
 # Actions that never move a position or its cost. Mirrors the engines'
 # non-capital skip list (core.py) minus ADJUST/SPLIT/OPENING_BALANCE which

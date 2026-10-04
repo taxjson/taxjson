@@ -56,8 +56,10 @@ from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Tuple
 
 from taxjson.lib import country as _C
 
-# Listing suffixes of Canadian exchanges (TSX, TSXV, CSE, Cboe Canada).
-CA_LISTING_SUFFIXES = frozenset({"TO", "V", "CN", "NE", "VN"})
+# Listing suffixes of Canadian exchanges (TSX, TSXV, CSE, Cboe Canada):
+# the market data's one venue table (lib/markets).
+from taxjson.lib.markets import canadian_suffixes as _ca_sfx  # noqa: E402
+CA_LISTING_SUFFIXES = _ca_sfx()
 
 # Split-share corporations: their payouts are labelled "Distribution"
 # by RBC and "DIST ON" by Questrade, but they are corporations' T5

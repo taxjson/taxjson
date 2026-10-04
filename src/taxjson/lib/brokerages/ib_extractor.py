@@ -12,7 +12,12 @@ from datetime import datetime, timedelta
 # suffix like SYM.EUR that no downstream ticker map recognizes, fragmenting
 # the position. Centralized + a one-time warning so a held exotic currency is
 # surfaced instead of corrupting silently.
-_IB_CURRENCY_EXT = {'CAD': 'TO', 'USD': 'US', 'AUD': 'AX', 'GBP': 'L'}
+# The market data's currency -> suffix table (lib/markets), one for every
+# parser; the suffixes it appends are what this parser strips (_IB_EXT_RE).
+from taxjson.lib.markets import (currency_suffixes as _cur_sfx,  # noqa: E402
+                                 listing_suffix_re as _sfx_re)
+_IB_CURRENCY_EXT = _cur_sfx()
+_IB_EXT_RE = _sfx_re(set(_IB_CURRENCY_EXT.values()))
 _IB_WARNED_CURRENCIES: set = set()
 
 
@@ -25,7 +30,7 @@ def _ib_currency_ext(currency: str) -> str:
                 f"warning: IB currency {currency!r} has no exchange-suffix "
                 f"mapping; using '.{currency}', which downstream ticker maps "
                 f"won't recognize (position may fragment). Add it to "
-                f"_IB_CURRENCY_EXT in ib_extractor.py.",
+                f"[currency_suffix] in taxjson/data/markets.toml.",
                 file=sys.stderr,
             )
         return currency
@@ -44,7 +49,7 @@ def _ib_currency_ext(currency: str) -> str:
 # held for that ticker in this statement.
 _POSITION_ACTIONS = frozenset({'BUYSELL', 'TRANSFER'})
 _INCOME_ACTIONS = frozenset({'DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX'})
-_KNOWN_EXT_RE = re.compile(r'^(.*)\.(TO|US|AX|L)$')
+_KNOWN_EXT_RE = re.compile(r'^(.*)' + _IB_EXT_RE.pattern)
 
 # A Corporate Actions row settling the fractional share a split/merger
 # ratio leaves over for cash: negative Quantity (the fraction removed),
@@ -85,10 +90,9 @@ def _ib_refine_split_ratio(info: Dict[str, Any]) -> None:
 # A dotted symbol whose last part is a currency code is an IB currency or
 # venue line (ABH.CAD: the temporary line a merger fraction sat on), not
 # a class share like SAMPMP.B or a unit like SAMPMQ.UN (audit R1-59 / S059-00).
-_IB_CURRENCY_TAGS = frozenset({
-    'CAD', 'USD', 'EUR', 'GBP', 'AUD', 'CHF', 'JPY', 'HKD', 'SEK', 'NOK',
-    'DKK', 'NZD', 'SGD', 'CNH', 'CNY', 'MXN', 'ILS', 'ZAR', 'KRW', 'INR',
-    'PLN', 'CZK', 'HUF', 'TRY'})
+# The one fiat list (lib/markets).
+from taxjson.lib.markets import fiat_currencies as _fiat  # noqa: E402
+_IB_CURRENCY_TAGS = _fiat()
 
 # Days between a cash-in-lieu row and the split whose fraction it settles.
 _IB_CIL_WINDOW = 7
@@ -345,16 +349,16 @@ _MON_MAP = {
 # Income rows take their exchange suffix from the security's ISIN
 # country until _reattribute_income_to_holdings rebinds them to the
 # listing actually held. An ISIN country outside this map falls back to
-# .US — and is reported when no held position confirms it.
-_ISIN_EXT = {'CA': 'TO', 'AU': 'AX', 'GB': 'L', 'IE': 'L', 'US': 'US'}
-
-
+# .US — and is reported when no held position confirms it. The table is
+# market data (lib/markets.isin_country_suffix).
 def _isin_ext(isin: str, ticker: str, fallback: set) -> str:
+    from taxjson.lib.markets import isin_country_suffix
     if not isin or len(isin) < 2:
         return 'US'
     cc = isin[:2].upper()
-    if cc in _ISIN_EXT:
-        return _ISIN_EXT[cc]
+    ext = isin_country_suffix(cc)
+    if ext:
+        return ext
     fallback.add((f"{ticker}.US", cc))
     return 'US'
 
@@ -938,11 +942,11 @@ def _root_aliases(occ_by_conid, underlying_by_conid):
     return root_alias, alias_conids
 
 
-# Canadian listing venues as IB's Financial Instrument Information names
-# them (Listing Exch).
-_IB_LSE_VENUES = frozenset({'LSE', 'LSEETF', 'LSEIOB1'})
-_IB_CA_VENUES = frozenset({'TSE', 'VENTURE', 'TSXV', 'CSE', 'NEO', 'AEQLIT',
-                           'PURE', 'OMEGA', 'CHIXCA', 'ALPHA', 'LYNX'})
+# IB's Financial Instrument Information names a listing venue (Listing
+# Exch): which suffix each code is, is market data (lib/markets.
+# ib_venue_suffix: taxjson/data/markets.toml [ib_venues], ticker.map
+# VENUE lines). An unknown venue leaves the currency's suffix, noted
+# once with the VENUE line to add.
 
 
 def _ib_listing_ext(asset_cat: str, raw_symbol: str, currency: str,
@@ -961,9 +965,17 @@ def _ib_listing_ext(asset_cat: str, raw_symbol: str, currency: str,
     info = (fii.get((asset_cat, s))
             or fii.get((asset_cat, re.sub(r'\s+', ' ', s))) or {})
     exch = (info.get('exch') or '').upper()
-    if re.search(r'[.\s]U$', s) and exch in _IB_CA_VENUES:
+    from taxjson.lib.markets import (canadian_suffixes, ib_venue_suffix,
+                                     note_builtin)
+    venue = ib_venue_suffix(exch) if exch else None
+    if exch and venue is None:
+        note_builtin("ib-venue", exch, (
+            f"IB listing venue {exch!r} ({s}) is not in taxjson's market "
+            f"data: the line keeps its currency's suffix .{ext}. If it is "
+            f"another market, add `VENUE {exch} SUFFIX` to ticker.map."))
+    if re.search(r'[.\s]U$', s) and venue in canadian_suffixes():
         return 'TO'
-    if exch in _IB_LSE_VENUES:
+    if venue == 'L':
         # A USD line of an LSE-listed fund or GDR (CSPX-style UCITS
         # ETF): an LSE security on the UK cycle, not a fictional `.US`
         # one on the US T+1 calendar (audit A2-0081).
@@ -974,7 +986,7 @@ def _ib_listing_ext(asset_cat: str, raw_symbol: str, currency: str,
 def _ib_stock_symbol(asset_cat: str, raw_symbol: str, currency: str,
                      fii: Dict[tuple, Any]) -> str:
     sym = (raw_symbol or '').strip().replace(' ', '.')
-    sym = re.sub(r'\.(TO|US|AX|L)$', '', sym, flags=re.IGNORECASE)
+    sym = _IB_EXT_RE.sub('', sym)
     return f"{sym}.{_ib_listing_ext(asset_cat, raw_symbol, currency, fii)}"
 
 
@@ -2230,7 +2242,8 @@ class IbBrokerage(BaseBrokerage):
         symbol). An unpaired leg keeps the old booking with an
         ATTENTION line."""
         def _root(sym: str) -> str:
-            return re.sub(r'\.(TO|US|AX|L|V|CN|NE)$', '', sym or '')
+            from taxjson.lib.markets import strip_listing_suffix
+            return strip_listing_suffix(sym or '')
         used = set()
         for w, where, code in warrant_legs:
             cands = [t for t in share_legs if id(t) not in used
@@ -2973,12 +2986,11 @@ class IbBrokerage(BaseBrokerage):
                     symbol = f"F:{symbol}"
                 else:
                     symbol = symbol.replace(' ', '.')
-                    self._check_symbol_tag(re.sub(
-                        r'\.(TO|US|AX|L)$', '', symbol, flags=re.IGNORECASE),
+                    self._check_symbol_tag(_IB_EXT_RE.sub('', symbol),
                         where)
 
                 # Remove common known exchange extensions to avoid doubling
-                symbol = re.sub(r'\.(TO|US|AX|L)$', '', symbol, flags=re.IGNORECASE)
+                symbol = _IB_EXT_RE.sub('', symbol)
 
                 ext = (_ib_listing_ext(asset_cat, description, currency, fii)
                        if asset_cat in ('Stocks', 'Warrants')
@@ -3257,9 +3269,8 @@ class IbBrokerage(BaseBrokerage):
                 except ValueError:
                     self.count_skip(f"malformed {section} row")
                     continue
-                self._check_symbol_tag(re.sub(
-                    r'\.(TO|US|AX|L)$', '', symbol.strip(),
-                    flags=re.IGNORECASE), shown_name(path))
+                self._check_symbol_tag(_IB_EXT_RE.sub('', symbol.strip()),
+                                       shown_name(path))
                 _op_full = _ib_stock_symbol(asset_cat, symbol, currency,
                                             fii)
                 open_position_syms.add(_op_full)
@@ -3614,9 +3625,7 @@ class IbBrokerage(BaseBrokerage):
                     if _occ:
                         symbol = f"{_occ}.{_ib_currency_ext(currency)}"
                     else:
-                        _tk = re.sub(r'\.(TO|US|AX|L)$', '',
-                                     _raw_tk.replace(' ', '.'),
-                                     flags=re.IGNORECASE)
+                        _tk = _IB_EXT_RE.sub('', _raw_tk.replace(' ', '.'))
                         # The listing rule of the trades (S010-06): a
                         # TSX USD unit's refund sits on SAMPMD.U.TO with its
                         # trades, not SAMPMD.U.US (audit A2-0086).
@@ -3653,10 +3662,8 @@ class IbBrokerage(BaseBrokerage):
                                                   where)
                         comm_adjustments.append({
                             'fee_tx': transactions[-1], 'amount': amount,
-                            'ticker': (_adj_occ or re.sub(
-                                r'\.(TO|US|AX|L)$', '',
-                                _adj_tk.replace(' ', '.'),
-                                flags=re.IGNORECASE)),
+                            'ticker': (_adj_occ or _IB_EXT_RE.sub(
+                                '', _adj_tk.replace(' ', '.'))),
                             'qty': _aq, 'trade_date': _tm.group(3),
                             'currency': currency, 'date': date,
                             'key': (currency, date, round(amount, 6),
@@ -4257,11 +4264,10 @@ class IbBrokerage(BaseBrokerage):
                     symbol = f"F:{symbol.replace(' ', '.')}"
                 else:
                     symbol = symbol.replace(' ', '.')
-                    self._check_symbol_tag(re.sub(
-                        r'\.(TO|US|AX|L)$', '', symbol, flags=re.IGNORECASE),
+                    self._check_symbol_tag(_IB_EXT_RE.sub('', symbol),
                         where)
 
-                symbol = re.sub(r'\.(TO|US|AX|L)$', '', symbol, flags=re.IGNORECASE)
+                symbol = _IB_EXT_RE.sub('', symbol)
                 ext = (_ib_listing_ext(asset_cat, self._cell(
                            row, header_map, 'Symbol'), currency, fii)
                        if asset_cat in ('Stocks', 'Warrants')

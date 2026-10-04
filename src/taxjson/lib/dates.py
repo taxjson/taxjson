@@ -107,14 +107,13 @@ def settlement_lag_days(trade_iso: str, currency: str = 'USD',
     return 2 if trade_iso < cutover else 1
 
 
-# A Canadian listing's suffix (TSX, TSX-V, CSE, NEO / Cboe Canada).
-CA_LISTING_SUFFIXES = (".TO", ".V", ".CN", ".NE", ".VN")
-
-
-# Listing suffixes of the other markets this tool models a cycle for
-# (the IB parser's .L / .AX lines; the generic importer passes symbols
-# through as mapped).
-_OTHER_LISTING_MARKETS = ((".L", "GBP"), (".AX", "AUD"))
+# A Canadian listing's suffix (TSX, TSX-V, CSE, NEO / Cboe Canada) and
+# the other markets' (the IB parser's .L / .AX lines; the generic
+# importer passes symbols through as mapped): the market data's one
+# venue table (lib/markets), each venue's trading currency the calendar
+# key.
+from taxjson.lib.markets import canadian_suffixes as _ca_sfx  # noqa: E402
+CA_LISTING_SUFFIXES = tuple(sorted("." + s for s in _ca_sfx()))
 
 
 def market_of(symbol: str, row_currency=None):
@@ -133,10 +132,8 @@ def market_of(symbol: str, row_currency=None):
         return 'CAD'
     if s.endswith(".US") or s.startswith(("F:", "/", "\\")):
         return 'USD'
-    for suffix, cur in _OTHER_LISTING_MARKETS:
-        if s.endswith(suffix):
-            return cur
-    return row_currency
+    from taxjson.lib.markets import suffix_currency, suffix_of
+    return suffix_currency(suffix_of(s)) or row_currency
 
 
 def listing_market_currency(symbol: str, fallback=None):

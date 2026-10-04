@@ -35,6 +35,19 @@
   code: add `GLOBAL ETH2 ETH` to ticker.map (both parsers apply bare-code
   `GLOBAL` lines before reading a row); a 1:1 swap between a coin and a code
   that extends it is noted once with that line.
+- **One venue and currency table.** The ten-odd copies of the listing
+  suffix, currency-to-suffix, ISIN-country and fiat-currency tables in the
+  parsers, the engine helpers and the reports (they disagreed: `.VN` was
+  missing from several, corporate actions turned `X.V` into `X.V.TO`) all
+  read the market-data file now. IB's listing venues are part of it; a
+  venue it lacks keeps its currency's suffix and is noted once with the
+  `VENUE` line to add.
+- **RBC: no named currency ETF.** The rule that moved one named TSX
+  US-dollar ETF's USD rows to its `.U.TO` class is gone; a TSX fund's
+  US-dollar class is moved by the project's `EXTRACT description words |
+  USD | ROOT.U.TO` line, and until there is one the row's `.US` booking is
+  an ATTENTION line that prints that line (it used to suggest a `GLOBAL`
+  rename, which would also move a real US listing of the same symbol).
 
 ### Command line
 

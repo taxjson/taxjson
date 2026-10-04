@@ -29,9 +29,9 @@ _CURRENCY_PREFIXES = frozenset({'U', 'US', 'USD', 'C', 'CA', 'CAD'})
 
 class WebullBrokerage(BaseBrokerage):
     DEFAULT_ACCOUNT = "WB"
-    # Webull's CSVs only carry USD/CAD positions; anything else falls back to US.
-    CURRENCY_EXT_MAP = {'USD': 'US', 'CAD': 'TO'}
-    CURRENCY_EXT_FALLBACK = 'US'
+    # Webull's CSVs only carry USD/CAD positions (a trade row in any
+    # other currency is refused before it is suffixed): the shared
+    # currency -> suffix table, with no silent '.US' fallback.
 
     def _option_description_patterns(self):
         return (_WEBULL_OPTION_RE,)

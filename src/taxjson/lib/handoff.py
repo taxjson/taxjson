@@ -720,7 +720,8 @@ def load_record(path: Any) -> Dict[str, Any]:
 def _root_sym(sym: str) -> str:
     """Symbol with a leading exchange/currency difference ignored, for
     matching another tool's spelling (SAMPLG.US vs SAMPLG)."""
-    return re.sub(r"\.(US|TO|V|CN|NE|L|AX)$", "", (sym or "").upper())
+    from taxjson.lib.markets import strip_listing_suffix
+    return strip_listing_suffix((sym or "").upper())
 
 
 def _redescribed_options(prev: Dict[str, Any], now: Dict[str, Any]

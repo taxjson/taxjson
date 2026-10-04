@@ -152,7 +152,8 @@ _NONRES_NET_RE = re.compile(r'NON-?RES\w*\.?\s+TAX\s+WITH', re.IGNORECASE)
 def _journal_root(symbol: str) -> str:
     """The security behind one listing line: SAMPLF.U.TO and SAMPLF.TO -> SAMPLF
     (a BRW journal moves units between the CAD and USD lines)."""
-    s = re.sub(r'\.(TO|US|V|CN|NE)$', '', (symbol or '').upper())
+    from taxjson.lib.markets import strip_listing_suffix
+    s = strip_listing_suffix((symbol or '').upper())
     return re.sub(r'\.U$', '', s)
 
 

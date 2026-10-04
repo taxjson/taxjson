@@ -119,7 +119,7 @@ class TestTickerMapKeywords(_MapCase):
         self.assertEqual(markets.contract_size("ZZQ1250117C00010000",
                                                "ZZQ1"), 10.0)
         self.assertIsNone(markets.contract_size("ZZR", "ZZR"))
-        self.assertIsNone(markets.ib_venue_suffix("LSE"))
+        self.assertEqual(markets.ib_venue_suffix("LSE"), "")
         self.assertEqual(markets.ib_venue_suffix("zzex"), "TO")
         self.assertEqual(markets.crypto_alias("zzstk"), "ZZC")
 
@@ -489,6 +489,198 @@ class TestKrakenCodes(_MapCase):
             self.assertEqual(_split_pair(pair), want, pair)
         self.use_map("STABLE ZZST USD\n")
         self.assertEqual(_split_pair("ZZSTZEUR"), ("ZZST", "EUR"))
+
+
+# ------------------------------------------------- B2 RBC USD class
+class TestRbcUsdClassByExtract(_MapCase):
+    def _brokerage(self, ticker_map):
+        import json
+        import subprocess
+        from test_rbc_parse_audit_2026_09 import HDR, row
+        body = (row("March 15, 2024", "Buy", "ZZD",
+                    "SAMPLE U S DLR CURRENCY ETF UNIT", "100", "10",
+                    "-1009.95", "USD", "SAMPLE U S DLR CURRENCY ETF DA")
+                + row("March 13, 2024", "Sell", "ZZD",
+                      "SAMPLE U S DLR CURRENCY ETF UNIT", "-100", "13.5",
+                      "1340.05", "CAD", "SAMPLE U S DLR CURRENCY ETF CA"))
+        csv = self.tmp / "rbc.csv"
+        csv.write_text(HDR + body)
+        argv = [sys.executable, "-m", "taxjson.bin.taxjson_brokerage",
+                "--brokerage", "rbc_direct", "--account", "margin"]
+        if ticker_map:
+            tm = self.tmp / "ticker.map"
+            tm.write_text(ticker_map)
+            argv += ["--ticker-map", str(tm), "--security-overrides",
+                     str(tm)]
+        env = dict(os.environ, PYTHONPATH=str(
+            Path(__file__).resolve().parent.parent / "src"))
+        r = subprocess.run(argv + [str(csv)], capture_output=True,
+                           text=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return ([t["symbol"] for t in json.loads(r.stdout)["transactions"]],
+                r.stderr)
+
+    def test_extract_line_moves_the_usd_rows_quietly(self):
+        syms, err = self._brokerage(
+            "EXTRACT SAMPLE U S DLR CURRENCY ETF | USD | ZZD.U.TO\n")
+        self.assertEqual(sorted(syms), ["ZZD.TO", "ZZD.U.TO"])
+        self.assertNotIn("US-dollar class", err)
+
+    def test_without_the_line_it_is_said(self):
+        syms, err = self._brokerage("")
+        self.assertEqual(sorted(syms), ["ZZD.TO", "ZZD.US"])
+        self.assertIn("EXTRACT SAMPLE U S DLR CURRENCY ETF | USD | ZZD.U.TO",
+                      err)
+
+    def test_no_named_security_left_in_the_parser(self):
+        from taxjson.lib.brokerages import rbc_direct
+        src = Path(rbc_direct.__file__).read_text()
+        self.assertNotIn("_RBC_USD_DLR_RE", src)
+        self.assertNotIn("'DLR.U.TO'", src)
+
+
+# ------------------------------------------- C one venue / currency table
+class TestOneVenueTable(_MapCase):
+    """Each former copy of the suffix / currency / ISO tables reads the
+    market data now; every case the copy handled still holds, and the
+    gaps between copies (.VN, .V in corp actions) are closed."""
+
+    FORMER_CA = ("TO", "V", "CN", "NE", "VN")
+
+    def test_income_dating_and_dates(self):
+        from taxjson.lib import dates, income_dating
+        self.assertEqual(set(income_dating.CA_LISTING_SUFFIXES),
+                         set(self.FORMER_CA))
+        for s in self.FORMER_CA:
+            self.assertEqual(dates.market_of(f"ZZQ.{s}", "USD"), "CAD")
+        self.assertEqual(dates.market_of("ZZQ.US", "CAD"), "USD")
+        self.assertEqual(dates.market_of("ZZQ.L", "USD"), "GBP")
+        self.assertEqual(dates.market_of("ZZQ.AX", "USD"), "AUD")
+        self.assertEqual(dates.market_of("ZZQ.DE", "EUR"), "EUR")
+
+    def test_check_dates_schema_generic(self):
+        from taxjson.lib import check_dates
+        from taxjson.lib.brokerages import generic, schema
+        for s in self.FORMER_CA:
+            self.assertEqual(check_dates.asset_class(f"ZZQ.{s}", False),
+                             "ca-equity")
+        self.assertEqual(set(schema.KNOWN_SUFFIXES),
+                         set(self.FORMER_CA) | {"US", "AX", "L"})
+        self.assertIn("VN", generic._KNOWN_SUFFIXES)   # was missing
+
+    def test_export_reconcile_handoff(self):
+        from types import SimpleNamespace
+        from taxjson.bin import taxjson_export as EX
+        from taxjson.bin import taxjson_reconcile_slips as RS
+        from taxjson.lib import handoff
+        args = SimpleNamespace(long=False, short=False, no_options=False,
+                               no_futures=False, no_equities=False,
+                               no_cad=True, no_usd=False)
+        for s in self.FORMER_CA:     # .VN passed --no-cad before
+            self.assertFalse(EX._passes_filters({"symbol": f"ZZQ.{s}",
+                                                 "qty": 1}, args), s)
+        for s in self.FORMER_CA + ("US", "AX", "L"):
+            self.assertEqual(RS._SUFFIX_RE.sub("", f"ZZQ.{s}"), "ZZQ")
+            self.assertEqual(handoff._root_sym(f"zzq.{s}"), "ZZQ")
+        self.assertEqual(handoff._root_sym("ZZQ.B"), "ZZQ.B")
+
+    def test_price_chain_quote_currency_unchanged(self):
+        from taxjson.lib.price_chain import quote_currency
+        for sym, cur in (("ZZQ.US", "USD"), ("ZZQ.TO", "CAD"),
+                         ("ZZQ.V", "CAD"), ("ZZQ.CN", "CAD"),
+                         ("ZZQ.NE", "CAD"), ("ZZQ.L", "GBP"),
+                         ("ZZQ.AX", "AUD"), ("ZZQ-U.TO", "USD"),
+                         ("ETH-JPY", "JPY"), ("ZZQ", "USD")):
+            self.assertEqual(quote_currency(sym), cur, sym)
+        # Yahoo's own .VN is another market, never Questrade's venue
+        self.assertIsNone(quote_currency("ZZQ.VN"))
+
+    def test_corp_actions_suffixes(self):
+        from taxjson.lib import corp_actions as CA
+        self.assertEqual(CA._CURRENCY_SUFFIX,
+                         {"CAD": "TO", "USD": "US", "AUD": "AX", "GBP": "L"})
+        self.assertEqual(CA._apply_suffix("ZZQ.V", "TO"), "ZZQ.V")  # was .V.TO
+        self.assertEqual(CA._apply_suffix("ZZQ.B", "US"), "ZZQ.B.US")
+        self.assertEqual(CA._apply_suffix("ZZQ.TO", "TO"), "ZZQ.TO")
+
+    def test_t1135_domicile_by_suffix(self):
+        from taxjson.bin import taxjson_t1135 as T
+        self.assertEqual(T._SUFFIX_COUNTRY["US"], "USA")
+        self.assertEqual(T._SUFFIX_COUNTRY["L"], "GBR")
+        self.assertEqual(T._SUFFIX_COUNTRY["AX"], "AUS")
+        for s in self.FORMER_CA:
+            self.assertIsNone(T._SUFFIX_COUNTRY[s])
+
+    def test_parsers_currency_suffix(self):
+        from taxjson.lib.brokerages.base import BaseBrokerage
+        from taxjson.lib.brokerages.webull import WebullBrokerage
+        from taxjson.lib.brokerages import ib_extractor as IB
+        b = BaseBrokerage()
+        self.assertEqual(BaseBrokerage.CURRENCY_EXT_MAP,
+                         {"CAD": "TO", "USD": "US", "AUD": "AX", "GBP": "L"})
+        self.assertEqual(b.apply_currency_suffix("ZZQ", "usd"), "ZZQ.US")
+        self.assertEqual(b.apply_currency_suffix("ZZQ.VN", "CAD"), "ZZQ.TO")
+        self.assertEqual(b.apply_currency_suffix("ZZQ.L", "AUD"), "ZZQ.AX")
+        self.assertIsNone(WebullBrokerage.CURRENCY_EXT_FALLBACK)
+        self.assertEqual(IB._ib_currency_ext("AUD"), "AX")
+        self.assertEqual(IB._split_known_ext("ZZQ.L"), ("ZZQ", "L"))
+        self.assertEqual(IB._split_known_ext("ZZQ.V"), ("ZZQ.V", None))
+        fb = set()
+        for cc, ext in (("CA", "TO"), ("AU", "AX"), ("GB", "L"),
+                        ("IE", "L"), ("US", "US")):
+            self.assertEqual(IB._isin_ext(cc + "0000000000", "ZZQ", fb), ext)
+        self.assertEqual(IB._isin_ext("DE0000000000", "ZZQ", fb), "US")
+        self.assertIn(("ZZQ.US", "DE"), fb)
+        former_tags = {
+            'CAD', 'USD', 'EUR', 'GBP', 'AUD', 'CHF', 'JPY', 'HKD', 'SEK',
+            'NOK', 'DKK', 'NZD', 'SGD', 'CNH', 'CNY', 'MXN', 'ILS', 'ZAR',
+            'KRW', 'INR', 'PLN', 'CZK', 'HUF', 'TRY'}
+        self.assertTrue(former_tags <= set(IB._IB_CURRENCY_TAGS))
+
+    def test_rbc_questrade_strip_every_venue(self):
+        from taxjson.lib.brokerages.questrade import _journal_root
+        from taxjson.lib.brokerages.rbc_direct import _names_underlying
+        for s in self.FORMER_CA + ("US",):
+            self.assertEqual(_journal_root(f"ZZQ.U.{s}"), "ZZQ")
+            self.assertTrue(_names_underlying("ZZQ", f"ZZQ.{s}"))
+
+
+# ------------------------------------------------- B17 IB venues
+class TestIbVenues(_MapCase):
+    FORMER_CA = ('TSE', 'VENTURE', 'TSXV', 'CSE', 'NEO', 'AEQLIT', 'PURE',
+                 'OMEGA', 'CHIXCA', 'ALPHA', 'LYNX')
+
+    def _ext(self, sym, cur, exch):
+        from taxjson.lib.brokerages.ib_extractor import _ib_listing_ext
+        return _ib_listing_ext("Stocks", sym, cur,
+                               {("Stocks", sym): {"exch": exch}})
+
+    def test_former_venues_unchanged(self):
+        self.no_map()
+        for v in self.FORMER_CA:
+            self.assertEqual(self._ext("ZZQ.U", "USD", v), "TO", v)
+            self.assertEqual(self._ext("ZZQ", "USD", v), "US", v)
+        for v in ("LSE", "LSEETF", "LSEIOB1"):
+            self.assertEqual(self._ext("ZZQ", "USD", v), "L", v)
+        self.assertEqual(self._ext("ZZQ", "USD", "NYSE"), "US")
+
+    def test_venue_line_adds_and_removes(self):
+        self.use_map("VENUE ZZEX L\nVENUE LSEETF NO\n")
+        self.assertEqual(self._ext("ZZQ", "USD", "ZZEX"), "L")
+        err = StringIO()
+        with redirect_stderr(err):
+            self.assertEqual(self._ext("ZZQ", "USD", "LSEETF"), "US")
+        self.assertEqual(err.getvalue(), "")   # a US line: nothing to say
+
+    def test_unknown_venue_is_noted_once(self):
+        # the silent case: a USD line on a venue the data lacks stays .US
+        self.no_map()
+        err = StringIO()
+        with redirect_stderr(err):
+            self.assertEqual(self._ext("ZZQ", "USD", "ZZEX"), "US")
+            self.assertEqual(self._ext("ZZR", "USD", "ZZEX"), "US")
+            self.assertEqual(self._ext("ZZQ", "USD", "NASDAQ"), "US")
+        self.assertEqual(err.getvalue().count("VENUE ZZEX SUFFIX"), 1)
 
 
 if __name__ == "__main__":

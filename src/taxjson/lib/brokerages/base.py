@@ -336,6 +336,15 @@ _NAME_DIGITS_RE = re.compile(r'(?<![0-9])\d{7,12}(?![0-9])')
 _NAME_DATE_RE = re.compile(r'^(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])$')
 
 
+def extract_words_match(desc_sub: str, desc: str) -> bool:
+    """A ticker.map EXTRACT line's description words occur in `desc` as
+    whole words, any case (IB's description is the bare ticker, so a
+    plain substring test made 'QZ' rewrite QQZX and QZTX: audit
+    S012-09)."""
+    return re.search(r'(?<![a-z0-9])' + re.escape((desc_sub or '').lower())
+                     + r'(?![a-z0-9])', (desc or '').lower()) is not None
+
+
 def shown_name(path) -> str:
     """A file's name as diagnostics print it: account-id-shaped tokens
     masked to their first 2 characters + *** (the parsers' rule for ids
@@ -531,7 +540,12 @@ def parse_strict_number(raw, *, field: str = 'value', where: str = '',
 #     go through a ticker.map QUOTE line (SAMPLY.TO -> SAMPLY.V).
 # TSX preferred shares are dotted per series: Questrade's FTN.PRA.TO is
 # the FTN.PR.A.TO every other parser emits.
-_CA_VENUE_SUFFIX_RE = re.compile(r'\.(VN|CN|NE)$', re.IGNORECASE)
+# Every Canadian venue suffix but .TO (the canonical one) and .V (a
+# class letter outside CAD): the market data's venue table.
+from taxjson.lib.markets import (canadian_suffixes as _ca_sfx,  # noqa: E402
+                                 currency_suffixes as _cur_sfx,
+                                 listing_suffix_re as _sfx_re)
+_CA_VENUE_SUFFIX_RE = _sfx_re(_ca_sfx() - {'TO', 'V'})
 _CA_PREF_UNDOTTED_RE = re.compile(r'^([A-Z0-9]+)\.(PR|PF)([A-Z]{1,2})$',
                                   re.IGNORECASE)
 
@@ -570,14 +584,10 @@ class BaseBrokerage:
     # 100 for options (each contract = 100 shares); 1 for equities/crypto.
     OPTION_MULTIPLIER = 100
 
-    # Currency → ticker-suffix mapping for the apply_currency_suffix helper.
-    # Subclasses can override with a narrower or different mapping.
-    CURRENCY_EXT_MAP: Dict[str, str] = {
-        'CAD': 'TO',
-        'USD': 'US',
-        'AUD': 'AX',
-        'GBP': 'L',
-    }
+    # Currency → ticker-suffix mapping for the apply_currency_suffix
+    # helper: the market data's table (lib/markets), one for every
+    # parser. Subclasses can override with a narrower mapping.
+    CURRENCY_EXT_MAP: Dict[str, str] = _cur_sfx()
 
     # Default fallback when CURRENCY_EXT_MAP doesn't contain the currency.
     # Use 'US' to match Webull's behavior; subclasses use this for unknown
@@ -596,6 +606,16 @@ class BaseBrokerage:
     # section and a Canadian one never reads an IRC one (re-audit
     # A2-0723 / A2-1304 / A2-1308).
     country: Optional[str] = None
+
+    # The project's ticker.map EXTRACT lines [(words, CURRENCY, symbol)]
+    # (taxjson-brokerage sets them): a parser's "this row reads as another
+    # listing" hint stays quiet when one of them rewrites the row.
+    security_overrides: list = []
+
+    def _extract_covers(self, desc: str, currency: str) -> bool:
+        cur = (currency or '').upper()
+        return any(extract_words_match(d, desc) and c in ('*', cur)
+                   for d, c, _s in (self.security_overrides or ()))
 
     # [accounts.<name>] combined_broker_accounts = true (taxjson-brokerage
     # --combined-broker-accounts): the user declares that every broker
@@ -739,7 +759,8 @@ class BaseBrokerage:
 
     # ----------------------------------------------------------- currency ext
 
-    _CURRENCY_SUFFIX_RE = re.compile(r'\.(TO|US|AX|L)$', re.IGNORECASE)
+    # The suffixes CURRENCY_EXT_MAP appends (a currency's listing).
+    _CURRENCY_SUFFIX_RE = _sfx_re(set(_cur_sfx().values()))
 
     def apply_currency_suffix(self, symbol: str, currency: str) -> str:
         """Normalize a symbol and append a currency-derived suffix.
