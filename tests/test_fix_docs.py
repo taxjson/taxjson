@@ -21,10 +21,15 @@ def _read(rel):
 
 
 def _unreleased():
+    """The CHANGELOG's current entry: Unreleased, or — right after a release
+    promoted it and left it empty — the newest version's entry."""
     text = _read("CHANGELOG.md")
     start = text.index("## Unreleased")
     end = text.index("\n## v", start)
-    return text[start:end]
+    if re.search(r"^[-#]", text[start:end].split("\n", 1)[1], re.M):
+        return text[start:end]
+    nxt = text.find("\n## v", end + 1)
+    return text[end + 1:nxt if nxt != -1 else len(text)]
 
 
 def _bullets(section):
