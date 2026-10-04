@@ -14,6 +14,12 @@
   `STABLE`, `SPLITSHARE`, `INDEXOPT`, `EVENING`, `MULT` and `VENUE` lines,
   and the run prints one note per symbol whenever a built-in entry decided
   an outcome, naming the line that would change it.
+- **No built-in exchange rate.** A row whose date has no rate in the
+  rates file (after the weekend/holiday carry-forward and the 5-day
+  look-back) used to be converted at a placeholder 1.35 USD->CAD rate and
+  flagged as a validation error; it now stops the conversion, naming the
+  row's date and currency pair. The stand-alone converters still accept
+  your own rate with `--default-rate`.
 
 ### Command line
 

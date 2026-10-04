@@ -341,12 +341,20 @@ class TestDefaultRateIsValidationError(unittest.TestCase):
                           _tx("2016-06-01", quantity=3),
                           _tx("2012-05-01", quantity=4)])      # no rate
 
-    def test_merge2_counts_the_fallback_as_error(self):
+    def test_merge2_stops_on_a_missing_rate(self):
+        # No built-in placeholder rate (owner, 2026-10-04): the row with
+        # no rate stops the merge, naming its date and pair.
         r = _py("taxjson.bin.taxjson_merge2", "--to", "CAD", "--rates",
                 str(self.rates), "--validate", str(self.inp))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("USD->CAD on 2012-05-01", r.stderr)
+        self.assertEqual(r.stdout, "")
+
+    def test_merge2_source_summary(self):
+        r = _py("taxjson.bin.taxjson_merge2", "--to", "CAD", "--rates",
+                str(self.rates), "--default-rate", "1.3", "--validate",
+                str(self.inp))
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("validation: 1 error(s)", r.stderr)
-        self.assertIn("converted at the default rate", r.stderr)
         self.assertIn("note: FX: Bank of Canada Valet for 2 dates, "
                       "Yahoo fallback for 1", r.stderr)
 
@@ -363,20 +371,14 @@ class TestDefaultRateIsValidationError(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("validation: ", r.stderr)
 
-    def test_standalone_convert_then_validate_fails(self):
-        # The crypto path: convert-currency, then taxjson-validate.
+    def test_standalone_convert_stops(self):
+        # The crypto path: convert-currency stops on the row with no
+        # rate (no built-in placeholder, owner 2026-10-04).
         r = _py("taxjson.bin.taxjson_convert_currency", str(self.inp),
                 "--to", "CAD", "--rates", str(self.rates))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("validation: 1 error(s)", r.stderr)
-        out = Path(self.td.name) / "base.json"
-        out.write_text(r.stdout)
-        meta = json.loads(r.stdout)["metadata"]
-        self.assertEqual(meta["fx_default_rate_rows"][0]["date"],
-                         "2012-05-01")
-        v = _py("taxjson.bin.taxjson_validate", str(out))
-        self.assertEqual(v.returncode, 1)
-        self.assertIn("default rate", v.stdout)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("USD->CAD on 2012-05-01", r.stderr)
+        self.assertEqual(r.stdout, "")
 
 
 if __name__ == "__main__":

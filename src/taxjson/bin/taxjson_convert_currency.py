@@ -16,7 +16,8 @@ from pathlib import Path
 from decimal import Decimal, InvalidOperation
 from typing import Dict, Optional
 
-from taxjson.lib.cli_diag import InputReadError, guard_main
+from taxjson.lib.cli_diag import (InputContentError, InputReadError,
+                                  guard_main)
 from taxjson.lib.country import country_arg
 from datetime import datetime, timedelta
 
@@ -24,33 +25,35 @@ from taxjson.lib.core import (
     TaxTransaction, convert_currency, load_transactions,
 )
 
-DEFAULT_RATE = 1.35
-# The built-in fallback is a USD->CAD rate: applied to a CAD row in a
-# USD book it multiplied CAD by 1.35 instead of ~0.74 (audit A2-0148).
-# The implicit fallback is per direction; an explicit --default-rate is
-# the user's own rate and is applied as given.
-IMPLICIT_PAIR_RATES = {("USD", "CAD"): Decimal("1.35"),
-                       ("CAD", "USD"): (Decimal(1) / Decimal("1.35")
-                                        ).quantize(Decimal("0.000001"))}
+# No built-in rate: a row whose date has no rate in the rates file (after
+# its weekend/holiday carry-forward and the look-back below) STOPS the
+# conversion with the row's date and currency pair (owner, 2026-10-04).
+# A 1.35 USD->CAD placeholder used to convert it (a validation ERROR, but
+# a made-up number in the books). An explicit --default-rate on the
+# stand-alone tools is the user's own rate and is applied as given.
+# Days a row with no rate that day looks back for the latest earlier one.
+LOOKBACK_DAYS = 5
 
 
-def default_rate_for(src: str, tgt: str, explicit=None) -> Decimal:
+class MissingRateError(InputContentError):
+    """Rows whose date has no exchange rate (and no explicit
+    --default-rate): ``str(err)`` names each date and currency pair."""
+
+
+def default_rate_for(src: str, tgt: str, explicit=None):
     """The fallback rate for one src->tgt conversion: `explicit` (a
-    --default-rate) when given, else the built-in rate of that
-    direction (USD->CAD 1.35, CAD->USD its inverse), else DEFAULT_RATE."""
+    --default-rate) as a Decimal, else None — there is no built-in
+    rate."""
     if explicit is not None:
         return Decimal(str(explicit))
-    return IMPLICIT_PAIR_RATES.get((norm_currency(src), norm_currency(tgt)),
-                                   Decimal(str(DEFAULT_RATE)))
+    return None
 
 
 def describe_default_rate(default_rate) -> str:
-    """How a fallback rate is named in messages (None: the built-in
-    per-direction rates)."""
+    """How a fallback rate is named in messages."""
     if default_rate is not None:
         return str(default_rate)
-    return (f"1.35 for USD->CAD, {IMPLICIT_PAIR_RATES[('CAD', 'USD')]} "
-            f"for CAD->USD")
+    return "none"
 
 _RATE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -252,13 +255,13 @@ _FALLBACK_ROWS: list = []
 _RATES_USED: set = set()
 
 
-def get_rate_for_date(currency: str, date_str: str, history: Dict[str, Dict[str, Decimal]], default_rate: Decimal) -> Decimal:
-    """Finds the rate for the exact date, or falls back to previous days, or default.
+def get_rate_for_date(currency: str, date_str: str, history: Dict[str, Dict[str, Decimal]], default_rate: Optional[Decimal]) -> Optional[Decimal]:
+    """The rate for the exact date, else the latest of the LOOKBACK_DAYS
+    days before it, else `default_rate` — an explicit --default-rate,
+    or None (no rate: the caller stops with the date and pair).
 
-    Records every fallback into `_DEFAULT_RATE_FALLBACKS` so callers can
-    surface a summary — silently applying a hardcoded 1.35 to a real
-    USD→CAD transaction is one of the easier ways to ship wrong numbers
-    if a rates file is truncated or missing for some date range.
+    Records every miss into `_DEFAULT_RATE_FALLBACKS` so callers can
+    surface a summary or the error.
     """
     currency = norm_currency(currency)
 
@@ -278,8 +281,8 @@ def get_rate_for_date(currency: str, date_str: str, history: Dict[str, Dict[str,
 
     # Weekends/holidays: the most recent PRIOR business-day rate (the
     # usual CRA practice; to_base_curr forward-fills the same way).
-    # Look back up to 5 days for a rate (e.g. over long weekends)
-    for i in range(6):
+    # Look back up to LOOKBACK_DAYS days for a rate (long weekends)
+    for i in range(LOOKBACK_DAYS + 1):
         test_date = (dt - timedelta(days=i)).strftime("%Y-%m-%d")
         if test_date in curr_history:
             _RATES_USED.add((currency, test_date))
@@ -293,7 +296,7 @@ def get_rate_for_date(currency: str, date_str: str, history: Dict[str, Dict[str,
         first = min(curr_history)
         if date_str < first:
             return _record_fallback(f"date predates rates file start {first}")
-    return _record_fallback("no rate within 5-day lookback")
+    return _record_fallback(f"no rate within {LOOKBACK_DAYS}-day lookback")
 
 def convert_transaction(
     tx: TaxTransaction, target_curr: str, history: Dict[str, Dict[str, Decimal]], default_rate: Decimal
@@ -327,8 +330,14 @@ def convert_transaction(
                           if n != before.get((c, r), 0))
             _FALLBACK_ROWS.append({
                 "id": tx.id, "date": tx_date, "currency": src_curr,
+                "target": target_curr,
                 "symbol": tx.symbol, "action": tx.action,
-                "reason": reason, "rate": str(_fallback)})
+                "reason": reason,
+                "rate": None if _fallback is None else str(_fallback)})
+        if rate is None:
+            # No rate and no explicit --default-rate: left as is here;
+            # process_transactions stops with every such row.
+            return converted
         rates_map = {(src_curr, target_curr): rate}
 
         # Stage all converted values before mutating `converted`. The
@@ -389,7 +398,30 @@ def process_transactions(
                 "country's lot rule (average cost / FIFO)")
         transactions, _stats = settle_futures(list(transactions),
                                               method_for(country))
-    return [convert_transaction(tx, target_curr, history, default_rate) for tx in transactions]
+    out = [convert_transaction(tx, target_curr, history, default_rate)
+           for tx in transactions]
+    missing = [r for r in _FALLBACK_ROWS if r.get("rate") is None]
+    if missing:
+        raise MissingRateError(missing_rate_message(missing))
+    return out
+
+
+def missing_rate_message(rows: list) -> str:
+    """One line naming each row (date, currency pair) that has no rate."""
+    def one(r):
+        return (f"{r['currency']}->{r.get('target') or '?'} on {r['date']} "
+                f"({r['action']} {r['symbol']}; {r['reason']})")
+    shown = "; ".join(one(r) for r in rows[:5])
+    more = f" (and {len(rows) - 5} more)" if len(rows) > 5 else ""
+    tgt = rows[0].get("target") or "the base currency"
+    return (f"no exchange rate for {len(rows)} row(s): {shown}{more}. "
+            f"taxjson uses the rate of the row's date, else the latest of "
+            f"the {LOOKBACK_DAYS} days before it, and never a built-in "
+            f"rate. Refresh the rates (`taxjson run` online; a currency "
+            f"you hold must be in [settings] source_currencies); if no "
+            f"source has a rate for that date, enter the row in {tgt} at "
+            f"its date's rate (a .tt row). The stand-alone tools take "
+            f"--default-rate to accept a rate of your own.")
 
 
 def uncovered_currencies():
@@ -556,12 +588,11 @@ def main():
              "rule: average cost in Canada, FIFO in the US)")
     parser.add_argument(
         "--default-rate", type=positive_rate, default=None,
-        help="Fallback rate when the rates file is missing a date "
-             "(default: 1.35 for USD->CAD, its inverse for CAD->USD — "
-             "every such row is a validation error). Passing it "
-             "explicitly also allows a "
-             "currency that is entirely absent from --rates to convert "
-             "at this rate; without it that is a fatal error.")
+        help="Your own fallback rate for a row whose date has no rate in "
+             "the rates file, or for a currency entirely absent from "
+             "--rates. There is no "
+             "built-in rate: without this flag such a row stops the "
+             "conversion, naming its date and currency pair.")
     args = parser.parse_args()
 
     # Shared loader funnel (core.load_transactions / the stdin loader):
@@ -579,16 +610,13 @@ def main():
         sys.exit(1)
 
     target_curr = norm_currency(args.to)
-    if not args.rates:
-        # The bare 1.35 default was historically silent. Make it loud:
-        # someone running --to CAD on USD trades without --rates would
-        # otherwise stamp every row at the same hardcoded rate without
-        # noticing.
+    if not args.rates and args.default_rate is not None:
+        # Without --rates every cross-currency row takes the explicit
+        # --default-rate (without either it has no rate and stops).
         print(
             f"warning: no --rates file given; every cross-currency row will "
-            f"be converted with the hardcoded --default-rate "
-            f"({describe_default_rate(resolve_default_rate(args.default_rate))}). Pass --rates "
-            f"rates.csv to use real historical rates.",
+            f"be converted with --default-rate {args.default_rate}. Pass "
+            f"--rates rates.csv to use real historical rates.",
             file=sys.stderr,
         )
 
@@ -630,7 +658,7 @@ def main():
     metadata = {
         "converted_to": target_curr,
         "default_rate": (str(default_rate) if default_rate is not None
-                         else "implicit"),
+                         else "none"),
     }
     if args.default_rate is None and fallback_rows():
         # Default-rate rows are validation ERRORS unless the fallback

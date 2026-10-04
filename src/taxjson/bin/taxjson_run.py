@@ -2016,7 +2016,7 @@ def _rates_coverage_stale(rates_path: Path, today: Optional[date_cls] = None,
     the data, not the file's mtime: coverage ends at the generation date,
     so on a stable install (no package/config mtime bumps to invalidate
     the cache) the file would otherwise be reused forever and every trade
-    after its last row would silently convert at the --default-rate.
+    after its last row would have no rate (and stop the conversion).
     Stale when the newest rate row is more than 3 days old (tolerates
     weekends/short holidays without refetching daily) — judged PER
     CURRENCY when `currencies` is given: the file concatenates one block
@@ -2094,8 +2094,9 @@ def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
         if had_previous:
             print(f"taxjson: warning: FX rate refresh failed ({exc}); keeping the "
                   f"existing to_base.csv. Transactions dated after its "
-                  f"coverage will fall back to the default rate — re-run "
-                  f"online to refresh.", file=sys.stderr)
+                  f"coverage (beyond its last rate and the look-back) "
+                  f"have no rate and stop the conversion — re-run online "
+                  f"to refresh.", file=sys.stderr)
             return rates_path
         raise
     # Atomic: to_base.csv is mtime-cached, so a kill mid-write must never
