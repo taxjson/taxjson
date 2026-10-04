@@ -486,7 +486,10 @@ def write_traces_file(results, file_path, *, country, input_path, year, tax_date
     # when the input lives behind a long absolute path or mounted directory.
     input_display = Path(input_path).name if input_path else None
 
-    with open(file_path, 'w', encoding='utf-8') as f:
+    # Through a fresh temp + rename, never through a symlink at the
+    # name (lib/safe_write; security review M1).
+    from taxjson.lib.safe_write import atomic_open
+    with atomic_open(file_path) as f:
         for line in render_document_header(
             input_path=input_display,
             country=country,

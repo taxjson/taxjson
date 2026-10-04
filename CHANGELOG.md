@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Security (pre-release review)
+
+- **No write through a planted symlink.** Every write-then-rename
+  (`work/*.part` stage outputs, `.sum` reports, `migrate`'s
+  `.migrate.part`, `write_text_atomic`, the gains traces, report.json,
+  watch / checklist state, form-export CSV/TXF, close-year locks, `.bak`
+  copies) creates its temporary file fresh (an existing entry is removed;
+  the create refuses a symlink; owner-only, fsync'd) and renames it into
+  place, so a symlink at the temporary or the final name is replaced, never
+  written through. `taxjson migrate` refuses a `ticker.map` /
+  `taxjson.toml` symlinked outside the project, before writing anything.
+
 ### One mapping file, year data in taxjson.toml (owner request)
 
 - `ticker.map` is the project's one mapping file. Three lookup keywords

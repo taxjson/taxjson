@@ -509,10 +509,9 @@ class TestLegacyManifestMigrationAtomic(unittest.TestCase):
             "election": "rollover_s_86_1",
             "hints": {"allocated_acb_cad": 1234.5},
             "summary": "x" * 5000}}})
-        real_write = Path.write_text
-
-        def failing_write(self, data, *a, **k):
-            real_write(self, data[: len(data) // 3], *a, **k)
+        # The copy is written through lib/safe_write; the disk fills
+        # after the data went into the temp file, before the rename.
+        def failing_write(fd):
             raise OSError(27, "File too large")
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -520,7 +519,8 @@ class TestLegacyManifestMigrationAtomic(unittest.TestCase):
             acct_dir, cache = root / "inputs" / "m", root / "work"
             cache.mkdir()
             (cache / "m_manifest.json").write_text(text)
-            with mock.patch.object(Path, "write_text", failing_write), \
+            from taxjson.lib import safe_write as _sw
+            with mock.patch.object(_sw.os, "fsync", failing_write), \
                     self.assertRaises(OSError):
                 _resolve_manifest(acct_dir, cache, "m")
             self.assertFalse((acct_dir / "manifest.json").exists())

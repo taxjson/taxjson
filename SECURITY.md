@@ -105,6 +105,17 @@ statements (which carry your account numbers) `0600`. Directories
 created by earlier versions keep their old mode; tighten a project
 once with `chmod -R go-rwx <project>`.
 
+Files are replaced through a temporary sibling (`<file>.part`) that is
+created fresh — an existing entry at that name is removed first and the
+create refuses a symlink — then renamed into place. A symlink planted at
+a temporary or a final name in `work/`, `reports/` or the project is
+therefore never written through: the link itself is replaced by the new
+file, and its target, inside or outside the project, is left alone.
+`taxjson migrate` (which rewrites your `ticker.map` / `taxjson.toml`)
+refuses, before writing anything, when either is a symlink to a file
+outside the project; a link inside the project is kept and its target
+updated.
+
 Ids in audit output: `taxjson audit` and the gains traces (`explain`,
 `--trace`) print each row's own id unmasked, on purpose — it is the
 handle `--id` takes. For most brokers it is a content hash; for Kraken

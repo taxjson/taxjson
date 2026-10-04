@@ -85,6 +85,7 @@ the project's country).
 import argparse
 import csv
 import json
+import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1135,63 +1136,70 @@ def write_csv(rep: Dict[str, Any], path: Path) -> None:
     """Write through `<path>.part` and replace, as the TXF --out does: a
     failed write left a truncated CSV in place of the good one
     (S032-24)."""
-    tmp = path.with_name(path.name + ".part")
+    from taxjson.lib.safe_write import discard, publish, temp_name
+    tmp = temp_name(path)
     try:
         _write_csv(rep, tmp)
-        tmp.replace(path)
+        publish(tmp, path)
     except BaseException:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
+        discard(tmp)
         raise
 
 
 def _write_csv(rep: Dict[str, Any], path: Path) -> None:
-    with path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        if rep["form"] == "8949":
-            w.writerow(["part", "description", "date_acquired", "date_sold",
-                        "proceeds", "cost", "code", "adjustment",
-                        "gain", "account", "boxes"])
-            for part in ("I", "II"):
-                for r in rep[f"part_{part}"]:
-                    w.writerow([part, r["description"], r["date_acquired"],
-                                r["date_sold"], r["proceeds"], r["cost"],
-                                r["code"], r["adjustment"], r["gain"],
-                                r["account"], r.get("boxes", "")])
-            # §1256 contracts: Form 6781 by hand, never an 8949 row.
-            for r in rep.get("section_1256") or []:
-                w.writerow(["6781", f"{r['description']} ({r['kind']})",
-                            r["date_acquired"], r["date_sold"], "", "",
-                            "", "", r["gain"], r["account"]])
-            # Unknown-cost dispositions: flagged rows,
-            # blank cost/gain, never mistaken for a computed row.
-            for m in rep.get("manual_reporting_required") or []:
-                w.writerow(["MANUAL",
-                            f"{_qty_str(abs(float(m.get('qty') or 0.0)))}"
-                            f" {m.get('symbol') or ''}", "",
-                            m.get("date") or "",
-                            round(abs(float(m.get("proceeds") or 0.0)), 2),
-                            "", "", "", "", m.get("account") or ""])
-        else:
-            w.writerow(["line", "proceeds_line", "gain_line", "property",
-                        "units", "symbol", "acq_year", "proceeds", "acb",
-                        "outlays", "gain", "denied", "notes"])
-            for r in rep["rows"]:
-                w.writerow([r["line"], r["proceeds_line"], r["gain_line"],
-                            r["property"], r["units"], r["symbol"],
-                            r["acq_year"], r["proceeds"], r["acb"],
-                            r["outlays"], r["gain"], r["denied"],
-                            r["notes"]])
-            for m in rep.get("manual_reporting_required") or []:
-                w.writerow(["MANUAL", "", "", "",
-                            abs(float(m.get("qty") or 0.0)),
-                            m.get("symbol") or "", "",
-                            round(abs(float(m.get("proceeds") or 0.0)), 2),
-                            "", "", "", "",
-                            "no purchase in your files, cost unknown "
-                            "(missing_history.json) - report by hand"])
+    # A fresh owner-only file, never through a symlink at `path`
+    # (lib/safe_write; security review M1).
+    from taxjson.lib.safe_write import open_new
+    with open_new(path, newline="") as f:
+        _rows_csv(rep, f)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def _rows_csv(rep: Dict[str, Any], f) -> None:
+    w = csv.writer(f)
+    if rep["form"] == "8949":
+        w.writerow(["part", "description", "date_acquired", "date_sold",
+                    "proceeds", "cost", "code", "adjustment",
+                    "gain", "account", "boxes"])
+        for part in ("I", "II"):
+            for r in rep[f"part_{part}"]:
+                w.writerow([part, r["description"], r["date_acquired"],
+                            r["date_sold"], r["proceeds"], r["cost"],
+                            r["code"], r["adjustment"], r["gain"],
+                            r["account"], r.get("boxes", "")])
+        # §1256 contracts: Form 6781 by hand, never an 8949 row.
+        for r in rep.get("section_1256") or []:
+            w.writerow(["6781", f"{r['description']} ({r['kind']})",
+                        r["date_acquired"], r["date_sold"], "", "",
+                        "", "", r["gain"], r["account"]])
+        # Unknown-cost dispositions: flagged rows,
+        # blank cost/gain, never mistaken for a computed row.
+        for m in rep.get("manual_reporting_required") or []:
+            w.writerow(["MANUAL",
+                        f"{_qty_str(abs(float(m.get('qty') or 0.0)))}"
+                        f" {m.get('symbol') or ''}", "",
+                        m.get("date") or "",
+                        round(abs(float(m.get("proceeds") or 0.0)), 2),
+                        "", "", "", "", m.get("account") or ""])
+    else:
+        w.writerow(["line", "proceeds_line", "gain_line", "property",
+                    "units", "symbol", "acq_year", "proceeds", "acb",
+                    "outlays", "gain", "denied", "notes"])
+        for r in rep["rows"]:
+            w.writerow([r["line"], r["proceeds_line"], r["gain_line"],
+                        r["property"], r["units"], r["symbol"],
+                        r["acq_year"], r["proceeds"], r["acb"],
+                        r["outlays"], r["gain"], r["denied"],
+                        r["notes"]])
+        for m in rep.get("manual_reporting_required") or []:
+            w.writerow(["MANUAL", "", "", "",
+                        abs(float(m.get("qty") or 0.0)),
+                        m.get("symbol") or "", "",
+                        round(abs(float(m.get("proceeds") or 0.0)), 2),
+                        "", "", "", "",
+                        "no purchase in your files, cost unknown "
+                        "(missing_history.json) - report by hand"])
 
 
 @guard_main("taxjson-form-export")
@@ -1438,12 +1446,10 @@ def _main(args) -> int:
                   f"knows — enter them by hand (`--form 8949` lists them "
                   f"by box).", file=sys.stderr)
         if args.out:
-            tmp = args.out.with_name(args.out.name + ".part")
+            from taxjson.lib.safe_write import write_atomic
             try:
-                tmp.write_text(doc, encoding="ascii")
-                tmp.replace(args.out)
+                write_atomic(args.out, doc, encoding="ascii")
             except (OSError, UnicodeEncodeError) as e:
-                tmp.unlink(missing_ok=True)
                 sys.exit(f"taxjson-form-export: cannot write --out "
                          f"{args.out}: {e}")
             n = sum(1 for p in ("I", "II") for r in rep[f"part_{p}"]

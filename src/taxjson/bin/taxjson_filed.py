@@ -248,19 +248,13 @@ def write_snapshot(root: Path, year, country: str, basis: str,
     if extra:
         doc.update(extra)
         doc["schema_version"] = 2
-    tmp = path.with_name(path.name + ".part")
+    from taxjson.lib.safe_write import write_atomic
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",
-                       encoding="utf-8")
-        tmp.replace(path)
+        write_atomic(path, json.dumps(doc, indent=2, sort_keys=True) + "\n")
     except OSError as e:
         # filed/ is a file, or the project is read-only: one line, not a
         # traceback (S031-19). Nothing was written.
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
         sys.exit(f"taxjson close-year: cannot write {path}: {e} — "
                  f"nothing was written.")
     return path

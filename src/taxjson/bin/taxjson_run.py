@@ -103,24 +103,25 @@ def run_to_file(cmd: List[str], out_path: Path, *, capture_diag: bool = True,
     # treat the corrupt file as valid and feed it to downstream stages. On
     # failure the previous good output (if any) survives with its old mtime,
     # so the next run correctly rebuilds the stage.
-    tmp_path = out_path.with_name(out_path.name + ".part")
-    try:
-        if interactive:
-            # The prompt owns stderr, so no fresh .diag is captured —
-            # but a STALE one from a prior non-interactive run of this
-            # stage would keep polluting the .sum DIAGNOSTICS banner
-            # until hand-deleted from work/ (KNOWN_ISSUES). Clear it.
-            out_path.with_name(out_path.name + ".diag").unlink(
-                missing_ok=True)
-            with tmp_path.open("wb") as f:
-                result = run_cmd(cmd, stdout=f,      # stderr+stdin keep TTY
-                                 interactive=True)
+    # The .part is created fresh (never through a symlink planted at its
+    # name) and the rename replaces a symlink at out_path instead of
+    # writing through it (lib/safe_write; security review M1).
+    from taxjson.lib.safe_write import atomic_open
+    if interactive:
+        # The prompt owns stderr, so no fresh .diag is captured —
+        # but a STALE one from a prior non-interactive run of this
+        # stage would keep polluting the .sum DIAGNOSTICS banner
+        # until hand-deleted from work/ (KNOWN_ISSUES). Clear it.
+        out_path.with_name(out_path.name + ".diag").unlink(
+            missing_ok=True)
+        with atomic_open(out_path, binary=True) as f:
+            result = run_cmd(cmd, stdout=f,      # stderr+stdin keep TTY
+                             interactive=True)
             if result.returncode != 0:
                 raise subprocess.CalledProcessError(result.returncode, cmd)
-            tmp_path.replace(out_path)
-            return
-        with tmp_path.open("w", encoding="utf-8") as f:
-            result = run_cmd(cmd, stdout=f)
+        return
+    with atomic_open(out_path) as f:
+        result = run_cmd(cmd, stdout=f)
         stderr_text = result.stderr or ""
         if capture_diag:
             diag_path = out_path.with_name(out_path.name + ".diag")
@@ -134,9 +135,6 @@ def run_to_file(cmd: List[str], out_path: Path, *, capture_diag: bool = True,
                 sys.stderr.write(stderr_text)
             raise subprocess.CalledProcessError(result.returncode, cmd,
                                                 stderr=stderr_text)
-        tmp_path.replace(out_path)
-    finally:
-        tmp_path.unlink(missing_ok=True)
 
 
 # Matches the per-file count lines `taxjson-brokerage` prints to
@@ -1995,9 +1993,8 @@ def _raw_align_adjust_currency(raw_json: Path, rates_path: Path,
                      f"restated as {t['net_amount']:,.2f} {dst} for the "
                      f"native-currency holdings view")
     if notes:
-        tmp = raw_json.with_name(raw_json.name + ".part")
-        tmp.write_text(_json.dumps(doc, indent=2), encoding="utf-8")
-        tmp.replace(raw_json)
+        from taxjson.lib.safe_write import write_atomic
+        write_atomic(raw_json, _json.dumps(doc, indent=2))
     return notes
 
 
@@ -2094,12 +2091,8 @@ def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
     # Atomic: to_base.csv is mtime-cached, so a kill mid-write must never
     # leave a fresh-looking empty/partial rates file (every later run would
     # silently fall back to the default FX rate).
-    rates_tmp = rates_path.with_name(rates_path.name + ".part")
-    try:
-        rates_tmp.write_bytes(b"".join(parts))
-        rates_tmp.replace(rates_path)
-    finally:
-        rates_tmp.unlink(missing_ok=True)
+    from taxjson.lib.safe_write import write_atomic
+    write_atomic(rates_path, b"".join(parts))
     return rates_path
 
 
@@ -2135,13 +2128,8 @@ def _resolve_manifest(acct_dir: Path, cache: Path, name: str,
         # Atomic (tmp + replace, as Manifest.save writes): a failed write
         # left a truncated canonical manifest that then won over the
         # intact legacy copy on every later run (A2-0218).
-        tmp = user_manifest.with_name(user_manifest.name + ".part")
-        try:
-            tmp.write_text(legacy.read_text(encoding="utf-8"),
-                           encoding="utf-8")
-            tmp.replace(user_manifest)
-        finally:
-            tmp.unlink(missing_ok=True)
+        from taxjson.lib.safe_write import write_atomic
+        write_atomic(user_manifest, legacy.read_text(encoding="utf-8"))
         print(f"  migrated elections manifest → {user_manifest} "
               f"(version-control this file; the work/ copy is no longer "
               f"read once this exists)")
@@ -2592,10 +2580,9 @@ def _apply_override_log(corp_json: Path, log: Path, account: str) -> None:
             t[fld] = targets[0]
             changed = True
     if changed:
-        tmp = corp_json.with_name(corp_json.name + ".part")
-        tmp.write_text(_json.dumps(corp, indent=2, sort_keys=True) + "\n",
-                       encoding="utf-8")
-        tmp.replace(corp_json)
+        from taxjson.lib.safe_write import write_atomic
+        write_atomic(corp_json,
+                     _json.dumps(corp, indent=2, sort_keys=True) + "\n")
 
 
 def _config_has_distributions() -> bool:
@@ -3617,7 +3604,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # no diff (correct behaviour — there's nothing to compare to).
             prev_holdings = cache / f"{name}_holdings_prev.toml"
             if holdings_toml.exists():
-                shutil.copy2(holdings_toml, prev_holdings)
+                # (a fresh file: never written through a symlink at the
+                # snapshot's name — security review M1)
+                from taxjson.lib.safe_write import write_atomic
+                write_atomic(prev_holdings, holdings_toml.read_bytes())
             elif prev_holdings.exists():
                 # Stale snapshot from a prior run whose output was wiped;
                 # discard so we don't diff against an out-of-date baseline.
@@ -3661,27 +3651,23 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     sum_path = reports_dir / f"{name}.sum"
     sum_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     print(f"  → {sum_path}")
-    sum_tmp = sum_path.with_name(sum_path.name + ".part")
-    try:
-        with sum_tmp.open("wb") as out:
-            # The pre-blend baseline: the cross-account passes' notes
-            # (written after this file) go in <name>_wash.sum.
-            out.write(_diagnostics_banner(cache, name, post_pass=False))
-            out.write(run_capture(_cmd("taxjson-sum-gains")
-                                  + (["--staking"] if is_crypto else [])
-                                  + ["--country", country]
-                                  + [str(gains_json)]))
-            out.write(run_capture(_cmd("taxjson-sum-income") + [
-                "--year", str(year), "--country", country,
-            ] + income_dating_flags(settings) + [str(base_json)]))
-            if not is_crypto:
-                # The portfolio-snapshot report is equity-specific; crypto skips it.
-                out.write(run_capture(_cmd("taxjson-export") + [
-                    "--report", "--futures", str(gains_json),
-                ]))
-        sum_tmp.replace(sum_path)
-    finally:
-        sum_tmp.unlink(missing_ok=True)
+    from taxjson.lib.safe_write import atomic_open
+    with atomic_open(sum_path, binary=True) as out:
+        # The pre-blend baseline: the cross-account passes' notes
+        # (written after this file) go in <name>_wash.sum.
+        out.write(_diagnostics_banner(cache, name, post_pass=False))
+        out.write(run_capture(_cmd("taxjson-sum-gains")
+                              + (["--staking"] if is_crypto else [])
+                              + ["--country", country]
+                              + [str(gains_json)]))
+        out.write(run_capture(_cmd("taxjson-sum-income") + [
+            "--year", str(year), "--country", country,
+        ] + income_dating_flags(settings) + [str(base_json)]))
+        if not is_crypto:
+            # The portfolio-snapshot report is equity-specific; crypto skips it.
+            out.write(run_capture(_cmd("taxjson-export") + [
+                "--report", "--futures", str(gains_json),
+            ]))
 
     # Machine twin of the text reports (ADDITIVE — the .sum bytes above are
     # untouched): the structured aggregates `taxjson sum` and future
@@ -3692,8 +3678,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         report_json = cache / f"{name}_report.json"
         _base_rows = load_report_json(base_json).get(
             "transactions", [])
-        report_json.write_text(
-            _json_dumps_report(build_account_report(
+        from taxjson.lib.safe_write import write_atomic
+        write_atomic(report_json, _json_dumps_report(build_account_report(
                 load_report_json(gains_json), name, basis="pre-wash",
                 base_transactions=_base_rows,
                 rules=_income_rules(settings))))
@@ -3769,27 +3755,23 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
     passes."""
     wash_sum = reports_dir / f"{name}_wash.sum"
     # .part + rename: a failing sub-report must not truncate the .sum.
-    wash_tmp = wash_sum.with_name(wash_sum.name + ".part")
-    try:
-        with wash_tmp.open("wb") as out:
-            out.write(_diagnostics_banner(cache, name, blended=blended))
-            _is_c = bool(((_soft_config(cache.parent).get("accounts")
-                           or {}).get(name) or {}).get("crypto"))
-            out.write(run_capture(_cmd("taxjson-sum-gains")
-                                  + (["--staking"] if _is_c else [])
-                                  + ["--country", _normalize_country(
-                                      settings["country"])]
-                                  + [str(wash_gains)]))
-            out.write(run_capture(_cmd("taxjson-sum-income") + [
-                "--year", str(settings["year"]),
-                "--country", _normalize_country(settings["country"]),
-            ] + income_dating_flags(settings) + [str(base_json)]))
-            out.write(run_capture(_cmd("taxjson-export") + [
-                "--report", "--futures", str(wash_gains),
-            ]))
-        wash_tmp.replace(wash_sum)
-    finally:
-        wash_tmp.unlink(missing_ok=True)
+    from taxjson.lib.safe_write import atomic_open
+    with atomic_open(wash_sum, binary=True) as out:
+        out.write(_diagnostics_banner(cache, name, blended=blended))
+        _is_c = bool(((_soft_config(cache.parent).get("accounts")
+                       or {}).get(name) or {}).get("crypto"))
+        out.write(run_capture(_cmd("taxjson-sum-gains")
+                              + (["--staking"] if _is_c else [])
+                              + ["--country", _normalize_country(
+                                  settings["country"])]
+                              + [str(wash_gains)]))
+        out.write(run_capture(_cmd("taxjson-sum-income") + [
+            "--year", str(settings["year"]),
+            "--country", _normalize_country(settings["country"]),
+        ] + income_dating_flags(settings) + [str(base_json)]))
+        out.write(run_capture(_cmd("taxjson-export") + [
+            "--report", "--futures", str(wash_gains),
+        ]))
 
     # Rebuild the machine twin from the wash-adjusted gains: report.json
     # must carry the same basis the query commands resolve to (they prefer
@@ -3801,8 +3783,8 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
         report_json = cache / f"{name}_report.json"
         _base_rows = load_report_json(base_json).get(
             "transactions", [])
-        report_json.write_text(
-            _json_dumps_report(build_account_report(
+        from taxjson.lib.safe_write import write_atomic
+        write_atomic(report_json, _json_dumps_report(build_account_report(
                 load_report_json(wash_gains), name,
                 basis="wash-adjusted",
                 base_transactions=_base_rows,
@@ -14781,9 +14763,8 @@ def _fx_cash_after_run(root: Path, cache: Path,
         return
     text = FX.render_report(ledger, base, year, country, verdict)
     rpt = reports_dir / "fx_cash.rpt"
-    tmp = rpt.with_name(rpt.name + ".part")
-    tmp.write_text(text + "\n", encoding="utf-8")
-    tmp.replace(rpt)
+    from taxjson.lib.safe_write import write_atomic
+    write_atomic(rpt, text + "\n")
     print(f"  net {ledger['net_gain']:,.2f} {base}, reportable "
           f"{verdict['reportable']:,.2f} {base} -> {rpt}")
 
@@ -17087,15 +17068,15 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
                           file=sys.stderr)
 
         rows = list(merged.values())
-        if out.exists() and not out.is_dir():
-            import shutil as _sh
-            _bak = out.with_name(out.name + ".bak")
-            _sh.copy2(out, _bak)
-            print(f"  kept the previous {out.name} as {_bak.name}",
-                  file=sys.stderr)
+        from taxjson.lib.safe_write import write_atomic
         try:
-            out.write_text(json.dumps(rows, indent=2) + "\n",
-                           encoding="utf-8")
+            if out.is_file() and not out.is_symlink():
+                # (a fresh .bak: never written through a symlink there)
+                _bak = out.with_name(out.name + ".bak")
+                write_atomic(_bak, out.read_bytes())
+                print(f"  kept the previous {out.name} as {_bak.name}",
+                      file=sys.stderr)
+            write_atomic(out, json.dumps(rows, indent=2) + "\n")
         except OSError as e:
             # A directory (or unwritable path) argument crashed with a
             # raw traceback AFTER all the per-account work (REVIEW #40).
@@ -17274,11 +17255,17 @@ def cmd_init(args: argparse.Namespace) -> None:
         # template (R1-255). Same numbering as fetch's .bak files.
         bak = cfg.with_name(bak_name)
         n = 1
-        while bak.exists() and bak.read_bytes() != cfg.read_bytes():
+        # lexists: a dangling symlink at a .bak name is taken, never
+        # written through (security review M1).
+        from os.path import lexists
+        while lexists(bak) and not (
+                bak.is_file() and not bak.is_symlink()
+                and bak.read_bytes() == cfg.read_bytes()):
             bak = cfg.with_name(f"{bak_name}{n}")
             n += 1
-        if not bak.exists():
-            shutil.copy2(cfg, bak)
+        if not lexists(bak):
+            from taxjson.lib.safe_write import write_atomic
+            write_atomic(bak, cfg.read_bytes())
         bak_name = bak.name
         written.append(f"{bak_name} (your previous config)")
     # UTF-8 whatever the locale, through tmp + replace: under LC_ALL=C

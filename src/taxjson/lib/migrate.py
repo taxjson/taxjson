@@ -726,9 +726,30 @@ def plan(root) -> Plan:
                                + " — fix the old file first")
         pl.toml_text = new_text
         pl.toml_before = text
+    for name, written in (("ticker.map", bool(pl.map_append)),
+                          ("taxjson.toml", pl.toml_text is not None)):
+        _refuse_outside_link(root, name, written)
     for n in pl.names:
         pl.moves.append((n, _migrated_name(root, n)))
     return pl
+
+
+def _refuse_outside_link(root: Path, name: str, written: bool) -> None:
+    """A ticker.map / taxjson.toml that migrate would rewrite and that is
+    a symlink leaving the project is refused before anything is written:
+    migrate never writes through a link to a file outside the project
+    (security review M1). A link inside the project is followed — its
+    target, a file of this project, is the one replaced."""
+    if not written:
+        return
+    from taxjson.lib.safe_write import link_outside
+    target = link_outside(root / name, root)
+    if target is not None:
+        raise MigrateError(
+            f"{name} is a symlink to {target}, outside the project — "
+            f"migrate rewrites {name} and never writes through such a "
+            f"link: run migrate in the folder that holds the real file, "
+            f"or replace the link with a copy, then migrate again")
 
 
 def _joined(before: str, add: str) -> str:
@@ -743,13 +764,17 @@ def apply(pl: Plan) -> None:
     root = pl.root
 
     def _write(path: Path, text: str) -> None:
-        tmp = path.with_name(path.name + ".migrate.part")
-        tmp.write_text(text, encoding="utf-8")
-        try:
-            os.chmod(tmp, path.stat().st_mode & 0o777)
-        except OSError:
-            pass
-        tmp.replace(path)
+        # The .migrate.part is created fresh (never through a symlink
+        # planted there) and keeps the file's permission bits; a link at
+        # `path` (inside the project — plan() refused one leaving it) is
+        # resolved so the link stays and its target is replaced.
+        from taxjson.lib.safe_write import link_outside, write_atomic
+        if path.is_symlink():
+            if link_outside(path, root) is not None:
+                raise MigrateError(f"{path.name} became a symlink leaving "
+                                   f"the project — nothing more written")
+            path = path.resolve()
+        write_atomic(path, text, suffix=".migrate.part", keep_mode=True)
 
     if pl.map_append:
         tm = root / "ticker.map"

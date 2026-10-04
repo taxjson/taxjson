@@ -560,10 +560,9 @@ def main(argv=None) -> int:
                                        renames=renames,
                                        country=args.country)
 
-    tmp = args.base_json.with_name(args.base_json.name + ".part")
-    tmp.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",
-                   encoding="utf-8")
-    tmp.replace(args.base_json)
+    from taxjson.lib.safe_write import write_atomic
+    write_atomic(args.base_json,
+                 json.dumps(doc, indent=2, sort_keys=True) + "\n")
     print(f"{PROG}: applied {applied} adjustment(s) to "
           f"{args.base_json.name}.", file=sys.stderr)
     return 0

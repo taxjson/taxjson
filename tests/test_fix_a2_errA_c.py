@@ -253,7 +253,8 @@ class TestDecisionsFile(unittest.TestCase):
     def test_unwritable_save_is_one_line_and_leaves_no_part(self):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "sends.json"
-            with mock.patch.object(Path, "write_text",
+            from taxjson.lib import safe_write as _sw
+            with mock.patch.object(_sw.os, "open",
                                    side_effect=PermissionError(
                                        13, "Permission denied")):
                 # An OSError: one 'cannot write' line, exit 2 (A2-1416).

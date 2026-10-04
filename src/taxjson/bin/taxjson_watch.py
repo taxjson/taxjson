@@ -239,19 +239,10 @@ def save_state(path: Path, radar: Dict[str, Dict[str, Any]],
                            "as_of": as_of, "radar": radar}
     if harvest_now is not None:
         doc["harvest_now"] = round(harvest_now, 2)
-    tmp = path.with_name(path.name + ".part")
-    try:
-        tmp.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",
-                       encoding="utf-8")
-        tmp.replace(path)
-    except OSError:
-        # No stray .part beside a state that could not be written; the
-        # caller names the path (S046-12).
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
+    # No stray .part beside a state that could not be written (the
+    # caller names the path, S046-12); never through a symlink (M1).
+    from taxjson.lib.safe_write import write_atomic
+    write_atomic(path, json.dumps(doc, indent=2, sort_keys=True) + "\n")
 
 
 def render_report(changes: List[Dict[str, Any]], as_of: str,

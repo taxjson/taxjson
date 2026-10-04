@@ -925,7 +925,6 @@ def record_input_fingerprint(root: Path, cfg: Dict[str, Any]) -> None:
     built from, for run-clean's staleness check."""
     work = root / "work"
     work.mkdir(parents=True, exist_ok=True)
-    tmp = work / (FINGERPRINT_FILE + ".part")
     doc: Dict[str, Any] = {"version": FINGERPRINT_VERSION,
                            "files": input_fingerprint(root, cfg)}
     # The country the books were built under: a report command on books
@@ -935,9 +934,9 @@ def record_input_fingerprint(root: Path, cfg: Dict[str, Any]) -> None:
         doc["country"] = settings_country(cfg.get("settings") or {})
     except ValueError:
         pass
-    tmp.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n",
-                   encoding="utf-8")
-    tmp.replace(work / FINGERPRINT_FILE)
+    from taxjson.lib.safe_write import write_atomic
+    write_atomic(work / FINGERPRINT_FILE,
+                 json.dumps(doc, indent=1, sort_keys=True) + "\n")
 
 
 def books_country(root: Path) -> Optional[str]:
@@ -2058,20 +2057,13 @@ def save_state(root: Path, state: Dict[str, Any], year: int) -> None:
     if path.is_dir():
         raise StateFileError(f"cannot write {STATE_FILE}: is a directory "
                              f"— nothing was written")
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.part")
+    from taxjson.lib.safe_write import write_atomic
     try:
-        tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, path)
+        write_atomic(path, text, suffix=f".{os.getpid()}.part")
     except OSError as e:
         raise StateFileError(f"cannot write {STATE_FILE}: "
                              f"{e.strerror or e} — nothing was "
                              f"written") from None
-    finally:
-        try:
-            if tmp.is_file():
-                tmp.unlink()
-        except OSError:
-            pass
 
 
 def reset_state(root: Path) -> bool:

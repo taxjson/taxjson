@@ -73,27 +73,19 @@ class OutputWriteError(OSError):
 def write_text_atomic(path, text: str, encoding: str = "utf-8") -> None:
     """Write `text` to `path` through `<path>.part` in the same folder
     (the old contents stay until the new ones are complete). A failure
-    raises OutputWriteError naming `path` and leaves no .part behind."""
-    import os
+    raises OutputWriteError naming `path` and leaves no .part behind.
+    The .part is created fresh and a symlink at either name is never
+    written through (lib/safe_write)."""
     from pathlib import Path
+    from taxjson.lib.safe_write import write_atomic
     path = Path(path)
-    if path.is_dir():
+    if path.is_dir() and not path.is_symlink():
         raise OutputWriteError(f"cannot write {path}: is a directory")
-    tmp = path.with_name(path.name + ".part")
     try:
-        tmp.write_text(text, encoding=encoding)
-        os.replace(tmp, path)
-    except OutputWriteError:
-        raise
+        write_atomic(path, text, encoding=encoding)
     except OSError as e:
         raise OutputWriteError(
             f"cannot write {path}: {e.strerror or e}") from None
-    finally:
-        try:
-            if tmp.is_file():
-                tmp.unlink()
-        except OSError:
-            pass
 
 
 def read_stdin_utf8() -> str:
