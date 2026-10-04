@@ -999,8 +999,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "share position under a millionth of a share counts as "
                  "zero.", cont=True),
             Rule("CA-CRYPTO-02",
-                 "USD stablecoins (" + _stable_text() + ", on "
-                 "Kraken and Coinbase alike) are treated as US-dollar "
+                 "USD stablecoins (" + _stable_text() + "), on "
+                 "Kraken and Coinbase alike, are treated as US-dollar "
                  "cash, an approximation (their own gain or loss, a "
                  "de-peg, is not computed; a fill more than 2% off 1.00 "
                  "USD is warned about. A fill valued in another currency "
@@ -1952,8 +1952,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "proceeds are on the units held). Each case is named in "
                  "a warning."),
             Rule("US-CRYPTO-02",
-                 "USD stablecoins (" + _stable_text() + ", on "
-                 "Kraken and Coinbase alike) are property like any coin: "
+                 "USD stablecoins (" + _stable_text() + "), on "
+                 "Kraken and Coinbase alike, are property like any coin: "
                  "buying one is a purchase, selling or spending one is a "
                  "sale (a de-peg is a gain or loss), and a payment in one "
                  "is written as a sale. A swap against a stablecoin, a "
