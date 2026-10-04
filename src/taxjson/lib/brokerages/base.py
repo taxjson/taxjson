@@ -618,10 +618,18 @@ class BaseBrokerage:
     # listing" hint stays quiet when one of them rewrites the row.
     security_overrides: list = []
 
-    def _extract_covers(self, desc: str, currency: str) -> bool:
+    def _extract_symbol(self, desc: str, currency: str) -> Optional[str]:
+        """The symbol the first matching EXTRACT line gives this row (the
+        rule taxjson-brokerage applies after the parse), None when none
+        matches."""
         cur = (currency or '').upper()
-        return any(extract_words_match(d, desc) and c in ('*', cur)
-                   for d, c, _s in (self.security_overrides or ()))
+        for d, c, s in (self.security_overrides or ()):
+            if extract_words_match(d, desc) and c in ('*', cur):
+                return s
+        return None
+
+    def _extract_covers(self, desc: str, currency: str) -> bool:
+        return self._extract_symbol(desc, currency) is not None
 
     # [accounts.<name>] combined_broker_accounts = true (taxjson-brokerage
     # --combined-broker-accounts): the user declares that every broker

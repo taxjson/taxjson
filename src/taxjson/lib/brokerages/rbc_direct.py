@@ -1731,7 +1731,14 @@ class RbcBrokerage(BaseBrokerage):
         (see `_income_currency`). A row that reads as a TSX fund's
         US-dollar class but becomes a .US listing is an ATTENTION line
         naming the ticker.map EXTRACT line that moves it (none when the
-        project's EXTRACT lines already match it)."""
+        project's EXTRACT lines already match it). A row an EXTRACT line
+        matches gets its symbol here, before the settlement fallback
+        reads the listing's market (a TSX US-dollar unit settles on the
+        Canadian calendar)."""
+        if r is not None:
+            _hit = self._extract_symbol(r.desc, currency)
+            if _hit:
+                return _hit
         if market and r is not None:
             currency = self._income_currency(r) or currency
         out = self.apply_currency_suffix(symbol, currency)

@@ -80,9 +80,18 @@ class TestBlankSettleListingMarket(unittest.TestCase):
 
     @rule("CA-DATE-05")
     def test_rbc_usd_dlr_unit_settles_on_canadian_calendar(self):
-        self.assertEqual(
-            _rbc_settle("June 30, 2025", "DLR.U", "QZ U.S. DLR CURRENCY ETF",
-                        "USD"), ("DLR.U.TO", "2025-07-02"))
+        # The TSX unit is named by the project's ticker.map EXTRACT line
+        # (no built-in security, owner 2026-10-04); the parser applies it
+        # before the settlement fallback reads the listing's market.
+        from unittest import mock
+        from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
+        with mock.patch.object(RbcBrokerage, "security_overrides",
+                               [("qz u.s. dlr currency etf", "USD",
+                                 "QZD.U.TO")]):
+            self.assertEqual(
+                _rbc_settle("June 30, 2025", "QZD.U",
+                            "QZ U.S. DLR CURRENCY ETF", "USD"),
+                ("QZD.U.TO", "2025-07-02"))
 
     @rule("CA-DATE-05")
     def test_ib_questrade_rbc_and_generic_agree(self):
