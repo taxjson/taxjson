@@ -600,6 +600,99 @@ class TestCommitMessageAmounts(_Sandbox):
         self.assertIn("TAG message", r.stderr)
 
 
+class TestPushEveryCommitAndDiffAmounts(_Sandbox):
+    """Pre-release security review M2: the pre-push hook scans the added
+    lines of EVERY pushed commit (a value added in one commit and removed
+    in the next is still published in history), and --diff refuses a
+    money amount added to a CHANGELOG / markdown doc or a code comment
+    (pii-ok on the line lets a synthetic one through). Synthetic values."""
+
+    _AMT = "1" + ",234,567" + ".89"
+
+    def _commit(self, path, text, msg="c"):
+        (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / path).write_text(text)
+        self.git("add", "-A")
+        self.git("commit", "-q", "--allow-empty", "-m", msg)
+        return self.git("rev-parse", "HEAD").strip()
+
+    def _remote_with_base(self):
+        remote = self.tmp / "remote.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)],
+                       check=True, env=self.env, capture_output=True)
+        self.git("remote", "add", "origin", str(remote))
+        base = self._commit("a.txt", "hello\n", "base")
+        self.git("push", "-q", "--no-verify", "origin", "main")
+        return base
+
+    def _pre_push(self, new, old):
+        return subprocess.run(
+            ["bash", str(self.repo / "scripts" / "hooks" / "pre-push"),
+             "origin", "unused-url"], cwd=self.repo, capture_output=True,
+            text=True, env=self.env,
+            input=f"refs/heads/main {new} refs/heads/main {old}\n")
+
+    def test_value_added_then_removed_is_still_refused(self):
+        base = self._remote_with_base()
+        self._commit("notes.txt", f"acct {_ACCT}\n", "add")
+        tip = self._commit("notes.txt", "acct (removed)\n", "remove")
+        self.assertNotIn(_ACCT, self.git("diff", base, tip))   # net: clean
+        r = self._pre_push(tip, base)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertNotIn(_ACCT, r.stdout + r.stderr)
+
+    def test_clean_range_passes(self):
+        base = self._remote_with_base()
+        self._commit("notes.txt", "one\n")
+        tip = self._commit("notes.txt", "two\n")
+        r = self._pre_push(tip, base)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_amount_in_changelog_added_then_removed_is_refused(self):
+        base = self._remote_with_base()
+        self._commit("CHANGELOG.md", f"- the 2025 total is {self._AMT}\n")
+        tip = self._commit("CHANGELOG.md", "- the 2025 total is unchanged\n")
+        r = self._pre_push(tip, base)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("money amount", r.stdout + r.stderr)
+        self.assertNotIn(self._AMT, r.stdout + r.stderr)
+
+    def _diff_of(self, path, text):
+        base = self._commit("a.txt", "x\n", "base")
+        self._commit(path, text)
+        return self.git("diff", base, "HEAD")
+
+    def test_diff_mode_amount_in_docs_and_comments(self):
+        for path, text in (
+                ("CHANGELOG.md", f"- owner books moved to {self._AMT}\n"),
+                ("KNOWN_ISSUES.md", f"Total {self._AMT} differs\n"),
+                ("docs/guide.md", f"e.g. ${self._AMT}\n"),
+                ("src/x.py", f"x = 1  # was {self._AMT} on the books\n"),
+                ("src/y.py", f"    # total {self._AMT}\n"),
+                ("tools/z.sh", f"# {self._AMT}\n"),
+                ("src/w.js", f"// {self._AMT}\n")):
+            with self.subTest(path=path):
+                r = self.scan("--diff", stdin=self._diff_of(path, text))
+                self.assertEqual(r.returncode, 1, path + r.stdout)
+                self.assertIn("money amount", r.stdout)
+                self.assertNotIn(self._AMT, r.stdout)
+
+    def test_diff_mode_amount_elsewhere_or_marked_passes(self):
+        for path, text in (
+                # data and code (fixtures carry synthetic amounts)
+                ("tests/fixtures/s.csv", f'Total,"{self._AMT}"\n'),
+                ("src/x.py", f'AMT = "{self._AMT}"\n'),
+                # the escape, as a comment marker or the bare word
+                ("CHANGELOG.md", f"- synthetic {self._AMT} <!-- pii-ok -->\n"),
+                ("CHANGELOG.md", f"- synthetic test total {self._AMT} (pii-ok)\n"),
+                ("src/y.py", f"# synthetic {self._AMT} pii-ok\n"),
+                # not an amount
+                ("CHANGELOG.md", "- v1.2.3 handles 1,000 rows and 12.50 fees\n")):
+            with self.subTest(path=path, text=text):
+                r = self.scan("--diff", stdin=self._diff_of(path, text))
+                self.assertEqual(r.returncode, 0, path + r.stdout)
+
+
 class TestReleaseAndCiGates(unittest.TestCase):
     """S025-06, S024-23, S023-00: static checks of the gate wiring."""
 

@@ -203,6 +203,7 @@ for path in sys.stdin.read().splitlines():
 # ---- input -----------------------------------------------------------
 NAMES=""     # newline-separated file names (tree mode), for the name scan
 RAWF=""
+AMT_INPUT="" # --diff: the added prose / comment text checked for money amounts
 if [ "$mode" != tree ]; then
   RAWF="$(mktemp)"; trap 'rm -f "$RAWF"' EXIT
   cat > "$RAWF"
@@ -213,6 +214,20 @@ fi
 if [ "$mode" = diff ]; then
   RAW="$(tr -d '\0' < "$RAWF")"
   INPUT="$(printf '%s\n' "$RAW" | grep -E '^\+' | grep -vE '^\+\+\+ ' | sed -E 's/^\+//')"
+  # Money amounts (A2-1384, security review M2) are checked where owner
+  # figures were once quoted: every added line of a CHANGELOG or a
+  # markdown / reST doc, and the COMMENT part (from a #, //, /* or <!--
+  # at the start or after a blank) of any other added line, each
+  # prefixed with its file. Data and code are not: fixtures carry
+  # synthetic amounts.
+  AMT_INPUT="$(printf '%s\n' "$RAW" | LC_ALL=C awk '
+    /^diff --git / { f = ""; next }
+    /^\+\+\+ / { f = substr($0, 5); sub(/^b\//, "", f); next }
+    /^\+/ {
+      s = substr($0, 2)
+      if (f ~ /(^|\/)CHANGELOG[^\/]*$/ || f ~ /\.(md|markdown|rst)$/) { print f ": " s; next }
+      if (match(s, /(^|[ \t])(#|\/\/|\/\*|<!--)/)) print f ": " substr(s, RSTART)
+    }')"
   # Destination paths: +++ lines, plus the headers a PURE rename/copy
   # or an empty new file carries instead (no +++ line at all).
   NAMES="$( { printf '%s\n' "$RAW" | sed -nE 's#^\+\+\+ b/##p; s#^(rename|copy) to ##p'
@@ -452,10 +467,19 @@ report "credential-looking string"                      'ghp_[A-Za-z0-9]{30,}|gi
 # thousands separators and cents (1,234,567.89): owner-book totals once
 # reached the public history that way (A2-1384). A synthetic number in a
 # message carries the word pii-ok on its line (bare, as messages have no
-# comment syntax). Code, docs and fixtures are not checked for it.
+# comment syntax). The pushed DIFF (--diff) gets the same check on its
+# CHANGELOG / doc lines and code comments (AMT_INPUT above; security
+# review M2); data, code and the tree scan are not checked for it.
+AMOUNT_RE='(^|[^0-9,.])[0-9]{1,3}(,[0-9]{3})+[.][0-9]{2}([^0-9]|$)'
 if [ "$MSG" = 1 ]; then
 report "money amount in a commit/tag message (thousands separators and cents; mark a synthetic one pii-ok)" \
-  '(^|[^0-9,.])[0-9]{1,3}(,[0-9]{3})+[.][0-9]{2}([^0-9]|$)' '' amount_filter
+  "$AMOUNT_RE" '' amount_filter
+fi
+if [ "$mode" = diff ] && [ -n "$AMT_INPUT" ]; then
+  _input="$INPUT"; INPUT="$AMT_INPUT"
+  report "money amount added to a CHANGELOG / doc or a code comment (thousands separators and cents; mark a synthetic one pii-ok)" \
+    "$AMOUNT_RE" '' amount_filter
+  INPUT="$_input"
 fi
 fi
 # ---- account-number columns (tree / ad hoc / pre-push diff) ----------

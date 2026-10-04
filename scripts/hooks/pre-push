@@ -2,7 +2,10 @@
 # Installed into .git/hooks/pre-push by scripts/dev-setup.sh (and run by
 # scripts/release.sh itself). On a public repository a push IS
 # publication, so this is the last check: scan the net diff the push
-# would add (merge resolutions included), the text inside any binary file
+# would add (merge resolutions included) AND the added lines of every
+# commit it publishes (a value added in one commit and removed in the
+# next is still in history; money amounts in CHANGELOG / docs / code
+# comments too), the text inside any binary file
 # it adds, the branch / tag NAMES it publishes, the commit messages,
 # annotated-tag messages, and the author / committer / tagger identities
 # of the NEW commits and tags — identities against your private denylist
@@ -31,15 +34,24 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     diff_cmd=(git diff "$remote_sha" "$local_sha" --)
     num_cmd=(git diff --numstat --no-renames "$remote_sha" "$local_sha" --)
     log_range=("$remote_sha..$local_sha")
+    per_commit=1
   else
     # New branch/tag, or a remote tip we do not have: everything not
     # already on that remote.
     diff_cmd=(git log -p --format='' --diff-merges=first-parent "$local_sha" --not --remotes="$remote/*" --)
     num_cmd=(git log --numstat --no-renames --format='' --diff-merges=first-parent "$local_sha" --not --remotes="$remote/*" --)
     log_range=("$local_sha" --not --remotes="$remote/*")
+    per_commit=0      # the log above is already per commit
   fi
   if ! "${diff_cmd[@]}" | "$check" --diff; then
     refuse "$local_ref" "see above."
+  fi
+  # The net diff hides a value one pushed commit added and a later one
+  # removed — history publishes it all the same (security review M2).
+  # One pass over every non-merge commit's own patch (merge resolutions
+  # are in the net diff above).
+  if [ "$per_commit" = 1 ] && ! git log -p --no-merges --format='' "${log_range[@]}" -- | "$check" --diff; then
+    refuse "$local_ref" "see above — a commit in the push adds it, even if a later one removes it (rewrite that commit)."
   fi
   # A diff shows a binary only as 'Binary files ... differ': scan the
   # text inside each binary the push adds (PDF /Author, DOCX creator, a

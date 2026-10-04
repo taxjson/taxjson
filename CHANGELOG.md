@@ -20,6 +20,11 @@
   place, so a symlink at the temporary or the final name is replaced, never
   written through. `taxjson migrate` refuses a `ticker.map` /
   `taxjson.toml` symlinked outside the project, before writing anything.
+- **pre-push scans every pushed commit**, not only the net diff: a value
+  added in one commit and removed in the next is refused too. The diff
+  scan also refuses a money amount (thousands separators and cents) added
+  to a CHANGELOG or markdown doc line or a code comment; `pii-ok` on the
+  line lets a synthetic one through.
 
 ### One mapping file, year data in taxjson.toml (owner request)
 

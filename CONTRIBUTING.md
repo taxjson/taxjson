@@ -45,7 +45,9 @@ at `~/.config/taxjson/pii-denylist` (one regex per line: your real account
 numbers, name, addresses; it lives outside every repository, so the strings
 it guards are never themselves committed). It runs in every `scripts/ci.sh`
 mode and as the `pre-push` hook that `scripts/dev-setup.sh` installs, which
-scans only what a push would add — the diff lines, the text inside binary
+scans only what a push would add — the diff lines (the net diff and the
+added lines of every pushed commit: a value added in one commit and removed
+in the next is still published), the text inside binary
 files (PDF/Office metadata, spreadsheet cells), branch and tag names,
 commit and tag messages, and author/committer/tagger identities (against
 the denylist and the e-mail allowlist) — and refuses on any hit (your own
@@ -65,8 +67,10 @@ amounts or totals, no symbol + quantity pairs or trade dates from real
 books, no account ids — write "the 2025 total is unchanged", not the
 number. The `pre-push` hook enforces part of this: a commit or tag message
 line with a money-like amount (thousands separators and cents, such as
-`1,234,567.89`) is refused (`scripts/check-pii.sh --message`). A synthetic
-number in a message is let through by the bare word `pii-ok` on its line.
+`1,234,567.89`) is refused (`scripts/check-pii.sh --message`), and so is <!-- pii-ok: the synthetic example -->
+one added to a CHANGELOG or markdown doc line or a code comment in a pushed
+commit (`--diff`). A synthetic number is let through by the word `pii-ok`
+on its line (in a doc, `<!-- pii-ok -->`).
 
 ## Running tests
 
