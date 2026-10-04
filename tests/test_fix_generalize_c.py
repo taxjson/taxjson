@@ -113,5 +113,51 @@ class TestWebullExerciseFeeIsConfigured(unittest.TestCase):
             self.assertIn('"ASSIGN"', outs[True])
 
 
+class TestRbcYearEndPostingIsASetting(unittest.TestCase):
+    """B12: the day RBC has posted the year's back-dated book-cost rows
+    is `[accounts.X] year_end_posting` (default 06-30), not a constant."""
+
+    @staticmethod
+    def _msgs(as_of, today, **kw):
+        from datetime import date
+        from taxjson.lib.brokerages.rbc_direct import rbc_coverage_messages
+        return rbc_coverage_messages(
+            [("rbc_2025.csv", as_of, ["2025-03-03", "2025-11-03"])],
+            2025, listings=None, today=date.fromisoformat(today), **kw)
+
+    def _noted(self, msgs):
+        return any("year-end book-cost" in m for m in msgs)
+
+    def test_default_is_june_30(self):
+        self.assertTrue(self._noted(self._msgs("2026-04-15", "2026-08-01")))
+        self.assertFalse(self._noted(self._msgs("2026-06-30", "2026-08-01")))
+
+    def test_the_account_setting_moves_the_day(self):
+        early = self._msgs("2026-04-15", "2026-08-01",
+                           year_end_posting="03-31")
+        self.assertFalse(self._noted(early), early)
+        late = self._msgs("2026-08-15", "2026-10-01",
+                          year_end_posting="09-30")
+        self.assertTrue(self._noted(late), late)
+        self.assertTrue(any("2026-09-30" in m for m in late), late)
+
+    def test_bad_value_is_refused(self):
+        from taxjson.lib.config_check import account_type_problems
+        for bad in ("6/30", "02-30", 630, "13-01"):
+            cfg = {"settings": {}, "accounts": {"rbc": {
+                "type": "taxable", "year_end_posting": bad}}}
+            self.assertTrue(any("year_end_posting" in m for m in
+                                account_type_problems(cfg)), bad)
+        ok = {"settings": {}, "accounts": {"rbc": {
+            "type": "taxable", "year_end_posting": "03-31"}}}
+        self.assertEqual(account_type_problems(ok), [])
+
+    def test_run_passes_the_flag(self):
+        from taxjson.bin.taxjson_run import _brokerage_account_flags
+        self.assertEqual(
+            _brokerage_account_flags({"year_end_posting": "03-31"}),
+            ["--year-end-posting", "03-31"])
+
+
 if __name__ == "__main__":
     unittest.main()

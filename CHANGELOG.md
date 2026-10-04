@@ -21,6 +21,10 @@
   booked as an exercise/assignment. Without it nothing is inferred and each
   such pair is named on the console for you to check. A Webull account
   that relied on the old inference needs the line.
+- **RBC's year-end posting day is a setting.** The note that an RBC export
+  taken before the broker posts the year's back-dated Dec-31 book-cost rows
+  may lack them uses `[accounts.<name>] year_end_posting = "MM-DD"`
+  (default `"06-30"`, the previous fixed day) instead of a constant.
 
 ### Command line
 

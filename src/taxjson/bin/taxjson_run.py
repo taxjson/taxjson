@@ -1216,6 +1216,9 @@ def _brokerage_account_flags(acfg: Dict[str, Any]) -> List[str]:
     # states (config_check checks the value; none: nothing inferred).
     if acfg.get("exercise_fee") is not None:
         flags += ["--exercise-fee", f"{float(acfg['exercise_fee']):g}"]
+    # RBC's year-end posting day (default 06-30 in the parser).
+    if acfg.get("year_end_posting") is not None:
+        flags += ["--year-end-posting", str(acfg["year_end_posting"])]
     return flags
 _ACCOUNT_TYPES = ("taxable", "sheltered")
 

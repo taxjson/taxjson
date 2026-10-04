@@ -30,7 +30,8 @@ TOP_LEVEL_TABLES = ("settings", "accounts", "instalments", "estimate",
 # installed, so a project that used `taxjson fetch` keeps validating.
 ACCOUNT_KEYS = ("type", "crypto", "transfers", "plan",
                 "brokerage", "account", "query_id", "holdings",
-                "combined_broker_accounts", "exercise_fee")
+                "combined_broker_accounts", "exercise_fee",
+                "year_end_posting")
 ESTIMATE_KEYS = ("other_income", "other_losses", "deductions",
                  "carrying_charges", "long_term_losses", "amt_carryover")
 INSTALMENTS_KEYS = ("basis", "prior_year_net_tax", "second_prior_net_tax",
@@ -186,6 +187,16 @@ def account_type_problems(cfg: Dict[str, Any]) -> List[str]:
                 f"[accounts.{name}] exercise_fee must be a number such "
                 f"as 1.00 (the broker's exercise/assignment charge, no "
                 f"quotes), got {_fee!r}")
+        _yep = acfg.get("year_end_posting")
+        if _yep is not None:
+            from taxjson.lib.brokerages.rbc_direct import parse_month_day
+            try:
+                if not isinstance(_yep, str):
+                    raise ValueError(f"{_yep!r} is not a quoted MM-DD day")
+                parse_month_day(_yep)
+            except ValueError as e:
+                out.append(f"[accounts.{name}] year_end_posting must be a "
+                           f"day such as \"06-30\" (MM-DD): {e}")
     return (out + account_pair_problems(accounts.keys())
             + bool_setting_problems(cfg))
 

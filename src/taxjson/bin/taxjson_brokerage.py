@@ -423,6 +423,17 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--year-end-posting", dest="year_end_posting", default=None,
+        metavar="MM-DD",
+        help=(
+            "RBC: the day of the next year by which RBC has posted the "
+            "tax year's back-dated Dec-31 book-cost adjustments "
+            "(`[accounts.<name>] year_end_posting`, passed by `taxjson "
+            "run`; default 06-30). Exports that hold the year's rows, all "
+            "taken before it, get a note that they may be missing."
+        ),
+    )
+    parser.add_argument(
         "--combined-broker-accounts", dest="combined_broker_accounts",
         action="store_true",
         help=(
@@ -578,8 +589,17 @@ Examples:
         # timestamps, audit S063-22).
         _cov = getattr(extractor_class, 'coverage_messages', None)
         if _cov is not None and args.tax_year and shared_context is not None:
-            for _m in _cov(shared_context, args.tax_year,
-                           country=args.country):
+            _ckw = {}
+            if args.year_end_posting is not None:
+                _ckw['year_end_posting'] = args.year_end_posting
+            try:
+                _cov_msgs = _cov(shared_context, args.tax_year,
+                                 country=args.country, **_ckw)
+            except ValueError as e:
+                print(f"taxjson-brokerage: error: --year-end-posting: {e}",
+                      file=sys.stderr)
+                sys.exit(2)
+            for _m in _cov_msgs:
                 print(_m, file=sys.stderr)
 
     # s.90(1) is Canadian law: never the default without a country

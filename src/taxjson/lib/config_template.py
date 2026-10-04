@@ -220,6 +220,9 @@ ACCOUNT_SPEC: Tuple[Key, ...] = (
         "default:",
         ("without it no exercise/assignment is inferred — each candidate "
          "is named)",)),
+    Key("year_end_posting", '"06-30"',
+        "RBC: the day next year by which year-end book-cost rows are "
+        "posted (default 06-30)"),
     Key("brokerage", '"questrade"',
         "`taxjson fetch` source (taxjson-fetch plugin): questrade | "
         "ibkr_flex"),

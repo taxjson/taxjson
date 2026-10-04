@@ -520,6 +520,9 @@ type = "taxable"               # REQUIRED: taxable | sheltered
 # exercise_fee = 1.00          # Webull: the exercise/assignment charge on the
 #                              # stock leg; without it no exercise/assignment
 #                              # is inferred from a $0 close (each is named)
+# year_end_posting = "06-30"   # RBC: the day next year by which the year's
+#                              # Dec-31 book-cost rows are posted (an export
+#                              # taken earlier gets a note; default 06-30)
 
 [accounts.rrsp]
 type = "sheltered"
