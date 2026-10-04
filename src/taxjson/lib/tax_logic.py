@@ -742,8 +742,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-SL-05",
                  "A long call on the shares is identical property to them "
                  "(a right to acquire, s.54 para (i)), at its contract size "
-                 "(100 shares for a standard equity option, the declared "
-                 "size of a mini). A root that drops the share class (SAMPLD "
+                 "(100 shares for a standard equity option — ASSUMED, and "
+                 "noted once per root, when a non-IB export does not state "
+                 "it; a mini's 10 when the row's own amount shows it; a "
+                 "ticker.map `MULT ROOT N` line overrides). A root that drops "
+                 "the share class (SAMPLD "
                  "for SAMPLD.B.TO) names that class line."),
             Rule("CA-SL-06",
                  "Shares never replace an option; an option is replaced "
@@ -823,8 +826,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-OPT-08",
                  "Each assignment's premium goes to its own stock leg: the "
                  "same account and underlying, the delivered quantity "
-                 "(contracts x the declared contract size, else 100; one "
-                 "per futures option), priced at the strike, dated up to 3 "
+                 "(contracts x the contract size — a ticker.map MULT line, "
+                 "else the size the export states (IB) or a mini's 10 its "
+                 "own amount shows, else 100 ASSUMED and noted once per "
+                 "option root; one per futures option), priced at the "
+                 "strike, dated up to 3 "
                  "days before or 7 days after the option row. Several "
                  "assignments at one moment are told apart by strike, "
                  "never by row order.", cont=True),
@@ -1743,9 +1749,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-WASH-12",
                  "A long call bought in the window is flagged as a warning "
                  "only (\"option to acquire\" is not enforced by the US "
-                 "engine), sized at the contract's size (100 shares for a "
-                 "standard equity option, the declared size of a mini), "
-                 "each contract "
+                 "engine), sized at the contract's size "
+                 "(100 shares for a standard equity option — ASSUMED, and "
+                 "noted once per root, when a non-IB export does not state "
+                 "it; a mini's 10 when the row's own amount shows it; a "
+                 "ticker.map `MULT ROOT N` line overrides), each contract "
                  "flagged against one loss's shares only; a buy that "
                  "closes a written call is not an acquisition. A root "
                  "that drops the share class (SAMPLCB for SAMPLC.B) names that "
@@ -1941,8 +1949,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-OPT-05",
                  "Each assignment's premium goes to its own stock leg: the "
                  "same account and underlying, the delivered quantity "
-                 "(contracts x the declared contract size, else 100; one "
-                 "per futures option), priced at the strike, dated up to 3 "
+                 "(contracts x the contract size — a ticker.map MULT line, "
+                 "else the size the export states (IB) or a mini's 10 its "
+                 "own amount shows, else 100 ASSUMED and noted once per "
+                 "option root; one per futures option), priced at the "
+                 "strike, dated up to 3 "
                  "days before or 7 days after the option row. Several "
                  "assignments at one moment are told apart by strike, "
                  "never by row order.", cont=True),

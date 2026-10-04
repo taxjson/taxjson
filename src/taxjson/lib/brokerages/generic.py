@@ -1175,7 +1175,11 @@ class GenericBrokerage(BaseBrokerage):
                 continue
             under = m.group(1) + (f".{m.group(5)}" if m.group(5) else "")
             strike = int(m.group(4)) / 1000.0
-            shares = abs(z["qty"]) * 100
+            # Shares per contract: ticker.map MULT (the option or its
+            # root), else the standard 100 (B10).
+            from taxjson.lib.markets import contract_size as _csize
+            shares = abs(z["qty"]) * float(
+                _csize(z["symbol"], m.group(1).split(".", 1)[0]) or 100)
             for t in transactions:
                 if t.get("action") != "BUYSELL" or t["symbol"] != under:
                     continue

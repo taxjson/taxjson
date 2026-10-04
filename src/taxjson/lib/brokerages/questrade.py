@@ -1222,6 +1222,9 @@ class QuestradeBrokerage(BaseBrokerage):
 
             qty = self._num(row, 'Quantity', lineno)
             mult = float(self.OPTION_MULTIPLIER) if opt else 1.0
+            # The export never states a contract's size: 100 is assumed
+            # unless the row's Gross shows a mini (B10).
+            size_basis = 'assumed' if opt else ''
             # The row's OWN money decides whether it is a zero-cash
             # option leg (audit R1-63). A word in the description used
             # to zero price, cash and commission on ANY row: an ASN
@@ -1303,6 +1306,14 @@ class QuestradeBrokerage(BaseBrokerage):
                 comm_signed = self._num(row, 'Commission', lineno)
                 net_signed = self._num(row, 'Net Amount', lineno)
                 gross = abs(gross_signed)
+                if opt and abs(price) > 0:
+                    def _fits(m, _q=qty, _p=price, _g=gross):
+                        exp = abs(_q) * abs(_p) * m
+                        return abs(_g - exp) <= max(0.02, 0.002 * max(exp,
+                                                                      _g))
+                    mult, size_basis = self.option_row_multiplier(
+                        (row.get('Symbol') or '').strip() or desc[:30],
+                        _fits)
                 # SIGNED commission. The old abs(Commission) made a
                 # REBATE a charge (2x the rebate wrong). The cash truth
                 # is Questrade's own Net Amount (a buy's negative, a
@@ -1429,9 +1440,11 @@ class QuestradeBrokerage(BaseBrokerage):
                 # notional 100× too small into fee bucketing and per-row
                 # reports.
                 'gross_amount': self.theoretical_gross(
-                    qty, price, is_option=bool(opt)),
+                    qty, price, is_option=bool(opt), multiplier=mult),
                 # Declared contract size: the schema notional check is
-                # an error, not a guess, for rows that carry it.
+                # an error, not a guess, for rows that carry it. Its
+                # basis says whether the export showed it (a mini's
+                # Gross) or 100 was assumed (the engine notes that).
                 'multiplier': mult,
                 'account': self.DEFAULT_ACCOUNT,
                 # Carry the raw description so a description-keyed
@@ -1439,6 +1452,8 @@ class QuestradeBrokerage(BaseBrokerage):
                 # IB/RBC/Webull trade rows already do; Questrade's was the gap.
                 'description': desc,
             }
+            if size_basis:
+                _tx['contract_size_basis'] = size_basis
             if not opt and not is_expired and not is_assigned:
                 self.warn_zero_cost_buy(self._where(lineno), symbol, qty,
                                         price, net)
@@ -2000,4 +2015,5 @@ class QuestradeBrokerage(BaseBrokerage):
         }
         if opt:
             tx['multiplier'] = mult
+            tx['contract_size_basis'] = 'assumed'
         return tx

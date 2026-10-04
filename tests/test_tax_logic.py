@@ -18,7 +18,9 @@ class TestTaxLogic(unittest.TestCase):
         self.assertIn("TAX LOGIC — Canada", text)
         self.assertIn("SETTLES", text)
         self.assertIn("right to acquire", text)
-        self.assertIn("a put never replaces the shares", text)
+        # (whitespace folded: the rendered text wraps at a fixed width)
+        self.assertIn("a put never replaces the shares",
+                      " ".join(text.split()))
 
     @rule("CA-OPT-05", "CA-OPT-10")
     def test_settings_change_the_text(self):

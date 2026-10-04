@@ -27,6 +27,24 @@ _WEBULL_OPTION_RE = re.compile(
 _CURRENCY_PREFIXES = frozenset({'U', 'US', 'USD', 'C', 'CA', 'CAD'})
 
 
+def _deliverable_size(opt, rows) -> float:
+    """Shares one contract of the option row `opt` delivers: the
+    ticker.map `MULT` line for it (or its root), else the size a priced
+    row of the same option showed (a mini's 10), else the standard 100
+    (B10)."""
+    from taxjson.lib.core import parse_option_underlying
+    from taxjson.lib.markets import contract_size
+    sym = str(opt.get('symbol') or '')
+    und = parse_option_underlying(sym) or ''
+    m = contract_size(sym, und.split('.', 1)[0]) or contract_size(und)
+    if m:
+        return float(m)
+    for t in rows:
+        if t.get('symbol') == sym and float(t.get('multiplier') or 0) > 0:
+            return float(t['multiplier'])
+    return float(BaseBrokerage.OPTION_MULTIPLIER)
+
+
 class WebullBrokerage(BaseBrokerage):
     DEFAULT_ACCOUNT = "WB"
     # Webull's CSVs only carry USD/CAD positions; anything else falls back to US.
@@ -407,9 +425,17 @@ class WebullBrokerage(BaseBrokerage):
                     f"cut row or a transfer, not a trade; refusing to book "
                     f"it at $0. Fix the cells, or enter a transfer as a "
                     f".tt line.")
+            # The export never states a contract's size: 100 is assumed
+            # unless only a mini's 10 fits the Proceeds (B10).
+            opt_mult, size_basis = None, ''
+            if is_option and not is_expiry and abs(price) > 1e-9:
+                opt_mult, size_basis = self.option_row_multiplier(
+                    symbol, lambda m: not self._trade_money_problem(
+                        where, action_raw, qty, price, net_amount, True, m))
             if not is_expiry and abs(price) > 1e-9:
                 self._check_trade_money(where, action_raw, qty, price,
-                                        net_amount, is_option)
+                                        net_amount, is_option,
+                                        mult=opt_mult)
             if is_expiry:
                 trade_date, row_time = date_str, '16:00:00'
             else:
@@ -425,13 +451,18 @@ class WebullBrokerage(BaseBrokerage):
                 'quantity': qty,
                 'currency': currency,
                 'price': price,
-                'fee': self.back_compute_fee(qty, price, net_amount, is_option),
+                'fee': self.back_compute_fee(qty, price, net_amount, is_option,
+                                             multiplier=opt_mult),
                 'net_amount': net_amount,
-                'gross_amount': self.theoretical_gross(qty, price, is_option),
+                'gross_amount': self.theoretical_gross(qty, price, is_option,
+                                                       multiplier=opt_mult),
                 'account': self.DEFAULT_ACCOUNT,
                 'description': current_description,
                 '_where': where,
             }
+            if size_basis == 'derived':
+                _tx['multiplier'] = opt_mult
+                _tx['contract_size_basis'] = size_basis
             if account:
                 # The broker account the export names (cross-file dedup
                 # keeps two accounts' identical rows apart: A2-0286).
@@ -491,7 +522,7 @@ class WebullBrokerage(BaseBrokerage):
         return ''
 
     def _check_trade_money(self, where, action, qty, price, net,
-                           is_option) -> None:
+                           is_option, mult=None) -> None:
         """Fail-closed identity for a priced trade (audit S023-19, the
         RBC check's twin). The Trading Summary has no commission column:
         the gap between Proceeds and |qty| x Price x multiplier IS the
@@ -500,19 +531,29 @@ class WebullBrokerage(BaseBrokerage):
         cell off by a factor (a shifted or mislabelled column) used to
         book with only a schema warning; Questrade, IB and RBC refuse
         it. Real Webull commissions are a few dollars."""
-        mult = self.OPTION_MULTIPLIER if is_option else 1
+        msg = self._trade_money_problem(where, action, qty, price, net,
+                                        is_option, mult)
+        if msg:
+            raise BrokerageParseError(msg)
+
+    def _trade_money_problem(self, where, action, qty, price, net,
+                             is_option, mult=None) -> str:
+        """The _check_trade_money finding for contract size `mult`
+        (default: 100 for an option), '' when the row fits."""
+        if mult is None:
+            mult = self.OPTION_MULTIPLIER if is_option else 1
         gross = abs(qty) * abs(price) * mult
         fee = (gross - net) if action == 'SELL' else (net - gross)
         low = -(0.05 + 0.005 * gross)
         high = (max(250.0, 3.0 * abs(qty) if is_option else 0.0)
                 + 0.05 * gross)
         if fee < low or fee > high:
-            raise BrokerageParseError(
-                f"{where}: {action} Proceeds {net:,.2f} does not fit "
-                f"|Quantity| {abs(qty):g} x Price {abs(price):g}"
-                f"{' x 100' if is_option else ''} = {gross:,.2f} (implied "
-                f"commission {fee:,.2f}) — a wrong or shifted column; "
-                f"refusing to book it.")
+            return (f"{where}: {action} Proceeds {net:,.2f} does not fit "
+                    f"|Quantity| {abs(qty):g} x Price {abs(price):g}"
+                    f"{f' x {mult:g}' if is_option else ''} = {gross:,.2f} "
+                    f"(implied commission {fee:,.2f}) — a wrong or shifted "
+                    f"column; refusing to book it.")
+        return ''
 
     # Header label -> field. Matching is on lowercased label text with
     # newlines folded, so the bilingual two-line cells ("Currency\nDevise")
@@ -618,6 +659,9 @@ class WebullBrokerage(BaseBrokerage):
                           'Rev. Rul. 78-182')
             meta.append((strike, f" ({_c})" if _c else ""))
             contracts = abs(float(opt['quantity']))
+            # Shares per contract: a ticker.map MULT line, else the
+            # size the option's own rows showed (a mini), else 100.
+            _size = _deliverable_size(opt, transactions + expiries)
             closed_short = float(opt['quantity']) > 0   # BUY at 0 closes a write
             # Short put / long call -> shares arrive (BUY);
             # short call / long put -> shares leave (SELL).
@@ -645,7 +689,7 @@ class WebullBrokerage(BaseBrokerage):
                 exercise_fee = (self.exercise_fee is not None and abs(
                     abs(float(t.get('fee') or 0.0))
                     - float(self.exercise_fee)) <= 0.011)
-                if abs(abs(q) - contracts * 100) > 1e-6:
+                if abs(abs(q) - contracts * _size) > 1e-6:
                     if exercise_fee:
                         qty_mismatch.append((oi, i))
                     continue

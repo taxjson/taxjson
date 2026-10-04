@@ -1995,6 +1995,7 @@ class RbcBrokerage(BaseBrokerage):
         }
         if occ:
             tx['multiplier'] = float(self.OPTION_MULTIPLIER)
+            tx['contract_size_basis'] = 'assumed'
         m = _RBC_BOOK_VALUE_RE.search(r.desc)
         if m:
             tx['book_value'] = desc_number(m.group(1), where=self._at(r),
@@ -2093,8 +2094,15 @@ class RbcBrokerage(BaseBrokerage):
         if is_retraction and not price and qty:
             # RBC leaves Price blank on retractions; per-share = Value/Qty.
             price = round(abs(net) / abs(qty), 6)
+        # The export never states a contract's size: 100 is assumed
+        # unless only a mini's 10 fits the row's Value (B10).
+        opt_mult, size_basis = None, ''
+        if occ and price and abs(qty) > 1e-12 and r.cls != 'expiry':
+            opt_mult, size_basis = self.option_row_multiplier(
+                symbol, lambda m: not self._trade_money_problem(
+                    r, qty, price, net, True, is_retraction, m))
         self._check_trade_money(r, qty, price, net, bool(occ),
-                                is_retraction)
+                                is_retraction, mult=opt_mult)
         if not occ and activity.strip().lower() == 'buy':
             self.warn_zero_cost_buy(self._at(r), r.symbol, qty, price, net)
 
@@ -2117,7 +2125,8 @@ class RbcBrokerage(BaseBrokerage):
             _ex_role = 'warrant' if (qty < 0 and abs(net) < 0.005) \
                 else ('shares' if qty > 0 else '')
 
-        fee = self.back_compute_fee(qty, price, net, is_option=is_option_symbol)
+        fee = self.back_compute_fee(qty, price, net, is_option=is_option_symbol,
+                                    multiplier=opt_mult)
         if r.cls == 'expiry' and not opt:
             self._note(f"line {r.line}: non-option expiry (rights/warrants) "
                        f"booked as a $0 disposition of {symbol}")
@@ -2137,11 +2146,15 @@ class RbcBrokerage(BaseBrokerage):
             # the engine books it as negative proceeds.
             'net_amount': net if qty < 0 else abs(net),
             'gross_amount': self.theoretical_gross(qty, price,
-                                                   is_option=is_option_symbol),
+                                                   is_option=is_option_symbol,
+                                                   multiplier=opt_mult),
             'account': self.DEFAULT_ACCOUNT,
             'description': desc,
             '_expiry': is_expiry,
         }
+        if size_basis == 'derived':
+            tx['multiplier'] = opt_mult
+            tx['contract_size_basis'] = size_basis
         if _ex_role:
             tx['_exercise'] = (_ex_role, r.line)
         oc = self._open_close(r, bool(occ))
@@ -2210,7 +2223,7 @@ class RbcBrokerage(BaseBrokerage):
         return ''
 
     def _check_trade_money(self, r, qty, price, net, is_option,
-                           is_retraction) -> None:
+                           is_retraction, mult=None) -> None:
         """Fail-closed identity for a priced trade (audit S023-19). RBC
         has no commission column: the difference between Value and
         |qty| x Price x multiplier IS the commission, so it must be a
@@ -2219,9 +2232,19 @@ class RbcBrokerage(BaseBrokerage):
         shifted or mislabelled column) used to book with only a schema
         warning; the same row from Questrade or IB is refused. The
         bounds sit far outside any plausible retail commission."""
+        msg = self._trade_money_problem(r, qty, price, net, is_option,
+                                        is_retraction, mult)
+        if msg:
+            raise _err(Path(self._fname), r.line, msg)
+
+    def _trade_money_problem(self, r, qty, price, net, is_option,
+                             is_retraction, mult=None) -> str:
+        """The _check_trade_money finding for contract size `mult`
+        (default: 100 for an option), '' when the row fits."""
         if not price or abs(qty) < 1e-12 or r.cls == 'expiry':
-            return
-        mult = self.OPTION_MULTIPLIER if is_option else 1
+            return ''
+        if mult is None:
+            mult = self.OPTION_MULTIPLIER if is_option else 1
         gross = abs(qty) * price * mult
         act = (r.activity or '').strip().lower()
         sale = act != 'buy' and (act == 'sell' or is_retraction or qty < 0)
@@ -2230,13 +2253,13 @@ class RbcBrokerage(BaseBrokerage):
         high = (max(250.0, 3.0 * abs(qty) if is_option else 0.0)
                 + 0.05 * gross)
         if fee < low or (fee > high and not is_retraction):
-            raise _err(Path(self._fname), r.line,
-                       f"Value {net:,.2f} does not fit |Quantity| "
-                       f"{abs(qty):g} x Price {price:g}"
-                       f"{' x 100' if is_option else ''} = {gross:,.2f} "
-                       f"(implied commission {fee:,.2f}) — a wrong or "
-                       f"shifted column; refusing to book it "
-                       f"({r.desc[:60]!r})")
+            return (f"Value {net:,.2f} does not fit |Quantity| "
+                    f"{abs(qty):g} x Price {price:g}"
+                    f"{f' x {mult:g}' if is_option else ''} = {gross:,.2f} "
+                    f"(implied commission {fee:,.2f}) — a wrong or "
+                    f"shifted column; refusing to book it "
+                    f"({r.desc[:60]!r})")
+        return ''
 
     def _build_stock_dividend(self, r):
         """A stock dividend paid in shares ("DIS - <name> STK DIV ON N

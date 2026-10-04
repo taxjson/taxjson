@@ -1170,7 +1170,12 @@ identical to them. So in the Canada engine a **long call** on the same
 shares, opened inside the ±30-day window of a loss on **long shares** and
 still held at the end of day 30 (in any of your accounts, registered ones
 included), is replacement property: the loss is denied at the contract's
-size (100 shares, or the declared size of a mini — `x10` in a `.tt`), and an
+size (100 shares, or the declared size of a mini — `x10` in a `.tt`; only the
+IB export states a contract's size: for Questrade, RBC, Webull and the generic
+importer 100 is **assumed** — a row whose own amount fits a mini's 10 and not 100
+is booked as a mini — and the run notes once per option root when an assumed size
+decided a delivered or replacement quantity; a `MULT ROOT N` line in ticker.map
+sets it for a mini or an adjusted series), and an
 option root that drops the share class (`SAMPLD` calls for `SAMPLD.B.TO`, `SAMPLCB`
 for `SAMPLC.B`) counts for that class line; the denied amount is added to the **call's** cost (recovered
 when the call is sold, or rolled into the shares if it is exercised). A call

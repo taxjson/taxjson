@@ -25,6 +25,14 @@
   taken before the broker posts the year's back-dated Dec-31 book-cost rows
   may lack them uses `[accounts.<name>] year_end_posting = "MM-DD"`
   (default `"06-30"`, the previous fixed day) instead of a constant.
+- **Option contract sizes are stated, derived or noted.** Only the IB export
+  states an option's contract size. For the other brokers a row whose own
+  amount fits quantity x price x 10 but not x 100 is now booked as a mini
+  (10 shares, with a note) instead of being refused; otherwise 100 is still
+  used, and the run says once per option root when that assumed size
+  decided an exercise, an assignment or a replacement quantity. A
+  `MULT ROOT N` line in ticker.map sets the size for a mini or an adjusted
+  series. Ordinary 100-share options book exactly as before.
 
 ### Command line
 
