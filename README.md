@@ -31,7 +31,7 @@ Everything runs locally on your machine. Your transaction data never leaves your
 | Interactive Brokers   | Yes      | Yes     | —      | Activity Statement CSV; corp-action auto-detection |
 | Questrade             | Yes      | Yes     | —      | Account activity CSV                               |
 | RBC Direct Investing  | Yes      | Yes     | —      | Transaction history CSV                            |
-| Webull                | Yes      | Yes     | —      | Trading Summary CSV (BUY/SELL rows only): a $0 option close is an expiry, or an exercise/assignment when a stock trade at the strike carries Webull's $1.00 charge (see KNOWN_ISSUES). It carries no income — enter T5 interest/dividends as `.tt` `INTEREST`/`DIVIDEND` lines |
+| Webull                | Yes      | Yes     | —      | Trading Summary CSV (BUY/SELL rows only): a $0 option close is an expiry, or an exercise/assignment when a stock trade at the strike carries the account's `exercise_fee` (the broker's exercise/assignment charge, e.g. `exercise_fee = 1.00` under `[accounts.<name>]`; without it nothing is inferred and each such pair is named for you to check — see KNOWN_ISSUES). It carries no income — enter T5 interest/dividends as `.tt` `INTEREST`/`DIVIDEND` lines |
 | Kraken                | —        | —       | Yes    | Trades + Ledgers CSV (same folder: the ledger says which coin paid each fee; overlapping ledger exports are read once per txid; a ledger trade the trades export lacks, a lone instant-trade leg, or a ledger row of a type the parser does not book that moves a coin (airdrop, conversion, adjustment, margin) is an `UNBOOKED` warning, fatal under `run --strict`) |
 | Coinbase              | —        | —       | Yes    | Transaction history CSV                            |
 | **Any other broker**  | Yes      | —       | —      | `generic_*.csv` + a TOML column mapping (see `examples/generic_wealthsimple.toml`) |
@@ -523,6 +523,12 @@ type = "taxable"               # REQUIRED: taxable | sheltered
 # combined_broker_accounts = true  # every broker account in this folder's
 #                              # statements is yours and taxable together
 #                              # (see "Several broker accounts in one folder")
+# exercise_fee = 1.00          # Webull: the exercise/assignment charge on the
+#                              # stock leg; without it no exercise/assignment
+#                              # is inferred from a $0 close (each is named)
+# year_end_posting = "06-30"   # RBC: the day next year by which the year's
+#                              # Dec-31 book-cost rows are posted (an export
+#                              # taken earlier gets a note; default 06-30)
 
 [accounts.rrsp]
 type = "sheltered"
@@ -1170,7 +1176,12 @@ identical to them. So in the Canada engine a **long call** on the same
 shares, opened inside the ±30-day window of a loss on **long shares** and
 still held at the end of day 30 (in any of your accounts, registered ones
 included), is replacement property: the loss is denied at the contract's
-size (100 shares, or the declared size of a mini — `x10` in a `.tt`), and an
+size (100 shares, or the declared size of a mini — `x10` in a `.tt`; only the
+IB export states a contract's size: for Questrade, RBC, Webull and the generic
+importer 100 is **assumed** — a row whose own amount fits a mini's 10 and not 100
+is booked as a mini — and the run notes once per option root when an assumed size
+decided a delivered or replacement quantity; a `MULT ROOT N` line in ticker.map
+sets it for a mini or an adjusted series), and an
 option root that drops the share class (`SAMPLD` calls for `SAMPLD.B.TO`, `SAMPLCB`
 for `SAMPLC.B`) counts for that class line; the denied amount is added to the **call's** cost (recovered
 when the call is sold, or rolled into the shares if it is exercised). A call

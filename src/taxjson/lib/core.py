@@ -118,6 +118,12 @@ class TaxTransaction:
     # on option and futures rows only; 0 = not declared (audit S026-22).
     # NOT part of compute_id, omitted from to_dict() when 0.
     multiplier: float = 0.0
+    # How a non-IB parser got `multiplier` on an option row: "assumed"
+    # (the export does not state a contract's size; the standard 100
+    # was used) or "derived" (the row's own money showed a mini's 10).
+    # The engine says once per option root when it relied on an
+    # assumed size (B10). NOT part of compute_id, omitted when empty.
+    contract_size_basis: str = ''
     # The input file the row was read from ("questrade_2025.csv",
     # "history.tt"), stamped by taxjson-brokerage / convert-tt. Cross-
     # file dedup tells an overlapping re-export (one row, two files)
@@ -204,7 +210,8 @@ INCOME_FACT_FIELDS = ('record_date', 'ex_date', 'income_label',
                       'dealer_country', 'issuer_country')
 # The other optional evidence fields, omitted from to_dict() when empty.
 EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
-                   'broker_basis', 'multiplier', 'source', 'source_key',
+                   'broker_basis', 'multiplier', 'contract_size_basis',
+                   'source', 'source_key',
                    'source_account', 'exercise_of', 'corp_cash')
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]
@@ -298,6 +305,34 @@ def parse_option_expiry(symbol: str) -> Optional[str]:
 
 
 OPTION_CONTRACT_SHARES = 100.0      # shares per standard equity option
+
+
+def equity_option_size(opt_tx) -> float:
+    """Units of the underlying one contract of the equity option
+    `opt_tx` delivers: a ticker.map `MULT` line for the option (or its
+    root) first; else the size the row declares, unless its parser
+    only assumed it; else the standard 100 — ASSUMED, said once per
+    option root (tax-logic: the 100-share contract is assumed when the
+    export does not state the size; B10)."""
+    from taxjson.lib import markets
+    sym = str(getattr(opt_tx, 'symbol', '') or '')
+    und = parse_option_underlying(sym) or ''
+    root = und.split('.', 1)[0]
+    ovr = markets.contract_size(sym, root) or markets.contract_size(und)
+    if ovr:
+        return float(ovr)
+    m = float(getattr(opt_tx, 'multiplier', 0.0) or 0.0)
+    if m > 0 and getattr(opt_tx, 'contract_size_basis', '') != 'assumed':
+        return m
+    size = m if m > 0 else OPTION_CONTRACT_SHARES
+    if root:
+        markets.note_builtin(
+            "mult", root,
+            f"{root} options: the export does not state the contract size, "
+            f"so {size:g} shares per contract is ASSUMED where it matters "
+            f"(an exercise or assignment, replacement shares); for a mini "
+            f"or an adjusted series add `MULT {root} N` to ticker.map.")
+    return size
 
 # Actions that never touch a symbol's ACB / basis pool, so their currency
 # is never checked against it (both engines' currency guards skip them:
@@ -810,7 +845,7 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                  'record_date', 'ex_date', 'income_label',
                  'dealer_country', 'issuer_country', 'broker_time',
                  'security_name', 'open_close', 'broker_basis',
-                 'exercise_of', 'corp_cash'):
+                 'exercise_of', 'corp_cash', 'contract_size_basis'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]
@@ -1144,8 +1179,7 @@ def _assign_delivery_shares(opt_tx) -> Optional[float]:
         return q * m if m > 0 else None
     if _FUTURES_PREFIX_RE.match(opt_tx.symbol or ''):
         return q
-    m = float(getattr(opt_tx, 'multiplier', 0.0) or 0.0)
-    return q * (m if m > 0 else OPTION_CONTRACT_SHARES)
+    return q * equity_option_size(opt_tx)
 
 
 def _assign_direction(opt_tx) -> Optional[int]:
@@ -1386,8 +1420,7 @@ def option_contract_size(opt_tx) -> float:
     count). Audit A2-0049/0957."""
     if _FUTURES_PREFIX_RE.match(getattr(opt_tx, 'symbol', '') or ''):
         return 1.0
-    m = float(getattr(opt_tx, 'multiplier', 0.0) or 0.0)
-    return m if m > 0 else float(OPTION_CONTRACT_SHARES)
+    return equity_option_size(opt_tx)
 
 
 def _make_assign_underlying_resolver(transactions, date_of, quiet=False):

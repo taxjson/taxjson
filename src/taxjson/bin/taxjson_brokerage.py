@@ -410,6 +410,29 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--exercise-fee", dest="exercise_fee", type=float, default=None,
+        metavar="FEE",
+        help=(
+            "Webull: the broker's exercise/assignment charge on the stock "
+            "leg (`[accounts.<name>] exercise_fee`, passed by `taxjson "
+            "run`). With it, a $0 option close plus a stock trade at the "
+            "strike carrying exactly this charge is booked as an "
+            "exercise/assignment; without it nothing is inferred and each "
+            "such pair is named for you to check."
+        ),
+    )
+    parser.add_argument(
+        "--year-end-posting", dest="year_end_posting", default=None,
+        metavar="MM-DD",
+        help=(
+            "RBC: the day of the next year by which RBC has posted the "
+            "tax year's back-dated Dec-31 book-cost adjustments "
+            "(`[accounts.<name>] year_end_posting`, passed by `taxjson "
+            "run`; default 06-30). Exports that hold the year's rows, all "
+            "taken before it, get a note that they may be missing."
+        ),
+    )
+    parser.add_argument(
         "--combined-broker-accounts", dest="combined_broker_accounts",
         action="store_true",
         help=(
@@ -565,8 +588,17 @@ Examples:
         # timestamps, audit S063-22).
         _cov = getattr(extractor_class, 'coverage_messages', None)
         if _cov is not None and args.tax_year and shared_context is not None:
-            for _m in _cov(shared_context, args.tax_year,
-                           country=args.country):
+            _ckw = {}
+            if args.year_end_posting is not None:
+                _ckw['year_end_posting'] = args.year_end_posting
+            try:
+                _cov_msgs = _cov(shared_context, args.tax_year,
+                                 country=args.country, **_ckw)
+            except ValueError as e:
+                print(f"taxjson-brokerage: error: --year-end-posting: {e}",
+                      file=sys.stderr)
+                sys.exit(2)
+            for _m in _cov_msgs:
                 print(_m, file=sys.stderr)
 
     # s.90(1) is Canadian law: never the default without a country
@@ -624,6 +656,9 @@ Examples:
         if args.account_type and hasattr(extractor, 'account_taxable'):
             extractor.account_taxable = args.account_type == 'taxable'
         extractor.combined_broker_accounts = args.combined_broker_accounts
+        if args.exercise_fee is not None and hasattr(extractor,
+                                                     'exercise_fee'):
+            extractor.exercise_fee = args.exercise_fee
         try:
             _cut = final_record_cut(input_path)
             transactions = extractor.parse_file(input_path)

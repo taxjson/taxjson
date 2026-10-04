@@ -74,6 +74,25 @@
   supported `province` had its carry-forwards estimated on Ontario's
   tables; it now uses a federal-only estimate and says so (the recorded
   figures are federal either way).
+- **Webull exercise/assignment charge is a setting.** The parser no longer
+  assumes a $1.00 charge: `[accounts.<name>] exercise_fee = 1.00` states
+  the account's exercise/assignment charge, and only then is a $0 option
+  close plus a stock trade at the strike carrying exactly that charge
+  booked as an exercise/assignment. Without it nothing is inferred and each
+  such pair is named on the console for you to check. A Webull account
+  that relied on the old inference needs the line.
+- **RBC's year-end posting day is a setting.** The note that an RBC export
+  taken before the broker posts the year's back-dated Dec-31 book-cost rows
+  may lack them uses `[accounts.<name>] year_end_posting = "MM-DD"`
+  (default `"06-30"`, the previous fixed day) instead of a constant.
+- **Option contract sizes are stated, derived or noted.** Only the IB export
+  states an option's contract size. For the other brokers a row whose own
+  amount fits quantity x price x 10 but not x 100 is now booked as a mini
+  (10 shares, with a note) instead of being refused; otherwise 100 is still
+  used, and the run says once per option root when that assumed size
+  decided an exercise, an assignment or a replacement quantity. A
+  `MULT ROOT N` line in ticker.map sets the size for a mini or an adjusted
+  series. Ordinary 100-share options book exactly as before.
 
 ### Command line
 

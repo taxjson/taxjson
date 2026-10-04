@@ -581,8 +581,14 @@ def canonical_ca_listing(symbol: str, currency: str = 'CAD') -> Optional[str]:
 
 
 class BaseBrokerage:
-    # 100 for options (each contract = 100 shares); 1 for equities/crypto.
+    # The STANDARD equity-option contract (100 shares); 1 for
+    # equities/crypto. Only IB's export states a contract's size; every
+    # other parser ASSUMES this one unless the row's own money shows a
+    # mini (option_row_multiplier), and marks the row
+    # `contract_size_basis` so the engine says when it relied on it
+    # (ticker.map `MULT SYMBOL N` overrides — lib/markets, B10).
     OPTION_MULTIPLIER = 100
+    MINI_OPTION_MULTIPLIER = 10
 
     # Currency → ticker-suffix mapping for the apply_currency_suffix
     # helper: the market data's table (lib/markets), one for every
@@ -897,9 +903,35 @@ class BaseBrokerage:
 
     # ------------------------------------------------------- fee back-compute
 
+    def option_row_multiplier(self, symbol: str, fits) -> tuple:
+        """(premium multiplier, contract_size_basis) of an option row
+        whose export does not state its contract size. `fits(m)` tells
+        whether the row's own money (gross, or net within the
+        commission band) is |qty| x price x m. The standard 100 is
+        tried first ("assumed": the money fits it, the deliverable is
+        not stated); only when it cannot fit and a mini's 10 does is
+        the row a mini ("derived", noted once per symbol). When neither
+        fits, 100 "assumed" — the parser's own money check refuses the
+        row as before."""
+        std = float(self.OPTION_MULTIPLIER)
+        if fits(std):
+            return std, 'assumed'
+        mini = float(self.MINI_OPTION_MULTIPLIER)
+        if fits(mini):
+            from taxjson.lib.markets import note_builtin
+            note_builtin(
+                "mult-derived", str(symbol),
+                f"{symbol}: the row's amount is quantity x price x "
+                f"{mini:g}, not x {std:g} — booked as a {mini:g}-share "
+                f"(mini) contract; if that is wrong add `MULT ROOT N` "
+                f"to ticker.map (ROOT: the option's root).")
+            return mini, 'derived'
+        return std, 'assumed'
+
     def back_compute_fee(
         self, qty: float, price: float, net_amount: float, is_option: bool,
         *, min_fee: float = 0.005, sanity_ratio: float = 0.25,
+        multiplier: Optional[float] = None,
     ) -> float:
         """For brokerages whose CSV doesn't break out fees, infer the fee
         from the gross (qty * price * multiplier) and the net, SIGNED by
@@ -916,7 +948,8 @@ class BaseBrokerage:
         alone zeroed real flat commissions on cheap option fills (a
         1.99 fee on a 6.01 sale, RBC's 11.95 on a 43.95 buy — audit
         R1-22 / R1-88)."""
-        multiplier = self.OPTION_MULTIPLIER if is_option else 1
+        if multiplier is None:
+            multiplier = self.OPTION_MULTIPLIER if is_option else 1
         theoretical_gross = abs(qty) * price * multiplier
         if qty > 0:
             implicit = abs(net_amount) - theoretical_gross
@@ -936,8 +969,10 @@ class BaseBrokerage:
             return 0.0
         return round(implicit, 4)
 
-    def theoretical_gross(self, qty: float, price: float, is_option: bool) -> float:
-        multiplier = self.OPTION_MULTIPLIER if is_option else 1
+    def theoretical_gross(self, qty: float, price: float, is_option: bool,
+                          multiplier: Optional[float] = None) -> float:
+        if multiplier is None:
+            multiplier = self.OPTION_MULTIPLIER if is_option else 1
         return round(abs(qty) * price * multiplier, 4)
 
     # -------------------------------------------------------- date / settle

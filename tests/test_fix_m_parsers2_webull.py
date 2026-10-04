@@ -12,6 +12,15 @@ from tax_rules import rule
 from taxjson.lib.brokerages.base import BrokerageParseError
 from taxjson.lib.brokerages.webull import WebullBrokerage
 
+
+def _wb():
+    """Webull with a $1.00 exercise/assignment charge configured
+    (`[accounts.X] exercise_fee = 1.00`): these fixtures carry that
+    charge, and nothing is inferred without the setting (B11)."""
+    p = WebullBrokerage()
+    p.exercise_fee = 1.00
+    return p
+
 _PRE = (",,,,,,,,\n"
         "Account Number / Numéro de compte:,,,,,,,55500001,\n"  # pii-ok: synthetic id
         "Year / Année:,,,,,,,2025,\n"
@@ -29,7 +38,7 @@ def _parse(text, name="wb.csv"):
         f.write_text(text, encoding="utf-8")
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            tx = WebullBrokerage().parse_file(f)
+            tx = _wb().parse_file(f)
         return tx, err.getvalue()
 
 
@@ -40,7 +49,7 @@ def _parse_folder(files, which):
             (Path(td) / name).write_text(text, encoding="utf-8")
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            tx = WebullBrokerage().parse_file(Path(td) / which)
+            tx = _wb().parse_file(Path(td) / which)
         return tx, err.getvalue()
 
 

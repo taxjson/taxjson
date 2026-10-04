@@ -4,7 +4,7 @@ import io
 import re
 import sys
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          ticker_map_joins,
@@ -25,6 +25,24 @@ _WEBULL_OPTION_RE = re.compile(
 
 # First cells a cut-short data row can start with ('C' .. 'USD').
 _CURRENCY_PREFIXES = frozenset({'U', 'US', 'USD', 'C', 'CA', 'CAD'})
+
+
+def _deliverable_size(opt, rows) -> float:
+    """Shares one contract of the option row `opt` delivers: the
+    ticker.map `MULT` line for it (or its root), else the size a priced
+    row of the same option showed (a mini's 10), else the standard 100
+    (B10)."""
+    from taxjson.lib.core import parse_option_underlying
+    from taxjson.lib.markets import contract_size
+    sym = str(opt.get('symbol') or '')
+    und = parse_option_underlying(sym) or ''
+    m = contract_size(sym, und.split('.', 1)[0]) or contract_size(und)
+    if m:
+        return float(m)
+    for t in rows:
+        if t.get('symbol') == sym and float(t.get('multiplier') or 0) > 0:
+            return float(t['multiplier'])
+    return float(BaseBrokerage.OPTION_MULTIPLIER)
 
 
 class WebullBrokerage(BaseBrokerage):
@@ -59,7 +77,9 @@ class WebullBrokerage(BaseBrokerage):
         for sib in self._sibling_exports(path):
             try:
                 with contextlib.redirect_stderr(io.StringIO()):
-                    sp = WebullBrokerage()._parse_rows(sib)
+                    _sib = WebullBrokerage()
+                    _sib.exercise_fee = self.exercise_fee
+                    sp = _sib._parse_rows(sib)
             except (ValueError, OSError, UnicodeDecodeError):
                 continue        # reported when that file is parsed
             if sp:
@@ -405,9 +425,17 @@ class WebullBrokerage(BaseBrokerage):
                     f"cut row or a transfer, not a trade; refusing to book "
                     f"it at $0. Fix the cells, or enter a transfer as a "
                     f".tt line.")
+            # The export never states a contract's size: 100 is assumed
+            # unless only a mini's 10 fits the Proceeds (B10).
+            opt_mult, size_basis = None, ''
+            if is_option and not is_expiry and abs(price) > 1e-9:
+                opt_mult, size_basis = self.option_row_multiplier(
+                    symbol, lambda m: not self._trade_money_problem(
+                        where, action_raw, qty, price, net_amount, True, m))
             if not is_expiry and abs(price) > 1e-9:
                 self._check_trade_money(where, action_raw, qty, price,
-                                        net_amount, is_option)
+                                        net_amount, is_option,
+                                        mult=opt_mult)
             if is_expiry:
                 trade_date, row_time = date_str, '16:00:00'
             else:
@@ -423,13 +451,18 @@ class WebullBrokerage(BaseBrokerage):
                 'quantity': qty,
                 'currency': currency,
                 'price': price,
-                'fee': self.back_compute_fee(qty, price, net_amount, is_option),
+                'fee': self.back_compute_fee(qty, price, net_amount, is_option,
+                                             multiplier=opt_mult),
                 'net_amount': net_amount,
-                'gross_amount': self.theoretical_gross(qty, price, is_option),
+                'gross_amount': self.theoretical_gross(qty, price, is_option,
+                                                       multiplier=opt_mult),
                 'account': self.DEFAULT_ACCOUNT,
                 'description': current_description,
                 '_where': where,
             }
+            if size_basis == 'derived':
+                _tx['multiplier'] = opt_mult
+                _tx['contract_size_basis'] = size_basis
             if account:
                 # The broker account the export names (cross-file dedup
                 # keeps two accounts' identical rows apart: A2-0286).
@@ -489,7 +522,7 @@ class WebullBrokerage(BaseBrokerage):
         return ''
 
     def _check_trade_money(self, where, action, qty, price, net,
-                           is_option) -> None:
+                           is_option, mult=None) -> None:
         """Fail-closed identity for a priced trade (audit S023-19, the
         RBC check's twin). The Trading Summary has no commission column:
         the gap between Proceeds and |qty| x Price x multiplier IS the
@@ -498,19 +531,29 @@ class WebullBrokerage(BaseBrokerage):
         cell off by a factor (a shifted or mislabelled column) used to
         book with only a schema warning; Questrade, IB and RBC refuse
         it. Real Webull commissions are a few dollars."""
-        mult = self.OPTION_MULTIPLIER if is_option else 1
+        msg = self._trade_money_problem(where, action, qty, price, net,
+                                        is_option, mult)
+        if msg:
+            raise BrokerageParseError(msg)
+
+    def _trade_money_problem(self, where, action, qty, price, net,
+                             is_option, mult=None) -> str:
+        """The _check_trade_money finding for contract size `mult`
+        (default: 100 for an option), '' when the row fits."""
+        if mult is None:
+            mult = self.OPTION_MULTIPLIER if is_option else 1
         gross = abs(qty) * abs(price) * mult
         fee = (gross - net) if action == 'SELL' else (net - gross)
         low = -(0.05 + 0.005 * gross)
         high = (max(250.0, 3.0 * abs(qty) if is_option else 0.0)
                 + 0.05 * gross)
         if fee < low or fee > high:
-            raise BrokerageParseError(
-                f"{where}: {action} Proceeds {net:,.2f} does not fit "
-                f"|Quantity| {abs(qty):g} x Price {abs(price):g}"
-                f"{' x 100' if is_option else ''} = {gross:,.2f} (implied "
-                f"commission {fee:,.2f}) — a wrong or shifted column; "
-                f"refusing to book it.")
+            return (f"{where}: {action} Proceeds {net:,.2f} does not fit "
+                    f"|Quantity| {abs(qty):g} x Price {abs(price):g}"
+                    f"{f' x {mult:g}' if is_option else ''} = {gross:,.2f} "
+                    f"(implied commission {fee:,.2f}) — a wrong or shifted "
+                    f"column; refusing to book it.")
+        return ''
 
     # Header label -> field. Matching is on lowercased label text with
     # newlines folded, so the bilingual two-line cells ("Currency\nDevise")
@@ -558,19 +601,22 @@ class WebullBrokerage(BaseBrokerage):
                 f"{header!r}. Refusing to guess column positions.")
         return cols
 
-    # Webull's exercise/assignment charge on the stock leg: Webull's fee
-    # schedule charges exactly $1.00 on an assignment/exercise (net =
-    # qty x strike +/- 1), while ordinary stock trades carry the regular
-    # commission (or $0 in a commission-free promotion). The fee is
-    # the only evidence in the Trading Summary that separates the two.
-    _EXERCISE_FEE = 1.00
+    # The broker's exercise/assignment charge on the stock leg
+    # (`[accounts.<name>] exercise_fee`, passed by `taxjson run` as
+    # taxjson-brokerage --exercise-fee): the only evidence in the
+    # Trading Summary that separates an exercise/assignment (net = qty x
+    # strike +/- the charge) from an ordinary trade at the strike. None
+    # (the default): no fee is known, nothing is inferred — every such
+    # pair is named as a candidate for the user to check.
+    exercise_fee: Optional[float] = None
 
     def _mark_assignments(self, transactions, expiries, own=None,
                           source='') -> None:
         """A Webull option closed at price 0 is an expiry — UNLESS shares
         of the underlying change hands at the strike within a few days in
-        the matching quantity and direction, carrying Webull's $1.00
-        exercise/assignment charge: then it was ASSIGNED (short) or
+        the matching quantity and direction, carrying the account's
+        exercise/assignment charge (`exercise_fee`; none configured:
+        nothing is inferred, every such pair is named): then it was ASSIGNED (short) or
         EXERCISED (long). Webull's Trading Summary shows both only as a
         $0 option close plus an ordinary stock trade at the strike.
         Booking it as an expiry realizes the premium as its own gain or
@@ -592,7 +638,7 @@ class WebullBrokerage(BaseBrokerage):
                    else {id(t) for t in transactions})
         cands = []          # (gap, option index, stock index)
         rejected = []       # (option index, stock index)
-        # A $0 close and a stock trade at the strike with the $1.00
+        # A $0 close and a stock trade at the strike with the exercise
         # charge whose quantities do not match one-to-one (2 contracts
         # vs two 100-share rows): named, never silently an expiry
         # (audit A2-0617).
@@ -613,6 +659,9 @@ class WebullBrokerage(BaseBrokerage):
                           'Rev. Rul. 78-182')
             meta.append((strike, f" ({_c})" if _c else ""))
             contracts = abs(float(opt['quantity']))
+            # Shares per contract: a ticker.map MULT line, else the
+            # size the option's own rows showed (a mini), else 100.
+            _size = _deliverable_size(opt, transactions + expiries)
             closed_short = float(opt['quantity']) > 0   # BUY at 0 closes a write
             # Short put / long call -> shares arrive (BUY);
             # short call / long put -> shares leave (SELL).
@@ -637,9 +686,10 @@ class WebullBrokerage(BaseBrokerage):
                     continue
                 if not -1 <= gap <= 7:
                     continue
-                exercise_fee = abs(abs(float(t.get('fee') or 0.0))
-                                   - self._EXERCISE_FEE) <= 0.011
-                if abs(abs(q) - contracts * 100) > 1e-6:
+                exercise_fee = (self.exercise_fee is not None and abs(
+                    abs(float(t.get('fee') or 0.0))
+                    - float(self.exercise_fee)) <= 0.011)
+                if abs(abs(q) - contracts * _size) > 1e-6:
                     if exercise_fee:
                         qty_mismatch.append((oi, i))
                     continue
@@ -686,15 +736,21 @@ class WebullBrokerage(BaseBrokerage):
             opt, stock = expiries[oi], transactions[i]
             if not (id(opt) in own_ids or id(stock) in own_ids):
                 continue
+            _fee = float(stock.get('fee') or 0)
+            why = (f"no exercise/assignment charge is configured for "
+                   f"this account ([accounts.<name>] exercise_fee), so"
+                   if self.exercise_fee is None else
+                   f"an ordinary trade's fee, not the account's "
+                   f"{float(self.exercise_fee):.2f} exercise/assignment "
+                   f"charge (exercise_fee), so")
             print(f"warning: Webull {source}: {opt['symbol']} closed at "
                   f"$0 on {opt['date']} and "
                   f"{abs(float(stock['quantity'])):g} {stock['symbol']} "
                   f"traded at the strike {meta[oi][0]:g} settling "
                   f"{stock['date_settle']} with a "
-                  f"{float(stock.get('fee') or 0):.2f} commission — an "
-                  f"ordinary trade's fee, not Webull's $1.00 exercise/"
-                  f"assignment charge, so exercise/assignment was NOT "
-                  f"inferred: booked as an expiry plus a separate trade. "
+                  f"{_fee:.2f} commission — {why} exercise/assignment "
+                  f"was NOT inferred: booked as an expiry plus a "
+                  f"separate trade. "
                   f"If the statement shows an exercise/assignment, the "
                   f"premium belongs in the shares' cost or proceeds"
                   f"{meta[oi][1]} — see "
@@ -712,8 +768,9 @@ class WebullBrokerage(BaseBrokerage):
                   f"({abs(float(opt['quantity'])):g} contract(s)) closed at "
                   f"$0 on {opt['date']} and {abs(float(stock['quantity'])):g} "
                   f"{stock['symbol']} traded at the strike {meta[oi][0]:g} "
-                  f"settling {stock['date_settle']} with Webull's $1.00 "
-                  f"exercise/assignment charge, but the quantities differ "
+                  f"settling {stock['date_settle']} with the account's "
+                  f"{float(self.exercise_fee or 0):.2f} exercise/"
+                  f"assignment charge, but the quantities differ "
                   f"(the close or the stock leg is split across rows), so "
                   f"exercise/assignment was NOT inferred: booked as an "
                   f"expiry plus a separate trade. If the statement shows "

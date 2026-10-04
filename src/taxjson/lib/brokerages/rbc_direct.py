@@ -679,13 +679,37 @@ def rbc_terms(country: Optional[str]) -> Dict[str, str]:
 # RBC posts year-end book-cost adjustments (a notional distribution, a
 # year-end return of capital) dated Dec 31 but only after the fund's
 # tax slips are out, in the following spring (2026-09 audit R1-85): an
-# export taken before this day of the next year cannot hold them.
-RBC_YEAR_END_POSTING = (6, 30)
+# export taken before this day of the next year may not hold them. The
+# account's `[accounts.<name>] year_end_posting = "MM-DD"` sets the day
+# (taxjson-brokerage --year-end-posting); this is its documented
+# default.
+DEFAULT_YEAR_END_POSTING = "06-30"
+
+
+def parse_month_day(text) -> tuple:
+    """(month, day) of an "MM-DD" string; ValueError naming the value
+    when it is not a real day (Feb 29 is refused: not every year has
+    it)."""
+    import re as _re
+    from datetime import date as _date
+    s = str(text or "").strip()
+    m = _re.fullmatch(r"(\d{1,2})-(\d{1,2})", s)
+    if not m:
+        raise ValueError(f"{text!r} is not a MM-DD day such as \"06-30\"")
+    md = (int(m.group(1)), int(m.group(2)))
+    try:
+        _date(2001, *md)
+    except ValueError:
+        raise ValueError(f"{text!r} is not a day of the year (MM-DD)") \
+            from None
+    return md
 
 
 def rbc_coverage_messages(exports, year: int, listings=None,
                           today=None,
-                          country: Optional[str] = None) -> List[str]:
+                          country: Optional[str] = None,
+                          year_end_posting: Optional[str] = None
+                          ) -> List[str]:
     """Coverage findings for tax year `year` from the exports' "as of"
     timestamps (audit S063-22), one message each:
 
@@ -700,8 +724,9 @@ def rbc_coverage_messages(exports, year: int, listings=None,
         activity may be missing);
       * a note when the exports holding `year`'s rows were all taken
         before RBC posts the year's back-dated Dec-31 book-cost
-        adjustments (by June 30 of the next year) while the account
-        held a position at the year end — they may be missing (R1-85).
+        adjustments (by `year_end_posting` of the next year, default
+        06-30 — the account's setting) while the account held a
+        position at the year end — they may be missing (R1-85).
 
     `exports`: [(file name, as_of ISO, [row ISO dates][, {accounts}])];
     `listings`: the account context's position timelines (symbol ->
@@ -751,7 +776,8 @@ def rbc_coverage_messages(exports, year: int, listings=None,
             f"are in) and add the file.")
     if any(m.startswith('warning:') for m in out):
         return out
-    posted = _date(y + 1, *RBC_YEAR_END_POSTING).isoformat()
+    posted = _date(y + 1, *parse_month_day(
+        year_end_posting or DEFAULT_YEAR_END_POSTING)).isoformat()
     cover = max((a for _, a, ds, _ac in dated
                  if any(x and x <= year_end for x in ds)), default='')
     if not cover or cover >= posted:
@@ -766,7 +792,8 @@ def rbc_coverage_messages(exports, year: int, listings=None,
         f"(notional distributions, a year-end return of capital — dated "
         f"{year_end}) only in the spring of {y + 1}, and an export "
         f"starting Jan 1, {y + 1} never holds them. Re-export {y} after "
-        f"{posted} (keep both files: overlapping downloads are "
+        f"{posted} (the account's year_end_posting; keep both files: "
+        f"overlapping downloads are "
         f"de-duplicated) or check the {rbc_terms(country)['cost']} "
         f"against {rbc_terms(country)['fund_slips'].format(y=y)}.")
     return out
@@ -1471,7 +1498,9 @@ class RbcBrokerage(BaseBrokerage):
     @staticmethod
     def coverage_messages(ctx: 'RbcAccountContext', year: int,
                           today=None,
-                          country: Optional[str] = None) -> List[str]:
+                          country: Optional[str] = None,
+                          year_end_posting: Optional[str] = None
+                          ) -> List[str]:
         """The account's coverage findings for tax year `year` (see
         rbc_coverage_messages); taxjson-brokerage prints them when
         `taxjson run` passes the project year (--tax-year)."""
@@ -1481,7 +1510,8 @@ class RbcBrokerage(BaseBrokerage):
               {_norm_account(r.account) for r in ctx.exports[k].rows
                if r.account.strip()})
              for k in ctx.files],
-            year, ctx.listings, today=today, country=country)
+            year, ctx.listings, today=today, country=country,
+            year_end_posting=year_end_posting)
 
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         path = Path(path)
@@ -1978,6 +2008,7 @@ class RbcBrokerage(BaseBrokerage):
         }
         if occ:
             tx['multiplier'] = float(self.OPTION_MULTIPLIER)
+            tx['contract_size_basis'] = 'assumed'
         m = _RBC_BOOK_VALUE_RE.search(r.desc)
         if m:
             tx['book_value'] = desc_number(m.group(1), where=self._at(r),
@@ -2076,8 +2107,15 @@ class RbcBrokerage(BaseBrokerage):
         if is_retraction and not price and qty:
             # RBC leaves Price blank on retractions; per-share = Value/Qty.
             price = round(abs(net) / abs(qty), 6)
+        # The export never states a contract's size: 100 is assumed
+        # unless only a mini's 10 fits the row's Value (B10).
+        opt_mult, size_basis = None, ''
+        if occ and price and abs(qty) > 1e-12 and r.cls != 'expiry':
+            opt_mult, size_basis = self.option_row_multiplier(
+                symbol, lambda m: not self._trade_money_problem(
+                    r, qty, price, net, True, is_retraction, m))
         self._check_trade_money(r, qty, price, net, bool(occ),
-                                is_retraction)
+                                is_retraction, mult=opt_mult)
         if not occ and activity.strip().lower() == 'buy':
             self.warn_zero_cost_buy(self._at(r), r.symbol, qty, price, net)
 
@@ -2100,7 +2138,8 @@ class RbcBrokerage(BaseBrokerage):
             _ex_role = 'warrant' if (qty < 0 and abs(net) < 0.005) \
                 else ('shares' if qty > 0 else '')
 
-        fee = self.back_compute_fee(qty, price, net, is_option=is_option_symbol)
+        fee = self.back_compute_fee(qty, price, net, is_option=is_option_symbol,
+                                    multiplier=opt_mult)
         if r.cls == 'expiry' and not opt:
             self._note(f"line {r.line}: non-option expiry (rights/warrants) "
                        f"booked as a $0 disposition of {symbol}")
@@ -2120,11 +2159,15 @@ class RbcBrokerage(BaseBrokerage):
             # the engine books it as negative proceeds.
             'net_amount': net if qty < 0 else abs(net),
             'gross_amount': self.theoretical_gross(qty, price,
-                                                   is_option=is_option_symbol),
+                                                   is_option=is_option_symbol,
+                                                   multiplier=opt_mult),
             'account': self.DEFAULT_ACCOUNT,
             'description': desc,
             '_expiry': is_expiry,
         }
+        if size_basis == 'derived':
+            tx['multiplier'] = opt_mult
+            tx['contract_size_basis'] = size_basis
         if _ex_role:
             tx['_exercise'] = (_ex_role, r.line)
         oc = self._open_close(r, bool(occ))
@@ -2193,7 +2236,7 @@ class RbcBrokerage(BaseBrokerage):
         return ''
 
     def _check_trade_money(self, r, qty, price, net, is_option,
-                           is_retraction) -> None:
+                           is_retraction, mult=None) -> None:
         """Fail-closed identity for a priced trade (audit S023-19). RBC
         has no commission column: the difference between Value and
         |qty| x Price x multiplier IS the commission, so it must be a
@@ -2202,9 +2245,19 @@ class RbcBrokerage(BaseBrokerage):
         shifted or mislabelled column) used to book with only a schema
         warning; the same row from Questrade or IB is refused. The
         bounds sit far outside any plausible retail commission."""
+        msg = self._trade_money_problem(r, qty, price, net, is_option,
+                                        is_retraction, mult)
+        if msg:
+            raise _err(Path(self._fname), r.line, msg)
+
+    def _trade_money_problem(self, r, qty, price, net, is_option,
+                             is_retraction, mult=None) -> str:
+        """The _check_trade_money finding for contract size `mult`
+        (default: 100 for an option), '' when the row fits."""
         if not price or abs(qty) < 1e-12 or r.cls == 'expiry':
-            return
-        mult = self.OPTION_MULTIPLIER if is_option else 1
+            return ''
+        if mult is None:
+            mult = self.OPTION_MULTIPLIER if is_option else 1
         gross = abs(qty) * price * mult
         act = (r.activity or '').strip().lower()
         sale = act != 'buy' and (act == 'sell' or is_retraction or qty < 0)
@@ -2213,13 +2266,13 @@ class RbcBrokerage(BaseBrokerage):
         high = (max(250.0, 3.0 * abs(qty) if is_option else 0.0)
                 + 0.05 * gross)
         if fee < low or (fee > high and not is_retraction):
-            raise _err(Path(self._fname), r.line,
-                       f"Value {net:,.2f} does not fit |Quantity| "
-                       f"{abs(qty):g} x Price {price:g}"
-                       f"{' x 100' if is_option else ''} = {gross:,.2f} "
-                       f"(implied commission {fee:,.2f}) — a wrong or "
-                       f"shifted column; refusing to book it "
-                       f"({r.desc[:60]!r})")
+            return (f"Value {net:,.2f} does not fit |Quantity| "
+                    f"{abs(qty):g} x Price {price:g}"
+                    f"{f' x {mult:g}' if is_option else ''} = {gross:,.2f} "
+                    f"(implied commission {fee:,.2f}) — a wrong or "
+                    f"shifted column; refusing to book it "
+                    f"({r.desc[:60]!r})")
+        return ''
 
     def _build_stock_dividend(self, r):
         """A stock dividend paid in shares ("DIS - <name> STK DIV ON N
