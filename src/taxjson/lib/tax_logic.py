@@ -1274,8 +1274,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-SCAN-02",
                  "A Canadian issuer held through its US listing in a "
                  "taxable account or TFSA while it pays dividends is "
-                 "flagged: its .TO line pays the eligible dividend in CAD "
-                 "with no conversion.", cont=True),
+                 "flagged: its Canadian line pays the eligible dividend "
+                 "in CAD with no conversion. The Canadian line is the "
+                 "ticker.map target, else a listing of the same root on "
+                 "any Canadian venue (.TO, .V, .CN, .NE, .VN) seen in the "
+                 "books; a DISTINCT pair is not one.", cont=True),
             Rule("CA-RPT-07",
                  "`taxjson edge-cases`: every trade whose year or "
                  "superficial-loss verdict turns on a boundary — window "

@@ -9218,8 +9218,12 @@ def _account_plan(name: str, acfg: Dict[str, Any],
 
 
 def _scan_symbol_root(sym: str) -> Tuple[str, str]:
+    """(root, suffix) of a US or Canadian listing (every Canadian venue:
+    lib/markets), else (symbol, '')."""
+    from taxjson.lib.markets import canadian_suffixes
     parts = sym.rsplit(".", 1)
-    if len(parts) == 2 and parts[1].upper() in ("TO", "US", "V", "CN", "NE"):
+    if len(parts) == 2 and (parts[1].upper() == "US"
+                            or parts[1].upper() in canadian_suffixes()):
         return parts[0].upper(), parts[1].upper()
     return sym.upper(), ""
 
@@ -9435,19 +9439,26 @@ def cmd_scan(args: argparse.Namespace) -> None:
         _see(old)
         _see(new)
 
-    def _has_ca_twin(rt: str, sym_u: str) -> bool:
-        # ticker.map (GLOBAL/TOBASE onto a .TO listing) is the identity
-        # ruling; without one, a .TO sighting of the same root is only
-        # evidence (MAP-GAP asks for the ruling too). A DISTINCT ruling
-        # settles it the other way: the .TO line is a CDR or another
+    from taxjson.lib.markets import canadian_suffixes as _ca_sufs
+    _CA_SUFS = tuple(sorted(_ca_sufs()))
+
+    def _ca_twins(rt: str, sym_u: str) -> List[str]:
+        # ticker.map (GLOBAL/TOBASE onto a Canadian listing) is the
+        # identity ruling; without one, a sighting of the same root on
+        # ANY Canadian venue (.TO, .V, .CN, .NE, .VN — not only the TSX)
+        # is only evidence (MAP-GAP asks for the ruling too). A DISTINCT
+        # ruling settles it the other way: that line is a CDR or another
         # issuer, and "hold it instead" is wrong advice (audit S042-06,
         # S049-09).
         tgt = renames_u.get(sym_u, "")
-        if tgt.endswith(".TO"):
-            return not _declared_distinct(sym_u, tgt)
-        if _declared_distinct(sym_u, f"{rt}.TO"):
-            return False
-        return "TO" in (seen_suffixes.get(rt) or set())
+        if _scan_symbol_root(tgt)[1] in _CA_SUFS:
+            return [] if _declared_distinct(sym_u, tgt) else [tgt]
+        return [f"{rt}.{s}" for s in sorted(seen_suffixes.get(rt) or ())
+                if s in _CA_SUFS
+                and not _declared_distinct(sym_u, f"{rt}.{s}")]
+
+    def _has_ca_twin(rt: str, sym_u: str) -> bool:
+        return bool(_ca_twins(rt, sym_u))
 
     findings = []                     # (check, account, symbol, message)
     if country == "canada":
@@ -9470,7 +9481,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 if not pays:
                     continue
                 if _has_ca_twin(rt, sym_u):
-                    _ca = renames_u.get(sym_u) or f"{rt}.TO"
+                    _ca = " or ".join(_ca_twins(rt, sym_u))
                     findings.append((
                         "US-LISTING", name, sym,
                         f"Canadian issuer held via its US listing in a "
@@ -9488,13 +9499,16 @@ def cmd_scan(args: argparse.Namespace) -> None:
     # MAP-GAP: both listings seen, no consolidating entry either way.
     for rt in sorted(seen_suffixes):
         sufs = seen_suffixes[rt]
-        if "TO" in sufs and "US" in sufs:
-            if _declared_distinct(f"{rt}.US", f"{rt}.TO"):
+        if "US" not in sufs:
+            continue
+        for _cs in sorted(s for s in sufs if s in _CA_SUFS):
+            _ca = f"{rt}.{_cs}"
+            if _declared_distinct(f"{rt}.US", _ca):
                 continue        # user's DISTINCT ruling — settled
             if (f"{rt}.US" not in renames_u
-                    and f"{rt}.TO" not in renames_u):
+                    and _ca not in renames_u):
                 findings.append((
-                    "MAP-GAP", "-", f"{rt}.TO/{rt}.US",
+                    "MAP-GAP", "-", f"{_ca}/{rt}.US",
                     "both listings appear in this project but "
                     "ticker.map has no GLOBAL/TOBASE entry — the "
                     "engine treats them as two securities (splits the "
@@ -9677,7 +9691,6 @@ def cmd_scan(args: argparse.Namespace) -> None:
             # DIFFERENT-root dual listings (SAMPLQ.US/SAMPLP.TO) and typo'd
             # map pairs, which same-root scanning can never see.
 
-            _CA_SUFS = ("TO", "V", "CN", "NE")
             held_syms = {str(h.get("symbol") or "").upper()
                          for rows in holdings.values() for h in rows}
             held_syms = {s for s in held_syms

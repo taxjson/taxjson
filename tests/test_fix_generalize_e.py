@@ -220,3 +220,48 @@ class TestYahooSpelling(unittest.TestCase):
         self.assertIn("ZZRX", asked)             # the QUOTE line
         self.assertNotIn("ZZQ.B.US", asked)
         self.assertNotIn("ZZR.US", asked)
+
+
+# ---------------------------------------------------------------- B15
+
+class TestCanadianTwinOnEveryVenue(unittest.TestCase):
+    """B15: a US listing's Canadian twin is found on every Canadian
+    venue, not only as `{root}.TO`."""
+
+    @rule("CA-SCAN-02")
+    def test_venture_twin_seen_in_the_books(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _scan_project(
+                tmp, accounts=[("margin", "taxable"), ("rrsp", "sheltered")],
+                holdings={"margin": _holdings_toml("ZZQ.US"),
+                          "rrsp": _holdings_toml("ZZQ.V")},
+                raws={"margin": _raw_json("ZZQ.US")})
+            r = _scan(root)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("US-LISTING", r.stdout)
+        self.assertIn("hold ZZQ.V instead", r.stdout)
+        self.assertIn("ZZQ.V/ZZQ.US", r.stdout)       # MAP-GAP
+
+    @rule("CA-SCAN-02")
+    def test_mapped_cse_twin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _scan_project(
+                tmp, accounts=[("margin", "taxable")],
+                holdings={"margin": _holdings_toml("ZZQ.US")},
+                raws={"margin": _raw_json("ZZQ.US")},
+                ticker_map="TOBASE ZZQ.US ZZQ.CN\n")
+            r = _scan(root)
+        self.assertIn("hold ZZQ.CN instead", r.stdout)
+        self.assertNotIn("MAP-GAP", r.stdout)
+
+    def test_distinct_venue_twin_is_not_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _scan_project(
+                tmp, accounts=[("margin", "taxable"), ("rrsp", "sheltered")],
+                holdings={"margin": _holdings_toml("ZZQ.US"),
+                          "rrsp": _holdings_toml("ZZQ.NE")},
+                raws={"margin": _raw_json("ZZQ.US")},
+                ticker_map="DISTINCT ZZQ.US ZZQ.NE\n")
+            r = _scan(root)
+        self.assertNotIn("US-LISTING", r.stdout)
+        self.assertNotIn("MAP-GAP", r.stdout)

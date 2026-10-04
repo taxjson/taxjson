@@ -27,6 +27,10 @@
   --online` now asks Yahoo for that spelling (or the symbol's `QUOTE`
   line) instead of the book symbol, which returned nothing for every US
   listing, so a wrongly paired map entry can be flagged.
+- **`taxjson scan` finds a Canadian twin on any Canadian venue.** The
+  US-LISTING and MAP-GAP checks looked for a US listing's Canadian line
+  only as `ROOT.TO`; a TSX Venture, CSE or Cboe Canada line of the same
+  root (or a ticker.map target there) now counts too.
 
 ### Command line
 
