@@ -197,18 +197,16 @@ class TestWatchlistPlatformSuffix(unittest.TestCase):
         sys.path.insert(0, str(SRC))
         from taxjson.lib.ticker_map import format_ticker_for_platform as f
         cases = {
-            "QZT.TO": ("QZT:CA", "TSX:QZT", "QZT:CA"),
-            "QZV.V": ("QZV:CA", "TSXV:QZV", "QZV:CA"),
-            "QZC.CN": ("QZC:CA", "CSE:QZC", "QZC:CA"),
-            "QZN.NE": ("QZN:CA", "NEO:QZN", "QZN:CA"),
-            "QZU.US": ("QZU", "QZU", "QZU:US"),
-            "QZA.AX": ("QZA.AX", "ASX:QZA", "QZA.AX"),
+            "QZT.TO": ("QZT:CA", "QZT:CA"),
+            "QZV.V": ("QZV:CA", "QZV:CA"),
+            "QZC.CN": ("QZC:CA", "QZC:CA"),
+            "QZN.NE": ("QZN:CA", "QZN:CA"),
+            "QZU.US": ("QZU", "QZU:US"),
+            "QZA.AX": ("QZA.AX", "QZA.AX"),
         }
-        for sym, (sa, tv, fg) in cases.items():
+        for sym, (sa, fg) in cases.items():
             self.assertEqual(f(sym, "seekingalpha"), sa, sym)
-            self.assertEqual(f(sym, "tradingview"), tv, sym)
             self.assertEqual(f(sym, "fastgraph"), fg, sym)
-        self.assertEqual(f("QZV.V", "tradingview", {"QZV.V": "XYZ"}), "XYZ:QZV")
 
 
 _IB_SAMPLE = """Statement,Header,Field Name,Field Value

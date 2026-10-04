@@ -4,7 +4,6 @@ ticker.map and taxjson.toml.
 The old files and where their contents go:
 
     yf_ticker.map                    -> ticker.map  QUOTE lines
-    tv_exchange.map                  -> ticker.map  TRADINGVIEW lines
     crypto_ticker.map                -> ticker.map  CRYPTO lines
     ticker_extraction_overrides.txt  -> ticker.map  EXTRACT lines
     amt_carryover.txt                -> taxjson.toml [estimate] amt_carryover
@@ -18,13 +17,19 @@ are APPENDED to ticker.map and the tables to taxjson.toml — the user's
 content and comments are never rewritten (a key that belongs in an
 existing [estimate] / [carryover] section is inserted right under that
 section's header line). Each old file is then renamed to
-`<name>.migrated` (never deleted). Nothing is written when any file
+`<name>.migrated` (never deleted).
+
+tv_exchange.map (the removed TradingView export's exchange prefixes) is
+not converted: nothing reads it any more, so migrate only renames it to
+tv_exchange.map.migrated and says it is no longer used. It does not stop
+other commands either (RETIRED_MAP_FILES) — no rule can be lost. Nothing is written when any file
 cannot be converted, or when the target already holds a conflicting
 entry; the result is re-read and compared with what was intended
 before anything is replaced.
 
-While any old file is present every other `taxjson` command stops with
-a message naming it (lib/migrate.legacy_message) — no silent fallback.
+While any old file (other than a retired one) is present every other
+`taxjson` command stops with a message naming it
+(lib/migrate.legacy_message) — no silent fallback.
 """
 from __future__ import annotations
 
@@ -36,7 +41,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from taxjson.lib.ticker_map import LEGACY_MAP_FILES
+from taxjson.lib.ticker_map import LEGACY_MAP_FILES, RETIRED_MAP_FILES
 
 # Every old file, in the order migrate handles (and names) them.
 LEGACY_DATA_FILES = {
@@ -45,8 +50,12 @@ LEGACY_DATA_FILES = {
     "capital_gains_dividends.map": "[[capital_gains_dividends]]",
     "distributions.map": "[[distributions]]",
 }
-LEGACY_FILES: Tuple[str, ...] = tuple(LEGACY_MAP_FILES) + tuple(
+# Files whose contents still matter: commands stop while one is here.
+_GUARDED_FILES: Tuple[str, ...] = tuple(LEGACY_MAP_FILES) + tuple(
     LEGACY_DATA_FILES)
+# Every file migrate handles: the guarded ones plus the retired ones
+# (renamed only).
+LEGACY_FILES: Tuple[str, ...] = _GUARDED_FILES + tuple(RETIRED_MAP_FILES)
 
 
 class MigrateError(ValueError):
@@ -54,11 +63,28 @@ class MigrateError(ValueError):
     holds a conflicting entry. Nothing was written."""
 
 
-def legacy_files(root) -> List[str]:
+def legacy_files(root, retired: bool = False) -> List[str]:
     """The old per-purpose files present in the project root (a name
-    that exists in any form — a dangling link or a directory too)."""
+    that exists in any form — a dangling link or a directory too) whose
+    contents now live elsewhere — the ones every command stops for.
+    With retired=True also the files of removed features
+    (RETIRED_MAP_FILES: tv_exchange.map), which migrate renames."""
     r = Path(root)
-    return [n for n in LEGACY_FILES if os.path.lexists(r / n)]
+    names = LEGACY_FILES if retired else _GUARDED_FILES
+    return [n for n in names if os.path.lexists(r / n)]
+
+
+def retired_files(root) -> List[str]:
+    """The removed features' old files present in the project root."""
+    r = Path(root)
+    return [n for n in RETIRED_MAP_FILES if os.path.lexists(r / n)]
+
+
+def retired_file_note(names: List[str]) -> str:
+    """The once-per-run NOTE for a leftover retired file."""
+    what = ", ".join(f"{n} ({RETIRED_MAP_FILES[n]})" for n in names)
+    return (f"{what} is no longer used and is ignored — delete it, or "
+            f"run `taxjson migrate` to rename it to *.migrated.")
 
 
 def legacy_message(names: List[str]) -> str:
@@ -179,51 +205,6 @@ def _conv_quote(text: str, out: _MapOut) -> None:
         out.rules.append(("quote", sym, (yf, ratio)))
 
 
-def _conv_tradingview(text: str, out: _MapOut) -> None:
-    """tv_exchange.map: `SYMBOL EXCHANGE`, a line STARTING with `#` is a
-    comment (a `#` later in the line was not), extra words were ignored,
-    later lines won. Keys are upper-cased now, like every ticker.map
-    symbol (a lower-case key used to match nothing)."""
-    eff: Dict[str, Tuple[int, str, str]] = {}
-    order: List[str] = []
-    for n, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip()
-        if not line:
-            continue
-        if line.startswith("#"):
-            out.lines.append("# " + line.lstrip("#").strip())
-            continue
-        parts = line.split()
-        if len(parts) < 2:
-            out.notes.append(f"{out.name}:{n}: {line!r} has no exchange — "
-                             f"it was ignored; kept as a comment")
-            out.lines.append(f"# (ignored by the old loader) {line}")
-            continue
-        if "#" in parts[0] or "#" in parts[1]:
-            raise MigrateError(
-                f"{out.name}:{n}: {line!r} has a `#` inside the symbol or "
-                f"exchange, which ticker.map reads as a comment — fix the "
-                f"line first")
-        note = " ".join(parts[2:]).lstrip("#").strip()
-        sym = parts[0].upper()
-        if sym != parts[0]:
-            out.notes.append(f"{out.name}:{n}: key {parts[0]!r} is now "
-                             f"{sym} (ticker.map symbols are upper case; "
-                             f"the lower-case key matched nothing before)")
-        if sym in eff:
-            if eff[sym][1] != parts[1]:
-                out.notes.append(f"{out.name}:{n}: {sym} repeats line "
-                                 f"{eff[sym][0]} — the later line won; "
-                                 f"only it is kept")
-        else:
-            order.append(sym)
-        eff[sym] = (n, parts[1], note)
-    for sym in order:
-        _n, ex, note = eff[sym]
-        out.lines.append(f"TRADINGVIEW {sym} {ex}{_note(note)}")
-        out.rules.append(("tradingview", sym, ex))
-
-
 def _conv_crypto(text: str, out: _MapOut) -> None:
     """crypto_ticker.map: `SYMBOL YF_ID`, `#` comments; any other shape
     was skipped; later lines won."""
@@ -310,7 +291,6 @@ def _conv_extract(text: str, out: _MapOut) -> None:
 
 _MAP_CONVERTERS = {
     "yf_ticker.map": _conv_quote,
-    "tv_exchange.map": _conv_tradingview,
     "crypto_ticker.map": _conv_crypto,
     "ticker_extraction_overrides.txt": _conv_extract,
 }
@@ -526,9 +506,13 @@ def plan(root) -> Plan:
     from taxjson.lib.tomlcompat import tomllib
     root = Path(root).resolve()
     pl = Plan(root)
-    pl.names = legacy_files(root)
+    pl.names = legacy_files(root, retired=True)
     if not pl.names:
         return pl
+    for n in pl.names:
+        if n in RETIRED_MAP_FILES:
+            pl.done.append(f"{n}: no longer used ({RETIRED_MAP_FILES[n]})"
+                           f" — not converted, only renamed")
     # ---------------------------------------------------- ticker.map
     map_names = [n for n in pl.names if n in LEGACY_MAP_FILES]
     if map_names:

@@ -16,8 +16,8 @@ Directory layout:
                           # elections are decisions, not rebuildable data)
       rrsp/  tfsa/  ...
     ticker.map            # optional — symbol rules (GLOBAL/TOBASE/JOURNAL/DELETE/
-                          # DISTINCT/RENAME) and lookups (QUOTE/TRADINGVIEW/
-                          # CRYPTO/EXTRACT)
+                          # DISTINCT/RENAME) and lookups (QUOTE/CRYPTO/
+                          # EXTRACT)
     reports/              # all outputs land here, overwritten on re-run
     work/                 # intermediate JSON (--fast reuses these via mtime)
 
@@ -2660,12 +2660,13 @@ def _refuse_legacy_project_files(root: Path) -> None:
 
 def cmd_migrate(args: argparse.Namespace) -> None:
     """`taxjson migrate [--dry-run]`: move an old project's per-purpose
-    files into ticker.map (QUOTE / TRADINGVIEW / CRYPTO / EXTRACT lines)
-    and taxjson.toml ([estimate] amt_carryover, [carryover] claimed,
+    files into ticker.map (QUOTE / CRYPTO / EXTRACT lines) and
+    taxjson.toml ([estimate] amt_carryover, [carryover] claimed,
     [[capital_gains_dividends]], [[distributions]]) — appended, never
-    rewritten — and rename each old file to <name>.migrated. Refuses
-    (exit 2, nothing written) when a file cannot be converted or the
-    target already holds a conflicting entry."""
+    rewritten — and rename each old file to <name>.migrated. A leftover
+    tv_exchange.map (the removed TradingView export) is only renamed.
+    Refuses (exit 2, nothing written) when a file cannot be converted or
+    the target already holds a conflicting entry."""
     from taxjson.lib import migrate as M
     root = Path(args.dir).resolve()
     try:
@@ -4224,18 +4225,34 @@ _EXPORT_MATRIX: Tuple[Tuple[str, List[str]], ...] = (
     ("ALong_FG.csv",            ["--fastgraph", "--no-options"]),
     ("AOptionsShort_FG.csv",    ["--fastgraph", "--no-equities", "--short"]),
     ("AOptionsLong_FG.csv",     ["--fastgraph", "--no-equities", "--long"]),
-    ("AAll_TV.txt",             ["--tradingview"]),
-    ("ALong_TV.txt",            ["--tradingview", "--no-options"]),
-    ("AOptionsShort_TV.txt",    ["--tradingview", "--no-equities", "--short"]),
-    ("AOptionsLong_TV.txt",     ["--tradingview", "--no-equities", "--long"]),
+)
+
+# Exports an earlier version wrote and this one no longer does: an
+# outdated copy left in reports/exports/ would read as current, so each
+# run removes it. {glob: why}.
+_RETIRED_EXPORTS: Tuple[Tuple[str, str], ...] = (
+    ("*_TV.txt", "the TradingView export was removed"),
 )
 
 
+def _sweep_retired_exports(exports_dir: Path) -> None:
+    """Remove the retired exports (_RETIRED_EXPORTS) an earlier run left
+    in reports/exports/, naming each."""
+    if not exports_dir.is_dir():
+        return
+    for pattern, why in _RETIRED_EXPORTS:
+        for p in sorted(exports_dir.glob(pattern)):
+            if p.is_file() or p.is_symlink():
+                p.unlink()
+                print(f"  removed stale {p.name} ({why})")
+
+
 def stage_exports(equity_gains: List[Path], reports_dir: Path) -> None:
+    exports_dir = reports_dir / "exports"
+    _sweep_retired_exports(exports_dir)
     if not equity_gains:
         return
     print("==> exports")
-    exports_dir = reports_dir / "exports"
     files = [str(p) for p in equity_gains]
     for fname, flags in _EXPORT_MATRIX:
         run_to_file(_cmd("taxjson-export") + flags + files, exports_dir / fname,
@@ -4708,6 +4725,12 @@ def cmd_run(args: argparse.Namespace) -> None:
     # dangling or looping symlink) read as "absent": the run exited 0
     # with other gains (audit A2-0313). Absent and unreadable differ.
     _refuse_unreadable_project_inputs(root)
+    # A leftover tv_exchange.map (the removed TradingView export) stops
+    # nothing — nothing reads it — but is named once per run.
+    from taxjson.lib.migrate import retired_file_note, retired_files
+    _retired = retired_files(root)
+    if _retired:
+        print(f"NOTE: {retired_file_note(_retired)}", file=sys.stderr)
     # ticker.map — one keyword-prefixed symbol-rule file. GLOBAL renames
     # apply everywhere; TOBASE consolidations apply only in the main
     # (to-base) merge; JOURNAL pairs also net in the holdings export;
@@ -4745,8 +4768,17 @@ def cmd_run(args: argparse.Namespace) -> None:
     sec_overrides_arg = None
     if ticker_map_arg:
         from taxjson.lib.ticker_map import read_side_rules
-        if read_side_rules(ticker_map).extract:
+        _side = read_side_rules(ticker_map)
+        if _side.extract:
             sec_overrides_arg = ticker_map
+        if _side.retired:
+            # TRADINGVIEW lines: the export they fed was removed. Ignored
+            # (never an error — an older project may still carry them);
+            # said once per run.
+            print(f"NOTE: {ticker_map.name} has {len(_side.retired)} "
+                  f"TRADINGVIEW line(s) ({', '.join(_side.retired)}) — "
+                  f"TradingView export removed; delete these lines (they "
+                  f"are ignored).", file=sys.stderr)
     # missing_history.json — optional project-wide list of (symbol,
     # account) pairs sold with no purchase in the files (bought before
     # the data; from `find-missing-history --write-missing-history`). Its
@@ -5629,9 +5661,6 @@ _TEMPLATE_TICKER_MAP = """\
 #                     (`taxjson harvest`); RATIO converts the position's
 #                     quantity (a ticker consumed by a merger, quoted as
 #                     the acquirer: OLDCO.TO NEWCO 0.25).
-#   TRADINGVIEW SYMBOL EXCHANGE
-#                     The exchange prefix of the TradingView watchlist
-#                     export (reports/exports/*_TV.txt).
 #   CRYPTO  SYMBOL YAHOO_ID
 #                     A coin whose ticker collides with another asset on
 #                     Yahoo (prices are looked up as YAHOO_ID-USD).
@@ -5649,7 +5678,6 @@ _TEMPLATE_TICKER_MAP = """\
 # DELETE   CASH.US
 # DISTINCT UNH.US     UNH.TO
 # QUOTE    PNG.TO     PNG.V
-# TRADINGVIEW OR.US   NYSE
 # CRYPTO   TAO        TAO22974
 # EXTRACT  Global X US Dollar Currency ETF | USD | DLR.U.TO
 """
@@ -17430,13 +17458,14 @@ def _build_parser(prog: str = "taxjson"
 
     p_mig = sub.add_parser(
         "migrate",
-        help="Move an old project's yf_ticker.map, tv_exchange.map, "
+        help="Move an old project's yf_ticker.map, "
              "crypto_ticker.map, ticker_extraction_overrides.txt, "
              "amt_carryover.txt, claimed_losses.txt, "
              "capital_gains_dividends.map and distributions.map into "
              "ticker.map / taxjson.toml (appended; each old file is "
              "renamed <name>.migrated). Every other command stops while "
-             "one of those files is present")
+             "one of those files is present. A leftover tv_exchange.map "
+             "(the removed TradingView export) is only renamed")
     p_mig.add_argument("--dry-run", action="store_true",
                        help="Show what would be appended and moved; "
                             "write nothing")
