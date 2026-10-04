@@ -59,8 +59,38 @@
   (and says where each figure came from), `carryover` starts from the
   recorded balance, and `handoff` flags an input that differs from it.
 
+### T1135 overrides move into ticker.map (owner request)
+
+- `t1135.map` is folded into ticker.map: a symbol's T1135 domicile is a
+  `T1135 SYMBOL COUNTRY` line (COUNTRY: an ISO 3166 alpha-3 code, or
+  CA/CAN/CANADA/EXCLUDE for "not foreign property" — the old file's
+  vocabulary). `taxjson t1135` reads the project's ticker.map and
+  `taxjson-t1135 --map` takes a ticker.map. An override still follows
+  its symbol through a ticker change and is named when it matches
+  nothing. A T1135 line that cannot be read (a country outside the
+  vocabulary, a wrong shape, one symbol given two countries) now stops
+  `taxjson run` and `taxjson t1135` with a did-you-mean hint, like any
+  malformed ticker.map line — the old file skipped it with a warning and
+  the symbol kept its listing country. A `t1135.map` left in a project
+  stops every command until `taxjson migrate` converts it (with the old
+  file's rules: a line it ignored becomes a comment) and renames it
+  `t1135.map.migrated`.
+- `sector.map` is gone from the docs: nothing has read it since the
+  timeline view went with the desktop app.
+
 ### Removed
 
+- The remaining watchlist exports are gone: `taxjson-export
+  --seekingalpha` and `--fastgraph` (asking for either is now a clear
+  error naming the removal) and `taxjson run`'s exports stage with them
+  (its thirteen `reports/exports/*_SA.csv` / `*_FG.csv` files and the
+  "==> exports" step). A full run removes the `*_SA.csv`, `*_FG.csv` and
+  `*_TV.txt` files an earlier run left in `reports/exports/`, and the
+  folder once it is empty, in one line; a file of your own there is
+  kept. `taxjson-export` now needs `--report` or `--holdings-toml` (with
+  neither it used to print a bare ticker list). The holdings TOMLs,
+  `--report`, `--holdings-toml` and ticker.map `QUOTE` lines are
+  unchanged.
 - The TradingView watchlist export is gone: `taxjson-export
   --tradingview` and `--tv-map` (asking for either is now a clear error
   naming the removal) and the four `reports/exports/*_TV.txt` files of
@@ -69,8 +99,7 @@
   NOTE per run asking you to delete it (never an error). A leftover
   `tv_exchange.map` stops nothing (it is ignored, with a NOTE);
   `taxjson migrate` renames it to `tv_exchange.map.migrated` without
-  converting it. The Seeking Alpha (`*_SA.csv`) and FastGraph
-  (`*_FG.csv`) exports, `--report` and `--holdings-toml` are unchanged.
+  converting it.
 - The local web UI is gone: `taxjson serve` (and its `--host`, `--port`
   and `--token` flags), the `src/taxjson/web` package and the `[web]`
   extra (FastAPI, Uvicorn, Jinja2, python-multipart; the `[dev]` extra no

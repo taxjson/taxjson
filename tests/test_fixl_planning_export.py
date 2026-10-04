@@ -75,7 +75,7 @@ class TestUnreadableInputsFail(_Tmp):
         self.assertNotIn("holdings_count", r.stdout)
 
     def test_positional_inputs(self):
-        for mode in ("--holdings-toml", "--report", "--fastgraph"):
+        for mode in ("--holdings-toml", "--report"):
             self._assert_refused(_export(mode, self.good, self.trunc), "t.json")
             self._assert_refused(
                 _export(mode, self.tmp / "nosuch.json"), "nosuch.json")
@@ -92,7 +92,7 @@ class TestUnreadableInputsFail(_Tmp):
 
     def test_json_without_inventory(self):
         nokey = self.w("n.json", {"transactions": []})
-        for mode in ("--report", "--seekingalpha"):
+        for mode in ("--report", "--holdings-toml"):
             self._assert_refused(_export(mode, nokey), "n.json")
             self._assert_refused(_export(mode, self.good, nokey), "n.json")
 
@@ -112,7 +112,7 @@ class TestTomlInputShape(_Tmp):
 
     def test_wrong_table_name_refused(self):
         p = self.w("h.toml", '[[holdings]]\nsymbol = "ABC.TO"\nquantity = 1\n')
-        r = _export("--seekingalpha", p)
+        r = _export("--report", p)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("holding", r.stderr)
         self.assertIn("holdings", r.stderr)     # names what it found
@@ -124,8 +124,9 @@ class TestTomlInputShape(_Tmp):
         self.assertEqual(r.returncode, 0, r.stderr)
         good = self.w("h.toml", '[[holding]]\nsymbol = "ABC.TO"\n'
                                 'quantity = 1.0\ntotal_cost = 5.0\n')
-        r = _export("--seekingalpha", good)
-        self.assertEqual((r.returncode, r.stdout.split()), (0, ["ABC:CA"]))
+        r = _export("--report", good)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("ABC.TO", r.stdout)
 
 
 class TestDust(_Tmp):
@@ -233,12 +234,14 @@ class TestCurrencySplit(_Tmp):
                                   ("XIU.TO", 1, 1, "CAD"),
                                   ("VOD.L", 1, 1, "GBP"),
                                   ("NST.AX", 1, 1, "AUD")))
-        usd = _export("--seekingalpha", "--no-cad", g).stdout.strip()
-        cad = _export("--seekingalpha", "--no-usd", g).stdout.strip()
-        self.assertEqual(usd, "AAPL")
-        self.assertEqual(cad, "XIU:CA")
-        both = _export("--seekingalpha", g).stdout
-        self.assertIn("VOD", both)
+        def tickers(*flags):
+            r = _export("--report", *flags, g)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return {ln.split()[0] for ln in r.stdout.splitlines()
+                    if ln.split() and "." in ln.split()[0]}
+        self.assertEqual(tickers("--no-cad"), {"AAPL.US"})
+        self.assertEqual(tickers("--no-usd"), {"XIU.TO"})
+        self.assertIn("VOD.L", tickers())
 
 
 class TestFuturesHandoff(_Tmp):

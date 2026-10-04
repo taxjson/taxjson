@@ -285,9 +285,11 @@ class TestT1135MapValidation(unittest.TestCase):
     misspelt EXCLUDE / CA keyword became a bogus 'country'."""
 
     def _load(self, text):
+        # ticker.map T1135 lines (once t1135.map lines).
         with tempfile.TemporaryDirectory() as td:
-            p = Path(td) / "t1135.map"
-            p.write_text(text)
+            p = Path(td) / "ticker.map"
+            p.write_text("".join(f"T1135 {ln}\n"
+                                 for ln in text.splitlines()))
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
                 ov = T1.load_overrides(p)
@@ -300,14 +302,20 @@ class TestT1135MapValidation(unittest.TestCase):
         self.assertIsNone(T1.classify_country("BTC", ov))
 
     def test_unknown_country_word_is_refused_with_a_suggestion(self):
-        ov, err = self._load("ABC.US EXCLUDED\nDEF.US CDN\nGHI.US NOT-FOREIGN\n"
-                             "JKL.TO usa\nMNO.US gbr\n")
+        # A ticker.map T1135 line outside the vocabulary stops the tool
+        # (the old t1135.map skipped it with a warning and the symbol
+        # kept its listing-suffix country).
+        from taxjson.lib.cli_diag import InputContentError
+        for word in ("EXCLUDED", "CDN", "NOT-FOREIGN"):
+            with self.subTest(word=word):
+                with self.assertRaises(InputContentError) as cm:
+                    self._load(f"ABC.US {word}\nJKL.TO usa\n")
+                self.assertIn(word, str(cm.exception))
+        with self.assertRaises(InputContentError) as cm:
+            self._load("ABC.US EXCLUDED\n")
+        self.assertIn("did you mean EXCLUDE", str(cm.exception))
+        ov, _ = self._load("JKL.TO usa\nMNO.US gbr\n")
         self.assertEqual(ov, {"JKL.TO": "USA", "MNO.US": "GBR"})
-        self.assertIn("EXCLUDED", err)
-        self.assertIn("EXCLUDE", err)
-        self.assertIn("CDN", err)
-        self.assertIn("NOT-FOREIGN", err)
-        self.assertEqual(T1.classify_country("ABC.US", ov), "USA")
 
 
 class TestT1135Inputs(unittest.TestCase):
@@ -516,7 +524,8 @@ class TestT1135Report(unittest.TestCase):
                       "250,000.00 CAD", text)
         self.assertIn("unknown ACB (bought before the data) — cost understated",
                       text)
-        self.assertIn("unclassified — review / add to t1135.map", text)
+        self.assertIn("unclassified — review / add a ticker.map T1135 "
+                      "line", text)
         self.assertIn("T1135 instructions", text)
 
     @rule("CA-RPT-01")

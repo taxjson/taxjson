@@ -36,31 +36,6 @@ def get_base_ticker_info(symbol: str):
     
     return full_ticker, ext
 
-# The Canadian venue suffixes: a listing on any of them is Canadian.
-_CA_VENUES = frozenset({'TO', 'V', 'CN', 'NE'})
-
-
-def format_ticker_for_platform(symbol: str, platform: str) -> str:
-    """Formats a ticker for a specific platform (SeekingAlpha, FastGraph)."""
-    base, ext = get_base_ticker_info(symbol)
-    if not ext:
-        return base
-    # Every Canadian venue is a Canadian listing: .V/.CN/.NE used to fall
-    # through to the US branch (S078-03). An unknown foreign suffix keeps
-    # its own spelling rather than becoming a US ticker.
-    canadian = ext in _CA_VENUES
-
-    if platform == 'seekingalpha':
-        if canadian: return f"{base}:CA"
-        if ext == 'US': return base
-        return f"{base}.{ext}"
-    elif platform == 'fastgraph':
-        if canadian: return f"{base}:CA"
-        if ext == 'US': return f"{base}:US"
-        return f"{base}.{ext}"
-    
-    return f"{base}.{ext}"
-
 def get_option_type(symbol: str) -> str:
     """Returns 'C' or 'P' from an OCC-style option ticker."""
     match = re.search(r'\d{6}([CP])\d+', symbol, re.IGNORECASE)
@@ -154,7 +129,7 @@ def underlying_of(symbol: str, aliases: dict) -> str:
 # ticker.map is the project's ONE mapping file. Besides the rename rules
 # (GLOBAL, TOBASE, JOURNAL, DELETE, DISTINCT, RENAME — parsed by
 # bin/taxjson_ticker_map._parse_map_file, which hands these lines here),
-# it carries three lookup keywords that change no symbol in the books:
+# it carries four lookup keywords that change no symbol in the books:
 #
 #   QUOTE       SYMBOL YAHOO_SYMBOL [QTY_RATIO]
 #       the Yahoo Finance spelling a price lookup uses for SYMBOL
@@ -171,10 +146,15 @@ def underlying_of(symbol: str, aliases: dict) -> str:
 #       and whose currency is CURRENCY ('*' = any) gets SYMBOL — for a
 #       security the currency->exchange suffix mislabels (the TSX-only
 #       USD unit DLR.U.TO). First matching line wins.
+#   T1135       SYMBOL COUNTRY
+#       the T1135 domicile of SYMBOL where its listing suffix is wrong
+#       (an interlisted company): an ISO 3166 alpha-3 code, or
+#       CA/CAN/CANADA/EXCLUDE for "not specified foreign property"
+#       (lib/t1135_country). Read by taxjson-t1135 / `taxjson t1135`.
 #
 # These used to be files of their own (yf_ticker.map,
-# crypto_ticker.map, ticker_extraction_overrides.txt); `taxjson migrate`
-# folds an old project's files into ticker.map.
+# crypto_ticker.map, ticker_extraction_overrides.txt, t1135.map);
+# `taxjson migrate` folds an old project's files into ticker.map.
 #
 # TRADINGVIEW SYMBOL EXCHANGE was a fourth lookup (the exchange prefix of
 # the TradingView watchlist export, once tv_exchange.map). The export was
@@ -185,7 +165,7 @@ def underlying_of(symbol: str, aliases: dict) -> str:
 # ---------------------------------------------------------------------------
 
 TICKER_MAP_NAME = "ticker.map"
-SIDE_KEYWORDS = ("QUOTE", "CRYPTO", "EXTRACT")
+SIDE_KEYWORDS = ("QUOTE", "CRYPTO", "EXTRACT", "T1135")
 # Keywords of removed features: lines carrying them are skipped by every
 # reader (read_side_rules lists where they are) — {keyword: what went}.
 RETIRED_KEYWORDS = {"TRADINGVIEW": "TradingView export removed"}
@@ -197,6 +177,7 @@ LEGACY_MAP_FILES = {
     "yf_ticker.map": "QUOTE",
     "crypto_ticker.map": "CRYPTO",
     "ticker_extraction_overrides.txt": "EXTRACT",
+    "t1135.map": "T1135",
 }
 # Old per-purpose files of REMOVED features: nothing reads them, so no
 # command stops for them (no rule could be silently lost); `taxjson
@@ -217,23 +198,29 @@ class LegacyMapFileError(_InputContentError):
 
 
 class SideRules:
-    """The parsed QUOTE / CRYPTO / EXTRACT lines of one ticker.map.
-    quote: {SYMBOL: (yahoo, ratio)}; crypto: {SYMBOL: yahoo id};
-    extract: [(description words lower-cased, CURRENCY, symbol)] in file
-    order; problems: the lines that cannot be read or that contradict an
-    earlier line, as `<file>:<lineno>: <message>`; retired: the
-    `<file>:<lineno>` of each skipped line of a removed feature
-    (RETIRED_KEYWORDS — a TRADINGVIEW line)."""
+    """The parsed QUOTE / CRYPTO / EXTRACT / T1135 lines of one
+    ticker.map. quote: {SYMBOL: (yahoo, ratio)}; crypto: {SYMBOL: yahoo
+    id}; extract: [(description words lower-cased, CURRENCY, symbol)] in
+    file order; t1135: {SYMBOL: ISO3 code, or "CA" for not foreign
+    property} (lib/t1135_country); problems: the lines that cannot be
+    read or that contradict an earlier line, as `<file>:<lineno>:
+    <message>`; t1135_problems: the ones a T1135 reader must not skip —
+    a T1135 line, or a line with no keyword at all (an old t1135.map
+    line pasted in); retired: the `<file>:<lineno>` of each skipped line
+    of a removed feature (RETIRED_KEYWORDS — a TRADINGVIEW line)."""
 
     def __init__(self):
         self.quote: dict = {}
         self.crypto: dict = {}
         self.extract: list = []
+        self.t1135: dict = {}
         self.problems: list = []
+        self.t1135_problems: list = []
         self.retired: list = []
 
     def empty(self) -> bool:
-        return not (self.quote or self.crypto or self.extract)
+        return not (self.quote or self.crypto or self.extract
+                    or self.t1135)
 
 
 def _comment_free(raw: str) -> str:
@@ -280,6 +267,15 @@ def parse_side_line(kw: str, line: str):
         if len(toks) != 2:
             raise ValueError("CRYPTO needs `CRYPTO SYMBOL YAHOO_ID`")
         return "crypto", toks[0].upper(), toks[1]
+    if kw == "T1135":
+        from taxjson.lib.t1135_country import (NOT_FOREIGN_WORDS,
+                                               parse_country)
+        if len(toks) != 2:
+            raise ValueError(
+                f"T1135 needs `T1135 SYMBOL COUNTRY` (COUNTRY an ISO 3166 "
+                f"alpha-3 code, or {'/'.join(NOT_FOREIGN_WORDS)} for not "
+                f"foreign property)")
+        return "t1135", toks[0].upper(), parse_country(toks[1])
     raise ValueError(f"{kw} is not a ticker.map lookup keyword")
 
 
@@ -331,16 +327,23 @@ def read_side_rules(path) -> "SideRules":
             rules.retired.append(where)
             continue
         if kw not in SIDE_KEYWORDS:
-            rules.problems.append(
-                f"{where}: line has no ticker.map keyword "
-                f"({'/'.join(RENAME_KEYWORDS + SIDE_KEYWORDS)}): {line!r}")
+            msg = (f"{where}: line has no ticker.map keyword "
+                   f"({'/'.join(RENAME_KEYWORDS + SIDE_KEYWORDS)}): "
+                   f"{line!r}")
+            rules.problems.append(msg)
+            rules.t1135_problems.append(msg)
             continue
         try:
             kind, key, value = parse_side_line(kw, line)
         except ValueError as e:
             rules.problems.append(f"{where}: {e}: {line!r}")
+            if kw == "T1135":
+                rules.t1135_problems.append(rules.problems[-1])
             continue
+        n = len(rules.problems)
         add_side_rule(rules, kind, key, value, where, line)
+        if kind == "t1135" and len(rules.problems) > n:
+            rules.t1135_problems.append(rules.problems[-1])
     return rules
 
 

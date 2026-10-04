@@ -17,7 +17,7 @@ Directory layout:
       rrsp/  tfsa/  ...
     ticker.map            # optional — symbol rules (GLOBAL/TOBASE/JOURNAL/DELETE/
                           # DISTINCT/RENAME) and lookups (QUOTE/CRYPTO/
-                          # EXTRACT)
+                          # EXTRACT/T1135)
     reports/              # all outputs land here, overwritten on re-run
     work/                 # intermediate JSON (--fast reuses these via mtime)
 
@@ -2663,7 +2663,7 @@ def _refuse_legacy_project_files(root: Path) -> None:
 
 def cmd_migrate(args: argparse.Namespace) -> None:
     """`taxjson migrate [--dry-run]`: move an old project's per-purpose
-    files into ticker.map (QUOTE / CRYPTO / EXTRACT lines) and
+    files into ticker.map (QUOTE / CRYPTO / EXTRACT / T1135 lines) and
     taxjson.toml ([estimate] amt_carryover, [carryover] claimed,
     [[capital_gains_dividends]], [[distributions]]) — appended, never
     rewritten — and rename each old file to <name>.migrated. A leftover
@@ -4214,53 +4214,40 @@ def _blend_conservation_gaps(blended_doc: Dict[str, Any],
     return out
 
 
-_EXPORT_MATRIX: Tuple[Tuple[str, List[str]], ...] = (
-    ("AAll_SA.csv",             ["--seekingalpha"]),
-    ("ALongUSD_SA.csv",         ["--seekingalpha", "--no-options", "--no-cad"]),
-    ("ALongCAD_SA.csv",         ["--seekingalpha", "--no-options", "--no-usd"]),
-    ("AOptionsUSD_SA.csv",      ["--seekingalpha", "--no-equities", "--no-cad"]),
-    ("AOptionsCAD_SA.csv",      ["--seekingalpha", "--no-equities", "--no-usd"]),
-    ("AOptionsShortUSD_SA.csv", ["--seekingalpha", "--no-equities", "--no-cad", "--short"]),
-    ("AOptionsShortCAD_SA.csv", ["--seekingalpha", "--no-equities", "--no-usd", "--short"]),
-    ("AOptionsLongUSD_SA.csv",  ["--seekingalpha", "--no-equities", "--no-cad", "--long"]),
-    ("AOptionsLongCAD_SA.csv",  ["--seekingalpha", "--no-equities", "--no-usd", "--long"]),
-    ("AAll_FG.csv",             ["--fastgraph"]),
-    ("ALong_FG.csv",            ["--fastgraph", "--no-options"]),
-    ("AOptionsShort_FG.csv",    ["--fastgraph", "--no-equities", "--short"]),
-    ("AOptionsLong_FG.csv",     ["--fastgraph", "--no-equities", "--long"]),
-)
-
-# Exports an earlier version wrote and this one no longer does: an
-# outdated copy left in reports/exports/ would read as current, so each
-# run removes it. {glob: why}.
-_RETIRED_EXPORTS: Tuple[Tuple[str, str], ...] = (
-    ("*_TV.txt", "the TradingView export was removed"),
-)
+# The watchlist exports (Seeking Alpha *_SA.csv, FastGraph *_FG.csv,
+# TradingView *_TV.txt) an earlier version wrote to reports/exports/ and
+# this one no longer does: an outdated copy would read as current, so a
+# full run removes them, and the folder once nothing else is in it.
+_RETIRED_EXPORTS: Tuple[str, ...] = ("*_SA.csv", "*_FG.csv", "*_TV.txt")
 
 
-def _sweep_retired_exports(exports_dir: Path) -> None:
-    """Remove the retired exports (_RETIRED_EXPORTS) an earlier run left
-    in reports/exports/, naming each."""
-    if not exports_dir.is_dir():
+def _sweep_retired_exports(reports_dir: Path) -> None:
+    """Remove the retired watchlist exports (_RETIRED_EXPORTS) an earlier
+    run left in reports/exports/, then the folder if that empties it — in
+    one line. A file of the user's own there (another name) is kept, and
+    so is the folder."""
+    exports_dir = reports_dir / "exports"
+    if not exports_dir.is_dir() or exports_dir.is_symlink():
         return
-    for pattern, why in _RETIRED_EXPORTS:
+    gone = 0
+    for pattern in _RETIRED_EXPORTS:
         for p in sorted(exports_dir.glob(pattern)):
             if p.is_file() or p.is_symlink():
                 p.unlink()
-                print(f"  removed stale {p.name} ({why})")
-
-
-def stage_exports(equity_gains: List[Path], reports_dir: Path) -> None:
-    exports_dir = reports_dir / "exports"
-    _sweep_retired_exports(exports_dir)
-    if not equity_gains:
+                gone += 1
+    try:
+        exports_dir.rmdir()
+        removed_dir = True
+    except OSError:          # not empty: the user's own files stay
+        removed_dir = False
+    if not gone and not removed_dir:
         return
-    print("==> exports")
-    files = [str(p) for p in equity_gains]
-    for fname, flags in _EXPORT_MATRIX:
-        run_to_file(_cmd("taxjson-export") + flags + files, exports_dir / fname,
-                    capture_diag=False)
-    print(f"  → {exports_dir}/")
+    what = (f"{gone} old watchlist file(s) in "
+            f"{reports_dir.name}/exports/")
+    if removed_dir:
+        what += " and the folder"
+    print(f"  removed {what} (the Seeking Alpha / FastGraph / TradingView "
+          f"exports were removed)")
 
 
 def _duplicate_input_files(inputs_dir: Path,
@@ -5248,8 +5235,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         _agg_path.unlink(missing_ok=True)
 
     if not args.account:
-        equity_gains = [o["gains"] for _, o, is_crypto in taxable_outputs if not is_crypto]
-        stage_exports(equity_gains, reports_dir)
+        _sweep_retired_exports(reports_dir)
 
         all_gains = ([o["gains"] for _, o in sheltered_outputs] +
                      [_wash_preferred_gains(o["gains"])
@@ -5420,9 +5406,9 @@ def cmd_run(args: argparse.Namespace) -> None:
             print(f"  holdings sanity skipped: {_e}", file=sys.stderr)
     if args.account:
         # A single-account run can't do cross-account wash detection or the
-        # combined exports/cross reports — those are SKIPPED (previously they
+        # combined cross-account reports — those are SKIPPED (previously they
         # ran on just this account's data and silently OVERWROTE the combined
-        # exports/ccd/leaps/crosslistings with one-account truncations).
+        # ccd/leaps/crosslistings with one-account truncations).
         # `<account>_wash.sum` and the combined reports keep whatever the
         # last FULL run wrote.
         # Canada's rule is the superficial-loss rule (audit A2-1360).
@@ -5430,7 +5416,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                    else "superficial-loss")
         print(
             f"\n  ! Single-account run ({args.account}): cross-account "
-            f"{_rule_n} detection and the combined exports/cross reports "
+            f"{_rule_n} detection and the combined cross-account reports "
             f"were skipped — "
             f"they keep the last full run's contents. Run `taxjson run` "
             f"with no --account before filing.",
@@ -5672,6 +5658,11 @@ _TEMPLATE_TICKER_MAP = """\
 #                     these words and whose currency is CURRENCY ('*' =
 #                     any) gets SYMBOL (a USD unit that trades only on the
 #                     TSX would otherwise become a .US listing).
+#   T1135   SYMBOL COUNTRY
+#                     The T1135 domicile where the listing suffix is wrong
+#                     (an interlisted company): an ISO 3166 alpha-3 code,
+#                     or CA/CAN/CANADA/EXCLUDE for "not foreign property"
+#                     (`taxjson t1135`).
 #
 # Examples — uncomment and edit:
 # RENAME   FB.US      META.US   2022-06-09
@@ -5683,6 +5674,7 @@ _TEMPLATE_TICKER_MAP = """\
 # QUOTE    PNG.TO     PNG.V
 # CRYPTO   TAO        TAO22974
 # EXTRACT  Global X US Dollar Currency ETF | USD | DLR.U.TO
+# T1135    ENB.US     CA
 """
 
 # Keep generated artifacts out of version control. `taxjson run` rebuilds all
@@ -13523,15 +13515,16 @@ def cmd_t1135(args: argparse.Namespace) -> None:
              # S052-10: the gain join and the cost walk follow the
              # project's tax_date, like the gains files.
              "--tax-date", _tax_date_basis(settings)]
-    t1135_map = root / "t1135.map"
-    # A dangling link (or a directory) is not "no map": the domicile
+    # The domicile overrides are ticker.map's T1135 lines (once
+    # t1135.map). A dangling link (or a directory) is not "no map": the
     # overrides it holds change the filing verdict (A2-0355).
+    t1135_map = root / "ticker.map"
     if t1135_map.is_file():
         argv += ["--map", str(t1135_map)]
     elif t1135_map.is_symlink() or t1135_map.exists():
         sys.exit(f"taxjson t1135: cannot read {t1135_map.name} (a broken "
-                 f"link or not a file) — fix or remove it; its country "
-                 f"overrides change the verdict.")
+                 f"link or not a file) — fix or remove it; its T1135 "
+                 f"country overrides change the verdict.")
     # The same missing-history openings the gains stage applies (R1-321):
     # without them a position bought before the data read as a short that
     # later real buys covered at zero cost.
@@ -17478,7 +17471,7 @@ def _build_parser(prog: str = "taxjson"
         help="Move an older project's files into the new layout",
         description="Move an old project's yf_ticker.map, "
              "crypto_ticker.map, ticker_extraction_overrides.txt, "
-             "amt_carryover.txt, claimed_losses.txt, "
+             "t1135.map, amt_carryover.txt, claimed_losses.txt, "
              "capital_gains_dividends.map and distributions.map into "
              "ticker.map / taxjson.toml (appended; each old file is "
              "renamed <name>.migrated). Every other command stops while "
@@ -18351,8 +18344,8 @@ def _build_parser(prog: str = "taxjson"
         help="Foreign property (T1135): test and tables",
         description="CRA T1135 foreign-property helper: cost-based "
              "filing-threshold test plus per-property / per-country "
-             "tables over all taxable accounts (put per-symbol domicile "
-             "overrides in t1135.map).")
+             "tables over all taxable accounts (per-symbol domicile "
+             "overrides: ticker.map `T1135 SYMBOL COUNTRY` lines).")
     p_t1135.add_argument("--json", action="store_true",
                          help="Emit the report as JSON instead of text")
     p_t1135.set_defaults(func=cmd_t1135)

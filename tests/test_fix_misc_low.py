@@ -191,24 +191,6 @@ class TestLintCrosslistings(unittest.TestCase):
             self.assertEqual(r.returncode, 1)
 
 
-class TestWatchlistPlatformSuffix(unittest.TestCase):
-    def test_canadian_venues_are_canadian(self):
-        # S078-03: .V/.CN/.NE were exported as US tickers.
-        sys.path.insert(0, str(SRC))
-        from taxjson.lib.ticker_map import format_ticker_for_platform as f
-        cases = {
-            "QZT.TO": ("QZT:CA", "QZT:CA"),
-            "QZV.V": ("QZV:CA", "QZV:CA"),
-            "QZC.CN": ("QZC:CA", "QZC:CA"),
-            "QZN.NE": ("QZN:CA", "QZN:CA"),
-            "QZU.US": ("QZU", "QZU:US"),
-            "QZA.AX": ("QZA.AX", "QZA.AX"),
-        }
-        for sym, (sa, fg) in cases.items():
-            self.assertEqual(f(sym, "seekingalpha"), sa, sym)
-            self.assertEqual(f(sym, "fastgraph"), fg, sym)
-
-
 _IB_SAMPLE = """Statement,Header,Field Name,Field Value
 Account Information,Header,Field Name,Field Value
 Account Information,Data,Name,Pat Contributor

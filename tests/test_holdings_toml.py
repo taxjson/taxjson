@@ -291,8 +291,8 @@ class TestHoldingsToml(unittest.TestCase):
                  "no TOML reader (Python < 3.11 without `tomli`)")
 class TestTomlInput(unittest.TestCase):
     """taxjson-export accepts a holdings TOML snapshot as input (detected
-    by the .toml extension), not just gains JSON — so the watchlist
-    exports can run straight off `reports/*_holdings.toml`. A `[[holding]]`
+    by the .toml extension), not just gains JSON — so --report can run
+    straight off `reports/*_holdings.toml`. A `[[holding]]`
     table's `quantity` is adapted to the `qty` the tool consumes."""
 
     def _run(self, toml_text, *args):
@@ -305,13 +305,6 @@ class TestTomlInput(unittest.TestCase):
                                text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             return r.stdout
-
-    def test_platform_export_reads_toml(self):
-        out = self._run(
-            '[[holding]]\nsymbol = "AEM.US"\nasset_type = "equity"\n'
-            'quantity = 40.0\ncurrency = "USD"\ntotal_cost = 7200.0\n',
-            '--seekingalpha')
-        self.assertEqual(out.strip(), 'AEM')
 
     def test_report_reads_toml_quantity_and_cost(self):
         out = self._run(
@@ -329,8 +322,9 @@ class TestTomlInput(unittest.TestCase):
             'currency = "USD"\ntotal_cost = -5000.0\n'
             '[[holding]]\nsymbol = "ABC.US"\nquantity = 50.0\n'
             'currency = "USD"\ntotal_cost = 5000.0\n',
-            '--seekingalpha', '--short')
-        self.assertEqual(out.strip(), 'XYZ')
+            '--report', '--short')
+        self.assertIn('XYZ.US', out)
+        self.assertNotIn('ABC.US', out)
 
 
 if __name__ == '__main__':

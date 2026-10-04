@@ -15,7 +15,8 @@ Usage:
 ticker.map is the project's one mapping file. Rename rules: GLOBAL, TOBASE,
 JOURNAL, DELETE, DISTINCT, RENAME. Lookups that change no symbol (read by
 other tools; this one skips them): QUOTE SYMBOL YAHOO_SYMBOL [RATIO],
-CRYPTO SYMBOL YAHOO_ID, EXTRACT description words | CURRENCY | SYMBOL.
+CRYPTO SYMBOL YAHOO_ID, EXTRACT description words | CURRENCY | SYMBOL,
+T1135 SYMBOL COUNTRY.
 A TRADINGVIEW line (the removed TradingView export) is ignored. See the
 README's ticker.map section.
 """
@@ -50,9 +51,10 @@ from taxjson.lib.ticker_map import map_ticker
 #   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
 #                     — a ticker change on that date: a DATED event
 #                       (lib/renames). Without a date it is GLOBAL.
-# Three more keywords are lookups that change no symbol (lib/ticker_map,
+# Four more keywords are lookups that change no symbol (lib/ticker_map,
 # which parses them): QUOTE (Yahoo quote spelling), CRYPTO (a coin's
-# Yahoo id) and EXTRACT (a parser symbol-extraction override). A
+# Yahoo id), EXTRACT (a parser symbol-extraction override) and T1135 (a
+# symbol's T1135 domicile). A
 # TRADINGVIEW line (the removed TradingView export) is skipped here;
 # `taxjson run` notes it once (lib/ticker_map.RETIRED_KEYWORDS).
 _MAP_KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DELETE", "DISTINCT",
@@ -121,7 +123,7 @@ def _parse_map_file(file_path: Path):
                 # a problem (`taxjson run` asks once to delete it).
                 continue
             if kw in SIDE_KEYWORDS:
-                # QUOTE / CRYPTO / EXTRACT: lookups that
+                # QUOTE / CRYPTO / EXTRACT / T1135: lookups that
                 # change no symbol (lib/ticker_map); checked here so
                 # `taxjson run` refuses a malformed one up front too.
                 try:
@@ -135,7 +137,7 @@ def _parse_map_file(file_path: Path):
                 problems.append(
                     f"{where}: line has no ticker.map keyword "
                     f"(GLOBAL/TOBASE/JOURNAL/DELETE/DISTINCT/RENAME/"
-                    f"QUOTE/CRYPTO/EXTRACT): {line!r}")
+                    f"QUOTE/CRYPTO/EXTRACT/T1135): {line!r}")
                 continue
             if kw == "RENAME" and len(syms) > 2:
                 # RENAME OLD NEW YYYY-MM-DD [late=fold|late=separate]
@@ -535,8 +537,11 @@ def main():
             "            QUOTE SYMBOL YAHOO_SYMBOL [QTY_RATIO]   price lookups\n"
             "            CRYPTO SYMBOL YAHOO_ID                a coin's Yahoo id\n"
             "            EXTRACT words | CURRENCY | SYMBOL     parser symbol override\n"
-            "The old yf_ticker.map, crypto_ticker.map and\n"
-            "ticker_extraction_overrides.txt are folded in by `taxjson migrate`.\n"
+            "            T1135 SYMBOL COUNTRY                  T1135 domicile (ISO-3,\n"
+            "                                                  or CA/EXCLUDE)\n"
+            "The old yf_ticker.map, crypto_ticker.map,\n"
+            "ticker_extraction_overrides.txt and t1135.map are folded in by\n"
+            "`taxjson migrate`.\n"
             "A TRADINGVIEW line (the removed TradingView export) is ignored."))
     parser.add_argument("input", help="Input JSON file with transactions")
     parser.add_argument("map_file", nargs="?", help="Optional map file (ticker.map). If provided, outputs updated JSON.")

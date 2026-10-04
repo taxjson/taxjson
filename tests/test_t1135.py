@@ -1,6 +1,6 @@
 """Tests for taxjson-t1135 (CRA foreign-property helper).
 
-Covers: domicile classification + t1135.map overrides, the cost walk
+Covers: domicile classification + ticker.map T1135 overrides, the cost walk
 (baseline state, simultaneous-total threshold test, splits/renames,
 phantom openings, shorts, ADJUST), the income/gain join, report assembly,
 and the CLI end-to-end (text + JSON) including the `taxjson t1135` wrapper.
@@ -71,23 +71,28 @@ class TestClassify(unittest.TestCase):
 
 class TestOverridesFile(unittest.TestCase):
     def test_parse(self):
+        # The overrides are ticker.map T1135 lines (once t1135.map); a
+        # line that cannot be read stops the tool instead of being
+        # skipped (test_fix_t1135_tickermap).
+        from taxjson.lib.cli_diag import InputContentError
         with tempfile.TemporaryDirectory() as td:
-            p = Path(td) / "t1135.map"
+            p = Path(td) / "ticker.map"
             p.write_text(
                 "# comment\n"
-                "ENB.US  CA\n"
-                "GLXY.TO USA   # foreign corp on TSX\n"
-                "BTC EXCLUDE\n"
-                "malformed-line-here\n"
+                "T1135 ENB.US  CA\n"
+                "T1135 GLXY.TO USA   # foreign corp on TSX\n"
+                "T1135 BTC EXCLUDE\n"
+                "GLOBAL FB.US META.US\n"
             )
-            err = io.StringIO()
-            with redirect_stderr(err):
-                ov = load_overrides(p)
+            ov = load_overrides(p)
+            p.write_text("T1135 ENB.US CA\nmalformed-line-here\n")
+            with self.assertRaises(InputContentError) as cm:
+                load_overrides(p)
         self.assertIsNone(ov["ENB.US"])
         self.assertEqual(ov["GLXY.TO"], "USA")
         self.assertIsNone(ov["BTC"])
-        self.assertNotIn("malformed-line-here", ov)
-        self.assertIn("line ignored", err.getvalue())
+        self.assertEqual(len(ov), 3)
+        self.assertIn("malformed-line-here", str(cm.exception))
 
 
 class TestWalkCosts(unittest.TestCase):
@@ -350,7 +355,7 @@ class TestCli(unittest.TestCase):
             text = out.getvalue()
             self.assertIn("T1135 FILING REQUIRED", text)
             self.assertIn("AAPL.US", text)
-            self.assertIn("t1135.map", text)      # review note for BTC
+            self.assertIn("T1135 SYMBOL", text)   # review note for BTC
 
             out = io.StringIO()
             with redirect_stdout(out):
@@ -374,8 +379,8 @@ class TestCli(unittest.TestCase):
             base.write_text(json.dumps({"transactions": [
                 tx(symbol="ENB.US", date="2025-01-10", qty=100, net=120000.0),
             ]}))
-            m = Path(td) / "t1135.map"
-            m.write_text("ENB.US CA\n")
+            m = Path(td) / "ticker.map"
+            m.write_text("T1135 ENB.US CA\n")
             out = io.StringIO()
             with redirect_stdout(out):
                 rc = main([str(base), "--year", "2025", "--json",
