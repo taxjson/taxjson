@@ -127,6 +127,17 @@ def qt_refresh(refresh_token: str,
         if not doc.get(k):
             raise RuntimeError(f"Questrade token response missing {k!r}"
                                f" — is the refresh token valid?")
+    # The tokens go into an Authorization header and the token file: a
+    # CR/LF (or anything a bearer token cannot hold) in a tampered or
+    # garbled response was a urllib ValueError whose traceback printed
+    # the whole header, token included (security review L4). Refuse it
+    # in one line that never shows the token.
+    for k in ("access_token", "refresh_token"):
+        if not _token_ok(str(doc[k])):
+            raise RuntimeError(
+                f"Questrade login returned an {k.replace('_', ' ')} with "
+                f"characters a token cannot hold (whitespace or control "
+                f"characters); refusing to use it")
     _api = str(doc["api_server"])
     if not _api.lower().startswith("https://"):
         raise RuntimeError(
@@ -140,6 +151,34 @@ def qt_refresh(refresh_token: str,
     return {"api_server": _api,
             "access_token": str(doc["access_token"]),
             "refresh_token": str(doc["refresh_token"])}
+
+
+_TOKEN_RE = None
+
+
+def _token_ok(token: str) -> bool:
+    """An OAuth token as a bearer credential may carry it (RFC 6750
+    b64token: letters, digits, - . _ ~ + / and trailing =) — nothing
+    that could split or extend an HTTP header."""
+    global _TOKEN_RE
+    if _TOKEN_RE is None:
+        import re as _re
+        _TOKEN_RE = _re.compile(r"[A-Za-z0-9\-._~+/]+=*")
+    return bool(_TOKEN_RE.fullmatch(token or ""))
+
+
+def qt_account_segment(number: Any) -> str:
+    """The Questrade account number from taxjson.toml as an API path
+    segment: ASCII digits only, then percent-quoted (security review
+    L2) — '../' or '?x=' in the config must never reshape the request.
+    A bad value raises RuntimeError naming it masked."""
+    n = str(number or "")
+    if not (n.isascii() and n.isdigit()):
+        raise RuntimeError(
+            f"the Questrade account number must be digits only (got "
+            f"{mask_account_number(n)!s}) — fix `account` under the "
+            f"account's [accounts.<name>] table in taxjson.toml")
+    return urllib.parse.quote(n, safe="")
 
 
 def qt_api_server_ok(url: str) -> bool:
@@ -180,6 +219,9 @@ def _qt_get(api_server: str, access_token: str, path: str,
         raise RuntimeError(
             f"refusing to send the Questrade access token to "
             f"{api_server!r} (not https://*.questrade.com)")
+    if not _token_ok(access_token):
+        raise RuntimeError("the Questrade access token holds characters "
+                           "a token cannot hold; refusing to send it")
     url = api_server.rstrip("/") + path
     def _authed(u: str) -> bytes:
         req = urllib.request.Request(
@@ -235,6 +277,7 @@ def qt_activities(session: Dict[str, str], number: str,
                   http_get: Callable[[str], bytes]) -> List[Dict[str, Any]]:
     """All activities for the account number over [start, end], fetched
     in <=31-day chunks (the API's hard window cap)."""
+    seg = qt_account_segment(number)
     out: List[Dict[str, Any]] = []
     seen_prev: set = set()
     cur = start
@@ -244,7 +287,7 @@ def qt_activities(session: Dict[str, str], number: str,
             "startTime": _toronto_stamp(cur, "00:00:00"),
             "endTime": _toronto_stamp(chunk_end, "23:59:59")})
         doc = _qt_get(session["api_server"], session["access_token"],
-                      f"/v1/accounts/{number}/activities?{qs}", http_get)
+                      f"/v1/accounts/{seg}/activities?{qs}", http_get)
         # Boundary-day activities come back in BOTH adjacent chunks
         # (a trade on the boundary date settles inside the next
         # window, and the server matches it in each) — drop repeats
@@ -347,8 +390,9 @@ def qt_positions(session: Dict[str, str], number: str,
                  http_get: Callable[[str], bytes]) -> List[Dict[str, Any]]:
     """Live open positions for the account — symbol, openQuantity,
     averageEntryPrice, currentPrice, currentMarketValue."""
+    seg = qt_account_segment(number)
     doc = _qt_get(session["api_server"], session["access_token"],
-                  f"/v1/accounts/{number}/positions", http_get)
+                  f"/v1/accounts/{seg}/positions", http_get)
     return doc.get("positions") or []
 
 

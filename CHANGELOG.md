@@ -27,6 +27,11 @@
   line lets a synthetic one through.
 - **`TAXJSON_OFFLINE` stops `taxjson fetch`** with one line before any
   fetcher runs (`--list` still works).
+- taxjson-fetch: the Questrade `account` from taxjson.toml must be digits
+  only (checked before the refresh token is spent) and is percent-quoted
+  into the API path; a login response whose access or refresh token holds
+  whitespace or control characters is one clean error line that never
+  shows the token (was a traceback printing the Authorization header).
 
 ### One mapping file, year data in taxjson.toml (owner request)
 

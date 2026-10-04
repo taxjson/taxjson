@@ -109,6 +109,10 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
         number = fc.get("number") or ""
         if not number:
             continue
+        try:
+            F.qt_account_segment(number)          # before any login (L2)
+        except RuntimeError as e:
+            _die(f"[accounts.{a}]: {e}")
         if qt_session is None:
             tok_cache = _questrade_token_file(cache)
             token = ((tok_cache.read_text(encoding="utf-8").strip()
@@ -567,6 +571,11 @@ def run(request) -> Dict[str, Any]:
             if not number:
                 sys.exit(f"taxjson fetch: [accounts.{a}] needs "
                          f"`account` (the Questrade account number).")
+            try:
+                # digits only, checked before the token is spent (L2)
+                F.qt_account_segment(number)
+            except RuntimeError as e:
+                sys.exit(f"taxjson fetch: [accounts.{a}]: {e}")
             if qt_session is None:
                 tok_cache = _questrade_token_file(cache)
                 token = (getattr(args, "refresh_token", None)
