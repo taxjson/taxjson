@@ -47,7 +47,7 @@ def _parse_folder(files, which):
 # A long call that expired worthless, then an ordinary limit buy of 100
 # shares AT THE STRIKE four days later. {fee} picks the stock leg's
 # commission: Webull's exercise/assignment signature is $1.00; ordinary
-# stock trades carry ~$2.91-4.13.
+# stock trades carry the regular commission.
 _LONGCALL = (_PRE + _H25 +
              'USD,20-03-2025,BUY,@XYZ,CALL XYZ03/21/25 50,OPC,1,1.00,,(100.99)\n'
              'USD,21-03-2025,SELL,,,,-1,0.00,,\n'

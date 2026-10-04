@@ -66,12 +66,14 @@ class Rule:
 RuleSection = Tuple[str, List[Rule]]
 
 # The settings each country's text branches on, with every value that
-# changes a statement. catalog() renders every combination.
+# changes a statement. catalog() renders every combination. YEAR stands
+# for "a year is set": variants() renders it as the sample project year.
+YEAR = "YEAR"
 VARIANT_AXES: Dict[str, Dict[str, Tuple[Any, ...]]] = {
     _C.CANADA: {
         "tax_date": ("settle", "trade"),
         "option_premium_timing": ("grant", "close"),
-        "option_grant_timing_since": (None, 2025),
+        "option_grant_timing_since": (None, YEAR),
         "option_buyback_loss_superficial": (False, True),
         "futures_settle": ("trade", "next_day"),
         "foreign_return_of_capital": ("dividend", "acb"),
@@ -2201,10 +2203,12 @@ def variants(country: str):
     """Every settings combination of VARIANT_AXES for `country`."""
     c = _C.canonical_country(country)
     axes = VARIANT_AXES[c]
+    year = 2026
     for combo in itertools.product(*axes.values()):
-        st = {k: v for k, v in zip(axes, combo) if v is not None}
+        st = {k: (year if v == YEAR else v)
+              for k, v in zip(axes, combo) if v is not None}
         st["country"] = c
-        st["year"] = 2026
+        st["year"] = year
         yield st
 
 

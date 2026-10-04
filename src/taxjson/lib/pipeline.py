@@ -133,8 +133,8 @@ _ATTEST_BLESS_PAD_DAYS = 7
 # one or two symbols' churn is not evidence of an account-level event.
 _RESTATEMENT_MIN_SYMBOLS = 3
 _RESTATEMENT_CHAIN_PAD_DAYS = 3
-# One broker restatement is a FEW DAYS of churn (the real 2026-08 event
-# spanned 5). Without an event-level cap, pad-chaining could glue
+# One broker restatement is a FEW DAYS of churn (well under a week).
+# Without an event-level cap, pad-chaining could glue
 # unrelated per-symbol pairs weeks apart into a >= 3-symbol "event"
 # (round-five adversarial audit finding 2).
 _RESTATEMENT_EVENT_MAX_SPAN_DAYS = 7
@@ -274,8 +274,8 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
     # detection. Per account, chain zero-net qualified segments whose
     # date spans sit within _RESTATEMENT_CHAIN_PAD_DAYS of each other;
     # a chain covering >= _RESTATEMENT_MIN_SYMBOLS distinct symbols is
-    # one broker custody event (2026-09: a real restatement journaled
-    # every position of one account out-and-back over a few days) —
+    # one broker custody event (a restatement can journal every
+    # position of one account out-and-back over a few days) —
     # its segments net without per-symbol attestation. The evidence is
     # IN the data: no tax event journals an account's whole inventory
     # out-and-back to zero, and the per-symbol near-trade refusal was

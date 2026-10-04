@@ -119,8 +119,8 @@ _TOTAL_TOL_REL = 0.01
 # USD); what it leaves out is the USD/CAD movement while the coins are
 # held — exactly the FX on USD cash that the tool does not model for
 # Kraken's USD balances either (KNOWN_ISSUES "Kraken fiat conversions
-# are not modeled"). On real data that residual was a few dollars a
-# year (USDC bought and spent within days at ~the same BoC rate).
+# are not modeled"). When USDC is bought and spent within days, at
+# about the same BoC rate, that residual is small.
 # The crypto side of each Advanced Trade is still booked at the CAD
 # value Coinbase states for it (Subtotal / Total).
 _STABLECOINS = USD_STABLECOINS

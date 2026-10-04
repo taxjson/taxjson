@@ -558,10 +558,10 @@ class WebullBrokerage(BaseBrokerage):
                 f"{header!r}. Refusing to guess column positions.")
         return cols
 
-    # Webull's exercise/assignment charge on the stock leg: every real
-    # assignment/exercise seen carries exactly $1.00 (net = qty x strike
-    # +/- 1), while ordinary stock trades carry the regular commission
-    # (~$2.91-4.13, or $0 in a commission-free promotion). The fee is
+    # Webull's exercise/assignment charge on the stock leg: Webull's fee
+    # schedule charges exactly $1.00 on an assignment/exercise (net =
+    # qty x strike +/- 1), while ordinary stock trades carry the regular
+    # commission (or $0 in a commission-free promotion). The fee is
     # the only evidence in the Trading Summary that separates the two.
     _EXERCISE_FEE = 1.00
 

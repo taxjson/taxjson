@@ -63,7 +63,7 @@ _COLUMNS = ('Date', 'Activity', 'Symbol', 'Symbol Description', 'Quantity',
             'Price', 'Settlement Date', 'Account', 'Value', 'Amount',
             'Currency', 'Description')
 _CANON = {c.lower(): c for c in _COLUMNS}
-# Every RBC export vintage seen (2021-2026, 13 distinct files) carries
+# Every RBC export vintage this parser knows carries
 # all of these; a file without them is not an export this parser knows.
 REQUIRED_COLUMNS = ('Date', 'Activity', 'Symbol', 'Quantity', 'Price',
                     'Settlement Date', 'Currency', 'Description')
@@ -120,7 +120,7 @@ _TRADE_DESC_RE = re.compile(r'\b(?:Buy|Sell)\b')
 # the TSX, in a CAD class (DLR.TO) and a USD class (DLR.U.TO). RBC books
 # both under the bare symbol "DLR"; the USD row would otherwise become
 # DLR.US — the NYSE ticker of Digital Realty Trust, a different security.
-# Both issuer spellings seen in real exports: "HORIZONS U S DLR CURRENCY
+# The issuer has used two spellings: "HORIZONS U S DLR CURRENCY
 # ETF" (to ~2023) and "GLOBAL X US DLR CURRENCY ETF".
 _RBC_USD_DLR_RE = re.compile(r'\bU\s?\.?\s?S\.?\s+DLR\s+CURRENCY\s+ETF\b',
                              re.I)
@@ -1654,7 +1654,7 @@ class RbcBrokerage(BaseBrokerage):
     # ------------------------------------------------------ pre-pass maps
     def _row_occ(self, r) -> Optional[str]:
         """OCC symbol from the row's Description, else its Symbol
-        Description (two real 2024 buys carried the contract only there).
+        Description (some buy rows carry the contract only there).
         None when the Symbol column is the contract's own UNDERLYING
         ticker: that row is the stock leg of an assignment/exercise whose
         text quotes the contract, and it used to become 100x as many

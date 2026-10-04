@@ -1891,7 +1891,7 @@ def _fold_per_account_rename_ratios(taxable: List[TaxTransaction],
     (the ratio is part of the event key) nor scale their own account:
     the first renamed the WHOLE pool at its account's ratio and the
     second found no pool — shares went missing and the gain moved
-    (2026-09 engine audit, r10: 1,100 booked for 1,220).
+    (2026-09 engine audit: fewer shares booked than were held).
 
     Rows of one event (same symbol, date and rename target) with more
     than one ratio are folded into ONE row whose ratio is the
@@ -3802,7 +3802,7 @@ class CanadaTaxRules(TaxRules):
                 # create nor back a denial: a class-wide balance let an
                 # RRSP's 2020 shares turn a taxable rebuy that was sold
                 # again inside the window into a PERMANENT denial (2026-09
-                # engine and real-data audits: AMD, ENPH, XTD shapes).
+                # engine audit).
                 def _holder(t):
                     if t.id in sheltered_ids or t.id in affiliated_ids:
                         return ('other', t.account)
