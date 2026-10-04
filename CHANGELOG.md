@@ -48,6 +48,16 @@
   USD | ROOT.U.TO` line, and until there is one the row's `.US` booking is
   an ATTENTION line that prints that line (it used to suggest a `GLOBAL`
   rename, which would also move a real US listing of the same symbol).
+- **`taxjson tax-logic` states every law constant the estimate uses**,
+  rendered from the same constants the code computes with: per-year
+  federal and provincial brackets, rates and basic personal amounts
+  (Canada) or standard deduction, ordinary and long-term-gain brackets
+  (US); the dividend gross-up and credit rates; the Ontario surtax and
+  Health Premium chart; each province's minimum-tax factor (marked where
+  assumed); NIIT's rate and threshold; CRA's prescribed interest rates and
+  the rule past the table's end; the April 30 balance-due day; the US
+  significant-holder thresholds for a reorganization statement. The
+  estimate's printed rates come from the same constants.
 
 ### Command line
 

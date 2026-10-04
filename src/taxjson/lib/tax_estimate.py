@@ -41,6 +41,20 @@ RATE_VINTAGE = "2025"
 
 _INF = float("inf")
 
+
+def fmt_pct(rate: float) -> str:
+    """A rate as the printed percentage, no float noise and no trailing
+    zeros: .150198 -> '15.0198%', .5 -> '50%', .038 -> '3.8%'. Every
+    printed rate (the estimate, tax-logic) goes through it, so the text
+    follows the constant (one source)."""
+    s = f"{rate * 100:.4f}".rstrip("0").rstrip(".")
+    return f"{s}%"
+
+
+def fmt_dollars(amount: float) -> str:
+    """'$55,867' (whole dollars, the tables' own precision)."""
+    return f"${amount:,.0f}"
+
 # Three published vintages; `apply_vintage(year)` selects one (exact
 # year, else the LATEST table at or before it — a 2027 project runs on
 # the 2026 tables until the annual refresh lands, and the printed
@@ -732,7 +746,7 @@ CA_ASSUMPTIONS = (
     "box 18 capital-gains "
     "dividends named in [[capital_gains_dividends]] (taxed as capital "
     "gains); foreign withholding creditable "
-    "up to 15%; crypto staking is ordinary income; no QC abatement or "
+    "up to " + fmt_pct(CA_FOREIGN_WITHHOLDING) + "; crypto staking is ordinary income; no QC abatement or "
     "low-income reductions; interest income and interest paid are "
     "not included — each account's .sum shows only a NET 'CASH "
     "INTEREST' (credit less debit interest), so take interest income "
@@ -810,10 +824,13 @@ def estimate_canada(*, realized: float, eligible_div: float,
     if actual_withheld is not None:
         ftc = min(max(0.0, actual_withheld),
                   foreign_div * CA_FOREIGN_WITHHOLDING)
-        ftc_source = "actual TAX rows (capped at 15% of foreign divs)"
+        ftc_source = (f"actual TAX rows (capped at "
+                      f"{fmt_pct(CA_FOREIGN_WITHHOLDING)} of foreign "
+                      f"divs)")
     else:
         ftc = foreign_div * CA_FOREIGN_WITHHOLDING
-        ftc_source = "assumed 15% of foreign dividends"
+        ftc_source = (f"assumed {fmt_pct(CA_FOREIGN_WITHHOLDING)} of "
+                      f"foreign dividends")
     # Net income (line 23600) = taxable income + the carryforward
     # losses deducted below it at line 25300 (x50%).
     grossed = eligible_div * CA_ELIGIBLE_GROSSUP
