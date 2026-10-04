@@ -4,17 +4,15 @@
 
 ### One mapping file, year data in taxjson.toml (owner request)
 
-- `ticker.map` is the project's one mapping file. Four lookup keywords
+- `ticker.map` is the project's one mapping file. Three lookup keywords
   join the rename rules: `QUOTE SYMBOL YAHOO_SYMBOL [RATIO]` (was
   `yf_ticker.map`; price lookups in `harvest` and the price chain),
-  `TRADINGVIEW SYMBOL EXCHANGE` (was `tv_exchange.map`; the TradingView
-  exports), `CRYPTO SYMBOL YAHOO_ID` (was `crypto_ticker.map`;
+  `CRYPTO SYMBOL YAHOO_ID` (was `crypto_ticker.map`;
   fill-crypto, crypto-sends and harvest) and `EXTRACT description words |
   CURRENCY | SYMBOL` (was `ticker_extraction_overrides.txt`; the parsers'
   symbol-extraction overrides — `taxjson-brokerage --security-overrides`
   now takes a ticker.map and reads its EXTRACT lines). A malformed
-  lookup line stops `taxjson run` like any other ticker.map line;
-  TRADINGVIEW symbols are upper-cased like every ticker.map symbol.
+  lookup line stops `taxjson run` like any other ticker.map line.
 - Hand-entered year data lives in `taxjson.toml`, checked by every
   command (types, dates, duplicates, the account an entry names, the
   country): `[estimate] amt_carryover` (the `amt_carryover.txt` reader is
@@ -63,6 +61,16 @@
 
 ### Removed
 
+- The TradingView watchlist export is gone: `taxjson-export
+  --tradingview` and `--tv-map` (asking for either is now a clear error
+  naming the removal) and the four `reports/exports/*_TV.txt` files of
+  `taxjson run`'s exports stage; each run removes a `*_TV.txt` an earlier
+  run left there. A `TRADINGVIEW` line in ticker.map is ignored, with one
+  NOTE per run asking you to delete it (never an error). A leftover
+  `tv_exchange.map` stops nothing (it is ignored, with a NOTE);
+  `taxjson migrate` renames it to `tv_exchange.map.migrated` without
+  converting it. The Seeking Alpha (`*_SA.csv`) and FastGraph
+  (`*_FG.csv`) exports, `--report` and `--holdings-toml` are unchanged.
 - The local web UI is gone: `taxjson serve` (and its `--host`, `--port`
   and `--token` flags), the `src/taxjson/web` package and the `[web]`
   extra (FastAPI, Uvicorn, Jinja2, python-multipart; the `[dev]` extra no

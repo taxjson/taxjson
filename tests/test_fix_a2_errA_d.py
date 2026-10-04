@@ -322,17 +322,8 @@ def export(*args, cwd=None):
 
 
 class TestExport(_Tmp):
-    """A2-0806, A2-1410, A2-1442, A2-1443 (tv-map BOM), A2-1441."""
-
-    def test_tv_map_bom_keeps_first_rule(self):
-        g = self.root / "g.json"
-        g.write_text('{"inventory":[{"symbol":"XYZ.TO","qty":10,'
-                     '"total_cost":100.0,"currency":"CAD"}]}')
-        m = self.root / "bom.map"
-        m.write_bytes(b"\xef\xbb\xbfTRADINGVIEW XYZ NEO\n")
-        r = export("--tradingview", "--tv-map", str(m), str(g))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("NEO:XYZ", r.stdout)
+    """A2-0806, A2-1410, A2-1442, A2-1441. (A2-1443, the tv-map BOM, went
+    with the TradingView export.)"""
 
     def test_gains_rows_wrong_types_refused(self):
         """A2-0793 (export part)."""
@@ -354,7 +345,7 @@ class TestExport(_Tmp):
             h.write_text('[meta]\nschema_version = 1\n[[holding]]\n'
                          'symbol = "XEI.TO"\n' + bad +
                          '\ncurrency = "CAD"\n')
-            for mode in ("--report", "--seekingalpha", "--tradingview"):
+            for mode in ("--report", "--seekingalpha", "--fastgraph"):
                 r = export(mode, str(h))
                 no_tb(self, r)
                 self.assertEqual(r.returncode, 2, (mode, r.stderr))

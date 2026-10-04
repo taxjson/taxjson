@@ -1,6 +1,5 @@
 """Planning low round (2026-09 audit): taxjson-export findings.
 
-  R1-246 / R1-285  tv_exchange.map comes from the project root, not the cwd
   R1-291 / S030-19 an unreadable input / --base-gains / --trades /
                    --transfer-evidence fails the tool (the run keeps the
                    previous snapshot) instead of an empty snapshot at rc 0
@@ -60,45 +59,6 @@ class _Tmp(unittest.TestCase):
         return p
 
 
-class TestTvMapFromProjectRoot(_Tmp):
-    """R1-246 / R1-285."""
-
-    def _project(self):
-        root = self.tmp / "proj"
-        self.w("proj/ticker.map", "TRADINGVIEW NVO.US NYSE\n")
-        g = self.w("proj/work/margin_gains.json",
-                   _inv(("NVO.US", 10, 1000, "USD")))
-        return root, g
-
-    def test_run_stage_passes_the_root_map(self):
-        from taxjson.bin import taxjson_run
-        root, g = self._project()
-        # A decoy map in the cwd must not win either.
-        other = self.tmp / "elsewhere"
-        other.mkdir()
-        (other / "ticker.map").write_text("TRADINGVIEW NVO.US XETR\n")
-        old = os.getcwd()
-        os.chdir(other)
-        try:
-            taxjson_run.stage_exports([g], root / "reports")
-        finally:
-            os.chdir(old)
-        tv = (root / "reports/exports/AAll_TV.txt").read_text().split()
-        self.assertEqual(tv, ["NYSE:NVO"])
-
-    def test_standalone_finds_the_map_next_to_work(self):
-        root, g = self._project()
-        r = _export("--tradingview", g, cwd=self.tmp)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(r.stdout.split(), ["NYSE:NVO"])
-
-    def test_explicit_map_that_cannot_be_read_is_refused(self):
-        root, g = self._project()
-        r = _export("--tradingview", "--tv-map", self.tmp / "nope.map", g)
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("nope.map", r.stderr)
-
-
 class TestUnreadableInputsFail(_Tmp):
     """R1-291 / S030-19 / S030-14: a named input that cannot be used
     stops the tool with a non-zero exit and writes no snapshot."""
@@ -115,7 +75,7 @@ class TestUnreadableInputsFail(_Tmp):
         self.assertNotIn("holdings_count", r.stdout)
 
     def test_positional_inputs(self):
-        for mode in ("--holdings-toml", "--report", "--tradingview"):
+        for mode in ("--holdings-toml", "--report", "--fastgraph"):
             self._assert_refused(_export(mode, self.good, self.trunc), "t.json")
             self._assert_refused(
                 _export(mode, self.tmp / "nosuch.json"), "nosuch.json")
@@ -152,7 +112,7 @@ class TestTomlInputShape(_Tmp):
 
     def test_wrong_table_name_refused(self):
         p = self.w("h.toml", '[[holdings]]\nsymbol = "ABC.TO"\nquantity = 1\n')
-        r = _export("--tradingview", p)
+        r = _export("--seekingalpha", p)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("holding", r.stderr)
         self.assertIn("holdings", r.stderr)     # names what it found
@@ -164,8 +124,8 @@ class TestTomlInputShape(_Tmp):
         self.assertEqual(r.returncode, 0, r.stderr)
         good = self.w("h.toml", '[[holding]]\nsymbol = "ABC.TO"\n'
                                 'quantity = 1.0\ntotal_cost = 5.0\n')
-        r = _export("--tradingview", good)
-        self.assertEqual((r.returncode, r.stdout.split()), (0, ["TSX:ABC"]))
+        r = _export("--seekingalpha", good)
+        self.assertEqual((r.returncode, r.stdout.split()), (0, ["ABC:CA"]))
 
 
 class TestDust(_Tmp):

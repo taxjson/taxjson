@@ -137,29 +137,6 @@ class TestYfMapLoader(unittest.TestCase):
         self.assertIn("ticker.map:2", err.getvalue())
 
 
-class TestTvExchangeMapShortLine(unittest.TestCase):
-    """S077-07 (sibling): a TRADINGVIEW line (once tv_exchange.map)
-    with no exchange is not dropped silently."""
-
-    def test_warns(self):
-        import subprocess
-        import sys
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp)
-            (tmp / "ticker.map").write_text("TRADINGVIEW NVDA.US\n")
-            gains = tmp / "gains.json"
-            gains.write_text(json.dumps({"inventory": [
-                {"symbol": "NVDA.US", "qty": 1, "total_cost": 100,
-                 "currency": "USD"}]}))
-            r = subprocess.run(
-                [sys.executable, "-m", "taxjson.bin.taxjson_export",
-                 "--tradingview", str(gains)],
-                cwd=Path(__file__).resolve().parent.parent,
-                capture_output=True, text=True)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("line ignored", r.stderr)
-
-
 class TestBocDegradedAnswer(unittest.TestCase):
     """S055-03: an HTTP 200 with no (or truncated) observations was
     recorded as coverage for good, so the dates kept a Yahoo close or a

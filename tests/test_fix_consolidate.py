@@ -1,8 +1,9 @@
 """One mapping file and the year data in taxjson.toml (owner request).
 
-- ticker.map carries four lookup keywords besides the renames: QUOTE
-  (was yf_ticker.map), TRADINGVIEW (tv_exchange.map), CRYPTO
-  (crypto_ticker.map) and EXTRACT (ticker_extraction_overrides.txt).
+- ticker.map carries three lookup keywords besides the renames: QUOTE
+  (was yf_ticker.map), CRYPTO (crypto_ticker.map) and EXTRACT
+  (ticker_extraction_overrides.txt). tv_exchange.map (the removed
+  TradingView export) is only renamed by migrate (test_fix_notv).
 - taxjson.toml carries [estimate] amt_carryover (amt_carryover.txt),
   [carryover] claimed (claimed_losses.txt), [[capital_gains_dividends]]
   (capital_gains_dividends.map) and [[distributions]] (distributions.map),
@@ -76,7 +77,6 @@ _OLD = {
 # The same content written directly in the new form.
 _NEW_MAP = ("TOBASE AEM.US AEM.TO\n"
             "QUOTE ZZS.TO ZZS-A.TO\nQUOTE OLD.TO NEWCO 0.25\n"
-            "TRADINGVIEW XAW.TO TSX\nTRADINGVIEW ZZS.TO NEO\n"
             "CRYPTO FOO FOO123\n"
             "EXTRACT ZZQ REIT Trust Units | CAD | ZZQ.UN.TO\n")
 _NEW_TOML = (
@@ -129,7 +129,7 @@ def _book(path: Path):
 
 
 class TestTickerMapLookups(unittest.TestCase):
-    """The four lookup keywords: parsed by lib/ticker_map, accepted by the
+    """The three lookup keywords: parsed by lib/ticker_map, accepted by the
     rename parser, read by each old reader's replacement."""
 
     def _map(self, td, text):
@@ -158,22 +158,20 @@ class TestTickerMapLookups(unittest.TestCase):
             self.assertEqual(load_symbol_overrides([td])["FOO"], "FOO123")
             self.assertEqual(load_security_overrides(p),
                              [("zzq reit trust units", "CAD", "ZZQ.UN.TO")])
-            self.assertEqual(read_side_rules(p).tradingview,
-                             {"XAW.TO": "TSX", "ZZS.TO": "NEO"})
+            self.assertEqual(read_side_rules(p).retired, [])
 
     def test_malformed_lookup_lines_are_map_problems(self):
         from taxjson.bin.taxjson_ticker_map import map_file_problems
         with tempfile.TemporaryDirectory() as td:
             p = self._map(td, "QUOTE ZZS.TO\n"
                               "QUOTE A.TO A 0\n"
-                              "TRADINGVIEW A.US\n"
                               "CRYPTO FOO\n"
                               "EXTRACT words | US | X.TO\n"
                               "EXTRACT words only\n"
                               "QUOTE B.TO B\nQUOTE B.TO C\n"
                               "ZZS.TO ZZS-A.TO\n")
             probs = map_file_problems(p)
-        self.assertEqual(len(probs), 8, probs)
+        self.assertEqual(len(probs), 7, probs)
         self.assertTrue(any("two" in m.lower() or "twice" in m
                             for m in probs), probs)
         self.assertTrue(any("no ticker.map keyword" in m for m in probs))
@@ -200,26 +198,6 @@ class TestTickerMapLookups(unittest.TestCase):
             (Path(td) / "crypto_ticker.map").write_text("FOO F1\n")
             with self.assertRaises(LegacyMapFileError):
                 load_symbol_overrides([td])
-
-    def test_tradingview_export_reads_ticker_map(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / "work").mkdir()
-            (root / "ticker.map").write_text("TRADINGVIEW ABC.TO NEO\n")
-            g = root / "work" / "m_gains.json"
-            g.write_text(json.dumps({"inventory": [
-                {"symbol": "ABC.TO", "qty": 10},
-                {"symbol": "XYZ.TO", "qty": 5}]}))
-            env = dict(os.environ, PYTHONPATH=str(
-                Path(__file__).resolve().parent.parent / "src"))
-            import subprocess
-            r = subprocess.run([sys.executable, "-m",
-                                "taxjson.bin.taxjson_export",
-                                "--tradingview", str(g)],
-                               capture_output=True, text=True, env=env)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("NEO:ABC", r.stdout)
-        self.assertIn("TSX:XYZ", r.stdout)
 
 
 class TestConfigTables(unittest.TestCase):
@@ -295,10 +273,14 @@ class TestLegacyRefusal(unittest.TestCase):
 
     def test_every_old_file_stops_commands_until_migrated(self):
         from taxjson.lib.migrate import LEGACY_FILES
+        from taxjson.lib.ticker_map import RETIRED_MAP_FILES
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "taxjson.toml").write_text(_BASE_TOML)
-            for name in LEGACY_FILES:
+            # (a retired file — tv_exchange.map — stops nothing:
+            # test_fix_notv)
+            for name in [n for n in LEGACY_FILES
+                         if n not in RETIRED_MAP_FILES]:
                 (root / name).write_text("")
                 for args in (("sum",), ("divs-sum",), ("run", "--no-input")):
                     r = cli(root, *args)
@@ -345,8 +327,9 @@ class TestMigrate(unittest.TestCase):
             cfg = tomllib.loads(toml)
         # ticker.map: appended after the user's line.
         self.assertTrue(tm.startswith("TOBASE AEM.US AEM.TO  # keep me\n"))
+        self.assertNotIn("TRADINGVIEW", tm)
         for ln in ("QUOTE ZZS.TO ZZS-A.TO", "QUOTE OLD.TO NEWCO 0.25",
-                   "TRADINGVIEW XAW.TO TSX", "CRYPTO FOO FOO123",
+                   "CRYPTO FOO FOO123",
                    "EXTRACT ZZQ REIT Trust Units | CAD | ZZQ.UN.TO",
                    "# the trust units"):
             self.assertIn(ln, tm)
@@ -435,10 +418,10 @@ class TestMigrate(unittest.TestCase):
                              load_crypto_overrides([new]))
             ro_, rn_ = (read_side_rules(old / "ticker.map"),
                         read_side_rules(new / "ticker.map"))
-            self.assertEqual((ro_.quote, ro_.tradingview, ro_.crypto,
-                              ro_.extract, ro_.problems),
-                             (rn_.quote, rn_.tradingview, rn_.crypto,
-                              rn_.extract, rn_.problems))
+            self.assertEqual((ro_.quote, ro_.crypto, ro_.extract,
+                              ro_.problems, ro_.retired),
+                             (rn_.quote, rn_.crypto, rn_.extract,
+                              rn_.problems, rn_.retired))
             for f in ("margin_base.json", "margin_gains.json"):
                 self.assertEqual(_book(old / "work" / f),
                                  _book(new / "work" / f), f)
@@ -449,10 +432,10 @@ class TestMigrate(unittest.TestCase):
             self.assertNotIn("ZZQ.TO", syms)
             self.assertTrue(any(str(t.get("id", "")).startswith("DIST-")
                                 for t in base["transactions"]))
-            tv_old = (old / "reports" / "exports" / "AAll_TV.txt").read_text()
-            tv_new = (new / "reports" / "exports" / "AAll_TV.txt").read_text()
-            self.assertEqual(tv_old, tv_new)
-            self.assertIn("NEO:ZZS", tv_new)
+            for ex in ("AAll_SA.csv", "AAll_FG.csv"):
+                self.assertEqual(
+                    (old / "reports" / "exports" / ex).read_text(),
+                    (new / "reports" / "exports" / ex).read_text(), ex)
             for args in (("divs-sum", "--json"), ("estimate", "--json"),
                          ("carryover", "--json"), ("amt", "--json"),
                          ("sum", "--json")):

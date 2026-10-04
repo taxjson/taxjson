@@ -118,24 +118,6 @@ def _passes_filters(item: Dict[str, Any], args) -> bool:
     return True
 
 
-def _find_tv_map(inputs):
-    """The ticker.map whose TRADINGVIEW lines a stand-alone --tradingview
-    run uses: next to an input, then in the input's parent (the project
-    root for work/<acct>_gains.json), then the current directory. The
-    cwd used to be searched FIRST and the project root never, so
-    `taxjson -C <proj> run` from another directory lost the project's
-    prefixes, or picked up a different project's map (audit R1-246,
-    R1-285). A searched folder still holding the old tv_exchange.map is
-    refused (`taxjson migrate` moves its lines into ticker.map)."""
-    from taxjson.lib.ticker_map import find_ticker_map
-    dirs = []
-    for p in inputs:
-        d = Path(p).resolve().parent
-        dirs += [d, d.parent]
-    dirs.append(Path.cwd())
-    return find_ticker_map(dirs)
-
-
 def _is_dust(qty: float, total_cost: float, threshold: float) -> bool:
     """A sub-fractional residue: tiny quantity AND no material cost.
     Keying on quantity alone hid real crypto lots — 0.0009 BTC is about
@@ -150,13 +132,13 @@ def _is_dust(qty: float, total_cost: float, threshold: float) -> bool:
 _DUST_COST = 1.0
 
 
-def process_data_platform(data, args, seen, results, tv_map):
+def process_data_platform(data, args, seen, results):
     """Existing behavior: emit platform-formatted ticker strings."""
     inventory = data.get("inventory", [])
     for item in inventory:
         if not _passes_filters(item, args):
             continue
-        formatted = format_ticker_for_platform(item.get("symbol"), args.platform, tv_map)
+        formatted = format_ticker_for_platform(item.get("symbol"), args.platform)
         if formatted and formatted not in seen:
             results.append(formatted)
             seen.add(formatted)
@@ -858,7 +840,7 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any],
     for i, h in enumerate(holdings, start=1):
         # A quantity 'abc' was a float() traceback in --report and
         # --holdings-toml and exported silently in --seekingalpha /
-        # --tradingview (A2-1441): refused here, naming the row.
+        # --fastgraph (A2-1441): refused here, naming the row.
         sym = h.get("symbol")
         if not isinstance(sym, str) or not sym.strip():
             _die(f"{path}: [[holding]] {i}: symbol is {sym!r}, not a "
@@ -880,6 +862,25 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any],
             "position_start_date": psd,
         })
     return {"inventory": inventory}
+
+
+# Options of removed exports: {option: what to say}. Refused by name
+# (exit 2) before argparse, which would only say "unrecognized".
+_REMOVED_OPTIONS = {
+    "--tradingview": "the TradingView watchlist export was removed — use "
+                     "--seekingalpha or --fastgraph",
+    "--tv-map": "the TradingView watchlist export (and its --tv-map) was "
+                "removed",
+}
+
+
+def _refuse_removed_options(argv) -> None:
+    for a in argv:
+        if a == "--":
+            break
+        opt = a.split("=", 1)[0]
+        if opt in _REMOVED_OPTIONS:
+            _die(f"{opt}: {_REMOVED_OPTIONS[opt]}")
 
 
 @guard_main("taxjson-export")
@@ -904,7 +905,6 @@ def main():
     # Output mode (mutually exclusive)
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--seekingalpha", action="store_const", dest="platform", const="seekingalpha")
-    group.add_argument("--tradingview", action="store_const", dest="platform", const="tradingview")
     group.add_argument("--fastgraph", action="store_const", dest="platform", const="fastgraph")
     group.add_argument(
         "--report", action="store_const", dest="platform", const="report",
@@ -916,13 +916,6 @@ def main():
              "[[holding]] entry per position) — a machine-readable handoff "
              "for live-pricing / trading tools.",
     )
-    parser.add_argument(
-        "--tv-map", metavar="FILE", default=None,
-        help="The ticker.map whose TRADINGVIEW lines (`TRADINGVIEW SYMBOL "
-             "EXCHANGE`) give --tradingview's exchange prefixes. Default: "
-             "the first ticker.map found next to an input or in its "
-             "parent directory (the project root for work/*_gains.json), "
-             "then in the current directory.")
     parser.add_argument(
         "--account-name", default=None,
         help="Account name to stamp into the --holdings-toml output.",
@@ -993,30 +986,12 @@ def main():
              "position_start_date). Prices are verbatim (never FX-converted).",
     )
 
+    _refuse_removed_options(sys.argv[1:])
     args = parser.parse_args()
 
     seen = set()
     results: List[str] = []
     agg: Dict[str, Dict[str, Any]] = {}
-    tv_map: Dict[str, str] = {}
-
-    # Load TradingView map if needed: the TRADINGVIEW lines of the
-    # project's ticker.map (`TRADINGVIEW SYMBOL EXCHANGE`).
-    if args.platform == "tradingview":
-        map_file = (Path(args.tv_map) if args.tv_map
-                    else _find_tv_map(args.inputs))
-        if map_file is not None:
-            from taxjson.lib.ticker_map import read_side_rules
-            try:
-                _side = read_side_rules(map_file)
-            except (OSError, UnicodeDecodeError, ValueError) as e:
-                _die(f"{map_file}: cannot read ({e})")
-            for _msg in _side.problems:
-                # Warn like the sibling map loaders do (audit S077-07:
-                # silently dropped).
-                print(f"warning: ticker.map problem: {_msg} — line "
-                      f"ignored", file=sys.stderr)
-            tv_map.update(_side.tradingview)
 
     # The holdings aggregation applies JOURNAL renames — they net
     # offsetting cross-currency legs (Norbert's Gambit) here, post-gains,
@@ -1033,7 +1008,7 @@ def main():
         if args.platform in ("report", "holdings_toml"):
             process_data_report(data, args, agg, holdings_map, holdings_drops)
         else:
-            process_data_platform(data, args, seen, results, tv_map)
+            process_data_platform(data, args, seen, results)
 
     # Every named input must load: a missing, truncated or wrong-shape
     # file used to print one stderr line and carry on, so the tool wrote
@@ -1104,16 +1079,9 @@ def main():
     if not results:
         return
 
-    if args.platform == "tradingview":
-        # Sort by the bare ticker, ignoring any EXCHANGE: prefix, so
-        # ABC and TSX:ABC land next to each other — no manual re-sort
-        # needed after importing the watchlist into TradingView.
-        results.sort(key=lambda s: (s.rsplit(":", 1)[-1], s))
-        print("\n".join(results))
-    else:
-        results.sort()
-        # SeekingAlpha & FastGraph: comma-joined on one line
-        print(", ".join(results))
+    results.sort()
+    # SeekingAlpha & FastGraph: comma-joined on one line
+    print(", ".join(results))
 
 
 if __name__ == "__main__":

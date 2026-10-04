@@ -36,40 +36,24 @@ def get_base_ticker_info(symbol: str):
     
     return full_ticker, ext
 
-# Canadian venue suffix -> TradingView exchange prefix.
-_CA_TV_PREFIX = {'TO': 'TSX', 'V': 'TSXV', 'CN': 'CSE', 'NE': 'NEO'}
+# The Canadian venue suffixes: a listing on any of them is Canadian.
+_CA_VENUES = frozenset({'TO', 'V', 'CN', 'NE'})
 
 
-def format_ticker_for_platform(symbol: str, platform: str, tv_map: dict = None) -> str:
-    """Formats a ticker for a specific platform (SeekingAlpha, TradingView, FastGraph)."""
+def format_ticker_for_platform(symbol: str, platform: str) -> str:
+    """Formats a ticker for a specific platform (SeekingAlpha, FastGraph)."""
     base, ext = get_base_ticker_info(symbol)
     if not ext:
         return base
     # Every Canadian venue is a Canadian listing: .V/.CN/.NE used to fall
     # through to the US branch (S078-03). An unknown foreign suffix keeps
     # its own spelling rather than becoming a US ticker.
-    canadian = ext in _CA_TV_PREFIX
+    canadian = ext in _CA_VENUES
 
     if platform == 'seekingalpha':
         if canadian: return f"{base}:CA"
         if ext == 'US': return base
         return f"{base}.{ext}"
-    elif platform == 'tradingview':
-        # TRADINGVIEW keys (ticker.map) may be a bare ticker (applies to every
-        # listing of it) or extension-qualified — `OR.US` / `OR.TO` —
-        # which lets a dual-listed name get a different exchange prefix
-        # per listing. The qualified key wins over the bare one.
-        tvm = tv_map or {}
-        if canadian:
-            prefix = (tvm.get(f"{base}.{ext}") or tvm.get(base)
-                      or _CA_TV_PREFIX[ext])
-            return f"{prefix}:{base}"
-        if ext == 'US':
-            prefix = tvm.get(f"{base}.US") or tvm.get(base)
-            return f"{prefix}:{base}" if prefix else base
-        if ext == 'AX': return f"ASX:{base}"
-        if ext == 'L': return f"LSE:{base}"
-        return base
     elif platform == 'fastgraph':
         if canadian: return f"{base}:CA"
         if ext == 'US': return f"{base}:US"
@@ -170,17 +154,13 @@ def underlying_of(symbol: str, aliases: dict) -> str:
 # ticker.map is the project's ONE mapping file. Besides the rename rules
 # (GLOBAL, TOBASE, JOURNAL, DELETE, DISTINCT, RENAME — parsed by
 # bin/taxjson_ticker_map._parse_map_file, which hands these lines here),
-# it carries four lookup keywords that change no symbol in the books:
+# it carries three lookup keywords that change no symbol in the books:
 #
 #   QUOTE       SYMBOL YAHOO_SYMBOL [QTY_RATIO]
 #       the Yahoo Finance spelling a price lookup uses for SYMBOL
 #       (harvest, the price chain); QTY_RATIO (default 1) converts the
 #       position's quantity into the quoted ticker's units (a ticker
 #       consumed by a merger, quoted as the acquirer).
-#   TRADINGVIEW SYMBOL EXCHANGE
-#       the TradingView exchange prefix `taxjson-export --tradingview`
-#       writes (SYMBOL bare — every listing — or with its suffix, e.g.
-#       OR.US / OR.TO; the suffixed key wins).
 #   CRYPTO      SYMBOL YAHOO_ID
 #       the Yahoo id of a coin whose ticker collides with another
 #       asset (fill-crypto prices `<YAHOO_ID>-USD`; crypto-sends and
@@ -192,22 +172,37 @@ def underlying_of(symbol: str, aliases: dict) -> str:
 #       security the currency->exchange suffix mislabels (the TSX-only
 #       USD unit DLR.U.TO). First matching line wins.
 #
-# These used to be four files of their own (yf_ticker.map,
-# tv_exchange.map, crypto_ticker.map, ticker_extraction_overrides.txt);
-# `taxjson migrate` folds an old project's files into ticker.map.
+# These used to be files of their own (yf_ticker.map,
+# crypto_ticker.map, ticker_extraction_overrides.txt); `taxjson migrate`
+# folds an old project's files into ticker.map.
+#
+# TRADINGVIEW SYMBOL EXCHANGE was a fourth lookup (the exchange prefix of
+# the TradingView watchlist export, once tv_exchange.map). The export was
+# removed: a TRADINGVIEW line left in a ticker.map is ignored — never a
+# problem — and `taxjson run` says once that it can be deleted
+# (SideRules.retired). `taxjson migrate` only renames an old
+# tv_exchange.map (RETIRED_MAP_FILES).
 # ---------------------------------------------------------------------------
 
 TICKER_MAP_NAME = "ticker.map"
-SIDE_KEYWORDS = ("QUOTE", "TRADINGVIEW", "CRYPTO", "EXTRACT")
+SIDE_KEYWORDS = ("QUOTE", "CRYPTO", "EXTRACT")
+# Keywords of removed features: lines carrying them are skipped by every
+# reader (read_side_rules lists where they are) — {keyword: what went}.
+RETIRED_KEYWORDS = {"TRADINGVIEW": "TradingView export removed"}
 RENAME_KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DELETE", "DISTINCT",
                    "RENAME")
 
 # The old per-purpose files ticker.map replaced: {file: keyword}.
 LEGACY_MAP_FILES = {
     "yf_ticker.map": "QUOTE",
-    "tv_exchange.map": "TRADINGVIEW",
     "crypto_ticker.map": "CRYPTO",
     "ticker_extraction_overrides.txt": "EXTRACT",
+}
+# Old per-purpose files of REMOVED features: nothing reads them, so no
+# command stops for them (no rule could be silently lost); `taxjson
+# migrate` renames them to <name>.migrated without converting anything.
+RETIRED_MAP_FILES = {
+    "tv_exchange.map": "TradingView export removed",
 }
 
 _CURRENCY_RE = re.compile(r'^(?:[A-Z]{3}|\*)$')
@@ -222,23 +217,23 @@ class LegacyMapFileError(_InputContentError):
 
 
 class SideRules:
-    """The parsed QUOTE / TRADINGVIEW / CRYPTO / EXTRACT lines of one
-    ticker.map. quote: {SYMBOL: (yahoo, ratio)}; tradingview: {SYMBOL:
-    EXCHANGE}; crypto: {SYMBOL: yahoo id}; extract: [(description words
-    lower-cased, CURRENCY, symbol)] in file order; problems: the lines
-    that cannot be read or that contradict an earlier line, as
-    `<file>:<lineno>: <message>`."""
+    """The parsed QUOTE / CRYPTO / EXTRACT lines of one ticker.map.
+    quote: {SYMBOL: (yahoo, ratio)}; crypto: {SYMBOL: yahoo id};
+    extract: [(description words lower-cased, CURRENCY, symbol)] in file
+    order; problems: the lines that cannot be read or that contradict an
+    earlier line, as `<file>:<lineno>: <message>`; retired: the
+    `<file>:<lineno>` of each skipped line of a removed feature
+    (RETIRED_KEYWORDS — a TRADINGVIEW line)."""
 
     def __init__(self):
         self.quote: dict = {}
-        self.tradingview: dict = {}
         self.crypto: dict = {}
         self.extract: list = []
         self.problems: list = []
+        self.retired: list = []
 
     def empty(self) -> bool:
-        return not (self.quote or self.tradingview or self.crypto
-                    or self.extract)
+        return not (self.quote or self.crypto or self.extract)
 
 
 def _comment_free(raw: str) -> str:
@@ -281,11 +276,6 @@ def parse_side_line(kw: str, line: str):
                 raise ValueError(f"QUOTE ratio {toks[2]!r} must be a "
                                  f"positive number")
         return "quote", toks[0].upper(), (toks[1], ratio)
-    if kw == "TRADINGVIEW":
-        if len(toks) != 2:
-            raise ValueError("TRADINGVIEW needs `TRADINGVIEW SYMBOL "
-                             "EXCHANGE`")
-        return "tradingview", toks[0].upper(), toks[1]
     if kw == "CRYPTO":
         if len(toks) != 2:
             raise ValueError("CRYPTO needs `CRYPTO SYMBOL YAHOO_ID`")
@@ -336,6 +326,9 @@ def read_side_rules(path) -> "SideRules":
         kw = line.split()[0].upper()
         where = f"{p.name}:{lineno}"
         if kw in RENAME_KEYWORDS:
+            continue
+        if kw in RETIRED_KEYWORDS:
+            rules.retired.append(where)
             continue
         if kw not in SIDE_KEYWORDS:
             rules.problems.append(
