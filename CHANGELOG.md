@@ -75,6 +75,8 @@
   stops every command until `taxjson migrate` converts it (with the old
   file's rules: a line it ignored becomes a comment) and renames it
   `t1135.map.migrated`.
+- `sector.map` is gone from the docs: nothing has read it since the
+  timeline view went with the desktop app.
 
 ### Removed
 
