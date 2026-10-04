@@ -821,11 +821,13 @@ class _CappedHelpFormatter(argparse.HelpFormatter):
 _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Set up", ("init", "migrate", "fetch", "elect")),
     ("Build the books", ("run", "crypto-sends", "find-missing-history")),
-    ("Read the numbers", (
-        "sum", "list", "divs-sum", "trades-sum", "fees-sum", "shares",
-        "estimate", "amt", "instalments", "events", "divs", "dil", "trades",
-        "gains", "fees", "roc", "leaps", "transfers", "roc-sum", "dil-sum",
-        "winners", "stats", "ccd-sum", "leaps-sum", "fx-cash")),
+    ("Summaries", ("amt", "estimate", "fx-cash", "instalments", "stats",
+                   "sum")),
+    ("Positions", ("list", "shares")),
+    ("Row listings", ("dil", "divs", "events", "fees", "gains", "leaps",
+                      "roc", "trades", "transfers")),
+    ("Totals by type", ("ccd-sum", "dil-sum", "divs-sum", "fees-sum",
+                        "leaps-sum", "roc-sum", "trades-sum", "winners")),
     ("Before you trade", ("wash-radar", "buy-check", "sell-check",
                           "harvest", "scan", "watch")),
     ("Before you file", ("checklist", "form-export", "t1135",
