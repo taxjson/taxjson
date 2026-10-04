@@ -172,6 +172,15 @@ def _index_option_roots():
     return index_option_roots()
 
 
+def _stable_text() -> str:
+    """The USD stablecoins in force, and where the list lives."""
+    from taxjson.lib.markets import usd_stablecoins
+    return (", ".join(sorted(usd_stablecoins())) + " — market data "
+            "shipped in taxjson/data/markets.toml, extended or overridden "
+            "by ticker.map `STABLE SYMBOL USD|NO` lines; the run notes once "
+            "per coin when the built-in list decided")
+
+
 def _evening_roots():
     """Option roots with a Cboe evening session in force (lib/markets)."""
     from taxjson.lib.markets import evening_session_roots
@@ -956,14 +965,26 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-CRYPTO-01",
                  "Each coin is its own property. A coin-for-coin trade is "
                  "a sale of one and a purchase of the other at fair "
-                 "value. Kraken's staked and bonded wallet codes (DOT.S, "
-                 "DOT28.S, ETH2, ETH2.S, the .M/.F/.B/.P/.HOLD suffixes) "
-                 "name the same coin as the bare code, so a 1:1 swap "
-                 "between them is not a sale."),
+                 "value. Kraken's wallet suffixes (DOT.S and the "
+                 ".M/.F/.B/.P/.HOLD suffixes) and its bonded-staking codes "
+                 "(<COIN><two-digit lock period>.S, e.g. DOT28.S, when the "
+                 "coin itself is in the same export; otherwise noted with "
+                 "the line to add) name the same coin as the bare code, "
+                 "so a 1:1 swap between them is not a sale. Kraken's "
+                 "legacy codes (XXBT, XETH, XDG ...) are the common "
+                 "tickers (market data, taxjson/data/markets.toml). "
+                 "Any other code is a coin of its own unless the "
+                 "project's ticker.map folds it with a `GLOBAL CODE COIN` "
+                 "line between bare codes, which the Coinbase and Kraken "
+                 "parsers apply before they read a row (a staked or "
+                 "wrapped code such as ETH2 — taxjson ships no such fold; "
+                 "a 1:1 swap between ETH and ETH2 without it is a sale, "
+                 "noted once with the line to add)."),
             Rule("CA-CRYPTO-10",
-                 "So is Coinbase's ETH2 (its staked ETH): it is booked as "
-                 "ETH, and a \"Converted ETH to ETH2\" row is not a sale "
-                 "(unequal quantities stop the parse).", cont=True),
+                 "So is Coinbase's ETH2 (its staked ETH) under `GLOBAL "
+                 "ETH2 ETH`: it is booked as ETH, and a \"Converted ETH "
+                 "to ETH2\" row is not a sale (unequal quantities stop "
+                 "the parse).", cont=True),
             Rule("CA-CRYPTO-11",
                  "A Kraken dust sweep (several coins converted at once "
                  "into one receipt) is a sale of each coin: the receipt "
@@ -978,7 +999,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "share position under a millionth of a share counts as "
                  "zero.", cont=True),
             Rule("CA-CRYPTO-02",
-                 "USD stablecoins (USDC, USDT, DAI, PYUSD and GUSD, on "
+                 "USD stablecoins (" + _stable_text() + ", on "
                  "Kraken and Coinbase alike) are treated as US-dollar "
                  "cash, an approximation (their own gain or loss, a "
                  "de-peg, is not computed; a fill more than 2% off 1.00 "
@@ -1879,14 +1900,26 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-CRYPTO-01",
                  "Each coin is its own property. A coin-for-coin trade is "
                  "a sale of one and a purchase of the other at fair "
-                 "value. Kraken's staked and bonded wallet codes (DOT.S, "
-                 "DOT28.S, ETH2, ETH2.S, the .M/.F/.B/.P/.HOLD suffixes) "
-                 "name the same coin as the bare code, so a 1:1 swap "
-                 "between them is not a sale."),
+                 "value. Kraken's wallet suffixes (DOT.S and the "
+                 ".M/.F/.B/.P/.HOLD suffixes) and its bonded-staking codes "
+                 "(<COIN><two-digit lock period>.S, e.g. DOT28.S, when the "
+                 "coin itself is in the same export; otherwise noted with "
+                 "the line to add) name the same coin as the bare code, "
+                 "so a 1:1 swap between them is not a sale. Kraken's "
+                 "legacy codes (XXBT, XETH, XDG ...) are the common "
+                 "tickers (market data, taxjson/data/markets.toml). "
+                 "Any other code is a coin of its own unless the "
+                 "project's ticker.map folds it with a `GLOBAL CODE COIN` "
+                 "line between bare codes, which the Coinbase and Kraken "
+                 "parsers apply before they read a row (a staked or "
+                 "wrapped code such as ETH2 — taxjson ships no such fold; "
+                 "a 1:1 swap between ETH and ETH2 without it is a sale, "
+                 "noted once with the line to add)."),
             Rule("US-CRYPTO-06",
-                 "So is Coinbase's ETH2 (its staked ETH): it is booked as "
-                 "ETH, and a \"Converted ETH to ETH2\" row is not a sale "
-                 "(unequal quantities stop the parse).", cont=True),
+                 "So is Coinbase's ETH2 (its staked ETH) under `GLOBAL "
+                 "ETH2 ETH`: it is booked as ETH, and a \"Converted ETH "
+                 "to ETH2\" row is not a sale (unequal quantities stop "
+                 "the parse).", cont=True),
             Rule("US-CRYPTO-07",
                  "A Kraken dust sweep (several coins converted at once "
                  "into one receipt) is a sale of each coin: the receipt "
@@ -1904,7 +1937,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "proceeds are on the units held). Each case is named in "
                  "a warning."),
             Rule("US-CRYPTO-02",
-                 "USD stablecoins (USDC, USDT, DAI, PYUSD and GUSD, on "
+                 "USD stablecoins (" + _stable_text() + ", on "
                  "Kraken and Coinbase alike) are property like any coin: "
                  "buying one is a purchase, selling or spending one is a "
                  "sale (a de-peg is a gain or loss), and a payment in one "

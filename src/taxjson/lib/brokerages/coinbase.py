@@ -10,6 +10,7 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, read_broker_text,
                                          shown_name)
 from taxjson.lib.brokerages._crypto_common import (FIAT_CURRENCIES,
                                                    USD_STABLECOINS,
+                                                   same_coin_hint,
                                                    strict_money, utc_to_local,
                                                    warn_depeg)
 
@@ -126,16 +127,13 @@ _TOTAL_TOL_REL = 0.01
 _STABLECOINS = USD_STABLECOINS
 
 # Fiat currencies a Coinbase pair can be quoted in (or a row priced
-# in). Anything else in the quote slot of an Advanced Trade pair is a
-# crypto-asset: trading ETH-BTC disposes of BTC (or acquires it), a
-# taxable leg of its own. Erring toward "crypto" is the safe side — a
-# fiat code missing here books a visible phantom position; a crypto
-# coin wrongly treated as cash would drop a disposition silently.
-_FIAT = frozenset({
-    'USD', 'CAD', 'EUR', 'GBP', 'AUD', 'NZD', 'JPY', 'CHF', 'SGD', 'HKD',
-    'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'BRL', 'MXN', 'INR', 'ZAR', 'TRY',
-    'KRW', 'CNY', 'AED', 'ILS',
-})
+# in): the ONE fiat list (lib/markets). Anything else in the quote slot
+# of an Advanced Trade pair is a crypto-asset: trading ETH-BTC disposes
+# of BTC (or acquires it), a taxable leg of its own. Erring toward
+# "crypto" is the safe side — a fiat code missing here books a visible
+# phantom position; a crypto coin wrongly treated as cash would drop a
+# disposition silently.
+_FIAT = FIAT_CURRENCIES
 
 # Advanced Trade rows name the pair only in Notes, e.g. "Bought 3 ETH
 # for 0.1 BTC on ETH-BTC at 0.0333 BTC/ETH" — Coinbase emits ONE row
@@ -152,14 +150,16 @@ _ADV_NOTES_RE = re.compile(
 
 
 def _cb_symbol(asset: str) -> str:
-    """The book symbol for a Coinbase asset code. Upper-cased (a
-    hand-edited `sol` beside `SOL` used to open a second pool, R1-112)
-    and ETH2 folded into ETH — Coinbase's staked-ETH wrap is the same
-    property (Coinbase itself relabels it with a 'Retail ETH
-    Deprecation' non-event; Kraken folds it the same way), so an ETH2
-    pool used to be stranded and ETH -> ETH2 realized a gain (R1-110)."""
-    sym = (asset or '').strip().upper().replace(' ', '.')
-    return 'ETH' if sym == 'ETH2' else sym
+    """The book symbol for a Coinbase asset code: upper-cased (a
+    hand-edited `sol` beside `SOL` used to open a second pool, R1-112),
+    then the project's ticker.map GLOBAL lines between bare codes
+    (lib/markets.crypto_alias). A staked or wrapped code is the same
+    property as its coin only when the project says so — `GLOBAL ETH2
+    ETH` folds Coinbase's staked-ETH wrap into ETH, so an ETH -> ETH2
+    convert is a relabel (R1-110). taxjson ships no such fold (owner,
+    2026-10-04); an unfolded 1:1 convert is noted with the line."""
+    from taxjson.lib.markets import crypto_alias
+    return crypto_alias((asset or '').strip().upper().replace(' ', '.'))
 
 
 class CoinbaseBrokerage(BaseBrokerage):
@@ -784,10 +784,12 @@ class CoinbaseBrokerage(BaseBrokerage):
                 self._check_qp(where, 'Subtotal' if _sub else 'Total',
                                _sub or _tot, row_qty, _price)
         from_asset, to_asset = _cb_symbol(from_raw), _cb_symbol(to_raw)
+        same_coin_hint(from_asset, to_asset, from_qty, to_qty,
+                       f"Coinbase Convert {from_raw}->{to_raw}")
         if from_asset == to_asset:
-            # ETH -> ETH2: two spellings of one property (R1-110). A
-            # relabel, not a disposition — unless the quantities differ,
-            # which has no modeled booking.
+            # ETH -> ETH2 under `GLOBAL ETH2 ETH`: two spellings of one
+            # property (R1-110). A relabel, not a disposition — unless
+            # the quantities differ, which has no modeled booking.
             if abs(from_qty - to_qty) > 1e-8 * max(from_qty, to_qty):
                 raise ValueError(
                     f"Coinbase Convert {notes!r}: {from_raw} and {to_raw} "

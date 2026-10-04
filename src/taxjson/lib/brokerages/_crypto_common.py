@@ -18,29 +18,55 @@ Two jobs, both about refusing to produce a quietly-wrong number:
 
 import os
 import re
+from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 DEFAULT_LOCAL_TZ = 'America/Toronto'
 
-# The USD-pegged stablecoins, ONE list for every crypto consumer (the
-# Coinbase and Kraken parsers, crypto-sends, fx-cash, fill-crypto). In a
-# Canada project they are US-dollar cash (tax-logic CA-CRYPTO-02); a US
-# project books them as property. Copies of this list drifted apart
-# (PYUSD/GUSD missing in some, audit S060-24 / re-audit A2-0589).
-USD_STABLECOINS = frozenset({'USDC', 'USDT', 'DAI', 'PYUSD', 'GUSD'})
+class _LiveStablecoins(AbstractSet):
+    """The USD-pegged stablecoins, ONE list for every crypto consumer
+    (the Coinbase and Kraken parsers, crypto-sends, fx-cash,
+    fill-crypto): taxjson's shipped market data (lib/markets) with the
+    project's ticker.map STABLE lines, read at each use — never a copy
+    frozen at import (copies drifted apart: PYUSD/GUSD missing in some,
+    audit S060-24 / re-audit A2-0589). In a Canada project they are
+    US-dollar cash (tax-logic CA-CRYPTO-02); a US project books them as
+    property valued at par. A membership test the BUILT-IN list
+    answered yes is noted once per coin (the line to add if it is
+    wrong)."""
+
+    def __contains__(self, item) -> bool:
+        if not isinstance(item, str) or not item:
+            return False
+        from taxjson.lib.markets import is_usd_stablecoin
+        return is_usd_stablecoin(item.strip().upper(), note=True)
+
+    def __iter__(self):
+        from taxjson.lib.markets import usd_stablecoins
+        return iter(sorted(usd_stablecoins()))
+
+    def __len__(self) -> int:
+        from taxjson.lib.markets import usd_stablecoins
+        return len(usd_stablecoins())
+
+    @classmethod
+    def _from_iterable(cls, it):
+        return frozenset(it)
+
+    def __repr__(self) -> str:
+        return f"USD_STABLECOINS({sorted(self)!r})"
+
+
+USD_STABLECOINS = _LiveStablecoins()
 
 # Fiat currencies an exchange row can be priced or quoted in, ONE list
-# for the Coinbase and Kraken parsers. Anything else is a crypto-asset:
-# erring toward "crypto" books a visible phantom position, while a coin
-# wrongly taken for cash would drop a disposition silently. Kraken knew
-# only USD/CAD/EUR/GBP, so an AUD/JPY/CHF bank deposit became a crypto
-# send and an XBT/AUD fill a coin-for-coin swap (re-audit A2-0579).
-FIAT_CURRENCIES = frozenset({
-    'USD', 'CAD', 'EUR', 'GBP', 'AUD', 'NZD', 'JPY', 'CHF', 'SGD', 'HKD',
-    'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'BRL', 'MXN', 'INR', 'ZAR', 'TRY',
-    'KRW', 'CNY', 'AED', 'ILS',
-})
+# (lib/markets: taxjson/data/markets.toml) for the Coinbase and Kraken
+# parsers, the IB currency tags and the price chain. Anything else is a
+# crypto-asset: erring toward "crypto" books a visible phantom position,
+# while a coin wrongly taken for cash would drop a disposition silently.
+from taxjson.lib.markets import fiat_currencies as _fiat  # noqa: E402
+FIAT_CURRENCIES = _fiat()
 
 # Currency markers an exchange may glue to an amount. Longest first so
 # `CA$` is not half-eaten by `A$`/`$`.
@@ -165,6 +191,30 @@ def utc_to_local(dt_utc: datetime, tz_name: Optional[str] = None) -> datetime:
             f"such as America/Toronto.")
     return (dt_utc.replace(tzinfo=timezone.utc).astimezone(tz)
             .replace(tzinfo=None))
+
+
+def same_coin_hint(a: str, b: str, qty_a: float, qty_b: float,
+                   where: str) -> None:
+    """A swap between two codes where one is the other plus a suffix
+    (ETH and ETH2) at exactly 1:1 is booked as the swap it is — a
+    disposition — but it is often a staked or wrapped form of the same
+    coin: say once which ticker.map line folds them (taxjson ships no
+    such fold; owner, 2026-10-04)."""
+    a, b = (a or '').strip().upper(), (b or '').strip().upper()
+    if not a or not b or a == b:
+        return
+    short, long_ = sorted((a, b), key=len)
+    if not long_.startswith(short):
+        return
+    qa, qb = abs(qty_a or 0.0), abs(qty_b or 0.0)
+    if not qa or abs(qa - qb) > 1e-8 * max(qa, qb):
+        return
+    from taxjson.lib.markets import note_builtin
+    note_builtin("same-coin-hint", f"{long_}>{short}", (
+        f"{where}: {a} -> {b} at exactly 1:1 is booked as a swap (a "
+        f"disposition). If {long_} is a staked or wrapped form of "
+        f"{short} (the same property), add `GLOBAL {long_} {short}` to "
+        f"ticker.map and re-run."))
 
 
 # A USD stablecoin traded this far from 1.00 USD is said: the parsers

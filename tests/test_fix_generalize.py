@@ -337,5 +337,159 @@ class TestEveningSessionRoots(_MapCase):
             self.assertIn("VIXW", TL.render(c, {}))
 
 
+# --------------------------------------------- B5-B9 crypto lists
+def _kr(files, target, cash=True):
+    from test_fix_l_parsers2_kraken import _parse
+    return _parse(files, target, cash=cash)
+
+
+def _kl(*rows):
+    from test_fix_m_parsers2_crypto import KR_LEDGER_H
+    return KR_LEDGER_H + "".join(r + "\n" for r in rows)
+
+
+class TestStablecoinList(_MapCase):
+    def test_one_list_kraken_copy_gone(self):
+        from taxjson.lib.brokerages import kraken as K
+        self.assertFalse(hasattr(K, "_USD_SUFFIX_STABLES"))
+        self.no_map()
+        # every former Kraken-only "stablecoin ending in USD" is in the one
+        # list, and a legacy pair ending in one is still refused
+        for s in ("PYUSD", "RLUSD", "FDUSD", "GUSD"):
+            self.assertIn(s, markets.usd_stablecoins())
+            with self.assertRaisesRegex(ValueError, "ambiguous"):
+                K._split_pair(f"ETH{s}")
+
+    @rule("CA-CRYPTO-02")
+    @rule_absent("CA-CRYPTO-02", country="usa")
+    @rule("US-CRYPTO-02")
+    def test_stable_line_makes_a_coin_us_dollar_cash_in_canada(self):
+        self.use_map("STABLE ZZUSD USD\n")
+        led = _kl("L1,R1,2025-03-01 12:00:00,earn,reward,currency,,ZZUSD,"
+                  "spot,5,0,5")
+        ca, _ = _kr({"kr_ledgers.csv": led}, "kr_ledgers.csv", cash=True)
+        us, _ = _kr({"kr_ledgers.csv": led}, "kr_ledgers.csv", cash=False)
+        # Canada: US-dollar cash income, no coin position; USA: the
+        # reward acquires the coin (property)
+        self.assertEqual([t["action"] for t in ca], ["DIVIDEND"])
+        self.assertEqual(ca[0]["currency"], "USD")
+        self.assertIn(("BUYSELL", "ZZUSD"),
+                      {(t["action"], t["symbol"]) for t in us})
+
+    @rule("CA-CRYPTO-02")
+    def test_stable_no_line_makes_a_builtin_coin_property(self):
+        self.use_map("STABLE USDT NO\n")
+        led = _kl("L1,R1,2025-03-01 12:00:00,earn,reward,currency,,USDT,"
+                  "spot,5,0,5")
+        ca, err = _kr({"kr_ledgers.csv": led}, "kr_ledgers.csv", cash=True)
+        self.assertIn(("BUYSELL", "USDT"),
+                      {(t["action"], t["symbol"]) for t in ca})
+        self.assertNotIn("note: USDT", err)
+
+    @rule("CA-CRYPTO-02")
+    def test_builtin_stablecoin_noted_once(self):
+        self.no_map()
+        led = _kl("L1,R1,2025-03-01 12:00:00,earn,reward,currency,,USDC,"
+                  "spot,5,0,5",
+                  "L2,R2,2025-03-02 12:00:00,earn,reward,currency,,USDC,"
+                  "spot,5,0,10")
+        _txs, err = _kr({"kr_ledgers.csv": led}, "kr_ledgers.csv")
+        self.assertEqual(err.count("STABLE USDC NO"), 1, err)
+
+    @rule("CA-CRYPTO-02")
+    def test_tax_logic_lists_the_coins_in_force(self):
+        from taxjson.lib import tax_logic as TL
+        self.use_map("STABLE ZZUSD USD\nSTABLE DAI NO\n")
+        text = TL.catalog("canada")["CA-CRYPTO-02"].text
+        self.assertIn("ZZUSD", text)
+        self.assertNotIn("DAI,", text)
+
+
+@rule("CA-CRYPTO-01")
+class TestNoBuiltinStakedFold(_MapCase):
+    def _cb_convert(self):
+        from test_fix_m_parsers2_crypto import _bs, _cb_row, _parse_cb
+        txs, err = _parse_cb(
+            _cb_row("b1", "2025-01-02 10:00:00 UTC", "Buy", "ZZC", "1",
+                    "CAD", "2000", "2000", "2000", "0")
+            + _cb_row("c1", "2025-06-02 10:00:00 UTC", "Convert", "ZZC",
+                      "-1", "CAD", "4000", "4000", "4000", "0",
+                      "Converted 1 ZZC to 1 ZZC2"))
+        return _bs(txs), err
+
+    def test_without_a_line_a_staked_code_is_its_own_coin(self):
+        self.no_map()
+        bs, err = self._cb_convert()
+        self.assertEqual(sorted(t["symbol"] for t in bs),
+                         ["ZZC", "ZZC", "ZZC2"])
+        self.assertIn("GLOBAL ZZC2 ZZC", err)
+        # nothing named in the code: the old ETH2 fold is gone too
+        from taxjson.lib.brokerages.coinbase import _cb_symbol
+        from taxjson.lib.brokerages.kraken import _normalize_asset
+        self.assertEqual(_cb_symbol("ETH2"), "ETH2")
+        self.assertEqual(_normalize_asset("ETH2"), "ETH2")
+
+    def test_global_line_folds_it_before_the_parse(self):
+        self.use_map("GLOBAL ZZC2 ZZC\n")
+        bs, err = self._cb_convert()
+        self.assertEqual([t["symbol"] for t in bs], ["ZZC"])  # the buy
+        self.assertNotIn("GLOBAL ZZC2 ZZC", err)
+
+
+class TestKrakenCodes(_MapCase):
+    FORMER = {"XXBT": "BTC", "XBT": "BTC", "XETH": "ETH", "XLTC": "LTC",
+              "XXRP": "XRP", "XXLM": "XLM", "XXMR": "XMR", "XZEC": "ZEC",
+              "XXDG": "DOGE", "XDG": "DOGE", "XETC": "ETC", "XMLN": "MLN",
+              "XREP": "REP", "ZUSD": "USD", "ZJPY": "JPY", "ZEC": "ZEC",
+              "XTZ": "XTZ"}
+
+    def test_legacy_codes_from_market_data(self):
+        from taxjson.lib.brokerages.kraken import _normalize_asset
+        self.no_map()
+        for raw, want in self.FORMER.items():
+            self.assertEqual(_normalize_asset(raw, fold_stable=False), want,
+                             raw)
+
+    def test_global_line_adds_a_legacy_code(self):
+        from taxjson.lib.brokerages.kraken import _normalize_asset
+        self.use_map("GLOBAL XZZQ ZZQ\n")
+        self.assertEqual(_normalize_asset("XZZQ"), "ZZQ")
+
+    @rule("CA-CRYPTO-01")
+    def test_bonded_code_without_its_coin_is_kept_and_noted(self):
+        self.no_map()
+        led = _kl("LS1,RS1,2025-06-01 10:00:00,staking,,currency,,ZZQ28.S,"
+                  "spot,2.0,0,2.0")
+        txs, err = _kr({"kr_ledgers.csv": led}, "kr_ledgers.csv")
+        self.assertEqual({t["symbol"] for t in txs}, {"ZZQ28"})
+        self.assertIn("GLOBAL ZZQ28 ZZQ", err)
+
+    @rule("CA-CRYPTO-01")
+    def test_bonded_code_any_lock_period_folds_into_its_coin(self):
+        self.no_map()
+        led = _kl("LB1,RB1,2025-05-01 10:00:00,transfer,spottostaking,"
+                  "currency,,ZZQ,spot,-2.0,0,0",
+                  "LS1,RS1,2025-06-01 10:00:00,staking,,currency,,ZZQ90.S,"
+                  "spot,2.0,0,2.0")
+        txs, _ = _kr({"kr_ledgers.csv": led}, "kr_ledgers.csv")
+        self.assertEqual({t["symbol"] for t in txs}, {"ZZQ"})
+
+    def test_legacy_pairs_from_the_fiat_and_stablecoin_lists(self):
+        from taxjson.lib.brokerages.kraken import _split_pair
+        self.no_map()
+        for pair, want in (("XXBTZUSD", ("XBT", "USD")),
+                           ("XXBTZJPY", ("XBT", "JPY")),
+                           ("XETHXXBT", ("ETH", "XBT")),
+                           ("USDTZUSD", ("USDT", "USD")),
+                           ("ZUSDZCAD", ("USD", "CAD")),
+                           ("ADAUSD", ("ADA", "USD")),
+                           ("SOLUSDT", ("SOL", "USDT")),
+                           ("XTZUSD", ("XTZ", "USD")),
+                           ("ADACHF", ("ADA", "CHF"))):
+            self.assertEqual(_split_pair(pair), want, pair)
+        self.use_map("STABLE ZZST USD\n")
+        self.assertEqual(_split_pair("ZZSTZEUR"), ("ZZST", "EUR"))
+
+
 if __name__ == "__main__":
     unittest.main()

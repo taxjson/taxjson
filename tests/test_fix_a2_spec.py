@@ -218,8 +218,18 @@ class TestCoinbaseEth2IsEth(unittest.TestCase):
     tax-logic says so for each country."""
 
     def _check(self, country, rid):
+        import tempfile
+        from taxjson.lib import markets
         from test_fix_m_parsers2_crypto import _bs, _cb_row, _parse_cb
         self.assertIn("Coinbase's ETH2", _text(country, rid))
+        self.assertIn("GLOBAL ETH2 ETH", _text(country, rid))
+        # The fold is the project's ticker.map line (owner 2026-10-04).
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        tm = Path(td.name) / "ticker.map"
+        tm.write_text("GLOBAL ETH2 ETH\n")
+        markets.use_ticker_map(tm)
+        self.addCleanup(markets.use_ticker_map, None)
         txs, err = _parse_cb(
             _cb_row("b1", "2025-01-02 10:00:00 UTC", "Buy", "ETH", "1",
                     "CAD", "2000", "2000", "2000", "0")

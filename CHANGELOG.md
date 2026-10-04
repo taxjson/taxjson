@@ -22,6 +22,19 @@
   `taxjson tax-logic` lists every root in force (it used to name four of the
   five evening-session roots, missing the weekly VIX root, and summarised
   the index roots as "and their weekly roots").
+- **Crypto: one stablecoin list, no built-in staked-coin fold.** The USD
+  stablecoins are one list (the market data, extended or overridden by
+  `STABLE` lines): Kraken's private copy of the stablecoins that end in "USD"
+  is gone, so RLUSD and FDUSD are now US-dollar cash in a Canadian project
+  like the other stablecoins. Kraken's legacy asset codes (XXBT, XETH …) come
+  from the market data; its bonded-staking codes are derived from their shape
+  (`<COIN><two-digit lock period>.S`, folded when the coin is in the same
+  export, otherwise noted with the line to add) instead of a list of lock
+  periods; legacy concatenated pairs split on the fiat and stablecoin lists.
+  Coinbase's and Kraken's ETH2 are no longer folded into ETH by built-in
+  code: add `GLOBAL ETH2 ETH` to ticker.map (both parsers apply bare-code
+  `GLOBAL` lines before reading a row); a 1:1 swap between a coin and a code
+  that extends it is noted once with that line.
 
 ### Command line
 

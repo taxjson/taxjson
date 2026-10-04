@@ -241,12 +241,23 @@ class TestBondedStakingCodes(unittest.TestCase):
     """S014-01 / S061-08."""
 
     def test_lock_period_codes_fold(self):
-        from taxjson.lib.brokerages.kraken import _normalize_asset
-        for raw, want in (("DOT28.S", "DOT"), ("KSM07.S", "KSM"),
-                          ("ATOM21.S", "ATOM"), ("SOL03.S", "SOL"),
-                          ("MATIC04.S", "MATIC"), ("FLOW14.S", "FLOW"),
-                          ("DOT.S", "DOT"), ("ETH2.S", "ETH")):
-            self.assertEqual(_normalize_asset(raw), want, raw)
+        # Derived from the shape <COIN><dd>.S when the coin itself is in
+        # the export (no list of lock periods; owner 2026-10-04). ETH2.S
+        # is no bonded code: ETH2 folds into ETH only by a ticker.map
+        # GLOBAL line (test_fix_generalize).
+        from taxjson.lib.brokerages import kraken as K
+        prev = K._KNOWN_ASSETS
+        K._KNOWN_ASSETS = {"DOT", "KSM", "ATOM", "SOL", "MATIC", "FLOW",
+                           "ETH"}
+        try:
+            for raw, want in (("DOT28.S", "DOT"), ("KSM07.S", "KSM"),
+                              ("ATOM21.S", "ATOM"), ("SOL03.S", "SOL"),
+                              ("MATIC04.S", "MATIC"), ("FLOW14.S", "FLOW"),
+                              ("DOT60.S", "DOT"), ("DOT.S", "DOT"),
+                              ("ETH2.S", "ETH2")):
+                self.assertEqual(K._normalize_asset(raw), want, raw)
+        finally:
+            K._KNOWN_ASSETS = prev
 
     def test_real_digit_coins_untouched(self):
         from taxjson.lib.brokerages.kraken import _normalize_asset
@@ -257,8 +268,13 @@ class TestBondedStakingCodes(unittest.TestCase):
     @rule("CA-INC-04")
     @rule("US-INC-02")
     def test_reward_books_to_bare_coin(self):
-        led = KR_LEDGER_H + ("LS1,RS1,2025-06-01 10:00:00,staking,,"
-                             "currency,,DOT28.S,spot,2.0,0,2.0\n")
+        # The export holds DOT itself (the bonding move from spot), so
+        # DOT28.S is DOT's bonded code.
+        led = KR_LEDGER_H + (
+            "LB1,RB1,2025-05-01 10:00:00,transfer,spottostaking,"
+            "currency,,DOT,spot,-2.0,0,0\n"
+            "LS1,RS1,2025-06-01 10:00:00,staking,,"
+            "currency,,DOT28.S,spot,2.0,0,2.0\n")
         txs, _ = _parse_kr({"kr_ledgers_2025.csv": led},
                            "kr_ledgers_2025.csv")
         self.assertEqual({t["symbol"] for t in txs}, {"DOT"})
@@ -267,7 +283,22 @@ class TestBondedStakingCodes(unittest.TestCase):
 @rule("CA-CRYPTO-01")
 @rule("US-CRYPTO-01")
 class TestEth2IsEth(unittest.TestCase):
-    """R1-110 (Coinbase) / S061-11 (Kraken)."""
+    """R1-110 (Coinbase) / S061-11 (Kraken). taxjson ships no staked-coin
+    fold (owner, 2026-10-04): the project declares it with the ticker.map
+    line `GLOBAL ETH2 ETH`, which the crypto parsers apply before they
+    read a row."""
+
+    def setUp(self):
+        from taxjson.lib import markets
+        self._td = tempfile.TemporaryDirectory()
+        tm = Path(self._td.name) / "ticker.map"
+        tm.write_text("GLOBAL ETH2 ETH\n")
+        markets.use_ticker_map(tm)
+
+    def tearDown(self):
+        from taxjson.lib import markets
+        markets.use_ticker_map(None)
+        self._td.cleanup()
 
     def test_coinbase_eth2_staking_income_is_eth(self):
         txs, _ = _parse_cb(_cb_row("s1", "2025-01-02 10:00:00 UTC",

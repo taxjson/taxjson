@@ -2,6 +2,7 @@ import csv
 import io
 import re
 import sys
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -10,6 +11,7 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          shown_name)
 from taxjson.lib.brokerages._crypto_common import (FIAT_CURRENCIES,
                                                    USD_STABLECOINS,
+                                                   same_coin_hint,
                                                    strict_money, utc_to_local,
                                                    warn_depeg)
 
@@ -36,10 +38,31 @@ _FIAT_CURRENCIES = FIAT_CURRENCIES
 # on every path (PYUSD/GUSD used to be valued by a daily close here and
 # at par on Coinbase, and a swap against one by the ledger's amountusd
 # on one path and par on the other: re-audit A2-1004 / A2-1020).
-_STABLECOINS = tuple(sorted(USD_STABLECOINS))
+# The live list (lib/markets + ticker.map STABLE lines): read at each
+# use, never frozen at import.
+_STABLECOINS = USD_STABLECOINS
 _CASH_STABLECOINS = _STABLECOINS
-# Currencies (not property) in a cash-mode book: fiat + the stablecoins.
-_FIAT_ASSETS = FIAT_CURRENCIES | USD_STABLECOINS
+
+
+class _FiatAndStable(AbstractSet):
+    """Currencies (not property) in a cash-mode book: fiat + the
+    stablecoins (live)."""
+
+    def __contains__(self, item) -> bool:
+        return item in FIAT_CURRENCIES or item in USD_STABLECOINS
+
+    def __iter__(self):
+        return iter(sorted(set(FIAT_CURRENCIES) | set(USD_STABLECOINS)))
+
+    def __len__(self) -> int:
+        return len(set(FIAT_CURRENCIES) | set(USD_STABLECOINS))
+
+    @classmethod
+    def _from_iterable(cls, it):
+        return frozenset(it)
+
+
+_FIAT_ASSETS = _FiatAndStable()
 
 
 # Kraken's wallet-flavour suffixes on ledger asset codes: `.S` staked,
@@ -51,14 +74,18 @@ _FIAT_ASSETS = FIAT_CURRENCIES | USD_STABLECOINS
 # outright) and fill-crypto could never price `DOT.S-USD`.
 _ASSET_SUFFIX_RE = re.compile(r'\.(S|M|F|B|P|HOLD)$', re.IGNORECASE)
 # Legacy (pre-Earn, ~2021-23) BONDED staking codes carry the lock period
-# in days before the `.S`: DOT28.S, KSM07.S, ATOM21.S, SOL03.S,
-# MATIC04.S, FLOW14.S. Same property as the bare coin (audits S014-01 /
-# S061-08: DOT28.S used to become its own "DOT28" pool, so the rewards
-# sat in a pool nothing sold and the real coin went short). Only these
-# lock periods, and only in front of `.S`, so a real coin whose ticker
-# ends in digits (C98, 1INCH, 0G) is never cut.
-_BONDED_STAKING_RE = re.compile(r'^([A-Z][A-Z0-9]*?)(?:03|04|07|14|21|28)'
-                                r'\.S$')
+# in days, two digits, before the `.S`: <COIN><dd>.S (DOT28.S, KSM07.S).
+# Same property as the bare coin (audits S014-01 / S061-08: DOT28.S used
+# to become its own "DOT28" pool, so the rewards sat in a pool nothing
+# sold and the real coin went short). Derived from the shape, not a list
+# of coins or lock periods: folded only when the bare coin itself
+# appears in the same export (_KNOWN_ASSETS), so a real coin whose
+# ticker ends in digits (C98.S) is never cut. A bonded code whose coin
+# never appears is noted, with the ticker.map GLOBAL line that folds it.
+_BONDED_STAKING_RE = re.compile(r'^([A-Z][A-Z0-9]*?[A-Z])(\d{2})\.S$')
+# The bare asset codes of the export being parsed (set per file by the
+# parser's pre-pass; None outside a parse).
+_KNOWN_ASSETS: Optional[set] = None
 
 # Required columns — a missing `fee`/`vol` used to read as 0 on every
 # row (DictReader.get), silently booking fee-free trades. Refuse.
@@ -80,36 +107,48 @@ _STAKING_WALLET_MOVES = ('spottostaking', 'stakingfromspot',
                          'spottofutures', 'spotfromfutures')
 
 
-def _normalize_asset(asset: str, fold_stable: bool = True) -> str:
+def _normalize_asset(asset: str, fold_stable: bool = True,
+                     bonded: bool = True) -> str:
     """Kraken prefixes assets with Z (fiat) and X (crypto) for historical reasons.
     Strip those and treat USD-pegged stablecoins as their USD anchor.
     `fold_stable=False` keeps the stablecoin's own name — the custody-
     evidence rows must say WHAT was sent (a USDC gift is a disposition
     of USDC the property, not a USD cash movement), even though the
-    trade books fold it for pricing."""
+    trade books fold it for pricing. The project's ticker.map GLOBAL
+    lines between bare codes apply first and last (lib/markets.
+    crypto_alias: `GLOBAL ETH2 ETH` folds a staked-coin code into its
+    coin — taxjson ships no such fold)."""
+    from taxjson.lib.markets import crypto_alias, kraken_assets
     # Upper-cased first: a hand-edited or converted export with `dot.s`
     # or `eth` would otherwise open its own pool beside DOT/ETH (R1-112).
     asset = (asset or '').strip().upper()
-    asset = _BONDED_STAKING_RE.sub(r'\1', asset)
+    if bonded:
+        m = _BONDED_STAKING_RE.match(asset)
+        if m:
+            coin = _normalize_asset(m.group(1), fold_stable=False,
+                                    bonded=False)
+            if _KNOWN_ASSETS is not None and coin in _KNOWN_ASSETS:
+                asset = m.group(1)
+            elif _KNOWN_ASSETS is not None:
+                from taxjson.lib.markets import note_builtin
+                note_builtin(
+                    "kraken-bonded", asset,
+                    f"Kraken {asset} looks like a bonded-staking code of "
+                    f"{coin} ({m.group(2)}-day lock), but {coin} itself "
+                    f"never appears in the export, so it is kept as its "
+                    f"own asset {asset[:-2]}; if it is {coin}, add "
+                    f"`GLOBAL {asset[:-2]} {coin}` to ticker.map.")
     asset = _ASSET_SUFFIX_RE.sub('', asset)
+    asset = crypto_alias(asset)
     if (len(asset) == 4 and asset.startswith('Z')
             and asset[1:] in _FIAT_CURRENCIES):
         asset = asset[1:]           # ZUSD, ZJPY, ZAUD (never ZEC: Zcash)
-    # The X-prefix strip covers every classic X-prefixed Kraken asset
-    # (KNOWN_ISSUES enumerated the missing ones: XLM, XMR, ZEC, XDG
-    # [Dogecoin], ETC) — an unstripped `XXLM` reached
-    # taxjson-fill-crypto as `XXLM-USD`, which Yahoo can't resolve.
-    asset = re.sub(r'^X(XBT|ETH|LTC|XRP|XLM|XMR|ZEC|XDG|ETC|MLN|REP)$',
-                   r'\1', asset)
-    if asset == 'XBT':
-        asset = 'BTC'
-    if asset == 'XDG':
-        asset = 'DOGE'      # Kraken's Dogecoin code; Yahoo wants DOGE
-    if asset == 'ETH2':
-        # Kraken's staked-ETH ledger code (`ETH2`, `ETH2.S`): a 1:1
-        # claim on ETH that Kraken converted back to ETH at the merge
-        # unlock — the same property for ACB purposes.
-        asset = 'ETH'
+    # Kraken's legacy codes (XXBT, XETH, XDG ...): the shipped market
+    # data (lib/markets.kraken_assets) — an unmapped `XXLM` reached
+    # taxjson-fill-crypto as `XXLM-USD`, which Yahoo can't resolve. A
+    # code the list lacks: ticker.map `GLOBAL XCODE COIN`.
+    asset = kraken_assets().get(asset, asset)
+    asset = crypto_alias(asset)
     # Fold USD-pegged stablecoins. DAI is included so that a `BTC/DAI`
     # row resolves consistently — otherwise DAI would be flagged as
     # fiat (via `_FIAT_ASSETS`) but pass through to the gain engine
@@ -119,9 +158,21 @@ def _normalize_asset(asset: str, fold_stable: bool = True) -> str:
     return asset
 
 
-# Stablecoin tickers that end in "USD": a legacy concatenated pair
-# ending in one is ambiguous (see _split_pair).
-_USD_SUFFIX_STABLES = ('PYUSD', 'RLUSD', 'FDUSD', 'GUSD')
+def known_assets_of(codes) -> set:
+    """The bare asset codes among `codes` (raw Kraken ledger assets or
+    pair halves), normalised without the bonded-staking fold: the
+    _KNOWN_ASSETS a parse folds `<COIN><dd>.S` against."""
+    out = set()
+    for c in codes:
+        if c:
+            out.add(_normalize_asset(c, fold_stable=False, bonded=False))
+    return out
+
+
+def _alt(codes) -> str:
+    """A regex alternation of `codes`, longest first (USDT before USD)."""
+    return '|'.join(re.escape(c) for c in sorted(codes, key=lambda c:
+                                                 (-len(c), c)))
 
 
 def _split_pair(pair: str, time_raw: str = '') -> tuple:
@@ -132,7 +183,9 @@ def _split_pair(pair: str, time_raw: str = '') -> tuple:
     dumped the whole string into `base` and stamped `quote='USD'`,
     which mis-denominated every legacy row. Recognize the documented
     legacy shapes and refuse loudly on anything else — a wrong quote
-    silently corrupts the disposition currency."""
+    silently corrupts the disposition currency. The quote and base
+    alternatives come from the fiat and stablecoin lists (lib/markets),
+    not from a list of their own."""
     if '/' in pair:
         # Upper-cased like the legacy branch below: 'eth/usd' used to
         # keep a lower-case quote that missed every fiat check and
@@ -140,48 +193,52 @@ def _split_pair(pair: str, time_raw: str = '') -> tuple:
         base, quote = pair.split('/', 1)
         return base.strip().upper(), quote.strip().upper()
     p = pair.strip().upper()
+    fiat = set(_FIAT_CURRENCIES)
+    stables = set(USD_STABLECOINS)
     m = re.fullmatch(r'X([A-Z]{3,4})Z([A-Z]{3})', p)
-    if m and m.group(2) in _FIAT_CURRENCIES:  # XXBTZUSD, XXBTZJPY
+    if m and m.group(2) in fiat:            # XXBTZUSD, XXBTZJPY
         return m.group(1), m.group(2)
     m = re.fullmatch(r'X([A-Z]{3,4})X([A-Z]{3,4})', p)
     if m:                                   # XETHXXBT (crypto/crypto)
         return m.group(1), m.group(2)
-    # Z-prefixed fiat QUOTE behind a stablecoin/fiat base (USDTZUSD,
+    # Z-prefixed fiat QUOTE behind a stablecoin or Z-fiat base (USDTZUSD,
     # ZUSDZCAD — Kraken's actual legacy names): matched BEFORE the
     # generic concatenation, whose greedy base otherwise eats the Z and
-    # mints garbage symbols like 'USDTZ'. Kept to the EXPLICIT base
-    # list — a permissive Z? base would wrongly split XTZUSD (Tezos)
-    # into XT/USD.
-    m = re.fullmatch(r'(USDT|USDC|DAI|Z(?:USD|CAD|EUR|GBP))'
-                     r'Z(USD|CAD|EUR|GBP)', p)
+    # mints garbage symbols like 'USDTZ'. Kept to the stablecoin and
+    # Z-fiat bases — a permissive Z? base would wrongly split XTZUSD
+    # (Tezos) into XT/USD.
+    m = re.fullmatch(rf'({_alt(stables | {"Z" + f for f in fiat})})'
+                     rf'Z({_alt(fiat)})', p)
     if m:
         base = m.group(1)
-        if base.startswith('Z') and len(base) == 4:
+        if base.startswith('Z') and len(base) == 4 and base[1:] in fiat:
             base = base[1:]                 # ZUSDZCAD → USD/CAD
         return base, m.group(2)
-    m = re.fullmatch(r'([A-Z0-9]{2,8})(USDC|USDT|DAI|USD|CAD|EUR|GBP)', p)
-    if m and m.group(2) == 'USD' and p.endswith(_USD_SUFFIX_STABLES):
+    m = re.fullmatch(rf'([A-Z0-9]{{2,8}})({_alt(stables | fiat)})', p)
+    if m:
         # ETHPYUSD is ETH/PYUSD (a crypto quote), not 'ETHPY'/USD cash:
-        # a stablecoin ticker that ENDS in USD makes the concatenation
-        # ambiguous, and the generic split minted a truncated base and
-        # booked the coin side as dollars (audit S061-00). Refused like
-        # any unrecognized shape. (TUSD cannot be told apart this way:
-        # XBTUSD and DOTUSD end in it too.)
-        raise ValueError(
-            f"Kraken trades row has an ambiguous legacy pair {pair!r} "
-            f"(time={time_raw!r}): it ends in a stablecoin ticker "
-            f"({', '.join(s for s in _USD_SUFFIX_STABLES if p.endswith(s))}"
-            f"), so the quote may be that coin, not US dollars. "
-            f"Re-export the trades with slashed pairs (ETH/PYUSD), or "
-            f"write the pair with a slash in the file.")
-    if m:                                   # ADAUSD, SOLUSDT
-        return m.group(1), m.group(2)
+        # a stablecoin ticker that ENDS in a fiat code makes the
+        # concatenation ambiguous, and the generic split minted a
+        # truncated base and booked the coin side as dollars (audit
+        # S061-00). Refused like any unrecognized shape.
+        quote = m.group(2)
+        clash = sorted(s for s in stables
+                       if len(s) > len(quote) and s.endswith(quote)
+                       and p.endswith(s))
+        if quote in fiat and clash:
+            raise ValueError(
+                f"Kraken trades row has an ambiguous legacy pair {pair!r} "
+                f"(time={time_raw!r}): it ends in a stablecoin ticker "
+                f"({', '.join(clash)}), so the quote may be that coin, not "
+                f"{quote}. Re-export the trades with slashed pairs "
+                f"(ETH/PYUSD), or write the pair with a slash in the file.")
+        return m.group(1), quote            # ADAUSD, SOLUSDT
     raise ValueError(
         f"Kraken trades row has an unrecognized pair format: {pair!r} "
         f"(time={time_raw!r}). The slashed form (XBT/USD) and the "
         f"documented legacy concatenations (XXBTZUSD, XETHXXBT, ADAUSD) "
-        f"are supported; add the new shape to _split_pair rather than "
-        f"letting the row parse with a guessed quote currency.")
+        f"are supported; write the pair with a slash (BASE/QUOTE) rather "
+        f"than letting the row parse with a guessed quote currency.")
 
 
 def _classify_header(header_line: str) -> str:
@@ -339,14 +396,54 @@ class KrakenBrokerage(BaseBrokerage):
                 else _FIAT_CURRENCIES)
 
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
+        global _KNOWN_ASSETS
         with io.StringIO(read_broker_text(path)) as f:
             header_line = f.readline()
         kind = _classify_header(header_line)
-        if kind == 'trades':
-            return self._parse_trades(path)
-        if kind == 'ledgers':
-            return self._parse_ledgers(path)
-        return []
+        prev = _KNOWN_ASSETS
+        _KNOWN_ASSETS = self._export_assets(path)
+        try:
+            if kind == 'trades':
+                return self._parse_trades(path)
+            if kind == 'ledgers':
+                return self._parse_ledgers(path)
+            return []
+        finally:
+            _KNOWN_ASSETS = prev
+
+    @staticmethod
+    def _export_assets(path: Path) -> set:
+        """Every bare asset code of the Kraken export `path` belongs to
+        (the file and its Kraken siblings in the folder): what a bonded
+        staking code `<COIN><dd>.S` is folded against. Unreadable rows
+        are skipped here (the parse itself reports them)."""
+        codes: List[str] = []
+        try:
+            siblings = sorted(path.parent.iterdir())
+        except OSError:
+            siblings = []
+        files = [path] + [p for p in siblings if p != path and p.is_file()
+                          and p.suffix.lower() == '.csv'
+                          and (p.name.lower().startswith('kr_')
+                               or 'kraken' in p.name.lower())]
+        for p in files:
+            try:
+                rows = list(csv.DictReader(io.StringIO(read_broker_text(p))))
+            except (BrokerageParseError, OSError, csv.Error,
+                    UnicodeDecodeError):
+                continue
+            for raw in rows:
+                row = {str(k or '').strip().lower(): v
+                       for k, v in raw.items() if k is not None}
+                if row.get('asset'):
+                    codes.append(str(row['asset']))
+                pair = str(row.get('pair') or '')
+                if pair:
+                    try:
+                        codes.extend(_split_pair(pair))
+                    except ValueError:
+                        pass
+        return known_assets_of(codes)
 
     # ------------------------------------------------------------ helpers
     def _num(self, row, field, context, required=False) -> float:
@@ -550,12 +647,13 @@ class KrakenBrokerage(BaseBrokerage):
 
     def _same_property_swap(self, qty_out: float, qty_in: float,
                             asset: str, where: str) -> None:
-        """A swap whose two sides fold to the same asset (ETH <-> ETH2 /
-        ETH2.S) is a counted non-event when the quantities match; any
+        """A swap whose two sides fold to the same asset (DOT <-> DOT28.S,
+        or a ticker.map GLOBAL fold) is a counted non-event when the
+        quantities match; any
         other shape (a fee in the coin, a non-1:1 rate) has no modeled
         booking and raises."""
         if abs(qty_out - qty_in) <= 1e-8 * max(qty_out, qty_in, 1e-12):
-            self.count_nonevent(f"{asset} relabel swap (e.g. ETH<->ETH2, "
+            self.count_nonevent(f"{asset} relabel swap (two codes of "
                                 f"the same property)")
             return
         raise ValueError(
@@ -654,17 +752,20 @@ class KrakenBrokerage(BaseBrokerage):
                     continue
 
                 if base == quote:
-                    # Two spellings of ONE property (ETH2.S/ETH: Kraken
-                    # folds ETH2 into ETH as the same property for ACB
-                    # purposes). The wrap/unwrap moves nothing but the
-                    # label — booking it as a sale and rebuy realized a
-                    # false gain (S061-11).
+                    # Two spellings of ONE property (DOT28.S/DOT, or
+                    # ETH2.S/ETH under a ticker.map `GLOBAL ETH2 ETH`).
+                    # The wrap/unwrap moves nothing but the label —
+                    # booking it as a sale and rebuy realized a false
+                    # gain (S061-11).
                     self._same_property_swap(
                         abs(vol), abs(cost), base,
                         f"trades {shown_name(path)} line {line} "
                         f"({pair})")
                     continue
 
+                same_coin_hint(base, quote, vol, cost,
+                               f"Kraken trades {shown_name(path)} "
+                               f"line {line}")
                 # Which balance paid the fee (M3): join the ledger.
                 _txid = (row.get('txid') or '').strip()
                 legs = (ledger_idx.get(_txid)
@@ -1182,7 +1283,7 @@ class KrakenBrokerage(BaseBrokerage):
                 and (nonevents or ignored_types)
                 and not any(not c.startswith(self.KNOWN_NONEVENT_PREFIX)
                             for c in self._skip_counts)):
-            # Every row is a recognized non-event (an ETH<->ETH2 relabel,
+            # Every row is a recognized non-event (a same-coin relabel,
             # an Earn wallet move, a fiat deposit): the parser worked,
             # so no "parsed to 0 transactions" warning, which `run
             # --strict` refuses (re-audit A2-0583).
@@ -1567,8 +1668,9 @@ class KrakenBrokerage(BaseBrokerage):
 
         if spend['asset'] == recv['asset'] and \
                 spend['asset'] not in self._fiat:
-            # ETH -> ETH2.S (both fold to ETH, the same property): a
-            # relabel, not a disposition (S061-11).
+            # DOT -> DOT28.S, or ETH -> ETH2.S under a ticker.map
+            # `GLOBAL ETH2 ETH` (both fold to one property): a relabel,
+            # not a disposition (S061-11).
             if spend['fee'] or recv['fee']:
                 raise ValueError(
                     f"Kraken ledger refid {refid[:2]}***: a swap between "
@@ -1578,6 +1680,8 @@ class KrakenBrokerage(BaseBrokerage):
                                      spend['asset'],
                                      f"ledger refid {refid[:2]}***")
             return []
+        same_coin_hint(spend['asset'], recv['asset'], spend['amount'],
+                       recv['amount'], f"Kraken ledger refid {refid[:2]}***")
 
         if (spend['asset'] in _FIAT_CURRENCIES
                 and recv['asset'] in _FIAT_CURRENCIES):

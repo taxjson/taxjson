@@ -244,7 +244,9 @@ Kraken and Coinbase timestamps are UTC; rows are dated in local time
 "America/Vancouver"` etc., or the `TAXJSON_LOCAL_TZ` environment variable
 outside a project, to change it — the setting wins, and a change re-dates the
 rows and re-keys crypto sends), so a fill at 03:00 UTC on January 1 belongs to
-the previous tax year. USDC/USDT/DAI/PYUSD/GUSD are treated
+the previous tax year. The USD stablecoins (USDC, USDT, DAI, PYUSD, GUSD,
+RLUSD and FDUSD in the shipped market data; a ticker.map `STABLE SYMBOL USD`
+line adds one, `STABLE SYMBOL NO` removes one) are treated
 as US-dollar cash in a Canada project (an approximation; a fill valued in US
 dollars more than 2% off 1.00 USD is warned about, a CAD- or EUR-valued one is
 not checked) and as property, like any coin, in a US project.

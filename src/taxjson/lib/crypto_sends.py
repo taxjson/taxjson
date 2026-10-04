@@ -76,7 +76,17 @@ class RefusedDecision(ValueError):
 # for one would sell a position that does not exist.
 from taxjson.lib.brokerages._crypto_common import (  # noqa: E402
     USD_STABLECOINS as STABLECOINS)
-USD_FAMILY = STABLECOINS | {"USD"}
+
+
+class _UsdFamily:
+    """US dollars and the stablecoins (live: lib/markets + ticker.map
+    STABLE lines)."""
+
+    def __contains__(self, item) -> bool:
+        return item == "USD" or item in STABLECOINS
+
+
+USD_FAMILY = _UsdFamily()
 
 
 def is_cash_stablecoin(symbol: str, exchange: str) -> bool:

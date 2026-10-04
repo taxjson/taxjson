@@ -318,13 +318,15 @@ class TestKrakenLegacyLedger(unittest.TestCase):
         with td:
             txs, err = _run(K().parse_file, Path(td.name) / "kr_ledgers.csv")
         divs = {t["symbol"]: t for t in txs if t["action"] == "DIVIDEND"}
-        self.assertEqual(sorted(divs), ["BTC", "DOT", "ETH", "USD"])
+        # ETH2 is its own code unless ticker.map says `GLOBAL ETH2 ETH`
+        # (taxjson ships no staked-coin fold; owner 2026-10-04).
+        self.assertEqual(sorted(divs), ["BTC", "DOT", "ETH2", "USD"])
         self.assertAlmostEqual(divs["DOT"]["quantity"], 0.5)
         # Fiat reward: cash income in its own currency, no position.
         self.assertEqual(divs["USD"]["net_amount"], 1.25)
         self.assertEqual(divs["USD"]["currency"], "USD")
         buys = sorted(t["symbol"] for t in txs if t["action"] == "BUYSELL")
-        self.assertEqual(buys, ["BTC", "DOT", "ETH"])
+        self.assertEqual(buys, ["BTC", "DOT", "ETH2"])
         self.assertNotIn("unhandled type", err)
 
     @rule("CA-INC-04")

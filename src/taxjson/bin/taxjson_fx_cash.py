@@ -39,7 +39,8 @@ of the s.39(1.1) number and where to file it.
 import sys
 from typing import Any, Dict, List, Optional
 
-from taxjson.lib.brokerages._crypto_common import USD_STABLECOINS
+from taxjson.lib.brokerages._crypto_common import (FIAT_CURRENCIES,
+                                                   USD_STABLECOINS)
 
 CA_EXEMPTION = 200.0
 
@@ -56,8 +57,10 @@ _OUTFLOW = ("TAX", "FEE")
 # out here, so a Canadian PYUSD reward never entered the USD pool
 # (re-audit A2-0589). A US book's base is USD, so a US stablecoin flow
 # never reaches the ledger.
-_CASH_LIKE = (frozenset({"USD", "CAD", "EUR", "GBP", "AUD", "JPY", "CHF"})
-              | USD_STABLECOINS)
+def _cash_like(sym: str) -> bool:
+    """A fiat currency (the ONE fiat list, lib/markets) or a stablecoin
+    (live: ticker.map STABLE lines apply)."""
+    return sym in FIAT_CURRENCIES or sym in USD_STABLECOINS
 
 
 def _non_cash(tx: Dict[str, Any]) -> bool:
@@ -79,7 +82,7 @@ def _non_cash(tx: Dict[str, Any]) -> bool:
     # acquisition row). A reward paid in fiat or a stablecoin is cash.
     if low.startswith("staking reward"):
         sym = str(tx.get("symbol") or "").upper().split(".")[0]
-        return sym not in _CASH_LIKE
+        return not _cash_like(sym)
     # Corporate-action legs (share-for-share merger, spin-off ACB
     # allocation, taxable exchange at FMV): stock for stock. Their cash
     # (cash in lieu, boot) is the row's structured `corp_cash`, read by

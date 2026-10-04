@@ -309,8 +309,8 @@ class TestUnbookedRows(unittest.TestCase):
 
     def test_file_of_only_non_events_reports_a_reason(self):
         for rows in (
-                ["L1,R1,2025-03-01 12:00:00,spend,,currency,XETH,spot,-1,0,"
-                 "1", "L2,R1,2025-03-01 12:00:00,receive,,currency,ETH2.S,"
+                ["L1,R1,2025-03-01 12:00:00,spend,,currency,DOT,spot,-1,0,"
+                 "1", "L2,R1,2025-03-01 12:00:00,receive,,currency,DOT28.S,"
                  "spot,1,0,1"],
                 ["L1,F1,2025-03-01 12:00:00,deposit,,currency,ZUSD,spot,50,"
                  "0,50"]):
@@ -468,6 +468,7 @@ class TestStakedCodesSameProperty(unittest.TestCase):
         text = catalog("canada")["CA-CRYPTO-01"].text
         self.assertIn("ETH2", text)
         self.assertIn("DOT.S", text)
+        self.assertIn("DOT28.S", text)
         led = _ledger([
             "L1,R1,2025-03-01 12:00:00,spend,,currency,DOT,spot,-5,0,0",
             "L2,R1,2025-03-01 12:00:00,receive,,currency,DOT28.S,spot,5,0,"
@@ -477,15 +478,27 @@ class TestStakedCodesSameProperty(unittest.TestCase):
 
     @rule("US-CRYPTO-01")
     def test_us_rule_states_the_fold(self):
+        # ETH2 is ETH only when the project's ticker.map says so
+        # (`GLOBAL ETH2 ETH`; no built-in fold, owner 2026-10-04).
+        import tempfile
+        from pathlib import Path
+        from taxjson.lib import markets
         from taxjson.lib.tax_logic import catalog
         text = catalog("usa")["US-CRYPTO-01"].text
-        self.assertIn("ETH2", text)
+        self.assertIn("GLOBAL", text)
         led = _ledger([
             "L1,R1,2025-03-01 12:00:00,spend,,currency,XETH,spot,-1,0,0",
             "L2,R1,2025-03-01 12:00:00,receive,,currency,ETH2.S,spot,1,0,"
             "1"])
-        txs, _ = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv",
-                        cash=False)
+        with tempfile.TemporaryDirectory() as td:
+            tm = Path(td) / "ticker.map"
+            tm.write_text("GLOBAL ETH2 ETH\n")
+            markets.use_ticker_map(tm)
+            try:
+                txs, _ = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv",
+                                cash=False)
+            finally:
+                markets.use_ticker_map(None)
         self.assertEqual(txs, [])
 
 

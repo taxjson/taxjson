@@ -441,8 +441,8 @@ class TestKrakenRefusalsSayRemoveTheRow(unittest.TestCase):
             'L4,R1,2025-03-01 00:00:00,receive,,currency,ADA,spot,100,0,'
             '100\n', False),
         'two spellings': (
-            'L1,R1,2025-03-01 00:00:00,spend,,currency,XETH,spot,-1,0.001,1\n'
-            'L2,R1,2025-03-01 00:00:00,receive,,currency,ETH2.S,spot,1,0,1\n',
+            'L1,R1,2025-03-01 00:00:00,spend,,currency,DOT,spot,-1,0.001,1\n'
+            'L2,R1,2025-03-01 00:00:00,receive,,currency,DOT28.S,spot,1,0,1\n',
             False),
     }
 
