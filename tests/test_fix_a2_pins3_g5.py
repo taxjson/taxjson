@@ -261,7 +261,7 @@ class TestHandPriceGuards(unittest.TestCase):
             root, home = _crypto_project(td)
             for bad in ("-1", "0", "inf"):
                 r = _cli(root, home, "crypto-sends", "crypto", "--set",
-                         "kr-20260413T173000-LDO-2.5=payment",
+                         "kr-20260413T173000-QZL-2.5=payment",
                          f"--price={bad}")
                 self.assertEqual(r.returncode, 2, (bad, r.stderr))
                 self.assertIn("argument --price: must be a finite number",
@@ -304,7 +304,7 @@ class TestRunStageUnparsedPeer(unittest.TestCase):
     .diag instead."""
 
     def test_no_prompt_while_a_peer_is_unparsed(self):
-        from test_fix_sends import CB_CSV, KR_LEDGER, _env, _rates_file
+        from test_fix_sends import CB_CSV, CRYPTO_MAP_LINE, KR_LEDGER, _env, _rates_file
         from taxjson.bin import taxjson_run as tr
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
@@ -318,13 +318,14 @@ class TestRunStageUnparsedPeer(unittest.TestCase):
                 'base_currency = "CAD"\nsource_currencies = ["USD"]\n'
                 '[accounts.cb]\ntype = "taxable"\ncrypto = true\n'
                 '[accounts.kr]\ntype = "taxable"\ncrypto = true\n')
+            (root / "ticker.map").write_text(CRYPTO_MAP_LINE)
             (root / "work").mkdir()
             _rates_file(root / "work" / "to_base.csv")
             home = td / "home"
             home.mkdir()
             (home / ".crypto_price_cache.json").write_text(json.dumps({
-                "LDO11808-2026-04-13": 1.84,
-                "LDO11808-2026-01-12": 2.1}))
+                "QZL55501-2026-04-13": 1.84,
+                "QZL55501-2026-01-12": 2.1}))
             r = _cli(root, home, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             # kr never parsed (a first-time run reaching cb first).

@@ -766,7 +766,7 @@ def main(argv: Optional[List[str]] = None,
                 _dirs.append(d)
     external_map = load_yf_map(_dirs + [Path(".")])
     # The coin spellings the books were priced with: fill-crypto's
-    # built-ins plus the project's ticker.map CRYPTO lines (A2-0364).
+    # ids, the project's ticker.map CRYPTO lines (A2-0364).
     # Project root first — `taxjson run` reads the map from there.
     crypto_overrides = load_crypto_overrides(
         [d for d in reversed(_dirs)])

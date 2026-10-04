@@ -198,11 +198,16 @@ class TestCryptoTickerMap(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertEqual(asked, {"FOO": "FOO123-USD"})
 
-    def test_builtin_override_still_applies(self):
-        from taxjson.lib.price_chain import yf_symbol_for
-        self.assertEqual(yf_symbol_for("UNI"), "UNI7083-USD")
+    def test_only_the_project_map_names_a_coin_id(self):
+        # The built-in coin id table is gone: without a CRYPTO line a
+        # coin is quoted as <SYMBOL>-USD.
+        from taxjson.lib.price_chain import (load_crypto_overrides,
+                                             yf_symbol_for)
+        self.assertEqual(yf_symbol_for("FOO"), "FOO-USD")
         self.assertEqual(yf_symbol_for("FOO", {"FOO": "FOO123"}),
                          "FOO123-USD")
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(load_crypto_overrides([td]), {})
 
 
 class TestMinorUnitQuotes(unittest.TestCase):

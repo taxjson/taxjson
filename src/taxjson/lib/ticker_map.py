@@ -139,7 +139,9 @@ def underlying_of(symbol: str, aliases: dict) -> str:
 #   CRYPTO      SYMBOL YAHOO_ID
 #       the Yahoo id of a coin whose ticker collides with another
 #       asset (fill-crypto prices `<YAHOO_ID>-USD`; crypto-sends and
-#       harvest quote the same id).
+#       harvest quote the same id). The only coin ids there are: with no
+#       line a coin is `<SYMBOL>-USD`. A trailing `-USD` on YAHOO_ID is
+#       dropped (the full pair as Yahoo shows it is accepted).
 #   EXTRACT     DESCRIPTION WORDS | CURRENCY | SYMBOL
 #       a parser symbol-extraction override: a broker row whose
 #       description contains DESCRIPTION WORDS (whole words, any case)
@@ -266,7 +268,13 @@ def parse_side_line(kw: str, line: str):
     if kw == "CRYPTO":
         if len(toks) != 2:
             raise ValueError("CRYPTO needs `CRYPTO SYMBOL YAHOO_ID`")
-        return "crypto", toks[0].upper(), toks[1]
+        # Yahoo shows the full pair (`ABC12345-USD`); the id is the part
+        # before `-USD`, which the lookups append — copied whole, the
+        # pair would have been quoted as `ABC12345-USD-USD`.
+        yid = toks[1]
+        if yid.upper().endswith("-USD") and len(yid) > 4:
+            yid = yid[:-4]
+        return "crypto", toks[0].upper(), yid
     if kw == "T1135":
         from taxjson.lib.t1135_country import (NOT_FOREIGN_WORDS,
                                                parse_country)

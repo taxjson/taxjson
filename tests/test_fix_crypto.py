@@ -449,7 +449,7 @@ class TestCryptoTickerMapFromProjectRoot(unittest.TestCase):
 
     def test_in_process_overrides_do_not_leak_between_runs(self):
         import taxjson.bin.fill_crypto_prices as fc
-        before = dict(fc.SYMBOL_OVERRIDES)
+        before = dict(fc.PROJECT_CRYPTO_IDS)
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "ticker.map").write_text("CRYPTO ZZQ ZZQ999\n")
             inp = Path(tmp) / "in.json"
@@ -461,7 +461,7 @@ class TestCryptoTickerMapFromProjectRoot(unittest.TestCase):
                     fc.main()
             finally:
                 sys.argv = saved
-        self.assertEqual(fc.SYMBOL_OVERRIDES, before)
+        self.assertEqual(fc.PROJECT_CRYPTO_IDS, before)
 
 
 if __name__ == "__main__":

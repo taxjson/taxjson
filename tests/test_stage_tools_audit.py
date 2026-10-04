@@ -334,12 +334,14 @@ class TestD8FillCrypto(unittest.TestCase):
         cache = Path(tmp) / 'cache.json'
         inp = _write(tmp, 'in.json', rows)
         saved = (fc.CACHE_FILE, fc.get_crypto_price, sys.argv,
-                 dict(fc.SYMBOL_OVERRIDES), fc.time.sleep)
+                 dict(fc.PROJECT_CRYPTO_IDS), fc.time.sleep)
         fc.CACHE_FILE = str(cache)
         fc.get_crypto_price = fetch
         fc.time.sleep = lambda s: None
-        fc.SYMBOL_OVERRIDES['ZZQ'] = 'ZZQ12345'
-        sys.argv = ['fill-crypto', str(inp)]
+        # ZZQ's Yahoo id comes from the project's ticker.map CRYPTO
+        # line (there is no built-in coin id table).
+        (Path(tmp) / 'ticker.map').write_text('CRYPTO ZZQ ZZQ12345\n')
+        sys.argv = ['fill-crypto', '--project-root', str(tmp), str(inp)]
         out, err = io.StringIO(), io.StringIO()
         try:
             with contextlib.redirect_stdout(out), \
@@ -348,8 +350,8 @@ class TestD8FillCrypto(unittest.TestCase):
         finally:
             (fc.CACHE_FILE, fc.get_crypto_price, sys.argv,
              overrides, fc.time.sleep) = saved
-            fc.SYMBOL_OVERRIDES.clear()
-            fc.SYMBOL_OVERRIDES.update(overrides)
+            fc.PROJECT_CRYPTO_IDS.clear()
+            fc.PROJECT_CRYPTO_IDS.update(overrides)
         return json.loads(out.getvalue())['transactions'], cache, err.getvalue()
 
     def test_cache_keyed_on_resolved_yahoo_id(self):

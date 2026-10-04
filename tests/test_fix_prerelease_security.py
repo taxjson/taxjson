@@ -342,7 +342,7 @@ class TestFillCryptoUrl(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != "TAXJSON_OFFLINE"}
         with mock.patch.dict(os.environ, env, clear=True), \
                 mock.patch.object(F.urllib.request, "urlopen", fake_urlopen), \
-                mock.patch.dict(F.SYMBOL_OVERRIDES, {"ZZQ": "A/B?x=1#y"}):
+                mock.patch.dict(F.PROJECT_CRYPTO_IDS, {"ZZQ": "A/B?x=1#y"}):
             v = F.get_crypto_price("ZZQ", "2025-01-02")
         self.assertEqual(v, 123.5)
         self.assertEqual(len(seen), 1)

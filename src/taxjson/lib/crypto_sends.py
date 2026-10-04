@@ -703,7 +703,7 @@ def yahoo_usd_price(project_root: Path) -> Callable[[str, str],
                                                     Tuple[Optional[float], str]]:
     """The fill-crypto price source: Yahoo `<id>-USD` daily close, the
     same cache (~/.crypto_price_cache.json) and the same symbol map
-    (built-ins + the project's ticker.map CRYPTO lines). Offline
+    (the project's ticker.map CRYPTO lines; no built-in ids). Offline
     (TAXJSON_OFFLINE) it answers from the cache only."""
     from taxjson.bin import fill_crypto_prices as F
     from taxjson.lib.offline import offline_enabled
@@ -727,13 +727,13 @@ def yahoo_usd_price(project_root: Path) -> Callable[[str, str],
             return hit, ysym
         if offline_enabled():
             return None, ysym
-        saved = dict(F.SYMBOL_OVERRIDES)
-        F.SYMBOL_OVERRIDES.update(overrides)
+        saved = dict(F.PROJECT_CRYPTO_IDS)
+        F.PROJECT_CRYPTO_IDS.update(overrides)
         try:
             p = F.get_crypto_price(symbol, day)
         finally:
-            F.SYMBOL_OVERRIDES.clear()
-            F.SYMBOL_OVERRIDES.update(saved)
+            F.PROJECT_CRYPTO_IDS.clear()
+            F.PROJECT_CRYPTO_IDS.update(saved)
         if p and p > 0:
             # A close for UTC today or later is the still-open candle:
             # used, never cached (fill-crypto's rule, audit S025-08 —

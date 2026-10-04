@@ -3281,6 +3281,14 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             run_to_file(_cmd("taxjson-fill-crypto") + [
                 "--project-root", str(inputs_dir.parent), str(mapped)],
                 filled)
+        # A coin priced under an id that looks wrong (no CRYPTO line
+        # while the price cache holds a numbered id of the ticker, or
+        # Yahoo closes far off the coin's own trade prices): console,
+        # every run, --fast included (from the persisted .diag).
+        from taxjson.bin.fill_crypto_prices import (
+            ATTENTION_CRYPTO_ID as _ATT_CID)
+        echo_attention_lines(filled,
+                             prefix=_ATT_CID[len(ATTENTION_PREFIX) + 1:])
         if force or needs_rebuild(base_json, filled, rates):
             print(f"  convert-currency → {base_currency}")
             run_to_file(_cmd("taxjson-convert-currency") + [
@@ -5640,7 +5648,10 @@ _TEMPLATE_TICKER_MAP = """\
 #                     the acquirer: OLDCO.TO NEWCO 0.25).
 #   CRYPTO  SYMBOL YAHOO_ID
 #                     A coin whose ticker collides with another asset on
-#                     Yahoo (prices are looked up as YAHOO_ID-USD).
+#                     Yahoo (prices are looked up as YAHOO_ID-USD; with
+#                     no line, as SYMBOL-USD). Yahoo numbers a shared
+#                     ticker (SYMBOL<number>-USD): find the id on
+#                     finance.yahoo.com.
 #   EXTRACT description words | CURRENCY | SYMBOL
 #                     Parser override: a broker row whose description has
 #                     these words and whose currency is CURRENCY ('*' =
@@ -5660,7 +5671,7 @@ _TEMPLATE_TICKER_MAP = """\
 # DELETE   CASH.US
 # DISTINCT UNH.US     UNH.TO
 # QUOTE    PNG.TO     PNG.V
-# CRYPTO   TAO        TAO22974
+# CRYPTO   ABC        ABC12345
 # EXTRACT  Global X US Dollar Currency ETF | USD | DLR.U.TO
 # T1135    ENB.US     CA
 """

@@ -460,7 +460,7 @@ class TestLocks(unittest.TestCase):
 # ------------------------------------------------------------ crypto-sends
 class TestCryptoSendsCommand(unittest.TestCase):
     def setUp(self):
-        from test_fix_sends import CB_CSV, KR_LEDGER, _rates_file
+        from test_fix_sends import CB_CSV, CRYPTO_MAP_LINE, KR_LEDGER, _rates_file
         self._td = tempfile.TemporaryDirectory()
         td = Path(self._td.name)
         self.root = td / "proj"
@@ -472,13 +472,14 @@ class TestCryptoSendsCommand(unittest.TestCase):
             'base_currency = "CAD"\nsource_currencies = ["USD"]\n'
             '[accounts.cb]\ntype = "taxable"\ncrypto = true\n'
             '[accounts.kr]\ntype = "taxable"\ncrypto = true\n')
+        (self.root / "ticker.map").write_text(CRYPTO_MAP_LINE)
         (self.root / "work").mkdir()
         _rates_file(self.root / "work" / "to_base.csv")
         self.home = td / "home"
         self.home.mkdir()
         (self.home / ".crypto_price_cache.json").write_text(json.dumps({
-            "LDO11808-2026-04-13": 1.84,
-            "LDO11808-2026-01-12": 2.1}))
+            "QZL55501-2026-04-13": 1.84,
+            "QZL55501-2026-01-12": 2.1}))
 
     def tearDown(self):
         self._td.cleanup()

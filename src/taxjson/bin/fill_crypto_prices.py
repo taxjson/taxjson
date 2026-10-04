@@ -68,17 +68,32 @@ def save_cache(cache_data):
     from taxjson.lib.json_cache import save_json_cache
     save_json_cache(CACHE_FILE, cache_data, merge=True, prog=PROG, indent=2)
 
-# Built-in Yahoo ticker-collision disambiguations. Extended (or
-# overridden) per project by `CRYPTO SYMBOL YF_ID` lines in ticker.map
-# (`#` comments). The hardcoded set covers only the coins it lists; a
-# user with another colliding coin needs a CRYPTO line.
-SYMBOL_OVERRIDES = {
-    'TAO': 'TAO22974',
-    'UNI': 'UNI7083',
-    'LDO': 'LDO11808',
-    'GRT': 'GRT6719',
-    'FTM': 'FTM',
-}
+# The project's coin ids for THIS run: {SYMBOL: YAHOO_ID} from the
+# ticker.map `CRYPTO SYMBOL YAHOO_ID` lines, filled by main() (and by
+# crypto-sends' price lookup) and emptied again afterwards. There is no
+# built-in table: a coin is quoted as Yahoo `<SYMBOL>-USD` unless the
+# project maps it. Yahoo gives a ticker shared by two assets a number
+# (`<SYMBOL><number>-USD`); such a coin needs a CRYPTO line — the
+# messages below say which line (_crypto_line_hint).
+PROJECT_CRYPTO_IDS: dict = {}
+
+
+def yahoo_id(symbol: str, ids=None) -> str:
+    """The Yahoo id (without `-USD`) a coin is priced under: the
+    project's CRYPTO line, else the symbol itself."""
+    table = PROJECT_CRYPTO_IDS if ids is None else ids
+    return table.get(symbol, symbol)
+
+
+def _crypto_line_hint(symbol: str) -> str:
+    """How to map a coin whose default Yahoo id does not resolve, or
+    resolves to another asset."""
+    return (f"if Yahoo lists {symbol} under another id (a ticker shared "
+            f"with another asset carries a number: `{symbol}<number>-USD`"
+            f"), find the id on finance.yahoo.com and add the line "
+            f"`CRYPTO {symbol} {symbol}<number>` to the project's "
+            f"ticker.map")
+
 
 # USD-pegged stablecoins: 1.0/unit by definition — no lookup, no cache,
 # no network. A stablecoin staking reward (Kraken `earn/reward` in USDC)
@@ -93,20 +108,21 @@ from taxjson.lib.brokerages._crypto_common import (  # noqa: E402
 
 
 def load_symbol_overrides(dirs):
-    """Merge the CRYPTO lines (`CRYPTO SYMBOL YF_ID`) of the ticker.map
-    found in each of `dirs` (later dirs win) over the built-in
-    SYMBOL_OVERRIDES. A malformed line is skipped with a warning — a
-    typo shouldn't kill a price-fill run (`taxjson run` refuses the map
-    up front). A folder still holding the old crypto_ticker.map stops
-    the run (`taxjson migrate` moves it into ticker.map)."""
+    """The CRYPTO lines (`CRYPTO SYMBOL YAHOO_ID`) of the ticker.map
+    found in each of `dirs` (later dirs win), as {SYMBOL: YAHOO_ID} —
+    the only coin ids there are (no built-in table). A malformed line
+    is skipped with a warning — a typo shouldn't kill a price-fill run
+    (`taxjson run` refuses the map up front). A folder still holding the
+    old crypto_ticker.map stops the run (`taxjson migrate` moves it into
+    ticker.map)."""
     from taxjson.lib.ticker_map import side_rules_in
-    merged = dict(SYMBOL_OVERRIDES)
+    merged = {}
     for d in dirs:
         merged.update(side_rules_in([str(d)]).crypto)
     return merged
 
 def get_crypto_price(symbol, date_str):
-    y_symbol = SYMBOL_OVERRIDES.get(symbol, symbol)
+    y_symbol = yahoo_id(symbol)
     try:
         # UTC midnight: Yahoo daily candles are UTC-keyed; local
         # mktime made the 1-day window straddle two candles east of
@@ -141,7 +157,11 @@ def get_crypto_price(symbol, date_str):
         raise ValueError(f"Yahoo returned no usable close for "
                          f"{y_symbol}-USD (close={closes!r})")
     except Exception as e:
-        cli_diag.warn(PROG, f"failed to fetch crypto price for {symbol} on {date_str}: {e}")
+        hint = ("" if symbol in PROJECT_CRYPTO_IDS
+                else f" — {_crypto_line_hint(symbol)}")
+        cli_diag.warn(PROG, f"failed to fetch crypto price for {symbol} "
+                            f"on {date_str} (Yahoo {y_symbol}-USD): "
+                            f"{e}{hint}")
     return 0.0
 
 @guard_main("taxjson-fill-crypto")
@@ -172,13 +192,13 @@ def main():
     # Applied for THIS run only: `taxjson run` dispatches the tool
     # in-process, and a permanent update of the module-level table
     # carried one project's map into every later run in the process.
-    _saved = dict(SYMBOL_OVERRIDES)
-    SYMBOL_OVERRIDES.update(load_symbol_overrides(_dirs))
+    _saved = dict(PROJECT_CRYPTO_IDS)
+    PROJECT_CRYPTO_IDS.update(load_symbol_overrides(_dirs))
     try:
         return _fill(args)
     finally:
-        SYMBOL_OVERRIDES.clear()
-        SYMBOL_OVERRIDES.update(_saved)
+        PROJECT_CRYPTO_IDS.clear()
+        PROJECT_CRYPTO_IDS.update(_saved)
 
 
 _SWAP_LEG_RE = re.compile(r'^(.+)-(sell|buy|base|quote)$')
@@ -241,6 +261,109 @@ def _value_swaps_once(pairs, unpriced):
     return n
 
 
+# Echoed to the console by `taxjson run` (its ATTENTION channel) and
+# kept in the account's .sum DIAGNOSTICS.
+ATTENTION_CRYPTO_ID = "warning: ATTENTION: crypto id:"
+# Fiat quotes a coin's broker price can be compared with a Yahoo USD
+# close (within a factor of a few); a coin-quoted price cannot.
+_FIAT_QUOTES = frozenset({'USD', 'CAD', 'EUR', 'GBP', 'AUD', 'NZD', 'CHF'})
+# A Yahoo close this many times above or below the coin's own broker
+# prices near the date is another asset, not a market move.
+_IMPLAUSIBLE_FACTOR = 5.0
+_NEAR_DAYS = 7
+
+
+def _shown_cache_path() -> str:
+    """The cache path as shown in a report: `~/...` under the home
+    folder (a .sum never carries the OS user name, S037-18)."""
+    home = os.path.expanduser("~")
+    if CACHE_FILE.startswith(home + os.sep):
+        return "~" + CACHE_FILE[len(home):]
+    return os.path.basename(CACHE_FILE)
+
+
+def _ids_seen_in_cache(symbols, cache):
+    """ATTENTION lines for the coins priced under their default Yahoo id
+    (no CRYPTO line) while the price cache holds prices of a numbered id
+    of the same ticker (`<SYMBOL><number>`) from earlier runs: the
+    project was priced under that id before (once from a built-in
+    table taxjson no longer carries), and `<SYMBOL>-USD` may well be
+    another asset. Names the exact ticker.map line."""
+    out = []
+    keys = list(cache) if isinstance(cache, dict) else []
+    for sym in sorted(symbols):
+        if sym in PROJECT_CRYPTO_IDS:
+            continue
+        pat = re.compile(re.escape(sym) + r"(\d{3,})-\d{4}-\d{2}-\d{2}$")
+        ids = sorted({sym + m.group(1) for k in keys
+                      for m in [pat.match(str(k))] if m})
+        if not ids:
+            continue
+        lines = "\n".join(f"    CRYPTO {sym} {i}" for i in ids)
+        out.append(
+            f"{ATTENTION_CRYPTO_ID} {sym} has no CRYPTO line in ticker.map, "
+            f"so it is priced as Yahoo {sym}-USD — but the price cache "
+            f"({_shown_cache_path()}) holds prices for Yahoo "
+            f"{', '.join(i + '-USD' for i in ids)} from earlier runs "
+            f"(taxjson no longer carries a built-in crypto id table). "
+            f"{sym}-USD may be another asset. If the numbered id is your "
+            f"coin (check on finance.yahoo.com), add to ticker.map:\n"
+            f"{lines}")
+    return out
+
+
+def _implausible_yahoo_prices(yahoo_priced, broker_priced):
+    """ATTENTION lines for coins whose Yahoo closes are more than
+    _IMPLAUSIBLE_FACTOR times off the coin's own broker-priced rows
+    within _NEAR_DAYS days (median over the rows that have such a
+    neighbour): the Yahoo id is another asset sharing the ticker."""
+    import datetime as _dt
+
+    def _day(s):
+        try:
+            return _dt.date.fromisoformat(str(s)[:10])
+        except ValueError:
+            return None
+
+    marks = {}
+    for tx in broker_priced:
+        d = _day(tx.date)
+        cur = str(getattr(tx, 'currency', '') or '').upper()
+        if d is None or not (cur in _FIAT_QUOTES
+                             or cur in _STABLE_ONE_TO_ONE):
+            continue
+        p = abs(tx.price) or abs(tx.net_amount) / abs(tx.quantity)
+        if p > 0:
+            marks.setdefault(tx.symbol, []).append((d, p, cur))
+    ratios = {}
+    for tx, yid in yahoo_priced:
+        d = _day(tx.date)
+        near = [m for m in marks.get(tx.symbol, ())
+                if d is not None and abs((m[0] - d).days) <= _NEAR_DAYS]
+        if not near:
+            continue
+        m = min(near, key=lambda m: abs((m[0] - d).days))
+        ratios.setdefault((tx.symbol, yid), []).append(
+            (tx.price / m[1], tx.date, tx.price, m))
+    out = []
+    for (sym, yid), rs in sorted(ratios.items()):
+        rs.sort(key=lambda r: r[0])
+        ratio, day, yp, (md, mp, mcur) = rs[len(rs) // 2]
+        if 1 / _IMPLAUSIBLE_FACTOR <= ratio <= _IMPLAUSIBLE_FACTOR:
+            continue
+        fix = (f"the ticker.map line `CRYPTO {sym} "
+               f"{PROJECT_CRYPTO_IDS[sym]}` names the wrong Yahoo id — "
+               f"find the coin's id on finance.yahoo.com and correct it"
+               if sym in PROJECT_CRYPTO_IDS else _crypto_line_hint(sym))
+        out.append(
+            f"{ATTENTION_CRYPTO_ID} {sym} priced from Yahoo {yid}-USD at "
+            f"{yp:g} USD on {day}, but your own {sym} rows are priced at "
+            f"{mp:g} {mcur} on {md.isoformat()} ({ratio:.3g}x) — Yahoo "
+            f"{yid}-USD looks like another asset, so the {len(rs)} "
+            f"row(s) priced from it are likely wrong:\n    {fix}.")
+    return out
+
+
 def _utc_today() -> str:
     """Today's date in UTC — the Yahoo daily candle's key."""
     import datetime as _dt
@@ -270,6 +393,13 @@ def _fill(args):
 
     transactions = []
     unpriced = []
+    # Rows the export priced itself (a price or a total): the yardstick
+    # the Yahoo-priced rows of the same coin are checked against.
+    broker_priced = [tx for tx in loaded
+                     if (abs(tx.price) >= 1e-8 or abs(tx.net_amount) >= 1e-8)
+                     and abs(tx.quantity) > 1e-12]
+    yahoo_priced = []       # (row, Yahoo id) priced from a daily close
+    looked_up = set()       # coins that went to Yahoo at all
     swap_pairs = _swap_pairs(loaded)
     for tx in loaded:
         if tx.action in ('BUYSELL', 'DIVIDEND'):
@@ -319,11 +449,12 @@ def _fill(args):
                     transactions.append(tx)
                     continue
                 # Key the cache on the RESOLVED Yahoo id, not the raw
-                # symbol: the fetch honours SYMBOL_OVERRIDES /
-                # ticker.map CRYPTO lines, so a raw-symbol key kept serving
+                # symbol: the fetch honours the ticker.map CRYPTO
+                # lines, so a raw-symbol key kept serving
                 # the OLD coin's price after the user remapped the
                 # symbol (stage-tools audit).
-                y_symbol = SYMBOL_OVERRIDES.get(tx.symbol, tx.symbol)
+                y_symbol = yahoo_id(tx.symbol)
+                looked_up.add(tx.symbol)
                 cache_key = f"{y_symbol}-{tx.date}"
                 if _damaged_entry(cache, cache_key):
                     # null / "abc" / true / Infinity: a miss, looked up
@@ -364,6 +495,7 @@ def _fill(args):
                 if not fetched_price > 0:
                     unpriced.append(tx)
                 if fetched_price > 0:
+                    yahoo_priced.append((tx, y_symbol))
                     tx.price = fetched_price
                     # DIVIDEND rows from staking carry the reward qty (set by
                     # the parser) so income reports as qty*FMV. (qty=0
@@ -380,6 +512,9 @@ def _fill(args):
 
     if cache_dirty:
         save_cache(cache)
+    for line in (_ids_seen_in_cache(looked_up, cache)
+                 + _implausible_yahoo_prices(yahoo_priced, broker_priced)):
+        sys.stderr.write(line + "\n")
     n_swaps = _value_swaps_once(swap_pairs, unpriced)
     if n_swaps:
         cli_diag.note(
@@ -403,6 +538,9 @@ def _fill(args):
             f"failed (see above); re-run when Yahoo is reachable, add "
             f"the price to the row, or map the symbol in "
             f"ticker.map (`CRYPTO SYMBOL YAHOO_ID`).")
+        for sym in sorted({t.symbol for t in unpriced}
+                          - set(PROJECT_CRYPTO_IDS)):
+            cli_diag.warn(PROG, f"{sym}: {_crypto_line_hint(sym)}.")
 
     output_data = {
         "transactions": [tx.to_dict() for tx in transactions]

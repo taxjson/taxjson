@@ -118,19 +118,16 @@ def yf_symbol_for(symbol: str,
     can't serve (exchange-prefixed 'X:SYM' forms).
 
     `crypto_overrides`: the coin spellings the books were priced with
-    (fill-crypto's built-ins merged with the project's
-    ticker.map CRYPTO lines — `load_crypto_overrides`); the built-ins alone
-    when not given (audit A2-0364: FOO mapped to FOO123 in the books
+    (the project's ticker.map CRYPTO lines — `load_crypto_overrides`;
+    there is no built-in table); none when not given, so every coin is
+    `<SYMBOL>-USD` (audit A2-0364: FOO mapped to FOO123 in the books
     was quoted as FOO-USD, another asset)."""
     import re
     if is_crypto_symbol(symbol):
         # A coin, not a stock: Yahoo's crypto pair, with the same
-        # collision table the crypto price filler uses (audit R1-228 —
-        # ETH/LINK/SOL went out as equity tickers).
-        if crypto_overrides is None:
-            from taxjson.bin.fill_crypto_prices import SYMBOL_OVERRIDES
-            crypto_overrides = SYMBOL_OVERRIDES
-        return f"{crypto_overrides.get(symbol, symbol)}-USD"
+        # project CRYPTO ids the crypto price filler uses (audit R1-228
+        # — ETH/LINK/SOL went out as equity tickers).
+        return f"{(crypto_overrides or {}).get(symbol, symbol)}-USD"
     yf_ticker = symbol
     if symbol.endswith('.US'):
         yf_ticker = symbol[:-3]
@@ -161,15 +158,11 @@ def yf_symbol_for(symbol: str,
 
 
 def load_crypto_overrides(search_dirs) -> Dict[str, str]:
-    """fill-crypto's coin spellings: its built-in collision table merged
-    with the CRYPTO lines of the first ticker.map found in
-    `search_dirs` (the project root's map is the one `taxjson run`
-    priced the books with)."""
-    from taxjson.bin.fill_crypto_prices import SYMBOL_OVERRIDES
+    """fill-crypto's coin spellings: the CRYPTO lines of the first
+    ticker.map found in `search_dirs` (the project root's map is the one
+    `taxjson run` priced the books with). No built-in ids."""
     from taxjson.lib.ticker_map import side_rules_in
-    merged = dict(SYMBOL_OVERRIDES)
-    merged.update(side_rules_in(search_dirs).crypto)
-    return merged
+    return dict(side_rules_in(search_dirs).crypto)
 
 
 def load_yf_map(search_dirs) -> Dict[str, Tuple[str, float]]:

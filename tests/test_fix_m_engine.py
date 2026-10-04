@@ -1214,7 +1214,11 @@ class TestPriceChain(unittest.TestCase):
         self.assertEqual(yf_symbol_for('BRK.B.US'), 'BRK-B')
         self.assertEqual(yf_symbol_for('RCI.B.TO'), 'RCI-B.TO')
         self.assertEqual(yf_symbol_for('ETH'), 'ETH-USD')
-        self.assertEqual(yf_symbol_for('TAO'), 'TAO22974-USD')
+        # No built-in coin ids: a coin is <SYMBOL>-USD unless the
+        # project's ticker.map CRYPTO line names its Yahoo id.
+        self.assertEqual(yf_symbol_for('QZT'), 'QZT-USD')
+        self.assertEqual(yf_symbol_for('QZT', {'QZT': 'QZT55502'}),
+                         'QZT55502-USD')
 
     def test_quote_currency(self):
         # R1-150 / S077-00.

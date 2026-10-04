@@ -43,11 +43,11 @@ KR_LEDGER = (
     # gift's small FX loss is (likely) superficial.
     "LE1EEE,RE1,2025-07-20 12:00:00,earn,reward,currency,USDC,spot,1,0,"
     "910\n"
-    # LDO reward so the book holds LDO before the payment.
-    "LF1FFF,RF1,2026-01-12 12:00:00,earn,reward,currency,LDO,spot,3,0,3\n"
-    # Payment in LDO: 2.5 LDO + a 0.05 LDO network fee the parser
+    # QZL reward so the book holds QZL before the payment.
+    "LF1FFF,RF1,2026-01-12 12:00:00,earn,reward,currency,QZL,spot,3,0,3\n"
+    # Payment in QZL: 2.5 QZL + a 0.05 QZL network fee the parser
     # books by itself. 17:30:00 local.
-    "LG1GGG,RG1,2026-04-13 21:30:00,withdrawal,,currency,LDO,spot,-2.5,"
+    "LG1GGG,RG1,2026-04-13 21:30:00,withdrawal,,currency,QZL,spot,-2.5,"
     "0.05,0.45\n"
     # A Hybrid Earn sweep nobody has classified yet.
     "LH1HHH,RH1,2026-06-01 12:00:00,hybridearnwithdrawal,,currency,USDC,"
@@ -70,7 +70,11 @@ CB_CSV = (
     "c6,2025-08-01 12:00:00 UTC,Send,BTC,0.001,CAD,150000,150,150,0,"
     "Sent BTC to an address\n")
 
-PAY_ID = "kr-20260413T173000-LDO-2.5"
+PAY_ID = "kr-20260413T173000-QZL-2.5"
+# QZL is a fictional coin. Yahoo lists it under a numbered id, which
+# only the project's ticker.map CRYPTO line knows (there is no built-in
+# coin id table): every project here carries the line.
+CRYPTO_MAP_LINE = "CRYPTO QZL QZL55501\n"
 BTC_ID = "cb-20250801T080000-BTC-0.001"
 KR_USDC_ID = "kr-20250301T070000-USDC-100"
 CB_USDC_ID = "cb-20250711T072149-USDC-10"
@@ -113,13 +117,14 @@ def _project(td, *, country="canada"):
         f'[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
     (acct / "kr_ledgers.csv").write_text(KR_LEDGER)
     (acct / "cb_2025.csv").write_text(CB_CSV)
+    (root / "ticker.map").write_text(CRYPTO_MAP_LINE)
     (root / "work").mkdir()
     _rates_file(root / "work" / "to_base.csv")
     home = Path(td) / "home"
     home.mkdir()
     (home / ".crypto_price_cache.json").write_text(json.dumps({
-        "LDO11808-2026-04-13": 1.84,
-        "LDO11808-2026-01-12": 2.1,
+        "QZL55501-2026-04-13": 1.84,
+        "QZL55501-2026-01-12": 2.1,
     }))
     return root, home
 
@@ -142,7 +147,7 @@ class TestUnits(unittest.TestCase):
         self.assertEqual(cs.mask_ref("LG1GGG-xfer"), "LG***")
         self.assertEqual(cs.mask_ref(""), "")
         self.assertEqual(
-            cs.send_id("kraken", "2026-04-13", "17:30:00", "LDO", -2.5),
+            cs.send_id("kraken", "2026-04-13", "17:30:00", "QZL", -2.5),
             PAY_ID)
         self.assertEqual(cs.fmt_price(512.3456789), "512.346")
         self.assertEqual(cs.fmt_price(150000.0), "150000")
@@ -167,7 +172,7 @@ class TestUnits(unittest.TestCase):
     def test_prompt_records_answers_and_skip(self):
         with tempfile.TemporaryDirectory() as td:
             man = Path(td) / "sends.json"
-            sends = [{"id": PAY_ID, "summary": "2.5 LDO", "decision": None,
+            sends = [{"id": PAY_ID, "summary": "2.5 QZL", "decision": None,
                       "stable": False},
                      {"id": HYBRID_ID, "summary": "5 USDC",
                       "decision": None, "stable": True}]
@@ -223,12 +228,12 @@ class TestCryptoSendsProject(unittest.TestCase):
         self.assertIsNone(pay["decision"])
         self.assertEqual(pay["ref"], "LG***")
         self.assertAlmostEqual(pay["fair_value"]["price"], 2.50442, places=5)
-        self.assertIn("Yahoo LDO11808-USD", pay["fair_value"]["source"])
+        self.assertIn("Yahoo QZL55501-USD", pay["fair_value"]["source"])
         self.assertIn("Bank of Canada", pay["fair_value"]["source"])
         # The parser's own fee row is not counted again.
         self.assertEqual(pay["quantity"], 2.5)
         self.assertEqual(pay["tt"],
-                         "BUYSELL 2026-04-13 17:30:00 LDO -2.5 CAD 2.50442 "
+                         "BUYSELL 2026-04-13 17:30:00 QZL -2.5 CAD 2.50442 "
                          "6.26 0")
         btc = sends[BTC_ID]
         self.assertIn("Coinbase", btc["fair_value"]["source"])
@@ -304,11 +309,11 @@ class TestCryptoSendsProject(unittest.TestCase):
             # network fee, sold at the Coinbase spot price.
             "BUYSELL 2025-06-22 10:05:10 ATOM -0.002 CAD 9.85 0.02 0",
             "BUYSELL 2025-08-01 08:00:00 BTC -0.001 CAD 150000 150.00 0",
-            "BUYSELL 2026-04-13 17:30:00 LDO -2.5 CAD 2.50442 6.26 0"])
+            "BUYSELL 2026-04-13 17:30:00 QZL -2.5 CAD 2.50442 6.26 0"])
         self.assertIn("cb-20250622T100510-ATOM-80.002-fee: network fee",
                       body)
         self.assertIn(PAY_ID, body)
-        self.assertIn("Yahoo LDO11808-USD", body)
+        self.assertIn("Yahoo QZL55501-USD", body)
         self.assertNotIn("USDC", "\n".join(lines))
         # Idempotent: same decisions -> same bytes, file not rewritten.
         m0 = tt.stat().st_mtime_ns
@@ -321,7 +326,7 @@ class TestCryptoSendsProject(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
         base = json.loads((self.root / "work" / "crypto_base.json")
                           .read_text())["transactions"]
-        pay = [t for t in base if t["symbol"] == "LDO"
+        pay = [t for t in base if t["symbol"] == "QZL"
                and t["action"] == "BUYSELL"
                and abs(float(t["quantity"]) + 2.5) < 1e-12]
         self.assertEqual(len(pay), 1)
@@ -335,7 +340,7 @@ class TestCryptoSendsProject(unittest.TestCase):
 
     def test_e_duplicate_hand_written_line_is_flagged(self):
         dup = self.root / "inputs" / "crypto" / "ldo_payment.tt"
-        dup.write_text("BUYSELL 2026-04-13 17:30:00 LDO -2.5 CAD 2.50442 "
+        dup.write_text("BUYSELL 2026-04-13 17:30:00 QZL -2.5 CAD 2.50442 "
                        "6.26 0\n")
         try:
             _cli(self.root, self.home, "crypto-sends", "crypto", "--set",
@@ -422,15 +427,15 @@ class TestUsGift(unittest.TestCase):
             body = (root / "inputs" / "crypto" / "crypto_sends.tt"
                     ).read_text()
             lines = [ln for ln in body.splitlines()
-                     if ln.startswith("BUYSELL") and " LDO " in ln]
+                     if ln.startswith("BUYSELL") and " QZL " in ln]
             self.assertEqual(len(lines), 1, body)
             self.assertTrue(lines[0].startswith(
-                "BUYSELL 2026-04-13 17:30:00 LDO -2.5 "), lines[0])
+                "BUYSELL 2026-04-13 17:30:00 QZL -2.5 "), lines[0])
             r = _cli(root, home, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             base = json.loads((root / "work" / "crypto_base.json")
                               .read_text())["transactions"]
-            sale = [t for t in base if t["symbol"] == "LDO"
+            sale = [t for t in base if t["symbol"] == "QZL"
                     and t["action"] == "BUYSELL"
                     and abs(float(t["quantity"]) + 2.5) < 1e-12]
             self.assertEqual(len(sale), 1)

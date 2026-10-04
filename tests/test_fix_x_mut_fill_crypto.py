@@ -45,7 +45,7 @@ class _Run:
             calls.append((sym, day))
             return fetch(sym, day)
         saved = (fc.CACHE_FILE, fc.get_crypto_price, sys.argv,
-                 dict(fc.SYMBOL_OVERRIDES), fc.time.sleep, fc._utc_today)
+                 dict(fc.PROJECT_CRYPTO_IDS), fc.time.sleep, fc._utc_today)
         fc.CACHE_FILE = str(cache)
         fc.get_crypto_price = _fetch
         fc.time.sleep = lambda s: None
@@ -64,8 +64,8 @@ class _Run:
         finally:
             (fc.CACHE_FILE, fc.get_crypto_price, sys.argv, overrides,
              fc.time.sleep, fc._utc_today) = saved
-            fc.SYMBOL_OVERRIDES.clear()
-            fc.SYMBOL_OVERRIDES.update(overrides)
+            fc.PROJECT_CRYPTO_IDS.clear()
+            fc.PROJECT_CRYPTO_IDS.update(overrides)
         txs = (json.loads(out.getvalue())["transactions"]
                if out.getvalue().strip() else None)
         cached = (json.loads(cache.read_text()) if cache.exists() else {})

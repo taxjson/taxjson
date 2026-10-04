@@ -1244,26 +1244,26 @@ class TestStrictRunFlag(unittest.TestCase):
 
 
 class TestCryptoTickerMap(unittest.TestCase):
-    """KNOWN_ISSUES "SYMBOL_OVERRIDES is hardcoded": a user-editable
-    ticker.map CRYPTO lines (once crypto_ticker.map) extend/override
-    the built-in Yahoo collision disambiguations."""
+    """KNOWN_ISSUES "SYMBOL_OVERRIDES is hardcoded": the user-editable
+    ticker.map CRYPTO lines (once crypto_ticker.map) are the ONLY Yahoo
+    coin ids — the built-in table was removed."""
 
-    def test_map_file_merges_over_builtins(self):
+    def test_map_file_is_the_only_source(self):
         from taxjson.bin.fill_crypto_prices import load_symbol_overrides
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "ticker.map").write_text(
                 "# my colliding coins\n"
-                "CRYPTO PEPE PEPE24478   # collision with the other PEPE\n"
-                "CRYPTO TAO  TAO99999\n"
+                "CRYPTO QZP QZP55503   # collision with the other QZP\n"
+                "CRYPTO QZT  QZT55504-USD   # Yahoo's full pair\n"
                 "CRYPTO garbage line without two fields extra\n")
             import io
             from contextlib import redirect_stderr
             buf = io.StringIO()
             with redirect_stderr(buf):
                 merged = load_symbol_overrides([tmp])
-        self.assertEqual(merged["PEPE"], "PEPE24478")   # added
-        self.assertEqual(merged["TAO"], "TAO99999")     # overrides builtin
-        self.assertEqual(merged["UNI"], "UNI7083")      # builtin kept
+        # Only the map's lines; a pasted `-USD` suffix is dropped (the
+        # lookups append it).
+        self.assertEqual(merged, {"QZP": "QZP55503", "QZT": "QZT55504"})
         self.assertIn("CRYPTO needs", buf.getvalue())   # malformed warned
 
 

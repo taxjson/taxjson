@@ -27,6 +27,21 @@
   pins the same behaviour; comments describe the shape in words.
 
 
+### Crypto
+
+- **Removed the built-in crypto id table.** taxjson no longer carries
+  Yahoo ids for any coin: a coin is priced as `<SYMBOL>-USD` unless the
+  project's ticker.map maps it with a `CRYPTO SYMBOL YAHOO_ID` line (the
+  full pair as Yahoo shows it, ending in `-USD`, is accepted too). A
+  project that relied on the removed table needs the line: when a
+  coin's default id fails, the warning names the coin and the line to
+  add (Yahoo numbers a shared ticker; find the id on finance.yahoo.com),
+  and `taxjson run` prints an ATTENTION line, with the exact line, when
+  a coin is priced under its default id while the price cache holds
+  prices of a numbered id of the same ticker, or when its Yahoo close is
+  far off the coin's own trade prices near the date. `taxjson init`'s
+  ticker.map example uses a placeholder coin.
+
 ## v0.17.0 (2026-10-04)
 
 ### Security (pre-release review)
