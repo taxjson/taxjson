@@ -33,7 +33,7 @@ Domicile classification is by market suffix (.US → USA, .L → GBR,
 via `T1135 SYMBOL COUNTRY` lines in the project's ticker.map:
 
     #     symbol  country  (ISO-3 code, or CA/CAN/CANADA/EXCLUDE to exclude)
-    T1135 ENB.US  CA       # interlisted Canadian corp held on NYSE — not SFP
+    T1135 SAMPLW.US  CA       # interlisted Canadian corp held on NYSE — not SFP
     T1135 GLXY.TO USA      # foreign corp listed on TSX — still SFP
 
 Caveats printed with every report (also see --help):
@@ -209,7 +209,7 @@ def classify_country(symbol: str,
                      overrides: Dict[str, Optional[str]]) -> Optional[str]:
     """Country code for a symbol, or None when it is not specified foreign
     property (Canadian, or user-excluded). Options classify by their own
-    market suffix — the OCC symbol carries it (AAPL250117C00150000.US)."""
+    market suffix — the OCC symbol carries it (SAMPLG250117C00150000.US)."""
     if symbol in overrides:
         return overrides[symbol]
     if "." in symbol:
@@ -353,8 +353,8 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     # the option premium into the shares (a cash-settled index option
     # has no stock leg — same test as the engine).
     # The engine's own resolver (core._make_assign_underlying_resolver):
-    # a root that drops the share class (BRKB -> BRK.B.US, RCI ->
-    # RCI.B.TO) resolves to the one stock line the account trades at
+    # a root that drops the share class (SAMPLCB -> SAMPLC.B.US, SAMPLD ->
+    # SAMPLD.B.TO) resolves to the one stock line the account trades at
     # the assignment, so the premium folds into those shares as in the
     # books (re-audit A2-0328, A2-1106). It is None for a cash-settled
     # index option or a missing stock leg.

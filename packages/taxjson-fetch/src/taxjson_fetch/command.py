@@ -137,8 +137,8 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
         # the books hold that exact contract, and the books' .TO
         # OPTIONS teach Montreal roots (a cash-secured put has no
         # equity leg in the live payload — 2026-09 audit). A .TO
-        # EQUITY in the books no longer does: a CDR (AMZN.TO) made the
-        # account's US AMZN option .TO live vs .US in the books, a
+        # EQUITY in the books no longer does: a CDR (SAMPLB.TO) made the
+        # account's US SAMPLB option .TO live vs .US in the books, a
         # false verify mismatch every run (S031-12).
         _book_syms = set()
         try:

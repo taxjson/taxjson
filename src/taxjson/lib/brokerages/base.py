@@ -528,7 +528,7 @@ def parse_strict_number(raw, *, field: str = 'value', where: str = '',
 #     cross-account superficial loss was missed.
 #   * TSX and TSX Venture share one symbol namespace (TMX), so ROOT.TO is
 #     unambiguous for a Venture listing; price lookups that need the venue
-#     go through a ticker.map QUOTE line (PNG.TO -> PNG.V).
+#     go through a ticker.map QUOTE line (SAMPLY.TO -> SAMPLY.V).
 # TSX preferred shares are dotted per series: Questrade's FTN.PRA.TO is
 # the FTN.PR.A.TO every other parser emits.
 _CA_VENUE_SUFFIX_RE = re.compile(r'\.(VN|CN|NE)$', re.IGNORECASE)
@@ -538,7 +538,7 @@ _CA_PREF_UNDOTTED_RE = re.compile(r'^([A-Z0-9]+)\.(PR|PF)([A-Z]{1,2})$',
 
 def canonical_ca_root(root: str) -> str:
     """Dot a TSX preferred-share series (FTN.PRA -> FTN.PR.A,
-    TD.PFB -> TD.PF.B); any other root is returned unchanged. `root` is
+    SAMPMO.PFB -> SAMPMO.PF.B); any other root is returned unchanged. `root` is
     the symbol WITHOUT its .TO suffix."""
     m = _CA_PREF_UNDOTTED_RE.match(root or '')
     if not m:
@@ -691,7 +691,7 @@ class BaseBrokerage:
     # ---------------------------------------------------------------- options
 
     # The two regex shapes the brokerages produce:
-    #   "CALL AAPL 06/20/25 150.00"           — Questrade/Webull/RBC variant
+    #   "CALL SAMPLG 06/20/25 150.00"           — Questrade/Webull/RBC variant
     #   "ASN - CALL .QQZ 06/20/25 30 QQZ HOLDINGS"   — RBC option-leg notification
     #   "ASSIGNMENT OF OPTION ... CALL ..."   — RBC stock-leg notification
     # The base regex captures the common skeleton; subclasses can add their
@@ -754,10 +754,10 @@ class BaseBrokerage:
         # A Canadian venue suffix (Questrade's .VN / .CN / .NE, a .V)
         # is one Canadian listing: canonical ROOT.TO, the spelling every
         # other parser emits (see canonical_ca_listing). It used to give
-        # ABC.V, CCC.CN.TO and XYZ.NE.TO -- three identities IB, RBC and
+        # ABC.V, CCC.CN.TO and SAMPLE.NE.TO -- three identities IB, RBC and
         # Webull never produce, so pools split across brokers and a
         # cross-account superficial loss was missed (audit S010-05). A
-        # .TO listing traded in USD (DLR.U.TO) keeps the currency rule
+        # .TO listing traded in USD (SAMPLF.U.TO) keeps the currency rule
         # below.
         if not sym.upper().endswith('.TO'):
             ca = canonical_ca_listing(sym, currency)
@@ -765,7 +765,7 @@ class BaseBrokerage:
                 return ca
         sym = self._CURRENCY_SUFFIX_RE.sub('', sym)
         # A currency code is case-blind: 'usd' made the suffix '.usd'
-        # and split the pool from XYZ.US (audit S055-17).
+        # and split the pool from SAMPLE.US (audit S055-17).
         currency = (currency or '').strip().upper()
         ext = self.CURRENCY_EXT_MAP.get(currency, self.CURRENCY_EXT_FALLBACK or currency)
         if ext == 'TO':

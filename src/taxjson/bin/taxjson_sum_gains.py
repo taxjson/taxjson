@@ -37,7 +37,7 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
     transactions = data.get('transactions', [])
     target_year = data.get('summary', {}).get('year') or 'all'
     # An option whose root names no share listing but one class share
-    # (RCI...TO with RCI.B.TO shares) groups under that share (S040-11).
+    # (SAMPLD...TO with SAMPLD.B.TO shares) groups under that share (S040-11).
     from taxjson.lib.ticker_map import class_share_aliases
     # Held shares (inventory) too (re-audit A2-0715).
     _aliases = class_share_aliases(

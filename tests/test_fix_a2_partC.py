@@ -493,12 +493,12 @@ class TestIncomeRuleRefusalWording(unittest.TestCase):
         with self.assertRaises(IncomeRulesError) as cm:
             IncomeRules.from_settings({"country": "usa",
                                        "ric_january_dividends": "XYZ"})
-        self.assertIn('["XYZ.US"]', str(cm.exception))
+        self.assertIn('["SAMPLE.US"]', str(cm.exception))
         self.assertNotIn(".TO", str(cm.exception))
         with self.assertRaises(IncomeRulesError) as cm:
             IncomeRules.from_settings({"country": "canada",
                                        "corporate_distributions": "XYZ"})
-        self.assertIn('["XYZ.TO"]', str(cm.exception))
+        self.assertIn('["SAMPLE.TO"]', str(cm.exception))
         with self.assertRaises(IncomeRulesError) as cm:
             parse_ric_entries(["XYZ 2024-02-01"],
                               key="--ric-january-dividend")

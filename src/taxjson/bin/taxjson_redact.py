@@ -367,7 +367,7 @@ _SIN_CTX = re.compile(
 # The label in its own CSV cell, the value in the next one, no colon:
 # 'SIN,046…', 'Phone,416…', '"Tax ID","078…"', or both inside one
 # quoted cell ('"SIN,046…"') (A2-0456). The label must START the line
-# (or the quoted cell): a ticker cell mid-row ('…,USD,TEL,1000.0000')
+# (or the quoted cell): a ticker cell mid-row ('…,USD,QZT,1000.0000')
 # is not a label. A date is never a value; digit counts are checked in
 # _redact_contact.
 _LABEL_NUM_WORDS = (r"(?:(sin|s\.i\.n\.?|nas|ssn|tin|tax id"

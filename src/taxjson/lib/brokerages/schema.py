@@ -191,7 +191,8 @@ def validate_transactions(txs: List[Dict[str, Any]],
             # for sells). price==0 rows (crypto awaiting fill-crypto,
             # expiries) are exempt. A row whose parser DECLARES its
             # contract size (`multiplier`: IB carries the statement's
-            # own — CL 1000, MET 0.1, equity option 100) is checked
+            # own — 1000 for crude oil, 0.1 for a micro, equity
+            # option 100) is checked
             # against it and a mismatch is an ERROR: the guess of 1 or
             # 100 drowned every futures row in false positives, so the
             # check could only ever warn. Rows without a declared

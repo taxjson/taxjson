@@ -10,7 +10,7 @@ Usage:
   Transform Mode (With map file):
     taxjson-ticker-map input.json ticker.map > mapped_input.json
     Applies the mappings from ticker.map to all transactions and outputs a new JSON file.
-    Options are mapped by applying the underlying mapping (e.g. AEM.US -> AEM.TO applies to AEM250101C00100000.US -> AEM250101C00100000.TO).
+    Options are mapped by applying the underlying mapping (e.g. SAMPLM.US -> SAMPLM.TO applies to SAMPLM250101C00100000.US -> SAMPLM250101C00100000.TO).
 
 ticker.map is the project's one mapping file. Rename rules: GLOBAL, TOBASE,
 JOURNAL, DELETE, DISTINCT, RENAME. Lookups that change no symbol (read by
@@ -43,7 +43,7 @@ from taxjson.lib.ticker_map import map_ticker
 #                       listings separate.
 #   JOURNAL from to   — like TOBASE in the main pipeline, AND nets the
 #                       two legs together in the holdings view (a
-#                       Norbert's Gambit pair, e.g. DLR.U.TO / DLR.TO).
+#                       Norbert's Gambit pair, e.g. SAMPLF.U.TO / SAMPLF.TO).
 #   DELETE  from      — nuke that ticker's transactions (a pure artifact).
 #   DISTINCT a b      — declares two look-alike listings are SEPARATE
 #                       securities (a CDR vs its US underlying); changes
@@ -63,7 +63,7 @@ _MAP_KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DELETE", "DISTINCT",
 # Parsed map: glob/tobase/journal are {from: to}; delete is {symbol,...};
 # distinct is a set of frozenset pairs the user declares are SEPARATE
 # securities despite looking like one (CDRs vs their US underlying:
-# UNH.TO is a fractional CAD-hedged receipt over UNH.US, not a listing
+# SAMPLR.TO is a fractional CAD-hedged receipt over SAMPLR.US, not a listing
 # equivalent — pooling their ACB would be wrong). DISTINCT changes no
 # symbol; it silences the scan's MAP-GAP nagging for that pair and
 # records the judgment in the map file where it belongs.
@@ -422,7 +422,7 @@ def generate_summary(transactions: List[TaxTransaction]) -> Dict[str, Any]:
 
 def bare_rename_target(frm: str, to: str) -> bool:
     """True when a rename takes a listed symbol (a known market suffix:
-    RY.TO, XYZ.US) to a bare one (RY). A bare symbol is read as crypto
+    RY.TO, SAMPLE.US) to a bare one (RY). A bare symbol is read as crypto
     or as an unknown listing: a Canadian eligible dividend on RY became
     a foreign dividend with an assumed foreign tax credit (audit
     A2-0304). Options, futures and cash are not judged."""
@@ -451,13 +451,13 @@ def bare_target_warnings(symbols, mapping: Dict[str, str]) -> List[str]:
 
 def map_symbol(symbol: str, mapping: Dict[str, str]) -> str:
     """The rename a mapping implies for ONE symbol — exact match first,
-    else options map through their UNDERLYING (AEM.US -> AEM.TO also
-    renames AEM260116C00150000.US -> ...TO). Pure-string twin of
+    else options map through their UNDERLYING (SAMPLM.US -> SAMPLM.TO also
+    renames SAMPLM260116C00150000.US -> ...TO). Pure-string twin of
     apply_mapping so non-transaction consumers (taxjson sanity) apply
     the same consolidation the pipeline does."""
     if symbol in mapping:
         return mapping[symbol]
-    # Option check (e.g. AEM260116C00150000.US or F:CL251220P00053000.US)
+    # Option check (e.g. SAMPLM260116C00150000.US or F:SAMPLX251220P00053000.US)
     match = re.match(r'^((?:F:)?[A-Z0-9\.]+?)(\d{6}[CP]\d+)\.(\S+)$',
                      symbol, re.IGNORECASE)
     if match:

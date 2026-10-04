@@ -66,7 +66,7 @@ and refuse a decimal comma (1234,56). Trade rows settle on the mapped
 `settle` column when filled, else on the standard cycle from the
 holiday-aware lib.dates.settlement_date (T+1 since May 2024, T+2
 before, T+3 before 2017-09-05; options T+1) on the listing's market;
-income rows are dated `date`. Symbols are upper-cased (`xyz` and `XYZ`
+income rows are dated `date`. Symbols are upper-cased (`sample` and `SAMPLE`
 are one security). Unmapped action values are counted and summarized,
 never silently dropped — one that carries a quantity or an amount is an
 UNBOOKED warning (echoed by `taxjson run`, refused by `--strict`, a
@@ -204,7 +204,7 @@ _KEY_ALIASES = {
 }
 # Exchange suffixes a user may write explicitly. One of these on the
 # symbol is the LISTING and is kept; the row currency is only the
-# settlement currency (DLR.U.TO bought in USD is still DLR.U.TO).
+# settlement currency (SAMPLF.U.TO bought in USD is still SAMPLF.U.TO).
 _KNOWN_SUFFIXES = ("TO", "V", "CN", "NE", "US", "AX", "L")
 # Futures symbol prefixes (lib/futures.py): the contract size is not in
 # the row, so it is never guessed.
@@ -312,7 +312,7 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
         mapping["broker"]["account"] = acct.strip()
     # Every [defaults] / [formats] value is text: a TOML true, 5 or a
     # list was str()-coerced and booked (currency 'TRUE', symbol
-    # "['AAPL'].TRUE") or crashed strptime (audit A2-1081).
+    # "['SAMPLG'].TRUE") or crashed strptime (audit A2-1081).
     for sec in ("defaults", "formats"):
         for k, v in (mapping.get(sec) or {}).items():
             if not isinstance(v, str):
@@ -545,10 +545,10 @@ class GenericBrokerage(BaseBrokerage):
         suffix (.TO/.US/.AX/.L) is the LISTING and is kept (a Canadian
         venue .V/.VN/.CN/.NE is spelled .TO, below):
         the row currency is only what the trade settled in, and deriving
-        the suffix from it turned DLR.U.TO bought in USD into DLR.U.US —
+        the suffix from it turned SAMPLF.U.TO bought in USD into SAMPLF.U.US —
         a different identity, so a superficial loss across accounts was
         missed (audit R1-122). A bare symbol still takes its suffix from
-        the currency (XEI in CAD -> XEI.TO)."""
+        the currency (SAMPLZ in CAD -> SAMPLZ.TO)."""
         sym = symbol_raw.strip()
         # A futures contract is spelled F: everywhere downstream (IB,
         # check-dates, the engines): '/ESZ5' and '\\ESZ5' are the same
@@ -557,11 +557,11 @@ class GenericBrokerage(BaseBrokerage):
             sym = "F:" + sym[1:].lstrip()
         # One security, one spelling (audit S010-04): the ACB pool and
         # the superficial-loss match key on the exact symbol string.
-        #  * An OCC symbol padded to 21 characters ('XYZ   250321C...')
-        #    is the compact contract, not 'XYZ...250321C...'.
+        #  * An OCC symbol padded to 21 characters ('SAMPLE   250321C...')
+        #    is the compact contract, not 'SAMPLE...250321C...'.
         #  * A class-share separator '-' or '/' is the dot every broker
-        #    parser uses: BRK-B and BRK/B are BRK.B.
-        #  * A broker option DESCRIPTION ('XYZ 21MAR25 50 C', 'CALL XYZ
+        #    parser uses: SAMPLC-B and SAMPLC/B are SAMPLC.B.
+        #  * A broker option DESCRIPTION ('SAMPLE 21MAR25 50 C', 'CALL SAMPLE
         #    03/21/25 50') is not a symbol: booked as a share, it never
         #    expired. Refused — give the OCC symbol.
         _occ = re.match(r'^([A-Za-z0-9.]+)\s+(\d{6}[CPcp]\d{8})$', sym)
@@ -573,12 +573,12 @@ class GenericBrokerage(BaseBrokerage):
             raise BrokerageParseError(
                 f"generic importer: symbol {symbol_raw!r} is an option "
                 f"DESCRIPTION, not a symbol — give the OCC symbol (e.g. "
-                f"XYZ250321C00050000) so the contract is an option.")
+                f"SAMPLE250321C00050000) so the contract is an option.")
         _cls = re.match(r'^([A-Za-z0-9]+)[-/]([A-Za-z]{1,2})(\.[A-Za-z]{1,2})?$',
                         sym)
         if _cls:
             sym = f"{_cls.group(1)}.{_cls.group(2)}{_cls.group(3) or ''}"
-        # Upper-cased: `xyz` and `XYZ` are one security; left as typed
+        # Upper-cased: `sample` and `SAMPLE` are one security; left as typed
         # they were two ACB pools and a sale opened a phantom short
         # (R1-128).
         sym = sym.replace(" ", ".").upper()
@@ -587,7 +587,7 @@ class GenericBrokerage(BaseBrokerage):
         # spelled ROOT.TO by every broker parser (base.canonical_ca_
         # listing, audit S010-05): an explicit .V here must not split
         # the pool from the same shares bought at IB. The venue, not the
-        # row currency, decides -- DLR.U.TO bought in USD stays .TO.
+        # row currency, decides -- SAMPLF.U.TO bought in USD stays .TO.
         for suf in ("TO", "V", "VN", "CN", "NE"):
             if up.endswith("." + suf) and len(up) > len(suf) + 1:
                 return canonical_ca_listing(sym, "CAD")
@@ -1050,7 +1050,7 @@ class GenericBrokerage(BaseBrokerage):
         if settle_on_trade_date and any(
                 t.get("action") == "BUYSELL" for t in transactions):
             # The README used to route a crypto-only export through here
-            # with this option: the coins became BTC.US / ETH.TO shares
+            # with this option: the coins became SAMPMA.US / SAMPLT.TO shares
             # (Schedule 3 line 4, no pooling with the crypto accounts,
             # and §1091 in a US project) — re-audit A2-0152 / A2-0425.
             print(f"note: generic importer: {path.name}: "

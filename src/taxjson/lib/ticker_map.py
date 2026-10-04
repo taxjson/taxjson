@@ -44,7 +44,7 @@ def get_option_type(symbol: str) -> str:
 def map_ticker(symbol: str, target_currency: str = "CAD") -> str:
     """
     Maps a ticker symbol to its equivalent in the target currency (usually CAD).
-    Example: SHOP.US -> SHOP.TO if target is CAD.
+    Example: SAMPMM.US -> SAMPMM.TO if target is CAD.
     Also handles converting dotted option strings to OCC syntax.
     Example: ABC.17DEC27.12.P -> ABC271217P00012000
     """
@@ -97,9 +97,9 @@ def class_share_aliases(symbols) -> dict:
     """{option-root listing: class share} for an option root that names
     no share listing among `symbols` but exactly ONE class share of that
     root on the same exchange: RBC books Rogers' Montreal calls under the
-    root RCI (RCI271217C00030000.TO) while the shares are RCI.B.TO, and
+    root SAMPLD (SAMPLD271217C00030000.TO) while the shares are SAMPLD.B.TO, and
     the per-underlying reports filed the covered-call gain under a
-    phantom RCI.TO ticker (S040-11). Same rule as buy/sell-check
+    phantom SAMPLD.TO ticker (S040-11). Same rule as buy/sell-check
     (S047-01)."""
     import re
     shares = {str(s).strip().upper() for s in symbols
@@ -147,7 +147,7 @@ def underlying_of(symbol: str, aliases: dict) -> str:
 #       description contains DESCRIPTION WORDS (whole words, any case)
 #       and whose currency is CURRENCY ('*' = any) gets SYMBOL — for a
 #       security the currency->exchange suffix mislabels (the TSX-only
-#       USD unit DLR.U.TO). First matching line wins.
+#       USD unit SAMPLF.U.TO). First matching line wins.
 #   T1135       SYMBOL COUNTRY
 #       the T1135 domicile of SYMBOL where its listing suffix is wrong
 #       (an interlisted company): an ISO 3166 alpha-3 code, or

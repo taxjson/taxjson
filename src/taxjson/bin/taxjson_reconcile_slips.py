@@ -23,12 +23,12 @@ Headers are matched loosely, so common broker/T5008 spellings work as-is:
                (optional — blank means the project's base currency)
 
 Comparison is per symbol. A slip symbol without a market suffix matches the
-computed listing of that root (slip `AAPL` matches computed `AAPL.US`); when
-the books hold two listings of one root (a CDR `AMZN.TO` and `AMZN.US`) the
+computed listing of that root (slip `SAMPLG` matches computed `SAMPLG.US`); when
+the books hold two listings of one root (a CDR `SAMPLB.TO` and `SAMPLB.US`) the
 row is AMBIGUOUS_LISTING until the slip CSV names the suffix. Broker option
-descriptions (`XYZ 21MAR25 50 C`, `CALL XYZ03/21/25 50`) and share classes
-(`BRK B`, `BRK/B`) are read as the books spell them, and the project's
-ticker.map renames (KGC -> K) are applied to slip symbols. A blank proceeds
+descriptions (`SAMPLE 21MAR25 50 C`, `CALL SAMPLE03/21/25 50`) and share classes
+(`SAMPLC B`, `SAMPLC/B`) are read as the books spell them, and the project's
+ticker.map renames (SAMPLK -> SAMPLJ) are applied to slip symbols. A blank proceeds
 cell beside a cost is nil proceeds (an option that expired worthless);
 computed worthless expiries with no slip row are NO_SLIP_EXPECTED and do not
 fail the check. Slips aggregated per type code (SHS/OPC/FUT, 'Various')
@@ -118,8 +118,8 @@ _CURRENCY_ALIASES = {"CDN": "CAD", "C$": "CAD", "CA$": "CAD", "CAN": "CAD",
                      "US$": "USD", "US": "USD", "U.S.": "USD"}
 
 # Broker option descriptions -> OCC (R1-209): IB prints
-# "XYZ 21MAR25 50 C", Webull "CALL XYZ03/21/25 50"; the books carry
-# XYZ250321C00050000.
+# "SAMPLE 21MAR25 50 C", Webull "CALL SAMPLE03/21/25 50"; the books carry
+# SAMPLE250321C00050000.
 _MONTHS = {m: i for i, m in enumerate(
     ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT",
      "NOV", "DEC"), 1)}
@@ -152,9 +152,9 @@ def split_listing(sym: str) -> Tuple[str, str]:
 
 def slip_symbol(raw: str) -> str:
     """A slip cell as a book-style symbol, KEEPING any listing suffix
-    the slip wrote (AMZN.TO stays apart from AMZN.US — R1-292): upper-
+    the slip wrote (SAMPLB.TO stays apart from SAMPLB.US — R1-292): upper-
     cased, broker option descriptions rewritten to OCC and share-class
-    separators ('BRK B', 'BRK/B', 'BRK-B') to the books' dot form."""
+    separators ('SAMPLC B', 'SAMPLC/B', 'SAMPLC-B') to the books' dot form."""
     s = (raw or "").replace("\ufeff", "").strip().upper().lstrip(".")
     s = re.sub(r"\s+", " ", s)
     if not s:
@@ -284,7 +284,7 @@ def _read_text(path: Path) -> str:
 def _rename_fn(renames: Optional[Dict[str, str]]):
     """Slip symbol -> the project's consolidated symbol, through the
     ticker.map GLOBAL/TOBASE/JOURNAL renames the pipeline applied to the
-    books (R1-19: the slip says KGC / RCI, the books K.TO / RCI.B.TO,
+    books (R1-19: the slip says SAMPLK / SAMPLD, the books SAMPLJ.TO / SAMPLD.B.TO,
     options included). A bare slip symbol is tried as .US then .TO."""
     if not renames:
         return lambda sym: sym
@@ -435,8 +435,8 @@ def load_computed(gains_paths: List[Path],
                   date_basis: str = "settle") -> Dict[str, Dict[str, Any]]:
     """Aggregate computed dispositions per symbol root:
     {ROOT: {qty, proceeds_net, proceeds_gross, cost, rows, tainted_rows,
-    listings}} (listings: the same per listing suffix — AMZN.TO and
-    AMZN.US are different securities, R1-292).
+    listings}} (listings: the same per listing suffix — SAMPLB.TO and
+    SAMPLB.US are different securities, R1-292).
     Tainted rows are INCLUDED in the counts here (the broker's slip will
     include those sales too) but flagged so a basis mismatch on a tainted
     symbol reads as expected, not alarming."""
@@ -722,7 +722,7 @@ def reconcile(slip: Dict[str, Dict[str, Any]],
             row = _compare(root, s_list[""], agg, tolerance, country)
             if len(rest) > 1:
                 # Two securities that share a root (a CDR and its US
-                # parent, EFX.TO vs EFX.US) folded into one bare slip
+                # parent, SAMPLO.TO vs SAMPLO.US) folded into one bare slip
                 # symbol: offsetting errors between them cancel and
                 # reconciled "OK" (R1-292). Make the user say which.
                 names = ", ".join(_label(root, x) for x in sorted(rest))
@@ -796,8 +796,8 @@ def render(rep: Dict[str, Any], tolerance: float,
                      "the year end, are listed as NO_SLIP_EXPECTED and "
                      "do not fail the check.")
     lines.append("  - A slip symbol without a listing suffix matches every "
-                 "listing of that root; when the books hold two (AMZN.TO "
-                 "CDR and AMZN.US), write the suffix in the slip CSV.")
+                 "listing of that root; when the books hold two (SAMPLB.TO "
+                 "CDR and SAMPLB.US), write the suffix in the slip CSV.")
     lines.append("  - Slips aggregated per type code (IB's SHS/OPC/FUT "
                  "rows identified 'Various') cannot be compared per "
                  "security: transcribe a per-security CSV.")
@@ -870,8 +870,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Emit the report as JSON instead of text")
     parser.add_argument("--ticker-map", type=Path, default=None,
                         help="The project's ticker.map: slip symbols are "
-                             "renamed the way the books were (KGC -> K, "
-                             "RCI -> RCI.B). The `taxjson reconcile-slips` "
+                             "renamed the way the books were (SAMPLK -> SAMPLJ, "
+                             "SAMPLD -> SAMPLD.B). The `taxjson reconcile-slips` "
                              "wrapper passes it automatically.")
     args = parser.parse_args(argv)
 

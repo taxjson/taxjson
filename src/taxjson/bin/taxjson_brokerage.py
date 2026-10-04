@@ -119,10 +119,10 @@ def load_security_overrides(path: Path):
     correct securities the currency->exchange-suffix logic mislabels: a
     parser stamps `.US` on any USD row, but a security can trade in USD
     on a non-US exchange — the Global X US Dollar ETF trades only on the
-    TSX (CAD class DLR.TO, USD class DLR.U.TO), so its USD leg must not
-    become a fictional `DLR.US` (which would collide with US-listed
-    Digital Realty Trust). Description is the only field that reliably
-    tells those two `DLR`s apart.
+    TSX (CAD class SAMPLF.TO, USD class SAMPLF.U.TO), so its USD leg must not
+    become a fictional `SAMPLF.US` (which would collide with US-listed
+    an unrelated NYSE issuer). Description is the only field that reliably
+    tells those two `SAMPLF`s apart.
 
     CURRENCY may be '*' to match any currency; a currency code is
     case-insensitive ('usd' == 'USD'). A malformed EXTRACT line (or a
@@ -147,8 +147,8 @@ _FUTURES_PREFIXES = ('F:', '/', '\\')
 
 def _override_matches(desc_sub: str, desc: str) -> bool:
     """`desc_sub` occurs in `desc` as whole words: IB's description is
-    the bare ticker, so a plain substring test made 'BN' rewrite ABNB
-    and BNTX (audit S012-09)."""
+    the bare ticker, so a plain substring test made 'QZ' rewrite QQZX
+    and QZTX (audit S012-09)."""
     return re.search(r'(?<![a-z0-9])' + re.escape(desc_sub)
                      + r'(?![a-z0-9])', desc) is not None
 
@@ -953,7 +953,7 @@ Examples:
             multipliers.append(t.get('multiplier'))
 
     # One override line that rewrote two DIFFERENT raw securities pools
-    # them (IB 'LEN' vs 'LEN B', 'BN' vs 'BN PRA': the key matches
+    # them (IB 'QZL' vs 'QZL B', 'QZN' vs 'QZN PRA': the key matches
     # whole words, and a class letter or series is a word of its own —
     # audit A2-0109): said loudly, with the line to narrow.
     for _i, _syms in sorted(override_raw.items()):

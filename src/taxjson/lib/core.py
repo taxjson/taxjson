@@ -94,8 +94,8 @@ class TaxTransaction:
     # left out of to_dict() when empty.
     broker_time: str = ''
     # The security's name from the broker's instrument list, when the
-    # row's description is only the ticker (IB: "META PLATFORMS INC-CDR"
-    # beside description "META") — read by the cross-listing lint to tell
+    # row's description is only the ticker (IB: "SAMPLE PLATFORMS INC-CDR"
+    # beside description "SAMPLE") — read by the cross-listing lint to tell
     # a CDR or another company from an interlisting (audit S057-24).
     # Evidence only: NOT part of compute_id, omitted when empty.
     security_name: str = ''
@@ -208,8 +208,8 @@ EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
                    'source_account', 'exercise_of', 'corp_cash')
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]
-# e.g. "AAPL250120C00150000.US", "ABC271217P00029000.TO", or
-# "F:CL271116P00040000.US" for futures options.
+# e.g. "SAMPLG250120C00150000.US", "ABC271217P00029000.TO", or
+# "F:SAMPLX271116P00040000.US" for futures options.
 #
 # Single regex covering every option-detection / underlying-extraction
 # need across the codebase:
@@ -237,7 +237,7 @@ def parse_option_underlying(symbol: str):
     """Return the underlying ticker (with market suffix) for an OCC
     option symbol, or None when `symbol` doesn't look like one. The
     futures prefix (`F:`/`/`/`\\`) IS preserved — so e.g.
-    `F:CL250120P00053000.US` → `F:CL.US`, keeping futures positions
+    `F:SAMPLX250120P00053000.US` → `F:SAMPLX.US`, keeping futures positions
     distinct from same-base equity positions in by-ticker buckets."""
     if not symbol:
         return None
@@ -379,7 +379,7 @@ def detect_option_replacement_matches(loss_entries, events, *, date_of,
     carries held_at_window_end for the OPTION's own position (across all
     scopes)."""
     canon = canonical or (lambda s: s)
-    # A class-share root (RCI for RCI.B.TO, BRKB for BRK.B.US) names the
+    # A class-share root (SAMPLD for SAMPLD.B.TO, SAMPLCB for SAMPLC.B.US) names the
     # class line it delivers (A2-0016/0207).
     _cls = class_root_aliases(
         [ev.symbol for ev in events]
@@ -487,7 +487,7 @@ _RIGHT_RE = re.compile(r'^(.+?)[.\-](WTS|WT|WS|WR|RT|W|R)([.\-][A-Z])?$')
 def right_underlying(symbol: str) -> Optional[str]:
     """The share line a WARRANT or RIGHT names, from the dotted/dashed
     listing spelling ('SLH.WT.TO' -> 'SLH.TO', 'ABC.RT.TO' -> 'ABC.TO',
-    'XYZ.WS.US' -> 'XYZ.US'), else None. Undotted US forms ('QZDW')
+    'SAMPLE.WS.US' -> 'SAMPLE.US'), else None. Undotted US forms ('QZDW')
     are ambiguous with ordinary tickers and are not recognised."""
     if not symbol or is_option_symbol(symbol):
         return None
@@ -1306,7 +1306,7 @@ _FUTURES_PREFIX_RE = re.compile(r'^(F:|[\\/])')
 
 
 def _split_underlying(sym: str):
-    """('RCI', 'TO') for 'RCI.TO'; ('F:CL', 'US') for 'F:CL.US'."""
+    """('SAMPLD', 'TO') for 'SAMPLD.TO'; ('F:SAMPLX', 'US') for 'F:SAMPLX.US'."""
     if '.' in sym:
         base, _, ext = sym.rpartition('.')
         if ext.isalpha() and ext.isupper() and len(ext) <= 3:
@@ -1316,8 +1316,8 @@ def _split_underlying(sym: str):
 
 def _root_matches_stock(root_base: str, stock_base: str) -> bool:
     """Does an option ROOT name this stock line? Montreal / OCC roots
-    drop the share class ('RCI' for RCI.B, 'BRKB' or 'BRK' for BRK.B)
-    and OCC-adjusted roots carry a digit ('XYZ1' after a corporate
+    drop the share class ('SAMPLD' for SAMPLD.B, 'SAMPLCB' or 'SAMPLC' for SAMPLC.B)
+    and OCC-adjusted roots carry a digit ('SAMPLE1' after a corporate
     action). Futures roots name the contract family ('F:CL' for the
     dated 'F:CLG6')."""
     if root_base == stock_base:
@@ -1339,8 +1339,8 @@ def _root_matches_stock(root_base: str, stock_base: str) -> bool:
 
 def _class_root_matches(root_base: str, stock_base: str) -> bool:
     """The share-class subset of _root_matches_stock: an option root that
-    drops the class of a class-share line ('RCI' for RCI.B, 'BRKB' or
-    'BRK' for BRK.B, 'ABC' for ABC.UN). Never a futures root and never
+    drops the class of a class-share line ('SAMPLD' for SAMPLD.B, 'SAMPLCB' or
+    'SAMPLC' for SAMPLC.B, 'ABC' for ABC.UN). Never a futures root and never
     an OCC-adjusted (digit) root — those are flagged, not resolved."""
     if (_FUTURES_PREFIX_RE.match(root_base)
             or _FUTURES_PREFIX_RE.match(stock_base)
@@ -1356,9 +1356,9 @@ def _class_root_matches(root_base: str, stock_base: str) -> bool:
 def class_root_aliases(symbols) -> Dict[str, str]:
     """{option underlying: share line} for an option root that names no
     share line among `symbols` but exactly ONE class share of that root
-    on the same market: RBC books Rogers' Montreal calls under the root
-    RCI (RCI271217C00030000.TO) while the shares are RCI.B.TO; OCC spells
-    Berkshire B calls BRKB. Used by both engines' call-replacement rules
+    on the same market: RBC books a class share's Montreal calls under the root
+    SAMPLD (SAMPLD271217C00030000.TO) while the shares are SAMPLD.B.TO; OCC spells
+    class B calls SAMPLCB. Used by both engines' call-replacement rules
     (CA-SL-05 / US-WASH-12; audit A2-0015/0016/0207), the way the
     assignment resolver and the reports already map the root (S030-02,
     S040-11, S047-01). A root matching two class lines stays unresolved."""
@@ -1400,8 +1400,8 @@ def _make_assign_underlying_resolver(transactions, date_of, quiet=False):
     lines by class / futures-month / OCC-adjustment spelling
     (_root_matches_stock) and must name exactly ONE line that trades
     within _MARKED_LEG_MAX_LAG_DAYS of the assignment (audit R1-35,
-    S019-01, S070-17, R1-176: RCI for RCI.B.TO, BRKB for BRK.B.US,
-    F:CL for F:CLG6.US used to be treated as cash-settled, realizing the
+    S019-01, S070-17, R1-176: SAMPLD for SAMPLD.B.TO, SAMPLCB for SAMPLC.B.US,
+    F:SAMPLX for F:SAMPLXG6.US used to be treated as cash-settled, realizing the
     premium in the wrong year). An ambiguous match is left unresolved
     with a warning naming the candidates. `quiet` drops the per-match
     "resolved" note (a report that re-derives the engine's pairing,
@@ -1865,7 +1865,7 @@ def _dedupe_corporate_splits(txs: List[TaxTransaction], seen: set) -> List[TaxTr
     On merged multi-account input — one account fed by several brokers, or the
     combined sheltered context file — the same event then arrives N times and
     the engines' symbol-global pools/walks get scaled by ratio**N (e.g. two
-    accounts holding CRWD through its split doubled the pool).
+    accounts holding one stock through its split doubled the pool).
 
     Keyed on (symbol, date, ratio, symbol_new); `seen` is shared across the
     taxable/sheltered/affiliated lists so a split present in more than one
@@ -2182,7 +2182,7 @@ class CanadaTaxRules(TaxRules):
         # option's premium (audit R1-33, A2-0052); an unrelated trade
         # sorted between the option and its leg cannot take it.
         # Option root -> the stock line its assignment delivers (the
-        # root can differ from the ticker: RCI for RCI.B.TO, F:CL for
+        # root can differ from the ticker: SAMPLD for SAMPLD.B.TO, F:SAMPLX for
         # F:CLG6.US); see _make_assign_underlying_resolver.
         _assign_underlying = _make_assign_underlying_resolver(
             transactions, get_sort_date)
@@ -3440,8 +3440,8 @@ class CanadaTaxRules(TaxRules):
             # (audit A2-0059/0551/0058/0193/0192/0961/0965: a one-cent
             # price change used to move a denial).
             _pos = {id(_t): _i for _i, _t in enumerate(current_tx_list)}
-            # A class-share option root names its class line (RCI for
-            # RCI.B.TO — CA-SL-05; A2-0015/0016).
+            # A class-share option root names its class line (SAMPLD for
+            # SAMPLD.B.TO — CA-SL-05; A2-0015/0016).
             _cls_root = class_root_aliases(t.symbol for t in all_txs)
 
             def _call_und(sym):

@@ -139,9 +139,9 @@ def _apply_transfer_evidence(agg: Dict[str, Dict[str, Any]],
     same security — and only those quantities.
 
     A JOURNAL map line re-symbols unconditionally, which is right for
-    intrinsically fungible classes (DLR.U.TO/DLR.TO exist for
+    intrinsically fungible classes (SAMPLF.U.TO/SAMPLF.TO exist for
     Norbert's Gambit) but wrong as a blanket statement for ordinary
-    cross-listings: whether 300 OR.US became OR.TO is a FACT recorded
+    cross-listings: whether 300 SAMPLI.US became SAMPLI.TO is a FACT recorded
     by the broker's InterDepot rows, not a timeless property of the
     symbol pair (2026-09 design review). So: net the sidecar's
     TRANSFER quantities per symbol, and within each map-declared
@@ -310,7 +310,7 @@ def process_data_report(data, args, agg: Dict[str, Dict[str, Any]],
     Sums qty and total_cost; tracks currency (warns on mismatch).
 
     `mapping` (from --map) is applied to each symbol before bucketing, so
-    e.g. a Norbert's Gambit DLR.US leg folds into DLR.TO and the
+    e.g. a Norbert's Gambit SAMPLF.US leg folds into SAMPLF.TO and the
     offsetting quantities net out. This runs here, post-gains, rather
     than before the gains engine — the legs are in different currencies
     and a single ACB pool must be one currency. `drops` (the map file's
@@ -342,7 +342,7 @@ def process_data_report(data, args, agg: Dict[str, Dict[str, Any]],
             if bucket.get('multiplier') not in (None, float(_m)):
                 bucket['multiplier_conflict'] = True
             bucket['multiplier'] = float(_m)
-        # Per-currency sub-buckets: JOURNAL folds (DLR.US -> DLR.TO)
+        # Per-currency sub-buckets: JOURNAL folds (SAMPLF.US -> SAMPLF.TO)
         # deliberately merge cross-currency listings, and summing their
         # NATIVE costs into one number made total_cost currency salad.
         # The mixed-flag consumer blanks the flat figure downstream.
@@ -511,7 +511,7 @@ def _parse_option(symbol: str):
 
 def _resolve_underlying(root_sym: str, held_stock) -> str:
     """The listing an option's ROOT names. Montreal/OCC roots drop the
-    share class (RCI for RCI.B.TO), so `f"{root}.{ext}"` can name a
+    share class (SAMPLD for SAMPLD.B.TO), so `f"{root}.{ext}"` can name a
     listing that does not exist (audit S030-02). When exactly one held
     stock line matches the root (same rule the engine's assignment
     resolver uses), that line is the underlying; otherwise the root
@@ -921,7 +921,7 @@ def main():
         "--map", dest="map_file", metavar="FILE", default=None,
         help="Ticker-map file applied while aggregating --report / "
              "--holdings-toml output. Use it to net cross-currency "
-             "Norbert's Gambit legs (e.g. a `DLR.US DLR.TO` line folds "
+             "Norbert's Gambit legs (e.g. a `SAMPLF.US SAMPLF.TO` line folds "
              "the USD leg into the CAD symbol so the two cancel).",
     )
 

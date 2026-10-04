@@ -178,8 +178,8 @@ def parse_tt_line(line: str, account_name: str = 'default',
 
         if action in ('BUYSELL', 'ASSIGN', 'TRANSFER', 'SPLIT'):
             # Symbols are canonical upper-case, like the currency: a
-            # hand-typed `aapl.us` was its own ACB pool and the broker's
-            # sale of AAPL.US opened a phantom short (S001-06).
+            # hand-typed `samplg.us` was its own ACB pool and the broker's
+            # sale of SAMPLG.US opened a phantom short (S001-06).
             tx['symbol'] = parts[3].upper()
             if action == 'SPLIT':
                 tx['symbol_new'] = parts[4].upper()
@@ -475,8 +475,8 @@ def _excess_commission_sale(tx: dict) -> bool:
 def _warn_unknown_suffix(tx: dict, line: str, source: str) -> None:
     """A dotted symbol must end in a known market suffix — the rule the
     schema applies to every parser row, which .tt rows never met. A
-    typo'd lot (`XYZ.TSX`, `XYZ.CA`) is its own ACB pool: the broker's
-    sale of XYZ.TO opens a phantom short and the gain drops out
+    typo'd lot (`SAMPLE.TSX`, `SAMPLE.CA`) is its own ACB pool: the broker's
+    sale of SAMPLE.TO opens a phantom short and the gain drops out
     (S028-19). Bare symbols (crypto) and option/futures symbols are
     exempt."""
     from taxjson.lib.brokerages.schema import KNOWN_SUFFIXES
@@ -697,7 +697,7 @@ def _equity_account(input_path: Path, account_name: str) -> bool:
 
 def _warn_bare_equity_symbol(tx: dict, line: str, source: str) -> None:
     """A bare symbol on a .tt line of an equity (non-crypto) account
-    (MSFT for MSFT.US) is its own ACB pool: the broker's sale of MSFT.US
+    (SAMPLH for SAMPLH.US) is its own ACB pool: the broker's sale of SAMPLH.US
     went short and its gain dropped out with nothing on the console
     (A2-0777). The unknown-suffix check exempts bare symbols because
     crypto symbols are bare; in an equity account they are not."""

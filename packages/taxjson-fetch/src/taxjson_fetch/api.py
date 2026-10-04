@@ -409,14 +409,14 @@ def qt_position_symbol(sym: str, to_roots=frozenset(),
     Canadian venues ('.TO', '.VN' TSX Venture, '.CN', '.NE') all map
     to '.TO' with a dotted preferred series, as the parsers do; bare
     symbols are US listings ('.US'), and a trailing CLASS letter
-    ('BRK.B') is not an exchange — it takes '.US' too. Options ('BMO20Jan26C88.00')
-    become OCC ('BMO260120C00088000.TO') — suffixed .TO when the
+    ('SAMPLC.B') is not an exchange — it takes '.US' too. Options ('SAMPLA20Jan26C88.00')
+    become OCC ('SAMPLA260120C00088000.TO') — suffixed .TO when the
     root's equity also appears in this payload as a .TO listing
     (Montréal-listed options on Canadian names), else .US.
     When the account's BOOKS already hold the exact contract
     (`book_symbols`), their suffix wins — the parsers suffix a contract
     by its listing currency, and a same-root .TO equity (a CDR such as
-    AMZN.TO) must not turn a US option Montreal-listed (S031-12).
+    SAMPLB.TO) must not turn a US option Montreal-listed (S031-12).
     Unrecognized shapes pass through untouched so a mismatch stays
     VISIBLE in the sanity diff instead of being mangled."""
     import re as _re
@@ -450,8 +450,8 @@ def qt_position_symbol(sym: str, to_roots=frozenset(),
         from taxjson.lib.brokerages.base import canonical_ca_listing
         return canonical_ca_listing(sym, "CAD") or sym
     if ext.upper() not in KNOWN_SUFFIXES:
-        # A class share, not an exchange: 'BRK.B' is the US listing
-        # BRK.B.US. Passing it through unsuffixed made every live
+        # A class share, not an exchange: 'SAMPLC.B' is the US listing
+        # SAMPLC.B.US. Passing it through unsuffixed made every live
         # class-share position look like a phantom mismatch in the
         # verify diff.
         return f"{sym}.US"

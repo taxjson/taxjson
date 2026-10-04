@@ -49,10 +49,10 @@ def process_data(data, groups, *, direction: str, calls_only: bool):
     """Add the matching rows of one gains document to `groups`
     ({underlying: {'lines': [...], 'total_gain': {CUR: x}}}; the tainted
     count under '_tainted')."""
-    # An RCI...TO call on RCI.B.TO shares groups under the class share,
-    # not a phantom RCI.TO (S040-11).
+    # An SAMPLD...TO call on SAMPLD.B.TO shares groups under the class share,
+    # not a phantom SAMPLD.TO (S040-11).
     from taxjson.lib.ticker_map import class_share_aliases
-    # The held shares count too: a covered call's RCI.B.TO is usually
+    # The held shares count too: a covered call's SAMPLD.B.TO is usually
     # only in the inventory (re-audit A2-0715).
     aliases = class_share_aliases(
         t.get('symbol') for t in (data.get('transactions', []) or [])

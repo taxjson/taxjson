@@ -369,7 +369,7 @@
 ### Second-audit deferred items
 
 - A blank settlement cell now settles on the listing's market in every
-  parser: a Questrade or RBC US-dollar TSX unit (DLR.U.TO) on the Canadian
+  parser: a Questrade or RBC US-dollar TSX unit (SAMPLF.U.TO) on the Canadian
   calendar, a Questrade CAD-settled US stock on the US one, and a generic
   `.L`/`.AX` line priced in USD on the UK/ASX cycle (A2-1052, A2-1054).
 - The Questrade, RBC and Webull "looks renamed" hints, RBC's untraded-income
@@ -463,7 +463,7 @@
   `ticker_extraction_overrides.txt` line now stops the run by
   file:line instead of being skipped.
 - **A malformed `ticker.map` line stops the run.** A typo such as
-  `TOBASE XYZ.US=XYZ.TO` or `TOBSE ...` dropped that rule, which changed
+  `TOBASE SAMPLE.US=SAMPLE.TO` or `TOBSE ...` dropped that rule, which changed
   ACB pools and the Schedule 3 gain, and the warning reached only
   `reports/*.sum` while `run` and `run --strict` exited 0. `taxjson run`
   now refuses the map, listing each bad line as `ticker.map:<line>`.
@@ -518,7 +518,7 @@
   2024-2026 trade changes.
 - A long option expiring ON Dec 31 with no expiry row is warned about in
   that year's project; ccd.rpt / leaps / ccd-sum / the .sum name a
-  covered call's held class share (RCI.B.TO) even when the shares were
+  covered call's held class share (SAMPLD.B.TO) even when the shares were
   not sold; `taxjson transfers` refuses to run without taxjson.toml and
   says when an account's base book is missing (re-audit A2-0716,
   A2-0715, A2-0717, A2-1232).
@@ -549,7 +549,7 @@
   A2-1087, A2-1088, A2-1089).
 - **Long calls as replacements: class-share roots, mini contracts and
   futures options.** A call booked under the root that drops the share
-  class (RCI for RCI.B.TO, BRKB for BRK.B) is now a call on that class
+  class (SAMPLD for SAMPLD.B.TO, SAMPLCB for SAMPLC.B) is now a call on that class
   line: Canada denies the loss and the US warns (A2-0015/0016/0207). A
   call's replacement units are its declared contract size (a `x10` mini
   replaces 10 shares, not 100) in both engines (A2-0049/0957). A futures
@@ -609,8 +609,8 @@
   checked at the real size (audit S026-22).
 - **Adjusted-series and futures calls are flagged as possible
   replacement property.** A call on an adjusted option series (root +
-  digit, e.g. `XYZ1`) or on the loss's futures contract by its family
-  root (`F:CL` after a loss on `F:CLG6`) bought inside a loss's window
+  digit, e.g. `SAMPLE1`) or on the loss's futures contract by its family
+  root (`F:SAMPLX` after a loss on `F:SAMPLXG6`) bought inside a loss's window
   is named for a manual superficial-loss / wash-sale check, the way a
   warrant is, in both countries; warn-only, the numbers do not change
   (audit S069-23; tax-logic CA-SL-15, US-WASH-15).
@@ -697,8 +697,8 @@
   the end-of-run "unconsumed" warning instead of moving into another
   trade (and another year).
 - **Option roots that differ from the stock ticker.** An assignment of
-  a Montreal `RCI` option into `RCI.B.TO`, an OCC `BRKB` option into
-  `BRK.B.US`, or a futures option into its dated contract (`F:CL` into
+  a Montreal `SAMPLD` option into `SAMPLD.B.TO`, an OCC `SAMPLCB` option into
+  `SAMPLC.B.US`, or a futures option into its dated contract (`F:SAMPLX` into
   `F:CLG6.US`) was treated as cash-settled, so the premium was realized
   in the wrong year. The option is now matched to the one stock line in
   its account that trades at the assignment (a note names it); an
@@ -1040,7 +1040,7 @@
   `taxjson-carryover --slip-gains` (T5 box 18) are now in the tables.
 - An invalid `ric_january_dividends` / `corporate_distributions` entry
   is refused with an example listing of the setting's own country
-  (XYZ.US for the US-only RIC list), and a bad `--ric-january-dividend`
+  (SAMPLE.US for the US-only RIC list), and a bad `--ric-january-dividend`
   flag is named as the flag, not as a `[settings]` key (re-audit
   A2-1306).
 - US projects no longer see Canadian forms and terms (audit A2-0735 and
@@ -1277,12 +1277,12 @@
   leaves it out. The IB January trust-ROC warning stops once the two
   `.tt` lines it prescribes are in the books. US: a bare
   `ric_january_dividends` entry (`T`, `PSA`) is that fund's US listing
-  only — TELUS (T.TO) and PSA.PR.H.US are no longer moved (A2-0073,
+  only — a Canadian issuer (SAMPMC.TO) and PSA.PR.H.US are no longer moved (A2-0073,
   A2-0076, A2-0229, A2-0230, A2-0231, A2-0561, A2-0991, A2-0992,
   A2-0993).
 - **capital_gains_dividends.map reads what it documents.** A bare root
   (`FTN`, `T`) also claimed the issuer's preferred series (FTN.PR.A.TO)
-  and a same-root foreign listing (AT&T's T.US), turning their
+  and a same-root foreign listing (a US issuer's SAMPMC.US), turning their
   dividends into box-18 capital gains; it now covers only the root's
   Canadian listings. An AMOUNT with a decimal comma (`17,11` read as
   1711) or an underscore is refused, a map that is a directory or a
@@ -1598,7 +1598,7 @@
   booked with blank trailing cells (re-audit A2-1041 and A2-1042, the
   Questrade / RBC halves).
 - Questrade / RBC: the stock leg of an option assignment on a class
-  share (RCI.B under the Montreal root RCI, BRK.B under BRKB) is booked
+  share (SAMPLD.B under the Montreal root SAMPLD, SAMPLC.B under SAMPLCB) is booked
   as the stock; it was refused as a contract on another underlying or
   a 100x gross mismatch (re-audit A2-1059).
 - **Questrade / RBC: payments in lieu of a dividend.** A Questrade
@@ -1794,7 +1794,7 @@
   the parse naming its line number instead of being skipped. The
   override now runs before TRANSFER rows are set aside (the custody
   sidecar gets the corrected symbol), IB TRANSFER rows carry the
-  security (`ACATS (DLR)`) so the override can match them, and an IB
+  security (`ACATS (SAMPLF)`) so the override can match them, and an IB
   split of an overridden security stays a split (its `symbol_new`
   follows the rewrite) (audit R1-143, S001-00/01/02, S012-09, S027-01,
   S059-03).
@@ -1803,12 +1803,12 @@
   row in `taxjson transfers` or moves twice the shares in the holdings
   evidence netting (audit S026-23, S027-00).
 - **One spelling per Canadian listing.** Questrade's TSX-Venture, CSE
-  and NEO symbols (`VVV.VN`, `CCC.CN`, `XYZ.NE`) became `VVV.V`,
-  `CCC.CN.TO`, `XYZ.NE.TO`, while IB, RBC and Webull book every Canadian
+  and NEO symbols (`VVV.VN`, `CCC.CN`, `SAMPLE.NE`) became `VVV.V`,
+  `CCC.CN.TO`, `SAMPLE.NE.TO`, while IB, RBC and Webull book every Canadian
   listing `.TO`; the pools split and a superficial loss across accounts
   was missed. Every Canadian venue is now `ROOT.TO` in every parser, the
   generic importer and the live-position mapping (`yf_ticker.map` still
-  aliases a price lookup, e.g. `PNG.TO PNG.V`). `taxjson-lint-
+  aliases a price lookup, e.g. `SAMPLY.TO SAMPLY.V`). `taxjson-lint-
   crosslistings` warns when one root is held under two Canadian
   suffixes (a `.tt` line or a map rule).
 - **Decimal commas are refused in the IB diagnostics and slip
@@ -1839,7 +1839,7 @@
   cancelled and the rebook is booked; before, both disappeared from the
   books (re-audit A2-0886, A2-1559, A2-1560).
 - IB: a Dividends or Withholding Tax row on a currency-tagged symbol
-  (XYZ.CAD) gets the same "booked as a security of its own" warning as
+  (SAMPLE.CAD) gets the same "booked as a security of its own" warning as
   its trades (re-audit A2-1493).
 - IB parser: an AUD/HKD/JPY/SGD/NZD fill on a system with no time-zone
   database is a one-line error saying to install `tzdata` (now a declared
@@ -1887,7 +1887,7 @@
   adjusted root QZD1 split one put series in two, audit A2-0087); the
   ticker-change hint names the old symbol first with the listing
   suffix it is booked under and goes quiet once ticker.map joins the
-  two (A2-0611); an assigned adjusted (QZX1) or class-share (BRKB)
+  two (A2-0611); an assigned adjusted (QZX1) or class-share (SAMPLCB)
   option leg shares its stock leg's settle date (A2-1028).
 - IB statement coverage is checked per broker account and against the
   project year: another IB account's statement no longer hides this
@@ -1911,7 +1911,7 @@
   sells that security's fraction, and a stock dividend paid in ANOTHER
   security is an `UNBOOKED` line instead of new shares in the parent's
   pool (audit A2-0085, A2-0093, A2-0257, A2-1033). A TSX USD unit's
-  split, cash takeover, tender or commission refund stays on X.U.TO with
+  split, cash takeover, tender or commission refund stays on SAMPMD.U.TO with
   its trades (audit A2-0086).
 - IB: a Corporate Actions row IB cancelled (`Ca`) leaves no trace in
   the parse output: a merger, spin-off or tender journal row leaves the
@@ -2042,12 +2042,12 @@
   as `broker_time`. tax-logic CA-DATE-SESSION / US-DATE-SESSION.
 - **IB security identity across statements and issuers.** Income is
   moved to the held listing of its ticker only when the ISINs match (an
-  AT&T dividend no longer lands on Telus `T.TO`), and the holding may
+  US issuer's dividend no longer lands on a Canadian issuer's `SAMPMC.TO`), and the holding may
   come from the account's other statements (a ROC-only statement no
   longer books a gain on a phantom listing). Option-root aliases are
   learned from all of the account's statements, and after a ticker
-  rename the canonical root is the contract's underlying (SQ -> XYZ). A
-  USD trade of a TSX `.U` unit is `X.U.TO`, as RBC books it. One stock
+  rename the canonical root is the contract's underlying (OLDTKR -> SAMPLE). A
+  USD trade of a TSX `.U` unit is `SAMPMD.U.TO`, as RBC books it. One stock
   listed under two symbols (a ticker change) is an ATTENTION line
   naming the `ticker.map` GLOBAL rule that joins them (audit S059-24,
   S060-19, S060-00, S059-15, S059-11, S010-06, S059-13, S060-17).
@@ -2094,7 +2094,7 @@
   value without asking for it. Existing IB spin-offs need one election.
 - **IB cash takeovers are booked.** `Merged(Acquisition) FOR USD 30.00
   PER SHARE` is a sale at the cash amount (it was left in inventory with
-  only a .sum note). Decimal-ratio and class-share (`BRK B`) mergers are
+  only a .sum note). Decimal-ratio and class-share (`SAMPLC B`) mergers are
   parsed; a stock-plus-cash merger stops the run by name for manual
   booking instead of vanishing.
 - **IB: a cancelled trade (`Ca`) nets out.** A Trades row coded `Ca`
@@ -2209,12 +2209,12 @@
   stays a dividend; an REI row with units and no cash is refused (its
   units were dropped); the internal-code warning says it is moot once
   ticker.map maps the code.
-- **Questrade keeps a TSX listing traded in USD on `.TO`.** `DLR.U.TO`
-  and `XUS.U.TO` bought in USD became `DLR.U.US` / `XUS.U.US`: a pool
-  apart from the same units at RBC or IB, a `JOURNAL DLR.U.TO DLR.TO`
+- **Questrade keeps a TSX listing traded in USD on `.TO`.** `SAMPLF.U.TO`
+  and `XUS.U.TO` bought in USD became `SAMPLF.U.US` / `XUS.U.US`: a pool
+  apart from the same units at RBC or IB, a `JOURNAL SAMPLF.U.TO SAMPLF.TO`
   rule that never fired, and a Canadian ETF listed as US property on the
   T1135. A `.TO` symbol now keeps `.TO` whatever the row currency, so the
-  API (`FNV.TO`) and web (`.FNV`) spellings of a USD dividend agree; a
+  API (`SAMPNA.TO`) and web (`.FNV`) spellings of a USD dividend agree; a
   CAD dividend or ROC on a US stock bought from the CAD side (`EXCHANGE
   RATE`) now reaches the `.US` pool instead of a phantom `.TO` one.
 - **Questrade learns identities from all of an account's exports.** A
@@ -2234,10 +2234,10 @@
 - **Questrade row shapes.** `BUY`/`buy` and lower-case symbols are read
   like `Buy`; an unknown action that moves shares is an `UNBOOKED`
   warning on the console (fatal under `run --strict`); a `BRW`
-  Norbert's-gambit journal between `DLR.TO` and `DLR.U.TO` is booked as
+  Norbert's-gambit journal between `SAMPLF.TO` and `SAMPLF.U.TO` is booked as
   a TRANSFER pair like RBC's journal legs, carrying the stated book
-  value (skipped before, leaving the units on `DLR.TO`), which a
-  `JOURNAL DLR.U.TO DLR.TO` rule nets; a negated stock-dividend row cancels its original; a DIS or
+  value (skipped before, leaving the units on `SAMPLF.TO`), which a
+  `JOURNAL SAMPLF.U.TO SAMPLF.TO` rule nets; a negated stock-dividend row cancels its original; a SAMPNB or
   stock-dividend row carrying both shares and cash is refused; a
   CAD-settled US trade's CAD net must match the USD gross at the stated
   rate and keeps its sign; a blank settlement date on an option is T+1;
@@ -2319,8 +2319,8 @@
   account's statements, A2-0214) instead of two UNBOOKED legs that
   made `run --strict` refuse (re-audit A2-0271).
 - RBC: a USD row whose name reads as the US-dollar class of a TSX fund
-  ('... ETF US DOLLAR UNITS'), other than DLR, is an ATTENTION line with
-  the `GLOBAL X.US X.U.TO` map line; it was booked as a US listing
+  ('... ETF US DOLLAR UNITS'), other than the built-in one, is an ATTENTION line with
+  the `GLOBAL SAMPMD.US SAMPMD.U.TO` map line; it was booked as a US listing
   silently (re-audit A2-1043; RBC's spelling for these is unverified,
   so it is not renamed automatically).
 - RBC: a swallowed-row error names the line of the stray quote, not the
@@ -2489,8 +2489,8 @@
   unclassified row that moves shares or cash is a loud warning and fails
   `--lint`. Same-day rows keep the export's order (it lists newest
   first; an option assignment's two rows share one time so the premium
-  still folds into the stock leg), and the older "HORIZONS U S DLR" line maps to DLR.U.TO like
-  "GLOBAL X US DLR".
+  still folds into the stock leg), and the older spelling of that ETF's name maps to its .U.TO class like
+  the current one.
 - **RBC: split-corp retractions are dispositions.** RBC books an issuer
   retraction as an `Other` row coded `TEN` ("... RETRACTION AT C$x PER
   SHARE") with a blank price; it was skipped as unclassified, so the
@@ -2575,7 +2575,7 @@
 
 ### Generic importer and .tt files
 
-- `.tt` files: a symbol with no market suffix (MSFT for MSFT.US) on a
+- `.tt` files: a symbol with no market suffix (SAMPLH for SAMPLH.US) on a
   line of an account that is not `crypto = true` is now warned about in
   the run diagnostics like an unknown suffix — it is its own ACB pool and
   the broker's rows for the real listing go short (A2-0777).
@@ -2584,7 +2584,7 @@
 - The generic importer is no longer documented as a crypto route: the
   README, the mapping template and the importer no longer suggest
   `settle_on_trade_date = true` for a crypto-only export (the coins were
-  booked as BTC.US / ETH.TO shares — Schedule 3 line 4, and §1091 in a
+  booked as SAMPMA.US / SAMPLT.TO shares — Schedule 3 line 4, and §1091 in a
   US project); coins go in a `crypto = true` account, and the importer
   says so when the option is set.
 - Two .tt files (or generic files) whose names differ only in an
@@ -2685,8 +2685,8 @@
   excess commission, or refused as a mis-mapped column with one (S057-02).
 - **`.tt` lines: canonical symbols and fewer false alarms.** A symbol is
   upper-cased on read (`aapl.us` was its own pool and the broker's sale
-  went short with no gain), and a suffix that is not a market (`XYZ.TSX`,
-  `XYZ.CA`) is a warning naming the line. Futures totals are no longer
+  went short with no gain), and a suffix that is not a market (`SAMPLE.TSX`,
+  `SAMPLE.CA`) is a warning naming the line. Futures totals are no longer
   called typos (the 1/100 contract-size guess), two identical `ACQUIRED`
   lots arriving the same day no longer collapse into one arrival leg (a
   phantom 100 shares, or a refused `AmbiguousTransferDateError`), and a
@@ -2701,7 +2701,7 @@
   differ, keep a Questrade-style `commission` as the fee, and warn about a
   contract multiplier the format cannot carry.
 - **Generic importer: fewer ways to book wrong money quietly.** Symbols
-  are upper-cased (`xyz` and `XYZ` used to be two pools, the sale a
+  are upper-cased (`sample` and `SAMPLE` used to be two pools, the sale a
   phantom short). An unmapped action that carries a quantity or an amount
   (a DRIP reinvest, say) is an `UNBOOKED` warning — on the console, fatal
   under `run --strict`, a `--lint` failure — instead of a note in the
@@ -2718,8 +2718,8 @@
   cash received); `[formats] fee_sign` picks the CSV's convention. The
   `taxjson fees` view flipped every IB/Questrade/RBC fee row into a
   rebate and understated TOTAL FEES; it now reads them as charged.
-- **Generic importer: one spelling per security.** `BRK-B` and `BRK/B`
-  are `BRK.B` (they were separate ACB pools, so a cross-account
+- **Generic importer: one spelling per security.** `SAMPLC-B` and `SAMPLC/B`
+  are `SAMPLC.B` (they were separate ACB pools, so a cross-account
   superficial loss was missed), an OCC symbol padded to 21 characters is
   compacted, and an option description in the symbol column is refused
   instead of booked as a share that never expires (audit S010-04).
@@ -2737,8 +2737,8 @@
   or a stock buy at zero cost is refused; so is a quantity/amount sign
   that contradicts the mapped action (a sell under an action mapped to
   `buy` was booked as a buy).
-- **Generic importer keeps an explicit exchange suffix.** `DLR.U.TO`
-  bought in USD became `DLR.U.US`, a different security, so a
+- **Generic importer keeps an explicit exchange suffix.** `SAMPLF.U.TO`
+  bought in USD became `SAMPLF.U.US`, a different security, so a
   superficial loss across accounts was missed. A bare symbol still takes
   its suffix from the row currency.
 - **Generic importer settles trades on the settlement date.** Every row
@@ -3585,7 +3585,7 @@
   beyond the ACB leaves the cost nil (CA-ACB-07), so the maximum cost —
   and the filing verdict — match the books (re-audit A2-0034, A2-0115,
   A2-0321). An exercised or assigned option whose root drops the share
-  class (BRKB for BRK.B, RCI for RCI.B) folds its premium into the
+  class (SAMPLCB for SAMPLC.B, SAMPLD for SAMPLD.B) folds its premium into the
   shares, through the engine's own resolver (A2-0328, A2-1106). A long
   option expiring on Dec 31 is named as still held (A2-1121); a s.260
   payment in lieu counts in the income column (A2-0661); a foreign
@@ -3608,7 +3608,7 @@
   amount are refused as ambiguous (A2-0656), and a broker option
   description with a grouped strike (`5,000.00`) is matched (A2-1113).
 - option-boundary: an assignment whose option root drops the share
-  class (RCI for RCI.B.TO, BRKB for BRK.B.US) is paired with its share
+  class (SAMPLD for SAMPLD.B.TO, SAMPLCB for SAMPLC.B.US) is paired with its share
   leg by the engine's own resolver; it was called cash-settled with
   "no amendment" while the engine folds the premium (re-audit A2-0114,
   a regression of S075-09, and A2-0328). A buy-back carried with a
@@ -3737,7 +3737,7 @@
   the wash pass is stale; audit and form-export say "rebuild" for
   other-year or stale books instead of blaming phantoms; roc-entered,
   inputs-frozen and run-clean name an unreadable base book or .sum;
-  missing-history counts every AFFECTS row (BRK/B, `?` currency); the
+  missing-history counts every AFFECTS row (SAMPLC/B, `?` currency); the
   form-export check compares the unrounded rows with the .sum, so many
   rows of rounding no longer read as a mismatch; a US project checks
   for option positions left open past expiry; `sanity` names an
@@ -3805,10 +3805,10 @@
   cost (an option that expired worthless) is nil proceeds, and a
   worthless expiry with no slip row no longer fails the check. A written
   option booked twice under grant timing counts its contracts once. Slip
-  symbols go through the project's ticker.map (KGC ↔ K.TO), and broker
-  option descriptions, share classes (`BRK B`), UTF-16 files, French and
-  T5008 box headings are read. Two listings of one root (AMZN.TO and
-  AMZN.US) are no longer folded together. A row with amounts but no
+  symbols go through the project's ticker.map (SAMPLK ↔ SAMPLJ.TO), and broker
+  option descriptions, share classes (`SAMPLC B`), UTF-16 files, French and
+  T5008 box headings are read. Two listings of one root (SAMPLB.TO and
+  SAMPLB.US) are no longer folded together. A row with amounts but no
   symbol, or an unreadable quantity, counts as not reconciled; a second
   column that also looks like quantity/proceeds/cost is refused instead
   of silently taking over. Books built for another tax year are refused
@@ -4059,7 +4059,7 @@
   stays silent.
 - `buy-check` / `sell-check`: in a US project a bare coin held in a
   crypto account (`buy-check ETH`) is answered as outside the wash-sale
-  rule instead of taking ETH.US's verdict or saying "no tracked taxable
+  rule instead of taking SAMPLT.US's verdict or saying "no tracked taxable
   position"; a LOCKED row (a registered / IRA buy in the window) no
   longer says a full exit escapes the rule; a Canadian call bought
   after a share loss states the denial per share and per 100-share
@@ -4126,7 +4126,7 @@
   A2-0691; US: an IRA buy the engine already matched is not 'at risk'
   again). Quantities across a split are compared in today's units
   (A2-0382); a long call counts at its declared contract size (A2-0373);
-  a class-share option root (RCI for RCI.B.TO) names its class line; a
+  a class-share option root (SAMPLD for SAMPLD.B.TO) names its class line; a
   futures option on the loss's own contract is a note to check by hand,
   never a VIOLATION (A2-0378, A2-0690, also in edge-cases).
 - Wash radar: once the last rescue trade date has passed, a VIOLATION
@@ -4233,7 +4233,7 @@
   project both hold only if the bought shares are still held 30 days
   after the sale (s.54 'superficial loss' (b)); a full exit is fine
   (the radar's BLOCKED legend says the same). `buy-check ETH` means the
-  coin when the books hold one (it mixed in ETH.US's verdict and
+  coin when the books hold one (it mixed in SAMPLT.US's verdict and
   nothing could ask about the coin alone). The "last loss sale" line
   says which date it shows (settled / traded), includes a loss routed
   to manual reporting (phantom basis), and warns when a gains file
@@ -4352,8 +4352,8 @@
   as wash-sale context, on the account's own FIFO basis (US-PLAN-03).
   The result page names the rule of the project's country.
 - **Harvest prices the right thing in the right currency.** USD-traded
-  TSX units (`DLR.U.TO`) are valued in USD and spelled `DLR-U.TO` for
-  Yahoo; trust units (`DIR.UN.TO` -> `DIR-UN.TO`) and US class shares
+  TSX units (`SAMPLF.U.TO`) are valued in USD and spelled `SAMPLF-U.TO` for
+  Yahoo; trust units (`SAMPNC.UN.TO` -> `SAMPNC-UN.TO`) and US class shares
   (`BF.B` -> `BF-B`) get Yahoo's spelling; an LSE quote Yahoo gives in
   pence is converted to pounds (it was valued 100x); a quote whose
   currency cannot be told (a `yf_ticker.map` override to `.DE`, `.T`,
@@ -4363,10 +4363,10 @@
   now also stops the IBKR option-price lookup, and a cache miss refuses
   as for stocks.
 - **buy-check / sell-check read broker spellings and Montreal option
-  roots.** RCI-B, "RCI B", RCI/B and RCI-B.TO are read as RCI.B(.TO) (they
-  answered SAFE beside a loss on RCI.B.TO), and an option on a root that
+  roots.** SAMPLD-B, "SAMPLD B", SAMPLD/B and SAMPLD-B.TO are read as SAMPLD.B(.TO) (they
+  answered SAFE beside a loss on SAMPLD.B.TO), and an option on a root that
   names no share listing but exactly one class share of it (RBC's
-  RCI271217C00030000.TO for RCI.B.TO shares) is in that share's class
+  SAMPLD271217C00030000.TO for SAMPLD.B.TO shares) is in that share's class
   (audit S007-02, S047-01).
 - **The wash tools name a taxable account with no books.** wash-radar,
   watch, buy-check and sell-check warned about nothing when a configured
@@ -4390,7 +4390,7 @@
   written option whose premium was taxed at the write (grant timing)
   shows the buy-back's whole cost as the loss (the engine's inventory
   now carries `recognised_premium`); an option the pipeline renamed via
-  ticker.map (TOBASE KGC.US K.TO) is quoted as the contract actually
+  ticker.map (TOBASE SAMPLK.US SAMPLJ.TO) is quoted as the contract actually
   held, in its currency; and when the wash-radar reports are older than
   the books (after `run --account`), harvest runs the radar live instead
   of showing a registered-account lock as CLEAR (audit R1-230, R1-232,
@@ -4529,12 +4529,12 @@
   thousands on a typical salary-plus-RRSP mix) and a binding
   AMT could read as not binding.
 - **No security identity by suffix stripping.** `buy-check`, `sell-check`,
-  `harvest` and `scan` matched listings by root, so `XYZ.TO` and `XYZ.US`
-  were one security unless ticker.map said `DISTINCT` (it merged Digital
-  Realty DLR.US with the Global X DLR.TO currency ETF). Two
+  `harvest` and `scan` matched listings by root, so `SAMPLE.TO` and `SAMPLE.US`
+  were one security unless ticker.map said `DISTINCT` (it merged an
+  NYSE issuer SAMPLF.US with the TSX currency ETF SAMPLF.TO). Two
   listings are now the same security ONLY through a ticker.map rule
   (GLOBAL/TOBASE/JOURNAL), a split rename, or an option's own underlying,
-  exactly as the engine pools them. A bare query (`buy-check XYZ`) still
+  exactly as the engine pools them. A bare query (`buy-check SAMPLE`) still
   finds every listing of that ticker, each with its own verdict.
   `DISTINCT` now only records a settled pair for the scan's MAP-GAP check.
 - **Estimate: Ontario AMT corrected** — the Ontario additional tax for
@@ -4719,8 +4719,8 @@
   native book, or when ticker.map cannot be read (a renamed LEAPS or a
   whole account vanished at exit 0) (re-audit A2-0117, A2-0329,
   A2-1126).
-- `ccd-sum` heads a call on a class-share root (Rogers RCI) under the
-  held class share (RCI.B.TO) even when no share was sold in the year
+- `ccd-sum` heads a call on a class-share root (SAMPLD) under the
+  held class share (SAMPLD.B.TO) even when no share was sold in the year
   (re-audit A2-1115).
 - `sum`, `t1135`, `list` and the other report commands now print the
   "not the clean result of the current inputs" banner when a first
@@ -4757,7 +4757,7 @@
   recomputes with the option timing the lock recorded, and says so;
   the merged `audit --json` total is summed over the events and
   rounded once (it was a cent off wash-sales). find-missing-history
-  names the broker's ticker of a renamed symbol (K.TO <- KGC.US: a
+  names the broker's ticker of a renamed symbol (SAMPLJ.TO <- SAMPLK.US: a
   missing buy belongs under the broker's symbol and currency), and
   `--gen-phantoms phantoms.json` from the project root says `taxjson
   run` auto-detects it (audit S048-17, S048-18, S047-17, S049-01,
@@ -4873,7 +4873,7 @@
 - **Holdings export details.** A small quantity with real cost (0.0009
   BTC) is no longer dropped as dust; the .sum HOLDINGS REPORT says it
   is the end-of-data inventory, not year-end positions; an option on a
-  class share names the held listing (`RCI.B.TO`, not `RCI.TO`); the
+  class share names the held listing (`SAMPLD.B.TO`, not `SAMPLD.TO`); the
   `trades` history follows splits and renames; overseas listings (.L,
   .AX) are in neither currency-split watchlist; a future is `asset_type
   = "future"` and a futures option gets no guessed `contract_multiplier
@@ -5088,7 +5088,7 @@
   it assumed to be 0 (other income, withholding); `trades`, `trades-sum`
   and `events` take a trade by its settlement date in a tax-year window on
   a settle-basis project, as Schedule 3 does; per-underlying reports file
-  an `RCI…` option under the `RCI.B.TO` shares it is written on.
+  an `SAMPLD…` option under the `SAMPLD.B.TO` shares it is written on.
 
 ### Pipeline, configuration and errors
 
@@ -5302,7 +5302,7 @@
   find-missing-history now point at `taxjson find-missing-history
   --gen-phantoms` (the `taxjson-gains` flags they quoted are not `taxjson
   run` options). The unmapped cross-listing NOTE suggests the rule in
-  the right direction for a USD unit (`TOBASE DLR.U.TO DLR.TO`) and in a
+  the right direction for a USD unit (`TOBASE SAMPLF.U.TO SAMPLF.TO`) and in a
   US project.
 - **Hand-made JSON books:** a time written `9:30:00` or `09:30` is read
   as `09:30:00` (it used to sort after its own superficial-loss
@@ -5409,7 +5409,7 @@
   dividend as a "zero-net" row. A refused redirect no longer prints the
   redirect URL's query (the Flex token or Questrade refresh token). The
   live-holdings snapshot takes an option's suffix from the account's
-  books when they hold that contract, so a CDR such as AMZN.TO no longer
+  books when they hold that contract, so a CDR such as SAMPLB.TO no longer
   makes the account's US AMZN option look Montreal-listed (a false
   verify/sanity mismatch).
 - **taxjson-merge never emits a partial merge.** The legacy merge that
@@ -5819,8 +5819,8 @@ the engine against the Act (docs/design/canada-rules-2026-09.md):
   REFERENCES: s.39(1.1) for fx-cash, short sales' income character.
 - `find-missing-history`: the phantom walk pooled positions per
   (symbol, account, CURRENCY) and had no buy-before-sell tie-break at
-  equal timestamps, so a Norbert's-gambit pair (sell DLR.TO in CAD, buy
-  DLR.U.TO in USD the same morning, one symbol after the ticker map)
+  equal timestamps, so a Norbert's-gambit pair (sell SAMPLF.TO in CAD, buy
+  SAMPLF.U.TO in USD the same morning, one symbol after the ticker map)
   read as a phantom short "affecting" the year while the engine
   had matched every sale correctly. Pools are per (symbol, account) like
   the engine's, and buys sort before sells at equal times.
@@ -5995,8 +5995,8 @@ fixed:
   The straddle fuzzer gains an "evening" placement for this shape.
 - `taxjson sanity` matches an option row through its `underlying`
   field when the file spells the option root differently from
-  taxjson (IB names the Montréal contract on RCI.B by the underlying,
-  a positions export by the exchange root `RCI`); the fallback fires
+  taxjson (IB names the Montréal contract on SAMPLD.B by the underlying,
+  a positions export by the exchange root `SAMPLD`); the fallback fires
   only when the file's spelling has no taxjson counterpart, is noted
   in text mode, and listed as `matched_via_underlying` in JSON.
 - `taxjson sanity` gains a PAIRED form alongside the aggregate one:
@@ -6416,7 +6416,7 @@ Scan/CLI/consistency:
   class, capped at held quantity; shares never created or destroyed —
   a flip that was flipped back nets to zero and moves nothing, lone
   migration legs are ignored). `JOURNAL` map lines are for
-  intrinsically fungible classes (DLR's gambit units) — an ordinary
+  intrinsically fungible classes (a Norbert's-gambit ETF's units) — an ordinary
   cross-listing stays `TOBASE` and its holdings only merge when the
   broker's own InterDepot rows say so.
 
@@ -6448,7 +6448,7 @@ Scan/CLI/consistency:
   symbol before netting ran. Surfaced as a `TOBASE X Y` suggestion
   instead of silently feeding the loss walk a disposal + acquisition.
 - CDR awareness + the DISTINCT map verb: Canadian Depositary
-  Receipts (UNH.TO over UNH.US) name the SAME issuer but are NOT
+  Receipts (SAMPLR.TO over SAMPLR.US) name the SAME issuer but are NOT
   listing equivalents — fractional, CAD-hedged, floating ratio. The
   scan detects them from the exchange shortName (the longName is the
   clean issuer name), never suggests mapping one (CDR-PAIR says so;
@@ -6456,11 +6456,11 @@ Scan/CLI/consistency:
   pairing a CDR with its underlying as MAP-BAD?. New ticker.map verb
   `DISTINCT a b` records that two look-alike listings are
   deliberately separate securities (a CDR, or same-root different
-  companies like EFX.TO Enerflex vs EFX.US Equifax) — changes no
+  companies, e.g. SAMPLO.TO vs SAMPLO.US) — changes no
   symbol, silences the MAP-GAP nag.
 - `taxjson scan --online` map robustness: clusters HELD listings by
   exchange-reported issuer name to catch DIFFERENT-root dual listings
-  (BTG.US/BTO.TO — same-root scanning can never see these), and
+  (SAMPLQ.US/SAMPLP.TO — same-root scanning can never see these), and
   verifies every defined GLOBAL/TOBASE/JOURNAL pair names one issuer
   (`MAP-BAD?` on mismatch — a typo'd pair merges two companies' ACB
   pools). Conservative matching; findings say VERIFY.
@@ -6965,7 +6965,7 @@ called out below. 1,903 tests.
   - `--tolerance 0` means exact; falsy coercion had restored the
     1e-4 default.
   - Live Questrade positions: a trailing CLASS letter is not an
-    exchange — `BRK.B` is `BRK.B.US`, and passing it through
+    exchange — `SAMPLC.B` is `SAMPLC.B.US`, and passing it through
     unsuffixed made every class-share position look like a phantom
     mismatch in the verify diff.
   - Rows with a blank category are no longer captioned `(CLEAR)`.

@@ -15,7 +15,7 @@ Examples:
     taxjson-explain --country canada txs.json
 
     # One symbol
-    taxjson-explain --country canada --symbol AAPL.USD txs.json
+    taxjson-explain --country canada --symbol SAMPLG.USD txs.json
 
     # A specific disposition by tx id (16-char or any unique prefix)
     taxjson-explain --country canada --id 1a2b3c4d txs.json
@@ -90,7 +90,7 @@ def parse_args():
              "or partnership — ITA s.251.1; a parent, child or sibling is "
              "related but not affiliated).",
     )
-    parser.add_argument("--symbol", help="Filter to a symbol; case-insensitive prefix match (e.g. aapl matches AAPL.US).")
+    parser.add_argument("--symbol", help="Filter to a symbol; case-insensitive prefix match (e.g. samplg matches SAMPLG.US).")
     parser.add_argument("--date", help="Filter to one disposition date (YYYY-MM-DD).")
     parser.add_argument("--id", dest="gain_id", help="Filter to one tx id (prefix match).")
     parser.add_argument("--year", type=tax_year, help="Filter to one tax year.")

@@ -168,7 +168,7 @@ class CorporateAction:
     @staticmethod
     def _sym_root(symbol: str) -> str:
         """Lowercased symbol with its market suffix and punctuation
-        stripped: ABG.TO -> abg, ABH.CAD.TO -> abhcad, BRK.B.US ->
+        stripped: ABG.TO -> abg, ABH.CAD.TO -> abhcad, SAMPLC.B.US ->
         brkb. Used only for the readable part of the event id."""
         parts = (symbol or '').rsplit('.', 1)
         if len(parts) == 2 and parts[1].upper() in set(
@@ -215,7 +215,7 @@ class CorporateAction:
 # the cross-listing intermediate like "ABH.CAD") that we use to chain the
 # subsequent .CAD→.US journal into a single logical event.
 #
-# Tickers may carry a class-share space ('BRK B') and ratios a decimal
+# Tickers may carry a class-share space ('SAMPLC B') and ratios a decimal
 # ('1.025 for 1'); both shapes used to fall through every regex and the
 # merger was booked by nobody (2026-09 audit). Spaces become dots, the
 # way the statement parser spells the same ticker.
@@ -229,8 +229,8 @@ _IB_MERGER_RE = re.compile(
 )
 
 # Multi-counterparty variant — a SPLIT-UP / separation, e.g. (synthetic):
-#   XYZ(US0000000101) Merged(Acquisition) WITH XYZAV 1 for 2,
-#   US0000000102 1 for 2 (XYZA, XYZ AEROSPACE, US0000000103)
+#   SAMPLE(US0000000101) Merged(Acquisition) WITH SAMPLEV 1 for 2,
+#   US0000000102 1 for 2 (SAMPLEA, SAMPLE AEROSPACE, US0000000103)
 # One old share is exchanged for shares of TWO (or more) successor
 # companies. IB reports one out-leg (the old position) and one in-leg
 # per successor, all under the same description. The single-target
@@ -248,7 +248,7 @@ _IB_WITH_PAIR_RE = re.compile(
     rf'([A-Z0-9.]+)\s+({_IB_NUM})\s+for\s+({_IB_NUM})', re.IGNORECASE)
 
 # A cash takeover: the shares are bought out for cash, no new shares.
-#   TGT(US0000000555) Merged(Acquisition) FOR USD 30.00 PER SHARE (TGT, TARGET CO, US0000000555)
+#   SAMPMV(US0000000555) Merged(Acquisition) FOR USD 30.00 PER SHARE (SAMPMV, SAMPLE CO, US0000000555)
 # A plain disposition at the cash amount — the statement parser books it
 # as a sale (ib_extractor, Corporate Actions branch); no election.
 _IB_CASH_MERGER_RE = re.compile(
@@ -322,8 +322,8 @@ def ib_merger_owned(description: str) -> bool:
 # as a pair of zero-proceeds legs that move the shares onto a `.TEN`
 # placeholder line, then — on allocation — either journals them back
 # with a `Merged(Voluntary Offer Allocation)` pair or settles them:
-#   AAUC(CA0193081049) Tendered to 12345678 1 FOR 1 (AAUC.TEN, ALLIED GOLD CORP - TENDER, CA0193081049)
-#   AAUC.TEN(12345678) Merged(Voluntary Offer Allocation) WITH CA0193081049 1 for 1 (AAUC, ALLIED GOLD CORP, CA0193081049)
+#   SAMPMW(CA0000000001) Tendered to 12345678 1 FOR 1 (SAMPMW.TEN, SAMPLE GOLD CORP - TENDER, CA0000000001)
+#   SAMPMW.TEN(12345678) Merged(Voluntary Offer Allocation) WITH CA0000000001 1 for 1 (SAMPMW, SAMPLE GOLD CORP, CA0000000001)
 # Neither is a merger the election machinery should ask about: the
 # zero-proceeds round trip is a no-op journal and a cash settlement is
 # a plain disposition. Both are handled by the statement parser
@@ -339,8 +339,8 @@ _IB_TENDER_RE = re.compile(
 def ib_tender_root(description: str) -> Optional[str]:
     """The underlying ticker (`.TEN` placeholder suffix stripped) when
     `description` is an IB tender / voluntary-offer journal row, else
-    None. Both the out-leg (`AAUC(...) Tendered to ...`) and the
-    placeholder leg (`AAUC.TEN(...) Merged(Voluntary Offer ...)`)
+    None. Both the out-leg (`SAMPMW(...) Tendered to ...`) and the
+    placeholder leg (`SAMPMW.TEN(...) Merged(Voluntary Offer ...)`)
     resolve to the same root so a statement parser can net them."""
     m = _IB_TENDER_RE.match(description or '')
     if not m:
@@ -532,7 +532,7 @@ def _ib_leg_symbol(sym: str, currency: str, fii: Dict[tuple, Any],
                    tsx_unit: bool = False) -> str:
     """An IB corporate-action leg's symbol under the statement parser's
     listing rule (`_ib_listing_ext`): a USD unit of a TSX-listed fund
-    (QZAA.U) is the Canadian listing X.U.TO, not a fictional `.US`
+    (QZAA.U) is the Canadian listing SAMPMD.U.TO, not a fictional `.US`
     security — the currency-only suffix left the real position open and
     disposed of a pool that never existed (A2-0209, A2-0219, the S010-06
     twin). `tsx_unit`: the other leg is such a unit, so a `.U` successor
@@ -1135,7 +1135,7 @@ IGNORE_ELECTION = (
 def _apply_suffix(symbol: str, suffix: str) -> str:
     """Append `.SUFFIX` unless the symbol already carries one of the
     *known market* suffixes. The old check `if '.' in symbol` was too
-    broad — class-share tickers like `BRK.B`, `BRK.A`, `RDS.A` would
+    broad — class-share tickers like `SAMPLC.B`, `SAMPLC.A`, `QZR.A` would
     never get a market suffix appended, fragmenting their pool from
     the .TO / .US-suffixed equivalents downstream tools expect."""
     known_suffixes = set(_CURRENCY_SUFFIX.values())  # {'TO','US','AX','L'}
@@ -1757,7 +1757,7 @@ def rbc_norm_company(name: str) -> str:
 
 def rbc_rights_key(text: str) -> str:
     """Identity of a rights/warrants issue across its rows: RBC books the
-    distribution under a real symbol (CSU.RT) and the expiry under a
+    distribution under a real symbol (SAMPMX.RT) and the expiry under a
     temporary code, both described "RTS <ISSUER> EXP mm/dd/yyyy"."""
     m = re.search(r'\b(RTS|WTS)\s+(.+?)\s+EXP\s+(\d\d/\d\d/\d{4})',
                   (text or '').upper())

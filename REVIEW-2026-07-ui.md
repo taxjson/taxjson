@@ -253,7 +253,7 @@ Project /tmp/rend-p1 (taxjson.toml with [accounts."rrsp x"] type=sheltered) with
 
 ```
 # repro
-QT_QPA_PLATFORM=offscreen python gui_drive.py (instantiates taxjson.gui.app.MainWindow on /tmp/f5gui-ca; refresh_tables + _render_harvest on real `list --json` / `harvest --json` output): positions COST cell = '3000', harvest PRICE_BASE = '157.86000061035156', UNREALIZED = '-1078.6000061035156'. Sorting: probe_sort.py calls positions_table.sortItems(3, AscendingOrder) -> order SHOP.TO -500.00, BNS.TO 1200, BNS.TO 3000, option 400.00. Minimal probe (probe_table.py): QTableWidgetItem('3,000.00'); setData(EditRole, 3000.0); item.text() -> '3000'; for 157.86000061035156 text -> '157.86000061035156'.
+QT_QPA_PLATFORM=offscreen python gui_drive.py (instantiates taxjson.gui.app.MainWindow on /tmp/f5gui-ca; refresh_tables + _render_harvest on real `list --json` / `harvest --json` output): positions SAMPNI cell = '3000', harvest PRICE_BASE = '157.86000061035156', UNREALIZED = '-1078.6000061035156'. Sorting: probe_sort.py calls positions_table.sortItems(3, AscendingOrder) -> order SAMPMM.TO -500.00, SAMPNG.TO 1200, SAMPNG.TO 3000, option 400.00. Minimal probe (probe_table.py): QTableWidgetItem('3,000.00'); setData(EditRole, 3000.0); item.text() -> '3000'; for 157.86000061035156 text -> '157.86000061035156'.  # pii-ok (synthetic)
 ```
 
 ### 18. taxjson serve --host 0.0.0.0 yields a server that refuses every network request with 400
@@ -318,7 +318,7 @@ mkdir -p /tmp/nvr2-tt/inputs/{margin,manual}; taxjson.toml with accounts.margin 
 
 ```
 # repro
-Project /tmp/fc2-base (canada/2025/CAD, Questrade CSV with BCE.TO wash-sale + XIU.TO gain; `taxjson run --no-input` done). Then:
+Project /tmp/fc2-base (canada/2025/CAD, Questrade CSV with SAMPND.TO wash-sale + XIU.TO gain; `taxjson run --no-input` done). Then:
 printf 'Symbol,Quantity,Proceeds of disposition,Cost or other basis\nBCE.TO,200,7600.00,9012.34\nBCE.TO,100,N/A,3700.00\nXIU.TO,100,3890.00,3204.99\n' > slip_na2.csv
 python -m taxjson.bin.taxjson_run -C /tmp/fc2-base reconcile-slips slip_na2.csv; echo EXIT=$?
 French variant: slip with "7 600,00"/"9 004,99" quoted cells → all rows dropped.
@@ -521,7 +521,7 @@ python -m taxjson.bin.taxjson_run -C /tmp/p elect margin --set '=rollover_s_85_1
 # repro
 Zoo has work/krypto_gains.json + work/krypto_filled.json but no krypto_base.json; work/margin_base.json exists.
 $ python -m taxjson.bin.taxjson_run -C /tmp/qf-zoo list  -> shows "krypto BTC 0.25 15,000.00 ..." and margin rows; total 15,130.00.
-$ python -m taxjson.bin.taxjson_run -C /tmp/qf-zoo list --date 2025-04-01  -> only margin rows (AAA.TO, BADCALL..., F:CL.TO, LMN...), total 8,010.00; no note that krypto was skipped; rc=0.
+$ python -m taxjson.bin.taxjson_run -C /tmp/qf-zoo list --date 2025-04-01  -> only margin rows (AAA.TO, BADCALL..., F:SAMPLX.TO, LMN...), total 8,010.00; no note that krypto was skipped; rc=0.  # pii-ok (synthetic)
 ```
 
 ### 37. trades/events FEE column is always 0.00 for Questrade accounts while fees/trades-sum/--json report the real fees for the same rows
@@ -590,7 +590,7 @@ python -m taxjson.bin.taxjson_run -C /tmp/fc2-base form-export --csv outdir; ech
 
 ```
 # repro
-Project /tmp/fc2-phantom (canada/2025, Questrade CSV whose ENB.TO sell has no matching buy; `taxjson run --no-input` done).
+Project /tmp/fc2-phantom (canada/2025, Questrade CSV whose SAMPLW.TO sell has no matching buy; `taxjson run --no-input` done).
 python -m taxjson.bin.taxjson_run -C /tmp/fc2-phantom find-missing-history --gen-phantoms /tmp/fc2-phantom/inputs; echo EXIT=$?
 ```
 

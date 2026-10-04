@@ -143,8 +143,8 @@ def write_lots(transactions: List[TaxTransaction],
     _date_of = date_basis_of(tax_date)
     # The engine's own pairing of an assignment with its share leg
     # (A2-0114, A2-0328): the option root is matched to the account's
-    # stock line by class / futures-month spelling (RCI for RCI.B.TO,
-    # BRKB for BRK.B.US) — an exact (account, root) test called those
+    # stock line by class / futures-month spelling (SAMPLD for SAMPLD.B.TO,
+    # SAMPLCB for SAMPLC.B.US) — an exact (account, root) test called those
     # physically settled assignments cash-settled. No stock line in the
     # option's account (an index option) -> None -> cash-settled.
     resolve_underlying = _make_assign_underlying_resolver(

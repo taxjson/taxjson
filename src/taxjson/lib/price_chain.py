@@ -6,7 +6,7 @@ tools need (stock snapshots only):
   1. IBKR   — a running TWS / IB Gateway (ib_insync, the [ibkr] extra).
               Frozen market data (real-time while open, prior close when
               shut); qualification retries the space form for class
-              shares ('BF.B' -> 'BF B'). Missing library / no gateway /
+              shares ('SAMPMY.B' -> 'SAMPMY B'). Missing library / no gateway /
               unqualified symbols degrade silently to the next tier.
   2. yfinance — the [fx] extra, using each symbol's Yahoo
               spelling (caller-provided; see ticker.map QUOTE lines).
@@ -131,21 +131,21 @@ def yf_symbol_for(symbol: str,
     yf_ticker = symbol
     if symbol.endswith('.US'):
         yf_ticker = symbol[:-3]
-        # US class shares: Yahoo spells BF.B as BF-B (audit S077-09 —
-        # only BRK.B was handled).
+        # US class shares: Yahoo spells SAMPMY.B as SAMPMY-B (audit S077-09 —
+        # only one class share was handled).
         yf_ticker = re.sub(r'\.([A-Z])$', r'-\1', yf_ticker)
     elif symbol.endswith('.TO'):
         yf_ticker = symbol[:-3]
         yf_ticker = re.sub(r'\.PR\.', '-P', yf_ticker, flags=re.IGNORECASE)
-        # Trust units and USD-traded units: DIR.UN -> DIR-UN, DLR.U ->
-        # DLR-U (audit S077-09 / R1-150 — the old '\.UN\.' pattern ran
+        # Trust units and USD-traded units: SAMPMQ.UN -> SAMPMQ-UN, SAMPLF.U ->
+        # SAMPLF-U (audit S077-09 / R1-150 — the old '\.UN\.' pattern ran
         # after the .TO strip and could never match).
         yf_ticker = re.sub(r'\.UN$', '-UN', yf_ticker, flags=re.IGNORECASE)
         yf_ticker = re.sub(r'\.U$', '-U', yf_ticker, flags=re.IGNORECASE)
         yf_ticker = yf_ticker.replace('.B', '-B')
         yf_ticker = yf_ticker.replace('.A', '-A')
         # Preferred-share styles (.PR.A / .PR-A / .PR_A / bare .PR)
-        # -> Yahoo's -PA / -P forms (e.g. FFN.PR.A.TO -> FFN-PA.TO).
+        # -> Yahoo's -PA / -P forms (e.g. SAMPMH.PR.A.TO -> SAMPMH-PA.TO).
         for letter in 'ABCDEF':
             yf_ticker = re.sub(rf'\.PR[\.\-_]{letter}', f'-P{letter}',
                                yf_ticker, flags=re.IGNORECASE)
@@ -174,7 +174,7 @@ def load_yf_map(search_dirs) -> Dict[str, Tuple[str, float]]:
     e.g.:
 
         QUOTE OLDCO.TO  NEWCO  0.25    # 4:1 merger — 4 OLDCO -> 1 NEWCO
-        QUOTE ABC.TO    XYZ    1.5
+        QUOTE ABC.TO    SAMPLE    1.5
 
     A folder still holding the old yf_ticker.map is refused
     (lib/ticker_map.LegacyMapFileError): `taxjson migrate` moves it."""
@@ -197,7 +197,7 @@ def quote_currency(quote_symbol: str) -> Optional[str]:
     basis was a real reported bug.
 
       - a known exchange suffix (.TO -> CAD, .L -> GBP, ...), except a
-        Canadian-listed USD unit ('DLR.U.TO' / 'DLR-U.TO') -> USD
+        Canadian-listed USD unit ('SAMPLF.U.TO' / 'SAMPLF-U.TO') -> USD
         (audit R1-150);
       - a Yahoo pair ('ETH-USD', 'ETH-CAD') -> its quote currency;
       - a bare symbol (Yahoo's US spelling) -> USD;
@@ -292,7 +292,7 @@ def _ibkr_fetcher(symbols: List[str], *, host: str, port: int,
             contracts.append(Stock(root.replace(" ", "."), "SMART",
                                    currency))
         ib.qualifyContracts(*contracts)
-        # Class-share retry: IBKR wants 'BF B' where taxjson has 'BF.B'
+        # Class-share retry: IBKR wants 'SAMPMY B' where taxjson has 'SAMPMY.B'
         # (US names; Canadian class shares keep the dot).
         for c in contracts:
             if not c.conId and "." in c.symbol:
@@ -366,7 +366,7 @@ def _ibkr_option_fetcher(symbols: List[str], *, host: str, port: int,
                 continue                  # unknown listing: no guess
             c = None
             # Class-share roots: try as written, then the space form
-            # (US names want 'RCI B'; Canadian keep the dot).
+            # (US names want 'SAMPLD B'; Canadian keep the dot).
             for spelled in dict.fromkeys((root, root.replace(".", " "))):
                 cand = Option(spelled, expiry.replace("-", ""), strike,
                               right, "SMART", currency=currency)

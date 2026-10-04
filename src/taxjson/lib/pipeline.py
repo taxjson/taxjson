@@ -184,7 +184,7 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
     """Drop TRANSFER groups that net to zero WITHIN ONE TIME CLUSTER and
     have no intervening trade or split.
 
-    Real cross-listing journals (AEM.TO out → AEM.US in, where the ticker
+    Real cross-listing journals (SAMPLM.TO out → SAMPLM.US in, where the ticker
     map has normalized .US back to .TO) and broker-to-broker custody
     moves (out at the old broker, in at the new, often with cancel/
     rebook restatements between) appear as TRANSFER rows on the same
@@ -512,7 +512,7 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
     # journal candidates. A mapped dual listing (ticker.map
     # TOBASE/JOURNAL) was normalized to ONE symbol before this code
     # ran and netted as a same-symbol cluster above. An UNMAPPED pair
-    # (different roots — BTG.US/BTO.TO) survives as an out-leg of X
+    # (different roots — SAMPLQ.US/SAMPLP.TO) survives as an out-leg of X
     # and an in-leg of Y that nothing can net: surface the fingerprint
     # (same account, equal qty, opposite signs, within
     # _JOURNAL_CANDIDATE_PAD_DAYS) as a ticker.map suggestion instead
@@ -542,9 +542,9 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
                 _warned.add(key)
                 # Suggest the conventional direction: the listing in
                 # another currency maps onto the base-currency one. The
-                # listing's currency comes from its spelling (DLR.U.TO
+                # listing's currency comes from its spelling (SAMPLF.U.TO
                 # is the USD unit — audit S076-18: an ".US"-only test
-                # suggested folding DLR.TO into DLR.U.TO); without a
+                # suggested folding SAMPLF.TO into SAMPLF.U.TO); without a
                 # known base, the .US leg is taken as the foreign one.
                 from taxjson.lib.price_chain import quote_currency
                 _ca, _cb = quote_currency(a.symbol), quote_currency(b.symbol)
@@ -1575,7 +1575,7 @@ def run_gains(transactions, sheltered_transactions=(),
     # Rebuild by_ticker from the (year-filtered) rows, with or without
     # --year (re-audit A2-0710: without it an s.260 deemed dividend
     # stayed in total_pil). Under --year, consumers reading
-    # by_ticker['AAPL.US']['total_gain'] otherwise got all-year totals
+    # by_ticker['SAMPLG.US']['total_gain'] otherwise got all-year totals
     # on what looks like a single-year report.
     #
     # Skip `tainted` rows — they carry fabricated gain numbers (cost

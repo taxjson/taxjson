@@ -5,7 +5,7 @@ taxjson_lint_crosslistings.py
 Lint for cross-listed securities the wash radar would treat as two separate
 holdings. The radar keys positions by exchange-suffixed symbol and relies on
 ticker.map `TOBASE` consolidation (applied upstream) to merge a true
-interlisting (e.g. AEM.US → AEM.TO). This lint scans the radar's OWN input
+interlisting (e.g. SAMPLM.US → SAMPLM.TO). This lint scans the radar's OWN input
 (the taxable/sheltered transaction files) for any root that still appears on
 BOTH `.TO` and `.US`, and classifies each:
 
@@ -22,8 +22,8 @@ rule, s.54), and share positions follow SPLIT ratios and renames.
           link between them.
   REVIEW— same ticker on both exchanges with no rule. Either a genuine
           interlisting that needs a TOBASE entry, OR two different companies
-          that share a ticker (e.g. CMG.TO Computer Modelling vs CMG.US
-          Chipotle; EFX.TO Enerflex vs EFX.US Equifax) — a human must decide.
+          that share a ticker (e.g. SAMPLN.TO, a Canadian issuer, vs SAMPLN.US, an
+          unrelated US one) — a human must decide.
 
 WARN/REVIEW rows carrying TAXABLE exposure are the actionable ones (a sheltered
 loss isn't a superficial-loss trigger on its own).

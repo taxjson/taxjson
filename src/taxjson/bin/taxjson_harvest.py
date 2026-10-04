@@ -245,7 +245,7 @@ def _option_quote_symbols(option_tickers: List[str], files: List[Path],
                           ticker_map: Optional[Path]) -> Dict[str, Optional[str]]:
     """{position symbol: symbol to QUOTE} for option positions. The
     pipeline moves an option onto its underlying's ticker.map rule
-    (TOBASE KGC.US K.TO books KGC...US calls as K...TO), so the wash
+    (TOBASE SAMPLK.US SAMPLJ.TO books SAMPLK...US calls as SAMPLJ...TO), so the wash
     inventory can name a contract nobody holds — pricing it quoted the
     Montreal contract in CAD (2026-09 audit S034-11). The contract held
     is the account's native inventory (<acct>_raw_gains.json next to
@@ -664,8 +664,8 @@ def main(argv: Optional[List[str]] = None,
     p.add_argument("--ticker-map", type=Path, default=None, metavar="FILE",
                    help="The project's ticker.map. With --options, a "
                         "contract the pipeline renamed onto another "
-                        "listing's code (TOBASE KGC.US K.TO turns "
-                        "KGC...US calls into K...TO) is quoted as the "
+                        "listing's code (TOBASE SAMPLK.US SAMPLJ.TO turns "
+                        "SAMPLK...US calls into SAMPLJ...TO) is quoted as the "
                         "contract actually held — found in the "
                         "account's <acct>_raw_gains.json — in its own "
                         "currency. Default: ticker.map next to the "
@@ -738,7 +738,7 @@ def main(argv: Optional[List[str]] = None,
 
     radar = load_radar([Path(r) for r in args.radar])
     # TX_ADD: last acquisition across the TAXABLE inputs themselves — a
-    # taxable rebuy extends the wash window too (the AVGO case: a margin
+    # taxable rebuy extends the wash window too (a margin
     # buy pushed the clear date past what the sheltered adds implied).
     taxable_agg = load_inventory_agg(files, "TX_ADD")
     sheltered = load_inventory_agg([Path(f) for f in args.sheltered],
@@ -824,7 +824,7 @@ def main(argv: Optional[List[str]] = None,
     # FX: book costs are BASE currency; quotes arrive in the quoted
     # symbol's native currency. Convert every non-base quote or drop the
     # row loudly — a USD price against CAD basis overstated a real
-    # user's ETN.US loss by the full FX factor.
+    # user's SAMPLL.US loss by the full FX factor.
     base = args.base_currency.upper()
     rates_path = args.rates or (files[0].parent / "to_base.csv")
     try:

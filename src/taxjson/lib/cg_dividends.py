@@ -18,15 +18,15 @@ refuses the table.
     year = 2025
     amount = "all"
 
-    [[capital_gains_dividends]]       # 1.25 of the Jun-16 payment
-    symbol = "XTD.TO"
-    date = 2025-06-16
-    amount = 1.25
+    [[capital_gains_dividends]]       # 0.75 of the Jun-13 payment
+    symbol = "SAMPMG.TO"
+    date = 2025-06-13
+    amount = 0.75
 
     [[capital_gains_dividends]]       # box 18 total for the year
-    symbol = "FFN.TO"
+    symbol = "SAMPMH.TO"
     year = 2024
-    amount = 1711.05
+    amount = 123.45
     account = "margin"
 
 - symbol: the dividend row's symbol as the books spell it (after
@@ -95,7 +95,7 @@ class Entry:
     def matches_symbol(self, symbol: str) -> bool:
         """Exact, or a bare root against ROOT.<Canadian listing suffix>:
         a preferred series or another class (FTN.PR.A.TO) and a foreign
-        listing of a same-root issuer (T.US for T) are other securities
+        listing of a same-root issuer (SAMPMC.US for SAMPMC) are other securities
         and never carry a T5 box-18 dividend of this one (audit A2-0075,
         A2-0228)."""
         from taxjson.lib.income_dating import CA_LISTING_SUFFIXES
@@ -187,7 +187,7 @@ def entries_from_config(cfg: dict) -> Optional[List[Entry]]:
                 or len(sym.split()) != 1:
             raise CgDividendMapError(
                 f"{where}: symbol must be the books' symbol as a string, "
-                f"e.g. \"LFE.TO\" (got {sym!r})")
+                f"e.g. \"SAMPMI.TO\" (got {sym!r})")
         if ("year" in e) == ("date" in e):
             raise CgDividendMapError(
                 f"{where}: give exactly one of `year = 2025` (every "

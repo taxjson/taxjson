@@ -906,7 +906,7 @@ def strict_option_from_description(parser, desc: str):
 def _names_underlying(root: str, symbol: str) -> bool:
     """Does the Symbol column name the stock the option ROOT is on?
     Exactly, or by the class / adjustment spelling the engine accepts
-    (core._root_matches_stock: RCI for RCI.B, BRKB for BRK.B) — the
+    (core._root_matches_stock: SAMPLD for SAMPLD.B, SAMPLCB for SAMPLC.B) — the
     stock leg of an assignment on a class share was refused (re-audit
     A2-1059)."""
     from taxjson.lib.core import _root_matches_stock
@@ -916,8 +916,8 @@ def _names_underlying(root: str, symbol: str) -> bool:
         return False
     if root == stock:
         return True
-    # Only a listed CLASS share (RCI.B, BRK.B): Questrade's option rows
-    # carry 'AAPL.OPT'-shaped symbols, which must stay the option.
+    # Only a listed CLASS share (SAMPLD.B, SAMPLC.B): Questrade's option rows
+    # carry 'SAMPLG.OPT'-shaped symbols, which must stay the option.
     return (bool(re.fullmatch(r'[A-Z]+\.[A-Z]{1,2}', stock))
             and _root_matches_stock(root, stock))
 
@@ -1718,7 +1718,7 @@ class RbcBrokerage(BaseBrokerage):
         """The listing (by currency) an income/withholding/ROC/fee row
         belongs to, from the account's own trade rows in ALL its files:
         a TSX stock paying USD keeps .TO; when a bare symbol names two
-        securities (HCA Healthcare in USD and a Hamilton ETF in CAD; the
+        securities (a US issuer in USD and a Canadian ETF in CAD; the
         NVIDIA stock and its CAD CDR), the row goes to the line with the
         same Symbol Description, else the one held at the time, else the
         one in the row's currency. A symbol the files never trade keeps
@@ -2000,7 +2000,7 @@ class RbcBrokerage(BaseBrokerage):
                          or any(x in activity for x in ('Assignment',
                                                         'Exercise')))
         # A blank settle cell falls back to the cycle of the LISTING's
-        # market, not the row currency's (A2-1054): DLR.U.TO bought in USD
+        # market, not the row currency's (A2-1054): SAMPLF.U.TO bought in USD
         # settles through CDS on the Canadian calendar.
         from taxjson.lib.dates import market_of
         _mkt = market_of(symbol, r.currency)
@@ -2168,7 +2168,7 @@ class RbcBrokerage(BaseBrokerage):
         assignment always closes. Read only for options (audit
         A2-0006): a CLOSE CONTRACT sale whose position the books do not
         hold — a .tt hand-off or an earlier export under another root,
-        RCI vs RCI.B — was booked as a NEW written call with no warning;
+        SAMPLD vs SAMPLD.B — was booked as a NEW written call with no warning;
         with the code, the gains run's broker-closing check names it."""
         if not is_option:
             return ''

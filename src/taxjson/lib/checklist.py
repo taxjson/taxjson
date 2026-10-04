@@ -1090,7 +1090,7 @@ def d_missing_history(ctx: Ctx) -> Result:
     in_affects = False
     in_remove = False
     # Every table row printed under an AFFECTS heading counts — a strict
-    # symbol/currency pattern dropped 'BRK/B', a '?' currency, 'USDT'
+    # symbol/currency pattern dropped 'SAMPLC/B', a '?' currency, 'USDT'
     # and lower-case coins, and the step said "nothing affects the
     # year" (S067-10). A section ends at the blank line before the next
     # heading; the header, the rules and indented detail lines are not

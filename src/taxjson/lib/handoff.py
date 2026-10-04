@@ -465,7 +465,7 @@ def load_filed_dispositions(path: Path) -> List[Dict[str, Any]]:
                 f"re-run.")
         short = [c for c in _FILED_COLS if r.get(c) is None]
         if short:
-            # A short row ('AAPL.US,2024-05-14') was a TypeError
+            # A short row ('SAMPLG.US,2024-05-14') was a TypeError
             # traceback from float(None) (A2-0769 / A2-1397).
             raise ValueError(f"{path}:{i}: bad row (no "
                              f"{', '.join(short)} cell)")
@@ -719,7 +719,7 @@ def load_record(path: Any) -> Dict[str, Any]:
 
 def _root_sym(sym: str) -> str:
     """Symbol with a leading exchange/currency difference ignored, for
-    matching another tool's spelling (AAPL.US vs AAPL)."""
+    matching another tool's spelling (SAMPLG.US vs SAMPLG)."""
     return re.sub(r"\.(US|TO|V|CN|NE|L|AX)$", "", (sym or "").upper())
 
 

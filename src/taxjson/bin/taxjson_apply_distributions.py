@@ -401,8 +401,8 @@ def apply_distributions(doc: dict, map_rows, account: str,
             sym = map_symbol(sym, renames)
         live = resolve_live_symbol(sizing, sym, date)
         # A key that still holds shares under its own name on the record
-        # date is that holding — a ticker reused after its rename (FB
-        # bought again after FB -> META) is not the renamed pool (audit
+        # date is that holding — a ticker reused after its rename (OLDTKR
+        # bought again after OLDTKR -> NEWTKR) is not the renamed pool (audit
         # A2-0074).
         if live != sym and balance_on(sizing, sym, date,
                                       date_basis) > 1e-9:

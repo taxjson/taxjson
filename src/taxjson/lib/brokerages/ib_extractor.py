@@ -34,12 +34,12 @@ def _ib_currency_ext(currency: str) -> str:
 
 # Trades take their exchange suffix from the trade currency; DIVIDEND/TAX rows
 # take theirs from the security's ISIN country. Those disagree for a dual-listed
-# name held on a non-domicile exchange — a Canadian-domiciled B2Gold held on the
-# NYSE (BTG.US) has its dividend stamped BTG.TO (ISIN 'CA'); an Irish-domiciled
-# Seagate held as STX.US gets STX.L (ISIN 'IE') — orphaning the income onto a
+# name held on a non-domicile exchange — a Canadian-domiciled issuer held on the
+# NYSE (SAMPLQ.US) has its dividend stamped SAMPLQ.TO (ISIN 'CA'); an Irish-domiciled
+# issuer held as SAMPMB.US gets SAMPMB.L (ISIN 'IE') — orphaning the income onto a
 # phantom symbol with no shares. Neither currency nor ISIN is reliable on its
-# own (B2Gold's TSX listing BTO.TO pays some dividends in USD, so currency would
-# wrongly say .US there). The dividend's own ticker (BTO vs BTG) already names
+# own (the issuer's TSX listing SAMPLP.TO pays some dividends in USD, so currency would
+# wrongly say .US there). The dividend's own ticker (SAMPLP vs SAMPLQ) already names
 # the listing, so bind each income row to the suffix of the position actually
 # held for that ticker in this statement.
 _POSITION_ACTIONS = frozenset({'BUYSELL', 'TRANSFER'})
@@ -84,7 +84,7 @@ def _ib_refine_split_ratio(info: Dict[str, Any]) -> None:
 
 # A dotted symbol whose last part is a currency code is an IB currency or
 # venue line (ABH.CAD: the temporary line a merger fraction sat on), not
-# a class share like BBD.B or a unit like DIR.UN (audit R1-59 / S059-00).
+# a class share like SAMPMP.B or a unit like SAMPMQ.UN (audit R1-59 / S059-00).
 _IB_CURRENCY_TAGS = frozenset({
     'CAD', 'USD', 'EUR', 'GBP', 'AUD', 'CHF', 'JPY', 'HKD', 'SEK', 'NOK',
     'DKK', 'NZD', 'SGD', 'CNH', 'CNY', 'MXN', 'ILS', 'ZAR', 'KRW', 'INR',
@@ -120,8 +120,8 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
     Open Positions section. That closes the two gaps of trade-only inference:
     (a) a buy-and-hold name generates dividends in every LATER statement year
     with no trade rows, so trade-derived holdings were empty and the ISIN
-    fallback (STX.L, BTG.TO) came back every hold-year; (b) an interlisted
-    same-ticker name (ENB-class) whose OTHER listing is still held makes the
+    fallback (SAMPMB.L, SAMPLQ.TO) came back every hold-year; (b) an interlisted
+    same-ticker name (SAMPLW-class) whose OTHER listing is still held makes the
     root ambiguous, correctly suppressing the rewrite instead of misbinding a
     .TO dividend onto the .US listing traded in this file.
 
@@ -132,8 +132,8 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
 
     `isins_by_root` (the Financial Instrument Information Security IDs per
     ticker) makes the rebind require the SAME security: a row whose ISIN
-    names a different issuer than the held listing of that root (AT&T's T
-    vs Telus's T.TO, Equifax vs Enerflex EFX.TO) keeps its ISIN-derived
+    names a different issuer than the held listing of that root (a US
+    issuer's SAMPMC vs a Canadian issuer's SAMPMC.TO) keeps its ISIN-derived
     suffix (audit S059-24 / S060-19); the (symbol, ISIN) pairs skipped
     are added to `mismatches`. A row whose ISIN, or whose root's listing
     ISIN, is unknown is rebound as before.
@@ -192,7 +192,7 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
     for t in transactions:
         # ROC ADJUSTs come out of the same ISIN-suffixed Dividends section
         # as income rows, so they need the same held-listing rebind — an
-        # ADJUST on a phantom listing (STX.L) would reduce nothing.
+        # ADJUST on a phantom listing (SAMPMB.L) would reduce nothing.
         is_roc_adjust = (t.get('action') == 'ADJUST'
                          and t.get('type') == 'roc')
         if t.get('action') not in _INCOME_ACTIONS and not is_roc_adjust:
@@ -691,7 +691,7 @@ _IB_INCOME_TICKER_RE = re.compile(
 
 def _ib_income_ticker(description: str):
     """(ticker, ISIN) of a Dividends / Withholding Tax row: the leading
-    `TICKER(ISIN)` token (space-form class tickers 'BRK B' dotted), else
+    `TICKER(ISIN)` token (space-form class tickers 'SAMPLC B' dotted), else
     the first ticker-like word and no ISIN."""
     ticker, isin = 'UNKNOWN', ''
     m = _IB_INCOME_TICKER_RE.search(description or '')
@@ -909,7 +909,7 @@ def _root_aliases(occ_by_conid, underlying_by_conid):
     roots (QZD 251121P..., QZD1 251121P... after a corporate action
     renamed the adjusted contract): every alias root maps to the
     canonical one. The canonical root is the contract's UNDERLYING when
-    it is one of the roots — after a ticker rename (SQ -> XYZ) the
+    it is one of the roots — after a ticker rename (OLDTKR -> SAMPLE) the
     shorter old root won and the assigned option never met the
     delivered shares (audit S059-11); otherwise _canonical_root."""
     root_alias: Dict[str, str] = {}
@@ -945,12 +945,12 @@ _IB_CA_VENUES = frozenset({'TSE', 'VENTURE', 'TSXV', 'CSE', 'NEO', 'AEQLIT',
 def _ib_listing_ext(asset_cat: str, raw_symbol: str, currency: str,
                     fii: Dict[tuple, Any]) -> str:
     """The exchange suffix of a stock/warrant row: from the currency,
-    except a USD-class unit of a TSX-listed fund ('ZSP.U', 'DLR.U'),
-    which is a Canadian listing (X.U.TO — the spelling RBC and the
+    except a USD-class unit of a TSX-listed fund ('ZSP.U', 'SAMPLF.U'),
+    which is a Canadian listing (SAMPMD.U.TO — the spelling RBC and the
     ticker maps use); `.US` made it a fictional US security (audit
     S010-06). Only the `.U` unit class is re-suffixed: IB's instrument
     list names a single primary listing per symbol, so a USD trade of an
-    interlisted ordinary share (MDA on the NYSE) must keep `.US`."""
+    interlisted ordinary share (SAMPMR on the NYSE) must keep `.US`."""
     ext = _ib_currency_ext(currency)
     s = (raw_symbol or '').strip()
     if asset_cat not in ('Stocks', 'Warrants') or ext in ('TO', 'L'):
@@ -1295,8 +1295,8 @@ def _ib_refund_hits(adj: Dict[str, Any], txs) -> List[Dict[str, Any]]:
     (ticker, signed quantity, trade date). An exact quantity first; else
     the ONE same-symbol, same-date, same-sign trade whose quantity
     covers the named one — IB names an execution of a statement that
-    lists only the Order row (a real 'Refund (KWEB, -400, ...)' for a
-    -440 order, audit A2-0604)."""
+    lists only the Order row (a 'Refund (QZW, -40, ...)' for a
+    -50 order, audit A2-0604)."""
     def _base(t):
         return (t.get('action') == 'BUYSELL'
                 and t.get('type') != TRADE_CANCEL_TYPE
@@ -1884,8 +1884,8 @@ class IbBrokerage(BaseBrokerage):
                     where: str) -> float:
         """Contract size for a row: IB's own Financial Instrument
         Information Multiplier when the statement lists the instrument
-        (CL 1000, ES 50, MET/MBT 0.1, SI 5000, GC 100, equity option
-        100); otherwise 1 per share/warrant and 100 per equity option.
+        (1000 for a crude-oil future, 50 for an index e-mini, 0.1 for a
+        micro future, equity option 100); otherwise 1 per share/warrant and 100 per equity option.
         A futures / futures-option contract size cannot be guessed, so
         its absence fails the parse."""
         s = (raw_symbol or '').strip()
@@ -1910,15 +1910,15 @@ class IbBrokerage(BaseBrokerage):
         raise BrokerageParseError(
             f"{where}: {asset_cat} {s!r} has no multiplier in the "
             f"statement's Financial Instrument Information section — a "
-            f"futures contract size (CL 1000, ES 50, MET 0.1, SI 5000 "
-            f"...) cannot be guessed. Export the full Activity Statement "
+            f"futures contract size (1000 for crude oil, 50 for an "
+            f"index e-mini, ...) cannot be guessed. Export the full Activity Statement "
             f"(it lists every instrument).")
 
     @staticmethod
     def _security_name(asset_cat: str, raw_symbol: str,
                        fii: Dict[tuple, Any]) -> str:
         """The Financial Instrument Information name of a stock row
-        ('META PLATFORMS INC-CDR'), or '' — the row's description stays
+        ('SAMPLE PLATFORMS INC-CDR'), or '' — the row's description stays
         the raw symbol (the security overrides key on it)."""
         if asset_cat not in ('Stocks', 'Warrants'):
             return ''
@@ -2848,7 +2848,7 @@ class IbBrokerage(BaseBrokerage):
                 # broker emits a `description` field; IB Trades
                 # was the lone gap — without it the override
                 # silently no-op'd on IB rows). For options the
-                # raw symbol is the verbose `BCE 16JAN26 100 P`
+                # raw symbol is the verbose `SAMPMN 16JAN26 100 P`
                 # form, which is exactly what the user keys on
                 # in ticker.map `EXTRACT` lines.
                 description = symbol
@@ -2996,7 +2996,7 @@ class IbBrokerage(BaseBrokerage):
                     'gross_amount': gross_proceeds,
                     # Contract size (IB's Financial Instrument
                     # Information Multiplier; 100 per equity option,
-                    # 1000 per CL future, 0.1 per MET/MBT, 1 per
+                    # 1000 per crude-oil future, 0.1 per micro, 1 per
                     # share). The schema notional check uses it —
                     # futures used to trip it on every row.
                     'multiplier': mult,
@@ -3117,7 +3117,7 @@ class IbBrokerage(BaseBrokerage):
 
                 ticker, isin = _ib_income_ticker_strict(description,
                                                         where, section)
-                # A currency-tagged line (XYZ.CAD) is its own security
+                # A currency-tagged line (SAMPLE.CAD) is its own security
                 # here as in Trades: say so once (re-audit A2-1493).
                 self._check_symbol_tag(ticker, where)
                 # Record (ticker, pay date) so the accrual diagnostic
@@ -3421,7 +3421,7 @@ class IbBrokerage(BaseBrokerage):
                 amount = -_wht_cash
                 _book('Withholding Tax', currency, _wht_cash)
 
-                # Description shape:  "AAPL (US0378331005) Cash Dividend..."
+                # Description shape:  "SAMPLG (US0000000001) Cash Dividend..."
                 # — pull the ticker AND the ISIN so the market suffix
                 # comes from the security's country (same isin_map the
                 # dividend handler uses above) rather than hardcoding
@@ -3580,7 +3580,7 @@ class IbBrokerage(BaseBrokerage):
 
             elif section == 'Commission Adjustments':
                 # Post-trade commission corrections, e.g.
-                #   USD,2025-02-10,"Refund (KWEB, -200 2025-02-07)",1.25
+                #   USD,2025-02-10,"Refund (QZW, -20 2025-01-07)",1.10
                 # IB's Amount is signed cash (a refund POSITIVE).
                 # Emitted as a FEE with the repo sign (positive =
                 # charged) so a refund is a NEGATIVE fee that nets
@@ -3615,8 +3615,8 @@ class IbBrokerage(BaseBrokerage):
                                      _raw_tk.replace(' ', '.'),
                                      flags=re.IGNORECASE)
                         # The listing rule of the trades (S010-06): a
-                        # TSX USD unit's refund sits on X.U.TO with its
-                        # trades, not X.U.US (audit A2-0086).
+                        # TSX USD unit's refund sits on SAMPMD.U.TO with its
+                        # trades, not SAMPMD.U.US (audit A2-0086).
                         symbol = (f"{_tk}."
                                   f"{_ib_listing_ext('Stocks', _raw_tk, currency, fii)}")
                 else:
@@ -3702,7 +3702,7 @@ class IbBrokerage(BaseBrokerage):
                         _base=ext):
                     """The listing suffix of a corporate action's
                     stock: the S010-06 / A2-0081 listing rule of the
-                    trades (a TSX USD unit stays X.U.TO, an LSE USD line
+                    trades (a TSX USD unit stays SAMPMD.U.TO, an LSE USD line
                     .L) — the currency suffix alone put a split or cash
                     takeover of ZSP.U on ZSP.U.US while its trades sat
                     on ZSP.U.TO (audit A2-0086)."""
@@ -4115,7 +4115,7 @@ class IbBrokerage(BaseBrokerage):
                     if (qty > 0 and _deliv
                             and _deliv.upper() != _sd_tk.upper()):
                         # Shares of ANOTHER security (another class:
-                        # GOOGL paying GOOG) are not new shares of the
+                        # class A paying class C) are not new shares of the
                         # parent: booked into its pool they inflated it
                         # and the delivered line's sale went short. The
                         # cost split between two securities is each
@@ -4866,7 +4866,7 @@ class IbBrokerage(BaseBrokerage):
         def _root_forms(r):
             # The option root as the stock leg may spell it: itself, the
             # adjusted contract's root without OCC's digit (QZX1 ->
-            # QZX), a class share without its dot (BRKB vs BRK.B) —
+            # QZX), a class share without its dot (SAMPLCB vs SAMPLC.B) —
             # the exact-root match left those legs on two settle dates
             # (audit A2-1028).
             base = re.sub(r'\d+$', '', r) or r

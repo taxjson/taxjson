@@ -3512,7 +3512,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # NO validation; then gains with no options. The same ticker.map is
     # passed, but with no --to the merge applies only GLOBAL renames and
     # DELETEs — TOBASE consolidations are skipped, so cross-listings like
-    # AEM.US / AEM.TO stay separate per actual listing. JOURNAL pairs are
+    # SAMPLM.US / SAMPLM.TO stay separate per actual listing. JOURNAL pairs are
     # netted later, at the export aggregation (post-gains — they can't be
     # merged pre-gains without a mixed-currency ACB pool).
     #
@@ -3644,7 +3644,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 # sidecars prove which quantities journaled between a
                 # security's listings — the holdings view applies
                 # exactly those (a JOURNAL map line stays for
-                # intrinsically fungible classes like DLR).
+                # intrinsically fungible classes like SAMPLF).
                 for _sc in sorted(cache.glob(f"{name}_*_transfers.json")):
                     if any(_sc.name.startswith(_pre)
                            for _pre in _sibling_prefixes):
@@ -3659,7 +3659,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             run_to_file(export_cmd, holdings_toml, capture_diag=False)
             print(f"  → {holdings_toml}")
             # Surface quantity changes vs the prior run so the user can
-            # sanity-check trades at a glance (e.g. "I didn't expect AAPL
+            # sanity-check trades at a glance (e.g. "I didn't expect SAMPLG
             # to move — did I import the wrong file?"). Silent on the
             # first run (no baseline) and silent when nothing changed.
             maybe_print_holdings_diff(prev_holdings, holdings_toml)
@@ -7269,8 +7269,8 @@ def _leaps_contracts(root: Path, account: Optional[str],
              f"otherwise leave their LEAPS out).")
     leaps: set = set()
     qty_by_symbol: Dict[str, float] = {}
-    # The native books carry the broker's listing (pre-TOBASE: BCE...US)
-    # while the gains files carry the ticker.map spelling (BCE...TO);
+    # The native books carry the broker's listing (pre-TOBASE: SAMPMN...US)
+    # while the gains files carry the ticker.map spelling (SAMPMN...TO);
     # without the rename a genuine LEAPS never matched a gains row and
     # vanished from both views (R1-237).
     _renames: Dict[str, str] = {}
@@ -7638,8 +7638,8 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     _docs = [(_a, _load_json_or_die(_f)) for _a, _f in resolved.items()]
     # The class share is found among every listing the accounts hold or
     # traded (inventory and native books), not only the year's sales: a
-    # Rogers call written on held, unsold RCI.B.TO shares was headed
-    # RCI.TO while the holdings TOML said RCI.B.TO (audit A2-1115).
+    # A class-share call written on held, unsold SAMPLD.B.TO shares was headed
+    # SAMPLD.TO while the holdings TOML said SAMPLD.B.TO (audit A2-1115).
     _alias_syms = [t.get("symbol") for _a, _d in _docs
                    for t in (_d.get("transactions", []) or [])
                    + (_d.get("inventory", []) or [])
@@ -9265,15 +9265,15 @@ def cmd_scan(args: argparse.Namespace) -> None:
                    --online, additionally probes yfinance for a .TO twin
                    of every US-listed dividend payer the map doesn't
                    know, clusters HELD listings by issuer name to catch
-                   DIFFERENT-root dual listings (BTG.US/BTO.TO), and
+                   DIFFERENT-root dual listings (SAMPLQ.US/SAMPLP.TO), and
                    verifies every defined map pair names one issuer
                    (MAP-BAD? on mismatch). Candidates to verify, not
                    verdicts.
       CDR-PAIR     a .TO line whose exchange name says CDR (Canadian
-                   Depositary Receipt — UNH.TO over UNH.US): the SAME
+                   Depositary Receipt — SAMPLR.TO over SAMPLR.US): the SAME
                    issuer but NOT a listing equivalent (fractional,
                    CAD-hedged, floating ratio) — never map it; declare
-                   `DISTINCT UNH.US UNH.TO` in ticker.map to record
+                   `DISTINCT SAMPLR.US SAMPLR.TO` in ticker.map to record
                    the ruling and silence the pair. A map entry that
                    pairs a CDR with its underlying is flagged MAP-BAD?.
 
@@ -9617,7 +9617,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     f"`TOBASE {rt}.US {rt}.TO` to ticker.map."))
 
             # Issuer-name evidence — the only way to catch
-            # DIFFERENT-root dual listings (BTG.US/BTO.TO) and typo'd
+            # DIFFERENT-root dual listings (SAMPLQ.US/SAMPLP.TO) and typo'd
             # map pairs, which same-root scanning can never see.
 
             _CA_SUFS = ("TO", "V", "CN", "NE")
@@ -14772,7 +14772,7 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
     tmap = root / "ticker.map"
     if tmap.exists():
         # Slips print the broker's symbols; the books carry the
-        # ticker.map consolidations (KGC -> K, R1-19).
+        # ticker.map consolidations (SAMPLK -> SAMPLJ, R1-19).
         argv += ["--ticker-map", str(tmap)]
     if year is not None:
         argv += ["--year", str(year)]
@@ -15532,7 +15532,7 @@ def _us_coin_answer(canon, radar: Dict[str, Dict[str, Any]],
     """buy-check / sell-check lines for a bare coin query in a US
     project's crypto account, or None: the coin is outside the
     wash-sale rule (US-WASH-13; US-PLAN-05); an equity sharing its root
-    (ETH.US) keeps its own verdict under its own name."""
+    (SAMPLT.US) keeps its own verdict under its own name."""
     coins = getattr(canon, "us_crypto_coins", None) or {}
     q = q.strip().upper()
     if q not in coins:
@@ -15583,9 +15583,9 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
 
     # Identity comes ONLY from ticker.map (GLOBAL/TOBASE/JOURNAL), SPLIT
     # renames in the books, and an option's own underlying. Two listings
-    # that merely share a root (XYZ.TO / XYZ.US) are NOT assumed to be the
-    # same security: a CDR, a different issuer (DLR.US Digital Realty vs
-    # DLR.TO the Global X ETF) or a share class would all be merged
+    # that merely share a root (SAMPLE.TO / SAMPLE.US) are NOT assumed to be the
+    # same security: a CDR, a different issuer (SAMPLF.US an NYSE issuer vs
+    # SAMPLF.TO a TSX ETF) or a share class would all be merged
     # wrongly by suffix stripping. The engine pools by exact mapped symbol,
     # and this matcher must agree with it.
     _distinct_pairs: set = set()
@@ -15680,9 +15680,9 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
     # An option root that names no share listing in the books but
     # matches exactly ONE class share of that root on the same exchange
     # is that class: RBC books Rogers' Montreal options under the root
-    # RCI (RCI271217C00030000.TO) while the shares are RCI.B.TO, and the
+    # SAMPLD (SAMPLD271217C00030000.TO) while the shares are SAMPLD.B.TO, and the
     # call — a right to acquire those shares — fell into an empty
-    # RCI.TO class, so buy-check said SAFE (S047-01).
+    # SAMPLD.TO class, so buy-check said SAFE (S047-01).
     from taxjson.lib.core import is_option_symbol as _is_opt
     _shares = {t.strip().upper() for t in radar if not _is_opt(t)}
     for _bp in bases:
@@ -15714,11 +15714,11 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
 
     # Suffix-less listings in the books — crypto coins (ETH): a bare
     # query that names one of them means that listing, never also the
-    # equity sharing its root (ETH.US) (S047-06).
+    # equity sharing its root (SAMPLT.US) (S047-06).
     canon.bare_listings = {_sy for _sy in _shares if "." not in _sy}
     # A US project leaves its crypto accounts out of the radar (§1091
     # does not reach digital assets, US-WASH-13), so a coin there is
-    # in no radar row: `buy-check ETH` took ETH.US's verdict and
+    # in no radar row: `buy-check SAMPLT` took SAMPLT.US's verdict and
     # `sell-check BTC` said "no tracked taxable position" (audit
     # A2-0749, A2-0750, A2-1340). {coin: [crypto accounts]}.
     canon.us_crypto_coins = _us_crypto_coins(root, cache, prog)
@@ -15815,10 +15815,10 @@ def _last_loss_by_class(gains_files, canon, taxable, *, usa: bool
 
 
 def _fold_class_separator(symbol: str) -> str:
-    """A share-class ticker typed the broker/Yahoo way (RCI-B, 'RCI B',
-    RCI/B, RCI-B.TO) in the books' dotted spelling (RCI.B, RCI.B.TO).
+    """A share-class ticker typed the broker/Yahoo way (SAMPLD-B, 'SAMPLD B',
+    SAMPLD/B, SAMPLD-B.TO) in the books' dotted spelling (SAMPLD.B, SAMPLD.B.TO).
     Unfolded, the query matched nothing and buy-check answered SAFE
-    while a loss on RCI.B.TO sat inside the window (S007-02). Option
+    while a loss on SAMPLD.B.TO sat inside the window (S007-02). Option
     symbols pass through unchanged."""
     from taxjson.lib.core import is_option_symbol
     s = " ".join(str(symbol).split()).upper()
@@ -15831,9 +15831,9 @@ def _fold_class_separator(symbol: str) -> str:
 def _class_matches(radar: Dict[str, Dict[str, Any]], canon, want: str):
     """(class root, {ticker: row}, note) for one queried symbol.
 
-    A query WITH an exchange suffix (XYZ.TO) names one listing and sees
+    A query WITH an exchange suffix (SAMPLE.TO) names one listing and sees
     exactly that listing's class — the listings ticker.map joins to it,
-    its split renames and its options. A BARE query (XYZ, BRK.B) names
+    its split renames and its options. A BARE query (SAMPLE, SAMPLC.B) names
     no listing: it is resolved to every listing that carries that
     ticker, and each of those keeps its own class. Nothing is ever
     merged by stripping a suffix — only ticker.map makes two listings
@@ -15851,7 +15851,7 @@ def _class_matches(radar: Dict[str, Dict[str, Any]], canon, want: str):
     if q in _bare or any(t.strip().upper() == q for t in radar):
         # The books hold a suffix-less listing of exactly this name (a
         # coin): that IS the security asked about. `buy-check ETH` gave
-        # ETH.US's verdict too, and nothing could ask about the coin
+        # SAMPLT.US's verdict too, and nothing could ask about the coin
         # alone (S047-06); the equity keeps its own spelling.
         wroot = canon(q)
         others = sorted({t for t in radar
@@ -18327,11 +18327,11 @@ def _build_parser(prog: str = "taxjson"
              "within the past 30 days (the rebuy cancels it — "
              "permanently if bought in a sheltered account); SAFE* "
              "when buying merely extends an open wash window. "
-             "Root-matched (`buy-check NU` covers NU.US and "
+             "Root-matched (`buy-check SAMPLU` covers SAMPLU.US and "
              "cross-listings). Exit 1 when any symbol is unsafe.")
     p_canbuy.add_argument("symbol", nargs="+",
                           help="Ticker(s) to check (root or full, "
-                               "e.g. NU or NU.US)")
+                               "e.g. SAMPLU or SAMPLU.US)")
     p_canbuy.add_argument("--json", action="store_true",
                           help="Emit verdicts as JSON")
     p_canbuy.set_defaults(func=cmd_buy_check)
@@ -18351,7 +18351,7 @@ def _build_parser(prog: str = "taxjson"
              "job. Exit 1 on UNSAFE or PARTIAL.")
     p_sellchk.add_argument("symbol", nargs="+",
                            help="Ticker(s) to check (root or full, "
-                                "e.g. NU or NU.US)")
+                                "e.g. SAMPLU or SAMPLU.US)")
     p_sellchk.add_argument("--json", action="store_true",
                            help="Emit verdicts as JSON")
     p_sellchk.set_defaults(func=cmd_sell_check)

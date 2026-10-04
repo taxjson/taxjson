@@ -129,8 +129,8 @@ def split_for_account(combined: Dict[str, Any], account: str,
     # Missing-history openings the blended pass synthesized for THIS
     # account (missing_history.json): they are in the pool but not in the
     # base book
-    # (audit R1-275 / R1-322 — SPY showed -379 shares at a negative cost,
-    # BK.TO vanished).
+    # (audit R1-275 / R1-322 — a pool showed negative shares at a
+    # negative cost, another vanished).
     openings = _missing_history_openings(combined, account)
     _basis = (combined.get("summary") or {}).get("tax_date_basis") \
         or "settle"

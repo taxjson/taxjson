@@ -125,8 +125,8 @@ def market_of(symbol: str, row_currency=None):
     included), 'USD' for a US one (and an F:/'/' futures contract),
     'GBP' for an LSE line (.L), 'AUD' for an ASX one (.AX) -- whatever
     currency the trade is priced or settled in. A TSX USD-class unit
-    such as DLR.U.TO settles through CDS on the Canadian calendar, and
-    an AEM.US trade settled in CAD on the US one (audits A2-0375,
+    such as SAMPLF.U.TO settles through CDS on the Canadian calendar, and
+    an SAMPLM.US trade settled in CAD on the US one (audits A2-0375,
     A2-1183, A2-1052, A2-1054). Any other symbol: `row_currency`."""
     s = str(symbol or "").strip().upper()
     if s.endswith(CA_LISTING_SUFFIXES):

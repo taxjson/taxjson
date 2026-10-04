@@ -63,7 +63,7 @@ CA_LISTING_SUFFIXES = frozenset({"TO", "V", "CN", "NE", "VN"})
 # by RBC and "DIST ON" by Questrade, but they are corporations' T5
 # dividends (s.82(1): taxed when received) and their return of capital
 # is a PUC reduction (s.53(2)(a): when paid). Matched on the ticker
-# root, every class and preferred series included (FTN.PR.A.TO, FTN.TO).
+# root, every class and preferred series included (SAMPMJ.PR.A.TO, SAMPMJ.TO).
 # A project adds others with [settings] corporate_distributions.
 SPLIT_SHARE_ROOTS: FrozenSet[str] = frozenset({
     "BK",    # Canadian Banc Corp
@@ -122,7 +122,7 @@ def listing_suffix(symbol: str) -> str:
 
 
 def listing_root(symbol: str) -> str:
-    """'FTN.PR.A.TO' -> 'FTN'; 'XIC.TO' -> 'XIC'; 'BRK.B.US' -> 'BRK'."""
+    """'SAMPMJ.PR.A.TO' -> 'SAMPMJ'; 'SAMPMK.TO' -> 'SAMPMK'; 'SAMPLC.B.US' -> 'SAMPLC'."""
     return str(symbol or "").upper().split(".", 1)[0]
 
 
@@ -158,7 +158,7 @@ def _example(key: str) -> str:
     """A listing of the setting's own country: the RIC list is US-only,
     the corporate-distribution list Canada-only (re-audit A2-1306)."""
     us = key in (SETTING_RIC, "--ric-january-dividend")
-    return '["XYZ.US"]' if us else '["XYZ.TO"]'
+    return '["SAMPLE.US"]' if us else '["SAMPLE.TO"]'
 
 
 def _symbols(value: Any, key: str) -> Tuple[str, ...]:
@@ -590,8 +590,8 @@ class IncomeRules:
 
 def _ric_symbol_match(entry: str, symbol: str) -> bool:
     """ric_january_dividends: exact, or a bare root against that one
-    fund's US listing (SPY -> SPY.US). A bare root used to match every
-    listing and class sharing it — TELUS's T.TO for AT&T's T, and the
+    fund's US listing (SAMPML -> SAMPML.US). A bare root used to match every
+    listing and class sharing it — a Canadian issuer's SAMPMC.TO for a US issuer's SAMPMC, and the
     preferred series PSA.PR.H.US for PSA (audit A2-0230, A2-0992)."""
     if entry == symbol:
         return True

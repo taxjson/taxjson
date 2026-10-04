@@ -358,7 +358,7 @@ def _is_marked_short(tx) -> bool:
 
 def journal_targets(ticker_map) -> Set[str]:
     """The symbols ticker.map's JOURNAL lines fold a listing INTO (and
-    from): a Norbert's-gambit pair (sell DLR.TO, buy DLR.U.TO the same
+    from): a Norbert's-gambit pair (sell SAMPLF.TO, buy SAMPLF.U.TO the same
     morning) is one symbol in the books. Empty without a readable map
     (a missing map is not an error here: the caller decides)."""
     if not ticker_map:
@@ -376,8 +376,8 @@ def _walk_key(t, journal_symbols: Optional[Set[str]] = None) -> Tuple:
     """The missing-history walks' order. A JOURNAL-folded symbol's trades of one
     day read buys first whatever their clock: RBC stamps a day's rows
     with its row ORDINAL (09:30:00 + k s, newest-first export), so the
-    Norbert's-gambit sale of DLR.TO sorted ahead of the same morning's
-    DLR.U.TO buy and read as a one-day short — reported as
+    Norbert's-gambit sale of SAMPLF.TO sorted ahead of the same morning's
+    SAMPLF.U.TO buy and read as a one-day short — reported as
     missing history, and the file generator wrote an entry that pulled
     the sale off Schedule 3 (audit A2-0309 / A2-0636). Other symbols keep
     the clock: a same-day sale and rebuy of shares bought before the
@@ -405,7 +405,7 @@ def detect_missing_history(
     flow events (DIVIDEND, INTEREST, FEE, etc.) are ignored, matching the
     main engine's pool-update rules.
 
-    Option symbols (OCC format like AAPL250620C00150000) are skipped by
+    Option symbols (OCC format like SAMPLG250620C00150000) are skipped by
     default — negative option positions are normal (sell-to-open) and
     rarely indicate truncated history. Futures (`F:`-prefixed) are
     skipped likewise — a short future is an ordinary opening position.
@@ -431,8 +431,8 @@ def detect_missing_history(
     state: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
     # Same-date rows with equal clock times go buys before sells (the
     # walks' convention — the engines keep the export's row order, see
-    # corporate_timeline._walk_rest): a Norbert's-gambit pair — sell DLR.TO, buy
-    # DLR.U.TO the same morning, folded to one symbol by the ticker map —
+    # corporate_timeline._walk_rest): a Norbert's-gambit pair — sell SAMPLF.TO, buy
+    # SAMPLF.U.TO the same morning, folded to one symbol by the ticker map —
     # otherwise read as an N-share short with a missing purchase.
     sorted_txs = _drop_duplicate_splits(sorted(
         transactions,

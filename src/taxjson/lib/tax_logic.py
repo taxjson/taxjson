@@ -332,7 +332,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "market, not the quote or settlement currency's, in every "
                  "parser (IB, Questrade, RBC and the generic importer, "
                  "one rule): a US-dollar unit listed on the TSX "
-                 "(DLR.U.TO) settles on the Canadian calendar, a US stock "
+                 "(SAMPLF.U.TO) settles on the Canadian calendar, a US stock "
                  "settled in Canadian dollars on the US one, and a "
                  "US-dollar line listed on the LSE (.L) or the ASX (.AX) "
                  "on that market's cycle.", cont=True),
@@ -743,8 +743,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "A long call on the shares is identical property to them "
                  "(a right to acquire, s.54 para (i)), at its contract size "
                  "(100 shares for a standard equity option, the declared "
-                 "size of a mini). A root that drops the share class (RCI "
-                 "for RCI.B.TO) names that class line."),
+                 "size of a mini). A root that drops the share class (SAMPLD "
+                 "for SAMPLD.B.TO) names that class line."),
             Rule("CA-SL-06",
                  "Shares never replace an option; an option is replaced "
                  "only by the identical contract; a put never replaces "
@@ -755,7 +755,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "converts into are not in the books).", cont=True),
             Rule("CA-SL-15",
                  "So is a call on an adjusted option series (root + digit, "
-                 "e.g. XYZ1) or a futures option on the loss's futures "
+                 "e.g. SAMPLE1) or a futures option on the loss's futures "
                  "contract, however it is spelled (never sized as 100 "
                  "units). Nothing is denied for a flag, so `taxjson "
                  "wash-sales` lists each one and the checklist's "
@@ -1374,7 +1374,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "market, not the quote or settlement currency's, in every "
                  "parser (IB, Questrade, RBC and the generic importer, "
                  "one rule): a US-dollar unit listed on the TSX "
-                 "(DLR.U.TO) settles on the Canadian calendar, a US stock "
+                 "(SAMPLF.U.TO) settles on the Canadian calendar, a US stock "
                  "settled in Canadian dollars on the US one, and a "
                  "US-dollar line listed on the LSE (.L) or the ASX (.AX) "
                  "on that market's cycle.", cont=True),
@@ -1748,14 +1748,14 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "each contract "
                  "flagged against one loss's shares only; a buy that "
                  "closes a written call is not an acquisition. A root "
-                 "that drops the share class (BRKB for BRK.B) names that "
+                 "that drops the share class (SAMPLCB for SAMPLC.B) names that "
                  "class line."),
             Rule("US-WASH-14",
                  "A warrant or right bought in the window is flagged for a "
                  "manual wash-sale check only.", cont=True),
             Rule("US-WASH-15",
                  "So is a call on an adjusted option series (root + digit, "
-                 "e.g. XYZ1) or a futures option on the loss's futures "
+                 "e.g. SAMPLE1) or a futures option on the loss's futures "
                  "contract, however it is spelled (a commodity future is "
                  "usually outside §1091). Nothing is disallowed for a "
                  "flag, so `taxjson wash-sales` lists each one and the "
@@ -2140,7 +2140,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "accounts are outside the wash-sale rule (US-WASH-13); "
                  "buy-check and sell-check answer a coin held there "
                  "(a bare symbol, ETH) the same way, and an equity "
-                 "sharing its root (ETH.US) keeps its own verdict under "
+                 "sharing its root (SAMPLT.US) keeps its own verdict under "
                  "its own name."),
         ]),
         ("Project country", _ownership(c)),

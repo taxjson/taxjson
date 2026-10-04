@@ -150,7 +150,7 @@ _NONRES_NET_RE = re.compile(r'NON-?RES\w*\.?\s+TAX\s+WITH', re.IGNORECASE)
 
 
 def _journal_root(symbol: str) -> str:
-    """The security behind one listing line: DLR.U.TO and DLR.TO -> DLR
+    """The security behind one listing line: SAMPLF.U.TO and SAMPLF.TO -> SAMPLF
     (a BRW journal moves units between the CAD and USD lines)."""
     s = re.sub(r'\.(TO|US|V|CN|NE)$', '', (symbol or '').upper())
     return re.sub(r'\.U$', '', s)
@@ -528,7 +528,7 @@ class QuestradeBrokerage(BaseBrokerage):
                 f"{self._where(lineno)}: blank Currency — the suffix and "
                 f"the FX rate both depend on it; refusing to assume USD")
         # A currency code is case-blind: 'usd' became the suffix .usd,
-        # a pool apart from XYZ.US (audit S055-17).
+        # a pool apart from SAMPLE.US (audit S055-17).
         return cur.upper()
 
     def _is_taxable(self) -> Optional[bool]:
@@ -537,10 +537,10 @@ class QuestradeBrokerage(BaseBrokerage):
         return self._qt_taxable_hint
 
     def apply_currency_suffix(self, symbol: str, currency: str) -> str:
-        """Questrade names the LISTING in the symbol: XEI.TO is a TSX
+        """Questrade names the LISTING in the symbol: SAMPLZ.TO is a TSX
         listing and a bare symbol a US one. A .TO symbol keeps .TO
-        whatever currency the row settled in — DLR.U.TO / XUS.U.TO trade
-        on the TSX in USD and became DLR.U.US, a separate pool from the
+        whatever currency the row settled in — SAMPLF.U.TO / XUS.U.TO trade
+        on the TSX in USD and became SAMPLF.U.US, a separate pool from the
         same units at RBC or IB (which a JOURNAL rule then never met),
         and a US-looking symbol on the T1135 (audit R1-68; the generic
         importer's R1-122). Anything else follows the base rule."""
@@ -700,8 +700,8 @@ class QuestradeBrokerage(BaseBrokerage):
                         lineno: Optional[int] = None):
         """(symbol, suffix currency) for a non-trade row. Questrade
         writes some rows under an internal code (S098765, a TF6's
-        R123456) or a dotted dividend code (.BTO for B2Gold held as
-        BTG on the NYSE); ONLY those are rebound to the traded symbol
+        R123456) or a dotted dividend code (.SAMPLP for an issuer held as
+        SAMPLQ on the NYSE); ONLY those are rebound to the traded symbol
         of the same security (matched on the description, in ANY of
         the account's exports). A real ticker is kept: first-match-wins
         used to rebind, e.g., an FTN.PR dividend onto FTN.PRA because
@@ -1146,12 +1146,12 @@ class QuestradeBrokerage(BaseBrokerage):
                 if action_raw == 'BRW' and 'JOURNAL' in _du and abs(_q) > 1e-9:
                     # "... JOURNAL POSITION TO USD" / "FROM CAD": units
                     # journaled between the CAD and USD lines of ONE
-                    # security (Norbert's gambit, DLR.TO <-> DLR.U.TO).
+                    # security (Norbert's gambit, SAMPLF.TO <-> SAMPLF.U.TO).
                     # Booked the way RBC's TFR journal legs are: a
                     # TRANSFER per leg, the USD leg on its TSX listing
-                    # (DLR.U.TO). A ticker.map JOURNAL rule makes the two
+                    # (SAMPLF.U.TO). A ticker.map JOURNAL rule makes the two
                     # lines one pool and the pair nets out; the legs used
-                    # to be skipped, leaving the units on DLR.TO.
+                    # to be skipped, leaving the units on SAMPLF.TO.
                     _bv = _BRW_BOOK_VALUE_RE.search(desc)
                     _date = self._date(row, 'Transaction Date', lineno)
                     _jtx = {
@@ -1333,7 +1333,7 @@ class QuestradeBrokerage(BaseBrokerage):
             # the US listing, and the ACB is the CAD the account paid —
             # Net Amount — not the USD gross read as if it were CAD
             # (which under-stated a Broadcom buy by the whole exchange
-            # rate and filed it as AVGO.TO, a CDR-shaped symbol the
+            # rate and filed it as SAMPMF.TO, a CDR-shaped symbol the
             # DISTINCT rule then kept apart from the real pool).
             listing_currency = currency
             fx_m = _FX_SETTLED_RE.search(desc) if carries_cash else None
@@ -1361,18 +1361,18 @@ class QuestradeBrokerage(BaseBrokerage):
                                  else (_gross_cad - net), 2)
 
             # Option symbol reconstruction from Description; fall back to
-            # the bare Symbol column (which is often non-OCC like AAPL.OPT).
+            # the bare Symbol column (which is often non-OCC like SAMPLG.OPT).
             if opt:
                 symbol = self.format_occ_symbol(opt['right'], opt['base'], opt['expiry'], opt['strike'])
             else:
-                # Upper-cased: 'xyz.to' split the pool from XYZ.TO
+                # Upper-cased: 'sample.to' split the pool from SAMPLE.TO
                 # (audit R1-71).
                 symbol = (row.get('Symbol') or '').strip().upper()
             symbol = self.apply_currency_suffix(symbol, listing_currency)
             self.note_row_consumed()
             if date_settle is None:
                 # The LISTING's market decides the cycle and calendar,
-                # not the row currency (A2-1052 / A2-1054): DLR.U.TO in
+                # not the row currency (A2-1052 / A2-1054): SAMPLF.U.TO in
                 # USD settles through CDS, a CAD-settled US stock on the
                 # US calendar (lib/dates.market_of, the rule every parser
                 # shares).
@@ -1509,7 +1509,7 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"move units between the CAD and USD lines of one "
                   f"security ({', '.join(journals[:6])}) — booked as "
                   f"TRANSFER legs; a ticker.map JOURNAL rule (e.g. "
-                  f"JOURNAL DLR.U.TO DLR.TO) makes the lines one pool so "
+                  f"JOURNAL SAMPLF.U.TO SAMPLF.TO) makes the lines one pool so "
                   f"the pair nets out.", file=sys.stderr)
         self.emit_skip_summary(path.name)
         return transactions
@@ -1536,8 +1536,8 @@ class QuestradeBrokerage(BaseBrokerage):
             i['net_amount'] = i['gross_amount'] = bv
             i['price'] = round(bv / i['quantity'], 8)
             # The SAME security's other line only (re-audit A2-1061: two
-            # journals on one date swapped their costs): DLR.U.TO and
-            # DLR.TO share the root DLR.
+            # journals on one date swapped their costs): SAMPLF.U.TO and
+            # SAMPLF.TO share the root SAMPLF.
             out = next((o for o in legs if o['quantity'] < 0
                         and o['date'] == i['date']
                         and _journal_root(o['symbol'])
@@ -1861,8 +1861,8 @@ class QuestradeBrokerage(BaseBrokerage):
 
         Symbol resolution (see _resolve_symbol): an internal code
         ('S098765', a transferred-in security) or a dotted dividend code
-        ('.BTO' — B2Gold's dividend on a position held as BTG on the
-        NYSE, paid in USD; the row's own currency would yield BTO.US,
+        ('.SAMPLP' — the issuer's dividend on a position held as SAMPLQ on the
+        NYSE, paid in USD; the row's own currency would yield SAMPLP.US,
         wrong on both axes) is rebound to the TRADED symbol+currency of
         the same security, which the user's ticker.map then folds into
         the canonical identity. A real ticker is kept. The currency

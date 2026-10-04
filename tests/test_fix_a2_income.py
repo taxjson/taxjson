@@ -308,7 +308,7 @@ class TestCgDividendsMap(unittest.TestCase):
                     "1_000", "5,50", "1234,56"):
             with self.assertRaises(CgDividendMapError, msg=amt):
                 parse_map(f"FFN.TO 2024 {amt}\n")
-        for amt, want in (("1,711.05", 1711.05), ("17.11", 17.11),
+        for amt, want in (("1,234.05", 1234.05), ("12.34", 12.34),
                           (".5", 0.5), ("5", 5.0)):
             self.assertEqual(parse_map(f"FFN.TO 2024 {amt}\n")[0].amount,
                              want)

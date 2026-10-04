@@ -651,8 +651,8 @@ def main():
                                   option_contract_size, parse_option_expiry,
                                   parse_option_right, parse_option_underlying,
                                   pool_qty_eps)
-    # A class-share option root names its class line (RCI for RCI.B.TO,
-    # BRKB for BRK.B — CA-SL-05 / US-WASH-12), as in both engines.
+    # A class-share option root names its class line (SAMPLD for SAMPLD.B.TO,
+    # SAMPLCB for SAMPLC.B — CA-SL-05 / US-WASH-12), as in both engines.
     _cls_root = class_root_aliases(t.symbol for t in transactions)
 
     def _call_und(sym):
@@ -936,7 +936,7 @@ def main():
                   # disposition at a loss: the option's cost or premium
                   # folds into the share leg (s.49(3)/(3.1)). Booked
                   # here as "sold for 0", it invented a loss equal to
-                  # the option's cost (2026-09 audit: DELL, IMG, QQQ).
+                  # the option's cost (2026-09 audit).
                   and not (tx.action == 'ASSIGN'
                            and is_option_ticker(ticker))
                   # A buy-back loss on a WRITTEN option is exempt unless
