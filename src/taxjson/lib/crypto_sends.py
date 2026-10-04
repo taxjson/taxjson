@@ -704,7 +704,10 @@ def yahoo_usd_price(project_root: Path) -> Callable[[str, str],
     """The fill-crypto price source: Yahoo `<id>-USD` daily close, the
     same cache (~/.crypto_price_cache.json) and the same symbol map
     (the project's ticker.map CRYPTO lines; no built-in ids). Offline
-    (TAXJSON_OFFLINE) it answers from the cache only."""
+    (TAXJSON_OFFLINE) it answers from the cache only. `.attention`
+    collects a message per coin priced under its default id while the
+    cache holds a numbered id of its ticker (fill_crypto_prices.
+    ids_seen_in_cache)."""
     from taxjson.bin import fill_crypto_prices as F
     from taxjson.lib.offline import offline_enabled
     # The same folders, in the same order, as `taxjson run` gives
@@ -713,12 +716,20 @@ def yahoo_usd_price(project_root: Path) -> Callable[[str, str],
     overrides = F.load_symbol_overrides([str(project_root),
                                          str(Path(project_root) / "work")])
     state: Dict[str, Any] = {"cache": None}
+    asked: set = set()
 
     def lookup(symbol: str, day: str) -> Tuple[Optional[float], str]:
         ysym = overrides.get(symbol, symbol)
         if state["cache"] is None:
             state["cache"] = F.load_cache()
         cache = state["cache"]
+        if symbol not in asked:
+            # A coin priced under its default id while the cache holds a
+            # numbered id of its ticker (fill-crypto's check): said by
+            # the caller (lookup.attention), never a silent re-price.
+            asked.add(symbol)
+            lookup.attention += F.ids_seen_in_cache([symbol], cache,
+                                                    ids=overrides)
         key = f"{ysym}-{day}"
         # A damaged entry (null, "abc", true, Infinity) is a miss, as in
         # fill-crypto (re-audit A2-0464 / A2-1403).
@@ -743,6 +754,7 @@ def yahoo_usd_price(project_root: Path) -> Callable[[str, str],
                 F.save_cache(cache)
             return float(p), ysym
         return None, ysym
+    lookup.attention = []
     return lookup
 
 

@@ -181,6 +181,37 @@ class TestCacheEvidence(unittest.TestCase):
         self.assertNotIn("ATTENTION", err)
 
 
+class TestCryptoSendsLookupEvidence(unittest.TestCase):
+    """crypto-sends' fair-value lookup (a gift or payment the exchange
+    did not price) asks the same question: its `.attention` carries the
+    line, which `taxjson run` and `taxjson crypto-sends` print."""
+
+    def _lookup(self, td, ticker_map=None):
+        from taxjson.lib import crypto_sends as CS
+        cache = Path(td) / "cache.json"
+        cache.write_text(json.dumps(TestCacheEvidence.CACHE))
+        if ticker_map:
+            (Path(td) / "ticker.map").write_text(ticker_map)
+        with mock.patch.object(fc, "CACHE_FILE", str(cache)), \
+                mock.patch.dict(os.environ, {"TAXJSON_OFFLINE": "1"}):
+            fn = CS.yahoo_usd_price(Path(td))
+            got = fn("QZT", "2026-03-02"), fn("QZT", "2026-02-01")
+        return fn, got
+
+    def test_default_id_with_numbered_history_is_said_once(self):
+        with tempfile.TemporaryDirectory() as td:
+            fn, got = self._lookup(td)
+        self.assertEqual(got[0], (0.01, "QZT"))
+        self.assertEqual(len(fn.attention), 1)
+        self.assertIn("\n    CRYPTO QZT QZT55504", fn.attention[0])
+
+    def test_quiet_with_the_line(self):
+        with tempfile.TemporaryDirectory() as td:
+            fn, got = self._lookup(td, "CRYPTO QZT QZT55504\n")
+        self.assertEqual(got, ((100.0, "QZT55504"), (90.0, "QZT55504")))
+        self.assertEqual(fn.attention, [])
+
+
 class TestImplausibleYahooPrice(unittest.TestCase):
     """No cache history at all: a default id that is another asset is
     caught against the coin's own broker prices near the date."""
@@ -264,6 +295,35 @@ class TestRunWarnsWithoutTheLine(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             self.assertNotIn("crypto id:", r.stdout + r.stderr)
             self.assertEqual(self._filled_price(root), 100.0)
+
+
+class TestRunCryptoSendsWithoutTheLine(unittest.TestCase):
+    """The sends fixture (fictional QZL, priced under a numbered id)
+    with its CRYPTO line removed: both the reward fill-crypto prices and
+    the payment crypto-sends values are said, with the line — a
+    console warning and a .sum line, not a --strict stop of its own."""
+
+    def test_both_paths_say_it(self):
+        from test_fix_sends import _cli, _project
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _project(td)
+            (root / "ticker.map").unlink()
+            cache = home / ".crypto_price_cache.json"
+            c = json.loads(cache.read_text())
+            c.update({"QZL-2026-04-13": 0.5, "QZL-2026-01-12": 0.4})
+            cache.write_text(json.dumps(c))
+            r = _cli(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            console = r.stdout + r.stderr
+            self.assertIn("ATTENTION: crypto id: QZL has no CRYPTO line",
+                          console)
+            self.assertIn("crypto sends: crypto id: QZL has no CRYPTO "
+                          "line", console)
+            self.assertIn("CRYPTO QZL QZL55501", console)
+            diag = (root / "work" / "crypto_crypto_sends.diag").read_text()
+            self.assertIn("crypto id: QZL", diag)
+            r = _cli(root, home, "crypto-sends", "crypto")
+            self.assertIn("crypto id: QZL", r.stderr)
 
 
 if __name__ == "__main__":

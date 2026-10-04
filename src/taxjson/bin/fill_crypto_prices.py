@@ -282,17 +282,20 @@ def _shown_cache_path() -> str:
     return os.path.basename(CACHE_FILE)
 
 
-def _ids_seen_in_cache(symbols, cache):
-    """ATTENTION lines for the coins priced under their default Yahoo id
-    (no CRYPTO line) while the price cache holds prices of a numbered id
-    of the same ticker (`<SYMBOL><number>`) from earlier runs: the
+def ids_seen_in_cache(symbols, cache, ids=None):
+    """Messages (without a prefix) for the coins priced under their
+    default Yahoo id (no CRYPTO line in `ids`, default the run's
+    PROJECT_CRYPTO_IDS) while the price cache holds prices of a numbered
+    id of the same ticker (`<SYMBOL><number>`) from earlier runs: the
     project was priced under that id before (once from a built-in
     table taxjson no longer carries), and `<SYMBOL>-USD` may well be
-    another asset. Names the exact ticker.map line."""
+    another asset. Names the exact ticker.map line. crypto-sends'
+    price lookup asks too."""
+    table = PROJECT_CRYPTO_IDS if ids is None else ids
     out = []
     keys = list(cache) if isinstance(cache, dict) else []
     for sym in sorted(symbols):
-        if sym in PROJECT_CRYPTO_IDS:
+        if sym in table:
             continue
         pat = re.compile(re.escape(sym) + r"(\d{3,})-\d{4}-\d{2}-\d{2}$")
         ids = sorted({sym + m.group(1) for k in keys
@@ -301,7 +304,7 @@ def _ids_seen_in_cache(symbols, cache):
             continue
         lines = "\n".join(f"    CRYPTO {sym} {i}" for i in ids)
         out.append(
-            f"{ATTENTION_CRYPTO_ID} {sym} has no CRYPTO line in ticker.map, "
+            f"{sym} has no CRYPTO line in ticker.map, "
             f"so it is priced as Yahoo {sym}-USD — but the price cache "
             f"({_shown_cache_path()}) holds prices for Yahoo "
             f"{', '.join(i + '-USD' for i in ids)} from earlier runs "
@@ -512,7 +515,8 @@ def _fill(args):
 
     if cache_dirty:
         save_cache(cache)
-    for line in (_ids_seen_in_cache(looked_up, cache)
+    for line in ([f"{ATTENTION_CRYPTO_ID} {m}"
+                  for m in ids_seen_in_cache(looked_up, cache)]
                  + _implausible_yahoo_prices(yahoo_priced, broker_priced)):
         sys.stderr.write(line + "\n")
     n_swaps = _value_swaps_once(swap_pairs, unpriced)
