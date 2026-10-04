@@ -751,11 +751,17 @@ CA_ASSUMPTIONS = (
     "stock-option deduction add-back or donated securities).")
 
 
+# The provincial "table" of a federal-only estimate: nothing provincial.
+FEDERAL_ONLY_PROVINCE: Dict[str, Any] = {
+    "brackets": [(_INF, 0.0)], "bpa": 0.0, "dtc_eligible": 0.0,
+    "surtax": [], "amt_factor": 0.0}
+
+
 def estimate_canada(*, realized: float, eligible_div: float,
                     year=None,
                     foreign_div: float, pil: float,
                     other_income: float, other_losses: float,
-                    province: str,
+                    province: Optional[str],
                     actual_withheld=None,
                     staking: float = 0.0,
                     deductions: float = 0.0,
@@ -788,12 +794,19 @@ def estimate_canada(*, realized: float, eligible_div: float,
     carrying_charges = float(carrying_charges)
     ded_total = deductions + carrying_charges
     pick = apply_vintage(year)
-    prov_key = province.strip().upper()
-    if prov_key not in CA_PROVINCES:
-        raise ValueError(
-            f"unsupported province {province!r} for the estimate "
-            f"(supported: {', '.join(sorted(CA_PROVINCES))})")
-    prov = CA_PROVINCES[prov_key]
+    if province is None:
+        # Federal only (close-year with no supported province): no
+        # provincial tax, credit, surtax, premium or minimum-tax factor;
+        # every federal figure is the same as under any province.
+        prov_key = None
+        prov = FEDERAL_ONLY_PROVINCE
+    else:
+        prov_key = province.strip().upper()
+        if prov_key not in CA_PROVINCES:
+            raise ValueError(
+                f"unsupported province {province!r} for the estimate "
+                f"(supported: {', '.join(sorted(CA_PROVINCES))})")
+        prov = CA_PROVINCES[prov_key]
 
     net_gain = realized - other_losses
     losses_unused = max(0.0, -net_gain)
@@ -899,11 +912,17 @@ def estimate_canada(*, realized: float, eligible_div: float,
             "closing": round(float(sum(closing.values())), 2),
         })
         amt["carryover"] = c
-    notes = (vintage_notes(year, pick)
-             + _canada_notes(prov_key, prov, with_inv, base, amt,
-                             staking))
+    notes = vintage_notes(year, pick)
+    if prov_key is None:
+        notes.append("Federal only: no supported [settings] province, so "
+                     "no provincial tax, credit or minimum tax is "
+                     "included.")
+    else:
+        notes += _canada_notes(prov_key, prov, with_inv, base, amt,
+                               staking)
     return {
         "country": "canada", "province": prov_key,
+        "federal_only": prov_key is None,
         "amt": amt,
         "estimated_tax_with_amt": round(est + amt["topup"]
                                         - recovered_attr, 2),

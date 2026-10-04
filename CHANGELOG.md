@@ -26,6 +26,10 @@
   naming the key and suggesting this machine's zone (`taxjson init` writes
   it when it can read it; `taxjson format` and `migrate` still run).
   Outside a project the parsers need `TAXJSON_LOCAL_TZ`.
+- **close-year never borrows a province.** A Canadian project with no
+  supported `province` had its carry-forwards estimated on Ontario's
+  tables; it now uses a federal-only estimate and says so (the recorded
+  figures are federal either way).
 
 ### Command line
 

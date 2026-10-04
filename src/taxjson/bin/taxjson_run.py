@@ -10000,8 +10000,8 @@ def cmd_summary(args: argparse.Namespace) -> None:
         # --other-income/--other-losses were checked by _estimate_inputs
         # above (one guard, A2-1123).
         _settings0 = cfg.get("settings") or {}
-        if _country(_settings0) \
-                == "canada":
+        if _country(_settings0) == "canada" \
+                and not getattr(args, "federal_only", False):
             # Validate the province BEFORE printing anything: a missing
             # or unsupported one used to fail only after the whole sum
             # table had scrolled past (2026-09 CLI audit B20).
@@ -10409,6 +10409,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                 deductions=_ded, carrying_charges=_cc, lt_losses=_ltl,
                 amt_carryover=_amt_in, carry_sources=_carry_src,
                 province=getattr(args, "province", None),
+                federal_only=bool(getattr(args, "federal_only", False)),
                 actual_withheld=_actual_withholding(
                     cache, set(files) & taxable_accounts,
                     year or (cfg.get("settings") or {}).get("year"),
@@ -11070,7 +11071,8 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
                          carrying_charges: float = 0.0,
                          lt_losses: float = 0.0,
                          amt_carryover: Optional[Dict[int, float]] = None,
-                         carry_sources: Optional[Dict[str, Any]] = None
+                         carry_sources: Optional[Dict[str, Any]] = None,
+                         federal_only: bool = False
                          ) -> Dict[str, Any]:
     """Resolve country/province and run the estimator — shared by the
     text block and `sum --json` so the two can never disagree. For usa,
@@ -11083,7 +11085,11 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
     country = _country(settings)
     if country == "canada":
         prov = (province or str(settings.get("province", "") or "")).strip()
-        if not prov:
+        if federal_only:
+            # close-year with no supported province: the federal
+            # carry-forwards, no province standing in (CA-CARRY-01).
+            prov = None
+        elif not prov:
             _die("the canada estimate needs a province — pass "
                  "--province ON|BC|AB or set `province` under "
                  "[settings] in taxjson.toml.")
@@ -14360,9 +14366,9 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any]
     carryover (USA), and the Canadian minimum tax carryover — from the
     estimate itself (`taxjson estimate --json`, the computation `amt`
     prints), with the inputs the project gives it. A Canada project
-    with no supported province is estimated on Ontario's tables: every
-    figure the block carries forward is federal (the provincial
-    recovery is left out). A failing estimate stops the close (its
+    with no supported province gets a federal-only estimate (no other
+    province's tables stand in; every figure the block carries forward
+    is federal), with a note. A failing estimate stops the close (its
     inputs are wrong), naming the reason."""
     import json as _json
     from taxjson.lib import carryforward as CF
@@ -14373,11 +14379,16 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any]
     argv = [sys.executable, "-m", "taxjson.bin.taxjson_run",
             "-C", str(root), "estimate", "--json"]
     prov = str(settings.get("province") or "").strip().upper()
-    stand_in = False
+    federal_only = False
     if country == "canada" and prov not in {
             k for v in _VINTAGES.values() for k in v["CA_PROVINCES"]}:
-        argv += ["--province", "ON"]
-        stand_in = True
+        argv += ["--federal-only"]
+        federal_only = True
+        print(f"  note: "
+              + (f"province {prov} is not modelled" if prov else
+                 "no [settings] province")
+              + " — the carry-forwards are computed federal-only (no "
+              "provincial tax or minimum-tax recovery).")
     res = _run(argv, capture_output=True)
     if res.returncode != 0:
         sys.exit(f"taxjson close-year: could not compute the carry-"
@@ -14392,7 +14403,7 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any]
     src["other_income_value"] = (est_cfg or {}).get("other_income") or 0.0
     block = CF.record_block(country, r, src)
     mt = block.get("minimum_tax")
-    if stand_in and isinstance(mt, dict):
+    if federal_only and isinstance(mt, dict):
         mt["province"] = None
         mt.pop("recovered_provincial", None)
     return block
@@ -17838,6 +17849,11 @@ def _build_parser(prog: str = "taxjson"
     p_est.add_argument("--province", default=None,
                        help="Canada: ON|BC|AB (default: `province` "
                             "under [settings])")
+    # close-year's hand-off (with --json): the federal carry-forwards
+    # of a Canadian project with no supported province. Not a user
+    # option: the printed estimate needs a province.
+    p_est.add_argument("--federal-only", action="store_true",
+                       help=argparse.SUPPRESS)
     p_est.add_argument("--verbose", "-v", action="store_true",
                        help="Full CALCULATION TRACE: every bracket "
                             "slice, credit and surtax tier for the "

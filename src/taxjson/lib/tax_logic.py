@@ -1225,8 +1225,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "applied (up to the year's gains) and carried out (100% "
                  "amounts); and the minimum tax carryover by year of "
                  "origin — opening, expired, recovered, created, carried "
-                 "out. With no supported province it is estimated on "
-                 "Ontario's tables (every figure carried is federal)."),
+                 "out. With no supported [settings] province it uses a "
+                 "federal-only estimate (no provincial tax, credit or "
+                 "minimum-tax factor) and says so; the carry-forwards it "
+                 "records are federal either way — never another "
+                 "province's tables standing in."),
             Rule("CA-CARRY-02",
                  "The estimate's net capital losses are --other-losses, "
                  "else [estimate] other_losses, else the balance the "

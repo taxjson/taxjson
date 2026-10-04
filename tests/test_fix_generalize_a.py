@@ -216,5 +216,63 @@ class TestNoDefaultZone(_NoZoneEnv):
             self.assertIn("local_timezone", out.getvalue())
 
 
+class TestCloseYearNeedsNoStandInProvince(unittest.TestCase):
+    """A3: close-year's carry-forwards come from the project's province,
+    or from a federal-only estimate — never another province's tables
+    standing in."""
+
+    _EST = dict(realized=400000.0, eligible_div=0.0, foreign_div=0.0,
+                pil=0.0, other_income=0.0, other_losses=0.0, year=2025)
+
+    @rule("CA-CARRY-01")
+    def test_federal_only_estimate(self):
+        from taxjson.lib.tax_estimate import estimate_canada
+        fed = estimate_canada(province=None, **self._EST)
+        bc = estimate_canada(province="BC", **self._EST)
+        self.assertIsNone(fed["province"])
+        self.assertTrue(fed["federal_only"])
+        self.assertEqual(fed["tax_with"]["provincial"], 0.0)
+        self.assertEqual(fed["tax_with"]["federal"],
+                         bc["tax_with"]["federal"])
+        self.assertEqual(fed["amt"]["excess_fed"], bc["amt"]["excess_fed"])
+        self.assertTrue(any("federal" in n.lower() and "province" in n
+                            for n in fed["notes"]), fed["notes"])
+
+    def _lock_argv(self, settings_extra):
+        import subprocess
+        from unittest import mock
+        from taxjson.bin import taxjson_run as R
+        from taxjson.lib.tax_estimate import estimate_canada
+        seen = {}
+        prov = "BC" if "BC" in settings_extra else None
+        r = estimate_canada(province=prov, **self._EST)
+
+        def fake(argv, capture_output=False, **_k):
+            seen["argv"] = list(argv)
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps({"estimate": r}), "")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "taxjson.toml").write_text(_BASE + settings_extra
+                                               + _ACCT)
+            cfg = R.load_config(root)
+            with mock.patch("taxjson.lib.dispatch.run_cmd", fake):
+                block = R._carryforwards_for_lock(root, cfg)
+        return seen["argv"], block
+
+    def test_close_year_without_province_is_federal_only(self):
+        argv, block = self._lock_argv("")
+        self.assertIn("--federal-only", argv)
+        self.assertNotIn("--province", argv)
+        self.assertIsNone(block["minimum_tax"]["province"])
+        self.assertNotIn("recovered_provincial", block["minimum_tax"])
+
+    def test_close_year_uses_the_project_province(self):
+        argv, block = self._lock_argv('province = "BC"\n')
+        self.assertNotIn("--federal-only", argv)
+        self.assertNotIn("--province", argv)       # read from [settings]
+        self.assertEqual(block["minimum_tax"]["province"], "BC")
+
+
 if __name__ == "__main__":
     unittest.main()
