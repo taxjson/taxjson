@@ -21,8 +21,8 @@ from taxjson.lib import crypto_sends as cs
 from tax_rules import rule
 
 
-def _s(exchange="coinbase", account="c", date="2025-07-13",
-       time="07:13:27", symbol="SOL", quantity=-1.0, **kw):
+def _s(exchange="coinbase", account="c", date="2025-08-24",
+       time="09:41:52", symbol="SOL", quantity=-1.0, **kw):
     r = {"exchange": exchange, "account": account, "date": date,
          "time": time, "symbol": symbol, "quantity": quantity,
          "price": 0.0, "currency": "", "fee": 0.0, "kind": "Send",
@@ -168,11 +168,11 @@ class TestMatchTransfers(unittest.TestCase):
     @rule("US-CRYPTO-05")
     def test_window_edges(self):
         # m1242/m1243 (edges inclusive), m1040/m1041 (10 min, 3 days).
-        send = _s(quantity=-1.0, date="2025-07-13", time="12:00:00")
-        for when, ok in ((("2025-07-13", "11:50:00"), True),
-                         (("2025-07-13", "11:49:00"), False),
-                         (("2025-07-16", "12:00:00"), True),
-                         (("2025-07-16", "12:01:00"), False)):
+        send = _s(quantity=-1.0, date="2025-08-24", time="12:00:00")
+        for when, ok in ((("2025-08-24", "11:50:00"), True),
+                         (("2025-08-24", "11:49:00"), False),
+                         (("2025-08-27", "12:00:00"), True),
+                         (("2025-08-27", "12:01:00"), False)):
             un, pairs = self._pairs([dict(send), self._arrive(
                 date=when[0], time=when[1])])
             self.assertEqual(bool(pairs), ok, when)
@@ -218,7 +218,7 @@ class TestMatchTransfers(unittest.TestCase):
         # m1241 (and m1134: the same exchange AND account is not).
         rows = [_s(quantity=-1.0, exchange="kraken", account="a"),
                 _s(quantity=1.0, exchange="kraken", account="b",
-                   time="07:20:00")]
+                   time="09:48:00")]
         self.assertEqual(len(self._pairs(rows)[1]), 1)
         rows[1]["account"] = "a"
         un, pairs = self._pairs(rows)
@@ -872,8 +872,8 @@ class TestNetworkFees(unittest.TestCase):
 
 
 class TestDuplicateLines(unittest.TestCase):
-    ENTRY = {"id": "kr-20260504T185014-TAO-0.1", "date": "2026-05-04",
-             "time": "18:50:14", "symbol": "TAO", "quantity": 0.1}
+    ENTRY = {"id": "kr-20260316T142241-KSM-0.25", "date": "2026-03-16",
+             "time": "14:22:41", "symbol": "KSM", "quantity": 0.25}
 
     def test_only_hand_written_tt_sales_of_the_same_coin_and_qty(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -881,16 +881,16 @@ class TestDuplicateLines(unittest.TestCase):
             a, b = inputs / "a", inputs / "b"
             a.mkdir(parents=True)
             b.mkdir()
-            line = "BUYSELL 2026-05-04 18:50:14 TAO -0.1 CAD 387.813 38.78 0"
+            line = "BUYSELL 2026-03-16 14:22:41 KSM -0.25 CAD 212.40 53.10 0"
             (a / "mine.tt").write_text(
                 "# notes\n"
-                "BUYSELL 2026-05-04\n"                       # m1326/m1327
-                "DIVIDEND 2026-05-04 18:50:14 TAO -0.1 CAD 1 1 0\n"
-                "BUYSELL 2026-05-04 18:50:14 TAO x CAD 1 1 0\n"  # m1328
-                "BUYSELL 2026-05-04 18:50:14 ETH -0.1 CAD 1 1 0\n"  # m1329
+                "BUYSELL 2026-03-16\n"                       # m1326/m1327
+                "DIVIDEND 2026-03-16 14:22:41 KSM -0.25 CAD 1 1 0\n"
+                "BUYSELL 2026-03-16 14:22:41 KSM x CAD 1 1 0\n"  # m1328
+                "BUYSELL 2026-03-16 14:22:41 ETH -0.25 CAD 1 1 0\n"  # m1329
                 + line + "\n")
             (b / "other.tt").write_text(
-                "BUYSELL 2026-05-04 09:00:00 tao -0.1 CAD 1 1 0\n")
+                "BUYSELL 2026-03-16 09:00:00 ksm -0.25 CAD 1 1 0\n")
             (a / "crypto_sends.tt").write_text(line + "\n")   # m1218
             (a / "notes.txt").write_text(line + "\n")
             (a / "bad.tt").write_bytes(b"\xff\xfe BUYSELL")     # m1220

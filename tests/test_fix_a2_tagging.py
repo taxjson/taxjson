@@ -80,7 +80,7 @@ class TestBaselineStatementsPinned(unittest.TestCase):
 
     @rule("US-WASH-03")
     def test_us_identical_option_rebought_washes_the_option_loss(self):
-        c = 'XYZ250620C00050000.US'
+        c = 'ABC250718C00045000.US'
         rows = [_row('2025-02-03', 1, 5, sym=c, cur='USD'),
                 _row('2025-03-03', -1, 2, sym=c, cur='USD'),
                 _row('2025-03-10', 1, 2.5, sym=c, cur='USD')]
@@ -95,7 +95,7 @@ class TestBaselineStatementsPinned(unittest.TestCase):
 
 
 
-def _opt(d, q, px, sym='XYZ250620C00050000.TO', **kw):
+def _opt(d, q, px, sym='ABC250718C00045000.TO', **kw):
     r = _row(d, q, px, sym=sym, **kw)
     r.net_amount = round(abs(q * px * 100), 2)
     return r
@@ -115,14 +115,15 @@ class TestCaOptionLossReplacement(unittest.TestCase):
 
     @rule("CA-SL-06")
     def test_shares_never_replace_an_option(self):
-        self.assertEqual(self._denied([_row('2025-03-10', 100, 50)]), [0.0])
+        self.assertEqual(self._denied([_row('2025-03-10', 100, 50,
+                                                sym='ABC.TO')]), [0.0])
 
     @rule("CA-SL-06")
     def test_another_series_never_replaces_an_option(self):
         self.assertEqual(self._denied(
-            [_opt('2025-03-10', 1, 1.5, 'XYZ250620C00055000.TO')]), [0.0])
+            [_opt('2025-03-10', 1, 1.5, 'ABC250718C00050000.TO')]), [0.0])
         self.assertEqual(self._denied(
-            [_opt('2025-03-10', 1, 1.5, 'XYZ250919C00050000.TO')]), [0.0])
+            [_opt('2025-03-10', 1, 1.5, 'ABC251017C00045000.TO')]), [0.0])
 
     @rule("CA-SL-06")
     def test_the_identical_contract_does(self):

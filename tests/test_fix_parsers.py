@@ -311,7 +311,7 @@ class TestWebullProceeds(unittest.TestCase):
                            '5499.00\n'])
 
     def test_expiry_row_still_parses(self):
-        txs, _ = _wb(['USD,17-01-2025,SELL,@QQZ,CALL QQZ01/17/25 190,'
+        txs, _ = _wb(['USD,21-03-2025,SELL,@QQZ,CALL QQZ03/21/25 57,'
                       'OPC,-2,,\n'])
         self.assertEqual(txs[0]['net_amount'], 0.0)
 

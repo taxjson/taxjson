@@ -772,18 +772,18 @@ class TestSplitRenamesPool(unittest.TestCase):
 
     @rule("CA-ACB-04")
     def test_canada_rollover_carries_acb_to_target(self):
-        """Buy SSL.TO @ 80000, SPLIT to RGLD.US at 0.0625, sell RGLD.US
-        @ 90000. Realized gain must reflect SSL.TO's original ACB
+        """Buy ABG.TO @ 80000, SPLIT to ABH.US at 0.0625, sell ABH.US
+        @ 90000. Realized gain must reflect ABG.TO's original ACB
         (90000 - 80000 = 10000), not start fresh from zero."""
         rules = CanadaTaxRules()
         txs = [
-            TaxTransaction(action='BUYSELL', date='2025-01-15', symbol='SSL.TO',
+            TaxTransaction(action='BUYSELL', date='2025-01-15', symbol='ABG.TO',
                            quantity=5000.0, net_amount=80000.0, currency='CAD',
                            account='Margin'),
-            TaxTransaction(action='SPLIT', date='2025-10-22', symbol='SSL.TO',
-                           symbol_new='RGLD.US', quantity=0.0625, currency='CAD',
+            TaxTransaction(action='SPLIT', date='2025-10-22', symbol='ABG.TO',
+                           symbol_new='ABH.US', quantity=0.0625, currency='CAD',
                            account='Margin'),
-            TaxTransaction(action='BUYSELL', date='2025-11-15', symbol='RGLD.US',
+            TaxTransaction(action='BUYSELL', date='2025-11-15', symbol='ABH.US',
                            quantity=-312.5, net_amount=90000.0, currency='CAD',
                            account='Margin'),
         ]
@@ -791,16 +791,16 @@ class TestSplitRenamesPool(unittest.TestCase):
         gains = [g for g in result['transactions']
                  if g.get('action') not in ('DIVIDEND', 'DIVIDEND_IN_LIEU')
                  and not g.get('tainted')]
-        self.assertEqual(len(gains), 1, "Should realize one gain on the RGLD.US sale")
+        self.assertEqual(len(gains), 1, "Should realize one gain on the ABH.US sale")
         g = gains[0]
-        self.assertEqual(g['symbol'], 'RGLD.US')
+        self.assertEqual(g['symbol'], 'ABH.US')
         self.assertAlmostEqual(g['gain'], 10000.0, places=2,
-                               msg="ACB should carry over from SSL.TO; got "
+                               msg="ACB should carry over from ABG.TO; got "
                                    f"cost={g.get('cost')}, proceeds={g.get('proceeds')}")
-        # Source pool should be empty after rename (no SSL.TO inventory left).
-        ssl_inv = [i for i in result.get('inventory', []) if i.get('symbol') == 'SSL.TO']
-        self.assertEqual(ssl_inv, [],
-                         "SSL.TO inventory should be empty after rename to RGLD.US")
+        # Source pool should be empty after rename (no ABG.TO inventory left).
+        src_inv = [i for i in result.get('inventory', []) if i.get('symbol') == 'ABG.TO']
+        self.assertEqual(src_inv, [],
+                         "ABG.TO inventory should be empty after rename to ABH.US")
 
     def test_canada_split_without_symbol_new_is_classic_split(self):
         """When symbol_new is missing/empty, behaviour matches a classic
@@ -830,16 +830,16 @@ class TestSplitRenamesPool(unittest.TestCase):
         """Same end-to-end test on the US engine. Before this fix the
         US engine had no SPLIT handler at all — the SPLIT row fell
         through to the regular BUY path and added `ratio` (e.g. 0.0625)
-        as new $0-cost shares, then the RGLD.US sale realized garbage."""
+        as new $0-cost shares, then the ABH.US sale realized garbage."""
         rules = USATaxRules()
         txs = [
-            TaxTransaction(action='BUYSELL', date='2025-01-15', symbol='SSL',
+            TaxTransaction(action='BUYSELL', date='2025-01-15', symbol='ABG',
                            quantity=5000.0, net_amount=80000.0, currency='USD',
                            account='Margin'),
-            TaxTransaction(action='SPLIT', date='2025-10-22', symbol='SSL',
-                           symbol_new='RGLD', quantity=0.0625, currency='USD',
+            TaxTransaction(action='SPLIT', date='2025-10-22', symbol='ABG',
+                           symbol_new='ABH', quantity=0.0625, currency='USD',
                            account='Margin'),
-            TaxTransaction(action='BUYSELL', date='2025-11-15', symbol='RGLD',
+            TaxTransaction(action='BUYSELL', date='2025-11-15', symbol='ABH',
                            quantity=-312.5, net_amount=90000.0, currency='USD',
                            account='Margin'),
         ]
@@ -848,7 +848,7 @@ class TestSplitRenamesPool(unittest.TestCase):
                  if g.get('action') not in ('DIVIDEND', 'DIVIDEND_IN_LIEU')]
         self.assertEqual(len(sells), 1)
         self.assertAlmostEqual(sells[0]['gain'], 10000.0, places=2)
-        self.assertEqual(sells[0]['symbol'], 'RGLD')
+        self.assertEqual(sells[0]['symbol'], 'ABH')
 
     def test_split_rename_merge_skips_sentinel_last_acq_date(self):
         """Regression: when a SPLIT renames source→target and the source
@@ -859,18 +859,18 @@ class TestSplitRenamesPool(unittest.TestCase):
         the source pool is empty or still at the sentinel."""
         rules = CanadaTaxRules()
         txs = [
-            # Real RGLD.US buy 100 days before the SPLIT.
-            TaxTransaction(action='BUYSELL', date='2025-03-15', symbol='RGLD.US',
+            # Real ABH.US buy 100 days before the SPLIT.
+            TaxTransaction(action='BUYSELL', date='2025-03-15', symbol='ABH.US',
                            quantity=100.0, price=200.0, net_amount=20000.0,
                            currency='CAD', account='Margin'),
-            # SPLIT from a source ticker (SSL.TO) that was never traded.
+            # SPLIT from a source ticker (ABG.TO) that was never traded.
             # Source pool auto-creates at qty=0, last_acq_date=sentinel.
-            TaxTransaction(action='SPLIT', date='2025-06-23', symbol='SSL.TO',
-                           symbol_new='RGLD.US', quantity=0.0625, currency='CAD',
+            TaxTransaction(action='SPLIT', date='2025-06-23', symbol='ABG.TO',
+                           symbol_new='ABH.US', quantity=0.0625, currency='CAD',
                            account='Margin'),
-            # Sell RGLD.US a week later — days_held should be ~100,
+            # Sell ABH.US a week later — days_held should be ~100,
             # NOT ~20407 (which is what the sentinel-leak produced).
-            TaxTransaction(action='BUYSELL', date='2025-06-30', symbol='RGLD.US',
+            TaxTransaction(action='BUYSELL', date='2025-06-30', symbol='ABH.US',
                            quantity=-50.0, price=210.0, net_amount=10500.0,
                            currency='CAD', account='Margin'),
         ]
@@ -942,31 +942,31 @@ class TestSplitRenamesPool(unittest.TestCase):
         )
 
     def test_canada_wash_sale_bridges_split_rename(self):
-        """A loss on SSL.TO followed within 30 days by a buy of RGLD.US
-        (with SSL.TO→RGLD.US linked by a SPLIT-rename) must be detected
+        """A loss on ABG.TO followed within 30 days by a buy of ABH.US
+        (with ABG.TO→ABH.US linked by a SPLIT-rename) must be detected
         as a superficial loss under CRA's substantially-identical rule.
         Before this fix the wash-sale solver was symbol-blind across
-        renames — the loss-symbol's running balance only saw SSL.TO
-        activity, and the candidate-trigger filter discarded RGLD.US
+        renames — the loss-symbol's running balance only saw ABG.TO
+        activity, and the candidate-trigger filter discarded ABH.US
         buys for not matching tx.symbol."""
         rules = CanadaTaxRules()
         txs = [
-            # Buy SSL.TO at $20/share, will be sold at a loss.
-            TaxTransaction(action='BUYSELL', date='2025-01-15', symbol='SSL.TO',
+            # Buy ABG.TO at $20/share, will be sold at a loss.
+            TaxTransaction(action='BUYSELL', date='2025-01-15', symbol='ABG.TO',
                            quantity=100.0, price=20.0, net_amount=2000.0,
                            currency='CAD', account='Margin'),
-            # Sell SSL.TO at $10 — $1000 loss.
-            TaxTransaction(action='BUYSELL', date='2025-06-15', symbol='SSL.TO',
+            # Sell ABG.TO at $10 — $1000 loss.
+            TaxTransaction(action='BUYSELL', date='2025-06-15', symbol='ABG.TO',
                            quantity=-100.0, price=10.0, net_amount=1000.0,
                            currency='CAD', account='Margin'),
-            # Merger rollover SSL.TO → RGLD.US (s.85.1(5) election).
-            TaxTransaction(action='SPLIT', date='2025-06-20', symbol='SSL.TO',
-                           symbol_new='RGLD.US', quantity=0.0625, currency='CAD',
+            # Merger rollover ABG.TO → ABH.US (s.85.1(5) election).
+            TaxTransaction(action='SPLIT', date='2025-06-20', symbol='ABG.TO',
+                           symbol_new='ABH.US', quantity=0.0625, currency='CAD',
                            account='Margin'),
-            # Buy RGLD.US within 30 days of the SSL.TO loss — must be
+            # Buy ABH.US within 30 days of the ABG.TO loss — must be
             # treated as a superficial-loss trigger because the rename
             # makes it the same logical security.
-            TaxTransaction(action='BUYSELL', date='2025-07-01', symbol='RGLD.US',
+            TaxTransaction(action='BUYSELL', date='2025-07-01', symbol='ABH.US',
                            quantity=10.0, price=200.0, net_amount=2000.0,
                            currency='CAD', account='Margin'),
         ]
@@ -974,7 +974,7 @@ class TestSplitRenamesPool(unittest.TestCase):
         wash_sales = result.get('wash_sales', [])
         self.assertTrue(
             len(wash_sales) >= 1,
-            "SSL.TO loss followed by RGLD.US buy within 30d should "
+            "ABG.TO loss followed by ABH.US buy within 30d should "
             "trigger superficial loss via SPLIT-rename alias; got "
             f"wash_sales={wash_sales}",
         )

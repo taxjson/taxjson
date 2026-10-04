@@ -1,7 +1,7 @@
 """Dotted-option → OCC strike encoding regression tests.
 
-`map_ticker` converts dotted option strings like `U.19SEP25.4.02.P`
-into OCC-formatted tickers like `U250919P00004020`. The strike portion
+`map_ticker` converts dotted option strings like `ABC.17DEC27.4.02.P`
+into OCC-formatted tickers like `ABC271217P00004020`. The strike portion
 is `int(strike * 1000)` formatted with 8 digits.
 
 The pre-fix implementation used `int(float(strike_str) * 1000)` which
@@ -23,14 +23,14 @@ class TestStrikeEncoding(unittest.TestCase):
         # Cherry-picked strikes that float-truncate one cent low:
         # 4.02, 8.03, 16.06, 32.12 all hit the IEEE-754 underflow.
         cases = [
-            ('U.19SEP25.4.02.P', 'U250919P00004020'),
-            ('U.19SEP25.8.03.P', 'U250919P00008030'),
-            ('U.19SEP25.16.06.P', 'U250919P00016060'),
-            ('U.19SEP25.32.12.P', 'U250919P00032120'),
+            ('ABC.17DEC27.4.02.P', 'ABC271217P00004020'),
+            ('ABC.17DEC27.8.03.P', 'ABC271217P00008030'),
+            ('ABC.17DEC27.16.06.P', 'ABC271217P00016060'),
+            ('ABC.17DEC27.32.12.P', 'ABC271217P00032120'),
             # Whole-cent strikes stayed correct under the bug — pin
             # them so a future "fix" doesn't break the easy cases.
-            ('U.19SEP25.2.10.P', 'U250919P00002100'),
-            ('U.19SEP25.100.07.P', 'U250919P00100070'),
+            ('ABC.17DEC27.2.10.P', 'ABC271217P00002100'),
+            ('ABC.17DEC27.100.07.P', 'ABC271217P00100070'),
         ]
         for dotted, expected_occ in cases:
             with self.subTest(dotted=dotted):
@@ -42,10 +42,10 @@ class TestStrikeEncoding(unittest.TestCase):
                          'AAPL260116C00150000')
 
     def test_call_and_put_both_encode(self):
-        self.assertEqual(map_ticker('U.19SEP25.4.02.C'),
-                         'U250919C00004020')
-        self.assertEqual(map_ticker('U.19SEP25.4.02.P'),
-                         'U250919P00004020')
+        self.assertEqual(map_ticker('ABC.17DEC27.4.02.C'),
+                         'ABC271217C00004020')
+        self.assertEqual(map_ticker('ABC.17DEC27.4.02.P'),
+                         'ABC271217P00004020')
 
 
 if __name__ == '__main__':

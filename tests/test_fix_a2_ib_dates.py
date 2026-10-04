@@ -105,7 +105,7 @@ class TestIbVenueLocalDate(unittest.TestCase):
             cur='HKD'))
         t = txs[0]
         self.assertEqual(t['date'], '2025-12-30')
-        self.assertEqual(t['date_settle'], '2026-01-01')   # T+2, weekends
+        self.assertEqual(t['date_settle'], '2026-01-01')   # 2 business days
 
 
 # ---------------------------------- A2-0254 / A2-0596 / A2-0608 (CME)
@@ -117,7 +117,7 @@ class TestIbFuturesEveningSession(unittest.TestCase):
                            (('2025-12-25', '19:00:00'), '2025-12-26'),  # Xmas
                            (('2025-12-30', '19:30:00'), '2025-12-31'),
                            (('2025-12-31', '18:30:00'), '2026-01-02'),
-                           (('2025-10-19', '18:13:50'), '2025-10-20')):
+                           (('2025-10-26', '18:20:00'), '2025-10-27')):
             for cat in ('Futures', 'Options On Futures'):
                 with self.subTest(when=when, cat=cat):
                     d, t, stamp = _ib_market_trade_date(

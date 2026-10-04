@@ -192,10 +192,10 @@ class TestTransferSidecarDedup(unittest.TestCase):
 
     def test_overlapping_exports_keep_each_transfer_once(self):
         body = (HEAD + TRADES_H
-                + _trade('QZOR', '2025-05-01, 09:30:00', 500, 10, -5000, -1)
+                + _trade('QZOR', '2025-05-01, 09:30:00', 450, 10, -4500, -1)
                 + XFER_H
-                + _xfer('QZOR', '2025-07-02', -300, -3000, typ='InterDepot')
-                + _xfer('QZOR', '2025-07-02', 300, 3000, typ='InterDepot',
+                + _xfer('QZOR', '2025-06-11', -240, -2400, typ='InterDepot')
+                + _xfer('QZOR', '2025-06-11', 240, 2400, typ='InterDepot',
                         cur='CAD'))
         rc, _, err, side = _brokerage_cli(
             {'a.csv': body, 'b.csv': body}, '--transfers-out',
@@ -406,10 +406,10 @@ class TestIbOrderAndTradeRows(unittest.TestCase):
 
     def test_trade_only_fill_of_another_symbol_is_booked(self):
         body = (HEAD + TRADES_H
-                + _trade('QZAA', '2025-03-03, 10:00:00', 100, 10, -1000, -1)
-                + _trade('QZAA', '2025-03-03, 10:00:00', 100, 10, -1000,
+                + _trade('QZAA', '2025-03-12, 10:00:00', 100, 10, -1000, -1)
+                + _trade('QZAA', '2025-03-12, 10:00:00', 100, 10, -1000,
                          -1, disc='Trade')
-                + _trade('QZBB', '2025-03-04, 11:00:00', 50, 20, -1000, -1,
+                + _trade('QZBB', '2025-03-13, 11:00:00', 50, 20, -1000, -1,
                          disc='Trade'))
         _, txs, _ = _parse_ib(body)
         self.assertEqual(sorted((t['symbol'], t['quantity']) for t in txs),
@@ -417,17 +417,17 @@ class TestIbOrderAndTradeRows(unittest.TestCase):
 
     def test_trade_row_before_its_order_row_is_not_doubled(self):
         body = (HEAD + TRADES_H
-                + _trade('QZAA', '2025-03-03, 10:00:00', 100, 10, -1000, -1,
+                + _trade('QZAA', '2025-03-12, 10:00:00', 100, 10, -1000, -1,
                          disc='Trade')
-                + _trade('QZAA', '2025-03-03, 10:00:00', 100, 10, -1000, -1))
+                + _trade('QZAA', '2025-03-12, 10:00:00', 100, 10, -1000, -1))
         _, txs, _ = _parse_ib(body)
         self.assertEqual([(t['symbol'], t['quantity']) for t in txs],
                          [('QZAA.US', 100.0)])
 
     def test_levels_that_disagree_are_an_error(self):
         body = (HEAD + TRADES_H
-                + _trade('QZAA', '2025-03-03, 10:00:00', 100, 10, -1000, -1)
-                + _trade('QZAA', '2025-03-03, 10:00:00', 60, 10, -600, -1,
+                + _trade('QZAA', '2025-03-12, 10:00:00', 100, 10, -1000, -1)
+                + _trade('QZAA', '2025-03-12, 10:00:00', 60, 10, -600, -1,
                          disc='Trade'))
         with self.assertRaises(BrokerageParseError):
             _parse_ib(body)
@@ -438,7 +438,7 @@ class TestIbTransferWithoutQuantity(unittest.TestCase):
     (the position change was lost)."""
 
     def test_blank_qty_on_a_stock_transfer_is_an_error(self):
-        body = HEAD + XFER_H + _xfer('QZDD', '2025-07-02', '', 3000,
+        body = HEAD + XFER_H + _xfer('QZDD', '2025-06-11', '', 2400,
                                      typ='ATON', cur='CAD')
         with self.assertRaises(BrokerageParseError) as cm:
             _parse_ib(body)
@@ -457,19 +457,19 @@ class TestIbOptionsExpirationsCategory(unittest.TestCase):
 
     def test_row_category_is_honoured(self):
         fii = (FII_H + 'Financial Instrument Information,Data,Options On '
-               'Futures,QZCL JAN26 52 P,QZCL JAN26 52 P,990000071,,QZCL,'
-               'NYMEX,1000,2025-12-16,2026-01,P,52,\n')
+               'Futures,QZCL FEB26 47 P,QZCL FEB26 47 P,990000071,,QZCL,'
+               'NYMEX,1000,2026-01-14,2026-02,P,47,\n')
         body = (HEAD + TRADES_H
-                + _trade('QZCL JAN26 52 P', '2025-11-03, 10:00:00', 1, 1.5,
+                + _trade('QZCL FEB26 47 P', '2025-11-03, 10:00:00', 1, 1.5,
                          -1500, -2, cat='Options On Futures')
                 + 'Options Expirations,Header,Asset Category,Currency,'
                   'Symbol,Date/Time,Quantity,Code\n'
                 + 'Options Expirations,Data,Options On Futures,USD,'
-                  'QZCL JAN26 52 P,"2025-12-16, 16:20:00",-1,C;Ep\n'
+                  'QZCL FEB26 47 P,"2026-01-14, 16:20:00",-1,C;Ep\n'
                 + fii)
         _, txs, _ = _parse_ib(body)
         self.assertEqual({t['symbol'] for t in txs},
-                         {'F:QZCL251216P00052000.US'})
+                         {'F:QZCL260114P00047000.US'})
 
 
 class TestIbCorporateActionsNotBooked(unittest.TestCase):
@@ -580,18 +580,19 @@ def _parse_account(files):
 
 class TestIbIncomeRebindNeedsTheSameIsin(unittest.TestCase):
     """S059-24 / S060-19: a dividend was rebound to whatever listing of
-    the same ROOT was held — AT&T's (US ISIN) onto Telus (T.TO)."""
+    the same ROOT was held — a US issuer's (US ISIN) onto an unrelated
+    TSX listing of that root."""
 
     def _body(self, fii_isin):
         return (HEAD + TRADES_H
-                + _trade('QZT', '2025-02-03, 10:00:00', 100, 30, -3000, -1,
+                + _trade('QZT', '2025-02-10, 10:00:00', 120, 30, -3600, -1,
                          cur='CAD')
                 + DIV_H + 'Dividends,Data,USD,2025-05-01,QZT(US9990000701) '
-                          'Cash Dividend USD 0.2775 per Share (Ordinary '
-                          'Dividend),5550\n'
+                          'Cash Dividend USD 0.31 per Share (Ordinary '
+                          'Dividend),6200\n'
                 + WHT_H + 'Withholding Tax,Data,USD,2025-05-01,QZT('
-                          'US9990000701) Cash Dividend USD 0.2775 per Share '
-                          '- US Tax,-832.50\n'
+                          'US9990000701) Cash Dividend USD 0.31 per Share '
+                          '- US Tax,-930.00\n'
                 + FII_H + _fii_stock('QZT', fii_isin, exch='TSE'))
 
     def test_other_issuer_keeps_its_isin_listing(self):
@@ -616,7 +617,7 @@ class TestIbIncomeRebindNeedsTheSameIsin(unittest.TestCase):
 @rule("US-ROC-01")
 class TestIbIncomeRebindAcrossStatements(unittest.TestCase):
     """S060-00: a statement with only a ROC row (no trades, no Open
-    Positions) kept the ISIN suffix: a gain on a phantom BTG.TO."""
+    Positions) kept the ISIN suffix: a gain on a phantom .TO listing."""
 
     def test_holding_from_the_other_statement_rebinds(self):
         a = (HEAD + TRADES_H
@@ -652,43 +653,43 @@ class TestIbUsdClassTsxUnits(unittest.TestCase):
 def _fii_opt(syms, desc, conid, underlying):
     return (f'Financial Instrument Information,Data,Equity and Index '
             f'Options,"{syms}",{desc},{conid},,{underlying},CBOE,100,'
-            f'2025-12-19,2025-12,P,60,\n')
+            f'2026-01-16,2026-01,P,44,\n')
 
 
 class TestIbOptionRootAliases(unittest.TestCase):
     def test_rename_alias_canonical_is_the_underlying(self):
-        # S059-11: SQ -> XYZ rename; the shortest root (SQ) won, so the
-        # assigned put never met the delivered XYZ shares.
+        # S059-11: a root rename (QZS -> QZXYZ); the shortest root won, so
+        # the assigned put never met the delivered shares.
         body = (HEAD + TRADES_H
-                + _trade('QZS 19DEC25 60 P', '2025-10-10, 10:00:00', -1, 4,
+                + _trade('QZS 16JAN26 44 P', '2025-10-10, 10:00:00', -1, 4,
                          400, 0, cat='Equity and Index Options')
-                + _trade('QZXYZ 19DEC25 60 P', '2025-12-19, 16:20:00', 1, 0,
+                + _trade('QZXYZ 16JAN26 44 P', '2026-01-16, 16:20:00', 1, 0,
                          0, 0, code='A;C', cat='Equity and Index Options')
-                + _trade('QZXYZ', '2025-12-19, 16:20:00', 100, 60, -6000, 0,
+                + _trade('QZXYZ', '2026-01-16, 16:20:00', 100, 44, -4400, 0,
                          code='A;O')
-                + FII_H + _fii_opt('QZS   251219P00060000, QZXYZ 251219P'
-                                   '00060000', 'QZXYZ 19DEC25 60 P',
+                + FII_H + _fii_opt('QZS   260116P00044000, QZXYZ 251219P'
+                                   '00060000', 'QZXYZ 16JAN26 44 P',
                                    '990000011', 'QZXYZ'))
         _, txs, _ = _parse_ib(body)
         opts = {t['symbol'] for t in txs if 'P000' in t['symbol']}
-        self.assertEqual(opts, {'QZXYZ251219P00060000.US'})
+        self.assertEqual(opts, {'QZXYZ260116P00044000.US'})
 
     def test_alias_learned_from_another_statement(self):
         # S059-15: the 2026 statement lists only the adjusted root.
         a = (HEAD + TRADES_H
-             + _trade('QZD 19DEC25 60 P', '2025-10-10, 10:00:00', -1, 4, 400,
+             + _trade('QZD 16JAN26 44 P', '2025-10-10, 10:00:00', -1, 4, 400,
                       0, cat='Equity and Index Options')
-             + FII_H + _fii_opt('QZD   251219P00060000, QZD1  251219P'
-                                '00060000', 'QZD 19DEC25 60 P', '990000021',
+             + FII_H + _fii_opt('QZD   260116P00044000, QZD1  251219P'
+                                '00060000', 'QZD 16JAN26 44 P', '990000021',
                                 'QZD'))
         b = (HEAD + TRADES_H
-             + _trade('QZD1 19DEC25 60 P', '2025-11-10, 10:00:00', 1, 3,
+             + _trade('QZD1 16JAN26 44 P', '2025-11-10, 10:00:00', 1, 3,
                       -300, 0, code='C', cat='Equity and Index Options')
-             + FII_H + _fii_opt('QZD1  251219P00060000', 'QZD1 19DEC25 60 P',
+             + FII_H + _fii_opt('QZD1  260116P00044000', 'QZD1 16JAN26 44 P',
                                 '990000021', 'QZD'))
         txs, _ = _parse_account({'a.csv': a, 'b.csv': b})
         self.assertEqual({t['symbol'] for t in txs},
-                         {'QZD251219P00060000.US'})
+                         {'QZD260116P00044000.US'})
 
 
 class TestIbStockSymbolAliases(unittest.TestCase):

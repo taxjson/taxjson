@@ -605,8 +605,8 @@ class TestJournalCandidateRelativeTolerance(unittest.TestCase):
 # driven depot flips on the holdings aggregation).
 # ============================================================================
 def _tmap(journal=None):
-    """A minimal ticker map declaring OR.US/OR.TO one identity class."""
-    return TickerMap({}, {'OR.US': 'OR.TO'}, dict(journal or {}),
+    """A minimal ticker map declaring QRL.US/QRL.TO one identity class."""
+    return TickerMap({}, {'QRL.US': 'QRL.TO'}, dict(journal or {}),
                      set(), set())
 
 
@@ -645,23 +645,23 @@ class TestPartialDepotFlipApportionsCost(unittest.TestCase):
     inventory replay (post-audit contract)."""
 
     def test_half_flip_moves_half_the_cost_and_returns_move(self):
-        agg = {'OR.US': _bucket(600.0, 12000.0, 'USD', '2026-03-20'),
-               'OR.TO': _bucket(100.0, 4000.0, 'CAD', '2026-07-17')}
-        moves = _apply(agg, [('2026-07-02', 'OR.US', -300),
-                             ('2026-07-02', 'OR.TO', 300)], _tmap())
-        self.assertEqual(moves, [('OR.US', 'OR.TO', 300.0)])
-        self.assertAlmostEqual(agg['OR.US']['qty'], 300.0, places=6)
-        self.assertAlmostEqual(agg['OR.US']['total_cost'], 6000.0,
+        agg = {'QRL.US': _bucket(600.0, 12000.0, 'USD', '2026-02-13'),
+               'QRL.TO': _bucket(100.0, 4000.0, 'CAD', '2026-06-12')}
+        moves = _apply(agg, [('2026-05-28', 'QRL.US', -300),
+                             ('2026-05-28', 'QRL.TO', 300)], _tmap())
+        self.assertEqual(moves, [('QRL.US', 'QRL.TO', 300.0)])
+        self.assertAlmostEqual(agg['QRL.US']['qty'], 300.0, places=6)
+        self.assertAlmostEqual(agg['QRL.US']['total_cost'], 6000.0,
                                places=6)
-        self.assertAlmostEqual(agg['OR.TO']['qty'], 400.0, places=6)
-        self.assertAlmostEqual(agg['OR.TO']['total_cost'], 10000.0,
+        self.assertAlmostEqual(agg['QRL.TO']['qty'], 400.0, places=6)
+        self.assertAlmostEqual(agg['QRL.TO']['total_cost'], 10000.0,
                                places=6)
         self.assertAlmostEqual(
-            agg['OR.US']['cost_by_currency']['USD'], 6000.0, places=6)
+            agg['QRL.US']['cost_by_currency']['USD'], 6000.0, places=6)
         self.assertAlmostEqual(
-            agg['OR.TO']['cost_by_currency']['USD'], 6000.0, places=6)
+            agg['QRL.TO']['cost_by_currency']['USD'], 6000.0, places=6)
         self.assertAlmostEqual(
-            agg['OR.TO']['cost_by_currency']['CAD'], 4000.0, places=6)
+            agg['QRL.TO']['cost_by_currency']['CAD'], 4000.0, places=6)
 
 
 class TestDepotFlipNoOpGuards(unittest.TestCase):
@@ -671,21 +671,21 @@ class TestDepotFlipNoOpGuards(unittest.TestCase):
     applied-move list and leave the aggregation untouched."""
 
     def test_none_tmap_is_a_noop(self):
-        agg = {'OR.TO': {'qty': 100.0, 'total_cost': 4000.0}}
+        agg = {'QRL.TO': {'qty': 100.0, 'total_cost': 4000.0}}
         with tempfile.TemporaryDirectory() as td:
-            p = _write_evidence(td, [('2026-07-02', 'OR.US', -300)])
+            p = _write_evidence(td, [('2026-05-28', 'QRL.US', -300)])
             moves = _apply_transfer_evidence(agg, [p], None)
         self.assertEqual(moves, [])
-        self.assertEqual(agg['OR.TO']['qty'], 100.0)
-        self.assertEqual(agg['OR.TO']['total_cost'], 4000.0)
+        self.assertEqual(agg['QRL.TO']['qty'], 100.0)
+        self.assertEqual(agg['QRL.TO']['total_cost'], 4000.0)
 
     def test_out_leg_without_source_bucket_is_a_noop(self):
-        agg = {'OR.TO': _bucket(100.0, 4000.0, 'CAD', '2026-07-17')}
-        moves = _apply(agg, [('2026-07-02', 'OR.US', -300),
-                             ('2026-07-02', 'OR.TO', 300)], _tmap())
+        agg = {'QRL.TO': _bucket(100.0, 4000.0, 'CAD', '2026-06-12')}
+        moves = _apply(agg, [('2026-05-28', 'QRL.US', -300),
+                             ('2026-05-28', 'QRL.TO', 300)], _tmap())
         self.assertEqual(moves, [])
-        self.assertAlmostEqual(agg['OR.TO']['qty'], 100.0, places=6)
-        self.assertAlmostEqual(agg['OR.TO']['total_cost'], 4000.0,
+        self.assertAlmostEqual(agg['QRL.TO']['qty'], 100.0, places=6)
+        self.assertAlmostEqual(agg['QRL.TO']['total_cost'], 4000.0,
                                places=6)
 
 
@@ -696,12 +696,12 @@ class TestDepotFlipPruneGuard(unittest.TestCase):
     mutant on the prune condition deletes a live position."""
 
     def test_source_with_shares_left_is_never_pruned(self):
-        agg = {'OR.US': _bucket(600.0, 0.004, 'USD', '2026-03-20'),
-               'OR.TO': _bucket(100.0, 4000.0, 'CAD', '2026-07-17')}
-        _apply(agg, [('2026-07-02', 'OR.US', -300),
-                     ('2026-07-02', 'OR.TO', 300)], _tmap())
-        self.assertIn('OR.US', agg)
-        self.assertAlmostEqual(agg['OR.US']['qty'], 300.0, places=6)
+        agg = {'QRL.US': _bucket(600.0, 0.004, 'USD', '2026-02-13'),
+               'QRL.TO': _bucket(100.0, 4000.0, 'CAD', '2026-06-12')}
+        _apply(agg, [('2026-05-28', 'QRL.US', -300),
+                     ('2026-05-28', 'QRL.TO', 300)], _tmap())
+        self.assertIn('QRL.US', agg)
+        self.assertAlmostEqual(agg['QRL.US']['qty'], 300.0, places=6)
 
 
 class TestJournalFoldCancelsEvidence(unittest.TestCase):
@@ -711,13 +711,13 @@ class TestJournalFoldCancelsEvidence(unittest.TestCase):
     aggregation) must NOT be evidence-moved on top of its fold."""
 
     def test_journal_pair_evidence_nets_to_zero_and_moves_nothing(self):
-        agg = {'DLR.TO': _bucket(400.0, 5000.0, 'CAD', '2026-01-05')}
-        tm = TickerMap({}, {}, {'DLR.US': 'DLR.TO'}, set(), set())
-        moves = _apply(agg, [('2026-07-02', 'DLR.US', -300),
-                             ('2026-07-02', 'DLR.TO', 300)], tm)
+        agg = {'ZDL.TO': _bucket(400.0, 5000.0, "CAD", "2026-01-19")}
+        tm = TickerMap({}, {}, {'ZDL.US': 'ZDL.TO'}, set(), set())
+        moves = _apply(agg, [('2026-05-28', 'ZDL.US', -300),
+                             ('2026-05-28', 'ZDL.TO', 300)], tm)
         self.assertEqual(moves, [])
-        self.assertAlmostEqual(agg['DLR.TO']['qty'], 400.0, places=6)
-        self.assertAlmostEqual(agg['DLR.TO']['total_cost'], 5000.0,
+        self.assertAlmostEqual(agg['ZDL.TO']['qty'], 400.0, places=6)
+        self.assertAlmostEqual(agg['ZDL.TO']['total_cost'], 5000.0,
                                places=6)
 
 

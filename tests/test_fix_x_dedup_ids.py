@@ -27,8 +27,8 @@ def _env():
 
 _SSL_RGLD_CSV = '''\
 Corporate Actions,Header,Asset Category,Currency,Report Date,Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,Code
-Corporate Actions,Data,Stocks,CAD,2025-10-27,"2025-10-22, 20:25:00","SSL(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 (RGLD.CAD, ROYAL GOLD INC, US0000000002)",100.0026,0,25840.67184,0,
-Corporate Actions,Data,Stocks,CAD,2025-10-27,"2025-10-22, 20:25:00","SSL(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 (SSL, SANDSTORM GOLD LTD, CA0000000001)",-1600.0416,0,-25920.67392,0,
+Corporate Actions,Data,Stocks,CAD,2025-10-27,"2025-10-22, 20:25:00","ABG(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 (ABH.CAD, ABH GOLD INC, US0000000002)",100.0026,0,25840.67184,0,
+Corporate Actions,Data,Stocks,CAD,2025-10-27,"2025-10-22, 20:25:00","ABG(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 (ABG, ABG MINING LTD, CA0000000001)",-1600.0416,0,-25920.67392,0,
 '''
 
 
@@ -46,8 +46,8 @@ def _old_scheme_id(ev: CorporateAction, account: str) -> str:
 def _event(account):
     return CorporateAction(
         date='2025-10-22', time='20:25:00', action_type='merger',
-        source_symbol='SSL.TO', source_isin='CA0000000001',
-        target_symbol='RGLD.US', target_isin='US0000000002',
+        source_symbol='ABG.TO', source_isin='CA0000000001',
+        target_symbol='ABH.US', target_isin='US0000000002',
         ratio_new=1, ratio_old=16, qty_disposed=1600.0416,
         qty_received=100.0026, fmv=25920.67, currency='CAD',
         target_currency='USD', account=account)

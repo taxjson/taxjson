@@ -702,14 +702,14 @@ class TestCoveredCallNamesTheHeldClassShare(unittest.TestCase):
     def test_ccd_groups_under_held_class_share(self):
         from taxjson.bin._option_gains_report import process_data
         doc = {"transactions": [{
-                   "symbol": "RCI270115C00046000.TO", "direction": "SHORT",
+                   "symbol": "QRL270618C00038000.TO", "direction": "SHORT",
                    "cost": -199.0, "proceeds": 0.0, "gain": 199.0,
-                   "currency": "CAD", "date": "2026-02-03"}],
-               "inventory": [{"symbol": "RCI.B.TO", "qty": 100.0}]}
+                   "currency": "CAD", "date": "2026-02-17"}],
+               "inventory": [{"symbol": "QRL.B.TO", "qty": 100.0}]}
         groups = {}
         process_data(doc, groups, direction="SHORT", calls_only=True)
-        self.assertIn("RCI.B.TO", groups)
-        self.assertNotIn("RCI.TO", groups)
+        self.assertIn("QRL.B.TO", groups)
+        self.assertNotIn("QRL.TO", groups)
 
 
 # ------------------------------------------------------ A2-1230 / A2-1231

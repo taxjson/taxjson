@@ -42,23 +42,23 @@ class TestSaleDebitKeepsItsSign(unittest.TestCase):
     """R1-100: 'SELL ... -2 @ 0.00, (1.50)' is a close whose commission
     exceeded the gross — negative proceeds, not +1.50 received."""
 
-    _BUY = 'USD,19-02-2025,BUY,@QQQ,CALL QQQ02/21/25 530,OPC,2,4.35,,(871.98)\n'
+    _BUY = 'USD,19-03-2025,BUY,@KQZ,CALL KQZ03/21/25 61,OPC,2,3.15,,(631.98)\n'
 
     def test_debit_on_a_sale_is_negative_proceeds(self):
         tx, _ = _parse(self._BUY +
-                       'USD,21-02-2025,SELL,,,,-2,0.00,,(1.50)\n')
+                       'USD,21-03-2025,SELL,,,,-2,0.00,,(1.50)\n')
         sale = [t for t in tx if t["quantity"] < 0][0]
         self.assertAlmostEqual(sale["net_amount"], -1.50)
         self.assertAlmostEqual(sale["fee"], 1.50)
 
     def test_credit_on_a_sale_unchanged(self):
         tx, _ = _parse(self._BUY +
-                       'USD,21-02-2025,SELL,,,,-2,0.10,,18.50\n')
+                       'USD,21-03-2025,SELL,,,,-2,0.10,,18.50\n')
         sale = [t for t in tx if t["quantity"] < 0][0]
         self.assertAlmostEqual(sale["net_amount"], 18.50)
 
     def test_zero_close_is_still_an_expiry(self):
-        tx, _ = _parse(self._BUY + 'USD,21-02-2025,SELL,,,,-2,0.00,,\n')
+        tx, _ = _parse(self._BUY + 'USD,21-03-2025,SELL,,,,-2,0.00,,\n')
         sale = [t for t in tx if t["quantity"] < 0][0]
         self.assertEqual(sale["net_amount"], 0.0)
         self.assertEqual(sale["time"], "16:00:00")
@@ -78,16 +78,16 @@ class TestTypeCodeDecides(unittest.TestCase):
 
     def test_shs_row_with_contract_description_refused(self):
         with self.assertRaises(BrokerageParseError) as cm:
-            _parse('USD,10-03-2025,BUY,ABC,CALL ABC06/20/25 50,SHS,1,'
+            _parse('USD,10-03-2025,BUY,ABC,CALL ABC07/18/25 45,SHS,1,'
                    '2.00,,(2.99)\n')
         self.assertIn("SHS", str(cm.exception))
 
     def test_continuation_rows_carry_the_type(self):
         tx, _ = _parse(
-            'USD,10-03-2025,BUY,@ABC,CALL ABC06/20/25 50,OPC,1,2.00,,(200.99)\n'
+            'USD,10-03-2025,BUY,@ABC,CALL ABC07/18/25 45,OPC,1,2.00,,(200.99)\n'
             'USD,11-03-2025,BUY,,,,1,2.10,,(210.99)\n')
         self.assertEqual({t["symbol"] for t in tx},
-                         {"ABC250620C00050000.US"})
+                         {"ABC250718C00045000.US"})
 
 
 class TestSkipWarningWording(unittest.TestCase):

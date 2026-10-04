@@ -3,7 +3,7 @@
 TRANSFER rows are deliberately NOT tax events in a taxable book (basis
 comes from the buy/sell history), but they are custody EVIDENCE — a
 depot flip or broker migration is exactly what explains a confusing
-position later (2026-09: the OR.US/OR.TO InterDepot mystery). The
+position later (a US-to-TSX listing flip by InterDepot). The
 parse stage must keep them aside in a sidecar instead of silently
 deleting them, and the `transfers` view must surface sidecar + in-book
 rows.
@@ -24,9 +24,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # A minimal IBKR flex CSV: one trade + one InterDepot transfer row.
 IB_CSV = """\
 Trades,Header,DataDiscriminator,Asset Category,Currency,Account,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
-Trades,Data,Order,Stocks,USD,U1,OR,"2026-03-18, 11:22:07",300,31.40,31.52,-9420,-1,9421,0,36,O
+Trades,Data,Order,Stocks,USD,U1,RYQ,"2026-03-11, 11:22:07",240,31.40,31.52,-7536,-1,7537,0,28.8,O
 Transfers,Header,Asset Category,Currency,Account,Symbol,Date,Type,Direction,Xfer Company,Xfer Account,Qty,Xfer Price,Market Value,Realized P/L,Cash Amount,Code
-Transfers,Data,Stocks,CAD,U1,OR,2026-07-02,InterDepot,In,--,U1,300,--,"12,951.00",0.00,0.00,
+Transfers,Data,Stocks,CAD,U1,RYQ,2026-07-09,InterDepot,In,--,U1,240,--,"10,360.80",0.00,0.00,
 """
 
 
@@ -55,7 +55,7 @@ class TestSidecar(unittest.TestCase):
             rows = doc["transactions"]
             self.assertEqual(len(rows), 1)
             # The kind plus the security (audit S059-03).
-            self.assertEqual(rows[0]["description"], "InterDepot (OR)")
+            self.assertEqual(rows[0]["description"], "InterDepot (RYQ)")
             self.assertEqual(rows[0]["account"], "margin",
                              "sidecar rows get the account label")
 
@@ -101,9 +101,9 @@ class TestDerivedPricesAreReprClean(unittest.TestCase):
 
     def test_ib_transfer_price_clean(self):
         csv = IB_CSV.replace(
-            'Transfers,Data,Stocks,CAD,U1,OR,2026-07-02,InterDepot,In,'
-            '--,U1,300,--,"12,951.00",0.00,0.00,',
-            'Transfers,Data,Stocks,CAD,U1,OR,2026-07-02,InterDepot,In,'
+            'Transfers,Data,Stocks,CAD,U1,RYQ,2026-07-09,InterDepot,In,'
+            '--,U1,240,--,"10,360.80",0.00,0.00,',
+            'Transfers,Data,Stocks,CAD,U1,RYQ,2026-07-09,InterDepot,In,'
             '--,U1,420,--,"10,840.20",0.00,0.00,')
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "ib.csv"
@@ -133,9 +133,9 @@ class TestTransfersView(unittest.TestCase):
         work.mkdir()
         (work / "margin_ib_transfers.json").write_text(json.dumps(
             {"transactions": [
-                {"action": "TRANSFER", "date": "2026-07-02",
-                 "symbol": "OR.TO", "quantity": 300.0,
-                 "currency": "CAD", "net_amount": 12951.0,
+                {"action": "TRANSFER", "date": "2026-07-09",
+                 "symbol": "RYQ.TO", "quantity": 240.0,
+                 "currency": "CAD", "net_amount": 10360.8,
                  "account": "margin", "description": "InterDepot"}],
              "metadata": {"kind": "transfer_sidecar",
                           "account": "margin", "brokerage": "ib"}}))
@@ -163,7 +163,7 @@ class TestTransfersView(unittest.TestCase):
     def test_view_merges_sidecar_and_book_rows(self):
         with tempfile.TemporaryDirectory() as td:
             out = self._run(self._project(td))
-        self.assertIn("OR.TO", out)
+        self.assertIn("RYQ.TO", out)
         self.assertIn("InterDepot", out)
         self.assertIn("sidecar", out)
         self.assertIn("XYZ.US", out)
@@ -174,7 +174,7 @@ class TestTransfersView(unittest.TestCase):
     def test_account_filter(self):
         with tempfile.TemporaryDirectory() as td:
             out = self._run(self._project(td), account="margin")
-        self.assertIn("OR.TO", out)
+        self.assertIn("RYQ.TO", out)
         self.assertNotIn("XYZ.US", out)
 
     def test_json_mode(self):
@@ -196,17 +196,17 @@ class TestEvidencedDepotFlips(unittest.TestCase):
         from collections import namedtuple
         TM = namedtuple("TM", ["glob", "tobase", "journal", "delete",
                                "distinct"])
-        return TM({}, {"OR.US": "OR.TO"}, {}, set(), set())
+        return TM({}, {"RYQ.US": "RYQ.TO"}, {}, set(), set())
 
     def _agg(self):
-        return {"OR.US": {"qty": 300.0, "total_cost": 9421.0,
+        return {"RYQ.US": {"qty": 240.0, "total_cost": 7537.0,
                           "currency": "USD",
-                          "cost_by_currency": {"USD": 9421.0},
-                          "position_start_date": "2026-03-20"},
-                "OR.TO": {"qty": 1700.0, "total_cost": 73626.0,
+                          "cost_by_currency": {"USD": 7537.0},
+                          "position_start_date": "2026-03-13"},
+                "RYQ.TO": {"qty": 1360.0, "total_cost": 58900.0,
                           "currency": "CAD",
-                          "cost_by_currency": {"CAD": 73626.0},
-                          "position_start_date": "2026-07-17"}}
+                          "cost_by_currency": {"CAD": 58900.0},
+                          "position_start_date": "2026-07-24"}}
 
     def _sidecar(self, td, rows):
         p = Path(td) / "m_ib_transfers.json"
@@ -229,52 +229,52 @@ class TestEvidencedDepotFlips(unittest.TestCase):
         return agg
 
     def test_net_residual_moves_between_listings(self):
-        # The real OR shape: 6-leg churn netting to US -300 / TO +300.
+        # Six-leg churn netting to US -240 / TO +240.
         agg = self._apply(self._agg(), [
-            ("2026-07-02", "OR.TO", 300), ("2026-07-02", "OR.TO", -300),
-            ("2026-07-06", "OR.TO", 300), ("2026-07-02", "OR.US", -300),
-            ("2026-07-02", "OR.US", 300), ("2026-07-06", "OR.US", -300)])
-        self.assertNotIn("OR.US", agg, "emptied bucket pruned")
-        d = agg["OR.TO"]
-        self.assertAlmostEqual(d["qty"], 2000.0)
+            ("2026-07-09", "RYQ.TO", 240), ("2026-07-09", "RYQ.TO", -240),
+            ("2026-07-13", "RYQ.TO", 240), ("2026-07-09", "RYQ.US", -240),
+            ("2026-07-09", "RYQ.US", 240), ("2026-07-13", "RYQ.US", -240)])
+        self.assertNotIn("RYQ.US", agg, "emptied bucket pruned")
+        d = agg["RYQ.TO"]
+        self.assertAlmostEqual(d["qty"], 1600.0)
         self.assertTrue(d["mixed_currency"])
-        self.assertAlmostEqual(d["cost_by_currency"]["USD"], 9421.0)
-        self.assertAlmostEqual(d["cost_by_currency"]["CAD"], 73626.0)
-        self.assertEqual(d["position_start_date"], "2026-03-20")
+        self.assertAlmostEqual(d["cost_by_currency"]["USD"], 7537.0)
+        self.assertAlmostEqual(d["cost_by_currency"]["CAD"], 58900.0)
+        self.assertEqual(d["position_start_date"], "2026-03-13")
 
     def test_flip_flipped_back_moves_nothing(self):
-        # CNQ/PAAS shape: out-and-back on both listings, net zero.
+        # Out-and-back on both listings, net zero.
         agg = self._apply(self._agg(), [
-            ("2026-07-02", "OR.TO", 300), ("2026-07-03", "OR.TO", -300),
-            ("2026-07-02", "OR.US", -300), ("2026-07-03", "OR.US", 300)])
-        self.assertAlmostEqual(agg["OR.US"]["qty"], 300.0)
-        self.assertAlmostEqual(agg["OR.TO"]["qty"], 1700.0)
+            ("2026-07-09", "RYQ.TO", 240), ("2026-07-10", "RYQ.TO", -240),
+            ("2026-07-09", "RYQ.US", -240), ("2026-07-10", "RYQ.US", 240)])
+        self.assertAlmostEqual(agg["RYQ.US"]["qty"], 240.0)
+        self.assertAlmostEqual(agg["RYQ.TO"]["qty"], 1360.0)
 
     def test_lone_migration_leg_ignored(self):
         # ATON arrival: positive residual, no source in the class —
         # the book's buy/sell history already carries the position.
-        agg = self._apply(self._agg(), [("2026-07-02", "OR.TO", 300)])
-        self.assertAlmostEqual(agg["OR.US"]["qty"], 300.0)
-        self.assertAlmostEqual(agg["OR.TO"]["qty"], 1700.0)
+        agg = self._apply(self._agg(), [("2026-07-09", "RYQ.TO", 240)])
+        self.assertAlmostEqual(agg["RYQ.US"]["qty"], 240.0)
+        self.assertAlmostEqual(agg["RYQ.TO"]["qty"], 1360.0)
 
     def test_unrelated_symbols_never_pair(self):
         # Out-leg of a symbol OUTSIDE the identity class must not fund
         # an in-leg inside it: shares are never invented across
         # securities.
         agg = self._apply(self._agg(), [
-            ("2026-07-02", "XYZ.US", -300),
-            ("2026-07-02", "OR.TO", 300)])
-        self.assertAlmostEqual(agg["OR.US"]["qty"], 300.0)
-        self.assertAlmostEqual(agg["OR.TO"]["qty"], 1700.0)
+            ("2026-07-09", "XYZ.US", -240),
+            ("2026-07-09", "RYQ.TO", 240)])
+        self.assertAlmostEqual(agg["RYQ.US"]["qty"], 240.0)
+        self.assertAlmostEqual(agg["RYQ.TO"]["qty"], 1360.0)
 
     def test_move_capped_at_held_quantity(self):
-        # Evidence says 500 moved but the bucket only holds 300 (e.g.
+        # Evidence says 400 moved but the bucket only holds 240 (e.g.
         # partial history imported): move what exists, never go short.
         agg = self._apply(self._agg(), [
-            ("2026-07-02", "OR.US", -500),
-            ("2026-07-02", "OR.TO", 500)])
-        self.assertNotIn("OR.US", agg)
-        self.assertAlmostEqual(agg["OR.TO"]["qty"], 2000.0)
+            ("2026-07-09", "RYQ.US", -400),
+            ("2026-07-09", "RYQ.TO", 400)])
+        self.assertNotIn("RYQ.US", agg)
+        self.assertAlmostEqual(agg["RYQ.TO"]["qty"], 1600.0)
 
 
 class TestCryptoSendsBecomeEvidence(unittest.TestCase):
@@ -299,8 +299,8 @@ class TestCryptoSendsBecomeEvidence(unittest.TestCase):
         "Price Currency,Price at Transaction,Subtotal,"
         "Total (inclusive of Fees and/or Spread),"
         "Fees and/or Spread,Notes\n"
-        "x1,2026-05-06 13:07:29 UTC,Send,TAO,0.102,USD,400.00,,,,"
-        "Sent 0.102 TAO to wallet\n")
+        "x1,2026-05-13 13:07:29 UTC,Send,ATOM,3.5,USD,8.40,,,,"
+        "Sent 3.5 ATOM to wallet\n")
 
     def _parse(self, brokerage, name, content):
         with tempfile.TemporaryDirectory() as td:
@@ -345,12 +345,12 @@ class TestCryptoSendsBecomeEvidence(unittest.TestCase):
             "coinbase", "cb.csv", self.CB_CSV)
         self.assertEqual(len(rows), 1)
         t = rows[0]
-        self.assertEqual(t["symbol"], "TAO")
-        self.assertEqual(t["quantity"], -0.102)
+        self.assertEqual(t["symbol"], "ATOM")
+        self.assertEqual(t["quantity"], -3.5)
         self.assertEqual(t["description"], "Send")
         # Spot price carried so declaring the FMV sell is copy-paste.
-        self.assertEqual(t["price"], 400.0)
-        self.assertAlmostEqual(t["net_amount"], 40.80)
+        self.assertEqual(t["price"], 8.4)
+        self.assertAlmostEqual(t["net_amount"], 29.40)
         self.assertIn("taxable DISPOSITION at fair market", err)
 
 
@@ -403,44 +403,44 @@ class TestEvidenceFoldInteractions(unittest.TestCase):
         """Round-six finding 1 (corrects the round-five pin's wrong
         premise): the RAW-base pipeline keeps cross-listings
         PER-LISTING (GLOBAL renames only, no TOBASE consolidation),
-        so a native OR.US->OR.TO evidence move must REPLAY on the
+        so a native RYQ.US->RYQ.TO evidence move must REPLAY on the
         base inventory — the flipped shares' base-currency cost moves
         with them. The old to-base fold made this a no-op and the
-        300 shares' 13,443.14 CAD basis vanished from holdings."""
+        240 shares' 10754.51 CAD basis vanished from holdings."""
         from taxjson.bin.taxjson_export import (_apply_transfer_evidence,
                                                 _replay_moves_on_base)
-        tmap = self._tmap(tobase={"OR.US": "OR.TO"})
-        agg = {"OR.US": {"qty": 300.0, "total_cost": 9421.0,
+        tmap = self._tmap(tobase={"RYQ.US": "RYQ.TO"})
+        agg = {"RYQ.US": {"qty": 240.0, "total_cost": 7537.0,
                          "currency": "USD",
-                         "cost_by_currency": {"USD": 9421.0},
-                         "position_start_date": "2026-03-20"},
-               "OR.TO": {"qty": 1700.0, "total_cost": 73626.0,
+                         "cost_by_currency": {"USD": 7537.0},
+                         "position_start_date": "2026-03-13"},
+               "RYQ.TO": {"qty": 1360.0, "total_cost": 58900.0,
                          "currency": "CAD",
-                         "cost_by_currency": {"CAD": 73626.0},
-                         "position_start_date": "2026-07-17"}}
-        base = {"OR.US": {"qty": 300.0, "total_cost": 13443.14,
+                         "cost_by_currency": {"CAD": 58900.0},
+                         "position_start_date": "2026-07-24"}}
+        base = {"RYQ.US": {"qty": 240.0, "total_cost": 10754.51,
                           "currency": "CAD",
-                          "cost_by_currency": {"CAD": 13443.14},
-                          "position_start_date": "2026-03-20"},
-                "OR.TO": {"qty": 1700.0, "total_cost": 73626.0,
+                          "cost_by_currency": {"CAD": 10754.51},
+                          "position_start_date": "2026-03-13"},
+                "RYQ.TO": {"qty": 1360.0, "total_cost": 58900.0,
                           "currency": "CAD",
-                          "cost_by_currency": {"CAD": 73626.0},
-                          "position_start_date": "2026-07-17"}}
+                          "cost_by_currency": {"CAD": 58900.0},
+                          "position_start_date": "2026-07-24"}}
         with tempfile.TemporaryDirectory() as td:
             p = self._sidecar(td, [
-                ("2026-07-02", "OR.US", -300),
-                ("2026-07-02", "OR.TO", +300)])
+                ("2026-07-09", "RYQ.US", -240),
+                ("2026-07-09", "RYQ.TO", +240)])
             with redirect_stderr(io.StringIO()):
                 moves = _apply_transfer_evidence(agg, [p], tmap)
             _replay_moves_on_base(base, moves, tmap)
-        self.assertEqual(moves, [("OR.US", "OR.TO", 300.0)])
-        self.assertAlmostEqual(agg["OR.TO"]["qty"], 2000.0)
-        self.assertNotIn("OR.US", agg)
-        # Base REPLAYS: 2,000 shares under OR.TO carrying the WHOLE
-        # 87,069.14 CAD cost; nothing vanishes.
-        self.assertEqual(set(base), {"OR.TO"})
-        self.assertAlmostEqual(base["OR.TO"]["qty"], 2000.0)
-        self.assertAlmostEqual(base["OR.TO"]["total_cost"], 87069.14)
+        self.assertEqual(moves, [("RYQ.US", "RYQ.TO", 240.0)])
+        self.assertAlmostEqual(agg["RYQ.TO"]["qty"], 1600.0)
+        self.assertNotIn("RYQ.US", agg)
+        # Base REPLAYS: 1,600 shares under RYQ.TO carrying the WHOLE
+        # 69654.51 CAD cost; nothing vanishes.
+        self.assertEqual(set(base), {"RYQ.TO"})
+        self.assertAlmostEqual(base["RYQ.TO"]["qty"], 1600.0)
+        self.assertAlmostEqual(base["RYQ.TO"]["total_cost"], 69654.51)
 
     def test_journal_pair_base_replay_is_noop(self):
         """A JOURNAL pair's move endpoints fold to one key in BOTH

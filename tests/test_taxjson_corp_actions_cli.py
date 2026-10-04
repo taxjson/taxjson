@@ -20,10 +20,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def _merger():
     return CorporateAction(
-        date="2025-07-21", time="09:30:00", action_type="merger",
-        source_symbol="H015283.US", source_isin="H015283.US",
-        target_symbol="CVX.US", target_isin="CVX.US",
-        ratio_new=1.025, ratio_old=1.0, qty_disposed=15.0, qty_received=15.0,
+        date="2025-03-17", time="09:30:00", action_type="merger",
+        source_symbol="A012345.US", source_isin="A012345.US",
+        target_symbol="ABD.US", target_isin="ABD.US",
+        ratio_new=1.05, ratio_old=1.0, qty_disposed=12.0, qty_received=12.0,
         fmv=0.0, currency="USD", target_currency="USD", account="margin")
 
 
@@ -36,8 +36,8 @@ class TestEmitResolved(unittest.TestCase):
         out = _emit_resolved([ev], man, "canada")
         splits = [r for r in out["transactions"] if r["action"] == "SPLIT"]
         self.assertEqual(len(splits), 1)
-        self.assertEqual(splits[0]["symbol"], "H015283.US")
-        self.assertEqual(splits[0]["symbol_new"], "CVX.US")
+        self.assertEqual(splits[0]["symbol"], "A012345.US")
+        self.assertEqual(splits[0]["symbol_new"], "ABD.US")
         self.assertEqual(out["metadata"]["event_count"], 1)
         self.assertEqual(out["metadata"]["ignored_count"], 0)
 
@@ -68,11 +68,11 @@ class TestCliMainNonInteractive(unittest.TestCase):
                 '"Date","Activity","Symbol","Symbol Description","Quantity",'
                 '"Price","Settlement Date","Account","Value","Currency",'
                 '"Description"\n'
-                '"2025-07-21","Reorganization","H015283","HESS CORPORATION",'
-                '"-15","","2025-07-21","1","0","USD","MGR - HESS CORPORATION '
-                'MERGER TO CHEVRON CORPORATION 1.025 NEW = 1 OLD"\n'
-                '"2025-07-21","Reorganization","CVX","CHEVRON CORPORATION","15",'
-                '"","2025-07-21","1","0","USD","MGR - CHEVRON CORPORATION SHRS '
+                '"2025-03-17","Reorganization","A012345","ABC CORPORATION",'
+                '"-12","","2025-03-17","1","0","USD","MGR - ABC CORPORATION '
+                'MERGER TO ABDCO CORPORATION 1.05 NEW = 1 OLD"\n'
+                '"2025-03-17","Reorganization","ABD","ABDCO CORPORATION","12",'
+                '"","2025-03-17","1","0","USD","MGR - ABDCO CORPORATION SHRS '
                 'RECEIVED THRU MERGER"\n')
             # Resolve the event id the extractor will produce.
             from taxjson.lib.corp_actions import parse_rbc_corporate_actions
@@ -91,7 +91,7 @@ class TestCliMainNonInteractive(unittest.TestCase):
             data = json.loads(result.stdout)
             splits = [t for t in data["transactions"] if t["action"] == "SPLIT"]
             self.assertEqual(len(splits), 1)
-            self.assertEqual(splits[0]["symbol_new"], "CVX.US")
+            self.assertEqual(splits[0]["symbol_new"], "ABD.US")
 
 
 if __name__ == "__main__":

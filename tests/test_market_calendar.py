@@ -155,7 +155,7 @@ class TestIbSettlement(unittest.TestCase):
         self.assertEqual(get_ib_settlement('2025-04-17', 'Stocks', 'USD'),
                          '2025-04-21')
         self.assertEqual(get_ib_settlement('2024-05-24', 'Stocks', 'USD'),
-                         '2024-05-29')     # T+2 over Memorial Day
+                         '2024-05-29')     # two days over Memorial Day
         self.assertEqual(get_ib_settlement('2025-12-24', 'Stocks', 'CAD'),
                          '2025-12-29')
 

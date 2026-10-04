@@ -686,8 +686,8 @@ class TestHandoffAcrossDec31(unittest.TestCase):
         self.assertIn("again", b[0]["why"])
 
 
-class TestHandoffOwnerShapes(unittest.TestCase):
-    """Shapes from a measurement on real books (no false problems)."""
+class TestHandoffBoundaryShapes(unittest.TestCase):
+    """Year-boundary shapes that must not report false problems."""
 
     CFG = {"settings": {"country": "canada", "year": 2026},
            "accounts": {"margin": {"type": "taxable"}}}
@@ -704,31 +704,31 @@ class TestHandoffOwnerShapes(unittest.TestCase):
     @rule("CA-RPT-08")
     def test_grant_premium_row_is_not_a_double_of_a_buy_back(self):
         # A grant-timed premium row (proceeds 0) in the record and a
-        # January buy-back here (proceeds -250, cost 0) are not one sale.
+        # January buy-back here (proceeds -180, cost 0) are not one sale.
         from taxjson.lib import handoff
-        opt = "PSX260116C00065000.US"
+        opt = "QZP260320C00038500.US"
         with tempfile.TemporaryDirectory() as td:
             self._cache(td, [], [
                 {"symbol": opt, "date": "2025-12-31",
                  "date_settle": "2026-01-02", "qty": 1.0,
-                 "proceeds": -250.31, "cost": -0.0, "gain": -250.31,
+                 "proceeds": -180.25, "cost": -0.0, "gain": -180.25,
                  "direction": "SHORT"}])
             rec = {"year": 2025, "year_end": {}, "boundary_rows": [],
                    "dispositions": [
                        {"symbol": opt, "date": "2025-12-30",
                         "date_settle": "2025-12-31", "qty": 1.0,
-                        "proceeds": 0.0, "cost": -328.44,
-                        "gain": 328.44}]}
+                        "proceeds": 0.0, "cost": -242.6,
+                        "gain": 242.6}]}
             rep = handoff.check(Path(td), self.CFG, rec, {})
             self.assertEqual(rep["double"], [])
 
     @rule("CA-RPT-08")
     def test_boundary_rows_keep_full_quantity_precision(self):
         from taxjson.lib import handoff
-        rows = [{"action": "DIVIDEND", "symbol": "SOL",
+        rows = [{"action": "DIVIDEND", "symbol": "ATOM",
                  "date": "2025-12-30", "date_settle": "2025-12-30",
-                 "time": "14:56:03", "quantity": 0.000135313637,
-                 "net_amount": 0.02307, "currency": "CAD", "id": "d1"}]
+                 "time": "11:42:17", "quantity": 0.000271849163,
+                 "net_amount": 0.00194, "currency": "CAD", "id": "d1"}]
         with tempfile.TemporaryDirectory() as td:
             work = self._cache(td, rows, [])
             rec = {"year": 2025, "year_end": {}, "dispositions": [],

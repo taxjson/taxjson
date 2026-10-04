@@ -237,18 +237,18 @@ class TestRbcThousandsRatios(unittest.TestCase):
 class TestRbcPairing(unittest.TestCase):
     def test_s071_19_xch_pairs_by_strike(self):
         rows = [
-            _rbc_row("2024-11-15", "Reorganization", "8AAAAA1", "", "-1",
-                     "0", "CAD", "XCH - CALL .TUX   03/21/25    64 TUX "
+            _rbc_row("2025-02-10", "Reorganization", "8AAAAA1", "", "-1",
+                     "0", "CAD", "XCH - CALL .QVM   06/20/25    41 QVM "
                      "CORP ADJ: SPCL CASH DIVD"),
-            _rbc_row("2024-11-15", "Reorganization", "8AAAAA2", "", "-1",
-                     "0", "CAD", "XCH - CALL .TUX   03/21/25    70 TUX "
+            _rbc_row("2025-02-10", "Reorganization", "8AAAAA2", "", "-1",
+                     "0", "CAD", "XCH - CALL .QVM   06/20/25    47 QVM "
                      "CORP ADJ: SPCL CASH DIVD"),
-            # the 69.50 receipt listed first
-            _rbc_row("2024-11-15", "Reorganization", "8BBBBB2", "", "1",
-                     "0", "CAD", "XCH - CALL .TUX   03/21/25    69.50 TUX "
+            # the 46.25 receipt listed first
+            _rbc_row("2025-02-10", "Reorganization", "8BBBBB2", "", "1",
+                     "0", "CAD", "XCH - CALL .QVM   06/20/25    46.25 QVM "
                      "CORP ADJ: SPCL CASH DIVD"),
-            _rbc_row("2024-11-15", "Reorganization", "8BBBBB1", "", "1",
-                     "0", "CAD", "XCH - CALL .TUX   03/21/25    63.50 TUX "
+            _rbc_row("2025-02-10", "Reorganization", "8BBBBB1", "", "1",
+                     "0", "CAD", "XCH - CALL .QVM   06/20/25    40.25 QVM "
                      "CORP ADJ: SPCL CASH DIVD"),
         ]
         import itertools
@@ -410,17 +410,18 @@ class TestRbcSymbolResolution(unittest.TestCase):
         self.assertIn("not traded", err)
 
     def test_fuzzy_parent_still_resolves_real_shapes(self):
-        # The real 2024 shapes: 'GE AEROSPACE' -> the 'GE AEROSPACE
-        # COMMON STOCK' line; 'GRAYSCALE ETHEREUM TR ETH' -> ETHE.
+        # Two description shapes: 'QZ AEROSPACE' -> the 'QZ AEROSPACE
+        # COMMON STOCK' line; 'QUARTZ ETHEREUM TR ETH' -> the trust's
+        # 'ETF SHS' line.
         for parent, sym, symdesc in (
-                ("GE AEROSPACE", "GEX", "GE AEROSPACE COMMON STOCK"),
-                ("GRAYSCALE ETHEREUM TR ETH", "ETHX",
-                 "GRAYSCALE ETHEREUM TR ETF SHS")):
+                ("QZ AEROSPACE", "QZAX", "QZ AEROSPACE COMMON STOCK"),
+                ("QUARTZ ETHEREUM TR ETH", "QETX",
+                 "QUARTZ ETHEREUM TR ETF SHS")):
             with tempfile.TemporaryDirectory() as tmp:
                 evs, err = _rbc_events(
                     tmp,
-                    _rbc_row("2024-01-10", "Buy", sym, symdesc, "120",
-                             "-3000", "USD", symdesc, price="25"),
+                    _rbc_row("2024-01-10", "Buy", sym, symdesc, "80",
+                             "-2000", "USD", symdesc, price="25"),
                     self._spin(parent))
             self.assertEqual(evs[0].source_symbol, f"{sym}.US", err)
 
@@ -807,10 +808,10 @@ class TestElections(unittest.TestCase):
     def test_s020_06_s074_00_zero_fmv_with_cash_in_lieu_warns(self):
         from taxjson.lib.corp_actions import (resolve_event,
                                               zero_value_merger_rows)
-        ev = _event(action_type='merger', source_symbol='HES.US',
-                    target_symbol='CVX.US', qty_disposed=15,
-                    qty_received=15, ratio_new=1.025, ratio_old=1,
-                    cash_in_lieu=55.82, cash_in_lieu_currency='USD')
+        ev = _event(action_type='merger', source_symbol='MRGA.US',
+                    target_symbol='MRGB.US', qty_disposed=12,
+                    qty_received=12, ratio_new=1.025, ratio_old=1,
+                    cash_in_lieu=41.37, cash_in_lieu_currency='USD')
         rows, err = _quiet(resolve_event, ev, 'taxable_disposition',
                            hints={'fmv_per_share': 0.0})
         self.assertIn('NO fair market value', err)

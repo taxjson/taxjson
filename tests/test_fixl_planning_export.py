@@ -162,17 +162,17 @@ class TestReportAsOf(_Tmp):
 
 
 class TestOptionUnderlying(_Tmp):
-    """S030-02: RCI option root -> the held RCI.B.TO listing."""
+    """S030-02: a class-share option root -> the held ROOT.B.TO listing."""
 
     def test_class_share_underlying(self):
-        g = self.w("g.json", _inv(("RCI.B.TO", 100, 5000, "CAD"),
-                                  ("RCI270115C00046000.TO", -1, -300, "CAD"),
-                                  ("BCE260116C00030000.TO", 1, 50, "CAD")))
+        g = self.w("g.json", _inv(("QZC.B.TO", 100, 5000, "CAD"),
+                                  ("QZC270115C00038000.TO", -1, -300, "CAD"),
+                                  ("QZE260116C00031000.TO", 1, 50, "CAD")))
         doc = tomllib.loads(_export("--holdings-toml", g).stdout)
         und = {h["symbol"]: h.get("underlying") for h in doc["holding"]}
-        self.assertEqual(und["RCI270115C00046000.TO"], "RCI.B.TO")
+        self.assertEqual(und["QZC270115C00038000.TO"], "QZC.B.TO")
         # No held stock line: the root spelling stays.
-        self.assertEqual(und["BCE260116C00030000.TO"], "BCE.TO")
+        self.assertEqual(und["QZE260116C00031000.TO"], "QZE.TO")
 
 
 class TestTradesFollowCorporateActions(_Tmp):
@@ -248,22 +248,22 @@ class TestFuturesHandoff(_Tmp):
     """S030-09."""
 
     def test_future_and_future_option(self):
-        g = self.w("g.json", _inv(("F:MBTM6.US", 1, 38128.27, "USD"),
-                                  ("F:CL260114P00053000.US", 10, 9543.6,
+        g = self.w("g.json", _inv(("F:ZZMZ6.US", 1, 41250.00, "USD"),
+                                  ("F:CL260217P00048000.US", 8, 7342.4,
                                    "USD"),
                                   ("AAPL260116C00200000.US", 1, 500, "USD")))
         r = _export("--holdings-toml", "--futures", g)
         self.assertEqual(r.returncode, 0, r.stderr)
         h = {x["symbol"]: x for x in tomllib.loads(r.stdout)["holding"]}
-        self.assertEqual(h["F:MBTM6.US"]["asset_type"], "future")
-        fo = h["F:CL260114P00053000.US"]
+        self.assertEqual(h["F:ZZMZ6.US"]["asset_type"], "future")
+        fo = h["F:CL260217P00048000.US"]
         self.assertEqual(fo["asset_type"], "option")
         self.assertNotIn("contract_multiplier", fo)
         self.assertEqual(h["AAPL260116C00200000.US"]["contract_multiplier"],
                          100)
         rep = _export("--report", "--futures", g).stdout
         row = [ln for ln in rep.splitlines() if ln.startswith("F:CL")][0]
-        self.assertIn("954.3600", row)       # per contract, not /100
+        self.assertIn("917.8000", row)       # per contract, not /100
 
 
 if __name__ == "__main__":

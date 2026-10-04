@@ -338,17 +338,17 @@ _WB_HDR = ('"Currency\nDevise",Date,"Action Code\nCode d\'action",'
 
 
 def _wb_csv(sell_first):
-    s = 'USD,02-10-2025,SELL,@XYZ,CALL XYZ01/16/26 50,OPC,-1,1.00,,100.00\n'
-    b = 'USD,02-10-2025,BUY,,,,1,3.00,,(300.00)\n'
+    s = 'USD,08-10-2025,SELL,@QZY,CALL QZY02/20/26 45,OPC,-1,1.00,,100.00\n'
+    b = 'USD,08-10-2025,BUY,,,,1,3.00,,(300.00)\n'
     if not sell_first:
-        s, b = (b.replace(',,,,1', ',@XYZ,CALL XYZ01/16/26 50,OPC,1'),
-                s.replace('@XYZ,CALL XYZ01/16/26 50,OPC', ',,'))
+        s, b = (b.replace(',,,,1', ',@QZY,CALL QZY02/20/26 45,OPC,1'),
+                s.replace('@QZY,CALL QZY02/20/26 45,OPC', ',,'))
     return (_WB_PRE + _WB_HDR + ',,,,,,,,,\n' + s + b
-            + 'USD,07-10-2025,BUY,,,,1,2.50,,(250.00)\n')
+            + 'USD,15-10-2025,BUY,,,,1,2.50,,(250.00)\n')
 
 
 class TestWebullThroughRun(unittest.TestCase):
-    """The owner's case end to end: a Webull export listing a write before
+    """End to end: a Webull export listing a write before
     its same-day buy-back, through `taxjson run` (parse, merge, sort,
     currency, engine) in a project of each country."""
 

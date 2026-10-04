@@ -1132,18 +1132,18 @@ class TestKnownIssuesGraduated(unittest.TestCase):
                   '"Security Description","Type Code","Quantity",'
                   '"Price","Proceeds"\n')
         csv = header + (
-            'USD,25-11-2024,SELL,@ABBV,CALL ABBV01/17/25 190,OPC,10,'
-            '1.60,"1590.08"\n'
+            'USD,02-12-2024,SELL,@QRS,CALL QRS03/26/25 63.5,OPC,10,'
+            '1.55,"1540.08"\n'
             # New EQUITY symbol, blank Description: must NOT re-parse
-            # as the ABBV call.
-            'USD,26-11-2024,BUY,AAPL,,STK,100,150.00,"(15000.00)"\n')
+            # as the QRS call.
+            'USD,03-12-2024,BUY,AAPL,,STK,100,150.00,"(15000.00)"\n')
         txs = _parse_csv(WebullBrokerage, csv)
         syms = sorted(t['symbol'] for t in txs)
         self.assertIn('AAPL.US', syms)
         self.assertEqual(
-            sum(1 for s in syms if 'ABBV' in s), 1,
+            sum(1 for s in syms if 'QRS' in s), 1,
             "the blank-Description AAPL row inherited the option "
-            "description and re-parsed as a second ABBV call")
+            "description and re-parsed as a second QRS call")
 
 
 class TestCrossTaxableOverlapWarning(unittest.TestCase):
@@ -1539,29 +1539,29 @@ class TestAssignmentPremiumNotHijacked(unittest.TestCase):
 
     def test_canada_unrelated_sale_between_legs(self):
         txs = [
-            # Hold 100 XYZ @ 4000 (ACB 40/sh).
+            # Hold 100 QRS @ 4000 (ACB 40/sh).
             TaxTransaction(action='BUYSELL', date='2025-01-05',
-                           symbol='XYZ.US', quantity=100.0, price=40.0,
+                           symbol='QRS.US', quantity=100.0, price=40.0,
                            net_amount=4000.0, currency='USD', account='M'),
             # Short put, premium +200; assigned.
             TaxTransaction(action='BUYSELL', date='2025-02-01',
                            time='10:00:00',
-                           symbol='XYZ250620P00050000.US', quantity=-2.0,
+                           symbol='QRS250718P00050000.US', quantity=-2.0,
                            price=1.0, net_amount=200.0, currency='USD',
                            account='M'),
             TaxTransaction(action='ASSIGN', date='2025-03-10',
                            time='09:00:00',
-                           symbol='XYZ250620P00050000.US', quantity=2.0,
+                           symbol='QRS250718P00050000.US', quantity=2.0,
                            price=0.0, net_amount=0.0, currency='USD',
                            account='M'),
             # UNRELATED sale of 40 held shares at ACB (gain must be 0).
             TaxTransaction(action='BUYSELL', date='2025-03-10',
-                           time='09:10:00', symbol='XYZ.US',
+                           time='09:10:00', symbol='QRS.US',
                            quantity=-40.0, price=40.0, net_amount=1600.0,
                            currency='USD', account='M'),
             # The assignment's own stock leg: buy 200 @ 50.
             TaxTransaction(action='ASSIGN', date='2025-03-10',
-                           time='09:30:00', symbol='XYZ.US',
+                           time='09:30:00', symbol='QRS.US',
                            quantity=200.0, price=50.0, net_amount=10000.0,
                            currency='USD', account='M'),
         ]
@@ -1578,30 +1578,30 @@ class TestAssignmentPremiumNotHijacked(unittest.TestCase):
             # Short put, premium +500; assigned.
             TaxTransaction(action='BUYSELL', date='2025-02-01',
                            time='10:00:00',
-                           symbol='XYZ250620P00100000.US', quantity=-1.0,
+                           symbol='QRS250718P00100000.US', quantity=-1.0,
                            price=5.0, net_amount=500.0, currency='USD',
                            account='M'),
             TaxTransaction(action='ASSIGN', date='2025-03-10',
                            time='09:00:00',
-                           symbol='XYZ250620P00100000.US', quantity=1.0,
+                           symbol='QRS250718P00100000.US', quantity=1.0,
                            price=0.0, net_amount=0.0, currency='USD',
                            account='M'),
             # UNRELATED buy at market.
             TaxTransaction(action='BUYSELL', date='2025-03-10',
-                           time='09:30:00', symbol='XYZ.US',
+                           time='09:30:00', symbol='QRS.US',
                            quantity=100.0, price=100.0,
                            net_amount=10000.0, currency='USD',
                            account='M'),
             # Assignment stock leg: buy 100 @ strike.
             TaxTransaction(action='ASSIGN', date='2025-03-10',
-                           time='16:00:00', symbol='XYZ.US',
+                           time='16:00:00', symbol='QRS.US',
                            quantity=100.0, price=100.0,
                            net_amount=10000.0, currency='USD',
                            account='M'),
             # Sell the FIRST lot (FIFO) — must realize gain 1000, not
             # 1500 (basis 10000, not premium-reduced 9500).
             TaxTransaction(action='BUYSELL', date='2025-04-01',
-                           symbol='XYZ.US', quantity=-100.0, price=110.0,
+                           symbol='QRS.US', quantity=-100.0, price=110.0,
                            net_amount=11000.0, currency='USD',
                            account='M'),
         ]
@@ -2029,36 +2029,36 @@ class TestReAuditRegressions(unittest.TestCase):
         txs = [
             # Feb marked pair.
             TaxTransaction(action='BUYSELL', date='2025-01-05',
-                           symbol='QQQ250620P00050000.US', quantity=-1.0,
+                           symbol='QZQ250620P00050000.US', quantity=-1.0,
                            price=1.0, net_amount=100.0, currency='USD',
                            account='M'),
             TaxTransaction(action='ASSIGN', date='2025-02-01',
                            time='09:00:00',
-                           symbol='QQQ250620P00050000.US', quantity=1.0,
+                           symbol='QZQ250620P00050000.US', quantity=1.0,
                            price=0.0, net_amount=0.0, currency='USD',
                            account='M'),
             TaxTransaction(action='ASSIGN', date='2025-02-01',
-                           time='16:00:00', symbol='QQQ.US',
+                           time='16:00:00', symbol='QZQ.US',
                            quantity=100.0, price=50.0, net_amount=5000.0,
                            currency='USD', account='M'),
             # June plain-convention assignment (second broker).
             TaxTransaction(action='BUYSELL', date='2025-05-05',
-                           symbol='QQQ250820P00060000.US', quantity=-1.0,
+                           symbol='QZQ250820P00060000.US', quantity=-1.0,
                            price=6.0, net_amount=600.0, currency='USD',
                            account='M'),
             TaxTransaction(action='ASSIGN', date='2025-06-15',
                            time='09:00:00',
-                           symbol='QQQ250820P00060000.US', quantity=1.0,
+                           symbol='QZQ250820P00060000.US', quantity=1.0,
                            price=0.0, net_amount=0.0, currency='USD',
                            account='M'),
             TaxTransaction(action='BUYSELL', date='2025-06-15',
-                           time='16:00:00', symbol='QQQ.US',
+                           time='16:00:00', symbol='QZQ.US',
                            quantity=100.0, price=60.0, net_amount=6000.0,
                            currency='USD', account='M'),
             # Liquidate everything at cost-neutral prices; the premiums
             # are the only P&L.
             TaxTransaction(action='BUYSELL', date='2025-09-01',
-                           symbol='QQQ.US', quantity=-200.0, price=55.0,
+                           symbol='QZQ.US', quantity=-200.0, price=55.0,
                            net_amount=11000.0, currency='USD',
                            account='M'),
         ]

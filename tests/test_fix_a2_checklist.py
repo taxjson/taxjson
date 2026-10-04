@@ -477,8 +477,8 @@ class TestCryptoSendsCommand(unittest.TestCase):
         self.home = td / "home"
         self.home.mkdir()
         (self.home / ".crypto_price_cache.json").write_text(json.dumps({
-            "TAO22974-2026-05-04": 284.9259948730469,
-            "TAO22974-2026-01-05": 300.0}))
+            "LDO11808-2026-04-13": 1.84,
+            "LDO11808-2026-01-12": 2.1}))
 
     def tearDown(self):
         self._td.cleanup()
@@ -490,7 +490,7 @@ class TestCryptoSendsCommand(unittest.TestCase):
     def test_unparsed_peer_guard_and_unset(self):
         """A2-0359: with kr not parsed, a send to it is not offered as a
         gift; A2-1163: a saved decision can be removed."""
-        sol = "cb-20250713T071327-SOL-50.0001"
+        sol = "cb-20250622T100510-ATOM-80.002"   # the matched send
         r = self.cli("run", "--no-input")
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         # kr's evidence gone (never parsed): the guard the command
@@ -508,7 +508,7 @@ class TestCryptoSendsCommand(unittest.TestCase):
         res = cl.d_crypto_sends(c)
         self.assertEqual(res.status, "blocked", res.detail)
         self.assertIn("kr (kraken: not parsed yet)", res.detail)
-        # Full run: SOL matched; decide the BTC send, then take it back.
+        # Full run: the send matched; decide the BTC send, then take it back.
         self.assertEqual(self.cli("run", "--no-input").returncode, 0)
         btc = "cb-20250801T080000-BTC-0.001"
         self.assertEqual(self.cli("crypto-sends", "cb", "--set", f"{btc}=self").returncode, 0)

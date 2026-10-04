@@ -163,7 +163,7 @@ class TestT1135Futures(unittest.TestCase):
     def test_long_future_notional_is_not_cost(self):
         from taxjson.bin.taxjson_t1135 import walk_costs
         txs = [_tx(date="2025-01-10", qty=100, net=30000.0),
-               _tx(date="2025-10-20", symbol="F:CLZ5.US", qty=1,
+               _tx(date="2025-09-15", symbol="F:CLZ5.US", qty=1,
                    net=80000.0, price=80.00)]
         w = walk_costs(txs, 2025, {})
         self.assertAlmostEqual(w["max_total_cost"], 30000.0, places=2)
@@ -183,11 +183,11 @@ class TestT1135Futures(unittest.TestCase):
             base = Path(td) / "margin_base.json"
             base.write_text(json.dumps({"transactions": [
                 _tx(date="2025-01-10", qty=100, net=30000.0),
-                _tx(date="2025-10-20", symbol="F:CLZ5.US", qty=1,
+                _tx(date="2025-09-15", symbol="F:CLZ5.US", qty=1,
                     net=80000.0)]}))
             gains = Path(td) / "margin_gains.json"
             gains.write_text(json.dumps({"transactions": [
-                {"symbol": "F:CLZ5.US", "date": "2025-10-23",
+                {"symbol": "F:CLZ5.US", "date": "2025-09-18",
                  "gain": 5000.0}]}))
             rep = build_report([base], [gains], 2025, {}, "CAD")
         self.assertFalse(rep["filing_required"])
@@ -292,8 +292,8 @@ CL_OPEN = ("2025-10-06", 1.0, 50002.00, 50.00)
 CL_CLOSE = ("2025-10-09", -1.0, 53998.00, 54.00)
 RATES = {"USD": {"2025-10-06": Decimal("1.3900"),
                  "2025-10-09": Decimal("1.3800"),
-                 "2025-11-03": Decimal("1.4000"),
-                 "2025-11-10": Decimal("1.3500")}}
+                 "2025-11-17": Decimal("1.4000"),
+                 "2025-11-24": Decimal("1.3500")}}
 
 
 def _convert(rows, to="CAD", country="canada"):
@@ -330,9 +330,9 @@ class TestSettleFutures(unittest.TestCase):
         f = lambda d, q, n, t: _fut(d, q, n, n / abs(q) / 1000,  # noqa
                                     symbol="F:XXZ5.US", fee=0.0, time=t)
         rows, st = settle_futures([
-            f("2025-11-03", 1.0, 100.0, "10:00:00"),
-            f("2025-11-03", -2.0, 220.0, "11:00:00"),   # close 1, short 1
-            f("2025-11-10", 1.0, 105.0, "10:00:00")],  # cover at a gain
+            f("2025-11-17", 1.0, 100.0, "10:00:00"),
+            f("2025-11-17", -2.0, 220.0, "11:00:00"),   # close 1, short 1
+            f("2025-11-24", 1.0, 105.0, "10:00:00")],  # cover at a gain
             "average")
         self.assertEqual(st["split"], 1)
         self.assertEqual([r.quantity for r in rows], [1.0, -1.0, -1.0, 1.0])
@@ -369,8 +369,8 @@ class TestFuturesGainAtCloseRate(unittest.TestCase):
     def test_short_gain_is_native_pl_at_the_closing_rate(self):
         es = lambda d, q, n: _fut(d, q, n, n / 50, symbol="F:ESZ5.US",  # noqa
                                   fee=2.0)
-        conv = _convert([es("2025-11-03", -1.0, 299998.0),
-                         es("2025-11-10", 1.0, 295002.0)])
+        conv = _convert([es("2025-11-17", -1.0, 299998.0),
+                         es("2025-11-24", 1.0, 295002.0)])
         g = _gains(conv)
         self.assertEqual(len(g), 1)
         self.assertAlmostEqual(g[0]["gain"], 4996.0 * 1.35, places=2)
@@ -378,9 +378,9 @@ class TestFuturesGainAtCloseRate(unittest.TestCase):
     def test_loss_and_crossing_totals(self):
         f = lambda d, q, n, t: _fut(d, q, n, n / abs(q) / 1000,  # noqa
                                     symbol="F:XXZ5.US", fee=0.0, time=t)
-        conv = _convert([f("2025-11-03", 1.0, 100.0, "10:00:00"),
-                         f("2025-11-03", -2.0, 220.0, "11:00:00"),
-                         f("2025-11-10", 1.0, 115.0, "10:00:00")])
+        conv = _convert([f("2025-11-17", 1.0, 100.0, "10:00:00"),
+                         f("2025-11-17", -2.0, 220.0, "11:00:00"),
+                         f("2025-11-24", 1.0, 115.0, "10:00:00")])
         g = sorted(_gains(conv), key=lambda e: e["date"])
         self.assertAlmostEqual(g[0]["gain"], 10 * 1.40, places=6)
         self.assertAlmostEqual(g[1]["gain"], -5 * 1.35, places=6)
@@ -405,8 +405,8 @@ class TestFuturesScheduleThree(unittest.TestCase):
         from taxjson.bin.taxjson_form_export import build_schedule3
         entries = _gains(_convert([_fut(*CL_OPEN), _fut(*CL_CLOSE)]))
         loss = _gains(_convert([
-            _fut("2025-11-03", 1.0, 60000.0, 60.0, symbol="F:CLF6.US"),
-            _fut("2025-11-10", -1.0, 59000.0, 59.0, symbol="F:CLF6.US")]))
+            _fut("2025-11-17", 1.0, 60000.0, 60.0, symbol="F:CLF6.US"),
+            _fut("2025-11-24", -1.0, 59000.0, 59.0, symbol="F:CLF6.US")]))
         rep = build_schedule3(entries + loss, 2025)
         rows = {r["symbol"]: r for r in rep["rows"]}
         cl = rows["F:CLZ5.US"]

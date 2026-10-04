@@ -23,11 +23,11 @@ _TXS = [
     # A truncated-history short: sells with no prior buy.
     _tx("BUYSELL", "2025-06-01", "FOO.US", -10, 2000.0),
     # A merger fragmented across a temp symbol + the acquirer, then sold.
-    _tx("BUYSELL", "2025-07-21", "H015283.US", -15, 0.0,
-        "MGR - HESS CORPORATION MERGER TO CHEVRON CORPORATION 1.025 NEW = 1 OLD"),
-    _tx("BUYSELL", "2025-07-21", "CVX.US", 15, 0.0,
-        "MGR - CHEVRON CORPORATION SHRS RECEIVED THRU MERGER"),
-    _tx("BUYSELL", "2025-12-23", "CVX.US", -15, 3000.0, "sale"),
+    _tx("BUYSELL", "2025-03-17", "A012345.US", -12, 0.0,
+        "MGR - ABC CORPORATION MERGER TO ABDCO CORPORATION 1.05 NEW = 1 OLD"),
+    _tx("BUYSELL", "2025-03-17", "ABD.US", 12, 0.0,
+        "MGR - ABDCO CORPORATION SHRS RECEIVED THRU MERGER"),
+    _tx("BUYSELL", "2025-11-19", "ABD.US", -12, 1500.0, "sale"),
     # A clean, fully-known position — must NOT be flagged.
     _tx("BUYSELL", "2025-02-01", "OK.US", 100, 5000.0),
     _tx("BUYSELL", "2025-09-01", "OK.US", -100, 6000.0),
@@ -50,8 +50,8 @@ class TestMissingHistoryCli(unittest.TestCase):
         self.assertEqual(rc, 0)
         # Merger reconstructed and labelled with both symbols.
         self.assertIn("Reconstructed mergers", out)
-        self.assertIn("H015283.US", out)
-        self.assertIn("CVX.US", out)
+        self.assertIn("A012345.US", out)
+        self.assertIn("ABD.US", out)
         # Truncated-history short surfaced.
         self.assertIn("Truncated history", out)
         self.assertIn("FOO.US", out)

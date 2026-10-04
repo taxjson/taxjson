@@ -40,8 +40,8 @@ class TestNegativeProceedsSell(unittest.TestCase):
         # -220.90).
         from taxjson.lib.brokerages.questrade import QuestradeBrokerage
         csv = ("Transaction Date,Settlement Date,Action,Symbol,Description,Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Account #,Activity Type,Account Type\n"
-               "2025-03-03 10:00:00 AM,2025-03-04 12:00:00 AM,Buy,,CALL ZZZ 06/20/25 50.00 ZZZ INC,1,2.00,-200.00,-10.95,-210.95,USD,55500001,Trades,Individual\n"
-               "2025-12-15 10:00:00 AM,2025-12-16 12:00:00 AM,Sell,,CALL ZZZ 06/20/25 50.00 ZZZ INC,-1,0.01,1.00,-10.95,-9.95,USD,55500001,Trades,Individual\n")
+               "2025-03-03 10:00:00 AM,2025-03-04 12:00:00 AM,Buy,,CALL ZZZ 07/18/25 50.00 ZZZ INC,1,2.00,-200.00,-10.95,-210.95,USD,55500001,Trades,Individual\n"
+               "2025-12-15 10:00:00 AM,2025-12-16 12:00:00 AM,Sell,,CALL ZZZ 07/18/25 50.00 ZZZ INC,-1,0.01,1.00,-10.95,-9.95,USD,55500001,Trades,Individual\n")
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "qt.csv"
             p.write_text(csv)
@@ -134,7 +134,7 @@ class TestSuperficialLossSubstitutedProperty(unittest.TestCase):
     ACQUIRED identical property in the 61-day window AND at its end owns
     the SUBSTITUTED property — the property acquired in the window. A
     registered account's units held BEFORE the window neither create
-    nor back a denial (audit r04; real-data AMD / ENPH / XTD shapes)."""
+    nor back a denial (audit r04)."""
     S = "QQQX.US"
 
     def _sell_at_loss(self, *extra):
@@ -155,20 +155,20 @@ class TestSuperficialLossSubstitutedProperty(unittest.TestCase):
         g = self._loss(ca(tax, sheltered_transactions=shel))
         self.assertEqual((g["gain"], g["disallowed_amount"], g["permanently_disallowed"]), (-1000.0, 0.0, 0.0))
 
-    def test_amd_shape_taxable_rebuy_held_defers_not_permanent(self):
-        # Only the margin account bought in the window (40, of which it
-        # sells 30 again before +30); the RRSP's 800 predate the window:
-        # the 10 still held are denied and DEFERRED into the taxable
-        # ACB, nothing permanent. (Before: 40 denied, 30 of them
+    def test_taxable_rebuy_held_after_partial_resale_defers_not_permanent(self):
+        # Only the margin account bought in the window (50, of which it
+        # sells 35 again before +30); the RRSP's 700 predate the window:
+        # the 15 still held are denied and DEFERRED into the taxable
+        # ACB, nothing permanent. (Before: 50 denied, 35 of them
         # permanently on the strength of the RRSP's old shares.)
         tax = self._sell_at_loss(
-            T(date="2025-06-10", symbol=self.S, quantity=40, net_amount=400.0),
-            T(date="2025-06-20", symbol=self.S, quantity=-30, net_amount=300.0),
-            T(date="2025-09-02", symbol=self.S, quantity=-10, net_amount=100.0))
-        shel = [T(date="2021-03-01", symbol=self.S, quantity=800, net_amount=9000.0, account="RRSP9")]
+            T(date="2025-06-10", symbol=self.S, quantity=50, net_amount=500.0),
+            T(date="2025-06-20", symbol=self.S, quantity=-35, net_amount=350.0),
+            T(date="2025-09-02", symbol=self.S, quantity=-15, net_amount=150.0))
+        shel = [T(date="2021-03-08", symbol=self.S, quantity=700, net_amount=7800.0, account="RRSP9")]
         r = ca(tax, sheltered_transactions=shel)
         g = self._loss(r)
-        self.assertAlmostEqual(g["disallowed_amount"], 100.0)
+        self.assertAlmostEqual(g["disallowed_amount"], 150.0)
         self.assertAlmostEqual(g["permanently_disallowed"], 0.0)
         # Every denied dollar comes back through the taxable pool: the
         # book's allowed total equals its net cash, nothing permanent.
@@ -176,20 +176,20 @@ class TestSuperficialLossSubstitutedProperty(unittest.TestCase):
         self.assertEqual(sum(x["permanently_disallowed"] for x in recs), 0.0)
         self.assertAlmostEqual(sum(x["gain"] for x in recs), -1000.0)
 
-    def test_enph_shape_registered_account_only_sold_in_window_is_allowed(self):
-        shel = [T(date="2023-05-01", symbol=self.S, quantity=300, net_amount=6000.0, account="RRSP9"),
-                T(date="2025-06-12", symbol=self.S, quantity=-100, net_amount=1000.0, account="RRSP9")]
+    def test_registered_account_only_sold_in_window_is_allowed(self):
+        shel = [T(date="2023-05-08", symbol=self.S, quantity=250, net_amount=5000.0, account="RRSP9"),
+                T(date="2025-06-12", symbol=self.S, quantity=-80, net_amount=800.0, account="RRSP9")]
         g = self._loss(ca(self._sell_at_loss(), sheltered_transactions=shel))
         self.assertEqual((g["disallowed_amount"], g["permanently_disallowed"]), (0.0, 0.0))
 
-    def test_xtd_shape_only_in_window_drip_units_are_denied(self):
-        # The RRSP held 5,000 before the window and acquired 8 by DRIP
-        # inside it: 8 of the 100 units are denied, permanently.
-        shel = [T(date="2022-01-03", symbol=self.S, quantity=5000, net_amount=50000.0, account="RRSP9"),
-                T(date="2025-06-16", symbol=self.S, quantity=8, net_amount=80.0, account="RRSP9", description="DRIP")]
+    def test_only_in_window_drip_units_are_denied(self):
+        # The RRSP held 4,000 before the window and acquired 7 by DRIP
+        # inside it: 7 of the 100 units are denied, permanently.
+        shel = [T(date="2022-01-10", symbol=self.S, quantity=4000, net_amount=40000.0, account="RRSP9"),
+                T(date="2025-06-17", symbol=self.S, quantity=7, net_amount=70.0, account="RRSP9", description="DRIP")]
         g = self._loss(ca(self._sell_at_loss(), sheltered_transactions=shel))
-        self.assertAlmostEqual(g["disallowed_amount"], 80.0)
-        self.assertAlmostEqual(g["permanently_disallowed"], 80.0)
+        self.assertAlmostEqual(g["disallowed_amount"], 70.0)
+        self.assertAlmostEqual(g["permanently_disallowed"], 70.0)
 
     def test_registered_holder_backs_at_most_what_it_still_holds(self):
         # The TFSA held 150, buys 50 inside the window and sells 180

@@ -10,14 +10,14 @@ class TestTickerMap(unittest.TestCase):
     def test_ticker_mapping(self):
         tx_content = {
             "transactions": [
-                {"action": "BUYSELL", "date": "2025-01-01", "symbol": "AEM.US"},
-                {"action": "BUYSELL", "date": "2025-01-01", "symbol": "AEM250321C00100000.US"},
+                {"action": "BUYSELL", "date": "2025-01-01", "symbol": "QAM.US"},
+                {"action": "BUYSELL", "date": "2025-01-01", "symbol": "QAM250418C00085000.US"},
                 {"action": "BUYSELL", "date": "2025-01-01", "symbol": "AAPL.US"},
                 {"action": "BUYSELL", "date": "2025-01-01", "symbol": "AAPL260116C00150000.US"}
             ]
         }
         
-        map_content = "GLOBAL AEM.US AEM.TO\nGLOBAL AAPL.US AAPL.NEO\n"
+        map_content = "GLOBAL QAM.US QAM.TO\nGLOBAL AAPL.US AAPL.NEO\n"
         
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             f.write(json.dumps(tx_content))
@@ -43,8 +43,8 @@ class TestTickerMap(unittest.TestCase):
             output = json.loads(result.stdout)
             txs = output['transactions']
             
-            self.assertEqual(txs[0]['symbol'], "AEM.TO")
-            self.assertEqual(txs[1]['symbol'], "AEM250321C00100000.TO")
+            self.assertEqual(txs[0]['symbol'], "QAM.TO")
+            self.assertEqual(txs[1]['symbol'], "QAM250418C00085000.TO")
             self.assertEqual(txs[2]['symbol'], "AAPL.NEO")
             self.assertEqual(txs[3]['symbol'], "AAPL260116C00150000.NEO")
         finally:

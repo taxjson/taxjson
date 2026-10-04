@@ -1,10 +1,10 @@
 """Cross-currency rollover renames vs the raw (native-currency) stage.
 
-A s. 85.1(5) rollover across currencies (SSL.TO [CAD] → RGLD.US [USD])
+A s. 85.1(5) rollover across currencies (QAU.TO [CAD] → QRG.US [USD])
 is modeled as a SPLIT rename, so the native-currency book would have a
 CAD pool receiving USD trades — taxjson-gains rightly refuses, but that
-refusal used to kill the WHOLE `taxjson run` with a traceback (real
-rrsp data, 2026-07-25). The pipeline now detects the condition
+refusal used to kill the WHOLE `taxjson run` with a traceback. The
+pipeline now detects the condition
 (rename-aware) and skips the raw stage for that account with a warning;
 the converted, tax-authoritative books build normally.
 """
@@ -17,7 +17,7 @@ from taxjson.bin.taxjson_run import _raw_mixed_currency_symbols
 
 
 def _tx(action, sym, cur, **kw):
-    return {"action": action, "date": kw.get("date", "2025-10-22"),
+    return {"action": action, "date": kw.get("date", "2025-09-17"),
             "time": "09:30:00", "symbol": sym, "currency": cur,
             "quantity": kw.get("qty", 1), "net_amount": kw.get("net", 1.0),
             "account": "rrsp", **{k: v for k, v in kw.items()
@@ -34,13 +34,13 @@ def _write(txs):
 class TestRawMixedCurrencyDetector(unittest.TestCase):
     def test_cross_currency_rollover_rename_detected(self):
         p = _write([
-            _tx("BUYSELL", "SSL.TO", "CAD", qty=5024),
-            _tx("SPLIT", "SSL.TO", "CAD", qty=0.0625,
-                symbol_new="RGLD.US"),
-            _tx("BUYSELL", "RGLD.US", "USD", qty=-314,
-                date="2025-11-03"),
+            _tx("BUYSELL", "QAU.TO", "CAD", qty=4800),
+            _tx("SPLIT", "QAU.TO", "CAD", qty=0.0625,
+                symbol_new="QRG.US"),
+            _tx("BUYSELL", "QRG.US", "USD", qty=-300,
+                date="2025-11-12"),
         ])
-        self.assertEqual(_raw_mixed_currency_symbols(p), ["RGLD.US"])
+        self.assertEqual(_raw_mixed_currency_symbols(p), ["QRG.US"])
 
     def test_rename_chain_followed(self):
         # A→B→C where A is CAD and C's trades are USD.
@@ -48,7 +48,7 @@ class TestRawMixedCurrencyDetector(unittest.TestCase):
             _tx("BUYSELL", "A.TO", "CAD"),
             _tx("SPLIT", "A.TO", "CAD", symbol_new="B.TO"),
             _tx("SPLIT", "B.TO", "CAD", symbol_new="C.US"),
-            _tx("BUYSELL", "C.US", "USD", date="2025-11-03"),
+            _tx("BUYSELL", "C.US", "USD", date="2025-11-12"),
         ])
         self.assertEqual(_raw_mixed_currency_symbols(p), ["C.US"])
 
@@ -56,7 +56,7 @@ class TestRawMixedCurrencyDetector(unittest.TestCase):
         p = _write([
             _tx("BUYSELL", "XIU.TO", "CAD"),
             _tx("SPLIT", "XIU.TO", "CAD", symbol_new="XIU2.TO"),
-            _tx("BUYSELL", "XIU2.TO", "CAD", date="2025-11-03"),
+            _tx("BUYSELL", "XIU2.TO", "CAD", date="2025-11-12"),
         ])
         self.assertEqual(_raw_mixed_currency_symbols(p), [])
 

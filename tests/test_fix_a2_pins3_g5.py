@@ -25,8 +25,8 @@ from tax_rules import rule, rule_absent
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _s(exchange="coinbase", account="c", date="2025-07-13",
-       time="07:13:27", symbol="SOL", quantity=-1.0, **kw):
+def _s(exchange="coinbase", account="c", date="2025-06-22",
+       time="10:05:10", symbol="ATOM", quantity=-1.0, **kw):
     r = {"exchange": exchange, "account": account, "date": date,
          "time": time, "symbol": symbol, "quantity": quantity,
          "price": 0.0, "currency": "", "fee": 0.0, "kind": "Send",
@@ -261,7 +261,7 @@ class TestHandPriceGuards(unittest.TestCase):
             root, home = _crypto_project(td)
             for bad in ("-1", "0", "inf"):
                 r = _cli(root, home, "crypto-sends", "crypto", "--set",
-                         "kr-20260504T185014-TAO-0.1=payment",
+                         "kr-20260413T173000-LDO-2.5=payment",
                          f"--price={bad}")
                 self.assertEqual(r.returncode, 2, (bad, r.stderr))
                 self.assertIn("argument --price: must be a finite number",
@@ -323,8 +323,8 @@ class TestRunStageUnparsedPeer(unittest.TestCase):
             home = td / "home"
             home.mkdir()
             (home / ".crypto_price_cache.json").write_text(json.dumps({
-                "TAO22974-2026-05-04": 284.9259948730469,
-                "TAO22974-2026-01-05": 300.0}))
+                "LDO11808-2026-04-13": 1.84,
+                "LDO11808-2026-01-12": 2.1}))
             r = _cli(root, home, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             # kr never parsed (a first-time run reaching cb first).

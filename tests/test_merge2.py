@@ -112,19 +112,19 @@ class TestMerge2TickerDrop(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             _write_json(tmp / 'a.json', [
-                {'action': 'BUYSELL', 'date': '2025-10-22',
-                 'symbol': 'RGLD.CAD.TO', 'quantity': -0.0026, 'price': 0,
-                 'net_amount': 0.64, 'currency': 'CAD', 'account': 'rrsp'},
-                {'action': 'BUYSELL', 'date': '2025-10-22', 'symbol': 'NVDA.US',
+                {'action': 'BUYSELL', 'date': '2025-08-20',
+                 'symbol': 'QRGD.CAD.TO', 'quantity': -0.0041, 'price': 0,
+                 'net_amount': 1.02, 'currency': 'CAD', 'account': 'rrsp'},
+                {'action': 'BUYSELL', 'date': '2025-08-20', 'symbol': 'NVDA.US',
                  'quantity': 100, 'price': 500, 'net_amount': 50000,
                  'currency': 'USD', 'account': 'rrsp'},
             ])
-            (tmp / 'm.map').write_text('DELETE RGLD.CAD.TO\n')
+            (tmp / 'm.map').write_text('DELETE QRGD.CAD.TO\n')
             result = _run_merge2('--map', str(tmp / 'm.map'), str(tmp / 'a.json'))
             self.assertEqual(result.returncode, 0, result.stderr)
             syms = [t['symbol'] for t in json.loads(result.stdout)['transactions']]
             self.assertEqual(syms, ['NVDA.US'])
-            self.assertIn('DELETE removed 1 RGLD.CAD.TO', result.stderr)
+            self.assertIn('DELETE removed 1 QRGD.CAD.TO', result.stderr)
 
 
 class TestMerge2StageOrder(unittest.TestCase):

@@ -122,12 +122,12 @@ class TestAnalyze(unittest.TestCase):
         td, root, cfg = _project({("rbc_direct", "r.csv"): [
             _r("2025-05-16", "2025-05-20"),               # RBC: Victoria Day (CA calendar, accepted)
             _r("2025-06-10", "2025-06-13"),               # neither calendar
-            _r("2025-02-28", "2025-02-28",
-               sym="DELL250228C00102000.US"),             # expiry-day trade
-            _r("2025-07-29", "2025-07-29", price=0.0,
-               desc="STK DIV ON 1390 SHS"),               # event row
-            _r("2025-09-15", "2025-09-15", price=3.8,
-               desc="CMG REINV@C$3.82621 PAY 09/15/26")]})   # DRIP
+            _r("2025-03-14", "2025-03-14",
+               sym="QZD250314C00071000.US"),             # expiry-day trade
+            _r("2025-08-12", "2025-08-12", price=0.0,
+               desc="STK DIV ON 850 SHS"),               # event row
+            _r("2025-09-15", "2025-09-15", price=4.2,
+               desc="QZR REINV@C$4.17305 PAY 09/15/26")]})   # DRIP
         with td:
             doc = analyze(root, cfg, today=date(2026, 1, 1))
         self.assertEqual(self.codes(doc), ["settle-cycle"])

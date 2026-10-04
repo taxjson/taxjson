@@ -48,17 +48,17 @@ class TestSanity(unittest.TestCase):
             '[accounts.rrsp]\ntype = "sheltered"\n')
         # margin spans TWO broker accounts; rrsp shares tickers with
         # margin (same strategy) but different quantities.
-        _gains(root, "margin", {"ALK.TO": 30000, "XIU.TO": 100,
-                                "ANET.US": 50})
-        _gains(root, "rrsp", {"XIU.TO": 40, "ANET.US": 75})
+        _gains(root, "margin", {"QLK.TO": 24000, "XIU.TO": 100,
+                                "QNET.US": 50})
+        _gains(root, "rrsp", {"XIU.TO": 40, "QNET.US": 75})
         ext = root / "ext"
         ext.mkdir()
         _holdings_toml(ext / "U1_holdings.toml", "U1",
-                       {"ALK.TO": 30000, "ANET.US": 50})
+                       {"QLK.TO": 24000, "QNET.US": 50})
         _holdings_toml(ext / "U2_holdings.toml", "U2",
                        {"XIU.TO": 100})
         _holdings_toml(ext / "U3_holdings.toml", "U3",
-                       {"XIU.TO": 40, "ANET.US": 75})
+                       {"XIU.TO": 40, "QNET.US": 75})
         return root
 
     def _mix(self, root):
@@ -85,7 +85,7 @@ class TestSanity(unittest.TestCase):
             root = self._project(tmp)
             # Drift rrsp: qty change + a symbol only on the broker side.
             _holdings_toml(root / "ext" / "U3_holdings.toml", "U3",
-                           {"XIU.TO": 42, "ANET.US": 75,
+                           {"XIU.TO": 42, "QNET.US": 75,
                             "NEW.TO": 10})
             r = _run(root, "sanity", *self._mix(root), "--json")
         self.assertEqual(r.returncode, 1)
@@ -148,15 +148,15 @@ class TestSanity(unittest.TestCase):
     def test_option_symbols_follow_underlying_rename(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp)
-            (root / "ticker.map").write_text("TOBASE AEM.US AEM.TO\n")
+            (root / "ticker.map").write_text("TOBASE QAM.US QAM.TO\n")
             # taxjson holds the consolidated .TO option; broker file
             # reports the actual .US listing.
-            _gains(root, "margin", {"ALK.TO": 30000, "XIU.TO": 100,
-                                    "ANET.US": 50,
-                                    "AEM280121C00155000.TO": 1})
+            _gains(root, "margin", {"QLK.TO": 24000, "XIU.TO": 100,
+                                    "QNET.US": 50,
+                                    "QAM280121C00140000.TO": 1})
             _holdings_toml(root / "ext" / "U1_holdings.toml", "U1",
-                           {"ALK.TO": 30000, "ANET.US": 50,
-                            "AEM280121C00155000.US": 1})
+                           {"QLK.TO": 24000, "QNET.US": 50,
+                            "QAM280121C00140000.US": 1})
             r = _run(root, "sanity", *self._mix(root), "--json")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertTrue(json.loads(r.stdout)["clean"])
@@ -185,14 +185,14 @@ class TestSanity(unittest.TestCase):
 
     def test_paired_catches_position_in_wrong_account(self):
         # The case the aggregate form is blind to: totals agree, but
-        # ANET sits in the wrong account on the taxjson side. Aggregate
+        # QNET sits in the wrong account on the taxjson side. Aggregate
         # says OK; the paired form must flag it per group.
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp)
             e = root / "ext"
-            _gains(root, "margin", {"ALK.TO": 30000, "XIU.TO": 100,
-                                    "ANET.US": 75})
-            _gains(root, "rrsp", {"XIU.TO": 40, "ANET.US": 50})
+            _gains(root, "margin", {"QLK.TO": 24000, "XIU.TO": 100,
+                                    "QNET.US": 75})
+            _gains(root, "rrsp", {"XIU.TO": 40, "QNET.US": 50})
             agg = _run(root, "sanity", *self._mix(root), "--json")
             pair = _run(root, "sanity",
                         f"margin={e / 'U1_holdings.toml'}",
@@ -210,8 +210,8 @@ class TestSanity(unittest.TestCase):
         flagged = {(tuple(d["accounts"]), d["symbol"], d["issue"])
                    for d in doc["discrepancies"]}
         self.assertEqual(flagged, {
-            (("margin",), "ANET.US", "QTY_MISMATCH"),
-            (("rrsp",), "ANET.US", "QTY_MISMATCH")})
+            (("margin",), "QNET.US", "QTY_MISMATCH"),
+            (("rrsp",), "QNET.US", "QTY_MISMATCH")})
         self.assertEqual(text.returncode, 1, text.stderr + text.stdout)
         self.assertIn("paired check", text.stdout)
         # Every file read is listed by PATH under its group.
@@ -227,7 +227,7 @@ class TestSanity(unittest.TestCase):
             root = self._project(tmp)
             e = root / "ext"
             _holdings_toml(e / "flex.toml", "FLEX",
-                           {"ALK.TO": 30000, "ANET.US": 125,
+                           {"QLK.TO": 24000, "QNET.US": 125,
                             "XIU.TO": 140})
             r = _run(root, "sanity", f"margin+rrsp={e / 'flex.toml'}",
                      "--json")
@@ -291,14 +291,14 @@ class TestSanity(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp)
             e = root / "ext"
-            _gains(root, "margin", {"ALK.TO": 30000, "XIU.TO": 100,
-                                    "ANET.US": 50,
+            _gains(root, "margin", {"QLK.TO": 24000, "XIU.TO": 100,
+                                    "QNET.US": 50,
                                     "RCI.B270618C00060000.TO": 15})
             (e / "U1_holdings.toml").write_text(
                 'schema_version = "1.0"\n[meta]\naccount = "U1"\n\n'
-                '[[holding]]\nsymbol = "ALK.TO"\nquantity = 30000\n'
+                '[[holding]]\nsymbol = "QLK.TO"\nquantity = 24000\n'
                 'asset_type = "equity"\n\n'
-                '[[holding]]\nsymbol = "ANET.US"\nquantity = 50\n'
+                '[[holding]]\nsymbol = "QNET.US"\nquantity = 50\n'
                 'asset_type = "equity"\n\n'
                 '[[holding]]\nsymbol = "RCI270618C00060000.TO"\n'
                 'quantity = 15\nasset_type = "option"\n'
@@ -320,8 +320,8 @@ class TestSanity(unittest.TestCase):
             self.assertIn("via its underlying", text.stdout)
             # taxjson ALSO holds the file's spelling: no re-key, and
             # the quantity difference is reported as a real mismatch.
-            _gains(root, "margin", {"ALK.TO": 30000, "XIU.TO": 100,
-                                    "ANET.US": 50,
+            _gains(root, "margin", {"QLK.TO": 24000, "XIU.TO": 100,
+                                    "QNET.US": 50,
                                     "RCI.B270618C00060000.TO": 15,
                                     "RCI270618C00060000.TO": 5})
             r = _run(root, "sanity", f"margin={e / 'U1_holdings.toml'}"
@@ -367,14 +367,14 @@ class TestSanity(unittest.TestCase):
             self.assertEqual(len(by[("margin",)]["files"]), 2)
             self.assertEqual(doc["uncovered_accounts"], [])
             # Wrong-account placement is caught, as with explicit pairs.
-            _gains(root, "margin", {"ALK.TO": 30000, "XIU.TO": 100,
-                                    "ANET.US": 75})
-            _gains(root, "rrsp", {"XIU.TO": 40, "ANET.US": 50})
+            _gains(root, "margin", {"QLK.TO": 24000, "XIU.TO": 100,
+                                    "QNET.US": 75})
+            _gains(root, "rrsp", {"XIU.TO": 40, "QNET.US": 50})
             r = _run(root, "sanity", "--json")
             self.assertEqual(r.returncode, 1)
             self.assertEqual(
                 {d["symbol"] for d in json.loads(r.stdout)["discrepancies"]},
-                {"ANET.US"})
+                {"QNET.US"})
 
     def test_shared_file_merges_accounts_into_one_group(self):
         # One export covering two taxjson accounts, listed under both.
@@ -382,7 +382,7 @@ class TestSanity(unittest.TestCase):
             root = self._project(tmp)
             e = root / "ext"
             _holdings_toml(e / "flex.toml", "FLEX",
-                           {"ALK.TO": 30000, "ANET.US": 125,
+                           {"QLK.TO": 24000, "QNET.US": 125,
                             "XIU.TO": 140})
             self._config_with_holdings(root, ["ext/flex.toml"],
                                        ["ext/flex.toml"])
@@ -450,7 +450,7 @@ class TestSanity(unittest.TestCase):
             root = self._project(tmp)
             d = root / "IB+QT"
             d.mkdir()
-            _holdings_toml(d / "h.toml", "U1", {"ALK.TO": 30000, "ANET.US": 50,
+            _holdings_toml(d / "h.toml", "U1", {"QLK.TO": 24000, "QNET.US": 50,
                                                  "XIU.TO": 100})
             self._config_with_holdings(root, ["IB+QT/h.toml"], ["ext/U3_holdings.toml"])
             r = _run(root, "sanity", "--json")
@@ -459,11 +459,11 @@ class TestSanity(unittest.TestCase):
 
     def test_map_symbol_helper(self):
         from taxjson.bin.taxjson_ticker_map import map_symbol
-        m = {"AEM.US": "AEM.TO", "FB.US": "META.US"}
-        self.assertEqual(map_symbol("AEM.US", m), "AEM.TO")
+        m = {"QAM.US": "QAM.TO", "FB.US": "META.US"}
+        self.assertEqual(map_symbol("QAM.US", m), "QAM.TO")
         self.assertEqual(
-            map_symbol("AEM280121C00155000.US", m),
-            "AEM280121C00155000.TO")
+            map_symbol("QAM280121C00140000.US", m),
+            "QAM280121C00140000.TO")
         self.assertEqual(map_symbol("XIU.TO", m), "XIU.TO")
         self.assertEqual(map_symbol("FB251219C00300000.US", m),
                          "META251219C00300000.US")

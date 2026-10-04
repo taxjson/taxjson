@@ -58,7 +58,7 @@ def row(rep, symbol):
     return rows[0]
 
 
-SERIES = "XYZ250620C00050000.US"
+SERIES = "ABC250718C00045000.US"
 
 
 class TestSchedule3PreFormShareLine(unittest.TestCase):

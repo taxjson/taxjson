@@ -253,7 +253,7 @@ class TestIncomeSumsNeedProject(unittest.TestCase):
                 self.assertIn("country is missing", r.stderr, view)
 
 
-_LEAP = "AAQ270115C00050000.TO"
+_LEAP = "AAQ270618C00045000.TO"
 
 
 def _leaps_gains(sym, gain):
@@ -279,13 +279,13 @@ class TestLeapsInputs(unittest.TestCase):
         cfg = _CA + '\n[accounts.tfsa]\ntype = "sheltered"\n'
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, cfg,
-                            native={"tfsa": _leaps_native("BBQ270115C00050000.TO")},
+                            native={"tfsa": _leaps_native("BBQ270618C00045000.TO")},
                             inputs=("margin", "tfsa"))
             w = root / "work"
             (w / "margin_gains.json").write_text(json.dumps(
                 _leaps_gains(_LEAP, 100.0)))
             (w / "tfsa_gains.json").write_text(json.dumps(
-                _leaps_gains("BBQ270115C00050000.TO", 200.0)))
+                _leaps_gains("BBQ270618C00045000.TO", 200.0)))
             for args in (("leaps-sum",), ("leaps",), ("leaps-sum", "margin")):
                 r = _cli(root, *args)
                 self.assertNotEqual(r.returncode, 0, args)
@@ -305,8 +305,9 @@ class TestLeapsInputs(unittest.TestCase):
 
 
 class TestCcdSumClassShare(unittest.TestCase):
-    """A2-1115: ccd-sum heads a Rogers call (root RCI) under the held
-    class share RCI.B.TO even when no share was sold in the year."""
+    """A2-1115: ccd-sum heads a call on a class share (root RCQ) under
+    the held class share RCQ.B.TO even when no share was sold in the
+    year."""
 
     def test_heading_uses_held_class_share(self):
         call = "RCQ250620C00055000.TO"
@@ -339,16 +340,16 @@ class TestTransfersKrakenFee(unittest.TestCase):
         import io
         csv = ("txid,refid,time,type,subtype,aclass,asset,wallet,amount,"
                "fee,balance\n"
-               "L1,F1,2026-05-04 16:00:00,withdrawal,,currency,TAO,spot,"
-               "-0.1,0.002,14\n")
+               "L1,F1,2026-04-21 16:00:00,withdrawal,,currency,ATOM,spot,"
+               "-12,0.25,30\n")
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "kr_ledgers.csv"
             p.write_text(csv)
             with contextlib.redirect_stderr(io.StringIO()):
                 txs = KrakenBrokerage().parse_file(p)
             xfer = [t for t in txs if t["action"] == "TRANSFER"]
-            self.assertEqual(xfer[0].get("fee_qty"), 0.002)
-            self.assertEqual(xfer[0].get("fee_currency"), "TAO")
+            self.assertEqual(xfer[0].get("fee_qty"), 0.25)
+            self.assertEqual(xfer[0].get("fee_currency"), "ATOM")
             cfg = _CA + '\n[accounts.crypto]\ntype = "taxable"\ncrypto = true\n'
             root = _project(Path(tmp) / "p", cfg)
             (root / "work" / "crypto_kraken_transfers.json").write_text(
@@ -357,11 +358,11 @@ class TestTransfersKrakenFee(unittest.TestCase):
                             "transactions": xfer}))
             doc = _json(_cli(root, "transfers", "--json"))
             row = doc["transfers"][0]
-            self.assertEqual(row["fee_qty"], 0.002)
-            self.assertEqual(row["fee_currency"], "TAO")
+            self.assertEqual(row["fee_qty"], 0.25)
+            self.assertEqual(row["fee_currency"], "ATOM")
             r = _cli(root, "transfers")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("0.002_TAO", r.stdout)
+            self.assertIn("0.25_ATOM", r.stdout)
 
 
 if __name__ == "__main__":

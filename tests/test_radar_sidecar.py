@@ -23,8 +23,8 @@ def _tx(action, dt, symbol, qty, net, time_="09:30:00"):
 # Loss on 2026-06-02, still in window on 2026-06-15 and fully exited →
 # COOLING with a definite clears_at.
 _TAXABLE = [
-    _tx("BUYSELL", "2026-01-05", "WSP.TO", 50, 5000.0),
-    _tx("BUYSELL", "2026-06-02", "WSP.TO", -50, 4000.0),
+    _tx("BUYSELL", "2026-01-05", "QWS.TO", 50, 5000.0),
+    _tx("BUYSELL", "2026-06-02", "QWS.TO", -50, 4000.0),
 ]
 
 
@@ -61,7 +61,7 @@ class TestSidecar(unittest.TestCase):
             rows = [r for s in doc["sections"] for r in s["rows"]]
             self.assertEqual(len(rows), 1)
             r = rows[0]
-            self.assertEqual(r["ticker"], "WSP.TO")
+            self.assertEqual(r["ticker"], "QWS.TO")
             self.assertEqual(r["category"], "COOLING")
             # Absolute date, and it matches the date quoted in the prose.
             self.assertRegex(r["clears_at"], r"^\d{4}-\d{2}-\d{2}$")

@@ -265,7 +265,7 @@ class TestOptionBoundaryAmountsPinned(unittest.TestCase):
             # Lot B: 1 more for 310.00.
             T(date="2024-12-05", date_settle="2024-12-06", symbol=self.OPT, quantity=-1, price=3.1, net_amount=310.0),
             # 2025: buy 3 back for 361.20 (all from lot A), 2 expire (A, B).
-            T(date="2025-02-03", date_settle="2025-02-04", symbol=self.OPT, quantity=3, price=1.2, net_amount=361.2),
+            T(date="2025-02-10", date_settle="2025-02-11", symbol=self.OPT, quantity=3, price=1.2, net_amount=361.2),
             T(date="2025-06-20", date_settle="2025-06-20", symbol=self.OPT, quantity=2, price=0, net_amount=0.0),
             # Written 2024, never closed although it expired 2025-03-21.
             T(date="2024-12-10", date_settle="2024-12-11", symbol=self.OPT2, quantity=-2, price=1.5, net_amount=298.0),
@@ -349,7 +349,7 @@ class TestFxCashSkipsShelteredAccounts(unittest.TestCase):
 _ESTIMATE_BOOK = """\
 BUYSELL 2025-01-15 09:30:00 XEI.TO 100.00000000 CAD 10.00000000 1000.00000 0.00000
 BUYSELL 2025-06-20 10:15:00 XEI.TO -100.00000000 CAD 15.00000000 1500.00000 0.00000
-BUYSELL 2025-02-03 10:00:00 XEI250321C00016000.TO -2.00000000 CAD 1.50000000 300.00000 0.00000
+BUYSELL 2025-02-10 10:00:00 XEI250321C00016000.TO -2.00000000 CAD 1.50000000 300.00000 0.00000
 BUYSELL 2025-02-20 10:00:00 XEI250321C00016000.TO 2.00000000 CAD 0.40000000 80.00000 0.00000
 DIVIDEND 2025-04-01 09:30:00 XEI.TO 0.00000000 CAD 0.00000000 120.00000
 DIVIDEND 2025-04-02 09:30:00 ZZQ.US 0.00000000 CAD 0.00000000 200.00000
@@ -484,10 +484,10 @@ class TestToBaseOptionCollision(unittest.TestCase):
     Montreal contract with the same code."""
 
     BOOK = (
-        "BUYSELL 2025-02-03 10:00:00 RY270115C00100000.TO 1.00000000 CAD 3.00000000 300.00000 0.00000\n"
-        "BUYSELL 2025-02-04 10:00:00 RY270115C00100000.US 1.00000000 CAD 1.00000000 100.00000 0.00000\n"
-        "BUYSELL 2025-03-03 10:00:00 RY270115C00100000.TO -1.00000000 CAD 2.50000000 250.00000 0.00000\n"
-        "BUYSELL 2025-02-05 10:00:00 KGC270115C00012000.US 1.00000000 CAD 1.20000000 120.00000 0.00000\n")
+        "BUYSELL 2025-02-03 10:00:00 RY261218C00105000.TO 1.00000000 CAD 3.00000000 300.00000 0.00000\n"
+        "BUYSELL 2025-02-04 10:00:00 RY261218C00105000.US 1.00000000 CAD 1.00000000 100.00000 0.00000\n"
+        "BUYSELL 2025-03-03 10:00:00 RY261218C00105000.TO -1.00000000 CAD 2.50000000 250.00000 0.00000\n"
+        "BUYSELL 2025-02-05 10:00:00 QGX261218C00016000.US 1.00000000 CAD 1.20000000 120.00000 0.00000\n")
 
     def test_us_option_kept_separate_and_named(self):
         import json
@@ -502,7 +502,7 @@ class TestToBaseOptionCollision(unittest.TestCase):
             root = Path(tmp)
             (root / "inputs" / "margin").mkdir(parents=True)
             (root / "inputs" / "margin" / "book.tt").write_text(self.BOOK)
-            (root / "ticker.map").write_text("TOBASE RY.US RY.TO\nTOBASE KGC.US K.TO\n")
+            (root / "ticker.map").write_text("TOBASE RY.US RY.TO\nTOBASE QGX.US QG.TO\n")
             (root / "taxjson.toml").write_text(
                 '[settings]\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\nsource_currencies = []\n'
@@ -519,11 +519,11 @@ class TestToBaseOptionCollision(unittest.TestCase):
             base = json.loads((root / "work" / "margin_base.json").read_text())
             gains = json.loads((root / "work" / "margin_gains.json").read_text())
         syms = {t["symbol"] for t in base["transactions"]}
-        self.assertIn("RY270115C00100000.US", syms)             # not pooled into .TO
-        self.assertIn("K270115C00012000.TO", syms)              # no collision: renamed as before
+        self.assertIn("RY261218C00105000.US", syms)             # not pooled into .TO
+        self.assertIn("QG261218C00016000.TO", syms)              # no collision: renamed as before
         (d,) = [t for t in gains["transactions"] if "gain" in t]
-        self.assertEqual((d["symbol"], round(d["gain"], 2)), ("RY270115C00100000.TO", -50.0))
-        self.assertIn("RY270115C00100000.US", run_err)
+        self.assertEqual((d["symbol"], round(d["gain"], 2)), ("RY261218C00105000.TO", -50.0))
+        self.assertIn("RY261218C00105000.US", run_err)
         self.assertIn("kept separate", run_err)
 
 

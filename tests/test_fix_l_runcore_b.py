@@ -569,12 +569,12 @@ class TestViews(unittest.TestCase):
     def test_short_legs_read_the_real_world_way(self):
         from taxjson.bin.taxjson_run import (_gain_display_line,
                                              _real_world_legs)
-        t = {"date": "2025-07-01", "symbol": "ABC270115C00050000.TO",
+        t = {"date": "2025-07-01", "symbol": "ABC270618C00050000.TO",
              "qty": 1, "currency": "CAD", "direction": "SHORT",
-             "cost": -650.0, "proceeds": -160.0, "gain": 490.0}
-        self.assertEqual(_real_world_legs(t), (650.0, 160.0))
+             "cost": -515.0, "proceeds": -100.0, "gain": 415.0}
+        self.assertEqual(_real_world_legs(t), (515.0, 100.0))
         line = _gain_display_line(t)
-        self.assertIn("650.00 160.00 490.00", line)
+        self.assertIn("515.00 100.00 415.00", line)
         self.assertNotIn("-", line.split("CAD", 1)[1])
         self.assertEqual(_real_world_legs({"cost": 100.0,
                                            "proceeds": 150.0}),

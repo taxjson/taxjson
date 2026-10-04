@@ -277,11 +277,11 @@ class TestSpinoffsView(unittest.TestCase):
 
     def _proj(self, country, election, base=None):
         from test_corp_views import EV, SPIN_DESC, SUMMARY, _proj, _row
-        rows = [_row("BUYSELL", "2024-04-04", "GEV.US", 30, 900.0,
+        rows = [_row("BUYSELL", "2024-05-13", "SPNC.US", 20, 600.0,
                      corp_event_id=EV, description=SPIN_DESC)]
         td, root, cfg = _proj(rows, {EV: {
             "election": election,
-            "hints": {"allocated_basis": 900.0, "allocated_acb": 900.0},
+            "hints": {"allocated_basis": 600.0, "allocated_acb": 600.0},
             "summary": SUMMARY}})
         cfg["settings"] = {"country": country}
         if base:

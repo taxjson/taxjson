@@ -113,7 +113,7 @@ class TestDistinctConflict(unittest.TestCase):
 
     def test_plain_distinct_is_fine(self):
         self.assertEqual(map_file_problems(_map("DISTINCT UNH.US UNH.TO\n"
-                                                "TOBASE BCE.US BCE.TO\n")),
+                                                "TOBASE QBC.US QBC.TO\n")),
                          [])
 
 
@@ -154,8 +154,8 @@ class TestScanMapUnused(unittest.TestCase):
         self.assertEqual(self._scan("GLOBAL ETH2 ETH\n", ["ETH2"]), [])
 
     def test_option_root_keeps_rule_live(self):
-        self.assertEqual(self._scan("TOBASE BCE.US BCE.TO\n",
-                                    ["BCE251121C00050000.US"]), [])
+        self.assertEqual(self._scan("TOBASE QBC.US QBC.TO\n",
+                                    ["QBC251121C00050000.US"]), [])
 
 
 def _run_project(files):

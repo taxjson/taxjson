@@ -137,19 +137,19 @@ class TestRenameWashDeferral(unittest.TestCase):
     """FIXED (was a pinned known-bug found by the conservation check the
     first time it ran): the deferral ADJUST is now keyed to the TRIGGER's
     symbol, so a superficial loss whose repurchase sits across a merger
-    rename (SSL.TO loss -> rename -> RGLD.US buy) lands the denied amount
+    rename (ABG.TO loss -> rename -> ABH.US buy) lands the denied amount
     on the replacement's ACB instead of recreating a dead pool under the
     old ticker and stranding it forever."""
 
     def test_wash_deferral_across_rename_reaches_replacement(self):
         txs = [
-            tx(date='2025-01-15', symbol='SSL.TO', qty=100, price=20.0,
+            tx(date='2025-01-15', symbol='ABG.TO', qty=100, price=20.0,
                net=2000.0),
-            tx(date='2025-06-15', symbol='SSL.TO', qty=-100, price=10.0,
+            tx(date='2025-06-15', symbol='ABG.TO', qty=-100, price=10.0,
                net=1000.0),
-            tx(action='SPLIT', date='2025-06-20', symbol='SSL.TO',
-               qty=0.0625, symbol_new='RGLD.US'),
-            tx(date='2025-07-01', symbol='RGLD.US', qty=10, price=200.0,
+            tx(action='SPLIT', date='2025-06-20', symbol='ABG.TO',
+               qty=0.0625, symbol_new='ABH.US'),
+            tx(date='2025-07-01', symbol='ABH.US', qty=10, price=200.0,
                net=2000.0),
         ]
         err = io.StringIO()
@@ -157,9 +157,9 @@ class TestRenameWashDeferral(unittest.TestCase):
             res = CanadaTaxRules().compute_gains(txs)
         self.assertNotIn('stranded basis', err.getvalue())
         # Replacement carries purchase cost + the deferred $1,000 loss.
-        rgld = next(h for h in res['inventory']
-                    if h['symbol'] == 'RGLD.US')
-        self.assertAlmostEqual(rgld['total_cost'], 3000.0, places=2)
+        tgt = next(h for h in res['inventory']
+                    if h['symbol'] == 'ABH.US')
+        self.assertAlmostEqual(tgt['total_cost'], 3000.0, places=2)
 
 
 if __name__ == '__main__':

@@ -4,7 +4,7 @@ Regression: DIVIDEND/TAX/INTEREST rows carry a `quantity` equal to the shares
 the cash event was computed ON (for reconciliation), not shares acquired. The
 position walk was adding them, so a fully-sold position (taxable or sheltered)
 looked like it still held shares — producing a bogus "Sheltered holdings exist"
-wash-sale warning (the WSP.TO case). After the fix the warning reflects the
+wash-sale warning. After the fix the warning reflects the
 real reason: a recent realized loss.
 """
 import json
@@ -36,30 +36,30 @@ def _run(taxable, sheltered, date):
         return r.stdout
 
 
-# Bought 50 @ 100 then sold 50 @ 80 (a loss); a dividend was paid on the 50
+# Bought 36 @ 100 then sold 36 @ 80 (a loss); a dividend was paid on the 36
 # shares in between. Net position = 0 in BOTH accounts.
 _TAXABLE = [
-    _tx("BUYSELL", "2026-01-05", "WSP.TO", 50, 5000.0),
-    _tx("DIVIDEND", "2026-03-15", "WSP.TO", 50, 100.0),
-    _tx("BUYSELL", "2026-06-02", "WSP.TO", -50, 4000.0),
+    _tx("BUYSELL", "2026-01-12", "ZPL.TO", 36, 3600.0),
+    _tx("DIVIDEND", "2026-03-16", "ZPL.TO", 36, 72.0),
+    _tx("BUYSELL", "2026-06-03", "ZPL.TO", -36, 2880.0),
 ]
 _SHELTERED = [
-    _tx("BUYSELL", "2025-05-28", "WSP.TO", 50, 5000.0),
-    _tx("DIVIDEND", "2025-07-15", "WSP.TO", 50, 100.0),
-    _tx("BUYSELL", "2025-10-03", "WSP.TO", -50, 4800.0),
+    _tx("BUYSELL", "2025-05-14", "ZPL.TO", 36, 3600.0),
+    _tx("DIVIDEND", "2025-07-23", "ZPL.TO", 36, 72.0),
+    _tx("BUYSELL", "2025-10-08", "ZPL.TO", -36, 3456.0),
 ]
 
 
 class TestWashRadarDividendNotCountedAsPosition(unittest.TestCase):
     def _wsp_line(self, out):
-        line = next((ln for ln in out.splitlines() if ln.startswith("WSP.TO")), None)
-        self.assertIsNotNone(line, f"no WSP.TO row in:\n{out}")
+        line = next((ln for ln in out.splitlines() if ln.startswith("ZPL.TO")), None)
+        self.assertIsNotNone(line, f"no ZPL.TO row in:\n{out}")
         return line
 
     def test_fully_sold_positions_show_zero_not_dividend_qty(self):
         line = self._wsp_line(_run(_TAXABLE, _SHELTERED, "2026-06-15"))
         cells = [c.strip() for c in line.split("|")]
-        self.assertEqual(float(cells[1]), 0.0, "taxable should be flat, not 50/150")
+        self.assertEqual(float(cells[1]), 0.0, "taxable should be flat, not 36/108")
         self.assertEqual(float(cells[2]), 0.0, "sheltered should be flat, not the dividend qty")
 
     def test_no_bogus_sheltered_holdings_warning(self):
@@ -68,7 +68,7 @@ class TestWashRadarDividendNotCountedAsPosition(unittest.TestCase):
         self.assertNotIn("Sheltered holdings exist", line)
 
     def test_real_recent_loss_risk_is_reported(self):
-        # The sale on 2026-06-02 was a loss; 13 days later it's still in-window.
+        # The sale on 2026-06-03 was a loss; 12 days later it's still in-window.
         line = self._wsp_line(_run(_TAXABLE, _SHELTERED, "2026-06-15"))
         self.assertIn("loss", line.lower())
 
@@ -110,7 +110,7 @@ class TestWashRadarSplits(unittest.TestCase):
         # Buy 100, 2-for-1 split (ratio 2 → 200), sell 50 ⇒ 150 held.
         # Without applying the split the walk would show 100 − 50 = 50, and a
         # bigger post-split sell would underflow to a phantom NEGATIVE (the
-        # LFE.TO bug). The ratio lives in the SPLIT row's `quantity`.
+        # phantom-short bug). The ratio lives in the SPLIT row's `quantity`.
         taxable = [
             _tx("BUYSELL", "2025-01-01", "ZZZ.TO", 100, 1000.0),
             _split("2025-02-01", "ZZZ.TO", 2.0),
@@ -141,91 +141,91 @@ class TestWashRadarSplits(unittest.TestCase):
 
 class TestStillHeldTest(unittest.TestCase):
     """s. 40(2)(g) still-held: an in-window buy whose account has since
-    SOLD TO ZERO must not hard-LOCK the taxable loss (real MTZ.US case:
-    lira bought, sold out ten days later, margin stayed 'permanently
-    denied'). It downgrades to CAUTION with the forward-looking caveat;
+    SOLD TO ZERO must not hard-LOCK the taxable loss (a LIRA that
+    bought in the window and sold out two weeks later used to leave the
+    margin loss 'permanently denied'). It downgrades to CAUTION with the forward-looking caveat;
     an acquirer that still holds stays LOCKED."""
 
-    _TAX = [dict(action="BUYSELL", date="2026-05-26", time="09:30:00",
-                 symbol="MTZ.US", quantity=25, net_amount=12500.0,
+    _TAX = [dict(action="BUYSELL", date="2026-05-27", time="09:30:00",
+                 symbol="QWT.US", quantity=30, net_amount=15000.0,
                  currency="CAD", account="margin")]
 
     def _line(self, out):
         line = next((ln for ln in out.splitlines()
-                     if ln.startswith("MTZ.US")), None)
+                     if ln.startswith("QWT.US")), None)
         self.assertIsNotNone(line, out)
         return line
 
     def test_exited_sheltered_buyer_downgrades_to_caution(self):
-        shl = [dict(action="BUYSELL", date="2026-07-02", time="09:30:00",
-                    symbol="MTZ.US", quantity=5, net_amount=2500.0,
+        shl = [dict(action="BUYSELL", date="2026-07-03", time="09:30:00",
+                    symbol="QWT.US", quantity=3, net_amount=1500.0,
                     currency="CAD", account="lira"),
-               dict(action="BUYSELL", date="2026-07-16", time="09:30:00",
-                    symbol="MTZ.US", quantity=-5, net_amount=2400.0,
+               dict(action="BUYSELL", date="2026-07-17", time="09:30:00",
+                    symbol="QWT.US", quantity=-3, net_amount=1440.0,
                     currency="CAD", account="lira")]
-        line = self._line(_run(self._TAX, shl, "2026-07-27"))
+        line = self._line(_run(self._TAX, shl, "2026-07-28"))
         self.assertIn("CAUTION", line)
         self.assertNotIn("LOCKED", line)
         self.assertIn("holds none of it now", line)
         self.assertIn("30 days AFTER your sale", line)
 
     def test_still_holding_sheltered_buyer_stays_locked(self):
-        shl = [dict(action="BUYSELL", date="2026-07-02", time="09:30:00",
-                    symbol="MTZ.US", quantity=5, net_amount=2500.0,
+        shl = [dict(action="BUYSELL", date="2026-07-03", time="09:30:00",
+                    symbol="QWT.US", quantity=3, net_amount=1500.0,
                     currency="CAD", account="lira")]
-        line = self._line(_run(self._TAX, shl, "2026-07-27"))
+        line = self._line(_run(self._TAX, shl, "2026-07-28"))
         self.assertIn("LOCKED", line)
         self.assertIn("lira", line)
 
     def test_other_sheltered_holder_does_not_block_downgrade(self):
-        # Real ALK.TO shape: the acquirer sold out while a DIFFERENT
+        # The acquirer sold out while a DIFFERENT
         # sheltered account holds shares it bought before the window.
         # Those are not substituted property (s.54, per holder: min of
         # acquired in the window and held at its end — the engine's
         # rule since the 2026-09 audit), so the loss stands on a full
         # exit: CAUTION, not LOCKED. This test used to pin LOCKED
         # (medium audit R1-231 / S054-08).
-        shl = [dict(action="BUYSELL", date="2025-01-10", time="09:30:00",
-                    symbol="MTZ.US", quantity=100, net_amount=40000.0,
+        shl = [dict(action="BUYSELL", date="2025-01-14", time="09:30:00",
+                    symbol="QWT.US", quantity=80, net_amount=32000.0,
                     currency="CAD", account="rrsp"),
-               dict(action="BUYSELL", date="2026-07-02", time="09:30:00",
-                    symbol="MTZ.US", quantity=5, net_amount=2500.0,
+               dict(action="BUYSELL", date="2026-07-03", time="09:30:00",
+                    symbol="QWT.US", quantity=3, net_amount=1500.0,
                     currency="CAD", account="lira"),
-               dict(action="BUYSELL", date="2026-07-16", time="09:30:00",
-                    symbol="MTZ.US", quantity=-5, net_amount=2400.0,
+               dict(action="BUYSELL", date="2026-07-17", time="09:30:00",
+                    symbol="QWT.US", quantity=-3, net_amount=1440.0,
                     currency="CAD", account="lira")]
-        line = self._line(_run(self._TAX, shl, "2026-07-27"))
+        line = self._line(_run(self._TAX, shl, "2026-07-28"))
         self.assertIn("CAUTION", line)
         self.assertNotIn("LOCKED", line)
 
     def test_combined_with_flat_sheltered_is_exitable_with_note(self):
-        # Real SLV.US case: taxable in-window buy AND a sheltered
+        # A taxable in-window buy AND a sheltered
         # in-window buy whose whole group has since exited — the
         # combined branch used to keep "permanently denied" LOCKED.
         tax = self._TAX + [
-            dict(action="BUYSELL", date="2026-07-02", time="09:30:00",
-                 symbol="MTZ.US", quantity=10, net_amount=4500.0,
+            dict(action="BUYSELL", date="2026-07-03", time="09:30:00",
+                 symbol="QWT.US", quantity=12, net_amount=5400.0,
                  currency="CAD", account="margin")]
-        shl = [dict(action="BUYSELL", date="2026-07-08", time="09:30:00",
-                    symbol="MTZ.US", quantity=5, net_amount=2500.0,
+        shl = [dict(action="BUYSELL", date="2026-07-09", time="09:30:00",
+                    symbol="QWT.US", quantity=3, net_amount=1500.0,
                     currency="CAD", account="lira"),
-               dict(action="BUYSELL", date="2026-07-16", time="09:30:00",
-                    symbol="MTZ.US", quantity=-5, net_amount=2400.0,
+               dict(action="BUYSELL", date="2026-07-17", time="09:30:00",
+                    symbol="QWT.US", quantity=-3, net_amount=1440.0,
                     currency="CAD", account="lira")]
-        line = self._line(_run(tax, shl, "2026-07-27"))
+        line = self._line(_run(tax, shl, "2026-07-28"))
         self.assertIn("EXITABLE", line)
         self.assertIn("NOTE: SHELTERED", line)
         self.assertNotIn("permanently denied", line)
 
     def test_taxable_only_recent_buy_is_exitable(self):
-        # Real TA.TO case: your own recent taxable buy is not a hard
+        # Your own recent taxable buy is not a hard
         # lock — a FULL exit realizes the loss; only a partial sale
         # is superficial.
         tax = self._TAX + [
-            dict(action="BUYSELL", date="2026-07-23", time="09:30:00",
-                 symbol="MTZ.US", quantity=10, net_amount=4500.0,
+            dict(action="BUYSELL", date="2026-07-24", time="09:30:00",
+                 symbol="QWT.US", quantity=12, net_amount=5400.0,
                  currency="CAD", account="margin")]
-        line = self._line(_run(tax, [], "2026-07-27"))
+        line = self._line(_run(tax, [], "2026-07-28"))
         self.assertIn("EXITABLE", line)
         self.assertIn("FULL position", line)
         self.assertNotIn("LOCKED", line)

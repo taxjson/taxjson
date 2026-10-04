@@ -16,8 +16,8 @@ from taxjson.lib.core import TaxTransaction
 from taxjson.lib.option_close_check import (unbacked_option_closes,
                                             unbacked_option_close_messages)
 
-from test_fix_rbc import (ABC_REC, ABC_REM, ABC_SELL, HDR, ORCX_ROWS, OWL,
-                          parse_files, parse_one, row)
+from test_fix_rbc import (ABC_REC, ABC_REM, ABC_SELL, HDR, parse_files,
+                          parse_one, row)
 from test_fix_rbcqt import q, qdiv, qt_parse
 from tax_rules import rule, rule_absent
 from tax_rules.dual import gains_both
@@ -48,18 +48,18 @@ def _project(root, year, files, extra_settings="", ticker_map=""):
     return root
 
 
-# RBC re-describes one contract between yearly exports: ".RCI" with the
-# 2024 OPEN CONTRACT buy, ".RCI.B" with the 2025 CLOSE CONTRACT sale.
-RCI_BUY = row("December 16, 2024", "Buy", "8ZZZZZ1", "", "3", "3.20",
-              "-970.70", "CAD",
-              "CALL .RCI   01/15/27    46 ROGERS COMMUNICATIONS INC DA "
-              "OPEN CONTRACT", settle="December 17, 2024")
-RCI_SELL = row("December 15, 2025", "Sell", "8ZZZZZ1", "", "-3", "5.40",
-               "1609.30", "CAD",
-               "CALL .RCI.B   01/15/27    46 ROGERS COMMUNICATIONS INC CA "
-               "CLOSE CONTRACT", settle="December 16, 2025")
-TT_RCI = "BUYSELL 2024-12-17 09:30:00 RCI270115C00046000.TO 3 CAD 3.20 970.70 10.70\n"
-TT_RCIB = TT_RCI.replace("RCI270115", "RCI.B270115")
+# RBC re-describes one contract between yearly exports: ".QRL" with the
+# 2024 OPEN CONTRACT buy, ".QRL.B" with the 2025 CLOSE CONTRACT sale.
+OPT_BUY = row("December 9, 2024", "Buy", "8ZZZZZ1", "", "4", "2.80",
+              "-1130.70", "CAD",
+              "CALL .QRL   06/18/27    38 QRL TELECOM INC DA "
+              "OPEN CONTRACT", settle="December 10, 2024")
+OPT_SELL = row("December 8, 2025", "Sell", "8ZZZZZ1", "", "-4", "5.10",
+               "2029.30", "CAD",
+               "CALL .QRL.B   06/18/27    38 QRL TELECOM INC CA "
+               "CLOSE CONTRACT", settle="December 9, 2025")
+TT_OPT = "BUYSELL 2024-12-10 09:30:00 QRL270618C00038000.TO 4 CAD 2.80 1130.70 10.70\n"
+TT_OPT_B = TT_OPT.replace("QRL270618", "QRL.B270618")
 
 
 def _tx(**kw):
@@ -79,90 +79,90 @@ class TestRbcOpenCloseMarker(unittest.TestCase):
     def test_marker_is_carried_on_option_rows_only(self):
         stock = row("March 3, 2025", "Buy", "XYZ", "XYZ CORP", "10", "5.00",
                     "-59.95", "CAD", "XYZ CORP OPEN CONTRACT")
-        txs, _err, _ = parse_files({"a.csv": RCI_BUY, "b.csv": RCI_SELL
+        txs, _err, _ = parse_files({"a.csv": OPT_BUY, "b.csv": OPT_SELL
                                     + stock})
         oc = {(t["symbol"], t["quantity"]): t.get("open_close") for t in txs}
-        self.assertEqual(oc[("RCI270115C00046000.TO", 3.0)], "O")
-        self.assertEqual(oc[("RCI270115C00046000.TO", -3.0)], "C")
+        self.assertEqual(oc[("QRL270618C00038000.TO", 4.0)], "O")
+        self.assertEqual(oc[("QRL270618C00038000.TO", -4.0)], "C")
         self.assertIsNone(oc[("XYZ.TO", 10.0)])
 
     def test_expiry_row_is_closing(self):
         # A2-0266: RBC's expiry of a long (Reorganization, signed -3).
-        exp = row("January 19, 2026", "Reorganization", "8ZZZZZ2", "", "-3",
+        exp = row("June 22, 2026", "Reorganization", "8ZZZZZ2", "", "-4",
                   "", "0", "CAD",
-                  "EXP - CALL .RCX.B 01/16/26 46 ROGERS COMMUNICATIONS INC "
+                  "EXP - CALL .QRM.B 06/19/26 38 QRM TELECOM INC "
                   "OPTION EXPIRATION - EXPIRED")
         txs, _err, _ = parse_one(exp)
         self.assertEqual([t.get("open_close") for t in txs], ["C"])
 
     def test_close_sale_under_other_root_names_the_held_contract(self):
         books = [
-            _tx(date="2024-12-17", symbol="RCI270115C00046000.TO",
-                quantity=3, net_amount=970.70),
-            _tx(date="2025-12-15", symbol="RCI.B270115C00046000.TO",
-                quantity=-3, net_amount=1609.30, open_close="C"),
+            _tx(date="2024-12-10", symbol="QRL270618C00038000.TO",
+                quantity=4, net_amount=1130.70),
+            _tx(date="2025-12-08", symbol="QRL.B270618C00038000.TO",
+                quantity=-4, net_amount=2029.30, open_close="C"),
         ]
         msgs = unbacked_option_close_messages(books)
         self.assertEqual(len(msgs), 1)
         self.assertTrue(msgs[0].startswith("warning: ATTENTION: "))
-        self.assertIn("GLOBAL RCI270115C00046000.TO RCI.B270115C00046000.TO",
+        self.assertIn("GLOBAL QRL270618C00038000.TO QRL.B270618C00038000.TO",
                       msgs[0])
 
     def test_buy_to_close_opening_a_long_is_named(self):
-        # A2-0267: the written call is in the .tt as RCX; RBC's buy-back
-        # says CLOSE CONTRACT under RCX.B.
+        # A2-0267: the written call is in the .tt as QRM; RBC's buy-back
+        # says CLOSE CONTRACT under QRM.B.
         books = [
-            _tx(date="2024-12-20", symbol="RCX270115C00046000.TO",
-                quantity=-3, net_amount=949.70),
-            _tx(date="2025-06-02", symbol="RCX.B270115C00046000.TO",
-                quantity=3, net_amount=310.70, open_close="C"),
+            _tx(date="2024-12-13", symbol="QRM270618C00038000.TO",
+                quantity=-4, net_amount=1109.30),
+            _tx(date="2025-06-09", symbol="QRM.B270618C00038000.TO",
+                quantity=4, net_amount=410.70, open_close="C"),
         ]
         f = unbacked_option_closes(books)
         self.assertEqual([(x["side"], x["partners"]) for x in f],
-                         [("purchase", [("RCX270115C00046000.TO", -3.0)])])
-        self.assertIn("GLOBAL RCX270115C00046000.TO RCX.B270115C00046000.TO",
+                         [("purchase", [("QRM270618C00038000.TO", -4.0)])])
+        self.assertIn("GLOBAL QRM270618C00038000.TO QRM.B270618C00038000.TO",
                       unbacked_option_close_messages(books)[0])
 
     def test_adjusted_root_digit_partner(self):
-        # A2-0095: the .tt holds TRX, the XCH-renamed close says TRX1.
+        # A2-0095: the .tt holds TQZ, the XCH-renamed close says TQZ1.
         books = [
-            _tx(date="2024-05-01", symbol="TRX260116C00055000.TO",
-                quantity=5, net_amount=938.20),
-            _tx(date="2025-03-03", symbol="TRX1260116C00055000.TO",
-                quantity=-5, net_amount=8486.80, open_close="C"),
+            _tx(date="2024-05-15", symbol="TQZ260918C00062000.TO",
+                quantity=7, net_amount=1312.40),
+            _tx(date="2025-03-17", symbol="TQZ1260918C00062000.TO",
+                quantity=-7, net_amount=6203.10, open_close="C"),
         ]
-        self.assertIn("GLOBAL TRX260116C00055000.TO TRX1260116C00055000.TO",
+        self.assertIn("GLOBAL TQZ260918C00062000.TO TQZ1260918C00062000.TO",
                       unbacked_option_close_messages(books)[0])
 
     def test_backed_close_and_opening_write_are_silent(self):
         books = [
-            _tx(date="2024-12-17", symbol="RCI.B270115C00046000.TO",
-                quantity=3, net_amount=970.70),
-            _tx(date="2025-12-15", symbol="RCI.B270115C00046000.TO",
-                quantity=-3, net_amount=1609.30, open_close="C"),
-            _tx(date="2025-12-15", symbol="ZZZ270115C00010000.TO",
+            _tx(date="2024-12-10", symbol="QRL.B270618C00038000.TO",
+                quantity=4, net_amount=1130.70),
+            _tx(date="2025-12-08", symbol="QRL.B270618C00038000.TO",
+                quantity=-4, net_amount=2029.30, open_close="C"),
+            _tx(date="2025-12-08", symbol="ZZZ270618C00010000.TO",
                 quantity=-1, net_amount=100.0, open_close="O"),
         ]
         self.assertEqual(unbacked_option_close_messages(books), [])
 
     def test_same_day_write_and_buy_back_in_either_order_is_backed(self):
         # RBC prints no time: a day's write (O) and its buy-back (C) can
-        # sort buy first (seen on real books).
-        sym = "NVDA240719C00135000.US"
+        # sort buy first.
+        sym = "WIDG240816C00072000.US"
         books = [
-            _tx(date="2024-07-05", symbol=sym, quantity=4, net_amount=998.0,
+            _tx(date="2024-08-02", symbol=sym, quantity=6, net_amount=741.0,
                 open_close="C"),
-            _tx(date="2024-07-05", symbol=sym, quantity=-4,
-                net_amount=1347.0, open_close="O"),
+            _tx(date="2024-08-02", symbol=sym, quantity=-6,
+                net_amount=1029.0, open_close="O"),
         ]
         self.assertEqual(unbacked_option_closes(books), [])
 
     def test_unrelated_root_is_not_a_partner(self):
         books = [
-            _tx(date="2024-12-17", symbol="ABC270115C00046000.TO",
-                quantity=3, net_amount=970.70),
-            _tx(date="2025-12-15", symbol="XYZ270115C00046000.TO",
-                quantity=-3, net_amount=1609.30, open_close="C"),
+            _tx(date="2024-12-10", symbol="ABC270618C00038000.TO",
+                quantity=4, net_amount=1130.70),
+            _tx(date="2025-12-08", symbol="DEF270618C00038000.TO",
+                quantity=-4, net_amount=2029.30, open_close="C"),
         ]
         (m,) = unbacked_option_close_messages(books)
         self.assertNotIn("GLOBAL ABC", m)
@@ -179,7 +179,7 @@ class TestRbcCloseContractEndToEnd(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.base = Path(cls.tmp.name)
         cls.p24 = _project(cls.base / "p2024", 2024,
-                           {"rbc_2024.csv": HDR + RCI_BUY})
+                           {"rbc_2024.csv": HDR + OPT_BUY})
         r = _cli_run(cls.p24, "run", "--no-input")
         assert r.returncode == 0, r.stdout + r.stderr
         r = _cli_run(cls.p24, "close-year", "--force")
@@ -192,49 +192,61 @@ class TestRbcCloseContractEndToEnd(unittest.TestCase):
 
     def _p25(self, name, tt):
         p = _project(self.base / name, 2025,
-                     {"rbc_2025.csv": HDR + RCI_SELL, "margin_start.tt": tt},
+                     {"rbc_2025.csv": HDR + OPT_SELL, "margin_start.tt": tt},
                      f'prior_year_record = "{self.rec}"\n')
         r = _cli_run(p, "run", "--no-input")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         return p, r.stdout + r.stderr
 
     def test_wrong_root_in_tt_is_loud_and_fails_handoff(self):
-        p, out = self._p25("wrong", TT_RCI)
-        self.assertIn("ATTENTION: RCI.B270115C00046000.TO", out)
-        self.assertIn("GLOBAL RCI270115C00046000.TO RCI.B270115C00046000.TO",
+        p, out = self._p25("wrong", TT_OPT)
+        self.assertIn("ATTENTION: QRL.B270618C00038000.TO", out)
+        self.assertIn("GLOBAL QRL270618C00038000.TO QRL.B270618C00038000.TO",
                       out)
         h = _cli_run(p, "handoff")
         self.assertEqual(h.returncode, 1, h.stdout + h.stderr)
         self.assertIn("marked CLOSING", h.stdout)
 
     def test_this_years_root_in_tt_passes_handoff(self):
-        p, out = self._p25("right", TT_RCIB)
-        self.assertNotIn("ATTENTION: RCI", out)
+        p, out = self._p25("right", TT_OPT_B)
+        self.assertNotIn("ATTENTION: QRL", out)
         h = _cli_run(p, "handoff")
         self.assertEqual(h.returncode, 0, h.stdout + h.stderr)
         self.assertIn("re-described", h.stdout)
 
     def test_expiry_under_other_root_points_at_the_map_line(self):
-        # A2-0266: the EXP row of RCX.B for a long the .tt holds as RCX:
+        # A2-0266: the EXP row of QRM.B for a long the .tt holds as QRM:
         # the run named a missing expiry row (wrong) for both legs.
-        exp = row("January 19, 2026", "Reorganization", "8ZZZZZ2", "", "-3",
+        exp = row("June 22, 2026", "Reorganization", "8ZZZZZ2", "", "-4",
                   "", "0", "CAD",
-                  "EXP - CALL .RCX.B   01/16/26    46 ROGERX COMMUNICATIONS "
+                  "EXP - CALL .QRM.B   06/19/26    38 QRM TELECOM "
                   "INC OPTION EXPIRATION - EXPIRED")
-        tt = ("BUYSELL 2025-06-23 10:00:00 RCX260116C00046000.TO 3 CAD 3.20 "
-              "970.70 10.70\n")
+        tt = ("BUYSELL 2025-11-24 10:00:00 QRM260619C00038000.TO 4 CAD 2.80 "
+              "1130.70 10.70\n")
         p = _project(self.base / "exp", 2026,
                      {"rbc.csv": HDR + exp, "start.tt": tt})
         r = _cli_run(p, "run", "--no-input")
         out = r.stdout + r.stderr
         self.assertEqual(r.returncode, 0, out)
-        self.assertIn("GLOBAL RCX260116C00046000.TO RCX.B260116C00046000.TO",
+        self.assertIn("GLOBAL QRM260619C00038000.TO QRM.B260619C00038000.TO",
                       out)
         self.assertNotIn("missing its expiry", out)
         self.assertNotIn("add the missing purchase", out)
 
 
 ATT = "warning: ATTENTION:"
+
+# A ticker change RBC applied without a reorganization row: buys under
+# the old symbol, the sale under the new one (synthetic values).
+ZEPH = "ZEPHYR LENDING CORPORATION COMMON STOCK"
+RENAME_ROWS = [
+    row("October 17, 2022", "Sell", "PQRB", ZEPH, "-1200", "21",
+        "25199.95", "USD", "ZEPHYR LENDING CORPORATION UNSOLICITED CA"),
+    row("July 11, 2022", "Buy", "PQRA", ZEPH, "450", "17", "-7659.95", "USD",
+        "ZEPHYR LENDING CORPORATION UNSOLICITED DA"),
+    row("May 9, 2022", "Buy", "PQRA", ZEPH, "750", "16", "-12009.95", "USD",
+        "ZEPHYR LENDING CORPORATION UNSOLICITED DA"),
+]
 
 
 def _attention(err):
@@ -254,19 +266,19 @@ class TestMoneyWarningsReachTheConsole(unittest.TestCase):
         self.assertTrue(any("A012345" in ln for ln in _attention(err)), err)
 
     def test_rbc_ticker_change_puts_the_map_line_first(self):
-        _txs, err, _ = parse_one("".join(ORCX_ROWS))
-        (ln,) = [x for x in _attention(err) if "ORCX" in x]
-        self.assertIn("GLOBAL ORCX.US OBDX.US", ln)
+        _txs, err, _ = parse_one("".join(RENAME_ROWS))
+        (ln,) = [x for x in _attention(err) if "PQRA" in x]
+        self.assertIn("GLOBAL PQRA.US PQRB.US", ln)
 
     def test_rbc_ticker_change_with_a_buy_first(self):
         # A2-0270: the new symbol opens with a small buy, then sells more.
-        body = (row("August 23, 2023", "Sell", "OBDX", OWL, "-1578", "15",
-                    "23650.05", "USD", "BLUE OWLX UNSOLICITED CA")
-                + row("August 22, 2023", "Buy", "OBDX", OWL, "10", "15",
-                      "-150.05", "USD", "BLUE OWLX UNSOLICITED DA")
-                + "".join(ORCX_ROWS[1:]))
+        body = (row("October 17, 2022", "Sell", "PQRB", ZEPH, "-1210", "21",
+                    "25409.95", "USD", "ZEPHYR LENDING UNSOLICITED CA")
+                + row("October 14, 2022", "Buy", "PQRB", ZEPH, "10", "21",
+                      "-210.05", "USD", "ZEPHYR LENDING UNSOLICITED DA")
+                + "".join(RENAME_ROWS[1:]))
         _txs, err, _ = parse_one(body)
-        self.assertTrue(any("GLOBAL ORCX.US OBDX.US" in ln
+        self.assertTrue(any("GLOBAL PQRA.US PQRB.US" in ln
                             for ln in _attention(err)), err)
 
     def test_rbc_notional_distribution(self):
@@ -974,13 +986,13 @@ class TestQuestradeCashRows(unittest.TestCase):
 
 
 class TestClassShareAssignmentStockLeg(unittest.TestCase):
-    """A2-1059: the stock leg of an assignment on a class share (RCI.B
-    under root RCI, BRK.B under BRKB) is the stock, not 100x contracts."""
+    """A2-1059: the stock leg of an assignment on a class share (QRL.B
+    under root QRL, BRK.B under BRKB) is the stock, not 100x contracts."""
 
     def test_questrade(self):
         for sym, desc, cur, want in (
-                ("RCI.B.TO", "ROGERS COMMUNICATIONS INC CL B ASSIGNMENT OF "
-                 "OPTION CALL RCI 05/16/25 50", "CAD", "RCI.B.TO"),
+                ("QRL.B.TO", "QRL TELECOM INC CL B ASSIGNMENT OF "
+                 "OPTION CALL QRL 05/16/25 50", "CAD", "QRL.B.TO"),
                 ("BRK.B", "BERKSHIRE HATHAWAY INC CL B ASSIGNMENT OF OPTION "
                  "CALL BRKB 05/16/25 50", "USD", "BRK.B.US")):
             txs, err, _ = qt_parse(q(action="Sell", sym=sym, desc=desc,
@@ -991,11 +1003,11 @@ class TestClassShareAssignmentStockLeg(unittest.TestCase):
 
     def test_rbc(self):
         txs, err, _ = parse_one(row(
-            "May 16, 2025", "Sell", "RCI.B", "ROGERS COMM CL B", "-100", "50",
-            "4990.05", "CAD", "ROGERS COMM CL B ASSIGNMENT OF OPTION CALL "
-            "RCI 05/16/25 50"))
+            "May 16, 2025", "Sell", "QRL.B", "QRL TELECOM CL B", "-100", "50",
+            "4990.05", "CAD", "QRL TELECOM CL B ASSIGNMENT OF OPTION CALL "
+            "QRL 05/16/25 50"))
         self.assertEqual([(t["symbol"], t["quantity"]) for t in txs],
-                         [("RCI.B.TO", -100.0)], err)
+                         [("QRL.B.TO", -100.0)], err)
 
 
 
@@ -1006,18 +1018,18 @@ class TestCoordinatorHandOffs(unittest.TestCase):
     def test_decimal_comma_strike_is_refused(self):
         from taxjson.lib.brokerages.base import BrokerageParseError
         with self.assertRaises(BrokerageParseError):
-            qt_parse(q(sym="AAPL.OPT", desc="CALL AAPL 06/20/25 2,50",
+            qt_parse(q(sym="AAPL.OPT", desc="CALL AAPL 10/24/25 2,50",
                        qty="1", price="1.5", gross="-150", comm="0",
                        net="-150"))
         with self.assertRaises(BrokerageParseError):
             parse_one(row("March 3, 2025", "Buy", "8ZZZZZ3", "", "1", "1.5",
-                          "-150", "CAD", "CALL .XYZ 06/20/25 1,0000 XYZ CORP "
+                          "-150", "CAD", "CALL .QZX 10/24/25 1,0000 QZX CORP "
                           "OPEN CONTRACT"))
         txs, _err, _ = parse_one(row(
             "March 3, 2025", "Buy", "8ZZZZZ3", "", "1", "1.5", "-150", "CAD",
-            "CALL .XYZ 06/20/25 1,050 XYZ CORP OPEN CONTRACT"))
+            "CALL .QZX 10/24/25 1,050 QZX CORP OPEN CONTRACT"))
         self.assertEqual([t["symbol"] for t in txs],
-                         ["XYZ250620C01050000.TO"])
+                         ["QZX251024C01050000.TO"])
 
     def test_questrade_truncated_row_is_refused(self):
         from taxjson.lib.brokerages.base import BrokerageParseError

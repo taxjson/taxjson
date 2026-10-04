@@ -230,12 +230,12 @@ class TestEdgeCasesStockDividend(unittest.TestCase):
     country.stock_dividend_in_loss_window."""
 
     ROWS = [
-        _etx("margin", "BUYSELL", "2025-01-02", "2025-01-03", "XYZ.US", 200),
-        _etx("margin", "BUYSELL", "2025-05-20", "2025-05-21", "XYZ.US", -100),
-        _etx("margin", "BUYSELL", "2025-06-18", "2025-06-18", "XYZ.US", 10,
+        _etx("margin", "BUYSELL", "2025-01-02", "2025-01-03", "ABC.US", 200),
+        _etx("margin", "BUYSELL", "2025-05-20", "2025-05-21", "ABC.US", -100),
+        _etx("margin", "BUYSELL", "2025-06-18", "2025-06-18", "ABC.US", 10,
              typ="stock_dividend"),
     ]
-    GAINS = [_egain("margin", "2025-05-20", "2025-05-21", "XYZ.US", 100,
+    GAINS = [_egain("margin", "2025-05-20", "2025-05-21", "ABC.US", 100,
                     -1000.0)]
 
     def _items(self, country):

@@ -86,19 +86,19 @@ class TestRenderReport(unittest.TestCase):
 
     def test_option_cost_per_share_divided_by_contract_multiplier(self):
         """Options trade in 100-share contracts but cost/share is quoted
-        per underlying share. 12 contracts at total $23524.07 → per-contract
-        $1960.34, per-underlying-share $19.60."""
+        per underlying share. 9 contracts at total $16473.42 → per-contract
+        $1830.38, per-underlying-share $18.30."""
         agg = {
-            'TLT280121C00075000.US': {
-                'qty': 12.0, 'total_cost': 23524.07, 'currency': 'USD',
+            'QLT280121C00068000.US': {
+                'qty': 9.0, 'total_cost': 16473.42, 'currency': 'USD',
             },
         }
         lines = render_report(agg)
         hdr = self._header_idx(lines)
         row = lines[hdr + 2]
-        self.assertIn('19.6034', row)
+        self.assertIn('18.3038', row)
         # Total cost stays as actual dollars paid.
-        self.assertIn('23524.07', row)
+        self.assertIn('16473.42', row)
 
     def test_short_option_cost_per_share(self):
         """Short -2 contracts, total_cost=-1000 (proceeds credited).

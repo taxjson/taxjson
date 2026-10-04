@@ -285,18 +285,18 @@ class TestAssignmentShape(unittest.TestCase):
 
     def test_assignment_shape_is_attention(self):
         txs, err, _ = _parse(
-            _HDR + "2025-01-10,SELL,XYZ250620P00050000.TO,-1,2.00,200.00,"
-            "0,CAD\n2025-06-20,BUY,XYZ250620P00050000.TO,1,0,0,0,CAD\n"
-            "2025-06-20,BUY,XYZ.TO,100,50,-5000.00,0,CAD\n", _toml())
+            _HDR + "2025-02-07,SELL,QZV250815P00045000.TO,-1,2.00,200.00,"
+            "0,CAD\n2025-08-15,BUY,QZV250815P00045000.TO,1,0,0,0,CAD\n"
+            "2025-08-15,BUY,QZV.TO,100,45,-4500.00,0,CAD\n", _toml())
         self.assertEqual(len(txs), 3)
         self.assertIn("warning: ATTENTION:", err)
         self.assertIn("exercise/assignment", err)
-        self.assertIn("XYZ250620P00050000.TO", err)
+        self.assertIn("QZV250815P00045000.TO", err)
 
     def test_no_attention_for_plain_expiry(self):
         _, err, _ = _parse(
-            _HDR + "2025-01-10,SELL,XYZ250620P00050000.TO,-1,2.00,200.00,"
-            "0,CAD\n2025-06-20,BUY,XYZ250620P00050000.TO,1,0,0,0,CAD\n",
+            _HDR + "2025-02-07,SELL,QZV250815P00045000.TO,-1,2.00,200.00,"
+            "0,CAD\n2025-08-15,BUY,QZV250815P00045000.TO,1,0,0,0,CAD\n",
             _toml())
         self.assertNotIn("ATTENTION", err)
 

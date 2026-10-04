@@ -155,9 +155,9 @@ class TestSettleBeforeTrade(unittest.TestCase):
 class TestQtRowShapesLow(unittest.TestCase):
 
     def test_adr_custody_fee_real_wording_binds_the_ticker(self):
-        """R1-77: Questrade's real text is '500 SHARES XPEV'."""
-        fee = q(td='2025-09-16', action='FCH', sym='',
-                desc='ADR CUSTODY FEE 500 SHARES QZPV RECORD DATE 8/1/25',
+        """R1-77: Questrade's wording is '<N> SHARES <TICKER>'."""
+        fee = q(td='2025-10-14', action='FCH', sym='',
+                desc='ADR CUSTODY FEE 400 SHARES QZPV RECORD DATE 9/2/25',
                 qty='0', price='0', gross='0', comm='0', net='-10.00',
                 act='Fees and rebates')
         txs, _, _ = qt_parse(fee)
@@ -261,15 +261,15 @@ class TestRbcRowsLow(unittest.TestCase):
     def test_option_transfer_takes_the_contract_symbol(self):
         """S065-02: an in-kind option transfer kept the RBC code."""
         body = (rrow("March 3, 2025", "Buy", "8QZQQQ1",
-                     "CALL .QZT 01/15/27 22 QZT CORP", "2", "1.40", "-291.95",
-                     "USD", "CALL .QZT 01/15/27 22 QZT CORP")
+                     "CALL .QZT 01/15/27 21 QZT CORP", "2", "1.40", "-291.95",
+                     "USD", "CALL .QZT 01/15/27 21 QZT CORP")
                 + rrow("June 2, 2025", "Transfers", "8QZQQQ1",
-                       "CALL .QZT 01/15/27 22 QZT CORP", "-2", "", "0", "USD",
-                       "TFO - CALL .QZT 01/15/27 22 ACCOUNT TRANSFER"))
+                       "CALL .QZT 01/15/27 21 QZT CORP", "-2", "", "0", "USD",
+                       "TFO - CALL .QZT 01/15/27 21 ACCOUNT TRANSFER"))
         txs, err, _ = rbc_parse(body)
         syms = {t['action']: t['symbol'] for t in txs}
         self.assertEqual(syms['TRANSFER'], syms['BUYSELL'])
-        self.assertEqual(syms['TRANSFER'], 'QZT270115C00022000.US')
+        self.assertEqual(syms['TRANSFER'], 'QZT270115C00021000.US')
         self.assertEqual(of(txs, action='TRANSFER')[0]['multiplier'], 100.0)
         self.assertNotIn('internal code', err)
 
@@ -420,15 +420,15 @@ class TestExpiryAndAssignmentOrder(unittest.TestCase):
         """Newest first: the ASN row, a same-day buy, then the stock
         leg. The group takes the stock leg's (earliest) slot, so the buy
         is pooled AFTER the assigned sale."""
-        body = (rrow("May 16, 2025", "Other", "8QZQQQ3", "", "1", "", "0",
-                     "CAD", "ASN - CALL .QZA 05/16/25 197.50 QZA CORP",
-                     settle="May 20, 2025")
-                + rrow("May 16, 2025", "Buy", "QZA", "QZA CORP", "100",
-                       "200", "-20009.95", "CAD", "QZA CORP UNSOLICITED",
-                       settle="May 20, 2025")
-                + rrow("May 16, 2025", "Sell", "QZA", "QZA CORP", "-100",
-                       "197.50", "19740.05", "CAD", "QZA CORP ASSIGNMENT "
-                       "OF OPTION AS OF 05/16/25", settle="May 20, 2025"))
+        body = (rrow("June 13, 2025", "Other", "8QZQQQ3", "", "1", "", "0",
+                     "CAD", "ASN - CALL .QZA 06/13/25 142.50 QZA CORP",
+                     settle="June 17, 2025")
+                + rrow("June 13, 2025", "Buy", "QZA", "QZA CORP", "100",
+                       "145", "-14509.95", "CAD", "QZA CORP UNSOLICITED",
+                       settle="June 17, 2025")
+                + rrow("June 13, 2025", "Sell", "QZA", "QZA CORP", "-100",
+                       "142.50", "14240.05", "CAD", "QZA CORP ASSIGNMENT "
+                       "OF OPTION AS OF 06/13/25", settle="June 17, 2025"))
         txs, err, _ = rbc_parse(body)
         asn = of(txs, action='ASSIGN')
         buy = [t for t in txs if t['action'] == 'BUYSELL'

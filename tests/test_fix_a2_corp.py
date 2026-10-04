@@ -473,7 +473,7 @@ class TestElectionMigration(unittest.TestCase):
         self.assertIn('type and ratio match', m.migration_notes[0])
 
     def test_a2_0168_unrelated_orphan_is_never_adopted(self):
-        ge = _spin('GE.US', 'GEV.US', date='2024-04-02', currency='USD')
+        ge = _spin('QGE.US', 'QGV.US', date='2024-05-06', currency='USD')
         new = _spin('AAA.US', 'BBB.US', date='2025-06-30', currency='USD')
         m, n = _migrate([_rec(ge.event_id, ge)], [new])
         self.assertEqual((n, sorted(m.records)), (0, [ge.event_id]))
@@ -529,12 +529,12 @@ class TestRbcDecimalComma(unittest.TestCase):
         from types import SimpleNamespace
         from taxjson.lib import corp_actions as ca
         from taxjson.lib.brokerages.base import BrokerageParseError
-        leg = SimpleNamespace(desc="XCH - CALL .TOU 03/21/25 6,4 TOURMALINE "
+        leg = SimpleNamespace(desc="XCH - CALL .QTM 05/16/25 7,3 QTM ENERGY "
                                    "ADJ", symdesc='')
         with self.assertRaises(BrokerageParseError):
             ca._rbc_leg_option(leg)
-        leg.desc = "XCH - CALL .TOU 03/21/25 5,025 TOURMALINE ADJ"
-        self.assertEqual(ca._rbc_leg_option(leg)[3], '5025')
+        leg.desc = "XCH - CALL .QTM 05/16/25 4,875 QTM ENERGY ADJ"
+        self.assertEqual(ca._rbc_leg_option(leg)[3], '4875')
 
 
 
@@ -747,10 +747,10 @@ class TestQuestradeCorpUnbooked(unittest.TestCase):
     def test_a2_0966_internal_code_hint_names_the_booked_symbol(self):
         import test_fix_rbcqt as R
         from taxjson.lib.corp_actions import parse_questrade_corporate_actions
-        leg = ('WTS QZD DEV CORP WT EXP RTS DIST ON 1000 SHS FROM SEC# '
-               'J000001 QZD DEVELOPMENT CORP REC 07/10/25 PAY 07/14/25')
-        body = R.QH + R.q(td='2025-07-14', action='DIS', sym='D056068',
-                          desc=leg, qty='100', price='0', gross='0',
+        leg = ('WTS QZD DEV CORP WT EXP RTS DIST ON 500 SHS FROM SEC# '
+               'J000001 QZD DEVELOPMENT CORP REC 08/11/25 PAY 08/13/25')
+        body = R.QH + R.q(td='2025-08-13', action='DIS', sym='D056068',
+                          desc=leg, qty='50', price='0', gross='0',
                           comm='0', net='0', cur='CAD', act='Dividends')
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "qt.csv"

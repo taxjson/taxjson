@@ -35,7 +35,7 @@ class TestShares(unittest.TestCase):
             '[accounts.rrsp]\ntype = "sheltered"\n')
         _gains(root, "margin", {"XIU.TO": (100, 3000.0),
                                 "ANET.US": (-50, -5000.0),   # short
-                                "AEM280121C00155000.TO": (2, 400.0),
+                                "QMB280121C00062000.TO": (2, 400.0),
                                 "GONE.TO": (0, 0.0)})
         _gains(root, "rrsp", {"XIU.TO": (40, 1300.0),
                               "ANET.US": (75, 8000.0)})
@@ -70,7 +70,7 @@ class TestShares(unittest.TestCase):
             root = self._project(tmp)
             r = _run(root, "shares", "--options", "--json")
             rows = {d["symbol"] for d in json.loads(r.stdout)["rows"]}
-            self.assertIn("AEM280121C00155000.TO", rows)
+            self.assertIn("QMB280121C00062000.TO", rows)
             r = _run(root, "shares", "--sheltered", "--json")
             doc = json.loads(r.stdout)
             self.assertEqual(doc["scope"], "sheltered")

@@ -85,7 +85,7 @@ class TestDetection(unittest.TestCase):
         """Case #5: AAPL phantom in LIRA + real short in Margin — both surface."""
         txs = [
             _tx('BUYSELL', '2024-03-20', 'AAPL.US', -100, 180.0, 18000, account='LIRA'),
-            _tx('BUYSELL', '2024-04-10', 'AAPL.US', -50, 175.0, 8750, account='Margin'),
+            _tx('BUYSELL', '2024-04-17', 'AAPL.US', -50, 175.0, 8750, account='Margin'),
             _tx('BUYSELL', '2024-05-15', 'AAPL.US', 50, 170.0, 8500, account='Margin'),
         ]
         candidates = detect_missing_history(txs)
@@ -96,7 +96,7 @@ class TestDetection(unittest.TestCase):
         """Multi-disposition phantom: count both sells inside the negative span."""
         txs = [
             _tx('BUYSELL', '2024-03-20', 'AAPL.US', -60, 180.0, 10800, account='LIRA'),
-            _tx('BUYSELL', '2024-04-10', 'AAPL.US', -40, 175.0, 7000, account='LIRA'),
+            _tx('BUYSELL', '2024-04-17', 'AAPL.US', -40, 175.0, 7000, account='LIRA'),
         ]
         candidates = detect_missing_history(txs)
         self.assertEqual(len(candidates), 1)
@@ -235,7 +235,7 @@ class TestSynthesisAndTaint(unittest.TestCase):
         """Case #3: phantom drains to zero, fresh buys, later sell — last sell is clean."""
         txs = [
             _tx('BUYSELL', '2024-03-20', 'AAPL.US', -100, 180.0, 17991, account='Margin'),  # phantom drain
-            _tx('BUYSELL', '2024-04-10', 'AAPL.US', 200, 170.0, 34009, account='Margin'),   # fresh clean buys
+            _tx('BUYSELL', '2024-04-17', 'AAPL.US', 200, 170.0, 34009, account='Margin'),   # fresh clean buys
             _tx('BUYSELL', '2024-05-15', 'AAPL.US', -100, 190.0, 18991, account='Margin'),  # clean sell
         ]
         result = self._compute(txs, phantoms={('AAPL.US', 'Margin')})
@@ -252,7 +252,7 @@ class TestSynthesisAndTaint(unittest.TestCase):
         """Case #2: phantom sell, partial cover that doesn't drain → still tainted."""
         txs = [
             _tx('BUYSELL', '2024-03-20', 'AAPL.US', -100, 180.0, 17991, account='Margin'),
-            _tx('BUYSELL', '2024-04-10', 'AAPL.US', 30, 175.0, 5251, account='Margin'),
+            _tx('BUYSELL', '2024-04-17', 'AAPL.US', 30, 175.0, 5251, account='Margin'),
             _tx('BUYSELL', '2024-05-15', 'AAPL.US', -50, 170.0, 8499, account='Margin'),
         ]
         result = self._compute(txs, phantoms={('AAPL.US', 'Margin')})
@@ -292,7 +292,7 @@ class TestSynthesisAndTaint(unittest.TestCase):
         """Case #10: regenerating suggestions twice produces the same output."""
         txs = [
             _tx('BUYSELL', '2024-03-20', 'AAPL.US', -100, 180.0, 17991, account='LIRA'),
-            _tx('BUYSELL', '2024-04-10', 'MSFT.US', -50, 400.0, 19998, account='TFSA'),
+            _tx('BUYSELL', '2024-04-17', 'MSFT.US', -50, 400.0, 19998, account='TFSA'),
         ]
         from taxjson.lib.missing_history import format_suggestions
         out1 = format_suggestions(detect_missing_history(txs))
@@ -307,7 +307,7 @@ class TestCase4RegisteredAccountFlagInSuggestions(unittest.TestCase):
     def test_lira_phantom_flagged_in_suggestions(self):
         txs = [
             _tx('BUYSELL', '2024-03-20', 'AAPL.US', -100, 180.0, 17991, account='LIRA'),
-            _tx('BUYSELL', '2024-04-10', 'NVDA.US', -50, 1000.0, 49998, account='Margin'),
+            _tx('BUYSELL', '2024-04-17', 'NVDA.US', -50, 1000.0, 49998, account='Margin'),
         ]
         candidates = detect_missing_history(txs)
         rendered = format_suggestions(candidates)
@@ -370,7 +370,7 @@ class TestCase12RoundingEdge(unittest.TestCase):
         txs = [
             _tx('BUYSELL', '2024-01-15', 'BTC.US', 0.001, 60000.0, 60, account='Margin', currency='USD'),
             _tx('BUYSELL', '2024-03-20', 'BTC.US', -0.0001, 65000.0, 6.5, account='Margin', currency='USD'),
-            _tx('BUYSELL', '2024-04-10', 'BTC.US', -0.0009, 70000.0, 63, account='Margin', currency='USD'),
+            _tx('BUYSELL', '2024-04-17', 'BTC.US', -0.0009, 70000.0, 63, account='Margin', currency='USD'),
         ]
         # Wait — these don't go negative on their own. Force a phantom by
         # listing the pair AND having the first sell precede an undisclosed
@@ -515,25 +515,25 @@ class TestSplitRename(unittest.TestCase):
         )
 
     def test_rename_target_sale_not_flagged_short(self):
-        # 15 HES → (rollover) → 15 CVX, then CVX sold. Nets to zero; the
-        # detector must NOT flag CVX as a phantom short.
+        # 12 MRGA → (rollover) → 12 MRGB, then MRGB sold. Nets to zero; the
+        # detector must NOT flag MRGB as a phantom short.
         txs = [
-            _tx('BUYSELL', '2025-01-02', 'HES.US', 15, 10.0, 150.0),
-            self._split('2025-07-21', 'HES.US', 'CVX.US', 1.0),
-            _tx('BUYSELL', '2025-12-23', 'CVX.US', -15, 150.0, 2250.0),
+            _tx('BUYSELL', '2025-02-11', 'MRGA.US', 12, 10.0, 120.0),
+            self._split('2025-08-18', 'MRGA.US', 'MRGB.US', 1.0),
+            _tx('BUYSELL', '2025-11-24', 'MRGB.US', -12, 148.0, 1776.0),
         ]
         self.assertEqual(detect_missing_history(txs), [])
 
     def test_genuine_short_after_rename_still_flagged(self):
         # Selling MORE than the rename delivered is a real short.
         txs = [
-            _tx('BUYSELL', '2025-01-02', 'HES.US', 15, 10.0, 150.0),
-            self._split('2025-07-21', 'HES.US', 'CVX.US', 1.0),
-            _tx('BUYSELL', '2025-12-23', 'CVX.US', -20, 150.0, 3000.0),
+            _tx('BUYSELL', '2025-02-11', 'MRGA.US', 12, 10.0, 120.0),
+            self._split('2025-08-18', 'MRGA.US', 'MRGB.US', 1.0),
+            _tx('BUYSELL', '2025-11-24', 'MRGB.US', -17, 148.0, 2516.0),
         ]
         cands = detect_missing_history(txs)
         self.assertEqual(len(cands), 1)
-        self.assertEqual(cands[0].symbol, 'CVX.US')
+        self.assertEqual(cands[0].symbol, 'MRGB.US')
         self.assertAlmostEqual(cands[0].peak_short, -5.0)
 
 

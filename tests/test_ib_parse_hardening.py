@@ -193,15 +193,15 @@ class TestPerRowMoneyCheck(unittest.TestCase):
 
 class TestFuturesOptionExpiry(unittest.TestCase):
     FOP = ('Financial Instrument Information,Data,Options On Futures,'
-           'QZLOF6 P5200,QZCL JAN26 52 P,999000021,QZCLF6,NYMEX,"1,000",'
-           '2025-12-16,2026-01,P,52,\n')
+           'ZQKH6 P4700,ZQK MAR26 47 P,999000021,ZQKH6,NYMEX,"1,000",'
+           '2026-02-17,2026-03,P,47,\n')
 
     def test_monthly_fop_uses_the_real_expiry(self):
         _, txs, _ = _parse(HEAD + TRADES_H + _trade(
-            'QZCL JAN26 52 P', '2025-11-10, 11:26:51', 1, 0.44, -440, -2.25,
+            'ZQK MAR26 47 P', '2026-01-12, 11:26:51', 2, 0.37, -740, -4.50,
             cat='Options On Futures') + FII_H + self.FOP)
-        self.assertEqual(txs[0]['symbol'], 'F:QZCL251216P00052000.US',
-                         "expiry 2025-12-16 from the instrument list, not "
+        self.assertEqual(txs[0]['symbol'], 'F:ZQK260217P00047000.US',
+                         "expiry 2026-02-17 from the instrument list, not "
                          "a placeholder day 20 of the delivery month")
         self.assertEqual(txs[0]['multiplier'], 1000.0)
 
@@ -380,47 +380,47 @@ class TestCorporateActionCancellation(unittest.TestCase):
 
 class TestOptionRootAlias(unittest.TestCase):
     """After a corporate action IB renames an adjusted option's root
-    (XYZ -> XYZ1): the opening sale is `QZD 21NOV25 12.5 P`, the
-    assignment `QZD1 21NOV25 12.5 P`, and the instrument list shows one
+    (XYZ -> XYZ1): the opening sale is `VKD 20MAR26 11 P`, the
+    assignment `VKD1 20MAR26 11 P`, and the instrument list shows one
     conid under both roots. One canonical symbol lets the assignment
     fold the premium."""
 
     FII = ('Financial Instrument Information,Data,Equity and Index '
-           'Options,"QZD  251121P00012500, QZD1 251121P00012500",'
-           'QZD 21NOV25 12.5 P,999000031,QZD,CBOE,100,2025-11-21,2025-11,'
-           'P,12.5,\n'
+           'Options,"VKD  260320P00011000, VKD1 260320P00011000",'
+           'VKD 20MAR26 11 P,999000031,VKD,CBOE,100,2026-03-20,2026-03,'
+           'P,11,\n'
            'Financial Instrument Information,Data,Equity and Index '
-           'Options,QZD1 251121P00015000,QZD1 21NOV25 15 P,999000032,QZD1,'
-           'CBOE,100,2025-11-21,2025-11,P,15,\n')
+           'Options,VKD1 260320P00013500,VKD1 20MAR26 13.5 P,999000032,VKD1,'
+           'CBOE,100,2026-03-20,2026-03,P,13.5,\n')
 
     def test_both_legs_share_one_symbol_and_the_premium_folds(self):
         body = (HEAD + TRADES_H
-                + _trade('QZD 21NOV25 12.5 P', '2025-09-24, 11:08:51', -8,
-                         1.30, 1040, -5.65, cat='Equity and Index Options')
-                + _trade('QZD 21NOV25 15 P', '2025-10-09, 10:55:13', -4,
-                         2.10, 840, -2.80, cat='Equity and Index Options')
-                + _trade('QZD1 21NOV25 12.5 P', '2025-11-21, 16:20:00', 8,
+                + _trade('VKD 20MAR26 11 P', '2026-01-15, 11:08:51', -7,
+                         1.30, 910, -4.60, cat='Equity and Index Options')
+                + _trade('VKD 20MAR26 13.5 P', '2026-02-04, 10:55:13', -9,
+                         2.10, 1890, -5.40, cat='Equity and Index Options')
+                + _trade('VKD1 20MAR26 11 P', '2026-03-20, 16:20:00', 7,
                          0, 0, 0, code='A;C', cat='Equity and Index Options')
-                + _trade('QZD1 21NOV25 15 P', '2025-11-21, 16:20:00', 4,
+                + _trade('VKD1 20MAR26 13.5 P', '2026-03-20, 16:20:00', 9,
                          0, 0, 0, code='A;C', cat='Equity and Index Options')
-                + _trade('QZD', '2025-11-21, 16:20:00', 800, 12.5, -10000,
+                + _trade('VKD', '2026-03-20, 16:20:00', 700, 11, -7700,
                          0, code='A;O')
                 + FII_H + self.FII)
         _, txs, err = _parse(body)
         syms = sorted({t['symbol'] for t in txs})
-        self.assertEqual(syms, ['QZD.US', 'QZD251121P00012500.US',
-                                'QZD251121P00015000.US'])
-        self.assertIn('alias of QZD', err)
-        # A ticker.map GLOBAL QZD1.US QZD.US rule (the manual workaround)
+        self.assertEqual(syms, ['VKD.US', 'VKD260320P00011000.US',
+                                'VKD260320P00013500.US'])
+        self.assertIn('alias of VKD', err)
+        # A ticker.map GLOBAL VKD1.US VKD.US rule (the manual workaround)
         # now has nothing left to rename: a no-op.
-        self.assertFalse(any(s.startswith('QZD1') for s in syms))
+        self.assertFalse(any(s.startswith('VKD1') for s in syms))
         from taxjson.lib.core import CanadaTaxRules, TaxTransaction
         fields = TaxTransaction.__dataclass_fields__
         tts = [TaxTransaction(**{k: v for k, v in r.items() if k in fields})
                for r in txs]
         with contextlib.redirect_stderr(io.StringIO()) as e2:
             CanadaTaxRules().compute_gains(tts)
-        self.assertNotIn('QZD251121P00012500', e2.getvalue(),
+        self.assertNotIn('VKD260320P00011000', e2.getvalue(),
                          "no undrained premium / phantom on the option")
 
 

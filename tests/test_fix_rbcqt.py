@@ -352,19 +352,19 @@ class TestQtAssignmentLegsShareASettleDate(unittest.TestCase):
 
 
 class TestQtStockDividendAndDis(unittest.TestCase):
-    BUY = q(sym='XTD.TO', desc='XTD SPLIT CORP WE ACTED AS AGENT', qty='1000',
+    BUY = q(sym='QSD.TO', desc='QSD SPLIT CORP WE ACTED AS AGENT', qty='1000',
             price='10', gross='-10000', comm='0', net='-10000', cur='CAD')
 
-    def _stk(self, qty, net='0', td='2025-07-29'):
-        return q(td=td, action='DIS', sym='XTD.TO',
-                 desc='XTD SPLIT CORP STK DIV ON 1000 SHS REC 07/24/25 PAY '
-                      '07/29/25', qty=qty, price='0', gross='0', comm='0',
+    def _stk(self, qty, net='0', td='2025-08-26'):
+        return q(td=td, action='DIS', sym='QSD.TO',
+                 desc='QSD SPLIT CORP STK DIV ON 1000 SHS REC 08/21/25 PAY '
+                      '08/26/25', qty=qty, price='0', gross='0', comm='0',
                  net=net, cur='CAD', act='Dividends')
 
     def test_stock_dividend_reversal_cancels_the_original(self):
         """R1-65."""
         txs, _, _ = qt_parse(self.BUY + self._stk('150')
-                             + self._stk('-150', td='2025-07-30'))
+                             + self._stk('-150', td='2025-08-27'))
         self.assertEqual(sum(t['quantity'] for t in txs), 1000.0)
 
     def test_orphan_stock_dividend_reversal_is_refused(self):
@@ -379,9 +379,9 @@ class TestQtStockDividendAndDis(unittest.TestCase):
     def test_dis_with_shares_and_cash_is_refused(self):
         """R1-72."""
         with self.assertRaises(BrokerageParseError):
-            qt_parse(self.BUY + q(td='2025-07-29', action='DIS',
-                                  sym='XTD.TO',
-                                  desc='XTD SPLIT CORP DIST ON 1000 SHS',
+            qt_parse(self.BUY + q(td='2025-08-26', action='DIS',
+                                  sym='QSD.TO',
+                                  desc='QSD SPLIT CORP DIST ON 1000 SHS',
                                   qty='5', price='0', gross='0', comm='0',
                                   net='12.00', cur='CAD', act='Dividends'))
 
@@ -476,10 +476,10 @@ class TestQtCorpActionChains(unittest.TestCase):
 
     def test_internal_code_target_is_flagged(self):
         """R1-3."""
-        leg = ('WTS DEFI DEV CORP WT EXP RTS DIST ON 1000 SHS FROM SEC# '
-               'J000001 DEFI DEVELOPMENT CORP REC 07/10/25 PAY 07/14/25')
-        ev, err = self._events(q(td='2025-07-14', action='DIS',
-                                 sym='D056068', desc=leg, qty='100',
+        leg = ('WTS QZD DEV CORP WT EXP RTS DIST ON 500 SHS FROM SEC# '
+               'J000001 QZD DEVELOPMENT CORP REC 08/11/25 PAY 08/13/25')
+        ev, err = self._events(q(td='2025-08-13', action='DIS',
+                                 sym='D056068', desc=leg, qty='50',
                                  price='0', gross='0', comm='0', net='0',
                                  act='Dividends'))
         self.assertEqual(len(ev), 1)
@@ -537,9 +537,9 @@ class TestRbcTradeRows(unittest.TestCase):
 
     def test_explicit_zero_value_is_allowed(self):
         txs, _, _ = rbc_parse(rrow("April 1, 2025", "Sell", "8QQQQQ1",
-                                   "CALL .XYZ 04/17/25 90 XYZ CORP", "-1",
+                                   "CALL .ABC 05/16/25 90 ABC CORP", "-1",
                                    "0.01", "0", "CAD",
-                                   "CALL .XYZ 04/17/25 90 XYZ CORP"))
+                                   "CALL .ABC 05/16/25 90 ABC CORP"))
         self.assertAlmostEqual(txs[0]['net_amount'], 0.0)
 
     def test_value_off_by_a_factor_is_refused(self):
@@ -550,11 +550,11 @@ class TestRbcTradeRows(unittest.TestCase):
                                "100", "50", value, "CAD", "XYZ CORP"))
 
     def test_small_option_with_a_large_commission_is_fine(self):
-        txs, _, _ = rbc_parse(rrow("April 8, 2024", "Buy", "9QQQQQ5",
-                                   "CALL .SNQ 04/19/24 7 SNQ INC", "1",
-                                   "0.32", "-43.95", "USD",
-                                   "CALL .SNQ 04/19/24 7 SNQ INC"))
-        self.assertAlmostEqual(txs[0]['net_amount'], 43.95)
+        txs, _, _ = rbc_parse(rrow("June 10, 2024", "Buy", "9QQQQQ5",
+                                   "CALL .ZQP 06/21/24 6 ZQP INC", "1",
+                                   "0.28", "-39.95", "USD",
+                                   "CALL .ZQP 06/21/24 6 ZQP INC"))
+        self.assertAlmostEqual(txs[0]['net_amount'], 39.95)
 
     def test_comma_strikes_are_distinct_contracts(self):
         """S063-15."""
@@ -619,19 +619,19 @@ class TestRbcIncomeAndCorporateRows(unittest.TestCase):
 
     def test_reinvestment_reversal_cancels(self):
         """R1-83."""
-        rei = rrow("April 18, 2022", "Dividends", "SRU.UN", "SMARTCENTRES",
-                   "2", "", "-64.48", "CAD", "REI - SMARTCENTRES REINV@C$32.24")
-        cxl = rrow("April 22, 2022", "Dividends", "SRU.UN", "SMARTCENTRES",
-                   "-2", "", "64.48", "CAD",
-                   "REI - SMARTCENTRES REINV@C$32.24 CANCEL")
+        rei = rrow("April 11, 2022", "Dividends", "QRT.UN", "QRT REIT",
+                   "3", "", "-81.45", "CAD", "REI - QRT REIT REINV@C$27.15")
+        cxl = rrow("April 13, 2022", "Dividends", "QRT.UN", "QRT REIT",
+                   "-3", "", "81.45", "CAD",
+                   "REI - QRT REIT REINV@C$27.15 CANCEL")
         txs, _, _ = rbc_parse(rei + cxl)
         self.assertEqual(txs, [])
         with self.assertRaises(RbcFormatError):
             rbc_parse(cxl)
         with self.assertRaises(RbcFormatError):
-            rbc_parse(rrow("April 18, 2022", "Dividends", "SRU.UN",
-                           "SMARTCENTRES", "2", "", "64.48", "CAD",
-                           "REI - SMARTCENTRES REINV@C$32.24"))
+            rbc_parse(rrow("April 11, 2022", "Dividends", "QRT.UN",
+                           "QRT REIT", "3", "", "81.45", "CAD",
+                           "REI - QRT REIT REINV@C$27.15"))
 
     @rule("CA-DIST-03")
     @rule("US-DIST-03")
@@ -796,13 +796,13 @@ class TestBrokerMarkedShorts(unittest.TestCase):
 
         def t(date, qty, desc):
             return TaxTransaction(action='BUYSELL', date=date, symbol='QQA.TO',
-                                  quantity=qty, price=10.7,
-                                  net_amount=abs(qty) * 10.7,
+                                  quantity=qty, price=9.3,
+                                  net_amount=abs(qty) * 9.3,
                                   account='margin', currency='CAD',
                                   description=desc)
-        return [t('2024-04-15', -700, f'QQA CORP{marker} UNSOLICITED'),
-                t('2024-04-16', -300, f'QQA CORP{marker} UNSOLICITED'),
-                t('2024-04-19', 1000, 'QQA CORP COVER SHORT. UNSOLICITED')]
+        return [t('2024-05-13', -600, f'QQA CORP{marker} UNSOLICITED'),
+                t('2024-05-14', -400, f'QQA CORP{marker} UNSOLICITED'),
+                t('2024-05-17', 1000, 'QQA CORP COVER SHORT. UNSOLICITED')]
 
     def test_marked_short_is_not_a_phantom_candidate(self):
         from taxjson.lib.missing_history import detect_missing_history

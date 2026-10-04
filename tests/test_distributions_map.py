@@ -87,7 +87,7 @@ class TestEndToEnd(unittest.TestCase):
             # sell all in 2026 @ 12.
             (root / "inputs" / "margin" / "questrade.csv").write_text(
                 _QT_HEADER +
-                "2025-01-15 09:30:00 AM,2025-01-16 12:00:00 AM,Buy,XAW.TO,"
+                "2025-02-12 09:30:00 AM,2025-02-13 12:00:00 AM,Buy,XAW.TO,"
                 "D,100,10.00,1000.00,0.00,-1000.00,CAD,1,Trades,Individual\n"
                 "2026-03-20 10:15:00 AM,2026-03-23 12:00:00 AM,Sell,XAW.TO,"
                 "D,-100,12.00,1200.00,0.00,1200.00,CAD,1,Trades,Individual\n")

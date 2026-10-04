@@ -57,7 +57,7 @@ def _by(rep):
 class TestReconcileSlipRows(unittest.TestCase):
     def test_blank_box21_is_nil_proceeds(self):
         """R1-17: blank box 21 beside a box 20 = expired worthless."""
-        opt = "XYZ250117C00100000.US"
+        opt = "QRS250117C00100000.US"
         with tempfile.TemporaryDirectory() as td:
             code, rep, err = _reconcile(
                 td, f"Symbol,Box 16,Box 21,Box 20\n{opt},2,,1000.00\n",
@@ -95,39 +95,39 @@ class TestReconcileSlipRows(unittest.TestCase):
 class TestReconcileGrantPair(unittest.TestCase):
     def test_grant_write_and_buyback_count_once(self):
         """R1-18: a WRITE record plus its buy-back is ONE slip row."""
-        opt = "ZZA250620P00022500.US"
-        write = _sell(symbol=opt, qty=5, proceeds=0.0, cost=612.34,
+        opt = "ZZA250718P00018500.US"
+        write = _sell(symbol=opt, qty=5, proceeds=0.0, cost=512.40,
                       direction="SHORT", grant=True)
-        close = _sell(symbol=opt, qty=5, proceeds=-148.21, cost=0.0,
+        close = _sell(symbol=opt, qty=5, proceeds=-133.15, cost=0.0,
                       direction="SHORT")
         with tempfile.TemporaryDirectory() as td:
             code, rep, err = _reconcile(
                 td, "Symbol,Box 16,Box 21,Box 20\n"
-                    f"{opt},5,612.34,148.21\n", [write, close])
+                    f"{opt},5,512.40,133.15\n", [write, close])
         self.assertEqual(code, 0, rep)
 
     def test_open_write_still_counts(self):
         from taxjson.bin.taxjson_reconcile_slips import load_computed
-        opt = "ZZA250620P00022500.US"
+        opt = "ZZA250718P00018500.US"
         with tempfile.TemporaryDirectory() as td:
             out = load_computed([_gains(td, [_sell(
-                symbol=opt, qty=5, proceeds=0.0, cost=612.34,
+                symbol=opt, qty=5, proceeds=0.0, cost=512.40,
                 direction="SHORT", grant=True)])], 2025)
-        self.assertAlmostEqual(out["ZZA250620P00022500"]["qty"], 5.0)
+        self.assertAlmostEqual(out["ZZA250718P00018500"]["qty"], 5.0)
 
 
 class TestReconcileSymbols(unittest.TestCase):
     def test_ticker_map_renames_slip_symbols(self):
-        """R1-19: the books carry K / K...TO (TOBASE KGC.US K.TO)."""
-        opt = "K270115C00012000.TO"
+        """R1-19: the books carry QG / QG...TO (TOBASE QGX.US QG.TO)."""
+        opt = "QG261218C00016000.TO"
         with tempfile.TemporaryDirectory() as td:
             tm = Path(td) / "ticker.map"
-            tm.write_text("TOBASE KGC.US K.TO\n")
+            tm.write_text("TOBASE QGX.US QG.TO\n")
             code, rep, err = _reconcile(
                 td, "Symbol,Quantity,Proceeds\n"
-                    "KGC270115C00012000,1,6979.10\nKGC,100,1500.00\n",
-                [_sell(symbol=opt, qty=-1, proceeds=6979.10),
-                 _sell(symbol="K.TO", qty=-100, proceeds=1500.0)],
+                    "QGX261218C00016000,1,4321.50\nQGX,100,1500.00\n",
+                [_sell(symbol=opt, qty=-1, proceeds=4321.50),
+                 _sell(symbol="QG.TO", qty=-100, proceeds=1500.0)],
                 "--ticker-map", str(tm))
         self.assertEqual(code, 0, (rep, err))
 
@@ -137,10 +137,10 @@ class TestReconcileSymbols(unittest.TestCase):
             code, rep, err = _reconcile(
                 td, "Symbol,Quantity,Proceeds\n"
                     "BRK B,10,5000.00\n"
-                    "XYZ 21MAR25 50 C,1,300.00\n"
+                    "QRS 21MAR25 50 C,1,300.00\n"
                     "PUT ABC04/17/25 22.5,2,100.00\n",
                 [_sell(symbol="BRK.B.US", qty=-10, proceeds=5000.0),
-                 _sell(symbol="XYZ250321C00050000.US", qty=-1,
+                 _sell(symbol="QRS250321C00050000.US", qty=-1,
                        proceeds=300.0),
                  _sell(symbol="ABC250417P00022500.US", qty=-2,
                        proceeds=100.0)])
@@ -187,7 +187,7 @@ class TestReconcileSymbols(unittest.TestCase):
                 td, "Identification of securities,Quantity of securities,"
                     "Proceeds of disposition or settlement amount\n"
                     "AAPL,100,12000.00\n",
-                [_sell(), _sell(symbol="XYZ250117C00100000.US", qty=-2,
+                [_sell(), _sell(symbol="QRS250117C00100000.US", qty=-2,
                                 proceeds=0.0, cost=500.0)])
         self.assertEqual(code, 0, rep)
         self.assertEqual(rep["counts"]["no_slip_expected"], 1)
@@ -200,17 +200,17 @@ class TestReconcileHeaders(unittest.TestCase):
             code, rep, err = _reconcile(
                 td, "Symbol,Quantity of securities received on settlement,"
                     "Quantity,Proceeds of disposition\n"
-                    "XYZ,,200,1000.00\n",
-                [_sell(symbol="XYZ.TO", qty=-100, proceeds=1000.0)])
+                    "QRS,,200,1000.00\n",
+                [_sell(symbol="QRS.TO", qty=-100, proceeds=1000.0)])
         self.assertEqual(code, 1)
-        self.assertIn("quantity off", _by(rep)["XYZ"]["detail"])
+        self.assertIn("quantity off", _by(rep)["QRS"]["detail"])
 
     def test_two_proceeds_columns_are_refused(self):
         with tempfile.TemporaryDirectory() as td:
             code, rep, err = _reconcile(
                 td, "Symbol,Proceeds (USD),Proceeds (CAD)\n"
-                    "XYZ,700,1000.00\n",
-                [_sell(symbol="XYZ.TO", qty=-100, proceeds=1000.0)])
+                    "QRS,700,1000.00\n",
+                [_sell(symbol="QRS.TO", qty=-100, proceeds=1000.0)])
         self.assertEqual(code, 2)
         self.assertIn("ambiguous header", err)
 
@@ -562,14 +562,14 @@ class TestAuditPricedByFill(unittest.TestCase):
         from decimal import Decimal
         from taxjson.bin import taxjson_audit as A
         gid = "fee1"
-        g = {"id": gid, "symbol": "TAO", "date": "2026-05-04",
-             "date_settle": "2026-05-04", "qty": 0.002, "gain": 0.11,
+        g = {"id": gid, "symbol": "QTK", "date": "2026-05-18",
+             "date_settle": "2026-05-18", "qty": 0.003, "gain": 0.09,
              "account": "crypto"}
         raw = {"id": gid, "currency": "USD", "net_amount": 0.0,
-               "date": "2026-05-04"}
-        base = {"id": gid, "net_amount": 0.7756, "currency": "CAD"}
-        filled = {"id": gid, "net_amount": 0.5698, "currency": "USD"}
-        fx = {"USD": {"2026-05-04": Decimal("1.3612")}}
+               "date": "2026-05-18"}
+        base = {"id": gid, "net_amount": 0.6042, "currency": "CAD"}
+        filled = {"id": gid, "net_amount": 0.4410, "currency": "USD"}
+        fx = {"USD": {"2026-05-18": Decimal("1.3700")}}
         kw = dict(check_index={}, fx_history=fx,
                   default_rate=Decimal("1.35"), base_currency="CAD",
                   tmap=None, replacement_lookup={}, checks_supplied=False)
@@ -618,24 +618,24 @@ class TestT1135Walk(unittest.TestCase):
     def test_assigned_put_premium_reduces_cost(self):
         """R1-202 / R1-276: ITA 49(3.1)(b) — the stock leg first in the
         file must not matter."""
-        put = "XYZ250620P00050000.US"
+        put = "QRS250718P00050000.US"
         rows = [_tx("BUYSELL", "2025-03-03", put, -1, 300.0),
-                _tx("BUYSELL", "2025-06-20", "XYZ.US", 100, -5000.0,
+                _tx("BUYSELL", "2025-07-18", "QRS.US", 100, -5000.0,
                     time="16:00:00"),
-                _tx("ASSIGN", "2025-06-20", put, 1, 0.0, time="16:00:00")]
+                _tx("ASSIGN", "2025-07-18", put, 1, 0.0, time="16:00:00")]
         w = self._walk(rows)
-        s = w["per_symbol"]["XYZ.US"]
+        s = w["per_symbol"]["QRS.US"]
         self.assertAlmostEqual(s["year_end_cost"], 4700.0, places=2)
         self.assertAlmostEqual(s["max_cost"], 4700.0, places=2)
 
     def test_exercised_call_cost_is_added(self):
-        call = "XYZ250620C00060000.US"
+        call = "QRS250718C00060000.US"
         rows = [_tx("BUYSELL", "2025-03-03", call, 1, -400.0),
-                _tx("ASSIGN", "2025-06-20", call, -1, 0.0),
-                _tx("BUYSELL", "2025-06-20", "XYZ.US", 100, -6000.0)]
+                _tx("ASSIGN", "2025-07-18", call, -1, 0.0),
+                _tx("BUYSELL", "2025-07-18", "QRS.US", 100, -6000.0)]
         w = self._walk(rows)
         self.assertAlmostEqual(
-            w["per_symbol"]["XYZ.US"]["year_end_cost"], 6400.0, places=2)
+            w["per_symbol"]["QRS.US"]["year_end_cost"], 6400.0, places=2)
 
     @rule("CA-RPT-01", "CA-DATE-14")
     def test_same_stamp_order_is_the_engines(self):
@@ -693,10 +693,10 @@ class TestT1135Report(unittest.TestCase):
         from taxjson.bin.taxjson_t1135 import load_overrides
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "ticker.map"
-            p.write_bytes("﻿T1135 XYZ.TO USA\nT1135 ABC.US CA\n"
+            p.write_bytes("﻿T1135 QRS.TO USA\nT1135 ABC.US CA\n"
                           .encode("utf-8"))
             ov = load_overrides(p)
-        self.assertEqual(ov.get("XYZ.TO"), "USA")
+        self.assertEqual(ov.get("QRS.TO"), "USA")
 
     def test_unused_override_and_deferred_wash_are_named(self):
         """S051-17 (unused key) and S009-01 / S051-21 / S008-07 (denied
@@ -785,13 +785,13 @@ class TestWashExplainBlended(unittest.TestCase):
             _toml(root, 2025, "source_currencies = []\n"
                               "option_grant_timing_since = 2025\n",
                   [("margin", "taxable", ""), ("margin2", "taxable", "")])
-            for a, tt in (("margin", "BUYSELL 2025-02-03 10:00:00 XYZ.TO "
+            for a, tt in (("margin", "BUYSELL 2025-02-03 10:00:00 QRS.TO "
                                      "100 CAD 20.00 -2000.00 0.00\n"),
-                          ("margin2", "BUYSELL 2025-02-03 10:00:00 XYZ.TO "
+                          ("margin2", "BUYSELL 2025-02-03 10:00:00 QRS.TO "
                                       "100 CAD 10.00 -1000.00 0.00\n"
-                                      "BUYSELL 2025-09-02 10:00:00 XYZ.TO "
+                                      "BUYSELL 2025-09-02 10:00:00 QRS.TO "
                                       "-100 CAD 12.00 1200.00 0.00\n"
-                                      "BUYSELL 2025-09-08 10:00:00 XYZ.TO "
+                                      "BUYSELL 2025-09-08 10:00:00 QRS.TO "
                                       "100 CAD 12.00 -1200.00 0.00\n")):
                 (root / "inputs" / a).mkdir(parents=True)
                 (root / "inputs" / a / "x.tt").write_text(tt)

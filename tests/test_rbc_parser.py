@@ -7,8 +7,8 @@ from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
 class TestRbcParser(unittest.TestCase):
     def test_option_parsing(self):
         content = """\"Date\",\"Activity\",\"Symbol\",\"Symbol Description\",\"Quantity\",\"Price\",\"Settlement Date\",\"Account\",\"Value\",\"Currency\",\"Description\"
-\"January 30, 2025\",\"Sell\",\"8ABCDE1\",\"\",\"-25\",\"1.10\",\"January 31, 2025\",\"12345678\",\"2739.05\",\"CAD\",\"CALL .QQZ   06/20/25    30 QQZ HOLDINGS INC UNSOLICITED PROSPECTUS ENCLOSED CA CLOSE CONTRACT\"
-\"January 15, 2025\",\"Buy\",\"8ABCDE1\",\"\",\"20\",\"0.35\",\"January 16, 2025\",\"12345678\",\"-710.95\",\"CAD\",\"CALL .QQZ   06/20/25    30 QQZ HOLDINGS INC UNSOLICITED PROSPECTUS ENCLOSED DA OPEN CONTRACT\"
+\"January 30, 2025\",\"Sell\",\"8ABCDE1\",\"\",\"-25\",\"1.10\",\"January 31, 2025\",\"12345678\",\"2739.05\",\"CAD\",\"CALL .QQZ   09/12/25    30 QQZ HOLDINGS INC UNSOLICITED PROSPECTUS ENCLOSED CA CLOSE CONTRACT\"
+\"January 15, 2025\",\"Buy\",\"8ABCDE1\",\"\",\"20\",\"0.35\",\"January 16, 2025\",\"12345678\",\"-710.95\",\"CAD\",\"CALL .QQZ   09/12/25    30 QQZ HOLDINGS INC UNSOLICITED PROSPECTUS ENCLOSED DA OPEN CONTRACT\"
 """
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
             f.write(content)
@@ -18,8 +18,8 @@ class TestRbcParser(unittest.TestCase):
             parser = RbcBrokerage()
             txs = parser.parse_file(Path(fname))
             self.assertEqual(len(txs), 2)
-            self.assertEqual(txs[0]['symbol'], 'QQZ250620C00030000.TO')
-            self.assertEqual(txs[1]['symbol'], 'QQZ250620C00030000.TO')
+            self.assertEqual(txs[0]['symbol'], 'QQZ250912C00030000.TO')
+            self.assertEqual(txs[1]['symbol'], 'QQZ250912C00030000.TO')
             self.assertEqual(txs[0]['quantity'], -25.0)
             self.assertEqual(txs[1]['quantity'], 20.0)
         finally:
@@ -36,7 +36,7 @@ class TestRbcParser(unittest.TestCase):
         grouped EXP with ASN, which silently dropped premium gains.
         """
         content = """\"Date\",\"Activity\",\"Symbol\",\"Symbol Description\",\"Quantity\",\"Price\",\"Settlement Date\",\"Account\",\"Value\",\"Currency\",\"Description\"
-\"February 24, 2025\",\"Reorganization\",\"8DZNZG9\",\"\",\"-30\",\"\",\"February 24, 2025\",\"12345678\",\"0\",\"CAD\",\"EXP - CALL .BNS   02/21/25    82 BANK OF NOVA SCOTIA OPTION EXPIRATION - EXPIRED\"
+\"March 17, 2025\",\"Reorganization\",\"8DZNZG9\",\"\",\"-12\",\"\",\"March 17, 2025\",\"12345678\",\"0\",\"CAD\",\"EXP - CALL .ZBQ   03/14/25    74 ZBQ BANK CORP OPTION EXPIRATION - EXPIRED\"
 """
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
             f.write(content)
@@ -45,11 +45,11 @@ class TestRbcParser(unittest.TestCase):
             parser = RbcBrokerage()
             txs = parser.parse_file(Path(fname))
             self.assertEqual(len(txs), 1)
-            self.assertEqual(txs[0]['symbol'], 'BNS250221C00082000.TO')
+            self.assertEqual(txs[0]['symbol'], 'ZBQ250314C00074000.TO')
             self.assertEqual(txs[0]['action'], 'BUYSELL',
                              "EXP rows must stay BUYSELL — the engine then "
                              "realizes the premium gain/loss in place")
-            self.assertEqual(txs[0]['quantity'], -30.0)
+            self.assertEqual(txs[0]['quantity'], -12.0)
         finally:
             os.remove(fname)
 
@@ -65,9 +65,9 @@ class TestRbcParser(unittest.TestCase):
         rolled premium is folded in via the engine's pending_adjustments.
         """
         content = """\"Date\",\"Activity\",\"Symbol\",\"Symbol Description\",\"Quantity\",\"Price\",\"Settlement Date\",\"Account\",\"Value\",\"Currency\",\"Description\"
-\"May 16, 2025\",\"Other\",\"9BZYDS1\",\"\",\"1\",\"\",\"May 20, 2025\",\"12345678\",\"0\",\"USD\",\"ASN - CALL COIN   05/16/25   197.50 COINBASE GLOBAL INC ASSIGNMENT OF OPTION\"
-\"May 16, 2025\",\"Sell\",\"COIN\",\"COINBASE GLOBAL INC CLASS A\",\"-100\",\"197.5\",\"May 20, 2025\",\"12345678\",\"19707\",\"USD\",\"COINBASE GLOBAL INC ASSIGNMENT OF OPTION AS OF 05/16/25\"
-\"May 6, 2025\",\"Sell\",\"9BZYDS1\",\"\",\"-1\",\"9.2\",\"May 7, 2025\",\"12345678\",\"911.77\",\"USD\",\"CALL COIN   05/16/25   197.50 COINBASE GLOBAL INC UNSOLICITED CA OPEN CONTRACT\"
+\"June 13, 2025\",\"Other\",\"9BZYDS1\",\"\",\"1\",\"\",\"June 17, 2025\",\"12345678\",\"0\",\"USD\",\"ASN - CALL KVX   06/13/25   142.50 KVX GLOBAL INC ASSIGNMENT OF OPTION\"
+\"June 13, 2025\",\"Sell\",\"KVX\",\"KVX GLOBAL INC CLASS A\",\"-100\",\"142.5\",\"June 17, 2025\",\"12345678\",\"14207\",\"USD\",\"KVX GLOBAL INC ASSIGNMENT OF OPTION AS OF 06/13/25\"
+\"June 3, 2025\",\"Sell\",\"9BZYDS1\",\"\",\"-1\",\"6.4\",\"June 4, 2025\",\"12345678\",\"631.77\",\"USD\",\"CALL KVX   06/13/25   142.50 KVX GLOBAL INC UNSOLICITED CA OPEN CONTRACT\"
 """
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
             f.write(content)
@@ -78,13 +78,13 @@ class TestRbcParser(unittest.TestCase):
             txs = parser.parse_file(Path(fname))
             by_key = {(t['date'], t['symbol'], t['quantity']): t for t in txs}
             # Option assignment notification → ASSIGN
-            opt_assign = by_key[('2025-05-16', 'COIN250516C00197500.US', 1.0)]
+            opt_assign = by_key[('2025-06-13', 'KVX250613C00142500.US', 1.0)]
             self.assertEqual(opt_assign['action'], 'ASSIGN')
             # Stock-leg at strike → BUYSELL (rolled premium handled downstream)
-            stock_sale = by_key[('2025-05-16', 'COIN.US', -100.0)]
+            stock_sale = by_key[('2025-06-13', 'KVX.US', -100.0)]
             self.assertEqual(stock_sale['action'], 'BUYSELL')
             # Original sell-to-open → BUYSELL
-            opt_open = by_key[('2025-05-06', 'COIN250516C00197500.US', -1.0)]
+            opt_open = by_key[('2025-06-03', 'KVX250613C00142500.US', -1.0)]
             self.assertEqual(opt_open['action'], 'BUYSELL')
         finally:
             os.remove(fname)

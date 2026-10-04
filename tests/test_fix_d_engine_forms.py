@@ -130,8 +130,8 @@ class TestUnresolvedOptionReplacementFlag(unittest.TestCase):
             self.assertEqual(_rules(r[c]), [], c)
 
 
-def _grant_row(symbol="ZZQ250815C00082500.US", cost=-811.91, fee=5.41,
-               commission=0.0, gain=None, date="2025-07-02"):
+def _grant_row(symbol="ZZQ250919C00064000.US", cost=-623.45, fee=4.95,
+               commission=0.0, gain=None, date="2025-07-16"):
     return {"date": date, "date_settle": date, "symbol": symbol, "qty": 1.0,
             "proceeds": 0.0, "cost": cost,
             "gain": -cost if gain is None else gain, "raw_gain": -cost,
@@ -153,10 +153,10 @@ class TestScheduleThreeWrittenPremiumGross(unittest.TestCase):
     @rule("CA-DISP-06")
     def test_grant_row_gross_premium_and_commission_outlay(self):
         r, _ = self._row([_grant_row()])
-        self.assertAlmostEqual(r["proceeds"], 817.32)
-        self.assertAlmostEqual(r["outlays"], 5.41)
+        self.assertAlmostEqual(r["proceeds"], 628.40)
+        self.assertAlmostEqual(r["outlays"], 4.95)
         self.assertAlmostEqual(r["acb"], 0.0)
-        self.assertAlmostEqual(r["gain"], 811.91)
+        self.assertAlmostEqual(r["gain"], 623.45)
         self.assertAlmostEqual(r["proceeds"] - r["acb"] - r["outlays"],
                                r["gain"], places=2)
 
@@ -164,18 +164,18 @@ class TestScheduleThreeWrittenPremiumGross(unittest.TestCase):
     def test_buyback_commission_stays_in_the_acb(self):
         # The buy-back row's fee is an acquisition cost (in the ACB): it
         # must not be added to proceeds or outlays.
-        back = {"date": "2025-07-11", "date_settle": "2025-07-14",
-                "symbol": "ZZQ250815C00082500.US", "qty": 1.0,
-                "proceeds": -273.80, "cost": 0.0, "gain": -273.80,
-                "raw_gain": -273.80, "disallowed_amount": 0.0,
+        back = {"date": "2025-07-25", "date_settle": "2025-07-28",
+                "symbol": "ZZQ250919C00064000.US", "qty": 1.0,
+                "proceeds": -198.30, "cost": 0.0, "gain": -198.30,
+                "raw_gain": -198.30, "disallowed_amount": 0.0,
                 "days_held": 9, "term": None, "direction": "SHORT",
                 "commission": 0.0, "fee": 1.05, "account": "margin",
                 "is_option": True, "grant": False}
         r, _ = self._row([_grant_row(), back])
-        self.assertAlmostEqual(r["proceeds"], 817.32)
-        self.assertAlmostEqual(r["outlays"], 5.41)
-        self.assertAlmostEqual(r["acb"], 273.80)
-        self.assertAlmostEqual(r["gain"], 538.11)
+        self.assertAlmostEqual(r["proceeds"], 628.40)
+        self.assertAlmostEqual(r["outlays"], 4.95)
+        self.assertAlmostEqual(r["acb"], 198.30)
+        self.assertAlmostEqual(r["gain"], 425.15)
 
     @rule("CA-DISP-06")
     def test_debit_write_shows_premium_and_commission(self):
@@ -194,26 +194,26 @@ class TestScheduleThreeWrittenPremiumGross(unittest.TestCase):
                                          commission=0.5)]
         lines = filing_lines(rows, 2025)
         self.assertEqual(len(lines), 1)
-        self.assertAlmostEqual(lines[0]["proceeds"], 817.32 + 101.5)
-        self.assertAlmostEqual(lines[0]["outlays"], 5.41 + 1.5)
-        self.assertAlmostEqual(lines[0]["gain"], 911.91)
+        self.assertAlmostEqual(lines[0]["proceeds"], 628.40 + 101.5)
+        self.assertAlmostEqual(lines[0]["outlays"], 4.95 + 1.5)
+        self.assertAlmostEqual(lines[0]["gain"], 723.45)
 
     @rule("CA-DISP-06")
     def test_engine_grant_write_end_to_end(self):
-        opt = "ZZQ250815C00082500.US"
-        book = [tx("BUYSELL", "2025-07-01", opt, -1, 811.91,
-                   settle="2025-07-02", price=8.1732, fee=5.41),
-                tx("BUYSELL", "2025-07-11", opt, 1, 273.80,
-                   settle="2025-07-14", price=2.738)]
+        opt = "ZZQ250919C00064000.US"
+        book = [tx("BUYSELL", "2025-07-15", opt, -1, 623.45,
+                   settle="2025-07-16", price=6.284, fee=4.95),
+                tx("BUYSELL", "2025-07-25", opt, 1, 198.30,
+                   settle="2025-07-28", price=1.983)]
         res = gains_one(C.CANADA, book, year=2025,
                         option_premium_timing="grant",
                         option_grant_since=2025)
         from taxjson.bin.taxjson_form_export import build_schedule3
         rep = build_schedule3(res["transactions"], 2025)
         r = rep["rows"][0]
-        self.assertAlmostEqual(r["outlays"], 5.41, places=2)
-        self.assertAlmostEqual(r["proceeds"], 817.32, places=2)
-        self.assertAlmostEqual(r["gain"], 538.11, places=2)
+        self.assertAlmostEqual(r["outlays"], 4.95, places=2)
+        self.assertAlmostEqual(r["proceeds"], 628.40, places=2)
+        self.assertAlmostEqual(r["gain"], 425.15, places=2)
 
     def test_reconcile_slips_gross_includes_the_write_commission(self):
         import json
@@ -225,8 +225,8 @@ class TestScheduleThreeWrittenPremiumGross(unittest.TestCase):
             p.write_text(json.dumps({"transactions": [_grant_row()]}))
             c = load_computed([p], 2025)
         rec = next(iter(c.values()))
-        self.assertAlmostEqual(rec["proceeds_net"], 811.91)
-        self.assertAlmostEqual(rec["proceeds_gross"], 817.32)
+        self.assertAlmostEqual(rec["proceeds_net"], 623.45)
+        self.assertAlmostEqual(rec["proceeds_gross"], 628.40)
 
 
 class TestIBTrustDistributionKeepsPayDate(unittest.TestCase):

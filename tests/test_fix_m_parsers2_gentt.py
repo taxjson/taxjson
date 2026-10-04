@@ -188,11 +188,11 @@ class TestGenericFutures(unittest.TestCase):
 
     def test_future_with_amount_books_the_amount(self):
         csv = (_HDR + "2025-01-15,BUY,/CLZ5,1,80.57,-80572.50,2.50,USD\n"
-               "2025-02-15,BUY,F:CL251117P00053000,1,1.16,-1161.00,1.00,"
+               "2025-02-15,BUY,F:CL251216P00047000,1,1.24,-1241.00,1.00,"
                "USD\n")
         txs, _ = _parse(csv, _TOML)
         self.assertEqual(txs[0]["net_amount"], 80572.50)
-        self.assertEqual(txs[1]["net_amount"], 1161.00)
+        self.assertEqual(txs[1]["net_amount"], 1241.00)
 
 
 # ------------------------------------------------------------ S057-08
@@ -245,8 +245,8 @@ class TestTtFuturesTotalWarning(unittest.TestCase):
     def test_futures_totals_not_called_typos(self):
         _txs, err = _tt(
             "BUYSELL 2025-01-15 09:30:00 /CLZ5 1 USD 80.57 80572.50 2.50\n"
-            "BUYSELL 2025-01-15 09:30:00 F:CL251117P00053000.US 1 USD 1.16 "
-            "1161.00 1.00\n")
+            "BUYSELL 2025-01-15 09:30:00 F:CL251216P00047000.US 1 USD 1.24 "
+            "1241.00 1.00\n")
         self.assertNotIn("differs", err)
 
     def test_equity_typo_still_warns(self):

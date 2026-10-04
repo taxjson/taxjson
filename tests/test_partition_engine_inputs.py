@@ -365,8 +365,10 @@ class TestSavedCryptoGift(unittest.TestCase):
         import json
         import tempfile
         from pathlib import Path
-        from test_fix_sends import (TAO_ID, _cad_usd_rates_file, _cli,
+        from test_fix_sends import (PAY_ID, _cad_usd_rates_file, _cli,
                                     _project)
+        _, _, coin, qty = PAY_ID.split("-", 3)
+        sold = f"{coin} -{qty}"
         out = {}
         for c in C.COUNTRIES:
             with tempfile.TemporaryDirectory() as td:
@@ -385,7 +387,7 @@ class TestSavedCryptoGift(unittest.TestCase):
                 # The decision as a carried-over / hand-edited manifest.
                 man = root / "inputs" / "crypto" / "sends.json"
                 man.write_text(json.dumps(
-                    {"sends": {TAO_ID: {"decision": "gift"}}}))
+                    {"sends": {PAY_ID: {"decision": "gift"}}}))
                 w = _cli(root, home, "crypto-sends", "crypto", "--write")
                 tt = root / "inputs" / "crypto" / "crypto_sends.tt"
                 body = tt.read_text() if tt.exists() else ""
@@ -394,16 +396,16 @@ class TestSavedCryptoGift(unittest.TestCase):
                 out[c] = (w, body, run, chk)
         w, body, run, _ = out["canada"]
         self.assertEqual(w.returncode, 0, w.stderr)
-        self.assertIn("TAO -0.1 CAD", body)
+        self.assertIn(f"{sold} CAD", body)
         self.assertIn("ITA s.69(1)(b)", body)
         self.assertEqual(run.returncode, 0, run.stderr[-2000:])
         w, body, run, chk = out["usa"]
         self.assertNotEqual(w.returncode, 0)
         self.assertIn("not a sale for a US donor", w.stderr)
-        self.assertNotIn("TAO -0.1", body)
+        self.assertNotIn(sold, body)
         self.assertNotIn("s.69", body)
         self.assertNotEqual(run.returncode, 0)
-        self.assertIn(TAO_ID, run.stderr)
+        self.assertIn(PAY_ID, run.stderr)
         self.assertIn("REFUSED", chk.stdout)
 
 
@@ -414,29 +416,33 @@ class TestCryptoSendBookedTwice(unittest.TestCase):
 
     def test_warns_with_both_files_and_keeps_them(self):
         import tempfile
-        from test_fix_sends import TAO_ID, _cli, _project
+        from test_fix_sends import PAY_ID, _cli, _project
+        # The payment send's local stamp, coin and quantity, from its id
+        # ("kr-YYYYMMDDTHHMMSS-COIN-QTY").
+        _, stamp, coin, qty = PAY_ID.split("-", 3)
+        when = (f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:8]} "
+                f"{stamp[9:11]}:{stamp[11:13]}:{stamp[13:15]}")
         with tempfile.TemporaryDirectory() as td:
             root, home = _project(td)
             r = _cli(root, home, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             _cli(root, home, "crypto-sends", "crypto", "--set",
-                 f"{TAO_ID}=payment")
-            mine = root / "inputs" / "crypto" / "tao_payment_2026.tt"
-            line = ("BUYSELL 2026-05-04 18:50:14 TAO -0.1 CAD 387.813 "
-                    "38.78 0\n")
+                 f"{PAY_ID}=payment")
+            mine = root / "inputs" / "crypto" / "coin_payment_2026.tt"
+            line = f"BUYSELL {when} {coin} -{qty} CAD 2.5 6.25 0\n"
             mine.write_text(line)
             run = _cli(root, home, "run", "--no-input")
             lst = _cli(root, home, "crypto-sends", "crypto")
             for text in (run.stderr, lst.stdout):
-                self.assertIn("inputs/crypto/tao_payment_2026.tt line 1",
+                self.assertIn("inputs/crypto/coin_payment_2026.tt line 1",
                               text)
                 self.assertIn("inputs/crypto/crypto_sends.tt", text)
-                self.assertIn("2026-05-04 18:50:14", text)
+                self.assertIn(when, text)
                 self.assertIn("counted twice", text)
             # Nothing deleted.
             self.assertEqual(mine.read_text(), line)
-            self.assertIn("TAO -0.1", (root / "inputs" / "crypto" /
-                                       "crypto_sends.tt").read_text())
+            self.assertIn(f"{coin} -{qty}", (root / "inputs" / "crypto" /
+                                             "crypto_sends.tt").read_text())
 
 
 # ---------------------------------------- ENGINE-04/05, INPUTS-11, SPEC-34
@@ -929,17 +935,17 @@ class TestRulesBothCountriesState(unittest.TestCase):
 
         def row(acct, ex, date, time, qty):
             return {"account": acct, "exchange": ex, "date": date,
-                    "time": time, "symbol": "SOL", "quantity": qty,
+                    "time": time, "symbol": "ATOM", "quantity": qty,
                     "kind": "withdrawal" if qty < 0 else "deposit",
                     "fee": 0.0, "ref": ""}
-        send = row("a", "coinbase", "2025-07-13", "07:13:27", -50.0)
-        ok = row("b", "kraken", "2025-07-13", "07:15:42", 49.9)
+        send = row("a", "coinbase", "2025-08-19", "10:41:05", -60.0)
+        ok = row("b", "kraken", "2025-08-19", "10:43:20", 59.9)
         unmatched, pairs = cs.match_transfers([send, ok])
         self.assertEqual((len(unmatched), len(pairs)), (0, 1))
-        short = row("b", "kraken", "2025-07-13", "07:15:42", 44.0)
+        short = row("b", "kraken", "2025-08-19", "10:43:20", 52.8)
         unmatched, pairs = cs.match_transfers([dict(send), short])
         self.assertEqual(len(pairs), 0)          # 88% arrived: not paired
-        late = row("b", "kraken", "2025-07-17", "08:00:00", 50.0)
+        late = row("b", "kraken", "2025-08-23", "11:00:00", 60.0)
         unmatched, pairs = cs.match_transfers([dict(send), late])
         self.assertEqual(len(pairs), 0)          # 4 days: not paired
 

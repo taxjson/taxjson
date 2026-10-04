@@ -193,35 +193,35 @@ WB_HEAD = (',,,,,,,,,\n'
 
 
 class TestWebullExpiry(unittest.TestCase):
-    # Real row shape: the expiry row (no price, no proceeds) is dated the
-    # EXPIRY; the 0DTE buy is dated its SETTLEMENT (next business day).
+    # Webull's row shape: the expiry row (no price, no proceeds) is dated
+    # the EXPIRY; the 0DTE buy is dated its SETTLEMENT (next business day).
     CSV = WB_HEAD + (
-        'USD,27-02-2025,SELL,,CALL QZQ02/27/25 511,,-4,,,\n'
-        'USD,28-02-2025,BUY,,CALL QZQ02/27/25 511,,4,2.35,,(943.96)\n'
-        'USD,04-03-2025,BUY,@QZW,QZW CORP,,10,20.00,,(200.00)\n')
+        'USD,13-03-2025,SELL,,CALL QZQ03/13/25 487,,-3,,,\n'
+        'USD,14-03-2025,BUY,,CALL QZQ03/13/25 487,,3,1.85,,(557.97)\n'
+        'USD,18-03-2025,BUY,@QZW,QZW CORP,,10,20.00,,(200.00)\n')
 
     @rule("CA-DATE-08")
     @rule("US-DATE-08")
     def test_expiry_row_not_shifted(self):
         txs, _ = _parse(WebullBrokerage(), self.CSV)
-        exp = next(t for t in txs if t['quantity'] == -4)
-        self.assertEqual(exp['date'], '2025-02-27')
-        self.assertEqual(exp['date_settle'], '2025-02-27')
+        exp = next(t for t in txs if t['quantity'] == -3)
+        self.assertEqual(exp['date'], '2025-03-13')
+        self.assertEqual(exp['date_settle'], '2025-03-13')
         self.assertEqual(exp['time'], '16:00:00')
-        buy = next(t for t in txs if t['quantity'] == 4)
-        self.assertEqual(buy['date'], '2025-02-27')   # T+1 walked back
-        self.assertEqual(buy['date_settle'], '2025-02-27')  # clamped
+        buy = next(t for t in txs if t['quantity'] == 3)
+        self.assertEqual(buy['date'], '2025-03-13')   # T+1 walked back
+        self.assertEqual(buy['date_settle'], '2025-03-13')  # clamped
         # Non-option trades keep the settle-date semantics.
         eq = next(t for t in txs if t['symbol'] == 'QZW.US')
-        self.assertEqual(eq['date_settle'], '2025-03-04')
-        self.assertEqual(eq['date'], '2025-03-03')
+        self.assertEqual(eq['date_settle'], '2025-03-18')
+        self.assertEqual(eq['date'], '2025-03-17')
 
     def test_long_expiry_is_long_loss_not_a_write(self):
         txs, _ = _parse(WebullBrokerage(), self.CSV)
         gains = [g for g in _gains(txs) if g['symbol'].startswith('QZQ')]
         self.assertEqual(len(gains), 1)
         self.assertEqual(gains[0]['direction'], 'LONG')
-        self.assertAlmostEqual(gains[0]['gain'], -943.96)
+        self.assertAlmostEqual(gains[0]['gain'], -557.97)
         self.assertAlmostEqual(gains[0]['proceeds'], 0.0)
 
 
@@ -403,20 +403,20 @@ class TestTtOptionMultiplier(unittest.TestCase):
     def test_option_line_checked_with_x100(self):
         # 2 contracts @ 1.50 = 300 notional; buy net 301.30 with fee.
         self.assertEqual(self._warn(
-            'BUYSELL 2026-06-17 13:52:00 QZT270115C00088000.US 2 USD '
+            'BUYSELL 2026-06-17 11:20:00 QZT270618C00063000.US 2 USD '
             '1.50 301.30 1.30'), '')
         self.assertEqual(self._warn(
-            'BUYSELL 2026-06-17 13:52:00 QZT270115C00088000.US -2 USD '
+            'BUYSELL 2026-06-17 11:20:00 QZT270618C00063000.US -2 USD '
             '1.50 298.70 1.30'), '')
 
     def test_option_typo_still_warns_and_names_x100(self):
-        w = self._warn('BUYSELL 2026-06-17 13:52:00 QZT270115C00088000.US '
+        w = self._warn('BUYSELL 2026-06-17 11:20:00 QZT270618C00063000.US '
                        '2 USD 1.50 3.01 1.30')
         self.assertIn('qty*price*100', w)
 
     def test_equity_line_unchanged(self):
         self.assertEqual(self._warn(
-            'BUYSELL 2026-06-17 13:52:00 QZT.US 100 USD 1.50 151.30 1.30'),
+            'BUYSELL 2026-06-17 11:20:00 QZT.US 100 USD 1.50 151.30 1.30'),
             '')
 
 

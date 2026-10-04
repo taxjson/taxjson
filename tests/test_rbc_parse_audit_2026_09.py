@@ -2,9 +2,7 @@
 classification, strict reading, option identity, row accounting.
 
 Every fixture is synthetic (made-up codes, quantities and amounts in the
-shape of real RBC exports; no Account column — it is optional). The same
-behaviours were proven on the 13 real export versions (see CHANGELOG).
-"""
+shape of RBC exports; no Account column — it is optional)."""
 import contextlib
 import io
 import json
@@ -76,28 +74,28 @@ def position(txs, symbol):
 class TestReorganizationPairs(unittest.TestCase):
     def test_name_change_same_ticker_books_nothing(self):
         txs, err, par = parse(
-            row("April 18, 2023", "Reorganization", "ZZZ", "ZED RAIL CO COM",
-                "41", "", "0", "CAD", "NAC - ZED RAIL CO COM RESULT OF NAME CHANGE")
-            + row("April 18, 2023", "Reorganization", "Z100001", "ZED RAILWAY LTD",
-                  "-41", "", "0", "CAD",
+            row("September 12, 2023", "Reorganization", "ZZZ", "ZED RAIL CO COM",
+                "37", "", "0", "CAD", "NAC - ZED RAIL CO COM RESULT OF NAME CHANGE")
+            + row("September 12, 2023", "Reorganization", "Z100001", "ZED RAILWAY LTD",
+                  "-37", "", "0", "CAD",
                   "NAC - ZED RAILWAY LTD NAME CHANGE TO ZED RAIL CO")
-            + row("April 10, 2023", "Buy", "ZZZ", "ZED RAILWAY LTD", "41",
-                  "86.5", "-3556.45", "CAD", "ZED RAILWAY LTD UNSOLICITED DA"))
+            + row("September 5, 2023", "Buy", "ZZZ", "ZED RAILWAY LTD", "37",
+                  "52.25", "-1943.20", "CAD", "ZED RAILWAY LTD UNSOLICITED DA"))
         # Only the real buy: no $0 BUY of the receipt, no $0 SELL of the
-        # temporary code (the old phantom pair +41 ZZZ / -41 Z100001).
+        # temporary code (the old phantom pair +37 ZZZ / -37 Z100001).
         self.assertEqual([t['symbol'] for t in txs], ['ZZZ.TO'])
         self.assertEqual(par._rows_consumed, 3)
         self.assertIn('1-for-1 name change', err)
 
     def test_name_change_to_new_ticker_renames_the_pool(self):
         txs, err, _ = parse(
-            row("June 27, 2024", "Reorganization", "NEWM", "NEWCO MINING CORP COM",
-                "500", "", "0", "CAD", "NAC - NEWCO MINING CORP COM RESULT OF NAME CHANGE")
-            + row("June 27, 2024", "Reorganization", "F100009", "**OLDCO SILVER MINES INC",
-                  "-500", "", "0", "CAD",
+            row("August 19, 2024", "Reorganization", "NEWM", "NEWCO MINING CORP COM",
+                "650", "", "0", "CAD", "NAC - NEWCO MINING CORP COM RESULT OF NAME CHANGE")
+            + row("August 19, 2024", "Reorganization", "F100009", "**OLDCO SILVER MINES INC",
+                  "-650", "", "0", "CAD",
                   "NAC - **OLDCO SILVER MINES INC NAME CHG TO NEWCO MINING CORP")
-            + row("May 1, 2024", "Buy", "OLDS", "**OLDCO SILVER MINES INC", "500",
-                  "5", "-2509.95", "CAD", "OLDCO SILVER MINES INC UNSOLICITED DA"))
+            + row("July 2, 2024", "Buy", "OLDS", "**OLDCO SILVER MINES INC", "650",
+                  "5", "-3259.95", "CAD", "OLDCO SILVER MINES INC UNSOLICITED DA"))
         split = of(txs, action='SPLIT')
         self.assertEqual(len(split), 1)
         self.assertEqual(split[0]['symbol'], 'OLDS.TO')
@@ -107,22 +105,22 @@ class TestReorganizationPairs(unittest.TestCase):
 
     def test_reverse_split_is_one_split(self):
         txs, err, _ = parse(
-            row("December 20, 2023", "Reorganization", "C099001",
-                "CANNA GROWTH CORPORATION COMMON SHARES", "-9000", "", "0", "CAD",
+            row("February 14, 2024", "Reorganization", "C099001",
+                "CANNA GROWTH CORPORATION COMMON SHARES", "-6000", "", "0", "CAD",
                 "REV - CANNA GROWTH CORPORATION COMMON SHARES REV SPLIT TO "
                 "CANNA GROWTH CORP NEW; 1 FOR 10")
-            + row("December 20, 2023", "Reorganization", "CANN",
-                  "CANNA GROWTH CORPORATION COM", "900", "", "0", "CAD",
+            + row("February 14, 2024", "Reorganization", "CANN",
+                  "CANNA GROWTH CORPORATION COM", "600", "", "0", "CAD",
                   "REV - CANNA GROWTH CORPORATION COM RESULT OF REVERSE SPLIT")
-            + row("March 1, 2023", "Buy", "CANN", "CANNA GROWTH CORPORATION COMMON SHARES",
-                  "9000", "0.5", "-4509.95", "CAD", "CANNA UNSOLICITED DA"))
+            + row("November 1, 2023", "Buy", "CANN", "CANNA GROWTH CORPORATION COMMON SHARES",
+                  "6000", "0.5", "-3009.95", "CAD", "CANNA UNSOLICITED DA"))
         split = of(txs, action='SPLIT')
         self.assertEqual(len(split), 1)
         self.assertEqual(split[0]['symbol'], 'CANN.TO')
         self.assertEqual(split[0]['symbol_new'], '')
         self.assertAlmostEqual(split[0]['quantity'], 0.1)
         self.assertEqual(len(of(txs, action='BUYSELL')), 1)
-        self.assertAlmostEqual(position(txs, 'CANN.TO'), 900.0)
+        self.assertAlmostEqual(position(txs, 'CANN.TO'), 600.0)
         # The description keeps both legs' text (a user's description-keyed
         # override of "RESULT OF REVERSE SPLIT" still catches the row).
         self.assertIn('RESULT OF REVERSE SPLIT', split[0]['description'])
@@ -130,30 +128,30 @@ class TestReorganizationPairs(unittest.TestCase):
     def test_blank_mgr_forward_split(self):
         # RBC booked a 4-for-1 split as two "MGR -" rows with no text.
         txs, _, _ = parse(
-            row("December 4, 2024", "Reorganization", "A099001",
-                "ACME NETWORKS INC COM", "-15", "", "0", "USD", "MGR -")
-            + row("December 4, 2024", "Reorganization", "ACMN",
-                  "ACME NETWORKS INC COMMON STOCK", "60", "", "0", "USD", "MGR -")
-            + row("November 1, 2024", "Buy", "ACMN", "ACME NETWORKS INC COM", "15",
-                  "400", "-6009.95", "USD", "ACME NETWORKS UNSOLICITED DA"))
+            row("September 9, 2024", "Reorganization", "A099001",
+                "ACME NETWORKS INC COM", "-12", "", "0", "USD", "MGR -")
+            + row("September 9, 2024", "Reorganization", "ACMN",
+                  "ACME NETWORKS INC COMMON STOCK", "48", "", "0", "USD", "MGR -")
+            + row("August 1, 2024", "Buy", "ACMN", "ACME NETWORKS INC COM", "12",
+                  "400", "-4809.95", "USD", "ACME NETWORKS UNSOLICITED DA"))
         split = of(txs, action='SPLIT')
         self.assertEqual([(s['symbol'], s['quantity']) for s in split],
                          [('ACMN.US', 4.0)])
-        self.assertAlmostEqual(position(txs, 'ACMN.US'), 60.0)
+        self.assertAlmostEqual(position(txs, 'ACMN.US'), 48.0)
 
     def test_one_for_one_exchange_receipt_is_not_lost_nor_a_merger(self):
         body = (
-            row("October 2, 2024", "Reorganization", "B099002",
-                "BLACKSTONE ROCK INC", "-10", "", "0", "USD",
-                "MGR - BLACKSTONE ROCK INC TO BLACKSTONE ROCK INC COMMON STOCK 1 FOR 1")
-            + row("October 2, 2024", "Reorganization", "BRKX",
-                  "BLACKSTONE ROCK INC COMMON STOCK", "10", "", "0", "USD",
-                  "MGR - BLACKSTONE ROCK INC COMMON STOCK SHRS RECEIVED THRU MERGER")
-            + row("March 1, 2024", "Buy", "BRKX", "BLACKSTONE ROCK INC", "10",
-                  "800", "-8009.95", "USD", "BLACKSTONE UNSOLICITED DA"))
+            row("June 3, 2024", "Reorganization", "P099002",
+                "PEBBLE STONE INC", "-7", "", "0", "USD",
+                "MGR - PEBBLE STONE INC TO PEBBLE STONE INC COMMON STOCK 1 FOR 1")
+            + row("June 3, 2024", "Reorganization", "PBLX",
+                  "PEBBLE STONE INC COMMON STOCK", "7", "", "0", "USD",
+                  "MGR - PEBBLE STONE INC COMMON STOCK SHRS RECEIVED THRU MERGER")
+            + row("January 8, 2024", "Buy", "PBLX", "PEBBLE STONE INC", "7",
+                  "800", "-5609.95", "USD", "PEBBLE STONE UNSOLICITED DA"))
         txs, err, par = parse(body)
         self.assertEqual(of(txs, action='SPLIT'), [])
-        self.assertAlmostEqual(position(txs, 'BRKX.US'), 10.0)
+        self.assertAlmostEqual(position(txs, 'PBLX.US'), 7.0)
         self.assertEqual(par._rows_consumed, 3)
         p = _write(HDR + body)
         try:
@@ -162,41 +160,41 @@ class TestReorganizationPairs(unittest.TestCase):
             os.remove(p)
 
     def test_mer_roc_consolidation_and_cash_in_lieu(self):
-        # 50 old -> 50 x .963957 = 48.19785 new: 48 delivered + CIL for
-        # the .19785 fraction; C$6.1585/sh return of capital = 307.93.
+        # 70 old -> 70 x .95 = 66.5 new: 66 delivered + CIL for the .5
+        # fraction; C$4.20/sh return of capital = 294.00.
         txs, err, _ = parse(
-            row("July 12, 2023", "Reorganization", "TRX",
-                "TRIX REUTERS CORP COM NO PAR", "", "", "30.00", "CAD",
-                "CIL - TRIX REUTERS CORP COM NO PAR CASH IN LIEU OF FRAC SHARES")
-            + row("June 28, 2023", "Reorganization", "T099003",
-                  "TRIX REUTERS CORP COM NEW", "-50", "", "307.93", "CAD",
-                  "MER - TRIX REUTERS CORP COM NEW DEFAULT: ROC OF C$6.1585 + "
-                  ".963957 NEW SHS PER 1 OLD")
-            + row("June 28, 2023", "Reorganization", "TRX",
-                  "TRIX REUTERS CORP COM NO PAR", "48", "", "0", "CAD",
-                  "MGR - TRIX REUTERS CORP COM NO PAR SHRS RECEIVED THRU MERGER")
-            + row("May 3, 2023", "Buy", "TRX", "TRIX REUTERS CORP COM NEW", "50",
-                  "170", "-8509.95", "CAD", "TRIX UNSOLICITED DA"))
+            row("October 2, 2023", "Reorganization", "TDN",
+                "TRIDENT NEWS CORP COM NO PAR", "", "", "25.00", "CAD",
+                "CIL - TRIDENT NEWS CORP COM NO PAR CASH IN LIEU OF FRAC SHARES")
+            + row("September 18, 2023", "Reorganization", "T099003",
+                  "TRIDENT NEWS CORP COM NEW", "-70", "", "294.00", "CAD",
+                  "MER - TRIDENT NEWS CORP COM NEW DEFAULT: ROC OF C$4.20 + "
+                  ".95 NEW SHS PER 1 OLD")
+            + row("September 18, 2023", "Reorganization", "TDN",
+                  "TRIDENT NEWS CORP COM NO PAR", "66", "", "0", "CAD",
+                  "MGR - TRIDENT NEWS CORP COM NO PAR SHRS RECEIVED THRU MERGER")
+            + row("August 1, 2023", "Buy", "TDN", "TRIDENT NEWS CORP COM NEW", "70",
+                  "120", "-8409.95", "CAD", "TRIDENT UNSOLICITED DA"))
         roc = of(txs, action='ADJUST')
         self.assertEqual(len(roc), 1)
-        self.assertEqual(roc[0]['symbol'], 'TRX.TO')
-        self.assertAlmostEqual(roc[0]['net_amount'], -307.93)
+        self.assertEqual(roc[0]['symbol'], 'TDN.TO')
+        self.assertAlmostEqual(roc[0]['net_amount'], -294.00)
         self.assertEqual(roc[0]['type'], 'roc')
         split = of(txs, action='SPLIT')
-        self.assertAlmostEqual(split[0]['quantity'], 0.963957)
+        self.assertAlmostEqual(split[0]['quantity'], 0.95)
         frac = [t for t in of(txs, action='BUYSELL') if t['quantity'] < 0]
         self.assertEqual(len(frac), 1)
-        self.assertAlmostEqual(frac[0]['quantity'], -(50 * 0.963957 - 48))
-        self.assertAlmostEqual(frac[0]['net_amount'], 30.00)
-        self.assertEqual(frac[0]['date'], '2023-07-12')
-        self.assertAlmostEqual(position(txs, 'TRX.TO'), 48.0, places=6)
+        self.assertAlmostEqual(frac[0]['quantity'], -(70 * 0.95 - 66))
+        self.assertAlmostEqual(frac[0]['net_amount'], 25.00)
+        self.assertEqual(frac[0]['date'], '2023-10-02')
+        self.assertAlmostEqual(position(txs, 'TDN.TO'), 66.0, places=6)
 
     def test_reverse_entry_cancels(self):
         txs, err, par = parse(
-            row("November 20, 2024", "Reorganization", "G099004", "", "-700", "",
-                "0", "USD", "REV - GLOBEX DATA CENTER ETF USD AS OF 11/20/24 "
-                "REVERSE ENTRY", settle="November 21, 2024")
-            + row("November 20, 2024", "Reorganization", "G099004", "", "700", "",
+            row("March 11, 2024", "Reorganization", "G099004", "", "-450", "",
+                "0", "USD", "REV - GLOBEX DATA CENTER ETF USD AS OF 03/11/24 "
+                "REVERSE ENTRY", settle="March 12, 2024")
+            + row("March 11, 2024", "Reorganization", "G099004", "", "450", "",
                   "0", "USD", "REV - GLOBEX DATA CENTER ETF USD RESULT OF "
                   "REVERSE SPLIT"))
         self.assertEqual(txs, [])
@@ -205,45 +203,45 @@ class TestReorganizationPairs(unittest.TestCase):
 
     def test_unmatched_legs_warn_and_lint(self):
         txs, err, par = parse(
-            row("December 30, 2024", "Reorganization", "BIPX",
-                "BRIGHTFIELD INFRA CORP NEW", "200", "", "0", "CAD",
-                "MGR - BRIGHTFIELD INFRA CORP NEW SHRS RECEIVED THRU MERGER")
-            + row("January 3, 2024", "Reorganization", "Q099005", "QUUX LTD",
-                  "-10", "", "0", "CAD", "NAC - QUUX LTD NAME CHANGE TO QUUX CORP"))
+            row("October 15, 2024", "Reorganization", "BFIX",
+                "BRAMBLE INFRA CORP NEW", "130", "", "0", "CAD",
+                "MGR - BRAMBLE INFRA CORP NEW SHRS RECEIVED THRU MERGER")
+            + row("February 6, 2024", "Reorganization", "Q099005", "QUUX LTD",
+                  "-14", "", "0", "CAD", "NAC - QUUX LTD NAME CHANGE TO QUUX CORP"))
         self.assertEqual(txs, [])
         self.assertEqual(err.count('UNMATCHED reorganization leg'), 2)
         self.assertEqual(len(par.lint_findings), 2)
 
-    def test_hess_style_merger_still_goes_to_corp_actions(self):
+    def test_share_for_share_merger_still_goes_to_corp_actions(self):
         txs, err, _ = parse(
-            row("2025-07-21 00:00:00", "Reorganization", "CVXX",
-                "CHEVRO CORPORATION", "15", "", "0", "USD",
-                "MGR - CHEVRO CORPORATION SHRS RECEIVED THRU MERGER")
-            + row("2025-07-21 00:00:00", "Reorganization", "H099006",
-                  "HESSO CORPORATION", "-15", "", "0", "USD",
-                  "MGR - HESSO CORPORATION MERGER TO CHEVRO CORPORATION "
-                  "1.025 NEW = 1 OLD"))
+            row("2025-03-17 00:00:00", "Reorganization", "ZPHX",
+                "ZEPHYR CORPORATION", "22", "", "0", "USD",
+                "MGR - ZEPHYR CORPORATION SHRS RECEIVED THRU MERGER")
+            + row("2025-03-17 00:00:00", "Reorganization", "W099006",
+                  "WINDCO CORPORATION", "-20", "", "0", "USD",
+                  "MGR - WINDCO CORPORATION MERGER TO ZEPHYR CORPORATION "
+                  "1.1 NEW = 1 OLD"))
         self.assertEqual(txs, [])
         self.assertIn('resolved by taxjson-corp-actions', err)
 
 
 class TestOptionAdjustments(unittest.TestCase):
-    OLD = ("CALL .TUX   03/21/25    64 TUXEDO OIL CORP ADJ: SPCL CASH DIVD "
+    OLD = ("CALL .KRN   07/18/25    37 KESTREL OIL CORP ADJ: SPCL CASH DIVD "
            "CAD $0.50")
 
     def test_xch_keeps_the_contract_and_the_later_close_matches(self):
         txs, err, par = parse(
-            row("January 31, 2025", "Sell", "8ZZTUX2", "", "-8", "4.1",
-                "3263.05", "CAD", self.OLD + " UNSOLICITED CA")
-            + row("November 15, 2024", "Reorganization", "8ZZTUX2", "", "8", "",
-                  "0", "CAD", "XCH - CALL .TUX   03/21/25    63.50 TUXEDO OIL CORP "
+            row("April 22, 2025", "Sell", "8ZZKRN2", "", "-6", "2.35",
+                "1403.05", "CAD", self.OLD + " UNSOLICITED CA")
+            + row("March 10, 2025", "Reorganization", "8ZZKRN2", "", "6", "",
+                  "0", "CAD", "XCH - CALL .KRN   07/18/25    36.50 KESTREL OIL CORP "
                   "ADJ: SPCL CASH DIVD CAD $0.50 ADJ FOR SPECIAL CASH DIV")
-            + row("November 15, 2024", "Reorganization", "8ZZTUX1", "", "-8", "",
-                  "0", "CAD", "XCH - CALL .TUX   03/21/25    64 TUXEDO OIL CORP "
+            + row("March 10, 2025", "Reorganization", "8ZZKRN1", "", "-6", "",
+                  "0", "CAD", "XCH - CALL .KRN   07/18/25    37 KESTREL OIL CORP "
                   "ADJ: SPCL CASH DIVD CAD $0.50 ADJ FOR SPECIAL CASH DIV")
-            + row("November 1, 2024", "Buy", "8ZZTUX1", "", "8", "4.1",
-                  "-3296.95", "CAD", self.OLD + " UNSOLICITED DA"))
-        occ = 'TUX250321C00064000.TO'
+            + row("February 3, 2025", "Buy", "8ZZKRN1", "", "6", "2.35",
+                  "-1416.95", "CAD", self.OLD + " UNSOLICITED DA"))
+        occ = 'KRN250718C00037000.TO'
         self.assertEqual({t['symbol'] for t in txs}, {occ})
         self.assertAlmostEqual(position(txs, occ), 0.0)
         self.assertEqual(of(txs, action='SPLIT'), [])
@@ -252,18 +250,18 @@ class TestOptionAdjustments(unittest.TestCase):
 
     def test_xch_renames_when_the_new_code_trades_under_new_terms(self):
         txs, err, _ = parse(
-            row("January 31, 2025", "Sell", "8ZZTUX2", "", "-8", "4.1",
-                "3263.05", "CAD", "CALL .TUX   03/21/25    63.50 TUXEDO OIL CA")
-            + row("November 15, 2024", "Reorganization", "8ZZTUX2", "", "8", "",
-                  "0", "CAD", "XCH - CALL .TUX   03/21/25    63.50 TUXEDO OIL CORP")
-            + row("November 15, 2024", "Reorganization", "8ZZTUX1", "", "-8", "",
-                  "0", "CAD", "XCH - CALL .TUX   03/21/25    64 TUXEDO OIL CORP")
-            + row("November 1, 2024", "Buy", "8ZZTUX1", "", "8", "4.1",
-                  "-3296.95", "CAD", self.OLD + " UNSOLICITED DA"))
+            row("April 22, 2025", "Sell", "8ZZKRN2", "", "-6", "2.35",
+                "1403.05", "CAD", "CALL .KRN   07/18/25    36.50 KESTREL OIL CA")
+            + row("March 10, 2025", "Reorganization", "8ZZKRN2", "", "6", "",
+                  "0", "CAD", "XCH - CALL .KRN   07/18/25    36.50 KESTREL OIL CORP")
+            + row("March 10, 2025", "Reorganization", "8ZZKRN1", "", "-6", "",
+                  "0", "CAD", "XCH - CALL .KRN   07/18/25    37 KESTREL OIL CORP")
+            + row("February 3, 2025", "Buy", "8ZZKRN1", "", "6", "2.35",
+                  "-1416.95", "CAD", self.OLD + " UNSOLICITED DA"))
         split = of(txs, action='SPLIT')
         self.assertEqual(len(split), 1)
-        self.assertEqual(split[0]['symbol'], 'TUX250321C00064000.TO')
-        self.assertEqual(split[0]['symbol_new'], 'TUX250321C00063500.TO')
+        self.assertEqual(split[0]['symbol'], 'KRN250718C00037000.TO')
+        self.assertEqual(split[0]['symbol_new'], 'KRN250718C00036500.TO')
         self.assertAlmostEqual(split[0]['quantity'], 1.0)
 
 
@@ -272,27 +270,27 @@ class TestOptionAdjustments(unittest.TestCase):
 class TestNamesAreNotIncome(unittest.TestCase):
     def test_in_kind_transfer_of_dividend_named_fund(self):
         txs, _, _ = parse(
-            row("May 27, 2022", "Transfers", "DVX", "DIVIDEND 15 SPLIT CORP CL-A SHS",
-                "2000", "", "0", "CAD", "TFI - DIVIDEND 15 SPLIT CORP CL-A SHS "
-                "ACCOUNT TRANSFER BOOK VALUE           16506.95 FROM ACCOUNT"))
+            row("August 15, 2022", "Transfers", "DMX", "DIVIDEND MAPLE SPLIT CORP CL-A SHS",
+                "1500", "", "0", "CAD", "TFI - DIVIDEND MAPLE SPLIT CORP CL-A SHS "
+                "ACCOUNT TRANSFER BOOK VALUE           11250.40 FROM ACCOUNT"))
         self.assertEqual(of(txs, action='DIVIDEND'), [])
         tr = of(txs, action='TRANSFER')
         self.assertEqual(len(tr), 1)
-        self.assertEqual(tr[0]['quantity'], 2000.0)
-        self.assertAlmostEqual(tr[0]['book_value'], 16506.95)     # M11
+        self.assertEqual(tr[0]['quantity'], 1500.0)
+        self.assertAlmostEqual(tr[0]['book_value'], 11250.40)     # M11
         self.assertEqual(tr[0]['net_amount'], 0.0)                # unchanged
 
     def test_tender_worded_row_is_a_disposition_not_a_dividend(self):
-        # Mutation of a real retraction: RETRACTION -> TENDERED. The old
-        # parser booked a 143k DIVIDEND and kept the shares.
+        # A retraction row reworded RETRACTION -> TENDERED. The old
+        # parser booked the proceeds as a DIVIDEND and kept the shares.
         txs, _, _ = parse(
-            row("December 15, 2023", "Other", "DVX", "DIVIDEND 15 SPLIT CORP CL-A SHS",
-                "-32000", "", "143203.2", "CAD",
-                "TEN - DIVIDEND 15 SPLIT CORP CL-A SHS TENDERED AT C$4.4751 PER SHARE"))
+            row("June 14, 2024", "Other", "DMX", "DIVIDEND MAPLE SPLIT CORP CL-A SHS",
+                "-12000", "", "45750", "CAD",
+                "TEN - DIVIDEND MAPLE SPLIT CORP CL-A SHS TENDERED AT C$3.8125 PER SHARE"))
         self.assertEqual(of(txs, action='DIVIDEND'), [])
         (t,) = txs
-        self.assertEqual((t['action'], t['quantity']), ('BUYSELL', -32000.0))
-        self.assertAlmostEqual(t['net_amount'], 143203.2)
+        self.assertEqual((t['action'], t['quantity']), ('BUYSELL', -12000.0))
+        self.assertAlmostEqual(t['net_amount'], 45750.0)
 
     def test_income_row_with_shares_is_refused(self):
         with self.assertRaises(RbcFormatError) as cm:
@@ -324,35 +322,35 @@ class TestReinvestAndBookCost(unittest.TestCase):
     @rule("CA-DIST-03")
     @rule("US-DIST-03")
     def test_reinvestment_is_a_purchase_and_the_distribution_stays(self):
-        body = (row("4/18/2022", "Dividends", "SRX.UN", "SMARTX REIT UNIT", "2", "",
-                    "-64.48", "CAD", "REI - SMARTX REIT UNIT REINV@C$32.2399 REC "
-                    "03/31/22 PAY 04/18/22", settle="18-Apr-22")
-                + row("4/18/2022", "Dividends", "SRX.UN", "SMARTX REIT UNIT", "",
-                      "0.15", "77.09", "CAD", "SMARTX REIT UNIT DIST      ON     "
-                      "500 SHS REC 03/31/22 PAY 04/18/22", settle="18-Apr-22")
-                + row("3/14/2022", "Buy", "SRX.UN", "SMARTX REIT UNIT", "500", "30",
-                      "-15009.95", "CAD", "SMARTX UNSOLICITED DA", settle="16-Mar-22"))
+        body = (row("7/15/2022", "Dividends", "SRX.UN", "SMARTX REIT UNIT", "2", "",
+                    "-57.23", "CAD", "REI - SMARTX REIT UNIT REINV@C$28.6150 REC "
+                    "06/30/22 PAY 07/15/22", settle="15-Jul-22")
+                + row("7/15/2022", "Dividends", "SRX.UN", "SMARTX REIT UNIT", "",
+                      "0.1542", "61.68", "CAD", "SMARTX REIT UNIT DIST      ON     "
+                      "400 SHS REC 06/30/22 PAY 07/15/22", settle="15-Jul-22")
+                + row("6/13/2022", "Buy", "SRX.UN", "SMARTX REIT UNIT", "400", "30",
+                      "-12009.95", "CAD", "SMARTX UNSOLICITED DA", settle="15-Jun-22"))
         txs, _, _ = parse(body)
-        rei = [t for t in of(txs, action='BUYSELL') if t['date'] == '2022-04-18']
+        rei = [t for t in of(txs, action='BUYSELL') if t['date'] == '2022-07-15']
         self.assertEqual(len(rei), 1)
         self.assertEqual(rei[0]['quantity'], 2.0)
-        self.assertAlmostEqual(rei[0]['net_amount'], 64.48)
-        self.assertAlmostEqual(rei[0]['price'], 32.2399)
+        self.assertAlmostEqual(rei[0]['net_amount'], 57.23)
+        self.assertAlmostEqual(rei[0]['price'], 28.6150)
         div = of(txs, action='DIVIDEND')
-        self.assertEqual([d['net_amount'] for d in div], [77.09])
-        self.assertAlmostEqual(position(txs, 'SRX.UN.TO'), 502.0)
+        self.assertEqual([d['net_amount'] for d in div], [61.68])
+        self.assertAlmostEqual(position(txs, 'SRX.UN.TO'), 402.0)
 
     def test_book_cost_adjustments_are_signed_adjusts(self):
         txs, err, _ = parse(
-            row("December 31, 2022", "Return of Capital", "VDX", "VANGX HIGH DIVID ETF",
-                "", "", "0", "CAD", "RTC - VANGX HIGH DIVID ETF 2022 RETURN OF "
-                "CAPITAL ADJUSTMENT TO BOOK COST $1.16", settle="May 5, 2023")
-            + row("December 31, 2022", "Dividends", "VDX", "VANGX HIGH DIVID ETF",
-                  "", "", "0", "CAD", "ADJ - VANGX HIGH DIVID ETF 2022 NOTIONAL "
-                  "DISTRIBUTION ADJUSTMENT TO BOOK COST $5293.06",
-                  settle="May 5, 2023"))
+            row("December 31, 2023", "Return of Capital", "MHX", "MAPLEX HIGH DIVID ETF",
+                "", "", "0", "CAD", "RTC - MAPLEX HIGH DIVID ETF 2023 RETURN OF "
+                "CAPITAL ADJUSTMENT TO BOOK COST $0.87", settle="May 6, 2024")
+            + row("December 31, 2023", "Dividends", "MHX", "MAPLEX HIGH DIVID ETF",
+                  "", "", "0", "CAD", "ADJ - MAPLEX HIGH DIVID ETF 2023 NOTIONAL "
+                  "DISTRIBUTION ADJUSTMENT TO BOOK COST $1204.55",
+                  settle="May 6, 2024"))
         adj = sorted((t['net_amount'], t['type']) for t in of(txs, action='ADJUST'))
-        self.assertEqual(adj, [(-1.16, 'roc'), (5293.06, 'dist')])
+        self.assertEqual(adj, [(-0.87, 'roc'), (1204.55, 'dist')])
         self.assertEqual(of(txs, action='DIVIDEND'), [])
 
     def test_zero_dividend_warns(self):
@@ -428,11 +426,11 @@ class TestStrictReading(unittest.TestCase):
 
     def test_unquoted_comma_in_last_column_is_rejoined(self):
         txs, _, _ = parse(
-            '"December 22, 2023","Interest","","","","","December 22, 2023",'
-            '"-198.39","USD","INT FR 11/22 THRU12/21@ 9 3/4% BAL   31","498-  '
-            'AVBAL   24","756"\n')
+            '"February 22, 2024","Interest","","","","","February 22, 2024",'
+            '"-84.12","USD","INT FR 01/22 THRU02/21@ 8 1/4% BAL   12","305-  '
+            'AVBAL   11","870"\n')
         self.assertEqual(txs[0]['description'],
-                         'INT FR 11/22 THRU12/21@ 9 3/4% BAL   31,498-  AVBAL   24,756')
+                         'INT FR 01/22 THRU02/21@ 8 1/4% BAL   12,305-  AVBAL   11,870')
 
     def test_shifted_columns_raise(self):
         # A comma inside Symbol Description of an unquoted file shifts
@@ -449,18 +447,18 @@ class TestStrictReading(unittest.TestCase):
 class TestOptionIdentity(unittest.TestCase):
     def test_contract_only_in_symbol_description(self):
         txs, _, _ = parse(
-            row("December 3, 2024", "Buy", "8ZZBNS1", "CALL .BNX   02/21/25    84 "
-                "BANK OF NOVA", "25", "0.226", "-606.2", "CAD", ""))
-        self.assertEqual(txs[0]['symbol'], 'BNX250221C00084000.TO')
-        self.assertAlmostEqual(txs[0]['fee'], 41.2, places=2)
+            row("September 9, 2024", "Buy", "8ZZLNX1", "CALL .LNX   12/20/24    37 "
+                "LAKEVIEW BANK", "15", "0.31", "-478.45", "CAD", ""))
+        self.assertEqual(txs[0]['symbol'], 'LNX241220C00037000.TO')
+        self.assertAlmostEqual(txs[0]['fee'], 13.45, places=2)
 
     def test_one_code_two_descriptions_keeps_the_first(self):
         txs, err, _ = parse(
-            row("December 15, 2025", "Sell", "8ZZRCI1", "", "-3", "7.25", "2161.3",
-                "CAD", "CALL .RCX.B   01/15/27    46 ROGERX CA CLOSE CONTRACT")
-            + row("December 16, 2024", "Buy", "8ZZRCI1", "", "3", "3.20", "-970.7",
-                  "CAD", "CALL .RCX   01/15/27    46 ROGERX DA OPEN CONTRACT"))
-        self.assertEqual({t['symbol'] for t in txs}, {'RCX270115C00046000.TO'})
+            row("November 10, 2025", "Sell", "8ZZPNX1", "", "-4", "4.40", "1750.05",
+                "CAD", "CALL .PNX.B   06/18/27    33 PINEX CA CLOSE CONTRACT")
+            + row("March 4, 2025", "Buy", "8ZZPNX1", "", "4", "2.15", "-869.95",
+                  "CAD", "CALL .PNX   06/18/27    33 PINEX DA OPEN CONTRACT"))
+        self.assertEqual({t['symbol'] for t in txs}, {'PNX270618C00033000.TO'})
         self.assertIn('more than one contract', err)
 
     def test_emitted_rbc_code_warns(self):
@@ -473,7 +471,7 @@ class TestOptionIdentity(unittest.TestCase):
 
 # RBC writes a rights issue's expiry as "EXP <mm/dd/yyyy>" (built here so
 # the literal doesn't read as a payment-card expiry to secret scanners).
-RTS_EXP = "EXP " + "/".join(("09", "29", "2023"))
+RTS_EXP = "EXP " + "/".join(("11", "14", "2023"))
 
 
 class TestAccountingAndSpinoffs(unittest.TestCase):
@@ -514,8 +512,8 @@ class TestAccountingAndSpinoffs(unittest.TestCase):
         self.assertIn('lint:', r.stderr)
 
     def test_book_value_is_evidence_not_an_unknown_field(self):
-        p = _write(HDR + row("May 27, 2022", "Transfers", "DVX", "DVX FUND", "10",
-                             "", "0", "CAD", "TFI - DVX FUND ACCOUNT TRANSFER BOOK "
+        p = _write(HDR + row("August 15, 2022", "Transfers", "DMX", "DMX FUND", "10",
+                             "", "0", "CAD", "TFI - DMX FUND ACCOUNT TRANSFER BOOK "
                              "VALUE 100.00 FROM ACCOUNT"))
         try:
             r = subprocess.run(
@@ -531,13 +529,13 @@ class TestAccountingAndSpinoffs(unittest.TestCase):
                          'TRANSFER')
 
     def test_spinoff_goes_to_the_election_machinery(self):
-        body = (row("April 4, 2024", "Reorganization", "GVX", "GENCO VERNA LLC COMMON STOCK",
-                    "30", "", "0", "USD", "DIS - GENCO VERNA LLC COMMON STOCK SPINOFF   "
-                    "ON     120 SHS FROM SEC# G099007 GENCO AERO REC 04/01/24 PAY 04/02/24")
-                + row("February 8, 2024", "Buy", "GNX", "GENCO AERO COMMON STOCK", "120",
-                      "100", "-12009.95", "USD", "GENCO UNSOLICITED DA"))
+        body = (row("August 12, 2024", "Reorganization", "OPWX", "ORBIT POWER LLC COMMON STOCK",
+                    "30", "", "0", "USD", "DIS - ORBIT POWER LLC COMMON STOCK SPINOFF   "
+                    "ON     150 SHS FROM SEC# O099007 ORBIT DYNAMICS REC 08/05/24 PAY 08/06/24")
+                + row("May 6, 2024", "Buy", "ORDX", "ORBIT DYNAMICS COMMON STOCK", "150",
+                      "80", "-12009.95", "USD", "ORBIT UNSOLICITED DA"))
         txs, err, _ = parse(body)
-        self.assertEqual(of(txs, symbol='GVX.US'), [])
+        self.assertEqual(of(txs, symbol='OPWX.US'), [])
         # The note names the stage that asks for the election; the
         # election itself is per country (audit S064-20).
         self.assertIn('taxjson-corp-actions', err)
@@ -549,19 +547,19 @@ class TestAccountingAndSpinoffs(unittest.TestCase):
             os.remove(p)
         self.assertEqual((ev.action_type, ev.source_symbol, ev.target_symbol,
                           ev.qty_received, ev.ratio_old),
-                         ('spinoff', 'GNX.US', 'GVX.US', 30.0, 120.0))
+                         ('spinoff', 'ORDX.US', 'OPWX.US', 30.0, 150.0))
 
     def test_rights_are_a_noted_nil_cost_acquisition_and_expire(self):
         body = (
-            row("October 13, 2023", "Reorganization", "C099008", "", "-1", "", "0",
-                "CAD", f"EXP - RTS CONSTELLO SOFTWARE INC {RTS_EXP} {RTS_EXP} "
-                "AS OF 10/13/23 EXPIRED", settle="October 16, 2023")
-            + row("September 8, 2023", "Reorganization", "CSX.RT", "", "1", "", "0",
-                  "CAD", f"DIS - RTS CONSTELLO SOFTWARE INC {RTS_EXP} {RTS_EXP} "
-                  "RTS DIST  ON       1 SHS REC 09/01/23 PAY 09/08/23"))
+            row("November 17, 2023", "Reorganization", "Q099008", "", "-1", "", "0",
+                "CAD", f"EXP - RTS QUILLON SOFTWARE INC {RTS_EXP} {RTS_EXP} "
+                "AS OF 11/17/23 EXPIRED", settle="November 20, 2023")
+            + row("October 6, 2023", "Reorganization", "QSW.RT", "", "1", "", "0",
+                  "CAD", f"DIS - RTS QUILLON SOFTWARE INC {RTS_EXP} {RTS_EXP} "
+                  "RTS DIST  ON       1 SHS REC 09/29/23 PAY 10/06/23"))
         txs, err, _ = parse(body, country='canada')
-        self.assertEqual({t['symbol'] for t in txs}, {'CSX.RT.TO'})
-        self.assertAlmostEqual(position(txs, 'CSX.RT.TO'), 0.0)
+        self.assertEqual({t['symbol'] for t in txs}, {'QSW.RT.TO'})
+        self.assertAlmostEqual(position(txs, 'QSW.RT.TO'), 0.0)
         self.assertIn('15(1)(c)', err)
         # The same rows in a US project: the same booking, US words
         # (re-audit A2-1314: the test pinned the Canadian citation).
@@ -602,41 +600,41 @@ class TestLowItems(unittest.TestCase):
     def test_assignment_rows_share_one_time(self):
         # The ASN option leg is listed ABOVE its stock leg; file order would
         # put the stock sale first and the engine would miss the s.49(3)
-        # premium fold (seen on real books: gains moved noticeably).
+        # premium fold.
         txs, _, _ = parse(
-            row("May 16, 2025", "Other", "9ZZCOI1", "", "1", "", "0", "USD",
-                "ASN - CALL COIX   05/16/25   197.50 COIX GLOBAL INC ASSIGNMENT "
-                "OF OPTION", settle="May 20, 2025")
-            + row("May 16, 2025", "Sell", "COIX", "COIX GLOBAL INC", "-100",
-                  "197.5", "19707", "USD", "COIX GLOBAL INC ASSIGNMENT OF OPTION "
-                  "AS OF 05/16/25", settle="May 20, 2025")
-            + row("May 16, 2025", "Buy", "ZZZ", "ZZZ CORP", "10", "5", "-59.95",
-                  "USD", "ZZZ UNSOLICITED DA", settle="May 19, 2025"))
+            row("October 17, 2025", "Other", "9ZZKOI1", "", "1", "", "0", "USD",
+                "ASN - CALL KOIX   10/17/25   82.50 KOIX GLOBAL INC ASSIGNMENT "
+                "OF OPTION", settle="October 21, 2025")
+            + row("October 17, 2025", "Sell", "KOIX", "KOIX GLOBAL INC", "-100",
+                  "82.5", "8207", "USD", "KOIX GLOBAL INC ASSIGNMENT OF OPTION "
+                  "AS OF 10/17/25", settle="October 21, 2025")
+            + row("October 17, 2025", "Buy", "ZZZ", "ZZZ CORP", "10", "5", "-59.95",
+                  "USD", "ZZZ UNSOLICITED DA", settle="October 20, 2025"))
         t_opt = of(txs, action='ASSIGN')[0]['time']
-        t_stock = of(txs, symbol='COIX.US')[0]['time']
+        t_stock = of(txs, symbol='KOIX.US')[0]['time']
         self.assertEqual(t_opt, t_stock)
 
     def test_adr_fee_is_a_fee_row(self):
-        txs, _, _ = parse(row("October 8, 2024", "Fees", "SEX", "SEX LTD ADS", "", "",
-                              "-8", "USD", "FCH - SEX LTD ADS DTCC ADR FEE 0.02"))
+        txs, _, _ = parse(row("July 9, 2024", "Fees", "OCNX", "OCEANIX LTD ADS", "", "",
+                              "-6", "USD", "FCH - OCEANIX LTD ADS DTCC ADR FEE 0.03"))
         self.assertEqual([(t['action'], t['symbol'], t['net_amount']) for t in txs],
-                         [('FEE', 'SEX.US', 8.0)])
+                         [('FEE', 'OCNX.US', 6.0)])
 
 
 class TestDuplicateSplitWarning(unittest.TestCase):
     def test_parser_split_plus_manual_line_warns(self):
         from taxjson.bin.taxjson_merge2 import warn_duplicate_splits
         from taxjson.lib.core import TaxTransaction
-        a = TaxTransaction(action='SPLIT', date='2023-12-20', symbol='CANN.TO',
+        a = TaxTransaction(action='SPLIT', date='2024-02-14', symbol='CANN.TO',
                            quantity=0.1, account='margin', time='09:30:11',
                            description='RBC REV reorganization')
-        b = TaxTransaction(action='SPLIT', date='2023-12-20', symbol='CANN.TO',
+        b = TaxTransaction(action='SPLIT', date='2024-02-14', symbol='CANN.TO',
                            symbol_new='CANN.TO', quantity=0.1, account='margin')
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             self.assertEqual(warn_duplicate_splits([a, b]), 1)
         self.assertIn('duplicate split', err.getvalue())
-        c = TaxTransaction(action='SPLIT', date='2023-12-20', symbol='CANN.TO',
+        c = TaxTransaction(action='SPLIT', date='2024-02-14', symbol='CANN.TO',
                            quantity=0.2, account='margin')
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
@@ -647,11 +645,11 @@ class TestDuplicateSplitWarning(unittest.TestCase):
 class TestPairingApi(unittest.TestCase):
     def test_every_leg_is_accounted_for(self):
         p = _write(HDR
-                   + row("June 24, 2024", "Reorganization", "9ZZMRA1", "", "58", "", "0",
-                         "USD", "XCH - CALL MARX   01/17/25    24 MARX DIGITAL "
+                   + row("August 26, 2024", "Reorganization", "9ZZVLX1", "", "35", "", "0",
+                         "USD", "XCH - CALL VOLX   03/21/25    19 VOLTEX DIGITAL "
                          "SECURITY CODE ADJUSTMENT")
-                   + row("June 24, 2024", "Reorganization", "8ZZMRA1", "", "-58", "",
-                         "0", "USD", "XCH - CALL MARX   01/17/25    24 MARX DIGITAL "
+                   + row("August 26, 2024", "Reorganization", "8ZZVLX1", "", "-35", "",
+                         "0", "USD", "XCH - CALL VOLX   03/21/25    19 VOLTEX DIGITAL "
                          "SECURITY CODE ADJUSTMENT"))
         try:
             rows = read_rbc_rows(p).rows

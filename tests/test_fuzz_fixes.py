@@ -398,8 +398,8 @@ class TestFuzzL_LeapsBuyToCloseNotEntry(unittest.TestCase):
     position) was classified as a LEAPS entry buy — the same
     covered-call gain appeared in BOTH ccd-sum and leaps-sum."""
 
-    SHORT_CALL = "BNS270115C00082000.TO"      # >3 months to expiry
-    LONG_CALL = "AAPL270115C00150000.US"
+    SHORT_CALL = "QBN270115C00083000.TO"      # >3 months to expiry
+    LONG_CALL = "QAP270115C00145000.US"
 
     def _project(self, tmp):
         root = Path(tmp)
@@ -530,7 +530,7 @@ class TestFuzzE_ShortConventionCanonical(unittest.TestCase):
     sign through). ccd-sum's PREMIUM/BUYBACK identity follows.
     """
 
-    CALL = "XYZ250321C00012000.TO"
+    CALL = "QZX250321C00012500.TO"
 
     @classmethod
     def _open_close(cls):

@@ -141,7 +141,7 @@ class TestStaleSendsFileWithUnreadableDecisions(unittest.TestCase):
     changed) with a warning, even under --strict in the US case."""
 
     def _check(self, country):
-        from test_fix_sends import (_project, _cli, TAO_ID,
+        from test_fix_sends import (_project, _cli, PAY_ID,
                                     _cad_usd_rates_file)
         with tempfile.TemporaryDirectory() as td:
             root, home = _project(td, country=country)
@@ -154,14 +154,14 @@ class TestStaleSendsFileWithUnreadableDecisions(unittest.TestCase):
                 (root / "inputs" / "crypto" / "cb_2025.csv").unlink()
             man = root / "inputs" / "crypto" / "sends.json"
             man.write_text(json.dumps({"sends": {
-                TAO_ID: {"decision": "payment"}}}))
+                PAY_ID: {"decision": "payment"}}}))
             r = _cli(root, home, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             tt = root / "inputs" / "crypto" / "crypto_sends.tt"
-            self.assertIn("TAO", tt.read_text())
-            # The owner reclassifies the payment and mistypes the value.
+            self.assertIn(PAY_ID.split("-")[2], tt.read_text())
+            # The user reclassifies the payment and mistypes the value.
             man.write_text(json.dumps({"sends": {
-                TAO_ID: {"decision": "slef"}}}))
+                PAY_ID: {"decision": "slef"}}}))
             r = _cli(root, home, "run", "--no-input")
             self.assertNotEqual(r.returncode, 0, country)
             self.assertIn("not booked on a guess", r.stderr)
@@ -199,7 +199,7 @@ class TestCryptoSendsGiftWording(unittest.TestCase):
     @rule_absent("US-SEND-02", country="canada")
     @rule("CA-CRYPTO-07")
     def test_us_wording_offers_payment_only(self):
-        from test_fix_sends import _cli
+        from test_fix_sends import PAY_ID, _cli
         out = {}
         for country in ("canada", "usa"):
             with tempfile.TemporaryDirectory() as td:
@@ -208,7 +208,7 @@ class TestCryptoSendsGiftWording(unittest.TestCase):
                 self.assertEqual(r.returncode, 0, r.stderr[-2000:])
                 lst = _cli(root, home, "crypto-sends", "crypto")
                 bad = _cli(root, home, "crypto-sends", "crypto", "--set",
-                           "kr-20260504T185014-TAO-0.1=donate")
+                           f"{PAY_ID}=donate")
                 summ = (root / "reports" / "crypto.sum").read_text()
                 out[country] = (r.stderr, lst.stdout, bad.stderr, summ)
         run_err, listing, err, summ = out["usa"]

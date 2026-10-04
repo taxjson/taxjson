@@ -16,7 +16,7 @@ from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OPT = "Q260116C00050000.TO"
-PUT = "Q260116P00050000.TO"
+PUT = "Q260220P00048000.TO"
 
 
 def T(**kw):
@@ -58,19 +58,19 @@ class TestGrantTiming(unittest.TestCase):
     @rule("CA-OPT-06")
     def test_assignment_folds_and_emits_no_grant_record(self):
         book = [T(date="2025-12-15", date_settle="2025-12-16", symbol=PUT, quantity=-1, price=3, net_amount=299.0),
-                TaxTransaction(action="ASSIGN", date="2026-01-16", date_settle="2026-01-16", symbol=PUT, quantity=1, price=0, net_amount=0.0, currency="CAD", account="A0"),
-                TaxTransaction(action="ASSIGN", date="2026-01-16", date_settle="2026-01-16", symbol="Q.TO", quantity=100, price=50, net_amount=5000.0, currency="CAD", account="A0"),
+                TaxTransaction(action="ASSIGN", date="2026-02-20", date_settle="2026-02-20", symbol=PUT, quantity=1, price=0, net_amount=0.0, currency="CAD", account="A0"),
+                TaxTransaction(action="ASSIGN", date="2026-02-20", date_settle="2026-02-20", symbol="Q.TO", quantity=100, price=48, net_amount=4800.0, currency="CAD", account="A0"),
                 T(date="2026-03-01", date_settle="2026-03-02", symbol="Q.TO", quantity=-100, price=55, net_amount=5500.0)]
-        self.assertEqual(run(book, **GRANT)[0], [("2026-03-01", 799.0)])   # 5500 - (5000 - 299)
+        self.assertEqual(run(book, **GRANT)[0], [("2026-03-01", 999.0)])   # 5500 - (4800 - 299)
 
     @rule("CA-OPT-06")
     def test_partial_assignment_recognises_only_the_unassigned_unit(self):
         book = [T(date="2025-12-15", date_settle="2025-12-16", symbol=PUT, quantity=-2, price=3, net_amount=598.0),
-                TaxTransaction(action="ASSIGN", date="2026-01-16", date_settle="2026-01-16", symbol=PUT, quantity=1, price=0, net_amount=0.0, currency="CAD", account="A0"),
-                TaxTransaction(action="ASSIGN", date="2026-01-16", date_settle="2026-01-16", symbol="Q.TO", quantity=100, price=50, net_amount=5000.0, currency="CAD", account="A0"),
+                TaxTransaction(action="ASSIGN", date="2026-02-20", date_settle="2026-02-20", symbol=PUT, quantity=1, price=0, net_amount=0.0, currency="CAD", account="A0"),
+                TaxTransaction(action="ASSIGN", date="2026-02-20", date_settle="2026-02-20", symbol="Q.TO", quantity=100, price=48, net_amount=4800.0, currency="CAD", account="A0"),
                 T(date="2026-01-10", date_settle="2026-01-12", symbol=PUT, quantity=1, price=1, net_amount=101.0),
                 T(date="2026-03-01", date_settle="2026-03-02", symbol="Q.TO", quantity=-100, price=55, net_amount=5500.0)]
-        self.assertEqual(run(book, **GRANT)[0], [("2025-12-15", 299.0), ("2026-01-10", -101.0), ("2026-03-01", 799.0)])
+        self.assertEqual(run(book, **GRANT)[0], [("2025-12-15", 299.0), ("2026-01-10", -101.0), ("2026-03-01", 999.0)])
 
     @rule("CA-OPT-02")
     def test_since_year_keeps_older_contracts_on_close_timing(self):
@@ -133,7 +133,7 @@ class TestGrantTiming(unittest.TestCase):
                 elif u < 0.8:                               # stock-settled assignment
                     q = rng.randint(1, -pos)
                     book.append(TaxTransaction(action="ASSIGN", date=d, time="16:00:00", date_settle=d, symbol=PUT, quantity=q, price=0, net_amount=0.0, currency="CAD", account="A0"))
-                    book.append(TaxTransaction(action="ASSIGN", date=d, time="16:00:00", date_settle=d, symbol="Q.TO", quantity=100 * q, price=50, net_amount=5000.0 * q, currency="CAD", account="A0"))
+                    book.append(TaxTransaction(action="ASSIGN", date=d, time="16:00:00", date_settle=d, symbol="Q.TO", quantity=100 * q, price=48, net_amount=4800.0 * q, currency="CAD", account="A0"))
                     pos += q; shares += 100 * q
                 else:                                       # buy-back / expiry
                     q = rng.randint(1, -pos); px = rng.choice([0.0, 1.0, 5.0])
@@ -222,12 +222,12 @@ class TestBuybackLossSuperficialSwitch(unittest.TestCase):
     account holds the same series: default — the buy-back loss stands
     (a closing purchase is not a disposition s.54 reaches); opt-in — it
     is denied, permanently, by the registered acquisition."""
-    SYM = "TLT280121C00075000.US"
+    SYM = "QLT270115C00060000.US"
 
     def _run(self, strict):
-        book = [T(date="2025-12-12", time="12:05:14", date_settle="2025-12-15", symbol=self.SYM, quantity=-10, price=13.38, net_amount=13373.33),
-                T(date="2025-12-12", time="12:05:42", date_settle="2025-12-15", symbol=self.SYM, quantity=10, price=13.445, net_amount=13449.89)]
-        shel = [T(date="2025-12-08", date_settle="2025-12-09", symbol=self.SYM, quantity=5, price=13.0, net_amount=6500.0, account="lira")]
+        book = [T(date="2025-11-17", time="11:41:09", date_settle="2025-11-18", symbol=self.SYM, quantity=-6, price=8.25, net_amount=4943.05),
+                T(date="2025-11-17", time="11:41:37", date_settle="2025-11-18", symbol=self.SYM, quantity=6, price=8.31, net_amount=4993.55)]
+        shel = [T(date="2025-11-10", date_settle="2025-11-11", symbol=self.SYM, quantity=3, price=8.0, net_amount=2400.0, account="lira")]
         with redirect_stderr(io.StringIO()):
             r = get_tax_rules("canada").compute_gains(book, sheltered_transactions=shel, option_premium_timing="grant",
                                                        option_grant_since=2025, option_buyback_loss_superficial=strict)
@@ -235,14 +235,14 @@ class TestBuybackLossSuperficialSwitch(unittest.TestCase):
 
     @rule("CA-SL-11")
     def test_default_allows_the_buyback_loss(self):
-        self.assertEqual(self._run(False), [("2025-12-12", 13373.33, 0.0, 0.0), ("2025-12-12", -13449.89, 0.0, 0.0)])
+        self.assertEqual(self._run(False), [("2025-11-17", 4943.05, 0.0, 0.0), ("2025-11-17", -4993.55, 0.0, 0.0)])
 
     @rule("CA-SL-09", "CA-SL-12")
     def test_strict_reading_denies_it_permanently(self):
         recs = self._run(True)
-        # 10 bought back, the LIRA holds 5 at day 30: 5 units denied, permanently.
-        self.assertAlmostEqual(recs[1][2], 13449.89 / 2, places=2)
-        self.assertAlmostEqual(recs[1][3], 13449.89 / 2, places=2)
+        # 6 bought back, the LIRA holds 3 at day 30: 3 units denied, permanently.
+        self.assertAlmostEqual(recs[1][2], 4993.55 / 2, places=2)
+        self.assertAlmostEqual(recs[1][3], 4993.55 / 2, places=2)
 
 
 class TestDeemedGainNegativeAcb(unittest.TestCase):

@@ -309,8 +309,8 @@ class TestUsRocExcessTerm(unittest.TestCase):
     def test_excess_on_a_lot_held_over_a_year_is_long_term(self):
         """A2-0921: the §301(c)(3) gain takes the lot's holding period."""
         r = _quiet(USATaxRules(), [
-            tx("BUYSELL", "2023-01-03", "RCX.US", 100, 1000.0),
-            tx("ADJUST", "2025-06-02", "RCX.US", 0, -1500.0)])
+            tx("BUYSELL", "2023-01-03", "QRX.US", 100, 1000.0),
+            tx("ADJUST", "2025-06-02", "QRX.US", 0, -1500.0)])
         rows = [g for g in r['transactions'] if not g.get('action')
                 and g.get('date') == '2025-06-02']
         self.assertEqual(len(rows), 1)

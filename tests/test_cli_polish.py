@@ -255,7 +255,7 @@ BUYSELL 2026-08-03 10:00:00 F:SXFZ6.TO 1 CAD 1000 200000 0 x200
 BUYSELL 2026-08-10 10:00:00 F:SXFZ6.TO -1 CAD 1010 202000 0 x200
 BUYSELL 2026-02-03 10:00:00 LOS.TO 100 CAD 10.00 1000.00 0.00
 BUYSELL 2026-03-03 10:00:00 LOS.TO -100 CAD 8.00 800.00 0.00
-BUYSELL 2026-03-20 10:00:00 LOS.TO 50 CAD 8.00 400.00 0.00
+BUYSELL 2026-03-24 10:00:00 LOS.TO 50 CAD 8.00 400.00 0.00
 """
 COINS = """\
 BUYSELL 2026-01-10 10:00:00 BTC 1 CAD 50000 50000 0
@@ -404,7 +404,7 @@ class TestTradeStatsUnits(unittest.TestCase):
 
     def test_one_close_of_two_writes_is_one_trade(self):
         from taxjson.lib.trade_stats import written_option_trades
-        o = "QQQ260320C00050000.US"
+        o = "QZQ260320C00050000.US"
         rows = [self._r("2026-01-02", o, -1, 200), self._r("2026-01-05", o,
                                                           -1, 300),
                 self._r("2026-02-02", o, 2, 100)]
@@ -415,7 +415,7 @@ class TestTradeStatsUnits(unittest.TestCase):
 
     def test_partial_closes_one_trade_each(self):
         from taxjson.lib.trade_stats import written_option_trades
-        o = "QQQ260320C00050000.US"
+        o = "QZQ260320C00050000.US"
         rows = [self._r("2026-01-02", o, -5, 1000),
                 self._r("2026-02-02", o, 2, 600),
                 self._r("2026-03-20", o, 3, 0.0, price=0.0)]
@@ -425,7 +425,7 @@ class TestTradeStatsUnits(unittest.TestCase):
 
     def test_selling_a_held_option_is_not_a_write(self):
         from taxjson.lib.trade_stats import written_option_trades
-        o = "QQQ260320P00050000.US"
+        o = "QZQ260320P00050000.US"
         rows = [self._r("2026-01-02", o, 2, 200),
                 self._r("2026-02-02", o, -3, 450),     # close 2, write 1
                 self._r("2026-03-02", o, 1, 50)]
@@ -435,13 +435,13 @@ class TestTradeStatsUnits(unittest.TestCase):
 
     def test_put_premium_leaves_the_later_sale(self):
         from taxjson.lib.trade_stats import compute
-        o = "QQQ260320P00050000.US"
+        o = "QZQ260320P00050000.US"
         book = [self._r("2026-01-02", o, -1, 200),
                 self._r("2026-03-20", o, 1, 0.0, action="ASSIGN", price=0.0),
-                self._r("2026-03-20", "QQQ.US", 100, 5000, action="ASSIGN"),
-                self._r("2026-05-01", "QQQ.US", -100, 5100, rid="sale")]
+                self._r("2026-03-20", "QZQ.US", 100, 5000, action="ASSIGN"),
+                self._r("2026-05-01", "QZQ.US", -100, 5100, rid="sale")]
         gains = {"m": {"transactions": [
-            {"id": "sale", "date": "2026-05-01", "symbol": "QQQ.US",
+            {"id": "sale", "date": "2026-05-01", "symbol": "QZQ.US",
              "qty": 100, "gain": 300.0, "raw_gain": 300.0,
              "direction": "LONG", "account": "m"}]}}
         res = compute(gains, {"m": book}, lambda d: True,
@@ -462,7 +462,7 @@ BUYSELL 2026-03-05 10:00:00 ABC260320C00050000.{x} 1 {c} 2.00 200.00 0.00
 BUYSELL 2026-04-06 10:00:00 ABC.{x} -100 {c} 45.00 4500.00 0.00
 BUYSELL 2026-02-03 10:00:00 LOS.{x} 100 {c} 10.00 1000.00 0.00
 BUYSELL 2026-03-03 10:00:00 LOS.{x} -100 {c} 8.00 800.00 0.00
-BUYSELL 2026-03-20 10:00:00 LOS.{x} 50 {c} 8.00 400.00 0.00
+BUYSELL 2026-03-24 10:00:00 LOS.{x} 50 {c} 8.00 400.00 0.00
 """
 
     @rule("CA-RPT-16")

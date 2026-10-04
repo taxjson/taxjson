@@ -4,7 +4,7 @@ A headless `taxjson run` must never hang on the election prompt or
 crash: unresolved events become work/pending_elections.json (options,
 descriptions, required hints), the run exits 3, `taxjson elect
 --pending` shows ready-to-copy --set lines, and after `elect --set`
-the re-run completes. Uses an IB-shaped SSL->RGLD merger CSV (synthetic
+the re-run completes. Uses an IB-shaped ABG->ABH merger CSV (synthetic
 amounts).
 """
 
@@ -17,17 +17,17 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# An IB-shaped SSL->RGLD merger corp-action section, wrapped in a
+# An IB-shaped ABG->ABH merger corp-action section, wrapped in a
 # minimal IB statement (Statement header + one trade) so
 # taxjson-detect-brokerage recognizes the file as IB.
 _SSL_RGLD_CSV = '''\
 Statement,Header,Field Name,Field Value
 Statement,Data,BrokerName,Interactive Brokers
 Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
-Trades,Data,Order,Stocks,CAD,SSL,"2025-02-05, 09:31:00",1600,15.90,0,-25440.0,-1,0,0,0,O
+Trades,Data,Order,Stocks,CAD,ABG,"2025-02-05, 09:31:00",1600,15.90,0,-25440.0,-1,0,0,0,O
 Corporate Actions,Header,Asset Category,Currency,Report Date,Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,Code
-Corporate Actions,Data,Stocks,CAD,2025-10-27,"2025-10-22, 20:25:00","SSL(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 (RGLD.CAD, ROYAL GOLD INC, US0000000002)",100.0026,0,25840.67184,0,
-Corporate Actions,Data,Stocks,CAD,2025-10-27,"2025-10-22, 20:25:00","SSL(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 (SSL, SANDSTORM GOLD LTD, CA0000000001)",-1600.0416,0,-25920.67392,0,
+Corporate Actions,Data,Stocks,CAD,2025-10-27,"2025-10-22, 20:25:00","ABG(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 (ABH.CAD, ABH GOLD INC, US0000000002)",100.0026,0,25840.67184,0,
+Corporate Actions,Data,Stocks,CAD,2025-10-27,"2025-10-22, 20:25:00","ABG(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 (ABG, ABG MINING LTD, CA0000000001)",-1600.0416,0,-25920.67392,0,
 '''
 
 
@@ -72,7 +72,7 @@ class TestCorpActionsPendingJson(unittest.TestCase):
         evs = doc["pending"]
         self.assertGreaterEqual(len(evs), 1)
         ev = evs[0]
-        self.assertIn("SSL", ev["summary"])
+        self.assertIn("ABG", ev["summary"])
         elections = {o["election"] for o in ev["options"]}
         self.assertIn("ignore", elections)
         self.assertTrue(any(e != "ignore" for e in elections))

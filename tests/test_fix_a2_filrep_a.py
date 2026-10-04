@@ -373,8 +373,9 @@ class TestT1135CostWalk(unittest.TestCase):
 
     @rule("CA-RPT-12")
     def test_a2_0328_class_root_put_premium_folds(self):
-        # A written RCI put assigned into RCI.B.TO... on a US listing
-        # here so the walk reports it: premium lowers the shares' cost.
+        # A written class-root put (QZB) assigned into the class share
+        # QZB.B, on a US listing here so the walk reports it: premium
+        # lowers the shares' cost.
         rows = [_t(date="2025-01-03", symbol="QZB250620P00050000.US",
                    qty=-1, net=300.0),
                 _t("ASSIGN", "2025-06-20", symbol="QZB250620P00050000.US",

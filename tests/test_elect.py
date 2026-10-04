@@ -22,7 +22,7 @@ type = "taxable"
 _MANIFEST = {
     "elections": {
         "163ae89a851c": {
-            "summary": "2025-07-21 merger: H015283.US -> CVX.US",
+            "summary": "2025-03-17 merger: A012345.US -> ABD.US",
             "election": "rollover_s_85_1_5",
             "notes": "rollover",
         }
@@ -54,7 +54,7 @@ class TestElect(unittest.TestCase):
             out = _elect(_project(tmp), account="margin")
             self.assertIn("163ae89a851c", out)
             self.assertIn("rollover_s_85_1_5", out)
-            self.assertIn("H015283.US", out)
+            self.assertIn("A012345.US", out)
 
     def test_list_all_accounts_when_no_account(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -155,11 +155,11 @@ _IB_MERGER_CSV = (
     "Corporate Actions,Header,Asset Category,Currency,Report Date,"
     "Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,Code\n"
     'Corporate Actions,Data,Stocks,CAD,2025-10-27,"2025-10-22, 20:25:00",'
-    '"SSL(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 '
-    '(RGLD.CAD, ROYAL GOLD INC, US0000000002)",100.0026,0,25840.67,0,\n'
+    '"ABG(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 '
+    '(ABH.CAD, ABH GOLD INC, US0000000002)",100.0026,0,25840.67,0,\n'
     'Corporate Actions,Data,Stocks,CAD,2025-10-27,"2025-10-22, 20:25:00",'
-    '"SSL(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 '
-    '(SSL, SANDSTORM GOLD LTD, CA0000000001)",-1600.0416,0,-25920.67,0,\n'
+    '"ABG(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 '
+    '(ABG, ABG MINING LTD, CA0000000001)",-1600.0416,0,-25920.67,0,\n'
 )
 
 
@@ -224,7 +224,7 @@ class TestElectSetWithoutPendingDoc(unittest.TestCase):
             rec = json.loads((root / "inputs" / "margin" /
                               "manifest.json").read_text())["elections"][eid]
             self.assertEqual(rec["election"], "rollover_s_85_1_5")
-            self.assertIn("merger: SSL.TO", rec["summary"])
+            self.assertIn("merger: ABG.TO", rec["summary"])
 
 
 if __name__ == "__main__":

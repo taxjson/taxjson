@@ -30,8 +30,8 @@ class TestEncodeOccStrike(unittest.TestCase):
 
 class TestFormatOccSymbol(unittest.TestCase):
     def test_cent_precision_strike_not_one_cent_low(self):
-        sym = BaseBrokerage().format_occ_symbol('P', 'U', '09/19/25', '4.02')
-        self.assertEqual(sym, 'U250919P00004020')
+        sym = BaseBrokerage().format_occ_symbol('P', 'ABC', '12/17/27', '4.02')
+        self.assertEqual(sym, 'ABC271217P00004020')
 
     def test_call_whole_strike(self):
         sym = BaseBrokerage().format_occ_symbol('C', 'AAPL', '01/16/26', '150')

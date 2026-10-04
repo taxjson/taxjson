@@ -57,7 +57,7 @@ class TestDedup(unittest.TestCase):
         self.assertEqual({t.id for t in result}, {"kraken-abc", "kraken-def"})
 
     def test_dedup_keeps_split_fills_with_fill_marker(self):
-        """End-to-end regression for the WCP.TO split-fill bug.
+        """End-to-end regression for the split-fill bug.
 
         Two byte-identical Questrade rows (same date, no sub-second
         time, same symbol/qty/price) come into the engine with the
@@ -66,12 +66,12 @@ class TestDedup(unittest.TestCase):
         auto-generated ids differ → dedup keeps both. Without the marker
         they'd collapse and the user would lose one real disposition."""
         txs = [
-            TaxTransaction(action="BUYSELL", date="2025-11-12", time="00:00:00",
-                           symbol="WCP.TO", quantity=-100, price=10.86,
-                           net_amount=1086.0, account="Margin"),
-            TaxTransaction(action="BUYSELL", date="2025-11-12", time="00:00:00",
-                           symbol="WCP.TO", quantity=-100, price=10.86,
-                           net_amount=1086.0, account="Margin",
+            TaxTransaction(action="BUYSELL", date="2025-10-15", time="00:00:00",
+                           symbol="QZW.TO", quantity=-100, price=9.42,
+                           net_amount=942.0, account="Margin"),
+            TaxTransaction(action="BUYSELL", date="2025-10-15", time="00:00:00",
+                           symbol="QZW.TO", quantity=-100, price=9.42,
+                           net_amount=942.0, account="Margin",
                            description="[fill #2]"),
         ]
         # Sanity: auto-ids should already differ thanks to the description.

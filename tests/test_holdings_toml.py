@@ -47,7 +47,7 @@ def _export_toml(inventory, *extra_args):
 class TestHoldingsToml(unittest.TestCase):
     def test_valid_toml_with_meta(self):
         doc, _ = _export_toml([
-            {'symbol': 'AEM.US', 'qty': 40.0, 'total_cost': 7200.0,
+            {'symbol': 'QAE.US', 'qty': 40.0, 'total_cost': 7200.0,
              'currency': 'USD'},
         ], '--account-name', 'margin')
         self.assertEqual(doc['schema_version'], '1.2')
@@ -62,12 +62,12 @@ class TestHoldingsToml(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             native = Path(tmp) / 'native.json'
             native.write_text(json.dumps({'inventory': [
-                {'symbol': 'AEM.US', 'qty': 40.0, 'total_cost': 7200.0,
+                {'symbol': 'QAE.US', 'qty': 40.0, 'total_cost': 7200.0,
                  'currency': 'USD'},
             ]}))
             base = Path(tmp) / 'base.json'
             base.write_text(json.dumps({'inventory': [
-                {'symbol': 'AEM.US', 'qty': 40.0, 'total_cost': 9909.36,
+                {'symbol': 'QAE.US', 'qty': 40.0, 'total_cost': 9864.00,
                  'currency': 'CAD'},
             ]}))
             cmd = [sys.executable, '-m', 'taxjson.bin.taxjson_export',
@@ -79,8 +79,8 @@ class TestHoldingsToml(unittest.TestCase):
         self.assertEqual(h['currency'], 'USD')
         self.assertEqual(h['total_cost'], 7200.0)
         self.assertEqual(h['base_currency'], 'CAD')
-        self.assertEqual(h['base_total_cost'], 9909.36)
-        self.assertAlmostEqual(h['base_cost_per_share'], 9909.36 / 40.0,
+        self.assertEqual(h['base_total_cost'], 9864.00)
+        self.assertAlmostEqual(h['base_cost_per_share'], 9864.00 / 40.0,
                                places=4)
 
     def test_base_currency_mismatch_skips_base_fields(self):
@@ -90,13 +90,13 @@ class TestHoldingsToml(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             native = Path(tmp) / 'native.json'
             native.write_text(json.dumps({'inventory': [
-                {'symbol': 'AEM.US', 'qty': 40.0, 'total_cost': 7200.0,
+                {'symbol': 'QAE.US', 'qty': 40.0, 'total_cost': 7200.0,
                  'currency': 'USD'},
             ]}))
             base = Path(tmp) / 'base.json'
             # Bucket is still USD — conversion did not happen.
             base.write_text(json.dumps({'inventory': [
-                {'symbol': 'AEM.US', 'qty': 40.0, 'total_cost': 7200.0,
+                {'symbol': 'QAE.US', 'qty': 40.0, 'total_cost': 7200.0,
                  'currency': 'USD'},
             ]}))
             cmd = [sys.executable, '-m', 'taxjson.bin.taxjson_export',
@@ -115,17 +115,17 @@ class TestHoldingsToml(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             inv = Path(tmp) / 'gains.json'
             inv.write_text(json.dumps({'inventory': [
-                {'symbol': 'AEM.US', 'qty': 40.0, 'total_cost': 7200.0,
+                {'symbol': 'QAE.US', 'qty': 40.0, 'total_cost': 7200.0,
                  'currency': 'USD'}]}))
             raw = Path(tmp) / 'raw.json'
             raw.write_text(json.dumps({'transactions': [
-                {'action': 'BUYSELL', 'date': '2025-03-01', 'symbol': 'AEM.US',
+                {'action': 'BUYSELL', 'date': '2025-03-01', 'symbol': 'QAE.US',
                  'quantity': 20, 'price': 100.0, 'currency': 'USD'},
-                {'action': 'BUYSELL', 'date': '2025-06-01', 'symbol': 'AEM.US',
+                {'action': 'BUYSELL', 'date': '2025-06-01', 'symbol': 'QAE.US',
                  'quantity': -5, 'price': 120.0, 'currency': 'USD'},
-                {'action': 'BUYSELL', 'date': '2025-02-01', 'symbol': 'AEM.US',
+                {'action': 'BUYSELL', 'date': '2025-02-01', 'symbol': 'QAE.US',
                  'quantity': 20, 'price': 90.0, 'currency': 'USD'},
-                {'action': 'DIVIDEND', 'date': '2025-04-01', 'symbol': 'AEM.US',
+                {'action': 'DIVIDEND', 'date': '2025-04-01', 'symbol': 'QAE.US',
                  'quantity': 0, 'net_amount': 5},          # excluded
                 {'action': 'BUYSELL', 'date': '2025-05-01', 'symbol': 'XYZ.US',
                  'quantity': 10, 'price': 50.0, 'currency': 'USD'},  # other sym
@@ -150,17 +150,17 @@ class TestHoldingsToml(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             inv = Path(tmp) / 'gains.json'
             inv.write_text(json.dumps({'inventory': [
-                {'symbol': 'AEM.US', 'qty': 3.0, 'total_cost': 300.0,
+                {'symbol': 'QAE.US', 'qty': 3.0, 'total_cost': 300.0,
                  'currency': 'USD'}]}))
             raw = Path(tmp) / 'raw.json'
             raw.write_text(json.dumps({'transactions': [
-                {'action': 'BUYSELL', 'date': '2025-01-01', 'symbol': 'AEM.US',
+                {'action': 'BUYSELL', 'date': '2025-01-01', 'symbol': 'QAE.US',
                  'quantity': 10, 'price': 50.0, 'currency': 'USD'},
-                {'action': 'BUYSELL', 'date': '2025-02-01', 'symbol': 'AEM.US',
+                {'action': 'BUYSELL', 'date': '2025-02-01', 'symbol': 'QAE.US',
                  'quantity': -10, 'price': 60.0, 'currency': 'USD'},  # flat here
-                {'action': 'BUYSELL', 'date': '2025-03-01', 'symbol': 'AEM.US',
+                {'action': 'BUYSELL', 'date': '2025-03-01', 'symbol': 'QAE.US',
                  'quantity': 4, 'price': 70.0, 'currency': 'USD'},
-                {'action': 'BUYSELL', 'date': '2025-04-01', 'symbol': 'AEM.US',
+                {'action': 'BUYSELL', 'date': '2025-04-01', 'symbol': 'QAE.US',
                  'quantity': -1, 'price': 80.0, 'currency': 'USD'},
             ]}))
             cmd = [sys.executable, '-m', 'taxjson.bin.taxjson_export',
@@ -174,25 +174,25 @@ class TestHoldingsToml(unittest.TestCase):
 
     def test_trades_absent_without_flag(self):
         doc, _ = _export_toml([
-            {'symbol': 'AEM.US', 'qty': 40.0, 'total_cost': 7200.0,
+            {'symbol': 'QAE.US', 'qty': 40.0, 'total_cost': 7200.0,
              'currency': 'USD'}])
         self.assertNotIn('trades', doc['holding'][0])
 
     def test_base_fields_absent_without_base_gains(self):
         # Without --base-gains the holding has no base_* keys (back-compat).
         doc, _ = _export_toml([
-            {'symbol': 'AEM.US', 'qty': 40.0, 'total_cost': 7200.0,
+            {'symbol': 'QAE.US', 'qty': 40.0, 'total_cost': 7200.0,
              'currency': 'USD'},
         ])
         self.assertNotIn('base_total_cost', doc['holding'][0])
 
     def test_equity_holding_fields(self):
         doc, _ = _export_toml([
-            {'symbol': 'AEM.US', 'qty': 40.0, 'total_cost': 7200.0,
+            {'symbol': 'QAE.US', 'qty': 40.0, 'total_cost': 7200.0,
              'currency': 'USD'},
         ])
         h = doc['holding'][0]
-        self.assertEqual(h['symbol'], 'AEM.US')
+        self.assertEqual(h['symbol'], 'QAE.US')
         self.assertEqual(h['asset_type'], 'equity')
         self.assertEqual(h['quantity'], 40.0)
         self.assertEqual(h['currency'], 'USD')
@@ -203,26 +203,26 @@ class TestHoldingsToml(unittest.TestCase):
 
     def test_option_holding_broken_out(self):
         doc, _ = _export_toml([
-            {'symbol': 'BCE260116C00046000.TO', 'qty': 60.0,
-             'total_cost': 11400.0, 'currency': 'CAD'},
+            {'symbol': 'QZB260417C00038500.TO', 'qty': 45.0,
+             'total_cost': 8550.0, 'currency': 'CAD'},
         ])
         h = doc['holding'][0]
         self.assertEqual(h['asset_type'], 'option')
-        self.assertEqual(h['underlying'], 'BCE.TO')
+        self.assertEqual(h['underlying'], 'QZB.TO')
         self.assertEqual(h['right'], 'call')
-        self.assertEqual(h['strike'], 46.0)
+        self.assertEqual(h['strike'], 38.5)
         # tomllib parses a TOML local date into a date object.
-        self.assertEqual(h['expiry'].isoformat(), '2026-01-16')
+        self.assertEqual(h['expiry'].isoformat(), '2026-04-17')
         self.assertEqual(h['contract_multiplier'], 100)
-        self.assertEqual(h['quantity'], 60.0)
+        self.assertEqual(h['quantity'], 45.0)
 
     def test_zero_quantity_dropped(self):
         doc, _ = _export_toml([
-            {'symbol': 'AEM.US', 'qty': 0.0, 'total_cost': 0.0, 'currency': 'USD'},
-            {'symbol': 'ENB.TO', 'qty': 900.0, 'total_cost': 873.0, 'currency': 'CAD'},
+            {'symbol': 'QAE.US', 'qty': 0.0, 'total_cost': 0.0, 'currency': 'USD'},
+            {'symbol': 'QEN.TO', 'qty': 900.0, 'total_cost': 873.0, 'currency': 'CAD'},
         ])
         symbols = [h['symbol'] for h in doc['holding']]
-        self.assertEqual(symbols, ['ENB.TO'])
+        self.assertEqual(symbols, ['QEN.TO'])
 
     def test_short_position_keeps_sign(self):
         doc, _ = _export_toml([
@@ -236,7 +236,7 @@ class TestHoldingsToml(unittest.TestCase):
 
     def test_account_omitted_when_not_given(self):
         doc, _ = _export_toml([
-            {'symbol': 'AEM.US', 'qty': 40.0, 'total_cost': 7200.0,
+            {'symbol': 'QAE.US', 'qty': 40.0, 'total_cost': 7200.0,
              'currency': 'USD'},
         ])
         self.assertNotIn('account', doc['meta'])
@@ -246,16 +246,16 @@ class TestHoldingsToml(unittest.TestCase):
         """A sub-fractional residue (corp-action ratio / float noise) is
         dropped by the default dust threshold; a real holding survives."""
         doc, _ = _export_toml([
-            {'symbol': 'AUX.TO', 'qty': -3.333333e-05, 'total_cost': 0.0007,
+            {'symbol': 'QAX.TO', 'qty': -3.333333e-05, 'total_cost': 0.0007,
              'currency': 'CAD'},
-            {'symbol': 'AEM.US', 'qty': 40.0, 'total_cost': 7200.0,
+            {'symbol': 'QAE.US', 'qty': 40.0, 'total_cost': 7200.0,
              'currency': 'USD'},
         ])
-        self.assertEqual([h['symbol'] for h in doc['holding']], ['AEM.US'])
+        self.assertEqual([h['symbol'] for h in doc['holding']], ['QAE.US'])
 
     def test_dust_threshold_zero_keeps_everything(self):
         doc, _ = _export_toml([
-            {'symbol': 'AUX.TO', 'qty': -3.333333e-05, 'total_cost': 0.0007,
+            {'symbol': 'QAX.TO', 'qty': -3.333333e-05, 'total_cost': 0.0007,
              'currency': 'CAD'},
         ], '--dust-threshold', '0')
         self.assertEqual(len(doc['holding']), 1)
@@ -271,7 +271,7 @@ class TestHoldingsToml(unittest.TestCase):
                  'currency': 'CAD'},
                 {'symbol': 'DLR.US', 'qty': 10000.0, 'total_cost': 102000.0,
                  'currency': 'USD'},
-                {'symbol': 'AEM.US', 'qty': 40.0, 'total_cost': 7200.0,
+                {'symbol': 'QAE.US', 'qty': 40.0, 'total_cost': 7200.0,
                  'currency': 'USD'},
             ]}))
             mapfile = Path(tmp) / 'ticker.map'
@@ -284,7 +284,7 @@ class TestHoldingsToml(unittest.TestCase):
             syms = [h['symbol'] for h in doc['holding']]
             self.assertNotIn('DLR.TO', syms)   # netted to zero → dropped
             self.assertNotIn('DLR.US', syms)
-            self.assertEqual(syms, ['AEM.US'])  # unrelated holding kept
+            self.assertEqual(syms, ['QAE.US'])  # unrelated holding kept
 
 
 @unittest.skipIf(tomllib is None,
@@ -308,10 +308,10 @@ class TestTomlInput(unittest.TestCase):
 
     def test_report_reads_toml_quantity_and_cost(self):
         out = self._run(
-            '[[holding]]\nsymbol = "ENB.TO"\nquantity = 900.0\n'
+            '[[holding]]\nsymbol = "QEN.TO"\nquantity = 900.0\n'
             'currency = "CAD"\ntotal_cost = 873.0\n',
             '--report')
-        self.assertIn('ENB.TO', out)
+        self.assertIn('QEN.TO', out)
         self.assertIn('873.00', out)
 
     def test_short_filter_uses_toml_quantity_sign(self):

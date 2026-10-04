@@ -29,18 +29,18 @@ def _row(action, date, sym, qty, net=0.0, **kw):
     return d
 
 
-EV = "20240404-ge-gev-35b9"
-SPIN_DESC = "Spinoff GE.US\u2192GEV.US (deemed dividend at FMV)"
-SUMMARY = ("2024-04-04 spinoff: GE.US → GEV.US (30.0-for-120.0, ratio "
-           "0.25, FMV 3807.69 USD)")
+EV = "20240513-prnt-spnc-35b9"
+SPIN_DESC = "Spinoff PRNT.US\u2192SPNC.US (deemed dividend at FMV)"
+SUMMARY = ("2024-05-13 spinoff: PRNT.US → SPNC.US (20.0-for-80.0, ratio "
+           "0.25, FMV 830.00 USD)")
 
 
 class TestSpinoffs(unittest.TestCase):
     def test_zero_value_flagged_with_broker_value(self):
-        rows = [_row("BUYSELL", "2024-01-02", "GE.US", 120, 20000),
-                _row("DIVIDEND", "2024-04-04", "GEV.US", 0, 0.0,
+        rows = [_row("BUYSELL", "2024-01-02", "PRNT.US", 80, 13000),
+                _row("DIVIDEND", "2024-05-13", "SPNC.US", 0, 0.0,
                      corp_event_id=EV, description=SPIN_DESC),
-                _row("BUYSELL", "2024-04-04", "GEV.US", 30, 0.0,
+                _row("BUYSELL", "2024-05-13", "SPNC.US", 20, 0.0,
                      corp_event_id=EV, description=SPIN_DESC)]
         td, root, cfg = _proj(rows, {EV: {
             "election": "taxable_deemed_dividend",
@@ -50,23 +50,23 @@ class TestSpinoffs(unittest.TestCase):
         items = doc["spinoffs"]
         self.assertEqual(len(items), 1)
         s = items[0]
-        self.assertEqual((s["parent"], s["child"]), ("GE.US", "GEV.US"))
+        self.assertEqual((s["parent"], s["child"]), ("PRNT.US", "SPNC.US"))
         self.assertEqual(s["flags"], ["ZERO-VALUE"])
         self.assertEqual(s["broker_fmv"], 0.0)   # no current broker event
         self.assertIn("ZERO-VALUE", "\n".join(render_spinoffs(doc)))
 
     def test_valued_and_sheltered(self):
-        rows = [_row("DIVIDEND", "2024-04-04", "GEV.US", 0, 5141.9,
+        rows = [_row("DIVIDEND", "2024-05-13", "SPNC.US", 0, 830.0,
                      corp_event_id=EV, description=SPIN_DESC),
-                _row("BUYSELL", "2024-04-04", "GEV.US", 30, 5141.9,
+                _row("BUYSELL", "2024-05-13", "SPNC.US", 20, 830.0,
                      corp_event_id=EV, description=SPIN_DESC)]
         td, root, cfg = _proj(rows, {EV: {
             "election": "taxable_deemed_dividend",
-            "hints": {"fmv_per_share": 126.92}, "summary": SUMMARY}})
+            "hints": {"fmv_per_share": 41.5}, "summary": SUMMARY}})
         with td:
             s = spinoffs(root, cfg)["spinoffs"][0]
         self.assertEqual(s["flags"], [])
-        self.assertAlmostEqual(s["income"], 5141.9)
+        self.assertAlmostEqual(s["income"], 830.0)
         td, root, cfg = _proj(rows, {EV: {
             "election": "taxable_deemed_dividend",
             "hints": {"fmv_per_share": 0.0}, "summary": SUMMARY}},
@@ -75,20 +75,20 @@ class TestSpinoffs(unittest.TestCase):
             self.assertEqual(spinoffs(root, cfg)["spinoffs"][0]["flags"], [])
 
     def test_stale_election_listed_separately(self):
-        rows = [_row("BUYSELL", "2024-04-04", "GEV.US", 30, 0.0,
+        rows = [_row("BUYSELL", "2024-05-13", "SPNC.US", 20, 0.0,
                      corp_event_id=EV,
-                     description="Spinoff GE.US\u2192GEV.US (deemed)")]
-        old = "20240404-x-y-0000"
+                     description="Spinoff PRNT.US\u2192SPNC.US (deemed)")]
+        old = "20240513-x-y-0000"
         td, root, cfg = _proj(rows, {
             EV: {"election": "taxable_deemed_dividend",
                  "hints": {"fmv_per_share": 1.0}, "summary": SUMMARY},
             old: {"election": "taxable_deemed_dividend",
                   "hints": {"fmv_per_share": 0.0},
-                  "summary": "2024-04-04 spinoff: X \u2192 Y (1-for-1)"}})
+                  "summary": "2024-05-13 spinoff: X \u2192 Y (1-for-1)"}})
         with td:
             doc = spinoffs(root, cfg)
         self.assertEqual([s["event_id"] for s in doc["spinoffs"]], [EV])
-        self.assertEqual(doc["spinoffs"][0]["parent"], "GE.US")
+        self.assertEqual(doc["spinoffs"][0]["parent"], "PRNT.US")
         self.assertEqual([s["event_id"] for s in doc["stale"]], [old])
         self.assertIn("--reset --event " + old,
                       "\n".join(render_spinoffs(doc)))
@@ -96,20 +96,20 @@ class TestSpinoffs(unittest.TestCase):
 
 class TestSplits(unittest.TestCase):
     def test_before_after_and_flags(self):
-        rows = [_row("BUYSELL", "2024-01-02", "NVDA.US", 40, 1000),
-                _row("SPLIT", "2024-06-07", "NVDA.US", 10.0),
-                _row("SPLIT", "2024-06-10", "NVDA.US", 10.0),   # twice
-                _row("BUYSELL", "2023-01-02", "HON.US", 15, 1000),
-                _row("SPLIT", "2026-06-26", "HON.US", 0.5)]      # fraction
+        rows = [_row("BUYSELL", "2024-01-02", "SPLT.US", 40, 1000),
+                _row("SPLIT", "2024-06-17", "SPLT.US", 10.0),
+                _row("SPLIT", "2024-06-20", "SPLT.US", 10.0),   # twice
+                _row("BUYSELL", "2023-01-02", "QHN.US", 15, 1000),
+                _row("SPLIT", "2026-03-09", "QHN.US", 0.5)]      # fraction
         td, root, cfg = _proj(rows)
         with td:
             items = splits(root, cfg)
-        nv = [i for i in items if i["symbol"] == "NVDA.US"]
+        nv = [i for i in items if i["symbol"] == "SPLT.US"]
         self.assertEqual(nv[0]["held_before"], 40)
         self.assertEqual(nv[0]["held_after"], 400)
         self.assertIn("TWICE?", nv[0]["flags"])
-        hon = [i for i in items if i["symbol"] == "HON.US"][0]
-        self.assertIn("FRACTION", hon["flags"])
+        qhn = [i for i in items if i["symbol"] == "QHN.US"][0]
+        self.assertIn("FRACTION", qhn["flags"])
         self.assertIn("consolidation", "\n".join(render_splits(items)))
 
 

@@ -75,7 +75,7 @@ class TestBlankSettleListingMarket(unittest.TestCase):
         sym, settle = _qt_settle(
             "2025-06-30", "QZA",  "CAD",
             desc="QZA INC WE ACTED AS AGENT CROSS CURRENCY TRADE "
-                 "EXCHANGE RATE 1.3500", net="-135")
+                 "EXCHANGE RATE 1.3600", net="-136")
         self.assertEqual((sym, settle), ("QZA.US", "2025-07-01"))
 
     @rule("CA-DATE-05")
@@ -112,7 +112,7 @@ import subprocess
 import sys
 
 from test_fix_rbcqt import QH
-from test_fix_rbc import HDR as RBC_HDR, ORCX_ROWS
+from test_fix_rbc import HDR as RBC_HDR, RQA_ROWS
 from test_fix_m_parsers2_webull import _PRE as WB_PRE, _H25 as WB_H25
 
 REPO = Path(__file__).resolve().parent.parent
@@ -162,8 +162,8 @@ class TestTickerChangeHintMootOnceMapped(unittest.TestCase):
     CASES = (
         ('questrade', {'questrade_2025.csv': QH + QT_RENAME},
          'GLOBAL QQOL.US QQNW.US', 'looks renamed'),
-        ('rbc', {'rbc.csv': RBC_HDR + ''.join(ORCX_ROWS)},
-         'GLOBAL ORCX.US OBDX.US', 'looks renamed'),
+        ('rbc', {'rbc.csv': RBC_HDR + ''.join(RQA_ROWS)},
+         'GLOBAL RQA.US RQB.US', 'looks renamed'),
         ('webull', {'wb.csv': WB_RENAME},
          'RENAME QQOL.US QQNW.US 2025-12-06', 'ticker change Webull'),
     )

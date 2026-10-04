@@ -304,24 +304,24 @@ class TestCarryoverAfterProjectYear(unittest.TestCase):
 class TestCarryoverBox18(unittest.TestCase):
     @rule("CA-INC-06")
     def test_box18_gain_nets_the_year(self):
-        # A2-0678: [[capital_gains_dividends]] names 3,000 of box-18
-        # gains in 2025; the ledger's 2025 net is -5,000 + 3,000.
+        # A2-0678: [[capital_gains_dividends]] names 2,500 of box-18
+        # gains in 2025; the ledger's 2025 net is -5,000 + 2,500.
         book = [_row("b1", "2025-02-01", "AAA.TO", 100, -10000.0),
                 _row("s1", "2025-03-03", "AAA.TO", -100, 5000.0),
-                _row("d1", "2025-06-30", "LFE.TO", 0, 3000.0,
+                _row("d1", "2025-07-15", "ZZS.TO", 0, 2500.0,
                      action="DIVIDEND")]
         with tempfile.TemporaryDirectory() as td:
             p = _project(Path(td) / "p", 2025, book)
             (p / "work" / "margin_raw.json").write_text(
                 json.dumps({"transactions": book}))
             with (p / "taxjson.toml").open("a") as f:
-                f.write('\n[[capital_gains_dividends]]\nsymbol = "LFE.TO"\n'
+                f.write('\n[[capital_gains_dividends]]\nsymbol = "ZZS.TO"\n'
                         'year = 2025\namount = "all"\n')
             r = _carryover(p, "--json")
             self.assertEqual(r.returncode, 0, r.stderr)
             row = _rows_by_year(r.stdout)[2025]
-            self.assertAlmostEqual(row["net_gain"], -2000.0)
-            self.assertAlmostEqual(row["slip_gains"], 3000.0)
+            self.assertAlmostEqual(row["net_gain"], -2500.0)
+            self.assertAlmostEqual(row["slip_gains"], 2500.0)
 
 
 class TestCarryoverStandalone(unittest.TestCase):

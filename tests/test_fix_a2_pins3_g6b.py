@@ -565,7 +565,7 @@ class TestLeapsWalkCarriesTheSplitRatio(unittest.TestCase):
     a buy-to-close, not a LEAPS entry; a long LEAPS renamed 2-for-1 is
     2 contracts open."""
 
-    OLD, NEW = "XYZ270115C00050000.US", "XYZ1270115C00025000.US"
+    OLD, NEW = "QZY270618C00045000.US", "QZY1270618C00022500.US"
 
     def _leaps(self, rows):
         from taxjson.bin import taxjson_run as R

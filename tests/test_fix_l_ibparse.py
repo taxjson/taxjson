@@ -1,6 +1,6 @@
 """Regression tests for the low-round `ibparse` audit findings (IB
 statement parser, shared broker helpers, taxjson-brokerage, broker
-detection, the transaction schema) and the owner's overnight-session
+detection, the transaction schema) and the overnight-session
 item. Every fixture is synthetic: invented tickers and ISINs, fake
 account ids marked pii-ok."""
 import inspect
@@ -25,7 +25,7 @@ def _trades(*rows):
     return HEAD + TRADES_H + ''.join(rows)
 
 
-# ------------------------------------------- OWNER-OVERNIGHT / G5-1
+# ------------------------------------------------- OVERNIGHT / G5-1
 class TestIbExchangeTradeDate(unittest.TestCase):
     """IB stamps US Eastern clock time. An overnight-session US fill
     trades on the next trading day; an ASX fill on the Sydney date."""
@@ -39,12 +39,12 @@ class TestIbExchangeTradeDate(unittest.TestCase):
     @rule("CA-DATE-SESSION")
     @rule("US-DATE-SESSION")
     def test_christmas_night_fill_trades_next_day(self):
-        t = self._one('2025-12-25, 22:07:41')
+        t = self._one('2025-12-25, 20:52:37')
         self.assertEqual(t['date'], '2025-12-26')
         self.assertEqual(t['time'], '00:00:00')
         # T+1 from Friday Dec 26: Monday Dec 29 (was Dec 26).
         self.assertEqual(t['date_settle'], '2025-12-29')
-        self.assertEqual(t['broker_time'], '2025-12-25 22:07:41 ET')
+        self.assertEqual(t['broker_time'], '2025-12-25 20:52:37 ET')
 
     @rule("CA-DATE-SESSION")
     @rule("US-DATE-SESSION")
@@ -86,12 +86,12 @@ class TestIbExchangeTradeDate(unittest.TestCase):
     @rule("CA-DATE-SESSION")
     @rule("US-DATE-SESSION")
     def test_asx_fill_is_dated_in_sydney(self):
-        # 18:22 EST on Tue Mar 3 is 10:22 AEDT on Wed Mar 4.
-        t = self._one('2026-03-03, 18:22:08', sym='QZA', cur='AUD')
+        # 18:47 EST on Tue Feb 17 is 10:47 AEDT on Wed Feb 18.
+        t = self._one('2026-02-17, 18:47:51', sym='QZA', cur='AUD')
         self.assertEqual(t['symbol'], 'QZA.AX')
-        self.assertEqual((t['date'], t['time']), ('2026-03-04', '10:22:08'))
-        self.assertEqual(t['date_settle'], '2026-03-06')      # T+2
-        self.assertEqual(t['broker_time'], '2026-03-03 18:22:08 ET')
+        self.assertEqual((t['date'], t['time']), ('2026-02-18', '10:47:51'))
+        self.assertEqual(t['date_settle'], '2026-02-20')      # T+2
+        self.assertEqual(t['broker_time'], '2026-02-17 18:47:51 ET')
 
     @rule("CA-DATE-SESSION")
     @rule("US-DATE-SESSION")
@@ -134,10 +134,10 @@ class TestIbExchangeTradeDate(unittest.TestCase):
 
     def test_broker_time_survives_normalization(self):
         rc, out, err, _ = _brokerage_cli({'ib.csv': _trades(
-            _trade('QZN', '2025-12-25, 22:07:41', 10, 10.0, -100.0))})
+            _trade('QZN', '2025-12-25, 20:52:37', 10, 10.0, -100.0))})
         self.assertEqual(rc, 0, err)
         t = out['transactions'][0]
-        self.assertEqual(t['broker_time'], '2025-12-25 22:07:41 ET')
+        self.assertEqual(t['broker_time'], '2025-12-25 20:52:37 ET')
         self.assertNotIn('unknown field', err)
 
 
@@ -155,24 +155,24 @@ class TestIbTransferCancellations(unittest.TestCase):
                 if t['action'] == 'TRANSFER'], err
 
     def test_ca_posted_days_later_consumes_its_original(self):
-        # R1-61: Out 06-27, Ca 07-02, rebooked Out 07-03.
+        # R1-61: Out 05-13, Ca 05-16, rebooked Out 05-19.
         legs, err = self._legs(
-            _xfer('QZB', '2025-06-27', -300, -6000, typ='ATON', cur='CAD'),
-            _xfer('QZB', '2025-07-02', 300, 6000, typ='ATON', cur='CAD',
+            _xfer('QZB', '2025-05-13', -350, -7000, typ='ATON', cur='CAD'),
+            _xfer('QZB', '2025-05-16', 350, 7000, typ='ATON', cur='CAD',
                   code='Ca'),
-            _xfer('QZB', '2025-07-03', -300, -6000, typ='ATON', cur='CAD'))
-        self.assertEqual(legs, [('2025-07-03', -300)])
+            _xfer('QZB', '2025-05-19', -350, -7000, typ='ATON', cur='CAD'))
+        self.assertEqual(legs, [('2025-05-19', -350)])
         self.assertNotIn('not in this statement', err)
 
     def test_ca_listed_before_its_original(self):
         # R1-300: the same chain with each Ca moved before its original.
         legs, err = self._legs(
-            _xfer('QZB', '2026-09-01', 24, 960, typ='ATON', code='Ca'),
-            _xfer('QZB', '2026-09-01', -24, -960, typ='ATON'),
-            _xfer('QZB', '2026-09-01', 24, 960, typ='ATON', code='Ca'),
-            _xfer('QZB', '2026-09-01', -24, -960, typ='ATON'),
-            _xfer('QZB', '2026-09-01', -24, -960, typ='ATON'))
-        self.assertEqual(legs, [('2026-09-01', -24)])
+            _xfer('QZB', '2026-08-04', 36, 1440, typ='ATON', code='Ca'),
+            _xfer('QZB', '2026-08-04', -36, -1440, typ='ATON'),
+            _xfer('QZB', '2026-08-04', 36, 1440, typ='ATON', code='Ca'),
+            _xfer('QZB', '2026-08-04', -36, -1440, typ='ATON'),
+            _xfer('QZB', '2026-08-04', -36, -1440, typ='ATON'))
+        self.assertEqual(legs, [('2026-08-04', -36)])
         self.assertNotIn('not in this statement', err)
 
     def test_original_in_an_earlier_statement_stays_a_netting_leg(self):
@@ -191,13 +191,13 @@ class TestIbCorporateActionCancellationOrder(unittest.TestCase):
             'US0000000AA1)')
 
     def _rows(self):
-        orig = [_ca(self.ORIG, -100, when='2026-03-02, 20:25:00'),
-                _ca(self.ORIG, 200, when='2026-03-02, 20:25:00')]
-        canc = [_ca(self.ORIG, 100, when='2026-03-02, 20:25:00', code='Ca'),
-                _ca(self.ORIG, -200, when='2026-03-02, 20:25:00',
+        orig = [_ca(self.ORIG, -100, when='2026-02-02, 20:25:00'),
+                _ca(self.ORIG, 200, when='2026-02-02, 20:25:00')]
+        canc = [_ca(self.ORIG, 100, when='2026-02-02, 20:25:00', code='Ca'),
+                _ca(self.ORIG, -200, when='2026-02-02, 20:25:00',
                     code='Ca')]
-        rebook = [_ca(self.ORIG, -100, when='2026-03-03, 20:25:00'),
-                  _ca(self.ORIG, 200, when='2026-03-03, 20:25:00')]
+        rebook = [_ca(self.ORIG, -100, when='2026-02-03, 20:25:00'),
+                  _ca(self.ORIG, 200, when='2026-02-03, 20:25:00')]
         return orig, canc, rebook
 
     def test_every_order_keeps_the_rebooked_split(self):
@@ -211,7 +211,7 @@ class TestIbCorporateActionCancellationOrder(unittest.TestCase):
                 _, txs, _ = _parse_ib(text)
                 splits = [(t['date'], round(t['quantity'], 6))
                           for t in txs if t['action'] == 'SPLIT']
-                self.assertEqual(splits, [('2026-03-03', 2.0)])
+                self.assertEqual(splits, [('2026-02-03', 2.0)])
 
 
 # --------------------------- PIL back-fill and the open-accrual check
@@ -248,15 +248,15 @@ class TestIbPaymentInLieuBackfill(unittest.TestCase):
             + _DIV_H + ''.join(r for r in rows if r.startswith('Div')))
 
     def test_rate_of_the_paying_listing(self):
-        # S057-22: same-root accruals in CAD (0.0375) and USD (0.50) on one
-        # pay date; a USD PIL of 21.00 is 42 shares at 0.50.
+        # S057-22: same-root accruals in CAD (0.0375) and USD (0.40) on one
+        # pay date; a USD PIL of 14.00 is 35 shares at 0.40.
         _, txs, _ = self._parse(
-            _acc('QZE', '2025-08-20', '2025-08-20', '2025-09-15', 1000,
+            _acc('QZE', '2025-07-23', '2025-07-23', '2025-08-18', 1000,
                  0.0375, 37.5, 'Po', cur='CAD'),
-            _acc('QZE', '2025-08-20', '2025-08-20', '2025-09-15', 42, 0.5,
-                 21, 'Po'),
-            _div('QZE', 'US0000000QE1', '2025-09-15', 21, pil=True))
-        self.assertEqual(_pil(txs), [('QZE.US', 42.0, 0.5)])
+            _acc('QZE', '2025-07-23', '2025-07-23', '2025-08-18', 35, 0.4,
+                 14, 'Po'),
+            _div('QZE', 'US0000000QE1', '2025-08-18', 14, pil=True))
+        self.assertEqual(_pil(txs), [('QZE.US', 35.0, 0.4)])
 
     def test_cad_pil_takes_the_cad_rate(self):
         # S058-05 (2): USD 0.25 and CAD 0.05 accruals, CAD PIL of 30.
@@ -281,19 +281,19 @@ class TestIbPaymentInLieuBackfill(unittest.TestCase):
 
     def test_accrual_in_another_currency_uses_its_share_count(self):
         # S060-13 / G3-0: USD accrual (Po 0.0125 on 9000; Re at the CAD
-        # rate), PIL paid in CAD. Either row order: 9000 shares.
-        po = _acc('QZV', '2025-09-30', '2025-09-30', '2025-10-14', 9000,
-                  0.0125, 112.5, 'Po')
-        re_ = _acc('QZV', '2025-10-14', '2025-09-30', '2025-10-14', 9000,
-                   0.01740125, -112.5, 'Re')
-        pil = _div('QZV', 'CA0000000QV1', '2025-10-14', 156.61, cur='CAD',
+        # rate), PIL paid in CAD. Either row order: 7000 shares.
+        po = _acc('QZV', '2025-09-16', '2025-09-16', '2025-09-30', 7000,
+                  0.0125, 87.5, 'Po')
+        re_ = _acc('QZV', '2025-09-30', '2025-09-16', '2025-09-30', 7000,
+                   0.01740125, -87.5, 'Re')
+        pil = _div('QZV', 'CA0000000QV1', '2025-09-30', 121.81, cur='CAD',
                    pil=True)
         for rows in ((po, re_, pil), (re_, po, pil)):
             with self.subTest(first=rows[0][-3:-1]):
                 _, txs, _ = self._parse(*rows)
                 (sym, q, price), = _pil(txs)
-                self.assertEqual(q, 9000.0)
-                self.assertAlmostEqual(price, 156.61 / 9000, places=8)
+                self.assertEqual(q, 7000.0)
+                self.assertAlmostEqual(price, 121.81 / 7000, places=8)
 
 
 class TestIbOpenAccrualWarning(unittest.TestCase):
@@ -355,7 +355,7 @@ class TestIbCashInLieu(unittest.TestCase):
         # S058-17: Proceeds 0 used to be replaced by Value (market value).
         _, txs, err = _parse_ib(HEAD + CA_H + _ca(
             _CIL, -0.5, value=11.8, proceeds=0,
-            when='2026-03-02, 20:25:00'))
+            when='2026-02-02, 20:25:00'))
         cil = [t for t in txs if t['action'] == 'BUYSELL']
         self.assertEqual(cil[0]['net_amount'], 0.0)
         self.assertIn('Proceeds 0', err)
@@ -365,7 +365,7 @@ class TestIbCashInLieu(unittest.TestCase):
         # September: the September ratio comes from its own legs.
         _, txs, err = _parse_ib(HEAD + CA_H
                                 + _ca(_CIL, -0.5, proceeds=5,
-                                      when='2026-03-02, 20:25:00')
+                                      when='2026-02-02, 20:25:00')
                                 + _ca(_split_desc(2, 1), -999.5,
                                       when='2026-09-15, 20:25:00')
                                 + _ca(_split_desc(2, 1), 1999,
@@ -480,30 +480,30 @@ class TestIbCancelledUnhandledRowCount(unittest.TestCase):
 class TestIbCurrencyTaggedSymbol(unittest.TestCase):
 
     def test_currency_tag_is_said_in_every_section(self):
-        # R1-59 / S059-00: RGLD.CAD-style lines are their own pool.
+        # R1-59 / S059-00: SYMBOL.CAD-style lines are their own pool.
         cil = ('QZG.CAD(US0000000QG1) Cash in Lieu of Fractional Shares '
                '(QZG.CAD, QZG CORP, US0000000QG1)')
-        for body in (TRADES_H + _trade('QZG.CAD', '2026-03-02, 10:00:00',
+        for body in (TRADES_H + _trade('QZG.CAD', '2026-02-09, 10:00:00',
                                        -1, 25, 25, cur='CAD', code='C'),
-                     XFER_H + _xfer('QZG.CAD', '2026-03-02', 50, 1250,
+                     XFER_H + _xfer('QZG.CAD', '2026-02-09', 50, 1250,
                                     cur='CAD'),
-                     CA_H + _ca(cil, -0.0026, proceeds=0.64, cur='CAD')):
+                     CA_H + _ca(cil, -0.0041, proceeds=1.02, cur='CAD')):
             with self.subTest(section=body.split(',')[0]):
                 _, txs, err = _parse_ib(HEAD + body)
                 self.assertIn("IB symbol 'QZG.CAD' ends in the "
                               "currency/venue tag .CAD", err)
         _, _, err = _parse_ib(HEAD + TRADES_H + _trade(
-            'QZB B', '2026-03-02, 10:00:00', 1, 25, -25, cur='CAD'))
+            'QZB B', '2026-02-02, 10:00:00', 1, 25, -25, cur='CAD'))
         self.assertNotIn('currency/venue tag', err)
 
     def test_currency_tag_is_said_for_income_rows_too(self):
         # A2-1493: Dividends and Withholding Tax rows on a tagged line
         # are booked to the tagged security like the trades — and said.
         wht_h = 'Withholding Tax,Header,Currency,Account,Date,Description,Amount\n'
-        for body in (_DIV_H + _div('QZG.CAD', 'US0000000QG1', '2026-03-02',
+        for body in (_DIV_H + _div('QZG.CAD', 'US0000000QG1', '2026-02-02',
                                    5.00, cur='CAD', rate='0.10'),
                      wht_h + ('Withholding Tax,Data,CAD,U5550001,'  # pii-ok
-                              '2026-03-02,"QZG.CAD(US0000000QG1) Cash '
+                              '2026-02-02,"QZG.CAD(US0000000QG1) Cash '
                               'Dividend CAD 0.10 per Share - US Tax",'
                               '-0.75\n')):
             with self.subTest(section=body.split(',')[0]):
@@ -634,9 +634,9 @@ class TestIbSecurityNameForTheLint(unittest.TestCase):
         from test_fix_ibparse import FII_H
         from taxjson.bin.taxjson_lint_crosslistings import analyze
         text = (HEAD + TRADES_H
-                + _trade('QZMT', '2025-03-03, 10:00:00', 10, 30, -300,
+                + _trade('QZMT', '2025-03-11, 10:00:00', 10, 30, -300,
                          cur='CAD')
-                + _trade('QZMT', '2025-03-03, 10:00:00', 1, 600, -600)
+                + _trade('QZMT', '2025-03-11, 10:00:00', 1, 450, -450)
                 + FII_H
                 + 'Financial Instrument Information,Data,Stocks,QZMT,'
                   'QZMT PLATFORMS INC-CDR,990000091,CA0000000MT1,,AEQLIT,1,'

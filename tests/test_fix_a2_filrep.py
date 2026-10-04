@@ -162,10 +162,10 @@ class TestScheduleThreeCells(unittest.TestCase):
 
     @rule("CA-DISP-08")
     def test_premium_only_write_has_no_negative_acb(self):
-        # Grant-timing write: premium 27.672 gross, commission 13.836,
-        # gain 13.836 -> separately rounded 27.67 / 13.84 / 13.84.
-        w = ca("MSFT250815P00300000.US", 0.0, -13.836, gain=13.836,
-               commission=13.836, direction="SHORT", grant=True,
+        # Grant-timing write: premium 29.652 gross, commission 14.826,
+        # gain 14.826 -> separately rounded 29.65 / 14.83 / 14.83.
+        w = ca("ABC250815P00045000.US", 0.0, -14.826, gain=14.826,
+               commission=14.826, direction="SHORT", grant=True,
                is_option=True, qty=-1)
         rep = FE.build_schedule3([w], 2025)
         row = rep["rows"][0]
@@ -221,19 +221,19 @@ class TestRebatesAreNotOutlays(unittest.TestCase):
     @rule("CA-DISP-08", "CA-DISP-06")
     def test_ib_rebate_on_a_grant_write(self):
         # A write whose IB Comm/Fee is a +0.70 rebate (fee -0.70).
-        w = ca("BSX251121P00110000.US", 0.0, -130.70, gain=130.70,
+        w = ca("KVX251212P00085000.US", 0.0, -94.70, gain=94.70,
                fee=-0.70, direction="SHORT", grant=True, is_option=True,
                qty=-1)
         row = FE.build_schedule3([w], 2025)["rows"][0]
         self.assertEqual(row["outlays"], 0.0)
-        self.assertEqual(row["proceeds"], 130.70)
-        self.assertEqual(row["gain"], 130.70)
+        self.assertEqual(row["proceeds"], 94.70)
+        self.assertEqual(row["gain"], 94.70)
         # A real commission still splits out gross (R1-40 unchanged).
-        w2 = ca("BSX251121P00110000.US", 0.0, -128.70, gain=128.70,
+        w2 = ca("KVX251212P00085000.US", 0.0, -92.70, gain=92.70,
                 commission=1.30, direction="SHORT", grant=True,
                 is_option=True, qty=-1)
         row = FE.build_schedule3([w2], 2025)["rows"][0]
-        self.assertEqual((row["proceeds"], row["outlays"]), (130.0, 1.30))
+        self.assertEqual((row["proceeds"], row["outlays"]), (94.0, 1.30))
 
 
 class TestCurrencyGuards(unittest.TestCase):

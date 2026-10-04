@@ -104,7 +104,7 @@ class TestDetectors(unittest.TestCase):
             root = Path(td); _project(root)
             fmh = ("AFFECTS 2025 - missing basis distorts this year's gain\n"
                    "Symbol  Account Cur PeakShort\n"
-                   "AMZN.US                  margin     CAD      -40.0000 2025-11-03\n"
+                   "QZW.US                   margin     CAD      -60.0000 2025-10-21\n"
                    "NOT relevant to 2025\nZZZ.US   margin  CAD  -1 2024-01-01\n")
             audit_bad = "  pipeline tie-out       10 tied, 1 MISMATCHED, 0 not found  ✗\n"
             audit_ok = "  pipeline tie-out       10 tied, 0 MISMATCHED, 0 not found  ✓\n"
@@ -123,7 +123,7 @@ class TestDetectors(unittest.TestCase):
                                                      "filing": {"totals": {"proceeds": 100.0, "gain": 10.0}}}), "")})
             self.assertEqual((cl.d_sanity(ctx).status, cl.d_sanity(ctx).detail), ("attention", "7 discrepancy(ies)."))
             r = cl.d_missing_history(ctx)
-            self.assertEqual(r.status, "attention"); self.assertIn("AMZN.US (margin)", r.detail); self.assertNotIn("ZZZ", r.detail)
+            self.assertEqual(r.status, "attention"); self.assertIn("QZW.US (margin)", r.detail); self.assertNotIn("ZZZ", r.detail)
             self.assertEqual(cl.d_elections(ctx).status, "done")
             self.assertEqual(cl.d_audit(ctx).status, "attention")
             r = cl.d_option_boundary(ctx)

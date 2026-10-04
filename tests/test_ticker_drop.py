@@ -41,15 +41,15 @@ class TestLoadMapFile(unittest.TestCase):
     def test_keywords_sort_into_buckets(self):
         tmap = _map(
             "# a comment\n"
-            "GLOBAL  DFDV1.US  DFDV.US\n"
+            "GLOBAL  QZD1.US  QZD.US\n"
             "TOBASE  AEM.US    AEM.TO\n"
             "journal DLR.U.TO  DLR.TO\n"     # keyword is case-insensitive
-            "DELETE  RGLD.CAD.TO\n"
+            "DELETE  ABH.CAD.TO\n"
         )
-        self.assertEqual(tmap.glob, {'DFDV1.US': 'DFDV.US'})
+        self.assertEqual(tmap.glob, {'QZD1.US': 'QZD.US'})
         self.assertEqual(tmap.tobase, {'AEM.US': 'AEM.TO'})
         self.assertEqual(tmap.journal, {'DLR.U.TO': 'DLR.TO'})
-        self.assertEqual(tmap.delete, {'RGLD.CAD.TO'})
+        self.assertEqual(tmap.delete, {'ABH.CAD.TO'})
 
     def test_unkeyworded_line_is_skipped(self):
         # A bare `from to` line (no keyword) is malformed and ignored —
@@ -69,17 +69,17 @@ class TestLoadMapFile(unittest.TestCase):
 
 class TestApplyDrops(unittest.TestCase):
     def test_removes_matching_symbol_and_audits(self):
-        txs = [_tx('RGLD.CAD.TO', 0.0, 0.0),
-               _tx('RGLD.CAD.TO', -0.0026, 0.64),
+        txs = [_tx('ABH.CAD.TO', 0.0, 0.0),
+               _tx('ABH.CAD.TO', -0.0026, 0.64),
                _tx('NVDA.US', 100, 50000)]
-        kept, err = _drops(txs, {'RGLD.CAD.TO'})
+        kept, err = _drops(txs, {'ABH.CAD.TO'})
         self.assertEqual([t['symbol'] for t in kept], ['NVDA.US'])
         # The deletion is audited, not silent.
-        self.assertIn('DELETE removed 2 RGLD.CAD.TO', err)
+        self.assertIn('DELETE removed 2 ABH.CAD.TO', err)
         self.assertIn('net qty -0.0026', err)
 
     def test_fractional_artifact_no_warning(self):
-        _, err = _drops([_tx('RGLD.CAD.TO', -0.0026, 0.64)], {'RGLD.CAD.TO'})
+        _, err = _drops([_tx('ABH.CAD.TO', -0.0026, 0.64)], {'ABH.CAD.TO'})
         self.assertIn('NOTE:', err)
         self.assertNotIn('warning:', err)
 

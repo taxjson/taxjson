@@ -284,14 +284,14 @@ class TestReturnOfCapitalDating(unittest.TestCase):
 # ------------------------------------------------------------ D5 trusts
 class TestTrustDistributionYear(unittest.TestCase):
 
-    def _book(self, sym="XIC.TO", label="distribution", record="2024-12-30",
-              pay="2025-01-06", **kw):
-        return [tx("BUYSELL", "2024-06-03", sym, 500, 15000,
+    def _book(self, sym="QXI.TO", label="distribution", record="2024-12-27",
+              pay="2025-01-07", **kw):
+        return [tx("BUYSELL", "2024-06-03", sym, 400, 12000,
                    currency="CAD"),
-                tx("DIVIDEND", pay, sym, 0, 131.45, gross_amount=131.45,
+                tx("DIVIDEND", pay, sym, 0, 104.80, gross_amount=104.80,
                    type="dividend", currency="CAD", record_date=record,
                    income_label=label,
-                   description=f"DIST ON 500 SHS REC {record} PAY {pay}",
+                   description=f"DIST ON 400 SHS REC {record} PAY {pay}",
                    **kw)]
 
     def _years(self, book, **kw):
@@ -320,9 +320,9 @@ class TestTrustDistributionYear(unittest.TestCase):
         for label, book, canada in (
                 ("split-share corp", self._book(sym="FTN.PR.A.TO"), {}),
                 ("project list", self._book(),
-                 {"corporate_distributions": ("XIC.TO",)}),
+                 {"corporate_distributions": ("QXI.TO",)}),
                 ("project list, root", self._book(),
-                 {"corporate_distributions": ("XIC",)}),
+                 {"corporate_distributions": ("QXI",)}),
                 ("corporate dividend label", self._book(label=""), {}),
                 ("US fund 'DIST'", self._book(sym="IWM.US"), {}),
                 ("no record date (IB)", self._book(record=""), {})):
@@ -340,38 +340,38 @@ class TestTrustDistributionYear(unittest.TestCase):
                 "work/margin_raw.json": json.dumps(base)})
             r24 = cli_both(p, "divs-sum", "--json")
         got = {c: json.loads(r24[c].stdout)["totals"] for c in C.COUNTRIES}
-        self.assertEqual(got, {"canada": {"CAD": 131.45}, "usa": {}})
+        self.assertEqual(got, {"canada": {"CAD": 104.8}, "usa": {}})
         from taxjson.bin.taxjson_sum_income import summarize_income
         rows = base["transactions"]
         for c, y in (("canada", 2024), ("usa", 2025)):
             with self.subTest(country=c):
                 s = summarize_income(rows, y, IncomeRules(c))
-                self.assertIn("XIC.TO", s["ticker_stats"])
+                self.assertIn("QXI.TO", s["ticker_stats"])
 
     @rule("CA-INC-DATE-TRUST")
     def test_parsers_record_the_facts(self):
         from test_fix_rbcqt import qdiv, qt_parse, rrow, rbc_parse
         txs, _, _ = qt_parse(qdiv(
-            "XIC.TO", "ISHARES CORE S&P/TSX DIST ON 500 SHS REC 12/30/24 "
-            "PAY 01/06/25", "131.45", td="2025-01-06", cur="CAD"))
+            "QXI.TO", "MAPLEX CORE INDEX DIST ON 400 SHS REC 12/27/24 "
+            "PAY 01/07/25", "104.80", td="2025-01-07", cur="CAD"))
         (t,) = txs
         self.assertEqual((t["action"], t["date"], t["record_date"],
                           t["income_label"]),
-                         ("DIVIDEND", "2025-01-06", "2024-12-30",
+                         ("DIVIDEND", "2025-01-07", "2024-12-27",
                           "distribution"))
         txs, _, _ = qt_parse(qdiv(
-            "CSU.TO", "CONSTELLATION CASH DIV ON 10 SHS REC 12/19/24 "
-            "PAY 01/10/25", "10.00", td="2025-01-10", cur="CAD"))
-        self.assertEqual(txs[0]["record_date"], "2024-12-19")
+            "QSW.TO", "QUILLON SOFTWARE CASH DIV ON 12 SHS REC 12/18/24 "
+            "PAY 01/09/25", "12.00", td="2025-01-09", cur="CAD"))
+        self.assertEqual(txs[0]["record_date"], "2024-12-18")
         self.assertNotIn("income_label", txs[0])
         txs, _, _ = rbc_parse(rrow(
-            "January 8, 2025", "Distribution", "HDIV", "HAMILTON ETF", "",
-            "0.17", "513", "CAD",
-            "HAMILTON ETF DIST      ON    3000 SHS REC 12/31/24 "
-            "PAY 01/08/25"))
+            "January 9, 2025", "Distribution", "QHDV", "HAMMOND ETF", "",
+            "0.17", "425", "CAD",
+            "HAMMOND ETF DIST      ON    2500 SHS REC 12/30/24 "
+            "PAY 01/09/25"))
         (t,) = [t for t in txs if t["action"] == "DIVIDEND"]
         self.assertEqual((t["record_date"], t["income_label"]),
-                         ("2024-12-31", "distribution"))
+                         ("2024-12-30", "distribution"))
 
     def test_split_share_list_is_small_and_documented(self):
         from taxjson.lib import tax_logic as TL
@@ -454,7 +454,7 @@ class TestUsJanuaryFundDividends(unittest.TestCase):
                          ric_january_dividends=("SPY.US",))
         with self.assertRaises(ValueError):
             GainsRequest(country="usa",
-                         corporate_distributions=("XIC.TO",))
+                         corporate_distributions=("QXI.TO",))
         with self.assertRaises(ValueError):
             GainsRequest(country="usa",
                          ric_january_dividends=("SPY.US 2025-02-28",))
@@ -606,10 +606,10 @@ class TestRbcNotionalAndDrip(unittest.TestCase):
     def test_drip_is_income_plus_a_purchase(self):
         from test_fix_rbcqt import q, qdiv, qt_parse
         txs, _, _ = qt_parse(
-            qdiv("XIC.TO", "ISHARES DIST ON 100 SHS REC 06/20/25 PAY "
+            qdiv("QXI.TO", "MAPLEX DIST ON 100 SHS REC 06/20/25 PAY "
                  "06/27/25", "30.00", td="2025-06-27", cur="CAD")
-            + q(td="2025-06-27", action="REI", sym="XIC.TO",
-                desc="ISHARES REINV@C$30.00", qty="1", price="0",
+            + q(td="2025-06-27", action="REI", sym="QXI.TO",
+                desc="MAPLEX REINV@C$30.00", qty="1", price="0",
                 gross="0", comm="0", net="-30.00", cur="CAD",
                 act="Dividend reinvestment"))
         acts = sorted((t["action"], t["quantity"]) for t in txs)

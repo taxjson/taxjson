@@ -480,10 +480,10 @@ class TestStatementCoveragePerAccountAndYear(unittest.TestCase):
         self.assertIn('none covers 2025', err)
 
     def test_weekend_split_and_a_statement_into_next_year_are_quiet(self):
-        # The owner's 2024 download pattern: Jan 1 - Fri Dec 27 and
-        # Mon Dec 30 - Jan 1 2025.
-        files = {'a.csv': _stmt('January 1, 2024', 'December 27, 2024'),
-                 'b.csv': _stmt('December 30, 2024', 'January 1, 2025')}
+        # Two downloads split over a weekend: Jan 1 - Fri Dec 20 and
+        # Mon Dec 23 - Jan 1 2025.
+        files = {'a.csv': _stmt('January 1, 2024', 'December 20, 2024'),
+                 'b.csv': _stmt('December 23, 2024', 'January 1, 2025')}
         self.assertNotIn('ATTENTION', _prepare(files, tax_year=2024))
         rc, _out, err, _ = _brokerage_cli(files, '--tax-year', '2024')
         self.assertEqual(rc, 0, err)

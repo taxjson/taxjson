@@ -570,24 +570,24 @@ class TestSuperficialLossRules(unittest.TestCase):
     def test_us_other_scope_buy_to_close_is_not_a_replacement(self):
         # S070-10 case A: the IRA buys back its own written call.
         txs = _tt("""
-            BUYSELL 2025-02-03 10:00:00 XYZ250620C00050000.US 1 USD 5 500
-            BUYSELL 2025-03-03 10:00:00 XYZ250620C00050000.US -1 USD 2 200
+            BUYSELL 2025-02-03 10:00:00 ABC250620C00045000.US 1 USD 5 500
+            BUYSELL 2025-03-03 10:00:00 ABC250620C00045000.US -1 USD 2 200
         """)
         ira = _tt("""
-            BUYSELL 2025-01-10 10:00:00 XYZ250620C00050000.US -1 USD 3 300
-            BUYSELL 2025-03-10 10:00:00 XYZ250620C00050000.US 1 USD 2 200
+            BUYSELL 2025-01-10 10:00:00 ABC250620C00045000.US -1 USD 3 300
+            BUYSELL 2025-03-10 10:00:00 ABC250620C00045000.US 1 USD 2 200
         """, account='ira')
         res, _ = _run(USATaxRules(), txs, sheltered_transactions=ira)
         self.assertAlmostEqual(res['summary']['total_gain'], -300.0,
                                places=2)
         # Case B: an affiliated buy-to-cover.
         txs = _tt("""
-            BUYSELL 2025-01-02 10:00:00 XYZ.US 100 USD 20 2000
-            BUYSELL 2025-03-03 10:00:00 XYZ.US -100 USD 10 1000
+            BUYSELL 2025-01-02 10:00:00 ABC.US 100 USD 20 2000
+            BUYSELL 2025-03-03 10:00:00 ABC.US -100 USD 10 1000
         """)
         sp = _tt("""
-            BUYSELL 2025-02-20 10:00:00 XYZ.US -100 USD 12 1200
-            BUYSELL 2025-03-10 10:00:00 XYZ.US 100 USD 11 1100
+            BUYSELL 2025-02-20 10:00:00 ABC.US -100 USD 12 1200
+            BUYSELL 2025-03-10 10:00:00 ABC.US 100 USD 11 1100
         """, account='spouse')
         res, _ = _run(USATaxRules(), txs, affiliated_transactions=sp)
         self.assertAlmostEqual(res['summary']['total_gain'], -1000.0,

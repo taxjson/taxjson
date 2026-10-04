@@ -75,32 +75,32 @@ class TestRbcOneDateExportOrder(unittest.TestCase):
 class TestRbcCrossFileCashInLieu(unittest.TestCase):
 
     def test_a2_0898_merger_cil_in_next_years_file_pairs(self):
-        """S064-14: a December MER (ROC + .963957 new per old) whose cash
+        """S064-14: a December MER (ROC + .947213 new per old) whose cash
         in lieu posts in January's export is one event: the stated ratio
         and the fractional sale, no UNMATCHED leg."""
-        f25 = (rrow("December 22, 2025", "Reorganization", "TRX",
-                    "TRIX CORP NO PAR", "48", "", "0", "CAD",
-                    "MGR - TRIX CORP NO PAR SHRS RECEIVED THRU MERGER")
-               + rrow("December 22, 2025", "Reorganization", "T099003",
-                      "TRIX CORP NEW", "-50", "", "307.93", "CAD",
-                      "MER - TRIX CORP NEW DEFAULT: ROC OF C$6.1585 + "
-                      ".963957 NEW SHS PER 1 OLD")
-               + rrow("May 5, 2025", "Buy", "TRX", "TRIX CORP NEW", "50",
-                      "170", "-8509.95", "CAD", "TRIX UNSOLICITED DA"))
-        f26 = rrow("January 6, 2026", "Reorganization", "TRX",
-                   "TRIX CORP NO PAR", "", "", "30.00", "CAD",
-                   "CIL - TRIX CORP NO PAR CASH IN LIEU OF FRAC SHARES")
+        f25 = (rrow("December 15, 2025", "Reorganization", "QMRG",
+                    "QMRG CORP NO PAR", "75", "", "0", "CAD",
+                    "MGR - QMRG CORP NO PAR SHRS RECEIVED THRU MERGER")
+               + rrow("December 15, 2025", "Reorganization", "Q099003",
+                      "QMRG CORP NEW", "-80", "", "421.92", "CAD",
+                      "MER - QMRG CORP NEW DEFAULT: ROC OF C$5.2740 + "
+                      ".947213 NEW SHS PER 1 OLD")
+               + rrow("June 9, 2025", "Buy", "QMRG", "QMRG CORP NEW", "80",
+                      "168", "-13449.95", "CAD", "QMRG UNSOLICITED DA"))
+        f26 = rrow("January 9, 2026", "Reorganization", "QMRG",
+                   "QMRG CORP NO PAR", "", "", "41.30", "CAD",
+                   "CIL - QMRG CORP NO PAR CASH IN LIEU OF FRAC SHARES")
         txs, err, _ = rbc_parse(f25, f26)
         self.assertNotIn('UNMATCHED', err)
         split = [t for t in txs if t['action'] == 'SPLIT']
         self.assertEqual(len(split), 1, txs)
-        self.assertAlmostEqual(split[0]['quantity'], 0.963957, places=6)
+        self.assertAlmostEqual(split[0]['quantity'], 0.947213, places=6)
         cil = [t for t in txs if t['action'] == 'BUYSELL'
                and t['quantity'] < 0]
         self.assertEqual(len(cil), 1, txs)
-        self.assertEqual(cil[0]['date'], '2026-01-06')
-        self.assertAlmostEqual(cil[0]['quantity'], -0.19785, places=5)
-        self.assertAlmostEqual(cil[0]['net_amount'], 30.0, places=2)
+        self.assertEqual(cil[0]['date'], '2026-01-09')
+        self.assertAlmostEqual(cil[0]['quantity'], -0.77704, places=5)
+        self.assertAlmostEqual(cil[0]['net_amount'], 41.3, places=2)
 
 
 class TestRbcMergerNote(unittest.TestCase):
@@ -134,16 +134,16 @@ class TestRbcReinvestReversalDate(unittest.TestCase):
         the reversal cancels the April purchase, so the June one is
         booked whatever the export's row order."""
         def rei(d, q, v, tail=""):
-            return rrow(d, "Dividends", "SRU.UN", "SMARTCENTRES", q, "", v,
-                        "CAD", "REI - SMARTCENTRES REINV@C$32.24" + tail)
-        apr = rei("April 18, 2022", "2", "-64.48")
-        jun = rei("June 18, 2022", "2", "-64.48")
-        cxl = rei("April 22, 2022", "-2", "64.48", " CANCEL")
+            return rrow(d, "Dividends", "QRT.UN", "QUARTZ REIT", q, "", v,
+                        "CAD", "REI - QUARTZ REIT REINV@C$27.15" + tail)
+        apr = rei("April 13, 2022", "3", "-81.45")
+        jun = rei("June 15, 2022", "3", "-81.45")
+        cxl = rei("April 20, 2022", "-3", "81.45", " CANCEL")
         for body in (apr + cxl + jun, jun + cxl + apr):
             txs, err, _ = rbc_parse(body)
             self.assertEqual([(t['date'], t['action'], t['quantity'])
                               for t in txs],
-                             [('2022-06-18', 'BUYSELL', 2.0)], err)
+                             [('2022-06-15', 'BUYSELL', 3.0)], err)
 
 
 # --------------------------------------------------------------- Webull

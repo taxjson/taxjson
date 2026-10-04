@@ -80,24 +80,24 @@ def _zero(txs, year):
 
 class TestZeroBasisAcquisitions(unittest.TestCase):
     def test_merger_received_at_zero_then_sold_is_flagged(self):
-        # The CVX/HESS shape: shares received thru merger at $0, later sold.
+        # Shares received through a merger at $0, later sold.
         txs = [
-            _tx("BUYSELL", "2025-07-21", "CVX.US", 15, 0.0, price=0.0,
-                description="MGR - CHEVRON CORPORATION SHRS RECEIVED THRU MERGER"),
-            _tx("BUYSELL", "2025-12-23", "CVX.US", -15, 3072.90, price=205.0),
+            _tx("BUYSELL", "2025-08-11", "ORMQ.US", 24, 0.0, price=0.0,
+                description="MGR - ORMAND CORPORATION SHRS RECEIVED THRU MERGER"),
+            _tx("BUYSELL", "2025-12-09", "ORMQ.US", -24, 4111.20, price=171.3),
         ]
-        r = _zero(txs, 2025)[("CVX.US", "margin")]
+        r = _zero(txs, 2025)[("ORMQ.US", "margin")]
         self.assertTrue(r.affects_year)
-        self.assertEqual(r.zero_cost_qty, 15.0)
+        self.assertEqual(r.zero_cost_qty, 24.0)
         self.assertTrue(r.looks_corp_action)
         self.assertEqual(r.in_year_dispositions, 1)
-        self.assertAlmostEqual(r.in_year_proceeds, 3072.90, places=2)
+        self.assertAlmostEqual(r.in_year_proceeds, 4111.20, places=2)
 
     def test_zero_cost_but_never_sold_not_flagged(self):
         # Received at $0 and still held — no realized gain yet, so not flagged.
-        txs = [_tx("BUYSELL", "2025-07-21", "CVX.US", 15, 0.0,
+        txs = [_tx("BUYSELL", "2025-08-11", "ORMQ.US", 24, 0.0,
                    description="MGR shares received")]
-        self.assertNotIn(("CVX.US", "margin"), _zero(txs, 2025))
+        self.assertNotIn(("ORMQ.US", "margin"), _zero(txs, 2025))
 
     def test_clean_cost_basis_not_flagged(self):
         txs = [
@@ -108,10 +108,10 @@ class TestZeroBasisAcquisitions(unittest.TestCase):
 
     def test_sold_in_other_year_not_relevant(self):
         txs = [
-            _tx("BUYSELL", "2024-07-21", "CVX.US", 15, 0.0, description="MGR"),
-            _tx("BUYSELL", "2026-03-01", "CVX.US", -15, 3000.0, price=200.0),
+            _tx("BUYSELL", "2024-08-12", "ORMQ.US", 24, 0.0, description="MGR"),
+            _tx("BUYSELL", "2026-03-02", "ORMQ.US", -24, 4800.0, price=200.0),
         ]
-        r = _zero(txs, 2025)[("CVX.US", "margin")]
+        r = _zero(txs, 2025)[("ORMQ.US", "margin")]
         self.assertFalse(r.affects_year)
         self.assertEqual(r.in_year_dispositions, 0)
 
@@ -121,55 +121,55 @@ class TestZeroBasisAcquisitions(unittest.TestCase):
         txs = [
             _tx("BUYSELL", "2025-01-02", "XYZ.US", 10, 1000.0, price=100.0),
             _tx("BUYSELL", "2025-03-01", "XYZ.US", -10, 1200.0, price=120.0),
-            _tx("BUYSELL", "2025-07-21", "XYZ.US", 5, 0.0, description="MGR"),
+            _tx("BUYSELL", "2025-08-11", "XYZ.US", 5, 0.0, description="MGR"),
         ]
         self.assertNotIn(("XYZ.US", "margin"), _zero(txs, 2025))
 
 
 class TestMergerLinks(unittest.TestCase):
-    def _hess_cvx(self):
+    def _merger(self):
         return [
-            _tx("BUYSELL", "2025-07-21", "H015283.US", -15, 0.0,
-                description="MGR - HESS CORPORATION MERGER TO CHEVRON "
-                            "CORPORATION 1.025 NEW = 1 OLD"),
-            _tx("BUYSELL", "2025-07-21", "CVX.US", 15, 0.0,
-                description="MGR - CHEVRON CORPORATION SHRS RECEIVED THRU MERGER"),
+            _tx("BUYSELL", "2025-08-11", "K123456.US", -20, 0.0,
+                description="MGR - KELVIN CORPORATION MERGER TO ORMAND "
+                            "CORPORATION 1.2 NEW = 1 OLD"),
+            _tx("BUYSELL", "2025-08-11", "ORMQ.US", 24, 0.0,
+                description="MGR - ORMAND CORPORATION SHRS RECEIVED THRU MERGER"),
         ]
 
     def test_links_old_removal_to_new_receipt(self):
-        links = detect_corp_action_links(self._hess_cvx())
+        links = detect_corp_action_links(self._merger())
         self.assertEqual(len(links), 1)
         l = links[0]
-        self.assertEqual(l.old_symbol, "H015283.US")
-        self.assertEqual(l.new_symbol, "CVX.US")
-        self.assertEqual(l.old_company, "HESS CORPORATION")
-        self.assertEqual(l.new_company, "CHEVRON CORPORATION")
-        self.assertAlmostEqual(l.ratio, 1.025)
-        self.assertEqual(l.old_qty, 15.0)
-        self.assertEqual(l.new_qty, 15.0)
+        self.assertEqual(l.old_symbol, "K123456.US")
+        self.assertEqual(l.new_symbol, "ORMQ.US")
+        self.assertEqual(l.old_company, "KELVIN CORPORATION")
+        self.assertEqual(l.new_company, "ORMAND CORPORATION")
+        self.assertAlmostEqual(l.ratio, 1.2)
+        self.assertEqual(l.old_qty, 20.0)
+        self.assertEqual(l.new_qty, 24.0)
 
     def test_name_match_pairs_correctly_with_two_same_day_mergers(self):
-        txs = self._hess_cvx() + [
-            _tx("BUYSELL", "2025-07-21", "T012345.US", -8, 0.0,
+        txs = self._merger() + [
+            _tx("BUYSELL", "2025-08-11", "T012345.US", -8, 0.0,
                 description="MGR - FOO INC MERGER TO BAR INC 2 NEW = 1 OLD"),
-            _tx("BUYSELL", "2025-07-21", "BAR.US", 16, 0.0,
+            _tx("BUYSELL", "2025-08-11", "BAR.US", 16, 0.0,
                 description="MGR - BAR INC SHRS RECEIVED THRU MERGER"),
         ]
         links = {l.old_symbol: l for l in detect_corp_action_links(txs)}
-        self.assertEqual(links["H015283.US"].new_symbol, "CVX.US")
-        self.assertEqual(links["T012345.US"].new_symbol, "BAR.US")  # not CVX
+        self.assertEqual(links["K123456.US"].new_symbol, "ORMQ.US")
+        self.assertEqual(links["T012345.US"].new_symbol, "BAR.US")  # not ORMQ
 
     def test_no_link_without_a_receipt(self):
-        only_removal = [self._hess_cvx()[0]]
+        only_removal = [self._merger()[0]]
         self.assertEqual(detect_corp_action_links(only_removal), [])
 
     def test_priced_rows_are_not_treated_as_merger(self):
         # A normal (non-$0) buy/sell with 'merger' in the text isn't a link.
         txs = [
-            _tx("BUYSELL", "2025-07-21", "H015283.US", -15, 100.0, price=6.7,
-                description="HESS MERGER TO CHEVRON"),
-            _tx("BUYSELL", "2025-07-21", "CVX.US", 15, 2000.0, price=133.0,
-                description="CHEVRON SHRS RECEIVED THRU MERGER"),
+            _tx("BUYSELL", "2025-08-11", "K123456.US", -20, 100.0, price=5.0,
+                description="KELVIN MERGER TO ORMAND"),
+            _tx("BUYSELL", "2025-08-11", "ORMQ.US", 24, 2000.0, price=83.0,
+                description="ORMAND SHRS RECEIVED THRU MERGER"),
         ]
         self.assertEqual(detect_corp_action_links(txs), [])
 

@@ -91,7 +91,7 @@ class TestAssignmentPairingOrder(unittest.TestCase):
     ROWS = (_PRE + _H25 +
             'USD,05-12-2025,SELL,@QZX,PUT QZX12/12/25 60,OPC,-1,1.00,,99.00\n'
             'USD,12-12-2025,BUY,,,,1,0.00,,\n'
-            'USD,08-12-2025,SELL,@QZX,PUT QZX01/16/26 60,OPC,-1,2.50,,249.00\n'
+            'USD,09-12-2025,SELL,@QZX,PUT QZX01/16/26 60,OPC,-1,2.50,,249.00\n'
             'USD,15-12-2025,BUY,,,,1,0.00,,\n'
             'USD,16-12-2025,BUY,QZX,QZX INC,SHS,100,60.00,,"(6,001.00)"\n')
 

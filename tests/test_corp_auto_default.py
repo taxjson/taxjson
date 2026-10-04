@@ -29,8 +29,8 @@ def _name_change(source='FB.US', target='META.US'):
 def _merger():
     return CorporateAction(
         date='2025-10-22', time='20:25:00', action_type='merger',
-        source_symbol='SSL.TO', source_isin='CA0000000001',
-        target_symbol='RGLD.US', target_isin='US0000000002',
+        source_symbol='ABG.TO', source_isin='CA0000000001',
+        target_symbol='ABH.US', target_isin='US0000000002',
         ratio_new=1, ratio_old=16,
         qty_disposed=1600.0, qty_received=100.0,
         fmv=25920.67, currency='CAD', target_currency='USD',

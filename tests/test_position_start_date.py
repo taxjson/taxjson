@@ -141,7 +141,7 @@ class TestCanadaPositionStart(unittest.TestCase):
         self.assertEqual(inv['AAPL']['position_start_date'], '2023-12-31')
 
     def test_split_rename_merge_keeps_earliest_position_start(self):
-        """SPLIT-with-`symbol_new` (the SSL.TO → RGLD.US class of
+        """SPLIT-with-`symbol_new` (the ABG.TO → ABH.US class of
         corporate event) merges the source pool into the target.
         If the user happens to hold both pre-merger, the combined
         position's start is the EARLIER of the two — same convention
@@ -149,22 +149,22 @@ class TestCanadaPositionStart(unittest.TestCase):
         inv = self._inv([
             # Older position on the soon-to-be-renamed source.
             TaxTransaction(action='BUYSELL', date='2024-01-15',
-                           symbol='SSL.TO', quantity=100, price=10.0,
+                           symbol='ABG.TO', quantity=100, price=10.0,
                            net_amount=1000.0, currency='CAD', account='M'),
             # Newer position on the target ticker.
             TaxTransaction(action='BUYSELL', date='2024-06-01',
-                           symbol='RGLD.TO', quantity=50, price=200.0,
+                           symbol='ABH.TO', quantity=50, price=200.0,
                            net_amount=10000.0, currency='CAD', account='M'),
-            # The merger renames SSL.TO → RGLD.TO at a 1-for-16 ratio.
+            # The merger renames ABG.TO → ABH.TO at a 1-for-16 ratio.
             TaxTransaction(action='SPLIT', date='2024-09-01',
-                           symbol='SSL.TO', symbol_new='RGLD.TO',
+                           symbol='ABG.TO', symbol_new='ABH.TO',
                            quantity=0.0625, currency='CAD', account='M'),
         ])
         # Source ticker is gone; target absorbed it.
-        self.assertNotIn('SSL.TO', inv)
-        self.assertIn('RGLD.TO', inv)
+        self.assertNotIn('ABG.TO', inv)
+        self.assertIn('ABH.TO', inv)
         # Combined position carries the EARLIER position-start date.
-        self.assertEqual(inv['RGLD.TO']['position_start_date'], '2024-01-15')
+        self.assertEqual(inv['ABH.TO']['position_start_date'], '2024-01-15')
 
 
 # ============================================================================

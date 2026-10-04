@@ -109,17 +109,17 @@ class TestSplitTwinWindowEdge(unittest.TestCase):
     def _flags(self, second):
         from test_corp_views import _proj, _row
         from taxjson.lib.corp_views import splits
-        rows = [_row("BUYSELL", "2024-01-02", "NVDA.US", 40, 1000),
-                _row("SPLIT", "2024-06-07", "NVDA.US", 10.0),
-                _row("SPLIT", second, "NVDA.US", 10.0)]
+        rows = [_row("BUYSELL", "2024-01-02", "ZVM.US", 40, 1000),
+                _row("SPLIT", "2024-05-08", "ZVM.US", 10.0),
+                _row("SPLIT", second, "ZVM.US", 10.0)]
         td, root, cfg = _proj(rows)
         with td:
             items = splits(root, cfg)
-        return [i["flags"] for i in items if i["symbol"] == "NVDA.US"][0]
+        return [i["flags"] for i in items if i["symbol"] == "ZVM.US"][0]
 
     def test_day_10_is_a_twin_day_11_is_not(self):
-        self.assertIn("TWICE?", self._flags("2024-06-17"))
-        self.assertNotIn("TWICE?", self._flags("2024-06-18"))
+        self.assertIn("TWICE?", self._flags("2024-05-18"))
+        self.assertNotIn("TWICE?", self._flags("2024-05-19"))
 
 
 if __name__ == "__main__":

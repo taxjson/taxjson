@@ -213,9 +213,9 @@ def _old_us_build_and_factor(events, sym, from_date, to_date):
 class TestOldImplementationParity(unittest.TestCase):
     SCENARIO = [
         # (symbol, date, ratio, symbol_new)
-        ('SSL.TO', '2025-02-10', 2.0, ''),
-        ('SSL.TO', '2025-03-15', 0.0625, 'RGLD.US'),   # reverse + rename
-        ('RGLD.US', '2025-07-01', 3.0, 'RGLD.US'),     # IB-style symbol_new
+        ('ABG.TO', '2025-02-10', 2.0, ''),
+        ('ABG.TO', '2025-03-15', 0.0625, 'ABH.US'),   # reverse + rename
+        ('ABH.US', '2025-07-01', 3.0, 'ABH.US'),     # IB-style symbol_new
     ]
 
     def _timeline(self):
@@ -226,7 +226,7 @@ class TestOldImplementationParity(unittest.TestCase):
         tl = self._timeline()
         dates = ['2025-01-01', '2025-02-10', '2025-02-11', '2025-03-15',
                  '2025-06-30', '2025-07-01', '2025-12-31']
-        for sym in ('SSL.TO', 'RGLD.US'):
+        for sym in ('ABG.TO', 'ABH.US'):
             for a in dates:
                 for b in dates:
                     self.assertAlmostEqual(
@@ -246,7 +246,7 @@ class TestOldImplementationParity(unittest.TestCase):
                        '2025-03-20', '2025-07-01', '2025-08-01'):
                 old = _old_canada_to_loss_units(q, at, loss_sort,
                                                 window_splits)
-                new = q * tl.alias_factor('SSL.TO', at, loss_sort)
+                new = q * tl.alias_factor('ABG.TO', at, loss_sort)
                 self.assertAlmostEqual(new, old, places=9,
                                        msg=f"to_loss_units({q}, {at})")
 

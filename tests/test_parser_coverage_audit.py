@@ -388,22 +388,22 @@ class TestIbCommissionAdjustments(unittest.TestCase):
 # ------------------------------------------------------ 6. tender offers
 class TestIbTenderOffers(unittest.TestCase):
     TENDER_PAIR = (
-        'Corporate Actions,Data,Stocks,CAD,"2026-04-01, 20:25:00",'
-        '"AAUC(CA9990000101) Tendered to 99900001 1 FOR 1 (AAUC.TEN, '
-        'ALLIED GOLD CORP - TENDER, CA9990000101)",-500,0,0,0,\n'
-        'Corporate Actions,Data,Stocks,CAD,"2026-04-01, 20:25:00",'
-        '"AAUC(CA9990000101) Tendered to 99900001 1 FOR 1 (AAUC.TEN, '
-        'ALLIED GOLD CORP - TENDER, CA9990000101)",500,0,0,0,\n'
+        'Corporate Actions,Data,Stocks,CAD,"2026-03-09, 20:25:00",'
+        '"QTND(CA9990000101) Tendered to 99900001 1 FOR 1 (QTND.TEN, '
+        'QUARRY TENDER CORP - TENDER, CA9990000101)",-400,0,0,0,\n'
+        'Corporate Actions,Data,Stocks,CAD,"2026-03-09, 20:25:00",'
+        '"QTND(CA9990000101) Tendered to 99900001 1 FOR 1 (QTND.TEN, '
+        'QUARRY TENDER CORP - TENDER, CA9990000101)",400,0,0,0,\n'
     )
     RETURN_PAIR = (
-        'Corporate Actions,Data,Stocks,CAD,"2026-04-20, 20:25:00",'
-        '"AAUC.TEN(99900001) Merged(Voluntary Offer Allocation) WITH '
-        'CA9990000101 1 for 1 (AAUC, ALLIED GOLD CORP, CA9990000101)",'
-        '-500,0,0,0,\n'
-        'Corporate Actions,Data,Stocks,CAD,"2026-04-20, 20:25:00",'
-        '"AAUC.TEN(99900001) Merged(Voluntary Offer Allocation) WITH '
-        'CA9990000101 1 for 1 (AAUC, ALLIED GOLD CORP, CA9990000101)",'
-        '500,0,0,0,\n'
+        'Corporate Actions,Data,Stocks,CAD,"2026-03-23, 20:25:00",'
+        '"QTND.TEN(99900001) Merged(Voluntary Offer Allocation) WITH '
+        'CA9990000101 1 for 1 (QTND, QUARRY TENDER CORP, CA9990000101)",'
+        '-400,0,0,0,\n'
+        'Corporate Actions,Data,Stocks,CAD,"2026-03-23, 20:25:00",'
+        '"QTND.TEN(99900001) Merged(Voluntary Offer Allocation) WITH '
+        'CA9990000101 1 for 1 (QTND, QUARRY TENDER CORP, CA9990000101)",'
+        '400,0,0,0,\n'
     )
     TOTAL = 'Corporate Actions,Data,Total,,,,,,0,0,\n'
 
@@ -422,25 +422,25 @@ class TestIbTenderOffers(unittest.TestCase):
 
     def test_cash_settlement_is_a_booked_sale_with_note(self):
         cash_leg = (
-            'Corporate Actions,Data,Stocks,CAD,"2026-04-20, 20:25:00",'
-            '"AAUC.TEN(99900001) Merged(Voluntary Offer Allocation) WITH '
-            'CA9990000101 1 for 1 (AAUC, ALLIED GOLD CORP, CA9990000101)",'
-            '-500,5250,5250,0,\n'
+            'Corporate Actions,Data,Stocks,CAD,"2026-03-23, 20:25:00",'
+            '"QTND.TEN(99900001) Merged(Voluntary Offer Allocation) WITH '
+            'CA9990000101 1 for 1 (QTND, QUARRY TENDER CORP, CA9990000101)",'
+            '-400,4200,4200,0,\n'
         )
         csv = IB_HEAD + IB_CA_H + self.TENDER_PAIR + cash_leg + self.TOTAL
         parser, txs, err = _parse(IbBrokerage, csv)
         self.assertEqual(len(txs), 1)
         s = txs[0]
         self.assertEqual(s["action"], "BUYSELL")
-        self.assertEqual(s["symbol"], "AAUC.TO",
+        self.assertEqual(s["symbol"], "QTND.TO",
                          "the sale is of the ROOT position; the .TEN "
                          "placeholder never entered the book")
-        self.assertAlmostEqual(s["quantity"], -500.0)
-        self.assertAlmostEqual(s["net_amount"], 5250.0)
+        self.assertAlmostEqual(s["quantity"], -400.0)
+        self.assertAlmostEqual(s["net_amount"], 4200.0)
         self.assertAlmostEqual(s["price"], 10.5)
         self.assertEqual(s["currency"], "CAD")
         self.assertIn("settled for cash", err)
-        self.assertIn("500 share(s) disposed for 5250.00 CAD", err)
+        self.assertIn("400 share(s) disposed for 4200.00 CAD", err)
         self.assertNotIn("unhandled Corporate Action", err)
         self.assertEqual(_unaccounted(parser), 0)
 

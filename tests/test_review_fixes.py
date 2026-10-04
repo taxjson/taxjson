@@ -344,16 +344,16 @@ class TestShortPositionSignedCashFlow(unittest.TestCase):
 
     def test_short_put_cycle_emits_negative_cost_and_proceeds(self):
         rules = CanadaTaxRules()
-        # Sell-to-open 5 puts at premium 1.31651 → received 651.35 net.
-        # Buy-to-close 5 puts at premium 0.30743 → paid 160.65 net.
-        # Profit (cost - proceeds for shorts) = 490.71.
+        # Sell-to-open 4 puts → received 512.73 net.
+        # Buy-to-close 4 puts → paid 98.40 net.
+        # Profit (cost - proceeds for shorts) = 414.33.
         txs = [
-            TaxTransaction(action='BUYSELL', date='2025-04-25',
-                           symbol='AA250620P00022500.US', quantity=-5.0,
-                           currency='CAD', net_amount=651.353716, id='sto'),
-            TaxTransaction(action='BUYSELL', date='2025-05-13',
-                           symbol='AA250620P00022500.US', quantity=5.0,
-                           currency='CAD', net_amount=160.645104, id='btc'),
+            TaxTransaction(action='BUYSELL', date='2025-05-02',
+                           symbol='QZA250815P00018500.US', quantity=-4.0,
+                           currency='CAD', net_amount=512.734120, id='sto'),
+            TaxTransaction(action='BUYSELL', date='2025-05-20',
+                           symbol='QZA250815P00018500.US', quantity=4.0,
+                           currency='CAD', net_amount=98.402216, id='btc'),
         ]
         result = rules.compute_gains(txs)
         self.assertEqual(len(result['transactions']), 1)
@@ -361,10 +361,10 @@ class TestShortPositionSignedCashFlow(unittest.TestCase):
         self.assertEqual(entry['direction'], 'SHORT')
         # Signed convention: cost reflects cash inflow (negative), proceeds
         # reflects cash outflow (negative).
-        self.assertAlmostEqual(entry['cost'], -651.353716, places=4)
-        self.assertAlmostEqual(entry['proceeds'], -160.645104, places=4)
+        self.assertAlmostEqual(entry['cost'], -512.734120, places=4)
+        self.assertAlmostEqual(entry['proceeds'], -98.402216, places=4)
         # Gain remains positive (winning short).
-        self.assertAlmostEqual(entry['gain'], 490.708612, places=4)
+        self.assertAlmostEqual(entry['gain'], 414.331904, places=4)
         # And the invariant proceeds - cost == signed gain holds for shorts now.
         self.assertAlmostEqual(entry['proceeds'] - entry['cost'],
                                entry['gain'], places=4)

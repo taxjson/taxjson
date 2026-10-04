@@ -37,17 +37,17 @@ class TestParseOptionFromDescription(unittest.TestCase):
         self.assertEqual(result['base'], 'TSLA')
 
     def test_rbc_exp_prefix(self):
-        """RBC option-leg description: 'EXP - CALL .QQZ 06/20/25 30 QQZ HOLDINGS ...'"""
-        result = self.b.parse_option_from_description("EXP - CALL .QQZ   06/20/25    30 QQZ HOLDINGS INC")
+        """RBC option-leg description: 'EXP - CALL .QQZ 08/22/25 31 QQZ HOLDINGS ...'"""
+        result = self.b.parse_option_from_description("EXP - CALL .QQZ   08/22/25    31 QQZ HOLDINGS INC")
         self.assertIsNotNone(result)
         self.assertEqual(result['base'], 'QQZ')  # dot stripped
 
     def test_rbc_assignment_of_option_pattern(self):
         result = self.b.parse_option_from_description(
-            "COINBASE GLOBAL INC ASSIGNMENT OF OPTION CALL COIN 05/16/25 197.50"
+            "QZCN GLOBAL INC ASSIGNMENT OF OPTION CALL QZCN 08/22/25 142.50"
         )
         self.assertIsNotNone(result)
-        self.assertEqual(result['base'], 'COIN')
+        self.assertEqual(result['base'], 'QZCN')
 
     def test_no_match_returns_none(self):
         self.assertIsNone(self.b.parse_option_from_description(""))

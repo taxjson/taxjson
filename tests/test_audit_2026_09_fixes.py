@@ -365,7 +365,7 @@ class TestHarvestScheduleSemantics(unittest.TestCase):
 
 class TestExitableWithShelteredHolding(unittest.TestCase):
     def test_full_exit_advice_carries_the_denied_portion(self):
-        # The real FFH.TO shape: taxable in-window buys + an OLD
+        # Taxable in-window buys + an OLD
         # sheltered holding. The sheltered shares were bought before
         # the window, so they are not substituted property: a FULL
         # taxable exit keeps the whole loss (the engine's per-holder
@@ -376,24 +376,24 @@ class TestExitableWithShelteredHolding(unittest.TestCase):
             tax = Path(td) / 'tax.json'
             shl = Path(td) / 'shl.json'
             tax.write_text(json.dumps({'transactions': [
-                {'action': 'BUYSELL', 'date': '2026-01-02',
-                 'time': '09:30:00', 'symbol': 'FFH.TO',
-                 'quantity': 20, 'net_amount': 47000.0,
+                {'action': 'BUYSELL', 'date': '2026-01-06',
+                 'time': '09:30:00', 'symbol': 'QFX.TO',
+                 'quantity': 15, 'net_amount': 24300.0,
                  'currency': 'CAD', 'account': 'margin'},
-                {'action': 'BUYSELL', 'date': '2026-01-22',
-                 'time': '09:30:00', 'symbol': 'FFH.TO',
-                 'quantity': 20, 'net_amount': 46000.0,
+                {'action': 'BUYSELL', 'date': '2026-01-21',
+                 'time': '09:30:00', 'symbol': 'QFX.TO',
+                 'quantity': 15, 'net_amount': 23850.0,
                  'currency': 'CAD', 'account': 'margin'}]}))
             shl.write_text(json.dumps({'transactions': [
-                {'action': 'BUYSELL', 'date': '2025-09-26',
-                 'time': '09:30:00', 'symbol': 'FFH.TO',
-                 'quantity': 10, 'net_amount': 23000.0,
+                {'action': 'BUYSELL', 'date': '2025-10-15',
+                 'time': '09:30:00', 'symbol': 'QFX.TO',
+                 'quantity': 8, 'net_amount': 12800.0,
                  'currency': 'CAD', 'account': 'resp'}]}))
             r = subprocess.run(
                 [sys.executable, '-m',
                  'taxjson.bin.taxjson_wash_radar', '--country', 'canada',
                  '--taxable', str(tax), '--sheltered', str(shl),
-                 '--date', '2026-01-29'],
+                 '--date', '2026-01-28'],
                 cwd=REPO_ROOT, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('EXITABLE', r.stdout)

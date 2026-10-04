@@ -38,9 +38,9 @@ class TestCryptoSendsStageFailure(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from test_fix_sends import _project, _cli, TAO_ID
+        from test_fix_sends import _project, _cli, PAY_ID
         cls._cli = staticmethod(_cli)
-        cls.tao = TAO_ID
+        cls.send_id = PAY_ID
         cls._td = tempfile.TemporaryDirectory()
         cls.root, cls.home = _project(cls._td.name)
         r = _cli(cls.root, cls.home, "run", "--no-input")
@@ -54,7 +54,7 @@ class TestCryptoSendsStageFailure(unittest.TestCase):
     def _set_manifest(self, decision):
         man = self.root / "inputs" / "crypto" / "sends.json"
         man.write_text(json.dumps({"sends": {
-            self.tao: {"decision": decision, "note": "synthetic"}}}))
+            self.send_id: {"decision": decision, "note": "synthetic"}}}))
 
     def _sum_text(self):
         return (self.root / "reports" / "crypto.sum").read_text()
@@ -83,10 +83,10 @@ class TestCryptoSendsUnpriced(unittest.TestCase):
 
     KR = ("txid,refid,time,type,subtype,aclass,asset,wallet,amount,fee,"
           "balance\n"
-          "LA2AAA,RA2,2026-01-05 12:00:00,earn,reward,currency,SOL,spot,5,"
+          "LA2AAA,RA2,2026-01-12 12:00:00,earn,reward,currency,ATOM,spot,5,"
           "0,5\n"
-          "LC1CCC,RC1,2026-05-06 12:00:00,withdrawal,,currency,SOL,spot,-1,"
-          "0,4\n")
+          "LC1CCC,RC1,2026-05-20 12:00:00,withdrawal,,currency,ATOM,spot,-2,"
+          "0,3\n")
 
     @rule("CA-CRYPTO-07")
     def test_unpriced_payment_reaches_sum_and_strict_stops(self):
@@ -97,7 +97,7 @@ class TestCryptoSendsUnpriced(unittest.TestCase):
             (acct / "cb_2025.csv").unlink()
             (acct / "kr_ledgers.csv").write_text(self.KR)
             (home / ".crypto_price_cache.json").write_text(
-                json.dumps({"SOL-2026-01-05": 150.0}))
+                json.dumps({"ATOM-2026-01-12": 140.0}))
             r = _cli(root, home, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             doc = json.loads(_cli(root, home, "crypto-sends", "crypto",

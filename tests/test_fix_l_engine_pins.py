@@ -373,15 +373,15 @@ class TestCanadaOptionRecordUnits(unittest.TestCase):
 
     def test_option_and_share_units(self):
         res = run([
-            T('BUYSELL', '2025-01-06', 'XYZ250620C00050000.TO', 2, 400),
-            T('BUYSELL', '2025-03-03', 'XYZ250620C00050000.TO', -2, 600),
-            T('BUYSELL', '2025-01-06', 'XYZ.TO', 100, 1000),
-            T('BUYSELL', '2025-03-03', 'XYZ.TO', -100, 1500)], 2025)
+            T('BUYSELL', '2025-01-06', 'ABC250718C00045000.TO', 2, 400),
+            T('BUYSELL', '2025-03-10', 'ABC250718C00045000.TO', -2, 600),
+            T('BUYSELL', '2025-01-06', 'ABC.TO', 100, 1000),
+            T('BUYSELL', '2025-03-10', 'ABC.TO', -100, 1500)], 2025)
         q = {s['symbol']: s['qty'] for s in sales(res)}
-        self.assertEqual(q, {'XYZ250620C00050000.TO': 2.0, 'XYZ.TO': 100.0})
+        self.assertEqual(q, {'ABC250718C00045000.TO': 2.0, 'ABC.TO': 100.0})
         s3 = schedule3(res, 2025)
-        self.assertEqual(s3['XYZ250620C00050000.TO']['units'], 2.0)
-        self.assertEqual(s3['XYZ.TO']['units'], 100.0)
+        self.assertEqual(s3['ABC250718C00045000.TO']['units'], 2.0)
+        self.assertEqual(s3['ABC.TO']['units'], 100.0)
 
 
 class TestInventoryCurrencyReachesHoldingsToml(unittest.TestCase):
@@ -469,17 +469,17 @@ class TestUsOptionRecordReachesForm8949(unittest.TestCase):
 
     def test_option_description(self):
         from taxjson.bin.taxjson_form_export import build_8949
-        res = run([U('BUYSELL', '2025-01-06', 'XYZ250620C00050000', 2, 400),
-                   U('BUYSELL', '2025-03-03', 'XYZ250620C00050000', -2, 600),
-                   U('BUYSELL', '2025-01-06', 'XYZ.US', 10, 100),
-                   U('BUYSELL', '2025-03-03', 'XYZ.US', -10, 150)],
+        res = run([U('BUYSELL', '2025-01-06', 'ABC250718C00045000', 2, 400),
+                   U('BUYSELL', '2025-03-10', 'ABC250718C00045000', -2, 600),
+                   U('BUYSELL', '2025-01-06', 'ABC.US', 10, 100),
+                   U('BUYSELL', '2025-03-10', 'ABC.US', -10, 150)],
                   2025, country='usa')
         recs = {s['symbol']: s for s in sales(res)}
-        self.assertIs(recs['XYZ250620C00050000']['is_option'], True)
-        self.assertIs(recs['XYZ.US']['is_option'], False)
+        self.assertIs(recs['ABC250718C00045000']['is_option'], True)
+        self.assertIs(recs['ABC.US']['is_option'], False)
         desc = sorted(r['description']
                       for r in build_8949(sales(res))['part_I'])
-        self.assertEqual(desc, ['10 XYZ.US', '2 XYZ250620C00050000 (option)'])
+        self.assertEqual(desc, ['10 ABC.US', '2 ABC250718C00045000 (option)'])
 
 
 class TestSplitAtTheTradesOwnTimestamp(unittest.TestCase):

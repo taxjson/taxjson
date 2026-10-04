@@ -450,7 +450,7 @@ class TestCryptoSendsReadOnly(unittest.TestCase):
 
     @unittest.skipIf(os.geteuid() == 0, "root ignores permissions")
     def test_set_with_read_only_inputs(self):
-        from test_fix_sends import TAO_ID, _cli as _scli, _project
+        from test_fix_sends import PAY_ID, _cli as _scli, _project
         with tempfile.TemporaryDirectory() as td:
             root, home = _project(td)
             r = _scli(root, home, "run", "--no-input")
@@ -459,7 +459,7 @@ class TestCryptoSendsReadOnly(unittest.TestCase):
             os.chmod(d, 0o500)
             try:
                 r = _scli(root, home, "crypto-sends", "crypto", "--set",
-                          f"{TAO_ID}=payment")
+                          f"{PAY_ID}=payment")
             finally:
                 os.chmod(d, 0o700)
             self.assertNotIn("Traceback", r.stderr)

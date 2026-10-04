@@ -93,7 +93,7 @@ class TestNegativeSellTotal(unittest.TestCase):
         line = _tx_display_line(fut)
         self.assertTrue(line.endswith(" x1000"), line)
         mini = {'action': 'BUYSELL', 'date': '2025-04-01',
-                'time': '09:30:00', 'symbol': 'XYZ250620C00050000.US',
+                'time': '09:30:00', 'symbol': 'ABC250718C00045000.US',
                 'quantity': 1, 'currency': 'USD', 'price': 1.0,
                 'net_amount': 11.0, 'fee': 1.0, 'multiplier': 10}
         self.assertTrue(_tx_display_line(mini).endswith(" x10"))
@@ -322,7 +322,7 @@ class TestBareRenameTargets(unittest.TestCase):
         self.assertFalse(bare_rename_target('RY.TO', 'RY.US'))
         self.assertFalse(bare_rename_target('ETH2', 'ETH'))   # crypto
         self.assertFalse(bare_rename_target(
-            'XYZ250620C00050000.US', 'XYZ'))
+            'ABC250718C00045000.US', 'ABC'))
         self.assertEqual(len(bare_target_warnings(['RY.TO'],
                                                   {'RY.TO': 'RY'})), 1)
         self.assertEqual(bare_target_warnings(['AB.TO'],

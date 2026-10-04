@@ -519,10 +519,10 @@ class TestTickerMapSummaryNoSuffixGuess(unittest.TestCase):
                               time="10:00:00", symbol=s, quantity=1,
                               price=1.0, net_amount=1.0, currency="USD",
                               account="brk")
-               for s in ("QZQ.US", "U.19SEP25.26.P")]
+               for s in ("QZQ.US", "ZRT.17OCT25.31.P")]
         m = generate_summary(txs)["mappings"]
         self.assertEqual(m["QZQ.US"], "QZQ.US")
-        self.assertEqual(m["U.19SEP25.26.P"], "U250919P00026000")
+        self.assertEqual(m["ZRT.17OCT25.31.P"], "ZRT251017P00031000")
 
 
 # ------------------------------- standalone timing defaults (A2-1361)

@@ -197,7 +197,7 @@ class TestOptionUnitsGrantTiming(unittest.TestCase):
     only when it closes a write of the SAME year; a buy-back of an
     earlier year's write (grant or close timing) is its own disposition."""
 
-    S = "XYZ250620C00050000.TO"
+    S = "QZY250718C00045000.TO"
 
     def _t(self, i, d, q, net):
         return T(id=i, date=d, symbol=self.S, quantity=q,
@@ -209,7 +209,7 @@ class TestOptionUnitsGrantTiming(unittest.TestCase):
         s3 = build_schedule3(_rows(res), 2025)
         units = [r["units"] for r in s3["rows"] if r["symbol"] == self.S]
         comp = _computed(res, 2025)
-        return units[0], comp["XYZ250620C00050000"]["qty"]
+        return units[0], comp["QZY250718C00045000"]["qty"]
 
     @rule("CA-OPT-01")
     def test_a2_0651_pre_since_buyback_plus_new_grant_write(self):
@@ -280,7 +280,7 @@ class TestReconcileSlipsGrantStraddle(unittest.TestCase):
     """A2-0657: a grant-timing write still open at Dec 31 needs no slip
     in the write year; the close year's slip carries the premium."""
 
-    S = "DEF260116C00030000.TO"
+    S = "DEF260417C00033000.TO"
     BOOK = [T(id="w", date="2025-11-03", symbol=S, quantity=-3, price=0.8,
               net_amount=240.0),
             T(id="c", date="2026-01-12", symbol=S, quantity=3, price=0.21,

@@ -239,9 +239,9 @@ class TestDiffManualReporting(unittest.TestCase):
 class TestHoldingsTomlOptionUnits(unittest.TestCase):
     def test_option_cost_per_share_unit_is_stated(self):
         import tomllib
-        tt = ("BUYSELL 2026-03-02 10:00:00 XYZ270115C00050000.TO 2 CAD 5.00 "
+        tt = ("BUYSELL 2026-03-02 10:00:00 QZY270618C00045000.TO 2 CAD 5.00 "
               "-1001.30 1.30\n"
-              "BUYSELL 2026-03-09 10:00:00 XYZ270115C00050000.TO -1 CAD 4.00 "
+              "BUYSELL 2026-03-09 10:00:00 QZY270618C00045000.TO -1 CAD 4.00 "
               "399.35 0.65\n")
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, [("margin", "taxable")], {"margin": tt},

@@ -160,15 +160,15 @@ class TestQuestradeActivities(unittest.TestCase):
         """TF6 row emitted as TRANSFER. taxjson-brokerage --transfers
         controls whether it survives downstream."""
         csv = QUESTRADE_HEADER + (
-            '2025-06-25 12:00:00 AM,2025-06-25 12:00:00 AM,TF6,.AEM,'
-            'AGNICO EAGLE MINES,200.0,0,0,0,33060.00,CAD,'
+            '2025-07-09 12:00:00 AM,2025-07-09 12:00:00 AM,TF6,.NGM,'
+            'NORTHERN GOLD MINES,120.0,0,0,0,21480.00,CAD,'
             '12345,Transfers,Individual\n'
         )
         txs = _parse_csv(QuestradeBrokerage, csv)
         t = _find(txs, action='TRANSFER')
-        self.assertEqual(t['symbol'], 'AEM.TO')
-        self.assertEqual(t['quantity'], 200)
-        self.assertAlmostEqual(t['net_amount'], 33060.0, places=2)
+        self.assertEqual(t['symbol'], 'NGM.TO')
+        self.assertEqual(t['quantity'], 120)
+        self.assertAlmostEqual(t['net_amount'], 21480.0, places=2)
 
     def test_internal_code_dividend_resolves_via_trade(self):
         """Questrade can emit a dividend with an internal-code symbol.
@@ -190,15 +190,15 @@ class TestQuestradeActivities(unittest.TestCase):
         fills must produce two distinct transactions, not one (i.e.
         taxjson-sort --dedup should not collapse them)."""
         csv = QUESTRADE_HEADER + (
-            '2025-11-12 12:00:00 AM,2025-11-13 12:00:00 AM,Sell,WCP.TO,'
-            'WHITECAP RESOURCES INC WE ACTED AS AGENT,'
-            '-100,10.86,1086.00,0,1086.00,CAD,12345,Trades,Individual\n'
-            '2025-11-12 12:00:00 AM,2025-11-13 12:00:00 AM,Sell,WCP.TO,'
-            'WHITECAP RESOURCES INC WE ACTED AS AGENT,'
-            '-100,10.86,1086.00,0,1086.00,CAD,12345,Trades,Individual\n'
+            '2025-11-19 12:00:00 AM,2025-11-20 12:00:00 AM,Sell,ZQV.TO,'
+            'ZEQUAVA RESOURCES INC WE ACTED AS AGENT,'
+            '-100,9.42,942.00,0,942.00,CAD,12345,Trades,Individual\n'
+            '2025-11-19 12:00:00 AM,2025-11-20 12:00:00 AM,Sell,ZQV.TO,'
+            'ZEQUAVA RESOURCES INC WE ACTED AS AGENT,'
+            '-100,9.42,942.00,0,942.00,CAD,12345,Trades,Individual\n'
         )
         txs = _parse_csv(QuestradeBrokerage, csv)
-        wcps = [t for t in txs if t['symbol'] == 'WCP.TO']
+        wcps = [t for t in txs if t['symbol'] == 'ZQV.TO']
         self.assertEqual(len(wcps), 2)
         # The second instance carries a "fill #2" marker so its hashed
         # id is different. The original (first) keeps its stable id.
@@ -212,20 +212,20 @@ class TestQuestradeActivities(unittest.TestCase):
     def test_stock_split_dis_row_becomes_split_not_dropped_dividend(self):
         """A 'STK SPLIT' DIS row (tagged Dividends) must emit a SPLIT that
         scales the held pool — not get dropped as a $0 dividend. The temp
-        symbol (K012006) resolves to the traded ticker (KLAC) via the
+        symbol (P044127) resolves to the traded ticker (PLMN) via the
         same-security trade, and the ratio is (held + received)/held."""
         csv = QUESTRADE_HEADER + (
-            '2026-06-04 09:30:00 AM,2026-06-05 12:00:00 AM,Buy,KLAC,'
-            'KLA CORPORATION COMMON STOCK WITH DUE-BILL SPLIT WE ACTED AS AGENT,'
-            '1,2075.00,2075.00,0,-2075.00,USD,12345,Trades,Individual\n'
-            '2026-06-15 12:00:00 AM,2026-06-15 12:00:00 AM,DIS,K012006,'
-            'KLA CORPORATION COMMON STOCK STK SPLIT ON 1 SHS REC 06/12/26 PAY '
-            '06/15/26,9.0,0.0,0.0,0.0,0.0,USD,12345,Dividends,Individual\n'
+            '2026-06-11 09:30:00 AM,2026-06-12 12:00:00 AM,Buy,PLMN,'
+            'PLUMINA CORPORATION COMMON STOCK WITH DUE-BILL SPLIT WE ACTED AS AGENT,'
+            '1,840.00,840.00,0,-840.00,USD,12345,Trades,Individual\n'
+            '2026-06-22 12:00:00 AM,2026-06-22 12:00:00 AM,DIS,P044127,'
+            'PLUMINA CORPORATION COMMON STOCK STK SPLIT ON 1 SHS REC 06/19/26 PAY '
+            '06/22/26,9.0,0.0,0.0,0.0,0.0,USD,12345,Dividends,Individual\n'
         )
         txs = _parse_csv(QuestradeBrokerage, csv)
         split = _find(txs, action='SPLIT')
         self.assertIsNotNone(split, f"expected a SPLIT row, got: {txs}")
-        self.assertEqual(split['symbol'], 'KLAC.US')   # resolved from K012006
+        self.assertEqual(split['symbol'], 'PLMN.US')   # resolved from P044127
         self.assertAlmostEqual(split['quantity'], 10.0)  # (1 + 9) / 1
         # And it is NOT a dividend.
         self.assertIsNone(_find(txs, action='DIVIDEND'))
@@ -266,19 +266,19 @@ class TestRbcActivities(unittest.TestCase):
         csv = RBC_HEADER + (
             '"January 15, 2025","Sell","8ABCDE1","","-1","5.00",'
             '"January 16, 2025","12345","498.00","CAD",'
-            '"CALL .QQZ   06/20/25    30 QQZ HOLDINGS INC OPEN CONTRACT"\n'
+            '"CALL .QQZ   07/18/25    32 QQZ HOLDINGS INC OPEN CONTRACT"\n'
         )
         txs = _parse_csv(RbcBrokerage, csv)
         t = _find(txs, action='BUYSELL')
-        self.assertEqual(t['symbol'], 'QQZ250620C00030000.TO')
+        self.assertEqual(t['symbol'], 'QQZ250718C00032000.TO')
         self.assertEqual(t['quantity'], -1)
 
     def test_get_assigned(self):
         """RBC ASN row → action=ASSIGN."""
         csv = RBC_HEADER + (
-            '"May 16, 2025","Other","9BZYDS1","","1","",'
-            '"May 20, 2025","12345","0","USD",'
-            '"ASN - CALL COIN   05/16/25   197.50 COINBASE GLOBAL INC ASSIGNMENT OF OPTION"\n'
+            '"May 23, 2025","Other","9QRSAS1","","1","",'
+            '"May 27, 2025","12345","0","USD",'
+            '"ASN - CALL QRS   05/23/25   41.50 QRS HOLDINGS INC ASSIGNMENT OF OPTION"\n'
         )
         txs = _parse_csv(RbcBrokerage, csv)
         t = _find(txs, action='ASSIGN')
@@ -288,14 +288,14 @@ class TestRbcActivities(unittest.TestCase):
         """EXP row stays BUYSELL with cleared amounts so the engine
         realizes premium gain/loss in place."""
         csv = RBC_HEADER + (
-            '"February 24, 2025","Reorganization","8DZNZG9","","-30","",'
-            '"February 24, 2025","12345","0","CAD",'
-            '"EXP - CALL .BNS   02/21/25    82 BANK OF NOVA SCOTIA OPTION EXPIRATION - EXPIRED"\n'
+            '"April 21, 2025","Reorganization","8QRBXP2","","-12","",'
+            '"April 21, 2025","12345","0","CAD",'
+            '"EXP - CALL .QRB   04/18/25    31 QRB BANCORP OPTION EXPIRATION - EXPIRED"\n'
         )
         txs = _parse_csv(RbcBrokerage, csv)
         t = _find(txs, action='BUYSELL')
         self.assertIsNotNone(t)
-        self.assertEqual(t['symbol'], 'BNS250221C00082000.TO')
+        self.assertEqual(t['symbol'], 'QRB250418C00031000.TO')
 
     def test_dividend(self):
         csv = RBC_HEADER + (
@@ -377,20 +377,20 @@ class TestWebullActivities(unittest.TestCase):
 
     def test_sell_call_open(self):
         csv = self._csv([
-            'USD,25-11-2024,SELL,@ABBV,CALL ABBV01/17/25 190,OPC,10,1.60,"1590.08"\n'
+            'USD,02-12-2024,SELL,@QRS,CALL QRS03/26/25 63.5,OPC,10,1.55,"1540.08"\n'
         ])
         txs = _parse_csv(WebullBrokerage, csv)
         t = _find(txs, action='BUYSELL')
-        self.assertEqual(t['symbol'], 'ABBV250117C00190000.US')
+        self.assertEqual(t['symbol'], 'QRS250326C00063500.US')
         self.assertEqual(t['quantity'], -10)
 
     def test_buy_call(self):
         csv = self._csv([
-            'USD,15-12-2024,BUY,@ABBV,CALL ABBV01/17/25 190,OPC,10,2.50,"(2510.00)"\n'
+            'USD,22-12-2024,BUY,@QRS,CALL QRS03/26/25 63.5,OPC,10,2.45,"(2460.00)"\n'
         ])
         txs = _parse_csv(WebullBrokerage, csv)
         t = _find(txs, action='BUYSELL')
-        self.assertEqual(t['symbol'], 'ABBV250117C00190000.US')
+        self.assertEqual(t['symbol'], 'QRS250326C00063500.US')
         self.assertEqual(t['quantity'], 10)
 
     def test_currency_suffix_per_row(self):

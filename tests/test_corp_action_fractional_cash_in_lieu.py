@@ -2,8 +2,8 @@
 and reduce cost basis proportionally — mimicking real brokers' cash-in-
 lieu treatment.
 
-Without this, an SSL.TO 1-for-16 merger applied to a holding that
-isn't a multiple of 16 would leave a phantom 0.00XX RGLD.US dust
+Without this, an ABG.TO 1-for-16 merger applied to a holding that
+isn't a multiple of 16 would leave a phantom 0.00XX ABH.US dust
 position in the inventory forever. A `ticker.map` typically already
 DELETEs the broker's CAD-side cash-in-lieu rows, but the target-side
 residue persisted because the corp-actions extractor emitted the full
@@ -30,12 +30,12 @@ from tax_rules import rule
 
 def _event(**kwargs):
     """Build a CorporateAction with sensible defaults for a synthetic
-    SSL.TO → RGLD.US 1-for-16 case."""
+    ABG.TO → ABH.US 1-for-16 case."""
     base = dict(
         date='2025-10-22', time='09:30:00',
         action_type='merger',
-        source_symbol='SSL.TO', source_isin='CA0000000001',
-        target_symbol='RGLD.US', target_isin='US0000000002',
+        source_symbol='ABG.TO', source_isin='CA0000000001',
+        target_symbol='ABH.US', target_isin='US0000000002',
         ratio_new=1, ratio_old=16,
         qty_disposed=1600.0416,
         qty_received=100.0026,    # the actual fractional residue
@@ -95,10 +95,10 @@ class TestSnapHelper(unittest.TestCase):
 @rule("CA-CORP-05")
 class TestMergerTaxableSnap(unittest.TestCase):
     def test_fractional_residue_snapped(self):
-        """The motivating case: SSL.TO 1-for-16 merger leaving
-        100.0026 RGLD.US must snap the BUY to 100 with proportionally
+        """The motivating case: ABG.TO 1-for-16 merger leaving
+        100.0026 ABH.US must snap the BUY to 100 with proportionally
         reduced cost basis. The phantom 0.0026 dust position is gone."""
-        # One valuation: proceeds = FMV of the RGLD received (the USD
+        # One valuation: proceeds = FMV of the ABH received (the USD
         # in-leg), expressed in CAD at the event-date rate.
         fx = lambda a, f, t, d: a * 1.4 if (f, t) == ('USD', 'CAD') \
             else a / 1.4
@@ -114,7 +114,7 @@ class TestMergerTaxableSnap(unittest.TestCase):
         # Target BUY snapped to 100 whole shares.
         self.assertEqual(len(buys), 1)
         self.assertEqual(buys[0]['quantity'], 100.0)
-        self.assertEqual(buys[0]['symbol'], 'RGLD.US')
+        self.assertEqual(buys[0]['symbol'], 'ABH.US')
         # Cost basis reduced proportionally (preserves per-share basis).
         expected_fmv = (100.0 / 100.0026) * 18550.50
         self.assertAlmostEqual(buys[0]['net_amount'], expected_fmv, places=2)
@@ -248,11 +248,11 @@ class TestFractionalDeliveryBrokers(unittest.TestCase):
             'Corporate Actions,Header,Asset Category,Currency,Report Date,'
             'Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,Code\n'
             'Corporate Actions,Data,Stocks,CAD,2025-10-27,"2025-10-22, 20:25:00",'
-            '"SSL(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 '
-            '(RGLD.CAD, ROYAL GOLD INC, US0000000002)",100.0026,0,25840.67,0,\n'
+            '"ABG(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 '
+            '(ABH.CAD, ABH GOLD INC, US0000000002)",100.0026,0,25840.67,0,\n'
             'Corporate Actions,Data,Stocks,CAD,2025-10-27,"2025-10-22, 20:25:00",'
-            '"SSL(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 '
-            '(SSL, SANDSTORM GOLD LTD, CA0000000001)",-1600.0416,0,-25920.67,0,\n')
+            '"ABG(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 '
+            '(ABG, ABG MINING LTD, CA0000000001)",-1600.0416,0,-25920.67,0,\n')
         f = Path(tempfile.mkdtemp()) / 'ib.csv'
         f.write_text(csv_text)
         events = parse_ib_corporate_actions(f)

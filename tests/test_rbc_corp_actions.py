@@ -23,28 +23,28 @@ from taxjson.lib.corp_actions import (
 _HEADER = ('"Date","Activity","Symbol","Symbol Description","Quantity","Price",'
            '"Settlement Date","Account","Value","Currency","Description"\n')
 _MERGER = (
-    '"2025-07-21 00:00:00","Reorganization","H015283","HESS CORPORATION","-15",'
-    '"","2025-07-21 00:00:00","123","0","USD","MGR - HESS CORPORATION MERGER '
-    'TO CHEVRON CORPORATION 1.025 NEW = 1 OLD"\n'
-    '"2025-07-21 00:00:00","Reorganization","CVX","CHEVRON CORPORATION","15",'
-    '"","2025-07-21 00:00:00","123","0","USD","MGR - CHEVRON CORPORATION SHRS '
+    '"2025-03-17 00:00:00","Reorganization","A012345","ABC CORPORATION","-12",'
+    '"","2025-03-17 00:00:00","123","0","USD","MGR - ABC CORPORATION MERGER '
+    'TO ABDCO CORPORATION 1.05 NEW = 1 OLD"\n'
+    '"2025-03-17 00:00:00","Reorganization","ABD","ABDCO CORPORATION","12",'
+    '"","2025-03-17 00:00:00","123","0","USD","MGR - ABDCO CORPORATION SHRS '
     'RECEIVED THRU MERGER"\n'
 )
-_SALE = ('"2025-12-23 00:00:00","Sell","CVX","CHEVRON CORPORATION","-15",'
-         '"148.00","2025-12-24 00:00:00","123","2215.05","USD","CHEVRON SALE"\n')
-# A HESS dividend row — carries the *real* ticker (HES) under the same
-# company name as the merger removal's temp code (H015283), so the
-# extractor can resolve H015283 → HES.
-_HES_DIV = ('"2025-06-30 00:00:00","Dividends","HES","HESS CORPORATION","",'
-            '"","2025-06-30 00:00:00","123","6.38","USD","DIV - HESS '
-            'CORPORATION CASH DIV ON 15 SHS"\n')
-# Cash-in-lieu of the 0.375 fractional CVX share (15 * 1.025 = 15.375).
-_CIL = ('"2025-07-24 00:00:00","Reorganization","CVX","CHEVRON CORPORATION",'
-        '"","","2025-07-24 00:00:00","123","55.82","USD","CIL - CHEVRON '
-        'CORPORATION CASH IN LIEU OF FRAC SHARES 166764100000"\n'
-        '"2025-07-24 00:00:00","Reorganization","CVX","CHEVRON CORPORATION",'
-        '"","","2025-07-25 00:00:00","123","0.54","USD","CIL - CHEVRON '
-        'CORPORATION ADDITIONAL CIL PAYMENT 166764100000"\n')
+_SALE = ('"2025-11-19 00:00:00","Sell","ABD","ABDCO CORPORATION","-12",'
+         '"110.00","2025-11-20 00:00:00","123","1318.45","USD","ABDCO SALE"\n')
+# An ABC dividend row — carries the *real* ticker (ABC) under the same
+# company name as the merger removal's temp code (A012345), so the
+# extractor can resolve A012345 → ABC.
+_SRC_DIV = ('"2025-02-28 00:00:00","Dividends","ABC","ABC CORPORATION","",'
+            '"","2025-02-28 00:00:00","123","4.20","USD","DIV - ABC '
+            'CORPORATION CASH DIV ON 12 SHS"\n')
+# Cash-in-lieu of the 0.6 fractional ABD share (12 * 1.05 = 12.6).
+_CIL = ('"2025-03-20 00:00:00","Reorganization","ABD","ABDCO CORPORATION",'
+        '"","","2025-03-20 00:00:00","123","30.00","USD","CIL - ABDCO '
+        'CORPORATION CASH IN LIEU OF FRAC SHARES 000123400000"\n'
+        '"2025-03-20 00:00:00","Reorganization","ABD","ABDCO CORPORATION",'
+        '"","","2025-03-21 00:00:00","123","0.40","USD","CIL - ABDCO '
+        'CORPORATION ADDITIONAL CIL PAYMENT 000123400000"\n')
 
 
 def _write(content):
@@ -59,8 +59,8 @@ def _classify(activity, desc, symbol="XYZ", qty=""):
     the old is_rbc_merger_row / is_rbc_cil_row phrase tests were dead
     code the parser never ran (audits S073-17, S073-18)."""
     p = _write(_HEADER + (
-        f'"2025-07-24 00:00:00","{activity}","{symbol}","XYZ CORP",'
-        f'"{qty}","","2025-07-24 00:00:00","123","0","USD","{desc}"\n'))
+        f'"2025-03-20 00:00:00","{activity}","{symbol}","XYZ CORP",'
+        f'"{qty}","","2025-03-20 00:00:00","123","0","USD","{desc}"\n'))
     try:
         (r,) = read_rbc_rows(p).rows
     finally:
@@ -78,11 +78,11 @@ class TestRbcExtractor(unittest.TestCase):
         self.assertEqual(len(events), 1)
         ev = events[0]
         self.assertEqual(ev.action_type, "merger")
-        self.assertEqual(ev.source_symbol, "H015283.US")
-        self.assertEqual(ev.target_symbol, "CVX.US")
-        self.assertAlmostEqual(ev.ratio, 1.025)
-        self.assertEqual(ev.qty_disposed, 15.0)
-        self.assertEqual(ev.qty_received, 15.0)
+        self.assertEqual(ev.source_symbol, "A012345.US")
+        self.assertEqual(ev.target_symbol, "ABD.US")
+        self.assertAlmostEqual(ev.ratio, 1.05)
+        self.assertEqual(ev.qty_disposed, 12.0)
+        self.assertEqual(ev.qty_received, 12.0)
         self.assertEqual(ev.account, "margin")
         self.assertTrue(ev.event_id)               # stable id for the manifest
 
@@ -103,20 +103,20 @@ class TestMergerRowClass(unittest.TestCase):
         # as reorganization legs by their MGR code.
         self.assertEqual(_classify(
             "Reorganization",
-            "MGR - HESS CORPORATION MERGER TO CHEVRON 1.025 NEW = 1 OLD",
-            "H015283", "-15"), "reorg")
+            "MGR - ABC CORPORATION MERGER TO ABDCO 1.05 NEW = 1 OLD",
+            "A012345", "-12"), "reorg")
         self.assertEqual(_classify(
             "Reorganization",
-            "MGR - CHEVRON CORPORATION SHRS RECEIVED THRU MERGER",
-            "CVX", "15"), "reorg")
+            "MGR - ABDCO CORPORATION SHRS RECEIVED THRU MERGER",
+            "ABD", "12"), "reorg")
 
     def test_option_reorg_rows_are_not_reorgs(self):
         # Option expiry / assignment are also 'Reorganization' but not mergers.
         self.assertEqual(_classify(
-            "Reorganization", "EXP - CALL .BNS OPTION EXPIRATION - EXPIRED"),
+            "Reorganization", "EXP - CALL .ABE OPTION EXPIRATION - EXPIRED"),
             "expiry")
         self.assertEqual(_classify(
-            "Other", "ASN - CALL COIN ASSIGNMENT OF OPTION"), "assignment")
+            "Other", "ASN - CALL ABE ASSIGNMENT OF OPTION"), "assignment")
 
 
 class TestParserSkipsMergerRows(unittest.TestCase):
@@ -127,29 +127,29 @@ class TestParserSkipsMergerRows(unittest.TestCase):
                 txs = RbcBrokerage().parse_file(p)
         finally:
             os.remove(p)
-        self.assertEqual([t for t in txs if t['symbol'].startswith('H015283')], [])
-        receipts = [t for t in txs if t['symbol'] == 'CVX.US'
+        self.assertEqual([t for t in txs if t['symbol'].startswith('A012345')], [])
+        receipts = [t for t in txs if t['symbol'] == 'ABD.US'
                     and 'RECEIVED THRU MERGER' in (t.get('description') or '')]
         self.assertEqual(receipts, [])
-        # The real December sale survives.
-        sale = [t for t in txs if t['symbol'] == 'CVX.US' and t['quantity'] == -15.0]
+        # The November sale survives.
+        sale = [t for t in txs if t['symbol'] == 'ABD.US' and t['quantity'] == -12.0]
         self.assertEqual(len(sale), 1)
 
 
 class TestTempSymbolResolution(unittest.TestCase):
     def test_resolves_temp_code_to_real_ticker_via_company_name(self):
-        # With a HES dividend row present, the merger removal booked under
-        # the temp code H015283 resolves to the real ticker HES.US.
-        p = _write(_HEADER + _HES_DIV + _MERGER)
+        # With an ABC dividend row present, the merger removal booked under
+        # the temp code A012345 resolves to the real ticker ABC.US.
+        p = _write(_HEADER + _SRC_DIV + _MERGER)
         try:
             ev = parse_rbc_corporate_actions(p, "margin")[0]
         finally:
             os.remove(p)
-        self.assertEqual(ev.source_symbol, "HES.US")
-        self.assertEqual(ev.target_symbol, "CVX.US")
+        self.assertEqual(ev.source_symbol, "ABC.US")
+        self.assertEqual(ev.target_symbol, "ABD.US")
 
     def test_falls_back_to_temp_code_when_unresolvable(self):
-        # No HES row anywhere → nothing to resolve against; keep the temp
+        # No ABC row anywhere → nothing to resolve against; keep the temp
         # code (and warn) rather than guess.
         p = _write(_HEADER + _MERGER)
         try:
@@ -157,41 +157,41 @@ class TestTempSymbolResolution(unittest.TestCase):
                 ev = parse_rbc_corporate_actions(p, "margin")[0]
         finally:
             os.remove(p)
-        self.assertEqual(ev.source_symbol, "H015283.US")
+        self.assertEqual(ev.source_symbol, "A012345.US")
         self.assertIn("temporary reorg symbol", err.getvalue())
 
 
 class TestCashInLieu(unittest.TestCase):
     def test_cil_folded_into_event(self):
-        p = _write(_HEADER + _HES_DIV + _MERGER + _CIL)
+        p = _write(_HEADER + _SRC_DIV + _MERGER + _CIL)
         try:
             ev = parse_rbc_corporate_actions(p, "margin")[0]
         finally:
             os.remove(p)
-        self.assertAlmostEqual(ev.cash_in_lieu, 56.36)   # 55.82 + 0.54
+        self.assertAlmostEqual(ev.cash_in_lieu, 30.40)   # 30.00 + 0.40
         self.assertEqual(ev.cash_in_lieu_currency, "USD")
 
     def test_cil_rows_match_and_merger_rows_do_not(self):
         self.assertEqual(_classify(
             "Reorganization",
-            "CIL - CHEVRON CORPORATION CASH IN LIEU OF FRAC SHARES"), "cil")
+            "CIL - ABDCO CORPORATION CASH IN LIEU OF FRAC SHARES"), "cil")
         self.assertEqual(_classify(
             "Reorganization",
-            "CIL - CHEVRON CORPORATION ADDITIONAL CIL PAYMENT"), "cil")
+            "CIL - ABDCO CORPORATION ADDITIONAL CIL PAYMENT"), "cil")
         # Merger removal/receipt rows are NOT cash-in-lieu.
         self.assertEqual(_classify(
             "Reorganization",
-            "MGR - HESS CORPORATION MERGER TO CHEVRON 1.025 NEW = 1 OLD",
-            "H015283", "-15"), "reorg")
+            "MGR - ABC CORPORATION MERGER TO ABDCO 1.05 NEW = 1 OLD",
+            "A012345", "-12"), "reorg")
         # A code-less "ADDITIONAL CIL PAYMENT" is not guessed: unknown,
         # which the parser reports as UNCLASSIFIED.
         self.assertEqual(_classify(
-            "Reorganization", "CHEVRON CORPORATION ADDITIONAL CIL PAYMENT"),
+            "Reorganization", "ABDCO CORPORATION ADDITIONAL CIL PAYMENT"),
             "unknown")
 
     def test_parser_skips_cil_rows(self):
         # The CIL 'Reorganization' rows must not become 0-quantity trades.
-        p = _write(_HEADER + _HES_DIV + _MERGER + _CIL + _SALE)
+        p = _write(_HEADER + _SRC_DIV + _MERGER + _CIL + _SALE)
         try:
             with contextlib.redirect_stderr(io.StringIO()):
                 txs = RbcBrokerage().parse_file(p)
@@ -209,9 +209,9 @@ class TestCashInLieu(unittest.TestCase):
 class TestResolveThroughElection(unittest.TestCase):
     def test_rollover_emits_split_renaming_to_target(self):
         # No cash-in-lieu row → the SPLIT scales by the empirical received/
-        # disposed ratio (15/15 = 1.0), landing on the broker's whole-share
-        # delivery rather than the nominal 1.025 (which would leave 0.375
-        # phantom dust). Source stays H015283.US (nothing to resolve to).
+        # disposed ratio (12/12 = 1.0), landing on the broker's whole-share
+        # delivery rather than the nominal 1.05 (which would leave 0.6
+        # phantom dust). Source stays A012345.US (nothing to resolve to).
         p = _write(_HEADER + _MERGER)
         try:
             with contextlib.redirect_stderr(io.StringIO()):
@@ -221,15 +221,15 @@ class TestResolveThroughElection(unittest.TestCase):
         rows = resolve_event(ev, "rollover_s_85_1_5", country="canada")
         splits = [r for r in rows if r['action'] == 'SPLIT']
         self.assertEqual(len(splits), 1)
-        self.assertEqual(splits[0]['symbol'], "H015283.US")
-        self.assertEqual(splits[0]['symbol_new'], "CVX.US")
+        self.assertEqual(splits[0]['symbol'], "A012345.US")
+        self.assertEqual(splits[0]['symbol_new'], "ABD.US")
         self.assertAlmostEqual(splits[0]['quantity'], 1.0)
 
     def test_rollover_with_cash_in_lieu_sells_fractional(self):
         # With cash-in-lieu present, the SPLIT keeps the nominal ratio
-        # (15 → 15.375) and a SELL retires the 0.375 fractional at the
-        # cash proceeds, netting to 15 whole shares.
-        p = _write(_HEADER + _HES_DIV + _MERGER + _CIL)
+        # (12 → 12.6) and a SELL retires the 0.6 fractional at the
+        # cash proceeds, netting to 12 whole shares.
+        p = _write(_HEADER + _SRC_DIV + _MERGER + _CIL)
         try:
             ev = parse_rbc_corporate_actions(p, "margin")[0]
         finally:
@@ -238,13 +238,13 @@ class TestResolveThroughElection(unittest.TestCase):
         splits = [r for r in rows if r['action'] == 'SPLIT']
         sells = [r for r in rows if r['action'] == 'BUYSELL']
         self.assertEqual(len(splits), 1)
-        self.assertEqual(splits[0]['symbol'], "HES.US")
-        self.assertEqual(splits[0]['symbol_new'], "CVX.US")
-        self.assertAlmostEqual(splits[0]['quantity'], 1.025)
+        self.assertEqual(splits[0]['symbol'], "ABC.US")
+        self.assertEqual(splits[0]['symbol_new'], "ABD.US")
+        self.assertAlmostEqual(splits[0]['quantity'], 1.05)
         self.assertEqual(len(sells), 1)
-        self.assertEqual(sells[0]['symbol'], "CVX.US")
-        self.assertAlmostEqual(sells[0]['quantity'], -0.375)
-        self.assertAlmostEqual(sells[0]['net_amount'], 56.36)
+        self.assertEqual(sells[0]['symbol'], "ABD.US")
+        self.assertAlmostEqual(sells[0]['quantity'], -0.6)
+        self.assertAlmostEqual(sells[0]['net_amount'], 30.40)
         self.assertEqual(sells[0]['currency'], "USD")
 
 

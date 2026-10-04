@@ -217,26 +217,26 @@ class TestWalkStepsOverNonCapitalRows(unittest.TestCase):
 class TestWalkPoolArithmetic(unittest.TestCase):
     """A2-0184: multi-contract premium folds, crossing zero and a
     fractional pool."""
-    CALL = "XYZ250620C00060000.US"
-    PUT = "XYZ250620P00050000.US"
+    CALL = "QZY250718C00060000.US"
+    PUT = "QZY250718P00050000.US"
 
     @rule("CA-RPT-12")
     def test_exercised_calls_fold_per_unit_cost(self):
         w = _walk([_r("BUYSELL", "2025-03-03", self.CALL, 3, -1200.0),
                    _r("BUYSELL", "2025-03-04", self.CALL, -1, 500.0),
-                   _r("ASSIGN", "2025-06-20", self.CALL, -2, 0.0),
-                   _r("BUYSELL", "2025-06-20", "XYZ.US", 200, -12000.0)])
-        self.assertEqual(w["per_symbol"]["XYZ.US"]["year_end_cost"],
+                   _r("ASSIGN", "2025-07-18", self.CALL, -2, 0.0),
+                   _r("BUYSELL", "2025-07-18", "QZY.US", 200, -12000.0)])
+        self.assertEqual(w["per_symbol"]["QZY.US"]["year_end_cost"],
                          12800.0)
 
     @rule("CA-RPT-12")
     def test_assigned_written_puts_lower_the_cost(self):
         w = _walk([_r("BUYSELL", "2025-03-03", self.PUT, -2, 600.0),
-                   _r("BUYSELL", "2025-06-20", "XYZ.US", 200, -10000.0,
+                   _r("BUYSELL", "2025-07-18", "QZY.US", 200, -10000.0,
                       time="16:00:00"),
-                   _r("ASSIGN", "2025-06-20", self.PUT, 2, 0.0,
+                   _r("ASSIGN", "2025-07-18", self.PUT, 2, 0.0,
                       time="16:00:00")])
-        self.assertEqual(w["per_symbol"]["XYZ.US"]["year_end_cost"],
+        self.assertEqual(w["per_symbol"]["QZY.US"]["year_end_cost"],
                          9400.0)
 
     @rule("CA-RPT-12")

@@ -707,21 +707,21 @@ class TestTraceColumns(unittest.TestCase):
 
     def test_trace_fee(self):
         from taxjson.lib.core import _effective_fee_for_trace as fee
-        O = "SOUN240419C00007000.US"
-        self.assertAlmostEqual(fee(_cx("2024-04-08", O, 4, 43.95,
-                                       price=0.08)), 11.95, 4)
-        self.assertAlmostEqual(fee(_cx("2024-04-08", O, -2, 6.01,
+        O = "ZQP240517C00006000.US"
+        self.assertAlmostEqual(fee(_cx("2024-05-06", O, 3, 41.70,
+                                       price=0.10)), 11.70, 4)
+        self.assertAlmostEqual(fee(_cx("2024-05-06", O, -2, 6.01,
                                        price=0.04)), 1.99, 4)
-        self.assertAlmostEqual(fee(_cx("2024-04-08", O, -10, -12.45,
+        self.assertAlmostEqual(fee(_cx("2024-05-06", O, -10, -12.45,
                                        price=0.01)), 22.45, 4)
         # Sub-cent rounding on a zero-commission sale is not a fee.
-        self.assertEqual(fee(_cx("2025-06-16", "CQQQ.US", -350, 15141.53,
-                                 price=43.2615)), 0.0)
-        self.assertAlmostEqual(fee(_cx("2025-06-16", "ABC.US", 500, 5204.95,
+        self.assertEqual(fee(_cx("2025-07-14", "KVX.US", -270, 10293.35,
+                                 price=38.1235)), 0.0)
+        self.assertAlmostEqual(fee(_cx("2025-07-14", "ABC.US", 500, 5204.95,
                                        price=10.41)), -0.05, 4)
         # A units mismatch (per-contract quote, per-share net) still
         # shows 0, not a fictitious fee.
-        self.assertEqual(fee(_cx("2025-06-16", O, 1, 520.0, price=520.0)),
+        self.assertEqual(fee(_cx("2025-07-14", O, 1, 520.0, price=520.0)),
                          0.0)
 
     def test_partial_label_for_crypto_sized_units(self):

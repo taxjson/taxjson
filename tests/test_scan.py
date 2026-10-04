@@ -297,8 +297,8 @@ if __name__ == "__main__":
 
 class TestMapUnusedIsRootAware(unittest.TestCase):
     """A rule with no STOCK rows is still live when OPTION trades carry
-    its root (2026-09-15: a root-blind dead-rule check pruned ten live
-    TOBASE rules from a real map). MAP-UNUSED is a note, never a
+    its root (a root-blind dead-rule check would prune live TOBASE
+    rules). MAP-UNUSED is a note, never a
     finding, and never changes the exit code."""
 
     def test_option_root_keeps_rule_live_and_note_is_not_a_finding(self):

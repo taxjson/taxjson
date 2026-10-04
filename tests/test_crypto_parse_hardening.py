@@ -371,15 +371,15 @@ class TestKrakenLegacyLedger(unittest.TestCase):
     @rule("US-CRYPTO-03")
     def test_withdrawal_coin_fee_is_disposed(self):
         csv = (_KL_H +
-               "L1,F1,2026-05-04 16:00:00,withdrawal,,currency,TAO,spot,-0.1,0.002,14\n")
+               "L1,F1,2026-05-11 16:00:00,withdrawal,,currency,ATOM,spot,-2.5,0.04,11\n")
         td, K = _kraken_dir({"kr_ledgers.csv": csv})
         with td:
             txs, _ = _run(K().parse_file, Path(td.name) / "kr_ledgers.csv")
         xfer = next(t for t in txs if t["action"] == "TRANSFER")
         fee = next(t for t in txs if t["action"] == "BUYSELL")
-        self.assertAlmostEqual(xfer["quantity"], -0.1)
-        self.assertAlmostEqual(fee["quantity"], -0.002)
-        self.assertEqual(fee["symbol"], "TAO")
+        self.assertAlmostEqual(xfer["quantity"], -2.5)
+        self.assertAlmostEqual(fee["quantity"], -0.04)
+        self.assertEqual(fee["symbol"], "ATOM")
 
 
 # ------------------------------------------------------------------ LOW

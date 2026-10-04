@@ -47,14 +47,14 @@ OPT_FII = (FII_H
              'QZQ   251219C00035000,QZQ 19DEC25 35 C,990000102,,QZQ,CDE,100,'
              '2025-12-19,2025-12,C,35,\n')
 
-# The owner's AMZN shape on a fake ticker: buy 100 (O), sell 40 (C;IA),
-# sell 100 (C;O;P — closes 60, opens a 40 short), buy 40 (C).
+# Buy 150 (O), sell 60 (C;IA), sell 150 (C;O;P — closes 90, opens a 60
+# short), buy 60 (C).
 STOCK_ROWS = (
-    _trade('QZX', '2025-10-02, 10:00:00', 100, 10, -1000, -1, 'O')
-    + _trade('QZX', '2025-10-29, 10:00:00', -40, 12, 480, -1, 'C;IA',
-             basis=-400.4)
-    + _trade('QZX', '2025-11-03, 10:00:00', -100, 12, 1200, -1, 'C;O;P')
-    + _trade('QZX', '2025-11-03, 10:02:00', 40, 11.9, -476, -1, 'C'))
+    _trade('QZX', '2025-09-15, 10:00:00', 150, 10, -1500, -1, 'O')
+    + _trade('QZX', '2025-10-13, 10:00:00', -60, 12, 720, -1, 'C;IA',
+             basis=-600.4)
+    + _trade('QZX', '2025-10-20, 10:00:00', -150, 12, 1800, -1, 'C;O;P')
+    + _trade('QZX', '2025-10-20, 10:02:00', 60, 11.9, -714, -1, 'C'))
 
 # A long call bought before the data, sold to close (C, IB Basis -450),
 # beside a genuine write (O) that expires (C;Ep).
@@ -87,15 +87,15 @@ class TestIbOpenCloseCarried(unittest.TestCase):
         txs = _parsed(STOCK_ROWS + OPTION_ROWS)
         got = [(t['quantity'], t.get('open_close'), t.get('broker_basis'))
                for t in txs]
-        self.assertEqual(got[:4], [(100, 'O', None), (-40, 'C', '400.40 CAD'),
-                                   (-100, 'C;O', None), (40, 'C', None)])
+        self.assertEqual(got[:4], [(150, 'O', None), (-60, 'C', '600.40 CAD'),
+                                   (-150, 'C;O', None), (60, 'C', None)])
         self.assertEqual(got[4], (-2, 'C', '450.00 CAD'))
         self.assertEqual(got[5][1], 'O')
 
     def test_cancellation_rows_carry_no_marker(self):
         txs = _parsed(
-            _trade('QZX', '2025-10-02, 10:00:00', 100, 10, -1000, -1, 'O')
-            + _trade('QZX', '2025-10-02, 10:00:00', -100, 10, 1000, 1,
+            _trade('QZX', '2025-09-15, 10:00:00', 150, 10, -1500, -1, 'O')
+            + _trade('QZX', '2025-09-15, 10:00:00', -150, 10, 1500, 1,
                      'Ca;O'))
         self.assertFalse(any(t.get('open_close') for t in txs
                              if t.get('type')))
@@ -122,7 +122,7 @@ class TestPhantomsReadTheCode(unittest.TestCase):
         c, = detect_missing_history(book, include_broker_shorts=True)
         self.assertTrue(c.broker_marked_short)
         self.assertEqual(c.short_marker, 'IB code O')
-        self.assertEqual(c.peak_short, -40)
+        self.assertEqual(c.peak_short, -60)
 
     def test_without_codes_the_same_rows_are_still_flagged(self):
         # The sign-only walk is unchanged for exports with no marker.
@@ -145,7 +145,7 @@ class TestPhantomsReadTheCode(unittest.TestCase):
         # the closed part was bought before it — the O does not excuse it.
         from taxjson.lib.missing_history import detect_missing_history
         c, = detect_missing_history(_book(_parsed(
-            _trade('QZX', '2025-11-03, 10:00:00', -100, 12, 1200, -1,
+            _trade('QZX', '2025-10-20, 10:00:00', -150, 12, 1800, -1,
                    'C;O'))))
         self.assertTrue(c.broker_says_closing)
         self.assertFalse(c.broker_marked_short)
@@ -154,22 +154,22 @@ class TestPhantomsReadTheCode(unittest.TestCase):
         # IB stamps the ORDER's code on each fill: long 1, an order to
         # sell 2 in two fills both coded C;O (the first closed the long,
         # the second opened the short), then a buy back (C). A real
-        # short, not missing history (the owner's MBTK6 rows).
+        # short, not missing history.
         from taxjson.lib.missing_history import detect_missing_history
         fut = (FII_H + 'Financial Instrument Information,Data,Futures,'
-               'QZBK6,QZB MAY26,990000201,,QZB,CME,0.1,2026-05-29,'
-               '2026-05,,,\n')
+               'QZBM6,QZB JUN26,990000201,,QZB,CME,0.1,2026-06-26,'
+               '2026-06,,,\n')
         _, txs, _ = _parse_ib(HEAD + fut + TRADES_H
-                              + _trade('QZBK6', '2026-05-14, 10:00:00', 1,
+                              + _trade('QZBM6', '2026-06-08, 10:00:00', 1,
                                        1000, -100, -1, 'O', cat='Futures',
                                        cur='USD')
-                              + _trade('QZBK6', '2026-05-29, 06:15:26', -1,
+                              + _trade('QZBM6', '2026-06-23, 07:41:12', -1,
                                        990, 99, -1, 'C;O', cat='Futures',
                                        cur='USD')
-                              + _trade('QZBK6', '2026-05-29, 06:15:26', -1,
+                              + _trade('QZBM6', '2026-06-23, 07:41:12', -1,
                                        990, 99, -1, 'C;O', cat='Futures',
                                        cur='USD')
-                              + _trade('QZBK6', '2026-05-29, 06:15:54', 1,
+                              + _trade('QZBM6', '2026-06-23, 07:41:52', 1,
                                        991, -99.1, -1, 'C', cat='Futures',
                                        cur='USD'))
         for t in txs:
@@ -252,8 +252,8 @@ class TestOptionBoundaryReadsTheCode(unittest.TestCase):
 
 # ------------------------------------------------------------- S026-22
 FUTOPT_FII = (FII_H + 'Financial Instrument Information,Data,Options On '
-              'Futures,QZCL JAN26 52 P,QZCL JAN26 52 P,990000071,,QZCL,'
-              'NYMEX,1000,2025-12-16,2026-01,P,52,\n')
+              'Futures,QZCL JAN26 47 P,QZCL JAN26 47 P,990000071,,QZCL,'
+              'NYMEX,1000,2025-12-16,2026-01,P,47,\n')
 
 
 class TestFuturesOptionMultiplier(unittest.TestCase):
@@ -263,9 +263,9 @@ class TestFuturesOptionMultiplier(unittest.TestCase):
                 + 'Financial Instrument Information,Data,Stocks,QZX,QZX '
                   'CORP,990000001,CA0000000001,,TSE,1,,,COMMON,,\n'
                 + TRADES_H
-                + _trade('QZCL JAN26 52 P', '2025-11-03, 10:00:00', 2, 0.83,
-                         -1660, -4, cat='Options On Futures', cur='USD')
-                + _trade('QZX', '2025-11-03, 10:00:00', 10, 10, -100, -1))
+                + _trade('QZCL JAN26 47 P', '2025-11-17, 10:00:00', 3, 0.71,
+                         -2130, -6, cat='Options On Futures', cur='USD')
+                + _trade('QZX', '2025-11-17, 10:00:00', 10, 10, -100, -1))
         rc, doc, err, _ = _brokerage_cli({'ib.csv': body})
         self.assertEqual(rc, 0, err)
         by = {t['symbol']: t for t in doc['transactions']}
@@ -277,12 +277,12 @@ class TestFuturesOptionMultiplier(unittest.TestCase):
         from taxjson.lib.pipeline import annotate_inventory_multipliers
         from taxjson.bin.taxjson_export import (contract_multiplier_of,
                                                 render_report)
-        sym = 'F:QZCL260116P00052000.US'
-        res = {'inventory': [{'symbol': sym, 'qty': 2.0,
-                              'total_cost': 1664.0, 'currency': 'USD'}]}
+        sym = 'F:QZCL260116P00047000.US'
+        res = {'inventory': [{'symbol': sym, 'qty': 3.0,
+                              'total_cost': 2136.0, 'currency': 'USD'}]}
         annotate_inventory_multipliers(res, _book([
-            {'action': 'BUYSELL', 'date': '2025-11-03', 'symbol': sym,
-             'quantity': 2, 'net_amount': 1664, 'multiplier': 1000.0}]))
+            {'action': 'BUYSELL', 'date': '2025-11-17', 'symbol': sym,
+             'quantity': 3, 'net_amount': 2136, 'multiplier': 1000.0}]))
         self.assertEqual(res['inventory'][0]['multiplier'], 1000.0)
         b = dict(res['inventory'][0])
         self.assertEqual(contract_multiplier_of(sym, b), 1000.0)
@@ -290,45 +290,45 @@ class TestFuturesOptionMultiplier(unittest.TestCase):
         self.assertIsNone(contract_multiplier_of(sym, {}))
         self.assertEqual(contract_multiplier_of('QZQ251219C00030000.TO', {}),
                          100.0)
-        txt = '\n'.join(render_report({sym: {**b, 'qty': 2.0,
-                                             'total_cost': 1664.0}}))
-        self.assertIn('0.8320', txt)          # per barrel, not per contract
+        txt = '\n'.join(render_report({sym: {**b, 'qty': 3.0,
+                                             'total_cost': 2136.0}}))
+        self.assertIn('0.7120', txt)          # per barrel, not per contract
 
     def test_tt_line_checked_at_the_declared_size(self):
         from taxjson.bin.taxjson_convert_tt import parse_tt_line
-        sym = 'F:QZCL260116P00052000.US'
+        sym = 'F:QZCL260116P00047000.US'
 
         def warn(line):
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
                 tx = parse_tt_line(line, 'margin')
             return tx, err.getvalue()
-        tx, err = warn(f'BUYSELL 2025-11-03 10:00:00 {sym} 2 USD 0.83 '
-                       f'1664.00 4.00 x1000')
+        tx, err = warn(f'BUYSELL 2025-11-17 10:00:00 {sym} 3 USD 0.71 '
+                       f'2136.00 6.00 x1000')
         self.assertEqual(tx['multiplier'], 1000.0)
         self.assertEqual(err, '')
-        _, err = warn(f'BUYSELL 2025-11-03 10:00:00 {sym} 2 USD 0.83 '
-                      f'166.40 4.00 x1000')
+        _, err = warn(f'BUYSELL 2025-11-17 10:00:00 {sym} 3 USD 0.71 '
+                      f'216.00 6.00 x1000')
         self.assertIn('qty*price*1000', err)
         # Without a size a futures line is not compared (as before).
-        _, err = warn(f'BUYSELL 2025-11-03 10:00:00 {sym} 2 USD 0.83 '
-                      f'1664.00 4.00')
+        _, err = warn(f'BUYSELL 2025-11-17 10:00:00 {sym} 3 USD 0.71 '
+                      f'2136.00 6.00')
         self.assertEqual(err, '')
         with self.assertRaises(ValueError):
-            parse_tt_line(f'BUYSELL 2025-11-03 10:00:00 {sym} 2 USD 0.83 '
-                          f'1664.00 4.00 junk', 'margin')
+            parse_tt_line(f'BUYSELL 2025-11-17 10:00:00 {sym} 3 USD 0.71 '
+                          f'2136.00 6.00 junk', 'margin')
 
     def test_tt_round_trip_keeps_the_size(self):
         from taxjson.bin.taxjson_convert_tt import tx_to_tt_line, parse_tt_line
-        sym = 'F:QZCL260116P00052000.US'
-        line = tx_to_tt_line({'action': 'BUYSELL', 'date': '2025-11-03',
+        sym = 'F:QZCL260116P00047000.US'
+        line = tx_to_tt_line({'action': 'BUYSELL', 'date': '2025-11-17',
                               'time': '10:00:00', 'symbol': sym,
-                              'quantity': 2, 'currency': 'USD',
-                              'price': 0.83, 'net_amount': 1664.0,
-                              'fee': 4.0, 'multiplier': 1000.0})
+                              'quantity': 3, 'currency': 'USD',
+                              'price': 0.71, 'net_amount': 2136.0,
+                              'fee': 6.0, 'multiplier': 1000.0})
         self.assertTrue(line.endswith(' x1000'), line)
         self.assertEqual(parse_tt_line(line, 'm')['multiplier'], 1000.0)
-        eq = tx_to_tt_line({'action': 'BUYSELL', 'date': '2025-11-03',
+        eq = tx_to_tt_line({'action': 'BUYSELL', 'date': '2025-11-17',
                             'time': '10:00:00',
                             'symbol': 'QZQ251219C00030000.TO',
                             'quantity': 2, 'currency': 'CAD', 'price': 3,
@@ -337,10 +337,10 @@ class TestFuturesOptionMultiplier(unittest.TestCase):
 
     def test_trace_fee_uses_the_declared_size(self):
         from taxjson.lib.core import _effective_fee_for_trace
-        t = TaxTransaction(action='BUYSELL', date='2025-11-03',
-                           symbol='F:QZCL260116P00052000.US', quantity=2,
-                           price=0.83, net_amount=1664.0, multiplier=1000.0)
-        self.assertAlmostEqual(_effective_fee_for_trace(t), 4.0)
+        t = TaxTransaction(action='BUYSELL', date='2025-11-17',
+                           symbol='F:QZCL260116P00047000.US', quantity=3,
+                           price=0.71, net_amount=2136.0, multiplier=1000.0)
+        self.assertAlmostEqual(_effective_fee_for_trace(t), 6.0)
 
 
 # ------------------------------------------------------------- S063-22

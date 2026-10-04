@@ -207,13 +207,13 @@ class TestAccrualMatching(unittest.TestCase):
 
     def test_accrual_matches_a_posting_within_seven_days_only(self):
         # Mutant: `min(dists) > 7` -> `> 8`.
-        acc = _acc('QZE', '2025-08-20', '2025-08-20', '2025-09-15', 42, 0.5,
-                   21, 'Po')
+        acc = _acc('QZE', '2025-08-20', '2025-08-20', '2025-09-16', 44, 0.5,
+                   22, 'Po')
         _, txs, _ = self._parse(acc, _div('QZE', 'US0000000QE1',
-                                          '2025-09-22', 21, pil=True))
-        self.assertEqual(_pil(txs), [('QZE.US', 42.0, 0.5)])
+                                          '2025-09-23', 22, pil=True))
+        self.assertEqual(_pil(txs), [('QZE.US', 44.0, 0.5)])
         _, txs, _ = self._parse(acc, _div('QZE', 'US0000000QE1',
-                                          '2025-09-23', 21, pil=True))
+                                          '2025-09-24', 22, pil=True))
         self.assertEqual(_pil(txs), [('QZE.US', 0.0, 0.0)])
         self.assertEqual([t.get('ex_date') for t in txs], [None])
 

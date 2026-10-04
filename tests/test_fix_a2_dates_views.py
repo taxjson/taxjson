@@ -742,10 +742,10 @@ class TestListAsOf(unittest.TestCase):
 
 
 class TestListAsOfOwnerCalls(unittest.TestCase):
-    """OWNER-LIST-ASOF-WASH: on real books `list --date YYYY-12-31`
-    gave long-call lines a cost below the engine's by the in-account
-    superficial-loss addition. The same shape, synthetic: a long call sold at a loss
-    and bought back within 30 days."""
+    """OWNER-LIST-ASOF-WASH: `list --date YYYY-12-31` gave long-call
+    lines a cost below the engine's by the in-account superficial-loss
+    addition. Synthetic: a long call sold at a loss and bought back
+    within 30 days."""
 
     @rule("CA-SL-09")
     def test_long_call_rebuy_keeps_the_denied_loss(self):

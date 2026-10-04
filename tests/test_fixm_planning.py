@@ -89,15 +89,15 @@ class TestPerHolderRule(unittest.TestCase):
         self.assertIn("FULL position at a loss is fine now", r["advisory"])
 
     def test_locked_states_the_units_at_risk(self):   # R1-232, S055-01
-        tax = [_row("2025-01-10", "AEM.TO", 100, 10000.0)]
-        shl = [_row("2025-02-10", "AEM.TO", 49, 4900.0, account="rrsp2"),
-               _row("2026-09-14", "AEM.TO", 4, 600.0, account="rrsp2")]
+        tax = [_row("2025-01-24", "QMB.TO", 120, 12000.0)]
+        shl = [_row("2025-02-24", "QMB.TO", 37, 3700.0, account="rrsp"),
+               _row("2026-09-21", "QMB.TO", 6, 900.0, account="rrsp")]
         with tempfile.TemporaryDirectory() as tmp:
             rows = _radar(tmp, tax, "2026-09-29", sheltered=shl)
-        r = rows["AEM.TO"]
+        r = rows["QMB.TO"]
         self.assertEqual(r["category"], "LOCKED")
-        self.assertEqual(r["at_risk_qty"], 4.0)
-        self.assertIn("up to 4 of your 100 shares", r["advisory"])
+        self.assertEqual(r["at_risk_qty"], 6.0)
+        self.assertIn("up to 6 of your 120 shares", r["advisory"])
         self.assertNotIn("cannot be rescued", r["advisory"])
         self.assertIn("unless the registered account sells", r["advisory"])
 
@@ -233,21 +233,21 @@ class TestEdgeShapes(unittest.TestCase):
 
     @rule("CA-PLAN-01")
     def test_split_inside_a_sale_settle_lag(self):   # R1-241
-        shl = [_row("2026-06-16", "FFN.TO", 220, 2200.0, account="rrsp"),
-               _row("2026-06-30", "FFN.TO", 150, 1500.0, account="rrsp",
-                    settle="2026-07-01"),
-               dict(_row("2026-07-02", "FFN.TO", -84, 840.0,
-                         account="rrsp", settle="2026-07-03"),
-                    time="10:54:31"),
-               dict(_row("2026-07-02", "FFN.TO", 1.1, 0.0, account="rrsp",
+        shl = [_row("2026-06-02", "KVR.TO", 180, 1800.0, account="rrsp"),
+               _row("2026-06-16", "KVR.TO", 120, 1200.0, account="rrsp",
+                    settle="2026-06-17"),
+               dict(_row("2026-06-18", "KVR.TO", -72, 720.0,
+                         account="rrsp", settle="2026-06-19"),
+                    time="11:20:00"),
+               dict(_row("2026-06-18", "KVR.TO", 1.1, 0.0, account="rrsp",
                          action="SPLIT"), time="20:25:00"),
-               _row("2026-07-21", "FFN.TO", -314.6, 3100.0, account="rrsp",
-                    settle="2026-07-22")]
+               _row("2026-07-07", "KVR.TO", -250.8, 2500.0, account="rrsp",
+                    settle="2026-07-08")]
         tax = [_row("2026-03-02", "ABC.TO", 10, 100.0)]
         with tempfile.TemporaryDirectory() as tmp:
             rows = _radar(tmp, tax, "2026-09-29", sheltered=shl)
         self.assertAlmostEqual(
-            (rows.get("FFN.TO") or {}).get("sheltered_qty", 0.0), 0.0,
+            (rows.get("KVR.TO") or {}).get("sheltered_qty", 0.0), 0.0,
             places=6)
 
     @rule("CA-PLAN-01")

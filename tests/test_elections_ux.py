@@ -12,8 +12,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _PENDING = {"accounts": {"margin": {"pending": [
-    {"event_id": "20251022-ssl-rgld-51d7",
-     "summary": "2025-10-22 merger: SSL.TO → RGLD.US (1-for-16)",
+    {"event_id": "20251022-abg-abh-51d7",
+     "summary": "2025-10-22 merger: ABG.TO → ABH.US (1-for-16)",
      "qty_disposed": 1600.0, "qty_received": 100.0,
      "options": [
          {"election": "taxable_disposition", "description": "sale now",
@@ -44,7 +44,7 @@ def _run(root, *args):
 
 
 class TestElectSetHints(unittest.TestCase):
-    EV = "20251022-ssl-rgld-51d7"
+    EV = "20251022-abg-abh-51d7"
 
     def test_missing_required_hint_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -71,7 +71,7 @@ class TestElectSetHints(unittest.TestCase):
             self.assertNotIn("matches no pending", r.stderr)
             rec = json.loads((root / "inputs" / "margin" /
                               "manifest.json").read_text())
-            self.assertIn("merger: SSL.TO",
+            self.assertIn("merger: ABG.TO",
                           rec["elections"][self.EV]["summary"])
             # --pending now marks it as already elected.
             r2 = _run(root, "elect", "--pending")

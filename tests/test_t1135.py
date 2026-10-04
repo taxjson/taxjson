@@ -49,7 +49,7 @@ class TestClassify(unittest.TestCase):
 
     def test_option_symbol_uses_its_own_suffix(self):
         self.assertEqual(classify_country("AAPL250117C00150000.US", {}), "USA")
-        self.assertIsNone(classify_country("MDA251219P00029000.TO", {}))
+        self.assertIsNone(classify_country("QFN270115P00023000.TO", {}))
 
     @rule("CA-RPT-02")
     def test_no_suffix_is_crypto_bucket(self):

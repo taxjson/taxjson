@@ -293,7 +293,7 @@ class TestClassShareRootCall(unittest.TestCase):
         for root, stock in (('RCI', 'RCI.B.TO'), ('BCE', 'BCE.TO')):
             rows = [_t('2025-01-02', stock, 100, 50, 'CAD'),
                     _t('2025-05-01', stock, -100, 40, 'CAD'),
-                    _t('2025-05-06', f'{root}251219C00045000.TO', 1, 2,
+                    _t('2025-05-06', f'{root}251219C00041000.TO', 1, 2,
                        'CAD')]
             res = _gen(CanadaTaxRules, rows)
             self.assertAlmostEqual(res['summary']['total_disallowed'],
@@ -305,7 +305,7 @@ class TestClassShareRootCall(unittest.TestCase):
         rows = [_t('2025-01-02', 'RCI.A.TO', 10, 50, 'CAD'),
                 _t('2025-01-02', 'RCI.B.TO', 100, 50, 'CAD'),
                 _t('2025-05-01', 'RCI.B.TO', -100, 40, 'CAD'),
-                _t('2025-05-06', 'RCI251219C00045000.TO', 1, 2, 'CAD')]
+                _t('2025-05-06', 'RCI251219C00041000.TO', 1, 2, 'CAD')]
         res = _gen(CanadaTaxRules, rows)
         self.assertEqual(res['summary']['total_disallowed'], 0)
 
@@ -314,7 +314,7 @@ class TestClassShareRootCall(unittest.TestCase):
         from taxjson.lib.core import USATaxRules
         rows = [_t('2026-01-05', 'BRK.B.US', 100, 50),
                 _t('2026-03-02', 'BRK.B.US', -100, 40),
-                _t('2026-03-10', 'BRKB270115C00046000.US', 1, 2)]
+                _t('2026-03-10', 'BRKB261218C00052000.US', 1, 2)]
         res = _gen(USATaxRules, rows)
         ws = res.get('option_replacement_warnings') or []
         self.assertEqual([w['rule'] for w in ws], ['call_vs_share_loss'])

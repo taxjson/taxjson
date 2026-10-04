@@ -154,7 +154,7 @@ class TestLeapsViewFollowsTheEngineOrder(unittest.TestCase):
         # A2-0891 (S040-01): a sell listed before a same-stamp buy is a
         # write and its buy-back (the engine books it SHORT), so no LEAPS
         # contract exists; buy-first is a LEAPS bought and closed.
-        opt = "XXX270115C00050000.TO"
+        opt = "XXX270618C00045000.TO"
         sell = f"BUYSELL 2025-06-02 10:00:00 {opt} -1 CAD 9.00 900.00 0\n"
         buy = f"BUYSELL 2025-06-02 10:00:00 {opt} 1 CAD 8.00 800.00 0\n"
         out = {}
@@ -222,7 +222,7 @@ class TestCryptoSendsStablecoinFxTotal(unittest.TestCase):
 class TestAuditUsesTheFillPrices(unittest.TestCase):
     @rule("CA-INC-04")
     def test_crypto_payment_from_a_fill_priced_reward_ties_out(self):
-        # A2-0860 (R1-271): a TAO reward with no price in the export is
+        # A2-0860 (R1-271): a coin reward with no price in the export is
         # priced by fill-crypto-prices; the 2026 payment's cost comes
         # from it. The audit recomputes with those fill prices and ties
         # out to the run.
@@ -231,7 +231,7 @@ class TestAuditUsesTheFillPrices(unittest.TestCase):
             r = _cli(root, "run", "--no-input", home=home)
             self.assertEqual(r.returncode, 0, r.stderr[-1500:])
             r = _cli(root, "crypto-sends", "crypto", "--set",
-                     f"{T.TAO_ID}=payment", home=home)
+                     f"{T.PAY_ID}=payment", home=home)
             self.assertEqual(r.returncode, 0, r.stderr[-1500:])
             r = _cli(root, "run", "--no-input", home=home)
             self.assertEqual(r.returncode, 0, r.stderr[-1500:])

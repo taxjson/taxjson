@@ -99,25 +99,25 @@ class TestWebullParser(unittest.TestCase):
     _CSV_2024 = (
         '"Currency","Date","Action Code","Symbol","Security Description",'
         '"Type Code","Quantity","Price","Proceeds"\n'
-        'USD,18-11-2024,BUY,@ABBV,CALL ABBV01/17/25 190,OPC,10,1.45,"(1,459.92)"\n'
-        'USD,09-12-2024,SELL,@ABBV,CALL ABBV01/17/25 190,OPC,10,2.30,"2290.00"\n'
+        'USD,25-11-2024,BUY,@QRS,CALL QRS03/26/25 63.5,OPC,10,1.35,"(1,359.92)"\n'
+        'USD,16-12-2024,SELL,@QRS,CALL QRS03/26/25 63.5,OPC,10,2.15,"2140.00"\n'
     )
 
     # 2025 format: empty column 8, proceeds in column 9.
     _CSV_2025 = (
         '"Currency","Date","Action Code","Symbol","Security Description",'
         '"Type Code","Quantity","Price","_","Proceeds"\n'
-        'USD,18-11-2024,BUY,@ABBV,CALL ABBV01/17/25 190,OPC,10,1.45,,"(1,459.92)"\n'
-        'USD,09-12-2024,SELL,@ABBV,CALL ABBV01/17/25 190,OPC,10,2.30,,"2290.00"\n'
+        'USD,25-11-2024,BUY,@QRS,CALL QRS03/26/25 63.5,OPC,10,1.35,,"(1,359.92)"\n'
+        'USD,16-12-2024,SELL,@QRS,CALL QRS03/26/25 63.5,OPC,10,2.15,,"2140.00"\n'
     )
 
     def test_option_symbol_reconstruction(self):
-        """Description 'CALL ABBV01/17/25 190' should reconstruct as
-        ABBV250117C00190000.<ext>."""
+        """Description 'CALL QRS03/26/25 63.5' should reconstruct as
+        QRS250326C00063500.<ext>."""
         txs = self._parse(self._CSV_2024)
         self.assertEqual(len(txs), 2)
         for t in txs:
-            self.assertEqual(t['symbol'], 'ABBV250117C00190000.US')
+            self.assertEqual(t['symbol'], 'QRS250326C00063500.US')
 
     def test_action_code_sign_conventions(self):
         """BUY → positive qty, SELL → negative qty. Webull always emits
@@ -132,19 +132,19 @@ class TestWebullParser(unittest.TestCase):
 
     def test_2024_format_proceeds_column_8(self):
         txs = self._parse(self._CSV_2024)
-        # |Buy net| ≈ 1459.92; |Sell net| ≈ 2290
-        self.assertAlmostEqual(txs[0]['net_amount'], 1459.92, places=2)
-        self.assertAlmostEqual(txs[1]['net_amount'], 2290.00, places=2)
+        # |Buy net| ≈ 1359.92; |Sell net| ≈ 2140
+        self.assertAlmostEqual(txs[0]['net_amount'], 1359.92, places=2)
+        self.assertAlmostEqual(txs[1]['net_amount'], 2140.00, places=2)
 
     def test_2025_format_proceeds_column_9(self):
         txs = self._parse(self._CSV_2025)
-        self.assertAlmostEqual(txs[0]['net_amount'], 1459.92, places=2)
-        self.assertAlmostEqual(txs[1]['net_amount'], 2290.00, places=2)
+        self.assertAlmostEqual(txs[0]['net_amount'], 1359.92, places=2)
+        self.assertAlmostEqual(txs[1]['net_amount'], 2140.00, places=2)
 
     def test_option_fee_back_compute(self):
         """For an option, theoretical_gross = qty × price × 100.
-        Buy 10 @ $1.45: theoretical = 1450; net = 1459.92 → implicit fee $9.92.
-        Sell 10 @ $2.30: theoretical = 2300; net = 2290 → implicit fee $10.00.
+        Buy 10 @ $1.35: theoretical = 1350; net = 1359.92 → implicit fee $9.92.
+        Sell 10 @ $2.15: theoretical = 2150; net = 2140 → implicit fee $10.00.
         """
         txs = self._parse(self._CSV_2024)
         buy_fee = float(txs[0].get('fee', 0))
@@ -236,7 +236,7 @@ class TestQuestradeParser(unittest.TestCase):
             'Transaction Date,Settlement Date,Action,Symbol,Description,'
             'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Account #,Activity Type,Account Type\n'
             '2025-01-15 09:30:00 AM,2025-01-16 12:00:00 AM,Buy,AAPL.OPT,'
-            'CALL AAPL 06/20/25 150.00,1,2.50,250.00,1.25,-251.25,USD\n'
+            'CALL AAPL 06/20/25 150.00,1,2.37,237.00,1.25,-238.25,USD\n'
         )
         txs = self._parse(csv)
         self.assertEqual(txs[0]['symbol'], 'AAPL250620C00150000.US')
@@ -262,10 +262,10 @@ class TestQuestradeParser(unittest.TestCase):
         csv = (
             'Transaction Date,Settlement Date,Action,Symbol,Description,'
             'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Account #,Activity Type,Account Type\n'
-            '2026-02-09 12:00:00 AM,2026-02-10 12:00:00 AM,Buy,8LRQKH9,'
-            'CALL ACM 02/20/26 105 AECOM,1,2.1,210.00,0.99,-210.99,USD\n'
-            '2026-02-23 12:00:00 AM,2026-02-23 12:00:00 AM,EXP,8LRQKH9,'
-            'CALL ACM 02/20/26 105 AECOM OPTION EXPIRATION - EXPIRED,'
+            '2026-03-09 12:00:00 AM,2026-03-10 12:00:00 AM,Buy,9QZRXT4,'
+            'CALL QRS 03/20/26 42 QRS CORP,1,1.8,180.00,0.99,-180.99,USD\n'
+            '2026-03-23 12:00:00 AM,2026-03-23 12:00:00 AM,EXP,9QZRXT4,'
+            'CALL QRS 03/20/26 42 QRS CORP OPTION EXPIRATION - EXPIRED,'
             '-1,0.00,0.00,0.00,0.00,USD\n'
         )
         txs = self._parse(csv)
@@ -288,23 +288,23 @@ class TestQuestradeParser(unittest.TestCase):
             'Transaction Date,Settlement Date,Action,Symbol,Description,'
             'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,'
             'Account #,Activity Type,Account Type\n'
-            # Trade row teaches the parser that "REALTY INCOME CORP" is O.
-            '2026-03-10 12:00:00 AM,2026-03-11 12:00:00 AM,Sell,O,'
-            'REALTY INCOME CORP WE ACTED AS AGENT,-3,61.50,184.50,0,'
-            '184.50,USD,123,Trades,Individual LIRA\n'
-            # Transfer-in: internal code R555608, book value in the desc.
-            '2026-03-03 12:00:00 AM,2026-03-03 12:00:00 AM,TF6,R555608,'
-            'REALTY INCOME CORP RBC DOMINION SECURITIES 139.22 TRANSFER '
-            'BOOK VALUE 158.37,3,0,0,0,0,USD,123,Transfers,Individual LIRA\n'
+            # Trade row teaches the parser that "ACRE REALTY CORP" is ACRE.
+            '2026-03-24 12:00:00 AM,2026-03-25 12:00:00 AM,Sell,ACRE,'
+            'ACRE REALTY CORP WE ACTED AS AGENT,-7,48.20,337.40,0,'
+            '337.40,USD,123,Trades,Individual LIRA\n'
+            # Transfer-in: internal code R777301, book value in the desc.
+            '2026-03-17 12:00:00 AM,2026-03-17 12:00:00 AM,TF6,R777301,'
+            'ACRE REALTY CORP RBC DOMINION SECURITIES 41.75 TRANSFER '
+            'BOOK VALUE 371.21,7,0,0,0,0,USD,123,Transfers,Individual LIRA\n'
         )
         txs = self._parse(csv)
         transfer = next(t for t in txs if t['action'] == 'TRANSFER')
-        # Internal code R555608 resolved to the real ticker.
-        self.assertEqual(transfer['symbol'], 'O.US')
-        # Cost basis recovered from "BOOK VALUE 158.37", not the 0 column.
-        self.assertAlmostEqual(transfer['net_amount'], 158.37)
-        self.assertAlmostEqual(transfer['quantity'], 3.0)
-        self.assertAlmostEqual(transfer['price'], 158.37 / 3, places=4)
+        # Internal code R777301 resolved to the real ticker.
+        self.assertEqual(transfer['symbol'], 'ACRE.US')
+        # Cost basis recovered from "BOOK VALUE 371.21", not the 0 column.
+        self.assertAlmostEqual(transfer['net_amount'], 371.21)
+        self.assertAlmostEqual(transfer['quantity'], 7.0)
+        self.assertAlmostEqual(transfer['price'], 371.21 / 7, places=4)
 
     def test_assignment_maps_to_assign_action(self):
         csv = (
@@ -356,17 +356,17 @@ class TestQuestradeParser(unittest.TestCase):
             'Transaction Date,Settlement Date,Action,Symbol,Description,'
             'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,'
             'Account #,Activity Type,Account Type\n'
-            '2025-06-25 12:00:00 AM,2025-06-25 12:00:00 AM,TF6,.AEM,'
-            'AGNICO EAGLE MINES,200.0,0,0,0,33060.00,CAD,'
+            '2025-07-09 12:00:00 AM,2025-07-09 12:00:00 AM,TF6,.NGM,'
+            'NORTHERN GOLD MINES,120.0,0,0,0,21480.00,CAD,'
             '12345,Transfers,Individual\n'
         )
         txs = self._parse(csv)
         transfers = [t for t in txs if t['action'] == 'TRANSFER']
         self.assertEqual(len(transfers), 1)
         t = transfers[0]
-        self.assertEqual(t['symbol'], 'AEM.TO')
-        self.assertAlmostEqual(t['quantity'], 200.0)
-        self.assertAlmostEqual(t['net_amount'], 33060.0, places=2)
+        self.assertEqual(t['symbol'], 'NGM.TO')
+        self.assertAlmostEqual(t['quantity'], 120.0)
+        self.assertAlmostEqual(t['net_amount'], 21480.0, places=2)
 
     def test_dividend_internal_code_resolved_via_trade_description(self):
         """Questrade sometimes emits dividends with internal codes like
@@ -431,9 +431,9 @@ class TestQuestradeParser(unittest.TestCase):
             'B2GOLD CORP WE ACTED AS AGENT,1000,5.00,5000.00,0,-5000.00,'
             'USD,12345,Trades,Individual\n'
             # Dividend: .BTO ticker (Canadian listing identifier) but USD.
-            '2026-03-19 12:00:00 AM,2026-03-19 12:00:00 AM,DIV,.BTO,'
-            'B2GOLD CORP CASH DIV ON 4000 SHS REC 03/06/26 PAY 03/19/26,'
-            '0,0,0,0,80.0,USD,12345,Dividends,Individual\n'
+            '2026-01-28 12:00:00 AM,2026-01-28 12:00:00 AM,DIV,.BTO,'
+            'B2GOLD CORP CASH DIV ON 1000 SHS REC 01/14/26 PAY 01/28/26,'
+            '0,0,0,0,20.0,USD,12345,Dividends,Individual\n'
         )
         txs = self._parse(csv)
         divs = [t for t in txs if t['action'] == 'DIVIDEND']
@@ -444,7 +444,7 @@ class TestQuestradeParser(unittest.TestCase):
         self.assertEqual(d['symbol'], 'BTG.US')
         # But the currency stays USD — that's the actual payment.
         self.assertEqual(d['currency'], 'USD')
-        self.assertAlmostEqual(d['net_amount'], 80.0, places=2)
+        self.assertAlmostEqual(d['net_amount'], 20.0, places=2)
 
     def test_dividend_same_market_uses_own_currency(self):
         """Sanity guard: a regular Canadian-stock CAD dividend should

@@ -22,8 +22,8 @@ from taxjson.lib.corp_actions import (
 def merger_event(**overrides):
     kw = dict(
         date='2025-06-20', time='09:30:00', action_type='merger',
-        source_symbol='HES.US', source_isin='US42809H1077',
-        target_symbol='CVX.US', target_isin='US1667641005',
+        source_symbol='ABC.US', source_isin='US0000ABC001',
+        target_symbol='ABD.US', target_isin='US0000ABD002',
         ratio_new=1, ratio_old=1,
         qty_disposed=100.0, qty_received=100.0,
         fmv=0.0, currency='USD', target_currency='USD',
@@ -36,8 +36,8 @@ def merger_event(**overrides):
 def spinoff_event(**overrides):
     kw = dict(
         date='2025-04-01', time='09:30:00', action_type='spinoff',
-        source_symbol='GE.US', source_isin='US3696043013',
-        target_symbol='GEV.US', target_isin='US36828A1016',
+        source_symbol='ABE.US', source_isin='US0000ABE003',
+        target_symbol='ABF.US', target_isin='US0000ABF004',
         ratio_new=1, ratio_old=4,
         qty_disposed=0.0, qty_received=25.0,
         fmv=0.0, currency='USD', target_currency='USD',
@@ -76,10 +76,10 @@ class TestUsMergerTaxable(unittest.TestCase):
         rows = resolve_event(ev, 'taxable_exchange', country='usa')
         self.assertEqual([r['action'] for r in rows], ['BUYSELL', 'BUYSELL'])
         sell, buy = rows
-        self.assertEqual(sell['symbol'], 'HES.US')
+        self.assertEqual(sell['symbol'], 'ABC.US')
         self.assertAlmostEqual(sell['quantity'], -100.0)
         self.assertAlmostEqual(sell['net_amount'], 16000.0, places=2)
-        self.assertEqual(buy['symbol'], 'CVX.US')
+        self.assertEqual(buy['symbol'], 'ABD.US')
         self.assertAlmostEqual(buy['net_amount'], 16000.0, places=2)
         self.assertIn('§1001', sell['description'])
 
@@ -92,8 +92,8 @@ class TestUsMergerReorg368(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         split = rows[0]
         self.assertEqual(split['action'], 'SPLIT')
-        self.assertEqual(split['symbol'], 'HES.US')
-        self.assertEqual(split['symbol_new'], 'CVX.US')
+        self.assertEqual(split['symbol'], 'ABC.US')
+        self.assertEqual(split['symbol_new'], 'ABD.US')
         self.assertAlmostEqual(split['quantity'], 1.0)
         self.assertIn('§368(a)', split['description'])
         self.assertIn('§1223(1)', split['description'])
@@ -118,12 +118,12 @@ class TestUsMergerBoot(unittest.TestCase):
         from taxjson.lib.core import USATaxRules, TaxTransaction
         rows, _ = self._rows(tgt_fmv=tgt_fmv, boot=boot)
         txs = [TaxTransaction(action='BUYSELL', date='2024-01-10',
-                              symbol='HES.US', quantity=100, currency='USD',
+                              symbol='ABC.US', quantity=100, currency='USD',
                               price=basis / 100, net_amount=basis)]
         txs += [TaxTransaction(**r) for r in rows]
         res = USATaxRules().compute_gains(txs)
-        cvx = next(h for h in res['inventory'] if h['symbol'] == 'CVX.US')
-        return res['summary']['total_gain'], cvx['total_cost']
+        abd = next(h for h in res['inventory'] if h['symbol'] == 'ABD.US')
+        return res['summary']['total_gain'], abd['total_cost']
 
     def test_rows_carry_amount_realized_and_boot(self):
         rows, _ = self._rows(tgt_fmv=1800.0, boot=300.0)
@@ -180,7 +180,7 @@ class TestUsSpinoff(unittest.TestCase):
         self.assertEqual([r['action'] for r in rows], ['DIVIDEND', 'BUYSELL'])
         div, buy = rows
         self.assertAlmostEqual(div['net_amount'], 1000.0, places=2)  # 25 × 40
-        self.assertEqual(buy['symbol'], 'GEV.US')
+        self.assertEqual(buy['symbol'], 'ABF.US')
         self.assertAlmostEqual(buy['net_amount'], 1000.0, places=2)
         self.assertIn('§301', div['description'])
 
@@ -192,7 +192,7 @@ class TestUsSpinoff(unittest.TestCase):
         self.assertEqual([r['action'] for r in rows], ['BUYSELL', 'ADJUST'])
         buy, adj = rows
         self.assertAlmostEqual(buy['net_amount'], 800.0, places=2)
-        self.assertEqual(adj['symbol'], 'GE.US')
+        self.assertEqual(adj['symbol'], 'ABE.US')
         self.assertAlmostEqual(adj['net_amount'], -800.0, places=2)
         self.assertIn('§355', buy['description'])
 
@@ -202,7 +202,7 @@ class TestGenericEmitterParity(unittest.TestCase):
     generic extraction (descriptions included)."""
 
     def test_canada_rollover_description_unchanged(self):
-        ev = merger_event(source_symbol='SSL.TO', target_symbol='RGLD.US',
+        ev = merger_event(source_symbol='ABG.TO', target_symbol='ABH.US',
                           currency='CAD', target_currency='USD',
                           ratio_new=1, ratio_old=16,
                           qty_disposed=1600.0, qty_received=100.0)
@@ -213,8 +213,8 @@ class TestGenericEmitterParity(unittest.TestCase):
                       rows[0]['description'])
 
     def test_canada_taxable_description_unchanged(self):
-        ev = merger_event(source_symbol='SSL.TO', target_symbol='RGLD.US',
-                          fmv=25920.67, target_fmv=18600.0,
+        ev = merger_event(source_symbol='ABG.TO', target_symbol='ABH.US',
+                          fmv=20480.5, target_fmv=15200.0,
                           currency='CAD', target_currency='USD')
         rows = resolve_event(ev, 'taxable_disposition', country='canada')
         self.assertIn('(taxable disposition; gain reported',

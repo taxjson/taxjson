@@ -218,91 +218,91 @@ class TestMarketCurrencyAcrossFiles(unittest.TestCase):
 
 # ------------------------------- R1-79 / S016-06: option identity per account
 
-TRP_BUY = row("March 12, 2024", "Buy", "8ZZTRP1", "", "5", "1.80", "-938.20",
-              "CAD", "CALL .TRX   01/16/26    55 TRX ENERGY INC DA OPEN CONTRACT")
-TRP_XCH_OUT = row("October 2, 2024", "Reorganization", "8ZZTRP1", "", "-5", "",
-                  "0", "CAD", "XCH - CALL .TRX   01/16/26    55 TRX ENERGY INC")
-TRP_XCH_IN = row("October 2, 2024", "Reorganization", "8ZZTRP2", "", "5", "",
-                 "0", "CAD", "XCH - CALL .TRX1   01/16/26    55 TRX ENERGY INC")
-TRP_SELL = row("June 10, 2025", "Sell", "8ZZTRP2", "", "-5", "17.00", "8486.80",
-               "CAD", "CALL .TRX1   01/16/26    55 TRX ENERGY INC CA CLOSE "
+KQZ_BUY = row("March 19, 2024", "Buy", "8ZZKQZ1", "", "4", "1.80", "-758.20",
+              "CAD", "CALL .KQZ   06/18/27    42 KQZ ENERGY INC DA OPEN CONTRACT")
+KQZ_XCH_OUT = row("October 9, 2024", "Reorganization", "8ZZKQZ1", "", "-4", "",
+                  "0", "CAD", "XCH - CALL .KQZ   06/18/27    42 KQZ ENERGY INC")
+KQZ_XCH_IN = row("October 9, 2024", "Reorganization", "8ZZKQZ2", "", "4", "",
+                 "0", "CAD", "XCH - CALL .KQZ1   06/18/27    42 KQZ ENERGY INC")
+KQZ_SELL = row("June 18, 2025", "Sell", "8ZZKQZ2", "", "-4", "17.00", "6786.80",
+               "CAD", "CALL .KQZ1   06/18/27    42 KQZ ENERGY INC CA CLOSE "
                "CONTRACT")
 
-RCI_BUY = row("December 16, 2024", "Buy", "8ZZRCI1", "", "3", "3.20",
-              "-970.70", "CAD",
-              "CALL .RCX   01/15/27    46 ROGERX COMMUNICATIONS INC DA OPEN "
+VQX_BUY = row("December 10, 2024", "Buy", "8ZZVQX1", "", "2", "3.20",
+              "-650.70", "CAD",
+              "CALL .VQX   01/21/28    38 VQX COMMUNICATIONS INC DA OPEN "
               "CONTRACT")
-RCI_SELL = row("December 15, 2025", "Sell", "8ZZRCI1", "", "-3", "5.40",
-               "1609.30", "CAD",
-               "CALL .RCX.B   01/15/27    46 ROGERX COMMUNICATIONS INC CA "
+VQX_SELL = row("December 8, 2025", "Sell", "8ZZVQX1", "", "-2", "5.40",
+               "1069.30", "CAD",
+               "CALL .VQX.B   01/21/28    38 VQX COMMUNICATIONS INC CA "
                "CLOSE CONTRACT")
 
 
 @rule("CA-ACB-RENAME")
 class TestOptionIdentityAcrossFiles(unittest.TestCase):
     def test_xch_then_close_in_the_next_export(self):
-        split, err, _ = parse_files({'rbc_2024.csv': TRP_XCH_IN + TRP_XCH_OUT
-                                     + TRP_BUY,
-                                     'rbc_2025.csv': TRP_SELL})
-        one, _, _ = parse_one(TRP_SELL + TRP_XCH_IN + TRP_XCH_OUT + TRP_BUY)
+        split, err, _ = parse_files({'rbc_2024.csv': KQZ_XCH_IN + KQZ_XCH_OUT
+                                     + KQZ_BUY,
+                                     'rbc_2025.csv': KQZ_SELL})
+        one, _, _ = parse_one(KQZ_SELL + KQZ_XCH_IN + KQZ_XCH_OUT + KQZ_BUY)
         self.assertEqual(positions(split), {}, err)
         self.assertEqual(positions(one), {})
         self.assertEqual(of(split, action='SPLIT')[0]['symbol_new'],
-                         'TRX1260116C00055000.TO')
+                         'KQZ1270618C00042000.TO')
 
     def test_xch_alone_names_the_ticker_map_line(self):
         # The project holds only the XCH year; next year's close lives in
         # another project (opened there through a .tt).
-        _, err, _ = parse_one(TRP_XCH_IN + TRP_XCH_OUT + TRP_BUY)
-        self.assertIn('GLOBAL TRX1260116C00055000.TO TRX260116C00055000.TO',
+        _, err, _ = parse_one(KQZ_XCH_IN + KQZ_XCH_OUT + KQZ_BUY)
+        self.assertIn('GLOBAL KQZ1270618C00042000.TO KQZ270618C00042000.TO',
                       err)
 
     def test_same_code_redescribed_in_the_next_export(self):
-        split, err, _ = parse_files({'rbc_2024.csv': RCI_BUY,
-                                     'rbc_2025.csv': RCI_SELL})
+        split, err, _ = parse_files({'rbc_2024.csv': VQX_BUY,
+                                     'rbc_2025.csv': VQX_SELL})
         self.assertEqual({t['symbol'] for t in split},
-                         {'RCX270115C00046000.TO'}, err)
+                         {'VQX280121C00038000.TO'}, err)
         self.assertEqual(positions(split), {})
         self.assertIn('more than one contract', err)
         self.assertIn('rbc_2025.csv', err)
 
     def test_cli_same_code_redescribed(self):
-        rc, txs, err = cli({'rbc_2024.csv': RCI_BUY, 'rbc_2025.csv': RCI_SELL})
+        rc, txs, err = cli({'rbc_2024.csv': VQX_BUY, 'rbc_2025.csv': VQX_SELL})
         self.assertEqual(rc, 0, err)
-        self.assertEqual({t['symbol'] for t in txs}, {'RCX270115C00046000.TO'})
+        self.assertEqual({t['symbol'] for t in txs}, {'VQX280121C00038000.TO'})
 
 
 # ----------------------------------- R1-80: ticker change without a reorg row
 
-OWL = "BLUE OWLX CAPITAL CORPORATION COMMON STOCK"
-ORCX_ROWS = [
-    row("August 23, 2023", "Sell", "OBDX", OWL, "-1568", "15", "23500.05",
-        "USD", "BLUE OWLX CAPITAL CORPORATION UNSOLICITED CA"),
-    row("May 22, 2023", "Buy", "ORCX", OWL, "668", "13", "-8693.95", "USD",
-        "OWLX ROCK CAPITAL CORPORATION UNSOLICITED DA"),
-    row("April 3, 2023", "Buy", "ORCX", OWL, "900", "13", "-11709.95", "USD",
-        "OWLX ROCK CAPITAL CORPORATION UNSOLICITED DA"),
+NWC = "NORTHWIND CAPITAL CORPORATION COMMON STOCK"
+RQA_ROWS = [
+    row("September 6, 2023", "Sell", "RQB", NWC, "-1170", "15", "17540.05",
+        "USD", "NORTHWIND CAPITAL CORPORATION UNSOLICITED CA"),
+    row("May 30, 2023", "Buy", "RQA", NWC, "450", "13", "-5859.95", "USD",
+        "SOUTHWIND CAPITAL CORPORATION UNSOLICITED DA"),
+    row("April 11, 2023", "Buy", "RQA", NWC, "720", "13", "-9369.95", "USD",
+        "SOUTHWIND CAPITAL CORPORATION UNSOLICITED DA"),
 ]
 
 
 @rule("CA-ACB-RENAME")
 class TestTickerChangeWithoutReorganization(unittest.TestCase):
     def test_one_file_warns_with_the_ticker_map_line(self):
-        _, err, _ = parse_one(''.join(ORCX_ROWS))
-        self.assertIn('GLOBAL ORCX.US OBDX.US', err)
+        _, err, _ = parse_one(''.join(RQA_ROWS))
+        self.assertIn('GLOBAL RQA.US RQB.US', err)
         self.assertIn('warning', err)
 
     def test_across_files(self):
-        _, err, _ = parse_files({'rbc_a.csv': ''.join(ORCX_ROWS[1:]),
-                                 'rbc_b.csv': ORCX_ROWS[0]})
-        self.assertIn('GLOBAL ORCX.US OBDX.US', err)
+        _, err, _ = parse_files({'rbc_a.csv': ''.join(RQA_ROWS[1:]),
+                                 'rbc_b.csv': RQA_ROWS[0]})
+        self.assertIn('GLOBAL RQA.US RQB.US', err)
 
     def test_second_symbol_opening_with_a_buy_is_not_flagged(self):
-        body = (row("August 23, 2023", "Buy", "OBDX", OWL, "10", "15",
-                    "-150.05", "USD", "BLUE OWLX UNSOLICITED DA")
-                + ''.join(ORCX_ROWS[1:]))
+        body = (row("September 6, 2023", "Buy", "RQB", NWC, "10", "15",
+                    "-150.05", "USD", "NORTHWIND UNSOLICITED DA")
+                + ''.join(RQA_ROWS[1:]))
         _, err, _ = parse_one(body)
-        self.assertNotIn('GLOBAL ORCX.US OBDX.US', err)
+        self.assertNotIn('GLOBAL RQA.US RQB.US', err)
 
 
 # ------------------------------- S015-02: temporary code named in no row

@@ -111,12 +111,12 @@ class TestBuyCodedClosingIsMissingHistory(unittest.TestCase):
     def test_expired_open_buy_coded_c_is_broker_closing(self):
         from taxjson.lib.option_boundary import expired_open
         acct = "U5550001"  # pii-ok
-        rows = [_tx("BUYSELL", "2025-03-03", "XYZ250620C00050000.US", 1,
+        rows = [_tx("BUYSELL", "2025-03-03", "QZY250718C00045000.US", 1,
                     -100.0, account=acct, currency="USD", open_close="C",
                     settle="2025-03-04")]
         out = expired_open(rows, 2025, today=date(2026, 10, 1))
         self.assertEqual([o["broker_closing"] for o in out], [True])
-        rows = [_tx("BUYSELL", "2025-03-03", "XYZ250620C00050000.US", 1,
+        rows = [_tx("BUYSELL", "2025-03-03", "QZY250718C00045000.US", 1,
                     -100.0, account=acct, currency="USD", open_close="O",
                     settle="2025-03-04")]
         out = expired_open(rows, 2025, today=date(2026, 10, 1))

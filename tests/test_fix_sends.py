@@ -37,18 +37,18 @@ KR_LEDGER = (
     # Gift of 100 USDC (+1 USDC withdrawal fee). 07:00 local.
     "LC1CCC,RC1,2025-03-01 12:00:00,withdrawal,,currency,USDC,spot,-100,1,"
     "909\n"
-    # SOL arriving from Coinbase (matched: a self-custody move).
-    "LD1DDD,RD1,2025-07-13 11:15:42,deposit,,currency,SOL,spot,50,0,50\n"
+    # ATOM arriving from Coinbase (matched: a self-custody move).
+    "LD1DDD,RD1,2025-06-22 14:08:31,deposit,,currency,ATOM,spot,80,0,80\n"
     # USDC reward 9 days after the Coinbase USDC gift below -> that
     # gift's small FX loss is (likely) superficial.
     "LE1EEE,RE1,2025-07-20 12:00:00,earn,reward,currency,USDC,spot,1,0,"
     "910\n"
-    # TAO reward so the book holds TAO before the payment.
-    "LF1FFF,RF1,2026-01-05 12:00:00,earn,reward,currency,TAO,spot,1,0,1\n"
-    # Payment in TAO: 0.1 TAO + a 0.002 TAO network fee the parser
-    # books by itself. 18:50:14 local.
-    "LG1GGG,RG1,2026-05-04 22:50:14,withdrawal,,currency,TAO,spot,-0.1,"
-    "0.002,0.898\n"
+    # LDO reward so the book holds LDO before the payment.
+    "LF1FFF,RF1,2026-01-12 12:00:00,earn,reward,currency,LDO,spot,3,0,3\n"
+    # Payment in LDO: 2.5 LDO + a 0.05 LDO network fee the parser
+    # books by itself. 17:30:00 local.
+    "LG1GGG,RG1,2026-04-13 21:30:00,withdrawal,,currency,LDO,spot,-2.5,"
+    "0.05,0.45\n"
     # A Hybrid Earn sweep nobody has classified yet.
     "LH1HHH,RH1,2026-06-01 12:00:00,hybridearnwithdrawal,,currency,USDC,"
     "spot,-5,0,905\n")
@@ -61,23 +61,23 @@ CB_CSV = (
     "Bought 20 USDC\n"
     "c2,2025-06-01 12:00:00 UTC,Buy,BTC,0.002,CAD,140000,280,280,0,"
     "Bought 0.002 BTC\n"
-    "c3,2025-07-01 12:00:00 UTC,Buy,SOL,50.0001,CAD,200,10000.02,"
-    "10000.02,0,Bought SOL\n"
+    "c3,2025-06-10 12:00:00 UTC,Buy,ATOM,80.002,CAD,9,720.02,"
+    "720.02,0,Bought ATOM\n"
     "c4,2025-07-11 11:21:49 UTC,Send,USDC,10,CAD,1.35,13.50,13.50,0,"
     "Sent 10 USDC to an address\n"
-    "c5,2025-07-13 11:13:27 UTC,Send,SOL,50.0001,CAD,222.45,11122.52,"
-    "11122.52,0,Sent SOL to an address\n"
+    "c5,2025-06-22 14:05:10 UTC,Send,ATOM,80.002,CAD,9.85,788.02,"
+    "788.02,0,Sent ATOM to an address\n"
     "c6,2025-08-01 12:00:00 UTC,Send,BTC,0.001,CAD,150000,150,150,0,"
     "Sent BTC to an address\n")
 
-TAO_ID = "kr-20260504T185014-TAO-0.1"
+PAY_ID = "kr-20260413T173000-LDO-2.5"
 BTC_ID = "cb-20250801T080000-BTC-0.001"
 KR_USDC_ID = "kr-20250301T070000-USDC-100"
 CB_USDC_ID = "cb-20250711T072149-USDC-10"
 HYBRID_ID = "kr-20260601T080000-USDC-5"
 
 SPECIAL_RATES = {"2025-02-01": "1.4000", "2025-03-01": "1.4500",
-                 "2026-05-04": "1.3611"}
+                 "2026-04-13": "1.3611"}
 
 
 def _rates_file(path: Path):
@@ -118,8 +118,8 @@ def _project(td, *, country="canada"):
     home = Path(td) / "home"
     home.mkdir()
     (home / ".crypto_price_cache.json").write_text(json.dumps({
-        "TAO22974-2026-05-04": 284.9259948730469,
-        "TAO22974-2026-01-05": 300.0,
+        "LDO11808-2026-04-13": 1.84,
+        "LDO11808-2026-01-12": 2.1,
     }))
     return root, home
 
@@ -142,23 +142,23 @@ class TestUnits(unittest.TestCase):
         self.assertEqual(cs.mask_ref("LG1GGG-xfer"), "LG***")
         self.assertEqual(cs.mask_ref(""), "")
         self.assertEqual(
-            cs.send_id("kraken", "2026-05-04", "18:50:14", "TAO", -0.1),
-            TAO_ID)
-        self.assertEqual(cs.fmt_price(387.8127716217041), "387.813")
+            cs.send_id("kraken", "2026-04-13", "17:30:00", "LDO", -2.5),
+            PAY_ID)
+        self.assertEqual(cs.fmt_price(512.3456789), "512.346")
         self.assertEqual(cs.fmt_price(150000.0), "150000")
         self.assertEqual(cs.fmt_price(0.0000123456789), "0.0000123457")
 
     def test_matching_pairs_a_send_with_its_arrival(self):
         rows = [
-            {"exchange": "coinbase", "account": "c", "date": "2025-07-13",
-             "time": "07:13:27", "symbol": "SOL", "quantity": -50.0001},
-            {"exchange": "kraken", "account": "c", "date": "2025-07-13",
-             "time": "07:15:42", "symbol": "SOL", "quantity": 50.0},
+            {"exchange": "coinbase", "account": "c", "date": "2025-06-22",
+             "time": "10:05:10", "symbol": "ATOM", "quantity": -80.002},
+            {"exchange": "kraken", "account": "c", "date": "2025-06-22",
+             "time": "10:08:31", "symbol": "ATOM", "quantity": 80.0},
             # Same coin, far too late: not an arrival of the send above.
             {"exchange": "coinbase", "account": "c", "date": "2025-09-01",
-             "time": "10:00:00", "symbol": "SOL", "quantity": -1.0},
+             "time": "10:00:00", "symbol": "ATOM", "quantity": -1.0},
             {"exchange": "kraken", "account": "c", "date": "2025-09-09",
-             "time": "10:00:00", "symbol": "SOL", "quantity": 1.0},
+             "time": "10:00:00", "symbol": "ATOM", "quantity": 1.0},
         ]
         unmatched, pairs = cs.match_transfers(rows)
         self.assertEqual(len(pairs), 1)
@@ -167,7 +167,7 @@ class TestUnits(unittest.TestCase):
     def test_prompt_records_answers_and_skip(self):
         with tempfile.TemporaryDirectory() as td:
             man = Path(td) / "sends.json"
-            sends = [{"id": TAO_ID, "summary": "0.1 TAO", "decision": None,
+            sends = [{"id": PAY_ID, "summary": "2.5 LDO", "decision": None,
                       "stable": False},
                      {"id": HYBRID_ID, "summary": "5 USDC",
                       "decision": None, "stable": True}]
@@ -177,7 +177,7 @@ class TestUnits(unittest.TestCase):
                                     say=out.append)
             self.assertEqual(n, 1)
             doc = json.loads(man.read_text())
-            self.assertEqual(doc["sends"][TAO_ID]["decision"], "payment")
+            self.assertEqual(doc["sends"][PAY_ID]["decision"], "payment")
             self.assertNotIn(HYBRID_ID, doc["sends"])
 
 
@@ -212,24 +212,24 @@ class TestCryptoSendsProject(unittest.TestCase):
     @rule("CA-CRYPTO-07")
     def test_b_listing_unmatched_sends_with_fair_values(self):
         sends, doc = self._list()
-        self.assertEqual(set(sends), {TAO_ID, BTC_ID, KR_USDC_ID,
+        self.assertEqual(set(sends), {PAY_ID, BTC_ID, KR_USDC_ID,
                                       CB_USDC_ID, HYBRID_ID})
         self.assertEqual(doc["accounts"]["crypto"]["matched"], 1)
         # A Kraken Hybrid Earn sweep keeps the coins yours: decided
         # automatically, never asked about.
         self.assertEqual(sends[HYBRID_ID]["decision"], "self")
         self.assertTrue(sends[HYBRID_ID]["auto"])
-        tao = sends[TAO_ID]
-        self.assertIsNone(tao["decision"])
-        self.assertEqual(tao["ref"], "LG***")
-        self.assertAlmostEqual(tao["fair_value"]["price"], 387.813, places=3)
-        self.assertIn("Yahoo TAO22974-USD", tao["fair_value"]["source"])
-        self.assertIn("Bank of Canada", tao["fair_value"]["source"])
+        pay = sends[PAY_ID]
+        self.assertIsNone(pay["decision"])
+        self.assertEqual(pay["ref"], "LG***")
+        self.assertAlmostEqual(pay["fair_value"]["price"], 2.50442, places=5)
+        self.assertIn("Yahoo LDO11808-USD", pay["fair_value"]["source"])
+        self.assertIn("Bank of Canada", pay["fair_value"]["source"])
         # The parser's own fee row is not counted again.
-        self.assertEqual(tao["quantity"], 0.1)
-        self.assertEqual(tao["tt"],
-                         "BUYSELL 2026-05-04 18:50:14 TAO -0.1 CAD 387.813 "
-                         "38.78 0")
+        self.assertEqual(pay["quantity"], 2.5)
+        self.assertEqual(pay["tt"],
+                         "BUYSELL 2026-04-13 17:30:00 LDO -2.5 CAD 2.50442 "
+                         "6.26 0")
         btc = sends[BTC_ID]
         self.assertIn("Coinbase", btc["fair_value"]["source"])
         self.assertEqual(btc["tt"], "BUYSELL 2025-08-01 08:00:00 BTC "
@@ -277,21 +277,21 @@ class TestCryptoSendsProject(unittest.TestCase):
 
     @rule("CA-CRYPTO-05")
     def test_d_set_write_and_run_books_the_lines(self):
-        for sid, dec in ((TAO_ID, "payment"), (BTC_ID, "gift"),
+        for sid, dec in ((PAY_ID, "payment"), (BTC_ID, "gift"),
                          (KR_USDC_ID, "gift"), (CB_USDC_ID, "gift")):
             r = _cli(self.root, self.home, "crypto-sends", "crypto",
                      "--set", f"{sid}={dec}", "--note", "synthetic")
             self.assertEqual(r.returncode, 0, r.stderr)
         bad = _cli(self.root, self.home, "crypto-sends", "crypto", "--set",
-                   f"{TAO_ID}=donation")
+                   f"{PAY_ID}=donation")
         self.assertNotEqual(bad.returncode, 0)
         bad = _cli(self.root, self.home, "crypto-sends", "crypto", "--set",
                    "kr-19990101T000000-XYZ-1=gift")
         self.assertNotEqual(bad.returncode, 0)
         man = json.loads((self.root / "inputs" / "crypto" / "sends.json")
                          .read_text())
-        self.assertEqual(man["sends"][TAO_ID]["decision"], "payment")
-        self.assertEqual(man["sends"][TAO_ID]["note"], "synthetic")
+        self.assertEqual(man["sends"][PAY_ID]["decision"], "payment")
+        self.assertEqual(man["sends"][PAY_ID]["note"], "synthetic")
 
         w = _cli(self.root, self.home, "crypto-sends", "crypto", "--write")
         self.assertEqual(w.returncode, 0, w.stderr)
@@ -300,15 +300,15 @@ class TestCryptoSendsProject(unittest.TestCase):
         lines = [ln for ln in body.splitlines()
                  if ln and not ln.startswith("#")]
         self.assertEqual(lines, [
-            # R1-26: the matched SOL send arrived 0.0001 short — the
+            # R1-26: the matched ATOM send arrived 0.002 short — the
             # network fee, sold at the Coinbase spot price.
-            "BUYSELL 2025-07-13 07:13:27 SOL -0.0001 CAD 222.45 0.02 0",
+            "BUYSELL 2025-06-22 10:05:10 ATOM -0.002 CAD 9.85 0.02 0",
             "BUYSELL 2025-08-01 08:00:00 BTC -0.001 CAD 150000 150.00 0",
-            "BUYSELL 2026-05-04 18:50:14 TAO -0.1 CAD 387.813 38.78 0"])
-        self.assertIn("cb-20250713T071327-SOL-50.0001-fee: network fee",
+            "BUYSELL 2026-04-13 17:30:00 LDO -2.5 CAD 2.50442 6.26 0"])
+        self.assertIn("cb-20250622T100510-ATOM-80.002-fee: network fee",
                       body)
-        self.assertIn(TAO_ID, body)
-        self.assertIn("Yahoo TAO22974-USD", body)
+        self.assertIn(PAY_ID, body)
+        self.assertIn("Yahoo LDO11808-USD", body)
         self.assertNotIn("USDC", "\n".join(lines))
         # Idempotent: same decisions -> same bytes, file not rewritten.
         m0 = tt.stat().st_mtime_ns
@@ -321,27 +321,27 @@ class TestCryptoSendsProject(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
         base = json.loads((self.root / "work" / "crypto_base.json")
                           .read_text())["transactions"]
-        tao = [t for t in base if t["symbol"] == "TAO"
+        pay = [t for t in base if t["symbol"] == "LDO"
                and t["action"] == "BUYSELL"
-               and abs(float(t["quantity"]) + 0.1) < 1e-12]
-        self.assertEqual(len(tao), 1)
-        self.assertAlmostEqual(float(tao[0]["net_amount"]), 38.78, places=2)
-        sol_fee = [t for t in base if t["symbol"] == "SOL"
-                   and t["action"] == "BUYSELL"
-                   and abs(float(t["quantity"]) + 0.0001) < 1e-12]
-        self.assertEqual(len(sol_fee), 1)
+               and abs(float(t["quantity"]) + 2.5) < 1e-12]
+        self.assertEqual(len(pay), 1)
+        self.assertAlmostEqual(float(pay[0]["net_amount"]), 6.26, places=2)
+        coin_fee = [t for t in base if t["symbol"] == "ATOM"
+                    and t["action"] == "BUYSELL"
+                    and abs(float(t["quantity"]) + 0.002) < 1e-12]
+        self.assertEqual(len(coin_fee), 1)
         # Nothing left to classify: the Hybrid Earn sweep is automatic.
         self.assertNotIn("not yet classified", r.stderr + r.stdout)
 
     def test_e_duplicate_hand_written_line_is_flagged(self):
-        dup = self.root / "inputs" / "crypto" / "tao_payment.tt"
-        dup.write_text("BUYSELL 2026-05-04 18:50:14 TAO -0.1 CAD 387.813 "
-                       "38.78 0\n")
+        dup = self.root / "inputs" / "crypto" / "ldo_payment.tt"
+        dup.write_text("BUYSELL 2026-04-13 17:30:00 LDO -2.5 CAD 2.50442 "
+                       "6.26 0\n")
         try:
             _cli(self.root, self.home, "crypto-sends", "crypto", "--set",
-                 f"{TAO_ID}=payment")
+                 f"{PAY_ID}=payment")
             r = _cli(self.root, self.home, "crypto-sends", "crypto")
-            self.assertIn("tao_payment.tt", r.stdout + r.stderr)
+            self.assertIn("ldo_payment.tt", r.stdout + r.stderr)
             self.assertIn("counted twice", r.stdout + r.stderr)
         finally:
             dup.unlink()
@@ -356,7 +356,7 @@ class TestCryptoSendsProject(unittest.TestCase):
         r = _cli(self.root, self.home, "crypto-sends", "crypto", "--set",
                  f"{HYBRID_ID}=self")
         self.assertEqual(r.returncode, 0, r.stderr)
-        for sid, dec in ((TAO_ID, "payment"), (BTC_ID, "gift"),
+        for sid, dec in ((PAY_ID, "payment"), (BTC_ID, "gift"),
                          (KR_USDC_ID, "gift"), (CB_USDC_ID, "gift")):
             _cli(self.root, self.home, "crypto-sends", "crypto", "--set",
                  f"{sid}={dec}")
@@ -372,7 +372,7 @@ class TestCryptoSendsProject(unittest.TestCase):
             mine = root / "inputs" / "crypto" / "crypto_sends.tt"
             mine.write_text("# my own notes\n")
             _cli(root, home, "crypto-sends", "crypto", "--set",
-                 f"{TAO_ID}=payment")
+                 f"{PAY_ID}=payment")
             w = _cli(root, home, "crypto-sends", "crypto", "--write")
             self.assertNotEqual(w.returncode, 0)
             self.assertEqual(mine.read_text(), "# my own notes\n")
@@ -393,11 +393,11 @@ class TestUsGift(unittest.TestCase):
             r = _cli(root, home, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             g = _cli(root, home, "crypto-sends", "crypto", "--set",
-                     f"{TAO_ID}=gift")
+                     f"{PAY_ID}=gift")
             self.assertNotEqual(g.returncode, 0)
             self.assertIn("not a sale", g.stderr)
             p = _cli(root, home, "crypto-sends", "crypto", "--set",
-                     f"{TAO_ID}=payment")
+                     f"{PAY_ID}=payment")
             self.assertEqual(p.returncode, 0, p.stderr)
 
     @rule("US-SEND-01")
@@ -415,24 +415,24 @@ class TestUsGift(unittest.TestCase):
             r = _cli(root, home, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             p = _cli(root, home, "crypto-sends", "crypto", "--set",
-                     f"{TAO_ID}=payment")
+                     f"{PAY_ID}=payment")
             self.assertEqual(p.returncode, 0, p.stderr)
             w = _cli(root, home, "crypto-sends", "crypto", "--write")
             self.assertEqual(w.returncode, 0, w.stderr)
             body = (root / "inputs" / "crypto" / "crypto_sends.tt"
                     ).read_text()
             lines = [ln for ln in body.splitlines()
-                     if ln.startswith("BUYSELL") and " TAO " in ln]
+                     if ln.startswith("BUYSELL") and " LDO " in ln]
             self.assertEqual(len(lines), 1, body)
             self.assertTrue(lines[0].startswith(
-                "BUYSELL 2026-05-04 18:50:14 TAO -0.1 "), lines[0])
+                "BUYSELL 2026-04-13 17:30:00 LDO -2.5 "), lines[0])
             r = _cli(root, home, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             base = json.loads((root / "work" / "crypto_base.json")
                               .read_text())["transactions"]
-            sale = [t for t in base if t["symbol"] == "TAO"
+            sale = [t for t in base if t["symbol"] == "LDO"
                     and t["action"] == "BUYSELL"
-                    and abs(float(t["quantity"]) + 0.1) < 1e-12]
+                    and abs(float(t["quantity"]) + 2.5) < 1e-12]
             self.assertEqual(len(sale), 1)
             self.assertGreater(float(sale[0]["net_amount"]), 0.0)
 

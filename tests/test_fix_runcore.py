@@ -711,10 +711,10 @@ class TestLeapsViews(unittest.TestCase):
     LEAPS whose root ticker.map TOBASE-renames. R1-182: leaps-sum /
     ccd-sum totals mixed registered accounts into the headline."""
 
-    LEAP = "ABC280121C00050000.TO"
-    MAPPED_RAW = "BCE280121C00025000.US"
-    MAPPED = "BCE280121C00025000.TO"
-    TFSA_LEAP = "XYZ280121C00010000.TO"
+    LEAP = "ABC280121C00033000.TO"
+    MAPPED_RAW = "QCX280121C00027000.US"
+    MAPPED = "QCX280121C00027000.TO"
+    TFSA_LEAP = "KVX280121C00009000.TO"
 
     def _project(self, tmp):
         root = Path(tmp)
@@ -722,7 +722,7 @@ class TestLeapsViews(unittest.TestCase):
             '[settings]\nyear = 2025\ncountry = "canada"\n'
             'base_currency = "CAD"\n[accounts.margin]\ntype = "taxable"\n'
             '[accounts.tfsa]\ntype = "sheltered"\n')
-        (root / "ticker.map").write_text("TOBASE BCE.US BCE.TO\n")
+        (root / "ticker.map").write_text("TOBASE QCX.US QCX.TO\n")
         work = root / "work"
         work.mkdir()
         (work / "margin_raw.json").write_text(json.dumps({"transactions": [
