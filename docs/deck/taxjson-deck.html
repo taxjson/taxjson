@@ -31,6 +31,7 @@ table.t { border-collapse:collapse; width:100%; font-size:11.5pt }
 table.t th { font-size:10pt; letter-spacing:0.07em; text-transform:uppercase; color:#0f6e56; text-align:left; padding:4pt 8pt; border-bottom:1px solid #d9dfdb }
 table.t td { padding:5pt 8pt; border-bottom:1px solid #e6ebe8; vertical-align:top }
 table.t td.k { font-weight:700; white-space:nowrap }
+table.t td.src { white-space:nowrap }
 pre.term { background:#141a17; color:#eef3f0; border-radius:10pt; padding:12pt 14pt; font-family:"DejaVu Sans Mono",monospace; font-size:10.5pt; line-height:1.45; margin:0 }
 pre.term .g { color:#8fd3bd } pre.term .w { color:#f0c674 } pre.term .d { color:#a9b5af }
 .flow { display:flex; align-items:center; gap:10pt; margin:10pt 0 }
@@ -41,6 +42,8 @@ pre.term .g { color:#8fd3bd } pre.term .w { color:#f0c674 } pre.term .d { color:
 .dark .flow .arr { color:#8fd3bd }
 .small { font-size:11pt; color:#4f5a55 } .dark .small { color:#a9b5af }
 ul { padding-left:18pt; margin:0 }
+.cmds { gap:10pt } .cmds .card { padding:11pt 12pt }
+.cmds h3 { font-size:13.5pt; white-space:nowrap } .cmds ul { padding-left:11pt } .cmds li { font-size:11.5pt; margin:0 0 4pt }
 </style></head><body>
 
 <!-- 1 -->
@@ -49,7 +52,7 @@ ul { padding-left:18pt; margin:0 }
   <h1>taxjson</h1>
   <p class="lead">Your broker's CSV in. Schedule 3 out. Capital gains, dividends and the superficial-loss rule computed the way the CRA defines them — across every account you own — with every rule citing its source.</p>
   <p style="margin-top:22pt"><span class="cmdline">bash -c "$(curl -fsSL https://taxjson.com/install.sh)"</span></p>
-  <p class="small" style="margin-top:10pt">taxjson.com · github.com/taxjson/taxjson · MIT</p>
+  <p class="small" style="margin-top:10pt">Installs <code>taxjson</code> and its short name <code>tjs</code> · taxjson.com · github.com/taxjson/taxjson · MIT</p>
   <div class="foot"><span>taxjson.com</span><span>1</span></div>
 </section>
 
@@ -60,8 +63,8 @@ ul { padding-left:18pt; margin:0 }
   <p class="lead">A T5008 reports proceeds per account. The Income Tax Act taxes you on <b>one average cost per security across all your accounts</b>, denies losses when any affiliated account — your RRSP included — bought the same thing within 30 days, and folds option premiums, splits, spin-offs and return of capital into that cost. Nobody's statement does that math for you.</p>
   <div class="row">
     <div class="card"><h3>Cross-account pooling</h3><p>s.47: one ACB pool per identical property. A US listing and its TSX listing are the same pool; a CDR is not.</p></div>
-    <div class="card"><h3>Superficial losses</h3><p>s.54 / s.40(2)(g): a loss is denied if you <i>or an affiliated person</i> bought within ±30 days and still holds. Denied into an RRSP, it is gone for good.</p></div>
-    <div class="card"><h3>Everything that moves cost</h3><p>Assignments (IT-479R), splits, spin-offs (s.86.1), mergers with elections, ROC, reinvested distributions — in the right order, on the settlement date.</p></div>
+    <div class="card"><h3>Superficial losses</h3><p>s.54 / s.40(2)(g): a loss is denied if you <i>or an affiliated person</i> bought within ±30 days and still holds at day 30 — sized sale by sale. Denied into an RRSP, it is gone for good.</p></div>
+    <div class="card"><h3>Everything that moves cost</h3><p>Assignments (IT-479R), warrant exercises, splits, renames, spin-offs (s.86.1), mergers with elections, ROC, reinvested distributions — in the right order, on the settlement date.</p></div>
   </div>
   <div class="takeaway">Spreadsheets get the easy 90% right. The other 10% is where reassessments come from.</div>
   <div class="foot"><span>taxjson.com</span><span>2</span></div>
@@ -73,11 +76,11 @@ ul { padding-left:18pt; margin:0 }
   <h2>Three steps, all on disk</h2>
   <div class="flow">
     <div class="box"><b>inputs/</b>Broker CSV exports per account: IBKR, Questrade, RBC, Webull, Kraken, Coinbase — plus plain-text <code>.tt</code> for anything else</div><div class="arr">→</div>
-    <div class="box"><b>taxjson run</b>Parse · convert at the Bank of Canada rate per settlement date · pool identical securities · corporate actions with elections · superficial-loss pass across taxable and registered accounts</div><div class="arr">→</div>
-    <div class="box"><b>reports/</b>Per-account summaries, the wash radar, harvest candidates, T1135, a tax estimate, Schedule 3 / Form 8949 rows — and the broker cross-check</div>
+    <div class="box"><b>tjs run</b>Parse · convert at the Bank of Canada rate per settlement date · pool identical securities · dated renames and corporate actions with elections · superficial-loss pass across taxable and registered accounts</div><div class="arr">→</div>
+    <div class="box"><b>reports/</b>Per-account summaries, Schedule 3 / Form 8949 rows, the wash radar, T1135, a tax and minimum-tax estimate — and the broker cross-check</div>
   </div>
   <div class="row">
-    <div class="card"><h3>One config file</h3><p><code>taxjson.toml</code>: year, country, province, base currency, one section per account with its type (taxable / sheltered) and the broker positions files to check against.</p></div>
+    <div class="card"><h3>Two project files</h3><p><code>taxjson.toml</code>: year, country, accounts (taxable / sheltered) and the figures you enter by hand. <code>ticker.map</code>: dated renames and symbol lookups. <code>tjs migrate</code> converts an older project.</p></div>
     <div class="card"><h3>Row accounting</h3><p>Every parser accounts for every row it reads. Rows it recognises but does not translate are counted and named — never silently dropped.</p></div>
     <div class="card"><h3>Traceable numbers</h3><p><code>taxjson audit</code> recomputes every disposition from the parsed broker row through FX, ACB and the wash determination, and ties it out against the reports.</p></div>
   </div>
@@ -90,15 +93,15 @@ ul { padding-left:18pt; margin:0 }
   <h2>Every computation names its source</h2>
   <table class="t">
     <tr><th>Rule</th><th>What taxjson does</th><th>Source</th></tr>
-    <tr><td class="k">Identical properties</td><td>One average-cost pool per security across accounts; cross-listings merged, CDRs kept apart</td><td>s.47(1); IT-387R2; T4037</td></tr>
-    <tr><td class="k">Superficial loss</td><td>Denied to the extent an affiliated account acquired in the 61-day window and still holds; the RRSP/TFSA is affiliated; denied-into-plan is permanent</td><td>s.54, s.40(2)(g)(i), s.53(1)(f), s.251.1(1)(g)</td></tr>
-    <tr><td class="k">Disposition date</td><td>Settlement date, including at year end</td><td>T4037</td></tr>
-    <tr><td class="k">Foreign currency</td><td>Bank of Canada rate on each settlement date, never an annual average</td><td>Folio S5-F4-C1</td></tr>
-    <tr><td class="k">Options</td><td>A written option's premium is a gain in the year written; a buy-back is a loss in its own year; an assignment folds the premium into the shares. <code>option-boundary</code> says when a filed year needs a T1-ADJ</td><td>s.49(1)–(4); IT-479R</td></tr>
-    <tr><td class="k">Corporate actions</td><td>Splits, spin-offs, mergers with the rollover election recorded and a filing reminder at every run; ROC reduces ACB</td><td>s.86.1, s.85.1, s.53(2)(h)</td></tr>
-    <tr><td class="k">US (experimental)</td><td>FIFO, §1091 wash sales with basis and holding-period carry, IRA repurchases permanent, Form 8949 codes</td><td>§1091, Reg. 1.1091-1, Rev. Rul. 2008-5</td></tr>
+    <tr><td class="k">Identical properties</td><td>One average-cost pool per security across accounts; cross-listings merged, CDRs kept apart; a ticker change carries the pool on its date</td><td class="src">s.47(1); IT-387R2; T4037</td></tr>
+    <tr><td class="k">Superficial loss</td><td>CRA's formula, sale by sale: the least of the units sold, bought in the 61-day window, and held at day 30; the RRSP/TFSA is affiliated; denied-into-plan is permanent</td><td class="src">s.54, s.40(2)(g)(i),<br>s.53(1)(f), s.251.1(1)(g)</td></tr>
+    <tr><td class="k">Timing</td><td>Sales on the settlement date, including at year end; a dividend in the year paid, a Canadian trust's distribution in the year payable</td><td class="src">T4037; s.82(1); s.104(13)</td></tr>
+    <tr><td class="k">Foreign currency</td><td>Bank of Canada rate on each settlement date, never an annual average</td><td class="src">Folio S5-F4-C1</td></tr>
+    <tr><td class="k">Options</td><td>A written option's premium is a gain in the year written; a buy-back is a loss in its own year; an assignment folds the premium into the shares; an exercised warrant's cost goes into the shares too. <code>option-boundary</code> says when a filed year needs a T1-ADJ</td><td class="src">s.49(1)–(4); IT-479R</td></tr>
+    <tr><td class="k">Corporate actions</td><td>Splits, spin-offs, mergers with the rollover election recorded and a filing reminder at every run; ROC reduces ACB</td><td class="src">s.86.1, s.85.1, s.53(2)(h)</td></tr>
+    <tr><td class="k">US (experimental)</td><td>FIFO; §1091 wash sales with basis and holding-period carry, IRA repurchases permanent; lots carried between your own accounts; §355 / §356 per lot; Form 8949 codes</td><td class="src">§1091, Rev. Rul. 2008-5;<br>Reg. 1.358-2, 1.356-1(b)</td></tr>
   </table>
-  <p class="small" style="margin-top:8pt">The full map — including what is deliberately <i>not</i> modelled and the provision it skips — is REFERENCES.md. A rule that disagrees with its source is a bug; that is the most useful issue the project can receive.</p>
+  <p class="small" style="margin-top:8pt"><code>tjs tax-logic</code> prints every rule taxjson applies, one line each, with the id its tests cite — Canada's and the USA's apart, never mixed. REFERENCES.md maps each to its source, including what is deliberately <i>not</i> modelled. A rule that disagrees with its source is a bug; that is the most useful issue the project can receive.</p>
   <div class="foot"><span>taxjson.com</span><span>4</span></div>
 </section>
 
@@ -109,7 +112,7 @@ ul { padding-left:18pt; margin:0 }
   <div class="row">
     <div class="card"><h3>What happened</h3><p>The margin account sells 400 shares at a loss on February 3. On February 10 the RRSP buys 200 of the same stock, and still holds them on March 5.</p></div>
     <div class="card"><h3>What the slip says</h3><p>A capital loss on 400 shares. The spreadsheet agrees.</p></div>
-    <div class="card"><h3>What the Act says</h3><p>An affiliated person acquired 200 identical shares inside the 61-day window and still owns them at its end: the loss on those 200 is superficial (s.54). The ACB bump goes to the RRSP — where it is worthless. Permanently denied. Shares the RRSP held before the window would not have counted.</p></div>
+    <div class="card"><h3>What the Act says</h3><p>CRA's formula: the least of 400 sold, 200 acquired in the 61-day window and 200 still held at its end — the loss on 200 shares is superficial (s.54). The ACB bump goes to the RRSP, where it is worthless: permanently denied. Shares the RRSP held before the window would not have counted.</p></div>
   </div>
   <pre class="term" style="margin-top:12pt"><span class="w">NOTE:</span> superficial loss — 200 sh denied <span class="g">(permanently: replacement property held in rrsp)</span>
   loss sale 2026-02-03 · trigger lot 2026-02-10 (rrsp) · window end 2026-03-05</pre>
@@ -123,9 +126,9 @@ ul { padding-left:18pt; margin:0 }
   <h2>Checked against the one thing that cannot lie</h2>
   <p class="lead">Internal reports can all agree and still be wrong. <code>taxjson sanity</code> compares the positions the books say you hold with the positions your broker's own export says you hold, account by account. Any difference is a trade that has not reached the CSV yet, or a booking problem — there is no third kind.</p>
   <div class="row">
-    <div class="card"><h3>5,000+ tests</h3><p>Every fix lands with a regression test that failed before it. No mocks for tax math.</p></div>
-    <div class="card"><h3>Three property fuzzers</h3><p>Conservation of gains under the wash rule, custody-transfer netting, split-during-settlement books — thousands of random ledgers per run.</p></div>
-    <div class="card"><h3>Eight audit rounds</h3><p>Adversarial reviews, statutory scenarios by hand, parser coverage on real exports, a pre-release security audit. Every finding reproduced, fixed, pinned.</p></div>
+    <div class="card"><h3>6,500+ tests</h3><p>Every fix lands with a regression test that failed before it, tagged with the tax-logic rule it pins; the gate fails on a rule with no test.</p></div>
+    <div class="card"><h3>Fuzzers and mutants</h3><p>Three property fuzzers run thousands of random ledgers per run; mutation testing of both engines finds the boundaries no test pins.</p></div>
+    <div class="card"><h3>Two full audits</h3><p>About 1,300 and then 1,600 findings, after eight review rounds and a security audit. Every confirmed finding reproduced, fixed, pinned.</p></div>
     <div class="card"><h3>Published limits</h3><p>KNOWN_ISSUES.md lists what is out of scope and what to do by hand, with the citation.</p></div>
   </div>
   <div class="foot"><span>taxjson.com</span><span>6</span></div>
@@ -135,13 +138,14 @@ ul { padding-left:18pt; margin:0 }
 <section class="slide dark">
   <p class="eyebrow">Commands</p>
   <h2>One pipeline, a few dozen views on it</h2>
-  <div class="row">
-    <div class="card"><h3>Build the books</h3><ul><li><code>init</code> scaffold a project</li><li><code>fetch</code> Questrade / IBKR activity (plugin)</li><li><code>run</code> the whole pipeline + broker check</li><li><code>elect</code> corporate-action elections</li></ul></div>
-    <div class="card"><h3>Read the numbers</h3><ul><li><code>sum</code> the year, by account</li><li><code>list</code> / <code>shares</code> positions</li><li><code>events</code> / <code>trades</code> / <code>divs</code> the rows</li><li><code>audit</code> the justification</li></ul></div>
-    <div class="card"><h3>Before you trade</h3><ul><li><code>wash-radar</code> safe-to-sell dates</li><li><code>sell-check</code> / <code>buy-check</code></li><li><code>harvest</code> losses worth taking</li><li><code>scan</code> tax-efficiency lint</li></ul></div>
-    <div class="card"><h3>Before you file</h3><ul><li><code>checklist</code> every step, auto-detected</li><li><code>form-export</code> Schedule 3 / 8949</li><li><code>reconcile-slips</code> / <code>t1135</code> / <code>carryover</code></li><li><code>option-boundary</code> / <code>close-year</code></li></ul></div>
+  <div class="row cmds">
+    <div class="card"><h3>Build the books</h3><ul><li><code>init</code> a new project</li><li><code>migrate</code> an older one</li><li><code>fetch</code> from your broker (plugin)</li><li><code>run</code> the pipeline + broker check</li><li><code>elect</code> corporate actions</li></ul></div>
+    <div class="card"><h3>Read the numbers</h3><ul><li><code>sum</code> the year, by form line</li><li><code>estimate</code> / <code>amt</code> the tax</li><li><code>stats</code> wins and losses</li><li><code>list</code> / <code>shares</code> positions</li><li><code>events</code> / <code>trades</code> rows</li></ul></div>
+    <div class="card"><h3>Before you trade</h3><ul><li><code>wash-radar</code> open windows</li><li><code>buy-check</code> / <code>sell-check</code></li><li><code>harvest</code> losses to take</li><li><code>scan</code> tax-efficiency lint</li></ul></div>
+    <div class="card"><h3>Before you file</h3><ul><li><code>checklist</code> every step</li><li><code>form-export</code> Schedule 3</li><li><code>reconcile-slips</code> T5008</li><li><code>t1135</code> / <code>carryover</code></li><li><code>close-year</code> / <code>handoff</code></li></ul></div>
+    <div class="card"><h3>Explain</h3><ul><li><code>audit</code> every gain</li><li><code>tax-logic</code> every rule</li><li><code>renames</code> dated events</li><li><code>sanity</code> vs the broker</li><li><code>edge-cases</code> year ends</li></ul></div>
   </div>
-  <p class="small" style="margin-top:10pt">Every command takes <code>--help</code>; most take <code>--json</code>. <code>taxjson redact</code> strips identifiers from a real export so it can be shared as a parser sample.</p>
+  <p class="small" style="margin-top:10pt"><code>tjs</code> with no command lists them by purpose, one line each — inside a project only your country's. Every command takes <code>-h</code>; most take <code>--json</code>. <code>tjs redact</code> strips identifiers from a real export so it can be shared as a parser sample.</p>
   <div class="foot"><span>taxjson.com</span><span>7</span></div>
 </section>
 
@@ -150,9 +154,9 @@ ul { padding-left:18pt; margin:0 }
   <p class="eyebrow">Privacy and security</p>
   <h2>Nothing personal leaves the machine</h2>
   <div class="row">
-    <div class="card"><h3>Local by construction</h3><p>Parsing, pooling and the wash pass run on your computer. The pipeline's only network calls are FX rates (Bank of Canada, its noon rate before March 2017; Yahoo only before May 2007) and crypto prices for unpriced rows — both switchable off with <code>TAXJSON_OFFLINE=1</code>. SECURITY.md lists every egress.</p></div>
+    <div class="card"><h3>Local by construction</h3><p>Parsing, pooling and the wash pass run on your computer — no server, no web UI, just commands and files. The pipeline's only network calls are FX rates (Bank of Canada, its noon rate before March 2017; Yahoo only before May 2007) and crypto prices for unpriced rows — both switchable off with <code>TAXJSON_OFFLINE=1</code>. SECURITY.md lists every egress.</p></div>
     <div class="card"><h3>No credentials in the core</h3><p>The core holds no broker client and reads no credential. Broker fetch is a separate, optional package (taxjson-fetch): it uses your own token file, never writes it into a project, and sends it nowhere but that broker.</p></div>
-    <div class="card"><h3>The project guards itself</h3><p>A personal-data scan runs in every gate and as the pre-push hook, fails closed, and reads a private denylist kept outside the repository. Redacted exports keep every row shape and drop the identifiers <code>redact</code> recognises — review before sharing.</p></div>
+    <div class="card"><h3>The project guards itself</h3><p>A personal-data scan runs in every gate and as the pre-push hook, fails closed, and reads a private denylist kept outside the repository; the hook also refuses a commit message that quotes a money total. <code>redact</code> keeps every row shape and drops the identifiers it recognises — review before sharing.</p></div>
   </div>
   <div class="takeaway">Zero runtime dependencies in the core. A tax tool has to be trustworthy before it is clever.</div>
   <div class="foot"><span>taxjson.com</span><span>8</span></div>
@@ -163,9 +167,10 @@ ul { padding-left:18pt; margin:0 }
   <p class="eyebrow">Scope</p>
   <h2>Canada is the product. The US engine is a draft.</h2>
   <div class="row">
-    <div class="card"><h3>Canada — supported</h3><p>Average-cost ACB, superficial-loss rule across accounts, settlement-date timing, options, corporate actions with elections, T1135, Schedule 3, instalments and a marginal-rate estimate with provincial tables. Validated against two years of real multi-account books and the brokers' positions.</p></div>
-    <div class="card"><h3>US — experimental</h3><p>FIFO, §1091 wash sales, short/long-term, Form 8949 codes and a TXF export. Implemented and unit-tested, never validated on a real account. It says so at every run. Real US exports — redacted — are the way to change that.</p></div>
+    <div class="card"><h3>Canada — supported</h3><p>Average-cost ACB, the superficial-loss rule across accounts, settlement-date timing, options and warrants, dated renames, corporate actions with elections, T1135, Schedule 3, a marginal-rate estimate with provincial tables, minimum tax line by line, instalments, and carry-forwards from one year's lock to the next. Validated against two years of real multi-account books and the brokers' positions.</p></div>
+    <div class="card"><h3>US — experimental</h3><p>FIFO, §1091 wash sales across your accounts, lots carried between your own accounts, §355 / §356 per lot, short/long-term, Form 8949 codes and a TXF export. Implemented and unit-tested, never validated on a real account. It says so at every run. Real US exports — redacted — are the way to change that.</p></div>
   </div>
+  <p class="small" style="margin-top:12pt">The two rule sets never mix: a project has one country, and a setting, flag or command the other country owns is refused, not silently applied.</p>
   <div class="takeaway">Honest labelling costs nothing. A tax tool that overclaims loses the only thing it has.</div>
   <div class="foot"><span>taxjson.com</span><span>9</span></div>
 </section>
@@ -176,14 +181,14 @@ ul { padding-left:18pt; margin:0 }
   <h2>Reads the exports you already have</h2>
   <table class="t">
     <tr><th>Broker</th><th>Format</th><th>Notes</th></tr>
-    <tr><td class="k">Interactive Brokers</td><td>Activity / Flex statement CSV</td><td>Trades, options, corporate actions, transfers, fees, dividends; Flex auto-fetch (taxjson-fetch)</td></tr>
-    <tr><td class="k">Questrade</td><td>Activity CSV</td><td>Trades, DRIP, cash-in-lieu, transfers; REST auto-fetch and live positions (taxjson-fetch)</td></tr>
-    <tr><td class="k">RBC Direct Investing</td><td>Activity export</td><td>Trades, dividends with withholding</td></tr>
+    <tr><td class="k">Interactive Brokers</td><td>Activity / Flex statement CSV</td><td>Trades, options, corporate actions, warrant exercises, transfers, fees, dividends; Flex auto-fetch (taxjson-fetch plugin)</td></tr>
+    <tr><td class="k">Questrade</td><td>Activity CSV</td><td>Trades, DRIP, cash-in-lieu, transfers; REST auto-fetch and live positions (taxjson-fetch plugin)</td></tr>
+    <tr><td class="k">RBC Direct Investing</td><td>Activity export</td><td>Trades, dividends with withholding, warrant exercises</td></tr>
     <tr><td class="k">Webull</td><td>Trading Summary CSV</td><td>Trades and options (BUY/SELL rows only); no income &mdash; T5 interest and dividends go in as <code>.tt</code> lines</td></tr>
     <tr><td class="k">Kraken · Coinbase</td><td>Ledgers / transaction history</td><td>Trades, rewards, sends and withdrawals as custody evidence</td></tr>
     <tr><td class="k">Anything else</td><td><code>.tt</code> plain text · generic CSV mapping</td><td>Ten-line files a human can write and read</td></tr>
   </table>
-  <p class="small" style="margin-top:8pt">Help wanted: Wealthsimple, TD Direct, BMO InvestorLine, CIBC Investor's Edge, Scotia iTRADE, National Bank Direct, Qtrade, Desjardins. A parser is an afternoon's work given one real export — <code>taxjson redact</code> makes sharing one safe.</p>
+  <p class="small" style="margin-top:8pt">Help wanted: Wealthsimple, TD Direct, BMO InvestorLine, CIBC Investor's Edge, Scotia iTRADE, National Bank Direct, Qtrade, Desjardins. A parser is an afternoon's work given one real export — <code>tjs redact</code> makes sharing one safe. An auto-fetcher for another broker is a plugin of its own.</p>
   <div class="foot"><span>taxjson.com</span><span>10</span></div>
 </section>
 
@@ -192,13 +197,14 @@ ul { padding-left:18pt; margin:0 }
   <p class="eyebrow">Install</p>
   <h2>Your first books in ten minutes</h2>
   <p><span class="cmdline">bash -c "$(curl -fsSL https://taxjson.com/install.sh)"</span></p>
-  <p class="small" style="margin:8pt 0 14pt">Installs the latest release into its own Python environment and links <code>taxjson</code> onto your PATH. Needs git and Python 3.9+, nothing else. Re-run to upgrade; add <code>--with-fetch</code> for Questrade / IBKR auto-fetch.</p>
+  <p class="small" style="margin:8pt 0 14pt">Installs the latest release into its own Python environment and links <code>taxjson</code> and its short name <code>tjs</code> onto your PATH. Needs git and Python 3.9+, nothing else. Re-run to upgrade; add <code>_ --with-fetch</code> for the Questrade / IBKR auto-fetch plugin.</p>
   <pre class="term">mkdir -p ~/taxes/2026 &amp;&amp; cd ~/taxes/2026
-taxjson init --country canada     <span class="d"># writes taxjson.toml and inputs/</span>
+tjs init --country canada     <span class="d"># taxjson.toml, ticker.map, inputs/</span>
 <span class="d"># drop broker CSVs into inputs/margin/, inputs/rrsp/, …</span>
-taxjson run                       <span class="d"># books, reports, wash pass, broker check</span>
-taxjson sum                       <span class="d"># the realized-gains summary</span>
-taxjson wash-radar                <span class="d"># "can I sell this at a loss today?"</span></pre>
+tjs run                       <span class="d"># books, reports, wash pass, broker check</span>
+tjs sum                       <span class="d"># the year, by Schedule 3 line</span>
+tjs wash-radar                <span class="d"># "can I sell this at a loss today?"</span>
+tjs checklist                 <span class="d"># at year end: ready to file?</span></pre>
   <div class="foot"><span>taxjson.com</span><span>11</span></div>
 </section>
 
@@ -207,8 +213,8 @@ taxjson wash-radar                <span class="d"># "can I sell this at a loss t
   <p class="eyebrow">Where it goes</p>
   <h2>Roadmap</h2>
   <div class="row">
-    <div class="card"><h3>More Canadian brokers</h3><p>Driven by redacted real exports from users. One parser per afternoon, each with the row-accounting contract.</p></div>
-    <div class="card"><h3>Rules retail investors hit</h3><p>Non-eligible dividends and T3 box splits, DRIP fractions, the s.39(4) election, CNIL — whichever real exports show first.</p></div>
+    <div class="card"><h3>More Canadian brokers</h3><p>Driven by redacted real exports from users. One parser per afternoon, each with the row-accounting contract; auto-fetch for more brokers as plugins.</p></div>
+    <div class="card"><h3>Rules retail investors hit</h3><p>Non-eligible dividends and T3 box splits, the s.39(4) election, CNIL — each stated in tax-logic with its tests, whichever real exports show first.</p></div>
     <div class="card"><h3>US validation</h3><p>The engine exists; it needs a real account. The label comes off when the numbers have been checked against one.</p></div>
     <div class="card"><h3>1.0</h3><p>PyPI, a frozen CLI, and the interchange contract with portfolio tools written down.</p></div>
   </div>

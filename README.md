@@ -1888,15 +1888,26 @@ defended in layers rather than by tests alone:
 - **Property fuzzers.** Three seeded generators assert conservation,
   determinism and ordering laws over thousands of random books per
   run (engine, custody transfers, settle-lag/split interactions);
-  they are what still finds engine bugs after eight audit rounds.
-- **Mutation testing** of the wash-sale regions, so a boundary that
-  no test pins gets noticed.
-- **Independent audits.** Eight rounds plus a pre-release security and
-  correctness audit of the public surfaces — adversarial reviews,
-  hand-computed statutory scenarios, parser coverage against real
-  exports, the installer and the privacy gate — with every confirmed
-  finding reproduced, fixed and pinned. `KNOWN_ISSUES.md` lists what was
-  deliberately left, with the reasoning.
+  they are what still finds engine bugs after every audit round.
+- **Mutation testing** of both gains engines (the ACB pool walk and
+  the superficial-loss window and solver; FIFO lots and §1091
+  matching), so a boundary that no test pins gets noticed.
+- **tax-logic is the spec.** `taxjson tax-logic` states every rule the
+  engine applies, each with a stable id; the tests are tagged with the
+  ids they pin, and the gate (`scripts/check_tax_rules.py`) fails on an
+  unknown id, a test that mixes the two countries, or a new rule with
+  no test. Canadian and US rules never mix: a one-country setting, flag
+  or command is refused in the other country's project.
+- **Independent audits.** Eight review rounds and a pre-release
+  security audit of the public surfaces, then two full-coverage audits
+  of the whole codebase — about 1,300 findings in the first and 1,600
+  in the re-audit that also checked the first round's fixes — built
+  from adversarial reviews, hand-computed statutory scenarios, parser
+  coverage against real exports, real multi-account books, the
+  installer and the privacy gate. Every confirmed finding was
+  reproduced, fixed and pinned with a test; the judgment calls went to
+  the maintainer. `KNOWN_ISSUES.md` lists what was deliberately left, with
+  the reasoning.
 - **Nothing personal leaves the machine.** `scripts/check-pii.sh` runs
   in every gate and as the `pre-push` hook, fails closed, and reads a
   private denylist kept outside the repository (the hook also refuses a
@@ -1917,7 +1928,7 @@ defended in layers rather than by tests alone:
 
 ## Status
 
-Pre-1.0. The core pipeline (parse → merge → gains → summarize) is stable and covered by 5,000+ tests and three property fuzzers, but expect occasional breaking changes to CLI flags and JSON field names until 1.0.
+Pre-1.0. The core pipeline (parse → merge → gains → summarize) is stable and covered by 6,500+ tests and three property fuzzers, but expect occasional breaking changes to CLI flags and JSON field names until 1.0.
 
 The tests run against synthetic fixtures and check that the code implements the rules as written here — they are not an assurance that the rules themselves are correctly interpreted for your situation, and no output has been reviewed by a tax professional. The planning commands (`estimate`, `instalments`, the AMT check, `fx-cash`) are explicitly estimates: they say so in their own output, and they should be checked against your assessment or your accountant before you rely on them. Report anything that looks wrong.
 

@@ -2,7 +2,7 @@
 
 Known bugs, limitations, and deferred-fix items in taxjson. Each entry describes the current behavior, why it isn't fixed yet, and what evidence would be needed (or what work is required) to address it. Open a PR or attach a sample CSV to graduate any of these.
 
-The codebase has been through eight audit rounds and the re-audits that followed; everything listed here was triaged and deliberately left in place rather than overlooked.
+The codebase has been through eight audit rounds and two full-coverage audits; everything listed here was triaged and deliberately left in place rather than overlooked.
 
 ---
 
