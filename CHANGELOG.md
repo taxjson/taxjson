@@ -25,6 +25,8 @@
   scan also refuses a money amount (thousands separators and cents) added
   to a CHANGELOG or markdown doc line or a code comment; `pii-ok` on the
   line lets a synthetic one through.
+- **`TAXJSON_OFFLINE` stops `taxjson fetch`** with one line before any
+  fetcher runs (`--list` still works).
 
 ### One mapping file, year data in taxjson.toml (owner request)
 

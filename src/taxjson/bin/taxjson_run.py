@@ -15416,6 +15416,14 @@ def cmd_fetch(args: argparse.Namespace) -> None:
         by_fetcher.setdefault(f.name, []).append(a)
     json_mode = bool(getattr(args, "json", False))
     dry_run = bool(getattr(args, "dry_run", False))
+    # TAXJSON_OFFLINE forbids taxjson's network egress, and a fetch IS
+    # egress (a dry run too: it still downloads to preview). Refused here,
+    # before any plugin runs (security review L6); --list stays allowed.
+    from taxjson.lib.offline import ENV_VAR as _OFF_VAR, offline_enabled
+    if offline_enabled():
+        sys.exit(f"taxjson fetch: {_OFF_VAR} is set — a fetch downloads "
+                 f"from the broker, so nothing was fetched; unset it (or "
+                 f"set {_OFF_VAR}=0) to fetch.")
 
     def say(msg: str) -> None:
         # Progress lines move to stderr under --json so stdout stays

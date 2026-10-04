@@ -54,7 +54,8 @@ current-price chain behind `harvest` and `watch --harvest` (IBKR
 gateway / Yahoo Finance): they serve
 `work/.price_cache.json` only and refuse the lookup on a miss, and
 `scan --online` skips its Yahoo Finance name probe with a note (the
-offline checks still run). Everything else that touches the network is
+offline checks still run). `taxjson fetch` refuses outright (one line,
+before any fetcher plugin runs; `--list` still works). Everything else that touches the network is
 opt-in by command: `taxjson-generate-parser`, which sends the first `--sample-lines`
 (default 30) lines of the sample CSV you hand it to an LLM API. Those
 lines are where broker exports keep the holder's name, account number

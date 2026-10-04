@@ -262,6 +262,34 @@ class TestDispatch(_Patched):
         self.assertIn("no account declares a fetch source", err)
         self.assertIn('brokerage = "fakebroker"', err)
 
+    def test_offline_refuses_before_any_fetcher_runs(self):
+        # Security review L6: TAXJSON_OFFLINE forbids taxjson's network
+        # egress, and `taxjson fetch` is egress — one line, no plugin
+        # call (dry runs too: a dry run still downloads).
+        root = self.project(self.ACCOUNTS)
+        for argv in ((), ("--dry-run",), ("b", "--json")):
+            with self.subTest(argv=argv), \
+                    mock.patch.dict(os.environ, {"TAXJSON_OFFLINE": "1"}):
+                code, out, err = self.fetch(root, *argv)
+                self.assertEqual(code, 1, err)
+                self.assertEqual(out, "")
+                # (this class's broken test plugins add their warnings)
+                lines = [ln for ln in err.strip().splitlines()
+                         if "warning: fetcher" not in ln]
+                self.assertEqual(len(lines), 1, err)
+                self.assertIn("TAXJSON_OFFLINE is set", lines[0])
+        self.assertEqual(CALLS, [])
+        # --list never touches the network: still allowed.
+        with mock.patch.dict(os.environ, {"TAXJSON_OFFLINE": "yes"}):
+            code, out, _err = self.fetch(root, "--list")
+        self.assertEqual(code, 0)
+        self.assertIn("fakebroker", out)
+        # TAXJSON_OFFLINE=0 is OFF (lib/offline): the fetch runs.
+        with mock.patch.dict(os.environ, {"TAXJSON_OFFLINE": "0"}):
+            code, _out, err = self.fetch(root)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(CALLS), 1)
+
     def test_unknown_fetcher_name(self):
         code, _out, err = self.fetch(self.project(self.ACCOUNTS),
                                      "--fetcher", "nope")
