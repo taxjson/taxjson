@@ -427,10 +427,10 @@ class TestStrictReading(unittest.TestCase):
     def test_unquoted_comma_in_last_column_is_rejoined(self):
         txs, _, _ = parse(
             '"February 22, 2024","Interest","","","","","February 22, 2024",'
-            '"-84.12","USD","INT FR 01/22 THRU02/21@ 8 1/4% BAL   12","305-  '
-            'AVBAL   11","870"\n')
+            '"-71.23","USD","INT FR 01/22 THRU02/21@ 8 1/4% BAL   10","203-  '
+            'AVBAL   9","876"\n')
         self.assertEqual(txs[0]['description'],
-                         'INT FR 01/22 THRU02/21@ 8 1/4% BAL   12,305-  AVBAL   11,870')
+                         'INT FR 01/22 THRU02/21@ 8 1/4% BAL   10,203-  AVBAL   9,876')
 
     def test_shifted_columns_raise(self):
         # A comma inside Symbol Description of an unquoted file shifts

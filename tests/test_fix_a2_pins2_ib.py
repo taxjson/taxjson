@@ -180,7 +180,7 @@ class TestAccrualMatching(unittest.TestCase):
         po = _acc('QZV', '2025-09-30', '2025-09-30', '2025-10-14', 9000,
                   0.0125, 112.5, 'Po')
         re_ = _acc('QZV', '2025-10-14', '2025-09-30', '2025-10-14', 9000,
-                   0.01740125, -112.5, 'Re')
+                   0.01697375, -112.5, 'Re')
         pil = _div('QZV', 'US0000000QV1', '2025-10-14', 112.5, pil=True)
         for rows in ((po, re_, pil), (re_, po, pil)):
             with self.subTest(first=rows[0][:60]):

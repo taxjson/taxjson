@@ -126,10 +126,10 @@ class TestQtSymbolResolution(unittest.TestCase):
 
     def test_code_rows_in_a_later_file_resolve_account_wide(self):
         """R1-67: the trade in last year's export, the ROC in this one."""
-        income = (qdiv('A020626', 'ACME CORP CASH DIV ON 100 SHS REC '
+        income = (qdiv('X000008', 'ACME CORP CASH DIV ON 100 SHS REC '
                        '01/15/26 PAY 02/01/26', '40.00', td='2026-02-02',
                        cur='CAD')
-                  + qdiv('A020626', 'ACME CORP RETURN OF CAPITAL ON 100 SHS '
+                  + qdiv('X000008', 'ACME CORP RETURN OF CAPITAL ON 100 SHS '
                          'REC 01/15/26 PAY 02/01/26', '700.00',
                          td='2026-02-02', cur='CAD'))
         txs, err, _ = qt_parse(self.TRADE, income)
@@ -138,10 +138,10 @@ class TestQtSymbolResolution(unittest.TestCase):
 
     def test_unresolved_code_is_loud_and_a_lint_finding(self):
         txs, err, pars = qt_parse(
-            qdiv('A020626', 'OTHERCO INC RETURN OF CAPITAL ON 100 SHS REC '
+            qdiv('X000008', 'OTHERCO INC RETURN OF CAPITAL ON 100 SHS REC '
                  '01/15/26 PAY 02/01/26', '700.00', cur='CAD'))
-        self.assertIn("keeps internal symbol code 'A020626'", err)
-        self.assertIn('GLOBAL A020626.TO', err)
+        self.assertIn("keeps internal symbol code 'X000008'", err)
+        self.assertIn('GLOBAL X000008.TO', err)
         self.assertTrue(pars[0].lint_findings)
 
     def test_event_rows_under_a_code_bind_to_the_trade(self):
@@ -479,12 +479,12 @@ class TestQtCorpActionChains(unittest.TestCase):
         leg = ('WTS QZD DEV CORP WT EXP RTS DIST ON 500 SHS FROM SEC# '
                'J000001 QZD DEVELOPMENT CORP REC 08/11/25 PAY 08/13/25')
         ev, err = self._events(q(td='2025-08-13', action='DIS',
-                                 sym='D056068', desc=leg, qty='50',
+                                 sym='X000007', desc=leg, qty='50',
                                  price='0', gross='0', comm='0', net='0',
                                  act='Dividends'))
         self.assertEqual(len(ev), 1)
         # Named as booked (A2-0966).
-        self.assertIn("INTERNAL code D056068.", err)
+        self.assertIn("INTERNAL code X000007.", err)
 
 
 

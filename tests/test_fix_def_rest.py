@@ -210,12 +210,12 @@ class TestTickerChangeHintMootOnceMapped(unittest.TestCase):
 
     def test_questrade_internal_code_hint_moot_once_mapped(self):
         from test_fix_rbcqt import qdiv
-        roc = qdiv('A020626', 'OTHERCO INC RETURN OF CAPITAL ON 100 SHS '
+        roc = qdiv('X000008', 'OTHERCO INC RETURN OF CAPITAL ON 100 SHS '
                    'REC 01/15/26 PAY 02/01/26', '700.00', cur='CAD')
         rc, err = _brokerage('questrade', {'q.csv': QH + roc})
         self.assertIn('keeps internal symbol code', err)
         rc, err = _brokerage('questrade', {'q.csv': QH + roc},
-                             'GLOBAL A020626.TO QZO.TO\n')
+                             'GLOBAL X000008.TO QZO.TO\n')
         self.assertNotIn('keeps internal symbol code', err)
 
     def test_rbc_usd_units_hint_names_the_tsx_spelling(self):

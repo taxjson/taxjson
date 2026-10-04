@@ -654,14 +654,14 @@ class TestViews(unittest.TestCase):
             "FX.render_report = lambda *a, **k: 'REPORT'\n"
             "R._fx_cash_doc = lambda root, cache: ({'events': [{"
             "'date': '2025-03-03', 'account': 'margin', 'currency': 'USD',"
-            " 'units': 79081.35, 'rate': 1.4428, 'gain': 653.7,"
+            " 'units': 61234.57, 'rate': 1.3579, 'gain': 456.7,"
             " 'symbol': 'DLR.U.TO'}]}, {}, 'CAD', 2025, 'canada')\n"
             "sys.argv = ['taxjson', 'fx-cash', '--events']\n"
             "R.main()\n")
         r = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT,
                            capture_output=True, text=True,
                            stdin=subprocess.DEVNULL)
-        self.assertIn("USD 79,081.35 1.4428 +653.70 DLR.U.TO", r.stdout,
+        self.assertIn("USD 61,234.57 1.3579 +456.70 DLR.U.TO", r.stdout,
                       r.stderr)
 
 

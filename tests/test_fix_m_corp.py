@@ -335,7 +335,7 @@ class TestRbcPairing(unittest.TestCase):
     @rule("CA-CORP-02")
     def test_same_issuer_exchange_stays_a_reorg(self):
         rows = [
-            _rbc_row("2024-04-30", "Reorganization", "C005166",
+            _rbc_row("2024-04-30", "Reorganization", "X000009",
                      "CELESTA INC SUBORD VTG SHS", "-175", "0", "CAD",
                      "MGR - CELESTA INC SUBORD VTG SHS XCH TO CELESTA INC "
                      "1 FOR 1"),

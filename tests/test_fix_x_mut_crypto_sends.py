@@ -72,7 +72,7 @@ class TestFormatting(unittest.TestCase):
         self.assertEqual(cs.fmt_price(float("inf")), "0")
         self.assertEqual(cs.fmt_price(float("nan")), "0")
         self.assertEqual(cs.fmt_price(1234567.89), "1234568")
-        self.assertEqual(cs.fmt_price(-387.8127716), "-387.813")
+        self.assertEqual(cs.fmt_price(-123.4567891), "-123.457")
 
     def test_send_id_of_an_unknown_exchange(self):
         # m1333: the first two letters of the exchange, "xx" if none.

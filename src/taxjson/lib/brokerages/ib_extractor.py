@@ -2293,7 +2293,7 @@ class IbBrokerage(BaseBrokerage):
         # emitted transaction plus the legs' share quantities so the
         # ratio can be refined to the broker's own rounding once both
         # legs have been seen (IB books fractional results to 4 dp:
-        # 5,000 shares 1-for-3 becomes 1666.6667, not 5000/3 — using
+        # 7,000 shares 1-for-3 becomes 2333.3333, not 7000/3 — using
         # the text ratio leaves ±1e-4 phantom dust in the pool).
         emitted_splits: Dict[tuple, Dict[str, Any]] = {}
         # Cash-in-lieu fractions seen BEFORE a split of their symbol

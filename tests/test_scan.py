@@ -309,7 +309,7 @@ class TestMapUnusedIsRootAware(unittest.TestCase):
                 holdings={"margin": _holdings_toml("XIU.TO")},
                 raws={"margin": _raw_json("XIU.TO")},
                 ticker_map="TOBASE BCE.US BCE.TO\nTOBASE ZZZ.US ZZZ.TO\n"
-                           "GLOBAL D056068 DFDVW.US\n")
+                           "GLOBAL X000007 DFDVW.US\n")
             # A parsed-source file (what the dead-rule check reads):
             # a BCE OPTION under the .US root, and the warrant code
             # with a currency suffix.
@@ -319,18 +319,18 @@ class TestMapUnusedIsRootAware(unittest.TestCase):
                      "symbol": "BCE251121C00050000.US", "quantity": -1,
                      "currency": "USD", "net_amount": 120.0},
                     {"action": "BUYSELL", "date": "2026-03-02",
-                     "symbol": "D056068.US", "quantity": 100,
+                     "symbol": "X000007.US", "quantity": 100,
                      "currency": "USD", "net_amount": 0.0}]}))
             r = _run(root, "--json")
         doc = json.loads(r.stdout)
         rules = [n["rule"] for n in doc["notes"]]
-        # The suffix-less `GLOBAL D056068 DFDVW.US` is NOT live against
-        # D056068.US: the engine matches a rule's FROM exactly, so scan
+        # The suffix-less `GLOBAL X000007 DFDVW.US` is NOT live against
+        # X000007.US: the engine matches a rule's FROM exactly, so scan
         # reports it with a hint to write the suffixed form (S053-12 —
         # this test used to pin the scan calling it live).
         self.assertEqual(len(rules), 2, rules)
-        self.assertTrue(rules[0].startswith("D056068 -> DFDVW.US (the "
-                                            "books only have D056068.US"),
+        self.assertTrue(rules[0].startswith("X000007 -> DFDVW.US (the "
+                                            "books only have X000007.US"),
                         rules)
         self.assertEqual(rules[1], "ZZZ.US -> ZZZ.TO")
         self.assertEqual(r.returncode, 0, "notes never fail the scan")

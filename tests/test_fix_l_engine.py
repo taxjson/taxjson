@@ -717,7 +717,7 @@ class TestTraceColumns(unittest.TestCase):
         # Sub-cent rounding on a zero-commission sale is not a fee.
         self.assertEqual(fee(_cx("2025-07-14", "KVX.US", -270, 10293.35,
                                  price=38.1235)), 0.0)
-        self.assertAlmostEqual(fee(_cx("2025-07-14", "ABC.US", 500, 5204.95,
+        self.assertAlmostEqual(fee(_cx("2025-07-14", "ABC.US", 300, 3122.95,
                                        price=10.41)), -0.05, 4)
         # A units mismatch (per-contract quote, per-share net) still
         # shows 0, not a fictitious fee.
@@ -888,7 +888,7 @@ class TestCryptoDustRows(unittest.TestCase):
             account="crypto")
         book = [mk("2025-01-02", 1.0, 100000.0)]
         for i in range(20):
-            book.append(mk(f"2025-02-{i + 1:02d}", 9e-07, 0.09))
+            book.append(mk(f"2025-02-{i + 1:02d}", 8e-07, 0.09))
         book.append(mk("2025-03-03", -5e-07, 0.08))
         return book
 
@@ -898,13 +898,13 @@ class TestCryptoDustRows(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             r = CanadaTaxRules().compute_gains(self._book())
         inv = {i["symbol"]: i for i in r["inventory"]}
-        self.assertAlmostEqual(inv["BTC"]["qty"], 1.0000175, 12)
+        self.assertAlmostEqual(inv["BTC"]["qty"], 1.0000155, 12)
         sales = [g for g in r["transactions"] if g.get("date") == "2025-03-03"]
         self.assertEqual(len(sales), 1)
         self.assertAlmostEqual(sales[0]["proceeds"], 0.08, 6)
-        # Pool cost 100001.80 over 1.000018 units; 5e-7 units leave.
+        # Pool cost 100001.80 over 1.000016 units; 5e-7 units leave.
         self.assertAlmostEqual(inv["BTC"]["total_cost"],
-                               100001.8 * (1.0000175 / 1.000018), 2)
+                               100001.8 * (1.0000155 / 1.000016), 2)
 
     @rule("US-BASIS-01")
     def test_us_names_skipped_dust(self):

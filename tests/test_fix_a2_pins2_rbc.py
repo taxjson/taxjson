@@ -110,7 +110,7 @@ class TestRbcMergerNote(unittest.TestCase):
         user to enter the shares through a .tt file (the corp-actions
         stage books them — a .tt row double-books)."""
         body = (rrow("March 3, 2025", "Buy", "QZH", "QZH CORPORATION",
-                     "15", "100", "-1509.95", "USD", "QZH UNSOLICITED")
+                     "15", "100", "-1507.77", "USD", "QZH UNSOLICITED")
                 + rrow("July 1, 2025", "Reorganization", "X000004",
                        "QZH CORPORATION", "-15", "", "0", "USD",
                        "MGR - QZH CORPORATION MERGER TO QZC CORPORATION "

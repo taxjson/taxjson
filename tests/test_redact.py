@@ -34,7 +34,7 @@ RBC = (
     ',,,,,,,,,\n'
     '"Account: 55500002 - Margin"\n'  # pii-ok (synthetic)
     'Date,Activity Type,Symbol,Description,Quantity,Price,Amount\n'
-    '2025-01-13,Buy,AMD,ADVANCED MICRO DEVICES INC COM,100,116.5351,-11660.46\n'
+    '2025-01-13,Buy,ABC,ABC EXAMPLE INC COM,100,112.3456,-11244.51\n'
 )
 
 
@@ -68,7 +68,7 @@ class TestRedact(unittest.TestCase):
         out, rep = redact_text(RBC)
         self.assertNotIn("55500002", out)
         self.assertIn('"Account: 9990', out)
-        self.assertIn("100,116.5351,-11660.46", out)
+        self.assertIn("100,112.3456,-11244.51", out)
 
     def test_extra_patterns_and_denylist(self):
         out, rep = redact_text("note: Jane Sample owns this\n", ["Jane Sample"])

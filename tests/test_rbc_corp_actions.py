@@ -31,7 +31,7 @@ _MERGER = (
     'RECEIVED THRU MERGER"\n'
 )
 _SALE = ('"2025-11-19 00:00:00","Sell","ABD","ABDCO CORPORATION","-12",'
-         '"110.00","2025-11-20 00:00:00","123","1318.45","USD","ABDCO SALE"\n')
+         '"110.00","2025-11-20 00:00:00","123","1310.05","USD","ABDCO SALE"\n')
 # An ABC dividend row — carries the *real* ticker (ABC) under the same
 # company name as the merger removal's temp code (A012345), so the
 # extractor can resolve A012345 → ABC.

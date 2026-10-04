@@ -79,7 +79,7 @@ class TestRbcRoc(unittest.TestCase):
                    # .TO) so the ROC lands on the same pool identity even
                    # though this ROC is paid in CAD anyway.
                    "01/12/2024,Buy,XRE,ISHARES REIT ETF - Buy,100,15.00,"
-                   "01/15/2024,CAD,-1500.00,-1509.95\n"
+                   "01/15/2024,CAD,-1500.00,-1507.77\n"
                    "03/28/2024,Distributions,XRE,ISHARES REIT ETF "
                    "RETURN OF CAPITAL ON 100 SHS,0,0.00,"
                    "03/28/2024,CAD,0.00,12.34\n")

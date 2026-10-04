@@ -95,7 +95,7 @@ class TestSidecar(unittest.TestCase):
 class TestDerivedPricesAreReprClean(unittest.TestCase):
     """Prices parsers derive by DIVISION must round to 8dp before
     storage: repr() is the display path (round-trippable taxtext), so
-    an unrounded 10,840.20/420 stored 25.810000000000002 and the
+    an unrounded 8,425.20/420 stored 20.060000000000002 and the
     events view printed it (round-five follow-up). 8dp keeps
     satoshi-level crypto prices intact."""
 
@@ -104,7 +104,7 @@ class TestDerivedPricesAreReprClean(unittest.TestCase):
             'Transfers,Data,Stocks,CAD,U1,RYQ,2026-07-09,InterDepot,In,'
             '--,U1,240,--,"10,360.80",0.00,0.00,',
             'Transfers,Data,Stocks,CAD,U1,RYQ,2026-07-09,InterDepot,In,'
-            '--,U1,420,--,"10,840.20",0.00,0.00,')
+            '--,U1,420,--,"8,425.20",0.00,0.00,')
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "ib.csv"
             p.write_text(csv, encoding="utf-8")
@@ -116,8 +116,8 @@ class TestDerivedPricesAreReprClean(unittest.TestCase):
                 cwd=REPO_ROOT, capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             row = json.loads(side.read_text())["transactions"][0]
-        self.assertEqual(row["price"], 25.81)
-        self.assertEqual(repr(row["price"]), "25.81",
+        self.assertEqual(row["price"], 20.06)
+        self.assertEqual(repr(row["price"]), "20.06",
                          "division noise must not reach storage")
 
 

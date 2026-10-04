@@ -36,7 +36,7 @@ class TestRbcParser(unittest.TestCase):
         grouped EXP with ASN, which silently dropped premium gains.
         """
         content = """\"Date\",\"Activity\",\"Symbol\",\"Symbol Description\",\"Quantity\",\"Price\",\"Settlement Date\",\"Account\",\"Value\",\"Currency\",\"Description\"
-\"March 17, 2025\",\"Reorganization\",\"8DZNZG9\",\"\",\"-12\",\"\",\"March 17, 2025\",\"12345678\",\"0\",\"CAD\",\"EXP - CALL .ZBQ   03/14/25    74 ZBQ BANK CORP OPTION EXPIRATION - EXPIRED\"
+\"March 17, 2025\",\"Reorganization\",\"8XXXXX3\",\"\",\"-12\",\"\",\"March 17, 2025\",\"12345678\",\"0\",\"CAD\",\"EXP - CALL .ZBQ   03/14/25    74 ZBQ BANK CORP OPTION EXPIRATION - EXPIRED\"
 """
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
             f.write(content)
@@ -65,9 +65,9 @@ class TestRbcParser(unittest.TestCase):
         rolled premium is folded in via the engine's pending_adjustments.
         """
         content = """\"Date\",\"Activity\",\"Symbol\",\"Symbol Description\",\"Quantity\",\"Price\",\"Settlement Date\",\"Account\",\"Value\",\"Currency\",\"Description\"
-\"June 13, 2025\",\"Other\",\"9BZYDS1\",\"\",\"1\",\"\",\"June 17, 2025\",\"12345678\",\"0\",\"USD\",\"ASN - CALL KVX   06/13/25   142.50 KVX GLOBAL INC ASSIGNMENT OF OPTION\"
+\"June 13, 2025\",\"Other\",\"9XXXXX4\",\"\",\"1\",\"\",\"June 17, 2025\",\"12345678\",\"0\",\"USD\",\"ASN - CALL KVX   06/13/25   142.50 KVX GLOBAL INC ASSIGNMENT OF OPTION\"
 \"June 13, 2025\",\"Sell\",\"KVX\",\"KVX GLOBAL INC CLASS A\",\"-100\",\"142.5\",\"June 17, 2025\",\"12345678\",\"14207\",\"USD\",\"KVX GLOBAL INC ASSIGNMENT OF OPTION AS OF 06/13/25\"
-\"June 3, 2025\",\"Sell\",\"9BZYDS1\",\"\",\"-1\",\"6.4\",\"June 4, 2025\",\"12345678\",\"631.77\",\"USD\",\"CALL KVX   06/13/25   142.50 KVX GLOBAL INC UNSOLICITED CA OPEN CONTRACT\"
+\"June 3, 2025\",\"Sell\",\"9XXXXX4\",\"\",\"-1\",\"6.4\",\"June 4, 2025\",\"12345678\",\"631.77\",\"USD\",\"CALL KVX   06/13/25   142.50 KVX GLOBAL INC UNSOLICITED CA OPEN CONTRACT\"
 """
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
             f.write(content)
@@ -206,7 +206,7 @@ class TestRbcDividendClassifier(unittest.TestCase):
         from taxjson.lib.brokerages.rbc_direct import classify_rbc_row as c
         self.assertEqual(c(_rbc_row(
             'Transfers', 'TFI - SAMPLE DIVIDEND SPLIT CORP CL-A SHS ACCOUNT '
-                         'TRANSFER BOOK VALUE 16506.95', qty=100)),
+                         'TRANSFER BOOK VALUE 13579.24', qty=100)),
             'transfer')
         self.assertEqual(c(_rbc_row(
             'Transfers', 'TFO - SAMPLE COMPOSITE HIGH DIVIDEND '

@@ -87,14 +87,14 @@ class TestTransactionsCmd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, {"margin_raw.json": [
                 _tx("BUYSELL", recent, "AAA.TO", 100, 0.25, 25.0),
-                _tx("BUYSELL", recent, "BBB.TO", 100, 53.365, 5337.5003),
+                _tx("BUYSELL", recent, "BBB.TO", 100, 53.365, 5337.5013),
             ]})
             out = _run(root, "30d", "margin").stdout
         self.assertNotIn("0000000", out)      # no .tt padding zeros
         # money → exactly 2 decimals
         self.assertIn("25.00", out)
         self.assertIn("5,337.50", out)
-        self.assertNotIn("5,337.5003", out)   # amount rounded to cents
+        self.assertNotIn("5,337.5013", out)   # amount rounded to cents
         # price / qty keep their significant digits (not forced to 2dp)
         self.assertIn("53.365", out)
         self.assertIn("0.25", out)

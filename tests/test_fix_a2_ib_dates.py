@@ -176,9 +176,9 @@ class TestIbFuturesEveningSession(unittest.TestCase):
     def test_sunday_evening_round_trip_is_dated_monday_in_both(self):
         _, txs, _ = _parse_ib(
             HEAD + FUT_H
-            + _trade('QZCLG6', '2025-11-30, 19:12:37', 1, 60.0, -60000,
+            + _trade('QZCLG6', '2025-11-30, 19:05:13', 1, 60.0, -60000,
                      -2.25, cat='Futures')
-            + _trade('QZCLG6', '2025-11-30, 21:32:44', -1, 61.0, 61000,
+            + _trade('QZCLG6', '2025-11-30, 21:10:27', -1, 61.0, 61000,
                      -2.25, cat='Futures', code='C')
             + FII_H + FUT_FII)
         self.assertEqual([t['date'] for t in txs],

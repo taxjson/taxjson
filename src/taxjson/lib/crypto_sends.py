@@ -117,7 +117,7 @@ def fmt_qty(q: float) -> str:
 
 
 def fmt_price(p: float) -> str:
-    """Six significant digits, no exponent: 387.813, 150000, 1.3611."""
+    """Six significant digits, no exponent: 123.457, 150000, 1.2346."""
     p = float(p)
     if p == 0 or not math.isfinite(p):
         return "0"

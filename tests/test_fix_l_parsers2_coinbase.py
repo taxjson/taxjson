@@ -123,7 +123,7 @@ class TestStakingValue(unittest.TestCase):
 
     def test_subtotal_wins_over_qty_times_price(self):
         tx, _, _ = _parse(
-            "a7,2025-07-18 18:45:04 UTC,Staking Income,ZZC,0.00189506,CAD,"
+            "a7,2025-07-18 18:44:13 UTC,Staking Income,ZZC,0.00189506,CAD,"
             "$200.00,$0.38,$0.55,$0.17,\n")
         div = [t for t in tx if t["action"] == "DIVIDEND"][0]
         self.assertAlmostEqual(div["net_amount"], 0.38)
@@ -134,7 +134,7 @@ class TestStakingValue(unittest.TestCase):
                "Total (inclusive of fees and/or spread),Fees and/or Spread,"
                "Notes\n")
         tx, _, _ = _parse(
-            "a8,2025-07-18 18:45:04 UTC,Staking Income,ZZC,0.2,CAD,"
+            "a8,2025-07-18 18:44:13 UTC,Staking Income,ZZC,0.2,CAD,"
             "$200.00,$60.00,$20.00,\n", header=hdr)
         div = [t for t in tx if t["action"] == "DIVIDEND"][0]
         buy = [t for t in tx if t["action"] == "BUYSELL"][0]

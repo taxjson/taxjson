@@ -99,7 +99,7 @@ class TestWebullParser(unittest.TestCase):
     _CSV_2024 = (
         '"Currency","Date","Action Code","Symbol","Security Description",'
         '"Type Code","Quantity","Price","Proceeds"\n'
-        'USD,25-11-2024,BUY,@QRS,CALL QRS03/26/25 63.5,OPC,10,1.35,"(1,359.92)"\n'
+        'USD,25-11-2024,BUY,@QRS,CALL QRS03/26/25 63.5,OPC,10,1.35,"(1,358.87)"\n'
         'USD,16-12-2024,SELL,@QRS,CALL QRS03/26/25 63.5,OPC,10,2.15,"2140.00"\n'
     )
 
@@ -107,7 +107,7 @@ class TestWebullParser(unittest.TestCase):
     _CSV_2025 = (
         '"Currency","Date","Action Code","Symbol","Security Description",'
         '"Type Code","Quantity","Price","_","Proceeds"\n'
-        'USD,25-11-2024,BUY,@QRS,CALL QRS03/26/25 63.5,OPC,10,1.35,,"(1,359.92)"\n'
+        'USD,25-11-2024,BUY,@QRS,CALL QRS03/26/25 63.5,OPC,10,1.35,,"(1,358.87)"\n'
         'USD,16-12-2024,SELL,@QRS,CALL QRS03/26/25 63.5,OPC,10,2.15,,"2140.00"\n'
     )
 
@@ -132,24 +132,24 @@ class TestWebullParser(unittest.TestCase):
 
     def test_2024_format_proceeds_column_8(self):
         txs = self._parse(self._CSV_2024)
-        # |Buy net| ≈ 1359.92; |Sell net| ≈ 2140
-        self.assertAlmostEqual(txs[0]['net_amount'], 1359.92, places=2)
+        # |Buy net| ≈ 1358.87; |Sell net| ≈ 2140
+        self.assertAlmostEqual(txs[0]['net_amount'], 1358.87, places=2)
         self.assertAlmostEqual(txs[1]['net_amount'], 2140.00, places=2)
 
     def test_2025_format_proceeds_column_9(self):
         txs = self._parse(self._CSV_2025)
-        self.assertAlmostEqual(txs[0]['net_amount'], 1359.92, places=2)
+        self.assertAlmostEqual(txs[0]['net_amount'], 1358.87, places=2)
         self.assertAlmostEqual(txs[1]['net_amount'], 2140.00, places=2)
 
     def test_option_fee_back_compute(self):
         """For an option, theoretical_gross = qty × price × 100.
-        Buy 10 @ $1.35: theoretical = 1350; net = 1359.92 → implicit fee $9.92.
+        Buy 10 @ $1.35: theoretical = 1350; net = 1358.87 → implicit fee $8.87.
         Sell 10 @ $2.15: theoretical = 2150; net = 2140 → implicit fee $10.00.
         """
         txs = self._parse(self._CSV_2024)
         buy_fee = float(txs[0].get('fee', 0))
         sell_fee = float(txs[1].get('fee', 0))
-        self.assertAlmostEqual(buy_fee, 9.92, places=2)
+        self.assertAlmostEqual(buy_fee, 8.87, places=2)
         self.assertAlmostEqual(sell_fee, 10.00, places=2)
 
     def test_equity_uses_multiplier_one(self):

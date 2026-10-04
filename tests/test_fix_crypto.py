@@ -133,7 +133,7 @@ class TestCoinbaseCryptoQuotedAdvancedTrade(unittest.TestCase):
         # so both legs go to taxjson-fill-crypto at price 0 (as Kraken's
         # crypto/crypto path does) instead of booking ETH "in BTC".
         txs, _ = _parse_cb(_cb_row(
-            "a4", "2025-06-30 18:32:27 UTC", "Advanced Trade Buy", "ETH",
+            "a4", "2025-06-30 18:31:17 UTC", "Advanced Trade Buy", "ETH",
             "1", "BTC", "0.025", "0.025", "0.02505", "0.00005",
             "Bought 1 ETH for 0.02505 BTC on ETH-BTC"))
         legs = {t["symbol"]: t for t in _bs(txs)}
@@ -146,7 +146,7 @@ class TestCoinbaseCryptoQuotedAdvancedTrade(unittest.TestCase):
 
     def test_usdc_quote_unchanged(self):
         txs, _ = _parse_cb(_cb_row(
-            "a5", "2025-06-30 18:32:27 UTC", "Advanced Trade Buy", "ETH",
+            "a5", "2025-06-30 18:31:17 UTC", "Advanced Trade Buy", "ETH",
             "1", "CAD", "$3400", "$3400", "$3405", "$5",
             "Bought 1 ETH for 2490 USDC on ETH-USDC at 2485 USDC/ETH"))
         self.assertEqual([(t["symbol"], t["net_amount"]) for t in _bs(txs)],

@@ -285,7 +285,7 @@ class TestIbPaymentInLieuBackfill(unittest.TestCase):
         po = _acc('QZV', '2025-09-16', '2025-09-16', '2025-09-30', 7000,
                   0.0125, 87.5, 'Po')
         re_ = _acc('QZV', '2025-09-30', '2025-09-16', '2025-09-30', 7000,
-                   0.01740125, -87.5, 'Re')
+                   0.01697375, -87.5, 'Re')
         pil = _div('QZV', 'CA0000000QV1', '2025-09-30', 121.81, cur='CAD',
                    pil=True)
         for rows in ((po, re_, pil), (re_, po, pil)):
@@ -600,20 +600,20 @@ class TestIbFuturesNotional(unittest.TestCase):
     def _fut(self, proceeds):
         from test_fix_ibparse import FII_H
         return (HEAD + TRADES_H
-                + _trade('CLZ5', '2025-10-01, 10:00:00', -1, 57.40237,
+                + _trade('CLZ5', '2025-10-01, 10:00:00', -1, 61.23456,
                          proceeds, cat='Futures', code='C')
                 + FII_H + 'Financial Instrument Information,Data,Futures,'
                           'CLZ5,CL DEC25,990000088,,CL,NYMEX,1000,2025-11-19,'
                           '202512,,,\n')
 
     def test_exact_futures_row_is_booked(self):
-        _, txs, _ = _parse_ib(self._fut(57402.37))
+        _, txs, _ = _parse_ib(self._fut(61234.56))
         self.assertEqual(len(txs), 1)
 
     def test_a_dollar_off_is_refused(self):
         from taxjson.lib.brokerages.base import BrokerageParseError
         with self.assertRaises(BrokerageParseError):
-            _parse_ib(self._fut(57403.37))
+            _parse_ib(self._fut(61235.56))
 
 
 class TestIbLowerCaseCurrency(unittest.TestCase):
@@ -774,7 +774,7 @@ class TestBackComputedFee(unittest.TestCase):
     def test_rounding_noise_is_not_a_charge(self):
         # A buy that cost 0.05 LESS than qty x the rounded price.
         self.assertEqual(
-            self.b.back_compute_fee(500, 10.41, 5204.95, False), 0.0)
+            self.b.back_compute_fee(300, 10.41, 3122.95, False), 0.0)
 
     def test_units_artifact_is_still_zeroed(self):
         # Net quoted per share (6.00) against a x100 gross (600): no fee.
@@ -1011,13 +1011,13 @@ class TestTransfersViewInBookValue(unittest.TestCase):
                     'action': 'TRANSFER', 'date': '2025-04-01',
                     'symbol': 'QZD.TO', 'quantity': 2000, 'currency': 'CAD',
                     'net_amount': 0.0, 'account': 'tfsa',
-                    'description': 'TFI QZD ETF BOOK VALUE 16,506.95'}]}))
+                    'description': 'TFI QZD ETF BOOK VALUE 13,579.24'}]}))
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 R.cmd_transfers_view(argparse.Namespace(
                     dir=str(root), account=None, json=True))
         rows = json.loads(out.getvalue())['transfers']
-        self.assertEqual([r['value'] for r in rows], [16506.95])
+        self.assertEqual([r['value'] for r in rows], [13579.24])
 
 
 # -------------------------------------------- schema / generator prompt

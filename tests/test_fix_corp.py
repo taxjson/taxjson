@@ -453,12 +453,12 @@ class TestOneValuation(unittest.TestCase):
               '({t}, ABH GOLD INC, US0000000002)')
         body = (_IB_HEAD.format(acct='U5550001') + _IB_CA  # pii-ok
                 + _ib_ca(m1.format(t='ABH.CAD', i='US0000000002'), 100,
-                         80823.48, when='2025-10-22, 20:25:00')
+                         61234.57, when='2025-10-22, 20:25:00')
                 + _ib_ca(m1.format(t='ABG', i='CA0000000001'), -1600,
-                         -81138.28, when='2025-10-22, 20:25:00')
+                         -61512.34, when='2025-10-22, 20:25:00')
                 + _ib_ca(m2.format(t='ABH.CAD'), -100, -80000,
                          when='2025-10-28, 20:25:00')
-                + _ib_ca(m2.format(t='ABH'), 100, 56705.26, cur='USD',
+                + _ib_ca(m2.format(t='ABH'), 100, 43210.98, cur='USD',
                          when='2025-10-28, 20:25:00'))
         path = _tmp_csv(body)
         try:
@@ -469,7 +469,7 @@ class TestOneValuation(unittest.TestCase):
         ev = evs[0]
         self.assertEqual(ev.target_symbol, 'ABH.US')
         self.assertEqual((ev.target_fmv, ev.target_fmv_currency),
-                         (80823.48, 'CAD'))
+                         (61234.57, 'CAD'))
 
 
 # --------------------------------------------------------------- S002-04 / S019-04

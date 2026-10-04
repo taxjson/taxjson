@@ -13,7 +13,7 @@ from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
 
 _CSV = """Date,Activity,Symbol,Symbol Description,Quantity,Price,Settlement Date,Account,Value,Currency,Description
 3/15/2022,Dividends,PEY,PEYTO EXPLORATION AND DEVELOPMENT CORP,,,15-Mar-22,55500001,66,CAD,DIV - PEYTO EXPLORATION AND DEVELOPMENT CORP CASH DIV  ON     600 SHS REC 02/28/22 PAY 03/15/22
-1/6/2022,Sell,VT,VANGUARD TOTAL WORLD STOCK ETF,-950,106.054,10-Jan-22,55500001,100740.83,USD,VANGUARD TOTAL WORLD STOCK ETF UNSOLICITED CA
+1/6/2022,Sell,VT,VANGUARD TOTAL WORLD STOCK ETF,-500,101.234,10-Jan-22,55500001,50607.05,USD,VANGUARD TOTAL WORLD STOCK ETF UNSOLICITED CA
 12/30/2022,Buy,XEI,ISHARES S&P/TSX COMPOSITE HIGH DIV,100,24.10,4-Jan-23,55500001,-2419.95,CAD,ISHARES S&P/TSX COMPOSITE HIGH DIV
 """
 
@@ -67,16 +67,16 @@ class TestRbcRetraction(unittest.TestCase):
         # blank price, negative quantity, Value = proceeds. It was an
         # unclassified skip, so the shares never left the books.
         csv = ('"Date","Activity","Symbol","Symbol Description","Quantity","Price","Settlement Date","Account","Value","Currency","Description"\n'
-               '"January 12, 2024","Other","ZQS","ZQ SPLIT CORP CL-A SHS","-1000","","January 12, 2024","55500001","5360.70","CAD",'  # pii-ok: synthetic id
-               '"TEN - ZQ SPLIT CORP CL-A SHS RETRACTION AT C$5.3607 PER SHARE 000000000000"\n')
+               '"January 12, 2024","Other","ZQS","ZQ SPLIT CORP CL-A SHS","-1000","","January 12, 2024","55500001","5432.10","CAD",'  # pii-ok: synthetic id
+               '"TEN - ZQ SPLIT CORP CL-A SHS RETRACTION AT C$5.4321 PER SHARE 000000000000"\n')
         with tempfile.TemporaryDirectory() as td:
             f = Path(td) / "rbc.csv"
             f.write_text(csv)
             rows = [r for r in RbcBrokerage().parse_file(f) if r["action"] == "BUYSELL"]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["quantity"], -1000.0)
-        self.assertAlmostEqual(rows[0]["net_amount"], 5360.70)
-        self.assertAlmostEqual(rows[0]["price"], 5.3607)
+        self.assertAlmostEqual(rows[0]["net_amount"], 5432.10)
+        self.assertAlmostEqual(rows[0]["price"], 5.4321)
         self.assertEqual(rows[0]["symbol"], "ZQS.TO")
 
 

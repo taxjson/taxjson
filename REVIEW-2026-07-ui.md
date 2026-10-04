@@ -319,7 +319,7 @@ mkdir -p /tmp/nvr2-tt/inputs/{margin,manual}; taxjson.toml with accounts.margin 
 ```
 # repro
 Project /tmp/fc2-base (canada/2025/CAD, Questrade CSV with BCE.TO wash-sale + XIU.TO gain; `taxjson run --no-input` done). Then:
-printf 'Symbol,Quantity,Proceeds of disposition,Cost or other basis\nBCE.TO,200,7600.00,9004.99\nBCE.TO,100,N/A,3700.00\nXIU.TO,100,3890.00,3204.99\n' > slip_na2.csv
+printf 'Symbol,Quantity,Proceeds of disposition,Cost or other basis\nBCE.TO,200,7600.00,9012.34\nBCE.TO,100,N/A,3700.00\nXIU.TO,100,3890.00,3204.99\n' > slip_na2.csv
 python -m taxjson.bin.taxjson_run -C /tmp/fc2-base reconcile-slips slip_na2.csv; echo EXIT=$?
 French variant: slip with "7 600,00"/"9 004,99" quoted cells → all rows dropped.
 ```
@@ -334,7 +334,7 @@ French variant: slip with "7 600,00"/"9 004,99" quoted cells → all rows droppe
 
 ```
 # repro
-python3 -c "open('/tmp/fc2-base/slip_cp1252.csv','wb').write('Symbol,Description,Quantity,Proceeds of disposition,Cost or other basis\nBCE.TO,BCE Inc — Montréal Québec,200,7600.00,9004.99\n'.encode('cp1252'))"
+python3 -c "open('/tmp/fc2-base/slip_cp1252.csv','wb').write('Symbol,Description,Quantity,Proceeds of disposition,Cost or other basis\nBCE.TO,BCE Inc — Montréal Québec,200,7600.00,9012.34\n'.encode('cp1252'))"
 python -m taxjson.bin.taxjson_run -C /tmp/fc2-base reconcile-slips /tmp/fc2-base/slip_cp1252.csv; echo EXIT=$?
 ```
 

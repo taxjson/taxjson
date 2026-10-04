@@ -291,9 +291,9 @@ class TestMoneyWarningsReachTheConsole(unittest.TestCase):
 
     def test_qt_internal_code_roc(self):
         _txs, err, _ = qt_parse(
-            qdiv("A020626", "OTHERCO INC RETURN OF CAPITAL ON 100 SHS REC "
+            qdiv("X000008", "OTHERCO INC RETURN OF CAPITAL ON 100 SHS REC "
                  "01/15/26 PAY 02/01/26", "700.00", cur="CAD"))
-        self.assertTrue(any("A020626" in ln for ln in _attention(err)), err)
+        self.assertTrue(any("X000008" in ln for ln in _attention(err)), err)
 
     def test_qt_net_of_tax_dividend_and_no_book_value(self):
         div = qdiv("AAPL", "APPLE INC CASH DIV ON 100 SHS NON-RES TAX "

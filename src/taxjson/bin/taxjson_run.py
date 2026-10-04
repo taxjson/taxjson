@@ -6760,7 +6760,7 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                 continue
             # The book row lost the parser's book_value evidence (not a
             # transaction field); RBC's description still carries it
-            # ("... BOOK VALUE 16506.95") — shown as the sidecar row is
+            # ("... BOOK VALUE 13579.24") — shown as the sidecar row is
             # (audit S027-06).
             _value = float(t.get("net_amount") or 0)
             if not _value:

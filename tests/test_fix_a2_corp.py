@@ -749,17 +749,17 @@ class TestQuestradeCorpUnbooked(unittest.TestCase):
         from taxjson.lib.corp_actions import parse_questrade_corporate_actions
         leg = ('WTS QZD DEV CORP WT EXP RTS DIST ON 500 SHS FROM SEC# '
                'J000001 QZD DEVELOPMENT CORP REC 08/11/25 PAY 08/13/25')
-        body = R.QH + R.q(td='2025-08-13', action='DIS', sym='D056068',
+        body = R.QH + R.q(td='2025-08-13', action='DIS', sym='X000007',
                           desc=leg, qty='50', price='0', gross='0',
                           comm='0', net='0', cur='CAD', act='Dividends')
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "qt.csv"
             p.write_text(body)
             ev, err = _quiet(parse_questrade_corporate_actions, p)
-            self.assertEqual([e.target_symbol for e in ev], ['D056068.TO'])
-            self.assertIn('GLOBAL D056068.TO <TICKER>.TO', err)
+            self.assertEqual([e.target_symbol for e in ev], ['X000007.TO'])
+            self.assertIn('GLOBAL X000007.TO <TICKER>.TO', err)
             ev, err = _quiet(parse_questrade_corporate_actions, p,
-                             renames={'D056068.TO': 'QZDW.TO'})
+                             renames={'X000007.TO': 'QZDW.TO'})
             self.assertNotIn('INTERNAL code', err)
 
 
