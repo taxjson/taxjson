@@ -840,9 +840,10 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
 )
 
 _TOP_DESCRIPTION = (
-    "taxjson — one-command orchestrator for the full tax pipeline. "
-    "`tjs` is the same program under a shorter name. Run with no "
-    "command for this page.")
+    "taxjson — capital gains, income and the superficial-loss / "
+    "wash-sale rules from your broker exports, computed on your "
+    "machine. `tjs` is the same program under a shorter name. Run with "
+    "no command for this page; `COMMAND -h` explains one command.")
 
 # The name the program was invoked as: `tjs` (the short console script)
 # or `taxjson` (also for `python -m taxjson.bin.taxjson_run`). Set by
@@ -17399,15 +17400,24 @@ def _build_parser(prog: str = "taxjson"
 
     p_run = sub.add_parser(
         "run",
-        help="Run the full pipeline (full rebuild by default; "
-             "--fast reuses cached stages)")
+        help="Build the books and every report from inputs/",
+        description="Run the full pipeline: parse every broker file in "
+                    "inputs/, convert to the base currency, apply "
+                    "ticker.map, corporate actions and your elections, "
+                    "compute the gains with the superficial-loss / "
+                    "wash-sale pass across all your accounts, and write "
+                    "reports/. Every stage is rebuilt by default; --fast "
+                    "skips the stages whose inputs, config and code are "
+                    "unchanged. The run ends with the broker positions "
+                    "cross-check when taxjson.toml names holdings files. "
+                    "Commands chain: `taxjson run sum`.")
     p_run.add_argument("--account", help="Process only one account")
     p_run.add_argument("--fast", action="store_true",
-                       help="Incremental run: reuse mtime-cached stage "
+                       help="Incremental run: reuse cached stage "
                             "outputs; stages whose inputs, config and "
                             "code are unchanged are skipped")
     p_run.add_argument("--no-input", action="store_true",
-                       help="Never prompt (GUI/CI): unresolved corp-action "
+                       help="Never prompt (scripts/CI): unresolved corp-action "
                             "elections write work/pending_elections.json "
                             "and exit 3 — resolve with `taxjson elect "
                             "... --set`, then re-run")
@@ -17420,7 +17430,12 @@ def _build_parser(prog: str = "taxjson"
     p_run.set_defaults(func=cmd_run)
 
     p_elect = sub.add_parser(
-        "elect", help="View/redo corporate-action tax elections")
+        "elect", help="Review or set corporate-action tax elections",
+        description="List the corporate-action events in the books "
+                    "(mergers, spin-offs, reorganisations) with the tax "
+                    "election recorded for each; redo or reset one, show "
+                    "what a --no-input run left pending, or write one "
+                    "non-interactively with --set EVENT_ID=ELECTION.")
     p_elect.add_argument("account", nargs="?",
                          help="Account to act on (omit to list all accounts)")
     p_elect.add_argument("--redo", action="store_true",
@@ -17453,20 +17468,28 @@ def _build_parser(prog: str = "taxjson"
 
     p_mig = sub.add_parser(
         "migrate",
-        help="Move an old project's yf_ticker.map, "
+        help="Move an older project's files into the new layout",
+        description="Move an old project's yf_ticker.map, "
              "crypto_ticker.map, ticker_extraction_overrides.txt, "
              "t1135.map, amt_carryover.txt, claimed_losses.txt, "
              "capital_gains_dividends.map and distributions.map into "
              "ticker.map / taxjson.toml (appended; each old file is "
              "renamed <name>.migrated). Every other command stops while "
              "one of those files is present. A leftover tv_exchange.map "
-             "(the removed TradingView export) is only renamed")
+             "(the removed TradingView export) is only renamed.")
     p_mig.add_argument("--dry-run", action="store_true",
                        help="Show what would be appended and moved; "
                             "write nothing")
     p_mig.set_defaults(func=cmd_migrate)
 
-    p_init = sub.add_parser("init", help="Scaffold a new project")
+    p_init = sub.add_parser(
+        "init", help="Create a new project folder for a tax year",
+        description="Scaffold a new project: taxjson.toml (tax year, "
+                    "country, base currency and the usual accounts for "
+                    "that country), a commented ticker.map, a .gitignore "
+                    "and an inputs/<account>/ folder per account for the "
+                    "broker exports. An existing taxjson.toml is kept "
+                    "unless --force (then it is backed up first).")
     p_init.add_argument("path", nargs="?", help="Directory to initialize (default: cwd)")
     p_init.add_argument("--country", required=True,
                         choices=["canada", "ca", "usa", "us"],
@@ -17481,8 +17504,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_tx = sub.add_parser(
         "events",
-        help="Print native (pre-base) transactions in taxtext format over a "
-             "look-back window, chronological oldest→latest")
+        help="Every transaction over a window, oldest first",
+        description="Print the transactions over a look-back window "
+                    "(default: the tax year) in the .tt text format, in "
+                    "their own currency (before conversion to the base "
+                    "currency), oldest to latest.")
     p_tx.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_tx.add_argument("account", nargs="?",
                       help="Account (default: all accounts, merged)")
@@ -17492,8 +17518,10 @@ def _build_parser(prog: str = "taxjson"
 
     p_div = sub.add_parser(
         "divs",
-        help="Like `events` but only DIVIDEND and DIVIDEND_IN_LIEU rows "
-             "(native, taxtext)")
+        help="Dividend rows over a window",
+        description="Like `events`, but only DIVIDEND and "
+                    "DIVIDEND_IN_LIEU rows (in their own currency, .tt "
+                    "text format).")
     p_div.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_div.add_argument("account", nargs="?", help="Account (default: all)")
     p_div.add_argument("--json", action="store_true",
@@ -17502,14 +17530,16 @@ def _build_parser(prog: str = "taxjson"
 
     p_xfer = sub.add_parser(
         "transfers",
-        help="Custody-transfer EVIDENCE view: depot flips, listing "
+        help="Custody transfers the books leave out",
+        description="Custody-transfer EVIDENCE view: depot flips, listing "
              "journals, broker migrations, and crypto "
              "withdrawals/sends (matched pairs read as self-custody "
              "moves; unmatched out-legs are gift/payment candidates "
-             "— dispositions at FMV if they left your ownership; in a "
-             "US project only a payment is a sale). "
-             "The TRANSFER rows the books deliberately exclude; "
-             "sidecar rows from taxable parses + in-book rows from "
+             "— dispositions at fair value if they left your "
+             "ownership; in a US project only a payment is a sale). "
+             "These are the TRANSFER rows the books deliberately "
+             "exclude (cost comes from the buy and sell history): "
+             "sidecar rows from taxable parses plus in-book rows from "
              "sheltered accounts.")
     p_xfer.add_argument("account", nargs="?",
                         help="Account (default: all accounts)")
@@ -17519,12 +17549,7 @@ def _build_parser(prog: str = "taxjson"
 
     p_csend = sub.add_parser(
         "crypto-sends",
-        help="Crypto withdrawals/sends that did not arrive in another of "
-             "your crypto accounts: decide self (own wallet) / gift "
-             "(Canada only) / payment, see the fair value and the .tt "
-             "BUYSELL line; --write generates inputs/<acct>/crypto_sends.tt. "
-             "Stablecoins get the currency-gain calculation instead of a "
-             "sale line.",
+        help="Decide the crypto sends that left your accounts",
         description="Crypto withdrawals/sends that did not arrive in "
                     "another of your crypto accounts. A send is paired "
                     "with an arrival of the same coin on another "
@@ -17533,8 +17558,10 @@ def _build_parser(prog: str = "taxjson"
                     "send, losing at most 10% to the network fee; a "
                     "paired send is your own move. Decide each unpaired "
                     "send: self (own wallet) / gift (Canada only) / "
-                    "payment; --write generates "
-                    "inputs/<acct>/crypto_sends.tt.")
+                    "payment, with its fair value and the .tt BUYSELL "
+                    "line; --write generates "
+                    "inputs/<acct>/crypto_sends.tt. Stablecoins get the "
+                    "currency-gain calculation instead of a sale line.")
     p_csend.add_argument("account", nargs="?",
                          help="Crypto account (default: all)")
     p_csend.add_argument("--set", action="append", metavar="ID=DECISION",
@@ -17570,9 +17597,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_dil = sub.add_parser(
         "dil",
-        help="Like `events` but only DIVIDEND_IN_LIEU rows — payments in "
-             "lieu received while shares were lent out or short over the "
-             "ex-date (native, taxtext)")
+        help="Payment-in-lieu rows over a window",
+        description="Like `events`, but only DIVIDEND_IN_LIEU rows — "
+                    "payments in lieu of a dividend, received while your "
+                    "shares were lent out or short over the ex-date (in "
+                    "their own currency, .tt text format).")
     p_dil.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_dil.add_argument("account", nargs="?", help="Account (default: all)")
     p_dil.add_argument("--json", action="store_true",
@@ -17581,9 +17610,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_roc = sub.add_parser(
         "roc",
-        help="Like `events` but only ADJUST rows — return-of-capital "
-             "ACB / basis reductions (broker-classified) and manual .tt "
-             "adjustments")
+        help="Return-of-capital and other cost-adjustment rows",
+        description="Like `events`, but only ADJUST rows — "
+                    "return-of-capital ACB / basis reductions (as the "
+                    "broker classified them) and manual .tt "
+                    "adjustments.")
     p_roc.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_roc.add_argument("account", nargs="?", help="Account (default: all)")
     p_roc.add_argument("--json", action="store_true",
@@ -17592,9 +17623,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_leaps = sub.add_parser(
         "leaps",
-        help="Closed LEAPS positions over a window — engine dispositions "
-             "of long option buys placed >3 months to expiry, with "
-             "lot-matched base-currency gains")
+        help="Closed LEAPS positions over a window",
+        description="Closed LEAPS positions over a window (default: the "
+                    "tax year) — the engine's dispositions of long "
+                    "option buys placed more than 3 months to expiry, "
+                    "with lot-matched base-currency gains.")
     p_leaps.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_leaps.add_argument("account", nargs="?", help="Account (default: all)")
     p_leaps.add_argument("--json", action="store_true",
@@ -17603,7 +17636,9 @@ def _build_parser(prog: str = "taxjson"
 
     p_bs = sub.add_parser(
         "trades",
-        help="Like `events` but only BUYSELL/ASSIGN rows (native, taxtext)")
+        help="Buy, sell and assignment rows over a window",
+        description="Like `events`, but only BUYSELL and ASSIGN rows (in "
+                    "their own currency, .tt text format).")
     p_bs.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_bs.add_argument("account", nargs="?", help="Account (default: all)")
     _add_instrument_filters(p_bs)
@@ -17613,7 +17648,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_g = sub.add_parser(
         "gains",
-        help="Realized gains in NATIVE terms (pre-TOBASE, pre-currency-to-base)")
+        help="Realized gains in the trade's own currency",
+        description="Realized gains in NATIVE terms: before ticker.map's "
+                    "TOBASE consolidation and before conversion to the "
+                    "base currency, over a window (default: the tax "
+                    "year).")
     p_g.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_g.add_argument("account", nargs="?", help="Account (default: all)")
     _add_instrument_filters(p_g)
@@ -17623,10 +17662,13 @@ def _build_parser(prog: str = "taxjson"
 
     p_scan = sub.add_parser(
         "scan",
-        help="Lint the project for common tax-efficiency mistakes "
-             "(US-listed Canadian dividend payers in taxable/TFSA, US "
-             "payers in TFSA, ticker.map cross-listing gaps); exit 1 "
-             "on findings")
+        help="Check holdings for tax-efficiency mistakes",
+        description="Lint the project for common tax-efficiency "
+                    "mistakes: Canadian dividend payers held through "
+                    "their US listing in a taxable account or a TFSA, US "
+                    "dividend payers in a TFSA (unrecoverable "
+                    "withholding), and ticker.map cross-listing gaps. "
+                    "Exit 1 on findings.")
     p_scan.add_argument("--online", action="store_true",
                         help="Also probe yfinance for .TO twins of "
                              "unmapped US-listed dividend payers "
@@ -17637,10 +17679,13 @@ def _build_parser(prog: str = "taxjson"
 
     p_sum = sub.add_parser(
         "sum",
-        help="Cross-account realized-gains summary (base currency, one "
-             "row per account): TAXABLE / SHELTERED / ALL tables when "
-             "both types exist, one table otherwise; "
-             "--other-income/--other-losses add a marginal tax ESTIMATE")
+        help="The year's realized gains, by account and form line",
+        description="Cross-account realized-gains summary for the tax "
+                    "year (base currency, one row per account): "
+                    "TAXABLE / SHELTERED / ALL tables when both types "
+                    "exist, one table otherwise, and the FOR THE RETURN "
+                    "block by form line; --other-income/--other-losses "
+                    "add a marginal tax ESTIMATE.")
     p_sum.add_argument("--other-income", type=float, default=None,
                        metavar="AMT",
                        help="Non-investment income (employment etc.) the "
@@ -17670,12 +17715,14 @@ def _build_parser(prog: str = "taxjson"
 
     p_est = sub.add_parser(
         "estimate",
-        help="ESTIMATE the tax on the year's investment income — "
+        help="Estimate the tax on the year's investment income",
+        description="ESTIMATE the tax on the year's investment income — "
              "tax(other income + investment income) minus tax(other "
              "income), bracketed on top of what you already earn "
-             "(Canada: 50%% inclusion, eligible gross-up/DTC, FTC "
-             "from the books' actual TAX rows; taxable accounts "
-             "only). Planning numbers, never filing numbers")
+             "(Canada: 50% inclusion, eligible gross-up/DTC, FTC "
+             "from the books' actual TAX rows, the minimum tax check "
+             "and any carryover; taxable accounts only). Planning "
+             "numbers, never filing numbers.")
     p_est.add_argument("--other-income", type=float, default=None,
                        metavar="AMT",
                        help="Employment/other income the investment "
@@ -17698,13 +17745,14 @@ def _build_parser(prog: str = "taxjson"
 
     p_amt = sub.add_parser(
         "amt",
-        help="Canada: the year's minimum tax (AMT) line by line — "
+        help="The year's minimum tax (AMT), line by line",
+        description="Canada: the year's minimum tax (AMT) line by line — "
              "adjusted taxable income, exemption, rate, credits, whether "
              "it binds, the provincial AMT, and the carryover (ITA "
              "s.120.2): available by year of origin with its 7-year "
              "limit, recovered this year, carried forward. The "
              "estimate's own figures; YEAR = a closed year prints what "
-             "its lock recorded")
+             "its lock recorded.")
     p_amt.add_argument("year", nargs="?", type=_tax_year_arg, default=None,
                        help="Tax year (default: [settings] year)")
     p_amt.add_argument("--other-income", type=float, default=None,
@@ -17723,13 +17771,14 @@ def _build_parser(prog: str = "taxjson"
 
     p_inst = sub.add_parser(
         "instalments",
-        help="Canadian tax instalments: what each of the four dates "
-             "(Mar/Jun/Sep/Dec 15) calls for under your chosen basis, "
-             "what you have paid, and the offset interest plus "
+        help="Instalments due, paid, and interest owed",
+        description="Canadian tax instalments: what each of the four "
+             "dates (Mar/Jun/Sep/Dec 15) calls for under your chosen "
+             "basis, what you have paid, and the offset interest plus "
              "s.163.1 penalty that follow from any gap. The "
              "current-year basis is driven by `taxjson estimate` "
              "itself (AMT included). Configure [instalments] in "
-             "taxjson.toml")
+             "taxjson.toml.")
     p_inst.add_argument("--json", action="store_true",
                         help="Emit the schedule and interest as JSON")
     p_inst.set_defaults(func=cmd_instalments)
@@ -17738,8 +17787,12 @@ def _build_parser(prog: str = "taxjson"
     # config tax year. A lone non-period positional is read as an account.
     p_dsum = sub.add_parser(
         "divs-sum",
-        help="Dividend total per ticker over a window (default: tax "
-             "year), each row in its tax year (lib/income_dating)")
+        help="Dividend total per ticker over a window",
+        description="Dividend total per ticker over a window (default: "
+                    "the tax year), each payment counted in its own tax "
+                    "year: the pay date, or in Canada a Canadian trust's "
+                    "record date (`taxjson tax-logic` states the "
+                    "rule).")
     p_dsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_dsum.add_argument("account", nargs="?", help="Account (default: all)")
     p_dsum.add_argument("--json", action="store_true",
@@ -17748,10 +17801,12 @@ def _build_parser(prog: str = "taxjson"
 
     p_dilsum = sub.add_parser(
         "dil-sum",
-        help="Payment-in-lieu total per symbol over a window (default: "
-             "tax year) with each row's treatment — ordinary income, or "
-             "(Canada) a Canadian dealer's payment on a Canadian share, "
-             "a dividend under ITA s.260 (also in divs-sum)")
+        help="Payment-in-lieu total per symbol, with its treatment",
+        description="Payment-in-lieu total per symbol over a window "
+             "(default: the tax year) with each row's treatment — "
+             "ordinary income, or (Canada) a Canadian dealer's payment "
+             "on a Canadian corporation's share, a dividend under ITA "
+             "s.260 (also in divs-sum).")
     p_dilsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_dilsum.add_argument("account", nargs="?", help="Account (default: all)")
     p_dilsum.add_argument("--json", action="store_true",
@@ -17760,9 +17815,10 @@ def _build_parser(prog: str = "taxjson"
 
     p_rsum = sub.add_parser(
         "roc-sum",
-        help="Return-of-capital total per ticker over a window "
-             "(default: tax year): the ACB (Canada, T3 box 42) or basis "
-             "(USA, Form 1099-DIV box 3) adjustments")
+        help="Return-of-capital total per ticker",
+        description="Return-of-capital total per ticker over a window "
+             "(default: the tax year): the ACB (Canada, T3 box 42) or "
+             "basis (USA, Form 1099-DIV box 3) adjustments.")
     p_rsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_rsum.add_argument("account", nargs="?", help="Account (default: all)")
     p_rsum.add_argument("--json", action="store_true",
@@ -17771,8 +17827,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_win = sub.add_parser(
         "winners",
-        help="Per-ticker realized gains RANKED — biggest winners and "
-             "losers over a window (default: tax year)")
+        help="Biggest realized winners and losers by ticker",
+        description="Per-ticker realized gains RANKED — the biggest "
+                    "winners and losers over a window (default: the tax "
+                    "year); options are grouped under their "
+                    "underlying.")
     p_win.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_win.add_argument("account", nargs="?",
                        help="Account (default: all)")
@@ -17785,8 +17844,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_ccd = sub.add_parser(
         "ccd-sum",
-        help="Covered-call (short call) realized-gain summary per "
-             "underlying over a window (default: tax year)")
+        help="Covered-call gains per underlying",
+        description="Covered-call (short call) realized-gain summary per "
+                    "underlying over a window (default: the tax year), "
+                    "split into taxable and sheltered parts when "
+                    "registered accounts contribute.")
     p_ccd.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_ccd.add_argument("account", nargs="?", help="Account (default: all)")
     p_ccd.add_argument("--json", action="store_true",
@@ -17795,8 +17857,10 @@ def _build_parser(prog: str = "taxjson"
 
     p_lsum = sub.add_parser(
         "leaps-sum",
-        help="Realized-gain summary for closed LEAPS positions, per "
-             "contract with total (default: tax year)")
+        help="LEAPS gains per contract",
+        description="Realized-gain summary for closed LEAPS positions, "
+                    "per contract with a total, over a window (default: "
+                    "the tax year).")
     p_lsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_lsum.add_argument("account", nargs="?", help="Account (default: all)")
     p_lsum.add_argument("--json", action="store_true",
@@ -17805,12 +17869,14 @@ def _build_parser(prog: str = "taxjson"
 
     p_stats = sub.add_parser(
         "stats",
-        help="Win/lose statistics on closed trades per asset class (long "
-             "and short shares, long and written options, futures, "
-             "crypto): trades, wins, losses, win rate, net P/L, average "
-             "and largest win and loss, profit factor — economic P/L in "
-             "the base currency before any superficial-loss / wash-sale "
-             "denial (default: tax year, taxable accounts)")
+        help="Win/loss statistics on closed trades",
+        description="Win/lose statistics on closed trades per asset "
+             "class (long and short shares, long and written options, "
+             "futures, crypto): trades, wins, losses, win rate, net "
+             "P/L, average and largest win and loss, profit factor — "
+             "economic P/L in the base currency before any "
+             "superficial-loss / wash-sale denial (default: the tax "
+             "year, taxable accounts).")
     p_stats.add_argument("period", nargs="?", metavar="YEAR",
                          help="Tax year (default: the project's year); "
                               "any window token works too (30d, ytd, "
@@ -17828,8 +17894,9 @@ def _build_parser(prog: str = "taxjson"
 
     p_tsum = sub.add_parser(
         "trades-sum",
-        help="Trade summary per ticker (buys/sells, value, fees) over a window "
-             "(default: tax year)")
+        help="Buys, sells and fees per ticker over a window",
+        description="Trade summary per ticker (buys and sells, value, "
+                    "fees) over a window (default: the tax year).")
     p_tsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_tsum.add_argument("account", nargs="?", help="Account (default: all)")
     p_tsum.add_argument("--json", action="store_true",
@@ -17838,8 +17905,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_pos = sub.add_parser(
         "list",
-        help="List open positions per account (qty + base-currency book cost) "
-             "after ticker.map consolidation and base-currency conversion")
+        help="Open positions per account, with book cost",
+        description="List the open positions per account (quantity and "
+                    "base-currency book cost) after ticker.map "
+                    "consolidation and base-currency conversion, at the "
+                    "end of the books or --date.")
     p_pos.add_argument("account", nargs="?", help="Account (default: all)")
     p_pos.add_argument("--date", metavar="YYYY-MM-DD", default=None,
                        help="Positions AS OF this date — each account's "
@@ -17865,8 +17935,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_sh = sub.add_parser(
         "shares",
-        help="Combined shares held of each symbol across all accounts "
-             "(post ticker.map), with a per-account breakdown")
+        help="Total shares held per symbol, all accounts",
+        description="Combined quantity held of each symbol across all "
+                    "accounts (after ticker.map), with a per-account "
+                    "breakdown and the combined book cost; option "
+                    "contracts only with --options.")
     p_sh.add_argument("--options", action="store_true",
                       help="Include option contracts (excluded by default)")
     g = p_sh.add_mutually_exclusive_group()
@@ -17882,10 +17955,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_red = sub.add_parser(
         "redact",
-        help="Strip the account numbers, names and contact details it "
-             "recognises from broker exports (row shapes kept) so a "
-             "statement can be shared as a parser sample or bug report "
-             "— review the output before sharing")
+        help="Strip personal details from an export to share it",
+        description="Strip the account numbers, names and contact "
+             "details it recognises from broker exports (row shapes "
+             "kept) so a statement can be shared as a parser sample or "
+             "bug report — review the output before sharing.")
     p_red.add_argument("files", nargs="+", metavar="FILE")
     p_red.add_argument("--out", metavar="DIR",
                        help="Write redacted copies here (default: beside "
@@ -17905,19 +17979,24 @@ def _build_parser(prog: str = "taxjson"
 
     p_ob = sub.add_parser(
         "option-boundary",
-        help="Written options that straddle a tax-year boundary: where the "
-             "premium and any later amount land under ITA s.49, and whether "
-             "a filed year needs a T1-ADJ")
+        help="Written options across a year end",
+        description="Written options that straddle a tax-year boundary, "
+                    "or are open at year end: where the premium and any "
+                    "later amount land under ITA s.49 for the premium "
+                    "timing in force, and whether a filed year needs a "
+                    "T1-ADJ.")
     p_ob.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
     p_ob.set_defaults(func=cmd_option_boundary)
 
     p_edge = sub.add_parser(
         "edge-cases",
-        help="Year-boundary and superficial-loss-window edge cases: trades "
-             "that settle in another year, options and income around Dec 31, "
-             "and acquisitions/sales near day 30 of a loss's window — where "
-             "each lands and why")
+        help="Trades on a year-end or 30-day-window edge",
+        description="Year-boundary and superficial-loss-window edge "
+             "cases: trades that settle in another year, options and "
+             "income around Dec 31, crypto near midnight, renames, and "
+             "acquisitions/sales near day 30 of a loss's window — "
+             "where each lands and why.")
     p_edge.add_argument("account", nargs="?",
                         help="Account (default: all)")
     p_edge.add_argument("--margin", type=int, default=3, metavar="DAYS",
@@ -17929,10 +18008,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_cd = sub.add_parser(
         "check-dates",
-        help="Check every trade and settlement date against its market's "
-             "calendar (crypto 24/7, futures 23/5, stocks incl. overnight, "
-             "options and Canadian listings on exchange days); exit 1 on "
-             "an impossible date")
+        help="Check trade and settlement dates for each market",
+        description="Check every trade and settlement date against its "
+             "market's calendar (crypto 24/7, futures 23/5, stocks "
+             "incl. overnight, options and Canadian listings on "
+             "exchange days); exit 1 on an impossible date.")
     p_cd.add_argument("account", nargs="?", help="Account (default: all)")
     p_cd.add_argument("--all", action="store_true",
                       help="List every row, not the first 10 per kind")
@@ -17942,8 +18022,10 @@ def _build_parser(prog: str = "taxjson"
 
     p_spin = sub.add_parser(
         "spinoffs",
-        help="Every spin-off: election, value per share used, income and "
-             "new-share cost booked; flags a zero value or missing election")
+        help="Spin-offs: election, value used, cost booked",
+        description="Every spin-off: the election, the value per share "
+                    "used, the income and new-share cost booked; flags a "
+                    "zero value or a missing election.")
     p_spin.add_argument("account", nargs="?", help="Account (default: all)")
     p_spin.add_argument("--json", action="store_true",
                         help="Emit JSON instead of text")
@@ -17951,8 +18033,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_split = sub.add_parser(
         "splits",
-        help="Every split, consolidation and rename with holdings before "
-             "and after; flags a split applied twice or a fractional result")
+        help="Splits and consolidations, holdings before/after",
+        description="Every split, consolidation and rename with the "
+                    "holdings before and after; flags a split applied "
+                    "twice or a fractional result. Exit 1 on a likely "
+                    "double application.")
     p_split.add_argument("account", nargs="?", help="Account (default: all)")
     p_split.add_argument("--json", action="store_true",
                          help="Emit JSON instead of text")
@@ -17960,9 +18045,12 @@ def _build_parser(prog: str = "taxjson"
 
     p_ren = sub.add_parser(
         "renames",
-        help="Every ticker change as a dated event (source, position and "
-             "cost carried) and every trade in an old ticker after its "
-             "rename; exit 1 while one is not declared in ticker.map")
+        help="Ticker changes as dated events",
+        description="Every ticker change as a dated event (where it came "
+             "from, the position and cost it carried) and every trade "
+             "in an old ticker after its rename, with how ticker.map "
+             "resolves it (`RENAME OLD NEW YYYY-MM-DD late=fold|"
+             "separate`); exit 1 while one is not declared.")
     p_ren.add_argument("account", nargs="?", help="Account (default: all)")
     p_ren.add_argument("--json", action="store_true",
                        help="Emit JSON instead of text")
@@ -17970,8 +18058,12 @@ def _build_parser(prog: str = "taxjson"
 
     p_logic = sub.add_parser(
         "tax-logic",
-        help="A short statement of every rule taxjson applies for this "
-             "project's country, with its settings filled in")
+        help="Every tax rule taxjson applies, one line each",
+        description="A short statement of every rule taxjson applies for "
+             "this project's country, with the project's settings "
+             "filled in. It is the spec the code is tested against: "
+             "each statement has a rule id (--ids) that the tests cite, "
+             "and Canadian and US rules never mix.")
     from taxjson.lib.country import country_arg as _country_arg
     p_logic.add_argument("--country", type=_country_arg,
                          metavar="{canada,ca,usa,us}",
@@ -17988,9 +18080,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_ck = sub.add_parser(
         "checklist",
-        help="The filing checklist (docs/filing.md) with each step "
-             "auto-detected; --done/--skip/--undo record the steps no "
-             "command can prove; --walk steps through the open ones")
+        help="The filing checklist, each step checked for you",
+        description="The filing checklist (docs/filing.md) with each "
+             "step auto-detected by running the command that proves it; "
+             "--done/--skip/--undo record the steps no command can "
+             "prove; --walk steps through the open ones.")
     p_ck.add_argument("--walk", action="store_true",
                       help="Interactive: visit each open step in turn")
     p_ck.add_argument("--done", metavar="ID", action="append",
@@ -18014,10 +18108,14 @@ def _build_parser(prog: str = "taxjson"
 
     p_san = sub.add_parser(
         "sanity",
-        help="Cross-check positions vs external holdings .toml files "
-             "(portoml-style): bare items are summed together "
-             "(aggregate), ACCOUNT[+ACCOUNT]=FILE[+FILE] items are "
-             "checked as their own paired group")
+        help="Compare positions with your broker's holdings",
+        description="Cross-check the open positions against your "
+             "broker's holdings files (.toml, [[holding]] tables): bare "
+             "items are summed together (aggregate), "
+             "ACCOUNT[+ACCOUNT]=FILE[+FILE] items are checked as their "
+             "own paired group; with no items, each account's "
+             "`holdings = [...]` in taxjson.toml. Exit 1 on any "
+             "difference.")
     p_san.add_argument("items", nargs="*",
                        metavar="ACCOUNT|FILE|ACCOUNT[+ACCOUNT]=FILE[+FILE]",
                        help="Bare account names and holdings .toml files "
@@ -18038,9 +18136,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_wash = sub.add_parser(
         "wash-radar",
-        help="Superficial-loss / wash-sale radar per taxable account "
-             "(recomputed live as of today; also written to "
-             "reports/wash_radar_<account>.rpt by `taxjson run`)")
+        help="Open superficial-loss / wash-sale windows today",
+        description="Superficial-loss / wash-sale radar per taxable "
+             "account: the open windows and their clear dates, "
+             "recomputed live as of today (also written to "
+             "reports/wash_radar_<account>.rpt by `taxjson run`).")
     p_wash.add_argument("account", nargs="?",
                         help="Account (default: all taxable)")
     p_wash.add_argument("--date", help="As-of date YYYY-MM-DD (default: today)")
@@ -18055,11 +18155,12 @@ def _build_parser(prog: str = "taxjson"
 
     p_watch = sub.add_parser(
         "watch",
-        help="Report only what CHANGED since the last watch run — "
+        help="Report what changed since the last watch (cron)",
+        description="Report only what CHANGED since the last watch run — "
              "new/changed/cleared radar advisories, moved clear dates "
              "(--harvest adds the harvestable-now total). Quiet when "
              "nothing changed (cron mails only on news); state in "
-             "work/.watch_state.json")
+             "work/.watch_state.json.")
     p_watch.add_argument("--harvest", action="store_true",
                          help="Also watch the harvestable-now loss "
                               "total (runs `taxjson harvest --json`; "
@@ -18090,8 +18191,7 @@ def _build_parser(prog: str = "taxjson"
 
     p_fetch = sub.add_parser(
         "fetch",
-        help="Download broker activity into inputs/ through a fetcher "
-             "plugin (taxjson-fetch: Questrade, IBKR Flex)",
+        help="Download broker activity (taxjson-fetch plugin)",
         description="Download broker activity straight into inputs/ "
                     "through an installed fetcher plugin (taxjson-fetch: "
                     "Questrade REST API, IBKR Flex Web Service), "
@@ -18134,13 +18234,14 @@ def _build_parser(prog: str = "taxjson"
 
     p_canbuy = sub.add_parser(
         "buy-check",
-        help="Is buying a ticker TODAY safe from the wash-sale / "
+        help="Check if buying a ticker today cancels a loss",
+        description="Is buying a ticker TODAY safe from the wash-sale / "
              "superficial-loss rules? UNSAFE when a loss was sold "
              "within the past 30 days (the rebuy cancels it — "
              "permanently if bought in a sheltered account); SAFE* "
              "when buying merely extends an open wash window. "
              "Root-matched (`buy-check NU` covers NU.US and "
-             "cross-listings). Exit 1 when any symbol is unsafe")
+             "cross-listings). Exit 1 when any symbol is unsafe.")
     p_canbuy.add_argument("symbol", nargs="+",
                           help="Ticker(s) to check (root or full, "
                                "e.g. NU or NU.US)")
@@ -18150,7 +18251,8 @@ def _build_parser(prog: str = "taxjson"
 
     p_sellchk = sub.add_parser(
         "sell-check",
-        help="Is selling a ticker AT A LOSS today safe from the "
+        help="Check if selling at a loss today keeps the loss",
+        description="Is selling a ticker AT A LOSS today safe from the "
              "superficial-loss / wash-sale rules? UNSAFE when a "
              "registered account's recent buy it still holds would "
              "deny the loss on the whole position (LOCKED); PARTIAL "
@@ -18159,7 +18261,7 @@ def _build_parser(prog: str = "taxjson"
              "(sell the replacement); SAFE*/SAFE otherwise with the "
              "applicable caveats. buy-check's sell-side twin; whether "
              "it IS a loss at today's price is `taxjson harvest`'s "
-             "job. Exit 1 on UNSAFE or PARTIAL")
+             "job. Exit 1 on UNSAFE or PARTIAL.")
     p_sellchk.add_argument("symbol", nargs="+",
                            help="Ticker(s) to check (root or full, "
                                 "e.g. NU or NU.US)")
@@ -18169,13 +18271,14 @@ def _build_parser(prog: str = "taxjson"
 
     p_audit = sub.add_parser(
         "audit",
-        help="The authoritative justification of every capital gain: "
-             "one block per disposition tracing broker row -> ticker "
-             "map -> FX rate -> ACB/FIFO pool -> gain, with the wash/"
-             "superficial-loss math shown, every step recomputed and "
-             "cross-checked against the books, and a tie-out against "
-             "the pipeline's saved gains files. Exit 1 when any check "
-             "disagrees")
+        help="Trace every capital gain back to its broker row",
+        description="The authoritative justification of every capital "
+             "gain: one block per disposition tracing broker row -> "
+             "ticker map -> FX rate -> ACB/FIFO pool -> gain, with the "
+             "wash/superficial-loss math shown, every step recomputed "
+             "and cross-checked against the books, and a tie-out "
+             "against the pipeline's saved gains files. Exit 1 when "
+             "any check disagrees.")
     p_audit.add_argument("symbol", nargs="*",
                          help="Filter: symbol prefix(es) "
                               "(default: every disposition)")
@@ -18206,8 +18309,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_ws = sub.add_parser(
         "wash-sales",
-        help="Detail each wash sale (superficial loss) that occurred in the "
-             "tax year and the loss denied — what <account>.sum hides in totals")
+        help="Each loss denied this year, and why",
+        description="Detail each superficial loss / wash sale of the tax "
+             "year and the loss denied — what <account>.sum shows only "
+             "in totals — plus the warn-only flags (warrants, adjusted "
+             "series, futures options) that need a manual check.")
     p_ws.add_argument("account", nargs="?", help="Account (default: all)")
     p_ws.add_argument("--explain", action="store_true",
                       help="Print the full ACB / superficial-loss calculation "
@@ -18219,12 +18325,13 @@ def _build_parser(prog: str = "taxjson"
 
     p_fxc = sub.add_parser(
         "fx-cash",
-        help="FX capital gains on foreign-currency CASH (ITA "
-             "s.39(1.1) with the $200 de minimis; §988 ordinary-income "
-             "figure for US projects) — a standalone report from the "
-             "taxable accounts' native books; changes NO other number. "
-             "Set fx_cash_gains = true under [settings] to also print "
-             "it at the end of every run")
+        help="Currency gains on foreign cash (separate report)",
+        description="FX capital gains on foreign-currency CASH (ITA "
+             "s.39(1.1) with the $200 de minimis; the §988 "
+             "ordinary-income figure for US projects) — a standalone "
+             "report from the taxable accounts' native books; it "
+             "changes NO other number. Set fx_cash_gains = true under "
+             "[settings] to also print it at the end of every run.")
     p_fxc.add_argument("--events", action="store_true",
                        help="List each in-year disposal event (date, "
                             "units, rate, gain)")
@@ -18234,29 +18341,36 @@ def _build_parser(prog: str = "taxjson"
 
     p_t1135 = sub.add_parser(
         "t1135",
-        help="CRA T1135 foreign-property helper: cost-based filing-threshold "
-             "test plus per-property / per-country tables over all taxable "
-             "accounts (per-symbol domicile overrides: ticker.map "
-             "`T1135 SYMBOL COUNTRY` lines)")
+        help="Foreign property (T1135): test and tables",
+        description="CRA T1135 foreign-property helper: cost-based "
+             "filing-threshold test plus per-property / per-country "
+             "tables over all taxable accounts (per-symbol domicile "
+             "overrides: ticker.map `T1135 SYMBOL COUNTRY` lines).")
     p_t1135.add_argument("--json", action="store_true",
                          help="Emit the report as JSON instead of text")
     p_t1135.set_defaults(func=cmd_t1135)
 
     p_carry = sub.add_parser(
         "carryover",
-        help="Multi-year capital-loss carryforward/carryback ledger "
-             "(Canada: running balance + T1A carryback candidates; US: "
-             "ST/LT carryover worksheet). Record filed reality in "
-             "taxjson.toml: [carryover] claimed = { 2023 = 4000.00 }")
+        help="Capital-loss carryforward ledger across years",
+        description="Multi-year capital-loss carryforward/carryback "
+             "ledger (Canada: running balance + T1A carryback "
+             "candidates; US: ST/LT carryover worksheet). A close-year "
+             "lock's recorded balance becomes the running balance at "
+             "its year end. Record the losses your returns applied in "
+             "taxjson.toml: [carryover] claimed = { 2023 = 4000.00 }.")
     p_carry.add_argument("--json", action="store_true",
                          help="Emit the ledger as JSON instead of text")
     p_carry.set_defaults(func=cmd_carryover)
 
     p_forms = sub.add_parser(
         "form-export",
-        help="Render the year's gains as IRS Form 8949 (code-W wash "
-             "adjustments + Schedule D totals) or CRA Schedule 3 rows "
-             "(default form follows the project country)")
+        help="Schedule 3 / Form 8949 rows, or a TurboTax TXF",
+        description="Render the year's gains as CRA Schedule 3 rows or "
+             "IRS Form 8949 (code-W wash adjustments + Schedule D "
+             "totals) — the default form follows the project country — "
+             "or, for a US project, a TurboTax-importable TXF file "
+             "(--form txf).")
     p_forms.add_argument("--form",
                          choices=["8949", "schedule3", "txf"],
                          default=None,
@@ -18281,9 +18395,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_harv = sub.add_parser(
         "harvest",
-        help="Unrealized gain/(loss) per open position at current prices "
-             "— tax-loss-harvest view, losses first, with the wash "
-             "radar's advisory (IBKR -> yfinance -> cache)")
+        help="Unrealized gains and losses at current prices",
+        description="Unrealized gain/(loss) per open position at current "
+             "prices — the tax-loss-harvest view, losses first, with "
+             "the wash radar's advisory on each loss (prices: IBKR -> "
+             "yfinance -> cache).")
     p_harv.add_argument("symbol", nargs="*", default=[],
                         help="Only these symbols (e.g. AAA.TO BBB.US)")
     p_harv.add_argument("--crypto", action="store_true",
@@ -18308,8 +18424,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_rec = sub.add_parser(
         "reconcile-slips",
-        help="Diff broker T5008 / 1099-B slip CSVs against computed "
-             "dispositions (exit 1 on any mismatch)")
+        help="Compare broker T5008 / 1099-B slips to the books",
+        description="Diff broker T5008 / 1099-B slip CSVs against the "
+             "computed dispositions, per symbol, before filing; several "
+             "slip files (one per broker) are reconciled together. "
+             "Exit 1 on any mismatch.")
     p_rec.add_argument("slip_csv", nargs="+",
                        help="Slip CSV(s) — headers matched loosely "
                        "(symbol/ticker, quantity/box 16, proceeds/box 21, "
@@ -18325,9 +18444,15 @@ def _build_parser(prog: str = "taxjson"
 
     p_close = sub.add_parser(
         "close-year",
-        help="Snapshot the current tax year's filing aggregates to "
-             "filed/<year>.json — the filed-year lock that "
-             "check-filed (and every full run) guards")
+        help="Lock the year you filed (filed/<year>.json)",
+        description="Snapshot the current tax year's filing aggregates "
+             "to filed/<year>.json — the filed-year lock that "
+             "check-filed (and every full run) guards. It also records "
+             "what next year needs: every sale, the positions and cost "
+             "at Dec 31, the trades that settle in January, and the "
+             "carry-forwards (net capital loss, minimum tax carryover; "
+             "US: the capital loss carryover) that next year's "
+             "estimate, carryover and handoff read.")
     p_close.add_argument("--year", type=_tax_year_arg, default=None,
                          help="Must match [settings].year (guard)")
     p_close.add_argument("--force", action="store_true",
@@ -18343,9 +18468,12 @@ def _build_parser(prog: str = "taxjson"
 
     p_hand = sub.add_parser(
         "handoff",
-        help="Check this project against the previous year's close-year "
-             "record: opening positions and cost, trades settling across "
-             "Dec 31, sales reported in both years (exit 1 on a problem)")
+        help="Check this year starts where last year ended",
+        description="Check this project against the previous year's "
+             "close-year record: opening positions and cost, trades "
+             "settling across Dec 31, sales reported in both years, and "
+             "carry-forward inputs that differ from the recorded ones "
+             "(exit 1 on a problem).")
     p_hand.add_argument("--prior", metavar="PATH",
                         help="The previous year's filed/<year>.json "
                              "(default: [settings] prior_year_record, else "
@@ -18356,15 +18484,22 @@ def _build_parser(prog: str = "taxjson"
 
     p_chk = sub.add_parser(
         "check-filed",
-        help="Recompute every filed year from the current books and "
-             "report drift vs the locks (exit 1 on drift or a damaged "
-             "lock, 2 when only an input failed)")
+        help="Recompute filed years and report any drift",
+        description="Recompute every filed year from the current books "
+             "and report drift vs the locks (exit 1 on drift or a "
+             "damaged lock, 2 when only an input failed).")
     p_chk.set_defaults(func=cmd_check_filed)
 
     p_fmh = sub.add_parser(
         "find-missing-history",
-        help="Find positions with missing cost basis (truncated buy history "
-             "or $0-basis corp actions) that distort a year's gain")
+        help="Find positions whose purchase history is missing",
+        description="Find positions with missing cost basis — a "
+             "truncated buy history (the export starts after the "
+             "purchase) or $0-basis shares from a corporate action — "
+             "that distort a year's gain. Pairs the project's "
+             "missing_history.json already covers are listed apart; "
+             "--write-missing-history writes the candidates for "
+             "review.")
     p_fmh.add_argument("account", nargs="?", help="Account (default: all)")
     p_fmh.add_argument("--year", type=_tax_year_arg,
                        help="Tax year to scope relevance (default: config year)")
@@ -18394,8 +18529,10 @@ def _build_parser(prog: str = "taxjson"
 
     p_fees = sub.add_parser(
         "fees",
-        help="Fees incurred over a window (default: tax year), one row per "
-             "fee-bearing trade + a per-currency total")
+        help="Fees paid per trade over a window",
+        description="Fees incurred over a window (default: the tax "
+             "year), one row per fee-bearing trade plus a per-currency "
+             "total.")
     p_fees.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_fees.add_argument("account", nargs="?", help="Account (default: all)")
     p_fees.add_argument("--json", action="store_true",
@@ -18404,9 +18541,11 @@ def _build_parser(prog: str = "taxjson"
 
     p_fsum = sub.add_parser(
         "fees-sum",
-        help="Trading-fee report by brokerage (base currency) over a window "
-             "(default: tax year; trade dates); the totals `taxjson run` "
-             "writes to reports/fees.rpt, by account by default")
+        help="Trading fees by broker over a window",
+        description="Trading-fee report by brokerage (base currency) over "
+             "a window (default: tax year; trade dates); the totals "
+             "`taxjson run` writes to reports/fees.rpt, by account by "
+             "default.")
     p_fsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_fsum.add_argument("account", nargs="?", help="Account (default: all)")
     p_fsum.add_argument("--by-account", action=argparse.BooleanOptionalAction,
@@ -18418,7 +18557,11 @@ def _build_parser(prog: str = "taxjson"
     p_fsum.set_defaults(func=cmd_fees_sum)
 
     p_help = sub.add_parser(
-        "help", help="Show top-level help, or help for one COMMAND")
+        "help", help="Show this page, or one command's help",
+        description="Show the top-level help page, or the help for one "
+                    "COMMAND; --all also lists the other country's "
+                    "commands, which a project's help page leaves "
+                    "out.")
     p_help.add_argument("topic", nargs="?", help="Subcommand to explain")
     p_help.add_argument("--all", action="store_true",
                         help="List every command, also the ones the "

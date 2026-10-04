@@ -524,7 +524,9 @@ def apply_mapping(tx: TaxTransaction, mapping: Dict[str, str]) -> TaxTransaction
 @guard_main("taxjson-ticker-map")
 def main():
     parser = argparse.ArgumentParser(
-        description="Map tickers in a tax.json file",
+        description="Apply ticker.map's rename rules to the symbols of a "
+                    "taxjson file\n(option symbols follow their "
+                    "underlying), or, with no map, list its symbols.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "ticker.map keywords (one rule per line, notes after `#`):\n"

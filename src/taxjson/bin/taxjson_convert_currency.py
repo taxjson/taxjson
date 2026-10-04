@@ -541,7 +541,10 @@ def emit_fallback_summary(default_rate, *, stream=None) -> None:
 
 @guard_main("taxjson-convert-currency")
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Convert every amount in a taxjson file to a target "
+                    "currency at each row's exchange rate from a rates "
+                    "file (taxjson-to-base-curr writes one).")
     parser.add_argument("input", nargs="?", help="Input tax.json file")
     parser.add_argument("--to", required=True, help="Target currency code (e.g. CAD, USD)")
     parser.add_argument("--rates", help="File with historical exchange rates")

@@ -280,7 +280,9 @@ def _dedup_evidence(per_file) -> list:
 @guard_main("taxjson-brokerage")
 def main():
     parser = argparse.ArgumentParser(
-        description="Convert brokerage CSV to taxjson format",
+        description="Convert broker CSV exports (Interactive Brokers, "
+                    "Questrade, RBC, Webull,\nKraken, Coinbase, or a "
+                    "generic column mapping) to taxjson JSON.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

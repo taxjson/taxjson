@@ -223,7 +223,10 @@ def validate_transactions(transactions, filename="input",
     return issues, warnings
 
 def main():
-    parser = argparse.ArgumentParser(description="Validate taxjson for obvious mistakes")
+    parser = argparse.ArgumentParser(
+        description="Check taxjson files for obvious mistakes: missing "
+                    "fields, malformed tickers, date problems and the "
+                    "like. Exit 1 on an error.")
     parser.add_argument("files", nargs="+", help="Input JSON file(s)")
     parser.add_argument("--warnings", action="store_true", help="Show warnings as well as errors")
     parser.add_argument("--require-prices", action="store_true",
