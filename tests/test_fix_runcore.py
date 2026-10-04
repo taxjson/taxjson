@@ -231,12 +231,15 @@ class TestNetTaxOwingGuidance(unittest.TestCase):
     def test_no_guidance_names_line_48500(self):
         from taxjson.bin import taxjson_run as R
         from taxjson.bin import taxjson_instalments as I
-        texts = [R._TEMPLATE_INSTALMENTS,
+        from taxjson.lib.config_template import render_init
+        template = render_init("canada", 2025)[0]
+        texts = [template,
                  (REPO_ROOT / "README.md").read_text(encoding="utf-8"),
                  Path(I.__file__).read_text(encoding="utf-8")]
         for t in texts:
             self.assertNotIn("48500 minus", t)
-        self.assertIn("43700", R._TEMPLATE_INSTALMENTS)
+        self.assertIn("43700", template)
+        del R
 
 
 class TestInitForceKeepsEveryBackup(unittest.TestCase):

@@ -15,6 +15,36 @@ from typing import Any, Dict, List
 
 ACCOUNT_TYPES = ("taxable", "sheltered")
 
+# Every key and table taxjson.toml may carry, by table: the one list the
+# config readers warn against (unknown keys are named, with a did-you-
+# mean) and the one `taxjson init` / `taxjson format` document
+# (lib/config_template; tests/test_config_template.py checks that every
+# key here is in the template). [settings] keys and their owning country
+# live in lib/country.SETTING_COUNTRY; one-country tables and keys in
+# lib/country.CONFIG_COUNTRY.
+TOP_LEVEL_TABLES = ("settings", "accounts", "instalments", "estimate",
+                    "carryover", "capital_gains_dividends",
+                    "distributions")
+# brokerage / account / query_id are the fetcher plugins' keys
+# (lib/fetchers.CORE_ACCOUNT_KEYS): accepted whether or not a fetcher is
+# installed, so a project that used `taxjson fetch` keeps validating.
+ACCOUNT_KEYS = ("type", "crypto", "transfers", "plan",
+                "brokerage", "account", "query_id", "holdings",
+                "combined_broker_accounts")
+ESTIMATE_KEYS = ("other_income", "other_losses", "deductions",
+                 "carrying_charges", "long_term_losses", "amt_carryover")
+INSTALMENTS_KEYS = ("basis", "prior_year_net_tax", "second_prior_net_tax",
+                    "withheld", "prescribed_rate", "prescribed_rates",
+                    "paid")
+CARRYOVER_KEYS = ("claimed",)
+# One [[distributions]] / [[capital_gains_dividends]] entry's keys
+# (lib/project_tables, lib/cg_dividends).
+DISTRIBUTION_KEYS = ("symbol", "record_date", "per_share")
+CGD_KEYS = ("symbol", "year", "date", "amount", "account")
+# [settings] keys still recognised only to warn that they are ignored:
+# never documented as a setting.
+RETIRED_SETTINGS = ("cross_asset",)
+
 # Every per-account artifact is work/<name>_<suffix>.json, so an account
 # named `<other>_raw` owns `<other>_raw_base.json` — the other account's
 # native books — and the gains discovery skips any `*_raw_gains.json`

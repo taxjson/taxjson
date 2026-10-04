@@ -195,11 +195,12 @@ class TestFuturesSettleConfig(unittest.TestCase):
         with self.assertRaises(SystemExit):
             tr.validate_config(cfg)
 
-    def test_init_template_documents_it_next_to_tax_date(self):
-        from taxjson.bin import taxjson_run as tr
-        lines = tr._TEMPLATE_CONFIG.splitlines()
-        i = next(n for n, l in enumerate(lines) if l.startswith('tax_date'))
-        self.assertTrue(lines[i + 1].startswith('# futures_settle = "trade"'))
+    def test_init_template_documents_it_with_its_default(self):
+        from taxjson.lib.config_template import render_init
+        for country in ('canada', 'usa'):
+            text = render_init(country, 2025)[0]
+            self.assertRegex(text, r'(?m)^# futures_settle\s+= "trade"\s+# '
+                                   r'trade \| next_day')
 
 
 if __name__ == '__main__':

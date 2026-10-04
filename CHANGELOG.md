@@ -4,10 +4,29 @@
 
 ### Command line
 
-- **`taxjson init` scaffolds only the common accounts:** margin, TFSA and RRSP
-  in Canada; margin, Roth and 401(k) in the US. Any other account (a crypto
-  account, a LIRA, an RESP …) is one more section and `inputs/` folder; the
-  generated `taxjson.toml` shows a commented crypto example.
+- **`taxjson init` scaffolds the common accounts:** margin, TFSA, RRSP and a
+  crypto account in Canada; margin, Roth, 401(k) and a crypto account in the
+  US. Any other account (a LIRA, an RESP, a traditional IRA …) is one more
+  section and `inputs/` folder; the generated `taxjson.toml` shows a
+  commented example of one for the country.
+- **The generated `taxjson.toml` documents every key.** Every `[settings]`
+  key, every account key and every table (`[estimate]`, `[carryover]`,
+  `[[distributions]]`, and in Canada `[[capital_gains_dividends]]` and
+  `[instalments]`) is listed, grouped and column-aligned: the values the
+  scaffold sets are active, everything else is commented out with a
+  one-line description and its default. A Canadian file lists only the keys
+  a Canadian project accepts, a US file only the US ones. A test derives
+  the full key list from the config check, so a new key without template
+  documentation fails CI. `local_timezone` is written with this machine's
+  zone when it can be read. The examples in the generated files (and in the
+  `ticker.map` stub) use placeholder tickers, not real securities.
+- **New `taxjson format`.** Lays an existing `taxjson.toml` out like the
+  template — your values in their places, the rest documented and
+  commented, accounts and `[[...]]` entries in your order — keeping unknown
+  keys (flagged) and your comments; it writes only when the parsed
+  configuration is unchanged. A dry run shows the diff; `--write` applies
+  it with a `taxjson.toml.bak` backup (`--no-backup` to skip); `--check`
+  exits 1 when the file is not formatted.
 
 ### Privacy
 

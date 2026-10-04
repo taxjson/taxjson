@@ -33,6 +33,8 @@ import math
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from taxjson.lib.config_check import CARRYOVER_KEYS, DISTRIBUTION_KEYS
+
 DIST_TABLE = "distributions"
 CGD_TABLE = "capital_gains_dividends"
 CARRY_TABLE = "carryover"
@@ -99,7 +101,7 @@ def distribution_rows(cfg: Dict[str, Any]
     seen: Dict[Tuple[str, str], int] = {}
     for n, e in enumerate(entries, 1):
         where = f"[[{DIST_TABLE}]] #{n}"
-        extra = sorted(set(e) - {"symbol", "record_date", "per_share"})
+        extra = sorted(set(e) - set(DISTRIBUTION_KEYS))
         sym = e.get("symbol")
         date = iso_date(e.get("record_date"))
         amt = _number(e.get("per_share"))
@@ -146,7 +148,8 @@ def claimed_losses(cfg: Dict[str, Any]) -> Tuple[Dict[int, float], List[str]]:
         return {}, [f"{where} must be a table (a [{CARRY_TABLE}] section), "
                     f"got `{CARRY_TABLE} = {tbl!r}`"]
     problems = [f"{where}: unknown key {k!r} (only `{CLAIMED_KEY} = "
-                f"{{ 2023 = 4000.00 }}`)" for k in tbl if k != CLAIMED_KEY]
+                f"{{ 2023 = 4000.00 }}`)" for k in tbl
+                if k not in CARRYOVER_KEYS]
     v = tbl.get(CLAIMED_KEY)
     if v is None:
         return {}, problems

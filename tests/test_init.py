@@ -8,8 +8,8 @@ from pathlib import Path
 
 from taxjson.bin.taxjson_run import cmd_init, load_config
 
-_CA_ACCOUNTS = ["margin", "rrsp", "tfsa"]
-_US_ACCOUNTS = ["401k", "margin", "roth"]
+_CA_ACCOUNTS = ["crypto", "margin", "rrsp", "tfsa"]
+_US_ACCOUNTS = ["401k", "crypto", "margin", "roth"]
 
 
 def _init(path, force=False, country="canada", year=None):
@@ -68,6 +68,9 @@ class TestInit(unittest.TestCase):
             # 401k parses as a TOML bare key and is sheltered.
             self.assertEqual(cfg["accounts"]["401k"]["type"], "sheltered")
             self.assertEqual(cfg["accounts"]["margin"]["type"], "taxable")
+            # Crypto is scaffolded in both countries.
+            self.assertEqual(cfg["accounts"]["crypto"],
+                             {"type": "taxable", "crypto": True})
             for acct in _US_ACCOUNTS:
                 self.assertTrue((root / "inputs" / acct / "README.txt").exists(),
                                 f"missing README for {acct}")
@@ -172,6 +175,8 @@ class TestScaffoldCoversCurrentFeatures(unittest.TestCase):
             self.assertEqual(sorted(doc), ["accounts", "settings"])
             for key in ("province", "fx_cash_gains"):
                 self.assertNotIn(key, doc["settings"], key)
+            # Only crypto opts in to a key beyond type/transfers.
+            self.assertEqual(doc["accounts"]["crypto"].get("crypto"), True)
             for acct in doc["accounts"].values():
                 self.assertNotIn("brokerage", acct)
 

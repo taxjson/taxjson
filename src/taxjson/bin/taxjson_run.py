@@ -704,12 +704,12 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
 # which is why a misspelled [estimates] / [Estimate] / [instalment]
 # silently fell back to 0 other income or no instalment schedule
 # (R1-216, R1-257).
-_TOP_LEVEL_TABLES = ("settings", "accounts", "instalments", "estimate",
-                     "carryover", "capital_gains_dividends",
-                     "distributions")
-_INSTALMENTS_KEYS = ("basis", "prior_year_net_tax", "second_prior_net_tax",
-                     "withheld", "prescribed_rate", "prescribed_rates",
-                     "paid")
+# The key lists live in lib/config_check (shared with the template).
+from taxjson.lib.config_check import (  # noqa: E402
+    TOP_LEVEL_TABLES as _TOP_LEVEL_TABLES,
+    INSTALMENTS_KEYS as _INSTALMENTS_KEYS,
+    ESTIMATE_KEYS as _ESTIMATE_KEYS,
+    ACCOUNT_KEYS as _ACCOUNT_KEYS)
 
 
 def _did_you_mean(key: str, valid) -> str:
@@ -818,7 +818,7 @@ class _CappedHelpFormatter(argparse.HelpFormatter):
 # sits in exactly one group (tests/test_cli_polish.py); the README's
 # command table uses the same groups in the same order.
 _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Set up", ("init", "migrate", "fetch", "elect")),
+    ("Set up", ("init", "format", "migrate", "fetch", "elect")),
     ("Build the books", ("run", "crypto-sends", "find-missing-history")),
     ("Summaries", ("amt", "estimate", "fx-cash", "instalments", "stats",
                    "sum")),
@@ -1036,8 +1036,6 @@ def _die_input(msg: str) -> None:
     sys.exit(2)
 
 
-_ESTIMATE_KEYS = ("other_income", "other_losses", "deductions",
-                  "carrying_charges", "long_term_losses", "amt_carryover")
 
 
 def _estimate_deductions(root: Path, args) -> Tuple[float, float]:
@@ -1190,12 +1188,7 @@ def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
 # commands and scripts/check_tax_rules.py).
 from taxjson.lib.country import SETTING_COUNTRY as _SETTING_COUNTRY  # noqa: E402
 _SETTINGS_KEYS = tuple(_SETTING_COUNTRY)
-# brokerage / account / query_id are the fetcher plugins' keys
-# (lib/fetchers.CORE_ACCOUNT_KEYS): accepted whether or not a fetcher is
-# installed, so a project that used `taxjson fetch` keeps validating.
-_ACCOUNT_KEYS = ("type", "crypto", "transfers", "plan",
-                 "brokerage", "account", "query_id", "holdings",
-                 "combined_broker_accounts")
+# [accounts.<name>] keys: lib/config_check.ACCOUNT_KEYS (_ACCOUNT_KEYS).
 
 
 def _brokerage_account_flags(acfg: Dict[str, Any]) -> List[str]:
@@ -5432,204 +5425,18 @@ def cmd_run(args: argparse.Namespace) -> None:
         )
 
 
-_TEMPLATE_CONFIG = """\
-# taxjson configuration — https://github.com/taxjson/taxjson
-#
-# Keys are grouped and column-aligned so year-over-year projects diff
-# cleanly:  diff ~/taxes/2025/taxjson.toml ~/taxes/2026/taxjson.toml
-# Every commented key shows its default; uncomment a line to change it.
-
-[settings]
-year              = {year}
-country           = "{country}"{country_pad}# canada | ca | usa | us
-{province_line}base_currency     = "{base_currency}"{base_pad}# report currency (the country's); CAD: Bank of Canada rates, USD: Yahoo
-source_currencies = ["{source_currency}"]{source_pad}# currencies you hold besides base_currency (FX rates fetched)
-tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for canada — CRA; trade for usa — IRS)
-# futures_settle = "trade"            # trade | next_day: futures & futures options (IB, generic) settle on the TRADE date
-#                                     #   (daily variation margin); next_day = the clearing premium date
-# local_timezone = "America/Toronto"  # crypto UTC timestamps are dated in this zone (IANA name)
-# prior_year_record = "../{prev_year}/filed/{prev_year}.json"
-#                                     # last year's close-year record, checked by `taxjson handoff`
-
-# fx_cash_gains = false               # true: end-of-run FX-on-cash report ({fx_rule})
-{option_lines}
-# One [accounts.NAME] section per folder under inputs/. The folder name
-# is the account name. Required: type. Optional: transfers, crypto,
-# plan, holdings, combined_broker_accounts, and — to pull activity straight from the broker with
-# `taxjson fetch` (the taxjson-fetch plugin: the installer's --with-fetch) — brokerage + account
-# (Questrade) or query_id (IBKR):
-#
-#   [accounts.margin]
-#   type      = "taxable"
-#   brokerage = "questrade"      # questrade | ibkr_flex
-#   account   = "12345678"       # Questrade account number
-#   # query_id = "123456"        # ibkr_flex: the Flex query id instead
-#   holdings  = ["~/broker/12345678_holdings.toml"]   # `taxjson sanity` pairs the account with these files
-#   # combined_broker_accounts = true  # every broker account in this folder's statements is yours and
-#   #                                  #   taxable together: a multi-account statement is a note, not ATTENTION
-
-{account_sections}
-# Losses actually applied on filed returns (`taxjson carryover`), by year:
-# [carryover]
-# claimed = {{ {prev_year} = 4000.00 }}
-
-# Non-cash fund distributions (a reinvested capital-gains distribution,
-# a late return-of-capital factor) — `taxjson run` books each as a cost
-# adjustment on the shares held on the record date. One table each:
-#
-# [[distributions]]
-# symbol      = "ABC.TO"
-# record_date = {prev_year}-12-29
-# per_share   = 0.2500         # base currency; negative = return of capital
-{instalments_section}"""
-
-# Canada only. ITA s.49(1) written-option premium timing is a Canadian
-# rule (the US engine always nets at close), so the US scaffold omits
-# the block rather than showing switches that do nothing there.
-_TEMPLATE_OPTION_LINES = """\
-
-# Written-option premiums (ITA s.49(1)) — see `taxjson option-boundary`:
-# option_premium_timing           = "grant"   # gain in the year WRITTEN; "close" nets the premium at the
-#                                             #   closing transaction instead (the pre-s.49 behaviour = feature off)
-option_grant_timing_since         = {year}      # contracts written before this year keep close timing. SET ONCE to
-#                                             #   the first year you FILE under grant timing and keep it UNCHANGED
-#                                             #   in every later year's project (do not bump it with `year`)
-# option_buyback_loss_superficial = false     # true: strict s.54 reading — a buy-back loss is superficial when
-#                                             #   identical options are bought within 30 days and still held
-"""
-
-
-# Canada only: instalments are a distinct regime (US filers use
-# 1040-ES). Commented out — every value must be the user's own.
-_TEMPLATE_INSTALMENTS = """
-# Estimate inputs (`taxjson estimate`, and the instalments
-# current-year basis) — used when the CLI flags aren't given:
-#
-# [estimate]
-# other_income = 120000
-# other_losses = 0
-# deductions = 0            # RRSP 20800, FHSA, RPP ... (full under AMT)
-# carrying_charges = 0      # line 22100 (50% under AMT)
-# amt_carryover = { 2023 = 1200.50 }   # minimum tax carryover by year of
-#                           # origin (notice of assessment / T691)
-
-# T5 box 18 capital-gains dividends the books carry as dividends (one
-# table per payment or year; `taxjson divs-sum`, the estimate):
-#
-# [[capital_gains_dividends]]
-# symbol = "ABD.TO"
-# year   = 2025             # or: date = 2025-06-16 (one payment)
-# amount = "all"            # or the box 18 amount, e.g. 1.25
-# # account = "margin"        # optional; default: the taxable accounts
-
-# Tax instalments (`taxjson instalments`, and a summary inside
-# `taxjson estimate`). Uncomment and fill in YOUR figures.
-#
-# [instalments]
-# basis                = "current_year"   # current_year | prior_year | cra_reminder
-# withheld             = 0                # tax withheld at source this year
-# # Last two years' net tax owing, as CRA's instalment chart defines it:
-# # lines 42000 + 42200 + 42800 (+ 43200) minus 43700 (tax deducted) and
-# # the refundable credits — NOT line 48500, which also subtracts the
-# # instalments you paid. Supply BOTH even on current_year: CRA
-# # assesses interest on the least of the methods your figures support,
-# # and they decide whether instalments are owed at all. Leaving a 0
-# # here reads as "I owed nothing" and suppresses both.
-# prior_year_net_tax   = 55000
-# second_prior_net_tax = 41000
-# prescribed_rate      = 0.07             # CRA's overdue-tax rate; or a dated
-# # schedule, since CRA resets it quarterly and charges each day at the
-# # rate then in force:
-# # prescribed_rates = [
-# #   { from = "2025-04-01", rate = 0.08 },
-# #   { from = "2025-07-01", rate = 0.07 },
-# # ]
-# paid = [
-#   { date = "2026-03-16", amount = 15000 },
-#   { date = "2026-05-20", amount = 12000, note = "refund transferred" },
-# ]
-"""
-
-# Country-shaped scaffold: account names, currencies, and tax-date basis
-# in the generated config all follow the jurisdiction. Account order here
-# is the order of the [accounts.*] sections and inputs/ folders. Only the
-# common accounts are scaffolded; any other (crypto, a LIRA, an RESP …) is
-# one more section plus folder, shown as a commented example in the file.
-_INIT_BY_COUNTRY = {
-    "canada": {"base_currency": "CAD", "source_currency": "USD",
-               "tax_date": "settle",
-               "accounts": ("margin", "tfsa", "rrsp")},
-    "usa":    {"base_currency": "USD", "source_currency": "CAD",
-               "tax_date": "trade",
-               "accounts": ("margin", "roth", "401k")},
-}
-
-# Comment column for the [settings] values: every value is padded to
-# this width so the trailing comments line up (and so two projects'
-# files differ only where their values differ).
-_INIT_COMMENT_COL = 22
-
-
-def _pad(value: str) -> str:
-    """Spaces that carry a rendered value out to the comment column."""
-    return " " * max(1, _INIT_COMMENT_COL - len(value))
-
-
+# The taxjson.toml template — every key, documented, per country — and
+# its renderer live in lib/config_template (`taxjson format` uses the
+# same one, so a fresh scaffold is already formatted).
 def _render_init_config(country_canon: str,
                         year: Optional[int] = None
                         ) -> Tuple[str, Tuple[str, ...]]:
-    """Fill _TEMPLATE_CONFIG for a jurisdiction. Returns (toml_text,
-    account_names) — the same tuple drives the inputs/ folder scaffold so
-    config sections and input dirs can't drift apart."""
-    spec = _INIT_BY_COUNTRY[country_canon]
-    sections: List[str] = []
-    for name in spec["accounts"]:
-        if name == "margin":
-            sections.append(f"[accounts.{name}]\n"
-                            f'type      = "taxable"          # taxable | sheltered\n'
-                            f'# holdings  = ["~/broker/{name}_holdings.toml"]'
-                            f"   # `taxjson sanity` reconciles against these\n")
-        elif name == "crypto":
-            sections.append(f"[accounts.{name}]\n"
-                            f'type      = "taxable"\n'
-                            f"crypto    = true               # splices "
-                            f"fill-crypto-prices into the pipeline\n")
-        else:
-            sections.append(f"[accounts.{name}]\n"
-                            f'type      = "sheltered"\n'
-                            f"transfers = true               # keep TRANSFER "
-                            f"rows (contributions/withdrawals)\n")
-    sections.append("# More accounts: one section per inputs/ folder, e.g. a crypto account\n"
-                    "# (Coinbase / Kraken exports) or another registered account:\n"
-                    "# [accounts.crypto]\n"
-                    '# type      = "taxable"\n'
-                    "# crypto    = true               # splices fill-crypto-prices into the pipeline\n")
-    is_ca = country_canon == "canada"
-    yr = int(year) if year is not None else date_cls.today().year
-    toml_text = _TEMPLATE_CONFIG.format(
-        year=yr,
-        country=country_canon,
-        country_pad=_pad(f'"{country_canon}"'),
-        base_currency=spec["base_currency"],
-        base_pad=_pad(f'"{spec["base_currency"]}"'),
-        source_currency=spec["source_currency"],
-        source_pad=_pad(f'["{spec["source_currency"]}"]'),
-        tax_date=spec["tax_date"],
-        tax_pad=_pad(f'"{spec["tax_date"]}"'),
-        prev_year=yr - 1,
-        # `taxjson estimate` REQUIRES a province for canada, so the key
-        # is present (commented) rather than discovered at first run.
-        province_line=('# province          = "ON"'
-                       '                # ON | BC | AB — `taxjson estimate` needs it\n'
-                       if is_ca else ""),
-        fx_rule=("s.39(1.1), $200 de minimis" if is_ca
-                 else "§988, ordinary income"),
-        option_lines=(_TEMPLATE_OPTION_LINES.format(year=yr) if is_ca
-                      else ""),
-        account_sections="\n".join(sections),
-        instalments_section=_TEMPLATE_INSTALMENTS if is_ca else "",
-    )
-    return toml_text, spec["accounts"]
+    """(toml_text, account_names) for `taxjson init` — the same tuple
+    drives the inputs/ folder scaffold so config sections and input dirs
+    can't drift apart. local_timezone is this machine's zone when it can
+    be read, else left commented (the default zone)."""
+    from taxjson.lib import config_template as CT
+    return CT.render_init(country_canon, year, tz=CT.system_timezone())
 
 
 # A commented `ticker.map` stub. The pipeline runs fine without this file, so
@@ -17346,9 +17153,94 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
     _exec_tool(cmd)
 
 
+def _backup_config(cfg: Path) -> str:
+    """Copy taxjson.toml to taxjson.toml.bak before it is rewritten
+    (init --force, format --write) and return the backup's name. Never
+    overwrite an earlier backup: a second --force (fixing the --country)
+    replaced the only copy of the user's config with the first template
+    (R1-255) — the next free taxjson.toml.bakN is used instead, the same
+    numbering as fetch's .bak files; an identical existing backup is
+    reused."""
+    bak_name = "taxjson.toml.bak"
+    bak = cfg.with_name(bak_name)
+    n = 1
+    # lexists: a dangling symlink at a .bak name is taken, never
+    # written through (security review M1).
+    from os.path import lexists
+    while lexists(bak) and not (
+            bak.is_file() and not bak.is_symlink()
+            and bak.read_bytes() == cfg.read_bytes()):
+        bak = cfg.with_name(f"{bak_name}{n}")
+        n += 1
+    if not lexists(bak):
+        from taxjson.lib.safe_write import write_atomic
+        write_atomic(bak, cfg.read_bytes(), keep_mode=False)
+    return bak.name
+
+
+def cmd_format(args: argparse.Namespace) -> None:
+    """`taxjson format [--write [--no-backup] | --check]`: re-render
+    taxjson.toml into the country's template (lib/config_template):
+    every key in its place, set ones active, the rest commented with
+    their description and default; the user's values, unknown keys and
+    comments kept. The parsed configuration before and after must be
+    identical or nothing is written. Default: print a unified diff."""
+    import difflib
+    from taxjson.lib.config_template import FormatError, format_config
+    if args.no_backup and not args.write:
+        _die_input("--no-backup applies only with --write")
+    root = Path(args.dir).resolve()
+    cfg = root / "taxjson.toml"
+    if not cfg.exists() and not cfg.is_symlink():
+        _die_input(f"no taxjson.toml in {root}. Run `taxjson init` first.")
+    text = _read_config_text(cfg)
+    try:
+        res = format_config(text)
+    except FormatError as e:
+        _die_input(f"{cfg}: {e}")
+    if res.unrecognised:
+        print(f"note: kept {len(res.unrecognised)} key(s) the template "
+              f"does not know, flagged in the file: "
+              f"{', '.join(res.unrecognised)}", file=sys.stderr)
+    if res.notes_lines:
+        print(f"note: {res.notes_lines} comment line(s) could not be "
+              f"attached to a setting; they are kept in the \"Your "
+              f"notes\" block at the end of the file.", file=sys.stderr)
+    if not res.changed:
+        print("taxjson.toml is already formatted.")
+        return
+    if args.check:
+        print("taxjson.toml is not formatted — `taxjson format` shows "
+              "the changes, `taxjson format --write` applies them.",
+              file=sys.stderr)
+        sys.exit(1)
+    if not args.write:
+        sys.stdout.writelines(difflib.unified_diff(
+            text.splitlines(keepends=True),
+            res.text.splitlines(keepends=True),
+            fromfile="taxjson.toml", tofile="taxjson.toml (formatted)"))
+        print("\n(dry run: nothing written — `taxjson format --write` "
+              "applies this; your configuration loads the same either "
+              "way)", file=sys.stderr)
+        return
+    from taxjson.lib.safe_write import link_outside, write_atomic
+    target = link_outside(cfg, root)
+    if target is not None:
+        _die_input(f"{cfg} is a symlink to {target}, outside the project "
+                   f"— format the file it points at in its own project, "
+                   f"or replace the link with the file.")
+    bak = None if args.no_backup else _backup_config(cfg)
+    try:
+        write_atomic(cfg, res.text, suffix=".format.part", keep_mode=True)
+    except OSError as e:
+        _die_input(f"cannot write {cfg}: {e.strerror or e}")
+    print("formatted taxjson.toml"
+          + (f" (previous version: {bak})" if bak else ""))
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     country = _normalize_country(args.country)
-    if country not in _INIT_BY_COUNTRY:
+    if country not in ("canada", "usa"):
         sys.exit(f"taxjson init: unknown country {args.country!r} "
                  f"(expected canada | ca | usa | us)")
 
@@ -17394,24 +17286,8 @@ def cmd_init(args: argparse.Namespace) -> None:
     bak_name = "taxjson.toml.bak"
     if cfg.exists():
         # --force re-templates: keep the user's previous config (their
-        # accounts, holdings, instalments) recoverable. Never overwrite
-        # an earlier backup: a second --force (fixing the --country)
-        # replaced the only copy of the user's config with the first
-        # template (R1-255). Same numbering as fetch's .bak files.
-        bak = cfg.with_name(bak_name)
-        n = 1
-        # lexists: a dangling symlink at a .bak name is taken, never
-        # written through (security review M1).
-        from os.path import lexists
-        while lexists(bak) and not (
-                bak.is_file() and not bak.is_symlink()
-                and bak.read_bytes() == cfg.read_bytes()):
-            bak = cfg.with_name(f"{bak_name}{n}")
-            n += 1
-        if not lexists(bak):
-            from taxjson.lib.safe_write import write_atomic
-            write_atomic(bak, cfg.read_bytes())
-        bak_name = bak.name
+        # accounts, holdings, instalments) recoverable.
+        bak_name = _backup_config(cfg)
         written.append(f"{bak_name} (your previous config)")
     # UTF-8 whatever the locale, through tmp + replace: under LC_ALL=C
     # the template's em dash was a UnicodeEncodeError that left a 0-byte
@@ -17613,6 +17489,27 @@ def _build_parser(prog: str = "taxjson"
                        help="Show what would be appended and moved; "
                             "write nothing")
     p_mig.set_defaults(func=cmd_migrate)
+
+    p_fmt = sub.add_parser(
+        "format", help="Lay out taxjson.toml like the template",
+        description="Rewrite taxjson.toml in the layout `taxjson init` "
+                    "writes: every key of the project's country in its "
+                    "place — the ones you set active, the rest commented "
+                    "out with a description and the default. Your "
+                    "values, account order, [[...]] entries, unknown keys "
+                    "(flagged) and comments are kept; the parsed "
+                    "configuration must stay identical or nothing is "
+                    "written. Default: print the changes as a diff.")
+    _fmt_mode = p_fmt.add_mutually_exclusive_group()
+    _fmt_mode.add_argument("--write", action="store_true",
+                           help="Write the formatted file (the previous "
+                                "one is kept as taxjson.toml.bak)")
+    _fmt_mode.add_argument("--check", action="store_true",
+                           help="Exit 1 when the file is not formatted "
+                                "(writes nothing; for CI)")
+    p_fmt.add_argument("--no-backup", action="store_true",
+                       help="With --write: no taxjson.toml.bak")
+    p_fmt.set_defaults(func=cmd_format)
 
     p_init = sub.add_parser(
         "init", help="Create a new project folder for a tax year",

@@ -176,8 +176,8 @@ def entries_from_config(cfg: dict) -> Optional[List[Entry]]:
     seen: Dict[Tuple[str, str, str], int] = {}
     for n, e in enumerate(v, 1):
         where = f"taxjson.toml [[{TABLE}]] #{n}"
-        extra = sorted(set(e) - {"symbol", "year", "date", "amount",
-                                 "account"})
+        from taxjson.lib.config_check import CGD_KEYS
+        extra = sorted(set(e) - set(CGD_KEYS))
         if extra:
             raise CgDividendMapError(
                 f"{where}: unknown key(s) {', '.join(extra)} (an entry has "
