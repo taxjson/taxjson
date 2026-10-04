@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Command line
+
+- **`taxjson init` scaffolds only the common accounts:** margin, TFSA and RRSP
+  in Canada; margin, Roth and 401(k) in the US. Any other account (a crypto
+  account, a LIRA, an RESP …) is one more section and `inputs/` folder; the
+  generated `taxjson.toml` shows a commented crypto example.
+
 ### Privacy
 
 - **Private figure list.** `scripts/check-pii.sh --collect-amounts

@@ -8,8 +8,8 @@ from pathlib import Path
 
 from taxjson.bin.taxjson_run import cmd_init, load_config
 
-_CA_ACCOUNTS = ["crypto", "lira", "margin", "rrsp", "tfsa"]
-_US_ACCOUNTS = ["401k", "crypto", "margin", "roth"]
+_CA_ACCOUNTS = ["margin", "rrsp", "tfsa"]
+_US_ACCOUNTS = ["401k", "margin", "roth"]
 
 
 def _init(path, force=False, country="canada", year=None):
@@ -67,7 +67,7 @@ class TestInit(unittest.TestCase):
             self.assertNotIn("rrsp", cfg["accounts"])
             # 401k parses as a TOML bare key and is sheltered.
             self.assertEqual(cfg["accounts"]["401k"]["type"], "sheltered")
-            self.assertEqual(cfg["accounts"]["crypto"]["type"], "taxable")
+            self.assertEqual(cfg["accounts"]["margin"]["type"], "taxable")
             for acct in _US_ACCOUNTS:
                 self.assertTrue((root / "inputs" / acct / "README.txt").exists(),
                                 f"missing README for {acct}")

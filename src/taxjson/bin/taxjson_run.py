@@ -5532,14 +5532,16 @@ _TEMPLATE_INSTALMENTS = """
 
 # Country-shaped scaffold: account names, currencies, and tax-date basis
 # in the generated config all follow the jurisdiction. Account order here
-# is the order of the [accounts.*] sections and inputs/ folders.
+# is the order of the [accounts.*] sections and inputs/ folders. Only the
+# common accounts are scaffolded; any other (crypto, a LIRA, an RESP …) is
+# one more section plus folder, shown as a commented example in the file.
 _INIT_BY_COUNTRY = {
     "canada": {"base_currency": "CAD", "source_currency": "USD",
                "tax_date": "settle",
-               "accounts": ("margin", "tfsa", "rrsp", "lira", "crypto")},
+               "accounts": ("margin", "tfsa", "rrsp")},
     "usa":    {"base_currency": "USD", "source_currency": "CAD",
                "tax_date": "trade",
-               "accounts": ("margin", "crypto", "roth", "401k")},
+               "accounts": ("margin", "roth", "401k")},
 }
 
 # Comment column for the [settings] values: every value is padded to
@@ -5577,6 +5579,11 @@ def _render_init_config(country_canon: str,
                             f'type      = "sheltered"\n'
                             f"transfers = true               # keep TRANSFER "
                             f"rows (contributions/withdrawals)\n")
+    sections.append("# More accounts: one section per inputs/ folder, e.g. a crypto account\n"
+                    "# (Coinbase / Kraken exports) or another registered account:\n"
+                    "# [accounts.crypto]\n"
+                    '# type      = "taxable"\n'
+                    "# crypto    = true               # splices fill-crypto-prices into the pipeline\n")
     is_ca = country_canon == "canada"
     yr = int(year) if year is not None else date_cls.today().year
     toml_text = _TEMPLATE_CONFIG.format(
