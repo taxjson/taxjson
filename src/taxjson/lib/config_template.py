@@ -156,6 +156,13 @@ SETTINGS_GROUPS: Tuple[Tuple[Tuple[str, ...], Tuple[Key, ...]], ...] = (
             "last year's close-year record (`taxjson handoff`; no "
             "default)"),
     )),
+    (("# Report views:",), (
+        Key("leaps_months", "9",
+            "LEAPS views (leaps, leaps-sum): a long option bought more "
+            "than this many",
+            ("months before expiry (default 9; no effect on any tax "
+             "figure)",)),
+    )),
     (("# Futures and foreign-currency cash:",), (
         Key("futures_settle", '"trade"',
             "trade | next_day: futures and futures options settle on the "

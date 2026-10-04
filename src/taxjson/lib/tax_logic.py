@@ -92,6 +92,7 @@ NON_RULE_SETTINGS: Dict[str, str] = {
     "prior_year_record": "a file path for the handoff check",
     "source_currencies": "which FX rate series are fetched",
     "cross_asset": "retired; warned about and ignored",
+    "leaps_months": "the LEAPS views' cut-off; no tax figure reads it",
 }
 
 

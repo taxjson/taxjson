@@ -22,7 +22,7 @@ def process_data(data, leaps_by_underlying):
 @guard_main("taxjson-leaps-gains")
 def main():
     # Every LONG option close of any tenor — not only LEAPS (a buy placed
-    # >3 months to expiry). The old "(LEAPS)" title disagreed with
+    # > [settings] leaps_months to expiry). The old "(LEAPS)" title disagreed with
     # `taxjson leaps-sum` from the same run by 42k (audit R1-173).
     _main(prog=PROG,
           description="Long option gains (every tenor), from "

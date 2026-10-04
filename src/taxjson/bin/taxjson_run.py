@@ -7190,12 +7190,25 @@ def cmd_roc(args: argparse.Namespace) -> None:               # `roc` view
     _run_tx_view(args, actions={"ADJUST"}, label="roc")
 
 
-# A LEAPS position, per the project definition: a LONG option BUY placed
-# with more than 3 calendar months left to expiry. The contract set is
-# identified over FULL history (not the viewing window), so a sale,
-# assignment, or expiry inside the window still shows even when the
-# qualifying buy happened before it.
-_LEAPS_MONTHS = 3
+# A LEAPS position: a LONG option BUY placed with more than
+# `[settings] leaps_months` calendar months left to expiry (default 9,
+# the market convention; a views-only setting — no tax figure uses it).
+# The contract set is identified over FULL history (not the viewing
+# window), so a sale, assignment, or expiry inside the window still
+# shows even when the qualifying buy happened before it.
+LEAPS_MONTHS_DEFAULT = 9
+
+
+def _leaps_months(root: Path) -> int:
+    """The project's LEAPS cut-off in months ([settings] leaps_months)."""
+    cfg = load_config(root) if (root / "taxjson.toml").exists() else {}
+    v = (cfg.get("settings") or {}).get("leaps_months")
+    return int(v) if v is not None else LEAPS_MONTHS_DEFAULT
+
+
+def _leaps_rule(root: Path) -> str:
+    """The definition the LEAPS views print."""
+    return f"long option buys placed >{_leaps_months(root)} months to expiry"
 
 
 def _add_months(iso_date: str, months: int) -> str:
@@ -7270,6 +7283,7 @@ def _leaps_contracts(root: Path, account: Optional[str],
     TRUE still-open quantity regardless of any viewing window."""
     import json
     from taxjson.lib.core import is_option_symbol, parse_option_expiry
+    months = _leaps_months(root)
     cache = root / "work"
     if account:
         accounts = [account]
@@ -7380,15 +7394,16 @@ def _leaps_contracts(root: Path, account: Optional[str],
             d = tx.get("date") or ""
             if not expiry or not _ISO_DATE_RE.match(d):
                 continue
-            if expiry > _add_months(d, _LEAPS_MONTHS):
+            if expiry > _add_months(d, months):
                 leaps.add(msym)
     return {sym: qty_by_symbol.get(sym, 0.0) for sym in leaps}
 
 
 def cmd_leaps(args: argparse.Namespace) -> None:             # `leaps` view
     """Closed LEAPS positions over the window: one row per engine
-    disposition of a qualifying contract (long option buy placed >3
-    months to expiry), with lot-matched base-currency gains."""
+    disposition of a qualifying contract (long option buy placed more
+    than [settings] leaps_months to expiry), with lot-matched
+    base-currency gains."""
     root = Path(args.dir).resolve()
     keep, scope, account = _view_window(args, root)
     _leaps_scope_guard(root, account, args)
@@ -7397,8 +7412,7 @@ def cmd_leaps(args: argparse.Namespace) -> None:             # `leaps` view
         if getattr(args, "json", False):
             _json_out(_leaps_empty_doc(root, account))
             return
-        print("No LEAPS contracts found (long option buys placed more than "
-              "3 months before expiry).")
+        print(f"No LEAPS contracts found ({_leaps_rule(root)}).")
         return
     entries, found, basis = _leaps_closed(root, account, leaps, keep)
     if not found:
@@ -7437,8 +7451,8 @@ def cmd_leaps(args: argparse.Namespace) -> None:             # `leaps` view
             money(float(e.get("proceeds") or 0.0)),
             money(float(e.get("cost") or 0.0)),
             money(gain), str(int(e.get("days_held") or 0))]))
-    print(f"CLOSED LEAPS POSITIONS — {scope} ({base_cur}; long option "
-          f"buys placed >3 months to expiry)")
+    print(f"CLOSED LEAPS POSITIONS — {scope} ({base_cur}; "
+          f"{_leaps_rule(root)})")
     print()
     _print_report_table(out_lines)
     print(f"\nTOTAL REALIZED GAIN: {money(total)} {base_cur}")
@@ -7560,7 +7574,7 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
     """Realized-gain summary for closed LEAPS positions over a window
     (default: the tax year): per contract — quantity closed, proceeds,
     cost, gain, expiry — plus the total. A contract qualifies via its
-    FULL-history entry buy (>3 months to expiry), so in-window exits of
+    FULL-history entry buy (>leaps_months to expiry), so in-window exits of
     older entries are included."""
     from taxjson.lib.core import parse_option_expiry, parse_option_underlying
     root = Path(args.dir).resolve()
@@ -7572,8 +7586,7 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
         if getattr(args, "json", False):
             _json_out(_leaps_empty_doc(root, account))
             return
-        print("No LEAPS contracts found (long option buys placed more than "
-              "3 months before expiry).")
+        print(f"No LEAPS contracts found ({_leaps_rule(root)}).")
         return
     entries, found, basis = _leaps_closed(root, account, leaps, keep)
     if not found:
@@ -7623,8 +7636,8 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
             sym, parse_option_expiry(sym) or "?", f"{rec['qty']:g}",
             money(rec["proceeds"]), money(rec["cost"]),
             money(rec["gain"])]))
-    print(f"LEAPS REALIZED GAINS — {scope} ({base_cur}; long option buys "
-          f"placed >3 months to expiry)")
+    print(f"LEAPS REALIZED GAINS — {scope} ({base_cur}; "
+          f"{_leaps_rule(root)})")
     print()
     _print_report_table(out_lines)
     print(f"\nTOTAL REALIZED GAIN: {money(total)} {base_cur}")
@@ -17686,7 +17699,8 @@ def _build_parser(prog: str = "taxjson"
         help="Closed LEAPS positions over a window",
         description="Closed LEAPS positions over a window (default: the "
                     "tax year) — the engine's dispositions of long "
-                    "option buys placed more than 3 months to expiry, "
+                    "option buys placed more than [settings] "
+                    "leaps_months (default 9) months to expiry, "
                     "with lot-matched base-currency gains.")
     p_leaps.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_leaps.add_argument("account", nargs="?", help="Account (default: all)")

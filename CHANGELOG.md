@@ -14,6 +14,10 @@
   `STABLE`, `SPLITSHARE`, `INDEXOPT`, `EVENING`, `MULT` and `VENUE` lines,
   and the run prints one note per symbol whenever a built-in entry decided
   an outcome, naming the line that would change it.
+- **The LEAPS cut-off is a setting.** `taxjson leaps` / `leaps-sum` count a
+  long option bought more than `[settings] leaps_months` months before
+  expiry (default 9, the market convention; it used to be a fixed 3). Views
+  only: no tax figure changes. Set `leaps_months = 3` to keep the old view.
 
 ### Command line
 

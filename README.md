@@ -628,7 +628,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson dil-sum` | Payment-in-lieu total per symbol (default: tax year) — DIVIDEND_IN_LIEU rows only, with each row's treatment: ordinary income (no dividend gross-up/credit or qualified rate), except, in a Canada project, a Canadian dealer's payment on a Canadian issuer's share, which ITA s.260 deems a taxable dividend (on the dealer's T5 box 24; counted in `divs-sum` and the estimate's eligible dividends). |
 | `taxjson divs-sum` | Roll-up summary (see below): dividends received per ticker over a window (default: tax year). |
 | `taxjson fees-sum` | Roll-up summary (see below): trading-fee report by brokerage over a window (default: tax year). |
-| `taxjson leaps-sum` | Per-contract LEAPS summary — long option buys placed >3 months to expiry (default: tax year); only the long position's dispositions (a later write/buy-back of the same contract is covered-call P&L, in `ccd-sum`); the total is split into TAXABLE and SHELTERED parts when registered accounts contribute. |
+| `taxjson leaps-sum` | Per-contract LEAPS summary — long option buys placed more than `[settings] leaps_months` (default 9) months to expiry (default: tax year); only the long position's dispositions (a later write/buy-back of the same contract is covered-call P&L, in `ccd-sum`); the total is split into TAXABLE and SHELTERED parts when registered accounts contribute. |
 | `taxjson roc-sum` | Return-of-capital / ACB-adjustment total per ticker (default: tax year). |
 | `taxjson trades-sum` | Roll-up summary (see below): per ticker buy/sell counts, value and fees over a window (default: tax year). |
 | `taxjson winners [PERIOD] [--top N]` | Per-ticker realized gains RANKED — biggest winners and losers over a window (default: tax year); options grouped under their underlying. A tax-year window (default, `tax_year`, `2025`) follows the project's `tax_date` in `winners`, `gains`, `ccd-sum`, `leaps` and `leaps-sum`: on the settle basis a Dec-31 trade that settles in January belongs to the next year, as in `sum`. These views refuse when `work/` was built for another year than `[settings] year`. |
@@ -1529,8 +1529,10 @@ compensation payment you make: it lowers the cover's gain.
 
 ### LEAPS views
 
-A **LEAPS** position here is a **long option buy placed more than 3 calendar
-months before expiry** (calls and puts alike). Contracts qualify over your
+A **LEAPS** position here is a **long option buy placed more than
+`[settings] leaps_months` calendar months before expiry** (default 9, the
+market convention; calls and puts alike). The setting changes only these
+views, never a tax figure. Contracts qualify over your
 FULL history, so an exit inside the viewing window shows up even when the
 qualifying buy predates it; short premium and near-dated buys never qualify.
 Both views report the ENGINE's numbers — lot-matched, superficial-loss/
