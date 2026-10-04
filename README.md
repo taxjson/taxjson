@@ -283,12 +283,15 @@ gain that authority by accident:
 
 ## Install
 
-One line, no clone — installs the latest release into `~/.local/share/taxjson` with its own virtualenv and puts `taxjson` on your PATH, with `tjs` as its short name (re-run to upgrade; `TAXJSON_CHANNEL=dev` tracks `main`):
+One line, no clone — installs the `stable` release into `~/.local/share/taxjson` with its own virtualenv and puts `taxjson` on your PATH, with `tjs` as its short name (re-run to upgrade):
 
 ```bash
 bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
-bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --with-fetch   # plus the Questrade / IBKR auto-fetch plugin
+bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --with-fetch      # plus the Questrade / IBKR auto-fetch plugin
+bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --channel beta    # another channel
 ```
+
+**Channels.** `stable` (the default) is the release that has held up; `beta` the one being tried; `latest` the newest release, as soon as it is tagged; `dev` the `main` branch, unreleased; `vX.Y.Z` exactly that release (a pin — also how you go back). `stable` and `beta` are named in [`channels.json`](channels.json) on `main`; `latest` is always the newest `vX.Y.Z` tag. Pick one with `--channel NAME` or `TAXJSON_CHANNEL=NAME`; the installer prints `channel stable → release v0.16.0` and remembers the choice in `~/.config/taxjson/channel`, so re-running it upgrades along the same channel. A channel never moves an install backwards (name a version to go back). Only an annotated release tag on `main`'s history is installed. `taxjson channels` shows where every channel points and what this machine runs; `TAXJSON_DRY_RUN=1` prints what the installer would pick and changes nothing. The installer leaves a `taxjson` or `tjs` in `~/.local/bin` that is not its own link alone, with a note.
 
 Then `mkdir -p ~/taxes/2026 && cd ~/taxes/2026 && taxjson init --country canada` (or `--country usa`). See [REFERENCES.md](REFERENCES.md) for the CRA/IRS sources behind every rule and [docs/releasing.md](docs/releasing.md) for how releases are cut.
 
@@ -655,6 +658,14 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson renames [ACCOUNT] [--json]` | Every ticker change in the books as a dated event: its date, where it came from (a broker corporate-action row, a `.tt` SPLIT line, a ticker.map `RENAME` line), and per account the position and book cost it carried; every trade in an old ticker after its rename with how ticker.map resolves it; and the undated ticker.map renames, with the dated form when a broker row gives the date. Exit 1 while a late trade is undeclared. |
 | `taxjson spinoffs [ACCOUNT] [--json]` | Every spin-off in the books: parent and new security, ratio, the election (`taxable_deemed_dividend` is the Canadian default: a dividend equal to the new shares' fair market value, which is also their cost; `rollover_s_86_1` splits the parent's cost with no income, filed with the return, for spin-offs on CRA's list; you give the CAD cost moved to the new shares as `--hint allocated_acb_cad=`), the value per share used, what was booked (income and the new shares' cost), the broker's own value when it reported one (the default uses it when no value is given), and what is held now. In a US project the elections are `taxable_distribution_301` (§301 income at FMV) and `tax_free_355` (basis moved per Form 8937, `--hint allocated_acb=`). Flags a taxable spin-off booked at $0, a basis-allocating election with no allocated cost, a missing election or an ignored event; exit 1 when a taxable one needs attention. |
 | `taxjson splits [ACCOUNT] [--json]` | Every split, consolidation and rename with holdings just before and after. Flags a split recorded twice (two sources, close dates), a no-op row, a result with a fractional share (expect cash in lieu), and events that also mention a cash or return-of-capital leg. Exit 1 on a likely double application. |
+
+#### Release
+
+| Command | Purpose |
+| --- | --- |
+| `taxjson channels [all] [--json] [--offline]` | Where each release channel points — `stable` and `beta` as `channels.json` on `main` names them, `latest` the newest release tag — what this machine's production copy (`~/.local/share/taxjson`, or `TAXJSON_PROD_DIR`) runs and on which channel, and the newest 20 releases (`all`: every one) with date, first CHANGELOG entry and ←stable / beta / latest / this-box marks. Reads the development checkout (`TAXJSON_DEV_DIR`, or the git checkout this package is an editable install of), else the production copy's clone, after one `git fetch` of that clone's own remote; offline (or `TAXJSON_OFFLINE=1`, or `--offline`) it says so and shows what the clone knows. Same page: `scripts/channels.sh`. |
+| `taxjson deploy [vX.Y.Z]` | Development machine only: put the newest release (or the one named) on this machine's production copy now, through the installer's upgrade path. The remembered channel is kept; a channel never moves an install backwards, so the copy stays there until its channel passes it. Refused (exit 2) where no development checkout is found. |
+| `taxjson promote [vX.Y.Z] [stable\|beta]` | Development machine only: point `stable` (default) or `beta` at a release — `scripts/promote.sh`: the tag must exist, the checkout must be on `main` with a clean `channels.json`, moving a channel backwards asks first; commits "Promote vX.Y.Z to stable" and pushes. No tag, no rebuild. Without a version: the release this machine's production copy runs. Refused (exit 2) where no development checkout is found. |
 
 #### Tools
 
@@ -1887,7 +1898,7 @@ Each command takes `--help`. The full pipeline is composable — outputs from on
 - [`REFERENCES.md`](./REFERENCES.md) — the ITA / CRA / IRC source behind every rule, and every deliberate non-feature
 - [`KNOWN_ISSUES.md`](./KNOWN_ISSUES.md) — known limitations and deferred fixes
 - [`docs/filing.md`](./docs/filing.md) — the filing checklist: every step from frozen inputs to the `close-year` lock, with the command that proves it
-- [`docs/releasing.md`](./docs/releasing.md) — the dev/release scheme (`main` vs `vX.Y.Z` tags) and how a release is cut
+- [`docs/releasing.md`](./docs/releasing.md) — the dev/release scheme (`main`, `vX.Y.Z` tags, the stable / beta / latest channels) and how a release is cut and promoted
 - [`CHANGELOG.md`](./CHANGELOG.md) — release history
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) — how to run tests and submit changes
 - [`SECURITY.md`](./SECURITY.md) — vulnerability reporting policy

@@ -836,8 +836,13 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Explain and check", ("audit", "wash-sales", "tax-logic", "edge-cases",
                            "check-dates", "sanity", "renames", "spinoffs",
                            "splits")),
+    ("Release", ("channels", "deploy", "promote")),
     ("Tools", ("redact", "help")),
 )
+
+# The release verbs read a git checkout, never a tax project: -C/--dir
+# and the project guards do not apply to them.
+_RELEASE_CMDS: Tuple[str, ...] = ("channels", "deploy", "promote")
 
 _TOP_DESCRIPTION = (
     "taxjson — capital gains, income and the superficial-loss / "
@@ -11787,6 +11792,105 @@ def cmd_shares(args: argparse.Namespace) -> None:
     print(f"\n{len(rows)} symbol(s); COST is combined book cost in {base}.")
 
 
+def cmd_channels(args: argparse.Namespace) -> None:
+    """`taxjson channels [all] [--json] [--offline]`: where the release
+    channels point (stable / beta in channels.json on main, latest = the
+    newest release tag), what this machine's production copy runs, and
+    the newest releases (lib/channels). Reads the development checkout
+    when there is one, else the production copy's clone; one `git fetch`
+    of that clone's own remote, skipped offline."""
+    import json
+    from taxjson.lib import channels as ch
+    try:
+        repo, kind = ch.source_checkout()
+        st = ch.status(repo, fetch_remote=not args.offline,
+                       limit=None if args.scope == "all"
+                       else ch.DEFAULT_LIMIT, source_kind=kind)
+    except ch.ChannelsError as e:
+        _die_input(str(e))
+    if args.json:
+        print(json.dumps(st, indent=2))
+    else:
+        print(ch.render(st, _PROG))
+
+
+def _release_dev_checkout(verb: str) -> Path:
+    """The development checkout `promote` / `deploy` act from, or a clear
+    refusal: they publish or install releases, which is the maintainer's
+    machine's job (anywhere else, re-run the installer)."""
+    from taxjson.lib import channels as ch
+    try:
+        dev = ch.dev_checkout()
+    except ch.ChannelsError as e:
+        _die_input(str(e))
+    if dev is None or not (dev / "scripts" / "promote.sh").is_file():
+        _die_input(
+            f"`{verb}` is for the machine taxjson is developed on, and no "
+            f"development checkout was found (set TAXJSON_DEV_DIR to it, or "
+            f"run that checkout's own editable install). To update this "
+            f"machine, re-run the installer: bash -c \"$(curl -fsSL "
+            f"https://taxjson.com/install.sh)\"; `{_PROG} channels` shows "
+            f"where the channels point.")
+    return dev
+
+
+def _run_script(argv: List[str], env: Optional[Dict[str, str]] = None
+                ) -> None:
+    """Run a release script on this terminal (promote asks before moving
+    a channel backwards) and exit with its status."""
+    r = subprocess.run(argv, env=env)
+    if r.returncode:
+        raise SystemExit(r.returncode)
+
+
+def cmd_promote(args: argparse.Namespace) -> None:
+    """`taxjson promote [TAG] [stable|beta]`: point a channel at a
+    release — scripts/promote.sh in the development checkout (commits
+    channels.json on main and pushes; never tags or rebuilds). Without
+    TAG: the release this machine's production copy runs."""
+    from taxjson.lib import channels as ch
+    dev = _release_dev_checkout("promote")
+    tag, channel = args.tag, args.channel
+    if tag in ch.CHANNELS and channel is None:
+        tag, channel = None, tag            # `promote beta`
+    channel = channel or "stable"
+    if not tag:
+        tag = ch.this_box().get("release")
+        if not tag:
+            _die_input(f"this machine's production copy "
+                       f"({ch.prod_dir()}) is not on a release — say which: "
+                       f"{_PROG} promote vX.Y.Z [stable|beta]")
+        print(f"promoting what this machine runs: {tag}")
+    _run_script(["bash", str(dev / "scripts" / "promote.sh"), tag, channel])
+
+
+def cmd_deploy(args: argparse.Namespace) -> None:
+    """`taxjson deploy [TAG]`: put a release on this machine's production
+    copy now — the newest tag, or TAG — through the installer's upgrade
+    path (the development checkout's install.sh run against the
+    production copy). The remembered channel is left as it is; the
+    installer never moves a channel backwards, so the copy stays on TAG
+    until its channel passes it."""
+    import os
+    from taxjson.lib import channels as ch
+    dev = _release_dev_checkout("deploy")
+    prod = ch.prod_dir()
+    if not ch.is_checkout(prod):
+        _die_input(f"no production copy at {prod} — install it first with "
+                   f"the installer (bash -c \"$(curl -fsSL "
+                   f"https://taxjson.com/install.sh)\"), or set "
+                   f"TAXJSON_PROD_DIR")
+    target = "latest"
+    if args.tag:
+        target = args.tag if args.tag.startswith("v") else f"v{args.tag}"
+        if not ch.TAG_RE.match(target):
+            _die_input(f"{args.tag!r} is not a release — give vX.Y.Z "
+                       f"(or nothing, for the newest)")
+    env = dict(os.environ, TAXJSON_DIR=str(prod),
+               TAXJSON_REMEMBER_CHANNEL="0")
+    _run_script(["bash", str(dev / "install.sh"), "--channel", target], env)
+
+
 def cmd_redact(args: argparse.Namespace) -> None:
     """`taxjson redact FILE...`: strip account numbers and identity from
     broker exports (row shapes kept) — see taxjson_redact."""
@@ -17977,6 +18081,64 @@ def _build_parser(prog: str = "taxjson"
                             "anything would be redacted")
     p_red.set_defaults(func=cmd_redact)
 
+    # Release verbs (docs/releasing.md). `channels` works anywhere a
+    # taxjson checkout is (the development one, else the production
+    # copy); `promote` and `deploy` only where the development checkout
+    # is — they refuse anywhere else.
+    p_chan = sub.add_parser(
+        "channels",
+        help="Where stable, beta and latest point, and the releases",
+        description="Where each release channel points — stable and beta "
+             "as channels.json on main names them, latest the newest "
+             "release tag — what this machine's production copy runs "
+             "(~/.local/share/taxjson, or TAXJSON_PROD_DIR) and on which "
+             "channel, and the newest 20 releases with their date and "
+             "first CHANGELOG entry. Reads the development checkout "
+             "(TAXJSON_DEV_DIR, or this package's own git checkout), "
+             "else the production copy's clone, after one `git fetch` of "
+             "its remote; offline (or TAXJSON_OFFLINE=1) it says so and "
+             "shows what the clone knows.")
+    p_chan.add_argument("scope", nargs="?", choices=["all"],
+                        help="List every release, not just the newest 20")
+    p_chan.add_argument("--offline", action="store_true",
+                        help="Do not fetch; show what the clone knows")
+    p_chan.add_argument("--json", action="store_true",
+                        help="Emit JSON instead of text")
+    p_chan.set_defaults(func=cmd_channels)
+
+    p_prom = sub.add_parser(
+        "promote",
+        help="Point stable or beta at a release (development machine)",
+        description="Point a release channel at a release: what new "
+             "installs on that channel (and re-runs of the installer) "
+             "get from now on. Runs scripts/promote.sh in the development "
+             "checkout: the tag must exist, the checkout must be on main "
+             "with a clean channels.json, and moving a channel BACKWARDS "
+             "asks first; it commits channels.json (\"Promote vX.Y.Z to "
+             "stable\") and pushes main — no tag, no rebuild. Without TAG: "
+             "the release this machine's production copy runs. Refused "
+             "where no development checkout is found.")
+    p_prom.add_argument("tag", nargs="?", metavar="TAG",
+                        help="The release, vX.Y.Z (default: what this "
+                             "machine runs)")
+    p_prom.add_argument("channel", nargs="?", metavar="CHANNEL",
+                        help="stable (default) or beta")
+    p_prom.set_defaults(func=cmd_promote)
+
+    p_dep = sub.add_parser(
+        "deploy",
+        help="Put a release on this machine now (development machine)",
+        description="Update this machine's production copy "
+             "(~/.local/share/taxjson, or TAXJSON_PROD_DIR) to the newest "
+             "release tag, or to TAG, through the installer's upgrade "
+             "path (the development checkout's install.sh). The channel "
+             "the installer remembered is kept; a channel never moves the "
+             "copy backwards, so it stays on TAG until its channel passes "
+             "it. Refused where no development checkout is found.")
+    p_dep.add_argument("tag", nargs="?", metavar="TAG",
+                       help="The release, vX.Y.Z (default: the newest)")
+    p_dep.set_defaults(func=cmd_deploy)
+
     p_ob = sub.add_parser(
         "option-boundary",
         help="Written options across a year end",
@@ -18657,13 +18819,13 @@ def _main() -> None:
     for seg in segments:
         args = p.parse_args(seg)
         _CURRENT_CMD = next((t for t in seg if t in commands), "")
-        if (args.cmd not in ("init", "help", "redact")
+        if (args.cmd not in ("init", "help", "redact") + _RELEASE_CMDS
                 and not Path(args.dir).is_dir()):
             # `-C typo sum` said "no gains files in typo/work (run
             # `taxjson run` first)" — send the user to the real problem.
             _die_input(f"no such directory: {args.dir} (-C/--dir names the "
                  f"project root — the folder holding taxjson.toml)")
-        if args.cmd not in ("init", "help", "migrate"):
+        if args.cmd not in ("init", "help", "migrate") + _RELEASE_CMDS:
             # An old per-purpose file (yf_ticker.map, distributions.map
             # ...) stops every command, whatever it reads (lib/migrate).
             _refuse_legacy_project_files(Path(args.dir).resolve())
