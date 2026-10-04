@@ -1,6 +1,6 @@
 """Current-price resolution chain: IBKR -> yfinance -> on-disk cache.
 
-Modeled on portoml-ai's prices.py, pared down to what taxjson's pricing
+A small price-source chain, pared down to what taxjson's pricing
 tools need (stock snapshots only):
 
   1. IBKR   — a running TWS / IB Gateway (ib_insync, the [ibkr] extra).

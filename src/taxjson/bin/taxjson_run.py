@@ -12369,7 +12369,7 @@ def _mask_ids_in_path(path: str) -> str:
 def cmd_sanity(args: argparse.Namespace) -> None:
     """`taxjson sanity ITEM... [--tolerance N] [--json]`: LOOSE
     cross-check of open positions against externally produced holdings
-    TOML files (portoml-style: [[holding]] symbol/quantity).
+    TOML files (a [[holding]] array of symbol/quantity tables).
 
     Two argument forms, freely mixed:
 
@@ -12523,9 +12523,9 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             sys.exit("taxjson sanity: no arguments, and no account in "
                      "taxjson.toml declares `holdings = [...]` (paths "
                      "of its broker positions .toml files). Either "
-                     "pass items — `taxjson sanity margin=U1.toml` — "
+                     "pass items — `taxjson sanity margin=positions.toml` — "
                      "or add e.g.\n  [accounts.margin]\n  holdings = "
-                     "[\"~/portoml-run/U1_holdings.toml\"]")
+                     "[\"~/holdings/margin.toml\"]")
     for accts, paths in config_groups:
         key = tuple(accts)
         gname = "+".join(key)
@@ -12568,9 +12568,9 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         if not (bare["accounts"] and bare["files"]):
             sys.exit("taxjson sanity: the aggregate form needs at least "
                      "one ACCOUNT and one FILE.toml (free mix, e.g. "
-                     "`taxjson sanity margin rrsp U1_holdings.toml "
-                     "U2_holdings.toml`), or pair them: "
-                     "`margin=U1_holdings.toml+U2_holdings.toml`")
+                     "`taxjson sanity margin rrsp margin.toml "
+                     "rrsp.toml`), or pair them: "
+                     "`margin=margin.toml+margin-2.toml`")
     ordered: List[Dict[str, Any]] = list(groups.values())
     if bare["accounts"]:
         ordered.append(bare)
@@ -12634,7 +12634,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             holdings = doc.get("holding") if isinstance(doc, dict) else None
             if not isinstance(holdings, list):
                 sys.exit(f"taxjson sanity: {path.name} has no [[holding]] "
-                         f"array (portoml-style file expected)")
+                         f"array (a holdings file has [[holding]] tables)")
             for h in holdings:
                 if not isinstance(h, dict):
                     sys.exit(f"taxjson sanity: {path.name}: a [[holding]] "
@@ -12675,8 +12675,8 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                     continue
                 if (str(h.get("asset_type") or "").lower() == "crypto"
                         and _VENUE_SFX_RE.match(sym)):
-                    # A snapshot tool's venue suffix (portoml's
-                    # `LINK.KR` for Kraken): taxjson keys crypto by the
+                    # A snapshot tool's venue suffix (e.g.
+                    # `COIN.KR` for Kraken): taxjson keys crypto by the
                     # bare coin, so every coin showed twice, MISSING on
                     # each side (R1-113, R1-334).
                     sym = _VENUE_SFX_RE.match(sym).group(1)
@@ -12734,7 +12734,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         _json_out({
             "basis": basis,
             "accounts": accounts,
-            # The [meta] account label is the broker id portoml writes:
+            # The [meta] account label may be a broker account id:
             # masked like the text listing (S044-16).
             "files": [{"file": _mask_ids_in_path(str(p2)),
                        "file_account": _mask_ids_in_path(lbl)}

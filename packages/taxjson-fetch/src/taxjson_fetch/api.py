@@ -463,7 +463,7 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
                                generated_at: str,
                                extra_to_roots=frozenset(),
                                book_symbols=frozenset()) -> str:
-    """Render live positions as the portoml-style holdings TOML that
+    """Render live positions as the holdings TOML that
     `taxjson sanity` reads ([[holding]] symbol/quantity; extra fields
     are informational)."""
     # Roots whose options list in Canada (Montreal): learned from .TO

@@ -293,7 +293,7 @@
 - The help page lists each command on one short line (what it does, in
   plain words); `taxjson COMMAND -h` carries the full description. Stale
   wording is gone (`run --no-input` named a GUI, `sanity` a
-  "portoml-style" file, `--fast` an mtime cache), and the standalone
+  private tool's file format, `--fast` an mtime cache), and the standalone
   tools that printed no description or a vague one (taxjson-fill-crypto,
   taxjson-convert-currency, taxjson-wash-radar, taxjson-safe-to-sell,
   taxjson-ticker-map, taxjson-validate, taxjson-split-gains and others)
@@ -5966,7 +5966,7 @@ fixed:
   rows can fold into it; two same-day trades with one levy each still
   pair 1:1.
 - `taxjson.toml` accounts accept `holdings = [...]` — paths of the
-  account's broker positions files (portoml-style). `taxjson sanity`
+  account's broker positions files (`[[holding]]` TOML). `taxjson sanity`
   with no arguments builds the paired groups from it (accounts that
   list a common file merge into one group; an account whose file is
   missing is noted and left out), explicit arguments still override,
@@ -6885,7 +6885,7 @@ and the removal of the portfolio-analytics commands. 1,841 tests.
   `taxjson-leaps-missed` (~1,900 lines plus their tests). None fed
   any tax number — they were portfolio-tracker features living in a
   tax toolkit, priced over the network (the brittle dependency
-  class), and portoml-ai is their proper home. `divs-sum` keeps the
+  class), and a portfolio tracker is their proper home. `divs-sum` keeps the
   tax-relevant half of `yield` (dividends actually received);
   `harvest` keeps the pricing chain (and the `[ibkr]` extra) for the
   one decision that needs live prices. The `[analytics]` extra, the
@@ -6895,7 +6895,7 @@ and the removal of the portfolio-analytics commands. 1,841 tests.
   (`$QUESTRADE_TOKEN_FILE` overrides) instead of the per-project
   `work/.questrade_refresh_token`. Questrade runs one rotating chain
   per API app, so the credential belongs to the machine, not to a
-  project — two projects (or taxjson next to portoml-ai) each caching
+  project — two projects (or taxjson next to another Questrade tool) each caching
   their own copy meant whichever ran last held the live token and the
   other failed to authenticate. The resolver is exactly two steps
   ($QUESTRADE_TOKEN_FILE > ~/.questrade_token, written mode 600); a

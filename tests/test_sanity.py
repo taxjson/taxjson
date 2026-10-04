@@ -1,5 +1,5 @@
 """`taxjson sanity` — cross-check of positions against external
-holdings TOML files (portoml-style). Bare arguments (account names and
+holdings TOML files ([[holding]] tables). Bare arguments (account names and
 .toml files) form one AGGREGATE group: combined positions vs combined
 holdings, per symbol — quick, but blind to a position sitting in the
 wrong account. `ACCOUNT[+ACCOUNT]=FILE[+FILE]` arguments form PAIRED
@@ -53,20 +53,20 @@ class TestSanity(unittest.TestCase):
         _gains(root, "rrsp", {"XIU.TO": 40, "QNET.US": 75})
         ext = root / "ext"
         ext.mkdir()
-        _holdings_toml(ext / "U1_holdings.toml", "U1",
+        _holdings_toml(ext / "acct1_holdings.toml", "ACCT1",
                        {"QLK.TO": 24000, "QNET.US": 50})
-        _holdings_toml(ext / "U2_holdings.toml", "U2",
+        _holdings_toml(ext / "acct2_holdings.toml", "ACCT2",
                        {"XIU.TO": 100})
-        _holdings_toml(ext / "U3_holdings.toml", "U3",
+        _holdings_toml(ext / "acct3_holdings.toml", "ACCT3",
                        {"XIU.TO": 40, "QNET.US": 75})
         return root
 
     def _mix(self, root):
         e = root / "ext"
         return ["margin", "rrsp",
-                str(e / "U1_holdings.toml"),
-                str(e / "U2_holdings.toml"),
-                str(e / "U3_holdings.toml")]
+                str(e / "acct1_holdings.toml"),
+                str(e / "acct2_holdings.toml"),
+                str(e / "acct3_holdings.toml")]
 
     def test_free_mix_aggregate_clean_exit(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -78,13 +78,13 @@ class TestSanity(unittest.TestCase):
         self.assertEqual(doc["accounts"], ["margin", "rrsp"])
         self.assertEqual(
             sorted(f["file_account"] for f in doc["files"]),
-            ["U1", "U2", "U3"])
+            ["ACCT1", "ACCT2", "ACCT3"])
 
     def test_discrepancies_detected_and_exit_1(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp)
             # Drift rrsp: qty change + a symbol only on the broker side.
-            _holdings_toml(root / "ext" / "U3_holdings.toml", "U3",
+            _holdings_toml(root / "ext" / "acct3_holdings.toml", "ACCT3",
                            {"XIU.TO": 42, "QNET.US": 75,
                             "NEW.TO": 10})
             r = _run(root, "sanity", *self._mix(root), "--json")
@@ -111,7 +111,7 @@ class TestSanity(unittest.TestCase):
             root = self._project(tmp)
             e = root / "ext"
             r = _run(root, "sanity", *self._mix(root),
-                     str(e / "U1_holdings.toml"), "--json")
+                     str(e / "acct1_holdings.toml"), "--json")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertTrue(json.loads(r.stdout)["clean"])
         self.assertIn("given more than once", r.stderr)
@@ -122,7 +122,7 @@ class TestSanity(unittest.TestCase):
             e = root / "ext"
             # Neither an account nor a file (directories included).
             r = _run(root, "sanity", "nope",
-                     str(e / "U1_holdings.toml"))
+                     str(e / "acct1_holdings.toml"))
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("neither an account", r.stderr)
             r = _run(root, "sanity", "margin", str(e))
@@ -139,8 +139,8 @@ class TestSanity(unittest.TestCase):
             root = self._project(tmp)
             e = root / "ext"
             r = _run(root, "sanity", "margin",
-                     str(e / "U1_holdings.toml"),
-                     str(e / "U2_holdings.toml"), "--json")
+                     str(e / "acct1_holdings.toml"),
+                     str(e / "acct2_holdings.toml"), "--json")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         doc = json.loads(r.stdout)
         self.assertEqual(doc["uncovered_accounts"], ["rrsp"])
@@ -154,7 +154,7 @@ class TestSanity(unittest.TestCase):
             _gains(root, "margin", {"QLK.TO": 24000, "XIU.TO": 100,
                                     "QNET.US": 50,
                                     "QAM280121C00140000.TO": 1})
-            _holdings_toml(root / "ext" / "U1_holdings.toml", "U1",
+            _holdings_toml(root / "ext" / "acct1_holdings.toml", "ACCT1",
                            {"QLK.TO": 24000, "QNET.US": 50,
                             "QAM280121C00140000.US": 1})
             r = _run(root, "sanity", *self._mix(root), "--json")
@@ -165,14 +165,14 @@ class TestSanity(unittest.TestCase):
 
     def test_paired_groups_clean(self):
         # margin spans two broker accounts (IBKR + Webull style):
-        # `margin=U1+U2`; rrsp is a plain 1:1 pairing.
+        # `margin=ACCT1+ACCT2`; rrsp is a plain 1:1 pairing.
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp)
             e = root / "ext"
             r = _run(root, "sanity",
-                     f"margin={e / 'U1_holdings.toml'}"
-                     f"+{e / 'U2_holdings.toml'}",
-                     f"rrsp={e / 'U3_holdings.toml'}", "--json")
+                     f"margin={e / 'acct1_holdings.toml'}"
+                     f"+{e / 'acct2_holdings.toml'}",
+                     f"rrsp={e / 'acct3_holdings.toml'}", "--json")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         doc = json.loads(r.stdout)
         self.assertTrue(doc["clean"])
@@ -195,13 +195,13 @@ class TestSanity(unittest.TestCase):
             _gains(root, "rrsp", {"XIU.TO": 40, "QNET.US": 50})
             agg = _run(root, "sanity", *self._mix(root), "--json")
             pair = _run(root, "sanity",
-                        f"margin={e / 'U1_holdings.toml'}",
-                        f"margin={e / 'U2_holdings.toml'}",
-                        f"rrsp={e / 'U3_holdings.toml'}", "--json")
+                        f"margin={e / 'acct1_holdings.toml'}",
+                        f"margin={e / 'acct2_holdings.toml'}",
+                        f"rrsp={e / 'acct3_holdings.toml'}", "--json")
             text = _run(root, "sanity",
-                        f"margin={e / 'U1_holdings.toml'}"
-                        f"+{e / 'U2_holdings.toml'}",
-                        f"rrsp={e / 'U3_holdings.toml'}")
+                        f"margin={e / 'acct1_holdings.toml'}"
+                        f"+{e / 'acct2_holdings.toml'}",
+                        f"rrsp={e / 'acct3_holdings.toml'}")
         self.assertEqual(agg.returncode, 0, agg.stderr + agg.stdout)
         self.assertEqual(pair.returncode, 1, pair.stderr + pair.stdout)
         doc = json.loads(pair.stdout)
@@ -215,9 +215,9 @@ class TestSanity(unittest.TestCase):
         self.assertEqual(text.returncode, 1, text.stderr + text.stdout)
         self.assertIn("paired check", text.stdout)
         # Every file read is listed by PATH under its group.
-        self.assertIn(f"file:     {e / 'U1_holdings.toml'}", text.stdout)
-        self.assertIn(f"file:     {e / 'U2_holdings.toml'}", text.stdout)
-        self.assertIn(f"file:     {e / 'U3_holdings.toml'}", text.stdout)
+        self.assertIn(f"file:     {e / 'acct1_holdings.toml'}", text.stdout)
+        self.assertIn(f"file:     {e / 'acct2_holdings.toml'}", text.stdout)
+        self.assertIn(f"file:     {e / 'acct3_holdings.toml'}", text.stdout)
         self.assertIn("ACCOUNTS", text.stdout)
         self.assertIn("2 discrepancy(ies).", text.stdout)
 
@@ -244,9 +244,9 @@ class TestSanity(unittest.TestCase):
             root = self._project(tmp)
             e = root / "ext"
             r = _run(root, "sanity", "margin",
-                     str(e / "U1_holdings.toml"),
-                     f"rrsp={e / 'U3_holdings.toml'}",
-                     str(e / "U2_holdings.toml"), "--json")
+                     str(e / "acct1_holdings.toml"),
+                     f"rrsp={e / 'acct3_holdings.toml'}",
+                     str(e / "acct2_holdings.toml"), "--json")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         doc = json.loads(r.stdout)
         self.assertTrue(doc["clean"])
@@ -260,17 +260,17 @@ class TestSanity(unittest.TestCase):
             root = self._project(tmp)
             e = root / "ext"
             r = _run(root, "sanity",
-                     f"margin={e / 'U1_holdings.toml'}",
-                     f"margin+rrsp={e / 'U3_holdings.toml'}")
+                     f"margin={e / 'acct1_holdings.toml'}",
+                     f"margin+rrsp={e / 'acct3_holdings.toml'}")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("more than one group", r.stderr)
             r = _run(root, "sanity", "margin",
-                     str(e / "U1_holdings.toml"),
-                     f"rrsp={e / 'U1_holdings.toml'}")
+                     str(e / "acct1_holdings.toml"),
+                     f"rrsp={e / 'acct1_holdings.toml'}")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("more than one group", r.stderr)
             # Malformed pair: bad account, missing file, empty side.
-            r = _run(root, "sanity", f"nope={e / 'U1_holdings.toml'}")
+            r = _run(root, "sanity", f"nope={e / 'acct1_holdings.toml'}")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("is not an account", r.stderr)
             r = _run(root, "sanity", f"margin={e / 'missing.toml'}")
@@ -294,8 +294,8 @@ class TestSanity(unittest.TestCase):
             _gains(root, "margin", {"QLK.TO": 24000, "XIU.TO": 100,
                                     "QNET.US": 50,
                                     "RCI.B270618C00060000.TO": 15})
-            (e / "U1_holdings.toml").write_text(
-                'schema_version = "1.0"\n[meta]\naccount = "U1"\n\n'
+            (e / "acct1_holdings.toml").write_text(
+                'schema_version = "1.0"\n[meta]\naccount = "ACCT1"\n\n'
                 '[[holding]]\nsymbol = "QLK.TO"\nquantity = 24000\n'
                 'asset_type = "equity"\n\n'
                 '[[holding]]\nsymbol = "QNET.US"\nquantity = 50\n'
@@ -304,8 +304,8 @@ class TestSanity(unittest.TestCase):
                 'quantity = 15\nasset_type = "option"\n'
                 'underlying = "RCI.B.TO"\nright = "call"\n'
                 'strike = 60.0\n\n')
-            r = _run(root, "sanity", f"margin={e / 'U1_holdings.toml'}"
-                     f"+{e / 'U2_holdings.toml'}", "--json")
+            r = _run(root, "sanity", f"margin={e / 'acct1_holdings.toml'}"
+                     f"+{e / 'acct2_holdings.toml'}", "--json")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             doc = json.loads(r.stdout)
             self.assertTrue(doc["clean"])
@@ -314,8 +314,8 @@ class TestSanity(unittest.TestCase):
                 [{"file_symbol": "RCI270618C00060000.TO",
                   "taxjson_symbol": "RCI.B270618C00060000.TO"}])
             text = _run(root, "sanity", "margin",
-                        str(e / "U1_holdings.toml"),
-                        str(e / "U2_holdings.toml"))
+                        str(e / "acct1_holdings.toml"),
+                        str(e / "acct2_holdings.toml"))
             self.assertEqual(text.returncode, 0, text.stdout)
             self.assertIn("via its underlying", text.stdout)
             # taxjson ALSO holds the file's spelling: no re-key, and
@@ -324,8 +324,8 @@ class TestSanity(unittest.TestCase):
                                     "QNET.US": 50,
                                     "RCI.B270618C00060000.TO": 15,
                                     "RCI270618C00060000.TO": 5})
-            r = _run(root, "sanity", f"margin={e / 'U1_holdings.toml'}"
-                     f"+{e / 'U2_holdings.toml'}", "--json")
+            r = _run(root, "sanity", f"margin={e / 'acct1_holdings.toml'}"
+                     f"+{e / 'acct2_holdings.toml'}", "--json")
             self.assertEqual(r.returncode, 1)
             doc = json.loads(r.stdout)
             self.assertEqual(doc["groups"][0]["matched_via_underlying"],
@@ -354,9 +354,9 @@ class TestSanity(unittest.TestCase):
             root = self._project(tmp)
             # margin's two files: one absolute, one project-relative.
             self._config_with_holdings(
-                root, [str(root / "ext" / "U1_holdings.toml"),
-                       "ext/U2_holdings.toml"],
-                ["ext/U3_holdings.toml"])
+                root, [str(root / "ext" / "acct1_holdings.toml"),
+                       "ext/acct2_holdings.toml"],
+                ["ext/acct3_holdings.toml"])
             r = _run(root, "sanity", "--json")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             doc = json.loads(r.stdout)
@@ -396,7 +396,7 @@ class TestSanity(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp)
             self._config_with_holdings(
-                root, ["ext/U1_holdings.toml", "ext/U2_holdings.toml"],
+                root, ["ext/acct1_holdings.toml", "ext/acct2_holdings.toml"],
                 ["ext/not_there.toml"])
             r = _run(root, "sanity", "--json")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
@@ -416,9 +416,9 @@ class TestSanity(unittest.TestCase):
             root = self._project(tmp)
             e = root / "ext"
             self._config_with_holdings(
-                root, ["ext/U1_holdings.toml", "ext/U2_holdings.toml"],
-                ["ext/U3_holdings.toml"])
-            r = _run(root, "sanity", f"rrsp={e / 'U3_holdings.toml'}",
+                root, ["ext/acct1_holdings.toml", "ext/acct2_holdings.toml"],
+                ["ext/acct3_holdings.toml"])
+            r = _run(root, "sanity", f"rrsp={e / 'acct3_holdings.toml'}",
                      "--json")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             doc = json.loads(r.stdout)
@@ -450,9 +450,9 @@ class TestSanity(unittest.TestCase):
             root = self._project(tmp)
             d = root / "IB+QT"
             d.mkdir()
-            _holdings_toml(d / "h.toml", "U1", {"QLK.TO": 24000, "QNET.US": 50,
+            _holdings_toml(d / "h.toml", "ACCT1", {"QLK.TO": 24000, "QNET.US": 50,
                                                  "XIU.TO": 100})
-            self._config_with_holdings(root, ["IB+QT/h.toml"], ["ext/U3_holdings.toml"])
+            self._config_with_holdings(root, ["IB+QT/h.toml"], ["ext/acct3_holdings.toml"])
             r = _run(root, "sanity", "--json")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             self.assertTrue(json.loads(r.stdout)["clean"])

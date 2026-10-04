@@ -688,7 +688,7 @@ class TestLiveHoldings(unittest.TestCase):
 
 
 class QuestradeTokenFileTest(unittest.TestCase):
-    """The shared ~/.questrade_token chain (portoml-ai uses the same file)."""
+    """The shared ~/.questrade_token chain (other tools may use the same file)."""
 
     def test_fresh_machine_defaults_to_the_shared_file(self):
         from taxjson_fetch.command import _questrade_token_file

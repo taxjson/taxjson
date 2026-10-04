@@ -24,14 +24,14 @@ def _die(msg: str) -> None:
 
 def _questrade_token_file(cache: Path) -> Path:
     """Where the Questrade refresh token lives, read AND written:
-    $QUESTRADE_TOKEN_FILE > ~/.questrade_token — the shared, tool-neutral
-    file portoml-ai's Questrade tools default to as well, serving every
+    $QUESTRADE_TOKEN_FILE > ~/.questrade_token — a shared, tool-neutral
+    file that other Questrade API tools may use as well, serving every
     taxjson project on the machine.
 
     Questrade issues ONE rotating chain per API app: every exchange kills
     the previous token, so the token belongs to the APP, not to a single
-    tool or project. One shared file means taxjson and portoml-ai can
-    never rotate each other's copy dead. (`cache` is unused since the
+    tool or project. One shared file means taxjson and any other tool on
+    the same app can never rotate each other's copy dead. (`cache` is unused since the
     per-project work/.questrade_refresh_token fallback was removed
     pre-1.0; the parameter stays so call sites read uniformly.)"""
     import os as _os
@@ -94,7 +94,7 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
                       wanted: List[str], http, say) -> Dict[str, Path]:
     """Fetch live Questrade positions for each fetch-enabled account in
     `wanted` and write work/<account>_live_holdings.toml (the
-    portoml-style file `taxjson sanity` reads). Returns
+    [[holding]] file `taxjson sanity` reads). Returns
     {account: toml_path}. Shares the rotated-token session flow with
     the activity fetch."""
     import os as _os
