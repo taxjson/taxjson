@@ -18087,7 +18087,7 @@ def _build_parser(prog: str = "taxjson"
     # is — they refuse anywhere else.
     p_chan = sub.add_parser(
         "channels",
-        help="Where stable, beta and latest point, and the releases",
+        help="Where stable, beta and latest point; releases",
         description="Where each release channel points — stable and beta "
              "as channels.json on main names them, latest the newest "
              "release tag — what this machine's production copy runs "
@@ -18108,7 +18108,7 @@ def _build_parser(prog: str = "taxjson"
 
     p_prom = sub.add_parser(
         "promote",
-        help="Point stable or beta at a release (development machine)",
+        help="Point stable or beta at a release (dev machine)",
         description="Point a release channel at a release: what new "
              "installs on that channel (and re-runs of the installer) "
              "get from now on. Runs scripts/promote.sh in the development "
@@ -18127,7 +18127,7 @@ def _build_parser(prog: str = "taxjson"
 
     p_dep = sub.add_parser(
         "deploy",
-        help="Put a release on this machine now (development machine)",
+        help="Update this machine to a release (dev machine)",
         description="Update this machine's production copy "
              "(~/.local/share/taxjson, or TAXJSON_PROD_DIR) to the newest "
              "release tag, or to TAG, through the installer's upgrade "
