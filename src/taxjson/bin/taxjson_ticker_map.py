@@ -412,7 +412,7 @@ def generate_summary(transactions: List[TaxTransaction]) -> Dict[str, Any]:
     # Cross-listing renames are ticker.map lines the user writes.
     mappings = {}
     for ticker in sorted(unique_tickers):
-        mapped = map_ticker(ticker, target_currency="")
+        mapped = map_ticker(ticker)
         mappings[ticker] = mapped
         
     return {

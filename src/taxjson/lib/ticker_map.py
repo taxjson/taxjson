@@ -41,56 +41,28 @@ def get_option_type(symbol: str) -> str:
     match = re.search(r'\d{6}([CP])\d+', symbol, re.IGNORECASE)
     return match.group(1).upper() if match else None
 
-def map_ticker(symbol: str, target_currency: str = "CAD") -> str:
-    """
-    Maps a ticker symbol to its equivalent in the target currency (usually CAD).
-    Example: SAMPMM.US -> SAMPMM.TO if target is CAD.
-    Also handles converting dotted option strings to OCC syntax.
-    Example: ABC.17DEC27.12.P -> ABC271217P00012000
-    """
-    # 1. Handle Dotted Options (e.g. ABC.17DEC27.12.P)
+def map_ticker(symbol: str) -> str:
+    """A dotted option string in OCC syntax (ABC.17DEC27.12.P ->
+    ABC271217P00012000); any other symbol unchanged. (It used to also
+    map a US listing to a `.TO` one for a CAD target — never wanted, and
+    a silent pooling of a US stock into a nonexistent .TO pool.)"""
     option_pattern = r'^([A-Z0-9]+)\.(\d{1,2}[A-Z]{3}\d{2})\.(\d+(?:\.\d+)?)\.([CP])$'
     match = re.match(option_pattern, symbol, re.IGNORECASE)
-    if match:
-        underlying, date_str, strike_str, opt_type = match.groups()
-        try:
-            # Parse date 19SEP25
-            dt = datetime.strptime(date_str.upper(), '%d%b%y')
-            occ_date = dt.strftime('%y%m%d')
-
-            # Format strike: 8 digits (5 integer, 3 decimal).
-            # Use Decimal to avoid float-precision truncation —
-            # `int(float("4.02") * 1000)` was returning 4019 instead of
-            # 4020 (and similar for ~half of all sub-$200 cent-precision
-            # strikes) because float("4.02") underflows to 4.0199999…
-            from decimal import Decimal
-            strike_int = int(Decimal(strike_str) * 1000)
-            occ_strike = f"{strike_int:08d}"
-            
-            # Construct OCC symbol
-            symbol = f"{underlying.upper()}{occ_date}{opt_type.upper()}{occ_strike}"
-        except (ValueError, TypeError):
-            pass # Fall through to regular mapping if parsing fails
-
-    if target_currency != "CAD":
+    if not match:
         return symbol
-        
-    parts = symbol.rsplit('.', 1)
-    if len(parts) < 2:
+    underlying, date_str, strike_str, opt_type = match.groups()
+    try:
+        # Parse date 19SEP25
+        dt = datetime.strptime(date_str.upper(), '%d%b%y')
+    except ValueError:
         return symbol
-        
-    base, ext = parts[0], parts[1].upper()
-    
-    # Simple mapping based on common extensions
-    mapping = {
-        'US': 'TO', # Simplified: assume US stocks map to TO for CAD tracking if not specified
-        'USD': 'TO',
-        'NASDAQ': 'TO',
-        'NYSE': 'TO',
-    }
-    
-    new_ext = mapping.get(ext, ext)
-    return f"{base}.{new_ext}"
+    # Strike: 8 digits (5 integer, 3 decimal), through Decimal —
+    # `int(float("4.02") * 1000)` gave 4019 for about half of all
+    # sub-$200 cent strikes.
+    from decimal import Decimal
+    strike_int = int(Decimal(strike_str) * 1000)
+    return (f"{underlying.upper()}{dt.strftime('%y%m%d')}{opt_type.upper()}"
+            f"{strike_int:08d}")
 
 
 def class_share_aliases(symbols) -> dict:
