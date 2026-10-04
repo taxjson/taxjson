@@ -87,7 +87,7 @@ class TaxTransaction:
     income_label: str = ''
     dealer_country: str = ''
     issuer_country: str = ''
-    # The broker's own clock stamp ("2025-12-25 22:07:41 ET") on a trade
+    # The broker's own clock stamp ("2025-01-02 22:00:00 ET") on a trade
     # whose exchange trade date differs from it — an overnight-session US
     # fill, an ASX fill stamped in the US Eastern evening (tax-logic
     # CA-DATE-SESSION / US-DATE-SESSION). Evidence only: NOT part of compute_id,

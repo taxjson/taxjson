@@ -87,7 +87,7 @@ def is_roc_description(desc: Optional[str]) -> bool:
 
 
 # The record date Questrade and RBC print in an income row's description
-# ("... DIST ON 512 SHS REC 12/30/24 PAY 01/05/25"), and their word for a
+# ("... DIST ON 100 SHS REC 12/31/24 PAY 01/15/25"), and their word for a
 # distribution ("DIST ON"). Neutral facts: which tax year they decide is
 # a per-country rule (lib/income_dating), never the parser's.
 _REC_DATE_RE = re.compile(r'\bREC\s+(\d{1,2})/(\d{1,2})/(\d{2}(?:\d{2})?)\b',
@@ -177,10 +177,10 @@ def _parse_div_qty_rate(description: str, amount: float):
     if qty > 0 and rate == 0 and amount:
         rate = round(amount / qty, 8)
         # The paid amount is rounded to CENTS, so back-computing
-        # manufactures spurious precision: 41 sh paid $22.76 yields
-        # 0.55512195 for a dividend actually declared at 0.555 — and
+        # manufactures spurious precision: 7 sh paid $2.33 yields
+        # 0.33285714 for a dividend actually declared at 0.333 — and
         # the SAME payment in another account, from a broker whose
-        # statement states the rate, showed a clean 0.555. Snap to
+        # statement states the rate, showed a clean 0.333. Snap to
         # the FEWEST decimals that still explain the paid amount
         # within the half-cent tolerance the quantity snap below
         # uses. A genuinely fine-grained rate (0.0375 on a big
@@ -213,8 +213,8 @@ def _parse_div_qty_rate(description: str, amount: float):
     elif rate > 0 and qty == 0 and amount:
         qty = round(amount / rate, 8)
         # The statement's amount is rounded to CENTS, so the division
-        # lands NEAR the true share count, not on it (35 sh x 0.313 =
-        # 10.955 -> paid 10.95 -> derived 34.98402556). When the nearest
+        # lands NEAR the true share count, not on it (23 sh x 0.417 =
+        # 9.591 -> paid 9.59 -> derived 22.99760192). When the nearest
         # integer count explains the paid amount to within the
         # half-cent rounding IB applies, snap to it. A genuinely
         # fractional DRIP position differs by more than the tolerance

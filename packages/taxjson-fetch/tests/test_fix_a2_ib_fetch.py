@@ -185,7 +185,7 @@ class TestOverlapReadsUtf16(unittest.TestCase):
 
 
 class TestFlexSpanIgnoresNumbers(unittest.TestCase):
-    """A2-0083: an 8-decimal P/L ('-26.20190219') or a Mark-to-Market
+    """A2-0083: an 8-decimal P/L ('-12.20180315') or a Mark-to-Market
     figure is not a date; the span comes from the Statement Period or
     the activity date columns."""
 
@@ -202,7 +202,7 @@ class TestFlexSpanIgnoresNumbers(unittest.TestCase):
             '"Mark-to-Market Performance Summary","Header","Asset Category",'
             '"Symbol","Mark-to-Market P/L Total"\n'
             '"Mark-to-Market Performance Summary","Data","Stocks","ABC",'
-            '"-26.20190219"\n'
+            '"-12.20180315"\n'
             '"Withholding Tax","Header","Currency","Date","Description",'
             '"Amount"\n'
             '"Withholding Tax","Data","USD","2025-04-03","ABC adj","1.5"\n'
@@ -222,7 +222,7 @@ class TestFlexSpanIgnoresNumbers(unittest.TestCase):
                                              _flex_span)
         ytd = "\n".join(l for l in self._YTD.splitlines()
                         if '"Period"' not in l) + "\n"
-        self.assertNotIn("2019-02-19", _flex_dates(ytd))
+        self.assertNotIn("2018-03-15", _flex_dates(ytd))
         self.assertEqual(_flex_span(ytd), ("2026-01-06", "2026-01-06"))
         self.assertEqual(_flex_lost_dates(self._OLD, ytd, 2025),
                          ["2025-03-05", "2025-11-05"])
@@ -232,7 +232,7 @@ class TestFlexSpanIgnoresNumbers(unittest.TestCase):
         # date or date-time counts; a number containing digits does not.
         from taxjson_fetch.command import _flex_dates
         text = ('"Trades","Data","Order","Stocks","USD","XYZ",'
-                '"2025-03-05, 10:00:00","10","-26.20190219"\n')
+                '"2025-03-05, 10:00:00","10","-12.20180315"\n')
         self.assertEqual(_flex_dates(text), ["2025-03-05"])
 
     def test_full_year_replacement_is_not_refused(self):

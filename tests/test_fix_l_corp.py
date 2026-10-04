@@ -284,7 +284,7 @@ class TestRbcLow(unittest.TestCase):
 
     def test_s072_03_spinoff_temp_code_warning(self):
         from taxjson.lib.corp_actions import parse_rbc_corporate_actions
-        rows = (_rbc("2023-09-05 00:00:00", "Reorganization", "C135859",
+        rows = (_rbc("2023-09-05 00:00:00", "Reorganization", "X000006",
                      "SPINCO WTS", "10", "", "0", "CAD",
                      "DIS - SPINCO WTS SPINOFF ON 100 SHS FROM SEC# X1 "
                      "PARENTCO INC REC 08/25/23 PAY 08/31/23"),
@@ -294,17 +294,17 @@ class TestRbcLow(unittest.TestCase):
             p = Path(tmp) / "rbc.csv"
             p.write_text(_RBC_HEAD + "".join(rows))
             evs, err = _quiet(parse_rbc_corporate_actions, p, "margin")
-            self.assertEqual(evs[0].target_symbol, "C135859.TO")
+            self.assertEqual(evs[0].target_symbol, "X000006.TO")
             # Named as booked, with the exact line to add.
-            self.assertIn("temporary code C135859.TO", err)
-            self.assertIn("GLOBAL C135859.TO <TICKER>.TO", err)
+            self.assertIn("temporary code X000006.TO", err)
+            self.assertIn("GLOBAL X000006.TO <TICKER>.TO", err)
             # Once ticker.map renames it, no warning.
             _, err2 = _quiet(parse_rbc_corporate_actions, p, "margin",
-                             renames={"C135859.TO": "SPNC.TO"})
+                             renames={"X000006.TO": "SPNC.TO"})
             self.assertNotIn("temporary code", err2)
             # Through the CLI flag `taxjson run` passes.
             tm = Path(tmp) / "ticker.map"
-            tm.write_text("GLOBAL C135859.TO SPNC.TO\n")
+            tm.write_text("GLOBAL X000006.TO SPNC.TO\n")
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_corp_actions",
                  "--country", "canada", "--brokerage", "rbc", "--list",

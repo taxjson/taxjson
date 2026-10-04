@@ -660,7 +660,7 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
                   or is_option_symbol(str(ev.get("symbol") or "")))
 
     def per_share(v):
-        # (1,000 sh @ 41.0500) — the ACB/share (or sale price/share)
+        # (1,000 sh @ 12.3400) — the ACB/share (or sale price/share)
         # the reader wants to sanity-check against a statement. An
         # option is quoted per share: N contracts x 100 (S026-05).
         if qty and abs(qty) > 1e-9:

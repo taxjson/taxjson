@@ -58,11 +58,11 @@ class TestQuestradeDecimalCommaRefused(unittest.TestCase):
                   act='Other')
                 + q(action='BRW', sym='DLR.U.TO', desc='GLOBAL X US DLR '
                     'CURRENCY ETF UNIT CL A JOURNAL POSITION FROM CAD BOOK '
-                    'VALUE: $3039,64 CNV@ 1.4138', qty='300', price='0',
+                    'VALUE: $2468,13 CNV@ 1.3579', qty='300', price='0',
                     gross='0', comm='0', net='0', act='Other'))
         msg = _qt_refused(body)
         self.assertIn('BOOK VALUE', msg)
-        self.assertIn('3039,64', msg)
+        self.assertIn('2468,13', msg)
 
     def test_dividend_net_amount_decimal_comma_is_refused(self):
         msg = _qt_refused(

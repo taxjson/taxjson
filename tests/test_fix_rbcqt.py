@@ -174,7 +174,7 @@ class TestQtSymbolResolution(unittest.TestCase):
         for wording in ('AGNICO EAGLE MINES LIMITED TRANSFER IN INTERACTIVE '
                         'BROKER',
                         'AGNICO EAGLE MINES LIMITED INTERACTIVE BROKERS LLC '
-                        '146.16 TRANSFER'):
+                        '135.79 TRANSFER'):
             tfi = q(action='TF6', sym='AEM', desc=wording, qty='10',
                     price='0', gross='0', comm='0', net='0', act='Transfers')
             div = qdiv('A012345', 'AGNICO EAGLE MINES LIMITED CASH DIV ON 10 '
@@ -229,7 +229,7 @@ class TestQtRowShapes(unittest.TestCase):
              act='Other')
            + q(action='BRW', sym='DLR.U.TO', desc='GLOBAL X US DLR '
                'CURRENCY ETF UNIT CL A JOURNAL POSITION FROM CAD BOOK '
-               'VALUE: $3039.64 CNV@ 1.4138', qty='300', price='0',
+               'VALUE: $2468.13 CNV@ 1.3579', qty='300', price='0',
                gross='0', comm='0', net='0', act='Other'))
 
     def test_brw_listing_journal_is_a_transfer_pair(self):
@@ -240,13 +240,13 @@ class TestQtRowShapes(unittest.TestCase):
                          [('TRANSFER', 'DLR.TO', -300.0),
                           ('TRANSFER', 'DLR.U.TO', 300.0)])
         self.assertAlmostEqual(of(txs, symbol='DLR.U.TO')[0]['book_value'],
-                               3039.64)
+                               2468.13)
         # The cost moves with the units: USD book value on the IN leg,
         # the same cost in CAD at the stated rate on the OUT leg.
         self.assertAlmostEqual(of(txs, symbol='DLR.U.TO')[0]['net_amount'],
-                               3039.64)
+                               2468.13)
         self.assertAlmostEqual(of(txs, symbol='DLR.TO')[0]['net_amount'],
-                               round(3039.64 * 1.4138, 2))
+                               round(2468.13 * 1.3579, 2))
         self.assertNotIn('UNBOOKED', err)
         self.assertIn('JOURNAL', err)
 
@@ -703,11 +703,11 @@ class TestRbcIncomeAndCorporateRows(unittest.TestCase):
     def test_cil_reversal_nets(self):
         """S063-19."""
         mer = (rrow("June 28, 2023", "Reorganization", "T099003",
-                    "TRIX REUTERS CORP COM NEW", "-50", "", "307.93", "CAD",
+                    "TRIX REUTERS CORP COM NEW", "-50", "", "61.73", "CAD",
                     "MER - TRIX REUTERS CORP COM NEW DEFAULT: ROC OF "
-                    "C$6.1585 + .963957 NEW SHS PER 1 OLD")
+                    "C$1.2345 + .950000 NEW SHS PER 1 OLD")
                + rrow("June 28, 2023", "Reorganization", "TRX",
-                      "TRIX REUTERS CORP COM NO PAR", "48", "", "0", "CAD",
+                      "TRIX REUTERS CORP COM NO PAR", "47", "", "0", "CAD",
                       "MGR - TRIX REUTERS CORP COM NO PAR SHRS RECEIVED THRU "
                       "MERGER")
                + rrow("May 3, 2023", "Buy", "TRX", "TRIX REUTERS CORP COM NEW",

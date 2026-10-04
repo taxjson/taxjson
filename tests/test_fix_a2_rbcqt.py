@@ -854,8 +854,8 @@ class TestQuestradeDescriptionNumbers(unittest.TestCase):
         body = (self._brw("DLR.TO", "-300", "GLOBAL X US DLR JOURNAL "
                           "POSITION TO USD")
                 + self._brw("DLR.U.TO", "300", "GLOBAL X US DLR JOURNAL "
-                            "POSITION FROM CAD BOOK VALUE: $3039.64 CNV@ "
-                            "1,4138", cur="USD"))
+                            "POSITION FROM CAD BOOK VALUE: $2468.13 CNV@ "
+                            "1,3579", cur="USD"))
         with self.assertRaises(BrokerageParseError):
             qt_parse(body)
 

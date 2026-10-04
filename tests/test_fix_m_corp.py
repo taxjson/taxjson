@@ -306,8 +306,8 @@ class TestRbcPairing(unittest.TestCase):
         self.assertEqual(p.events[0].roc_amount, 0.0)
         from taxjson.lib.corp_actions import _RBC_ROC_RE
         self.assertTrue(_RBC_ROC_RE.search(
-            "MER - THOMSON REUTERS CORP COM NEW DEFAULT: ROC OF C$6.1585 "
-            "+ .963957 NEW SHS PER 1 OLD"))
+            "MER - SAMPLE CORP COM NEW DEFAULT: ROC OF C$1.2345 "
+            "+ .950000 NEW SHS PER 1 OLD"))
 
     @rule("CA-CORP-03")
     def test_s072_00_cross_issuer_xch_to_needs_election(self):

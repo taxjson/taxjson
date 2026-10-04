@@ -111,11 +111,11 @@ class TestRbcMergerNote(unittest.TestCase):
         stage books them — a .tt row double-books)."""
         body = (rrow("March 3, 2025", "Buy", "QZH", "QZH CORPORATION",
                      "15", "100", "-1509.95", "USD", "QZH UNSOLICITED")
-                + rrow("July 21, 2025", "Reorganization", "H015283",
+                + rrow("July 1, 2025", "Reorganization", "X000004",
                        "QZH CORPORATION", "-15", "", "0", "USD",
                        "MGR - QZH CORPORATION MERGER TO QZC CORPORATION "
-                       "1.025 NEW = 1 OLD")
-                + rrow("July 21, 2025", "Reorganization", "QZC",
+                       "1 NEW = 1 OLD")
+                + rrow("July 1, 2025", "Reorganization", "QZC",
                        "QZC CORPORATION", "15", "", "0", "USD",
                        "MGR - QZC CORPORATION SHRS RECEIVED THRU MERGER"))
         _, err, _ = rbc_parse(body)

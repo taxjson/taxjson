@@ -49,8 +49,8 @@ class TestRbcCilWordBoundary(unittest.TestCase):
         from taxjson.lib.brokerages.rbc_direct import (classify_rbc_row,
                                                        read_rbc_rows)
         p = _write(_RBC_HEADER + (
-            f'"2025-07-24 00:00:00","{activity}","XYZ","XYZ CORP",'
-            f'"{qty}","","2025-07-24 00:00:00","123","1.00","CAD",'
+            f'"2025-03-06 00:00:00","{activity}","XYZ","XYZ CORP",'
+            f'"{qty}","","2025-03-06 00:00:00","123","1.00","CAD",'
             f'"{desc}"\n'))
         try:
             (r,) = read_rbc_rows(p).rows
@@ -69,19 +69,19 @@ class TestRbcCilWordBoundary(unittest.TestCase):
     def test_genuine_cil_rows_still_match(self):
         self.assertEqual(self._classify(
             "Reorganization",
-            "CIL - CHEVRON CORPORATION CASH IN LIEU OF FRAC SHARES 166764"),
+            "CIL - NEWCO CORPORATION CASH IN LIEU OF FRAC SHARES 123456"),
             "cil")
         self.assertEqual(self._classify(
             "Reorganization",
-            "CIL - CHEVRON CORPORATION ADDITIONAL CIL PAYMENT 166764"), "cil")
+            "CIL - NEWCO CORPORATION ADDITIONAL CIL PAYMENT 123456"), "cil")
 
 
 class TestRbcDifferentDateMerger(unittest.TestCase):
-    _REMOVAL = ('"2025-07-21 00:00:00","Reorganization","H015283","HESS CORPORATION","-15",'
-                '"","2025-07-21 00:00:00","123","0","USD","MGR - HESS CORPORATION MERGER '
-                'TO CHEVRON CORPORATION 1.025 NEW = 1 OLD"\n')
-    _RECEIPT_LATE = ('"2025-07-22 00:00:00","Reorganization","CVX","CHEVRON CORPORATION","15",'
-                     '"","2025-07-22 00:00:00","123","0","USD","MGR - CHEVRON CORPORATION SHRS '
+    _REMOVAL = ('"2025-03-03 00:00:00","Reorganization","X000004","OLDCO CORPORATION","-20",'
+                '"","2025-03-03 00:00:00","123","0","USD","MGR - OLDCO CORPORATION MERGER '
+                'TO NEWCO CORPORATION 1.03 NEW = 1 OLD"\n')
+    _RECEIPT_LATE = ('"2025-03-04 00:00:00","Reorganization","NEWCO","NEWCO CORPORATION","20",'
+                     '"","2025-03-04 00:00:00","123","0","USD","MGR - NEWCO CORPORATION SHRS '
                      'RECEIVED THRU MERGER"\n')
 
     def test_receipt_next_day_still_pairs(self):
@@ -92,7 +92,7 @@ class TestRbcDifferentDateMerger(unittest.TestCase):
         finally:
             os.remove(p)
         self.assertEqual(len(events), 1, "different-date legs must pair")
-        self.assertEqual(events[0].qty_disposed, 15)
+        self.assertEqual(events[0].qty_disposed, 20)
 
     def test_unmatched_removal_warns(self):
         from taxjson.lib.corp_actions import parse_rbc_corporate_actions
@@ -113,15 +113,15 @@ class TestRbcTaxableElectionFmvHint(unittest.TestCase):
     def _event(self):
         from taxjson.lib.corp_actions import parse_rbc_corporate_actions
         merger = (
-            '"2025-07-21 00:00:00","Reorganization","H015283","HESS CORPORATION","-15",'
-            '"","2025-07-21 00:00:00","123","0","USD","MGR - HESS CORPORATION MERGER '
-            'TO CHEVRON CORPORATION 1.025 NEW = 1 OLD"\n'
-            '"2025-07-21 00:00:00","Reorganization","CVX","CHEVRON CORPORATION","15",'
-            '"","2025-07-21 00:00:00","123","0","USD","MGR - CHEVRON CORPORATION SHRS '
+            '"2025-03-03 00:00:00","Reorganization","X000004","OLDCO CORPORATION","-20",'
+            '"","2025-03-03 00:00:00","123","0","USD","MGR - OLDCO CORPORATION MERGER '
+            'TO NEWCO CORPORATION 1.03 NEW = 1 OLD"\n'
+            '"2025-03-03 00:00:00","Reorganization","NEWCO","NEWCO CORPORATION","20",'
+            '"","2025-03-03 00:00:00","123","0","USD","MGR - NEWCO CORPORATION SHRS '
             'RECEIVED THRU MERGER"\n'
-            '"2025-07-24 00:00:00","Reorganization","CVX","CHEVRON CORPORATION",'
-            '"","","2025-07-24 00:00:00","123","55.82","USD","CIL - CHEVRON '
-            'CORPORATION CASH IN LIEU OF FRAC SHARES 166764100000"\n')
+            '"2025-03-06 00:00:00","Reorganization","NEWCO","NEWCO CORPORATION",'
+            '"","","2025-03-06 00:00:00","123","12.34","USD","CIL - CHEVRON '
+            'CORPORATION CASH IN LIEU OF FRAC SHARES 123456100000"\n')
         p = _write(_RBC_HEADER + merger)
         try:
             return parse_rbc_corporate_actions(p)[0]
@@ -135,10 +135,10 @@ class TestRbcTaxableElectionFmvHint(unittest.TestCase):
                              hints={'fmv_per_share': 150.0})
         sell = next(r for r in rows if r['quantity'] < 0)
         buy = next(r for r in rows if r['quantity'] > 0)
-        # 15 whole CVX shares @150 = 2250 basis; proceeds include the 55.82
+        # 20 whole NEWCO shares @150 = 3000 basis; proceeds include the 12.34
         # cash-in-lieu on top of the share consideration.
-        self.assertGreater(sell['net_amount'], 2250.0)
-        self.assertAlmostEqual(buy['net_amount'], 2250.0, delta=60.0)
+        self.assertGreater(sell['net_amount'], 3000.0)
+        self.assertAlmostEqual(buy['net_amount'], 3000.0, delta=60.0)
         self.assertGreater(buy['price'], 0.0)
 
     def test_no_hint_zero_rows_warn(self):
@@ -147,11 +147,11 @@ class TestRbcTaxableElectionFmvHint(unittest.TestCase):
         from taxjson.lib.corp_actions import (parse_rbc_corporate_actions,
                                               resolve_event)
         merger = (
-            '"2025-07-21 00:00:00","Reorganization","H015283","HESS CORPORATION","-15",'
-            '"","2025-07-21 00:00:00","123","0","USD","MGR - HESS CORPORATION MERGER '
-            'TO CHEVRON CORPORATION 1.025 NEW = 1 OLD"\n'
-            '"2025-07-21 00:00:00","Reorganization","CVX","CHEVRON CORPORATION","15",'
-            '"","2025-07-21 00:00:00","123","0","USD","MGR - CHEVRON CORPORATION SHRS '
+            '"2025-03-03 00:00:00","Reorganization","X000004","OLDCO CORPORATION","-20",'
+            '"","2025-03-03 00:00:00","123","0","USD","MGR - OLDCO CORPORATION MERGER '
+            'TO NEWCO CORPORATION 1.03 NEW = 1 OLD"\n'
+            '"2025-03-03 00:00:00","Reorganization","NEWCO","NEWCO CORPORATION","20",'
+            '"","2025-03-03 00:00:00","123","0","USD","MGR - NEWCO CORPORATION SHRS '
             'RECEIVED THRU MERGER"\n')
         p = _write(_RBC_HEADER + merger)
         try:
@@ -177,11 +177,11 @@ class TestCorpActionsEmitDedup(unittest.TestCase):
         from taxjson.bin.taxjson_corp_actions import _emit_resolved
         from taxjson.lib.corp_actions import parse_rbc_corporate_actions, Manifest
         merger = (
-            '"2025-07-21 00:00:00","Reorganization","H015283","HESS CORPORATION","-15",'
-            '"","2025-07-21 00:00:00","123","0","USD","MGR - HESS CORPORATION MERGER '
-            'TO CHEVRON CORPORATION 1.025 NEW = 1 OLD"\n'
-            '"2025-07-21 00:00:00","Reorganization","CVX","CHEVRON CORPORATION","15",'
-            '"","2025-07-21 00:00:00","123","0","USD","MGR - CHEVRON CORPORATION SHRS '
+            '"2025-03-03 00:00:00","Reorganization","X000004","OLDCO CORPORATION","-20",'
+            '"","2025-03-03 00:00:00","123","0","USD","MGR - OLDCO CORPORATION MERGER '
+            'TO NEWCO CORPORATION 1.03 NEW = 1 OLD"\n'
+            '"2025-03-03 00:00:00","Reorganization","NEWCO","NEWCO CORPORATION","20",'
+            '"","2025-03-03 00:00:00","123","0","USD","MGR - NEWCO CORPORATION SHRS '
             'RECEIVED THRU MERGER"\n')
         p1, p2 = _write(_RBC_HEADER + merger), _write(_RBC_HEADER + merger)
         try:

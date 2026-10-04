@@ -2,8 +2,8 @@
 
 Every row is classified by its ACTIVITY label and the RBC event code that
 prefixes the Description ("DIV - ", "MGR - ", "XCH - ", ...), never by
-words inside the security name: a name like "DIVIDEND 15 SPLIT CORP" or
-"HIGH DIVIDEND INDEX ETF" once turned in-kind transfers and a retraction
+words inside the security name: a name like "SAMPLE DIVIDEND SPLIT CORP" or
+"SAMPLE HIGH DIVIDEND ETF" once turned in-kind transfers and a retraction
 into dividends. The export is read strictly — the header row must carry
 the real columns, every number must parse, and one date format is chosen
 per column for the whole file — because a silently mis-read column is how
@@ -72,7 +72,7 @@ REQUIRED_COLUMNS = ('Date', 'Activity', 'Symbol', 'Quantity', 'Price',
 _RBC_CODE_RE = re.compile(r'^\s*([A-Z]{2,4})\s*-(?=\s|$)')
 
 # Income is recognised by RBC's code/verb part of the description only —
-# never by words in the security name ("DIVIDEND 15 SPLIT CORP").
+# never by words in the security name ("SAMPLE DIVIDEND SPLIT CORP").
 #   "DIV - <name> CASH DIV  ON  500 SHS ..."   "<name> DIST  ON  400 SHS"
 _RBC_INCOME_VERB_RE = re.compile(
     r'^\s*DIV\s*-|\bCASH\s+DIV(?:IDEND)?\s+ON\b|\bDIST\s+ON\b', re.I)
@@ -2313,7 +2313,7 @@ class RbcBrokerage(BaseBrokerage):
         }
 
     def _build_reinvest(self, r):
-        """Dividend reinvestment ("REI - ... REINV@C$32.2399"): a PURCHASE
+        """Dividend reinvestment ("REI - ... REINV@C$12.3456"): a PURCHASE
         of the reinvested units at the cash reinvested. The distribution
         itself arrives as its own DIV/DIST row, so income is untouched —
         booking this row as a negative dividend netted the income away

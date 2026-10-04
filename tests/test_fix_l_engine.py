@@ -494,18 +494,18 @@ class TestMergerReceiptPostedLater(unittest.TestCase):
             action="BUYSELL", date=d, time="10:00:00", symbol=s,
             quantity=q, net_amount=0.0, currency="USD", account="margin",
             description=desc)
-        return [mk("2025-07-01", "H015283.US", -100,
-                   "MGR - HESS CORPORATION MERGER TO CHEVRON CORPORATION "
-                   "1.025 NEW = 1 OLD"),
-                mk(recv_date, "CVX.US", 102,
-                   "MGR - CHEVRON CORPORATION SHRS RECEIVED THRU MERGER")]
+        return [mk("2025-03-03", "X000004.US", -100,
+                   "MGR - OLDCO CORPORATION MERGER TO NEWCO CORPORATION "
+                   "1.02 NEW = 1 OLD"),
+                mk(recv_date, "NEWCO.US", 102,
+                   "MGR - NEWCO CORPORATION SHRS RECEIVED THRU MERGER")]
 
     def test_next_day_receipt_links(self):
         from taxjson.lib.missing_history import detect_corp_action_links
-        links = detect_corp_action_links(self._rows("2025-07-02"))
+        links = detect_corp_action_links(self._rows("2025-03-04"))
         self.assertEqual([(l.old_symbol, l.new_symbol) for l in links],
-                         [("H015283.US", "CVX.US")])
-        self.assertEqual(detect_corp_action_links(self._rows("2025-07-20")),
+                         [("X000004.US", "NEWCO.US")])
+        self.assertEqual(detect_corp_action_links(self._rows("2025-03-22")),
                          [])
 
 

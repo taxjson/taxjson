@@ -127,7 +127,7 @@ class TestStrictParseSiblingsOfS058_11(unittest.TestCase):
             'QZR CORP WE ACTED AS AGENT,-3,64.73,194.20,0,194.20,USD,'
             '55500001,Trades,Individual LIRA\n'                  # pii-ok
             '2026-03-03 12:00:00 AM,2026-03-03 12:00:00 AM,TF6,Q999001,'
-            '"QZR CORP OTHER BROKER 146.16 TRANSFER BOOK VALUE 173,64",3,'
+            '"QZR CORP OTHER BROKER 135.79 TRANSFER BOOK VALUE 173,64",3,'
             '0,0,0,0,USD,55500001,Transfers,Individual LIRA\n')  # pii-ok
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / 'qt.csv'

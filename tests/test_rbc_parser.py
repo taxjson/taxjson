@@ -205,11 +205,11 @@ class TestRbcDividendClassifier(unittest.TestCase):
     def test_rejects_words_in_security_names(self):
         from taxjson.lib.brokerages.rbc_direct import classify_rbc_row as c
         self.assertEqual(c(_rbc_row(
-            'Transfers', 'TFI - DIVIDEND 15 SPLIT CORP CL-A SHS ACCOUNT '
+            'Transfers', 'TFI - SAMPLE DIVIDEND SPLIT CORP CL-A SHS ACCOUNT '
                          'TRANSFER BOOK VALUE 16506.95', qty=100)),
             'transfer')
         self.assertEqual(c(_rbc_row(
-            'Transfers', 'TFO - ISHARES S&P/TSX COMPOSITE HIGH DIVIDEND '
+            'Transfers', 'TFO - SAMPLE COMPOSITE HIGH DIVIDEND '
                          'INDEX ETF ACCOUNT TRANSFER', qty=-50)), 'transfer')
         for desc in ('ETF DISTRIBUTION REINVESTED', 'Year-end Dist. payment',
                      'Redistribution of units', 'Misdistributed entry',

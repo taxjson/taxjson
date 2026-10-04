@@ -428,7 +428,7 @@ def _qt_trim_file(path: Path, start_iso: str, end_iso: str) -> int:
 
 # A cell that IS a date or date-time ("2025-03-05", "20250305",
 # "2025-03-05, 10:00:00", "20250305;100000"), never digits inside a
-# number: "-26.20190219" read as 2019-02-19 and widened the download's
+# number: "-12.20180315" read as 2018-03-15 and widened the download's
 # span so the replace guard stayed silent (audit A2-0083).
 _FLEX_DATE_RE = re.compile(r"^\s*(20\d{2})-?(0[1-9]|1[0-2])-?"
                            r"(0[1-9]|[12]\d|3[01])"

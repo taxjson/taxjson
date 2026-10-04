@@ -111,7 +111,7 @@ def mask_ref(ref: Any) -> str:
 
 
 def fmt_qty(q: float) -> str:
-    """Plain decimal, no exponent, no trailing zeros (0.1, 56.821203563)."""
+    """Plain decimal, no exponent, no trailing zeros (0.1, 12.345678901)."""
     s = f"{abs(float(q)):.12f}".rstrip("0").rstrip(".")
     return s or "0"
 

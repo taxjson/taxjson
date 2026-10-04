@@ -1270,7 +1270,7 @@ def _collapse_cross_listing_chains(events: List[CorporateAction]) -> List[Corpor
 # Questrade encodes corp actions in the "Action=DIS" rows (Activity Type
 # = "Dividends"). The Description text carries the structural detail in
 # free-form English. A spinoff often spans 2-3 rows that share a symbol:
-#   1) "...SPINOFF ON 1000 SHS FROM SEC# J070589 DEFI DEVELOPMENT CORP..."
+#   1) "...SPINOFF ON 100 SHS FROM SEC# X000003 SAMPLE SPINCO CORP..."
 #      — initial warrant receipt (positive qty)
 #   2) "...SPINOFF ... RELEASING AS RIGHTS DIST"
 #      — warrant retired pending the rights distribution (negative qty)
@@ -1641,14 +1641,14 @@ parse_questrade_corporate_actions.accepts_renames = True
 
 
 # RBC books every reorganization as a removal row (negative Quantity, often
-# under a TEMPORARY code like 'H015283') plus a receipt row (positive
+# under a TEMPORARY code like 'X000004') plus a receipt row (positive
 # Quantity, the listed ticker), both $0 'Reorganization' rows coded:
-#   MGR  merger / exchange     "MGR - HESS CORPORATION MERGER TO CHEVRON
-#                               CORPORATION 1.025 NEW = 1 OLD"
-#                              "MGR - CHEVRON CORPORATION SHRS RECEIVED THRU
+#   MGR  merger / exchange     "MGR - OLDCO CORPORATION MERGER TO NEWCO
+#                               CORPORATION 0.5 NEW = 1 OLD"
+#                              "MGR - NEWCO CORPORATION SHRS RECEIVED THRU
 #                               MERGER"
-#                              "MGR - BLACKROCK INC TO BLACKROCK INC COMMON
-#                               STOCK 1 FOR 1", "MGR - " (blank: Arista 4:1)
+#                              "MGR - SAMPLE INC TO SAMPLE INC COMMON
+#                               STOCK 1 FOR 1", "MGR - " (blank: a 4:1 split)
 #   NAC  name change           "NAC - ... NAME CHANGE TO ..." / "... RESULT OF
 #                               NAME CHANGE"
 #   REV  reverse split         "REV - ... REV SPLIT TO ...; 1 FOR 10" / "...
@@ -1692,10 +1692,10 @@ _RBC_CO_SUFFIX_RE = re.compile(
     r'\b(CORPORATION|CORP|INCORPORATED|INC|LTD|LIMITED|COMPANY|CO|PLC|SA|NV|AG|'
     r'HOLDINGS|GROUP)\b', re.I)
 # A temporary reorganization placeholder RBC assigns while a security is
-# mid-reorganization (e.g. 'H015283' for HESS, 'C049527' for CANOPY). It is
+# mid-reorganization (e.g. 'X000004' for OLDCO, 'X000005' for another issuer). It is
 # NOT the ticker the position is actually held under.
 _RBC_TEMP_SYMBOL_RE = re.compile(r'^[A-Z]\d{4,}$')
-# RBC's internal 7-character option code ('8DZQFW4', '9PKLPN0').
+# RBC's internal 7-character option code ('8XXXXX1', '9XXXXX2').
 _RBC_OPTION_CODE_RE = re.compile(r'^[89][A-Z0-9]{6}$')
 _RBC_LEG_OPTION_RE = re.compile(
     r'\b(CALL|PUT)\s+\.?([A-Z0-9.]+?)\s+(\d{1,2}/\d{1,2}/\d{2})\s+'
@@ -1707,10 +1707,10 @@ _RBC_TO_RE = re.compile(
     r'\s+[\d.]+\s+NEW\s*=|$)')
 _RBC_RECEIPT_TAIL_RE = re.compile(
     r'\s+(?:AS\s+OF\s+\d|RESULT\s+OF\b|SHRS\s+RECEIVED|SHARES\s+RECEIVED)')
-# RBC's own return-of-capital phrase ("DEFAULT: ROC OF C$6.1585"), not a
+# RBC's own return-of-capital phrase ("DEFAULT: ROC OF C$1.2345"), not a
 # bare ROC token: a company named "ROC OIL CORP" turned un-understood
 # merger boot into a return of capital (audit S071-24).
-# Only the consideration clause with an amount ('ROC OF C$6.1585'): the
+# Only the consideration clause with an amount ('ROC OF C$1.2345'): the
 # words in an issuer name ('ROC OF CANADA HOLDINGS') or a negation ('NO
 # ROC OF C$ PAID', 'RETURN OF CAPITAL NOT APPLICABLE') turned the leg's
 # cash into a silent ACB reduction (A2-0559); those keep the loud
@@ -1726,18 +1726,18 @@ _RBC_NAME_STOP = frozenset((
 
 
 def rbc_is_temp_symbol(symbol: str) -> bool:
-    """RBC temporary reorganization placeholder ('H015283')."""
+    """RBC temporary reorganization placeholder ('X000004')."""
     return bool(_RBC_TEMP_SYMBOL_RE.match((symbol or '').strip().upper()))
 
 
 def rbc_is_option_code(symbol: str) -> bool:
-    """RBC's internal 7-character option code ('8DZQFW4')."""
+    """RBC's internal 7-character option code ('8XXXXX1')."""
     return bool(_RBC_OPTION_CODE_RE.match((symbol or '').strip().upper()))
 
 
 def _rbc_is_real_ticker(symbol: str) -> bool:
     """Whether `symbol` is a genuine exchange ticker rather than a
-    temporary reorg placeholder (`H015283`) or an empty/cash-row blank."""
+    temporary reorg placeholder (`X000004`) or an empty/cash-row blank."""
     s = (symbol or '').strip().upper()
     if not s or _RBC_TEMP_SYMBOL_RE.match(s):
         return False
@@ -1819,7 +1819,7 @@ def _rbc_receipt_name(leg) -> str:
 
 def _rbc_stated_ratio(desc: str) -> Optional[float]:
     """New shares per old share stated in a removal's description:
-    "1.025 NEW = 1 OLD", ".963957 NEW SHS PER 1 OLD", "; 1 FOR 10"."""
+    "1.03 NEW = 1 OLD", ".950000 NEW SHS PER 1 OLD", "; 1 FOR 10"."""
     d = (desc or '').upper()
     n = _RBC_NUM
     # '\b...(?![\d,])': '1 FOR 1,000' must read 1000, never stop at
@@ -2488,7 +2488,7 @@ def parse_rbc_corporate_actions(
         src = parent or (parent_code or '(unknown parent)')
         tgt = _rbc_ca_symbol(r.symbol, r.currency)
         if rbc_is_temp_symbol(r.symbol) and not _renamed(tgt, renames):
-            # Named as the books carry it (C135859.TO): the bare code in
+            # Named as the books carry it (X000006.TO): the bare code in
             # a GLOBAL line matched nothing, and the warning used to stay
             # after the line was added (audit S072-03).
             print(f"warning: RBC spin-off on {r.date} is booked under the "

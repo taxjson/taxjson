@@ -206,7 +206,7 @@ def _basis(settings: Dict[str, Any]) -> str:
 # ------------------------------------------------------------ snapshot
 
 def _parse_adjust(cmd: str) -> Optional[Dict[str, Any]]:
-    # "ADJUST 2025-02-03 09:30:04 AMD.US CAD 44.0834"
+    # "ADJUST 2025-01-02 10:00:00 SAMPLA.US CAD 12.3456"
     f = (cmd or "").split()
     if len(f) != 6 or f[0] != "ADJUST":
         return None
@@ -548,7 +548,7 @@ def boundary_rows(cache: Path, cfg: Dict[str, Any], year: int
                             "date_settle": str(_d(r.get("date_settle"))
                                                or raw),
                             # Full precision: a coin reward of
-                            # 0.000135313637 rounded to 8 places no
+                            # 0.000123456789 rounded to 8 places no
                             # longer matched its own row.
                             "quantity": float(r.get("quantity") or 0.0),
                             "net": round(float(r.get("net_amount")

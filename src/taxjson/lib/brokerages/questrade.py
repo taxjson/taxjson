@@ -77,9 +77,9 @@ _INTERNAL_CODE_RE = re.compile(r'^[A-Z]\d+$')
 # dividend rows to the underlying trade rows. Mirrors qt_dividends.pl.
 _DESC_NOISE_RES = [
     # Event suffixes on quantity-bearing rows (audit S063-03): a stock
-    # split / stock dividend ("... STK SPLIT ON 40 SHS", "... STK DIV ON
-    # 1390 SHS" -- the ' DIV ON' rule below left a stray 'STK'), a DRIP
-    # ("... REINV@C$3.82621") and a cash-in-lieu ("... CASH IN LIEU OF
+    # split / stock dividend ("... STK SPLIT ON 10 SHS", "... STK DIV ON
+    # 200 SHS" -- the ' DIV ON' rule below left a stray 'STK'), a DRIP
+    # ("... REINV@C$1.23456") and a cash-in-lieu ("... CASH IN LIEU OF
     # .50000"). Stripped FIRST, so the key equals the trade row's.
     re.compile(r'\s+(?:STK\.?|STOCK)\s+(?:SPLIT|DIV(?:IDEND)?)\b.*$',
                re.IGNORECASE),
@@ -108,7 +108,7 @@ _DESC_NOISE_RES = [
                re.IGNORECASE),
     # Interactive Brokers' two transfer wordings (audit S063-09):
     # "<name> TRANSFER IN INTERACTIVE BROKER" (above) and
-    # "<name> INTERACTIVE BROKERS LLC 146.16 TRANSFER".
+    # "<name> INTERACTIVE BROKERS LLC 135.79 TRANSFER".
     re.compile(r'\s+INTERACTIVE\s+BROKERS?\s+LLC\b.*$', re.IGNORECASE),
     re.compile(r'\s+BOOK\s+VALUE.*$', re.IGNORECASE),
     # Cosmetic suffixes seen on various row types.
@@ -125,7 +125,7 @@ _BOOK_VALUE_RE = re.compile(
     r'BOOK\s+VALUE\s+([\d,]+(?:\.\d+)?)', re.IGNORECASE
 )
 # FCH fee rows name the security only in the description, after the
-# share count: "ADR CUSTODY FEE 300 SHARES ABCD RECORD DATE 3/3/25" (Questrade's
+# share count: "ADR CUSTODY FEE 100 SHARES ABCD RECORD DATE 1/2/25" (Questrade's
 # wording; audit R1-77 — only the '# SHARES TKR' placeholder form
 # used to match, and the real fee landed on CASH).
 _FEE_SHARES_TICKER_RE = re.compile(
@@ -136,10 +136,10 @@ _FEE_SHARES_TICKER_RE = re.compile(
 _QT_CA_LEG_RE = re.compile(r'\b(SPINOFF|RTS\s+DIST|RIGHTS\s+DIST)\b',
                            re.IGNORECASE)
 # A BRW listing journal's book value: "... JOURNAL POSITION FROM CAD BOOK
-# VALUE: $3039.64 CNV@ 1.4138" (carried as evidence, like RBC's).
+# VALUE: $2468.13 CNV@ 1.3579" (carried as evidence, like RBC's).
 _BRW_BOOK_VALUE_RE = re.compile(
     r'BOOK\s+VALUE:?\s*\$?\s*([\d,]+(?:\.\d+)?)', re.IGNORECASE)
-# Every comma captured, judged by desc_number: 'CNV@ 1,4138' read as a
+# Every comma captured, judged by desc_number: 'CNV@ 1,3579' read as a
 # rate of 1 (re-audit A2-0278).
 _BRW_CNV_RE = re.compile(r'\bCNV\s*@\s*' + DESC_NUMBER_RE, re.IGNORECASE)
 # A zero-cash row stating a book-cost change ("... RETURN OF CAPITAL
@@ -1523,8 +1523,8 @@ class QuestradeBrokerage(BaseBrokerage):
     @staticmethod
     def _cost_journal_pairs(legs: List[Dict[str, Any]]) -> None:
         """Carry the journaled units' cost on both BRW legs: the IN leg
-        states the book value in its own currency ("BOOK VALUE: $3039.64
-        CNV@ 1.4138"), the OUT leg is the same cost at the stated rate.
+        states the book value in its own currency ("BOOK VALUE: $2468.13
+        CNV@ 1.3579"), the OUT leg is the same cost at the stated rate.
         Where the pair does not net (no JOURNAL rule, or a sheltered
         custody view that rewrites TRANSFER to BUYSELL at its net), the
         cost moves with the units instead of a $0-cost lot."""
@@ -1799,7 +1799,7 @@ class QuestradeBrokerage(BaseBrokerage):
         """Emit a SPLIT scaling the existing pool by (held + received)/held —
         a non-taxable share-count change, not a dividend. Questrade reports the
         NEW shares in Quantity, the held count as 'ON <held> SHS', and a temp
-        internal Symbol (e.g. K012006); the real ticker is resolved from a
+        internal Symbol (e.g. X000001); the real ticker is resolved from a
         trade of the same security, so the SPLIT lands on the pool the user
         actually holds."""
         received = self._num(row, 'Quantity', lineno)
@@ -1930,10 +1930,10 @@ class QuestradeBrokerage(BaseBrokerage):
 
         Two fields need recovering from elsewhere:
           - Symbol. The TF6 Symbol column is often an internal Questrade
-            code (e.g. R223608); it is looked up from a trade row of the
+            code (e.g. X000002); it is looked up from a trade row of the
             same security (see _resolve_symbol). Without this the
-            transferred position lands under e.g. R223608.US instead of
-            O.US. A real ticker on the row is kept.
+            transferred position lands under e.g. X000002.US instead of
+            SAMPLA.US. A real ticker on the row is kept.
           - Cost basis. The TF6 Net Amount column is 0; Questrade puts
             the transferred-in book value (ACB) in the description as
             "TRANSFER BOOK VALUE <amount>". It's parsed from there; a

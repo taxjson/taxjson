@@ -210,12 +210,12 @@ class TestQtRowShapesLow(unittest.TestCase):
 
     def test_internal_code_warning_says_it_is_moot_once_mapped(self):
         """S063-10: the parse-time warning cannot see ticker.map."""
-        xfer = q(td='2026-02-02', action='TF6', sym='R223608',
+        xfer = q(td='2026-02-02', action='TF6', sym='X000002',
                  desc='QZF HOLDINGS TRANSFER BOOK VALUE 1000.00', qty='10',
                  price='0', gross='0', comm='0', net='0', cur='CAD',
                  act='Transfers')
         _, err, _ = qt_parse(xfer, taxable=False)
-        self.assertIn("Unless ticker.map already maps R223608.TO", err)
+        self.assertIn("Unless ticker.map already maps X000002.TO", err)
 
 
 # ------------------------------------------------------------- RBC rows

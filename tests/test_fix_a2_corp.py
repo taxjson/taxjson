@@ -515,13 +515,13 @@ class TestRbcDecimalComma(unittest.TestCase):
         from taxjson.lib import corp_actions as ca
         from taxjson.lib.brokerages.base import BrokerageParseError
         for d in ("REV - ABC REV SPLIT TO ABC 0,5 NEW = 1 OLD",
-                  "XCH - ABC 0,963957 NEW SHS PER 1 OLD",
+                  "XCH - ABC 0,950000 NEW SHS PER 1 OLD",
                   "NAC - ABC NAME CHG TO XYZ; 0,5 FOR 1",
                   "REV - ABC REV SPLIT; 1 FOR 2,5"):
             with self.assertRaises(BrokerageParseError, msg=d):
                 ca._rbc_stated_ratio(d)
         self.assertAlmostEqual(ca._rbc_stated_ratio(
-            "XCH - ABC .963957 NEW SHS PER 1 OLD"), 0.963957)
+            "XCH - ABC .950000 NEW SHS PER 1 OLD"), 0.95)
         self.assertEqual(ca._rbc_stated_ratio(
             "REV - ABC REV SPLIT; 1 FOR 1,000"), 0.001)
 
@@ -644,21 +644,21 @@ class TestRbcSpinoffParentListing(unittest.TestCase):
 
     def test_a2_0214_merger_legs_in_two_statements_pair(self):
         a = [_rbc('2025-12-31', 'Reorganization', 'H099006',
-                  'HESSO CORPORATION', '-15', '0', 'USD',
-                  'MGR - HESSO CORPORATION MERGER TO CHEVRO CORPORATION '
-                  '1.025 NEW = 1 OLD'),
-             _rbc('2025-03-03', 'Buy', 'HESO', 'HESSO CORPORATION', '15',
-                  '-1509.95', 'USD', 'HESSO CORPORATION', '100')]
-        b = [_rbc('2026-01-02', 'Reorganization', 'CVXX',
-                  'CHEVRO CORPORATION', '15', '0', 'USD',
-                  'MGR - CHEVRO CORPORATION SHRS RECEIVED THRU MERGER')]
+                  'OLDCO CORPORATION', '-20', '0', 'USD',
+                  'MGR - OLDCO CORPORATION MERGER TO NEWCO CORPORATION '
+                  '1 NEW = 1 OLD'),
+             _rbc('2025-03-03', 'Buy', 'OLDC', 'OLDCO CORPORATION', '20',
+                  '-2009.95', 'USD', 'OLDCO CORPORATION', '100')]
+        b = [_rbc('2026-01-02', 'Reorganization', 'NEWC',
+                  'NEWCO CORPORATION', '20', '0', 'USD',
+                  'MGR - NEWCO CORPORATION SHRS RECEIVED THRU MERGER')]
         from taxjson.lib.corp_actions import combine_broker_copies
         with tempfile.TemporaryDirectory() as td:
             evs, err = _rbc_events(td, a, b)
         evs = combine_broker_copies(evs, stream=io.StringIO())
         self.assertEqual([(e.action_type, e.source_symbol, e.target_symbol,
                            e.qty_disposed, e.qty_received) for e in evs],
-                         [('merger', 'HESO.US', 'CVXX.US', 15.0, 15.0)], err)
+                         [('merger', 'OLDC.US', 'NEWC.US', 20.0, 20.0)], err)
         self.assertNotIn('NO matching', err)
 
     def test_a2_0223_corp_symbols_match_the_parser(self):
@@ -674,11 +674,11 @@ class TestRbcSpinoffParentListing(unittest.TestCase):
 
     def test_a2_0214_unpaired_merger_removal_blocks(self):
         a = [_rbc('2025-12-31', 'Reorganization', 'H099006',
-                  'HESSO CORPORATION', '-15', '0', 'USD',
-                  'MGR - HESSO CORPORATION MERGER TO CHEVRO CORPORATION '
-                  '1.025 NEW = 1 OLD'),
-             _rbc('2025-03-03', 'Buy', 'HESO', 'HESSO CORPORATION', '15',
-                  '-1509.95', 'USD', 'HESSO CORPORATION', '100')]
+                  'OLDCO CORPORATION', '-20', '0', 'USD',
+                  'MGR - OLDCO CORPORATION MERGER TO NEWCO CORPORATION '
+                  '1 NEW = 1 OLD'),
+             _rbc('2025-03-03', 'Buy', 'OLDC', 'OLDCO CORPORATION', '20',
+                  '-2009.95', 'USD', 'OLDCO CORPORATION', '100')]
         with tempfile.TemporaryDirectory() as td:
             evs, err = _rbc_events(td, a)
         self.assertEqual([e.action_type for e in evs], ['unsupported'], err)

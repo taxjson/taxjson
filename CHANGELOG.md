@@ -2182,7 +2182,7 @@
   commission in CAD like its price and net; it stayed USD-sized, so the
   fees report and the Schedule 3 proceeds/outlays split were short by
   the rate (the gain was right) (re-audit A2-0615).
-- Questrade: a decimal-comma CNV@ rate ('CNV@ 1,4138', read as 1) or
+- Questrade: a decimal-comma CNV@ rate ('CNV@ 1,3579', read as 1) or
   cash-in-lieu fraction ('1,5' read as 1, '0,5' dropped) is refused,
   as BOOK VALUE already was; a BRW journal's IN leg pairs only with the
   OUT leg of the same security (two journals on one date swapped their
@@ -2368,7 +2368,7 @@
   RESOURCES) moved the cash into the wrong sale and hid its "NOT booked"
   warning (S072-01).
 - **RBC spin-off under a temporary code:** the warning names the symbol
-  as booked (`C135859.TO`) with the exact `GLOBAL` line, and stops once
+  as booked (`X000006.TO`) with the exact `GLOBAL` line, and stops once
   ticker.map renames it (`taxjson run` passes the map to the corp-actions
   stage) (S072-03).
 - **RBC:** an in-kind option transfer uses the contract's OCC symbol; a
@@ -2460,7 +2460,7 @@
   issued to all shareholders stay a nil-cost acquisition, now noted.
 - **RBC: income by code, never by security name.** Rows are classified
   by Activity and the RBC code ("DIV - ", "CASH DIV ON", "DIST ON"); the
-  word DIVIDEND inside a name ("DIVIDEND 15 SPLIT CORP", "HIGH DIVIDEND
+  word DIVIDEND inside a name ("SAMPLE DIVIDEND SPLIT CORP", "HIGH DIVIDEND
   ETF") turned in-kind transfers into $0 dividends and dropped their
   shares. An income row that carries shares is refused. Reinvestments
   (REI) are purchases of the units, not negative dividends; "ADJUSTMENT
@@ -5233,7 +5233,7 @@
 - `taxjson fetch` (IBKR Flex): the guard that refuses a download which
   would drop the tax year's activity takes the download's span from its
   Statement Period (else its activity dates), not from any digits on any
-  row. An 8-decimal P/L such as -26.20190219 read as 2019-02-19 and
+  row. An 8-decimal P/L such as -12.20180315 read as 2018-03-15 and
   silenced the refusal (audit A2-0083).
 - `taxjson fetch` (Questrade): activity windows ask from local
   (America/Toronto) midnight, -04:00 in summer, not a fixed -05:00 that
@@ -6814,7 +6814,7 @@ that changed NUMBERS or ADVICE:
   instead of double-counting income and shares.
 - **Questrade parser:** TSX-Venture `.VN` normalizes to `.V`
   (was the junk `ABC.VN.TO`, fragmenting identity vs live holdings);
-  a transfer-in keeping an internal symbol code (`R223608`) warns.
+  a transfer-in keeping an internal symbol code (`X000002`) warns.
 - **fetch:** `--trim-overlap` is bounded at BOTH window ends — it
   could delete sibling rows dated after the window's end, i.e. real
   trades the fetched file does not own; likely broker restatements
