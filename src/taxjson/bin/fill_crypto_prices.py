@@ -3,6 +3,7 @@ import sys
 import re
 import argparse
 import urllib.request
+import urllib.parse
 import json
 import calendar
 import math
@@ -112,7 +113,10 @@ def get_crypto_price(symbol, date_str):
         # mktime made the 1-day window straddle two candles east of
         # UTC, booking the adjacent day's close as FMV.
         dt = int(calendar.timegm(time.strptime(date_str, "%Y-%m-%d")))
-        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{y_symbol}-USD?period1={dt}&period2={dt+86400}&interval=1d"
+        # The symbol is one quoted path segment: a ticker.map CRYPTO id
+        # holding '/', '?' or '#' must not reshape the request.
+        _seg = urllib.parse.quote(f"{y_symbol}-USD", safe="")
+        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{_seg}?period1={dt}&period2={dt+86400}&interval=1d"
         if offline_enabled():
             raise SystemExit(
                 f"taxjson-fill-crypto: TAXJSON_OFFLINE is set but a "
@@ -123,8 +127,8 @@ def get_crypto_price(symbol, date_str):
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'})
         # Bounded timeout — Yahoo's unofficial endpoint occasionally hangs;
         # without this the whole pipeline freezes on a single bad symbol.
-        res = urllib.request.urlopen(req, timeout=15)
-        data = json.loads(res.read().decode())
+        with urllib.request.urlopen(req, timeout=15) as res:
+            data = json.loads(res.read().decode())
         closes = data['chart']['result'][0]['indicators']['quote'][0]['close']
         for c in closes:
             if c is not None:

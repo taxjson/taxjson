@@ -32,6 +32,8 @@
   into the API path; a login response whose access or refresh token holds
   whitespace or control characters is one clean error line that never
   shows the token (was a traceback printing the Authorization header).
+- fill-crypto quotes the coin's Yahoo id into the request URL and closes
+  the response.
 
 ### One mapping file, year data in taxjson.toml (owner request)
 

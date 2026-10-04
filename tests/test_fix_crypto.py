@@ -305,6 +305,13 @@ class _Resp:
     def read(self):
         return self._b
 
+    # a real urlopen response is a context manager (fill-crypto closes it)
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
 
 def _chart(closes):
     return {"chart": {"result": [{"indicators": {"quote": [

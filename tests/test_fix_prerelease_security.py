@@ -317,5 +317,39 @@ class TestRunInAPlantedProject(_Victims):
         self.assertFalse((root / "reports" / "m.sum").is_symlink())
         self.assertIn("ABC.TO", (root / "reports" / "m.sum").read_text())
 
+
+# ----------------------------------------------------------------- L5
+
+class _Resp(io.BytesIO):
+    closed_by_with = False
+
+    def __exit__(self, *a):
+        type(self).closed_by_with = True
+        return super().__exit__(*a)
+
+
+class TestFillCryptoUrl(unittest.TestCase):
+    def test_symbol_is_quoted_and_the_response_closed(self):
+        from taxjson.bin import fill_crypto_prices as F
+        seen = []
+        body = (b'{"chart": {"result": [{"indicators": {"quote": '
+                b'[{"close": [123.5]}]}}]}}')
+
+        def fake_urlopen(req, timeout=None):
+            seen.append(req.full_url)
+            return _Resp(body)
+
+        env = {k: v for k, v in os.environ.items() if k != "TAXJSON_OFFLINE"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(F.urllib.request, "urlopen", fake_urlopen), \
+                mock.patch.dict(F.SYMBOL_OVERRIDES, {"ZZQ": "A/B?x=1#y"}):
+            v = F.get_crypto_price("ZZQ", "2025-01-02")
+        self.assertEqual(v, 123.5)
+        self.assertEqual(len(seen), 1)
+        path = seen[0].split("?", 1)[0]
+        self.assertTrue(path.endswith("/chart/A%2FB%3Fx%3D1%23y-USD"),
+                        seen[0])
+        self.assertTrue(_Resp.closed_by_with)
+
 if __name__ == "__main__":
     unittest.main()
