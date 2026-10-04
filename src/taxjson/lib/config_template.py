@@ -399,9 +399,20 @@ def system_timezone() -> Optional[str]:
     except OSError:
         pass
     for name in cands:
+        if name in _SERVER_DEFAULT_ZONES:
+            # Servers, containers and WSL run on UTC whatever the user's
+            # zone is: leave the key commented rather than date crypto
+            # trades in UTC without the user choosing it.
+            return None
         if valid_timezone(name):
             return name
     return None
+
+
+_SERVER_DEFAULT_ZONES = frozenset({
+    "UTC", "Etc/UTC", "Etc/UCT", "UCT", "Etc/Universal", "Universal",
+    "Etc/Zulu", "Zulu", "GMT", "Etc/GMT", "Etc/GMT0", "Etc/GMT+0",
+    "Etc/GMT-0", "Etc/Greenwich", "Greenwich", "GMT0"})
 
 
 def valid_timezone(name: str) -> bool:

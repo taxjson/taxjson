@@ -177,6 +177,13 @@ class TestInitScaffold(unittest.TestCase):
         self.assertNotIn("local_timezone", tomllib.loads(text)["settings"])
         self.assertRegex(text, r"(?m)^# local_timezone\s+= \"")
 
+    def test_a_utc_system_zone_is_not_written(self):
+        # A server/container/WSL clock on UTC says nothing about where the
+        # user lives: the key stays commented instead.
+        for z in ("UTC", "Etc/UTC", "Etc/GMT", "Zulu"):
+            with mock.patch.dict(os.environ, {"TZ": z}):
+                self.assertIsNone(CT.system_timezone(), z)
+
     def test_system_timezone_reads_tz_and_validates(self):
         with mock.patch.dict(os.environ, {"TZ": "America/Vancouver"}):
             self.assertEqual(CT.system_timezone(), "America/Vancouver")
