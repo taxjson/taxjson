@@ -258,7 +258,8 @@ def split_for_account(combined: Dict[str, Any], account: str,
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(
+        description=" ".join(__doc__.split("\n\n")[0].split()))
     ap.add_argument("combined_json", type=Path)
     ap.add_argument("--account", required=True)
     ap.add_argument("--base", type=Path, default=None,

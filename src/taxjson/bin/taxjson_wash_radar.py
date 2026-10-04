@@ -276,7 +276,11 @@ def _qfmt(x: float) -> str:
 
 @guard_main("taxjson-wash-radar")
 def main():
-    parser = argparse.ArgumentParser(description="Tax-Efficient Holding Advisor")
+    parser = argparse.ArgumentParser(
+        description="The superficial-loss (Canada, ITA s.54) or wash-sale "
+                    "(US, IRC §1091) status of every holding as of a "
+                    "date, across the taxable and sheltered accounts' "
+                    "books: the open windows and when each clears.")
     # nargs='+' + extend: both `--taxable a b` (historical) and repeated
     # `--taxable a --taxable b` (A2 composability) work.
     parser.add_argument("--taxable", nargs='+', action='extend', default=[],

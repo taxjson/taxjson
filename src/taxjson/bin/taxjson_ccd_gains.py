@@ -21,7 +21,8 @@ def process_data(data, ccd_by_underlying):
 @guard_main("taxjson-ccd-gains")
 def main():
     _main(prog=PROG,
-          description="Summarize Covered Call (Short Option) gains.",
+          description="Covered-call (short call) gains per underlying, "
+                      "from taxjson-gains output.",
           direction='SHORT', calls_only=True,
           title="COVERED CALLS", row_total_label="COVERED CALL GAIN",
           summary_title="COVERED CALLS SUMMARY", summary_col="CCD_GAIN")

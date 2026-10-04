@@ -9,4 +9,4 @@ python3 -m venv /tmp/wp && /tmp/wp/bin/pip install weasyprint
 /tmp/wp/bin/weasyprint docs/deck/taxjson-deck.html docs/deck/taxjson-deck.pdf
 ```
 
-Edit the HTML, re-render, look at every page, commit both files. Numbers on the slides (test count, audit rounds) come from README's Verification section — keep them in step.
+Edit the HTML, re-render, look at every page, commit both files. Numbers on the slides (test count, audit finding counts) come from README's Verification and Status sections — keep them in step.

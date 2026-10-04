@@ -50,8 +50,8 @@ leave it off) to forbid both. A crypto-price cache miss then fails the
 stage with a message naming what it needed; the FX stage serves cached
 rates only, and a transaction whose date has no cached rate is a
 validation error at the conversion stage. The same switch covers the
-current-price chain behind `harvest`, `watch --harvest` and the GUI's
-Harvest tab (IBKR gateway / Yahoo Finance): they serve
+current-price chain behind `harvest` and `watch --harvest` (IBKR
+gateway / Yahoo Finance): they serve
 `work/.price_cache.json` only and refuse the lookup on a miss, and
 `scan --online` skips its Yahoo Finance name probe with a note (the
 offline checks still run). Everything else that touches the network is
