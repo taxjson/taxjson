@@ -17,6 +17,7 @@ import re
 import sys
 
 from taxjson.lib import cli_diag
+from taxjson.lib.install_hint import extra_hint
 
 PROG = "taxjson-xlsx-to-csv"
 
@@ -134,8 +135,8 @@ def main():
         cli_diag.error(
             PROG,
             f"{e}. taxjson-xlsx-to-csv requires the optional "
-            f"`xlsx` extras: pip install 'taxjson[xlsx]' "
-            f"(or pip install pandas openpyxl).",
+            f"`xlsx` extras: {extra_hint('xlsx')} (or pip install "
+            f"pandas openpyxl into it).",
         )
         sys.exit(2)
     except Exception as e:

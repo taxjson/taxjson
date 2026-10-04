@@ -15,12 +15,18 @@ the entry-point group `taxjson.fetchers`.
 Into the same Python environment as taxjson:
 
 ```bash
-pip install taxjson-fetch
-# or, from a taxjson checkout:
-pip install -e packages/taxjson-fetch
-# or with the one-line installer:
+# with the one-line installer (re-run it with --with-fetch; it adds the
+# plugin to the installer's own environment):
 bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --with-fetch
+# or, from a taxjson checkout, into the environment taxjson is installed in
+# (install the core first, `pip install -e .`):
+pip install -e packages/taxjson-fetch
 ```
+
+taxjson is not published on PyPI yet, so a `taxjson` or `taxjson-fetch`
+package there is not ours: never install either by name from PyPI.
+The plugin's `taxjson` dependency must be met by
+the core already installed from the installer or the checkout.
 
 `taxjson fetch --list` then shows `taxjson-fetch: questrade, ibkr_flex`.
 

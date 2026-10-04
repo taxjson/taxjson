@@ -75,6 +75,14 @@ Questrade login and REST API (`https://login.questrade.com`, the
 nothing else. A third-party fetcher plugin runs with your user's
 rights inside `taxjson fetch` — install only ones you trust.
 
+**Install only from the installer or a checkout.** taxjson and
+taxjson-fetch are not published on PyPI yet, so a `taxjson` or
+`taxjson-fetch` package there is not ours (anyone may register a free
+name). The installer clones the GitHub release and adds the plugin with
+`--with-fetch`; from a checkout, install the core (`pip install -e .`)
+before `pip install -e packages/taxjson-fetch`, so the plugin's
+`taxjson` dependency is met by the checkout and never fetched by name.
+
 **What Yahoo Finance learns.** Every Yahoo lookup (FX fallback, crypto
 prices, `harvest` / `watch --harvest` current prices, `scan --online`)
 is a plain request from your IP address naming a symbol and a date

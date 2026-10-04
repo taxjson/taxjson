@@ -273,8 +273,9 @@ def _ibkr_fetcher(symbols: List[str], *, host: str, port: int,
         from ib_insync import IB, Stock
     except ImportError:
         if verbose:
+            from taxjson.lib.install_hint import extra_hint
             print("price-chain: ib_insync not installed — skipping IBKR "
-                  "tier (pip install 'taxjson[ibkr]')", file=sys.stderr)
+                  f"tier ({extra_hint('ibkr')})", file=sys.stderr)
         return {}
     ib = IB()
     try:
@@ -343,8 +344,9 @@ def _ibkr_option_fetcher(symbols: List[str], *, host: str, port: int,
         from ib_insync import IB, Option
     except ImportError:
         if verbose:
+            from taxjson.lib.install_hint import extra_hint
             print("price-chain: ib_insync not installed — skipping IBKR "
-                  "option tier (pip install 'taxjson[ibkr]')",
+                  f"option tier ({extra_hint('ibkr')})",
                   file=sys.stderr)
         return {}
     ib = IB()

@@ -68,6 +68,8 @@ import urllib.request
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional, Tuple
 
+from taxjson.lib.install_hint import extra_hint
+
 try:
     import yfinance as yf
 except ImportError:                     # pragma: no cover
@@ -260,8 +262,7 @@ def fetch_boc_noon(currency: str, start: str, end: str) -> Dict[str, str]:
 def fetch_yahoo(ticker: str, start: str, end: str) -> Dict[str, float]:
     """Yahoo Finance daily closes for `ticker`, start..end inclusive."""
     if yf is None:
-        raise RuntimeError("yfinance is not installed (pip install "
-                           "'taxjson[fx]')")
+        raise RuntimeError(f"yfinance is not installed ({extra_hint('fx')})")
     data = yf.download(ticker, start=start, end=_shift(end, 1),
                        progress=False)
     out: Dict[str, float] = {}
@@ -975,8 +976,8 @@ def build_rates(from_curr: str, to_curr: str, start: str, end: str, *,
         if need and yf is None and fetch_yahoo_fn is None:
             notes.append(f"yfinance is not installed, so there is no "
                          f"Yahoo fallback for {pair} "
-                         f"{need[0][0]}..{need[-1][1]} (install "
-                         f"'taxjson[fx]' if you have transactions then).")
+                         f"{need[0][0]}..{need[-1][1]} (if you have "
+                         f"transactions then, {extra_hint('fx')}).")
         elif need:
             errors += refresh_yahoo(cache, pair, need, today, fetch_yahoo_fn)
     else:
@@ -1044,7 +1045,7 @@ def main(argv=None):
             parser.error(f"{label} must be YYYY-MM-DD, got {val!r}")
     if to_curr != "CAD" and yf is None:
         print(f"{PROG} needs the [fx] extra for a {to_curr} target "
-              f"(Yahoo Finance): pip install 'taxjson[fx]'",
+              f"(Yahoo Finance): {extra_hint('fx')}",
               file=sys.stderr)
         return 1
     if from_curr == to_curr:

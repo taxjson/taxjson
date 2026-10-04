@@ -112,7 +112,10 @@ class TestNoFetcherInstalled(_Patched):
         self.assertEqual(out, "")
         lines = err.strip().splitlines()
         self.assertEqual(len(lines), 1, err)
-        self.assertIn("pip install taxjson-fetch", lines[0])
+        # The installer or a checkout — never a PyPI name (security
+        # review H1: taxjson-fetch is not published there).
+        self.assertNotIn("pip install taxjson", lines[0])
+        self.assertIn("--with-fetch", lines[0])
         self.assertIn("pip install -e packages/taxjson-fetch", lines[0])
 
     def test_list_json_is_empty(self):
@@ -134,7 +137,8 @@ class TestNoFetcherInstalled(_Patched):
         note = _fetch_plugin_note(cfg)
         self.assertIn("[accounts.margin]", note)
         self.assertIn("[accounts.ibkr]", note)
-        self.assertIn("pip install taxjson-fetch", note)
+        self.assertIn("--with-fetch", note)
+        self.assertNotIn("pip install taxjson", note)
         self.assertIsNone(_fetch_plugin_note(
             {"accounts": {"m": {"type": "taxable"}}}))
 
@@ -179,11 +183,12 @@ class TestNoFetcherCli(unittest.TestCase):
                     self.assertEqual(r.stdout, "")
                     self.assertEqual(len(r.stderr.strip().splitlines()),
                                      1, r.stderr)
-                    self.assertIn("pip install taxjson-fetch", r.stderr)
+                    self.assertIn("--with-fetch", r.stderr)
+                    self.assertNotIn("pip install taxjson", r.stderr)
             r = self._cli(tmp, "fetch", "-h")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("Download broker activity", r.stdout)
-            self.assertIn("pip install taxjson-fetch",
+            self.assertIn("pip install -e packages/taxjson-fetch",
                           " ".join(r.stdout.split()))
 
 

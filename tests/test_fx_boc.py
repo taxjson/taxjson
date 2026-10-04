@@ -257,6 +257,12 @@ class TestOfflineFlag(unittest.TestCase):
             def read(self):
                 return json.dumps({"chart": {"result": [{"indicators": {
                     "quote": [{"close": [42.0]}]}}]}}).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
         with mock.patch.dict(os.environ, {"TAXJSON_OFFLINE": "0"}), \
                 mock.patch("urllib.request.urlopen", return_value=_Resp()):
             price = fcp.get_crypto_price("BTC", "2025-01-02")
@@ -298,7 +304,8 @@ class TestNoPandasAtImport(unittest.TestCase):
         with mock.patch.object(T, "yf", None), redirect_stderr(err):
             rc = T.main(["CAD", "USD"])
         self.assertEqual(rc, 1)
-        self.assertIn("taxjson[fx]", err.getvalue())
+        self.assertIn("[fx] extra", err.getvalue())
+        self.assertIn("pip install -e '.[fx]'", err.getvalue())
 
 
 def _write(path, rows):

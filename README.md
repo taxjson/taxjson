@@ -50,10 +50,16 @@ plugin is a separate distribution in this repository
 (`packages/taxjson-fetch`) that plugs into `taxjson fetch`:
 
 ```bash
-pip install taxjson-fetch                    # or, from a checkout:
-pip install -e packages/taxjson-fetch        # into the same environment as taxjson
+bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --with-fetch   # re-run the installer with the plugin
+pip install -e packages/taxjson-fetch        # or, from a checkout: into the same environment as taxjson
 taxjson fetch --list                         # the installed fetchers
 ```
+
+taxjson is not published on PyPI yet, so a `taxjson` or `taxjson-fetch`
+package there is not ours — install from the installer or a checkout,
+never by name from PyPI. (From a checkout, install
+the core first, `pip install -e .`, so the plugin's `taxjson` dependency
+is already satisfied by your checkout.)
 
 Without it, `taxjson fetch` prints the install line and exits 2, and
 `taxjson run` accepts the keys below with a one-line note. Declare the
@@ -289,6 +295,10 @@ One line, no clone — installs the latest release into `~/.local/share/taxjson`
 bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
 bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --with-fetch   # plus the Questrade / IBKR auto-fetch plugin
 ```
+
+taxjson is not published on PyPI yet: a `taxjson` or `taxjson-fetch`
+package there is not ours, so never install either by name from PyPI —
+use the installer above or a checkout.
 
 Then `mkdir -p ~/taxes/2026 && cd ~/taxes/2026 && taxjson init --country canada` (or `--country usa`). See [REFERENCES.md](REFERENCES.md) for the CRA/IRS sources behind every rule and [docs/releasing.md](docs/releasing.md) for how releases are cut.
 
@@ -557,7 +567,7 @@ Files the pipeline reads and writes (all map files are optional):
 | --- | --- |
 | `taxjson init --country canada\|usa [PATH] [--year YYYY]` | Scaffold a new project directory (config, currencies, and account folders per jurisdiction; `--force` to overwrite). |
 | `taxjson migrate [--dry-run]` | Move an older project's per-purpose files into the two that hold them now: `yf_ticker.map`, `crypto_ticker.map`, `ticker_extraction_overrides.txt` and `t1135.map` become `QUOTE` / `CRYPTO` / `EXTRACT` / `T1135` lines appended to `ticker.map`; `amt_carryover.txt`, `claimed_losses.txt`, `capital_gains_dividends.map` and `distributions.map` become `[estimate] amt_carryover`, `[carryover] claimed`, `[[capital_gains_dividends]]` and `[[distributions]]` in `taxjson.toml`. Each file is read with its old rules (what it meant before is what the new lines mean); the lines are appended (a key under an existing `[estimate]` / `[carryover]` header goes right below it) — your content and comments are never rewritten — and each old file is renamed `<name>.migrated`, never deleted. It refuses, writing nothing, when an old line cannot be read or ticker.map / taxjson.toml already holds a conflicting entry (an identical one is skipped). `--dry-run` prints the lines it would append and the moves. While any of those old files is in the project, every other command stops (exit 2) naming it and this command. A leftover `tv_exchange.map` (the removed TradingView export) is not converted — it is only renamed `tv_exchange.map.migrated` — and stops nothing meanwhile (`taxjson run` notes it once). |
-| `taxjson fetch [ACCOUNT ...]` | Download broker activity straight into `inputs/` through an installed fetcher plugin (`--list` names them; none installed: one install line, exit 2) — the taxjson-fetch plugin (`pip install taxjson-fetch`) covers the Questrade REST API and IBKR Flex Web Service, configured on the account (`brokerage` + `account`/`query_id` under `[accounts.<name>]`). Writes files the existing parsers already read; hand-exported CSVs keep working side by side. Questrade defaults to the whole tax-year window plus the superficial-loss margins (Dec 1 of the prior year through Jan 31 of the next, capped at today; `--year N` backfills a past year, `--from`/`--days` override the window); IBKR re-covers the Flex query's configured period. `--trim-overlap` drops rows your manual exports already cover, `--dry-run` previews. Credentials: `--refresh-token` (Questrade) / `--flex-token` (IBKR); `--positions` ALSO snapshots live Questrade holdings to `work/<account>_live_holdings.toml` (for `taxjson sanity`). Chain it: `taxjson fetch run`. |
+| `taxjson fetch [ACCOUNT ...]` | Download broker activity straight into `inputs/` through an installed fetcher plugin (`--list` names them; none installed: one install line, exit 2) — the taxjson-fetch plugin (the installer's `--with-fetch`, or `pip install -e packages/taxjson-fetch` from a checkout; not on PyPI) covers the Questrade REST API and IBKR Flex Web Service, configured on the account (`brokerage` + `account`/`query_id` under `[accounts.<name>]`). Writes files the existing parsers already read; hand-exported CSVs keep working side by side. Questrade defaults to the whole tax-year window plus the superficial-loss margins (Dec 1 of the prior year through Jan 31 of the next, capped at today; `--year N` backfills a past year, `--from`/`--days` override the window); IBKR re-covers the Flex query's configured period. `--trim-overlap` drops rows your manual exports already cover, `--dry-run` previews. Credentials: `--refresh-token` (Questrade) / `--flex-token` (IBKR); `--positions` ALSO snapshots live Questrade holdings to `work/<account>_live_holdings.toml` (for `taxjson sanity`). Chain it: `taxjson fetch run`. |
 | `taxjson elect` | Review, redo, or non-interactively set (`--set ID=ELECTION`) a corporate-action tax election. |
 
 #### Build the books

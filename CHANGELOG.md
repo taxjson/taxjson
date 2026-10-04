@@ -4,6 +4,13 @@
 
 ### Security (pre-release review)
 
+- **Install lines never name a PyPI package.** taxjson and taxjson-fetch
+  are not published on PyPI yet, so a package under either name there is
+  not ours. Every hint — `taxjson fetch` with no plugin, the `[fx]`,
+  `[ibkr]` and `[xlsx]` extras, README, the plugin's README — now names
+  the installer (re-run with `--with-fetch`, or `TAXJSON_EXTRAS=...`) or
+  an editable install from a checkout, and says the PyPI names are not
+  ours.
 - **No write through a planted symlink.** Every write-then-rename
   (`work/*.part` stage outputs, `.sum` reports, `migrate`'s
   `.migrate.part`, `write_text_atomic`, the gains traces, report.json,
@@ -133,8 +140,8 @@
   registered under the entry-point group `taxjson.fetchers`: `--list`
   names the installed ones, each account's `brokerage` picks its
   fetcher (`--fetcher NAME` narrows it), and `--json` / `--dry-run`
-  work as before. With none installed it prints one line — install it
-  with `pip install taxjson-fetch` (or `pip install -e
+  work as before. With none installed it prints one line — re-run the
+  installer with `--with-fetch` (or `pip install -e
   packages/taxjson-fetch` from a checkout) — and exits 2. With the
   plugin installed, every option and output is unchanged.
 - `brokerage` / `account` / `query_id` under `[accounts.<name>]` stay

@@ -569,8 +569,9 @@ def needs_rebuild(out: Path, *inputs: Path) -> bool:
 
     The config-file dependency catches edits to year / country /
     tax_date / base_currency. The package-source dependency catches
-    engine and parser fixes (a `pip install -U taxjson` or a `git pull`
-    in editable mode bumps file mtimes and invalidates the cache).
+    engine and parser fixes (an upgrade — re-running the installer — or
+    a `git pull` in editable mode bumps file mtimes and invalidates the
+    cache).
     Together they make `--fast` safe to reach for: when the cache
     returns a result, it's a result computed by the CURRENT code
     against the CURRENT config and inputs.
@@ -5430,7 +5431,7 @@ tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for c
 # One [accounts.NAME] section per folder under inputs/. The folder name
 # is the account name. Required: type. Optional: transfers, crypto,
 # plan, holdings, combined_broker_accounts, and — to pull activity straight from the broker with
-# `taxjson fetch` (the taxjson-fetch plugin: pip install taxjson-fetch) — brokerage + account
+# `taxjson fetch` (the taxjson-fetch plugin: the installer's --with-fetch) — brokerage + account
 # (Questrade) or query_id (IBKR):
 #
 #   [accounts.margin]
