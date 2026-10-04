@@ -30,7 +30,7 @@ TOP_LEVEL_TABLES = ("settings", "accounts", "instalments", "estimate",
 # installed, so a project that used `taxjson fetch` keeps validating.
 ACCOUNT_KEYS = ("type", "crypto", "transfers", "plan",
                 "brokerage", "account", "query_id", "holdings",
-                "combined_broker_accounts")
+                "combined_broker_accounts", "exercise_fee")
 ESTIMATE_KEYS = ("other_income", "other_losses", "deductions",
                  "carrying_charges", "long_term_losses", "amt_carryover")
 INSTALMENTS_KEYS = ("basis", "prior_year_net_tax", "second_prior_net_tax",
@@ -176,6 +176,16 @@ def account_type_problems(cfg: Dict[str, Any]) -> List[str]:
             out.append(
                 f"[accounts.{name}] combined_broker_accounts must be true "
                 f"or false (no quotes), got {_cba!r}")
+        _fee = acfg.get("exercise_fee")
+        if _fee is not None and (isinstance(_fee, bool)
+                                 or not isinstance(_fee, (int, float))
+                                 or not 0 <= _fee < 1000):
+            # The broker's exercise/assignment charge (Webull): a
+            # quoted "1.00" would never equal a row's fee (B11).
+            out.append(
+                f"[accounts.{name}] exercise_fee must be a number such "
+                f"as 1.00 (the broker's exercise/assignment charge, no "
+                f"quotes), got {_fee!r}")
     return (out + account_pair_problems(accounts.keys())
             + bool_setting_problems(cfg))
 

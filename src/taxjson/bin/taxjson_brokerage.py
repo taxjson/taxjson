@@ -411,6 +411,18 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--exercise-fee", dest="exercise_fee", type=float, default=None,
+        metavar="FEE",
+        help=(
+            "Webull: the broker's exercise/assignment charge on the stock "
+            "leg (`[accounts.<name>] exercise_fee`, passed by `taxjson "
+            "run`). With it, a $0 option close plus a stock trade at the "
+            "strike carrying exactly this charge is booked as an "
+            "exercise/assignment; without it nothing is inferred and each "
+            "such pair is named for you to check."
+        ),
+    )
+    parser.add_argument(
         "--combined-broker-accounts", dest="combined_broker_accounts",
         action="store_true",
         help=(
@@ -624,6 +636,9 @@ Examples:
         if args.account_type and hasattr(extractor, 'account_taxable'):
             extractor.account_taxable = args.account_type == 'taxable'
         extractor.combined_broker_accounts = args.combined_broker_accounts
+        if args.exercise_fee is not None and hasattr(extractor,
+                                                     'exercise_fee'):
+            extractor.exercise_fee = args.exercise_fee
         try:
             _cut = final_record_cut(input_path)
             transactions = extractor.parse_file(input_path)

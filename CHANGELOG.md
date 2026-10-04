@@ -14,6 +14,13 @@
   `STABLE`, `SPLITSHARE`, `INDEXOPT`, `EVENING`, `MULT` and `VENUE` lines,
   and the run prints one note per symbol whenever a built-in entry decided
   an outcome, naming the line that would change it.
+- **Webull exercise/assignment charge is a setting.** The parser no longer
+  assumes a $1.00 charge: `[accounts.<name>] exercise_fee = 1.00` states
+  the account's exercise/assignment charge, and only then is a $0 option
+  close plus a stock trade at the strike carrying exactly that charge
+  booked as an exercise/assignment. Without it nothing is inferred and each
+  such pair is named on the console for you to check. A Webull account
+  that relied on the old inference needs the line.
 
 ### Command line
 

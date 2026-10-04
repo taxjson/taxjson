@@ -52,6 +52,7 @@ def _wb(rows, country):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             wb = WebullBrokerage()
+            wb.exercise_fee = 1.00      # [accounts.X] exercise_fee (B11)
             wb.country = country
             tx = wb.parse_file(f)
     return tx, err.getvalue()
@@ -82,7 +83,8 @@ class TestWebullCitation(unittest.TestCase):
             f = Path(td) / "webull_2025.csv"
             f.write_text(_WB_PRE + _WB_H + _WB_PUT, encoding="utf-8")
             r = _tool("taxjson.bin.taxjson_brokerage", "--brokerage",
-                      "webull", "--country", "usa", f, home=td)
+                      "webull", "--country", "usa", "--exercise-fee",
+                      "1.00", f, home=td)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("inferred an exercise/assignment", r.stderr)
         self.assertNotIn("s.49", r.stderr)

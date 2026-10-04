@@ -4,7 +4,7 @@ import io
 import re
 import sys
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          ticker_map_joins,
@@ -59,7 +59,9 @@ class WebullBrokerage(BaseBrokerage):
         for sib in self._sibling_exports(path):
             try:
                 with contextlib.redirect_stderr(io.StringIO()):
-                    sp = WebullBrokerage()._parse_rows(sib)
+                    _sib = WebullBrokerage()
+                    _sib.exercise_fee = self.exercise_fee
+                    sp = _sib._parse_rows(sib)
             except (ValueError, OSError, UnicodeDecodeError):
                 continue        # reported when that file is parsed
             if sp:
@@ -558,19 +560,22 @@ class WebullBrokerage(BaseBrokerage):
                 f"{header!r}. Refusing to guess column positions.")
         return cols
 
-    # Webull's exercise/assignment charge on the stock leg: Webull's fee
-    # schedule charges exactly $1.00 on an assignment/exercise (net =
-    # qty x strike +/- 1), while ordinary stock trades carry the regular
-    # commission (or $0 in a commission-free promotion). The fee is
-    # the only evidence in the Trading Summary that separates the two.
-    _EXERCISE_FEE = 1.00
+    # The broker's exercise/assignment charge on the stock leg
+    # (`[accounts.<name>] exercise_fee`, passed by `taxjson run` as
+    # taxjson-brokerage --exercise-fee): the only evidence in the
+    # Trading Summary that separates an exercise/assignment (net = qty x
+    # strike +/- the charge) from an ordinary trade at the strike. None
+    # (the default): no fee is known, nothing is inferred — every such
+    # pair is named as a candidate for the user to check.
+    exercise_fee: Optional[float] = None
 
     def _mark_assignments(self, transactions, expiries, own=None,
                           source='') -> None:
         """A Webull option closed at price 0 is an expiry — UNLESS shares
         of the underlying change hands at the strike within a few days in
-        the matching quantity and direction, carrying Webull's $1.00
-        exercise/assignment charge: then it was ASSIGNED (short) or
+        the matching quantity and direction, carrying the account's
+        exercise/assignment charge (`exercise_fee`; none configured:
+        nothing is inferred, every such pair is named): then it was ASSIGNED (short) or
         EXERCISED (long). Webull's Trading Summary shows both only as a
         $0 option close plus an ordinary stock trade at the strike.
         Booking it as an expiry realizes the premium as its own gain or
@@ -592,7 +597,7 @@ class WebullBrokerage(BaseBrokerage):
                    else {id(t) for t in transactions})
         cands = []          # (gap, option index, stock index)
         rejected = []       # (option index, stock index)
-        # A $0 close and a stock trade at the strike with the $1.00
+        # A $0 close and a stock trade at the strike with the exercise
         # charge whose quantities do not match one-to-one (2 contracts
         # vs two 100-share rows): named, never silently an expiry
         # (audit A2-0617).
@@ -637,8 +642,9 @@ class WebullBrokerage(BaseBrokerage):
                     continue
                 if not -1 <= gap <= 7:
                     continue
-                exercise_fee = abs(abs(float(t.get('fee') or 0.0))
-                                   - self._EXERCISE_FEE) <= 0.011
+                exercise_fee = (self.exercise_fee is not None and abs(
+                    abs(float(t.get('fee') or 0.0))
+                    - float(self.exercise_fee)) <= 0.011)
                 if abs(abs(q) - contracts * 100) > 1e-6:
                     if exercise_fee:
                         qty_mismatch.append((oi, i))
@@ -686,15 +692,21 @@ class WebullBrokerage(BaseBrokerage):
             opt, stock = expiries[oi], transactions[i]
             if not (id(opt) in own_ids or id(stock) in own_ids):
                 continue
+            _fee = float(stock.get('fee') or 0)
+            why = (f"no exercise/assignment charge is configured for "
+                   f"this account ([accounts.<name>] exercise_fee), so"
+                   if self.exercise_fee is None else
+                   f"an ordinary trade's fee, not the account's "
+                   f"{float(self.exercise_fee):.2f} exercise/assignment "
+                   f"charge (exercise_fee), so")
             print(f"warning: Webull {source}: {opt['symbol']} closed at "
                   f"$0 on {opt['date']} and "
                   f"{abs(float(stock['quantity'])):g} {stock['symbol']} "
                   f"traded at the strike {meta[oi][0]:g} settling "
                   f"{stock['date_settle']} with a "
-                  f"{float(stock.get('fee') or 0):.2f} commission — an "
-                  f"ordinary trade's fee, not Webull's $1.00 exercise/"
-                  f"assignment charge, so exercise/assignment was NOT "
-                  f"inferred: booked as an expiry plus a separate trade. "
+                  f"{_fee:.2f} commission — {why} exercise/assignment "
+                  f"was NOT inferred: booked as an expiry plus a "
+                  f"separate trade. "
                   f"If the statement shows an exercise/assignment, the "
                   f"premium belongs in the shares' cost or proceeds"
                   f"{meta[oi][1]} — see "
@@ -712,8 +724,9 @@ class WebullBrokerage(BaseBrokerage):
                   f"({abs(float(opt['quantity'])):g} contract(s)) closed at "
                   f"$0 on {opt['date']} and {abs(float(stock['quantity'])):g} "
                   f"{stock['symbol']} traded at the strike {meta[oi][0]:g} "
-                  f"settling {stock['date_settle']} with Webull's $1.00 "
-                  f"exercise/assignment charge, but the quantities differ "
+                  f"settling {stock['date_settle']} with the account's "
+                  f"{float(self.exercise_fee or 0):.2f} exercise/"
+                  f"assignment charge, but the quantities differ "
                   f"(the close or the stock leg is split across rows), so "
                   f"exercise/assignment was NOT inferred: booked as an "
                   f"expiry plus a separate trade. If the statement shows "

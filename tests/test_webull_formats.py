@@ -16,6 +16,15 @@ from pathlib import Path
 
 from taxjson.lib.brokerages.webull import WebullBrokerage
 
+
+def _wb():
+    """Webull with a $1.00 exercise/assignment charge configured
+    (`[accounts.X] exercise_fee = 1.00`): these fixtures carry that
+    charge, and nothing is inferred without the setting (B11)."""
+    p = WebullBrokerage()
+    p.exercise_fee = 1.00
+    return p
+
 _PRE = (",,,,,,,,\n"
         "Account Number / Numéro de compte:,,,,,,,55500001,\n"  # pii-ok: synthetic id
         "Year / Année:,,,,,,,2024,\n"
@@ -43,7 +52,7 @@ def _parse(text):
     with tempfile.TemporaryDirectory() as td:
         f = Path(td) / "wb.csv"
         f.write_text(text, encoding="utf-8")
-        return WebullBrokerage().parse_file(f)
+        return _wb().parse_file(f)
 
 
 class TestBothLayouts(unittest.TestCase):

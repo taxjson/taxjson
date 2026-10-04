@@ -1209,8 +1209,14 @@ def _brokerage_account_flags(acfg: Dict[str, Any]) -> List[str]:
     'statement spans N accounts' ATTENTION becomes a NOTE; the parser
     refuses it on a sheltered label unless the statement shows one
     plan). config_check refuses a non-boolean value."""
-    return (["--combined-broker-accounts"]
-            if (acfg or {}).get("combined_broker_accounts") is True else [])
+    acfg = acfg or {}
+    flags = (["--combined-broker-accounts"]
+             if acfg.get("combined_broker_accounts") is True else [])
+    # Webull's exercise/assignment charge: a broker convention the user
+    # states (config_check checks the value; none: nothing inferred).
+    if acfg.get("exercise_fee") is not None:
+        flags += ["--exercise-fee", f"{float(acfg['exercise_fee']):g}"]
+    return flags
 _ACCOUNT_TYPES = ("taxable", "sheltered")
 
 

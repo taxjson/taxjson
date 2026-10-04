@@ -11,6 +11,15 @@ from pathlib import Path
 from taxjson.lib.brokerages.base import BrokerageParseError
 from taxjson.lib.brokerages.webull import WebullBrokerage
 
+
+def _wb():
+    """Webull with a $1.00 exercise/assignment charge configured
+    (`[accounts.X] exercise_fee = 1.00`): these fixtures carry that
+    charge, and nothing is inferred without the setting (B11)."""
+    p = WebullBrokerage()
+    p.exercise_fee = 1.00
+    return p
+
 from tax_rules import rule
 
 _PRE = (",,,,,,,,,\n"
@@ -33,7 +42,7 @@ def _parse(rows, pre=_PRE, encoding="utf-8", name="wb.csv"):
     with tempfile.TemporaryDirectory() as td:
         f = _write(td, name, rows, pre, encoding)
         err = io.StringIO()
-        ex = WebullBrokerage()
+        ex = _wb()
         with contextlib.redirect_stderr(err):
             tx = ex.parse_file(f)
         return tx, err.getvalue(), ex
@@ -45,7 +54,7 @@ def _parse_folder(files, which):
             _write(td, name, rows, pre)
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            tx = WebullBrokerage().parse_file(Path(td) / which)
+            tx = _wb().parse_file(Path(td) / which)
         return tx, err.getvalue()
 
 

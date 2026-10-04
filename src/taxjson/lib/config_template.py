@@ -215,6 +215,11 @@ ACCOUNT_SPEC: Tuple[Key, ...] = (
     Key("combined_broker_accounts", "false",
         "true: every broker account in these statements is yours, "
         "taxable together"),
+    Key("exercise_fee", "1.00",
+        "Webull: the exercise/assignment charge on the stock leg (no "
+        "default:",
+        ("without it no exercise/assignment is inferred — each candidate "
+         "is named)",)),
     Key("brokerage", '"questrade"',
         "`taxjson fetch` source (taxjson-fetch plugin): questrade | "
         "ibkr_flex"),

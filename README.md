@@ -31,7 +31,7 @@ Everything runs locally on your machine. Your transaction data never leaves your
 | Interactive Brokers   | Yes      | Yes     | —      | Activity Statement CSV; corp-action auto-detection |
 | Questrade             | Yes      | Yes     | —      | Account activity CSV                               |
 | RBC Direct Investing  | Yes      | Yes     | —      | Transaction history CSV                            |
-| Webull                | Yes      | Yes     | —      | Trading Summary CSV (BUY/SELL rows only): a $0 option close is an expiry, or an exercise/assignment when a stock trade at the strike carries Webull's $1.00 charge (see KNOWN_ISSUES). It carries no income — enter T5 interest/dividends as `.tt` `INTEREST`/`DIVIDEND` lines |
+| Webull                | Yes      | Yes     | —      | Trading Summary CSV (BUY/SELL rows only): a $0 option close is an expiry, or an exercise/assignment when a stock trade at the strike carries the account's `exercise_fee` (the broker's exercise/assignment charge, e.g. `exercise_fee = 1.00` under `[accounts.<name>]`; without it nothing is inferred and each such pair is named for you to check — see KNOWN_ISSUES). It carries no income — enter T5 interest/dividends as `.tt` `INTEREST`/`DIVIDEND` lines |
 | Kraken                | —        | —       | Yes    | Trades + Ledgers CSV (same folder: the ledger says which coin paid each fee; overlapping ledger exports are read once per txid; a ledger trade the trades export lacks, a lone instant-trade leg, or a ledger row of a type the parser does not book that moves a coin (airdrop, conversion, adjustment, margin) is an `UNBOOKED` warning, fatal under `run --strict`) |
 | Coinbase              | —        | —       | Yes    | Transaction history CSV                            |
 | **Any other broker**  | Yes      | —       | —      | `generic_*.csv` + a TOML column mapping (see `examples/generic_wealthsimple.toml`) |
@@ -517,6 +517,9 @@ type = "taxable"               # REQUIRED: taxable | sheltered
 # combined_broker_accounts = true  # every broker account in this folder's
 #                              # statements is yours and taxable together
 #                              # (see "Several broker accounts in one folder")
+# exercise_fee = 1.00          # Webull: the exercise/assignment charge on the
+#                              # stock leg; without it no exercise/assignment
+#                              # is inferred from a $0 close (each is named)
 
 [accounts.rrsp]
 type = "sheltered"
