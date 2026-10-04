@@ -143,7 +143,13 @@ def get_crypto_price(symbol, date_str):
 
 @guard_main("taxjson-fill-crypto")
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        prog=PROG,
+        description="Fill in the fair value of crypto rows the export left "
+                    "unpriced, from Yahoo Finance daily prices (cached in "
+                    "~/.crypto_price_cache.json; TAXJSON_OFFLINE=1 serves "
+                    "the cache only). ticker.map CRYPTO lines name a "
+                    "coin's Yahoo id.")
     parser.add_argument("input", nargs="?", help="Input JSON file (taxjson schema)")
     parser.add_argument(
         "--project-root", metavar="DIR",

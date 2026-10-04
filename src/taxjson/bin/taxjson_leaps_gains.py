@@ -25,7 +25,8 @@ def main():
     # >3 months to expiry). The old "(LEAPS)" title disagreed with
     # `taxjson leaps-sum` from the same run by 42k (audit R1-173).
     _main(prog=PROG,
-          description="Summarize LONG option gains (every tenor).",
+          description="Long option gains (every tenor), from "
+                      "taxjson-gains output.",
           direction='LONG', calls_only=False,
           title="LONG OPTIONS", row_total_label="LONG OPTION GAIN",
           summary_title=("LONG OPTIONS SUMMARY (every long option close, "

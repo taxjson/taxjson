@@ -44,7 +44,9 @@ from taxjson.lib.trace_format import (
 
 def _parse_args():
     parser = argparse.ArgumentParser(
-        description="Compute capital gains for a country."
+        description="Compute capital gains from a merged transaction "
+                    "book: Canadian ACB with the superficial-loss rule, or "
+                    "US FIFO lots with §1091 wash sales (--country)."
     )
     add_country_argument(parser)
     parser.add_argument("input", nargs="?", help="Path to merged transactions JSON (default: stdin)")

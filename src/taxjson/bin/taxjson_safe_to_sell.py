@@ -45,7 +45,10 @@ _STATUS = {
 
 @guard_main("taxjson-safe-to-sell")
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Taxable-Only Safe-to-Sell Audit")
+    parser = argparse.ArgumentParser(
+        description="One line per taxable position: may it be sold at a "
+                    "loss today without a superficial loss / wash sale? "
+                    "A view over taxjson-wash-radar's walk.")
     # nargs='+' + extend: both `--taxable a b` (historical) and repeated
     # `--taxable a --taxable b` (A2 composability) work.
     parser.add_argument("--taxable", nargs='+', action='extend', default=[],

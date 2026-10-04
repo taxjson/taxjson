@@ -522,7 +522,9 @@ def _require_gains(doc, where) -> None:
 
 @guard_main("taxjson-sum-gains")
 def main():
-    parser = argparse.ArgumentParser(description="Summarize gains from taxjson_gains.py output.")
+    parser = argparse.ArgumentParser(
+        description="Summarize taxjson-gains output per ticker: capital "
+                    "and option gains, dividends, payments in lieu.")
     parser.add_argument("--sort-by", "-s", choices=['total', 'total_gain', 'capital_gain', 'option_gain', 'dividend', 'pil', 'holding_days', 'ticker'], default='ticker')
     parser.add_argument("--no-color", action="store_true", help="Disable ANSI color output")
     parser.add_argument("--json", action="store_true",

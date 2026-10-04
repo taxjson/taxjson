@@ -118,6 +118,14 @@
   country's commands and says how many it hid; `taxjson help --all` lists
   every command, marking the one-country ones (Canada) / (USA), as the
   page does outside a project.
+- The help page lists each command on one short line (what it does, in
+  plain words); `taxjson COMMAND -h` carries the full description. Stale
+  wording is gone (`run --no-input` named a GUI, `sanity` a
+  "portoml-style" file, `--fast` an mtime cache), and the standalone
+  tools that printed no description or a vague one (taxjson-fill-crypto,
+  taxjson-convert-currency, taxjson-wash-radar, taxjson-safe-to-sell,
+  taxjson-ticker-map, taxjson-validate, taxjson-split-gains and others)
+  now say what they do.
 - `tjs` is a short name for `taxjson` (the same program; usage lines show
   the name used). The installer links it beside `taxjson`.
 - New `taxjson stats [YEAR] [ACCOUNT] [--all-history] [--json]`: win/lose
