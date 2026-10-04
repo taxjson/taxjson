@@ -80,7 +80,18 @@ on its line (in a doc, `<!-- pii-ok -->`).
 The maintainer also keeps a **private figure list**: the distinctive
 money figures (amounts with cents, five or more digits, cents other than
 .00/.25/.50/.75) of their own projects' outputs — `reports/`,
-`work/*.sum`, `*.toml`, `*.tt` — stored only as salted SHA-256 hashes
+`work/*.sum`, `*.toml`, `*.tt` — and the distinctive values of the raw
+broker exports under `inputs/`: amounts with cents from six digits up,
+numbers with three or more decimals and six or more significant digits
+(prices, rates, fractional and coin quantities), broker reference codes
+(six or more letters and digits with at least two digits — internal
+security and option codes, option symbols with their root, order
+references — or a number of seven or more digits that is not a date),
+and clock times with seconds next to their date. Short, round and public
+values are never listed (a word ending in a 2-digit number, a month-name
+date, an option series without its root, an ISIN or CUSIP, a time on
+the minute), so a synthetic example rarely collides; when one does, use
+another synthetic value. All are stored only as salted SHA-256 hashes
 (mode `0600`, no plain figure on disk) at
 `~/.config/taxjson/pii-amounts` (override with `TAXJSON_PII_AMOUNTS`).
 Build or refresh it after a run with

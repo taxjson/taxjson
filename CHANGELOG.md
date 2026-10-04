@@ -38,6 +38,15 @@
   and per-commit scan, commit and tag messages, ref names — then refuses a
   line holding one of them, naming the file and line only; there is no
   `pii-ok` escape. A missing list is skipped (contributors have none).
+- **The private figure list also covers the raw exports.** `--collect-amounts`
+  now reads every text file under each project's `inputs/` as well and
+  lists its distinctive values: amounts with cents from six digits up,
+  numbers with three or more decimals (prices, rates, coin quantities),
+  broker reference codes and clock times next to their date. Short,
+  round and public values (month-name dates, ISINs, CUSIPs, times on the
+  minute) are not listed. Binary files there are named, not read.
+  Comments, examples and tests that matched such values now use synthetic
+  ones.
 - **No figures from real books in the repository.** CONTRIBUTING states
   the rule: code, tests, docs, the CHANGELOG and commit messages use
   synthetic inputs only, and CHANGELOG entries describe changes in words.
@@ -2190,7 +2199,7 @@
 - Questrade corporate actions: an UNBOOKED line from the corporate-action
   stage (a DIS chain that nets a removal) is echoed on the console and
   refused by `run --strict`, as the parse stage's are (A2-0211); the
-  internal-code hint names the symbol as booked (`D056068.TO`) and goes
+  internal-code hint names the symbol as booked (`X000007.TO`) and goes
   quiet once ticker.map renames it (A2-0966); a spin-off parent held only
   in a start `.tt` can be named with a `GLOBAL <SEC#> <PARENT>` ticker.map
   line, which the warning now suggests (A2-0980).
@@ -2210,7 +2219,7 @@
   RATE`) now reaches the `.US` pool instead of a phantom `.TO` one.
 - **Questrade learns identities from all of an account's exports.** A
   dividend, ROC, stock dividend, DRIP or cash-in-lieu row under an
-  internal code (`A020626`) whose trade sits in last year's export stayed
+  internal code (`X000008`) whose trade sits in last year's export stayed
   on the code, and a ROC there became a capital gain. The
   description map now spans every export of the account; the event
   wording (`STK DIV ON`, `STK SPLIT ON`, `REINV@C$`, `CASH IN LIEU OF`)

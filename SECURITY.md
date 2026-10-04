@@ -152,8 +152,10 @@ repository: the maintainer's denylist (`~/.config/taxjson/pii-denylist`,
 regexes for account numbers and names) and the maintainer's private
 figure list (`~/.config/taxjson/pii-amounts`, written by
 `scripts/check-pii.sh --collect-amounts PROJECT_DIR...`: the distinctive
-money figures of the maintainer's own project outputs as salted SHA-256
-hashes, mode `0600`, no plain figures). A tree line, a pushed diff line,
+money figures of the maintainer's own project outputs, and the
+distinctive amounts, prices, quantities, broker reference codes and
+dated clock times of the raw exports under each project's `inputs/`, as
+salted SHA-256 hashes, mode `0600`, no plain figures). A tree line, a pushed diff line,
 or a commit or tag message holding one of those figures is refused with
 its file and line only. Neither file is ever committed; a contributor
 without them gets the generic checks.

@@ -720,8 +720,8 @@ class TestPrivateFigureList(_Sandbox):
             # round or short figures are not distinctive: never listed
             "fees 1,500.00  div 250.25  small 99.87  cost 1234.50\n")
         (self.proj / "work" / "x.sum").write_text(f"other {self._ONE}0\n")
-        # inputs are not an output: their figures are not collected
-        (self.proj / "inputs" / "b.csv").write_text("Net,62418.33\n")
+        # an export's amounts are listed from 6 digits up only
+        (self.proj / "inputs" / "b.csv").write_text("Net,624.18\n")
 
     def collect(self, *dirs):
         return subprocess.run(
@@ -763,7 +763,7 @@ class TestPrivateFigureList(_Sandbox):
             "a = 1\n"
             f"b = {self._BARE}  # pii-ok\n"     # no escape for these
             f'c = "x {self._ONE}"\n'           # 73016.4 == 73016.40
-            "d = 1500.00, 62418.33, 99.87\n")  # not listed
+            "d = 1500.00, 624.18, 99.87\n")    # not listed
         r = self.scan()
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("matches a figure from your own books", r.stdout)
@@ -879,6 +879,105 @@ class TestPrivateFigureList(_Sandbox):
         default = self.tmp / ".config" / "taxjson" / "pii-amounts"
         self.assertTrue(default.is_file())
         self.assertEqual(self.scan().returncode, 1)
+
+
+class TestPrivateFigureListInputs(_Sandbox):
+    """The figure list also covers the raw exports under a project's
+    inputs/: amounts with cents from 6 digits up, numbers with 3+
+    decimals and 6+ significant digits (prices, rates, quantities),
+    broker reference codes and clock times next to their date. Only
+    distinctive values are listed, so short or round synthetic values
+    never collide. Every value here is synthetic and assembled at run
+    time, so this file never holds a listed value itself."""
+
+    _PRICE = "37.4" + "18291"            # a 6-decimal price
+    _QTY = "0.000" + "731942"            # a coin quantity
+    _BIG = "6" + "1,742.39"              # a 6-digit amount with cents
+    _CODE = "K" + "730419"               # a broker's internal code
+    _OPT = "8" + "QWZKP3"                # an RBC-style option code
+    _REF = "73" + "1904428"              # a 9-digit order reference
+    _DATE = "2025-" + "04-17"
+    _TIME = "14:" + "37:52"
+    _ROOT = "QZJ" + "T"
+    _SERIES = "2506" + "20C00041500"     # an option series (no root)
+
+    def setUp(self):
+        super().setUp()
+        self.amounts = self.tmp / "figs" / "pii-amounts"
+        self.env["TAXJSON_PII_AMOUNTS"] = str(self.amounts)
+        self.proj = self.tmp / "books" / "2025"
+        (self.proj / "inputs" / "margin").mkdir(parents=True)
+        (self.proj / "inputs" / "margin" / "export.csv").write_text(
+            "Date,Symbol,Quantity,Price,Net,Ref\n"
+            f'"{self._DATE}, {self._TIME}",{self._CODE},{self._QTY},'
+            f'{self._PRICE},"{self._BIG}",{self._REF}\n'
+            f"{self._DATE},{self._OPT},1,0,0,x\n"
+            # an IB instrument line: root and series padded apart
+            f"Options,{self._ROOT}   {self._SERIES},{self._ROOT} 20JUN25 41.5 C\n"
+            # none of these is distinctive: never listed
+            "2025-04-17 10:00:00,THRU02,1.4138,0.555,99.87,624.18,"
+            "US0378331005,250620C00041500,20250417,1000000\n")
+        (self.proj / "inputs" / "kraken.json").write_text(
+            '{"time": "' + self._DATE + "T" + self._TIME + 'Z"}\n')
+
+    def collect(self):
+        return subprocess.run(
+            ["bash", str(self.repo / "scripts" / "check-pii.sh"),
+             "--collect-amounts", str(self.proj)], cwd=self.tmp,
+            capture_output=True, text=True, env=self.env)
+
+    def test_collects_the_distinctive_values_of_raw_exports(self):
+        r = self.collect()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        # price, quantity, amount, code, option code, reference, the
+        # clock time (both stamps are the same instant) and the IB
+        # option's root+series: 8 values
+        self.assertIn("8 figure(s), 8 new", r.stdout)
+        body = self.amounts.read_text()
+        for plain in (self._PRICE, self._QTY, self._BIG, self._CODE,
+                      self._OPT, self._REF, self._TIME, self._SERIES):
+            self.assertNotIn(plain, body)
+        self.assertEqual(self.amounts.stat().st_mode & 0o777, 0o600)
+
+    def test_scans_refuse_each_kind_without_printing_it(self):
+        self.collect()
+        lines = [
+            f"price = {self._PRICE}0\n",                     # trailing zero
+            f"qty = {self._QTY}\n",
+            f"net = {self._BIG.replace(',', '')}\n",
+            f"sym = '{self._CODE.lower()}'\n",                # any case
+            f"# RBC code {self._OPT}\n",
+            f"ref = {self._REF}  # pii-ok\n",                 # no escape
+            f"when = '{self._DATE} {self._TIME}'\n",
+            f"opt = '{self._ROOT}{self._SERIES}'\n",          # OCC form
+            "ok = ['2025-04-17 10:00:00', 'THRU02', 1.4138, 0.555,\n",
+            "      'US0378331005', '250620C00041500', 1000000]\n",
+        ]
+        (self.repo / "t.py").write_text("".join(lines))
+        r = self.scan()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("matches a figure from your own books", r.stdout)
+        for n in range(1, 9):
+            self.assertIn(f"t.py:{n}\n", r.stdout + "\n")
+        self.assertNotIn("t.py:9", r.stdout)
+        self.assertNotIn("t.py:10", r.stdout)
+        for plain in (self._PRICE, self._QTY, self._CODE, self._OPT,
+                      self._REF, self._TIME):
+            self.assertNotIn(plain, r.stdout)
+        # the same values in a commit message
+        for text in (f"fix the {self._CODE} row", f"at {self._DATE} {self._TIME}",
+                     f"price {self._PRICE}"):
+            r = self.scan("--message", stdin="subject\n\n" + text + "\n")
+            self.assertEqual(r.returncode, 1, text + r.stdout)
+            self.assertIn("line 3", r.stdout)
+        r = self.scan("--message", stdin="subject\n\nprice 37.4183\n")
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_binary_inputs_are_named_not_read(self):
+        (self.proj / "inputs" / "slip.pdf").write_bytes(b"%PDF-1.4\n")
+        r = self.collect()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("1 binary file(s)", r.stderr)
 
 
 class TestReleaseAndCiGates(unittest.TestCase):

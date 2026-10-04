@@ -22,9 +22,12 @@
 #      TAXJSON_PII_AMOUNTS) — the maintainer's own money figures, as
 #      salted SHA-256 hashes (no plain figure on disk), written by
 #        scripts/check-pii.sh --collect-amounts PROJECT_DIR...
-#      from each project's reports/, work/*.sum, *.toml and *.tt. Every
-#      mode except --identity refuses a line holding an amount with cents
-#      whose hash is listed ("matches a figure from your own books"),
+#      from each project's reports/, work/*.sum, *.toml and *.tt, and
+#      from the raw exports under its inputs/ (there also prices,
+#      quantities and rates with 3+ decimals, broker reference codes and
+#      dated clock times; see FIG_PY below). Every mode except
+#      --identity refuses a line holding a value whose hash is listed
+#      ("matches a figure from your own books"),
 #      naming file:line, never the figure. There is NO pii-ok escape: a
 #      synthetic number that collides gets a different number. A missing
 #      list at the default path is skipped silently (contributors have
@@ -78,6 +81,28 @@ AMOUNTS="${TAXJSON_PII_AMOUNTS:-$HOME/.config/taxjson/pii-amounts}"
 # plain digits with two decimals; it is "distinctive" (worth listing)
 # with 5+ digits and cents other than 00/25/50/75, the figures a
 # synthetic example is unlikely to hit by chance.
+# The raw exports under a project's inputs/ add three more kinds, each
+# hashed under its own prefix and each with its own "distinctive" test
+# (only distinctive values are listed, so a short or round synthetic
+# value never collides by chance; nothing is exempted for appearing in
+# the repo — a collision gets a different synthetic value):
+#   (amounts with cents from inputs/ are listed only from 6 digits up:
+#         an export holds thousands of small ones)
+#   dec:  a number with 3+ decimals after trailing zeros are dropped and
+#         6+ significant digits — prices, FX rates, fractional and coin
+#         quantities (12.34567, .000123456, 1,234.5678); a shorter one  # pii-ok
+#         such as a 4-decimal rate is too common to list
+#   code: a broker reference — a 6+ character letters-and-digits token
+#         with 2+ digits (internal security / option codes, OCC option
+#         symbols with their root, order refs), or a 7+ digit number
+#         that is not a YYYYMMDD date and does not end in 0000;
+#         case-insensitive. Not codes: a word ending in a 2-digit
+#         number (THRU02), month-name dates (20JUN25), an
+#         option series without its root, and public security ids (an
+#         ISIN or CUSIP whose check digit holds)
+#   ts:   a clock time with seconds next to its date (2025-01-02 10:11:12,
+#         20250102;101112, 1/2/2025 10:11:12), seconds not :00 and not
+#         23:59:59 (placeholder and period-end stamps)  # pii-ok
 FIG_PY='
 import hashlib, os, re, secrets, sys
 AMT = re.compile(r"(?<![\d.])(\d{1,3}(?:,\d{3})+\.\d{1,2}|\d{3,}\.\d{1,2})(?![\d])")
@@ -86,6 +111,15 @@ AMT = re.compile(r"(?<![\d.])(\d{1,3}(?:,\d{3})+\.\d{1,2}|\d{3,}\.\d{1,2})(?![\d
 AMT2 = re.compile(r"(?<![\d.])(\d{1,3}(?:,\d{3})+\.\d{2}|\d{3,}\.\d{2})(?![\d])")
 SUFFIXES = (".txt", ".sum", ".json", ".toml", ".tt", ".csv", ".md", "")
 HEAD = "# taxjson private figure list: salted SHA-256 of figures from your own books (scripts/check-pii.sh --collect-amounts)"
+# The inputs/ kinds (see the header above).
+# Both readings of "5,234.5678": one number, or a cell 5 then 234.5678.  # pii-ok
+DEC = re.compile(r"(?<![\w.:])(\d{1,3}(?:,\d{3})+\.\d{3,}|\d*\.\d{3,})(?!\d|\.\d)")
+DEC_CELL = re.compile(r"(?<![\w.:])(\d*\.\d{3,})(?!\d|\.\d)")
+CODE = re.compile(r"(?<![A-Za-z0-9.])([A-Za-z0-9]{6,})(?![A-Za-z0-9]|\.\d)")
+TS = (re.compile(r"(?<!\d)(\d{4})-(\d\d)-(\d\d)(?:[ T;]|,\s*)(\d\d):(\d\d):(\d\d)(?!\d)"),
+      re.compile(r"(?<!\d)(\d{4})(\d\d)(\d\d)(?:[;T]|,\s*)(\d\d):?(\d\d):?(\d\d)(?!\d)"),
+      re.compile(r"(?<![\d/])(\d{1,2})/(\d{1,2})/(\d{4})[ ,]+(\d{1,2}):(\d\d):(\d\d)(?!\d)"))
+DATE8 = re.compile(r"(19|20)\d\d(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])")
 def normalize(tok):
     whole, frac = tok.replace(",", "").split(".")
     return (whole.lstrip("0") or "0") + "." + (frac + "0")[:2]
@@ -94,6 +128,71 @@ def distinctive(v):
             and len(v.replace(".", "")) >= 5)
 def figures(line, strict=False):
     return [normalize(tok) for tok in (AMT2 if strict else AMT).findall(line)]
+def dec_value(tok):
+    whole, frac = tok.replace(",", "").split(".")
+    whole, frac = whole.lstrip("0") or "0", frac.rstrip("0")
+    if len(frac) < 3 or len((whole + frac).lstrip("0")) < 6:
+        return None
+    return "dec:" + whole + "." + frac
+# Not broker references: a date written with a month name (20JUN25,
+# DEC21), an option series without its root (250620C00050000), and a
+# public security id (an ISIN or CUSIP with a valid check digit).
+MONTHTOK = re.compile(r"\d{0,4}(JAN|FEB|MAR|APR|MAY|JUNE?|JULY?|AUG|SEPT?|OCT|NOV|DEC)\d{0,4}")
+OCCTAIL = re.compile(r"\d{6}[CP]\d{8}")
+OCC = re.compile(r"(?<![A-Za-z0-9])([A-Z]{1,5}\d?) {1,5}(\d{6}[CP]\d{8})(?!\d)")
+def _luhn(digits):
+    total = 0
+    for i, c in enumerate(reversed(digits)):
+        d = int(c) * (2 if i % 2 else 1)
+        total += d // 10 + d % 10
+    return total % 10 == 0
+def _isin(t):
+    return (len(t) == 12 and t[:2].isalpha() and t[-1].isdigit()
+            and _luhn("".join(str(int(c, 36)) for c in t)))
+def _cusip(t):
+    if len(t) != 9 or not t[-1].isdigit():
+        return False
+    total = 0
+    for i, c in enumerate(t[:8]):
+        v = int(c, 36) * (2 if i % 2 else 1)
+        total += v // 10 + v % 10
+    return (10 - total % 10) % 10 == int(t[-1])
+def code_value(tok):
+    t = tok.upper()
+    digits = sum(c.isdigit() for c in t)
+    if (digits < 2 or MONTHTOK.fullmatch(t) or OCCTAIL.fullmatch(t)
+            or re.fullmatch(r"[A-Z]+\d\d", t)):      # a word + number: THRU02
+        return None
+    if t.isdigit() and (len(t) < 7 or t.endswith("0000") or len(set(t)) < 3
+                        or (len(t) == 8 and DATE8.fullmatch(t))):
+        return None
+    if _isin(t) or _cusip(t):
+        return None
+    if re.fullmatch(r"\d{8}T\d{6}", t):       # a compact date-time: a ts
+        return None
+    return "code:" + t
+def ts_values(line):
+    out = []
+    for n, rx in enumerate(TS):
+        for m in rx.finditer(line):
+            g = m.groups()
+            if n == 2:
+                g = (g[2], g[0], g[1]) + g[3:]
+            y, a, b, hh, mm, ss = g
+            if ss == "00" or (hh, mm, ss) == ("23", "59", "59"):
+                continue
+            out.append("ts:%s-%02d-%02d %02d:%s:%s" % (y, int(a), int(b), int(hh), mm, ss))
+    return out
+def raw_values(line):
+    """The inputs/ kinds found on a line (prefixed, distinctive only)."""
+    out = [v for v in map(dec_value, DEC.findall(line) + DEC_CELL.findall(line)) if v]
+    out += [v for v in map(code_value, CODE.findall(line)) if v]
+    out += ["code:" + r + t for r, t in OCC.findall(line)]   # IB "ABC   250620C00050000"
+    return out + ts_values(line)
+def values(line, strict=False):
+    """Every listed kind a line can carry: amounts with cents (the
+    original, unprefixed kind) plus the inputs/ kinds."""
+    return [v for v in figures(line, strict) if distinctive(v)] + raw_values(line)
 def digest(salt, v):
     return hashlib.sha256((salt + ":" + v).encode()).hexdigest()
 def load(path):
@@ -125,6 +224,19 @@ def project_files(d):
               if x.endswith((".toml", ".tt"))]
     return sorted(p for p in found if os.path.isfile(p)
                   and os.path.splitext(p)[1] in SUFFIXES)
+def input_files(d):
+    """Every file under inputs/ (the raw broker exports), any extension."""
+    found = []
+    for sub, _dirs, names in os.walk(os.path.join(d, "inputs")):
+        found += [os.path.join(sub, x) for x in names]
+    return sorted(p for p in found if os.path.isfile(p))
+def read_text(p):
+    with open(p, "rb") as f:
+        raw = f.read()
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff") or raw.count(b"\0") > len(raw) // 4:
+        return raw.decode("utf-16", errors="ignore")
+    return raw.decode("utf-8", errors="ignore")
+BINARY = (".pdf", ".xlsx", ".xls", ".xlsm", ".zip", ".gz", ".png", ".jpg", ".jpeg", ".docx", ".ods")
 def collect(path, dirs):
     if os.path.exists(path):
         salt, hashes = load(path)
@@ -139,8 +251,21 @@ def collect(path, dirs):
             with open(p, encoding="utf-8", errors="ignore") as f:
                 for line in f:
                     got.update(v for v in figures(line) if distinctive(v))
+        skipped = 0
+        for p in input_files(d):
+            if p.lower().endswith(BINARY):
+                skipped += 1
+                continue
+            for line in read_text(p).splitlines():
+                # An export holds thousands of small amounts: only 6+
+                # digit ones (1,000.00 and up) are rare enough to list.  # pii-ok
+                got.update(v for v in figures(line)
+                           if distinctive(v) and len(v) >= 7)
+                got.update(raw_values(line))
+        if skipped:
+            print("check-pii: warning: %d binary file(s) under %s/inputs not read (export them as text to list their values)" % (skipped, d), file=sys.stderr)
         if not got:
-            print("check-pii: warning: no figures found under %s (a project folder with reports/?)" % d, file=sys.stderr)
+            print("check-pii: warning: no figures found under %s (a project folder with reports/ or inputs/?)" % d, file=sys.stderr)
         hashes.update(digest(salt, v) for v in got)
     parent = os.path.dirname(os.path.abspath(path))
     os.makedirs(parent, mode=0o700, exist_ok=True)
@@ -155,8 +280,7 @@ def collect(path, dirs):
     print("check-pii: figure list %s: %d figure(s), %d new"
           % (sys.argv[3], len(hashes), len(hashes) - before))
 def hit(salt, hashes, line, strict=False):
-    return any(digest(salt, v) in hashes
-               for v in figures(line, strict) if distinctive(v))
+    return any(digest(salt, v) in hashes for v in values(line, strict))
 def main():
     cmd, path = sys.argv[1], sys.argv[2]
     if cmd == "collect":
