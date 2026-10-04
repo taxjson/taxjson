@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, Optional, Tuple
 
@@ -58,6 +59,7 @@ def data() -> Dict[str, Any]:
     return _DATA
 
 
+@lru_cache(maxsize=None)
 def _list(name: str) -> FrozenSet[str]:
     return frozenset(str(x).upper() for x in data()["lists"][name])
 
@@ -188,11 +190,13 @@ def _venues() -> Dict[str, Dict[str, str]]:
     return data()["venues"]
 
 
+@lru_cache(maxsize=None)
 def known_suffixes() -> FrozenSet[str]:
     """Every listing suffix the books know (TO V CN NE VN US L AX)."""
     return frozenset(_venues())
 
 
+@lru_cache(maxsize=None)
 def canadian_suffixes() -> FrozenSet[str]:
     """The listing suffixes of Canadian exchanges (TO V CN NE VN)."""
     return frozenset(s for s, v in _venues().items()
