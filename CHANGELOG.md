@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.17.0 (2026-10-04)
+
 ### Security (pre-release review)
 
 - **Install lines never name a PyPI package.** taxjson and taxjson-fetch
