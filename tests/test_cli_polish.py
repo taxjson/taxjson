@@ -69,7 +69,7 @@ class TestNoCommandPrintsHelp(unittest.TestCase):
             for args in (["-C", d], ["--dir", d], [f"--dir={d}"]):
                 r = _cli(*args)
                 self.assertEqual(r.returncode, 0, (args, r.stderr))
-                self.assertIn("Read the numbers:", r.stdout)
+                self.assertIn("Summaries:", r.stdout)
 
     def test_usage_errors_unchanged(self):
         r = _cli("-C")
