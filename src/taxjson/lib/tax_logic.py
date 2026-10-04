@@ -160,8 +160,10 @@ PARTITION_RULES = frozenset({
 
 
 def _split_share_roots():
-    from taxjson.lib.income_dating import SPLIT_SHARE_ROOTS
-    return SPLIT_SHARE_ROOTS
+    """The split-share list in force (taxjson/data/markets.toml with the
+    project's ticker.map SPLITSHARE lines)."""
+    from taxjson.lib.markets import split_share_roots
+    return split_share_roots()
 
 
 def _corp_list(s: Dict[str, Any]) -> List[str]:
@@ -464,8 +466,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "events views' windows (each row still shows its pay "
                  "date). Split-share "
                  "corporations say \"Distribution\" too but are "
-                 "corporations (paid date): "
-                 + ", ".join(sorted(_split_share_roots())) + ", any row "
+                 "corporations (paid date): the split-share list — "
+                 + ", ".join(sorted(_split_share_roots())) + " (market "
+                 "data shipped in taxjson/data/markets.toml, extended or "
+                 "overridden by ticker.map `SPLITSHARE ROOT [NO]` lines; "
+                 "the run notes once per issuer when the built-in list "
+                 "decided) — any row "
                  "whose description says \"SPLIT CORP\", and the "
                  "issuers in corporate_distributions"
                  + (f" ({', '.join(_corp_list(s))})" if _corp_list(s)

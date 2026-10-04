@@ -19,8 +19,8 @@ Canada
   (its ISIN country when the export gives one, else a Canadian listing)
   with a printed record date is dated by
   that record date. Split-share corporations say "Distribution" too:
-  ``SPLIT_SHARE_ROOTS`` and ``[settings] corporate_distributions`` keep
-  them on the pay date. Foreign funds: the pay date.
+  the split-share list (lib/markets, ticker.map SPLITSHARE) and
+  ``[settings] corporate_distributions`` keep them on the pay date. Foreign funds: the pay date.
 - [CA-INC-DATE-ROC-TRUST] A Canadian trust's return of capital lowers
   the ACB when payable (s.53(2)(h)): an ADJUST ``roc`` row with a
   record date is moved to it (the engine books it there). With no
@@ -63,30 +63,15 @@ CA_LISTING_SUFFIXES = frozenset({"TO", "V", "CN", "NE", "VN"})
 # by RBC and "DIST ON" by Questrade, but they are corporations' T5
 # dividends (s.82(1): taxed when received) and their return of capital
 # is a PUC reduction (s.53(2)(a): when paid). Matched on the ticker
-# root, every class and preferred series included (SAMPMJ.PR.A.TO, SAMPMJ.TO).
-# A project adds others with [settings] corporate_distributions.
-SPLIT_SHARE_ROOTS: FrozenSet[str] = frozenset({
-    "BK",    # Canadian Banc Corp
-    "DF",    # Dividend 15 Split Corp II
-    "DFN",   # Dividend 15 Split Corp
-    "DGS",   # Dividend Growth Split Corp
-    "ENS",   # E Split Corp
-    "FFN",   # North American Financial 15 Split Corp
-    "FTN",   # Financial 15 Split Corp
-    "GDV",   # Global Dividend Growth Split Corp
-    "LBS",   # Life & Banc Split Corp
-    "LCS",   # Brompton Lifeco Split Corp
-    "LFE",   # Canadian Life Companies Split Corp
-    "PDV",   # Prime Dividend Corp
-    "PIC",   # Premium Income Corp (PIC.A)
-    "PWI",   # Sustainable Power & Infrastructure Split Corp
-    "SBC",   # Brompton Split Banc Corp
-    "SBN",   # S Split Corp
-    "WFS",   # World Financial Split Corp
-    "XMF",   # M Split Corp
-    "XTD",   # TDb Split Corp
-    "YCM",   # Commerce Split Corp
-})
+# root, every class and preferred series included (ZZQ.PR.A.TO, ZZQ.TO).
+# The list is market data, not code: taxjson/data/markets.toml
+# (lib/markets.split_share_roots), extended or overridden by ticker.map
+# SPLITSHARE lines; a project also adds issuers with [settings]
+# corporate_distributions.
+def split_share_roots() -> FrozenSet[str]:
+    from taxjson.lib.markets import split_share_roots as _roots
+    return _roots()
+
 
 # A description that names a split-share corporation ("TDB SPLIT CORP
 # ... DIST ON"): a corporation's payout whatever the list says (audit
@@ -252,7 +237,10 @@ class IncomeRules:
         payout (split-share list or the project's own list, by issuer
         root)."""
         root = listing_root(symbol)
-        return root in SPLIT_SHARE_ROOTS or root in self._corp
+        if root in self._corp:
+            return True
+        from taxjson.lib.markets import is_split_share_root
+        return is_split_share_root(root)
 
     def is_corporate_row(self, row: Any) -> bool:
         """is_corporate, or a description naming a split-share

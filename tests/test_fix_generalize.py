@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from taxjson.lib import markets  # noqa: E402
 from taxjson.lib.ticker_map import read_side_rules  # noqa: E402
+from tax_rules import rule, rule_absent  # noqa: E402
 
 
 class _MapCase(unittest.TestCase):
@@ -156,6 +157,79 @@ class TestTickerMapKeywords(_MapCase):
         self.assertNotIn("ZZENV", markets.usd_stablecoins())
         markets.use_ticker_map(None)
         self.assertIn("ZZENV", markets.usd_stablecoins())
+
+
+# ------------------------------------------------- B1 split-share list
+def _dist(symbol, desc=""):
+    return {"action": "DIVIDEND", "symbol": symbol, "date": "2026-01-15",
+            "currency": "CAD", "net_amount": 10.0, "gross_amount": 10.0,
+            "income_label": "distribution", "record_date": "2025-12-31",
+            "description": desc}
+
+
+class TestSplitShareList(_MapCase):
+    @rule("CA-INC-DATE-TRUST", "CA-INC-DATE-DIV")
+    def test_ticker_map_adds_and_removes_a_split_share_corporation(self):
+        from taxjson.lib.income_dating import IncomeRules
+        self.use_map("SPLITSHARE ZZQ\nSPLITSHARE BK NO\n")
+        rules = IncomeRules("canada")
+        # a corporation: dated when paid
+        self.assertEqual(rules.income_date(_dist("ZZQ.PR.A.TO")),
+                         "2026-01-15")
+        # removed from the built-in list: a trust, dated at record
+        self.assertEqual(rules.income_date(_dist("BK.TO")), "2025-12-31")
+
+    @rule("CA-INC-DATE-TRUST", "CA-INC-DATE-DIV")
+    def test_builtin_list_decision_is_noted_once(self):
+        from taxjson.lib.income_dating import IncomeRules
+        self.no_map()
+        rules = IncomeRules("canada")
+        err = StringIO()
+        with redirect_stderr(err):
+            for _ in range(3):
+                self.assertEqual(rules.income_date(_dist("BK.TO")),
+                                 "2026-01-15")
+        self.assertEqual(err.getvalue().count("SPLITSHARE BK NO"), 1,
+                         err.getvalue())
+
+    @rule("CA-INC-DATE-TRUST")
+    @rule_absent("CA-INC-DATE-TRUST", country="usa")
+    def test_split_share_list_is_canada_only(self):
+        from taxjson.lib.income_dating import IncomeRules
+        self.no_map()
+        err = StringIO()
+        with redirect_stderr(err):
+            us = IncomeRules("usa").income_date(_dist("BK.TO"))
+        # a US project: a foreign payment, dated when paid, and the
+        # Canadian split-share list is never consulted
+        self.assertEqual(us, "2026-01-15")
+        self.assertNotIn("split-share", err.getvalue())
+        self.assertEqual(
+            IncomeRules("canada").income_date(_dist("ZZT.UN.TO")),
+            "2025-12-31")
+
+    @rule("CA-INC-DATE-TRUST")
+    def test_tax_logic_prints_the_list_in_force(self):
+        from taxjson.lib import tax_logic as TL
+        self.use_map("SPLITSHARE ZZQ\nSPLITSHARE BK NO\n")
+        text = TL.render("canada", {})
+        self.assertIn("ZZQ", text)
+        self.assertIn("SPLITSHARE", text)
+        self.assertNotIn(" BK,", text)
+
+    def test_no_split_share_table_left_in_code(self):
+        import taxjson.lib.income_dating as ID
+        self.assertFalse(hasattr(ID, "SPLIT_SHARE_ROOTS"))
+
+
+# ------------------------------------------------- B16 map_ticker
+class TestMapTickerNoCadTarget(unittest.TestCase):
+    def test_listing_is_never_remapped(self):
+        from taxjson.lib.ticker_map import map_ticker
+        self.assertEqual(map_ticker("ZZQ.US"), "ZZQ.US")
+        self.assertEqual(map_ticker("ZZQ.NYSE"), "ZZQ.NYSE")
+        self.assertEqual(map_ticker("ZZQ.17DEC27.4.02.P"),
+                         "ZZQ271217P00004020")
 
 
 if __name__ == "__main__":

@@ -14,6 +14,9 @@
   `STABLE`, `SPLITSHARE`, `INDEXOPT`, `EVENING`, `MULT` and `VENUE` lines,
   and the run prints one note per symbol whenever a built-in entry decided
   an outcome, naming the line that would change it.
+- **Split-share corporations (Canada)** are read from the market-data file
+  and the project's `SPLITSHARE ROOT [NO]` lines instead of a list in the
+  code; `taxjson tax-logic` prints the list in force.
 
 ### Command line
 

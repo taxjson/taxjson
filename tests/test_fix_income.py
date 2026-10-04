@@ -26,7 +26,8 @@ import unittest
 from pathlib import Path
 
 from taxjson.lib import country as C
-from taxjson.lib.income_dating import IncomeRules, SPLIT_SHARE_ROOTS
+from taxjson.lib.income_dating import IncomeRules
+from taxjson.lib.markets import split_share_roots
 from tax_rules import rule, rule_absent
 from tax_rules.dual import cli, cli_both, gains_both, projects_both, tx
 
@@ -376,9 +377,9 @@ class TestTrustDistributionYear(unittest.TestCase):
     def test_split_share_list_is_small_and_documented(self):
         from taxjson.lib import tax_logic as TL
         text = TL.render("canada", {})
-        for root in SPLIT_SHARE_ROOTS:
+        for root in split_share_roots():
             self.assertIn(root, text)
-        self.assertLessEqual(len(SPLIT_SHARE_ROOTS), 20)
+        self.assertLessEqual(len(split_share_roots()), 20)
 
 
 # ------------------------------------------------------------ D8 US RIC
