@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Cut a release: scripts/release.sh vX.Y.Z   (X.Y.Z also accepted)
 #
-# main is the development line; a vX.Y.Z tag is production — the curl
-# installer checks out the newest tag, never main. This script is the
-# only way a tag should be made:
+# main is the development line; a vX.Y.Z tag is a release. Tagging makes
+# the release `latest` and nothing more: new installs take `stable`, which
+# channels.json on main names and only scripts/promote.sh moves
+# (docs/releasing.md). This script is the only way a tag should be made:
 #   1. refuses on a dirty tree or off main;
 #   2. turns the CHANGELOG's "## Unreleased" into "## vX.Y.Z (date)"
 #      (or requires that heading to exist already);
@@ -13,8 +14,10 @@
 #   4. runs the FULL local gate (scripts/ci.sh, fuzzers included);
 #   5. commits, tags (annotated), runs the pre-push PII gate itself, and
 #      pushes main + the tag.
-# Roll back a bad release by tagging the previous good commit as the
-# next patch version — never by moving or deleting a published tag.
+# It never touches channels.json. Roll a bad release back by promoting
+# the previous good one (scripts/promote.sh vX.Y.Z — it asks before
+# moving a channel backwards) — never by moving or deleting a published
+# tag.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 V="${1:?usage: scripts/release.sh vX.Y.Z (or X.Y.Z)}"
@@ -70,7 +73,9 @@ printf 'refs/heads/main %s refs/heads/main %s\nrefs/tags/%s %s refs/tags/%s %s\n
   | scripts/hooks/pre-push origin "$(git remote get-url origin)" \
   || { echo "pre-push PII gate refused — nothing pushed (the commit and tag $TAG are local; fix, then delete the tag and re-run)"; exit 1; }
 git push --quiet origin main "$TAG"
-echo "released $TAG — installers pick it up on their next run"
+STABLE="$(sed -nE 's/.*"stable"[[:space:]]*:[[:space:]]*"(v[^"]+)".*/\1/p' channels.json 2>/dev/null | sed -n 1p || true)"
+echo "released $TAG — it is now 'latest' (installs on --channel latest get it on their next run)."
+echo "stable is still ${STABLE:-unset}; when $TAG has held up: scripts/promote.sh $TAG beta / scripts/promote.sh $TAG"
 # The tag covers both distributions (the installer installs the plugin
 # from the same checkout with --with-fetch). To publish wheels as well:
 #   python -m build && python -m build packages/taxjson-fetch

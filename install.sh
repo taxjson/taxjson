@@ -3,39 +3,73 @@
 #
 #   bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
 #   bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --with-fetch
+#   bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --channel beta
 #
-# What it does: checks git and Python 3.9+, clones the LATEST RELEASE
-# (newest vX.Y.Z tag) into ~/.local/share/taxjson — or fast-forwards an
-# existing install to it — builds a private virtualenv there with the
-# [fx] extra, and links the `taxjson` command (and its short name `tjs`)
-# into ~/.local/bin. The core only: broker auto-fetch (`taxjson fetch` for
-# Questrade / IBKR Flex) is the separate taxjson-fetch package, installed
-# into the same environment with --with-fetch (or TAXJSON_WITH_FETCH=1).
-# Re-running is safe and is how you upgrade. Nothing touches your tax
-# project folders.
+# What it does: checks git and Python 3.9+, clones the release on your
+# CHANNEL into ~/.local/share/taxjson — or moves an existing install to
+# it — builds a private virtualenv there with the [fx] extra, and links
+# the `taxjson` command (and its short name `tjs`) into ~/.local/bin. The
+# core only: broker auto-fetch (`taxjson fetch` for Questrade / IBKR
+# Flex) is the separate taxjson-fetch package, installed into the same
+# environment with --with-fetch (or TAXJSON_WITH_FETCH=1). Re-running is
+# safe and is how you upgrade. Nothing touches your tax project folders.
+#
+# Channels (docs/releasing.md):
+#   stable   the default: the release channels.json on main names
+#   beta     the release channels.json names for testers
+#   latest   the newest release tag (vX.Y.Z), as soon as it is tagged
+#   dev      the main branch, unreleased
+#   vX.Y.Z   exactly that release (a pin — also how you go back)
+# Pick one with --channel NAME or TAXJSON_CHANNEL=NAME. The choice is
+# remembered in ~/.config/taxjson/channel, so re-running the installer
+# upgrades along the same channel. A channel never moves an install
+# backwards; name a version to go back.
 #
 # Knobs (environment variables):
 #   TAXJSON_DIR      install location        (default ~/.local/share/taxjson)
 #   TAXJSON_BIN      where `taxjson` and `tjs` are linked (default ~/.local/bin)
-#   TAXJSON_CHANNEL  release | dev           (dev tracks the main branch)
+#   TAXJSON_CHANNEL  stable | beta | latest | dev | vX.Y.Z  (as --channel)
 #   TAXJSON_EXTRAS   pip extras to install   (default fx; "" for none)
 #   TAXJSON_REPO     git remote              (default the GitHub repo)
 #   TAXJSON_WITH_FETCH  1 = also install taxjson-fetch (same as --with-fetch)
+#   TAXJSON_DRY_RUN  1 = say which release the channel resolves to, change nothing
 set -euo pipefail
 
 DIR="${TAXJSON_DIR:-$HOME/.local/share/taxjson}"
 BIN="${TAXJSON_BIN:-$HOME/.local/bin}"
-CHANNEL="${TAXJSON_CHANNEL:-release}"
 EXTRAS="${TAXJSON_EXTRAS-fx}"
 REPO="${TAXJSON_REPO:-https://github.com/taxjson/taxjson.git}"
 WITH_FETCH="${TAXJSON_WITH_FETCH:-0}"
-for arg in "$@"; do
-  case "$arg" in
+CHANNEL_FILE="$HOME/.config/taxjson/channel"
+USAGE="usage: install.sh [--channel stable|beta|latest|dev|vX.Y.Z] [--with-fetch]
+  --channel   which release to install (default: the remembered one, else stable)
+  --with-fetch  also install taxjson-fetch (Questrade / IBKR Flex auto-fetch)"
+CHANNEL_ARG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
     --with-fetch) WITH_FETCH=1 ;;
-    -h|--help) echo "usage: install.sh [--with-fetch]   (also installs taxjson-fetch: Questrade / IBKR Flex auto-fetch)"; exit 0 ;;
-    *) printf 'unknown option: %s (known: --with-fetch)\n' "$arg" >&2; exit 2 ;;
+    --channel) [ $# -ge 2 ] || { printf '%s\n' "--channel needs a value" "$USAGE" >&2; exit 2; }
+               CHANNEL_ARG="$2"; shift ;;
+    --channel=*) CHANNEL_ARG="${1#--channel=}" ;;
+    -h|--help) printf '%s\n' "$USAGE"; exit 0 ;;
+    *) printf 'unknown option: %s\n%s\n' "$1" "$USAGE" >&2; exit 2 ;;
   esac
+  shift
 done
+# --channel, else TAXJSON_CHANNEL, else what this machine was installed
+# on, else stable.
+CHANNEL="${CHANNEL_ARG:-${TAXJSON_CHANNEL:-}}"
+if [ -z "$CHANNEL" ] && [ -f "$CHANNEL_FILE" ]; then CHANNEL="$(tr -d '[:space:]' < "$CHANNEL_FILE")"; fi
+CHANNEL="${CHANNEL:-stable}"
+case "$CHANNEL" in
+  release) CHANNEL=latest ;;              # its name before channels existed
+  [0-9]*) CHANNEL="v$CHANNEL" ;;          # 0.16.0 = v0.16.0
+esac
+case "$CHANNEL" in
+  stable|beta|latest|dev) ;;
+  *) [[ "$CHANNEL" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+       || { printf 'unknown channel %s — use stable, beta, latest, dev, or a release like v0.16.0\n' "'$CHANNEL'" >&2; exit 2; } ;;
+esac
 OS="$(uname -s)"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
@@ -72,6 +106,54 @@ else
   git clone --quiet "$REPO" "$DIR"
 fi
 DIR="$(cd "$DIR" && pwd -P)"          # canonical: the symlink target must be absolute
+# The newest release: exactly vX.Y.Z (a hand-pushed rc/four-part tag
+# never ships). `sed -n 1p`, not `head -1`: head can close the pipe early
+# and pipefail then fails the script.
+newest() { git -C "$DIR" tag -l 'v[0-9]*' --sort=-v:refname | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sed -n 1p; }
+# What channels.json on main names for a channel (a promote is a one-line
+# commit there, never a new tag).
+named() { { git -C "$DIR" show origin/main:channels.json 2>/dev/null || true; } \
+            | sed -nE "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"(v[^\"]+)\".*/\\1/p" | sed -n 1p; }
+# The newer of two vX.Y.Z.
+vernewer() { printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1; }
+CUR="$(git -C "$DIR" describe --tags --exact-match 2>/dev/null || true)"
+case "$CHANNEL" in
+  dev) TARGET=main ;;
+  latest) TARGET="$(newest)" ;;
+  stable|beta)
+    TARGET="$(named "$CHANNEL")"
+    if [ -z "$TARGET" ]; then
+      echo "   (channels.json names no $CHANNEL release yet — using the newest)"
+      TARGET="$(newest)"
+    fi ;;
+  *) git -C "$DIR" rev-parse -q --verify "refs/tags/$CHANNEL" >/dev/null || die "There is no release $CHANNEL."
+     TARGET="$CHANNEL" ;;
+esac
+[ -n "$TARGET" ] || die "No release tags found in $REPO (--channel dev tracks main)."
+if [ "$TARGET" != main ]; then
+  git -C "$DIR" rev-parse -q --verify "refs/tags/$TARGET" >/dev/null \
+    || die "channels.json names $TARGET for $CHANNEL, but $REPO has no such tag."
+  # Only a release scripts/release.sh made: an annotated tag on main's
+  # history (a lightweight tag, or one on a commit main never had, is
+  # refused). Tags are not signed; this is not a signature check.
+  [ "$(git -C "$DIR" cat-file -t "refs/tags/$TARGET")" = tag ] \
+    || die "$TARGET is not an annotated release tag — refusing to install it."
+  git -C "$DIR" merge-base --is-ancestor "refs/tags/$TARGET^{commit}" origin/main 2>/dev/null \
+    || die "$TARGET is not on the main branch's history — refusing to install it."
+  # A channel never takes an install backwards (this one may run ahead of
+  # it after `taxjson deploy` or a pin); naming a version goes back.
+  case "$CHANNEL" in v*) ;; *)
+    if [[ "$CUR" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "$CUR" != "$TARGET" ] \
+        && [ "$(vernewer "$CUR" "$TARGET")" = "$CUR" ]; then
+      echo "   on $CUR, newer than $CHANNEL ($TARGET) — staying (to go back: --channel $TARGET)"
+      TARGET="$CUR"
+    fi ;;
+  esac
+fi
+if [ "${TAXJSON_DRY_RUN:-0}" = 1 ]; then
+  echo "   channel $CHANNEL → release $TARGET  (dry run: nothing checked out or installed)"
+  exit 0
+fi
 if [ -n "$(git -C "$DIR" status --porcelain --untracked-files=no)" ]; then
   echo
   echo "   These tracked files differ from the checkout:"
@@ -82,22 +164,22 @@ if [ -n "$(git -C "$DIR" status --porcelain --untracked-files=no)" ]; then
   Discard them:  cd $DIR && git checkout -- .
 Then re-run this installer. (Your tax project folders are untouched either way.)"
 fi
-case "$CHANNEL" in
-  release)
-    # Releases are exactly vX.Y.Z: a hand-pushed rc/four-part tag never ships.
-    TARGET="$(git -C "$DIR" tag -l 'v[0-9]*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)"
-    [ -n "$TARGET" ] || die "No release tags found in $REPO (set TAXJSON_CHANNEL=dev to track main)."
-    CUR="$(git -C "$DIR" describe --tags --exact-match 2>/dev/null || echo none)"
-    [ "$CUR" = "$TARGET" ] || git -C "$DIR" checkout --quiet "refs/tags/$TARGET"
-    echo "   release $TARGET"
-    ;;
-  dev)
-    git -C "$DIR" checkout --quiet main
-    git -C "$DIR" pull --ff-only --quiet origin main
-    echo "   dev channel: main @ $(git -C "$DIR" rev-parse --short HEAD)"
-    ;;
-  *) die "TAXJSON_CHANNEL must be 'release' or 'dev' (got '$CHANNEL')." ;;
-esac
+if [ "$TARGET" = main ]; then
+  git -C "$DIR" checkout --quiet main
+  git -C "$DIR" pull --ff-only --quiet origin main
+  echo "   channel dev → main @ $(git -C "$DIR" rev-parse --short HEAD)"
+else
+  [ "$CUR" = "$TARGET" ] || git -C "$DIR" checkout --quiet "refs/tags/$TARGET"
+  echo "   channel $CHANNEL → release $TARGET"
+fi
+# Remembered OUTSIDE the clone (a file inside would be a local change), so
+# re-running upgrades along the same channel. A pinned version is
+# remembered too. `taxjson deploy` keeps the remembered one
+# (TAXJSON_REMEMBER_CHANNEL=0).
+if [ "${TAXJSON_REMEMBER_CHANNEL:-1}" != 0 ]; then
+  mkdir -p "$(dirname "$CHANNEL_FILE")"
+  printf '%s\n' "$CHANNEL" > "$CHANNEL_FILE"
+fi
 
 say "3/4 Python environment"
 [ -x "$DIR/venv/bin/python" ] || "$PY" -m venv "$DIR/venv"
@@ -105,7 +187,7 @@ say "3/4 Python environment"
 if [ -n "$EXTRAS" ]; then
   "$DIR/venv/bin/python" -m pip install --quiet -e "$DIR[$EXTRAS]" \
     || { echo "   WARNING: extras [$EXTRAS] failed to install — falling back to the core package."; \
-         echo "   WARNING: without [fx]: no FX rates before 2017-01-03 (Yahoo fallback) and none at all for a non-CAD base."; \
+         echo "   WARNING: without [fx]: no FX rates before 2007-05-01 or for currencies the Bank of Canada does not publish (the Yahoo Finance fallback), and none at all for a non-CAD base."; \
          "$DIR/venv/bin/python" -m pip install --quiet -e "$DIR"; }
 else
   "$DIR/venv/bin/python" -m pip install --quiet -e "$DIR"
@@ -126,17 +208,31 @@ echo "   $("$DIR/venv/bin/taxjson" --version)"
 
 say "4/4 Command → $BIN/taxjson"
 mkdir -p "$BIN"
-if [ -e "$BIN/taxjson" ] && [ ! -L "$BIN/taxjson" ]; then
-  die "$BIN/taxjson exists and is not a symlink (another install, e.g. pipx?). Move it aside or set TAXJSON_BIN."
+# Replace a link only when it is ours (it points into $DIR, or nowhere
+# yet): another program's `taxjson` / `tjs` — a file, or a symlink to
+# something else — is left alone with a note.
+ours() {   # ours LINK: true when LINK may be (re)pointed at this install
+  [ -e "$1" ] || [ -L "$1" ] || return 0
+  [ -L "$1" ] || return 1
+  local t; t="$(readlink "$1")"
+  case "$t" in "$DIR"/*) return 0 ;; esac
+  t="$(readlink -f "$1" 2>/dev/null || true)"
+  case "$t" in "$DIR"/*) return 0 ;; esac
+  return 1
+}
+if ours "$BIN/taxjson"; then
+  ln -sfn "$DIR/venv/bin/taxjson" "$BIN/taxjson"
+else
+  echo "   NOTE: $BIN/taxjson is another program's ($( [ -L "$BIN/taxjson" ] && echo "a link to $(readlink "$BIN/taxjson")" || echo "not a symlink")) — left alone."
+  echo "         Run this install as $DIR/venv/bin/taxjson, move that one aside and re-run, or set TAXJSON_BIN."
 fi
-ln -sfn "$DIR/venv/bin/taxjson" "$BIN/taxjson"
 # `tjs`: the same program under a shorter name (releases that have it).
 if [ -x "$DIR/venv/bin/tjs" ]; then
-  if [ -e "$BIN/tjs" ] && [ ! -L "$BIN/tjs" ]; then
-    echo "   NOTE: $BIN/tjs exists and is not a symlink — left alone; use \`taxjson\`."
-  else
+  if ours "$BIN/tjs"; then
     ln -sfn "$DIR/venv/bin/tjs" "$BIN/tjs"
     echo "   also linked $BIN/tjs (the same program, shorter)"
+  else
+    echo "   NOTE: $BIN/tjs is another program's — left alone; use \`taxjson\` (or $DIR/venv/bin/tjs)."
   fi
 fi
 case ":$PATH:" in
@@ -154,7 +250,8 @@ cat <<DONE
    then drop your broker CSV exports into inputs/<account>/ and run
      taxjson run
    Docs: https://taxjson.com  ·  https://github.com/taxjson/taxjson#readme
-   Upgrade later by re-running this installer.
+   Upgrade later by re-running this installer: it follows the $CHANNEL channel
+   (--channel stable|beta|latest|dev|vX.Y.Z to switch).
 DONE
 if [ "$WITH_FETCH" != 1 ]; then
   echo "   Questrade / IBKR auto-fetch: re-run with --with-fetch (installs taxjson-fetch)."
