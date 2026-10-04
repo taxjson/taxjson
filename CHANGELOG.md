@@ -112,8 +112,9 @@
 - `taxjson` with no command (or only `-C DIR`) prints the help page and
   exits 0; it was a usage error (exit 2).
 - The help page groups the commands by what they are for (Set up, Build
-  the books, Read the numbers, Before you trade, Before you file, Explain
-  and check, Tools) instead of one flat list; the README's command table
+  the books, Summaries, Positions, Row listings, Totals by type, Before
+  you trade, Before you file, Explain and check, Tools; alphabetical within
+  the four reading groups) instead of one flat list; the README's command table
   uses the same groups. Inside a project the page leaves out the other
   country's commands and says how many it hid; `taxjson help --all` lists
   every command, marking the one-country ones (Canada) / (USA), as the
