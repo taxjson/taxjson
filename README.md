@@ -374,7 +374,6 @@ time (`work/.run.lock`); a second one refuses.
 - `fees.rpt` — trading fees by brokerage, with comparison stats
 - `ccd.rpt`, `leaps.rpt` — cross-account covered-call / long-option views (`leaps.rpt` lists every long option close of any tenor; `taxjson leaps-sum` is the LEAPS-only figure; unknown-cost rows (no purchase in your files) are excluded and counted, as in `ccd-sum`)
 - `<account>_holdings.toml` — machine-readable positions (native + base-currency cost; a cost adjustment paid in another currency than its listing — a USD return of capital on a `.TO` stock — is restated in the listing's currency at the row's date for the native view, with a note, and the per-position acquisition/sell `trades` history). `cost_per_share` is `total_cost / quantity`, so for an option it is per contract; divide by `contract_multiplier` for the per-share price the `trades` show (a futures option carries the future's `contract_multiplier` its broker rows declared — IB's instrument list: CL 1000, ES 50 — and none when no row declared it, never the equity 100; a plain future is `asset_type = "future"`)
-- `exports/` — SeekingAlpha / FastGraph watchlist CSVs
 
 When the year is over, [`docs/filing.md`](./docs/filing.md) is the
 checklist that takes a project from "last export dropped in" to a filed
@@ -546,7 +545,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `t1135.map`, `sector.map` | Per-symbol overrides: T1135 domicile, timeline sectors. |
 | `missing_history.json` | Sales with no purchase in your files (bought before the data; auto-applied — the old name `phantoms.json` is still read, with a NOTE to rename it). |
 | `work/` | Intermediate per-stage artifacts and price/FX caches. Rebuildable; gitignored. |
-| `reports/` | Everything you read: `<account>.sum`, `wash_radar_*`, `fees.rpt`, holdings, `exports/`. Rebuildable. |
+| `reports/` | Everything you read: `<account>.sum`, `wash_radar_*`, `fees.rpt`, holdings. Rebuildable. |
 | `filed/<year>.json` | Filed-year locks from `taxjson close-year` — **commit these**. |
 
 ### Subcommands

@@ -346,8 +346,11 @@ class TestBomUserFiles(_Built):
         h = root / "h.toml"
         h.write_bytes(b"\xef\xbb\xbf" + b'[[holding]]\nsymbol = "ABC.TO"\n'
                       b'quantity = 60\ncurrency = "CAD"\n')
-        r = _tool("taxjson_export", str(h), cwd=root, home=self.home)
+        r = _tool("taxjson_export", "--report", str(h), cwd=root,
+                  home=self.home)
         self.assertNotIn("not a readable TOML", r.stderr)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("ABC.TO", r.stdout)
 
     def test_phantoms_with_bom(self):
         from taxjson.lib.missing_history import load_missing_history

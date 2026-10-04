@@ -432,10 +432,12 @@ class TestMigrate(unittest.TestCase):
             self.assertNotIn("ZZQ.TO", syms)
             self.assertTrue(any(str(t.get("id", "")).startswith("DIST-")
                                 for t in base["transactions"]))
-            for ex in ("AAll_SA.csv", "AAll_FG.csv"):
-                self.assertEqual(
-                    (old / "reports" / "exports" / ex).read_text(),
-                    (new / "reports" / "exports" / ex).read_text(), ex)
+            def _holdings(root):
+                return [ln for ln in (root / "reports" /
+                                      "margin_holdings.toml")
+                        .read_text().splitlines()
+                        if not ln.startswith("generated_at")]
+            self.assertEqual(_holdings(old), _holdings(new))
             for args in (("divs-sum", "--json"), ("estimate", "--json"),
                          ("carryover", "--json"), ("amt", "--json"),
                          ("sum", "--json")):

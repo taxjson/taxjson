@@ -9,7 +9,8 @@
 - An old tv_exchange.map no longer stops the project (nothing in it is
   read any more); `taxjson migrate` renames it to
   tv_exchange.map.migrated without converting it.
-- Seeking Alpha / FastGraph / --report / --holdings-toml are unchanged.
+- --report / --holdings-toml are unchanged. (The Seeking Alpha and
+  FastGraph exports were removed later: test_fix_noexports.)
 
 Synthetic data only.
 """
@@ -71,28 +72,12 @@ def _gains(d: Path) -> Path:
 
 class TestExportRemoved(unittest.TestCase):
 
-    def test_run_matrix_has_no_tradingview_entry(self):
-        from taxjson.bin.taxjson_run import _EXPORT_MATRIX
-        names = [n for n, _f in _EXPORT_MATRIX]
-        self.assertFalse([n for n in names if n.endswith("_TV.txt")], names)
-        self.assertFalse([f for _n, fl in _EXPORT_MATRIX for f in fl
-                          if "tradingview" in f])
-        # Seeking Alpha and FastGraph stay exactly as they were.
-        self.assertEqual(
-            names,
-            ["AAll_SA.csv", "ALongUSD_SA.csv", "ALongCAD_SA.csv",
-             "AOptionsUSD_SA.csv", "AOptionsCAD_SA.csv",
-             "AOptionsShortUSD_SA.csv", "AOptionsShortCAD_SA.csv",
-             "AOptionsLongUSD_SA.csv", "AOptionsLongCAD_SA.csv",
-             "AAll_FG.csv", "ALong_FG.csv", "AOptionsShort_FG.csv",
-             "AOptionsLong_FG.csv"])
-
     def test_tradingview_flags_are_a_clear_error(self):
         with tempfile.TemporaryDirectory() as td:
             g = _gains(Path(td))
             for args in (("--tradingview", g),
-                         ("--seekingalpha", "--tv-map", Path(td) / "m", g),
-                         ("--tv-map=x", "--fastgraph", g)):
+                         ("--report", "--tv-map", Path(td) / "m", g),
+                         ("--tv-map=x", "--holdings-toml", g)):
                 with self.subTest(args=args):
                     r = _export(*args)
                     self.assertEqual(r.returncode, 2, r.stderr)
@@ -101,23 +86,12 @@ class TestExportRemoved(unittest.TestCase):
                     self.assertNotIn("Traceback", r.stderr)
                     self.assertEqual(r.stdout, "")
 
-    def test_other_formats_unchanged(self):
-        with tempfile.TemporaryDirectory() as td:
-            g = _gains(Path(td))
-            sa = _export("--seekingalpha", g)
-            fg = _export("--fastgraph", g)
-        self.assertEqual((sa.returncode, sa.stdout.strip()),
-                         (0, "ABC:CA, XYZ"))
-        self.assertEqual((fg.returncode, fg.stdout.strip()),
-                         (0, "ABC:CA, XYZ:US"))
-
-    def test_stage_exports_removes_stale_tradingview_files(self):
+    def test_run_sweeps_stale_tradingview_files(self):
         from taxjson.bin import taxjson_run
         import contextlib
         import io
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            g = _gains(root)
             ex = root / "reports" / "exports"
             ex.mkdir(parents=True)
             for n in ("AAll_TV.txt", "ALong_TV.txt",
@@ -126,13 +100,10 @@ class TestExportRemoved(unittest.TestCase):
             (ex / "my_notes.txt").write_text("mine\n")
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                taxjson_run.stage_exports([g], root / "reports")
+                taxjson_run._sweep_retired_exports(root / "reports")
             left = sorted(p.name for p in ex.iterdir())
-        self.assertFalse([n for n in left if n.endswith("_TV.txt")], left)
-        self.assertIn("my_notes.txt", left)
-        self.assertIn("AAll_SA.csv", left)
-        self.assertIn("AAll_FG.csv", left)
-        self.assertIn("removed stale AAll_TV.txt", out.getvalue())
+        self.assertEqual(left, ["my_notes.txt"])
+        self.assertIn("removed 4 old watchlist file(s)", out.getvalue())
 
 
 class TestTickerMapTradingViewLines(unittest.TestCase):
@@ -169,15 +140,13 @@ class TestTickerMapTradingViewLines(unittest.TestCase):
                 "TRADINGVIEW XAW.TO TSX\nTRADINGVIEW ZZZ.US NYSE\n")
             r = cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-3000:])
-            ex = sorted(p.name for p in
-                        (root / "reports" / "exports").iterdir())
+            ex = (root / "reports" / "exports").exists()
         err = r.stdout + r.stderr
         self.assertEqual(err.count(_NOTE), 1, err[-3000:])
         self.assertIn("ticker.map:1", err)
         self.assertIn("ticker.map:2", err)
         self.assertIn("delete these lines", err)
-        self.assertFalse([n for n in ex if n.endswith("_TV.txt")], ex)
-        self.assertIn("AAll_SA.csv", ex)
+        self.assertFalse(ex)
 
     def test_run_without_tradingview_lines_says_nothing(self):
         with tempfile.TemporaryDirectory() as td:

@@ -61,6 +61,17 @@
 
 ### Removed
 
+- The remaining watchlist exports are gone: `taxjson-export
+  --seekingalpha` and `--fastgraph` (asking for either is now a clear
+  error naming the removal) and `taxjson run`'s exports stage with them
+  (its thirteen `reports/exports/*_SA.csv` / `*_FG.csv` files and the
+  "==> exports" step). A full run removes the `*_SA.csv`, `*_FG.csv` and
+  `*_TV.txt` files an earlier run left in `reports/exports/`, and the
+  folder once it is empty, in one line; a file of your own there is
+  kept. `taxjson-export` now needs `--report` or `--holdings-toml` (with
+  neither it used to print a bare ticker list). The holdings TOMLs,
+  `--report`, `--holdings-toml` and ticker.map `QUOTE` lines are
+  unchanged.
 - The TradingView watchlist export is gone: `taxjson-export
   --tradingview` and `--tv-map` (asking for either is now a clear error
   naming the removal) and the four `reports/exports/*_TV.txt` files of
@@ -69,8 +80,7 @@
   NOTE per run asking you to delete it (never an error). A leftover
   `tv_exchange.map` stops nothing (it is ignored, with a NOTE);
   `taxjson migrate` renames it to `tv_exchange.map.migrated` without
-  converting it. The Seeking Alpha (`*_SA.csv`) and FastGraph
-  (`*_FG.csv`) exports, `--report` and `--holdings-toml` are unchanged.
+  converting it.
 - The local web UI is gone: `taxjson serve` (and its `--host`, `--port`
   and `--token` flags), the `src/taxjson/web` package and the `[web]`
   extra (FastAPI, Uvicorn, Jinja2, python-multipart; the `[dev]` extra no

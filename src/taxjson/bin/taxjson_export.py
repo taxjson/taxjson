@@ -2,8 +2,9 @@
 """
 taxjson_export.py
 
-Export holdings to various platform formats, or as a plain-text /
-TOML holdings report.
+Export holdings as a plain-text report (--report) or a TOML holdings
+snapshot (--holdings-toml). The watchlist exports (Seeking Alpha,
+FastGraph, TradingView) were removed.
 
 Input may be taxjson_gains.py JSON (an `inventory` section) or a
 taxjson holdings TOML snapshot (a `.toml` file of `[[holding]]`
@@ -75,7 +76,6 @@ from taxjson.lib.tomlcompat import tomllib
 
 from taxjson.lib.ticker_map import (
     is_option_ticker, is_future_ticker, get_base_ticker_info,
-    format_ticker_for_platform,
 )
 from taxjson.bin.taxjson_ticker_map import load_map_file
 
@@ -130,18 +130,6 @@ def _is_dust(qty: float, total_cost: float, threshold: float) -> bool:
 
 
 _DUST_COST = 1.0
-
-
-def process_data_platform(data, args, seen, results):
-    """Existing behavior: emit platform-formatted ticker strings."""
-    inventory = data.get("inventory", [])
-    for item in inventory:
-        if not _passes_filters(item, args):
-            continue
-        formatted = format_ticker_for_platform(item.get("symbol"), args.platform)
-        if formatted and formatted not in seen:
-            results.append(formatted)
-            seen.add(formatted)
 
 
 def _apply_transfer_evidence(agg: Dict[str, Dict[str, Any]],
@@ -839,8 +827,7 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any],
     inventory = []
     for i, h in enumerate(holdings, start=1):
         # A quantity 'abc' was a float() traceback in --report and
-        # --holdings-toml and exported silently in --seekingalpha /
-        # --fastgraph (A2-1441): refused here, naming the row.
+        # --holdings-toml (A2-1441): refused here, naming the row.
         sym = h.get("symbol")
         if not isinstance(sym, str) or not sym.strip():
             _die(f"{path}: [[holding]] {i}: symbol is {sym!r}, not a "
@@ -866,11 +853,15 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any],
 
 # Options of removed exports: {option: what to say}. Refused by name
 # (exit 2) before argparse, which would only say "unrecognized".
+_LEFT = "--report and --holdings-toml remain"
 _REMOVED_OPTIONS = {
-    "--tradingview": "the TradingView watchlist export was removed — use "
-                     "--seekingalpha or --fastgraph",
+    "--tradingview": f"the TradingView watchlist export was removed — "
+                     f"{_LEFT}",
     "--tv-map": "the TradingView watchlist export (and its --tv-map) was "
                 "removed",
+    "--seekingalpha": f"the Seeking Alpha watchlist export was removed — "
+                      f"{_LEFT}",
+    "--fastgraph": f"the FastGraph watchlist export was removed — {_LEFT}",
 }
 
 
@@ -886,7 +877,8 @@ def _refuse_removed_options(argv) -> None:
 @guard_main("taxjson-export")
 def main():
     parser = argparse.ArgumentParser(
-        description="Export holdings to various formats or as a text report.",
+        description="Export holdings as a plain-text report (--report) or "
+                    "a TOML snapshot (--holdings-toml).",
     )
     parser.add_argument(
         "--transfer-evidence", action="append", default=[],
@@ -902,10 +894,9 @@ def main():
              "snapshots (.toml, detected by extension). Default: stdin (JSON).",
     )
 
-    # Output mode (mutually exclusive)
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument("--seekingalpha", action="store_const", dest="platform", const="seekingalpha")
-    group.add_argument("--fastgraph", action="store_const", dest="platform", const="fastgraph")
+    # Output mode (one is required: with none the tool used to print a
+    # bare ticker list, the removed watchlist exports' path).
+    group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "--report", action="store_const", dest="platform", const="report",
         help="Output a plain-text holdings table: Ticker, Qty, Cost/Share, Total Cost.",
@@ -989,8 +980,6 @@ def main():
     _refuse_removed_options(sys.argv[1:])
     args = parser.parse_args()
 
-    seen = set()
-    results: List[str] = []
     agg: Dict[str, Dict[str, Any]] = {}
 
     # The holdings aggregation applies JOURNAL renames — they net
@@ -1005,10 +994,7 @@ def main():
         holdings_map, holdings_drops = {}, set()
 
     def dispatch(data):
-        if args.platform in ("report", "holdings_toml"):
-            process_data_report(data, args, agg, holdings_map, holdings_drops)
-        else:
-            process_data_platform(data, args, seen, results)
+        process_data_report(data, args, agg, holdings_map, holdings_drops)
 
     # Every named input must load: a missing, truncated or wrong-shape
     # file used to print one stderr line and carry on, so the tool wrote
@@ -1053,35 +1039,27 @@ def main():
             print(line)
         return
 
-    if args.platform == "holdings_toml":
-        # Base-currency companion inventory (optional). Aggregated with the
-        # same JOURNAL/DELETE map as the native holdings so symbol keys line
-        # up; values are in the base currency for downstream gain/loss checks.
-        base_agg: Dict[str, Dict[str, Any]] = {}
-        for bp in args.base_gains:
-            process_data_report(_read_rows_doc(bp, require_key="inventory"),
-                                args, base_agg, holdings_map, holdings_drops)
-        # Per-symbol acquisition/sell events (optional), in native currency,
-        # from the pre-gains transaction file(s). Mapped/dropped the same way
-        # as the holdings so events attach to the right (netted) symbol key.
-        trades_by_symbol = (
-            _load_trade_events(args.trades, holdings_map, holdings_drops)
-            if args.trades else None)
-        # Evidence-driven depot flips (see _apply_transfer_evidence):
-        # applied to BOTH inventories so symbol keys stay aligned.
-        _moves = _apply_transfer_evidence(
-            agg, args.transfer_evidence, _tmap)
-        _replay_moves_on_base(base_agg, _moves, _tmap)
-        print("\n".join(render_holdings_toml(agg, args, base_agg,
-                                             trades_by_symbol)))
-        return
-
-    if not results:
-        return
-
-    results.sort()
-    # SeekingAlpha & FastGraph: comma-joined on one line
-    print(", ".join(results))
+    # --holdings-toml.
+    # Base-currency companion inventory (optional). Aggregated with the
+    # same JOURNAL/DELETE map as the native holdings so symbol keys line
+    # up; values are in the base currency for downstream gain/loss checks.
+    base_agg: Dict[str, Dict[str, Any]] = {}
+    for bp in args.base_gains:
+        process_data_report(_read_rows_doc(bp, require_key="inventory"),
+                            args, base_agg, holdings_map, holdings_drops)
+    # Per-symbol acquisition/sell events (optional), in native currency,
+    # from the pre-gains transaction file(s). Mapped/dropped the same way
+    # as the holdings so events attach to the right (netted) symbol key.
+    trades_by_symbol = (
+        _load_trade_events(args.trades, holdings_map, holdings_drops)
+        if args.trades else None)
+    # Evidence-driven depot flips (see _apply_transfer_evidence):
+    # applied to BOTH inventories so symbol keys stay aligned.
+    _moves = _apply_transfer_evidence(
+        agg, args.transfer_evidence, _tmap)
+    _replay_moves_on_base(base_agg, _moves, _tmap)
+    print("\n".join(render_holdings_toml(agg, args, base_agg,
+                                         trades_by_symbol)))
 
 
 if __name__ == "__main__":

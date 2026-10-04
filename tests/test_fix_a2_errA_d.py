@@ -332,7 +332,7 @@ class TestExport(_Tmp):
                      "currency": "x"},
                     {"symbol": 5, "qty": 1, "total_cost": 1}):
             g.write_text(json.dumps({"transactions": [], "inventory": [inv]}))
-            for mode in ("--report", "--seekingalpha", "--holdings-toml"):
+            for mode in ("--report", "--holdings-toml"):
                 r = export(mode, str(g))
                 no_tb(self, r)
                 self.assertEqual(r.returncode, 2, (mode, r.stderr))
@@ -345,7 +345,7 @@ class TestExport(_Tmp):
             h.write_text('[meta]\nschema_version = 1\n[[holding]]\n'
                          'symbol = "XEI.TO"\n' + bad +
                          '\ncurrency = "CAD"\n')
-            for mode in ("--report", "--seekingalpha", "--fastgraph"):
+            for mode in ("--report", "--holdings-toml"):
                 r = export(mode, str(h))
                 no_tb(self, r)
                 self.assertEqual(r.returncode, 2, (mode, r.stderr))

@@ -133,9 +133,9 @@ the open steps one at a time; `--quick` skips the slow detectors.
 
 ## 5. File and lock
 
-- [ ] Enter the figures (or file the T1-ADJ). Keep `reports/` and
-      `reports/exports/` as the working papers — the CRA can ask for the
-      ACB computation years later.
+- [ ] Enter the figures (or file the T1-ADJ). Keep `reports/` as the
+      working papers — the CRA can ask for the ACB computation years
+      later.
 - [ ] `taxjson close-year` **immediately after filing** (`--force` when
       re-filing). The lock is what `check-filed`, `option-boundary` and
       every later `run` use to detect drift, and what makes next year's

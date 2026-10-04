@@ -4211,53 +4211,40 @@ def _blend_conservation_gaps(blended_doc: Dict[str, Any],
     return out
 
 
-_EXPORT_MATRIX: Tuple[Tuple[str, List[str]], ...] = (
-    ("AAll_SA.csv",             ["--seekingalpha"]),
-    ("ALongUSD_SA.csv",         ["--seekingalpha", "--no-options", "--no-cad"]),
-    ("ALongCAD_SA.csv",         ["--seekingalpha", "--no-options", "--no-usd"]),
-    ("AOptionsUSD_SA.csv",      ["--seekingalpha", "--no-equities", "--no-cad"]),
-    ("AOptionsCAD_SA.csv",      ["--seekingalpha", "--no-equities", "--no-usd"]),
-    ("AOptionsShortUSD_SA.csv", ["--seekingalpha", "--no-equities", "--no-cad", "--short"]),
-    ("AOptionsShortCAD_SA.csv", ["--seekingalpha", "--no-equities", "--no-usd", "--short"]),
-    ("AOptionsLongUSD_SA.csv",  ["--seekingalpha", "--no-equities", "--no-cad", "--long"]),
-    ("AOptionsLongCAD_SA.csv",  ["--seekingalpha", "--no-equities", "--no-usd", "--long"]),
-    ("AAll_FG.csv",             ["--fastgraph"]),
-    ("ALong_FG.csv",            ["--fastgraph", "--no-options"]),
-    ("AOptionsShort_FG.csv",    ["--fastgraph", "--no-equities", "--short"]),
-    ("AOptionsLong_FG.csv",     ["--fastgraph", "--no-equities", "--long"]),
-)
-
-# Exports an earlier version wrote and this one no longer does: an
-# outdated copy left in reports/exports/ would read as current, so each
-# run removes it. {glob: why}.
-_RETIRED_EXPORTS: Tuple[Tuple[str, str], ...] = (
-    ("*_TV.txt", "the TradingView export was removed"),
-)
+# The watchlist exports (Seeking Alpha *_SA.csv, FastGraph *_FG.csv,
+# TradingView *_TV.txt) an earlier version wrote to reports/exports/ and
+# this one no longer does: an outdated copy would read as current, so a
+# full run removes them, and the folder once nothing else is in it.
+_RETIRED_EXPORTS: Tuple[str, ...] = ("*_SA.csv", "*_FG.csv", "*_TV.txt")
 
 
-def _sweep_retired_exports(exports_dir: Path) -> None:
-    """Remove the retired exports (_RETIRED_EXPORTS) an earlier run left
-    in reports/exports/, naming each."""
-    if not exports_dir.is_dir():
+def _sweep_retired_exports(reports_dir: Path) -> None:
+    """Remove the retired watchlist exports (_RETIRED_EXPORTS) an earlier
+    run left in reports/exports/, then the folder if that empties it — in
+    one line. A file of the user's own there (another name) is kept, and
+    so is the folder."""
+    exports_dir = reports_dir / "exports"
+    if not exports_dir.is_dir() or exports_dir.is_symlink():
         return
-    for pattern, why in _RETIRED_EXPORTS:
+    gone = 0
+    for pattern in _RETIRED_EXPORTS:
         for p in sorted(exports_dir.glob(pattern)):
             if p.is_file() or p.is_symlink():
                 p.unlink()
-                print(f"  removed stale {p.name} ({why})")
-
-
-def stage_exports(equity_gains: List[Path], reports_dir: Path) -> None:
-    exports_dir = reports_dir / "exports"
-    _sweep_retired_exports(exports_dir)
-    if not equity_gains:
+                gone += 1
+    try:
+        exports_dir.rmdir()
+        removed_dir = True
+    except OSError:          # not empty: the user's own files stay
+        removed_dir = False
+    if not gone and not removed_dir:
         return
-    print("==> exports")
-    files = [str(p) for p in equity_gains]
-    for fname, flags in _EXPORT_MATRIX:
-        run_to_file(_cmd("taxjson-export") + flags + files, exports_dir / fname,
-                    capture_diag=False)
-    print(f"  → {exports_dir}/")
+    what = (f"{gone} old watchlist file(s) in "
+            f"{reports_dir.name}/exports/")
+    if removed_dir:
+        what += " and the folder"
+    print(f"  removed {what} (the Seeking Alpha / FastGraph / TradingView "
+          f"exports were removed)")
 
 
 def _duplicate_input_files(inputs_dir: Path,
@@ -5245,8 +5232,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         _agg_path.unlink(missing_ok=True)
 
     if not args.account:
-        equity_gains = [o["gains"] for _, o, is_crypto in taxable_outputs if not is_crypto]
-        stage_exports(equity_gains, reports_dir)
+        _sweep_retired_exports(reports_dir)
 
         all_gains = ([o["gains"] for _, o in sheltered_outputs] +
                      [_wash_preferred_gains(o["gains"])
@@ -5417,9 +5403,9 @@ def cmd_run(args: argparse.Namespace) -> None:
             print(f"  holdings sanity skipped: {_e}", file=sys.stderr)
     if args.account:
         # A single-account run can't do cross-account wash detection or the
-        # combined exports/cross reports — those are SKIPPED (previously they
+        # combined cross-account reports — those are SKIPPED (previously they
         # ran on just this account's data and silently OVERWROTE the combined
-        # exports/ccd/leaps/crosslistings with one-account truncations).
+        # ccd/leaps/crosslistings with one-account truncations).
         # `<account>_wash.sum` and the combined reports keep whatever the
         # last FULL run wrote.
         # Canada's rule is the superficial-loss rule (audit A2-1360).
@@ -5427,7 +5413,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                    else "superficial-loss")
         print(
             f"\n  ! Single-account run ({args.account}): cross-account "
-            f"{_rule_n} detection and the combined exports/cross reports "
+            f"{_rule_n} detection and the combined cross-account reports "
             f"were skipped — "
             f"they keep the last full run's contents. Run `taxjson run` "
             f"with no --account before filing.",

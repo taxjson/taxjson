@@ -36,31 +36,6 @@ def get_base_ticker_info(symbol: str):
     
     return full_ticker, ext
 
-# The Canadian venue suffixes: a listing on any of them is Canadian.
-_CA_VENUES = frozenset({'TO', 'V', 'CN', 'NE'})
-
-
-def format_ticker_for_platform(symbol: str, platform: str) -> str:
-    """Formats a ticker for a specific platform (SeekingAlpha, FastGraph)."""
-    base, ext = get_base_ticker_info(symbol)
-    if not ext:
-        return base
-    # Every Canadian venue is a Canadian listing: .V/.CN/.NE used to fall
-    # through to the US branch (S078-03). An unknown foreign suffix keeps
-    # its own spelling rather than becoming a US ticker.
-    canadian = ext in _CA_VENUES
-
-    if platform == 'seekingalpha':
-        if canadian: return f"{base}:CA"
-        if ext == 'US': return base
-        return f"{base}.{ext}"
-    elif platform == 'fastgraph':
-        if canadian: return f"{base}:CA"
-        if ext == 'US': return f"{base}:US"
-        return f"{base}.{ext}"
-    
-    return f"{base}.{ext}"
-
 def get_option_type(symbol: str) -> str:
     """Returns 'C' or 'P' from an OCC-style option ticker."""
     match = re.search(r'\d{6}([CP])\d+', symbol, re.IGNORECASE)
