@@ -42,8 +42,8 @@ pre.term .g { color:#8fd3bd } pre.term .w { color:#f0c674 } pre.term .d { color:
 .dark .flow .arr { color:#8fd3bd }
 .small { font-size:11pt; color:#4f5a55 } .dark .small { color:#a9b5af }
 ul { padding-left:18pt; margin:0 }
-.cmds { gap:10pt } .cmds .card { padding:11pt 12pt }
-.cmds h3 { font-size:13.5pt; white-space:nowrap } .cmds ul { padding-left:11pt } .cmds li { font-size:11.5pt; margin:0 0 4pt }
+.cmds { gap:9pt; margin-top:0 } .cmds + .cmds { margin-top:9pt } .cmds .card { padding:8pt 10pt }
+.cmds h3 { font-size:12.5pt; white-space:nowrap; margin-bottom:3pt } .cmds ul { padding-left:10pt } .cmds li { font-size:10.5pt; margin:0 0 2pt; line-height:1.3 }
 </style></head><body>
 
 <!-- 1 -->
@@ -139,13 +139,20 @@ ul { padding-left:18pt; margin:0 }
   <p class="eyebrow">Commands</p>
   <h2>One pipeline, a few dozen views on it</h2>
   <div class="row cmds">
-    <div class="card"><h3>Build the books</h3><ul><li><code>init</code> a new project</li><li><code>migrate</code> an older one</li><li><code>fetch</code> from your broker (plugin)</li><li><code>run</code> the pipeline + broker check</li><li><code>elect</code> corporate actions</li></ul></div>
-    <div class="card"><h3>Read the numbers</h3><ul><li><code>sum</code> the year, by form line</li><li><code>estimate</code> / <code>amt</code> the tax</li><li><code>stats</code> wins and losses</li><li><code>list</code> / <code>shares</code> positions</li><li><code>events</code> / <code>trades</code> rows</li></ul></div>
-    <div class="card"><h3>Before you trade</h3><ul><li><code>wash-radar</code> open windows</li><li><code>buy-check</code> / <code>sell-check</code></li><li><code>harvest</code> losses to take</li><li><code>scan</code> tax-efficiency lint</li></ul></div>
-    <div class="card"><h3>Before you file</h3><ul><li><code>checklist</code> every step</li><li><code>form-export</code> Schedule 3</li><li><code>reconcile-slips</code> T5008</li><li><code>t1135</code> / <code>carryover</code></li><li><code>close-year</code> / <code>handoff</code></li></ul></div>
-    <div class="card"><h3>Explain</h3><ul><li><code>audit</code> every gain</li><li><code>tax-logic</code> every rule</li><li><code>renames</code> dated events</li><li><code>sanity</code> vs the broker</li><li><code>edge-cases</code> year ends</li></ul></div>
+    <div class="card"><h3>Set up</h3><ul><li><code>init</code> a project</li><li><code>migrate</code> an old one</li><li><code>fetch</code> (plugin)</li><li><code>elect</code> elections</li></ul></div>
+    <div class="card"><h3>Build the books</h3><ul><li><code>run</code> the pipeline</li><li><code>crypto-sends</code></li><li><code>find-missing-history</code></li></ul></div>
+    <div class="card"><h3>Summaries</h3><ul><li><code>sum</code> by form line</li><li><code>estimate</code> / <code>amt</code></li><li><code>stats</code> / <code>instalments</code></li><li><code>fx-cash</code></li></ul></div>
+    <div class="card"><h3>Positions</h3><ul><li><code>list</code> per account</li><li><code>shares</code> all accounts</li></ul></div>
+    <div class="card"><h3>Row listings</h3><ul><li><code>events</code> / <code>trades</code></li><li><code>divs</code> / <code>dil</code> / <code>roc</code></li><li><code>gains</code> / <code>fees</code> / <code>leaps</code></li><li><code>transfers</code></li></ul></div>
   </div>
-  <p class="small" style="margin-top:10pt"><code>tjs</code> with no command lists them by purpose, one line each — inside a project only your country's. Every command takes <code>-h</code>; most take <code>--json</code>. <code>tjs redact</code> strips identifiers from a real export so it can be shared as a parser sample.</p>
+  <div class="row cmds">
+    <div class="card"><h3>Totals by type</h3><ul><li><code>winners</code> ranked</li><li><code>divs-sum</code> / <code>dil-sum</code></li><li><code>trades-sum</code> / <code>fees-sum</code></li><li><code>ccd-sum</code> / <code>leaps-sum</code></li><li><code>roc-sum</code></li></ul></div>
+    <div class="card"><h3>Before you trade</h3><ul><li><code>wash-radar</code> windows</li><li><code>buy-check</code></li><li><code>sell-check</code></li><li><code>harvest</code> / <code>scan</code></li><li><code>watch</code> for cron</li></ul></div>
+    <div class="card"><h3>Before you file</h3><ul><li><code>checklist</code> every step</li><li><code>form-export</code> / <code>t1135</code></li><li><code>reconcile-slips</code></li><li><code>carryover</code> / <code>handoff</code></li><li><code>close-year</code></li><li><code>check-filed</code></li></ul></div>
+    <div class="card"><h3>Explain and check</h3><ul><li><code>audit</code> / <code>tax-logic</code></li><li><code>renames</code> / <code>splits</code></li><li><code>spinoffs</code> / <code>wash-sales</code></li><li><code>sanity</code> / <code>check-dates</code></li><li><code>edge-cases</code></li></ul></div>
+    <div class="card"><h3>Tools</h3><ul><li><code>redact</code> an export</li><li><code>help</code> (<code>--all</code>)</li></ul></div>
+  </div>
+  <p class="small" style="margin-top:9pt">The groups are the help page's: <code>tjs</code> with no command lists every command under them, one line each — inside a project only your country's. Every command takes <code>-h</code>; most take <code>--json</code>. <code>tjs redact</code> strips identifiers from a real export so it can be shared as a parser sample.</p>
   <div class="foot"><span>taxjson.com</span><span>7</span></div>
 </section>
 
