@@ -2,6 +2,7 @@
 and the crypto map, the de-peg ATTENTION echo, `elect --set` repeated,
 the same exchange export in two crypto accounts and the shared price
 caches' save. Synthetic data only; no network."""
+import os
 import contextlib
 import io
 import json
@@ -108,7 +109,7 @@ class TestElectOneSetPerCommand(unittest.TestCase):
             root = Path(td) / "p"
             (root / "inputs" / "margin").mkdir(parents=True)
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\n[accounts.margin]\n'
                 'type = "taxable"\n')
             r = _cli(root, Path(td), "elect", "margin", "--set",
@@ -149,6 +150,7 @@ for i in range(40):
 """
 _READER = """
 import json, sys, time
+
 bad = 0
 t0 = time.time()
 while time.time() - t0 < 1.5:

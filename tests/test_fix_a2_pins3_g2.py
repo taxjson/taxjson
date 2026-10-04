@@ -16,6 +16,13 @@ from tax_rules import rule
 from test_fix_rbcqt import q, qdiv, qt_parse, of
 
 
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+
+
 def _qt_refused(*bodies):
     """Parse Questrade rows; return the BrokerageParseError text (or
     fail when the rows are accepted)."""

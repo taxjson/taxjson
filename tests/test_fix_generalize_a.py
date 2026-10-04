@@ -8,6 +8,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(__file__))
+from tax_rules import rule  # noqa: E402
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 _BASE = ('[settings]\nyear = 2025\ncountry = "canada"\n'
@@ -71,6 +74,146 @@ class TestLeapsMonthsSetting(unittest.TestCase):
         from taxjson.lib.config_template import render_init
         for c in ("canada", "usa"):
             self.assertIn("leaps_months", render_init(c, 2025)[0])
+
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+def _cli(root, *args, tz=None):
+    import subprocess
+    env = {k: v for k, v in os.environ.items() if k != "TAXJSON_LOCAL_TZ"}
+    env.update(TAXJSON_OFFLINE="1", PYTHONPATH=str(REPO / "src"))
+    if tz:
+        env["TZ"] = tz
+    return subprocess.run(
+        [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
+         *args], capture_output=True, text=True, env=env,
+        stdin=subprocess.DEVNULL)
+
+
+def _crypto_project(td, country="canada", tz_line=""):
+    root = Path(td) / country
+    root.mkdir(parents=True, exist_ok=True)
+    cur = "CAD" if country == "canada" else "USD"
+    (root / "taxjson.toml").write_text(
+        f'[settings]\nyear = 2025\ncountry = "{country}"\n'
+        f'base_currency = "{cur}"\n{tz_line}'
+        '\n[accounts.kr]\ntype = "taxable"\ncrypto = true\n')
+    (root / "inputs" / "kr").mkdir(parents=True)
+    return root
+
+
+class _NoZoneEnv(unittest.TestCase):
+    def setUp(self):
+        from unittest import mock
+        p = mock.patch.dict(os.environ)
+        p.start()
+        self.addCleanup(p.stop)
+        os.environ.pop("TAXJSON_LOCAL_TZ", None)
+
+
+class TestNoDefaultZone(_NoZoneEnv):
+    """A2: crypto UTC stamps are dated in the zone the user names; there
+    is no default (it used to be one user's zone, silently)."""
+
+    def _stops(self, country):
+        with tempfile.TemporaryDirectory() as td:
+            root = _crypto_project(td, country)
+            r = _cli(root, "run", "--no-input", tz="America/Halifax")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("local_timezone", r.stderr)
+            self.assertIn("[accounts.kr]", r.stderr)
+            self.assertIn('local_timezone = "America/Halifax"', r.stderr)
+            # A UTC machine: no zone is suggested, an IANA name is asked.
+            r = _cli(root, "run", "--no-input", tz="UTC")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("cannot be read or is UTC", r.stderr)
+            # format / migrate still work (they date nothing).
+            self.assertEqual(_cli(root, "format").returncode, 0)
+            self.assertEqual(_cli(root, "migrate", "--dry-run").returncode,
+                             0)
+            # Named: the run goes ahead.
+            root2 = _crypto_project(Path(td) / "b", country,
+                                    'local_timezone = "America/Halifax"\n')
+            r = _cli(root2, "run", "--no-input")
+            self.assertNotIn("has no local_timezone", r.stderr)
+
+    @rule("CA-DATE-12")
+    def test_canada_crypto_project_stops(self):
+        self._stops("canada")
+        from taxjson.lib import tax_logic as TL
+        txt = [r.text for _t, rs in TL.rule_sections(
+            "canada", {"country": "canada", "year": 2025}) for r in rs
+            if r.id == "CA-DATE-12"][0]
+        self.assertIn("no default", txt)
+        self.assertNotIn("America/Toronto", txt)
+
+    @rule("US-DATE-11")
+    def test_usa_crypto_project_stops(self):
+        self._stops("usa")
+        from taxjson.lib import tax_logic as TL
+        txt = [r.text for _t, rs in TL.rule_sections(
+            "usa", {"country": "usa", "year": 2025}) for r in rs
+            if r.id == "US-DATE-11"][0]
+        self.assertIn("no default", txt)
+
+    def test_project_without_crypto_needs_no_zone(self):
+        from taxjson.bin.taxjson_run import load_config
+        from taxjson.lib.brokerages._crypto_common import (
+            LocalTimezoneMissing, local_tz_name)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "taxjson.toml").write_text(_BASE + _ACCT)
+            os.environ["TAXJSON_LOCAL_TZ"] = "Asia/Tokyo"
+            load_config(root)
+            # the outer variable never dates this project's rows
+            with self.assertRaises(LocalTimezoneMissing):
+                local_tz_name()
+
+    def test_parser_outside_a_project_needs_the_variable(self):
+        from datetime import datetime
+        from taxjson.lib.brokerages._crypto_common import (
+            LocalTimezoneMissing, utc_to_local)
+        with self.assertRaises(LocalTimezoneMissing) as cm:
+            utc_to_local(datetime(2025, 12, 31, 3, 0))
+        self.assertIn("TAXJSON_LOCAL_TZ", str(cm.exception))
+        os.environ["TAXJSON_LOCAL_TZ"] = "America/Halifax"
+        self.assertEqual(utc_to_local(datetime(2025, 12, 31, 3, 0)),
+                         datetime(2025, 12, 30, 23, 0))
+
+    def test_kraken_file_refused_without_a_zone(self):
+        from taxjson.lib.brokerages.kraken import KrakenBrokerage
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "kr_ledgers.csv"
+            p.write_text(
+                '"txid","refid","time","type","subtype","aclass","asset",'
+                '"amount","fee","balance"\n'
+                '"L1","R1","2025-06-02 10:00:00","deposit","","currency",'
+                '"ZUSD","100.0","0","100.0"\n')
+            with self.assertRaises(Exception) as cm:
+                KrakenBrokerage().parse_file(p)
+            self.assertIn("TAXJSON_LOCAL_TZ", str(cm.exception))
+
+    def test_utc_machine_scaffold_leaves_it_commented(self):
+        from unittest import mock
+        from taxjson.lib.config_template import render_init
+        text = render_init("canada", 2025, tz=None)[0]
+        self.assertIn("# local_timezone", text)
+        self.assertNotIn("default America/Toronto", text)
+        self.assertIn("no default", text)
+        import argparse
+        import io
+        from contextlib import redirect_stdout
+        from taxjson.bin.taxjson_run import cmd_init
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch("taxjson.lib.config_template.system_timezone",
+                           return_value=None):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                cmd_init(argparse.Namespace(path=str(Path(td) / "p"),
+                                            dir=".", force=False,
+                                            country="canada", year=2025))
+            self.assertIn("local_timezone", out.getvalue())
 
 
 if __name__ == "__main__":

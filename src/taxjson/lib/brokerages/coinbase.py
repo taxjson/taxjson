@@ -1027,7 +1027,7 @@ class CoinbaseBrokerage(BaseBrokerage):
 
     def _ts(self, row, header_map, what):
         """Coinbase stamps rows in UTC; converted to local wall-clock
-        time (America/Toronto by default — see _crypto_common) so the
+        time (the project's local_timezone — see _crypto_common) so the
         tax year and the BoC rate day are the taxpayer's local date.
         Raises on an unparseable stamp: silently stamping or skipping
         a row distorts holding periods and year filters. If Coinbase

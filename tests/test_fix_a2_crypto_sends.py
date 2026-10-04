@@ -20,6 +20,13 @@ from tax_rules import rule
 
 from test_fix_sends import _cad_usd_rates_file, _cli, _rates_file
 
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+
 CB_HEADER = ("ID,Timestamp,Transaction Type,Asset,Quantity Transacted,"
              "Price Currency,Price at Transaction,Subtotal,"
              "Total (inclusive of fees and/or spread),Fees and/or Spread,"
@@ -55,7 +62,7 @@ def _proj(td, accounts, *, country="canada"):
     root = Path(td) / "proj"
     base = "USD" if country == "usa" else "CAD"
     src = "CAD" if country == "usa" else "USD"
-    toml = (f'[settings]\nyear = 2025\ncountry = "{country}"\n'
+    toml = (f'[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "{country}"\n'
             f'base_currency = "{base}"\nsource_currencies = ["{src}"]\n')
     for name, files in accounts.items():
         toml += f'[accounts.{name}]\ntype = "taxable"\ncrypto = true\n'

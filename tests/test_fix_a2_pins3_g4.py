@@ -21,6 +21,7 @@ suite. All data is synthetic.
   A2-1551  recompute_year's `crypto=crypto` on a one-crypto-account
       project (close-year then check-filed is OK).
 """
+import os
 import io
 import json
 import math
@@ -36,6 +37,7 @@ from taxjson.bin.taxjson_form_export import (build_8949, build_schedule3,
                                              filing_totals, mark_crypto,
                                              render_8949, render_schedule3)
 from tax_rules import rule
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -466,7 +468,7 @@ class TestLockDateBasis(unittest.TestCase):
                 "D,-100,15.00,1500.00,0.00,1500.00,CAD,1,Trades,Individual\n"
                 "2025-12-31 10:15:00 AM,2026-01-02 12:00:00 AM,Sell,XEI.TO,"
                 "D,-100,18.00,1800.00,0.00,1800.00,CAD,1,Trades,Individual\n")
-        cfg = ('[settings]\nyear = 2025\ncountry = "canada"\n'
+        cfg = ('[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
                'base_currency = "CAD"\nsource_currencies = []\n'
                'tax_date = "settle"\n'
                '[accounts.margin]\ntype = "taxable"\n')
@@ -518,7 +520,7 @@ class TestSingleCryptoAccountCheckFiled(unittest.TestCase):
             (root / "inputs" / "kr1").mkdir(parents=True)
             (root / "inputs" / "kr1" / "kr_trades.csv").write_text(body)
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\nsource_currencies = []\n'
                 '[accounts.kr1]\ntype = "taxable"\ncrypto = true\n')
             r = _cli(root, "run", "--no-input")

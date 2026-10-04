@@ -659,6 +659,12 @@ def _read_config_text(path: Path) -> str:
              f"save it as UTF-8.")
 
 
+# Commands that never date a crypto row: a crypto project without
+# [settings] local_timezone still runs them (`taxjson format` shows the
+# key to add; `migrate` moves old files).
+_ZONE_FREE_CMDS = ("format", "migrate", "init", "help")
+
+
 def _normalize_settings(cfg: Dict[str, Any]) -> None:
     """Canonical `country` (canada|usa) and a checked `tax_date` for
     EVERY config reader, not only `run`'s validate_config: check-filed,
@@ -681,19 +687,34 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
     # The zone crypto UTC stamps are dated in (the parsers and
     # crypto-sends read TAXJSON_LOCAL_TZ): the project's setting wins
     # over the environment, so every command and stage of this project
-    # dates a crypto row the same way (partition INPUTS-09). With no
-    # setting the project uses the default zone, never the environment
-    # (CA-DATE-12 / US-DATE-11: the variable applies OUTSIDE a project,
-    # and tax-logic names the zone in force — re-audit A2-0165).
+    # dates a crypto row the same way (partition INPUTS-09); the
+    # variable applies only OUTSIDE a project (re-audit A2-0165). There
+    # is no default zone (CA-DATE-12 / US-DATE-11): a project with a
+    # crypto account and no setting stops here, naming the key — one
+    # user's zone silently dated everyone's midnight fills. `taxjson
+    # format` / `migrate` do not come through here.
     import os as _os
-    from taxjson.lib.brokerages._crypto_common import DEFAULT_LOCAL_TZ
-    _tz = settings.get("local_timezone") or DEFAULT_LOCAL_TZ
-    _env_tz = (_os.environ.get("TAXJSON_LOCAL_TZ") or "").strip()
-    if _env_tz and _env_tz != _tz and not settings.get("local_timezone"):
-        print(f"note: TAXJSON_LOCAL_TZ={_env_tz} is ignored inside a "
-              f"project: crypto rows are dated in {_tz}; set [settings] "
-              f"local_timezone to change it.", file=sys.stderr)
-    _os.environ["TAXJSON_LOCAL_TZ"] = _tz
+    from taxjson.lib.brokerages._crypto_common import (
+        ENV_LOCAL_TZ, missing_timezone_message)
+    _tz = settings.get("local_timezone")
+    if not _tz and _CURRENT_CMD in _ZONE_FREE_CMDS:
+        pass                # they only read or rewrite the config text
+    elif not _tz:
+        _crypto = sorted(str(n) for n, a in
+                         (cfg.get("accounts") or {}).items()
+                         if isinstance(a, dict) and a.get("crypto") is True)
+        if _crypto:
+            _die(f"[accounts.{_crypto[0]}] is a crypto account"
+                 + (f" (and {len(_crypto) - 1} more)" if len(_crypto) > 1
+                    else "")
+                 + " but [settings] has no local_timezone — "
+                 + missing_timezone_message("project"))
+        # No crypto account: an outer TAXJSON_LOCAL_TZ still never dates
+        # this project's rows (a crypto file in another account is
+        # refused by its parser with the same message).
+        _os.environ.pop(ENV_LOCAL_TZ, None)
+    else:
+        _os.environ[ENV_LOCAL_TZ] = _tz
     srcs = settings.get("source_currencies")
     if isinstance(srcs, list) and all(isinstance(c, str) for c in srcs):
         settings["source_currencies"] = [c.strip().upper() for c in srcs]
@@ -973,7 +994,9 @@ def _help_country(argv: List[str]) -> Optional[str]:
                                 .decode("utf-8-sig"))
             return settings_country(cfg.get("settings") or {})
         return settings_country(_soft_settings(root.resolve()))
-    except Exception:                                   # noqa: BLE001
+    except (Exception, SystemExit):                     # noqa: BLE001
+        # (SystemExit: a config the command itself refuses — e.g. a
+        # crypto project with no local_timezone — still gets help.)
         return None
 
 
@@ -5445,7 +5468,8 @@ def _render_init_config(country_canon: str,
     """(toml_text, account_names) for `taxjson init` — the same tuple
     drives the inputs/ folder scaffold so config sections and input dirs
     can't drift apart. local_timezone is this machine's zone when it can
-    be read, else left commented (the default zone)."""
+    be read, else left commented (there is no default: `taxjson run`
+    then asks for it when the project has a crypto account)."""
     from taxjson.lib import config_template as CT
     return CT.render_init(country_canon, year, tz=CT.system_timezone())
 
@@ -17374,6 +17398,13 @@ def cmd_init(args: argparse.Namespace) -> None:
     import shlex as _shlex
     print("\nNext:")
     print(f"  1. edit {cfg} — set the year, accounts, and source currencies")
+    from taxjson.lib.config_template import system_timezone as _systz
+    if _systz() is None:
+        # Left commented (UTC or unreadable here): there is no default,
+        # and a crypto account stops the run until it is set.
+        print("     and [settings] local_timezone (your IANA zone, e.g. "
+              "\"America/Vancouver\": crypto rows are dated in it; this "
+              "machine's zone could not be read or is UTC)")
     print("  2. drop broker CSV exports into inputs/<account>/")
     print(f"  3. run: taxjson -C {_shlex.quote(str(root))} run")
 

@@ -20,6 +20,7 @@ from tax_rules import rule, rule_absent
 from taxjson.bin.taxjson_harvest import _recovery_schedule
 from taxjson.bin.taxjson_harvest import main as harvest_main
 
+
 TODAY = date.today()
 
 
@@ -451,7 +452,7 @@ class TestUsCryptoOutsideWashRule(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "taxjson.toml").write_text(
-                f'[settings]\nyear = {TODAY.year}\ncountry = "usa"\n'
+                f'[settings]\nlocal_timezone = "America/Toronto"\nyear = {TODAY.year}\ncountry = "usa"\n'
                 'base_currency = "USD"\n'
                 '[accounts.coins]\ntype = "taxable"\ncrypto = true\n')
             _write(root / "work" / "coins_gains_wash.json", _gains([

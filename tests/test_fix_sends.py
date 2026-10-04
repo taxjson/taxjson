@@ -20,6 +20,7 @@ from pathlib import Path
 from taxjson.lib import crypto_sends as cs
 from tax_rules import rule
 
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Kraken ledger (UTC). America/Toronto is UTC-5 in winter, UTC-4 in
@@ -112,7 +113,7 @@ def _project(td, *, country="canada"):
     acct = root / "inputs" / "crypto"
     acct.mkdir(parents=True)
     (root / "taxjson.toml").write_text(
-        f'[settings]\nyear = 2026\ncountry = "{country}"\n'
+        f'[settings]\nlocal_timezone = "America/Toronto"\nyear = 2026\ncountry = "{country}"\n'
         f'base_currency = "CAD"\nsource_currencies = ["USD"]\n'
         f'[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
     (acct / "kr_ledgers.csv").write_text(KR_LEDGER)
@@ -389,7 +390,7 @@ class TestUsGift(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root, home = _project(td, country="usa")
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2026\ncountry = "usa"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2026\ncountry = "usa"\n'
                 'base_currency = "USD"\nsource_currencies = ["CAD"]\n'
                 '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
             _cad_usd_rates_file(root / "work" / "to_base.csv")
@@ -412,7 +413,7 @@ class TestUsGift(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root, home = _project(td, country="usa")
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2026\ncountry = "usa"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2026\ncountry = "usa"\n'
                 'base_currency = "USD"\nsource_currencies = ["CAD"]\n'
                 '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
             _cad_usd_rates_file(root / "work" / "to_base.csv")

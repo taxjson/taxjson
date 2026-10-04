@@ -15,6 +15,13 @@ from pathlib import Path
 from taxjson.bin.taxjson_sort import plan_dedup
 from taxjson.lib.core import TaxTransaction
 
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+
 SRC = str(Path(__file__).resolve().parents[1] / "src")
 
 

@@ -17,10 +17,18 @@ from pathlib import Path
 
 from tax_rules import rule, rule_absent
 
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _CA = """\
 [settings]
+local_timezone = "America/Toronto"
 year = 2025
 country = "canada"
 base_currency = "CAD"
@@ -32,6 +40,7 @@ type = "taxable"
 
 _US = """\
 [settings]
+local_timezone = "America/Toronto"
 year = 2025
 country = "usa"
 base_currency = "USD"

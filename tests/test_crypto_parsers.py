@@ -8,6 +8,13 @@ import json
 from taxjson.lib.brokerages.kraken import KrakenBrokerage
 from taxjson.lib.brokerages.coinbase import CoinbaseBrokerage
 
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+
 class TestCryptoParsers(unittest.TestCase):
     def test_kraken_trades(self):
         content = """txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,margin,misc,ledgers\nT1,O1,BTC/USD,2025-01-15 10:00:00.1234,buy,limit,60000,6000,1,0.1,,,"""

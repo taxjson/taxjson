@@ -1,5 +1,6 @@
 """Tests for taxjson-reconcile-slips (T5008 / 1099-B slip reconciliation)."""
 
+import os
 import io
 import json
 import tempfile
@@ -14,6 +15,7 @@ from taxjson.bin.taxjson_reconcile_slips import (
     norm_symbol,
     reconcile,
 )
+
 
 
 def sell(symbol="AAPL.US", date="2025-05-02", qty=-100, proceeds=11990.0,
@@ -204,7 +206,7 @@ class TestWrapperExcludesCrypto(unittest.TestCase):
             root = Path(td)
             (root / "work").mkdir()
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\n'
                 '[accounts.margin]\ntype = "taxable"\n'
                 '[accounts.kraken]\ntype = "taxable"\ncrypto = true\n')

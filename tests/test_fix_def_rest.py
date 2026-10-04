@@ -115,6 +115,13 @@ from test_fix_rbcqt import QH
 from test_fix_rbc import HDR as RBC_HDR, RQA_ROWS
 from test_fix_m_parsers2_webull import _PRE as WB_PRE, _H25 as WB_H25
 
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+
 REPO = Path(__file__).resolve().parent.parent
 
 QT_RENAME = (q(sym='QQOL', desc='QQ HOLDINGS CORP WE ACTED AS AGENT',

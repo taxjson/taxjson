@@ -18,6 +18,14 @@
   long option bought more than `[settings] leaps_months` months before
   expiry (default 9, the market convention; it used to be a fixed 3). Views
   only: no tax figure changes. Set `leaps_months = 3` to keep the old view.
+- **Crypto needs your time zone.** Kraken and Coinbase rows (stamped in UTC)
+  were dated in Eastern time unless `[settings] local_timezone` said
+  otherwise, so a midnight fill near December 31 could land in the wrong
+  year for anyone living elsewhere, without a word. There is no default
+  zone now: a project with a crypto account and no `local_timezone` stops,
+  naming the key and suggesting this machine's zone (`taxjson init` writes
+  it when it can read it; `taxjson format` and `migrate` still run).
+  Outside a project the parsers need `TAXJSON_LOCAL_TZ`.
 
 ### Command line
 

@@ -13,11 +13,12 @@ from pathlib import Path
 from taxjson.lib import checklist as cl
 from tax_rules import rule
 
+
 REPO = Path(__file__).resolve().parent.parent
 ENV = dict(os.environ, TAXJSON_OFFLINE="1", PYTHONPATH=str(REPO / "src"),
            NO_COLOR="1")
 
-TOML = ('[settings]\nyear = 2025\ncountry = "canada"\n'
+TOML = ('[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
         'base_currency = "CAD"\nsource_currencies = []\n'
         'option_grant_timing_since = 2025\n'
         '[accounts.margin]\ntype = "taxable"\n')
@@ -262,7 +263,7 @@ class TestCryptoSendsGates(unittest.TestCase):
         acct = self.root / "inputs" / "crypto"
         acct.mkdir(parents=True)
         (self.root / "taxjson.toml").write_text(
-            '[settings]\nyear = 2025\ncountry = "canada"\n'
+            '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
             'base_currency = "CAD"\nsource_currencies = ["USD"]\n'
             '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
         (acct / "kr_ledgers.csv").write_text(KR_SEND)
@@ -348,7 +349,7 @@ class TestCryptoSendsGates(unittest.TestCase):
 # --------------------------------------------------------------- inputs-frozen
 def _frozen_project(root, margin_to, crypto_to):
     (root / 'taxjson.toml').write_text(
-        '[settings]\nyear = 2025\ncountry = "canada"\nbase_currency = "CAD"\n'
+        '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\nbase_currency = "CAD"\n'
         '[accounts.margin]\ntype = "taxable"\n[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
     for a in ('margin', 'crypto'):
         (root / 'inputs' / a).mkdir(parents=True)
@@ -468,7 +469,7 @@ class TestCryptoSendsCommand(unittest.TestCase):
             (self.root / "inputs" / a).mkdir(parents=True)
             (self.root / "inputs" / a / fn).write_text(body)
         (self.root / "taxjson.toml").write_text(
-            '[settings]\nyear = 2026\ncountry = "canada"\n'
+            '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2026\ncountry = "canada"\n'
             'base_currency = "CAD"\nsource_currencies = ["USD"]\n'
             '[accounts.cb]\ntype = "taxable"\ncrypto = true\n'
             '[accounts.kr]\ntype = "taxable"\ncrypto = true\n')
@@ -564,7 +565,7 @@ class TestRocEntered(unittest.TestCase):
 
 
 # ---------------------------------------------------------------- wording
-US_TOML = ('[settings]\nyear = 2025\ncountry = "usa"\nbase_currency = "USD"\n'
+US_TOML = ('[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "usa"\nbase_currency = "USD"\n'
            '[accounts.cb]\ntype = "taxable"\ncrypto = true\n')
 
 
@@ -625,7 +626,7 @@ class TestStepWording(unittest.TestCase):
                 "filing": {"totals": {
                     "proceeds": rep["part_I_totals"]["proceeds"],
                     "gain": rep["part_I_totals"]["gain"]}}}
-        cfg = ('[settings]\nyear = 2025\ncountry = "usa"\nbase_currency = "USD"\n'
+        cfg = ('[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "usa"\nbase_currency = "USD"\n'
                '[accounts.ib]\ntype = "taxable"\n')
         with tempfile.TemporaryDirectory() as td:
             p = Path(td)
@@ -716,7 +717,7 @@ class TestGrantSinceGate(unittest.TestCase):
             (p / "inputs" / "crypto").mkdir(parents=True)
             (p / "inputs" / "crypto" / "kr_ledgers.csv").write_text(KR_SEND)
             (p / "taxjson.toml").write_text(
-                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\nsource_currencies = ["USD"]\n'
                 '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
             (p / "work").mkdir()

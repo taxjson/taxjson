@@ -6,6 +6,7 @@ phantom openings, shorts, ADJUST), the income/gain join, report assembly,
 and the CLI end-to-end (text + JSON) including the `taxjson t1135` wrapper.
 """
 
+import os
 import io
 import json
 import sys
@@ -25,6 +26,7 @@ from taxjson.bin.taxjson_t1135 import (
     walk_costs,
 )
 from tax_rules import rule
+
 
 
 def tx(action="BUYSELL", date="2025-01-15", symbol="AAPL.US", qty=0.0,
@@ -406,7 +408,7 @@ class TestRunWrapper(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\n\n'
                 '[accounts.margin]\ntype = "taxable"\n\n'
                 '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n\n'

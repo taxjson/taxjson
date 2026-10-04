@@ -39,6 +39,7 @@ def _tool(module, *args, home=None):
 
 # --------------------------------------------------------------- Webull
 from test_fix_l_parsers2_webull import _H25 as _WB_H, _PRE as _WB_PRE  # noqa: E402
+
 _WB_PUT = ('USD,05-06-2025,SELL,@ZZS,PUT ZZS06/20/25 305,OPC,-1,8.00,,799.35\n'
            'USD,20-06-2025,BUY,,,,1,0.00,,\n'
            'USD,23-06-2025,BUY,ZZS,ZZS INC,SHS,100,305.00,,"(30,501.00)"\n')
@@ -317,7 +318,7 @@ class TestSpinoffsView(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2025\ncountry = "usa"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "usa"\n'
                 'base_currency = "USD"\n[accounts.m]\ntype = "taxable"\n')
             (root / "inputs" / "m").mkdir(parents=True)
             (root / "inputs" / "m" / "manifest.json").write_text(json.dumps(
@@ -418,7 +419,7 @@ class TestCryptoSendsRunNote(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root, home = _project(td, country="usa")
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2026\ncountry = "usa"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2026\ncountry = "usa"\n'
                 'base_currency = "USD"\nsource_currencies = ["CAD"]\n'
                 '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
             _cad_usd_rates_file(root / "work" / "to_base.csv")

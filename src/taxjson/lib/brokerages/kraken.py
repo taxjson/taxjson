@@ -359,7 +359,7 @@ class KrakenBrokerage(BaseBrokerage):
 
     def _local_dt(self, time_raw: str, what: str):
         """Kraken timestamps are UTC (`2025-06-01 12:00:00.1234`).
-        Returned as America/Toronto local wall-clock time (see
+        Returned as the user's local wall-clock time (see
         _crypto_common): the taxpayer's local DATE decides the tax year
         and the BoC rate day. Raises on an unparseable stamp — stamping
         or skipping distorts holding periods / year filters invisibly;

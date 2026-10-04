@@ -20,6 +20,7 @@ from unittest import mock
 
 from tax_rules import rule, rule_absent
 
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -42,7 +43,7 @@ def _project(root, accounts, books, settings="", extra_files=None,
     `accounts` adds keys to that account's table."""
     root = Path(root)
     cur = "USD" if country == "usa" else "CAD"
-    toml = (f'[settings]\nyear = {year}\ncountry = "{country}"\n'
+    toml = (f'[settings]\nlocal_timezone = "America/Toronto"\nyear = {year}\ncountry = "{country}"\n'
             f'base_currency = "{cur}"\nsource_currencies = []\n'
             + settings)
     for name in accounts:
@@ -305,7 +306,7 @@ def _audit_project(td, country):
     audit tool itself is faked: these tests read the commands built)."""
     root = Path(td)
     cur = "USD" if country == "usa" else "CAD"
-    toml = (f'[settings]\nyear = 2025\ncountry = "{country}"\n'
+    toml = (f'[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "{country}"\n'
             f'base_currency = "{cur}"\nsource_currencies = []\n')
     work = root / "work"
     work.mkdir(parents=True)

@@ -239,12 +239,15 @@ they are crypto-assets (Schedule 3 line 7, pooled across your crypto accounts,
 and outside §1091 in a US project). A generic file in a `crypto = true` account
 is refused.
 
-Kraken and Coinbase timestamps are UTC; rows are dated in local time
-(America/Toronto by default; set `[settings] local_timezone =
-"America/Vancouver"` etc., or the `TAXJSON_LOCAL_TZ` environment variable
-outside a project, to change it — the setting wins, and a change re-dates the
-rows and re-keys crypto sends), so a fill at 03:00 UTC on January 1 belongs to
-the previous tax year. USDC/USDT/DAI/PYUSD/GUSD are treated
+Kraken and Coinbase timestamps are UTC; rows are dated in YOUR local time,
+`[settings] local_timezone` (an IANA name such as "America/Vancouver"; the
+`TAXJSON_LOCAL_TZ` environment variable outside a project — the setting wins,
+and a change re-dates the rows and re-keys crypto sends), so in Eastern time a
+fill at 03:00 UTC on January 1 belongs to the previous tax year. There is no
+default zone: `taxjson init` writes this machine's zone when it can read one
+(not a server's UTC), and a project with a `crypto = true` account and no
+`local_timezone` stops (`taxjson format` and `migrate` still run), naming the
+key and suggesting this machine's zone. USDC/USDT/DAI/PYUSD/GUSD are treated
 as US-dollar cash in a Canada project (an approximation; a fill valued in US
 dollars more than 2% off 1.00 USD is warned about, a CAD- or EUR-valued one is
 not checked) and as property, like any coin, in a US project.
@@ -412,7 +415,8 @@ base_currency = "CAD"          # the country's currency: CAD for canada, USD for
 tax_date = "settle"            # settle (CRA default) | trade (IRS default)
 # futures_settle = "trade"     # futures & futures options (IB, generic): TRADE date (daily variation
 #                              # margin settles the P/L) | next_day (clearing premium date)
-# local_timezone = "America/Toronto"  # crypto UTC timestamps are dated in this zone
+# local_timezone = "America/New_York" # crypto UTC timestamps are dated in this zone (no default;
+#                              # required with a crypto account)
 source_currencies = ["USD"]    # currencies you hold besides base_currency (FX rates fetched)
 # province = "ON"              # canada tax-estimate default (ON/BC/AB)
 #   Canada-only keys (province, option_*, foreign_return_of_capital, and the

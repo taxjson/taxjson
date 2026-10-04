@@ -2,6 +2,7 @@
 
 Synthetic data only; account ids are fake (pii-ok).
 """
+import os
 import contextlib
 import io
 import tempfile
@@ -12,6 +13,13 @@ from taxjson.lib.brokerages.base import BrokerageParseError
 from taxjson.lib.brokerages.webull import WebullBrokerage
 
 from tax_rules import rule
+
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
 
 _PRE = (",,,,,,,,,\n"
         "Account Number / Numéro de compte:,,,,,,,55500001,,\n"  # pii-ok: synthetic id

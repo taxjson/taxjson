@@ -11,9 +11,11 @@ Two jobs, both about refusing to produce a quietly-wrong number:
 * `utc_to_local` — Kraken and Coinbase stamp every row in UTC. A
   Canadian taxpayer's trade/income DATE is the local calendar date, so
   a fill at 2026-01-01 03:00 UTC belongs to 2025-12-31 in Toronto (and
-  to the 2025 return). Rows are converted to America/Toronto local
-  time; set the `TAXJSON_LOCAL_TZ` environment variable to another
-  IANA zone name (e.g. America/Vancouver) if you live elsewhere.
+  to the 2025 return). Rows are converted to the user's local time:
+  the IANA zone in the `TAXJSON_LOCAL_TZ` environment variable, which
+  `taxjson` sets from the project's [settings] local_timezone. There is
+  no default zone: a crypto row with none named is refused
+  (LocalTimezoneMissing) rather than dated in someone else's time.
 """
 
 import os
@@ -21,7 +23,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-DEFAULT_LOCAL_TZ = 'America/Toronto'
+ENV_LOCAL_TZ = 'TAXJSON_LOCAL_TZ'
 
 # The USD-pegged stablecoins, ONE list for every crypto consumer (the
 # Coinbase and Kraken parsers, crypto-sends, fx-cash, fill-crypto). In a
@@ -121,8 +123,44 @@ def _ctx(context: str) -> str:
     return f" ({context})" if context else ''
 
 
+class LocalTimezoneMissing(ValueError):
+    """No local time zone is named for crypto UTC stamps."""
+
+
+def missing_timezone_message(where: str = "project") -> str:
+    """The one message for a crypto row (or a crypto project) with no
+    local time zone named: the key to set and this machine's zone as a
+    suggestion when it can be read (not UTC)."""
+    try:
+        from taxjson.lib.config_template import system_timezone
+        sys_tz = system_timezone()
+    except Exception:   # noqa: BLE001 — a suggestion only
+        sys_tz = None
+    if sys_tz:
+        hint = (f"this machine's zone is {sys_tz} — if that is where you "
+                f"live, set local_timezone = \"{sys_tz}\"")
+    else:
+        hint = ("this machine's zone cannot be read or is UTC (a server "
+                "default), so name yours: an IANA zone such as "
+                "\"America/Vancouver\" or \"Europe/London\"")
+    lead = ("crypto exchanges stamp every row in UTC and taxjson dates "
+            "it in YOUR local time zone, which has no default")
+    if where == "project":
+        return (f"{lead}: add local_timezone to [settings] in taxjson.toml "
+                f"({hint}).")
+    return (f"{lead}: set the {ENV_LOCAL_TZ} environment variable to an "
+            f"IANA zone name, or run inside a project with [settings] "
+            f"local_timezone ({hint}).")
+
+
 def local_tz_name() -> str:
-    return (os.environ.get('TAXJSON_LOCAL_TZ') or DEFAULT_LOCAL_TZ).strip()
+    """The zone crypto rows are dated in (TAXJSON_LOCAL_TZ; `taxjson`
+    sets it from [settings] local_timezone). LocalTimezoneMissing when
+    none is named."""
+    name = (os.environ.get(ENV_LOCAL_TZ) or '').strip()
+    if not name:
+        raise LocalTimezoneMissing(missing_timezone_message("env"))
+    return name
 
 
 def _eastern_offset_hours(dt_utc: datetime) -> int:

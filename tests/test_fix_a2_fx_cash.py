@@ -7,6 +7,7 @@ A2-0079 / A2-0234: a Coinbase Advanced Trade on a crypto-quoted pair
 A2-0234 / A2-0576: a Kraken fee paid in a coin moves no US dollars.
 A2-0244: same-settle rows are walked in trade-date order.
 """
+import os
 import contextlib
 import io
 import tempfile
@@ -15,6 +16,13 @@ from pathlib import Path
 
 from taxjson.bin.taxjson_fx_cash import build_ledger
 from tax_rules import rule, rule_absent
+
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
 
 _RATES = {"2025-10-10": 1.40, "2025-10-13": 1.40, "2025-10-14": 1.40,
           "2026-01-10": 1.30, "2026-02-10": 1.40, "2026-03-10": 1.35}

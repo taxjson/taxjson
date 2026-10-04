@@ -6,6 +6,7 @@ at 40,000 on 2025-06-02 and kr2 buys 1 BTC on 2025-06-10 and holds it —
 the whole 30,000 blended loss is superficial. Computed per exchange the
 return showed a -10,000 allowed loss.
 """
+import os
 import json
 import subprocess
 import sys
@@ -13,6 +14,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from tax_rules import rule, rule_absent
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HDR = ("txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,margin,"
@@ -29,7 +31,7 @@ KR2 = (HDR + "TXB1,OB1,BTC/CAD,2025-01-16 10:00:00.1234,buy,limit,90000,"
 def _project(td, accounts, country="canada"):
     root = Path(td)
     cur = "USD" if country == "usa" else "CAD"
-    cfg = (f'[settings]\nyear = 2025\ncountry = "{country}"\n'
+    cfg = (f'[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "{country}"\n'
            f'base_currency = "{cur}"\nsource_currencies = []\n')
     for name, body in accounts.items():
         cfg += f'[accounts.{name}]\ntype = "taxable"\ncrypto = true\n'

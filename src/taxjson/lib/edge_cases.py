@@ -617,6 +617,10 @@ def crypto_midnight(book: Book) -> List[Dict[str, Any]]:
     the UTC time came from a fixed EST offset whatever the zone)."""
     y = book.year
     out = []
+    if not book.local_tz:
+        # No zone named (no crypto account: `taxjson` refuses a crypto
+        # project without one): nothing was dated in a local zone.
+        return out
     for r in book.txs:
         if r["_acct"] not in book.crypto or not book.wanted(r["_acct"]):
             continue

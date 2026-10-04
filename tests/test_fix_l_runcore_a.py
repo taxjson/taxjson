@@ -15,10 +15,12 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _CONFIG = """\
 [settings]
+local_timezone = "America/Toronto"
 year = 2025
 country = "canada"
 base_currency = "CAD"
@@ -303,7 +305,7 @@ _KR1_SHORT = _KR_HDR + (
     "limit,3000,3000,0,1.0,,,\n")
 _KR2 = _KR_HDR + ("TXB1,OB1,BTC/CAD,2025-01-16 10:00:00.1234,buy,limit,"
                   "90000,90000,0,1.0,,,\n")
-_CRYPTO_CFG = ('[settings]\nyear = 2025\ncountry = "canada"\n'
+_CRYPTO_CFG = ('[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
                'base_currency = "CAD"\nsource_currencies = []\n')
 
 

@@ -22,6 +22,13 @@ from unittest import mock
 from taxjson.lib import crypto_sends as cs
 from tax_rules import rule, rule_absent
 
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -202,7 +209,7 @@ class TestNoTransferEvidenceGuards(unittest.TestCase):
         (root / "inputs" / "crypto").mkdir(parents=True)
         (root / "work").mkdir()
         (root / "taxjson.toml").write_text(
-            '[settings]\nyear = 2025\ncountry = "canada"\n'
+            '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
             'base_currency = "CAD"\nsource_currencies = ["USD"]\n'
             '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
         home = Path(td) / "home"
@@ -281,7 +288,7 @@ class TestUsDecideHint(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root, home = _crypto_project(td, country="usa")
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2026\ncountry = "usa"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2026\ncountry = "usa"\n'
                 'base_currency = "USD"\nsource_currencies = ["CAD"]\n'
                 '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
             _cad_usd_rates_file(root / "work" / "to_base.csv")
@@ -314,7 +321,7 @@ class TestRunStageUnparsedPeer(unittest.TestCase):
                 (root / "inputs" / a).mkdir(parents=True)
                 (root / "inputs" / a / fn).write_text(body)
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2026\ncountry = "canada"\n'
+                '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2026\ncountry = "canada"\n'
                 'base_currency = "CAD"\nsource_currencies = ["USD"]\n'
                 '[accounts.cb]\ntype = "taxable"\ncrypto = true\n'
                 '[accounts.kr]\ntype = "taxable"\ncrypto = true\n')
@@ -514,7 +521,7 @@ class TestWatchStatesItsScope(unittest.TestCase):
         root = Path(tmp) / country
         (root / "inputs" / "margin").mkdir(parents=True)
         (root / "taxjson.toml").write_text(
-            f'[settings]\nyear = {date.today().year}\ncountry = '
+            f'[settings]\nlocal_timezone = "America/Toronto"\nyear = {date.today().year}\ncountry = '
             f'"{country}"\nbase_currency = "{ccy}"\n'
             f'source_currencies = []\n'
             f'[accounts.margin]\ntype = "taxable"\n')

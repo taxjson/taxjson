@@ -34,6 +34,13 @@ from taxjson.lib.brokerages.kraken import KrakenBrokerage
 from tax_rules import rule
 
 
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+
+
 def _parse_csv(parser_cls, content):
     """Run a parser against an in-memory CSV string."""
     f = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)

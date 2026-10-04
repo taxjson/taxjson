@@ -19,6 +19,13 @@ from tax_rules.dual import cli, gains_both, settings_for, tx
 
 from taxjson.lib import tax_logic as TL
 
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+
 REPO = Path(__file__).resolve().parents[1]
 PY = sys.executable
 
@@ -70,28 +77,39 @@ def _gains(root, account="margin"):
 # ------------------------------------------------------------ dates
 class TestLocalZoneInsideAProject(unittest.TestCase):
     """A2-0165: inside a project with no local_timezone the environment
-    variable no longer re-dates crypto; the default zone tax-logic names
-    is the one in force."""
+    variable never re-dates crypto. Since the 2026-10 generalisation
+    there is no default zone either: a crypto account without the
+    setting stops every command, naming the key; the setting wins."""
 
     def _check(self, country, rid):
         from taxjson.bin import taxjson_run as run
         from taxjson.lib.brokerages._crypto_common import (
-            DEFAULT_LOCAL_TZ, local_tz_name)
+            LocalTimezoneMissing, local_tz_name)
         with tempfile.TemporaryDirectory() as td, \
                 mock.patch.dict(os.environ,
                                 {"TAXJSON_LOCAL_TZ": "Asia/Tokyo"}):
-            root = _project(td, country, {})
-            err = io.StringIO()
-            with contextlib.redirect_stderr(err):
-                run.load_config(root)
-            self.assertEqual(local_tz_name(), DEFAULT_LOCAL_TZ)
-            self.assertIn("ignored inside a project", err.getvalue())
-            self.assertIn(DEFAULT_LOCAL_TZ, _text(country, rid))
-            # The setting still wins.
+            root = _project(td, country, {}, local_timezone=None)
+            run.load_config(root)
+            with self.assertRaises(LocalTimezoneMissing):
+                local_tz_name()            # the outer variable is dropped
+            self.assertIn("no default", _text(country, rid))
+            croot = _project(Path(td) / "c", country, {},
+                             accounts={"kr": "taxable"},
+                             local_timezone=None)
+            (croot / "taxjson.toml").write_text(
+                (croot / "taxjson.toml").read_text()
+                + "crypto = true\n")
+            with self.assertRaises(SystemExit) as cm:
+                run.load_config(croot)
+            self.assertIn("local_timezone", str(cm.exception.code))
+            # The setting wins.
             root2 = _project(Path(td) / "b", country, {},
                              local_timezone="America/Vancouver")
             run.load_config(root2)
             self.assertEqual(local_tz_name(), "America/Vancouver")
+            self.assertIn("America/Vancouver",
+                          _text(country, rid,
+                                local_timezone="America/Vancouver"))
 
     @rule("CA-DATE-12")
     def test_canada(self):

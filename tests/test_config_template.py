@@ -30,6 +30,7 @@ from taxjson.lib.config_check import (ACCOUNT_KEYS, CARRYOVER_KEYS, CGD_KEYS,
                                       TOP_LEVEL_TABLES)
 from taxjson.lib.tomlcompat import tomllib
 
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -462,7 +463,9 @@ class TestFormatCommand(unittest.TestCase):
     def test_formatted_project_still_loads_the_same(self):
         from taxjson.bin.taxjson_run import load_config
         with tempfile.TemporaryDirectory() as td:
-            root = self._project(td, CT.render_init("canada", 2025)[0]
+            # (a scaffold with a crypto account names its zone)
+            root = self._project(td, CT.render_init(
+                "canada", 2025, tz="America/Toronto")[0]
                                  .replace("[accounts.margin]\n",
                                           "[accounts.margin]\n# mine\n"))
             before = load_config(root)
