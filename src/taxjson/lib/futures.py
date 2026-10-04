@@ -86,21 +86,20 @@ def is_plain_future(symbol: str) -> bool:
 # Cash-settled options on a broad-based index listed on a US exchange:
 # "nonequity options", §1256 contracts (IRC §1256(b)(1)(D), (g)(3)) —
 # marked to market at year end and split 60/40, reported on Form 6781,
-# never on Form 8949. Matched on the option ROOT (weekly / PM-settled
-# roots included). A deliberately short, conservative list: an index
-# option missing from it is filed as an ordinary option, so the US
-# Form 8949 notes still tell the user to check (tax-logic US-OPT-04).
-SECTION_1256_INDEX_ROOTS = frozenset({
-    "SPX", "SPXW", "SPXPM", "XSP", "NDX", "NDXP", "XND", "RUT", "RUTW",
-    "MRUT", "VIX", "VIXW", "DJX", "OEX", "XEO",
-})
+# never on Form 8949. Matched on the option ROOT. The roots are market
+# data, not code: taxjson/data/markets.toml (lib/markets.
+# index_option_roots), extended or overridden by ticker.map INDEXOPT
+# lines. An index option missing from it is filed as an ordinary option,
+# so the US Form 8949 notes still tell the user to check (tax-logic
+# US-OPT-04).
 
 
 def section_1256_kind(symbol: str) -> str:
     """Which US §1256 contract `symbol` is, '' for none: "future" (a
     plain futures contract), "futures option" (an option on one — the
     `F:`, `/` or `\\` prefix) or "index option" (a broad-based index
-    option, SECTION_1256_INDEX_ROOTS). tax-logic US-FUT-02 / US-OPT-04:
+    option, lib/markets.is_index_option_root). tax-logic US-FUT-02 /
+    US-OPT-04:
     none of them is modelled, so the US filing outputs keep them off
     Form 8949 and list them for Form 6781 by hand. US-only: Canada
     has no §1256 (a future is an ordinary property on Schedule 3)."""
@@ -113,7 +112,8 @@ def section_1256_kind(symbol: str) -> str:
     if s.startswith(_FUTURES_PREFIXES):
         return "futures option"
     root = (parse_option_underlying(s) or "").split(".", 1)[0]
-    return "index option" if root in SECTION_1256_INDEX_ROOTS else ""
+    from taxjson.lib.markets import is_index_option_root
+    return "index option" if is_index_option_root(root) else ""
 
 
 def is_settlement_row(tx) -> bool:

@@ -51,10 +51,15 @@ _EVENT_RE = re.compile(r"SPIN|STK DIV|STOCK DIV|IN LIEU|REORG|MERGER|"
 FUTURES_OPEN = dtime(17, 0)       # Sunday evening open (Eastern, lenient)
 FUTURES_CLOSE = dtime(17, 0)      # Friday afternoon close
 OVERNIGHT_OPEN = dtime(20, 0)     # US equities overnight session
-# Cboe Global Trading Hours (SPX, SPXW, XSP, VIX): from 20:15 Eastern,
-# Sunday to Thursday; the session trades on the next trading day.
+# Cboe Global Trading Hours: from 20:15 Eastern, Sunday to Thursday;
+# the session trades on the next trading day. Which roots have it is
+# market data (lib/markets.is_evening_session_root).
 GTH_OPEN = dtime(20, 15)
-GTH_ROOTS = frozenset({"SPX", "SPXW", "XSP", "VIX", "VIXW"})
+
+
+def _is_gth_root(root: str) -> bool:
+    from taxjson.lib.markets import is_evening_session_root
+    return is_evening_session_root(root, note=False)
 
 
 def _option_root(symbol: str) -> str:
@@ -203,7 +208,7 @@ def check_trade_time(cls: str, d: date, t: Optional[dtime], symbol: str,
     if cls in ("option", "ca-equity"):
         mkt = _market(cls, symbol, currency)
         if (cls == "option" and wd == 6 and t is not None and t >= GTH_OPEN
-                and _option_root(symbol) in GTH_ROOTS):
+                and _is_gth_root(_option_root(symbol))):
             return ("NOTE", "gth-clock-date",
                     "a Cboe Global Trading Hours fill (Sunday evening): "
                     "its trade date is Monday")

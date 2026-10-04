@@ -592,15 +592,16 @@ def _ib_split_datetime(raw: str, where: str):
 #   * a US-dollar futures or futures-option fill in the CME Globex
 #     evening session (18:00 ET onward, Sunday to Thursday) or on a
 #     weekday the exchange is closed trades on the next trading day;
-#   * an SPX/SPXW/XSP/VIX option filled in Cboe Global Trading Hours
-#     (20:15 ET onward) trades on the next trading day;
+#   * an option on a root with a Cboe Global Trading Hours session
+#     (lib/markets.is_evening_session_root: shipped market data plus
+#     ticker.map EVENING lines) filled from 20:15 ET trades on the next
+#     trading day;
 #   * a fill on the ASX, HKEX, Tokyo, Singapore or NZX exchanges (every
 #     asset class) is dated in the exchange's local time.
 _IB_OVERNIGHT_OPEN = '20:00:00'
 _IB_OVERNIGHT_CLOSE = '04:00:00'        # the session ends 03:50 ET
 _IB_CME_EVENING_OPEN = '18:00:00'
 _IB_GTH_OPEN = '20:15:00'
-_IB_GTH_ROOTS = frozenset({'SPX', 'SPXW', 'XSP', 'VIX', 'VIXW'})
 _IB_CLOCK_TZ = 'America/New_York'
 _IB_LOCAL_TZ_BY_CURRENCY = {'AUD': 'Australia/Sydney',
                             'HKD': 'Asia/Hong_Kong', 'JPY': 'Asia/Tokyo',
@@ -666,9 +667,11 @@ def _ib_market_trade_date(date: str, time: str, asset_cat: str,
         return date, time, ''
     if asset_cat == 'Equity and Index Options':
         root = (symbol or '').strip().split(' ')[0].upper()
-        if (cur == 'USD' and root in _IB_GTH_ROOTS
-                and time >= _IB_GTH_OPEN and sun_thu):
-            return _ib_next_trading_day(d).isoformat(), '00:00:00', stamp
+        if cur == 'USD' and time >= _IB_GTH_OPEN and sun_thu:
+            from taxjson.lib.markets import is_evening_session_root
+            if is_evening_session_root(root):
+                return (_ib_next_trading_day(d).isoformat(), '00:00:00',
+                        stamp)
         return date, time, ''
     if asset_cat != 'Stocks' or ext != 'US':
         return date, time, ''

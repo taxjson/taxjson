@@ -17,6 +17,11 @@
 - **Split-share corporations (Canada)** are read from the market-data file
   and the project's `SPLITSHARE ROOT [NO]` lines instead of a list in the
   code; `taxjson tax-logic` prints the list in force.
+- **US §1256 index-option roots and Cboe evening-session roots** are read
+  from the market-data file and the project's `INDEXOPT` / `EVENING` lines.
+  `taxjson tax-logic` lists every root in force (it used to name four of the
+  five evening-session roots, missing the weekly VIX root, and summarised
+  the index roots as "and their weekly roots").
 
 ### Command line
 

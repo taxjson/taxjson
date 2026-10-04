@@ -166,6 +166,18 @@ def _split_share_roots():
     return split_share_roots()
 
 
+def _index_option_roots():
+    """US §1256 index option roots in force (lib/markets)."""
+    from taxjson.lib.markets import index_option_roots
+    return index_option_roots()
+
+
+def _evening_roots():
+    """Option roots with a Cboe evening session in force (lib/markets)."""
+    from taxjson.lib.markets import evening_session_roots
+    return evening_session_roots()
+
+
 def _corp_list(s: Dict[str, Any]) -> List[str]:
     """[settings] corporate_distributions as the engine reads it."""
     from taxjson.lib.income_dating import SETTING_CORPORATE, _symbols
@@ -388,9 +400,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "trades Dec 31 and settles in January). So does a "
                  "US-dollar futures or futures-option fill in the CME "
                  "evening session (18:00 ET or later, Sunday to Thursday, "
-                 "or on a weekday the exchange is closed) and an SPX, "
-                 "SPXW, XSP or VIX option filled in Cboe Global Trading "
-                 "Hours (20:15 ET or later). A fill on the ASX, HKEX, "
+                 "or on a weekday the exchange is closed) and a US-dollar "
+                 "option filled in Cboe Global Trading Hours (20:15 ET or "
+                 "later, Sunday to Thursday) on a root with that session: "
+                 + ", ".join(sorted(_evening_roots())) + " (market data "
+                 "shipped in taxjson/data/markets.toml, extended or "
+                 "overridden by ticker.map `EVENING ROOT [NO]` lines; the "
+                 "run notes once per root when the built-in list moved a "
+                 "fill). A fill on the ASX, HKEX, "
                  "Tokyo, Singapore or NZX exchanges (an AUD, HKD, JPY, SGD "
                  "or NZD row, any asset class) is dated in the exchange's "
                  "local time. Every other fill keeps the clock date. A "
@@ -1435,9 +1452,14 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "trades Dec 31 and settles in January). So does a "
                  "US-dollar futures or futures-option fill in the CME "
                  "evening session (18:00 ET or later, Sunday to Thursday, "
-                 "or on a weekday the exchange is closed) and an SPX, "
-                 "SPXW, XSP or VIX option filled in Cboe Global Trading "
-                 "Hours (20:15 ET or later). A fill on the ASX, HKEX, "
+                 "or on a weekday the exchange is closed) and a US-dollar "
+                 "option filled in Cboe Global Trading Hours (20:15 ET or "
+                 "later, Sunday to Thursday) on a root with that session: "
+                 + ", ".join(sorted(_evening_roots())) + " (market data "
+                 "shipped in taxjson/data/markets.toml, extended or "
+                 "overridden by ticker.map `EVENING ROOT [NO]` lines; the "
+                 "run notes once per root when the built-in list moved a "
+                 "fill). A fill on the ASX, HKEX, "
                  "Tokyo, Singapore or NZX exchanges (an AUD, HKD, JPY, SGD "
                  "or NZD row, any asset class) is dated in the exchange's "
                  "local time. Every other fill keeps the clock date. A "
@@ -1964,10 +1986,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "line, RBC refuses the file.", cont=True),
             Rule("US-OPT-04",
                  "Not modelled: §1256 60/40 contracts, §1233 and §1259. A "
-                 "broad-based index option (SPX, XSP, NDX, RUT, VIX, DJX, "
-                 "OEX and their weekly roots) or an option on a future is "
+                 "broad-based index option or an option on a future is "
                  "a §1256 contract: kept off Form 8949 and listed for "
-                 "Form 6781, as futures are."),
+                 "Form 6781, as futures are. The index option roots: "
+                 + ", ".join(sorted(_index_option_roots())) + " (market "
+                 "data shipped in taxjson/data/markets.toml, extended or "
+                 "overridden by ticker.map `INDEXOPT ROOT [NO]` lines; "
+                 "the run notes once per root when the built-in list "
+                 "decided). An index option whose root is not listed is "
+                 "filed as an ordinary option."),
         ]),
         ("Futures", [
             Rule("US-FUT-01",

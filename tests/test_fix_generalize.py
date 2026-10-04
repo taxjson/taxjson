@@ -232,5 +232,110 @@ class TestMapTickerNoCadTarget(unittest.TestCase):
                          "ZZQ271217P00004020")
 
 
+# ------------------------------------------------- B3 §1256 index roots
+def _us8949(symbol, proceeds, cost):
+    return {"date": "2025-10-24", "date_settle": "2025-10-24",
+            "symbol": symbol, "qty": -1, "proceeds": proceeds,
+            "cost": cost, "gain": proceeds - cost, "disallowed_amount": 0.0,
+            "days_held": 4, "term": "SHORT_TERM", "direction": "LONG",
+            "commission": 0.0, "fee": 0.0, "account": "margin",
+            "currency": "USD", "is_option": True}
+
+
+class TestIndexOptionRoots(_MapCase):
+    @rule("US-OPT-04")
+    def test_indexopt_line_adds_and_removes_a_root(self):
+        from taxjson.bin import taxjson_form_export as FE
+        self.use_map("INDEXOPT ZZX\nINDEXOPT SPX NO\n")
+        rep = FE.build_8949([_us8949("ZZX251219C06000000.US", 500.0, 0.0),
+                             _us8949("SPX251219C06000000.US", 700.0, 0.0)])
+        self.assertEqual([r["description"] for r in rep["section_1256"]],
+                         ["ZZX251219C06000000.US"])
+        self.assertEqual([r["description"] for r in rep["part_I"]],
+                         ["1 SPX251219C06000000.US (option)"])
+
+    @rule("US-OPT-04")
+    @rule_absent("US-OPT-04", country="canada")
+    def test_canada_reports_an_index_option_on_schedule_3(self):
+        from taxjson.bin import taxjson_form_export as FE
+        self.no_map()
+        e = dict(_us8949("SPX251219C06000000.US", 700.0, 0.0),
+                 term=None, currency="CAD", date="2025-06-10",
+                 date_settle="2025-06-10")
+        err = StringIO()
+        with redirect_stderr(err):
+            rows = FE.build_schedule3([e], 2025)["rows"]
+        # Canada: an ordinary option on Schedule 3; the US list is never
+        # consulted (no §1256 note) ...
+        self.assertEqual(len(rows), 1)
+        self.assertNotIn("INDEXOPT", err.getvalue())
+        # ... the US: off Form 8949, listed for Form 6781
+        with redirect_stderr(StringIO()):
+            us = FE.build_8949([_us8949("SPX251219C06000000.US", 700.0,
+                                        0.0)])
+        self.assertEqual(len(us["section_1256"]), 1)
+
+    @rule("US-OPT-04")
+    def test_builtin_root_is_noted_once(self):
+        from taxjson.lib.futures import section_1256_kind
+        self.no_map()
+        err = StringIO()
+        with redirect_stderr(err):
+            for _ in range(2):
+                self.assertEqual(section_1256_kind("XSP251219P00500000"),
+                                 "index option")
+        self.assertEqual(err.getvalue().count("INDEXOPT XSP NO"), 1)
+
+    @rule("US-OPT-04")
+    def test_tax_logic_lists_the_roots_in_force(self):
+        from taxjson.lib import tax_logic as TL
+        self.use_map("INDEXOPT ZZX\n")
+        text = TL.render("usa", {})
+        for root in ("SPXPM", "MRUT", "XEO", "ZZX"):   # all, not "weekly"
+            self.assertIn(root, text)
+        self.assertNotIn("INDEXOPT", TL.render("canada", {}))
+
+
+# ------------------------------------------------- B4 evening session
+class TestEveningSessionRoots(_MapCase):
+    def _date(self, root, time="20:30:00"):
+        from taxjson.lib.brokerages.ib_extractor import _ib_market_trade_date
+        # a Monday evening
+        return _ib_market_trade_date("2025-12-29", time,
+                                     "Equity and Index Options", "USD", "",
+                                     f"{root} 16JAN26 6000 C")[0]
+
+    @rule("CA-DATE-SESSION")
+    def test_builtin_root_moves_and_notes_once(self):
+        self.no_map()
+        err = StringIO()
+        with redirect_stderr(err):
+            self.assertEqual(self._date("VIXW"), "2025-12-30")
+            self.assertEqual(self._date("VIXW"), "2025-12-30")
+            self.assertEqual(self._date("ZZX"), "2025-12-29")
+            self.assertEqual(self._date("VIXW", "16:00:00"), "2025-12-29")
+        self.assertEqual(err.getvalue().count("EVENING VIXW NO"), 1)
+
+    @rule("CA-DATE-SESSION")
+    def test_evening_line_adds_and_removes_a_root(self):
+        self.use_map("EVENING ZZX\nEVENING XSP NO\n")
+        self.assertEqual(self._date("ZZX"), "2025-12-30")
+        self.assertEqual(self._date("XSP"), "2025-12-29")
+
+    def test_check_dates_reads_the_same_list(self):
+        from taxjson.lib import check_dates as CD
+        self.use_map("EVENING ZZX\n")
+        self.assertTrue(CD._is_gth_root("ZZX"))
+        self.assertTrue(CD._is_gth_root("VIXW"))
+        self.assertFalse(CD._is_gth_root("ZZY"))
+
+    @rule("CA-DATE-SESSION")
+    def test_tax_logic_names_every_root_incl_weekly_vix(self):
+        from taxjson.lib import tax_logic as TL
+        self.no_map()
+        for c in ("canada", "usa"):
+            self.assertIn("VIXW", TL.render(c, {}))
+
+
 if __name__ == "__main__":
     unittest.main()
