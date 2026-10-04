@@ -17,7 +17,7 @@ Directory layout:
       rrsp/  tfsa/  ...
     ticker.map            # optional — symbol rules (GLOBAL/TOBASE/JOURNAL/DELETE/
                           # DISTINCT/RENAME) and lookups (QUOTE/CRYPTO/
-                          # EXTRACT)
+                          # EXTRACT/T1135)
     reports/              # all outputs land here, overwritten on re-run
     work/                 # intermediate JSON (--fast reuses these via mtime)
 
@@ -2660,7 +2660,7 @@ def _refuse_legacy_project_files(root: Path) -> None:
 
 def cmd_migrate(args: argparse.Namespace) -> None:
     """`taxjson migrate [--dry-run]`: move an old project's per-purpose
-    files into ticker.map (QUOTE / CRYPTO / EXTRACT lines) and
+    files into ticker.map (QUOTE / CRYPTO / EXTRACT / T1135 lines) and
     taxjson.toml ([estimate] amt_carryover, [carryover] claimed,
     [[capital_gains_dividends]], [[distributions]]) — appended, never
     rewritten — and rename each old file to <name>.migrated. A leftover
@@ -5655,6 +5655,11 @@ _TEMPLATE_TICKER_MAP = """\
 #                     these words and whose currency is CURRENCY ('*' =
 #                     any) gets SYMBOL (a USD unit that trades only on the
 #                     TSX would otherwise become a .US listing).
+#   T1135   SYMBOL COUNTRY
+#                     The T1135 domicile where the listing suffix is wrong
+#                     (an interlisted company): an ISO 3166 alpha-3 code,
+#                     or CA/CAN/CANADA/EXCLUDE for "not foreign property"
+#                     (`taxjson t1135`).
 #
 # Examples — uncomment and edit:
 # RENAME   FB.US      META.US   2022-06-09
@@ -5666,6 +5671,7 @@ _TEMPLATE_TICKER_MAP = """\
 # QUOTE    PNG.TO     PNG.V
 # CRYPTO   TAO        TAO22974
 # EXTRACT  Global X US Dollar Currency ETF | USD | DLR.U.TO
+# T1135    ENB.US     CA
 """
 
 # Keep generated artifacts out of version control. `taxjson run` rebuilds all
@@ -13506,15 +13512,16 @@ def cmd_t1135(args: argparse.Namespace) -> None:
              # S052-10: the gain join and the cost walk follow the
              # project's tax_date, like the gains files.
              "--tax-date", _tax_date_basis(settings)]
-    t1135_map = root / "t1135.map"
-    # A dangling link (or a directory) is not "no map": the domicile
+    # The domicile overrides are ticker.map's T1135 lines (once
+    # t1135.map). A dangling link (or a directory) is not "no map": the
     # overrides it holds change the filing verdict (A2-0355).
+    t1135_map = root / "ticker.map"
     if t1135_map.is_file():
         argv += ["--map", str(t1135_map)]
     elif t1135_map.is_symlink() or t1135_map.exists():
         sys.exit(f"taxjson t1135: cannot read {t1135_map.name} (a broken "
-                 f"link or not a file) — fix or remove it; its country "
-                 f"overrides change the verdict.")
+                 f"link or not a file) — fix or remove it; its T1135 "
+                 f"country overrides change the verdict.")
     # The same missing-history openings the gains stage applies (R1-321):
     # without them a position bought before the data read as a short that
     # later real buys covered at zero cost.
@@ -17446,7 +17453,7 @@ def _build_parser(prog: str = "taxjson"
         "migrate",
         help="Move an old project's yf_ticker.map, "
              "crypto_ticker.map, ticker_extraction_overrides.txt, "
-             "amt_carryover.txt, claimed_losses.txt, "
+             "t1135.map, amt_carryover.txt, claimed_losses.txt, "
              "capital_gains_dividends.map and distributions.map into "
              "ticker.map / taxjson.toml (appended; each old file is "
              "renamed <name>.migrated). Every other command stops while "
@@ -18227,7 +18234,8 @@ def _build_parser(prog: str = "taxjson"
         "t1135",
         help="CRA T1135 foreign-property helper: cost-based filing-threshold "
              "test plus per-property / per-country tables over all taxable "
-             "accounts (put per-symbol domicile overrides in t1135.map)")
+             "accounts (per-symbol domicile overrides: ticker.map "
+             "`T1135 SYMBOL COUNTRY` lines)")
     p_t1135.add_argument("--json", action="store_true",
                          help="Emit the report as JSON instead of text")
     p_t1135.set_defaults(func=cmd_t1135)

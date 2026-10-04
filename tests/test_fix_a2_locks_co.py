@@ -402,16 +402,22 @@ class TestAuditStandaloneNote(unittest.TestCase):
 
 class TestT1135DanglingMap(unittest.TestCase):
     def test_dangling_t1135_map_is_refused(self):
-        # A2-0355
+        # A2-0355; the T1135 overrides are ticker.map lines now, and a
+        # leftover t1135.map stops every command until migrated.
+        for name in ("ticker.map", "t1135.map"):
+            with self.subTest(name=name):
+                self._dangling(name)
+
+    def _dangling(self, name):
         with tempfile.TemporaryDirectory() as td:
             p = _project(Path(td) / "p", 2025, TestCarryoverLocks.BOOK)
-            os.symlink(Path(td) / "gone.map", p / "t1135.map")
+            os.symlink(Path(td) / "gone.map", p / name)
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
                  str(p), "t1135"], cwd=REPO_ROOT, capture_output=True,
                 text=True, stdin=subprocess.DEVNULL, timeout=300)
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("t1135.map", r.stderr)
+            self.assertIn(name, r.stderr)
 
 
 if __name__ == "__main__":

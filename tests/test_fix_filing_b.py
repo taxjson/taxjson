@@ -446,7 +446,7 @@ class TestTradeBasisProject(unittest.TestCase):
             + _qt("2025-06-02", "2025-06-03", "Sell", "ZZZ.TO", -50, 13.0)
             + _qt("2025-12-31", "2026-01-02", "Sell", "ZZZ.TO", -50, 14.0))
         # T1135 needs foreign property: classify the CAD test symbol.
-        (root / "t1135.map").write_text("ZZZ.TO USA\n")
+        (root / "ticker.map").write_text("T1135 ZZZ.TO USA\n")
         r = _cli(root, "run", "--no-input")
         assert r.returncode == 0, r.stderr[-2000:]
 
@@ -692,8 +692,9 @@ class TestT1135Report(unittest.TestCase):
         """S008-03 / S051-18."""
         from taxjson.bin.taxjson_t1135 import load_overrides
         with tempfile.TemporaryDirectory() as td:
-            p = Path(td) / "t1135.map"
-            p.write_bytes("﻿XYZ.TO USA\nABC.US CA\n".encode("utf-8"))
+            p = Path(td) / "ticker.map"
+            p.write_bytes("﻿T1135 XYZ.TO USA\nT1135 ABC.US CA\n"
+                          .encode("utf-8"))
             ov = load_overrides(p)
         self.assertEqual(ov.get("XYZ.TO"), "USA")
 

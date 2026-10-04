@@ -1032,14 +1032,17 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "method (Part A) is available; at $250,000 or more the "
                  "detailed method (Part B) is required.", cont=True),
             Rule("CA-RPT-02",
-                 "Country comes from the listing suffix (t1135.map "
-                 "overrides; a foreign listing whose rows carry a "
-                 "Canadian ISIN is named for a `SYMBOL CA` line, since a "
-                 "Canadian corporation's shares are not foreign "
-                 "property); crypto held on an exchange counts. A "
-                 "t1135.map line follows its symbol through a rename, and "
-                 "a line that matches no symbol in the books is named in "
-                 "a warning.",
+                 "Country comes from the listing suffix (ticker.map "
+                 "`T1135 SYMBOL COUNTRY` lines override it — COUNTRY an "
+                 "ISO 3166 alpha-3 code, or CA/CAN/CANADA/EXCLUDE for "
+                 "not foreign property; a line outside that vocabulary "
+                 "stops the report; a foreign listing whose rows carry a "
+                 "Canadian ISIN is named for a `T1135 SYMBOL CA` line, "
+                 "since a Canadian corporation's shares are not foreign "
+                 "property); crypto held on an exchange counts. A T1135 "
+                 "line follows its symbol through a rename, and a line "
+                 "that matches no symbol in the books is named in a "
+                 "warning.",
                  cont=True),
             Rule("CA-RPT-15",
                  "The test covers these books only: specified foreign "

@@ -59,6 +59,23 @@
   (and says where each figure came from), `carryover` starts from the
   recorded balance, and `handoff` flags an input that differs from it.
 
+### T1135 overrides move into ticker.map (owner request)
+
+- `t1135.map` is folded into ticker.map: a symbol's T1135 domicile is a
+  `T1135 SYMBOL COUNTRY` line (COUNTRY: an ISO 3166 alpha-3 code, or
+  CA/CAN/CANADA/EXCLUDE for "not foreign property" — the old file's
+  vocabulary). `taxjson t1135` reads the project's ticker.map and
+  `taxjson-t1135 --map` takes a ticker.map. An override still follows
+  its symbol through a ticker change and is named when it matches
+  nothing. A T1135 line that cannot be read (a country outside the
+  vocabulary, a wrong shape, one symbol given two countries) now stops
+  `taxjson run` and `taxjson t1135` with a did-you-mean hint, like any
+  malformed ticker.map line — the old file skipped it with a warning and
+  the symbol kept its listing country. A `t1135.map` left in a project
+  stops every command until `taxjson migrate` converts it (with the old
+  file's rules: a line it ignored becomes a comment) and renames it
+  `t1135.map.migrated`.
+
 ### Removed
 
 - The remaining watchlist exports are gone: `taxjson-export

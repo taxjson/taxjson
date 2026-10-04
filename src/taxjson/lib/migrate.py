@@ -6,6 +6,7 @@ The old files and where their contents go:
     yf_ticker.map                    -> ticker.map  QUOTE lines
     crypto_ticker.map                -> ticker.map  CRYPTO lines
     ticker_extraction_overrides.txt  -> ticker.map  EXTRACT lines
+    t1135.map                        -> ticker.map  T1135 lines
     amt_carryover.txt                -> taxjson.toml [estimate] amt_carryover
     claimed_losses.txt               -> taxjson.toml [carryover] claimed
     capital_gains_dividends.map      -> taxjson.toml [[capital_gains_dividends]]
@@ -289,10 +290,56 @@ def _conv_extract(text: str, out: _MapOut) -> None:
         out.rules.append(("extract", key, sym))
 
 
+def _conv_t1135(text: str, out: _MapOut) -> None:
+    """t1135.map: `SYMBOL COUNTRY`, `#` comments, symbols upper-cased;
+    a line of another shape, or whose COUNTRY is neither an ISO 3166
+    alpha-3 code nor CA/CAN/CANADA/EXCLUDE, was ignored with a warning
+    (the symbol kept its listing-suffix country) — kept as a comment
+    here; later lines won."""
+    from taxjson.lib.t1135_country import parse_country
+    eff: Dict[str, Tuple[int, str, str, str]] = {}
+    order: List[str] = []
+    for n, raw in enumerate(text.splitlines(), 1):
+        body, note = _split_comment(raw)
+        if not body:
+            if note:
+                out.lines.append(f"# {note}")
+            continue
+        parts = body.split()
+        if len(parts) != 2:
+            out.notes.append(f"{out.name}:{n}: {body!r} is not `SYMBOL "
+                             f"COUNTRY` — the old loader ignored it; kept "
+                             f"as a comment")
+            out.lines.append(f"# (ignored by the old loader) {body}")
+            continue
+        try:
+            code = parse_country(parts[1])
+        except ValueError as e:
+            out.notes.append(f"{out.name}:{n}: {e} — the old loader "
+                             f"ignored the line ({parts[0].upper()} kept "
+                             f"its listing-suffix country); kept as a "
+                             f"comment")
+            out.lines.append(f"# (ignored by the old loader) {body}")
+            continue
+        sym = parts[0].upper()
+        if sym in eff:
+            out.notes.append(f"{out.name}:{n}: {sym} repeats line "
+                             f"{eff[sym][0]} — the later line won; only it "
+                             f"is kept")
+        else:
+            order.append(sym)
+        eff[sym] = (n, parts[1].upper(), code, note)
+    for sym in order:
+        _n, word, code, note = eff[sym]
+        out.lines.append(f"T1135 {sym} {word}{_note(note)}")
+        out.rules.append(("t1135", sym, code))
+
+
 _MAP_CONVERTERS = {
     "yf_ticker.map": _conv_quote,
     "crypto_ticker.map": _conv_crypto,
     "ticker_extraction_overrides.txt": _conv_extract,
+    "t1135.map": _conv_t1135,
 }
 
 

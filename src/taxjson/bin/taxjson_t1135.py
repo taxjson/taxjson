@@ -30,11 +30,11 @@ addition joins the walk where the engine applied it.
 
 Domicile classification is by market suffix (.US → USA, .L → GBR,
 .AX → AUS; .TO/.V/.CN/.NE → Canadian, i.e. not SFP), overridable per symbol
-via a `t1135.map` file:
+via `T1135 SYMBOL COUNTRY` lines in the project's ticker.map:
 
-    # symbol  country      (ISO-3 code, or CA/CANADA/EXCLUDE to exclude)
-    ENB.US    CA           # interlisted Canadian corp held on NYSE — not SFP
-    GLXY.TO   USA          # foreign corp listed on TSX — still SFP
+    #     symbol  country  (ISO-3 code, or CA/CAN/CANADA/EXCLUDE to exclude)
+    T1135 ENB.US  CA       # interlisted Canadian corp held on NYSE — not SFP
+    T1135 GLXY.TO USA      # foreign corp listed on TSX — still SFP
 
 Caveats printed with every report (also see --help):
   - Amounts are COST (ACB-style). That is the correct basis for the filing
@@ -44,7 +44,8 @@ Caveats printed with every report (also see --help):
   - Symbols with no market suffix (typically exchange-held crypto) are
     bucketed as country `CRYPTO` and counted toward the threshold —
     crypto held on a foreign exchange is generally SFP; check where it
-    is held and map it (`SYMBOL <ISO3>` or `SYMBOL CA`) in t1135.map.
+    is held and map it (`T1135 SYMBOL <ISO3>` or `T1135 SYMBOL CA`)
+    in ticker.map.
 
   - The verdict is on these books alone: specified foreign property
     held outside them (a foreign bank account or cash, shares held in
@@ -57,7 +58,7 @@ Usage:
     taxjson-t1135 --year 2025 margin_base.json crypto_base.json \\
         --gains margin_gains.json --gains crypto_gains.json \\
         [--sheltered sheltered_base.json] [--option-premium-timing grant] \\
-        [--map t1135.map] [--threshold 100000] [--json]
+        [--map ticker.map] [--threshold 100000] [--json]
 
 Or through the project wrapper (recommended):  `taxjson t1135`
 """
@@ -70,7 +71,7 @@ import re
 import sys
 from decimal import Decimal
 from pathlib import Path
-from taxjson.lib.cli_diag import guard_main, read_text_utf8, tax_year
+from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.futures import is_plain_future
 from taxjson.lib.numeric import positive_float_arg
 from taxjson.lib.report_model import fmt_money
@@ -87,8 +88,8 @@ DETAILED_THRESHOLD = 250_000.0
 
 # Market suffix → ISO-3166 alpha-3 country of the exchange. This is the
 # 90% heuristic: domicile (what T1135 cares about) usually matches the
-# listing exchange for the retail case. Interlisted exceptions go in
-# t1135.map.
+# listing exchange for the retail case. Interlisted exceptions are
+# ticker.map T1135 lines.
 _SUFFIX_COUNTRY: Dict[str, Optional[str]] = {
     "US": "USA",
     "L": "GBR",
@@ -111,26 +112,7 @@ _QTY_EPS = 1e-6
 # suffix). Deliberately ugly so it reads as "review me".
 REVIEW = "??"
 
-# t1135.map COUNTRY vocabulary (S051-16): an ISO 3166-1 alpha-3 code or
-# one of the "not foreign property" words; anything else (EXCLUDED, CDN,
-# NOT-FOREIGN) became a bogus country and flipped the verdict.
-_NOT_FOREIGN_WORDS = ("CA", "CAN", "CANADA", "EXCLUDE")
-_ISO3 = frozenset("""
-ABW AFG AGO AIA ALA ALB AND ARE ARG ARM ASM ATA ATF ATG AUS AUT AZE BDI
-BEL BEN BES BFA BGD BGR BHR BHS BIH BLM BLR BLZ BMU BOL BRA BRB BRN BTN
-BVT BWA CAF CAN CCK CHE CHL CHN CIV CMR COD COG COK COL COM CPV CRI CUB
-CUW CXR CYM CYP CZE DEU DJI DMA DNK DOM DZA ECU EGY ERI ESH ESP EST ETH
-FIN FJI FLK FRA FRO FSM GAB GBR GEO GGY GHA GIB GIN GLP GMB GNB GNQ GRC
-GRD GRL GTM GUF GUM GUY HKG HMD HND HRV HTI HUN IDN IMN IND IOT IRL IRN
-IRQ ISL ISR ITA JAM JEY JOR JPN KAZ KEN KGZ KHM KIR KNA KOR KWT LAO LBN
-LBR LBY LCA LIE LKA LSO LTU LUX LVA MAC MAF MAR MCO MDA MDG MDV MEX MHL
-MKD MLI MLT MMR MNE MNG MNP MOZ MRT MSR MTQ MUS MWI MYS MYT NAM NCL NER
-NFK NGA NIC NIU NLD NOR NPL NRU NZL OMN PAK PAN PCN PER PHL PLW PNG POL
-PRI PRK PRT PRY PSE PYF QAT REU ROU RUS RWA SAU SDN SEN SGP SGS SHN SJM
-SLB SLE SLV SMR SOM SPM SRB SSD STP SUR SVK SVN SWE SWZ SXM SYC SYR TCA
-TCD TGO THA TJK TKL TKM TLS TON TTO TUN TUR TUV TWN TZA UGA UKR UMI URY
-USA UZB VAT VCT VEN VGB VIR VNM VUT WLF WSM YEM ZAF ZMB ZWE
-""".split())
+# The override COUNTRY vocabulary (S051-16) is lib/t1135_country's.
 # Bucket for suffix-less symbols — equity parsers always stamp a market
 # suffix, so these are crypto. Crypto held on a foreign exchange is
 # generally specified foreign property (funds/intangibles held outside
@@ -192,42 +174,33 @@ def load_transactions(paths: List[Path],
 
 
 def load_overrides(path: Optional[Path]) -> Dict[str, Optional[str]]:
-    """t1135.map: `SYMBOL COUNTRY` per line, '#' comments. COUNTRY of
-    CA/CAN/CANADA/EXCLUDE means "not foreign property"."""
-    overrides: Dict[str, Optional[str]] = {}
+    """The T1135 domicile overrides of a ticker.map: its `T1135 SYMBOL
+    COUNTRY` lines as {SYMBOL: ISO3 code, or None for "not foreign
+    property" (CA/CAN/CANADA/EXCLUDE)} — the vocabulary of the old
+    t1135.map (lib/t1135_country). A BOM is fine; symbols are
+    upper-cased (R1-212).
+
+    A T1135 line that cannot be read (a COUNTRY outside the vocabulary
+    — S051-16 —, a wrong shape, one symbol given two countries) or a
+    line with no keyword (an old t1135.map line pasted in as is) stops
+    the tool naming it: the old file skipped such a line with a warning
+    and the symbol silently kept its listing-suffix country, which can
+    flip the filing verdict. Other lookup lines' problems are `taxjson
+    run`'s to refuse; they do not stop T1135."""
     if path is None:
-        return overrides
-    # utf-8-sig: a BOM (Windows editors) became part of the first key
-    # and silently disabled that override (S008-03, S051-18).
-    for lineno, line in enumerate(
-            read_text_utf8(path).splitlines(), 1):
-        stripped = line.split("#", 1)[0].strip()
-        if not stripped:
-            continue
-        parts = stripped.split()
-        if len(parts) != 2:
-            print(f"warning: {path.name}:{lineno}: expected `SYMBOL COUNTRY`, "
-                  f"got {stripped!r} — line ignored", file=sys.stderr)
-            continue
-        # Book symbols are upper case: a lower-case 'btc CA' never
-        # matched and was ignored without a word (R1-212).
-        symbol, code = parts[0].upper(), parts[1].upper()
-        if code in _NOT_FOREIGN_WORDS:
-            overrides[symbol] = None
-        elif code in _ISO3:
-            overrides[symbol] = code
-        else:
-            import difflib
-            near = difflib.get_close_matches(
-                code, list(_NOT_FOREIGN_WORDS) + sorted(_ISO3), n=1,
-                cutoff=0.6)
-            hint = f" — did you mean {near[0]}?" if near else ""
-            print(f"warning: {path.name}:{lineno}: {parts[1]!r} is not an "
-                  f"ISO 3166 alpha-3 country code or "
-                  f"{'/'.join(_NOT_FOREIGN_WORDS)}{hint} — line ignored "
-                  f"({symbol} keeps its listing-suffix country)",
-                  file=sys.stderr)
-    return overrides
+        return {}
+    from taxjson.lib.cli_diag import InputContentError
+    from taxjson.lib.t1135_country import override_value
+    from taxjson.lib.ticker_map import read_side_rules
+    rules = read_side_rules(path)
+    if rules.t1135_problems:
+        more = len(rules.t1135_problems) - 1
+        raise InputContentError(
+            f"{path}: {rules.t1135_problems[0]}"
+            + (f" (and {more} more)" if more else "")
+            + " — T1135 overrides are `T1135 SYMBOL COUNTRY` lines "
+              "(`taxjson migrate` converts an old t1135.map)")
+    return {sym: override_value(code) for sym, code in rules.t1135.items()}
 
 
 # ---------------------------------------------------------------- classify
@@ -372,7 +345,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     for `year` plus the maximum TOTAL foreign cost observed in the year
     (the ITA 233.3 filing-threshold test). `overrides` is updated with
     rename targets of overridden symbols (a ticker change keeps its
-    t1135.map classification, S051-17)."""
+    T1135 override, S051-17)."""
     year_start = f"{year}-01-01"
     year_end = f"{year}-12-31"
     from taxjson.lib.core import is_option_symbol
@@ -980,13 +953,13 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
     seen = {t.get("symbol") for t in txs if t.get("symbol")}
     unused_overrides = sorted(k for k in user_keys if k not in seen)
     for k in unused_overrides:
-        print(f"warning: t1135.map: {k!r} matches no symbol in the books "
+        print(f"warning: ticker.map: `T1135 {k}` matches no symbol in the books "
               f"(renamed, consolidated by ticker.map, or a typo?) — the "
               f"override is not applied.", file=sys.stderr)
     # A Canadian issuer on a foreign listing (its ISIN says CA — IB
     # stamps issuer_country on the rows) is not specified foreign
     # property, yet the listing suffix classifies it foreign. Named, not
-    # guessed: the user confirms with a `SYMBOL CA` line in t1135.map
+    # guessed: the user confirms with a `T1135 SYMBOL CA` line in ticker.map
     # (re-audit A2-0332).
     canadian_issuer = sorted({
         str(t.get("symbol")) for t in txs
@@ -1000,7 +973,8 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
               f"{' ...' if len(canadian_issuer) > 6 else ''}): shares of a "
               f"Canadian corporation are not specified foreign property, "
               f"but they are counted here by their listing — add "
-              f"`SYMBOL CA` to t1135.map once confirmed.", file=sys.stderr)
+              f"`T1135 SYMBOL CA` to ticker.map once confirmed.",
+              file=sys.stderr)
     deferred: Dict[str, float] = {}
     if not full_history:
         # Year-only mode: a loss denied in an earlier year whose
@@ -1174,7 +1148,7 @@ def render_report(rep: Dict[str, Any]) -> str:
                      f"foreign listing are counted as foreign property "
                      f"({', '.join(_ci[:6])}{' ...' if len(_ci) > 6 else ''})"
                      f" — a Canadian corporation's shares are not; map "
-                     f"them `SYMBOL CA` in t1135.map once confirmed.")
+                     f"them `T1135 SYMBOL CA` in ticker.map once confirmed.")
     _dw = sum((rep.get("deferred_wash_not_in_cost") or {}).values())
     if _dw:
         lines.append(f"  !! cost amounts EXCLUDE {_money(_dw)} {cur} of "
@@ -1208,7 +1182,7 @@ def render_report(rep: Dict[str, Any]) -> str:
             if r.get("futures"):
                 notes.append("futures — cost amount nil")
             if r["country"] == REVIEW:
-                notes.append("unclassified — review / add to t1135.map")
+                notes.append("unclassified — review / add a ticker.map T1135 line")
             elif r["country"] == CRYPTO:
                 notes.append("crypto — check where held (see notes)")
             table.append((r["symbol"], r["country"], _money(r["max_cost"]),
@@ -1261,7 +1235,7 @@ def render_report(rep: Dict[str, Any]) -> str:
                  "simultaneous total.")
     lines.append("  - .TO/.V/.CN/.NE symbols are treated as Canadian (not "
                  "SFP). A foreign-domiciled corp listed on a Canadian "
-                 "exchange IS still SFP — add `SYMBOL <ISO3>` to t1135.map. "
+                 "exchange IS still SFP — add `T1135 SYMBOL <ISO3>` to ticker.map. "
                  "Conversely a Canadian corp held on a US exchange is NOT "
                  "SFP — add `SYMBOL CA`.")
     if rep.get("futures_symbols"):
@@ -1277,7 +1251,7 @@ def render_report(rep: Dict[str, Any]) -> str:
         lines.append("  - CRYPTO rows (symbols with no market suffix): crypto "
                      "held on a FOREIGN exchange or platform is generally "
                      "specified foreign property — report it under that "
-                     "exchange's country (add `SYMBOL <ISO3>` to t1135.map). "
+                     "exchange's country (add `T1135 SYMBOL <ISO3>` to ticker.map). "
                      "Crypto held with a Canadian platform may not be; add "
                      "`SYMBOL CA` once you have checked. Until then it is "
                      "counted toward the threshold (the conservative side).")
@@ -1318,7 +1292,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--year", type=tax_year, required=True,
                         help="Tax year")
     parser.add_argument("--map", type=Path, default=None,
-                        help="t1135.map override file (SYMBOL COUNTRY lines)")
+                        help="The ticker.map whose `T1135 SYMBOL COUNTRY` "
+                             "lines override a symbol's domicile")
     parser.add_argument("--base-currency", default="CAD",
                         type=norm_currency,
                         help="Label for amounts (default: CAD)")
@@ -1381,7 +1356,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"taxjson-t1135: no such file: {p}", file=sys.stderr)
             return 2
     if args.map is not None and not args.map.exists():
-        print(f"taxjson-t1135: no such map file: {args.map}", file=sys.stderr)
+        print(f"taxjson-t1135: no such ticker.map: {args.map}",
+              file=sys.stderr)
         return 2
 
     overrides = load_overrides(args.map)

@@ -414,8 +414,8 @@ class TestT1135Report(unittest.TestCase):
             self.assertEqual(rc, 0, err)
             self.assertIn("Canadian ISIN", err)
             self.assertIn("QZBT.US", out.split("Canadian ISIN")[-1])
-            m = Path(d) / "t1135.map"
-            m.write_text("QZBT.US CA\n")
+            m = Path(d) / "ticker.map"
+            m.write_text("T1135 QZBT.US CA\n")
             rc, out, err = _t1135([str(p), "--year", "2025", "--map",
                                    str(m), "--year-wash-only"])
             self.assertNotIn("Canadian ISIN", err + out)
