@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from tax_rules import rule  # noqa: E402
+from tax_rules import rule, rule_absent  # noqa: E402
 
 from taxjson.bin import taxjson_convert_currency as CC  # noqa: E402
 from taxjson.lib.core import TaxTransaction  # noqa: E402
@@ -265,3 +265,73 @@ class TestCanadianTwinOnEveryVenue(unittest.TestCase):
             r = _scan(root)
         self.assertNotIn("US-LISTING", r.stdout)
         self.assertNotIn("MAP-GAP", r.stdout)
+
+
+# ---------------------------------------------------------------- B18
+
+class TestQuestradeKeyWithoutDealerNames(unittest.TestCase):
+    """B18: the dividend <-> trade matching key keeps no list of dealer
+    names; a transfer row naming any dealer still teaches the map."""
+
+    def _parse(self, *bodies):
+        from test_fix_rbcqt import qt_parse
+        return qt_parse(*bodies)
+
+    def test_key_has_no_dealer_list(self):
+        from taxjson.lib.brokerages import questrade as Q
+        import inspect
+        src = inspect.getsource(Q).upper()
+        for name in ("SCOTIA", "CIBC", "DOMINION SECURITIES",
+                     "NATIONAL BANK", "INTERACTIVE"):
+            self.assertNotIn(name, src.split("_DESC_NOISE_RES")[1]
+                             .split("_SPINOFF_PARENT_RE")[0])
+
+    def test_any_dealer_on_a_transfer_teaches_the_dividend(self):
+        from test_fix_rbcqt import q, qdiv, of
+        for dealer in ("ZZDEALER SECURITIES INC 41.75 TRANSFER",
+                       "QQ WEALTH LTD",
+                       "TRANSFER IN SOME OTHER BROKER"):
+            tfi = q(action='TF6', sym='ZZQ', desc=f'ZZQ MINES LTD {dealer}',
+                    qty='10', price='0', gross='0', comm='0', net='0',
+                    act='Transfers')
+            div = qdiv('A012345', 'ZZQ MINES LTD CASH DIV ON 10 SHS REC '
+                       '06/01/25 PAY 06/15/25', '4.00')
+            txs, err, _ = self._parse(tfi + div)
+            self.assertEqual(of(txs, action='DIVIDEND')[0]['symbol'],
+                             'ZZQ.US', (dealer, err))
+
+    def test_transfer_with_internal_code_resolves_via_trade(self):
+        from test_fix_rbcqt import q, of
+        trade = q(sym='ZZQ', desc='ZZQ MINES LTD WE ACTED AS AGENT')
+        tfi = q(action='TF6', sym='R777301', act='Transfers', qty='7',
+                price='0', gross='0', comm='0', net='0',
+                desc='ZZQ MINES LTD ZZDEALER SECURITIES 41.75 TRANSFER '
+                     'BOOK VALUE 371.21')
+        txs, err, _ = self._parse(trade + tfi)
+        self.assertEqual(of(txs, action='TRANSFER')[0]['symbol'], 'ZZQ.US',
+                         err)
+
+    def test_class_letters_are_symmetric(self):
+        from taxjson.lib.brokerages.questrade import _get_desc_key
+        self.assertEqual(_get_desc_key("ZZR HOLDINGS INC CLASS A SUB VTG "
+                                       "WE ACTED AS AGENT"),
+                         "ZZR HOLDINGS INC CL A")
+        self.assertEqual(_get_desc_key("ZZR HOLDINGS INC CLASS B SUB VTG"),
+                         "ZZR HOLDINGS INC CL B")
+        self.assertEqual(_get_desc_key("ZZR HOLDINGS INC CL B CASH DIV ON "
+                                       "10 SHS"), "ZZR HOLDINGS INC CL B")
+
+    def test_class_dividend_without_the_class_word_finds_the_one_class(self):
+        from test_fix_rbcqt import q, qdiv, of
+        trade = q(sym='ZZR', desc='ZZR HOLDINGS INC CLASS B WE ACTED AS '
+                  'AGENT')
+        div = qdiv('A012345', 'ZZR HOLDINGS INC CASH DIV ON 10 SHS', '4.00')
+        txs, err, _ = self._parse(trade + div)
+        self.assertEqual(of(txs, action='DIVIDEND')[0]['symbol'], 'ZZR.US',
+                         err)
+
+    def test_name_with_transfer_inside_is_kept(self):
+        from taxjson.lib.brokerages.questrade import _get_desc_key
+        self.assertEqual(_get_desc_key("ZZ TRANSFER LP WE ACTED AS AGENT"),
+                         "ZZ TRANSFER LP")
+

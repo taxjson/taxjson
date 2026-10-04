@@ -31,6 +31,14 @@
   US-LISTING and MAP-GAP checks looked for a US listing's Canadian line
   only as `ROOT.TO`; a TSX Venture, CSE or Cboe Canada line of the same
   root (or a ticker.map target there) now counts too.
+- **Questrade income matching keeps no list of dealer names.** A
+  dividend row under an internal code is matched to its security through
+  the description; a transfer-in row naming the delivering dealer after
+  the security used to be matched only for a hard-coded list of Canadian
+  banks and one US broker. Any dealer is now matched (the security's own
+  description is a word prefix of the transfer's), and a class
+  designation keeps its letter for every class (`CLASS B` and `CL B`
+  are one key; only `CLASS A` used to be stripped).
 
 ### Command line
 
