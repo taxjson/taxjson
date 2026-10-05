@@ -8,6 +8,16 @@ The codebase has been through eight audit rounds and two full-coverage audits; e
 
 ## Brokerage parser limitations
 
+### Positions reports: what is not read
+- **Where:** `src/taxjson/lib/positions_reports.py` (`taxjson opening`, `taxjson sanity`).
+- **Current behavior:** an RBC Holdings Export is read by its column LABELS (Symbol, Quantity, Currency, a book cost / book value or average cost column, Market Value, Account): no real export was available to pin its exact layout. IB's Open Positions **Lot** rows are not read (no layout with acquisition dates is documented), so a US opening from an IB statement has no lot dates and is refused: list the lots in a holdings TOML (`acquired = ...`). Questrade, Webull, Coinbase and Kraken have no positions export the parsers know (Questrade: `taxjson fetch --positions` writes a holdings TOML).
+- **What would graduate it:** a real (redacted) RBC Holdings Export and an IB statement with Lot rows.
+
+### Opening balances: edges the cut-off does not see
+- **Where:** `src/taxjson/lib/opening.py` (merge2 stage).
+- **Current behavior:** the snapshot cut-off runs on the merged rows, so a `[[distributions]]` adjustment (added after merge2) and a missing-history opening from `missing_history.json` (added at the gains stage) dated before a snapshot are not left out; one taxjson account holding the same symbol at two brokers with different snapshot dates cannot be opened per broker (one snapshot date per symbol per account). A US project asks for a lot date on every OPENING line, a retirement account's included (where the holding period does not matter).
+- **Why deferred:** each needs the account type or the broker account on the row at the merge stage; none is in the owner's books.
+
 ### RBC dividend withholding-tax gross-up
 - **Where:** `src/taxjson/lib/brokerages/rbc_direct.py:_build_dividend`.
 - **Current behavior:** Dividend rows containing `"NON-RES TAX WITHHELD"` are grossed-up at a flat 15% (`gross = net / 0.85`) regardless of the security's actual domicile / treaty rate.
