@@ -224,8 +224,9 @@ class TestInit(unittest.TestCase):                   # B8 + polish
                                text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             bak = (Path(td) / "taxjson.toml.bak").read_text()
-            # (the Canadian file, whatever the `=` column's padding)
-            self.assertRegex(bak, r'(?m)^country += "canada"$')
+            # (the Canadian file, whatever the `=` column's padding and
+            # the values list at the end of the line)
+            self.assertRegex(bak, r'(?m)^country += "canada"(?: +# .*)?$')
             self.assertIn("tfsa", r.stdout)
             self.assertIn("no [accounts.*] section", r.stdout)
 
