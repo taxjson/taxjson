@@ -93,8 +93,6 @@ def _sample_texts():
         ("rbc_direct", "rbc Activity Export preamble",
          '"Activity Export as of Jan 5, 2026 at 8:59:00 am ET"\n\n'
          '"Account: 55500001 - Margin"\n\n' + _RBC_FULL_H + _RBC_ROW),  # pii-ok
-        ("rbc_direct", "rbc holdings export",
-         "Holdings Export as of Jan 5, 2026\n\nSymbol,Quantity\nZZR,10\n"),
         ("coinbase", "coinbase legacy layout with preamble", _CB_LEGACY),
         ("kraken", "kraken ledger", _KR_LEDGER),
     ]
@@ -113,7 +111,9 @@ class TestDetectorMatrix(unittest.TestCase):
 
     def test_each_sample_matches_only_its_own_detector(self):
         samples = _sample_texts()
-        self.assertGreaterEqual(len(samples), 20)
+        # An RBC "Holdings Export" (positions, not activity) is no
+        # trade detector's: tests/test_positions_reports.py.
+        self.assertGreaterEqual(len(samples), 19)
         for broker, label, text in samples:
             rows = D.csv_rows(text)
             head = rows[:D.SCAN_ROWS]

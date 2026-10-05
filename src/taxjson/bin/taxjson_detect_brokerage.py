@@ -84,6 +84,11 @@ def main():
         sys.exit(1)
     if det.error and det.broker is None:
         cli_diag.error(PROG, det.error)
+    if det.positions:
+        # A positions report: no parser reads it as activity.
+        print(f"positions:{det.positions}")
+        print(det.line(), file=sys.stderr)
+        sys.exit(0)
     if det.broker:
         print(det.broker)
         print(det.line(), file=sys.stderr)

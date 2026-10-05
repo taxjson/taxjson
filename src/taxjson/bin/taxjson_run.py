@@ -1851,6 +1851,14 @@ def group_inputs_detailed(account_dir: Path):
             det = detect(csv)
         except AmbiguousBroker as e:
             _die(str(e))
+        if det.positions:
+            # A positions report (what is held on a date, not activity —
+            # lib/positions_reports) dropped into inputs/: listed with
+            # the detection lines and skipped, never parsed as trades
+            # and never a failed run. `taxjson sanity` / `taxjson
+            # opening` read it.
+            found.append(det)
+            continue
         if not det.broker:
             # Content detection cannot read a cp1252 re-save: the
             # rename advice below pointed at the wrong fix (S024-03).
@@ -2847,6 +2855,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     _grouped_raw, _detected = group_inputs_detailed(acct_dir)
     grouped = _split_generic_groups(_grouped_raw)
     if not grouped and not input_files(acct_dir, ".tt"):
+        # Say why a folder holding only a positions report has no books.
+        _report_detection(name, [d for d in _detected if d.positions],
+                          cache)
         _msg = (f"taxjson: warning: no CSVs or .tt files in "
                 f"{acct_dir}; skipping account '{name}'.")
         if (cache / f"{name}_base.json").exists():

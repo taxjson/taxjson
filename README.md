@@ -70,6 +70,13 @@ File names do not decide which parser reads a CSV. For every CSV in
    parser reads, preamble lines allowed); Kraken's trades or ledgers
    columns. These signatures never overlap. A file that matches two
    (two exports pasted into one file) stops the run, naming both.
+   A **positions report** is not activity: an RBC "Holdings Export"
+   dropped into an inputs folder matches no trade parser, and the run
+   lists it as `→ positions report (RBC Holdings Export, as of ...) —
+   not activity; skipped` and carries on (`taxjson sanity` and
+   `taxjson opening` read it). An IB Activity Statement is activity
+   whatever sections it has; its Open Positions section is read by
+   those two commands too.
 3. **Falls back to the file name** only when no header matched: a `cb_`
    or `kr_` prefix, or the word `coinbase` or `kraken` in the name (and
    `generic_`, whose missing mapping the importer then names). When the

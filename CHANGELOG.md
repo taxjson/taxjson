@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Broker positions reports
+
+- **One reader for each broker's positions report.** A new module reads
+  what a broker says you hold on a date into one common row: the
+  account masked, the symbol spelled as that broker's trade parser
+  spells it, the quantity, the currency, and the cost with what kind of
+  cost it is (a Canadian broker's average book cost, or a sum of
+  per-lot cost basis). Market value is kept apart and never read as a
+  cost. Supported: the Open Positions section of an Interactive Brokers
+  Activity Statement, RBC Direct Investing's Holdings Export (columns
+  matched by their labels), and the `[[holding]]` TOML (with an
+  optional acquisition date per lot). Questrade, Webull, Coinbase and
+  Kraken have no positions export the parsers know; Questrade's live
+  positions come through the fetch plugin's TOML.
+- **A positions report in an inputs folder no longer stops the run.**
+  An RBC Holdings Export was routed to the RBC parser, which refused
+  it and failed the run; it is now recognised as a positions report,
+  listed with the other files as skipped, and never parsed as trades.
+  `taxjson-detect-brokerage` prints `positions:rbc_holdings` for it.
+
 ### Broker detection reads the file, not its name (owner request)
 
 - **Content first, for every supported export.** `taxjson run` now
