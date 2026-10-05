@@ -161,7 +161,10 @@ def note_builtin(kind: str, key: str, message: str) -> None:
     if k in _NOTED:
         return
     _NOTED.add(k)
-    print(f"note: {message}", file=sys.stderr)
+    # Wrapped at the house width for a person; one line when captured
+    # for a program (a stage's .diag), as before (docs/output-style.md).
+    from taxjson.lib.out import note
+    note(message)
 
 
 def reset_notes() -> None:

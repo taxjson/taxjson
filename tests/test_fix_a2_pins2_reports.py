@@ -78,11 +78,13 @@ class TestFeesSumLabels(unittest.TestCase):
         header = next(ln for ln in lines if ln.startswith("BROKERAGE"))
         self.assertIn("$/UNIT", header)
         self.assertNotIn("$/SHARE", header)
-        self.assertIn("Non-option vs option fees:", lines)
-        row = next(ln for ln in lines
-                   if ln.strip().startswith("questrade")
-                   and "options" in ln)
-        self.assertRegex(row, r"questrade\s+non-option 9\.95\s+options 0\.00")
+        # The split is its own table under a sentence-case heading
+        # (docs/output-style.md): BROKERAGE  NON-OPTION  OPTIONS.
+        i = lines.index("Non-option vs option fees")
+        self.assertRegex(lines[i + 1], r"^  BROKERAGE\s+NON-OPTION\s+OPTIONS$")
+        row = next(ln for ln in lines[i + 1:]
+                   if ln.strip().startswith("questrade"))
+        self.assertRegex(row, r"questrade\s+9\.95\s+0\.00$")
 
 
 # --------------------------------------------------- run views and `sum`

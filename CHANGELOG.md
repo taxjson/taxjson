@@ -27,6 +27,23 @@
   the denial, the ±30-day window as a table with a legend — instead of
   the `#`-commented trace (`taxjson audit` and trace files keep it). No
   figure, `--json` output or file changes.
+- **The position, period and roll-up views, `stats` and `crypto-sends`
+  in the house output style.** `list`, `shares`, `events`/`trades`/
+  `divs`/`dil`/`fees`/`gains`/`leaps`/`roc`/`transfers`, the `-sum`
+  roll-ups, `winners`, `stats` and `crypto-sends` put their context
+  under a short title, fit their tables to the width (the least
+  important columns go first — `stats` drops the largest win and loss,
+  `transfers` the fee and the sidecar/book column — then one record per
+  row), wrap their notes, and print their definitions as lists.
+  `fees-sum` (and `reports/fees.rpt`, a report for reading) shows the
+  non-option / option split as its own table and the native currencies
+  as aligned lines; `crypto-sends` lists each send's facts aligned under
+  its id with the ready `.tt` line never wrapped, and the stablecoin
+  currency gain per year under its own heading. Their notes, warnings
+  and refusals read `taxjson <command>: note|warning|error: ...` with
+  the detail indented below. `events PERIOD ACCOUNT` stays re-importable
+  `.tt` text, byte for byte; no figure, `--json` output or other file
+  changes.
 
 
 ## v0.18.0 (2026-10-05)

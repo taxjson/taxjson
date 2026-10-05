@@ -16,6 +16,7 @@ Synthetic data only.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -204,20 +205,22 @@ class TestCryptoSendsStablecoinFxTotal(unittest.TestCase):
         r = _cli(self.root, "crypto-sends", "crypto", home=self.home)
         self.assertEqual(r.returncode, 0, r.stderr[-1500:])
         self.assertIn("likely SUPERFICIAL", r.stdout)
-        return [ln for ln in r.stdout.splitlines()
-                if ln.startswith("Stablecoin gifts/payments")]
+        # The per-year totals: `  YYYY:  +n.nn CAD` under the section
+        # heading, then the "Superficial losses are excluded" paragraph.
+        lines = r.stdout.splitlines()
+        i = lines.index("STABLECOIN GIFTS AND PAYMENTS — currency gain")
+        self.assertIn("Superficial losses are excluded",
+                      " ".join(r.stdout.split()))
+        return [ln.strip() for ln in lines[i + 1:]
+                if re.match(r"  \d{4}:", ln)]
 
     def test_superficial_loss_is_excluded(self):
         # A2-0874: the CB gift's -0.21 is superficial, so 2025 = +7.97.
-        self.assertEqual(self._total("gift"), [
-            "Stablecoin gifts/payments, currency gain (superficial losses "
-            "excluded): 2025 +7.97 CAD"])
+        self.assertEqual(self._total("gift"), ["2025:  +7.97 CAD"])
 
     def test_self_sends_are_not_counted(self):
         # A2-0507: the 2026 self sweep (-0.10, not superficial) stays out.
-        self.assertEqual(self._total("self"), [
-            "Stablecoin gifts/payments, currency gain (superficial losses "
-            "excluded): 2025 +7.97 CAD"])
+        self.assertEqual(self._total("self"), ["2025:  +7.97 CAD"])
 
 
 class TestAuditUsesTheFillPrices(unittest.TestCase):

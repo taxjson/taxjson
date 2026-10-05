@@ -1172,13 +1172,14 @@ fully-closed positions are omitted. Pass an account to scope to one.
 
 ```
 $ taxjson list
-OPEN POSITIONS — CAD, as of the latest data in the books (2026-09-21), basis: wash-adjusted  (...)
+OPEN POSITIONS — CAD, as of the latest data in the books (2026-09-21)
+COST is book cost after ticker.map and the base-currency conversion, basis: wash-adjusted.
 
-ACCOUNT   SYMBOL    QTY   COST       COST/SH   DEFERRED   SINCE
----------------------------------------------------------------------
-lira      XEQT.TO   10    420.00     42.00     -          2024-11-03
-margin    SAMPLG.US 30    300.00     10.00     150.00     2025-01-15
-margin    SAMPNG.TO 4     240.00     60.00     -          2025-02-01
+ACCOUNT  SYMBOL     QTY    COST  COST/SH  DEFERRED  SINCE
+------------------------------------------------------------
+lira     XEQT.TO     10  420.00    42.00         -  2024-11-03
+margin   SAMPLG.US   30  300.00    10.00    150.00  2025-01-15
+margin   SAMPNG.TO    4  240.00    60.00         -  2025-02-01
 
 3 position(s), total book cost 960.00 CAD
 ```
