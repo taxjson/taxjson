@@ -465,3 +465,22 @@ class TestShortCostSign(unittest.TestCase):
             pooled=False, roc=False, tol_abs=1.0, tol_rel=0.001,
             short=True)
         self.assertEqual(r["status"], "match")
+
+
+class TestDrafterSeesOpenings(unittest.TestCase):
+    """find-missing-history --write-purchases: a sale an OPENING line
+    covers has its purchase history — nothing to draft."""
+
+    def test_opening_covered_closing_sale_is_not_drafted(self):
+        from test_basis_drafts import SINGLE, _book, _parsed
+        from taxjson.bin.taxjson_convert_tt import parse_tt_line
+        from taxjson.lib.core import TaxTransaction
+        from taxjson.lib.missing_history import draft_purchases
+        book = _book(_parsed(SINGLE))
+        self.assertEqual(len(draft_purchases(book, country="canada")[0]),
+                         1)
+        op = TaxTransaction(**parse_tt_line(
+            "OPENING 2024-12-31 QZB.US 10 USD 150", "margin"))
+        op.source = "opening_2024-12-31.tt"
+        drafts, gaps = draft_purchases(book + [op], country="canada")
+        self.assertEqual((drafts, gaps), ([], []))
