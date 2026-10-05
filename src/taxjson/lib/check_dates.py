@@ -441,34 +441,46 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
 
 
 def render(doc: Dict[str, Any], show_all: bool = False,
-           per_code: int = 10) -> List[str]:
-    L = [f"CHECK DATES — {doc['checked']} rows from "
-         f"{len(doc['sources'])} source(s)", ""]
+           per_code: int = 10, width_: Optional[int] = None) -> List[str]:
+    """The report in the house layout (docs/output-style.md): a title, a
+    section per severity, each code with its count and meaning and its
+    rows as a table that fits the width; the last line says what to do."""
+    from taxjson.lib.out import Doc
+    n_src = len(doc['sources'])
+    d = Doc(f"CHECK DATES — {doc['checked']} rows from {n_src} "
+            f"source{'' if n_src == 1 else 's'}", width_=width_)
+    heads = {"ERROR": "ERRORS — impossible dates",
+             "WARN": "WARNINGS — unusual dates to review",
+             "NOTE": "NOTES — information"}
     for sev in ("ERROR", "WARN", "NOTE"):
         codes = doc["counts"].get(sev, {})
         if not codes:
             continue
-        L.append(f"== {sev} ({sum(codes.values())})")
-        for code, n in sorted(codes.items(), key=lambda kv: -kv[1]):
+        d.section(f"{heads[sev]} ({sum(codes.values())})")
+        for k, (code, n) in enumerate(sorted(codes.items(),
+                                             key=lambda kv: -kv[1])):
             rows = [i for i in doc["issues"]
                     if i["severity"] == sev and i["code"] == code]
-            L.append(f"   {code}: {n} — {rows[0]['message']}")
-            for i in rows[: None if show_all else per_code]:
-                src = f"{i['account']}: {i['source']}"
-                L.append(f"      {src:<30} "
-                         f"{str(i['symbol']):<26} {i['action']:<8} "
-                         f"{i['date']} {i['time'] or '':<8} "
-                         f"settle {i['date_settle'] or '-'}"
-                         + (f"  ({i['detail']})" if i.get("detail") else ""))
+            if k:
+                d.blank()
+            d.para(f"{code}: {n} — {rows[0]['message']}", "  ")
+            shown = rows[: None if show_all else per_code]
+            d.table(["ACCOUNT", "SOURCE", "SYMBOL", "ACTION", "DATE",
+                     "TIME", "SETTLE", "DETAIL"],
+                    [[i["account"], i["source"], str(i["symbol"]),
+                      i["action"], i["date"], i["time"] or "",
+                      i["date_settle"] or "-", i.get("detail") or ""]
+                     for i in shown],
+                    drop=(5, 1), key=(0, 2, 4), indent="    ")
             if not show_all and len(rows) > per_code:
-                L.append(f"      ... {len(rows) - per_code} more "
-                         f"(--all)")
-        L.append("")
+                d.para(f"... {len(rows) - per_code} more (--all lists "
+                       f"them)", "    ")
+    d.blank()
     if not doc["issues"]:
-        L.append("Every date lands where its market allows.")
+        d.para("Every date lands where its market allows.")
     elif doc["errors"]:
-        L.append(f"{doc['errors']} date(s) cannot be right; fix the "
-                 f"source file or the parser.")
+        d.para(f"{doc['errors']} date(s) cannot be right; fix the "
+               f"source file or the parser.")
     else:
-        L.append("No impossible dates; review the warnings.")
-    return L
+        d.para("No impossible dates; review the warnings.")
+    return d.lines()

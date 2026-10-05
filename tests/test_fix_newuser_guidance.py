@@ -265,9 +265,10 @@ class TestSumWarnsUncoveredSales(unittest.TestCase):
             r = cli(root, "sum")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("taxjson sum: warning: 1 position(s) sold in "
-                          "2025 with no purchase in your files, not in "
-                          "missing_history.json: their gain is NOT in "
-                          "these totals (SMA.TO (margin))", r.stderr)
+                          "2025 with no purchase in your files: their gain "
+                          "is NOT in these totals", r.stderr)
+            self.assertIn("Not in missing_history.json: SMA.TO (margin)",
+                          r.stderr)
             self.assertIn("taxjson find-missing-history", r.stderr)
             j = json.loads(cli(root, "sum", "--json").stdout)
             self.assertEqual(j["no_purchase_uncovered"],

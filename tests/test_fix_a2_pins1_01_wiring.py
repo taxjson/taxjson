@@ -110,7 +110,8 @@ class TestCorporateDistributionsReachEveryConsumer(unittest.TestCase):
                          ("2025-12-30", -200.0))
         r = _cli(self.root, "form-export")
         self.assertEqual(r.returncode, 0, r.stderr[-1500:])
-        self.assertIn("Line 13200 (gain/loss): -200.00", r.stdout)
+        self.assertIn("Line 13200 (gain/loss): -200.00",
+                      " ".join(r.stdout.split()))
 
     def test_list_as_of_a_date(self):
         r = _cli(self.root, "list", "--date", "2025-12-25", "--json")
@@ -266,7 +267,8 @@ class TestFuturesSettleReachesTheParser(unittest.TestCase):
         self.assertEqual(settles, {"2025-06-02": "2025-06-03",
                                    "2025-12-31": "2026-01-02"})
         self.assertEqual(fe.returncode, 0, fe.stderr[-1500:])
-        self.assertNotIn("Line 15300 (gain/loss): 6.00", fe.stdout)
+        self.assertNotIn("Line 15300 (gain/loss): 6.00",
+                         " ".join(fe.stdout.split()))
 
     @rule("US-DATE-12")
     def test_usa(self):

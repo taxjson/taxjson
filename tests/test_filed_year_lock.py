@@ -88,7 +88,7 @@ class TestFiledYearLock(unittest.TestCase):
                              .returncode, 0)
             r = _run_cli(root, "check-filed")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("no filed/", r.stdout)
+            self.assertIn("no filed/", r.stdout.lower())
 
 
 

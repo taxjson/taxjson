@@ -338,38 +338,59 @@ def status(repo: Path, *, fetch_remote: bool = True,
             "releases": releases, "total": len(rows)}
 
 
-def render(st: Dict[str, Any], prog: str = "taxjson") -> str:
-    """The text page for `taxjson channels`."""
-    out = []
-    if not st["online"]:
-        out.append(f"(offline — showing what this clone already knows: "
-                   f"{st['offline_reason']})")
+def render(st: Dict[str, Any], prog: str = "taxjson",
+           width_: Optional[int] = None) -> str:
+    """The text page for `taxjson channels`, in the house layout
+    (docs/output-style.md): a title naming where it reads, the channels
+    and this machine as aligned `label:  value` lines, then the releases
+    as a table whose CHANGELOG column is cut to fit the width."""
+    from taxjson.lib.out import Doc
     kind = f"{st['source_kind']} " if st.get("source_kind") else ""
-    out.append(f"Release channels — from the {kind}{st['source']}"
-               + (f" ({st['channels_file']})" if st["channels_file"] else
-                  " (no channels.json yet)"))
+    d = Doc(f"RELEASE CHANNELS — from the {kind}{st['source']}"
+            + (f" ({st['channels_file']})" if st["channels_file"] else
+               " (no channels.json yet)"), width_=width_)
+    if not st["online"]:
+        d.para(f"(offline — showing what this clone already knows: "
+               f"{st['offline_reason']})")
+    d.blank()
     ch = st["channels"]
-    for name in CHANNELS:
-        out.append(f"  {name:<9}{ch.get(name) or '(not set)'}")
+    pairs = [(name, ch.get(name) or "(not set)") for name in CHANNELS]
     box = st["this_box"]
     if box["installed"]:
         on = (box["release"] or
               (f"{box['branch']} @ {box['commit']}" if box["branch"]
                else f"{box['commit']} (not a release)"))
         extra = f", channel {box['channel']}" if box["channel"] else ""
-        out.append(f"  {'this box':<9}{on}  ({box['dir']}{extra})")
+        pairs.append(("this box", f"{on}  ({box['dir']}{extra})"))
     else:
-        out.append(f"  {'this box':<9}no production copy at {box['dir']}")
+        pairs.append(("this box", f"no production copy at {box['dir']}"))
+    d.kv(pairs, "  ")
     for p in st["problems"]:
-        out.append(f"  ! {p}")
-    out.append("")
-    for r in st["releases"]:
-        marks = ("←" + " ".join(r["marks"])) if r["marks"] else ""
-        out.append(f"  {r['tag']:<9} {r['date']}  {marks:<26} "
-                   f"{r['subject'][:70]}".rstrip())
+        d.item(p, "  ")
+    d.section("RELEASES")
     if not st["releases"]:
-        out.append("  (no releases yet)")
+        d.para("(no releases yet)", "  ")
+    else:
+        marks = [("←" + " ".join(r["marks"])) if r["marks"] else ""
+                 for r in st["releases"]]
+        mw = max(len(m) for m in marks)
+        lead = 2 + 9 + 1 + 10 + 2 + (mw + 2 if mw else 0)
+        # The subject is the release's first CHANGELOG entry: cut to the
+        # room left on the line (70 columns at most, as before).
+        room = 70 if d.w <= 0 else max(20, min(70, d.w - lead))
+        for r, m in zip(st["releases"], marks):
+            subj = r["subject"]
+            if len(subj) > room:
+                # Cut the entry, keep its "(+N more)" count.
+                import re as _re
+                m_ = _re.match(r"(.*?)( \(\+\d+ more\))\Z", subj)
+                head, tail = (m_.group(1), m_.group(2)) if m_ else (subj, "")
+                head = head[:max(8, room - len(tail) - 1)].rstrip()
+                subj = head + "…" + tail
+            d.line((f"  {r['tag']:<9} {r['date']}  "
+                    + (f"{m:<{mw}}  " if mw else "") + subj).rstrip())
     hidden = st["total"] - len(st["releases"])
     if hidden > 0:
-        out.append(f"  … {hidden} older — {prog} channels all")
-    return "\n".join(out)
+        d.blank()
+        d.para(f"… {hidden} older — {prog} channels all")
+    return d.text()

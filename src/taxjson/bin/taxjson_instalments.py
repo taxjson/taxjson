@@ -500,19 +500,16 @@ def build(*, year: int, basis: str, current_net_tax: float,
 
 
 def _wrap_line(text: str) -> str:
-    import textwrap
-    return textwrap.fill(text, width=78, initial_indent="  ",
-                         subsequent_indent="  ")
+    """A report paragraph at the house width (lib/out), indented two."""
+    from taxjson.lib.out import fill
+    return fill(text, indent="  ")
 
 
 def render(doc: Dict[str, Any], base: str) -> str:
-    """The report — house style, 78 columns."""
-    import textwrap
+    """The report — house style (docs/output-style.md)."""
     from taxjson.lib.report_model import fmt_money, render_table
 
-    def wrap(t):
-        return textwrap.fill(t, width=78, initial_indent="  ",
-                             subsequent_indent="  ")
+    wrap = _wrap_line
 
     def _prior_text(v):
         # Never print an unset year as a figure.
@@ -565,9 +562,9 @@ def render(doc: Dict[str, Any], base: str) -> str:
             for r in doc["required"]]
     foot = [["TOTAL", fmt_money(doc["required_total"]), "",
              fmt_money(doc["paid_total"]), ""]]
-    lines += render_table(["DUE", "AMOUNT", "CUM. REQUIRED",
-                           "CUM. PAID", "STATUS"],
-                          ["<", ">", ">", ">", "<"], body, foot)
+    lines += [ln.rstrip() for ln in render_table(
+        ["DUE", "AMOUNT", "CUM. REQUIRED", "CUM. PAID", "STATUS"],
+        ["<", ">", ">", ">", "<"], body, foot)]
     lines.append("")
     if doc["shortfall"] > 0.005:
         if doc["remaining_dates"]:
@@ -604,8 +601,8 @@ def render(doc: Dict[str, Any], base: str) -> str:
     if paid_rows:
         lines += ["", "  PAYMENTS APPLIED"]
         for p in paid_rows:
-            # 78-column budget: 2 indent + 30 label + 14 money + 2 gap
-            # leaves 30 for the note.
+            # A 78-column budget: 2 indent + 30 label + 14 money + 2
+            # gap leaves 30 for the note.
             raw = str(p.get("note") or "")
             note = ("  " + (raw if len(raw) <= 30
                             else raw[:29] + "…")) if raw else ""

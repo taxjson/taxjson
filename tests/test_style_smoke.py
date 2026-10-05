@@ -35,8 +35,17 @@ class TestConvertedCommands(unittest.TestCase):
              ("elect", "margin"),
              ("wash-radar",), ("wash-radar", "--date", "2024-11-25", "--all"),
              ("fx-cash",), ("fx-cash", "--events"),
+             # group B (tests/test_style_group_b.py has the rest)
+             ("sum",), ("sum", "--verbose"), ("form-export",),
+             ("carryover",), ("check-filed",),
              # group A (run, init, fetch: tests/test_style_run.py)
              ("format",), ("migrate", "--dry-run")]
+    # group E (the rest, exit 1 by design, in tests/test_style_e.py)
+    CASES += [("tax-logic",), ("tax-logic", "--ids"), ("edge-cases",),
+              ("find-missing-history",), ("renames",), ("spinoffs",),
+              ("splits",), ("audit", "--summary"), ("audit", "QZQ.US"),
+              ("help",), ("help", "--all"), ("help", "audit"),
+              ("channels", "--offline")]
 
     def test_converted_commands(self):
         for country in ("canada", "usa"):

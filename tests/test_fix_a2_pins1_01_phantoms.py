@@ -104,7 +104,8 @@ class TestRunAndCarryoverApplyPhantoms(unittest.TestCase):
         self.assertRegex(txt, r"TOTAL REALIZED GAIN:\s+0\.00 CAD")
         r = _cli(self.root, "form-export")
         self.assertEqual(r.returncode, 0, r.stderr[-1500:])
-        self.assertIn("Line 13200 (gain/loss): 0.00", r.stdout)
+        self.assertIn("Line 13200 (gain/loss): 0.00",
+                      " ".join(r.stdout.split()))
         self.assertIn("MANUAL REPORTING REQUIRED", r.stdout)
 
     def test_no_phantom_short_is_left_open(self):

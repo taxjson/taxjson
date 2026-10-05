@@ -121,7 +121,7 @@ class TestSchedule3Periods2024(unittest.TestCase):
     @rule("CA-DISP-03")
     def test_text_names_both_periods_and_the_slip_lines(self):
         rep = FE.build_schedule3([XYZ_P1, XYZ_P2], 2024)
-        text = FE.render_schedule3(rep, 2024, "CAD")
+        text = " ".join(FE.render_schedule3(rep, 2024, "CAD").split())
         self.assertIn("Line 10689 (proceeds of disposition): 5,000.00", text)
         self.assertIn("Line 13200 (gain/loss): 2,000.00", text)
         self.assertIn("17399", text)
