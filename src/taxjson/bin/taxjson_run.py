@@ -1487,17 +1487,6 @@ def validate_config(cfg: Dict[str, Any],
 
 # ---------------------------------------------------------------- broker detection
 
-_FILENAME_HINTS: Tuple[Tuple[str, str], ...] = (
-    ("coinbase", "coinbase"),
-    ("cb_", "coinbase"),
-    ("kraken", "kraken"),
-    ("kr_", "kraken"),
-    # The column-mapped escape hatch for unsupported brokers: any
-    # `generic_*.csv` plus its TOML mapping sidecar.
-    ("generic_", "generic"),
-)
-
-
 # Brokers with corp-action extractors (taxjson-corp-actions). Others
 # (webull, coinbase, kraken) have no extractor and skip that stage.
 CORP_ACTION_BROKERS = {"ib", "interactive_brokers", "questrade", "qt",
@@ -1750,42 +1739,15 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
 
 
 def detect_broker(csv_path: Path) -> Optional[str]:
-    """Which parser reads this CSV. In order:
-
-    1. a documented name PREFIX — generic_, cb_, kr_ — is the user's
-       explicit routing and always wins;
-    2. a positive content match on an equity export's structure (IB's
-       Statement header, Questrade's columns, Webull's Action Code)
-       wins over a word in the name;
-    3. the venue WORDS coinbase / kraken in the name (their CSV shapes
-       aren't distinctive enough for content detection, and a Kraken
-       ledger looks superficially like an RBC activity export);
-    4. whatever content detection found (rbc_direct), else None.
-
-    The word hints used to be checked first, so generic_kraken_export.csv
-    and kr_trades_moved_from_coinbase.csv went to the wrong crypto
-    parser (0 rows, exit 0) and an IB export named after Kraken Robotics
-    was refused as crypto data (R1-127, S044-01, S044-02)."""
-    lower = csv_path.name.lower()
-    for hint, broker in _FILENAME_HINTS:
-        # Underscore-style hints match only at the START of the name:
-        # a substring match routed ibkr_statement.csv (contains "kr_")
-        # to the Kraken parser (REVIEW-2026-07-ui #3).
-        if hint.endswith("_") and lower.startswith(hint):
-            return broker
-    from taxjson.bin.taxjson_detect_brokerage import detect_brokerage
-    by_content = detect_brokerage(csv_path)
-    if by_content in _STRUCTURAL_BROKERS:
-        return by_content
-    for hint, broker in _FILENAME_HINTS:
-        if not hint.endswith("_") and hint in lower:
-            return broker
-    return by_content
-
-
-# Content matches strong enough to beat a venue word in the file name
-# (structural markers a crypto export never carries).
-_STRUCTURAL_BROKERS = ("ib", "questrade", "webull")
+    """Which parser reads this CSV (lib/brokerages/detect.detect): an
+    explicit generic mapping, else the file's CONTENT (each supported
+    export's header signature, from the parser's own required columns),
+    else — only when no content signature matched — the cb_/kr_/generic_
+    prefix or the coinbase/kraken word in the name. None when nothing
+    routes it. A file whose content matches two exports raises
+    AmbiguousBroker."""
+    from taxjson.lib.brokerages.detect import detect
+    return detect(csv_path).broker
 
 
 def input_files(dirpath: Path, suffix: str) -> List[Path]:
@@ -1839,7 +1801,19 @@ def spreadsheet_inputs(dirpath: Path) -> List[Path]:
 
 
 def group_inputs(account_dir: Path) -> Dict[str, List[Path]]:
+    """{parser id: [csv]} for an account's inputs folder."""
+    return group_inputs_detailed(account_dir)[0]
+
+
+def group_inputs_detailed(account_dir: Path):
+    """({parser id: [csv]}, [Detection]) — every CSV of the folder and
+    how it was routed (lib/brokerages/detect). Stops the run on a file
+    that cannot be read, is empty, is not UTF-8/UTF-16, matches two
+    exports, or matches nothing."""
+    from taxjson.lib.brokerages.detect import AmbiguousBroker, detect
+    from taxjson.bin.taxjson_detect_brokerage import cannot_detect_message
     out: Dict[str, List[Path]] = {}
+    found = []
     for csv in input_files(account_dir, ".csv"):
         # An unreadable or empty file got the "rename it to cb_/kr_/
         # generic_" advice; renaming never helps (re-audit A2-0713,
@@ -1854,8 +1828,11 @@ def group_inputs(account_dir: Path) -> Dict[str, List[Path]]:
         if not _head.strip(b" \t\r\n\xef\xbb\xbf\x00"):
             _die(f"{csv} is empty — a failed or interrupted download? "
                  f"Download the export again (or remove the file).")
-        broker = detect_broker(csv)
-        if not broker:
+        try:
+            det = detect(csv)
+        except AmbiguousBroker as e:
+            _die(str(e))
+        if not det.broker:
             # Content detection cannot read a cp1252 re-save: the
             # rename advice below pointed at the wrong fix (S024-03).
             try:
@@ -1867,14 +1844,40 @@ def group_inputs(account_dir: Path) -> Dict[str, List[Path]]:
                 _die(str(not_utf8(csv, e)))
             except OSError:
                 pass
-            _die(f"cannot detect broker for {csv}. "
-                     f"Rename to start with one of: cb_, kr_ (for crypto), "
-                     f"generic_ (any other broker, with a TOML column "
-                     f"mapping — see examples/generic_wealthsimple.toml), "
-                     f"or check that the CSV header matches a supported "
-                     f"broker.")
-        out.setdefault(broker, []).append(csv)
-    return out
+            _die(cannot_detect_message(det))
+        out.setdefault(det.broker, []).append(csv)
+        found.append(det)
+    return out, found
+
+
+# Accounts whose per-file detection lines this `taxjson run` printed
+# already (a crypto account is staged twice: parse first, then books).
+_DETECTION_SHOWN: set = set()
+
+
+def _report_detection(name: str, found, cache: Path) -> None:
+    """Print one line per input CSV — how its broker was detected — and
+    persist them to work/<acct>_detect.diag, whose `note:` lines (the
+    name disagreed with the content, a name-only routing) reach the
+    account's .sum DIAGNOSTICS. File names are shown masked
+    (shown_name), like every other diagnostic."""
+    from taxjson.lib.brokerages.base import shown_name
+    lines: List[str] = []
+    notes: List[str] = []
+    for det in found:
+        lines.append(det.line(f"inputs/{name}/{shown_name(det.path)}"))
+        if det.note:
+            notes.append(f"note: {det.note}")
+    if name not in _DETECTION_SHOWN:
+        _DETECTION_SHOWN.add(name)
+        for ln in lines:
+            print(f"  {ln}")
+        for n in notes:
+            print(f"    {n}")
+    _txt = "".join(f"{x}\n" for x in lines + notes)
+    _diag = cache / f"{name}_detect.diag"
+    if _read_work_stamp(_diag) != _txt:
+        _write_work_stamp(_diag, _txt)
 
 
 def _is_generic_group(broker: str) -> bool:
@@ -2822,7 +2825,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     is_taxable = acfg.get("type", "sheltered") == "taxable"
     include_transfers = acfg.get("transfers", False)
 
-    grouped = _split_generic_groups(group_inputs(acct_dir))
+    _grouped_raw, _detected = group_inputs_detailed(acct_dir)
+    grouped = _split_generic_groups(_grouped_raw)
     if not grouped and not input_files(acct_dir, ".tt"):
         _msg = (f"taxjson: warning: no CSVs or .tt files in "
                 f"{acct_dir}; skipping account '{name}'.")
@@ -2849,14 +2853,14 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                    {b for b in grouped if b not in _CRYPTO_BROKERS})
     if _mismatched:
         flag = "crypto = true" if is_crypto else "no crypto flag"
-        _which = ", ".join(f"inputs/{name}/{p.name} ({b})"
+        _how = {d.path: d.reason for d in _detected}
+        _which = ", ".join(f"inputs/{name}/{p.name} ({b}: {_how.get(p, '?')})"
                            for b in sorted(_mismatched)
                            for p in grouped[b])
         sys.exit(
             f"taxjson: account '{name}' has {flag} in taxjson.toml but "
             f"its inputs contain {', '.join(sorted(_mismatched))} files "
-            f"[{_which}; routed by a cb_/kr_/generic_ name prefix, the "
-            f"file's content, or a coinbase/kraken word in its name] "
+            f"[{_which}] "
             f"— the {'equity' if is_crypto else 'crypto'} data would be "
             f"routed through the wrong pipeline. Move the files to an "
             f"account of the matching type, or fix the account's "
@@ -2873,6 +2877,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     else:
         print(f"==> {name}  ({'taxable' if is_taxable else 'sheltered'}"
               f"{', crypto' if is_crypto else ''})")
+    # How each input CSV was routed: one line per file (owner request —
+    # detection must be visible, never a silent file-name guess).
+    _report_detection(name, _detected, cache)
 
     # Deletion-blindness guard (FUZZ #J): mtime deps only cover files
     # that EXIST — deleting an input CSV left its trades in the cached
@@ -4669,6 +4676,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     # Full rebuild is the DEFAULT: stale cached artifacts must never
     # feed a filing decision. `--fast` opts back into the mtime cache.
     args.force = not getattr(args, "fast", False)
+    _DETECTION_SHOWN.clear()            # each run lists its inputs once
     root = Path(args.dir).resolve()
     cfg = load_config(root)
     # Register the config path globally so every `needs_rebuild` call

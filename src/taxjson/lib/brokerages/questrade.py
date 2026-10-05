@@ -39,6 +39,16 @@ _QT_COLUMNS = ('Transaction Date', 'Settlement Date', 'Action', 'Symbol',
                'Commission', 'Net Amount', 'Currency', 'Account #',
                'Activity Type', 'Account Type')
 
+
+
+def missing_columns(cells) -> List[str]:
+    """The _QT_COLUMNS a header row (the export's FIRST row, as
+    _read_qt_rows reads it) lacks. Broker detection uses this same test
+    (lib/brokerages/detect.py)."""
+    have = {(c or '').strip() for c in cells}
+    return [c for c in _QT_COLUMNS if c not in have]
+
+
 # Registered-plan markers in the Account Type column (a warning that
 # matters only in a TAXABLE account stays quiet for these).
 _QT_REGISTERED_RE = re.compile(
@@ -194,7 +204,7 @@ def _read_qt_rows(path: Path, warn: bool = False) -> List[tuple]:
             else raw.decode('utf-8-sig'))
     reader = csv.DictReader(io.StringIO(text, newline=''))
     header = [h.strip() if h else h for h in (reader.fieldnames or [])]
-    missing = [c for c in _QT_COLUMNS if c not in header]
+    missing = missing_columns(header)
     if missing:
         raise BrokerageParseError(
             f"{shown_name(path)}: Questrade export is missing required "

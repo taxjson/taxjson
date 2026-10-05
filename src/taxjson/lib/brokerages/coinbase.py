@@ -77,6 +77,27 @@ _CONVERT_NOTES_RE = re.compile(
 _REQUIRED_FIELDS = ('timestamp', 'transaction type', 'asset',
                     'quantity transacted', 'price at transaction', 'total')
 
+
+def is_header_row(cells) -> bool:
+    """The row the parser takes as the header: the first one with a
+    Timestamp cell (any preamble lines above it are skipped). Broker
+    detection asks the same question (lib/brokerages/detect.py)."""
+    return bool(cells) and 'timestamp' in [c.strip().lower() for c in cells]
+
+
+def resolve_header(cells):
+    """(logical field -> column index, required fields missing) for a
+    header row, through _HEADER_SYNONYMS — the one definition of every
+    Coinbase layout the parser reads (detection uses it too)."""
+    raw_map = {c.lower().strip(): i for i, c in enumerate(cells)}
+    header_map: Dict[str, int] = {}
+    for field, names in _HEADER_SYNONYMS.items():
+        for n in names:
+            if n in raw_map:
+                header_map[field] = raw_map[n]
+                break
+    return header_map, [f for f in _REQUIRED_FIELDS if f not in header_map]
+
 # Transaction types the parser RECOGNIZES as non-events (lowercased):
 # internal moves between the trading and staking wallets, the ETH2→ETH
 # relabel, fiat funding, and the Coinbase One subscription charge.
@@ -196,25 +217,15 @@ class CoinbaseBrokerage(BaseBrokerage):
                 # lines named the wrong row (re-audit A2-0584).
                 row_start, _prev_line = _prev_line + 1, reader.line_num
                 if not header:
-                    # Stripped like raw_map below: a header written
+                    # Stripped like resolve_header: a header written
                     # `ID, Timestamp, ...` used to be missed and the
                     # whole file parsed to 0 rows (R1-109).
-                    if row and 'timestamp' in [c.strip().lower()
-                                               for c in row]:
+                    if is_header_row(row):
                         header = row
-                        raw_map = {c.lower().strip(): i
-                                   for i, c in enumerate(header)}
                         # Resolve logical fields through the synonym
                         # table; refuse to run against a layout we don't
                         # recognize rather than parse zeros.
-                        header_map = {}
-                        for field, names in _HEADER_SYNONYMS.items():
-                            for n in names:
-                                if n in raw_map:
-                                    header_map[field] = raw_map[n]
-                                    break
-                        missing = [f for f in _REQUIRED_FIELDS
-                                   if f not in header_map]
+                        header_map, missing = resolve_header(header)
                         if missing:
                             raise ValueError(
                                 f"Coinbase CSV {shown_name(path)}: unrecognized "

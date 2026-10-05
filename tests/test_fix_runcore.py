@@ -278,20 +278,25 @@ class TestBrokerDetectionPrecedence(unittest.TestCase):
     rows, rc 0) and an IB/Questrade export named after a holding was
     refused as crypto."""
 
-    def _detect(self, src, name):
+    def _detect(self, src, name, mapping=False):
         from taxjson.bin.taxjson_run import detect_broker
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / name
             p.write_bytes((REPO_ROOT / "examples" / src).read_bytes())
+            if mapping:
+                p.with_name(p.name + ".toml").write_text("[columns]\n")
             return detect_broker(p)
 
-    def test_generic_prefix_beats_a_venue_word(self):
-        self.assertEqual(self._detect("questrade_demo.csv",
-                                      "generic_kraken_export.csv"),
-                         "generic")
-        self.assertEqual(self._detect("questrade_demo.csv",
-                                      "generic_coinbase_pro.csv"),
-                         "generic")
+    def test_generic_mapping_beats_a_venue_word(self):
+        # The generic mapping (a sidecar) is configuration and wins; a
+        # generic_ NAME without a mapping is only a name, and the
+        # content (a Questrade export) wins over it (owner request
+        # 2026-10-04: detection never depends on the file name first).
+        for name in ("generic_kraken_export.csv", "generic_coinbase_pro.csv"):
+            self.assertEqual(self._detect("questrade_demo.csv", name,
+                                          mapping=True), "generic", name)
+            self.assertEqual(self._detect("questrade_demo.csv", name),
+                             "questrade", name)
 
     def test_kr_prefix_beats_the_coinbase_word(self):
         self.assertEqual(self._detect("kraken_demo.csv",

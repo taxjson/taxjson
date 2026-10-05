@@ -45,12 +45,59 @@ Everything runs locally on your machine. Your transaction data never leaves your
 | Webull                | Yes      | Yes     | —      | Trading Summary CSV (BUY/SELL rows only): a $0 option close is an expiry, or an exercise/assignment when a stock trade at the strike carries the account's `exercise_fee` (the broker's exercise/assignment charge, e.g. `exercise_fee = 1.00` under `[accounts.<name>]`; without it nothing is inferred and each such pair is named for you to check — see KNOWN_ISSUES). It carries no income — enter T5 interest/dividends as `.tt` `INTEREST`/`DIVIDEND` lines |
 | Kraken                | —        | —       | Yes    | Trades + Ledgers CSV (same folder: the ledger says which coin paid each fee; overlapping ledger exports are read once per txid; a ledger trade the trades export lacks, a lone instant-trade leg, or a ledger row of a type the parser does not book that moves a coin (airdrop, conversion, adjustment, margin) is an `UNBOOKED` warning, fatal under `run --strict`) |
 | Coinbase              | —        | —       | Yes    | Transaction history CSV                            |
-| **Any other broker**  | Yes      | —       | —      | `generic_*.csv` + a TOML column mapping (see `examples/generic_wealthsimple.toml`) |
+| **Any other broker**  | Yes      | —       | —      | a TOML column mapping beside the CSV (`<file>.csv.toml`, or `generic.toml` for `generic_*.csv` files; see `examples/generic_wealthsimple.toml`) |
 
 | Country | Rule set                                                                                     |
 | ------- | -------------------------------------------------------------------------------------------- |
 | Canada  | ACB cost basis, superficial loss s.40(2)(g), merger s.85.1(5), spinoff s.86.1                |
 | US      | **Experimental** — FIFO cost basis, wash sale §1091 (30-day window with replacement-share basis adjustment); not yet validated on real accounts |
+
+### How a file's broker is detected
+
+File names do not decide which parser reads a CSV. For every CSV in
+`inputs/<account>/`, `taxjson run`:
+
+1. **Honours a generic mapping first.** A `<file>.csv.toml` sidecar
+   beside the CSV (any file name), or a `generic_*.csv` file with the
+   folder's shared `generic.toml`, is configuration: the generic importer
+   reads the file, whatever its content.
+2. **Reads the content.** Each supported export is recognised by the
+   header its own parser requires: IB's `Statement,Header` (or another
+   section's `<section>,Header`) rows; Questrade's 14 activity columns;
+   Webull's Trading Summary labels (2024 and 2025 layouts); RBC Direct's
+   activity header (`Date`, `Activity`, `Symbol`, `Settlement Date`, ...,
+   after any preamble); Coinbase's transaction columns (every layout the
+   parser reads, preamble lines allowed); Kraken's trades or ledgers
+   columns. These signatures never overlap. A file that matches two
+   (two exports pasted into one file) stops the run, naming both.
+3. **Falls back to the file name** only when no header matched: a `cb_`
+   or `kr_` prefix, or the word `coinbase` or `kraken` in the name (and
+   `generic_`, whose missing mapping the importer then names). When the
+   header matched and the name suggests another broker, the content wins
+   and a note says so.
+
+The run prints one line per file under its account, with how it was
+detected:
+
+```
+==> margin  (taxable)
+  inputs/margin/U5***_2025.csv → Interactive Brokers (content: "Statement,Header" preamble)
+  inputs/margin/generic_ws.csv → generic (mapping generic_ws.csv.toml)
+==> crypto  (taxable, crypto)
+  inputs/crypto/export.csv → Kraken (content: ledger columns txid,refid,time…)
+  inputs/crypto/cb_old.csv → Coinbase (file name "cb_" — no content match)
+```
+
+The lines are also kept in `work/<account>_detect.diag`, and the notes
+(a name that disagrees with the content, a name-only routing) appear in
+the account's `.sum` DIAGNOSTICS. Account-number-like parts of file
+names are masked, as in every diagnostic. A file nothing routes stops
+the run: check its header first (re-export it with the broker's own
+columns; the message names the closest layout it nearly matched), add a
+generic mapping for another broker, or, as a last resort for a Coinbase
+or Kraken export, rename it to start with `cb_` / `kr_`.
+`taxjson-detect-brokerage FILE` answers the same question for one file:
+the parser id on stdout and the same line on stderr.
 
 ### Auto-fetch (skip the manual export)
 
@@ -156,10 +203,11 @@ example. See CONTRIBUTING.md.
 
 ### Any other broker (generic importer)
 
-No dedicated parser? Name the export `generic_<anything>.csv` in the account's
-inputs folder and describe its layout in a TOML mapping — either a sidecar
-`generic_<anything>.csv.toml` (wins) or one shared `generic.toml` in the same
-folder. Start from the template in
+No dedicated parser? Describe the export's layout in a TOML mapping — either a
+sidecar `<file>.csv.toml` beside it (wins; any file name), or, for files named
+`generic_<anything>.csv`, one shared `generic.toml` in the same folder. A
+mapping is configuration: it is honoured before the content detection
+above. Start from the template in
 [`examples/generic_wealthsimple.toml`](./examples/generic_wealthsimple.toml):
 map your CSV's header names in `[columns]`, its date format in `[formats]`, and
 each action value to one of `buy | sell | dividend | dividend_in_lieu | tax |

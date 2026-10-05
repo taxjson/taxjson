@@ -136,19 +136,13 @@ class WebullBrokerage(BaseBrokerage):
 
     @staticmethod
     def _sibling_exports(path: Path) -> List[Path]:
-        """The other Webull exports in the same folder (`wb_*.csv` or
-        `*webull*.csv`)."""
-        try:
-            siblings = sorted(path.parent.iterdir())
-        except OSError:
-            return []
-        out = []
-        for p in siblings:
-            n = p.name.lower()
-            if (p != path and p.is_file() and n.endswith('.csv')
-                    and (n.startswith('wb_') or 'webull' in n)):
-                out.append(p)
-        return out
+        """The other Webull exports in the same folder — the CSVs `taxjson
+        run` reads as Webull (content first, lib/brokerages/detect), not
+        only those named wb_*/*webull*."""
+        from taxjson.lib.brokerages.detect import same_broker_siblings
+        return same_broker_siblings(
+            Path(path), 'webull',
+            by_name=lambda n: n.startswith('wb_') or 'webull' in n)
 
     def _parse_rows(self, path: Path):
         """(transactions, expiries, skipped_actions) for one export, or
@@ -576,15 +570,28 @@ class WebullBrokerage(BaseBrokerage):
                  'quantity', 'price', 'proceeds')
 
     @classmethod
-    def _resolve_columns(cls, header: List[str], path) -> Dict[str, int]:
+    def label_hits(cls, header: List[str]) -> Dict[str, List[int]]:
+        """field -> the header cells whose label matches it (Webull's
+        Trading Summary labels, _HEADER_LABELS). Broker detection asks
+        the same question (lib/brokerages/detect.py): a header whose
+        labels cover every _REQUIRED field is a Webull header."""
         labels = [" ".join(str(c).split()).lower() for c in header]
-        cols: Dict[str, int] = {}
+        out: Dict[str, List[int]] = {}
         for key, needle in cls._HEADER_LABELS:
             # 'date' must not match 'Settlement date'-style labels of
             # other columns; the Trading Summary's date column is
             # labelled exactly "Date".
             hits = [j for j, lab in enumerate(labels)
                     if (lab == needle if key == 'date' else needle in lab)]
+            if hits:
+                out[key] = hits
+        return out
+
+    @classmethod
+    def _resolve_columns(cls, header: List[str], path) -> Dict[str, int]:
+        cols: Dict[str, int] = {}
+        for key, hits in cls.label_hits(header).items():
+            needle = dict(cls._HEADER_LABELS)[key]
             if len(hits) > 1:
                 # First-match used to win: an inserted 'Gross Proceeds'
                 # or 'Price Currency' column silently became the amount
@@ -594,8 +601,7 @@ class WebullBrokerage(BaseBrokerage):
                     f"{len(hits)} header labels contain {needle!r}: "
                     f"{[header[j] for j in hits]!r}. Refusing to guess "
                     f"which column is the {key}.")
-            if hits:
-                cols[key] = hits[0]
+            cols[key] = hits[0]
         missing = [k for k in cls._REQUIRED if k not in cols]
         if missing:
             raise BrokerageParseError(

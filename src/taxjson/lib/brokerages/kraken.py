@@ -251,6 +251,32 @@ def _classify_header(header_line: str) -> str:
     return ''
 
 
+REQUIRED_BY_KIND = {'trades': _TRADES_REQUIRED, 'ledgers': _LEDGER_REQUIRED}
+
+
+def header_kind(cells) -> tuple:
+    """(kind, required columns missing) for a Kraken export's FIRST row
+    — the row parse_file classifies (no preamble: Kraken writes the
+    header on line 1). kind is 'trades' | 'ledgers' | ''. Broker
+    detection asks the parser this question (lib/brokerages/detect.py),
+    so the two cannot drift."""
+    kind = _classify_header(','.join(c for c in cells if c))
+    if not kind:
+        return '', []
+    have = {(c or '').strip().lower() for c in cells}
+    return kind, [c for c in REQUIRED_BY_KIND[kind] if c not in have]
+
+
+def _kraken_siblings(path: Path) -> List[Path]:
+    """The other CSVs in the folder `taxjson run` reads as Kraken
+    exports — by the same detection (content first, then the kr_/kraken
+    name), not by file name alone."""
+    from taxjson.lib.brokerages.detect import same_broker_siblings
+    return same_broker_siblings(
+        Path(path), 'kraken',
+        by_name=lambda n: n.startswith('kr_') or 'kraken' in n)
+
+
 def _mask(ref: Any) -> str:
     """A Kraken txid/refid as shown in a message: first 2 characters +
     *** (the privacy rule for ids, A2-0756/A2-1381). The raw id stays
@@ -418,14 +444,7 @@ class KrakenBrokerage(BaseBrokerage):
         staking code `<COIN><dd>.S` is folded against. Unreadable rows
         are skipped here (the parse itself reports them)."""
         codes: List[str] = []
-        try:
-            siblings = sorted(path.parent.iterdir())
-        except OSError:
-            siblings = []
-        files = [path] + [p for p in siblings if p != path and p.is_file()
-                          and p.suffix.lower() == '.csv'
-                          and (p.name.lower().startswith('kr_')
-                               or 'kraken' in p.name.lower())]
+        files = [path] + _kraken_siblings(path)
         for p in files:
             try:
                 rows = list(csv.DictReader(io.StringIO(read_broker_text(p))))
@@ -473,26 +492,17 @@ class KrakenBrokerage(BaseBrokerage):
     @staticmethod
     def _sibling_ledger_index(path: Path) -> Optional[Dict[str, list]]:
         """refid -> ledger rows, from every Kraken LEDGER export in the
-        trades file's folder (kr_*.csv / *kraken*.csv). None when there
+        trades file's folder (_kraken_siblings). None when there
         is none. Several ledgers (one per year) are all indexed: a
         trades export and the ledger covering it need not share a
         filename year."""
         idx: Dict[str, list] = {}
         seen: Dict[str, tuple] = {}
         found = False
-        try:
-            siblings = sorted(path.parent.iterdir())
-        except OSError:
-            return None
-        for p in siblings:
-            if p == path or not p.is_file() or p.suffix.lower() != '.csv':
-                continue
-            n = p.name.lower()
-            if not (n.startswith('kr_') or 'kraken' in n):
-                continue
+        for p in _kraken_siblings(path):
             try:
                 _text = read_broker_text(p)
-            except BrokerageParseError:
+            except (BrokerageParseError, OSError):
                 continue        # a legacy encoding: reported when parsed
             try:
                 with io.StringIO(_text) as f:
@@ -1378,19 +1388,10 @@ class KrakenBrokerage(BaseBrokerage):
         folder, or None when there is none."""
         txids: set = set()
         found = False
-        try:
-            siblings = sorted(path.parent.iterdir())
-        except OSError:
-            return None
-        for p in siblings:
-            if p == path or not p.is_file() or p.suffix.lower() != '.csv':
-                continue
-            n = p.name.lower()
-            if not (n.startswith('kr_') or 'kraken' in n):
-                continue
+        for p in _kraken_siblings(path):
             try:
                 _text = read_broker_text(p)
-            except BrokerageParseError:
+            except (BrokerageParseError, OSError):
                 continue        # a legacy encoding: reported when parsed
             try:
                 with io.StringIO(_text) as f:

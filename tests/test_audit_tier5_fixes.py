@@ -63,8 +63,11 @@ class TestSettleBasisWashWindow(unittest.TestCase):
 class TestDetectBrokerage(unittest.TestCase):
     def test_webull_with_rbc_ticker_not_misrouted(self):
         from taxjson.bin.taxjson_detect_brokerage import detect_brokerage
-        content = ('Account Number,Action Code,Symbol,Description\n'
-                   '123,BUY,RBC,RBC BEARINGS CORP\n')
+        content = ('Webull Securities (Canada) Ltd.\n\n'
+                   'Currency,Date,Action Code,Symbol,Security Description,'
+                   'Type Code,Quantity,Price,Proceeds\n'
+                   'USD,15-01-2024,BUY,RBC,RBC BEARINGS CORP,EQ,1,10,'
+                   '"(10.00)"\n')
         with tempfile.NamedTemporaryFile("w", suffix=".csv",
                                          delete=False) as f:
             f.write(content)
@@ -78,7 +81,8 @@ class TestDetectBrokerage(unittest.TestCase):
         from taxjson.bin.taxjson_detect_brokerage import detect_brokerage
         content = ('"Activity Export as of Jan 5, 2026"\n\n'
                    '"Account: 12345678 - Margin"\n\n'
-                   '"Date","Activity","Symbol"\n')
+                   '"Date","Activity","Symbol","Quantity","Price",'
+                   '"Settlement Date","Currency","Value","Description"\n')
         with tempfile.NamedTemporaryFile("w", suffix=".csv",
                                          delete=False) as f:
             f.write(content)

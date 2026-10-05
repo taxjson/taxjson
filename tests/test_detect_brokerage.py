@@ -25,9 +25,12 @@ class TestDetectBrokerage(unittest.TestCase):
     def test_webull_detected_by_action_code_column(self):
         # No account number anywhere — detection keys on the generic
         # "Action Code" trade column every Webull export carries.
+        # The header must carry every column the Webull parser requires
+        # (detection asks the parser's own label test).
         content = (
-            "Currency,Date,Action Code,Symbol,Name,Status,Filled,Price\n"
-            "USD,01/15/2024,BUY,AAPL,APPLE INC,Filled,100,150.00\n"
+            "Currency,Date,Action Code,Symbol,Security Description,"
+            "Type Code,Quantity,Price,Proceeds\n"
+            "USD,15-01-2024,BUY,AAPL,APPLE INC,EQ,100,150.00,\"(15,000.00)\"\n"
         )
         self.assertEqual(_detect(content), "webull")
 
@@ -57,9 +60,18 @@ class TestDetectBrokerage(unittest.TestCase):
         )
         self.assertEqual(_detect(content), "rbc_direct")
 
-    def test_rbc_marker_detection_is_case_insensitive(self):
+    def test_rbc_brand_words_alone_do_not_route(self):
+        """Content detection keys on the header the RBC parser requires,
+        not on the words "RBC Direct Investing" (owner request
+        2026-10-04): a file with the brand line but no RBC header would
+        be refused by the parser anyway. After the same preamble, a full
+        RBC header routes."""
         content = ("Some preamble\nRBC DIRECT INVESTING INC.\n"
                    "Date,Activity,Description\n")
+        self.assertIsNone(_detect(content))
+        content = ("Some preamble\nRBC DIRECT INVESTING INC.\n"
+                   "Date,Activity,Symbol,Quantity,Price,Settlement Date,"
+                   "Currency,Value,Description\n")
         self.assertEqual(_detect(content), "rbc_direct")
 
     def test_structural_rbc_does_not_swallow_generic_csvs(self):

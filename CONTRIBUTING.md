@@ -193,8 +193,13 @@ is interrupted restore with `git checkout -- src/taxjson/lib/`.
    `self.count_skip('<category>')` (see the Questrade/RBC/Coinbase dispatch
    loops); `taxjson-brokerage --lint` reconciles rows in vs rows out.
 3. Register the id(s) in `src/taxjson/bin/taxjson_brokerage.py`
-   (`register_brokerage(...)`) and add a detection branch in
-   `src/taxjson/bin/taxjson_detect_brokerage.py`.
+   (`register_brokerage(...)`) and add a content detector to `DETECTORS`
+   in `src/taxjson/lib/brokerages/detect.py`, built on your parser's OWN
+   header test (export the function the parser uses, as
+   `questrade.missing_columns` or `kraken.header_kind` do) — never a
+   second column list, and never the file name. Add your samples to the
+   detector matrix in `tests/test_fix_detect.py`: each must match only
+   its own detector.
 4. Add a SYNTHETIC fixture (never real account data) at
    `tests/fixtures/your_broker/sample.csv`, register a three-line subclass in
    `tests/test_parser_conformance.py`, and mint the golden with

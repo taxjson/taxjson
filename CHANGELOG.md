@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Broker detection reads the file, not its name (owner request)
+
+- **Content first, for every supported export.** `taxjson run` now
+  recognises Coinbase and Kraken exports by their header too (every
+  Coinbase layout the parser reads, including the preamble lines above
+  the header; Kraken trades and ledgers), alongside Interactive Brokers,
+  Questrade, Webull (both Trading Summary layouts) and RBC Direct. Each
+  signature is the parser's own required-column test, so detection and
+  parsing cannot drift, and the signatures never overlap: a test checks
+  every sample of each broker against every detector. A file whose
+  content matches two exports stops the run, naming both, instead of
+  one being picked.
+- **A generic mapping is configuration.** A `<file>.csv.toml` sidecar
+  (now on any file name) or a `generic_` file with the folder's
+  `generic.toml` is honoured before the content. A `generic_` name with
+  no mapping no longer overrides a recognised header.
+- **The file name is only a fallback.** The `cb_` / `kr_` prefixes and
+  the words coinbase / kraken route a file only when no header matched;
+  when the header matched and the name says otherwise, the content wins
+  and a note says so. RBC files are no longer routed by brand words in
+  a preamble without the RBC header (the parser refused them anyway).
+- **Every file and how it was detected is printed** by `taxjson run`
+  (and `--fast`), one line per file under its account, kept in
+  `work/<account>_detect.diag`; the notes reach the `.sum` DIAGNOSTICS.
+  `taxjson-detect-brokerage` applies the same rules and prints the same
+  line. The "cannot detect broker" message now says to check the
+  header first (naming the layout the file nearly matched), then a
+  generic mapping, then the rename fallback.
+- The Kraken and Webull parsers find a file's companion exports in the
+  folder (a trades export's ledger, a Webull export's other years) by
+  the same detection, so neutrally named companions are found too.
+
 ### Getting started
 
 - **A getting-started guide**, `docs/getting-started.md`, linked from the

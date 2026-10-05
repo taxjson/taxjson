@@ -316,19 +316,36 @@ def rbc_export_as_of(path) -> str:
                          len(lines))
 
 
+def header_missing(cells) -> Optional[List[str]]:
+    """None when `cells` is not an RBC header candidate (no Date and
+    Activity columns — a preamble line like "Activity Export as of Date
+    Jan 5" is one cell and never qualifies); else the required columns
+    it lacks ([] for a complete header). The parser's header test and
+    broker detection's (lib/brokerages/detect.py) are this one function."""
+    present = {c for c in (_canon(x) for x in cells) if c}
+    if 'Date' not in present or 'Activity' not in present:
+        return None
+    missing = [c for c in REQUIRED_COLUMNS if c not in present]
+    if not ({'Value', 'Amount'} & present):
+        missing.append('Value (or Amount)')
+    return missing
+
+
+def is_holdings_export(first_text: str) -> bool:
+    """The first non-empty line of an RBC Holdings export (positions,
+    not transactions) — refused by the parser with its own message."""
+    return bool(re.match(r'^\s*Holdings\s+Export\b', first_text, re.I))
+
+
 def _find_header(records, path: Path):
     """The header row: the first record whose cells include the Date and
-    Activity COLUMNS (a preamble line like "Activity Export as of Date
-    Jan 5" is one cell and never qualifies). Raises when no such row
-    exists or when it lacks a required column."""
+    Activity COLUMNS (header_missing). Raises when no such row exists or
+    when it lacks a required column."""
     for pos, (line, cells) in enumerate(records):
-        canon = [_canon(c) for c in cells]
-        present = {c for c in canon if c}
-        if 'Date' not in present or 'Activity' not in present:
+        missing = header_missing(cells)
+        if missing is None:
             continue
-        missing = [c for c in REQUIRED_COLUMNS if c not in present]
-        if not ({'Value', 'Amount'} & present):
-            missing.append('Value (or Amount)')
+        canon = [_canon(c) for c in cells]
         if missing:
             raise _err(path, line, f"RBC header row lacks column(s) "
                        f"{', '.join(missing)} (found: "
@@ -339,7 +356,7 @@ def _find_header(records, path: Path):
     first = next((' '.join(c.strip() for c in cells if c.strip())
                   for _, cells in records if any(c.strip() for c in cells)),
                  '')
-    if re.match(r'^\s*Holdings\s+Export\b', first, re.I):
+    if is_holdings_export(first):
         # The holdings report (positions at a date), not the activity
         # export (audit R1-332: it died with a bare 'no header' error).
         raise RbcFormatError(
