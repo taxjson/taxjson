@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Security (pre-release review)
+
+- **Backups never overwrite a backup or follow a symlink.** `taxjson
+  opening --force`, `find-missing-history --write-purchases --force` and
+  `--write-missing-history --force` now keep the replaced file the way
+  `init --force` and `format --write` keep `taxjson.toml`: as `.bak`, or
+  the next free `.bakN`, written fresh. A second `--force` used to
+  replace the only copy of the first version, and the opening backup
+  followed a symlink planted at its name.
+- **`taxjson opening` writes only cells of a safe shape.** A symbol,
+  currency or lot date from a positions report is written into a `.tt`
+  line only when it is a plain symbol, a 3-letter code and a
+  `YYYY-MM-DD` day; anything else is listed and skipped. The IB, RBC and
+  holdings-TOML readers refuse a symbol or currency cell with a control
+  character or whitespace in it (a newline could book a line of its
+  own), and an IB or RBC currency that is not a 3-letter code. The
+  `# From:` header line drops control characters of the file name.
+- **Questrade descriptions with long whitespace runs parse quickly.**
+  The description key collapses whitespace before its suffix patterns,
+  which took minutes on a crafted row; the keys are unchanged.
+- **Purchase drafts are written only under a configured account's
+  folder.** An account name read from the books that is not a valid
+  name or not an account in `taxjson.toml` is refused before it names a
+  folder.
+- **`init` never writes through a dangling symlink** at `ticker.map`,
+  `.gitignore` or an input folder's `README.txt`: the link is left as
+  is, with a note.
+- The cannot-detect message masks an account id in the file's name, as
+  other diagnostics do; a channel tag with a trailing newline is no
+  longer taken for a release tag.
+
 ### Broker positions reports
 
 - **One reader for each broker's positions report.** A new module reads
