@@ -417,7 +417,7 @@ class TestCombinedSidecarStaleness(unittest.TestCase):
             # staleness guard under test is a hard stop either way.
             out, _ = _run_cmd(cmd_close_year, root, year=None,
                               force=True)
-        self.assertIn("closed", out)
+        self.assertIn("closed", out.lower())
 
 
 

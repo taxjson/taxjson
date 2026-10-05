@@ -303,15 +303,15 @@ class TestEdgeCases(unittest.TestCase):
         ca, us = out["canada"], out["usa"]
         self.assertIn("ITA s.54", ca)
         self.assertIn("Schedule 3", ca)
-        self.assertIn("Superficial-loss window", ca)
+        self.assertIn("SUPERFICIAL-LOSS WINDOW", ca)
         for word in ("s.54", "Schedule 3", "superficial", "Superficial",
                      "still held on day 30", "held on day 30",
                      "Written options across"):
             self.assertNotIn(word, us, word)
-        self.assertIn("Wash-sale window", us)
+        self.assertIn("WASH-SALE WINDOW", us)
         self.assertIn("no still-held", us)
         self.assertIn("Form 8949", us)
-        self.assertIn("WARNING only", us)
+        self.assertIn("A warning only", us)
 
 
 def _lock(country, year=2025):

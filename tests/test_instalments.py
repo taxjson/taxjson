@@ -18,6 +18,14 @@ from taxjson.bin.taxjson_instalments import (build, due_dates,
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _render100(doc, cur):
+    """render() at the house width (the suite runs unwrapped,
+    TAXJSON_WIDTH=0; these tests pin the wrapped layout)."""
+    with mock.patch.dict(os.environ, {"TAXJSON_WIDTH": "100"}):
+        from taxjson.bin.taxjson_instalments import render
+        return render(doc, cur)
+
+
 class TestDueDates(unittest.TestCase):
     @rule("CA-RPT-11")
     def test_four_dates_with_weekend_rollover(self):
@@ -308,7 +316,7 @@ class TestQuarterlyRateResets(unittest.TestCase):
                     annual_rate=[{"from": "2026-01-01", "rate": 0.08},
                                  {"from": "2026-10-01", "rate": 0.10}],
                     as_of=date(2026, 12, 31))
-        text = render(doc, "CAD")
+        text = _render100(doc, "CAD")
         self.assertIn("8.00%", text)
         self.assertIn("10.00% from 2026-10-01", text)
         for line in text.splitlines():
@@ -356,7 +364,7 @@ class TestInterestUsesTheCheapestBasis(unittest.TestCase):
                     current_net_tax=200000.0, prior_net_tax=40000.0,
                     second_prior_net_tax=20000.0, payments=paid,
                     annual_rate=0.08, as_of=date(2026, 8, 27))
-        text = render(doc, "CAD")
+        text = _render100(doc, "CAD")
         self.assertIn("PAYMENTS APPLIED", text)
         self.assertIn("2025 refund transferr", text)   # may elide
         self.assertIn("161(4.01)", text)
@@ -400,7 +408,7 @@ class TestRequirementTest(unittest.TestCase):
                     current_net_tax=81000.0, prior_net_tax=0.0,
                     second_prior_net_tax=0.0, payments=[],
                     annual_rate=0.08, as_of=date(2026, 8, 27))
-        text = render(doc, "CAD")
+        text = _render100(doc, "CAD")
         flat = " ".join(text.split())      # wrapping splits phrases
         self.assertIn("either of the two preceding years", flat)
         self.assertIn("placeholders", flat)
@@ -651,7 +659,7 @@ class TestRenderBranches(unittest.TestCase):
         base = dict(year=2026, basis="current_year", payments=[],
                     annual_rate=0.08, as_of=date(2026, 8, 27))
         base.update(kw)
-        text = render(build(**base), "CAD")
+        text = _render100(build(**base), "CAD")
         for line in text.splitlines():
             # The house width (docs/output-style.md).
                 self.assertLessEqual(len(line), 100, repr(line))
@@ -665,11 +673,11 @@ class TestRenderBranches(unittest.TestCase):
         t = self._r(current_net_tax=2000000.0,
                     as_of=date(2027, 4, 30))
         self.assertIn("PENALTY", t)
-        self.assertIn("half the excess", t)
+        self.assertIn("half the excess", " ".join(t.split()))
 
     def test_no_dates_left(self):
         t = self._r(current_net_tax=80000.0, as_of=date(2027, 4, 30))
-        self.assertIn("balance is due April 30", t)
+        self.assertIn("balance is due April 30", " ".join(t.split()))
 
     def test_vacuous_governing_basis_warns(self):
         # The realistic trap: a placeholder 0 in ONE field. The

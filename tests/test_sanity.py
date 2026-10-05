@@ -214,10 +214,12 @@ class TestSanity(unittest.TestCase):
             (("rrsp",), "QNET.US", "QTY_MISMATCH")})
         self.assertEqual(text.returncode, 1, text.stderr + text.stdout)
         self.assertIn("paired check", text.stdout)
-        # Every file read is listed by PATH under its group.
-        self.assertIn(f"file:     {e / 'acct1_holdings.toml'}", text.stdout)
-        self.assertIn(f"file:     {e / 'acct2_holdings.toml'}", text.stdout)
-        self.assertIn(f"file:     {e / 'acct3_holdings.toml'}", text.stdout)
+        # Every file read is listed by PATH under its group (relative
+        # to the project when inside it, docs/output-style.md).
+        rel = e.resolve().relative_to(root.resolve())
+        for n in (1, 2, 3):
+            self.assertRegex(text.stdout, rf"file: +{rel}/acct{n}_holdings"
+                                          rf"\.toml")
         self.assertIn("ACCOUNTS", text.stdout)
         self.assertIn("2 discrepancy(ies).", text.stdout)
 

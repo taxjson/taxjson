@@ -396,62 +396,83 @@ def splits(root: Path, cfg: Dict[str, Any],
     return out
 
 
-def render_spinoffs(doc: Dict[str, Any]) -> List[str]:
+def _hang(d, text: str, indent: str = "", hang: str = "  ") -> None:
+    """A paragraph of `d` (lib/out.Doc) with a hanging indent."""
+    from taxjson.lib.out import wrap
+    for ln in wrap(text, d.w, indent, hang):
+        d.line(ln)
+
+
+def render_spinoffs(doc: Dict[str, Any],
+                    width_: Optional[int] = None) -> List[str]:
+    """The spin-offs in the house layout (docs/output-style.md): each
+    event's headline, its figures as aligned `label:  value` lines and
+    its notes as `- ` items; the last line says whether any needs
+    attention."""
+    from taxjson.lib.out import Doc, Verbatim
     items, stale = doc["spinoffs"], doc["stale"]
-    L = [f"SPIN-OFFS ({len(items)})", ""]
+    d = Doc(f"SPIN-OFFS ({len(items)})", width_=width_)
+    d.blank()
     if not items:
-        L.append("No spin-offs in the books.")
-    for s in items:
+        d.para("No spin-offs in the books.")
+    for k, s in enumerate(items):
+        if k:
+            d.blank()
         tag = f" [{', '.join(s['flags'])}]" if s["flags"] else ""
-        L.append(f"{s['date']}  {s['account']:<8} {s['parent']} -> "
-                 f"{s['child']}  {s['ratio']}  election: "
-                 f"{s['election']}{tag}")
+        _hang(d, f"{s['date']}  {s['account']}  {s['parent']} -> "
+               f"{s['child']}  {s['ratio']}{tag}", "", "  ")
         fmv = (f"{s['fmv_per_share']:g} per share"
                + (" (the broker's value)" if s.get("value_from_broker")
                   else "")
                if s["fmv_per_share"] else "0")
-        L.append(f"      value used: {fmv}; booked: income "
-                 f"{s['income']:,.2f} {s['currency']}, {s['new_qty']:g} new "
-                 f"shares costing {s['new_cost']:,.2f} {s['currency']}; "
-                 f"held now {s['held_now']:g}")
-        for w in s["why"]:
-            L.append(f"      - {w}")
+        d.kv([("election", s["election"]), ("value used", fmv),
+              ("booked", f"income {s['income']:,.2f} {s['currency']}, "
+                         f"{s['new_qty']:g} new shares costing "
+                         f"{s['new_cost']:,.2f} {s['currency']}"),
+              ("held now", f"{s['held_now']:g}")], "  ")
+        d.items(s["why"], "  ")
     n = sum(1 for s in items if s["flags"])
     if stale:
-        L.append("")
-        L.append(f"{len(stale)} saved spin-off election(s) match no event "
-                 f"in the current inputs (saved by an older version, "
-                 f"nothing booked):")
+        d.blank()
+        d.para(f"{len(stale)} saved spin-off election(s) match no event "
+               f"in the current inputs (saved by an older version, "
+               f"nothing booked):")
         for st in stale:
-            L.append(f"      {st['account']}: {st['event_id']}  "
-                     f"({st['summary']})")
-            L.append(f"        remove: taxjson elect {st['account']} "
-                     f"--reset --event {st['event_id']}")
-    L.append("")
+            d.item(f"{st['account']}: {st['event_id']}  "
+                   f"({st['summary']})", "  ")
+            d.kv([("remove", Verbatim(f"taxjson elect {st['account']} "
+                                      f"--reset --event "
+                                      f"{st['event_id']}"))], "    ")
+    d.blank()
     if items:
-        L.append(f"{n} spin-off(s) need attention." if n else
-                 "Every taxable spin-off is booked with a value.")
-    return L
+        d.para(f"{n} spin-off(s) need attention." if n else
+               "Every taxable spin-off is booked with a value.")
+    return d.lines()
 
 
-def render_splits(items: List[Dict[str, Any]]) -> List[str]:
-    L = [f"SPLITS AND CONSOLIDATIONS ({len(items)})", ""]
+def render_splits(items: List[Dict[str, Any]],
+                  width_: Optional[int] = None) -> List[str]:
+    """The splits in the house layout: one line per split (its holdings
+    before and after), its notes as `- ` items under it; the last line
+    says whether any needs attention."""
+    from taxjson.lib.out import Doc
+    d = Doc(f"SPLITS AND CONSOLIDATIONS ({len(items)})", width_=width_)
+    d.blank()
     if not items:
-        L.append("No splits in the books.")
-        return L
+        d.para("No splits in the books.")
+        return d.lines()
     for s in items:
         tag = f" [{', '.join(s['flags'])}]" if s["flags"] else ""
         ren = f" -> {s['new_symbol']}" if s["new_symbol"] and \
             s["new_symbol"] != s["symbol"] else ""
         kind = ("rename" if abs(s["ratio"] - 1) < 1e-9 and ren else
                 "split" if s["ratio"] > 1 else "consolidation")
-        L.append(f"{s['date']}  {s['account']:<8} {s['symbol']}{ren}  "
-                 f"{kind} x{s['ratio']:g}  held {s['held_before']:g} -> "
-                 f"{s['held_after']:g}{tag}")
-        for w in s["why"]:
-            L.append(f"      - {w}")
+        _hang(d, f"{s['date']}  {s['account']:<8} {s['symbol']}{ren}  "
+               f"{kind} x{s['ratio']:g}  held {s['held_before']:g} -> "
+               f"{s['held_after']:g}{tag}", "", "  ")
+        d.items(s["why"], "  ")
     n = sum(1 for s in items if s["flags"])
-    L.append("")
-    L.append(f"{n} split(s) need attention." if n else
-             "No split is doubled, empty or fractional.")
-    return L
+    d.blank()
+    d.para(f"{n} split(s) need attention." if n else
+           "No split is doubled, empty or fractional.")
+    return d.lines()

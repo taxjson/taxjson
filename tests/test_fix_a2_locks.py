@@ -271,7 +271,7 @@ class TestCloseYearForce(_Base):
         new = json.loads(lock.read_text())
         self.assertEqual(len(new["filed_dispositions"]), 1)
         self.assertEqual(new["filed_totals"]["gain"], -100.0)
-        self.assertIn("kept the 1 filed disposition", r.stdout)
+        self.assertIn("kept the 1 filed disposition", r.stdout.lower())
         self.assertIn("realized -90.00 -> -100.00", r.stderr)
 
     def test_filed_dispositions_csv_funnel(self):

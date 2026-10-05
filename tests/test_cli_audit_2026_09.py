@@ -68,7 +68,7 @@ class TestWrongYearLock(unittest.TestCase):          # B2
             root = _project(td, year=2025, gains_year="2024")
             code, _o, _e = _call(R.cmd_close_year, dir=str(root),
                                  year=None, force=False)
-            self.assertIn("rebuild with `taxjson run` first", str(code))
+            self.assertIn("rebuild with `taxjson run` first", str(code).lower())
             self.assertIn("margin: 2024", str(code))
             self.assertFalse((root / "filed").exists())
 

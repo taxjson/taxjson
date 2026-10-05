@@ -205,7 +205,7 @@ class TestFindMissingHistoryCli(unittest.TestCase):
 
     def test_short_listed_apart_and_closing_sale_affects_the_year(self):
         out = self._run(_parsed(STOCK_ROWS + OPTION_ROWS))
-        self.assertIn('Broker-marked short sales', out)
+        self.assertIn('BROKER-MARKED SHORT SALES', out)
         self.assertIn('codes the sale O (opening)', out)
         affects = out.split('AFFECTS 2025', 1)[1]
         self.assertNotIn('QZX', affects)

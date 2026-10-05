@@ -73,7 +73,8 @@ class TestRecomputesUseTomlOrder(unittest.TestCase):
     def test_run_books_the_toml_order(self):
         r = _cli(self.root, "form-export")
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
-        self.assertIn("Line 13200 (gain/loss): 200.00", r.stdout)
+        self.assertIn("Line 13200 (gain/loss): 200.00",
+                      " ".join(r.stdout.split()))
 
     @rule("CA-DATE-14")
     def test_audit_ties_out_in_toml_order(self):

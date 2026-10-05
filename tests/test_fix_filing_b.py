@@ -395,7 +395,7 @@ class TestRunStateSurfaced(unittest.TestCase):
             self.assertFalse((root / "filed").exists())
             r = _cli(root, "close-year", "--force")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("WARNING: locking books", r.stderr)
+            self.assertIn("warning: locking books", r.stderr)
             r = _cli(root, "check-filed")
             self.assertIn("not the clean result", r.stderr)
 

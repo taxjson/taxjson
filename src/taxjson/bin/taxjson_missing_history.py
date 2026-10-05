@@ -58,6 +58,69 @@ from taxjson.lib.missing_history import (
 )
 
 
+def _diag(text, file=None):
+    """A `taxjson-missing-history: <kind>: ...` message on stderr in the
+    house layout (lib/out.message: the marker line, then the wrapped
+    rest indented); unwrapped when captured, so the same bytes as one
+    print."""
+    import re
+    from taxjson.lib.out import emit
+    m = re.match(r"(taxjson-missing-history): (error|warning|note): (.*)\Z",
+                 str(text), re.S)
+    if not m:
+        print(text, file=sys.stderr)
+        return
+    emit(m.group(2), m.group(3), prog=m.group(1))
+
+
+class _Printer:
+    """The report's stdout in the house layout (docs/output-style.md):
+    one blank line between blocks, never two, none first; prose wrapped
+    at the house width (lib/out)."""
+
+    def __init__(self):
+        self.started = False
+        self.blank = True
+
+    def gap(self):
+        if self.started and not self.blank:
+            print()
+            self.blank = True
+
+    def line(self, text=""):
+        print(text)
+        self.started = True
+        self.blank = not str(text).strip()
+
+    def para(self, text, indent="", hang=None):
+        from taxjson.lib.out import wrap
+        for ln in wrap(text, None, indent, hang):
+            self.line(ln)
+
+    def heading(self, text):
+        self.gap()
+        self.para(text, "", "  ")
+
+
+_P = _Printer()
+
+
+def _table(headers, rows, details=()):
+    """A report table that fits the width (lib/out.fit_table): header,
+    `---` rule, one row per line — whitespace-split, a row still starts
+    with its symbol and account, as the checklist reads the AFFECTS and
+    REMOVE sections — each followed by its indented detail lines
+    (`details[i]`: a list of texts)."""
+    from taxjson.lib.out import fit_table
+    lines = fit_table(headers, rows, per_record=False)
+    for ln in lines[:2]:
+        _P.line(ln)
+    for i, ln in enumerate(lines[2:]):
+        _P.line(ln)
+        for d in (details[i] if i < len(details) else None) or ():
+            _P.para(d, "  ", "  ")
+
+
 def _load_all(paths):
     """(transactions, [paths that failed to load])."""
     txs = []
@@ -66,7 +129,8 @@ def _load_all(paths):
         try:
             txs.extend(load_transactions(Path(p)))
         except (OSError, ValueError) as e:
-            print(f"error loading {p}: {e}", file=sys.stderr)
+            _diag(f"taxjson-missing-history: error: cannot load {p}: {e}",
+                  file=sys.stderr)
             failed.append(str(p))
     return txs, failed
 
@@ -77,62 +141,63 @@ def _is_derivative(symbol: str) -> bool:
             or (symbol or '').startswith(('F:', '/', '\\')))
 
 
+def _money(v) -> str:
+    from taxjson.lib.out import fmt_money
+    return fmt_money(v)
+
+
 def _print_section(title, rows, *, show_year_cols):
     if not rows:
         return
-    print(f"\n{title}")
+    _P.heading(title)
     if show_year_cols:
-        hdr = (f"{'Symbol':<24} {'Account':<10} {'Cur':<4} {'PeakShort':>12} "
-               f"{'FirstNeg':<12} {'InYrSales':>10} {'InYrProceeds':>14} {'Reg'}")
+        hdr = ["Symbol", "Account", "Cur", "PeakShort", "FirstNeg",
+               "InYrSales", "InYrProceeds", "Reg"]
     else:
-        hdr = (f"{'Symbol':<24} {'Account':<10} {'Cur':<4} {'PeakShort':>12} "
-               f"{'FirstNeg':<12} {'Sales<0':>10} {'EndPos':>12} {'Reg'}")
-    print("-" * len(hdr))
-    print(hdr)
-    print("-" * len(hdr))
+        hdr = ["Symbol", "Account", "Cur", "PeakShort", "FirstNeg",
+               "Sales<0", "EndPos", "Reg"]
+    body, details = [], []
     for r in rows:
         c = r.candidate
-        reg = "REG" if c.registered else ""
-        if show_year_cols:
-            print(f"{c.symbol:<24} {c.account:<10} {(c.currency or '?'):<4} "
-                  f"{c.peak_short:12.4f} {c.first_negative_date:<12} "
-                  f"{r.in_year_dispositions:10d} {r.in_year_proceeds:14.2f} {reg}")
-        else:
-            print(f"{c.symbol:<24} {c.account:<10} {(c.currency or '?'):<4} "
-                  f"{c.peak_short:12.4f} {c.first_negative_date:<12} "
-                  f"{r.in_year_dispositions:10d} {c.end_position:12.4f} {reg}")
+        body.append([c.symbol, c.account, c.currency or '?',
+                     f"{c.peak_short:.4f}", c.first_negative_date,
+                     str(r.in_year_dispositions),
+                     _money(r.in_year_proceeds) if show_year_cols
+                     else f"{c.end_position:.4f}",
+                     "REG" if c.registered else ""])
+        d = []
         if getattr(c, 'broker_says_closing', False):
             # (indented: a detail line, not a table row — the checklist
             # counts rows only)
-            print(f"    broker says closing (IB code C): the sale closed a "
-                  f"position bought before the data"
-                  + (f" (IB Basis {c.broker_basis})" if c.broker_basis
-                     else "")
-                  + " — add the missing purchase; it is not a short sale"
-                  + (" or a written option" if _is_derivative(c.symbol)
-                     else "") + "."
-                  + (" `--write-purchases` drafts the line from IB's "
-                     "figure for you to review."
-                     if c.broker_basis and not c.symbol.startswith(
-                         ('F:', '/', '\\')) else ""))
+            d.append("broker says closing (IB code C): the sale closed a "
+                     "position bought before the data"
+                     + (f" (IB Basis {c.broker_basis})" if c.broker_basis
+                        else "")
+                     + " — add the missing purchase; it is not a short sale"
+                     + (" or a written option" if _is_derivative(c.symbol)
+                        else "") + "."
+                     + (" `--write-purchases` drafts the line from IB's "
+                        "figure for you to review."
+                        if c.broker_basis and not c.symbol.startswith(
+                            ('F:', '/', '\\')) else ""))
+        details.append(d)
+    _table(hdr, body, details)
 
 
 def _print_zero_section(title, rows):
     if not rows:
         return
-    print(f"\n{title}")
-    hdr = (f"{'Symbol':<24} {'Account':<10} {'Cur':<4} {'ZeroQty':>10} "
-           f"{'AcqDate':<12} {'InYrSales':>10} {'InYrProceeds':>14} {'Why'}")
-    print("-" * len(hdr))
-    print(hdr)
-    print("-" * len(hdr))
+    _P.heading(title)
+    body, details = [], []
     for r in rows:
         why = "corp action" if r.looks_corp_action else "$0 cost"
-        print(f"{r.symbol:<24} {r.account:<10} {(r.currency or '?'):<4} "
-              f"{r.zero_cost_qty:10.4f} {r.acquisition_date:<12} "
-              f"{r.in_year_dispositions:10d} {r.in_year_proceeds:14.2f} {why}")
-        if r.description:
-            print(f"    └ {r.description}")
+        body.append([r.symbol, r.account, r.currency or '?',
+                     f"{r.zero_cost_qty:.4f}", r.acquisition_date,
+                     str(r.in_year_dispositions),
+                     _money(r.in_year_proceeds), why])
+        details.append([f"└ {r.description}"] if r.description else [])
+    _table(["Symbol", "Account", "Cur", "ZeroQty", "AcqDate", "InYrSales",
+            "InYrProceeds", "Why"], body, details)
 
 
 def _sheltered_title(yr, country) -> str:
@@ -160,7 +225,7 @@ def _rename_sources(map_path, symbols):
         from taxjson.bin.taxjson_ticker_map import load_map_file
         tm = load_map_file(Path(map_path))
     except Exception as e:                          # noqa: BLE001
-        print(f"taxjson-missing-history: warning: could not read "
+        _diag(f"taxjson-missing-history: warning: could not read "
               f"{map_path} ({e}) — renamed symbols are not traced back.",
               file=sys.stderr)
         return {}
@@ -189,10 +254,15 @@ def _print_zero_fix(country, cost) -> None:
     _stk = ("a stock dividend: its declared amount as a .tt "
             "ADJUST line on the dividend date (or "
             "[[distributions]]); " if is_canada(country) else "")
-    print(f"\nTo fix $0-cost shares, give them their {cost}: "
-          f"{_stk}a merger or spin-off: its election (`taxjson "
-          "elect`); shares transferred in: a .tt BUYSELL with the "
-          "original purchase date and cost.")
+    _P.gap()
+    _P.line(f"To fix $0-cost shares, give them their {cost}:")
+    for item in ((["a stock dividend: its declared amount as a .tt ADJUST "
+                   "line on the dividend date (or [[distributions]])"]
+                  if _stk else [])
+                 + ["a merger or spin-off: its election (`taxjson elect`)",
+                    "shares transferred in: a .tt BUYSELL with the "
+                    "original purchase date and cost"]):
+        _P.para(f"- {item}", "  ", "    ")
 
 
 def _project_root(path):
@@ -244,7 +314,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
     from taxjson.lib.safe_write import backup_copy, write_atomic
     country = country or args.country
     if not country:
-        print("taxjson-missing-history: error: --write-purchases needs the "
+        _diag("taxjson-missing-history: error: --write-purchases needs the "
               "project's country: run it on a project's work/ files "
               "(`taxjson find-missing-history --write-purchases`) or pass "
               "--country canada|usa.", file=sys.stderr)
@@ -259,7 +329,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
                     mh_pairs.add((str(e["symbol"]).strip().upper(),
                                   str(e["account"]).strip()))
         except (OSError, ValueError) as e:
-            print(f"taxjson-missing-history: warning: could not read "
+            _diag(f"taxjson-missing-history: warning: could not read "
                   f"{args.missing_history}: {e}", file=sys.stderr)
     accounts = sorted({t.account for t in txs if t.account})
     if args.account:
@@ -283,7 +353,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
             def key(sym, _ren=_ren):
                 return map_symbol(str(sym or "").strip().upper(), _ren)
         except (OSError, ValueError) as e:
-            print(f"taxjson-missing-history: warning: could not read "
+            _diag(f"taxjson-missing-history: warning: could not read "
                   f"{args.ticker_map} ({e}) — transfer-ins are matched "
                   f"to the books by their own spelling.", file=sys.stderr)
     drafts, gaps = draft_purchases(
@@ -300,18 +370,18 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
     scope = (f" with a sale in {args.year}" if args.year
              and not args.all_history else "")
     if not drafts:
-        print(f"No purchase to draft{scope}: no sale with no purchase in "
-              f"your files carries a broker cost (IB's Basis), and no "
-              f"transfer-in that needs a purchase line states a book "
-              f"value." + (f" Not drafted: {len(gaps)}." if gaps else ""))
+        _P.para(f"No purchase to draft{scope}: no sale with no purchase in "
+                f"your files carries a broker cost (IB's Basis), and no "
+                f"transfer-in that needs a purchase line states a book "
+                f"value." + (f" Not drafted: {len(gaps)}." if gaps else ""))
         for g in gaps:
-            print(f"  not drafted: {g.symbol} [{g.account}] {g.date} "
-                  f"{g.quantity:g} units — {g.reason}")
+            _P.para(f"- not drafted: {g.symbol} [{g.account}] {g.date} "
+                    f"{g.quantity:g} units — {g.reason}", "  ", "    ")
         return 1 if unchecked else 0
     explicit = Path(args.write_purchases) if args.write_purchases else None
     drafting = sorted(a for a, (ds, _) in by_acct.items() if ds)
     if explicit is not None and len(drafting) > 1:
-        print(f"taxjson-missing-history: error: drafts for "
+        _diag(f"taxjson-missing-history: error: drafts for "
               f"{len(drafting)} accounts ({', '.join(drafting)}) — a .tt "
               f"file belongs to one account: name it (--account, or "
               f"`taxjson find-missing-history ACCOUNT --write-purchases "
@@ -320,7 +390,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
         return 2
     root = _project_root(args.files[0])
     if explicit is None and root is None:
-        print(f"taxjson-missing-history: error: no project around "
+        _diag(f"taxjson-missing-history: error: no project around "
               f"{args.files[0]} — pass --write-purchases FILE.",
               file=sys.stderr)
         return 2
@@ -334,7 +404,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
         configured = _project_doc_near(args.files[0]).get("accounts") or {}
         for a in drafting:
             if not ACCOUNT_NAME_RE.fullmatch(a) or a not in configured:
-                print(f"taxjson-missing-history: error: the books name "
+                _diag(f"taxjson-missing-history: error: the books name "
                       f"account {ascii(a)}, which is not an account in "
                       f"taxjson.toml (have: "
                       f"{', '.join(sorted(configured)) or '-'}) — not "
@@ -346,7 +416,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
                for a in drafting}
     for a, out in targets.items():
         if (out.exists() or out.is_symlink()) and not args.force:
-            print(f"taxjson-missing-history: error: {out} already exists "
+            _diag(f"taxjson-missing-history: error: {out} already exists "
                   f"— not overwritten (it may hold your edits). Rename "
                   f"what you reviewed to .tt first, or pass --force to "
                   f"replace it (the old file is kept as "
@@ -354,7 +424,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
                   file=sys.stderr)
             return 1
         if out.suffix.lower() in (".tt", ".csv"):
-            print(f"taxjson-missing-history: error: {out.name}: a draft "
+            _diag(f"taxjson-missing-history: error: {out.name}: a draft "
                   f"must not end in {out.suffix} — the run would read it "
                   f"before you reviewed it (use a name ending in .txt, "
                   f"e.g. {DRAFT_NAME}).", file=sys.stderr)
@@ -374,7 +444,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
                       f"{bak.name}", file=sys.stderr)
             write_atomic(out, text)
         except OSError as e:
-            print(f"taxjson-missing-history: error: cannot write {out}: "
+            _diag(f"taxjson-missing-history: error: cannot write {out}: "
                   f"{e}", file=sys.stderr)
             return 2
         n_lot = sum(1 for d in ds if d.source == "ib-lot")
@@ -393,21 +463,23 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
             (n_lot, "from IB's closed lots"),
             (n_ib, "from IB's Basis"),
             (n_tr, "from a transfer-in's book value")) if n]
-        print(f"Wrote {len(ds)} draft purchase line(s) for {a} to {shown} "
-              f"({'; '.join(parts)}).")
+        _P.para(f"Wrote {len(ds)} draft purchase line(s) for {a} to {shown} "
+                f"({'; '.join(parts)}).")
         todo = [f"{n} need {what}" for n, what in (
             (n_date, f"the purchase date ({_PH_DATE})"),
             (n_cost, f"the cost ({_PH_COST})"),
             (n_chk, "a CHECK resolved")) if n]
         if todo:
-            print(f"  {'; '.join(todo)}.")
+            _P.para(f"{'; '.join(todo)}.", "  ", "  ")
         if gs:
-            print(f"  {len(gs)} sale(s) or transfer-in(s) of {a} could "
-                  f"not be drafted — listed at the end of the file.")
-    print(f"taxjson does not read a draft. Review every line, fill in "
-          f"the placeholders, then rename the file to end in .tt (e.g. "
-          f"purchases.tt) and `taxjson run`; `taxjson find-missing-"
-          f"history` should then drop the fixed positions.")
+            _P.para(f"{len(gs)} sale(s) or transfer-in(s) of {a} could "
+                    f"not be drafted — listed at the end of the file.",
+                    "  ", "  ")
+    _P.gap()
+    _P.para("taxjson does not read a draft. Review every line, fill in "
+            "the placeholders, then rename the file to end in .tt (e.g. "
+            "purchases.tt) and `taxjson run`; `taxjson find-missing-"
+            "history` should then drop the fixed positions.")
     return 1 if unchecked else 0
 
 
@@ -470,8 +542,10 @@ def main(argv=None):
                          "country whose rules the draft's notes follow "
                          "(a project's taxjson.toml decides otherwise)")
     args = ap.parse_args(argv)
+    global _P
+    _P = _Printer()
     if args.phantoms_old:
-        print("taxjson-missing-history: note: --phantoms is now "
+        _diag("taxjson-missing-history: note: --phantoms is now "
               "--missing-history (the old flag still works).",
               file=sys.stderr)
         if not args.missing_history:
@@ -492,7 +566,7 @@ def main(argv=None):
         # every finding away and printed the all-clear (audit S035-07).
         present = sorted({t.account for t in txs if t.account})
         if args.account not in present:
-            print(f"taxjson-missing-history: error: no row carries "
+            _diag(f"taxjson-missing-history: error: no row carries "
                   f"account {args.account!r} (accounts in the books: "
                   f"{', '.join(present) or 'none'})", file=sys.stderr)
             return 2
@@ -506,8 +580,9 @@ def main(argv=None):
     def _incomplete(rc):
         if not unchecked:
             return rc
-        print(f"\nINCOMPLETE: not checked: {', '.join(unchecked)} — "
-              f"missing basis there is not reported.")
+        _P.gap()
+        _P.para(f"INCOMPLETE: not checked: {', '.join(unchecked)} — "
+                f"missing basis there is not reported.", "", "  ")
         print(f"taxjson-missing-history: {len(unchecked)} input(s) not "
               f"checked: {', '.join(unchecked)}", file=sys.stderr)
         return 1
@@ -545,7 +620,7 @@ def main(argv=None):
     _cost = COST_TERM[country]
     if basis is None:
         basis = "settle"
-        print("taxjson-missing-history: note: no taxjson.toml beside the "
+        _diag("taxjson-missing-history: note: no taxjson.toml beside the "
               "input — a row's tax year is taken from its SETTLEMENT date "
               "(run it on a project's work/ files to use the project's "
               "country and tax_date)", file=sys.stderr)
@@ -558,7 +633,7 @@ def main(argv=None):
         try:
             journal = journal_targets(args.ticker_map)
         except Exception as e:                      # noqa: BLE001
-            print(f"taxjson-missing-history: warning: could not read "
+            _diag(f"taxjson-missing-history: warning: could not read "
                   f"{args.ticker_map} ({e}) — JOURNAL pairs are walked "
                   f"in clock order.", file=sys.stderr)
     if args.write_purchases is not None:
@@ -632,9 +707,14 @@ def main(argv=None):
                  and not is_registered_account(r.account, types or None,
                                                country)]
 
+    _P.line(f"MISSING COST BASIS — "
+            + (f"tax year {args.year}" if args.year else "all history")
+            + (f", account {args.account}" if args.account else ""))
+    _P.gap()
+
     if broker_shorts:
-        print(f"\n## Broker-marked short sales (real shorts, NOT missing "
-              f"history): {len(broker_shorts)}")
+        _P.heading(f"BROKER-MARKED SHORT SALES — real shorts, not missing "
+                   f"history: {len(broker_shorts)}")
         for c in broker_shorts:
             _how = ("codes the sale O (opening)"
                     if c.short_marker == 'IB code O'
@@ -642,39 +722,39 @@ def main(argv=None):
                     in ('', 'SHORT.')
                     else f"marks the sales short ({c.short_marker})")
             _listed = (str(c.symbol).upper(), c.account) in stale_pairs
-            print(f"  {c.symbol} [{c.account}] went short on "
-                  f"{c.first_negative_date} (peak {c.peak_short:g}); the "
-                  f"broker {_how} — "
-                  + (f"but {mh_name} LISTS it: remove that entry."
-                     if _listed else
-                     f"nothing to fix, do not add it to {mh_name}."))
+            _P.para(f"- {c.symbol} [{c.account}] went short on "
+                    f"{c.first_negative_date} (peak {c.peak_short:g}); the "
+                    f"broker {_how}"
+                    + (f" — but {mh_name} LISTS it: remove that entry."
+                       if _listed else ""), "", "  ")
+        _P.line(f"Nothing to fix for a real short: do not add it to "
+                f"{mh_name}.")
 
     if stale:
         # Heading starts with REMOVE: the checklist counts these rows.
-        print(f"\n## {mh_name} entries that are not missing history: "
-              f"{len(stale)}")
-        print(f"REMOVE from {mh_name} - the run applies them and they "
-              "move a real gain or loss off the totals:")
+        _P.heading(f"NOT MISSING HISTORY — {mh_name} entries the run "
+                   f"applies to a real short or a written option: "
+                   f"{len(stale)}")
+        _P.line(f"REMOVE from {mh_name} - the run applies them and they "
+                "move a real gain or loss off the totals:")
         for e in stale:
-            print(f"{e.symbol} {e.account}")
-            print(f"    {stale_entry_message(e)}")
+            _P.line(f"{e.symbol} {e.account}")
+            _P.para(stale_entry_message(e), "    ", "    ")
 
     if complete:
-        print(f"\n## {mh_name} entries whose purchase is now in the "
-              f"books: {len(complete)}")
-        print(f"STALE in {mh_name} - the position never goes short any "
-              f"more, so the entry does nothing; delete it:")
+        _P.heading(f"PURCHASE NOW IN THE BOOKS — {mh_name} entries that do "
+                   f"nothing: {len(complete)}")
+        _P.line(f"STALE in {mh_name} - the position never goes short any "
+                f"more, so the entry does nothing; delete it:")
         for e in complete:
-            print(f"{e.symbol} {e.account}")
+            _P.line(f"{e.symbol} {e.account}")
 
     if covers:
-        print(f"\n## Covers of a short opened before the data (missing "
-              f"history): {len(covers)}")
+        _P.heading(f"COVERS OF A SHORT OPENED BEFORE THE DATA — missing "
+                   f"history: {len(covers)}")
         yr_c = str(args.year) if args.year else None
         aff = [c for c in covers if yr_c is None or c.date.startswith(yr_c)]
         oth = [c for c in covers if c not in aff]
-        hdr = (f"{'Symbol':<24} {'Account':<10} {'Date':<12} "
-               f"{'Unbacked':>12} {'Cost':>14} {'Marker'}")
         for title, rows in (
                 ((f"AFFECTS {yr_c} - covering the short is the disposition; "
                   f"its gain or loss is missing (the books carry the buy "
@@ -685,46 +765,43 @@ def main(argv=None):
                 (f"NOT relevant to {yr_c} - covers in other years:", oth)):
             if not rows:
                 continue
-            print(f"\n{title}")
-            print("-" * len(hdr))
-            print(hdr)
-            print("-" * len(hdr))
-            for c in rows:
-                print(f"{c.symbol:<24} {c.account:<10} {c.date:<12} "
-                      f"{c.unbacked_qty:12.4f} {c.proceeds:14.2f} "
-                      f"{c.marker}")
+            _P.heading(title)
+            _table(["Symbol", "Account", "Date", "Unbacked", "Cost",
+                    "Marker"],
+                   [[c.symbol, c.account, c.date, f"{c.unbacked_qty:.4f}",
+                     _money(c.proceeds), c.marker] for c in rows])
 
     if zero_held:
-        print(f"\n## $0-cost shares still held (their sale will overstate "
-              f"the gain): {len(zero_held)} pair(s)")
-        print(f"HELD - no gain yet; give them their {_cost} before they "
-              f"are sold:")
-        hdr = (f"{'Symbol':<24} {'Account':<10} {'Cur':<4} {'HeldQty':>10} "
-               f"{'ZeroQty':>10} {'AcqDate':<12} {'Why'}")
-        print("-" * len(hdr))
-        print(hdr)
-        print("-" * len(hdr))
+        _P.heading(f"$0-COST SHARES STILL HELD — their sale will overstate "
+                   f"the gain: {len(zero_held)} pair(s)")
+        _P.line(f"HELD - no gain yet; give them their {_cost} before they "
+                f"are sold:")
+        body, details = [], []
         for r in zero_held:
             why = "corp action" if r.looks_corp_action else "$0 cost"
-            print(f"{r.symbol:<24} {r.account:<10} {(r.currency or '?'):<4} "
-                  f"{r.still_held_qty:10.4f} {r.zero_cost_qty:10.4f} "
-                  f"{r.acquisition_date:<12} {why}")
-            if r.description:
-                print(f"    └ {r.description}")
+            body.append([r.symbol, r.account, r.currency or '?',
+                         f"{r.still_held_qty:.4f}", f"{r.zero_cost_qty:.4f}",
+                         r.acquisition_date, why])
+            details.append([f"└ {r.description}"] if r.description else [])
+        _table(["Symbol", "Account", "Cur", "HeldQty", "ZeroQty", "AcqDate",
+                "Why"], body, details)
 
     if not short_rows and not zero_rows and not links:
         scope = f" (account {args.account})" if args.account else ""
         if zero_held:
             _print_zero_fix(country, _cost)
-            print(_WALK_THROUGH)
+            _P.gap()
+            _P.para(_WALK_THROUGH)
         if stale or covers or complete or zero_held:
             return _incomplete(0)
         if unchecked:
-            print(f"No missing-cost-basis issues found{scope} in the "
-                  f"books that loaded.")
+            _P.gap()
+            _P.para(f"No missing-cost-basis issues found{scope} in the "
+                    f"books that loaded.")
             return _incomplete(0)
-        print(f"No missing-cost-basis issues found{scope}: no negative "
-              "holdings, no $0-cost corp-action shares sold, no mergers.")
+        _P.gap()
+        _P.para(f"No missing-cost-basis issues found{scope}: no negative "
+                "holdings, no $0-cost corp-action shares sold, no mergers.")
         return 0
 
     yr = args.year
@@ -740,7 +817,7 @@ def main(argv=None):
                     _ph.add((str(e.get("symbol") or "").upper(),
                              str(e.get("account") or "").lower()))
         except (OSError, ValueError) as e:
-            print(f"taxjson-missing-history: warning: could not read "
+            _diag(f"taxjson-missing-history: warning: could not read "
                   f"{args.missing_history}: {e}", file=sys.stderr)
 
     def _covered(r) -> bool:
@@ -749,23 +826,24 @@ def main(argv=None):
 
     # === Section 0: reconstructed mergers ===
     if links:
-        print(f"\n## Reconstructed mergers (old symbol -> new symbol): "
-              f"{len(links)} event(s)")
+        _P.heading(f"RECONSTRUCTED MERGERS — old symbol to new symbol: "
+                   f"{len(links)} event(s)")
         for l in links:
             ratio = f", ratio {l.ratio:g} new=1 old" if l.ratio else ""
-            print(f"  {l.date} [{l.account}]  {l.old_symbol} "
-                  f"({l.old_company or '?'}) -> {l.new_symbol} "
-                  f"({l.new_company or '?'}){ratio}")
-            print(f"      {l.old_qty:g} {l.old_symbol} removed; "
-                  f"{l.new_qty:g} {l.new_symbol} received at $0 basis.")
-            print(f"      The old shares' {_cost} is missing (their purchase isn't "
-                  f"in your data). Supply it so {l.new_symbol} carries the "
-                  f"correct basis - otherwise {l.new_symbol}'s sale gain is "
-                  f"overstated by that amount.")
+            _P.para(f"- {l.date} [{l.account}]  {l.old_symbol} "
+                    f"({l.old_company or '?'}) to {l.new_symbol} "
+                    f"({l.new_company or '?'}){ratio}", "", "  ")
+            _P.para(f"{l.old_qty:g} {l.old_symbol} removed; "
+                    f"{l.new_qty:g} {l.new_symbol} received at $0 basis. "
+                    f"The old shares' {_cost} is missing (their purchase "
+                    f"isn't in your data). Supply it so {l.new_symbol} "
+                    f"carries the correct basis - otherwise "
+                    f"{l.new_symbol}'s sale gain is overstated by that "
+                    f"amount.", "  ", "  ")
     # === Section 1: truncated history ===
     if short_rows:
-        print(f"\n## Truncated history - positions go short (missing a buy): "
-              f"{len(short_rows)} pair(s)")
+        _P.heading(f"TRUNCATED HISTORY — positions go short (missing a "
+                   f"buy): {len(short_rows)} pair(s)")
         if yr:
             affects = [r for r in short_rows if r.affects_year
                        and not r.candidate.registered and not _covered(r)]
@@ -774,11 +852,11 @@ def main(argv=None):
             sheltered = [r for r in short_rows if r.affects_year
                          and r.candidate.registered]
             ignorable = [r for r in short_rows if not r.affects_year]
-            print(f"   {len(affects) + len(covered)} affect tax year {yr}"
-                  + (f" ({len(covered)} covered by {mh_name})"
-                     if covered else "")
-                  + f"; {len(sheltered)} are in registered accounts; "
-                    f"{len(ignorable)} do not.")
+            _P.para(f"{len(affects) + len(covered)} affect tax year {yr}"
+                    + (f" ({len(covered)} covered by {mh_name})"
+                       if covered else "")
+                    + f"; {len(sheltered)} are in registered accounts; "
+                      f"{len(ignorable)} do not.")
             _print_section(f"AFFECTS {yr} - missing basis distorts this year's "
                            "gain; fix before filing:", affects, show_year_cols=True)
             # Pairs the missing-history file already covers (the run
@@ -803,8 +881,8 @@ def main(argv=None):
 
     # === Section 2: $0-cost corp-action acquisitions ===
     if zero_rows:
-        print(f"\n## $0-cost corp-action shares that were later sold "
-              f"(inflated gain): {len(zero_rows)} pair(s)")
+        _P.heading(f"$0-COST CORP-ACTION SHARES LATER SOLD — inflated gain: "
+                   f"{len(zero_rows)} pair(s)")
 
         def _reg(r):
             return is_registered_account(r.account, types or None, country)
@@ -814,8 +892,8 @@ def main(argv=None):
                 if yr else [])
         irr = [r for r in zero_rows if not r.affects_year] if yr else []
         if yr:
-            print(f"   {len(rel)} affect tax year {yr}; {len(shel)} are in "
-                  f"registered accounts; {len(irr)} do not.")
+            _P.para(f"{len(rel)} affect tax year {yr}; {len(shel)} are in "
+                    f"registered accounts; {len(irr)} do not.")
         _print_zero_section(
             (f"AFFECTS {yr} - sold this year against a $0 basis; the gain is "
              "overstated by the missing basis:") if yr
@@ -835,12 +913,13 @@ def main(argv=None):
                                {r.candidate.symbol for r in short_rows}
                                | {r.symbol for r in zero_rows})
     if _renamed:
-        print("\nNOTE: these symbols are ticker.map's consolidated names "
-              "(amounts in the base currency); the broker booked them "
-              "as: " + "; ".join(f"{t} <- {', '.join(srcs)}"
-                                 for t, srcs in sorted(_renamed.items()))
-              + ". Enter a missing buy under the broker's symbol and "
-                "currency, as the account labels it.")
+        _P.gap()
+        _P.para("These symbols are ticker.map's consolidated names "
+                "(amounts in the base currency); the broker booked them "
+                "as: " + "; ".join(f"{t} <- {', '.join(srcs)}"
+                                   for t, srcs in sorted(_renamed.items()))
+                + ". Enter a missing buy under the broker's symbol and "
+                  "currency, as the account labels it.")
 
     if (yr and (any(r.affects_year and not _covered(r)
                     for r in short_rows)
@@ -852,27 +931,35 @@ def main(argv=None):
         _zero_open = (any(r.affects_year for r in zero_rows)
                       or bool(zero_held))
         if _short_open:
-            print("\nTo fix a sale with no purchase in your files, in this "
-                  "order: (1) add an older export that holds the purchase "
-                  "to inputs/<account>/; (2) or enter the purchase as a "
-                  ".tt BUYSELL line with its real date and cost (for "
-                  "shares transferred in: the original purchase at the "
-                  "other broker) — `taxjson find-missing-history "
-                  "--write-purchases` drafts these lines from IB's Basis "
-                  "or a transfer's stated book value, for you to review; "
-                  "(3) only when it cannot be recovered: "
-                  "`taxjson find-missing-history --write-missing-history` "
-                  "in the project writes missing_history.json — review "
-                  "it, then `taxjson run` (it picks missing_history.json "
-                  "up); those sales are then left out of the totals and "
-                  "must be reported by hand. Standalone: taxjson-gains "
-                  f"--country {country or 'canada|usa'} --year {yr} "
-                  "--suggest-missing-history missing_history.json "
-                  "<base.json>, then --incomplete-history "
-                  "missing_history.json.")
+            _P.gap()
+            _P.line("To fix a sale with no purchase in your files, in this "
+                    "order:")
+            for item in (
+                    "1. Add an older export that holds the purchase to "
+                    "inputs/<account>/.",
+                    "2. Or enter the purchase as a .tt BUYSELL line with its "
+                    "real date and cost (for shares transferred in: the "
+                    "original purchase at the other broker). `taxjson "
+                    "find-missing-history --write-purchases` drafts these "
+                    "lines from IB's Basis or a transfer's stated book "
+                    "value, for you to review.",
+                    "3. Only when it cannot be recovered: `taxjson "
+                    "find-missing-history --write-missing-history` in the "
+                    "project writes missing_history.json — review it, then "
+                    "`taxjson run` (it picks missing_history.json up); those "
+                    "sales are then left out of the totals and must be "
+                    "reported by hand."):
+                _P.para(item, "  ", "     ")
+            _P.line("Standalone (outside a project), then review the file "
+                    "and pass it with --incomplete-history:")
+            _P.line(f"  taxjson-gains --country {country or 'canada|usa'} "
+                    f"--year {yr} \\")
+            _P.line("      --suggest-missing-history missing_history.json "
+                    "<base.json>")
         if _zero_open:
             _print_zero_fix(country, _cost)
-        print(_WALK_THROUGH)
+        _P.gap()
+        _P.para(_WALK_THROUGH)
     return _incomplete(0)
 
 

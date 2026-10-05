@@ -514,25 +514,41 @@ def unresolved_late(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
             if x["resolution"] == "unresolved"]
 
 
-def render(doc: Dict[str, Any]) -> List[str]:
+def _hang(d, text: str, indent: str = "", hang: str = "  ") -> None:
+    """A paragraph of `d` (lib/out.Doc) with a hanging indent."""
+    from taxjson.lib.out import wrap
+    for ln in wrap(text, d.w, indent, hang):
+        d.line(ln)
+
+
+def render(doc: Dict[str, Any], width_: Optional[int] = None) -> List[str]:
+    """The renames in the house layout (docs/output-style.md): each
+    dated rename with the positions it carried and its late trades, the
+    ticker.map lines to copy never wrapped; the last line says whether a
+    declaration is needed."""
+    from taxjson.lib.out import Doc
     evs, late, undated = doc["renames"], doc["late"], doc["undated"]
-    L = [f"RENAMES ({len(evs)})", ""]
+    d = Doc(f"RENAMES ({len(evs)})", width_=width_)
+    d.blank()
     if not evs:
-        L.append("No dated rename in the books.")
-    for e in evs:
+        d.para("No dated rename in the books.")
+    for k, e in enumerate(evs):
+        if k:
+            d.blank()
         ratio = "" if abs((e["ratio"] or 1.0) - 1.0) < 1e-12 else \
             f" x{e['ratio']:g}"
-        L.append(f"{e['date']}  {e['old']} -> {e['new']}{ratio}  "
-                 f"source: {', '.join(e['sources'])}"
-                 + (f" (also {', '.join(e['ticker_map_lines'])})"
-                    if e["ticker_map_lines"]
-                    and "ticker.map line" not in e["sources"] else ""))
+        _hang(d, f"{e['date']}  {e['old']} -> {e['new']}{ratio}  "
+               f"source: {', '.join(e['sources'])}"
+               + (f" (also {', '.join(e['ticker_map_lines'])})"
+                  if e["ticker_map_lines"]
+                  and "ticker.map line" not in e["sources"] else ""),
+               "", "  ")
         for c in e["carried"]:
             cost = ("" if c["sheltered"] else
                     f"; book cost {c['book_cost']:,.2f} {e['currency']} "
                     f"carried")
-            L.append(f"      {c['account']}: held {c['qty']:g} {e['old']} "
-                     f"-> {c['qty_after']:g} {e['new']}{cost}")
+            d.item(f"{c['account']}: held {c['qty']:g} {e['old']} "
+                   f"-> {c['qty_after']:g} {e['new']}{cost}", "  ")
         mine = [x for x in late if x["symbol"] and x["rename_date"]
                 == e["date"] and x["renamed_to"] == e["new"]]
         if mine:
@@ -540,33 +556,35 @@ def render(doc: Dict[str, Any]) -> List[str]:
             word = {"fold": "declared the renamed shares (late=fold)",
                     "separate": "declared another security "
                                 "(late=separate)"}.get(res, "UNRESOLVED")
-            L.append(f"      {len(mine)} trade(s) in {e['old']} on or "
-                     f"after {e['date']}: {word}")
+            _hang(d, f"{len(mine)} trade(s) in {e['old']} on or "
+                   f"after {e['date']}: {word}", "  ", "    ")
             for x in mine:
-                L.append(f"        {x['date']}  {x['account']:<8} "
-                         f"{x['action']:<8} {x['symbol']} {x['qty']:+g}")
+                d.line(f"    {x['date']}  {x['account']:<8} "
+                       f"{x['action']:<8} {x['symbol']} {x['qty']:+g}")
             if res == "unresolved":
-                L.append(f"        declare one in ticker.map:")
-                L.append(f"          RENAME {e['old']} {e['new']} "
-                         f"{e['date']} late=fold      # the broker still "
-                         f"books the renamed shares as {e['old']}")
-                L.append(f"          RENAME {e['old']} {e['new']} "
-                         f"{e['date']} late=separate  # another company "
-                         f"now uses {e['old']}")
-                L.append("        Until then they are a separate security "
-                         "and `taxjson run --strict` stops.")
+                _hang(d, "Declare one in ticker.map — the broker still books "
+                       f"the renamed shares as {e['old']} (late=fold), or "
+                       f"another company now uses {e['old']} "
+                       f"(late=separate):", "  ", "    ")
+                d.line(f"    RENAME {e['old']} {e['new']} {e['date']} "
+                       f"late=fold")
+                d.line(f"    RENAME {e['old']} {e['new']} {e['date']} "
+                       f"late=separate")
+                _hang(d, "Until then they are a separate security and "
+                       "`taxjson run --strict` stops.", "  ", "    ")
     if undated:
-        L.append("")
-        L.append(f"UNDATED RENAMES IN ticker.map ({len(undated)}) — every "
-                 f"row of the old symbol, at any date, is the new one")
+        d.section(f"UNDATED RENAMES IN ticker.map ({len(undated)})")
+        d.para("Every row of the old symbol, at any date, is the new one.",
+               "  ")
         for u in undated:
-            L.append(f"  {u['rule']} {u['old']} {u['new']}")
-            for d in u["broker_dates"]:
-                L.append(f"      the broker books this change on {d}: the "
-                         f"dated form is  RENAME {u['old']} {u['new']} {d}")
-    L.append("")
+            d.line(f"  {u['rule']} {u['old']} {u['new']}")
+            for dd in u["broker_dates"]:
+                _hang(d, f"the broker books this change on {dd}; the dated "
+                       f"form is:", "    ", "      ")
+                d.line(f"      RENAME {u['old']} {u['new']} {dd}")
+    d.blank()
     n = doc["unresolved"]
-    L.append(f"{n} trade(s) in an old ticker after its rename need a "
-             f"ticker.map declaration." if n else
-             "No unresolved trade in an old ticker after its rename.")
-    return L
+    d.para(f"{n} trade(s) in an old ticker after its rename need a "
+           f"ticker.map declaration." if n else
+           "No unresolved trade in an old ticker after its rename.")
+    return d.lines()
