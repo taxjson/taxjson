@@ -9849,7 +9849,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
     country = _country(settings)
     accounts = cfg.get("accounts", {}) or {}
     if not accounts:
-        sys.exit("taxjson scan: no accounts in taxjson.toml.")
+        _die("no accounts in taxjson.toml.")
 
     # Per-listing positions (holdings.toml is built PRE-TOBASE, so the
     # US/TO line actually held is visible — the gains inventory is
@@ -9883,20 +9883,21 @@ def cmd_scan(args: argparse.Namespace) -> None:
             # A warning, then "No findings — clean scan." and exit 0
             # turned an unreadable report into a false all-clear: the
             # findings on that account's positions vanished (S049-10).
-            _die(f"could not read {f}: {e} — re-run `taxjson run` to "
-                 f"rebuild it (the scan would otherwise leave that "
-                 f"account's positions out).")
+            _die(f"could not read reports/{f.name}: {e}",
+                 "Re-run `taxjson run` to rebuild it (the scan would "
+                 "otherwise leave that account's positions out).")
     _equity_accts = [n for n, c in accounts.items()
                      if not (c or {}).get("crypto")]
     if not holdings and _equity_accts:
         # Printing "No findings — clean scan." (exit 0) over a scan that
         # read nothing was a false all-clear (2026-09 CLI audit B22).
         if set(_equity_accts) <= _accounts_skipped_for_no_inputs(root):
-            _die("no account has any input yet — nothing to scan. Drop "
-                 "broker CSVs into inputs/<account>/ and `taxjson run`.")
-        _die(f"no holdings reports in {reports} — run `taxjson run` "
-             f"first (the scan checks per-listing positions; nothing "
-             f"was scanned).")
+            _die("no account has any input yet — nothing to scan.",
+                 "Drop broker CSVs into inputs/<account>/ and `taxjson "
+                 "run`.")
+        _die("no holdings reports in reports/ — nothing was scanned",
+             "Run `taxjson run` first (the scan checks per-listing "
+             "positions).")
 
     # Dividend payers, per raw (pre-consolidation) symbol.
     div_syms: set = set()
@@ -9932,8 +9933,8 @@ def cmd_scan(args: argparse.Namespace) -> None:
             distinct_pairs = {frozenset(s.upper() for s in pair)
                               for pair in _tmap.distinct}
         except Exception as e:
-            print(f"taxjson: warning: could not read ticker.map: {e}",
-                  file=sys.stderr)
+            from taxjson.lib.out import warn as _warn
+            _warn(f"could not read ticker.map: {e}", prog="taxjson scan")
     renames_u = {k.upper(): v.upper() for k, v in renames.items()}
 
     def _declared_distinct(a: str, b: str) -> bool:
@@ -10113,27 +10114,29 @@ def cmd_scan(args: argparse.Namespace) -> None:
                          f"e.g. {sorted(_suffixed[_fu])[0]})")
             map_unused.append(f"{_frm} -> {_to}{_hint}")
         if _unread:
-            print(f"taxjson scan: warning: could not read "
-                  f"{'; '.join(_unread)} — the unused-ticker.map-rule "
-                  f"check is skipped (its symbols are unknown); re-run "
-                  f"`taxjson run`.", file=sys.stderr)
+            from taxjson.lib.out import warn as _warn
+            _warn(f"could not read {'; '.join(_unread)}",
+                  prog="taxjson scan",
+                  details=["The unused-ticker.map-rule check is skipped "
+                           "(its symbols are unknown); re-run `taxjson "
+                           "run`."])
             map_unused = []
 
     from taxjson.lib.offline import offline_enabled as _offline
     if getattr(args, "online", False) and _offline():
         # The documented kill switch covers this probe too: it sends
         # every held and dividend ticker to Yahoo (S042-12, S048-00).
-        print("taxjson scan: note: TAXJSON_OFFLINE is set — the --online "
-              "Yahoo Finance probe is skipped (MAP-GAP?/MAP-BAD?/"
-              "CDR-PAIR are not checked); the offline checks below "
-              "still ran.", file=sys.stderr)
+        note("taxjson scan", "TAXJSON_OFFLINE is set — the --online "
+             "Yahoo Finance probe is skipped",
+             details=["MAP-GAP?/MAP-BAD?/CDR-PAIR are not checked; the "
+                      "offline checks below still ran."])
     elif getattr(args, "online", False):
         try:
             import yfinance as yf
         except ImportError:
-            print("taxjson: warning: --online needs yfinance "
-                  "(pip install -e '.[fx]'); skipping the probe.",
-                  file=sys.stderr)
+            from taxjson.lib.out import warn as _warn
+            _warn("--online needs yfinance (pip install -e '.[fx]'); "
+                  "skipping the probe.", prog="taxjson scan")
         else:
             # The book symbol (ZZQ.US, ZZQ.B.TO) is not Yahoo's spelling:
             # every probe goes through the project's QUOTE lines, else
@@ -10227,12 +10230,12 @@ def cmd_scan(args: argparse.Namespace) -> None:
                                  | set(renames_u)
                                  | set(renames_u.values()))
             if len(_probe_list) > _NAME_CAP:
-                print(f"taxjson scan: note: probing issuer names "
-                      f"for the first {_NAME_CAP} of "
-                      f"{len(_probe_list)} listed symbols "
-                      f"(alphabetical; the remainder are NOT probed "
-                      f"— every run scans the same window).",
-                      file=sys.stderr)
+                note("taxjson scan",
+                     f"probing issuer names for the first {_NAME_CAP} "
+                     f"of {len(_probe_list)} listed symbols",
+                     details=["Alphabetical; the remainder are NOT "
+                              "probed — every run scans the same "
+                              "window."])
                 _probe_list = _probe_list[:_NAME_CAP]
             _pairs = {s: _issuer_names(s) for s in _probe_list}
             names = {s: (ln or sn) for s, (ln, sn) in _pairs.items()}
@@ -10321,41 +10324,47 @@ def cmd_scan(args: argparse.Namespace) -> None:
             indent=2, sort_keys=True))
         raise SystemExit(1 if findings or unscanned else 0)
 
-    print(f"SCAN — common tax-efficiency mistakes, {country}"
-          f"{', online map probe' if getattr(args, 'online', False) else ''}")
-    print()
+    from taxjson.lib import out
+    doc = out.Doc(f"SCAN — common tax-efficiency mistakes, {country}"
+                  f"{', online map probe' if getattr(args, 'online', False) else ''}")
     if not holdings:
-        print("No holdings reports found — run `taxjson run` first; the "
-              "scan checks per-listing positions.")
+        doc.blank()
+        doc.para("No holdings reports found — run `taxjson run` first; "
+                 "the scan checks per-listing positions.")
     if map_unused:
-        print(f"NOTE: {len(map_unused)} ticker.map rule(s) match no "
-              f"parsed symbol in this project (checked stock rows, "
-              f"option roots and rename chains): "
-              f"{'; '.join(map_unused)}. Unused rules are harmless; "
-              f"prune only if you know the symbol will not return.")
-        print()
+        doc.section("UNUSED TICKER.MAP RULES")
+        doc.para(f"{len(map_unused)} ticker.map rule(s) match no parsed "
+                 f"symbol in this project (checked stock rows, option "
+                 f"roots and rename chains). Unused rules are harmless; "
+                 f"prune only if you know the symbol will not return.")
+        doc.items(map_unused)
     if unscanned:
-        print("taxjson scan: WARNING: not scanned (no "
-              + "; ".join(f"{n}: {w}" for n, w in sorted(unscanned.items()))
-              + ") — re-run `taxjson run` to rebuild them.",
-              file=sys.stderr)
+        out.warn("not scanned (no "
+                 + "; ".join(f"{n}: {w}"
+                             for n, w in sorted(unscanned.items()))
+                 + ")", prog="taxjson scan",
+                 details=["Re-run `taxjson run` to rebuild them."])
     if not findings:
+        doc.blank()
         if unscanned:
-            print(f"No findings in the accounts scanned — NOT a clean "
-                  f"scan: {', '.join(sorted(unscanned))} could not be "
-                  f"read (see above).")
+            doc.para(f"No findings in the accounts scanned — NOT a clean "
+                     f"scan: {', '.join(sorted(unscanned))} could not be "
+                     f"read (see above).")
+            doc.print()
             raise SystemExit(1)
-        print("No findings — clean scan.")
+        doc.line("No findings — clean scan.")
+        doc.print()
         raise SystemExit(0)
-    out_lines = ["CHECK ACCOUNT SYMBOL"]
-    for c, a, sy, _m in findings:
-        out_lines.append(" ".join([c, a, sy]))
-    _print_report_table(out_lines)
-    print()
+    doc.section("FINDINGS")
+    doc.table(["CHECK", "ACCOUNT", "SYMBOL"],
+              [[c, a, sy] for c, a, sy, _m in findings])
+    doc.blank()
     for i, (c, a, sy, m) in enumerate(findings, 1):
         where = f" [{a}]" if a != "-" else ""
-        print(f"{i}. {c}{where} {sy}: {m}")
-    print(f"\n{len(findings)} finding(s).")
+        doc.item(f"{c}{where} {sy}: {m}", bullet=f"{i}. ")
+    doc.blank()
+    doc.line(f"{len(findings)} finding(s).")
+    doc.print()
     raise SystemExit(1)
 
 
@@ -14990,8 +14999,8 @@ def cmd_harvest(args: argparse.Namespace) -> None:
              f"crypto account(s) excluded: {', '.join(skipped)} "
              f"(pass --crypto to include them).")
     if not taxable:
-        sys.exit("taxjson harvest: no (non-crypto) taxable accounts — "
-                 "pass --crypto to harvest crypto accounts.")
+        _die("no (non-crypto) taxable accounts",
+             "Pass --crypto to harvest crypto accounts.")
     from taxjson.lib.report_model import resolve_gains_files
     files = []
     _no_input = _accounts_skipped_for_no_inputs(root)
@@ -15000,11 +15009,12 @@ def cmd_harvest(args: argparse.Namespace) -> None:
         if gains is not None:
             files.append(str(gains))
         elif name not in _no_input:
-            print(f"taxjson: warning: no gains file for taxable account "
-                  f"{name!r} — run `taxjson run` first.", file=sys.stderr)
+            from taxjson.lib.out import warn as _warn
+            _warn(f"no gains file for taxable account {name!r} — run "
+                  f"`taxjson run` first.", prog="taxjson harvest")
     if not files:
-        sys.exit(f"taxjson harvest: no taxable gains files in {cache} "
-                 f"(run `taxjson run` first).")
+        _die("no taxable gains files in work/",
+             "Run `taxjson run` first.")
     cmd = _cmd("taxjson-harvest") + files + [
         "--price-cache", str(cache / ".price_cache.json"),
         "--country", _country(settings),
@@ -15074,15 +15084,17 @@ def cmd_harvest(args: argparse.Namespace) -> None:
         if _res.returncode == 0 and _live.exists():
             note("taxjson harvest",
                  "the wash-radar reports are older than the books (a "
-                 "single-account run?) — using a live radar; run a full "
-                 "`taxjson run` to refresh reports/.")
+                 "single-account run?) — using a live radar",
+                 details=["Run a full `taxjson run` to refresh "
+                          "reports/."])
             radar_files = [_live]
         else:
-            print("taxjson harvest: warning: the wash-radar reports are "
-                  "older than the books and a live radar failed — the "
-                  "ADVISORY column is left empty (losses count as 'no "
-                  "clear date'); run a full `taxjson run`.",
-                  file=sys.stderr)
+            from taxjson.lib.out import warn as _warn
+            _warn("the wash-radar reports are older than the books and a "
+                  "live radar failed — the ADVISORY column is left empty",
+                  prog="taxjson harvest",
+                  details=["Losses count as 'no clear date'; run a full "
+                           "`taxjson run`."])
             radar_files = []
     for sidecar in radar_files:
         cmd += ["--radar", str(sidecar)]
@@ -15955,7 +15967,9 @@ def _fx_cash_after_run(root: Path, cache: Path,
     except SystemExit as e:
         print(f"  skipped: {e}", file=sys.stderr)
         return
-    text = FX.render_report(ledger, base, year, country, verdict)
+    # A file, like the captured stage reports: never wrapped.
+    text = FX.render_report(ledger, base, year, country, verdict,
+                            width_=0)
     rpt = reports_dir / "fx_cash.rpt"
     from taxjson.lib.safe_write import write_atomic
     write_atomic(rpt, text + "\n")
@@ -16187,9 +16201,10 @@ def _radar_config(root: Path, prog: str = "taxjson") -> Dict[str, Any]:
         try:
             tomllib.loads(text)
         except Exception as e:
-            sys.exit(f"{prog}: taxjson.toml cannot be read ({e}) — fix "
-                     f"it first; the radar will not guess which "
-                     f"accounts are taxable.")
+            from taxjson.lib.out import fail
+            fail(f"taxjson.toml cannot be read ({e})", prog=prog,
+                 details=["Fix it first; the radar will not guess which "
+                          "accounts are taxable."])
     return _soft_config(root)
 
 
@@ -16229,17 +16244,19 @@ def _refuse_us_crypto_account(root: Path, account: Optional[str],
     if (_country((cfg.get("settings") or {})) in ("us", "usa")
             and ((cfg.get("accounts") or {}).get(account) or {})
             .get("crypto")):
-        print(f"{prog}: {account} is a crypto account of a US project — "
-              f"the wash-sale rule (§1091) does not apply to it, so "
-              f"there is nothing to check.")
+        from taxjson.lib.out import fill
+        print(fill(f"{prog}: {account} is a crypto account of a US "
+                   f"project — the wash-sale rule (§1091) does not apply "
+                   f"to it, so there is nothing to check.", hang="  "))
         raise SystemExit(0)
 
 
 def _no_wash_checkable(prog: str) -> None:
-    print(f"{prog}: no wash-checkable taxable account in taxjson.toml "
-          f"(sheltered accounts are context only, and a US project's "
-          f"crypto accounts are outside the wash-sale rule, §1091) — "
-          f"nothing to check.")
+    from taxjson.lib.out import fill
+    print(fill(f"{prog}: no wash-checkable taxable account in "
+               f"taxjson.toml (sheltered accounts are context only, and a "
+               f"US project's crypto accounts are outside the wash-sale "
+               f"rule, §1091) — nothing to check.", hang="  "))
     raise SystemExit(0)
 
 
@@ -16257,15 +16274,14 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
     if args.account:
         base = cache / f"{args.account}_base.json"
         if not base.exists():
-            sys.exit(f"taxjson wash-radar: no {base.name} in {cache} "
-                     f"(run `taxjson run` first, or check the name).")
+            _die(f"no {base.name} in work/",
+                 "Run `taxjson run` first, or check the account name.")
         _acct_cfg = _radar_config(
             root, "taxjson wash-radar").get("accounts") or {}
         if (_acct_cfg.get(args.account) or {}).get("type") == "sheltered":
-            sys.exit(f"taxjson wash-radar: {args.account} is a "
-                     f"sheltered account — the radar advises on "
-                     f"TAXABLE loss sales (sheltered books are its "
-                     f"context, not its subject).")
+            _die(f"{args.account} is a sheltered account",
+                 "The radar advises on TAXABLE loss sales (sheltered "
+                 "books are its context, not its subject).")
         _refuse_us_crypto_account(root, args.account, "taxjson wash-radar")
         bases = [base]
     else:
@@ -16282,21 +16298,20 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
     if sheltered_base.exists():
         cmd += ["--sheltered", str(sheltered_base)]
     elif _sheltered_expected(root):
-        print("taxjson wash-radar: note: no sheltered_base.json in "
-              "work/ — registered-account (permanent-denial) context "
-              "disabled; run a full `taxjson run` to build it.",
-              file=sys.stderr)
+        note("taxjson wash-radar",
+             "no sheltered_base.json in work/ — registered-account "
+             "(permanent-denial) context disabled",
+             details=["Run a full `taxjson run` to build it."])
     if args.date:
         # Same shape+calendar validation as `list --date` — the
         # standalone fed the raw string straight into strptime, so a
         # typo'd date died with a traceback instead of a usage error.
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
-            sys.exit("taxjson wash-radar: --date expects YYYY-MM-DD")
+            _die("--date expects YYYY-MM-DD")
         try:
             datetime.strptime(args.date, "%Y-%m-%d")
         except ValueError:
-            sys.exit(f"taxjson wash-radar: --date {args.date} is not a "
-                     f"real calendar date")
+            _die(f"--date {args.date} is not a real calendar date")
         cmd += ["--date", args.date]
     if args.verbose:
         cmd += ["--verbose"]
@@ -16330,20 +16345,22 @@ def _radar_taxable_bases(root: Path, cache: Path,
                     if not (cache / f"{n}_base.json").exists()
                     and n not in _skipped]
         if _missing and bases:
-            print(f"{prog}: WARNING: no books for taxable account(s) "
+            from taxjson.lib.out import warn as _warn
+            _warn(f"no books for taxable account(s) "
                   f"{', '.join(_missing)} (work/<account>_base.json "
-                  f"missing) — their trades are INVISIBLE to these "
-                  f"window checks, so a SAFE/CLEAR verdict here can be "
-                  f"wrong. Run `taxjson run` to build them.",
-                  file=sys.stderr)
+                  f"missing)", prog=prog,
+                  details=["Their trades are INVISIBLE to these window "
+                           "checks, so a SAFE/CLEAR verdict here can be "
+                           "wrong. Run `taxjson run` to build them."])
     else:
         bases = [p for p in sorted(cache.glob("*_base.json"))
                  if not p.name.endswith("_raw_base.json")
                  and p.name != "sheltered_base.json"
                  and not p.name.startswith(".")]
     if not bases:
-        sys.exit(f"{prog}: no taxable base files in {cache} "
-                 f"(run `taxjson run` first).")
+        from taxjson.lib.out import fail
+        fail("no taxable base files in work/", prog=prog,
+             details=["Run `taxjson run` first."])
     return bases
 
 
@@ -16429,20 +16446,19 @@ def cmd_watch(args: argparse.Namespace) -> None:
         cmd += ["--sheltered", str(sheltered_base)]
     res = _run(cmd, capture_output=True)
     if res.returncode != 0:
-        sys.exit(f"taxjson watch: radar failed: "
-                 f"{_child_error(res.stderr)}")
+        _die("the wash radar failed", _child_error(res.stderr))
     try:
         radar_doc = _json.loads(res.stdout)
     except ValueError as e:
-        sys.exit(f"taxjson watch: radar emitted unparseable JSON: {e}")
+        _die(f"the wash radar emitted unparseable JSON: {e}")
     cur_radar = _watch.flatten_radar(radar_doc)
     as_of = radar_doc.get("as_of_date") or _date.today().isoformat()
 
     harvest_now = None
     if (getattr(args, "threshold", None) not in (None, 100.0)
             and not getattr(args, "harvest", False)):
-        print("taxjson watch: note: --threshold only applies with "
-              "--harvest (ignored this run).", file=sys.stderr)
+        note("taxjson watch", "--threshold only applies with --harvest "
+             "(ignored this run).")
     if getattr(args, "harvest", False):
         hcmd = [sys.executable, "-m", "taxjson.bin.taxjson_run",
                 "-C", str(root), "harvest", "--json"]
@@ -16450,10 +16466,10 @@ def cmd_watch(args: argparse.Namespace) -> None:
             hcmd.append("--no-ibkr")
         hres = _run(hcmd, capture_output=True)
         if hres.returncode != 0:
-            print(f"taxjson watch: warning: harvest failed — the "
-                  f"harvest dimension is skipped this run: "
-                  f"{_child_error(hres.stderr)}",
-                  file=sys.stderr)
+            from taxjson.lib.out import warn as _warn
+            _warn("harvest failed — the harvest dimension is skipped "
+                  "this run", prog="taxjson watch",
+                  details=[_child_error(hres.stderr)])
         else:
             try:
                 hdoc = _json.loads(hres.stdout)
@@ -16461,9 +16477,9 @@ def cmd_watch(args: argparse.Namespace) -> None:
                     ((hdoc.get("totals") or {}).get("harvestable")
                      or {}).get("now") or 0.0)
             except (ValueError, TypeError) as e:
-                print(f"taxjson watch: warning: harvest JSON "
-                      f"unreadable ({e}) — skipped this run.",
-                      file=sys.stderr)
+                from taxjson.lib.out import warn as _warn
+                _warn(f"harvest JSON unreadable ({e}) — skipped this "
+                      f"run.", prog="taxjson watch")
 
     if getattr(args, "state", None):
         state_path = Path(args.state)
@@ -16473,13 +16489,15 @@ def cmd_watch(args: argparse.Namespace) -> None:
         # an 11-line traceback (S046-12) — one line, like
         # --write-missing-history.
         if state_path.is_dir():
-            _die_input(f"--state {args.state} is a directory — pass a FILE "
-                 f"path, e.g. {state_path / 'watch_state.json'}")
+            _die_input(f"--state {args.state} is a directory",
+                       f"Pass a FILE path, e.g. "
+                       f"{state_path / 'watch_state.json'}")
         try:
             state_path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            _die_input(f"cannot create the folder for --state {args.state}: "
-                 f"{e} — pass a FILE path in a writable folder.")
+            _die_input(f"cannot create the folder for --state "
+                       f"{args.state}: {e}",
+                       "Pass a FILE path in a writable folder.")
     else:
         state_path = cache / ".watch_state.json"
 
@@ -16487,8 +16505,8 @@ def cmd_watch(args: argparse.Namespace) -> None:
         try:
             _watch.save_state(state_path, cur_radar, harvest_value, as_of)
         except OSError as e:
-            _die_input(f"cannot write the watch state {state_path}: {e} — "
-                 f"pass a writable FILE path with --state.")
+            _die_input(f"cannot write the watch state {state_path}: {e}",
+                       "Pass a writable FILE path with --state.")
 
     state = _watch.load_state(state_path)
     if state is None:
@@ -16501,9 +16519,11 @@ def cmd_watch(args: argparse.Namespace) -> None:
                        "actionable": actionable, "as_of": as_of,
                        "scope_note": _scope})
         else:
-            print(f"watch: baseline recorded — {len(cur_radar)} "
-                  f"ticker(s) tracked, {actionable} actionable "
-                  f"advisories. Future runs report only changes.")
+            from taxjson.lib.out import fill
+            print(f"WATCH — baseline recorded (as of {as_of})")
+            print(fill(f"{len(cur_radar)} ticker(s) tracked, {actionable} "
+                       f"actionable advisories. Future runs report only "
+                       f"changes."))
         return
 
     changes = _watch.diff_radar(state.get("radar") or {}, cur_radar)
@@ -16731,11 +16751,11 @@ def cmd_fx_cash(args: argparse.Namespace) -> None:
         return
     print(FX.render_report(ledger, base, year, country, verdict))
     if getattr(args, "events", False) and ledger["events"]:
-        print("\nDATE ACCOUNT CUR UNITS RATE GAIN SYMBOL")
-        for e in ledger["events"]:
-            print(f"{e['date']} {e['account']} {e['currency']} "
-                  f"{e['units']:,.2f} {e['rate']:g} {e['gain']:+,.2f} "
-                  f"{e['symbol'] or '-'}")
+        # After the report: the CAVEAT stays its last line without
+        # --events (the checklist reads it).
+        print()
+        print("EVENTS")
+        print("\n".join(FX.render_events(ledger["events"])))
 
 
 def _radar_country_is_usa(root: Path) -> bool:
@@ -16829,13 +16849,13 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
         cmd += ["--sheltered", str(sheltered_base)]
     else:
         if _sheltered_expected(root):
-            print(f"{prog}: note: no sheltered_base.json in work/ — "
-                  f"sheltered-account activity is invisible to the "
-                  f"window checks; run a full `taxjson run` to build "
-                  f"it.", file=sys.stderr)
+            note(prog, "no sheltered_base.json in work/ — "
+                 "sheltered-account activity is invisible to the window "
+                 "checks",
+                 details=["Run a full `taxjson run` to build it."])
     res = _run(cmd, capture_output=True)
     if res.returncode != 0:
-        _die(f"radar failed: {_child_error(res.stderr)}")
+        _die("the wash radar failed", _child_error(res.stderr))
     radar = flatten_radar(_json.loads(res.stdout))
 
     # Identity comes ONLY from ticker.map (GLOBAL/TOBASE/JOURNAL), SPLIT
@@ -16858,10 +16878,10 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
             # The map decides which listings are one security: without
             # it a cross-listed loss is invisible and the verdict flips
             # to SAFE, so refuse as `taxjson run` does (audit A2-0683).
-            _die(f"ticker.map cannot be read ({e}) — `taxjson run` "
-                 f"refuses it too; fix it before trusting a wash "
-                 f"verdict (its cross-listing and rename rules decide "
-                 f"which listings are the same security).")
+            _die(f"ticker.map cannot be read ({e})",
+                 "`taxjson run` refuses it too; fix it before trusting a "
+                 "wash verdict (its cross-listing and rename rules decide "
+                 "which listings are the same security).")
 
     def _root(t: str) -> str:
         t = t.strip().upper()
@@ -16889,9 +16909,9 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
         if any(_find(x) == _find(y) for x, y in
                (tuple(p) for p in _distinct_pairs if len(p) == 2)):
             del _parent[ra]
-            print(f"{prog}: warning: {why} would merge a DISTINCT pair "
-                  f"from ticker.map ({a} ~ {b}); the pair stays "
-                  f"separate.", file=sys.stderr)
+            from taxjson.lib.out import warn as _warn
+            _warn(f"{why} would merge a DISTINCT pair from ticker.map "
+                  f"({a} ~ {b}); the pair stays separate.", prog=prog)
 
     if _tm is not None:
         for _src, _dst in list(_tm.glob.items()) \
@@ -17025,9 +17045,11 @@ def _last_loss_by_class(gains_files, canon, taxable, *, usa: bool
             _doc = _read_work_doc(Path(_p))
         except (OSError, ValueError) as e:
             # The context line vanished in silence (S047-03).
-            print(f"taxjson: warning: could not read {Path(_p).name} "
-                  f"({e}) — the 'last loss sale' line leaves out "
-                  f"account {_a}; re-run `taxjson run`.", file=sys.stderr)
+            from taxjson.lib.out import warn as _warn
+            _warn(f"could not read {Path(_p).name} ({e})",
+                  prog="taxjson",
+                  details=[f"The 'last loss sale' line leaves out account "
+                           f"{_a}; re-run `taxjson run`."])
             continue
         # A sale routed to manual reporting (unknown cost) is still a
         # loss sale for the window: its row has no 'gain', only the
@@ -17250,6 +17272,28 @@ def _last_loss_line(ll) -> Optional[str]:
                "manual reporting"
                if ll.get("unknown_cost") else "")
             + f") — {_inout}.")
+
+
+def _print_check_results(results: List[Dict[str, Any]],
+                         country: str) -> None:
+    """buy-check / sell-check text: per symbol a `SYMBOL: VERDICT` line
+    and its detail lines as `- ` items (a radar note quoted in one as
+    its own `note:` item), a blank line between symbols, then the scope
+    paragraph (lib/wash_scope). The --json document carries the same
+    results."""
+    from taxjson.lib import out
+    from taxjson.lib.wash_scope import advisory_lines, scope_lines
+    w = out.width()
+    lines: List[str] = []
+    for r in results:
+        if lines:
+            lines.append("")
+        lines.append(f"{r['symbol']}: {r['verdict']}")
+        for ln in r["detail"]:
+            lines += advisory_lines(ln, w, "- ", "  ")
+    lines.append("")
+    lines += scope_lines(country, w)
+    print("\n".join(lines))
 
 
 def cmd_buy_check(args: argparse.Namespace) -> None:
@@ -17502,11 +17546,7 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
     if getattr(args, "json", False):
         _json_out({"results": results, "scope_note": _scope})
     else:
-        for r in results:
-            print(f"{r['symbol']}: {r['verdict']}")
-            for ln in r["detail"]:
-                print(f"  {ln}")
-        print(_scope)
+        _print_check_results(results, "usa" if _usa else "canada")
     if unsafe:
         raise SystemExit(1)
 
@@ -17701,11 +17741,7 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
     if getattr(args, "json", False):
         _json_out({"results": results, "scope_note": _scope})
     else:
-        for r in results:
-            print(f"{r['symbol']}: {r['verdict']}")
-            for ln in r["detail"]:
-                print(f"  {ln}")
-        print(_scope)
+        _print_check_results(results, "usa" if _usa else "canada")
     if unsafe:
         raise SystemExit(1)
 

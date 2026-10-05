@@ -21,6 +21,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from _radar_text import radar_rows
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -178,7 +180,7 @@ class TestWashRadarDst(unittest.TestCase):
         txs = [_tx("2026-09-01", "DST.TO", 100, 1000.0),
                _tx("2026-10-04", "DST.TO", -100, 500.0)]     # loss, fully out
         out = _radar(txs, "2026-11-03")
-        line = next((l for l in out.splitlines() if l.startswith("DST.TO")), "")
+        line = next((l for l in radar_rows(out) if l.startswith("DST.TO")), "")
         self.assertTrue(line, "day-30 loss must still be reported:\n" + out)
         self.assertIn("COOLING", line)
 
@@ -187,7 +189,7 @@ class TestWashRadarDst(unittest.TestCase):
         # is still a superficial loss — must be LOCKED, not CLEAR.
         txs = [_tx("2026-10-04", "LCK.TO", 100, 1000.0)]
         out = _radar(txs, "2026-11-03")
-        line = next(l for l in out.splitlines() if l.startswith("LCK.TO"))
+        line = next(l for l in radar_rows(out) if l.startswith("LCK.TO"))
         self.assertIn("EXITABLE", line)
         self.assertNotIn("CLEAR:", line)
 
@@ -204,7 +206,7 @@ class TestWashRadarViolationWindow(unittest.TestCase):
         out_early = _radar(txs, "2026-06-15")
         out_late = _radar(txs, "2026-07-03")                  # buy >30d ago
         for out in (out_early, out_late):
-            line = next(l for l in out.splitlines() if l.startswith("VIO.TO"))
+            line = next(l for l in radar_rows(out) if l.startswith("VIO.TO"))
             self.assertIn("VIOLATION", line, out)
 
     def test_no_trigger_held_position_is_blocked(self):
@@ -213,7 +215,7 @@ class TestWashRadarViolationWindow(unittest.TestCase):
         txs = [_tx("2024-01-05", "BLK.TO", 100, 10000.0),
                _tx("2026-06-05", "BLK.TO", -50, 2000.0)]      # loss, 50 left
         out = _radar(txs, "2026-06-15")
-        line = next(l for l in out.splitlines() if l.startswith("BLK.TO"))
+        line = next(l for l in radar_rows(out) if l.startswith("BLK.TO"))
         self.assertIn("BLOCKED", line)
 
     def test_fully_exited_loss_is_cooling(self):
@@ -222,7 +224,7 @@ class TestWashRadarViolationWindow(unittest.TestCase):
         txs = [_tx("2026-05-01", "COO.TO", 100, 2000.0),
                _tx("2026-06-05", "COO.TO", -100, 1000.0)]
         out = _radar(txs, "2026-06-15")
-        line = next(l for l in out.splitlines() if l.startswith("COO.TO"))
+        line = next(l for l in radar_rows(out) if l.startswith("COO.TO"))
         self.assertIn("COOLING", line)
 
 

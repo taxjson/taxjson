@@ -9,6 +9,8 @@ you (or they) control. A project only holds its own accounts, so every
 SAFE / CLEAR verdict is "safe as far as these accounts show" (audit
 S054-22)."""
 
+import re
+
 from taxjson.lib.country import canonical_country, USA
 
 _NOTE = {
@@ -30,3 +32,42 @@ def scope_note(country: str) -> str:
     """The one-line scope disclosure for `country` (canada | usa)."""
     c = canonical_country(country)
     return _NOTE["usa" if c == USA else "canada"]
+
+
+def scope_lines(country: str, width_=None, indent: str = "") -> list:
+    """scope_note(country) as a report paragraph: wrapped at the house
+    width (lib/out; unwrapped when captured), its `Scope:` lead kept on
+    the first line. The JSON documents carry scope_note() itself."""
+    from taxjson.lib import out
+    return out.wrap(scope_note(country), width_, indent, indent)
+
+
+# A warn-only flag the radar appends to an advisory ("... NOTE: a long
+# call on these shares was bought ..."). The JSON documents keep the
+# text as is; a person sees each one as its own `note:` paragraph.
+_NOTE_RE = re.compile(r"(?:^|\s)NOTE:\s+")
+
+
+def advisory_parts(text: str):
+    """(body, [note, ...]): `text` with its appended `NOTE:` sentences
+    split off (a body that is only a `TICKER:` lead keeps the first)."""
+    parts = _NOTE_RE.split(str(text or ""))
+    body = parts[0].strip()
+    notes = [p.strip() for p in parts[1:] if p.strip()]
+    if notes and (not body or body.endswith(":")):
+        body = f"{body} note: {notes.pop(0)}".strip()
+    return body, notes
+
+
+def advisory_lines(text: str, width_=None, indent: str = "",
+                   hang=None) -> list:
+    """An advisory (or a line quoting one) as wrapped report lines: the
+    body from `indent` (continuation lines at `hang`, default `indent`),
+    then each appended note as a `note:` paragraph at `indent`."""
+    from taxjson.lib import out
+    hang = indent if hang is None else hang
+    body, notes = advisory_parts(text)
+    lines = out.wrap(body, width_, indent, hang) if body else []
+    for n in notes:
+        lines += out.wrap(f"note: {n}", width_, indent, indent + "  ")
+    return lines

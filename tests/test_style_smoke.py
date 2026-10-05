@@ -32,7 +32,9 @@ class TestConvertedCommands(unittest.TestCase):
     """Every command converted to the house style, both countries."""
 
     CASES = [("wash-sales",), ("wash-sales", "--explain"), ("elect",),
-             ("elect", "margin")]
+             ("elect", "margin"),
+             ("wash-radar",), ("wash-radar", "--date", "2024-11-25", "--all"),
+             ("fx-cash",), ("fx-cash", "--events")]
     # group E (the rest, exit 1 by design, in tests/test_style_e.py)
     CASES += [("tax-logic",), ("tax-logic", "--ids"), ("edge-cases",),
               ("find-missing-history",), ("renames",), ("spinoffs",),

@@ -197,7 +197,10 @@ class TestFxCashCli(unittest.TestCase):
             root = self._project(tmp)
             r = _cli(root, "fx-cash", "--events")
         # Units to the cent, like GAIN (S046-21: :g printed 6 digits).
-        self.assertIn("2026-02-10 margin USD 10,000.00", r.stdout)
+        # (The listing is a table now: compare the row's cells.)
+        rows = [ln.split() for ln in r.stdout.splitlines()]
+        self.assertIn(["2026-02-10", "margin", "USD", "10,000.00"],
+                      [row[:4] for row in rows])
 
     def test_toggle_gates_the_run_hook(self):
         # The command itself always works; the end-of-run report only
