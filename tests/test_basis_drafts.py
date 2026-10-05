@@ -337,6 +337,34 @@ class TestCanadaDrafts(unittest.TestCase):
                                       account='margin')
         self.assertNotIn('FROM ACCOUNT', text)
 
+    def test_transfer_whose_shares_the_books_hold_is_not_drafted(self):
+        # The shares' purchase is in another export of the account: no
+        # sale goes short, so a line would count them twice.
+        buy = TaxTransaction(action='BUYSELL', date='2023-04-03',
+                             symbol='QZT.TO', quantity=30, net_amount=600,
+                             currency='CAD', account='margin')
+        sale = TaxTransaction(action='BUYSELL', date='2025-06-02',
+                              symbol='QZT.TO', quantity=-30,
+                              net_amount=750, currency='CAD',
+                              account='margin')
+        rows = [{'action': 'TRANSFER', 'date': '2025-02-10',
+                 'symbol': 'QZT.TO', 'quantity': 30.0, 'currency': 'CAD',
+                 'account': 'margin',
+                 'description': 'QZT CORP TRANSFER BOOK VALUE 600.00'}]
+        drafts, gaps = draft_purchases([buy, sale], country='canada',
+                                       transfer_rows=rows)
+        self.assertEqual(drafts, [])
+        self.assertIn('count it twice', gaps[0].reason)
+        # Partly held: drafted with a CHECK, and the short sale's rest
+        # is what the transfer delivered.
+        sale.quantity = -50
+        drafts, gaps = draft_purchases([buy, sale], country='canada',
+                                       transfer_rows=rows)
+        d, = drafts
+        self.assertTrue(d.warn)
+        self.assertIn('at most 20 units short', ' '.join(d.comments))
+        self.assertEqual(gaps, [])
+
     def test_transfer_covered_by_tt_lines_is_not_drafted_again(self):
         tt = TaxTransaction(action='BUYSELL', date='2021-03-15',
                             symbol='QZT.TO', quantity=30, net_amount=600,

@@ -1805,7 +1805,8 @@ def draft_purchases(
 
     def _new():
         return {'qty': 0.0, 'cost': 0.0, 'events': [], 'sales': [],
-                'in_year': False, 'tt_qty': 0.0}
+                'in_year': False, 'tt_qty': 0.0, 'low': 0.0,
+                'bought': False}
     state: Dict[Tuple[str, str], Dict[str, Any]] = {}
     orders = OrderStarts()
     for tx in sorted_txs:
@@ -1821,6 +1822,8 @@ def draft_purchases(
                 t['cost'] += s['cost']
                 t['events'] = (s['events'] + [(str(tx.date)[:10], ratio,
                                                tx.symbol)])
+                t['low'] = min(t['low'], s['low'] * ratio)
+                t['bought'] = t['bought'] or s['bought']
                 s['qty'] = s['cost'] = 0.0
             else:
                 s['qty'] *= ratio
@@ -1838,6 +1841,7 @@ def draft_purchases(
                     TRANSFER_BOOK_VALUE_TYPE:
                 s['booked_bv'] = s.get('booked_bv', 0.0) + q
             s['qty'] = prev + q
+            s['bought'] = True
             if prev >= 0:
                 s['cost'] += abs(float(tx.net_amount or 0.0))
             else:
@@ -1853,6 +1857,7 @@ def draft_purchases(
         held = max(prev, 0.0)
         held_cost = s['cost'] if held > 1e-12 else 0.0
         s['qty'] = prev + q
+        s['low'] = min(s['low'], s['qty'])
         if prev > 1e-12:
             s['cost'] = (s['cost'] * max(0.0, prev + q) / prev
                          if prev + q > 1e-12 else 0.0)
@@ -1952,9 +1957,14 @@ def draft_purchases(
     kept: List[DraftGap] = []
     for g in gaps:
         left = delivered.get((g.symbol, g.account), 0.0)
-        if g.reason.startswith('no broker cost') and left >= g.quantity - 1e-9:
-            delivered[(g.symbol, g.account)] = left - g.quantity
-            continue
+        if g.reason.startswith('no broker cost') and left > 1e-9:
+            used = min(left, g.quantity)
+            delivered[(g.symbol, g.account)] = left - used
+            if used >= g.quantity - 1e-9:
+                continue
+            g.quantity -= used
+            g.reason += (" (the rest of this sale is the drafted "
+                         "transfer-in's)")
         kept.append(g)
     return drafts + t_drafts, kept + t_gaps
 
@@ -2131,6 +2141,18 @@ def _draft_transfers(rows: List[Dict[str, Any]],
                           "value")
             gaps.append(gap)
             continue
+        st = state.get(book_key) or {}
+        if st.get('bought') and st.get('low', 0.0) >= -1e-9:
+            # Your files acquire it and no sale of it goes short: the
+            # shares are in the books already (another export, a .tt
+            # line under another quantity) — a draft would count them
+            # twice. Shares still held but missing show in `sanity`.
+            gap.reason = ("your files already acquire it and no sale "
+                          "goes short — a line would count it twice "
+                          "(`taxjson sanity` shows a position still "
+                          "short of the broker's)")
+            gaps.append(gap)
+            continue
         try:
             amount = float(m.group(1).replace(',', ''))
         except ValueError:
@@ -2146,12 +2168,20 @@ def _draft_transfers(rows: List[Dict[str, Any]],
                     f"{amount:,.2f} {cur}, as printed on the row",
                     "fill in: the ORIGINAL purchase date at the other "
                     "broker (the transfer date is not a purchase date)."]
+        warn = False
+        if st.get('bought') and -st.get('low', 0.0) < q - 1e-6:
+            comments.append(
+                f"CHECK: your files already acquire some {symbol} and "
+                f"its sales go at most {-st.get('low', 0.0):g} units "
+                f"short: part of these {q:g} may be in your files "
+                f"already — keep only the units that are not.")
+            warn = True
         comments += _drafting_caveats(country, cur, lots=False,
                                       is_transfer=True)
         drafts.append(PurchaseDraft(
             account=account, symbol=symbol, quantity=q, currency=cur,
             cost=amount, date=None, multiplier=mult, source='transfer',
-            comments=tuple(comments)))
+            comments=tuple(comments), warn=warn))
     return drafts, gaps
 
 

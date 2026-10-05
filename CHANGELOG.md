@@ -27,8 +27,9 @@
 - **Never overwrites a draft** without `--force` (the old one is kept as
   `.bak`). A file name ending in `.tt` or `.csv` is refused, since the
   run would read it before review. Sheltered accounts, futures, real
-  shorts, moves between your own accounts and sales with no broker
-  figure are not drafted; the draft lists them at the end.
+  shorts, moves between your own accounts, transfers whose shares your
+  files already acquire and sales with no broker figure are not
+  drafted; the draft lists them at the end.
 
 ### Broker detection reads the file, not its name (owner request)
 

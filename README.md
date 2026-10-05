@@ -1852,8 +1852,9 @@ written. Review it, then rename it to end in `.tt`:
   sold, IB's figure covers those too, so the cost is the literal `COST`
   (refused the same way) and the note shows the arithmetic.
 - A transfer-in's book value gets the date placeholder: the transfer date
-  is not the purchase date. A move between two of your own accounts, and a
-  transfer your `.tt` lines already cover, are not drafted.
+  is not the purchase date. A move between two of your own accounts, a
+  transfer your `.tt` lines already cover, and one whose shares your files
+  already acquire (no sale of them goes short) are not drafted.
 - The line is in the broker's currency. In a Canadian project a non-CAD
   line is converted at the Bank of Canada rate of its date, and IB's figure
   is the cost of the lots IB closed (FIFO), not your ACB, which averages
