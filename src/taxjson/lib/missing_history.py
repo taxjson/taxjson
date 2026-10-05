@@ -1590,6 +1590,10 @@ _TRANSFER_BOOK_VALUE_RE = re.compile(
 # A move between two of the user's own accounts posts its two legs a few
 # days apart at most (taxjson_run._OWN_MOVE_DAYS).
 _OWN_MOVE_DAYS = 10
+# The `type` of a books row that acquires transferred-in shares at the
+# broker's stated book value on their arrival date: such a transfer is
+# already costed by the run, so it is not drafted again.
+TRANSFER_BOOK_VALUE_TYPE = 'transfer_book_value'
 
 
 @dataclass
@@ -1825,6 +1829,9 @@ def draft_purchases(
         q = float(tx.quantity or 0.0)
         order_prev = orders.prev(key, tx, prev)
         if q > 0:
+            if str(getattr(tx, 'type', '') or '') == \
+                    TRANSFER_BOOK_VALUE_TYPE:
+                s['booked_bv'] = s.get('booked_bv', 0.0) + q
             s['qty'] = prev + q
             if prev >= 0:
                 s['cost'] += abs(float(tx.net_amount or 0.0))
@@ -2061,6 +2068,8 @@ def _draft_transfers(rows: List[Dict[str, Any]],
     outs = [r for r in rows if float(r.get('quantity') or 0) < 0]
     tt_left: Dict[Tuple[str, str], float] = {
         k: s.get('tt_qty', 0.0) for k, s in state.items()}
+    bv_left: Dict[Tuple[str, str], float] = {
+        k: s.get('booked_bv', 0.0) for k, s in state.items()}
     for r in sorted(rows, key=lambda r: (str(r.get('date') or ''),
                                          str(r.get('symbol') or ''))):
         q = float(r.get('quantity') or 0)
@@ -2092,6 +2101,12 @@ def _draft_transfers(rows: List[Dict[str, Any]],
         if tt_left.get((symbol, account), 0.0) >= q - 1e-9:
             tt_left[(symbol, account)] -= q
             gap.reason = "your .tt purchase lines already cover it"
+            gaps.append(gap)
+            continue
+        if bv_left.get((symbol, account), 0.0) >= q - 1e-9:
+            bv_left[(symbol, account)] -= q
+            gap.reason = ("the run already books it at the stated book "
+                          "value")
             gaps.append(gap)
             continue
         try:

@@ -275,6 +275,20 @@ class TestCanadaDrafts(unittest.TestCase):
         self.assertEqual([d.source for d in drafts], ['transfer'])
         self.assertEqual(gaps, [])
 
+    def test_transfer_the_run_books_at_book_value_is_not_drafted(self):
+        booked = TaxTransaction(action='BUYSELL', date='2025-02-10',
+                                symbol='QZT.TO', quantity=30,
+                                net_amount=600, currency='CAD',
+                                account='margin', type='transfer_book_value')
+        rows = [{'action': 'TRANSFER', 'date': '2025-02-10',
+                 'symbol': 'QZT.TO', 'quantity': 30.0, 'currency': 'CAD',
+                 'account': 'margin',
+                 'description': 'QZT CORP TRANSFER BOOK VALUE 600.00'}]
+        drafts, gaps = draft_purchases([booked], country='canada',
+                                       transfer_rows=rows)
+        self.assertEqual(drafts, [])
+        self.assertIn('already books it', gaps[0].reason)
+
     def test_transfer_covered_by_tt_lines_is_not_drafted_again(self):
         tt = TaxTransaction(action='BUYSELL', date='2021-03-15',
                             symbol='QZT.TO', quantity=30, net_amount=600,
