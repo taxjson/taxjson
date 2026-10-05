@@ -44,6 +44,11 @@
   the detail indented below. `events PERIOD ACCOUNT` stays re-importable
   `.tt` text, byte for byte; no figure, `--json` output or other file
   changes.
+- **The "export does not state the contract size" note is one note.** A
+  command shown to a person names every option root it assumed a
+  100-share contract for in one note with the single `MULT <ROOT> N`
+  advice, instead of a line per root; captured output (a stage's `.diag`,
+  the `.sum` DIAGNOSTICS) keeps its line per root.
 
 
 ## v0.18.0 (2026-10-05)
