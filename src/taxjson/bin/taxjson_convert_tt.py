@@ -31,10 +31,13 @@ from taxjson.lib.cli_diag import guard_main
 
 _VALID_ACTIONS = (
     'BUYSELL', 'TRANSFER', 'SPLIT', 'ASSIGN', 'ADJUST', 'DISALLOW',
-    'DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST', 'FEE',
+    'DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST', 'FEE', 'OPENING',
 )
 # Line-level sugar expanded by tt_to_json before parse_tt_line.
 _SUGAR_ACTIONS = ('ACQUIRED',)
+# The time an OPENING row is booked at: the start of the snapshot day,
+# before anything else that day (the line itself has no time column).
+OPENING_TIME = '00:00:00'
 
 # Highest token count per action (fields + optional trailing columns).
 # A token past these used to be ignored without a word — a stray
@@ -145,6 +148,8 @@ def parse_tt_line(line: str, account_name: str = 'default',
     action = parts[0]
     if action not in _VALID_ACTIONS:
         raise _unknown_action(action, line, source)
+    if action == 'OPENING':
+        return parse_opening_line(parts, line, account_name, source)
     if len(parts) < 3:
         raise ValueError(
             f"{_where(source)}malformed .tt line — {action} needs at "
@@ -367,6 +372,96 @@ def parse_tt_line(line: str, account_name: str = 'default',
     return tx
 
 
+def parse_opening_line(parts, line: str, account_name: str,
+                       source: str) -> dict:
+    """`OPENING <snapshot-date> <symbol> <qty> <currency> <total-cost>
+    [<lot-date>]` -> an opening-balance row: a BUYSELL of type
+    `opening` (core.OPENING_TYPE) dated the snapshot day at 00:00:00,
+    with the lot's acquisition date in `lot_date`. It sets a position
+    and its cost but is not a purchase (tax-logic CA-OPEN-01 /
+    US-OPEN-01); `taxjson opening` writes these lines from a positions
+    report. Only a long position can be opened (a written option's or a
+    short sale's premium depends on its write date: enter the write as
+    a BUYSELL line)."""
+    from taxjson.lib.core import OPENING_TYPE, is_option_symbol
+    where = _where(source)
+    if len(parts) > 2 and _TIME_RE.match(parts[2]):
+        raise ValueError(
+            f"{where}an OPENING line has no time column (it is booked "
+            f"at the start of the snapshot day): `OPENING "
+            f"<snapshot-date> <symbol> <qty> <currency> <total-cost> "
+            f"[<lot-date>]`: {line.strip()!r}")
+    if len(parts) not in (6, 7):
+        raise ValueError(
+            f"{where}malformed OPENING line — expected `OPENING "
+            f"<snapshot-date> <symbol> <qty> <currency> <total-cost> "
+            f"[<lot-date>]` (no time column), got {len(parts) - 1} "
+            f"field(s): {line.strip()!r}")
+    _, day, sym, qty_t, cur, total_t = parts[:6]
+    lot = parts[6] if len(parts) == 7 else ''
+    _check_date(day, 'snapshot date', line, source)
+    if lot:
+        _check_date(lot, 'lot date', line, source)
+        if lot > day:
+            raise ValueError(
+                f"{where}OPENING lot date {lot} is after the snapshot "
+                f"date {day} — a lot held on the snapshot day was "
+                f"acquired on or before it: {line.strip()!r}")
+    try:
+        qty = _tt_num(qty_t)
+        total = _tt_num(total_t)
+    except ValueError as e:
+        raise ValueError(f"{where}malformed OPENING line ({e}): "
+                         f"{line.strip()!r}") from e
+    sym = sym.upper()
+    if qty <= 0:
+        raise ValueError(
+            f"{where}OPENING quantity must be positive (a long position "
+            f"held on the snapshot day). A short position or a written "
+            f"option cannot be opened from a snapshot — its premium "
+            f"depends on the write: enter the write as a BUYSELL line "
+            f"dated the day it was written: {line.strip()!r}")
+    if total < 0:
+        raise ValueError(
+            f"{where}OPENING total cost {total_t} is negative — it is the "
+            f"position's book cost (a positive amount): {line.strip()!r}")
+    if sym.startswith(_FUTURES_PREFIXES):
+        raise ValueError(
+            f"{where}OPENING on a futures contract ({sym}) is not "
+            f"supported: futures are booked on their own basis "
+            f"(lib/futures.py). Enter the opening trade as a BUYSELL "
+            f"line: {line.strip()!r}")
+    if not re.match(r'^[A-Z]{3}$', cur.upper()):
+        raise ValueError(
+            f"{where}OPENING currency {cur!r} is not a three-letter code "
+            f"(CAD, USD): {line.strip()!r}")
+    size = 100.0 if is_option_symbol(sym) else 1.0
+    tx = {
+        'action': 'BUYSELL',
+        'type': OPENING_TYPE,
+        'date': day,
+        'time': OPENING_TIME,
+        'date_settle': day,
+        'account': account_name,
+        'symbol': sym,
+        'quantity': qty,
+        'currency': cur.upper(),
+        'price': total / qty / size,
+        'net_amount': total,
+        'fee': 0.0,
+        # The lot date is part of the description, so two lots of one
+        # snapshot that differ only by it keep two ids (dedup).
+        'description': ('opening balance'
+                        + (f", acquired {lot}" if lot else '')),
+    }
+    if lot:
+        tx['lot_date'] = lot
+    _canonical_ca_symbols(tx)
+    _warn_unknown_suffix(tx, line, source)
+    tx['id'] = compute_tt_id(tx)
+    return tx
+
+
 def _canonical_ca_symbols(tx: dict) -> None:
     """Spell a Canadian listing as every broker parser does: ROOT.TO
     with a dotted preferred series (base.canonical_ca_listing). A .tt
@@ -542,6 +637,20 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
     action = tx.get('action', '')
     if action not in _VALID_ACTIONS:
         return None
+    from taxjson.lib.core import is_opening_row
+    if is_opening_row(tx):
+        # OPENING <snapshot-date> <symbol> <qty> <currency> <total>
+        # [<lot-date>] — the snapshot date is the row's own date.
+        cur = str(tx.get('currency') or '').strip().upper()
+        if not cur:
+            raise ValueError(
+                f"OPENING {tx.get('date', '')} {tx.get('symbol', '')}: "
+                f"the row has no currency — fix the input row.")
+        lot = str(tx.get('lot_date') or '').strip()
+        return (f"OPENING {tx.get('date', '')} {tx.get('symbol', '')} "
+                f"{_num(float(tx.get('quantity') or 0.0))} {cur} "
+                f"{float(tx.get('net_amount') or 0.0):.5f}"
+                + (f" {lot}" if lot else ''))
 
     date = tx.get('date', '')
     if date_basis == 'settle' and tx.get('date_settle'):

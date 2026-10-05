@@ -437,6 +437,12 @@ def main():
              "stops the merge, naming its date and currency pair.",
     )
     parser.add_argument(
+        '--year', type=int, default=None,
+        help="The project's tax year: an opening snapshot (OPENING rows) "
+             "that would leave out a sale of this year or later is "
+             "refused instead of dropping the sale's gain.",
+    )
+    parser.add_argument(
         '--require-inputs', action='store_true',
         help="Fail if any input file is missing or unreadable, instead of "
              "warn-and-skip. Use in orchestrated pipelines where every input "
@@ -530,6 +536,20 @@ def main():
         # apply_mapping mutates and returns the same tx; that's fine here
         # because we built fresh TaxTransaction instances above.
         txs = [apply_mapping(t, renames) for t in txs]
+
+    # --- Stage 3b: opening-balance cut-off -----------------------------
+    # An OPENING snapshot replaces the account's earlier rows of its
+    # symbols (lib/opening, CA-OPEN-03 / US-OPEN-03): on the mapped
+    # symbols, so a renamed listing is the snapshot's own. Always on: a
+    # no-op without OPENING rows.
+    from taxjson.lib.opening import OpeningError, apply_opening_cutoff
+    try:
+        txs = apply_opening_cutoff(
+            txs, year=args.year, country=args.country,
+            base_currency=(args.target_currency or None))
+    except OpeningError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
 
     # Post-mapping (a DELETE'd or renamed row is judged as the engine will
     # see it): one account carrying the same split twice.

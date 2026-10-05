@@ -1738,6 +1738,25 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
         diag.unlink(missing_ok=True)
 
 
+def _refuse_crypto_openings(name: str, tt_jsons) -> None:
+    """An OPENING line in a crypto account: the crypto books have no
+    merge2 stage, so the snapshot cut-off (lib/opening) would not run
+    and the coins before it would count twice. Refused, naming the
+    file."""
+    import json as _json
+    from taxjson.lib.core import is_opening_row
+    for p in tt_jsons:
+        try:
+            rows = _json.loads(Path(p).read_text(
+                encoding="utf-8")).get("transactions") or []
+        except (OSError, ValueError, AttributeError):
+            continue
+        if any(isinstance(t, dict) and is_opening_row(t) for t in rows):
+            _die(f"account {name} is a crypto account: an OPENING line "
+                 f"({Path(p).name}) is for share accounts only — enter "
+                 f"the coins' purchases as BUYSELL lines instead.")
+
+
 def detect_broker(csv_path: Path) -> Optional[str]:
     """Which parser reads this CSV (lib/brokerages/detect.detect): an
     explicit generic mapping, else the file's CONTENT (each supported
@@ -3281,6 +3300,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # 4. merge → base.json (crypto path differs: needs fill-crypto mid-stream)
     base_json = cache / f"{name}_base.json"
     if is_crypto:
+        _refuse_crypto_openings(name, tt_jsons)
         merged = cache / f"{name}_merged.json"
         # src_manifest is a dep here for the same reason it is on the
         # equity merge2 below: deleting an entire broker group (e.g. the
@@ -3393,6 +3413,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             "--to", base_currency, "--rates", str(rates), "--validate",
             "--country", country,
         ]
+        if year:
+            # An opening snapshot that would leave out a sale of the
+            # tax year is refused (lib/opening, CA-OPEN-03).
+            cmd += ["--year", str(year)]
         if ticker_map:
             cmd += ["--map", str(ticker_map)]
         cmd += [str(p) for p in sources]
@@ -3502,6 +3526,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                          else base_json, prefix="dedup: ")
     # A ticker.map rename to a bare symbol (audit A2-0304).
     echo_attention_lines(base_json, prefix="ticker.map: ")
+    # An opening snapshot leaving the account's earlier rows of its
+    # symbols out of the books (lib/opening, CA-OPEN-03).
+    if not is_crypto:
+        echo_attention_lines(base_json, prefix="opening: ")
     # A split booked twice with a rounded ratio (A2-0070): one event,
     # applied once — on the console, so the manual line gets deleted.
     if not is_crypto:

@@ -115,6 +115,8 @@ PARTITION_RULES = frozenset({
     "CA-FX-04",        # futures P/L on average cost
     "CA-STKDIV-01",    # stock dividend: $0 acquisition (counts for s.54)
     "CA-ACB-12",       # manual missing-history loss check on settle dates
+    "CA-OPEN-01",      # opening balance: pooled, not a purchase (US: lot dates)
+    "CA-OPEN-02",      # opening cost at the snapshot day's BoC rate (US: USD only)
     "CA-CRYPTO-02",    # stablecoins as US-dollar cash
     "CA-DATE-01",      # settle-date tax year by default
     "CA-CTRY-02",      # US-only settings/commands/flags refused
@@ -146,6 +148,7 @@ PARTITION_RULES = frozenset({
     "US-CRYPTO-08",    # under 1e-08 units is zero (CA keeps any amount)
     "US-STKDIV-01",    # stock dividend: §307 basis spread, no §1091
     "US-BASIS-04",     # manual missing-history loss check on trade dates
+    "US-OPEN-01",      # opening lot: its own date, never a replacement
     "US-ROC-03",       # ROC with no shares held: not booked (CA books it)
     "US-ROC-04",       # basis increase with no shares: not applied (CA: next ACB)
     "CA-ACB-13",       # basis increase with no shares: next purchase's ACB
@@ -725,6 +728,37 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "such a sale at a loss with a purchase in that window, is "
                  "flagged for a manual superficial-loss check.",
                  cont=True),
+            Rule("CA-OPEN-01",
+                 "An opening balance (`taxjson opening`, a .tt OPENING "
+                 "line from a broker's positions report) sets a position "
+                 "and its cost on the snapshot day: its shares and cost "
+                 "join the s.47 pool (CA-ACB-01), but it is not a "
+                 "purchase — never a superficial-loss replacement and "
+                 "never 'acquired in the window' (its shares do count as "
+                 "held at the end of day 30). A lot date on the line is "
+                 "shown (days held, Schedule 3's year of acquisition) and "
+                 "does not change the pooled ACB; when it falls within 30 "
+                 "days of a loss, the loss is flagged for a manual check "
+                 "(that purchase was real). The broker's book cost is "
+                 "used as it is: it may leave out a superficial loss, a "
+                 "return of capital or the same shares in another "
+                 "account (`taxjson sanity` compares costs)."),
+            Rule("CA-OPEN-02",
+                 "A cost the report states in another currency is "
+                 "converted at the Bank of Canada rate of the snapshot day "
+                 "(an approximation of the purchase days' rates); a "
+                 "broker's book cost in Canadian dollars for a foreign "
+                 "listing is used as the broker converted it — the "
+                 "report's currency decides.", cont=True),
+            Rule("CA-OPEN-03",
+                 "The snapshot replaces the account's earlier history of "
+                 "its symbols: the account's other trade, transfer, split "
+                 "and cost-adjustment rows of a snapshot symbol dated on or "
+                 "before the snapshot day are left out of the books "
+                 "(income rows stay; other symbols and other accounts keep "
+                 "theirs), so no share is counted twice. A sale of the tax "
+                 "year among them stops the run; one symbol has one "
+                 "snapshot date per account.", cont=True),
         ]),
         ("Dispositions (Schedule 3)", [
             Rule("CA-DISP-01", "Gain = proceeds - ACB - outlays."),
@@ -1728,6 +1762,29 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "(trade dates) of such a sale, or such a sale at a loss "
                  "with a purchase in that window, is flagged for a manual "
                  "wash-sale check (not for crypto accounts)."),
+            Rule("US-OPEN-01",
+                 "An opening balance (`taxjson opening`, a .tt OPENING "
+                 "line from a broker's positions report) is one line per "
+                 "lot with the lot's real purchase date: the lot's basis "
+                 "is the report's cost, its holding period (US-HOLD-01) "
+                 "runs from that date and FIFO places it there. A line "
+                 "without a lot date stops the run. It is not a purchase "
+                 "on the snapshot day: never a wash-sale replacement; a "
+                 "lot whose own date falls within 30 days of a loss is "
+                 "flagged for a manual check (that purchase was real)."),
+            Rule("US-OPEN-02",
+                 "Its cost is in US dollars: a lot in another currency "
+                 "stops the run (its basis is the dollar cost on its own "
+                 "purchase date — enter it converted).", cont=True),
+            Rule("US-OPEN-03",
+                 "The snapshot replaces the account's earlier history of "
+                 "its symbols: the account's other trade, transfer, split "
+                 "and basis-adjustment rows of a snapshot symbol dated on "
+                 "or before the snapshot day are left out of the books "
+                 "(income rows stay; other symbols and other accounts keep "
+                 "theirs), so no share is counted twice. A sale of the tax "
+                 "year among them stops the run; one symbol has one "
+                 "snapshot date per account.", cont=True),
             Rule("US-STKDIV-01",
                  "A stock dividend is not income (§305(a)): the basis of "
                  "the shares held is spread over the old and new shares "

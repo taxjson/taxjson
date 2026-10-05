@@ -1762,10 +1762,13 @@ def run_gains(transactions, sheltered_transactions=(),
                                   '%Y-%m-%d')
             except ValueError:
                 continue
+            from taxjson.lib.core import is_opening_row as _is_open
             for a in transactions:
+                # An opening balance is not a purchase (CA-OPEN-01 /
+                # US-OPEN-01).
                 if (a.symbol != t.get('symbol')
                         or a.action not in ('BUYSELL', 'ASSIGN')
-                        or a.quantity <= 0):
+                        or a.quantity <= 0 or _is_open(a)):
                     continue
                 try:
                     da = _dt.strptime(loss_window_date(

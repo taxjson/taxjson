@@ -157,6 +157,13 @@ class TaxTransaction:
     # cash from the description text (re-audit A2-1014). Evidence only:
     # NOT part of compute_id, omitted from to_dict() when empty.
     corp_cash: str = ''
+    # The acquisition date of an OPENING lot (an opening balance from a
+    # positions report, `type == OPENING_TYPE`): the US engine dates the
+    # lot's holding period from it (US-OPEN-01); Canada pools the ACB
+    # and only shows it (CA-OPEN-01). Its own text is also in the row's
+    # description, so two lots that differ only by it keep two ids.
+    # NOT part of compute_id, omitted from to_dict() when empty.
+    lot_date: str = ''
 
     def __post_init__(self):
         if self.id is None:
@@ -212,7 +219,8 @@ INCOME_FACT_FIELDS = ('record_date', 'ex_date', 'income_label',
 EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
                    'broker_basis', 'multiplier', 'contract_size_basis',
                    'source', 'source_key',
-                   'source_account', 'exercise_of', 'corp_cash')
+                   'source_account', 'exercise_of', 'corp_cash',
+                   'lot_date')
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]
 # e.g. "SAMPLG250120C00150000.US", "ABC271217P00029000.TO", or
@@ -376,7 +384,10 @@ def _opening_option_buys(events, date_of):
         k = (getattr(ev, 'account', ''), ev.symbol)
         before = bal.get(k, 0.0)
         bal[k] = before + ev.quantity
-        if ev.action != 'BUYSELL' or ev.quantity <= 0:
+        # An opening balance holds the contract but did not buy it in
+        # any window (CA-OPEN-01 / US-OPEN-01).
+        if (ev.action != 'BUYSELL' or ev.quantity <= 0
+                or is_opening_row(ev)):
             continue
         opening = ev.quantity - min(ev.quantity, max(0.0, -before))
         if opening > 1e-9:
@@ -551,7 +562,8 @@ def detect_right_replacement_matches(loss_entries, events, *, date_of,
     canon = canonical or (lambda s: s)
     acqs = []
     for ev in events:
-        if ev.action != 'BUYSELL' or ev.quantity <= 0:
+        if (ev.action != 'BUYSELL' or ev.quantity <= 0
+                or is_opening_row(ev)):
             continue
         und = right_underlying(ev.symbol)
         if und:
@@ -692,6 +704,64 @@ def detect_unresolved_option_replacement_matches(
     return out
 
 
+def detect_opening_lot_matches(loss_entries, events, *, date_of,
+                               canonical=None, statute_label='',
+                               window_days=30):
+    """WARN-ONLY: an opening balance whose own lot date (its real
+    acquisition, `lot_date`) falls within the ±window of a loss on the
+    same security. The opening row is never a replacement (CA-OPEN-01 /
+    US-OPEN-01: the snapshot day is not a purchase), but a lot the
+    report dates inside the window WAS bought then — and the history
+    that would show it is before the snapshot. Named for a manual check,
+    like a warrant (CA-SL-14 / US-WASH-14); nothing is denied. Same
+    record shape as detect_right_replacement_matches, rule
+    'opening_lot_vs_loss'. `date_of` is unused for the lot (its date is
+    the lot date as the report states it)."""
+    canon = canonical or (lambda s: s)
+    lots = [ev for ev in events
+            if is_opening_row(ev) and getattr(ev, 'lot_date', '')
+            and ev.quantity > 0]
+    if not lots:
+        return []
+    out = []
+    for loss in loss_entries:
+        if loss.get('direction') == 'SHORT':
+            continue
+        try:
+            loss_dt = datetime.strptime(loss['date'], '%Y-%m-%d')
+        except (KeyError, TypeError, ValueError):
+            continue
+        loss_c = canon(loss['symbol'])
+        by_sym: Dict[str, Dict[str, Any]] = {}
+        for ev in lots:
+            if canon(ev.symbol) != loss_c:
+                continue
+            try:
+                lot_dt = datetime.strptime(ev.lot_date, '%Y-%m-%d')
+            except ValueError:
+                continue
+            if abs((lot_dt - loss_dt).days) > window_days:
+                continue
+            rec = by_sym.setdefault(ev.symbol, {'qty': 0.0,
+                                                'first': ev.lot_date})
+            rec['qty'] += ev.quantity
+            rec['first'] = min(rec['first'], ev.lot_date)
+        for osym, rec in sorted(by_sym.items()):
+            out.append({
+                'rule': 'opening_lot_vs_loss',
+                'loss_symbol': loss['symbol'],
+                'loss_date': loss['date'],
+                'loss_amount': round(float(loss['amount']), 2),
+                'loss_id': loss.get('id', ''),
+                'option_symbol': osym,
+                'option_acquired': rec['first'],
+                'option_qty': rec['qty'],
+                'held_at_window_end': None,
+                'statute': statute_label,
+            })
+    return out
+
+
 # What a denied loss is called, by the engine that prints the warning
 # (partition ENGINE-09: the shared helper said "superficial" in US runs).
 _LOSS_TERM = {'canada': 'the loss may be superficial',
@@ -707,6 +777,17 @@ def _emit_option_replacement_stderr(warnings, *, country: str) -> None:
 def format_option_replacement_warning(w, *, country: str) -> str:
     """One option/right-replacement flag as the run prints it (after
     "warning: ")."""
+    if w['rule'] == 'opening_lot_vs_loss':
+        return (
+            f"opening-balance lot (warn-only, numbers unchanged): "
+            f"{w['loss_symbol']} loss {w['loss_amount']:+,.2f} on "
+            f"{w['loss_date']}: the opening balance dates "
+            f"{w['option_qty']:g} {w['option_symbol']} as bought "
+            f"{w['option_acquired']}, inside the ±30d window; an opening "
+            f"balance is never a replacement in the books, but that "
+            f"purchase was real, so under {w['statute']} "
+            f"{_LOSS_TERM[country]} — review it by hand "
+            f"[{w['rule']}]")
     held = ''
     if w['held_at_window_end'] is not None:
         held = (' — still held at window end'
@@ -845,7 +926,8 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                  'record_date', 'ex_date', 'income_label',
                  'dealer_country', 'issuer_country', 'broker_time',
                  'security_name', 'open_close', 'broker_basis',
-                 'exercise_of', 'corp_cash', 'contract_size_basis'):
+                 'exercise_of', 'corp_cash', 'contract_size_basis',
+                 'lot_date'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]
@@ -889,7 +971,7 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
     if clean_t.get('action') in ('BUYSELL', 'ASSIGN'):
         _missing = tuple(f for f in ('quantity', 'net_amount')
                          if f not in clean_t)
-    for _fld in ('date', 'date_settle'):
+    for _fld in ('date', 'date_settle', 'lot_date'):
         _d = clean_t.get(_fld)
         if _d:
             try:
@@ -2050,6 +2132,20 @@ LOT_MOVE_TYPE = 'lot_move'
 _MOVE_DESC_RE = re.compile(r'own-account move #\d+: (\S+) -> (\S+)')
 REORG_356_TYPE = 'reorg_356'
 _LOT_EVENT_TYPES = (SPINOFF_355_TYPE, REORG_356_TYPE)
+# An opening balance (`taxjson opening`, a .tt OPENING line): a BUYSELL
+# that sets a position and its cost on a positions report's date but is
+# NOT a purchase — never a superficial-loss / wash-sale replacement and
+# never "acquired in the window" (CA-OPEN-01, US-OPEN-01). Its date is
+# the snapshot day; `lot_date` the real acquisition (US holding period).
+OPENING_TYPE = 'opening'
+
+
+def is_opening_row(tx) -> bool:
+    """An opening-balance row (BUYSELL of type OPENING_TYPE), dict or
+    TaxTransaction."""
+    t = tx.get('type') if isinstance(tx, dict) else getattr(tx, 'type', '')
+    a = tx.get('action') if isinstance(tx, dict) else getattr(tx, 'action', '')
+    return a == 'BUYSELL' and (t or '') == OPENING_TYPE
 
 
 def is_stock_dividend(tx) -> bool:
@@ -2595,6 +2691,7 @@ class CanadaTaxRules(TaxRules):
                 lambda _t: (not is_option_symbol(_t.symbol)
                             and not exercise_target(_t)
                             and _t.action in ('BUYSELL', 'ASSIGN')
+                            and not is_opening_row(_t)
                             and _taxable_scope(_t)),
                 _assign_pairs)
             iteration_realized_gains = []
@@ -2687,7 +2784,8 @@ class CanadaTaxRules(TaxRules):
                 # with no premium roll.
                 if (is_other_scope or is_option_symbol(symbol)
                         or exercise_target(tx)
-                        or tx.action not in ('BUYSELL', 'ASSIGN')):
+                        or tx.action not in ('BUYSELL', 'ASSIGN')
+                        or is_opening_row(tx)):
                     # Only a stock trade can be an assignment's leg (an
                     # ADJUST / SPLIT / OB row on the underlying used to
                     # pop — and drop — the staged premium).
@@ -3054,6 +3152,11 @@ class CanadaTaxRules(TaxRules):
                                         'last_acq_settle')
                                 if not existing['currency']:
                                     existing['currency'] = pool['currency']
+                                if pool.get('opening_acq'):
+                                    existing['opening_acq'] = min(
+                                        existing.get('opening_acq')
+                                        or pool['opening_acq'],
+                                        pool['opening_acq'])
                                 # Preserve the EARLIEST position_start
                                 # across the merged pools — the combined
                                 # position's continuous-holding date is
@@ -3146,14 +3249,27 @@ class CanadaTaxRules(TaxRules):
                             # buys don't reset it — the position is a
                             # continuous run.
                             if pool['position_start_date'] is None:
-                                pool['position_start_date'] = tx.date
+                                pool['position_start_date'] = (
+                                    (tx.lot_date or tx.date)
+                                    if is_opening_row(tx) else tx.date)
                             pool['qty'] += qty
-                            pool['last_acq_date'] = tx.date
-                            # The s.54 window runs on settle dates
-                            # (CA-SL-01): the planning views measure
-                            # from this one (A2-0958). last_acq_date
-                            # stays the TRADE date (days held).
-                            pool['last_acq_settle'] = get_sort_date(tx)
+                            if is_opening_row(tx):
+                                # Not a purchase (CA-OPEN-01): the
+                                # planning views' last-acquisition date
+                                # (the window signal) is not moved; the
+                                # days held of a sale from an opening-only
+                                # pool count from its lot date, else the
+                                # snapshot day.
+                                pool['opening_acq'] = max(
+                                    pool.get('opening_acq') or '',
+                                    tx.lot_date or tx.date)
+                            else:
+                                pool['last_acq_date'] = tx.date
+                                # The s.54 window runs on settle dates
+                                # (CA-SL-01): the planning views measure
+                                # from this one (A2-0958). last_acq_date
+                                # stays the TRADE date (days held).
+                                pool['last_acq_settle'] = get_sort_date(tx)
 
                             if qty < 0 and _grant_mode and is_option_symbol(symbol):
                                 _open_short_option(pool, tx, abs(qty),
@@ -3220,7 +3336,11 @@ class CanadaTaxRules(TaxRules):
 
                             # Days held
                             try:
-                                acq_dt = datetime.strptime(pool['last_acq_date'], '%Y-%m-%d')
+                                _acq_d = pool['last_acq_date']
+                                if (pool.get('opening_acq')
+                                        and _acq_d == '1970-01-01'):
+                                    _acq_d = pool['opening_acq']
+                                acq_dt = datetime.strptime(_acq_d, '%Y-%m-%d')
                                 disp_dt = datetime.strptime(tx.date, '%Y-%m-%d')
                                 raw_days = (disp_dt - acq_dt).days
                                 if raw_days < 0:
@@ -3655,6 +3775,12 @@ class CanadaTaxRules(TaxRules):
                     # (synthetic), and the bookkeeping actions.
                     if t.action not in ('BUYSELL', 'ASSIGN'):
                         continue
+                    # An opening balance (a positions report's snapshot)
+                    # is not a purchase: never a replacement, never
+                    # "acquired in the window" — its shares still count
+                    # as held at day 30 through the balances (CA-OPEN-01).
+                    if is_opening_row(t):
+                        continue
                     t_date = datetime.strptime(get_sort_date(t), '%Y-%m-%d')
                     if abs((t_date - loss_date).days) <= 30:
                         if t.quantity > 0:
@@ -3720,6 +3846,7 @@ class CanadaTaxRules(TaxRules):
                     for t in all_txs:
                         if (t.id == tx.id or t.action != 'BUYSELL'
                                 or t.quantity <= 0
+                                or is_opening_row(t)
                                 or parse_option_right(t.symbol) != 'C'):
                             continue
                         _und = _call_und(t.symbol)
@@ -4681,6 +4808,9 @@ class CanadaTaxRules(TaxRules):
                 _ca_losses, all_txs, date_of=get_sort_date,
                 canonical=alias_of,
                 statute_label="ITA s.54 ('a right to acquire')")
+        option_replacement_warnings += detect_opening_lot_matches(
+            _ca_losses, all_txs, date_of=get_sort_date,
+            canonical=alias_of, statute_label="ITA s.54")
         if getattr(self, 'emit_replacement_stderr', True):
             # run_gains turns this off and prints the warnings after its
             # year filter (audit S070-04).
@@ -5085,8 +5215,11 @@ class USATaxRules(TaxRules):
                                             + ev.quantity)
                 continue
 
+            # An opening balance (a positions report's lots) is not a
+            # purchase in any window either (US-OPEN-01).
             if (ev.quantity > 0 and ev.action == 'BUYSELL'
-                    and (ev.type or '') in _LOT_EVENT_TYPES):
+                    and ((ev.type or '') in _LOT_EVENT_TYPES
+                         or is_opening_row(ev))):
                 # Shares received in a §355 spin-off or a §356 exchange
                 # are not acquired "by purchase or by an exchange on which
                 # the entire amount of gain or loss was recognized"
@@ -6754,6 +6887,32 @@ class USATaxRules(TaxRules):
                     if not _blocks:
                         _blocks.append((qty_remaining, Decimal(0), tx.date))
                         _left = 0.0
+                    if is_opening_row(tx):
+                        # An opening lot (US-OPEN-01): its basis is the
+                        # report's cost and its holding period runs from
+                        # its own acquisition date (§1223), not the
+                        # snapshot day; FIFO places it by that date.
+                        if not tx.lot_date:
+                            raise ValueError(
+                                f"{symbol}: the opening balance dated "
+                                f"{tx.date} in {tx.account} has no lot "
+                                f"date — a US lot's holding period "
+                                f"needs its purchase date (one OPENING "
+                                f"line per lot, US-OPEN-01).")
+                        _insert_lots(ikey, [{
+                            'qty': qty_remaining,
+                            'cost_basis': base_cost_d,
+                            'wash_deferred': Decimal(0),
+                            'date': tx.lot_date,
+                            'effective_acq_date': tx.lot_date,
+                            'id': tx.id,
+                        }])
+                        if trace:
+                            symbol_traces[symbol].append(
+                                f"# {tx.date} OPENING   {qty_remaining:10.4f} | "
+                                f"Lot_Cost: {float(base_cost_d):10.4f} | "
+                                f"Acquired: {tx.lot_date}")
+                        continue
                     _new_lots = []
                     _alloc = Decimal(0)
                     for _bq, _pb, _pe in _blocks:
@@ -7312,6 +7471,10 @@ class USATaxRules(TaxRules):
                 date_of=lambda t: t.date,
                 canonical=split_timeline.canonical,
                 statute_label="IRS §1091 ('option to acquire')")
+        option_replacement_warnings += detect_opening_lot_matches(
+            _orw_losses, all_events, date_of=lambda t: t.date,
+            canonical=split_timeline.canonical,
+            statute_label="IRS §1091")
         option_replacement_warnings += list(_fut_flags.values())
         if getattr(self, 'emit_replacement_stderr', True):
             # run_gains turns this off and prints the warnings after its
