@@ -323,8 +323,11 @@ class TestCanadaDrafts(unittest.TestCase):
                                 'VALUE        480.00 FROM ACCOUNT 1'}]
         drafts, gaps = draft_purchases(
             [sale], country='canada', transfer_rows=rows,
-            symbol_key=lambda s: {'QZW.US': 'QZW.TO'}.get(s, s))
+            symbol_key=lambda s: {'QZW.US': 'QZW.TO'}.get(s, s),
+            listed_pairs={('QZW.TO', 'margin')})
         d, = drafts
+        self.assertIn('remove QZW.TO / margin from missing_history.json',
+                      ' '.join(d.comments))
         self.assertEqual(d.tt_line().split()[3:8:2], ['QZW.US', 'USD',
                                                       '480.00'])
         self.assertEqual(gaps, [])

@@ -1945,6 +1945,10 @@ def draft_purchases(
     for dr in t_drafts:
         k = ((symbol_key or (lambda x: x))(dr.symbol), dr.account)
         delivered[k] = delivered.get(k, 0.0) + dr.quantity
+        if (str(k[0]).upper(), dr.account) in listed:
+            dr.comments += ("once this line is in a .tt file, remove "
+                            f"{k[0]} / {dr.account} from "
+                            "missing_history.json.",)
     kept: List[DraftGap] = []
     for g in gaps:
         left = delivered.get((g.symbol, g.account), 0.0)
