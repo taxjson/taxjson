@@ -7,21 +7,27 @@ formatted (formatting it is a no-op).
 
 Layout. The tables come in a fixed order: [settings]; the accounts (a
 commented `# [accounts.NAME]` reference block naming every account key,
-then each [accounts.NAME] table in the user's order, then a commented
-example of one more account); then [estimate], [carryover],
+then each [accounts.NAME] table in the user's order, then a note on
+adding one more); then [estimate], [carryover],
 [[distributions]], and for Canada [[capital_gains_dividends]] and
-[instalments]. Arrays of tables keep their entries' order. Inside every
-table the keys are in alphabetical order, active and commented-out keys
-interleaved in one sequence, and every key line of the table (`key` or
-`# key`) is padded to the table's widest so the `=` signs form one column.
-No line carries an end-of-line comment: a key's description is on the
-line(s) just above it (plain `# text`, wrapped), and a key with a
-description is separated from the one before by a blank line (keys
-without one — an [[...]] entry's, or keys the template does not know —
-follow each other directly). A key that is set is written active with its
-value; a key that is not set is written commented out, `# key = default`
-(or an example where it has none). A table that is absent is written
-commented out. Only the keys the project's country owns are listed
+[instalments]. Arrays of tables keep their entries' order. [settings]
+comes in groups (SETTINGS_GROUPS: Project, Currencies, Options, Income,
+Futures), each under a `# --- Name ---` heading line, a blank line between
+groups, the keys alphabetical within a group; every other table's keys
+are alphabetical, except that an account table's `type` (the required
+key) comes first. Active and commented-out keys are interleaved in one
+sequence, and every key line of a table (`key` or `# key`) is padded to
+the table's widest so the `=` signs form one column. A key's description
+is on the line(s) just above it (plain `# text`, wrapped), with no blank
+line between keys. The one end-of-line comment is a key's `inline` text
+(the values it takes, `# settle | trade`, or what `true` means for a
+switch), at one column per group or table (at most INLINE_MAX_COLUMN; a
+longer or multi-line value gets it on the line above instead). An
+[accounts.NAME] table is compact: key lines only, since the reference
+block documents every account key once. A key that is set is written
+active with its value; a key that is not set is written commented out,
+`# key = default` (or an example where it has none). A table that is
+absent is written commented out. Only the keys the project's country owns are listed
 (lib/country SETTING_COUNTRY / CONFIG_COUNTRY / PLAN_COUNTRY): a Canadian
 file never mentions a US-only key and the other way round.
 
@@ -73,6 +79,11 @@ from taxjson.lib.tomlcompat import tomllib
 
 # Descriptions are wrapped to this many characters after the "# ".
 DOC_WIDTH = 76
+# An inline (end-of-line) comment starts at most at this column, and its
+# line is at most LINE_WIDTH long; a key whose value is longer gets it on
+# the line above instead.
+INLINE_MAX_COLUMN = 50
+LINE_WIDTH = 100
 
 NOTES_HEADING = ("# Your notes (kept by tjs format) — comments it could "
                  "not attach to a setting:")
@@ -100,10 +111,15 @@ class Key:
     is not set (its default, or an example where it has none) and may
     hold placeholders ({year}, {prev_year}, {next_year}, {home},
     {source}, {tax_date}, {tz}, {name}). `doc` is its description (a
-    str, or {country: str}), written wrapped on the lines above it."""
+    str, or {country: str}), written wrapped on the lines above it;
+    `inline` is a short text written after the value as an end-of-line
+    comment — the values the key takes (`settle | trade`), or what
+    `true` means for a switch — aligned with the other inline comments
+    of its group or table."""
     name: str
     value: Text
     doc: Text
+    inline: Text = ""
 
 
 def _pick(v: Any, country: str) -> Any:
@@ -134,25 +150,27 @@ def _bases() -> str:
 _FILE_HEADER = (
     "# taxjson configuration — https://github.com/taxjson/taxjson",
     "#",
-    "# Every key taxjson reads is listed here, alphabetically within each",
-    "# table and with one `=` column per table, so year-over-year projects",
-    "# diff cleanly:",
+    "# Every key taxjson reads is listed here: [settings] in groups, the",
+    "# other tables' keys alphabetically (an account's `type` first), one",
+    "# `=` column per table, so year-over-year projects diff cleanly:",
     "#   diff ~/taxes/{prev_year}/taxjson.toml ~/taxes/{year}/taxjson.toml",
-    "# Each key's description is on the lines above it. A commented key shows",
-    "# its default (or an example where it has none); uncomment it to change",
-    "# it. `taxjson format` puts an edited file back into this layout,",
-    "# keeping your values and comments.",
+    "# Each key's description is on the lines above it, the values it takes",
+    "# after it. A commented key shows its default (or an example where it",
+    "# has none); uncomment it to change it. `taxjson format` puts an edited",
+    "# file back into this layout, keeping your values and comments.",
 )
 
 # [settings]. A key the project's country does not own is left out
-# (lib/country.SETTING_COUNTRY). Written in alphabetical order.
+# (lib/country.SETTING_COUNTRY). Written by SETTINGS_GROUPS: group by
+# group, alphabetically within a group.
 SETTINGS_SPEC: Tuple[Key, ...] = (
     Key("year", "{year}",
         "The tax year the pipeline reports on (required)."),
-    Key("country", '"{country}"', "canada | ca | usa | us (required)."),
+    Key("country", '"{country}"', "",
+        inline="canada | ca | usa | us (required)"),
     Key("province", '"ON"',
-        "{provinces}: the province `taxjson estimate` taxes at. No "
-        "default."),
+        "The province `taxjson estimate` taxes at. No default.",
+        inline="{provinces}"),
     Key("base_currency", '"{home}"',
         {"canada": "Report currency: CAD (Bank of Canada rates).",
          "usa": "Report currency: USD."}),
@@ -164,10 +182,9 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
                 "here; uncomment it only for an account or trade in "
                 "another currency."}),
     Key("tax_date", '"{tax_date}"',
-        {"canada": "settle | trade. Default settle: CRA dates a sale by "
-                   "settlement.",
-         "usa": "trade | settle. Default trade: the IRS dates a sale by "
-                "trade date."}),
+        {"canada": "Default settle: CRA dates a sale by settlement.",
+         "usa": "Default trade: the IRS dates a sale by trade date."},
+        inline={"canada": "settle | trade", "usa": "trade | settle"}),
     Key("local_timezone", '"{tz}"',
         "The zone crypto UTC times are dated in (an IANA name). No "
         "default: required with a crypto account."),
@@ -178,17 +195,19 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
         "LEAPS (the leaps and leaps-sum views only; no tax figure). "
         "Default 9."),
     Key("futures_settle", '"trade"',
-        "trade | next_day. trade: futures and futures options settle on "
-        "the TRADE date (daily variation margin); next_day: the clearing "
-        "premium date."),
+        "trade (the default): futures and futures options settle on the "
+        "TRADE date (daily variation margin); next_day: the clearing "
+        "premium date.",
+        inline="trade | next_day"),
     Key("fx_cash_gains", "false",
         {"canada": "true: an end-of-run FX-on-cash report (s.39(1.1), $200 "
                    "de minimis).",
          "usa": "true: an end-of-run FX-on-cash report (§988, ordinary "
                 "income)."}),
     Key("foreign_return_of_capital", '"dividend"',
-        "A non-Canadian issuer's return of capital (IB): \"dividend\" "
-        "(s.90(1), the default) | \"acb\"."),
+        "A non-Canadian issuer's return of capital (IB): a dividend "
+        "(s.90(1), the default), or \"acb\" to lower the shares' ACB.",
+        inline="dividend | acb"),
     Key("corporate_distributions", '["XYZQ.TO"]',
         "Canadian issuers whose distributions are a corporation's, dated "
         "when paid (README \"Income dating\"). No default."),
@@ -197,9 +216,10 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
         "§852(b)(7) / §857(b)(9)): \"SYMBOL\" (every January one) or "
         "\"SYMBOL YYYY-01-DD\" (that payment). No default."),
     Key("option_premium_timing", '"grant"',
-        "\"grant\": a written option's premium is a gain in the year "
-        "WRITTEN (ITA s.49(1)); \"close\": it is netted at the closing "
-        "transaction instead. See `taxjson option-boundary`."),
+        "\"grant\" (the default): a written option's premium is a gain in "
+        "the year WRITTEN (ITA s.49(1)); \"close\": it is netted at the "
+        "closing transaction instead. See `taxjson option-boundary`.",
+        inline="grant | close"),
     Key("option_grant_timing_since", "{year}",
         "Contracts written before this year keep close timing (default: "
         "`year`). SET ONCE to the first year you FILE under grant timing "
@@ -212,15 +232,13 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
 )
 
 ACCOUNT_SPEC: Tuple[Key, ...] = (
-    Key("type", '"taxable"', "REQUIRED: taxable | sheltered."),
+    Key("type", '"taxable"', "", inline="taxable | sheltered (required)"),
     Key("plan", {"canada": '"rrsp"', "usa": '"ira"'},
         "The plan when the name doesn't say (default: from the name): "
         "{plans}."),
-    Key("crypto", "false",
-        "true: a Coinbase / Kraken account (crypto prices are filled in by "
-        "the run)."),
-    Key("transfers", "false",
-        "true: keep TRANSFER rows (contributions/withdrawals)."),
+    Key("crypto", "false", "", inline="true: a Coinbase / Kraken account"),
+    Key("transfers", "false", "",
+        inline="true: keep TRANSFER rows (contributions/withdrawals)"),
     Key("holdings", '["~/broker/{name}_holdings.toml"]',
         "Positions files `taxjson sanity` reconciles against. Default: "
         "none."),
@@ -234,14 +252,42 @@ ACCOUNT_SPEC: Tuple[Key, ...] = (
     Key("year_end_posting", '"06-30"',
         "RBC: the day next year by which year-end book-cost rows are "
         "posted. Default 06-30."),
-    Key("brokerage", '"questrade"',
-        "The `taxjson fetch` source (taxjson-fetch plugin): questrade | "
-        "ibkr_flex."),
-    Key("account", '"12345678"',
-        "questrade: the account number `taxjson fetch` downloads."),
-    Key("query_id", '"123456"',
-        "ibkr_flex: the Flex query id `taxjson fetch` runs."),
+    Key("brokerage", '"SOURCE"',
+        "The `taxjson fetch` source of this account (a fetcher plugin's "
+        "name; `taxjson fetch --list` names the installed ones). No "
+        "default."),
+    Key("account", '"ACCOUNT_ID"',
+        "The broker account id `taxjson fetch` downloads (if its source "
+        "needs one)."),
+    Key("query_id", '"QUERY_ID"',
+        "The report (query) id `taxjson fetch` runs (if its source needs "
+        "one)."),
 )
+
+# The [settings] groups, in order: (heading, keys). Every SETTINGS_SPEC
+# key is in exactly one group (tests/test_config_template.py); a group
+# with no key the project's country owns is left out.
+SETTINGS_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("Project", ("year", "country", "province", "tax_date",
+                 "local_timezone", "prior_year_record")),
+    ("Currencies", ("base_currency", "source_currencies", "fx_cash_gains")),
+    ("Options", ("option_premium_timing", "option_grant_timing_since",
+                 "option_buyback_loss_superficial", "leaps_months")),
+    ("Income", ("corporate_distributions", "foreign_return_of_capital",
+                "ric_january_dividends")),
+    ("Futures", ("futures_settle",)),
+)
+
+
+def group_heading(name: str) -> str:
+    """The comment line above a [settings] group."""
+    return f"# --- {name} ---"
+
+
+def _account_order(keys: Iterable[Key]) -> List[Key]:
+    """An account table's keys: `type` (the required key) first, the rest
+    alphabetically."""
+    return sorted(keys, key=lambda k: (k.name != "type", k.name))
 
 _ACCOUNTS_DOC = (
     "One [accounts.NAME] table per folder under inputs/ (the folder name is "
@@ -314,14 +360,14 @@ TABLES: Tuple[Table, ...] = (
                   "Every dividend of that tax year (instead of date)."),
               Key("date", "{year}-06-16",
                   "One payment's date (instead of year)."),
-              Key("amount", '"all"',
-                  "\"all\" or the box 18 amount, e.g. 1.25."),
+              Key("amount", '"all"', "",
+                  inline="\"all\" or the box 18 amount"),
               Key("account", '"margin"', "Default: the taxable accounts."),
           )),
     Table("instalments", False,
           "Tax instalments (`taxjson instalments`, and a summary inside "
           "`taxjson estimate`). Uncomment and fill in YOUR figures.", (
-              Key("basis", '"current_year"', "{bases}."),
+              Key("basis", '"current_year"', "", inline="{bases}"),
               Key("withheld", "0", "Tax withheld at source this year."),
               Key("prior_year_net_tax", "55000",
                   "Last year's net tax owing (no default), both years as "
@@ -532,9 +578,9 @@ def _hash(norm: str) -> str:
 # Comment lines (and trailing comments) earlier `taxjson init` versions
 # wrote, as hashes of their _norm text (sha256, first 16 hex digits; the
 # text of every '#' onward of every line each earlier template rendered,
-# both countries; the last block is the grouped, end-of-line-comment
-# layout before the alphabetical one): `taxjson format` regenerates them as template text
-# instead of keeping them as the user's notes. Hashes, not text: the old
+# both countries; the second block is the grouped, end-of-line-comment
+# layout before the alphabetical one): `taxjson format` regenerates them
+# as template text instead of keeping them as the user's notes. Hashes, not text: the old
 # examples are not carried in the source.
 _LEGACY_TEMPLATE_HASHES = frozenset("""
 00155ff5fe04a837 b466672d86933a32 cc383b0ee44d380c ccf1f0fb14c5c312
@@ -616,6 +662,67 @@ e7375f9815cfd066 e7896eac1898cb23 e9cb1329e3f38abd e9f19ceb7012b0c0
 ea7321a84bbc15e7 ef63ed5daa1137fd f0e9983114ddefcf f6be3e07a2788417
 """.split())
 
+# The alphabetical layout (before the grouped [settings] and compact
+# tables), per country: a line only the OTHER country's template wrote
+# (a Canadian `# tax_date = "trade"`) is the user's own.
+_LEGACY_TEMPLATE_HASHES_BY_COUNTRY = {
+    C.CANADA: frozenset("""
+008fbf0b21d4331d 027a359640c237cb 02fba5aeba703bc1 03b4cf3233f53254
+055ae0c64ce8dc17 0953110efdc50d00 0a4d4b3ad56b1057 10ffbd73d54fbb8d
+11e39a893bca603b 13b4cf05d84f74da 144d083f264e4c62 151b60b311d50294
+16a41caf03a40fda 180221ee36daec4e 1b89f76d9519498f 229e72be729ea2fd
+229feb6263f7d173 24aaef92b99f027c 24f367bd423c0698 2ad2402def2d23b3
+2dedfc6a84a3b236 327edbc1bc62524b 3661d51afca787e9 38f7bd7c6ed94f43
+399d640743def7bf 40439c64c252116c 40f92d9d5a21d406 4120da63ba553581
+4246491ffcf3fae3 47d31bb3dfc98347 49741e455d2d2c28 4cdcedd54e3ed0af
+4e8f42a837f0dad5 4f19f02f4cc2616a 4fd4984c8ccd4a6f 5042783462a09751
+50903059cad803c4 518fd285a2db8bcc 531a08f14883fe9c 549c5be4cb70752e
+55d2de201b897ccf 5e1f42eaf2188af1 611fe29fe4560408 613c63fd2316332f
+62ad3579483f040d 62cba9e7c72a5113 64a583cd5f9198c9 650a42ed5fb149db
+671de16c7cac75e4 671f5e4159da27e6 688d2ca159680ad0 6b426a6f926e51d4
+6bec38e0b5ed819b 6e6aa315db4bc5b3 7346b294aa20c3eb 762c007b97331b7b
+7715b9f75eb103fe 7992ebbf279bb8d6 7cc02743089d0ade 7d79440ff12d7185
+7dd566573c3a16be 7f106d303f9d8343 80c3faca27fbad62 85c03b24ced6f059
+86323e248d1089d7 87c1006f40f8eca6 8afad41408102b95 8f8b0f8beab7c729
+91bb9670206b9d92 9e852a4fbd51c971 9e8d480fd17d4dd0 9f9f392221f20f4e
+a0d89073041730fb a19cf1eb021fd452 a3861ce8929d447d a4bba00f6cfde9cb
+a63590d20bc40879 a6f00079587f901f aa21d392980c00ea aae708cbb686e09d
+ac24ac3c7d5a0a74 af49d0cafd76debc b0b6396ffabc6b73 b718a5c07b8231e5
+b985bc2bd832b95e b9e29972ce74fee1 b9f0c3ce9ee2d598 ba55bdd7ba6d9d44
+bf7a93e6c126b38d c0714b5d88cbbcfd c08149f1fd7f2959 c41b4c33e231bcba
+c5ad5dc490b93bb2 c68116e5dc81eee2 cbc302310689ce03 ccb2c4bac9128001
+cd7b647ee560a688 cf7aa29d72d3d49c cf9008e594aa56c0 d279f7b88ed86b9a
+d3deda125828f747 d502d3b2f9c8ac97 d59a8a299666022e d5a36e982568dd51
+d7b2f15162b61568 d8bff68fec3b6547 de12116a8b3da409 de522f2ba8ab9a17
+e223b78e6cf2233d e3076f44b482d1da e4d2072628822dc0 e8f929fea88da024
+e936cc2d9262deee e9380947889ee8a6 edb2bb9c2ac0f265 edffc5733f7c7f65
+f23db548a616307f f38d3a0d89440041 f3c1344f0c0ee752 f4ecea16fb3371c2
+f61eb9e3a92dc3ff f9e5646a07e6763c fc47e25e6fd818f4
+""".split()),
+    C.USA: frozenset("""
+008fbf0b21d4331d 027a359640c237cb 02fba5aeba703bc1 03b4cf3233f53254
+0953110efdc50d00 0d372c5493fdb858 13b4cf05d84f74da 144d083f264e4c62
+18781edfcb7b641b 1b89f76d9519498f 229feb6263f7d173 24bf06ace63daccc
+3661d51afca787e9 399d640743def7bf 3d346a6caf411a4d 40f92d9d5a21d406
+4246491ffcf3fae3 47d31bb3dfc98347 4c0e5124c885321b 5042783462a09751
+549c5be4cb70752e 55980d2a6b1bbd1d 5b1c397d4f727528 5e1f42eaf2188af1
+611fe29fe4560408 613c63fd2316332f 619c4fc634b14360 62ad3579483f040d
+64a583cd5f9198c9 650a42ed5fb149db 671f5e4159da27e6 688d2ca159680ad0
+6bec38e0b5ed819b 72c5df3267f7835b 7346b294aa20c3eb 762c007b97331b7b
+7876cc1f0eb9cef6 7cc02743089d0ade 7d79440ff12d7185 83373c248476f3a2
+85c03b24ced6f059 86323e248d1089d7 875c7ff422c231aa 87a3823da36c635b
+87c1006f40f8eca6 89ed8d00756da518 8ce2f27ad5fb9e7c 8f8b0f8beab7c729
+91bb9670206b9d92 9e852a4fbd51c971 a19cf1eb021fd452 a604b39ad8cc964f
+a8947039804c67d9 aae708cbb686e09d af49d0cafd76debc af5e2bc44b589085
+b0b6396ffabc6b73 b9e29972ce74fee1 b9f0c3ce9ee2d598 bf7a93e6c126b38d
+c08149f1fd7f2959 c41b4c33e231bcba c5ad5dc490b93bb2 ccb2c4bac9128001
+cf9008e594aa56c0 d279f7b88ed86b9a d5a36e982568dd51 d8bff68fec3b6547
+e223b78e6cf2233d e4d2072628822dc0 e60e7157dfc61d39 e8f929fea88da024
+e936cc2d9262deee edffc5733f7c7f65 eef93cc2bc576ad7 f1b02b5902a71e9e
+f23db548a616307f f9e5646a07e6763c fc47e25e6fd818f4
+""".split()),
+}
+
 
 def _comment_suffixes(line: str) -> Iterable[str]:
     """_norm of the text from every '#' of a rendered template line (a
@@ -664,6 +771,7 @@ class _Entry:
     value: str                 # TOML text (may span lines)
     doc: str = ""              # the filled description
     commented: bool = False
+    inline: str = ""           # the filled end-of-line text
     slot: bool = True          # a place the user's comments can attach to
 
     @property
@@ -749,38 +857,75 @@ class _Renderer:
              entries: Sequence[Union[_Entry, str]]) -> None:
         """A table's key lines (and its heading lines, as str), directly
         under its table line: one `=` column for the whole table, each
-        key's description and the user's comments above it, a blank line
-        before every key that has comment lines."""
+        key's description and the user's comments above it, no blank line
+        between keys; a blank line before each heading (but the first
+        line under a table line). An entry's inline text is an end-of-line
+        comment at one column per group (the run of keys between two
+        headings) — or, when its value is too long or spans lines, a line
+        above the key."""
         K = max([len(e.prefix) for e in entries if isinstance(e, _Entry)]
                 or [0])
+
+        def value_of(e: _Entry) -> Tuple[str, bool]:
+            s = ("key", T, e.key)
+            verbatim = (e.slot and not e.commented
+                        and s in self.x.verbatim)
+            return (self.x.verbatim[s] if verbatim else e.value), verbatim
+
+        def base(e: _Entry) -> str:
+            return f"{e.prefix.ljust(K)} = {value_of(e)[0]}"
+
+        def fits(e: _Entry) -> bool:
+            b, (v, verbatim) = base(e), value_of(e)
+            return (not verbatim and "\n" not in v
+                    and len(b) <= INLINE_MAX_COLUMN
+                    and len(b) + 2 + 2 + len(e.inline) <= LINE_WIDTH)
+
+        # The inline column of each group.
+        col: Dict[int, int] = {}
+        group: List[_Entry] = []
+
+        def close_group() -> None:
+            ok = [len(base(g)) for g in group if g.inline and fits(g)]
+            for g in group:
+                col[id(g)] = max(ok) + 2 if ok else 0
+            group.clear()
+
+        for e in entries:
+            if isinstance(e, str):
+                close_group()
+            else:
+                group.append(e)
+        close_group()
         first = True
         for e in entries:
             if isinstance(e, str):
-                self.blank()
+                if not (first and T):
+                    self.blank()
                 self.emit(e)
-                first = True
+                first = False
                 continue
+            first = False
             s = ("key", T, e.key)
             doc = _doc_lines(e.doc)
-            runs = self.x.runs.get(s, ()) if e.slot else ()
             tr = (self.x.trailing.get(s)
                   if e.slot and not e.commented else None)
-            if not first and (doc or runs or tr):
-                self.blank()
-            first = False
+            inline = e.inline and fits(e)
+            if e.inline and not inline:
+                doc.append(f"# {e.inline}")
             for ln in doc:
                 self.emit(ln)
             if e.slot:
                 self.user_runs(s)
             if tr:
                 self.emit(tr, template=False)
-            verbatim = (e.slot and not e.commented
-                        and s in self.x.verbatim)
-            value = self.x.verbatim[s] if verbatim else e.value
+            value, verbatim = value_of(e)
             vlines = value.split("\n")
             pre = "# " if e.commented else ""
-            self.emit(f"{e.prefix.ljust(K)} = {vlines[0]}",
-                      template=not verbatim)
+            first_line = f"{e.prefix.ljust(K)} = {vlines[0]}"
+            if inline:
+                first_line = f"{first_line.ljust(col[id(e)])}# {e.inline}"
+            self.emit(first_line, template=not verbatim)
             for ln in vlines[1:]:
                 # A verbatim value is the user's text, never matched as
                 # template text.
@@ -792,10 +937,12 @@ class _Renderer:
         its default or example)."""
         c = self.country
         doc = self.fill(_pick(k.doc, c), name)
+        inline = self.fill(_pick(k.inline, c), name)
         if k.name in values:
-            return _Entry(k.name, toml_value(values[k.name], top=True), doc)
+            return _Entry(k.name, toml_value(values[k.name], top=True), doc,
+                          inline=inline)
         return _Entry(k.name, self.fill(_pick(k.value, c), name), doc,
-                      commented=True)
+                      commented=True, inline=inline)
 
     def unknown_entries(self, values: Mapping[str, Any],
                         known: Sequence[str], label: str, *,
@@ -866,9 +1013,15 @@ class _Renderer:
         c = self.country
         T = ("settings",)
         self.header(T, "[settings]")
-        keys = _sorted_keys(k for k in SETTINGS_SPEC
-                            if owned(c, "settings", k.name))
-        self.keys(T, [self.entry(k, s) for k in keys]
+        spec = {k.name: k for k in SETTINGS_SPEC}
+        entries: List[Union[_Entry, str]] = []
+        for heading, names in SETTINGS_GROUPS:
+            keys = _sorted_keys(spec[n] for n in names
+                                if owned(c, "settings", n))
+            if keys:
+                entries.append(group_heading(heading))
+                entries += [self.entry(k, s) for k in keys]
+        self.keys(T, entries
                   + self.unknown_entries(s, spec_keys()["settings"],
                                          "settings",
                                          owner_table="settings"))
@@ -886,8 +1039,9 @@ class _Renderer:
         self.emit("# [accounts.NAME]")
         self.keys(T0, [
             _Entry(k.name, self.fill(_pick(k.value, c)),
-                   self.fill(_pick(k.doc, c)), commented=True, slot=False)
-            for k in _sorted_keys(ACCOUNT_SPEC)])
+                   self.fill(_pick(k.doc, c)), commented=True, slot=False,
+                   inline=self.fill(_pick(k.inline, c)))
+            for k in _account_order(ACCOUNT_SPEC)])
         if present and not accts:
             self.lines.append("")
             self.header(T0, "[accounts]")
@@ -898,8 +1052,10 @@ class _Renderer:
             T = ("accounts", name)
             self.lines.append("")
             self.header(T, f"[accounts.{key_repr(name)}]")
-            keys = _sorted_keys(k for k in ACCOUNT_SPEC if k.name in acfg)
-            self.keys(T, [self.entry(k, acfg, name) for k in keys]
+            # Compact: the reference block above documents every key.
+            keys = _account_order(k for k in ACCOUNT_SPEC if k.name in acfg)
+            self.keys(T, [_Entry(k.name, toml_value(acfg[k.name], top=True))
+                          for k in keys]
                       + self.unknown_entries(acfg, spec_keys()["accounts"],
                                              f"accounts.{name}"))
             self.end(T)
@@ -1363,7 +1519,9 @@ def format_config(text: str) -> FormatResult:
 
     def is_template(comment: str) -> bool:
         n = _norm(comment)
-        return not n or n in template or _hash(n) in _LEGACY_TEMPLATE_HASHES
+        h = _hash(n)
+        return (not n or n in template or h in _LEGACY_TEMPLATE_HASHES
+                or h in _LEGACY_TEMPLATE_HASHES_BY_COUNTRY[country])
 
     extras, kept = _associate(_scan(text), probe, is_template)
     r = _Renderer(doc, country, year, extras)

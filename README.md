@@ -499,24 +499,38 @@ order — `[settings]`, then the accounts (a commented `# [accounts.NAME]`
 block listing every account key, then your `[accounts.NAME]` tables in
 your order), then `[estimate]`, `[carryover]`, `[[distributions]]` and, in
 Canada, `[[capital_gains_dividends]]` and `[instalments]` (`[[...]]`
-entries keep their order). Inside each table the keys are alphabetical,
-set and commented-out keys in one sequence, and every key line of the
-table is padded so the `=` signs form one column. No line has an
-end-of-line comment: each key's description is on the line(s) above it,
-and a blank line separates one documented key from the next:
+entries keep their order). `[settings]` comes in groups — Project,
+Currencies, Options, Income, Futures — each under a `# --- Name ---`
+heading, the keys alphabetical within a group and a blank line between
+groups; every other table's keys are alphabetical, except that an
+account table starts with `type`. Set and commented-out keys are in one
+sequence, and every key line of a table is padded so the `=` signs form
+one column. Each key's description is on the line(s) above it, with no
+blank line between keys; a key's list of values (or what `true` means
+for a switch) ends its line instead, those comments aligned in one
+column per group (a value too long for the column gets it on the line
+above). An `[accounts.NAME]` table is key lines only: the commented
+reference block above the accounts documents every account key once.
 
 ```toml
 [settings]
+# --- Project ---
+country                           = "canada"  # canada | ca | usa | us (required)
+# Default settle: CRA dates a sale by settlement.
+tax_date                          = "settle"  # settle | trade
+# The tax year the pipeline reports on (required).
+year                              = 2025
+
+# --- Currencies ---
 # Report currency: CAD (Bank of Canada rates).
 base_currency                     = "CAD"
 
-# canada | ca | usa | us (required).
-country                           = "canada"
-
-# Options bought more than this many months before expiry count as LEAPS (the
-# leaps and leaps-sum views only; no tax figure). Default 9.
-# leaps_months                    = 9
+[accounts.rrsp]
+type      = "sheltered"
+transfers = true
 ```
+
+(Abridged: the generated file lists every key of the group.)
 
 The keys, with more detail than the template's descriptions (this
 annotated listing is not the generated layout):
@@ -695,8 +709,8 @@ Files the pipeline reads and writes (all map files are optional):
 
 | Command | Purpose |
 | --- | --- |
-| `taxjson init --country canada\|usa [PATH] [--year YYYY]` | Scaffold a new project directory (config, currencies, and account folders per jurisdiction; `--force` to overwrite). The generated `taxjson.toml` lists every key the country's projects read, documented: the scaffold's values active, every other key commented out with its default (or an example where it has none), each key under its description, alphabetically within each table with one `=` column per table (see "Project layout and configuration"). `local_timezone` is set to this machine's IANA zone when it can be read (else left commented: the default zone). |
-| `taxjson format [--write [--no-backup] \| --check]` | Lay an existing `taxjson.toml` out like the template `init` writes (see "Project layout and configuration"): every key of the project's country in its alphabetical place in its table — the ones you set active with your values, the rest commented with their default — each under its description, one `=` column per table, accounts in your order, `[[...]]` entries in order, values in canonical TOML (strings quoted, dates as dates). Nothing is lost: keys the template does not know stay in their table under a "Not in the template" line, alphabetically (and are named on the console); a trailing comment moves onto its own line just above its key or table line; a comment block stays above the key or table that follows it and moves with it (a block holding a commented-out key of your own, `# province = "BC"`, goes to that key; a block a blank line separates from the next table stays at the end of its table); a multi-line value with comments inside is kept as written; anything it cannot place goes to a "Your notes (kept by tjs format)" block at the end. Comment lines that are the template's own text (or an earlier `init`'s) are regenerated. The parsed configuration before and after must be identical, or nothing is written. Default: a dry run printing a unified diff; `--write` writes it (atomically, the file's mode kept, the old file saved as `taxjson.toml.bak`, or the next free `.bakN`; `--no-backup` skips that); `--check` exits 1 when the file is not formatted (CI). Formatting a formatted file changes nothing. Like every command it refuses a config the config check refuses, and a project with old per-purpose files (`taxjson migrate` first). |
+| `taxjson init --country canada\|usa [PATH] [--year YYYY]` | Scaffold a new project directory (config, currencies, and account folders per jurisdiction; `--force` to overwrite). The generated `taxjson.toml` lists every key the country's projects read, documented: the scaffold's values active, every other key commented out with its default (or an example where it has none), each key under its description, `[settings]` in groups and the other tables alphabetical, with one `=` column per table (see "Project layout and configuration"). `local_timezone` is set to this machine's IANA zone when it can be read (else left commented: the default zone). |
+| `taxjson format [--write [--no-backup] \| --check]` | Lay an existing `taxjson.toml` out like the template `init` writes (see "Project layout and configuration"): every key of the project's country in its place in its table (its `[settings]` group, or alphabetical; an account's `type` first) — the ones you set active with your values, the rest commented with their default — each under its description (account tables compact), one `=` column per table, accounts in your order, `[[...]]` entries in order, values in canonical TOML (strings quoted, dates as dates). Nothing is lost: keys the template does not know stay in their table under a "Not in the template" line, alphabetically (and are named on the console); a trailing comment moves onto its own line just above its key or table line; a comment block stays above the key or table that follows it and moves with it (a block holding a commented-out key of your own, `# province = "BC"`, goes to that key; a block a blank line separates from the next table stays at the end of its table); a multi-line value with comments inside is kept as written; anything it cannot place goes to a "Your notes (kept by tjs format)" block at the end. Comment lines that are the template's own text (or an earlier `init`'s) are regenerated. The parsed configuration before and after must be identical, or nothing is written. Default: a dry run printing a unified diff; `--write` writes it (atomically, the file's mode kept, the old file saved as `taxjson.toml.bak`, or the next free `.bakN`; `--no-backup` skips that); `--check` exits 1 when the file is not formatted (CI). Formatting a formatted file changes nothing. Like every command it refuses a config the config check refuses, and a project with old per-purpose files (`taxjson migrate` first). |
 | `taxjson migrate [--dry-run]` | Move an older project's per-purpose files into the two that hold them now: `yf_ticker.map`, `crypto_ticker.map`, `ticker_extraction_overrides.txt` and `t1135.map` become `QUOTE` / `CRYPTO` / `EXTRACT` / `T1135` lines appended to `ticker.map`; `amt_carryover.txt`, `claimed_losses.txt`, `capital_gains_dividends.map` and `distributions.map` become `[estimate] amt_carryover`, `[carryover] claimed`, `[[capital_gains_dividends]]` and `[[distributions]]` in `taxjson.toml`. Each file is read with its old rules (what it meant before is what the new lines mean); the lines are appended (a key under an existing `[estimate]` / `[carryover]` header goes right below it) — your content and comments are never rewritten — and each old file is renamed `<name>.migrated`, never deleted. It refuses, writing nothing, when an old line cannot be read or ticker.map / taxjson.toml already holds a conflicting entry (an identical one is skipped). `--dry-run` prints the lines it would append and the moves. While any of those old files is in the project, every other command stops (exit 2) naming it and this command. A leftover `tv_exchange.map` (the removed TradingView export) is not converted — it is only renamed `tv_exchange.map.migrated` — and stops nothing meanwhile (`taxjson run` notes it once). |
 | `taxjson fetch [ACCOUNT ...]` | Download broker activity straight into `inputs/` through an installed fetcher plugin (`--list` names them; none installed: one install line, exit 2) — the taxjson-fetch plugin (the installer installs it by default — `--without-fetch` leaves it out; from a checkout `pip install -e packages/taxjson-fetch`; not on PyPI) covers the Questrade REST API and IBKR Flex Web Service, configured on the account (`brokerage` + `account`/`query_id` under `[accounts.<name>]`). Writes files the existing parsers already read; hand-exported CSVs keep working side by side. Questrade defaults to the whole tax-year window plus the superficial-loss margins (Dec 1 of the prior year through Jan 31 of the next, capped at today; `--year N` backfills a past year, `--from`/`--days` override the window); IBKR re-covers the Flex query's configured period. `--trim-overlap` drops rows your manual exports already cover, `--dry-run` previews. Credentials: `--refresh-token` (Questrade) / `--flex-token` (IBKR); `--positions` ALSO snapshots live Questrade holdings to `work/<account>_live_holdings.toml` (for `taxjson sanity`). Chain it: `taxjson fetch run`. |
 | `taxjson elect` | Review, redo, or non-interactively set (`--set ID=ELECTION`) a corporate-action tax election. |

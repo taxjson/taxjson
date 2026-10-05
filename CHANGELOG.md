@@ -118,6 +118,22 @@
   account(s) with open positions and no holdings file" named only four;
   it now names up to six and says how many more). No figure, `--json`
   output or file changes.
+- **taxjson.toml reads in groups and compactly** (`taxjson init`, `taxjson
+  format`). `[settings]` comes in groups — Project, Currencies, Options,
+  Income, Futures — each under a `# --- Name ---` heading, keys
+  alphabetical within a group and a blank line between groups.
+  Descriptions stay on the line above each key, but there is no blank
+  line between keys inside a group or table, and a key whose comment is
+  just its list of values (`tax_date = "settle"  # settle | trade`) — or
+  what `true` means for a switch — carries it at the end of its line,
+  aligned within the group. `[accounts.NAME]` tables are
+  key lines only, `type` first (the commented reference block documents
+  every account key once). The fetch keys (`brokerage`, `account`,
+  `query_id`) are documented without naming a broker. `taxjson format`
+  re-lays an existing file into this layout without changing what it
+  configures; the previous layout's descriptions are recognised and
+  regenerated, never kept as your notes.
+
 - **The planning commands in the house output style.** `taxjson
   wash-radar` prints one section per advisory category (its title and
   row count) with a TICKER / TAXABLE / SHELTERED / CLEARS table and each

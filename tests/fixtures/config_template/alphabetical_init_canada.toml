@@ -1,0 +1,224 @@
+# taxjson configuration — https://github.com/taxjson/taxjson
+#
+# Every key taxjson reads is listed here, alphabetically within each
+# table and with one `=` column per table, so year-over-year projects
+# diff cleanly:
+#   diff ~/taxes/2024/taxjson.toml ~/taxes/2025/taxjson.toml
+# Each key's description is on the lines above it. A commented key shows
+# its default (or an example where it has none); uncomment it to change
+# it. `taxjson format` puts an edited file back into this layout,
+# keeping your values and comments.
+
+[settings]
+# Report currency: CAD (Bank of Canada rates).
+base_currency                     = "CAD"
+
+# Canadian issuers whose distributions are a corporation's, dated when paid
+# (README "Income dating"). No default.
+# corporate_distributions         = ["XYZQ.TO"]
+
+# canada | ca | usa | us (required).
+country                           = "canada"
+
+# A non-Canadian issuer's return of capital (IB): "dividend" (s.90(1), the
+# default) | "acb".
+# foreign_return_of_capital       = "dividend"
+
+# trade | next_day. trade: futures and futures options settle on the TRADE
+# date (daily variation margin); next_day: the clearing premium date.
+# futures_settle                  = "trade"
+
+# true: an end-of-run FX-on-cash report (s.39(1.1), $200 de minimis).
+# fx_cash_gains                   = false
+
+# Options bought more than this many months before expiry count as LEAPS (the
+# leaps and leaps-sum views only; no tax figure). Default 9.
+# leaps_months                    = 9
+
+# The zone crypto UTC times are dated in (an IANA name). No default: required
+# with a crypto account.
+# local_timezone                  = "America/New_York"
+
+# true: the strict s.54 reading — a loss on buying back a written option is
+# superficial when identical options are bought within 30 days and still held.
+# option_buyback_loss_superficial = false
+
+# Contracts written before this year keep close timing (default: `year`). SET
+# ONCE to the first year you FILE under grant timing and keep it UNCHANGED in
+# every later year's project (do not bump it with `year`).
+option_grant_timing_since         = 2025
+
+# "grant": a written option's premium is a gain in the year WRITTEN (ITA
+# s.49(1)); "close": it is netted at the closing transaction instead. See
+# `taxjson option-boundary`.
+# option_premium_timing           = "grant"
+
+# Last year's close-year record (`taxjson handoff`). No default.
+# prior_year_record               = "../2024/filed/2024.json"
+
+# ON | BC | AB: the province `taxjson estimate` taxes at. No default.
+# province                        = "ON"
+
+# Currencies you hold besides base_currency (their FX rates are fetched).
+# Default ["USD"].
+source_currencies                 = ["USD"]
+
+# settle | trade. Default settle: CRA dates a sale by settlement.
+tax_date                          = "settle"
+
+# The tax year the pipeline reports on (required).
+year                              = 2025
+
+# One [accounts.NAME] table per folder under inputs/ (the folder name is the
+# account name). Every key, with its default:
+# [accounts.NAME]
+# questrade: the account number `taxjson fetch` downloads.
+# account                  = "12345678"
+
+# The `taxjson fetch` source (taxjson-fetch plugin): questrade | ibkr_flex.
+# brokerage                = "questrade"
+
+# true: every broker account in these statements is yours, taxable together.
+# combined_broker_accounts = false
+
+# true: a Coinbase / Kraken account (crypto prices are filled in by the run).
+# crypto                   = false
+
+# Webull: the exercise/assignment charge on the stock leg. No default: without
+# it no exercise/assignment is inferred (each candidate is named).
+# exercise_fee             = 1.00
+
+# Positions files `taxjson sanity` reconciles against. Default: none.
+# holdings                 = ["~/broker/NAME_holdings.toml"]
+
+# The plan when the name doesn't say (default: from the name): tfsa | rrsp |
+# rrif | lira | lif | lrif | fhsa | resp | rdsp | prpp.
+# plan                     = "rrsp"
+
+# ibkr_flex: the Flex query id `taxjson fetch` runs.
+# query_id                 = "123456"
+
+# true: keep TRANSFER rows (contributions/withdrawals).
+# transfers                = false
+
+# REQUIRED: taxable | sheltered.
+# type                     = "taxable"
+
+# RBC: the day next year by which year-end book-cost rows are posted. Default
+# 06-30.
+# year_end_posting         = "06-30"
+
+[accounts.margin]
+# REQUIRED: taxable | sheltered.
+type = "taxable"
+
+[accounts.tfsa]
+# true: keep TRANSFER rows (contributions/withdrawals).
+transfers = true
+
+# REQUIRED: taxable | sheltered.
+type      = "sheltered"
+
+[accounts.rrsp]
+# true: keep TRANSFER rows (contributions/withdrawals).
+transfers = true
+
+# REQUIRED: taxable | sheltered.
+type      = "sheltered"
+
+[accounts.crypto]
+# true: a Coinbase / Kraken account (crypto prices are filled in by the run).
+crypto = true
+
+# REQUIRED: taxable | sheltered.
+type   = "taxable"
+
+# More accounts: add an [accounts.NAME] table (keys above) and an inputs/NAME
+# folder for it.
+
+# Estimate inputs (`taxjson estimate`, and the instalments current-year
+# basis), used when the command-line flags aren't given:
+# [estimate]
+# Minimum tax carryover by year of origin (T691). No default.
+# amt_carryover    = { 2024 = 1200.50 }
+
+# Line 22100 (50% under AMT).
+# carrying_charges = 0
+
+# RRSP 20800, FHSA, RPP ... (in full under AMT).
+# deductions       = 0
+
+# Income besides these books (employment, interest ...).
+# other_income     = 0
+
+# Net capital losses of earlier years applied, in FULL dollars.
+# other_losses     = 0
+
+# Losses actually applied on filed returns (`taxjson carryover`), by year:
+# [carryover]
+# Net capital losses applied on each filed return. No default.
+# claimed = { 2024 = 4000.00 }
+
+# Non-cash fund distributions (a reinvested capital-gains distribution, a late
+# return-of-capital factor): `taxjson run` books each as a cost adjustment on
+# the shares held on the record date. One table each:
+# [[distributions]]
+# Per share, in the base currency; negative = return of capital.
+# per_share   = 0.25
+
+# The record date.
+# record_date = 2025-12-29
+
+# The books' symbol.
+# symbol      = "XYZQ.TO"
+
+# T5 box 18 capital-gains dividends the books carry as dividends (`taxjson
+# divs-sum`, the estimate). One table per payment or year:
+# [[capital_gains_dividends]]
+# Default: the taxable accounts.
+# account = "margin"
+
+# "all" or the box 18 amount, e.g. 1.25.
+# amount  = "all"
+
+# One payment's date (instead of year).
+# date    = 2025-06-16
+
+# The books' symbol.
+# symbol  = "ABCX.TO"
+
+# Every dividend of that tax year (instead of date).
+# year    = 2025
+
+# Tax instalments (`taxjson instalments`, and a summary inside `taxjson
+# estimate`). Uncomment and fill in YOUR figures.
+# [instalments]
+# current_year | prior_year | cra_reminder.
+# basis                = "current_year"
+
+# Instalments paid. No default.
+# paid                 = [
+#   { date = "2025-03-16", amount = 15000 },
+#   { date = "2025-05-20", amount = 12000, note = "refund transferred" },
+# ]
+
+# CRA's overdue-tax rate. Default: CRA's published rates.
+# prescribed_rate      = 0.07
+
+# Or a dated schedule: CRA resets the rate quarterly.
+# prescribed_rates     = [
+#   { from = "2025-01-01", rate = 0.08 },
+#   { from = "2025-07-01", rate = 0.07 },
+# ]
+
+# Last year's net tax owing (no default), both years as CRA's instalment chart
+# defines it: lines 42000 + 42200 + 42800 (+ 43200) minus 43700 and the
+# refundable credits — NOT line 48500. Supply BOTH even on current_year: a 0
+# reads as "I owed nothing".
+# prior_year_net_tax   = 55000
+
+# The year before's net tax owing. No default.
+# second_prior_net_tax = 41000
+
+# Tax withheld at source this year.
+# withheld             = 0

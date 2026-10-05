@@ -243,11 +243,8 @@ To check it on every run, name the file in `taxjson.toml`:
 
 ```toml
 [accounts.margin]
-# Positions files `taxjson sanity` reconciles against. Default: none.
-holdings = ["margin_positions.toml"]
-
-# REQUIRED: taxable | sheltered.
 type     = "taxable"
+holdings = ["margin_positions.toml"]
 ```
 
 `tjs format --write` puts an edited `taxjson.toml` back into the layout
