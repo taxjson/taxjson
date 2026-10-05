@@ -26,6 +26,7 @@ from taxjson.lib.core import (
     parse_option_right,
     parse_option_strike,
 )
+from _radar_text import radar_rows
 from tax_rules import rule
 
 CALL = 'AAPL250620C00150000.US'
@@ -389,7 +390,7 @@ class TestRadarAndPlanningTools(unittest.TestCase):
             _row("BUYSELL", "2026-06-10", "ZZZ270115C00010000.TO", 1, 300.0),
         ]
         out = self._radar(txs, "2026-06-15")
-        line = next(l for l in out.splitlines() if l.startswith("ZZZ.TO"))
+        line = next(l for l in radar_rows(out) if l.startswith("ZZZ.TO"))
         self.assertIn("VIOLATION", line)
         self.assertIn("long call contract", line)
 
@@ -402,7 +403,7 @@ class TestRadarAndPlanningTools(unittest.TestCase):
             _row("BUYSELL", "2026-06-10", "ZZZ.TO", 100, 1000.0),
         ]
         out = self._radar(txs, "2026-06-15")
-        line = next(l for l in out.splitlines() if l.startswith(opt))
+        line = next(l for l in radar_rows(out) if l.startswith(opt))
         self.assertNotIn("VIOLATION", line)
 
     def test_replacement_rows_filter(self):

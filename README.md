@@ -1778,18 +1778,36 @@ taxjson harvest --json          # machine-readable
 ```
 
 ```
-HARVEST — unrealized open positions, CAD, basis: wash-adjusted  (all amounts CAD; PRICE marks its source: ^ IBKR, + yfinance, * cache; losses first; ADVISORY from the wash radar)
+HARVEST — unrealized open positions, CAD, basis: wash-adjusted
+Losses first. PRICE marks its source: ^ IBKR, + yfinance, * cache. ADVISORY is the wash radar's.
 
-ACCOUNT   SYMBOL   TX_QTY   SH_QTY   COST/SH   PRICE      EXIT@        UNREALIZED   PCT      VERDICT   TX_ADD               SH_ADD               ADVISORY
-                                     CAD       CAD        native       CAD
---------------------------------------------------------------------------------------------------------------------------------------------
-margin    AAA.TO   100      25       12.4000   10.8500+   12.6480CAD   -155.00      -12.5%   LOSS      2026-07-08(-7d)      2026-07-02(-13d)     LOCKED(clears:2026-08-09,+25d)
-margin    BBB.US   50       -        109.1000  130.4240^  -            1,066.20     19.5%    GAIN      2026-03-02(-135d)    -                    -
---------------------------------------------------------------------------------------------------------------------------------------------
-TOTAL     -        -        -        -         -          911.20       13.6%    -         -                    -                    -
+ACCOUNT  SYMBOL  TX_QTY  SH_QTY      PRICE  UNREALIZED     PCT  VERDICT
+                                       CAD         CAD
+-----------------------------------------------------------------------
+margin   AAA.TO     100      25   10.8500+     -155.00  -12.5%  LOSS
+margin   BBB.US       5       -  130.4240^      106.62   19.5%  GAIN
+-----------------------------------------------------------------------
+TOTAL    -            -       -          -      -48.38   -2.7%  -
+
+ACCOUNT  SYMBOL  ADVISORY                        TX_ADD             SH_ADD
+------------------------------------------------------------------------------------
+margin   AAA.TO  LOCKED(clears:2026-08-09,+25d)  2026-07-08(-7d)    2026-07-02(-13d)
+margin   BBB.US  -                               2026-03-02(-135d)  -
+
+ACCOUNT  SYMBOL   COST/SH       EXIT@
+                      CAD      native
+-------------------------------------
+margin   AAA.TO   12.4000  12.6480CAD
+margin   BBB.US  109.1000           -
 
 HARVESTABLE LOSSES (CAD, cumulative): now 0.00 | <=7d 0.00 | <=14d 0.00 | <=30d 155.00
 ```
+
+A table wider than the house width (100 columns) is split, as above, into
+tables that fit, each led by ACCOUNT and SYMBOL: the position and its
+verdict, the radar's advisory with the last buys, the cost with the
+break-even price. With `TAXJSON_WIDTH=0` it is one table with every
+column.
 
 Everything is base currency — `PRICE` is the native quote already
 FX-converted, with its source marked (`^` IBKR live, `+` yfinance,

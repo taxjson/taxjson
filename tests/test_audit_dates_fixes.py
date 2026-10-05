@@ -23,6 +23,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from _radar_text import radar_rows
 from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -236,7 +238,7 @@ class TestRadarSettleBasis(unittest.TestCase):
                  "--taxable", str(f), "--date", "2025-04-10"],
                 cwd=REPO_ROOT, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        line = next((l for l in r.stdout.splitlines()
+        line = next((l for l in radar_rows(r.stdout)
                      if l.startswith("SG.TO")), "")
         self.assertIn("VIOLATION", line,
                       f"settle-basis window must flag the rebuy:\n{r.stdout}")
