@@ -69,6 +69,9 @@ class TestNoPyPIInstallHints(unittest.TestCase):
     def test_fetch_install_hint_names_the_installer_and_the_checkout(self):
         from taxjson.lib.fetchers import INSTALL_HINT
         self.assertNotRegex(INSTALL_HINT, _PYPI_INSTALL)
+        # The installer installs taxjson-fetch by default; an install
+        # that opted out takes it back with --with-fetch.
+        self.assertIn("installs taxjson-fetch by default", INSTALL_HINT)
         self.assertIn("--with-fetch", INSTALL_HINT)
         self.assertIn("https://taxjson.com/install.sh", INSTALL_HINT)
         self.assertIn("pip install -e packages/taxjson-fetch", INSTALL_HINT)
@@ -105,7 +108,9 @@ class TestNoPyPIInstallHints(unittest.TestCase):
             text = " ".join((REPO_ROOT / rel).read_text(
                 encoding="utf-8").split())
             self.assertIn("not published on PyPI", text, rel)
-            self.assertIn("--with-fetch", text, rel)
+            # The installer's default includes the plugin; the docs
+            # name the opt-out.
+            self.assertIn("--without-fetch", text, rel)
 
 
 # ----------------------------------------------------------------- M1

@@ -77,6 +77,6 @@ STABLE="$(sed -nE 's/.*"stable"[[:space:]]*:[[:space:]]*"(v[^"]+)".*/\1/p' chann
 echo "released $TAG — it is now 'latest' (installs on --channel latest get it on their next run)."
 echo "stable is still ${STABLE:-unset}; when $TAG has held up: scripts/promote.sh $TAG beta / scripts/promote.sh $TAG"
 # The tag covers both distributions (the installer installs the plugin
-# from the same checkout with --with-fetch). To publish wheels as well:
+# from the same checkout by default). To publish wheels as well:
 #   python -m build && python -m build packages/taxjson-fetch
 #   twine upload dist/taxjson-$V* packages/taxjson-fetch/dist/taxjson_fetch-$V*

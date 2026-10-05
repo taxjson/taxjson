@@ -110,15 +110,15 @@ the parser id on stdout and the same line on stderr.
 ### Auto-fetch (skip the manual export)
 
 Questrade and Interactive Brokers accounts can pull activity directly
-through the optional **taxjson-fetch** plugin. The core taxjson package
-holds no broker API client and never reads a broker credential; the
-plugin is a separate distribution in this repository
-(`packages/taxjson-fetch`) that plugs into `taxjson fetch`:
+through the **taxjson-fetch** plugin. The core taxjson package holds
+no broker API client and never reads a broker credential; the plugin is
+a separate distribution in this repository (`packages/taxjson-fetch`)
+that plugs into `taxjson fetch`. The one-line installer installs it by
+default, into the same environment (`--without-fetch` leaves it out):
 
 ```bash
-bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --with-fetch   # re-run the installer with the plugin
-pip install -e packages/taxjson-fetch        # or, from a checkout: into the same environment as taxjson
 taxjson fetch --list                         # the installed fetchers
+pip install -e packages/taxjson-fetch        # from a checkout: into the same environment as taxjson
 ```
 
 taxjson is not published on PyPI yet, so a `taxjson` or `taxjson-fetch`
@@ -365,7 +365,7 @@ One line, no clone — installs the `stable` release into `~/.local/share/taxjso
 
 ```bash
 bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
-bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --with-fetch      # plus the Questrade / IBKR auto-fetch plugin
+bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --without-fetch   # without the Questrade / IBKR auto-fetch plugin
 bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --channel beta    # another channel
 ```
 
@@ -401,7 +401,7 @@ pip install -e ".[all]"         # everything (the core's extras)
 pip install -e packages/taxjson-fetch   # the separate broker-fetch plugin: `taxjson fetch` for Questrade / IBKR Flex
 ```
 
-The curl installer installs the core only; `--with-fetch` adds the fetch plugin (an install that already has it keeps it on upgrade).
+The curl installer installs the core and, by default, the taxjson-fetch plugin (still its own package, with its own dependencies, loaded through an entry point). `--without-fetch` (or `TAXJSON_WITH_FETCH=0`) leaves the plugin out and removes it from an install that has it; the choice is remembered in `~/.config/taxjson/fetch`, so re-running the installer (or `taxjson deploy`) keeps it out, and `--with-fetch` (or `TAXJSON_WITH_FETCH=1`) puts it back.
 
 Or run `scripts/dev-setup.sh` for a one-shot venv with the `[fx,dev]` extras and the taxjson-fetch plugin, then `source setup.sh` to activate it.
 
@@ -698,7 +698,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson init --country canada\|usa [PATH] [--year YYYY]` | Scaffold a new project directory (config, currencies, and account folders per jurisdiction; `--force` to overwrite). The generated `taxjson.toml` lists every key the country's projects read, documented: the scaffold's values active, every other key commented out with its default (or an example where it has none), each key under its description, alphabetically within each table with one `=` column per table (see "Project layout and configuration"). `local_timezone` is set to this machine's IANA zone when it can be read (else left commented: the default zone). |
 | `taxjson format [--write [--no-backup] \| --check]` | Lay an existing `taxjson.toml` out like the template `init` writes (see "Project layout and configuration"): every key of the project's country in its alphabetical place in its table — the ones you set active with your values, the rest commented with their default — each under its description, one `=` column per table, accounts in your order, `[[...]]` entries in order, values in canonical TOML (strings quoted, dates as dates). Nothing is lost: keys the template does not know stay in their table under a "Not in the template" line, alphabetically (and are named on the console); a trailing comment moves onto its own line just above its key or table line; a comment block stays above the key or table that follows it and moves with it (a block holding a commented-out key of your own, `# province = "BC"`, goes to that key; a block a blank line separates from the next table stays at the end of its table); a multi-line value with comments inside is kept as written; anything it cannot place goes to a "Your notes (kept by tjs format)" block at the end. Comment lines that are the template's own text (or an earlier `init`'s) are regenerated. The parsed configuration before and after must be identical, or nothing is written. Default: a dry run printing a unified diff; `--write` writes it (atomically, the file's mode kept, the old file saved as `taxjson.toml.bak`, or the next free `.bakN`; `--no-backup` skips that); `--check` exits 1 when the file is not formatted (CI). Formatting a formatted file changes nothing. Like every command it refuses a config the config check refuses, and a project with old per-purpose files (`taxjson migrate` first). |
 | `taxjson migrate [--dry-run]` | Move an older project's per-purpose files into the two that hold them now: `yf_ticker.map`, `crypto_ticker.map`, `ticker_extraction_overrides.txt` and `t1135.map` become `QUOTE` / `CRYPTO` / `EXTRACT` / `T1135` lines appended to `ticker.map`; `amt_carryover.txt`, `claimed_losses.txt`, `capital_gains_dividends.map` and `distributions.map` become `[estimate] amt_carryover`, `[carryover] claimed`, `[[capital_gains_dividends]]` and `[[distributions]]` in `taxjson.toml`. Each file is read with its old rules (what it meant before is what the new lines mean); the lines are appended (a key under an existing `[estimate]` / `[carryover]` header goes right below it) — your content and comments are never rewritten — and each old file is renamed `<name>.migrated`, never deleted. It refuses, writing nothing, when an old line cannot be read or ticker.map / taxjson.toml already holds a conflicting entry (an identical one is skipped). `--dry-run` prints the lines it would append and the moves. While any of those old files is in the project, every other command stops (exit 2) naming it and this command. A leftover `tv_exchange.map` (the removed TradingView export) is not converted — it is only renamed `tv_exchange.map.migrated` — and stops nothing meanwhile (`taxjson run` notes it once). |
-| `taxjson fetch [ACCOUNT ...]` | Download broker activity straight into `inputs/` through an installed fetcher plugin (`--list` names them; none installed: one install line, exit 2) — the taxjson-fetch plugin (the installer's `--with-fetch`, or `pip install -e packages/taxjson-fetch` from a checkout; not on PyPI) covers the Questrade REST API and IBKR Flex Web Service, configured on the account (`brokerage` + `account`/`query_id` under `[accounts.<name>]`). Writes files the existing parsers already read; hand-exported CSVs keep working side by side. Questrade defaults to the whole tax-year window plus the superficial-loss margins (Dec 1 of the prior year through Jan 31 of the next, capped at today; `--year N` backfills a past year, `--from`/`--days` override the window); IBKR re-covers the Flex query's configured period. `--trim-overlap` drops rows your manual exports already cover, `--dry-run` previews. Credentials: `--refresh-token` (Questrade) / `--flex-token` (IBKR); `--positions` ALSO snapshots live Questrade holdings to `work/<account>_live_holdings.toml` (for `taxjson sanity`). Chain it: `taxjson fetch run`. |
+| `taxjson fetch [ACCOUNT ...]` | Download broker activity straight into `inputs/` through an installed fetcher plugin (`--list` names them; none installed: one install line, exit 2) — the taxjson-fetch plugin (the installer installs it by default — `--without-fetch` leaves it out; from a checkout `pip install -e packages/taxjson-fetch`; not on PyPI) covers the Questrade REST API and IBKR Flex Web Service, configured on the account (`brokerage` + `account`/`query_id` under `[accounts.<name>]`). Writes files the existing parsers already read; hand-exported CSVs keep working side by side. Questrade defaults to the whole tax-year window plus the superficial-loss margins (Dec 1 of the prior year through Jan 31 of the next, capped at today; `--year N` backfills a past year, `--from`/`--days` override the window); IBKR re-covers the Flex query's configured period. `--trim-overlap` drops rows your manual exports already cover, `--dry-run` previews. Credentials: `--refresh-token` (Questrade) / `--flex-token` (IBKR); `--positions` ALSO snapshots live Questrade holdings to `work/<account>_live_holdings.toml` (for `taxjson sanity`). Chain it: `taxjson fetch run`. |
 | `taxjson elect` | Review, redo, or non-interactively set (`--set ID=ELECTION`) a corporate-action tax election. |
 
 #### Build the books

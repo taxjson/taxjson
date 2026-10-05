@@ -2,17 +2,21 @@
 # taxjson one-line installer.
 #
 #   bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
-#   bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --with-fetch
+#   bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --without-fetch
 #   bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --channel beta
 #
 # What it does: checks git and Python 3.9+, clones the release on your
 # CHANNEL into ~/.local/share/taxjson — or moves an existing install to
 # it — builds a private virtualenv there with the [fx] extra, and links
-# the `taxjson` command (and its short name `tjs`) into ~/.local/bin. The
-# core only: broker auto-fetch (`taxjson fetch` for Questrade / IBKR
-# Flex) is the separate taxjson-fetch package, installed into the same
-# environment with --with-fetch (or TAXJSON_WITH_FETCH=1). Re-running is
-# safe and is how you upgrade. Nothing touches your tax project folders.
+# the `taxjson` command (and its short name `tjs`) into ~/.local/bin.
+# Broker auto-fetch (`taxjson fetch` for Questrade / IBKR Flex) is the
+# separate taxjson-fetch package from the same release; it is installed
+# into the same environment by default. --without-fetch (or
+# TAXJSON_WITH_FETCH=0) leaves it out, and removes it from an install
+# that has it. The opt-out is remembered in ~/.config/taxjson/fetch, so
+# an upgrade keeps it out; --with-fetch (or TAXJSON_WITH_FETCH=1) puts
+# it back. Re-running is safe and is how you upgrade. Nothing touches
+# your tax project folders.
 #
 # Channels (docs/releasing.md):
 #   stable   the default: the release channels.json on main names
@@ -31,7 +35,8 @@
 #   TAXJSON_CHANNEL  stable | beta | latest | dev | vX.Y.Z  (as --channel)
 #   TAXJSON_EXTRAS   pip extras to install   (default fx; "" for none)
 #   TAXJSON_REPO     git remote              (default the GitHub repo)
-#   TAXJSON_WITH_FETCH  1 = also install taxjson-fetch (same as --with-fetch)
+#   TAXJSON_WITH_FETCH  0 = leave taxjson-fetch out (as --without-fetch);
+#                       1 = install it (the default; as --with-fetch)
 #   TAXJSON_DRY_RUN  1 = say which release the channel resolves to, change nothing
 set -euo pipefail
 
@@ -39,15 +44,19 @@ DIR="${TAXJSON_DIR:-$HOME/.local/share/taxjson}"
 BIN="${TAXJSON_BIN:-$HOME/.local/bin}"
 EXTRAS="${TAXJSON_EXTRAS-fx}"
 REPO="${TAXJSON_REPO:-https://github.com/taxjson/taxjson.git}"
-WITH_FETCH="${TAXJSON_WITH_FETCH:-0}"
 CHANNEL_FILE="$HOME/.config/taxjson/channel"
-USAGE="usage: install.sh [--channel stable|beta|latest|dev|vX.Y.Z] [--with-fetch]
-  --channel   which release to install (default: the remembered one, else stable)
-  --with-fetch  also install taxjson-fetch (Questrade / IBKR Flex auto-fetch)"
+FETCH_FILE="$HOME/.config/taxjson/fetch"
+USAGE="usage: install.sh [--channel stable|beta|latest|dev|vX.Y.Z] [--without-fetch]
+  --channel        which release to install (default: the remembered one, else stable)
+  --without-fetch  leave out taxjson-fetch, the Questrade / IBKR Flex auto-fetch
+                   plugin (installed by default; remembered for upgrades)
+  --with-fetch     install it again after a --without-fetch"
 CHANNEL_ARG=""
+FETCH_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --with-fetch) WITH_FETCH=1 ;;
+    --with-fetch) FETCH_ARG=1 ;;
+    --without-fetch) FETCH_ARG=0 ;;
     --channel) [ $# -ge 2 ] || { printf '%s\n' "--channel needs a value" "$USAGE" >&2; exit 2; }
                CHANNEL_ARG="$2"; shift ;;
     --channel=*) CHANNEL_ARG="${1#--channel=}" ;;
@@ -70,6 +79,18 @@ case "$CHANNEL" in
   *) [[ "$CHANNEL" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
        || { printf 'unknown channel %s — use stable, beta, latest, dev, or a release like v0.16.0\n' "'$CHANNEL'" >&2; exit 2; } ;;
 esac
+# taxjson-fetch: --with(out)-fetch, else TAXJSON_WITH_FETCH, else the
+# opt-out this machine remembered, else installed.
+FETCH_ASKED="${FETCH_ARG:-${TAXJSON_WITH_FETCH:-}}"
+case "$FETCH_ASKED" in
+  ""|0|1) ;;
+  *) printf 'TAXJSON_WITH_FETCH=%s — use 1 (install taxjson-fetch, the default) or 0 (leave it out)\n' "$FETCH_ASKED" >&2; exit 2 ;;
+esac
+WITH_FETCH="$FETCH_ASKED"
+if [ -z "$WITH_FETCH" ] && [ -f "$FETCH_FILE" ] && [ "$(tr -d '[:space:]' < "$FETCH_FILE")" = off ]; then
+  WITH_FETCH=0
+fi
+WITH_FETCH="${WITH_FETCH:-1}"
 OS="$(uname -s)"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
@@ -180,6 +201,14 @@ if [ "${TAXJSON_REMEMBER_CHANNEL:-1}" != 0 ]; then
   mkdir -p "$(dirname "$CHANNEL_FILE")"
   printf '%s\n' "$CHANNEL" > "$CHANNEL_FILE"
 fi
+# The fetch opt-out, remembered the same way (only when one was asked
+# for: a plain re-run, or `taxjson deploy`, keeps what is there).
+if [ "$FETCH_ASKED" = 0 ]; then
+  mkdir -p "$(dirname "$FETCH_FILE")"
+  printf 'off\n' > "$FETCH_FILE"
+elif [ "$FETCH_ASKED" = 1 ]; then
+  rm -f "$FETCH_FILE"
+fi
 
 say "3/4 Python environment"
 [ -x "$DIR/venv/bin/python" ] || "$PY" -m venv "$DIR/venv"
@@ -192,15 +221,19 @@ if [ -n "$EXTRAS" ]; then
 else
   "$DIR/venv/bin/python" -m pip install --quiet -e "$DIR"
 fi
-# An install that already has the fetcher keeps it on upgrade.
-if [ "$WITH_FETCH" != 1 ] && "$DIR/venv/bin/python" -m pip show --quiet taxjson-fetch >/dev/null 2>&1; then
-  WITH_FETCH=1
-fi
-if [ "$WITH_FETCH" = 1 ] && [ ! -d "$DIR/packages/taxjson-fetch" ]; then
+# The broker fetcher (Questrade REST API, IBKR Flex) is its own package
+# (its own dependencies, an entry-point plugin) in the same repository
+# and release tag; the core never holds broker clients.
+if [ ! -d "$DIR/packages/taxjson-fetch" ]; then
   echo "   NOTE: this release predates the taxjson-fetch split — its \`taxjson fetch\` is built in."
-elif [ "$WITH_FETCH" = 1 ]; then
-  # The broker fetcher (Questrade REST API, IBKR Flex) lives in the same
-  # repository and release tag; the core never holds broker clients.
+elif [ "$WITH_FETCH" = 0 ]; then
+  if "$DIR/venv/bin/python" -m pip show --quiet taxjson-fetch >/dev/null 2>&1; then
+    "$DIR/venv/bin/python" -m pip uninstall --quiet --yes taxjson-fetch
+    echo "   taxjson-fetch removed (--without-fetch; --with-fetch puts it back)"
+  else
+    echo "   taxjson-fetch left out (--without-fetch; --with-fetch adds it)"
+  fi
+else
   "$DIR/venv/bin/python" -m pip install --quiet -e "$DIR/packages/taxjson-fetch"
   echo "   taxjson-fetch installed: $("$DIR/venv/bin/taxjson" fetch --list | head -1)"
 fi
@@ -253,8 +286,8 @@ cat <<DONE
    Upgrade later by re-running this installer: it follows the $CHANNEL channel
    (--channel stable|beta|latest|dev|vX.Y.Z to switch).
 DONE
-if [ "$WITH_FETCH" != 1 ]; then
-  echo "   Questrade / IBKR auto-fetch: re-run with --with-fetch (installs taxjson-fetch)."
+if [ "$WITH_FETCH" = 0 ] && [ -d "$DIR/packages/taxjson-fetch" ]; then
+  echo "   Questrade / IBKR auto-fetch is left out (--without-fetch, remembered); --with-fetch adds it."
 fi
 }
 trap 'printf "\n\033[31m✗ install did not complete — re-running this installer is safe and resumes.\033[0m\n" >&2' ERR

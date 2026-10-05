@@ -17,7 +17,7 @@ the open steps one at a time; `--quick` skips the slow detectors.
 ## 1. Freeze the inputs
 
 - [ ] **Full-year broker activity plus January of the next year** in
-      every `inputs/<account>/` folder — `taxjson fetch` (the optional
+      every `inputs/<account>/` folder — `taxjson fetch` (the
       taxjson-fetch plugin) where an account is configured for it,
       exports for the rest. December trades settle
       in January and option closes after year end change the year's

@@ -54,10 +54,13 @@ ENTRY_POINT_GROUP = "taxjson.fetchers"
 # and the names there are not ours (security review H1).
 from taxjson.lib.install_hint import INSTALLER as _INSTALLER  # noqa: E402
 from taxjson.lib.install_hint import NOT_ON_PYPI as _NOT_ON_PYPI  # noqa: E402
-INSTALL_HINT = (f"install it by re-running the installer with --with-fetch "
-                f"(`{_INSTALLER} _ --with-fetch`) or, from a checkout, "
-                f"`pip install -e packages/taxjson-fetch` into taxjson's "
-                f"own environment — {_NOT_ON_PYPI}")
+# The installer installs taxjson-fetch by default; one that opted out
+# (--without-fetch, remembered) takes it back with --with-fetch.
+INSTALL_HINT = (f"install it by re-running the installer, which installs "
+                f"taxjson-fetch by default (`{_INSTALLER}`; add "
+                f"`_ --with-fetch` if it was installed --without-fetch), "
+                f"or, from a checkout, `pip install -e packages/taxjson-fetch` "
+                f"into taxjson's own environment — {_NOT_ON_PYPI}")
 # Keys the core always accepts under [accounts.<name>] for a fetcher
 # (the ones taxjson-fetch reads), installed or not: a project that used
 # `taxjson fetch` keeps validating when the plugin is absent.
