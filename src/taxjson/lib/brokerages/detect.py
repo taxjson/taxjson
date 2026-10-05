@@ -13,14 +13,18 @@ Order (`detect`):
      questrade   questrade.missing_columns (all _QT_COLUMNS, first row)
      webull      WebullBrokerage.label_hits (every required label)
      rbc_direct  rbc_direct.header_missing (Date, Activity, ... and
-                 Value/Amount), or the "Holdings Export" preamble the
-                 parser refuses with its own message
+                 Value/Amount)
      coinbase    coinbase.resolve_header (every required field through
                  the synonym table; preamble lines above it allowed)
      kraken      kraken.header_kind (the trades or ledgers columns)
    The signatures are mutually exclusive (tests/test_fix_detect.py
    checks every sample against every detector); a file matching two is
    refused, naming both — never a silent pick.
+   A positions-ONLY report (an RBC "Holdings Export": what is held on a
+   date, not activity — lib/positions_reports) matches no trade
+   detector: `detect` returns it with `positions` set and no parser,
+   and `taxjson run` skips it with a note (`taxjson sanity` and
+   `taxjson opening` read it).
 3. The file name, only when no content signature matched: a `cb_` /
    `kr_` / `generic_` prefix, or the word coinbase / kraken in the name.
    When the content matched and the name suggests another broker, the
@@ -104,14 +108,24 @@ class Detection:
     note: str = ''
     hint: str = ''
     error: str = ''
+    # A positions-only report (lib/positions_reports kind id, e.g.
+    # 'rbc_holdings') and its as-of date: never parsed as activity.
+    positions: str = ''
+    as_of: str = ''
 
     @property
     def display(self) -> str:
+        if self.positions:
+            return 'positions report'
         return DISPLAY_NAMES.get(self.broker or '', self.broker or '?')
 
     def line(self, shown: Optional[str] = None) -> str:
         """`<file> → <Broker> (<reason>)` — the run's per-file line."""
         where = shown if shown is not None else str(self.path)
+        if self.positions:
+            return (f"{where} → positions report ({self.reason}) — not "
+                    f"activity; skipped (read it with `taxjson sanity` "
+                    f"or `taxjson opening`)")
         return f"{where} → {self.display} ({self.reason})"
 
 
@@ -227,8 +241,7 @@ def _webull(rows, head) -> _Result:
 
 
 def _rbc(rows, head) -> _Result:
-    from taxjson.lib.brokerages.rbc_direct import (header_missing,
-                                                   is_holdings_export)
+    from taxjson.lib.brokerages.rbc_direct import header_missing
     near = None
     for cells in head:
         missing = header_missing(cells)
@@ -238,10 +251,8 @@ def _rbc(rows, head) -> _Result:
             return f"content: activity header {_cols(cells, 4)}", None
         near = near or (f"an RBC activity header lacking "
                         f"{', '.join(missing)}")
-    first = _first_nonempty(head)
-    if first and is_holdings_export(" ".join(c.strip() for c in first
-                                             if c.strip())):
-        return 'content: "Holdings Export" preamble', None
+    # A "Holdings Export" (positions, not activity) is NOT an RBC
+    # activity match: detect() routes it as a positions report.
     return None, near
 
 
@@ -356,7 +367,9 @@ _MATCH_CACHE: Dict[tuple, tuple] = {}
 
 
 def _file_matches(path: Path):
-    """(hits, near misses, decoding error) of one file's content."""
+    """(hits, near misses, decoding error, positions) of one file's
+    content — positions is (kind, as_of) for a positions-only report
+    (lib/positions_reports.positions_only_text), else None."""
     try:
         st = path.stat()
         key = (str(path.resolve()), st.st_mtime_ns, st.st_size)
@@ -367,14 +380,17 @@ def _file_matches(path: Path):
     hits: List[Tuple[str, str]] = []
     near: List[Tuple[str, str]] = []
     error = ''
+    positions = None
     try:
-        hits, near = content_matches(
-            decode_broker_text(path.read_bytes(), shown_name(path)))
+        text = decode_broker_text(path.read_bytes(), shown_name(path))
+        hits, near = content_matches(text)
+        from taxjson.lib.positions_reports import positions_only_text
+        positions = positions_only_text(text)
     except BrokerageParseError as e:
         error = str(e)
     except OSError as e:
         error = f"{shown_name(path)}: {e.strerror or e}"
-    out = (hits, near, error)
+    out = (hits, near, error, positions)
     if key is not None and not error:
         if len(_MATCH_CACHE) > 256:
             _MATCH_CACHE.clear()
@@ -387,7 +403,7 @@ def detect(path: Path) -> Detection:
     Raises AmbiguousBroker when the content matches two exports."""
     path = Path(path)
     mapping = generic_mapping(path)
-    hits, near, error = _file_matches(path)
+    hits, near, error, positions = _file_matches(path)
     if mapping is not None:
         note = ''
         if len(hits) == 1:
@@ -399,6 +415,14 @@ def detect(path: Path) -> Detection:
                          f"mapping {mapping.name}", note=note, error=error)
     if len(hits) > 1:
         raise AmbiguousBroker(ambiguity_message(path, hits))
+    if positions and not hits:
+        from taxjson.lib.positions_reports import kind_label
+        kind, as_of = positions
+        return Detection(
+            path, None, 'positions',
+            f"{kind_label(kind)}"
+            + (f", as of {as_of}" if as_of else ""),
+            positions=kind, as_of=as_of)
     named = name_hint(path.name)
     if hits:
         broker, reason = hits[0]
