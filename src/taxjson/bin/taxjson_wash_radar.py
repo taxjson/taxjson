@@ -38,7 +38,9 @@ from taxjson.lib.corporate_timeline import (SplitTimeline, radar_priority,
                                             split_seen)
 from taxjson.lib.price_chain import is_crypto_symbol
 from taxjson.lib.ticker_map import is_option_ticker
-from taxjson.lib.wash_scope import scope_note
+from taxjson.lib import out as _out
+from taxjson.lib.wash_scope import (advisory_lines, scope_lines,
+                                    scope_note)
 
 # UTC-noon epoch helpers: shared home in lib/dates (the DST rationale
 # lives there). Names re-exported for external callers.
@@ -51,6 +53,8 @@ from taxjson.lib.dates import (  # noqa: E402,F401
 # fixes never reached it — the repo's highest fix-ratio file for exactly
 # that reason. Alias kept for the sort call below and external callers.
 get_tx_priority = radar_priority
+
+_PROG = "taxjson-wash-radar"
 
 # Advisory sections, most-actionable first. Each row's category is the keyword
 # before the first ':' in its advisory (e.g. "LOCKED: ..." → "LOCKED"). Rows
@@ -105,15 +109,15 @@ class _EngineLosses:
                 from taxjson.lib.json_input import read_work_doc
                 doc = read_work_doc(p)
             except (OSError, ValueError) as e:
-                sys.exit(f"taxjson-wash-radar: --gains {p}: {e}")
+                _out.fail(f"--gains {p}: {e}", prog=_PROG)
             summ = doc.get('summary') or {}
             year = str(summ.get('year') or '').strip()
             if not year:
                 # A gains file with no year covers nothing we can
                 # bound — refuse rather than guess.
-                sys.exit(f"taxjson-wash-radar: --gains {p}: no "
-                         f"summary.year — pass the pipeline's "
-                         f"work/<acct>_gains*.json files")
+                _out.fail(f"--gains {p}: no summary.year", prog=_PROG,
+                         details=["Pass the pipeline's "
+                                  "work/<acct>_gains*.json files."])
             basis = str(summ.get('tax_date_basis') or 'settle').lower()
             buyback_wash = bool(summ.get('option_buyback_loss_superficial'))
             self.buyback_wash = self.buyback_wash or buyback_wash
@@ -196,10 +200,11 @@ def _us_engine_losses(taxable_rows, sheltered_rows):
                 tax, sheltered_transactions=shl, detect_wash_sales=True,
                 per_account_basis=True)
     except Exception as e:                                # noqa: BLE001
-        sys.exit(f"taxjson-wash-radar: the US engine could not evaluate "
-                 f"these books ({e}) — fix what it names (`taxjson run` "
-                 f"stops on the same books) before trusting any "
-                 f"wash-sale advice.")
+        _out.fail(f"the US engine could not evaluate these books: {e}",
+                 prog=_PROG,
+                 details=["Fix what it names (`taxjson run` stops on the "
+                          "same books) before trusting any wash-sale "
+                          "advice."])
     out: Dict[str, dict] = {}
     for r in res.get("transactions") or []:
         if r.get("action") or not r.get("qty") or not r.get("id"):
@@ -384,8 +389,8 @@ def main():
         try:
             today_dt = datetime.strptime(args.date, "%Y-%m-%d")
         except ValueError:
-            sys.exit(f"taxjson-wash-radar: --date {args.date!r} is not "
-                     f"a valid YYYY-MM-DD date")
+            _out.fail(f"--date {args.date!r} is not a valid YYYY-MM-DD "
+                     f"date", prog=_PROG)
     else:
         today_dt = datetime.now()
 
@@ -434,7 +439,7 @@ def main():
                     i, str(path)) for i, t in enumerate(rows)]
                 require_trade_fields(objs)
             except ValueError as e:
-                sys.stderr.write(f"{_prog}: error: {e}\n")
+                _out.error(str(e), prog=_prog)
                 sys.exit(2)
             for tx_obj in objs:
                 if _income_rules is not None:
@@ -527,8 +532,8 @@ def main():
         except (OSError, ValueError) as e:
             # Exit 2 like gains/t1135/audit --incomplete-history; a
             # sys.exit(str) exited 1, the 'finding' code (A2-1435).
-            print(f"taxjson-wash-radar: error: --incomplete-history "
-                  f"{args.incomplete_history}: {e}", file=sys.stderr)
+            _out.error(f"--incomplete-history {args.incomplete_history}: "
+                      f"{e}", prog=_PROG)
             sys.exit(2)
 
         def _with_openings(rows, group):
@@ -2061,50 +2066,19 @@ def main():
                 "category": _advisory_category(adv),
             })
 
-    # Dynamic Formatting
-    headers = ["TICKER", "TAXABLE", "SHELTERED", "CLEARS", "ADVISORY / ACTION REQUIRED"]
-    widths = [len(h) for h in headers]
-    for row in table_data:
-        for i, val in enumerate(row):
-            widths[i] = max(widths[i], len(str(val)))
-
-    fmt = " | ".join(f"{{:<{w}}}" for w in widths)
-
-    total_width = sum(widths) + 3 * (len(widths) - 1)
-
     # Group rows by advisory category (alphabetical by ticker within each).
     _order = _COUNTRY_ORDER[args.country]
     table_data.sort(key=lambda r: (_category_rank(_advisory_category(r[4])), r[0]))
     by_cat: Dict[str, list] = {}
     for r in table_data:
         by_cat.setdefault(_advisory_category(r[4]), []).append(r)
-
-    # Decorative rules capped at a sane width (the advisory column can push the
-    # table well past 200 chars; a full-width bar would be an eyesore).
-    head_w = min(total_width, 96)
-
-    # The column header repeats under each section divider (rather than once at
-    # the top) so a long report stays readable when scrolled past a section.
-    header_line = fmt.format(*headers)
-    rule_line = "-+-".join("-" * w for w in widths)
-
-    # Always print every advisory section in the fixed order — even empty ones
-    # — so a clean `VIOLATION (0)` / `BLOCKED (0)` is visible at a glance rather
-    # than silently absent. Any extra category (e.g. OTHER from --all) follows.
+    # Every advisory section prints in the fixed order — even empty ones
+    # — so a clean `VIOLATION (0)` / `BLOCKED (0)` is visible at a
+    # glance rather than silently absent. Any extra category (e.g. OTHER
+    # from --all) follows.
     extras = [c for c in by_cat if c not in _order]
-    for i, cat in enumerate(_order + extras):
-        rows_c = by_cat.get(cat, [])
-        if i:
-            print()
-        title = _category_title(cat, args.country)
-        print(f"--- {title} ({len(rows_c)}) ".ljust(total_width, "-"))
-        if rows_c:
-            print(header_line)
-            print(rule_line)
-            for row in rows_c:
-                print(fmt.format(*row))
-        else:
-            print("(none)")
+    report = _render_text(_order + extras, by_cat, args.country,
+                          _today_iso, bool(args.all))
 
     if args.json_out or args.json:
         # Structured sidecar: same rows/grouping as the printed .rpt, plus
@@ -2151,17 +2125,7 @@ def main():
             write_text_atomic(out_path, json.dumps(payload, indent=2,
                                                    sort_keys=True) + "\n")
 
-    print("-" * head_w)
-    print("Definitions:")
-    if us_mode:
-        for line in _US_DEFINITIONS:
-            print(f"  {line}")
-        print()
-    else:
-        _print_ca_definitions()
-    # Every SAFE/CLEAR here is "as far as this project's accounts show"
-    # (CA-PLAN-04 / US-PLAN-04, audit S054-22).
-    print(f"  {scope_note(args.country)}")
+    report.print()
 
     if args.json:
         # Discard the buffered text report and emit only the payload.
@@ -2201,14 +2165,93 @@ _US_DEFINITIONS = (
 )
 
 
-def _print_ca_definitions():
-    print("  VIOLATION: You sold at a loss and a holder that BOUGHT the same security inside the ±30-day window still holds it (your taxable accounts, or a registered account). That holder sells ALL of it by the printed TRADE date to rescue the loss — the rescue sale must SETTLE within 30 days of the loss's settlement (the printed date already allows for the settlement lag and any settlement holiday inside it; a crypto asset settles on its trade date). Shares a registered account held before the window never make a loss superficial.")
-    print("  BLOCKED: You sold at a loss in the last 30 days. Buying back now cancels the loss on as many shares as you buy and still hold 30 days after the sale (s.54; the per-unit amount is printed).")
-    print("  LOCKED: A registered account bought in the last 30 days and still holds those shares. A taxable loss sale is superficial for up to that many shares (the rest of the loss stands) — permanently denied unless that account sells them within 30 days after your sale.\n  EXITABLE: You bought in the last 30 days in a taxable account. Selling the FULL position at a loss is fine; a partial loss sale is superficial (basis defers into the rest).\n  CAUTION: A registered account bought recently but has since sold what it bought. A loss sale (whole or partial) stands unless an affiliated account re-buys within 30 days after.")
-    print("  COOLING: You recently sold out at a loss. Wait 30 days from the sale before buying back.")
-    print("  RISK: Sellable at a loss NOW — but a sheltered account still holds, so an affiliated buy (e.g. a DRIP) within 30 days AFTER the sale denies the loss permanently on as many shares as it buys. Pause sheltered adds for 30 days.")
-    print("  CLEAR: No recent buys. Safe to sell at a loss (don't buy back for 30 days).")
-    print()
+_CA_DEFINITIONS = (
+    "VIOLATION: You sold at a loss and a holder that BOUGHT the same "
+    "security inside the ±30-day window still holds it (your taxable "
+    "accounts, or a registered account). That holder sells ALL of it by "
+    "the printed TRADE date to rescue the loss — the rescue sale must "
+    "SETTLE within 30 days of the loss's settlement (the printed date "
+    "already allows for the settlement lag and any settlement holiday "
+    "inside it; a crypto asset settles on its trade date). Shares a "
+    "registered account held before the window never make a loss "
+    "superficial.",
+    "BLOCKED: You sold at a loss in the last 30 days. Buying back now "
+    "cancels the loss on as many shares as you buy and still hold 30 days "
+    "after the sale (s.54; the per-unit amount is printed).",
+    "LOCKED: A registered account bought in the last 30 days and still "
+    "holds those shares. A taxable loss sale is superficial for up to "
+    "that many shares (the rest of the loss stands) — permanently denied "
+    "unless that account sells them within 30 days after your sale.",
+    "EXITABLE: You bought in the last 30 days in a taxable account. "
+    "Selling the FULL position at a loss is fine; a partial loss sale is "
+    "superficial (basis defers into the rest).",
+    "CAUTION: A registered account bought recently but has since sold "
+    "what it bought. A loss sale (whole or partial) stands unless an "
+    "affiliated account re-buys within 30 days after.",
+    "COOLING: You recently sold out at a loss. Wait 30 days from the sale "
+    "before buying back.",
+    "RISK: Sellable at a loss NOW — but a sheltered account still holds, "
+    "so an affiliated buy (e.g. a DRIP) within 30 days AFTER the sale "
+    "denies the loss permanently on as many shares as it buys. Pause "
+    "sheltered adds for 30 days.",
+    "CLEAR: No recent buys. Safe to sell at a loss (don't buy back for 30 "
+    "days).",
+)
+
+
+def _render_text(sections, by_cat, country: str, as_of: str,
+                 include_all: bool) -> "_out.Doc":
+    """The radar report in the house layout (docs/output-style.md): a
+    title, one section per advisory category (heading with its count;
+    `(none)` when empty) holding a TICKER / TAXABLE / SHELTERED / CLEARS
+    table, each advisory printed once as a wrapped paragraph under the
+    rows it applies to, then the definitions as a list and the scope
+    paragraph. The rows and advisories are the --json document's."""
+    us = country == "usa"
+    doc = _out.Doc(
+        "WASH RADAR — "
+        + ("wash sales (§1091, trade dates)" if us
+           else "superficial losses (s.54, settlement dates)")
+        + f", as of {as_of}"
+        + ("" if include_all else ", positions with an advisory"))
+    headers = ["TICKER", "TAXABLE", "SHELTERED", "CLEARS"]
+    for cat in sections:
+        rows_c = by_cat.get(cat, [])
+        doc.blank()
+        doc.line("\n".join(_out.wrap(
+            f"{_category_title(cat, country)} ({len(rows_c)})", doc.w,
+            "", "  ")))
+        if not rows_c:
+            doc.line("  (none)")
+            continue
+        # The advisory without its "<CATEGORY>:" lead (the heading says
+        # it); rows that share one advisory share one paragraph, the
+        # groups in the order of their first ticker.
+        groups: Dict[str, list] = {}
+        for r in rows_c:
+            adv = str(r[4] or "")
+            if cat and adv.startswith(f"{cat}:"):
+                adv = adv[len(cat) + 1:].strip()
+            groups.setdefault(adv, []).append(r)
+        ordered = [(adv, grp) for adv, grp in groups.items()]
+        body = [r[:4] for _adv, grp in ordered for r in grp]
+        table = _out.fit_table(headers, body, aligns=["<", ">", ">", "<"],
+                              indent="  ", per_record=False, width_=doc.w)
+        doc.line("\n".join(table[:2]))
+        i = 2
+        for adv, grp in ordered:
+            doc.line("\n".join(table[i:i + len(grp)]))
+            i += len(grp)
+            if adv:
+                doc.line("\n".join(advisory_lines(adv, doc.w, "    ")))
+    doc.section("DEFINITIONS")
+    for d in (_US_DEFINITIONS if us else _CA_DEFINITIONS):
+        doc.item(d, indent="  ")
+    # Every SAFE/CLEAR here is "as far as this project's accounts show"
+    # (CA-PLAN-04 / US-PLAN-04, audit S054-22).
+    doc.blank()
+    doc.line("\n".join(scope_lines(country, doc.w)))
+    return doc
 
 
 if __name__ == "__main__":

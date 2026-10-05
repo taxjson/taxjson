@@ -44,7 +44,10 @@ class TestConvertedCommands(unittest.TestCase):
              ("fees-sum", "--no-by-account"), ("leaps-sum",),
              ("roc-sum",), ("trades-sum",), ("winners",),
              ("winners", "all"), ("stats",), ("stats", "--all-history"),
-             ("crypto-sends",)]
+             ("crypto-sends",),
+             # group C
+             ("wash-radar",), ("wash-radar", "--date", "2024-11-25", "--all"),
+             ("fx-cash",), ("fx-cash", "--events")]
 
     def test_converted_commands(self):
         for country in ("canada", "usa"):
