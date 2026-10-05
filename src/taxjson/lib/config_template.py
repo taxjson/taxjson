@@ -532,9 +532,9 @@ def _hash(norm: str) -> str:
 # Comment lines (and trailing comments) earlier `taxjson init` versions
 # wrote, as hashes of their _norm text (sha256, first 16 hex digits; the
 # text of every '#' onward of every line each earlier template rendered,
-# both countries; the last block is the grouped, end-of-line-comment
-# layout before the alphabetical one): `taxjson format` regenerates them as template text
-# instead of keeping them as the user's notes. Hashes, not text: the old
+# both countries; the second block is the grouped, end-of-line-comment
+# layout before the alphabetical one): `taxjson format` regenerates them
+# as template text instead of keeping them as the user's notes. Hashes, not text: the old
 # examples are not carried in the source.
 _LEGACY_TEMPLATE_HASHES = frozenset("""
 00155ff5fe04a837 b466672d86933a32 cc383b0ee44d380c ccf1f0fb14c5c312
@@ -615,6 +615,67 @@ de6895cedcfdb45b e1611727431c4224 e231a27e7e2d93d6 e6a4d654afa3a919
 e7375f9815cfd066 e7896eac1898cb23 e9cb1329e3f38abd e9f19ceb7012b0c0
 ea7321a84bbc15e7 ef63ed5daa1137fd f0e9983114ddefcf f6be3e07a2788417
 """.split())
+
+# The alphabetical layout (before the grouped [settings] and compact
+# tables), per country: a line only the OTHER country's template wrote
+# (a Canadian `# tax_date = "trade"`) is the user's own.
+_LEGACY_TEMPLATE_HASHES_BY_COUNTRY = {
+    C.CANADA: frozenset("""
+008fbf0b21d4331d 027a359640c237cb 02fba5aeba703bc1 03b4cf3233f53254
+055ae0c64ce8dc17 0953110efdc50d00 0a4d4b3ad56b1057 10ffbd73d54fbb8d
+11e39a893bca603b 13b4cf05d84f74da 144d083f264e4c62 151b60b311d50294
+16a41caf03a40fda 180221ee36daec4e 1b89f76d9519498f 229e72be729ea2fd
+229feb6263f7d173 24aaef92b99f027c 24f367bd423c0698 2ad2402def2d23b3
+2dedfc6a84a3b236 327edbc1bc62524b 3661d51afca787e9 38f7bd7c6ed94f43
+399d640743def7bf 40439c64c252116c 40f92d9d5a21d406 4120da63ba553581
+4246491ffcf3fae3 47d31bb3dfc98347 49741e455d2d2c28 4cdcedd54e3ed0af
+4e8f42a837f0dad5 4f19f02f4cc2616a 4fd4984c8ccd4a6f 5042783462a09751
+50903059cad803c4 518fd285a2db8bcc 531a08f14883fe9c 549c5be4cb70752e
+55d2de201b897ccf 5e1f42eaf2188af1 611fe29fe4560408 613c63fd2316332f
+62ad3579483f040d 62cba9e7c72a5113 64a583cd5f9198c9 650a42ed5fb149db
+671de16c7cac75e4 671f5e4159da27e6 688d2ca159680ad0 6b426a6f926e51d4
+6bec38e0b5ed819b 6e6aa315db4bc5b3 7346b294aa20c3eb 762c007b97331b7b
+7715b9f75eb103fe 7992ebbf279bb8d6 7cc02743089d0ade 7d79440ff12d7185
+7dd566573c3a16be 7f106d303f9d8343 80c3faca27fbad62 85c03b24ced6f059
+86323e248d1089d7 87c1006f40f8eca6 8afad41408102b95 8f8b0f8beab7c729
+91bb9670206b9d92 9e852a4fbd51c971 9e8d480fd17d4dd0 9f9f392221f20f4e
+a0d89073041730fb a19cf1eb021fd452 a3861ce8929d447d a4bba00f6cfde9cb
+a63590d20bc40879 a6f00079587f901f aa21d392980c00ea aae708cbb686e09d
+ac24ac3c7d5a0a74 af49d0cafd76debc b0b6396ffabc6b73 b718a5c07b8231e5
+b985bc2bd832b95e b9e29972ce74fee1 b9f0c3ce9ee2d598 ba55bdd7ba6d9d44
+bf7a93e6c126b38d c0714b5d88cbbcfd c08149f1fd7f2959 c41b4c33e231bcba
+c5ad5dc490b93bb2 c68116e5dc81eee2 cbc302310689ce03 ccb2c4bac9128001
+cd7b647ee560a688 cf7aa29d72d3d49c cf9008e594aa56c0 d279f7b88ed86b9a
+d3deda125828f747 d502d3b2f9c8ac97 d59a8a299666022e d5a36e982568dd51
+d7b2f15162b61568 d8bff68fec3b6547 de12116a8b3da409 de522f2ba8ab9a17
+e223b78e6cf2233d e3076f44b482d1da e4d2072628822dc0 e8f929fea88da024
+e936cc2d9262deee e9380947889ee8a6 edb2bb9c2ac0f265 edffc5733f7c7f65
+f23db548a616307f f38d3a0d89440041 f3c1344f0c0ee752 f4ecea16fb3371c2
+f61eb9e3a92dc3ff f9e5646a07e6763c fc47e25e6fd818f4
+""".split()),
+    C.USA: frozenset("""
+008fbf0b21d4331d 027a359640c237cb 02fba5aeba703bc1 03b4cf3233f53254
+0953110efdc50d00 0d372c5493fdb858 13b4cf05d84f74da 144d083f264e4c62
+18781edfcb7b641b 1b89f76d9519498f 229feb6263f7d173 24bf06ace63daccc
+3661d51afca787e9 399d640743def7bf 3d346a6caf411a4d 40f92d9d5a21d406
+4246491ffcf3fae3 47d31bb3dfc98347 4c0e5124c885321b 5042783462a09751
+549c5be4cb70752e 55980d2a6b1bbd1d 5b1c397d4f727528 5e1f42eaf2188af1
+611fe29fe4560408 613c63fd2316332f 619c4fc634b14360 62ad3579483f040d
+64a583cd5f9198c9 650a42ed5fb149db 671f5e4159da27e6 688d2ca159680ad0
+6bec38e0b5ed819b 72c5df3267f7835b 7346b294aa20c3eb 762c007b97331b7b
+7876cc1f0eb9cef6 7cc02743089d0ade 7d79440ff12d7185 83373c248476f3a2
+85c03b24ced6f059 86323e248d1089d7 875c7ff422c231aa 87a3823da36c635b
+87c1006f40f8eca6 89ed8d00756da518 8ce2f27ad5fb9e7c 8f8b0f8beab7c729
+91bb9670206b9d92 9e852a4fbd51c971 a19cf1eb021fd452 a604b39ad8cc964f
+a8947039804c67d9 aae708cbb686e09d af49d0cafd76debc af5e2bc44b589085
+b0b6396ffabc6b73 b9e29972ce74fee1 b9f0c3ce9ee2d598 bf7a93e6c126b38d
+c08149f1fd7f2959 c41b4c33e231bcba c5ad5dc490b93bb2 ccb2c4bac9128001
+cf9008e594aa56c0 d279f7b88ed86b9a d5a36e982568dd51 d8bff68fec3b6547
+e223b78e6cf2233d e4d2072628822dc0 e60e7157dfc61d39 e8f929fea88da024
+e936cc2d9262deee edffc5733f7c7f65 eef93cc2bc576ad7 f1b02b5902a71e9e
+f23db548a616307f f9e5646a07e6763c fc47e25e6fd818f4
+""".split()),
+}
 
 
 def _comment_suffixes(line: str) -> Iterable[str]:
@@ -1363,7 +1424,9 @@ def format_config(text: str) -> FormatResult:
 
     def is_template(comment: str) -> bool:
         n = _norm(comment)
-        return not n or n in template or _hash(n) in _LEGACY_TEMPLATE_HASHES
+        h = _hash(n)
+        return (not n or n in template or h in _LEGACY_TEMPLATE_HASHES
+                or h in _LEGACY_TEMPLATE_HASHES_BY_COUNTRY[country])
 
     extras, kept = _associate(_scan(text), probe, is_template)
     r = _Renderer(doc, country, year, extras)
