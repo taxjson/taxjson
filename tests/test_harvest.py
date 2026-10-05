@@ -17,11 +17,33 @@ from taxjson.bin.taxjson_harvest import main as harvest_main
 from tax_rules import rule
 
 
+# One "today" for the whole module: the fixtures below are dated from it
+# at import, and the harvest code reads today again later — a run that
+# crossed midnight saw two different days and failed (gate 2026-10-05).
+_TODAY = date.today()
+
+
+class _FrozenDate(date):
+    @classmethod
+    def today(cls):
+        return cls(_TODAY.year, _TODAY.month, _TODAY.day)
+
+
+def setUpModule():
+    import taxjson.bin.taxjson_harvest as _h
+    _h.date = _FrozenDate
+
+
+def tearDownModule():
+    import taxjson.bin.taxjson_harvest as _h
+    _h.date = date
+
+
 # margin: AAA.TO underwater (cost 1,240 vs value 1,085), BBB.US ahead,
 # one OCC option row (must be skipped — unpriceable by the chain).
 # last_acq_date is dynamic (TX_ADD renders signed days from today).
-_AAA_TX_ADD = (date.today() - timedelta(days=100)).isoformat()
-_BBB_TX_ADD = (date.today() - timedelta(days=400)).isoformat()
+_AAA_TX_ADD = (_TODAY - timedelta(days=100)).isoformat()
+_BBB_TX_ADD = (_TODAY - timedelta(days=400)).isoformat()
 GAINS = {
     "summary": {"year": 2026},
     "transactions": [],
@@ -58,7 +80,7 @@ def _project(td, *, wash=True, radar_clears=None, rates=True):
     (root / name).write_text(json.dumps(GAINS))
     if rates:
         (root / "to_base.csv").write_text(
-            f"{date.today().isoformat()} 12:00:00 USD CAD {USD_CAD}\n")
+            f"{_TODAY.isoformat()} 12:00:00 USD CAD {USD_CAD}\n")
     radar = None
     if radar_clears is not None:
         radar = root / "wash_radar_margin.json"
@@ -102,7 +124,7 @@ class TestHarvest(unittest.TestCase):
         self.assertNotIn("CLOSED.TO", out)
 
     def test_radar_advisory_with_view_time_countdown(self):
-        clears = (date.today() + timedelta(days=12)).isoformat()
+        clears = (_TODAY + timedelta(days=12)).isoformat()
         with tempfile.TemporaryDirectory() as td:
             gains, radar = _project(td, radar_clears=clears)
             rc, out, _ = _run([str(gains), "--no-ibkr",
@@ -135,7 +157,7 @@ class TestHarvest(unittest.TestCase):
             gains = root / "margin_gains_wash.json"
             gains.write_text(json.dumps(data))
             (root / "to_base.csv").write_text(
-                f"{date.today().isoformat()} 12:00:00 USD CAD {USD_CAD}\n")
+                f"{_TODAY.isoformat()} 12:00:00 USD CAD {USD_CAD}\n")
             rc, out, _ = _run([str(gains), "--no-ibkr",
                                "--country", "canada",
                                "--symbol", "aaa.to", "--symbol", "BBB.US"])
@@ -190,7 +212,7 @@ class TestHarvest(unittest.TestCase):
     def test_recovery_schedule_locked_loss_lands_in_its_bucket(self):
         # AAA.TO is the only loss (155), locked for 12 more days: not
         # recoverable now or within 7d; recoverable by 14d and 30d.
-        clears = (date.today() + timedelta(days=12)).isoformat()
+        clears = (_TODAY + timedelta(days=12)).isoformat()
         with tempfile.TemporaryDirectory() as td:
             gains, radar = _project(td, radar_clears=clears)
             rc, out, _ = _run([str(gains), "--no-ibkr",
@@ -222,7 +244,7 @@ class TestHarvest(unittest.TestCase):
         self.assertIn("155.00 with no clear date", line)
 
     def test_recovery_schedule_in_json_totals(self):
-        clears = (date.today() + timedelta(days=5)).isoformat()
+        clears = (_TODAY + timedelta(days=5)).isoformat()
         with tempfile.TemporaryDirectory() as td:
             gains, radar = _project(td, radar_clears=clears)
             rc, out, _ = _run([str(gains), "--no-ibkr",
@@ -247,7 +269,7 @@ class TestHarvest(unittest.TestCase):
             gains = root / "margin_gains_wash.json"
             gains.write_text(json.dumps(winner))
             (root / "to_base.csv").write_text(
-                f"{date.today().isoformat()} 12:00:00 USD CAD {USD_CAD}\n")
+                f"{_TODAY.isoformat()} 12:00:00 USD CAD {USD_CAD}\n")
             rc, out, _ = _run([str(gains), "--no-ibkr",
                                "--country", "canada"])
         self.assertEqual(rc, 0)
@@ -326,11 +348,11 @@ class TestShelteredInfo(unittest.TestCase):
                        start_days_ago=400):
         row = {"symbol": "AAA.TO", "qty": qty, "total_cost": 300.0,
                "position_start_date":
-                   (date.today() - timedelta(days=start_days_ago))
+                   (_TODAY - timedelta(days=start_days_ago))
                    .isoformat()}
         if with_last_acq:
             row["last_acq_date"] = (
-                date.today() - timedelta(days=last_acq_days_ago)
+                _TODAY - timedelta(days=last_acq_days_ago)
             ).isoformat()
         return {"summary": {"year": 2026}, "transactions": [],
                 "inventory": [row]}
@@ -354,7 +376,7 @@ class TestShelteredInfo(unittest.TestCase):
         self.assertIn("TX_ADD", out)
         aaa = next(ln for ln in out.splitlines() if "AAA.TO" in ln)
         self.assertIn(" 25 ", aaa)
-        sh_date = (date.today() - timedelta(days=10)).isoformat()
+        sh_date = (_TODAY - timedelta(days=10)).isoformat()
         self.assertIn(f"{sh_date}(-10d)", aaa)          # SH_ADD
         self.assertIn(f"{_AAA_TX_ADD}(-100d)", aaa)     # TX_ADD
         # BBB.US isn't held sheltered: dash in SH_QTY (right after
@@ -394,7 +416,7 @@ class TestShelteredInfo(unittest.TestCase):
         self.assertEqual(rc, 0)
         aaa = next(ln for ln in out.splitlines() if "AAA.TO" in ln)
         self.assertIn(" 35 ", aaa)
-        newest = (date.today() - timedelta(days=5)).isoformat()
+        newest = (_TODAY - timedelta(days=5)).isoformat()
         self.assertIn(f"{newest}(-5d)", aaa)
         self.assertNotIn("(-60d)", aaa)
 
@@ -436,7 +458,7 @@ class TestOptionsMode(unittest.TestCase):
     COST/SH, DTE column; unpriced contracts warn about IBKR."""
 
     # 2 contracts, 300 CAD book (1.50/sh premium), ~200 days to expiry.
-    _EXP = (date.today() + timedelta(days=200)).strftime("%y%m%d")
+    _EXP = (_TODAY + timedelta(days=200)).strftime("%y%m%d")
     OPT = f"XEQT.TO{_EXP}C00030000"
 
     def _project(self, td, *, opt_qty=2):
@@ -451,7 +473,7 @@ class TestOptionsMode(unittest.TestCase):
              "total_cost": 100.0},              # futures option: never
         ]}))
         (root / "to_base.csv").write_text(
-            f"{date.today().isoformat()} 12:00:00 USD CAD {USD_CAD}\n")
+            f"{_TODAY.isoformat()} 12:00:00 USD CAD {USD_CAD}\n")
         return gains
 
     @staticmethod
@@ -588,7 +610,7 @@ class TestFxConversion(unittest.TestCase):
             gains = Path(td) / "margin_gains_wash.json"
             gains.write_text(json.dumps(self.ETN))
             rates = Path(td) / "to_base.csv"
-            rates.write_text(f"{date.today().isoformat()} 12:00:00 "
+            rates.write_text(f"{_TODAY.isoformat()} 12:00:00 "
                              f"USD CAD 1.37\n")
             rc, out, _ = _run([str(gains), "--no-ibkr",
                                "--country", "canada",
@@ -614,7 +636,7 @@ class TestFxConversion(unittest.TestCase):
             gains = Path(td) / "margin_gains_wash.json"
             gains.write_text(json.dumps(self.ETN))
             rates = Path(td) / "to_base.csv"
-            old = (date.today() - timedelta(days=30)).isoformat()
+            old = (_TODAY - timedelta(days=30)).isoformat()
             rates.write_text(f"{old} 12:00:00 USD CAD 1.37\n")
             rc, out, err = _run([str(gains), "--no-ibkr",
                                  "--country", "canada",
@@ -645,7 +667,7 @@ class TestBreakevenExitColumn(unittest.TestCase):
         gains = root / "margin_gains_wash.json"
         gains.write_text(json.dumps(self.GAINS_BE))
         (root / "to_base.csv").write_text(
-            f"{date.today().isoformat()} 12:00:00 USD CAD {USD_CAD}\n")
+            f"{_TODAY.isoformat()} 12:00:00 USD CAD {USD_CAD}\n")
         prices = {"LOSER.US": (10.0, "fake"), "CADL.TO": (8.0, "fake")}
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
@@ -710,7 +732,7 @@ class TestBlockedCountsAsClaimableNow(unittest.TestCase):
 
     def test_blocked_lands_in_now_bucket(self):
         from taxjson.bin.taxjson_harvest import _recovery_schedule
-        clears = (date.today() + timedelta(days=21)).isoformat()
+        clears = (_TODAY + timedelta(days=21)).isoformat()
         rows = [{"verdict": "LOSS", "unrealized": -2297.0,
                  "radar": {"category": "BLOCKED", "advisory": "BLOCKED: ...",
                            "clears_at": clears}},
