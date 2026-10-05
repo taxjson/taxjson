@@ -1,3 +1,4 @@
+from taxjson.lib.stage_msg import emit_line
 import csv
 import io
 import re
@@ -937,43 +938,40 @@ class KrakenBrokerage(BaseBrokerage):
             # quiet `note:` only the .sum showed (re-audit A2-0245).
             detail = ', '.join(f"{k} x{v}"
                                for k, v in sorted(ignored_types.items()))
-            print(f"warning: UNBOOKED: Kraken trades {shown_name(path)}: "
+            emit_line(f"warning: UNBOOKED: Kraken trades {shown_name(path)}: "
                   f"{sum(ignored_types.values())} row(s) whose type is "
                   f"neither buy nor sell ({detail}) are NOT in the books "
                   f"— fix the type cell, or enter each fill via a .tt "
-                  f"file{_TT_REMOVE}.", file=sys.stderr)
+                  f"file{_TT_REMOVE}.")
         if unverified:
             where = ("no Kraken ledgers export (kr_ledgers*.csv) is in "
                      "the same folder" if ledger_idx is None else
                      "the ledgers export(s) beside it do not contain "
                      "them")
-            print(f"warning: Kraken trades {shown_name(path)}: the fee currency "
+            emit_line(f"warning: Kraken trades {shown_name(path)}: the fee currency "
                   f"of {unverified} fill(s) can't be verified — {where}. "
                   f"Kraken's trades CSV states every fee in quote units "
                   f"even when Kraken took it in the traded coin, which "
                   f"books coins that were never received; add the ledgers export covering "
-                  f"these dates beside the trades file.",
-                  file=sys.stderr)
+                  f"these dates beside the trades file.")
         if margin_fills:
-            print(f"warning: Kraken trades {shown_name(path)}: {margin_fills} "
+            emit_line(f"warning: Kraken trades {shown_name(path)}: {margin_fills} "
                   f"fill(s) carry a nonzero `margin` value — they are "
                   f"booked as ordinary SPOT buys/sells. The margin "
                   f"position's rollover (financing) and settlement "
                   f"ledger rows are NOT modeled; hand-check these "
-                  f"positions (R1-107).", file=sys.stderr)
+                  f"positions (R1-107).")
         if getattr(self, '_kfee_fills', 0):
-            print(f"note: Kraken trades {shown_name(path)}: {self._kfee_fills} "
+            emit_line(f"note: Kraken trades {shown_name(path)}: {self._kfee_fills} "
                   f"fill(s) paid their fee with Kraken fee credits (KFEE) "
-                  f"— booked with no fee (the credits cost nothing).",
-                  file=sys.stderr)
+                  f"— booked with no fee (the credits cost nothing).")
         if coin_fee_fills:
-            print(f"note: Kraken trades {shown_name(path)}: {coin_fee_fills} "
+            emit_line(f"note: Kraken trades {shown_name(path)}: {coin_fee_fills} "
                   f"fill(s) had the fee taken in the traded coin (per the "
                   f"ledger) — booked as fewer coins received / more "
                   f"coins given, with no quote-currency fee; those fees "
                   f"are therefore NOT in the fee reports (fees.rpt, "
-                  f"fees-sum, the .sum FEES line).",
-                  file=sys.stderr)
+                  f"fees-sum, the .sum FEES line).")
         self.emit_skip_summary(path.name)
         return transactions
 
@@ -1248,35 +1246,31 @@ class KrakenBrokerage(BaseBrokerage):
         if trade_rows:
             self._check_trade_coverage(path, trade_rows, trade_refids)
         if repeated:
-            print(f"note: Kraken ledger {shown_name(path)}: {repeated} repeated "
+            emit_line(f"note: Kraken ledger {shown_name(path)}: {repeated} repeated "
                   f"ledger row(s) (same txid and content as an earlier "
-                  f"row — overlapping exports pasted together) skipped.",
-                  file=sys.stderr)
+                  f"row — overlapping exports pasted together) skipped.")
         if unbooked:
             kinds: Dict[str, int] = {}
             for k, _d, _a, _m in unbooked:
                 kinds[k] = kinds.get(k, 0) + 1
             dates = sorted(d for _k, d, _a, _m in unbooked)
             assets = sorted({a for _k, _d, a, _m in unbooked})
-            print(f"warning: UNBOOKED: Kraken ledger {shown_name(path)}: "
+            emit_line(f"warning: UNBOOKED: Kraken ledger {shown_name(path)}: "
                   f"{len(unbooked)} row(s) of type(s) the parser does not "
                   f"book ({', '.join(f'{k} x{n}' for k, n in sorted(kinds.items()))}"
                   f"; {dates[0]}..{dates[-1]}; assets "
                   f"{', '.join(assets[:8])}) move property or margin "
                   f"P&L — an airdrop is an acquisition, a conversion or "
                   f"sale a disposition. They are NOT in the books: enter "
-                  f"each via a .tt file.", file=sys.stderr)
+                  f"each via a .tt file.")
         if ignored_types:
             detail = ', '.join(f"{k} x{v}" for k, v in sorted(ignored_types.items()))
-            print(
-                f"note: Kraken ledger {shown_name(path)}: ignored "
+            emit_line(f"note: Kraken ledger {shown_name(path)}: ignored "
                 f"{sum(ignored_types.values())} fiat-cash or zero-amount "
                 f"row(s) "
                 f"({detail}) — moving your own cash to or from Kraken (a "
                 f"bank deposit, withdrawal or transfer), or a row that "
-                f"moves nothing, is not a tax event.",
-                file=sys.stderr,
-            )
+                f"moves nothing, is not a tax event.")
             if not unbooked and not getattr(self, 'zero_tx_reason', None):
                 # A ledger of only cash moves books nothing, correctly:
                 # not the "parsed to 0 transactions" regression warning
@@ -1363,10 +1357,9 @@ class KrakenBrokerage(BaseBrokerage):
         if not missing:
             self.zero_tx_reason = (f"its {trade_rows} trade row(s) are "
                                    f"booked from the trades export")
-            print(f"note: Kraken ledger {shown_name(path)}: {trade_rows} trade "
+            emit_line(f"note: Kraken ledger {shown_name(path)}: {trade_rows} trade "
                   f"row(s) ({len(trade_refids)} trade(s)) are booked from "
-                  f"the trades export beside it — every one matched.",
-                  file=sys.stderr)
+                  f"the trades export beside it — every one matched.")
             return
         dates = [d for d, _ in missing]
         masked = ', '.join(f"{r[:2]}***" for _, r in missing[:5])
@@ -1375,12 +1368,12 @@ class KrakenBrokerage(BaseBrokerage):
                "in the same folder" if txids is None else
                "the trades export(s) beside it do not contain them — "
                "they likely cover a shorter date range")
-        print(f"warning: UNBOOKED: Kraken ledger {shown_name(path)}: "
+        emit_line(f"warning: UNBOOKED: Kraken ledger {shown_name(path)}: "
               f"{len(missing)} trade(s) of {len(trade_refids)} "
               f"({dates[0]}..{dates[-1]}; refids {masked}{more}) are NOT "
               f"booked — {why}. The ledger's trade rows are not parsed; "
               f"supply the trades export covering the ledger's dates, "
-              f"beside it.", file=sys.stderr)
+              f"beside it.")
 
     @staticmethod
     def _sibling_trades_txids(path: Path) -> Optional[set]:
@@ -1563,7 +1556,7 @@ class KrakenBrokerage(BaseBrokerage):
             for leg_type, legs in (('spend', spends), ('receive', recvs)):
                 for leg in legs:
                     missing = 'receive' if leg_type == 'spend' else 'spend'
-                    print(f"warning: UNBOOKED: Kraken ledger refid "
+                    emit_line(f"warning: UNBOOKED: Kraken ledger refid "
                           f"{refid[:2]}***: orphan "
                           f"{leg_type} row ({leg['asset']} "
                           f"{leg['amount']:g} on {leg['date']}) has no "
@@ -1572,8 +1565,7 @@ class KrakenBrokerage(BaseBrokerage):
                           f"receive an acquisition with basis); this event "
                           f"is NOT in the output — find the missing "
                           f"counter-leg (truncated export?) or enter the "
-                          f"trade manually via a .tt file.",
-                          file=sys.stderr)
+                          f"trade manually via a .tt file.")
                     self.count_skip(f"orphan {leg_type} (refid {_mask(refid)})")
             return []
         if len(spends) == 1 and len(recvs) == 1:
@@ -1595,11 +1587,10 @@ class KrakenBrokerage(BaseBrokerage):
         else:
             shares = [1.0 / len(many)] * len(many)
             basis = 'equal shares (no amountusd in this export)'
-        print(f"note: Kraken ledger refid {_mask(refid)}: {len(many)} "
+        emit_line(f"note: Kraken ledger refid {_mask(refid)}: {len(many)} "
               f"{many_side} legs ({', '.join(l['asset'] for l in many)}) "
               f"share one {one['asset']} {'receipt' if many_side == 'spend' else 'payment'} "
-              f"— split by {basis}; each asset is booked separately.",
-              file=sys.stderr)
+              f"— split by {basis}; each asset is booked separately.")
         out = []
         for leg, share in zip(many, shares):
             part = dict(one, amount=one['amount'] * share,
@@ -1639,7 +1630,7 @@ class KrakenBrokerage(BaseBrokerage):
         if 'spend' not in trade or 'receive' not in trade:
             for leg_type, leg in trade.items():
                 missing = 'receive' if leg_type == 'spend' else 'spend'
-                print(f"warning: UNBOOKED: Kraken ledger refid "
+                emit_line(f"warning: UNBOOKED: Kraken ledger refid "
                       f"{refid[:2]}***: orphan "
                       f"{leg_type} row ({leg['asset']} "
                       f"{leg['amount']:g} on {leg['date']}) has no "
@@ -1648,8 +1639,7 @@ class KrakenBrokerage(BaseBrokerage):
                       f"receive an acquisition with basis); this event "
                       f"is NOT in the output — find the missing "
                       f"counter-leg (truncated export?) or enter the "
-                      f"trade manually via a .tt file.",
-                      file=sys.stderr)
+                      f"trade manually via a .tt file.")
                 self.count_skip(f"orphan {leg_type} (refid {_mask(refid)})")
             return []
         spend = trade['spend']

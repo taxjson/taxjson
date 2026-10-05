@@ -11,6 +11,7 @@ The script reads transactions from JSON, sorts them chronologically, and writes
 the result to stdout. Optionally deduplicates by transaction ID or synthetic UID.
 """
 
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import json
 import sys
@@ -503,7 +504,7 @@ def main():
             if args.dedup:
                 meta_accounts = _doc_source_accounts(_stdin)
     except ValueError as e:
-        print(f"{PROG}: error: {e}", file=sys.stderr)
+        emit_line(f"{PROG}: error: {e}")
         sys.exit(1)
 
     # Validate transactions (unless disabled). NEVER drops a row:
@@ -515,15 +516,15 @@ def main():
         if errors:
             level = 'error' if args.strict else 'warning'
             for err in errors:
-                print(f"{PROG}: {level}: validation: {err}", file=sys.stderr)
+                emit_line(f"{PROG}: {level}: validation: {err}")
             if args.strict:
-                print(f"{PROG}: error: aborting due to {len(errors)} "
-                      f"validation error(s) (--strict)", file=sys.stderr)
+                emit_line(f"{PROG}: error: aborting due to {len(errors)} "
+                      f"validation error(s) (--strict)")
                 sys.exit(1)
-            print(f"{PROG}: warning: {len(errors)} validation error(s) "
+            emit_line(f"{PROG}: warning: {len(errors)} validation error(s) "
                   f"above; every row was KEPT (no row is dropped by "
                   f"validation) — fix the input or run with --strict "
-                  f"to abort.", file=sys.stderr)
+                  f"to abort.")
     
     # Sort first, then dedup. Dedup keeps the *first* occurrence of each
     # UID — if it ran before sort, the survivor depended on input-file

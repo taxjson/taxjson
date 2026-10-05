@@ -9,6 +9,7 @@ Designed so an AI-generated parser for a new brokerage can produce a short
 subclass that delegates to these helpers instead of re-implementing them.
 """
 
+from taxjson.lib.stage_msg import emit_line
 from datetime import datetime, timedelta
 from decimal import Decimal
 import math
@@ -705,16 +706,15 @@ class BaseBrokerage:
             total = sum(known.values())
             detail = ", ".join(f"{cat[len(pfx):]}: {n}" for cat, n in
                                sorted(known.items()))
-            print(f"note: {source_name}: {total} recognized non-event "
-                  f"row(s) not translated — {detail}.", file=sys.stderr)
+            emit_line(f"note: {source_name}: {total} recognized non-event "
+                  f"row(s) not translated — {detail}.")
         if unknown:
             total = sum(unknown.values())
             detail = ", ".join(f"{cat}: {n}" for cat, n in
                                sorted(unknown.items()))
-            print(f"note: {source_name}: skipped {total} unclassified "
+            emit_line(f"note: {source_name}: skipped {total} unclassified "
                   f"row(s) — {detail}. If any of these are trades/income, "
-                  f"the parser needs a new branch (see CONTRIBUTING).",
-                  file=sys.stderr)
+                  f"the parser needs a new branch (see CONTRIBUTING).")
 
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         raise NotImplementedError
@@ -884,8 +884,8 @@ class BaseBrokerage:
             v = float(s)
         except ValueError:
             import sys
-            print(f"warning: numeric cell {raw!r} is not a number — read "
-                  f"as {default!r}", file=sys.stderr)
+            emit_line(f"warning: numeric cell {raw!r} is not a number — read "
+                  f"as {default!r}")
             return default
         return -v if neg else v
 
@@ -1165,13 +1165,12 @@ class BaseBrokerage:
             if lag > SETTLE_LAG_FLAG_DAYS:
                 import sys
                 loc = f"{where}: " if where else ''
-                print(f"warning: ATTENTION: {loc}Settlement Date "
+                emit_line(f"warning: ATTENTION: {loc}Settlement Date "
                       f"{settle_iso} is {lag} days after the trade date "
                       f"{date_iso}{f' ({what})' if what else ''} — no "
                       f"settlement cycle is that long, and the tax year "
                       f"follows the settle date. Booked as printed; check "
-                      f"the cell (blank it for the standard cycle).",
-                      file=sys.stderr)
+                      f"the cell (blank it for the standard cycle).")
 
     @staticmethod
     def warn_zero_cost_buy(where: str, symbol: str, qty: float,
@@ -1183,11 +1182,10 @@ class BaseBrokerage:
         if (qty or 0) > 0 and abs(price or 0) < 1e-9 \
                 and abs(net or 0) < 0.005:
             import sys
-            print(f"warning: ATTENTION: {where}: a buy of {qty:g} "
+            emit_line(f"warning: ATTENTION: {where}: a buy of {qty:g} "
                   f"{symbol} at ZERO cost (price and cash both 0) — "
                   f"booked with no cost basis. If it is a transfer or a "
-                  f"journal, book its real cost (a .tt BUYSELL) instead.",
-                  file=sys.stderr)
+                  f"journal, book its real cost (a .tt BUYSELL) instead.")
 
     def settlement_date_t1(self, date_str: str, *formats: str,
                            currency: str = 'USD') -> str:

@@ -133,6 +133,7 @@ is named on the console (ATTENTION) — book such a pair as .tt ASSIGN
 rows (the premium folds into the shares' cost).
 """
 
+from taxjson.lib.stage_msg import emit_line
 import csv
 import difflib
 import re
@@ -512,11 +513,10 @@ def _check_trade_row(where: str, target: str, qty: float, price: float,
                 f"(qty {abs(qty):g}, price {abs(price):g}, fee "
                 f"{fee:g}) by more than 1% — {hint}")
         if fee and abs(abs(amount) - gross) < 0.005:
-            print(f"warning: generic importer: {where}: amount "
+            emit_line(f"warning: generic importer: {where}: amount "
                   f"{abs(amount):.2f} equals qty x price exactly while the "
                   f"fee is {fee:.2f} — `amount` must be the fee-INCLUSIVE "
-                  f"net; is the GROSS column mapped as amount?",
-                  file=sys.stderr)
+                  f"net; is the GROSS column mapped as amount?")
     return fee
 
 
@@ -1037,18 +1037,17 @@ class GenericBrokerage(BaseBrokerage):
                     f"and sells to separate action values ({len(bad)} "
                     f"such row(s)).")
         if expiry_clamped:
-            print(f"note: generic importer: {shown_name(path)}: "
+            emit_line(f"note: generic importer: {shown_name(path)}: "
                   f"{len(expiry_clamped)} option close(s) at $0 posted "
                   f"after the contract's expiry are dated the expiry day "
                   f"(CA-DATE-08 / US-DATE-08): "
-                  f"{'; '.join(expiry_clamped[:5])}", file=sys.stderr)
+                  f"{'; '.join(expiry_clamped[:5])}")
         if late_settles:
-            print(f"warning: ATTENTION: generic importer: {shown_name(path)}: "
+            emit_line(f"warning: ATTENTION: generic importer: {shown_name(path)}: "
                   f"{len(late_settles)} trade(s) settle more than "
                   f"{_SETTLE_LATE_DAYS} days after the trade date: "
                   f"{'; '.join(late_settles[:5])}. The tax year follows "
-                  f"the settle date — check the settle cells.",
-                  file=sys.stderr)
+                  f"the settle date — check the settle cells.")
         self._warn_assignment_shapes(path.name, zero_closes, transactions)
         if settle_on_trade_date and any(
                 t.get("action") == "BUYSELL" for t in transactions):
@@ -1056,22 +1055,22 @@ class GenericBrokerage(BaseBrokerage):
             # with this option: the coins became SAMPMA.US / SAMPLT.TO shares
             # (Schedule 3 line 4, no pooling with the crypto accounts,
             # and §1091 in a US project) — re-audit A2-0152 / A2-0425.
-            print(f"note: generic importer: {path.name}: "
+            emit_line(f"note: generic importer: {path.name}: "
                   f"settle_on_trade_date = true settles each trade on its "
                   f"trade date; the rows are still booked as SECURITIES "
                   f"(a listing suffix is added). The generic importer is "
                   f"not a crypto route: coins go in a `crypto = true` "
                   f"account (its exchange's export, or .tt lines with "
-                  f"the bare coin symbol).", file=sys.stderr)
+                  f"the bare coin symbol).")
         if unbooked:
             shown = "; ".join(unbooked[:5])
             more = (f" (+{len(unbooked) - 5} more)"
                     if len(unbooked) > 5 else "")
-            print(f"warning: UNBOOKED: generic importer: {len(unbooked)} "
+            emit_line(f"warning: UNBOOKED: generic importer: {len(unbooked)} "
                   f"row(s) with an unmapped action move shares or cash "
                   f"and are NOT in the books: {shown}{more}. Map the "
                   f"action in [actions] (or to \"skip\" if it really "
-                  f"is not an event).", file=sys.stderr)
+                  f"is not an event).")
         # Every row is stamped 09:30:00, so a day's rows tie and keep
         # the order they are emitted in (CA-DATE-14 / US-DATE-13): a
         # newest-first export is read bottom-up. One row emits at most
@@ -1198,7 +1197,7 @@ class GenericBrokerage(BaseBrokerage):
                                 f"the strike {strike:g} on {t['date']}")
                     break
         if hits:
-            print(f"warning: ATTENTION: generic importer: {name}: "
+            emit_line(f"warning: ATTENTION: generic importer: {name}: "
                   f"{len(hits)} possible exercise/assignment(s) booked as "
                   f"an expiry plus a separate trade: {'; '.join(hits[:5])}"
                   f". The mapping cannot express an exercise or "
@@ -1207,7 +1206,7 @@ class GenericBrokerage(BaseBrokerage):
                   f"{self.law(' (s.49(3)/(3.1))', ' (Rev. Rul. 78-182)')}"
                   f". If the "
                   f"statement shows one, map those rows to skip and enter "
-                  f"both legs as .tt ASSIGN rows.", file=sys.stderr)
+                  f"both legs as .tt ASSIGN rows.")
 
     @staticmethod
     def _settle_for(row, cell, where: str, date: str, settle_fmt: str,

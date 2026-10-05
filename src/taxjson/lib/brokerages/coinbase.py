@@ -1,3 +1,4 @@
+from taxjson.lib.stage_msg import emit_line
 import csv
 import hashlib
 import io
@@ -630,11 +631,11 @@ class CoinbaseBrokerage(BaseBrokerage):
                     continue
                 transactions.append(tx)
         if self._blank_totals:
-            print(f"note: Coinbase {shown_name(path)}: {self._blank_totals} "
+            emit_line(f"note: Coinbase {shown_name(path)}: {self._blank_totals} "
                   f"Buy/Sell row(s) had a blank Total — derived from "
                   f"Subtotal ± fee (or quantity × price ± fee when "
                   f"Subtotal is blank too). Check them against the "
-                  f"Coinbase statement.", file=sys.stderr)
+                  f"Coinbase statement.")
         # Older Coinbase exports have no ID column, so byte-identical
         # same-second fills would hash to the same content id and
         # `taxjson-sort --dedup` would silently delete real trades —
@@ -656,7 +657,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                    f"reward is income and an acquisition, a payment a "
                    f"disposition. They are NOT in the books: enter each "
                    f"via a .tt file.")
-            print(f"warning: UNBOOKED: {msg}", file=sys.stderr)
+            emit_line(f"warning: UNBOOKED: {msg}")
             self.lint_findings.append(msg)
         self.emit_skip_summary(path.name)
         return transactions

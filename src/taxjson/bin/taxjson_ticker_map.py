@@ -21,6 +21,7 @@ A TRADINGVIEW line (the removed TradingView export) is ignored. See the
 README's ticker.map section.
 """
 
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import json
 import sys
@@ -295,10 +296,10 @@ def load_map_file(file_path: Path) -> "TickerMap":
     (`taxjson run` refuses such a map up front — map_file_problems)."""
     tmap, problems, notes = _parse_map_file(file_path)
     for msg in problems:
-        print(f"warning: ticker.map problem: {msg} (`taxjson run` refuses "
-              f"this map)", file=sys.stderr)
+        emit_line(f"warning: ticker.map problem: {msg} (`taxjson run` refuses "
+              f"this map)")
     for msg in notes:
-        print(f"warning: {msg} — skipping", file=sys.stderr)
+        emit_line(f"warning: {msg} — skipping")
     return tmap
 
 
@@ -383,20 +384,14 @@ def apply_drops(transactions: List[TaxTransaction], drops) -> List[TaxTransactio
         rows = removed[sym]
         net_qty = sum(_field(t, 'quantity') for t in rows)
         net_cash = sum(_cash(t) for t in rows)
-        print(
-            f"NOTE: ticker-map DELETE removed {len(rows)} {sym} row(s) "
-            f"(net qty {net_qty:.4f}, net cash {net_cash:+.2f}).",
-            file=sys.stderr,
-        )
+        emit_line(f"NOTE: ticker-map DELETE removed {len(rows)} {sym} row(s) "
+            f"(net qty {net_qty:.4f}, net cash {net_cash:+.2f}).")
         if abs(net_qty) >= 1.0:
-            print(
-                f"warning: dropped ticker {sym} has a net quantity of "
+            emit_line(f"warning: dropped ticker {sym} has a net quantity of "
                 f"{net_qty:.4f} — that looks like a real position, and "
                 f"DELETE discards its cost basis. Remove the `DELETE "
                 f"{sym}` line from ticker.map if "
-                f"{sym} is not a pure artifact.",
-                file=sys.stderr,
-            )
+                f"{sym} is not a pure artifact.")
     return kept
 
 def generate_summary(transactions: List[TaxTransaction]) -> Dict[str, Any]:
@@ -496,12 +491,12 @@ def guard_option_listing_collisions(symbols, mapping: Dict[str, str],
         target = map_symbol(sym, mapping)
         if target != sym and target in natives:
             out[sym] = sym
-            print(f"{prog}: warning: the underlying rule would rename option "
+            emit_line(f"{prog}: warning: the underlying rule would rename option "
                   f"{sym} to {target}, a different listed contract this book "
                   f"also trades (strike currency and clearing house differ, so "
                   f"they are not identical property) — kept separate as {sym}. "
                   f"Add an exact rule for {sym} in ticker.map if they really "
-                  f"are one contract.", file=sys.stderr)
+                  f"are one contract.")
     return out
 
 
@@ -558,9 +553,8 @@ def main():
     if args.map_flag and args.map_file:
         # Two map sources: the positional one used to win silently
         # (audit S053-00).
-        print("taxjson-ticker-map: error: give the map once — either "
-              "the positional MAP_FILE or --map, not both",
-              file=sys.stderr)
+        emit_line("taxjson-ticker-map: error: give the map once — either "
+              "the positional MAP_FILE or --map, not both")
         sys.exit(2)
     if args.map_flag:
         args.map_file = args.map_flag
@@ -590,13 +584,13 @@ def main():
         try:
             transactions = apply_dated_renames(transactions, tmap.dated)
         except RenameConflict as e:
-            print(f"taxjson-ticker-map: error: {e}", file=sys.stderr)
+            emit_line(f"taxjson-ticker-map: error: {e}")
             sys.exit(1)
         mapping = guard_option_listing_collisions(
             [t.symbol for t in transactions], mapping)
         for _w in bare_target_warnings([t.symbol for t in transactions],
                                        mapping):
-            print(f"warning: ATTENTION: {_w}", file=sys.stderr)
+            emit_line(f"warning: ATTENTION: {_w}")
         updated_transactions = []
 
         for tx in transactions:

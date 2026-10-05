@@ -22,6 +22,7 @@ Options:
     --transfers     Include transfer transactions in output (default: exclude)
 """
 
+from taxjson.lib.stage_msg import emit_line
 import csv
 import hashlib
 import inspect
@@ -482,8 +483,7 @@ Examples:
     if missing:
         # Environment error (exit 2), unlike schema/lint FINDINGS (exit 1).
         for p in missing:
-            print(f"taxjson-brokerage: error: no such file: {p}",
-                  file=sys.stderr)
+            emit_line(f"taxjson-brokerage: error: no such file: {p}")
         sys.exit(2)
 
     # The market lists' per-symbol overrides (lib/markets: STABLE,
@@ -493,8 +493,8 @@ Examples:
     use_ticker_map(args.ticker_map)
     if args.ticker_map:
         if not Path(args.ticker_map).exists():
-            print(f"taxjson-brokerage: error: no such file: --ticker-map "
-                  f"{args.ticker_map}", file=sys.stderr)
+            emit_line(f"taxjson-brokerage: error: no such file: --ticker-map "
+                  f"{args.ticker_map}")
             sys.exit(2)
         if not args.lint:
             # Hints the map already answers stay quiet (A2-1056).
@@ -502,28 +502,26 @@ Examples:
             try:
                 set_ticker_map(Path(args.ticker_map))
             except (OSError, ValueError) as e:
-                print(f"taxjson-brokerage: error: {args.ticker_map}: {e}",
-                      file=sys.stderr)
+                emit_line(f"taxjson-brokerage: error: {args.ticker_map}: {e}")
                 sys.exit(2)
     if args.rates:
         if not Path(args.rates).exists():
-            print(f"taxjson-brokerage: error: no such file: --rates "
-                  f"{args.rates}", file=sys.stderr)
+            emit_line(f"taxjson-brokerage: error: no such file: --rates "
+                  f"{args.rates}")
             sys.exit(2)
         from taxjson.lib.brokerages._crypto_common import set_depeg_rates
         try:
             set_depeg_rates(Path(args.rates), None)
         except (OSError, ValueError) as e:
-            print(f"taxjson-brokerage: error: {args.rates}: {e}",
-                  file=sys.stderr)
+            emit_line(f"taxjson-brokerage: error: {args.rates}: {e}")
             sys.exit(2)
     try:
         extractor_class = load_brokerage(brokerage_id)
     except ValueError as e:
         # A usage error (exit 2), one line — it was a traceback (R1-262).
-        print(f"taxjson-brokerage: error: {e} (known: "
+        emit_line(f"taxjson-brokerage: error: {e} (known: "
               f"{', '.join(sorted(set(_CANONICAL_ID.values()) | {'generic'}))}"
-              f")", file=sys.stderr)
+              f")")
         sys.exit(2)
     valid_keys = set(inspect.signature(TaxTransaction).parameters.keys())
     try:
@@ -533,7 +531,7 @@ Examples:
         # An unreadable file is an environment error: exit 2, as its
         # sibling tools exit (re-audit A2-1421); a malformed line stays
         # a data error (1).
-        print(f"taxjson-brokerage: error: {e}", file=sys.stderr)
+        emit_line(f"taxjson-brokerage: error: {e}")
         sys.exit(2 if isinstance(e, OSError) else 1)
     override_hits: dict = {}
     # (symbol|CURRENCY) the overrides renamed (-> new symbols) or left
@@ -576,13 +574,12 @@ Examples:
                 _pkw['taxable'] = args.account_type == 'taxable'
             shared_context = _prepare(input_paths, **_pkw)
         except csv.Error as e:
-            print(f"taxjson-brokerage: error: the CSV module refused an "
+            emit_line(f"taxjson-brokerage: error: the CSV module refused an "
                   f"input file ({e}) — see the per-file error below by "
-                  f"parsing the files one at a time.", file=sys.stderr)
+                  f"parsing the files one at a time.")
             sys.exit(2)
         except (BrokerageParseError, ValueError, UnicodeDecodeError) as e:
-            print(f"taxjson-brokerage: error: {_refusal(e)}",
-                  file=sys.stderr)
+            emit_line(f"taxjson-brokerage: error: {_refusal(e)}")
             sys.exit(1)
         # Per-statement coverage against the tax year (RBC "as of"
         # timestamps, audit S063-22).
@@ -595,11 +592,10 @@ Examples:
                 _cov_msgs = _cov(shared_context, args.tax_year,
                                  country=args.country, **_ckw)
             except ValueError as e:
-                print(f"taxjson-brokerage: error: --year-end-posting: {e}",
-                      file=sys.stderr)
+                emit_line(f"taxjson-brokerage: error: --year-end-posting: {e}")
                 sys.exit(2)
             for _m in _cov_msgs:
-                print(_m, file=sys.stderr)
+                emit_line(_m)
 
     # s.90(1) is Canadian law: never the default without a country
     # (partition INPUTS-03), and refused for a US filer.
@@ -613,7 +609,7 @@ Examples:
                                     tool="taxjson-brokerage: error")
         if _fp:
             for _m in _fp:
-                print(_m, file=sys.stderr)
+                emit_line(_m)
             sys.exit(2)
     if foreign_roc is None:
         foreign_roc = "dividend" if args.country == "canada" else "acb"
@@ -667,17 +663,16 @@ Examples:
             _cut = final_record_cut(input_path)
             transactions = extractor.parse_file(input_path)
             if _cut:
-                print(f"warning: ATTENTION: {shown_name(input_path)}: "
-                      f"{_cut}", file=sys.stderr)
+                emit_line(f"warning: ATTENTION: {shown_name(input_path)}: "
+                      f"{_cut}")
         except csv.Error as e:
             # A >128KB field (or other csv-module limit) surfaced as a
             # raw traceback; name the file and the limit instead
             # (2026-09 security audit).
-            print(f"taxjson-brokerage: error: {shown_name(input_path)}: the "
+            emit_line(f"taxjson-brokerage: error: {shown_name(input_path)}: the "
                   f"CSV module refused the file ({e}). A single field "
                   f"exceeding {csv.field_size_limit()} characters is "
-                  f"the usual cause — inspect/trim the offending row.",
-                  file=sys.stderr)
+                  f"the usual cause — inspect/trim the offending row.")
             sys.exit(2)
         except (BrokerageParseError, ValueError, UnicodeDecodeError) as e:
             # The parser refused the file rather than guess (missing
@@ -689,9 +684,8 @@ Examples:
             # a legacy encoding (audit R1-262 / S059-17).
             msg = _refusal(e)
             shown = shown_name(input_path)
-            print(f"taxjson-brokerage: error: "
-                  f"{msg if msg.startswith(shown) else f'{shown}: {msg}'}",
-                  file=sys.stderr)
+            emit_line(f"taxjson-brokerage: error: "
+                  f"{msg if msg.startswith(shown) else f'{shown}: {msg}'}")
             sys.exit(1)
         parsed_files.append((input_path, extractor, transactions))
         if args.country is None and hasattr(extractor,
@@ -702,11 +696,11 @@ Examples:
                             for t in transactions}
                            & set(USD_STABLECOINS))
             if _stab:
-                print(f"taxjson-brokerage: note: {shown_name(input_path)}: "
+                emit_line(f"taxjson-brokerage: note: {shown_name(input_path)}: "
                       f"{', '.join(_stab)} booked as property like any "
                       f"coin (no --country given); a Canadian filer "
                       f"passes --country canada (USD stablecoins are "
-                      f"US-dollar cash).", file=sys.stderr)
+                      f"US-dollar cash).")
         if args.country is None and args.foreign_roc is None:
             # The issuer's ISIN is in IB's description ("QZRX(US...)").
             _froc = [t for t in transactions
@@ -715,12 +709,11 @@ Examples:
                                          str(t.get('description') or '')))
                      and m.group(1) != 'CA']
             if _froc:
-                print(f"taxjson-brokerage: note: {shown_name(input_path)}: "
+                emit_line(f"taxjson-brokerage: note: {shown_name(input_path)}: "
                       f"{len(_froc)} return(s) of capital from a "
                       f"non-Canadian issuer booked as a cost reduction "
                       f"(no --country given); a Canadian filer passes "
-                      f"--country canada (ITA s.90(1): a dividend).",
-                      file=sys.stderr)
+                      f"--country canada (ITA s.90(1): a dividend).")
 
     # Cross-statement pass (IB): a `Ca` cancellation, commission refund
     # or cash in lieu whose row sits in ANOTHER of the account's
@@ -752,10 +745,10 @@ Examples:
                   for _p, ex, _t in parsed_files}
         if len(_names) > 1:
             _shown = ", ".join(sorted(n or "(none)" for n in _names))
-            print(f"taxjson-brokerage: error: the generic files' mappings "
+            emit_line(f"taxjson-brokerage: error: the generic files' mappings "
                   f"name different brokers ([broker].name: {_shown}) — "
                   f"parse each broker's files in a separate call "
-                  f"(`taxjson run` does this).", file=sys.stderr)
+                  f"(`taxjson run` does this).")
             sys.exit(2)
         _nm = next(iter(_names), None) if _names else None
         if _nm:
@@ -823,7 +816,7 @@ Examples:
                             and (_before, t.get('symbol'))
                             not in _bare_warned):
                         _bare_warned.add((_before, t.get('symbol')))
-                        print(f"warning: ATTENTION: "
+                        emit_line(f"warning: ATTENTION: "
                               f"a ticker.map EXTRACT line renames "
                               f"{_before} to {t.get('symbol')}, which has "
                               f"no market suffix — a bare symbol is read "
@@ -831,7 +824,7 @@ Examples:
                               f"dividend on it is counted as foreign). "
                               f"Write the listing "
                               f"({t.get('symbol')}.TO, "
-                              f"{t.get('symbol')}.US).", file=sys.stderr)
+                              f"{t.get('symbol')}.US).")
                 else:
                     override_kept.add(_key)
 
@@ -863,8 +856,7 @@ Examples:
                     if _sends and args.country == "usa":
                         # A US donor's gift is not a sale (US-SEND-02;
                         # audit A2-0721, A2-0740, A2-1286).
-                        print(
-                            f"  NOTE: {_sends} crypto withdrawal/"
+                        emit_line(f"  NOTE: {_sends} crypto withdrawal/"
                             f"send(s) among them — if any paid for "
                             f"something (payment), each is a taxable "
                             f"SALE at fair market value: `taxjson "
@@ -872,11 +864,9 @@ Examples:
                             f"value and writes the .tt sale for each "
                             f"payment (a gift is not a sale for a US "
                             f"donor; it and self-custody moves need "
-                            f"nothing).",
-                            file=sys.stderr)
+                            f"nothing).")
                     elif _sends:
-                        print(
-                            f"  NOTE: {_sends} crypto withdrawal/"
+                        emit_line(f"  NOTE: {_sends} crypto withdrawal/"
                             f"send(s) among them — if any left your "
                             f"ownership (gift or payment), each is a "
                             f"taxable DISPOSITION at fair market "
@@ -887,8 +877,7 @@ Examples:
                             + ("" if args.country else
                                "; with --country usa only a payment "
                                "is a sale")
-                            + ".",
-                            file=sys.stderr)
+                            + ".")
             transactions = [tx for tx in transactions if tx.get('action', '').upper() != 'TRANSFER']
 
         # Per-file count so the user can see at a glance how many
@@ -927,14 +916,11 @@ Examples:
                   f"({_only_nonevents(extractor)} recognized non-event "
                   f"row(s))", file=sys.stderr)
         elif not transactions and file_size > 0:
-            print(
-                f"warning: {shown_name(input_path)} parsed to 0 transactions "
+            emit_line(f"warning: {shown_name(input_path)} parsed to 0 transactions "
                 f"({file_size} bytes input, brokerage={brokerage_id}): "
                 f"NONE of its rows are in the books. Check the CSV "
                 f"header / format — silent zero-tx output is usually a "
-                f"changed export layout or a parser regression.",
-                file=sys.stderr,
-            )
+                f"changed export layout or a parser regression.")
         else:
             print(f"  {shown_name(input_path)}: {len(transactions)} tax objects",
                   file=sys.stderr)
@@ -944,9 +930,8 @@ Examples:
             consumed = extractor._rows_consumed
             skipped = sum(extractor._skip_counts.values())
             unaccounted = seen - consumed - skipped
-            print(f"lint: {shown_name(input_path)}: rows={seen} consumed={consumed} "
-                  f"skipped={skipped} unaccounted={unaccounted}",
-                  file=sys.stderr)
+            emit_line(f"lint: {shown_name(input_path)}: rows={seen} consumed={consumed} "
+                  f"skipped={skipped} unaccounted={unaccounted}")
             if unaccounted:
                 # A row neither classified nor counted: the parser has a
                 # code path that drops data with no accounting at all.
@@ -957,7 +942,7 @@ Examples:
         _findings = getattr(extractor, 'lint_findings', None) or []
         if args.lint and _findings:
             for _f in _findings:
-                print(f"lint: {shown_name(input_path)}: {_f}", file=sys.stderr)
+                emit_line(f"lint: {shown_name(input_path)}: {_f}")
             lint_problems += len(_findings)
 
         for t in transactions:
@@ -1003,19 +988,18 @@ Examples:
     for _i, _syms in sorted(override_raw.items()):
         if len(_syms) > 1:
             _d, _c, _s = overrides[_i]
-            print(f"warning: ATTENTION: security override "
+            emit_line(f"warning: ATTENTION: security override "
                   f"'{_d} | {_c} | {_s}' rewrote {len(_syms)} different "
                   f"raw symbols into {_s}: {', '.join(sorted(_syms))} — "
                   f"they now share ONE cost pool. If they are different "
                   f"securities (a share class, a preferred series, a "
                   f"warrant), make the description key longer so it "
-                  f"matches only one.", file=sys.stderr)
+                  f"matches only one.")
 
     for key, n in sorted(dropped_keys.items()):
-        print(f"warning: parser emitted unknown field {key!r} on {n} "
+        emit_line(f"warning: parser emitted unknown field {key!r} on {n} "
               f"transaction(s) — not part of the TaxTransaction schema, "
-              f"DROPPED. Fix the parser or add the field to the schema.",
-              file=sys.stderr)
+              f"DROPPED. Fix the parser or add the field to the schema.")
 
     # Schema validation on what downstream actually sees. Errors are
     # violations that corrupt tax math; they abort only under --strict
@@ -1027,13 +1011,12 @@ Examples:
         if w.startswith(SCHEMA_ATTENTION_TAG):
             # `taxjson run` echoes ATTENTION lines to the console
             # (echo_parse_stats); the rest stay in the .sum (S065-12).
-            print(f"warning: ATTENTION: schema: "
-                  f"{w[len(SCHEMA_ATTENTION_TAG):]}", file=sys.stderr)
+            emit_line(f"warning: ATTENTION: schema: "
+                  f"{w[len(SCHEMA_ATTENTION_TAG):]}")
         else:
-            print(f"warning: schema: {w}", file=sys.stderr)
+            emit_line(f"warning: schema: {w}")
     for e in errors:
-        print(f"{'error' if (args.strict or args.lint) else 'warning: schema VIOLATION'}: {e}",
-              file=sys.stderr)
+        emit_line(f"{'error' if (args.strict or args.lint) else 'warning: schema VIOLATION'}: {e}")
     # Exit-code convention (AUDIT-2026-07-ui §1C4): schema violations and
     # lint problems are FINDINGS in the data → exit 1. Exit 2 is reserved
     # for usage/environment errors (bad args, missing files).
