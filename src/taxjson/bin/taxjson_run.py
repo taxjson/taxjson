@@ -2878,7 +2878,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
     if parse_only:
         print(f"==> {name}  (crypto exports first: sends pair across "
-              f"accounts)")
+              f"accounts)" if is_crypto else
+              f"==> {name}  (transfer evidence first: moves between your "
+              f"accounts pair across them)")
     else:
         print(f"==> {name}  ({'taxable' if is_taxable else 'sheltered'}"
               f"{', crypto' if is_crypto else ''})")
@@ -3266,6 +3268,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 "_raw_base_gains.json", "_merged.json", "_sorted.json",
                 "_filled.json", "_mapped.json", "_report.json",
                 "_pending_elections.json", "_manifest.json",
+                TRANSFER_COSTS_SUFFIX,
                 "_blend.diag", OWN_MOVES_SUFFIX)):
             continue
         # A parsed-source artifact with no surviving input group.
@@ -3276,6 +3279,14 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                       f"files are gone)")
 
     sources = tt_jsons + parsed + corp_files
+    # Shares that arrived by transfer from outside the books: booked at
+    # the broker's stated book value, or said to have no cost
+    # (lib/transfer_in, CA-ACB-TRANSFER-BV / US-BASIS-TRANSFER-BV).
+    if is_taxable and not is_crypto and not include_transfers:
+        _tc = stage_transfer_arrivals(name, inputs_dir.parent, cache,
+                                      tt_jsons, country)
+        if _tc is not None:
+            sources = sources + [_tc]
     # A US project's moves between your own taxable accounts, written by
     # `taxjson run` before the accounts' books (stage_own_account_moves;
     # US-BASIS-05): their TRANSFER legs are part of this account's books.
@@ -3876,6 +3887,107 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
 # A custody move's two legs (out of one account, into another) post a
 # few days apart at most.
 _OWN_MOVE_DAYS = 10
+
+
+TRANSFER_COSTS_SUFFIX = "_transfer_costs.json"
+
+
+def _transfer_key(root: Path):
+    """The security a transfer row moves, after ticker.map's undated
+    renames (the books are mapped by the merge stage; the transfer
+    evidence is not)."""
+    tm = root / "ticker.map"
+    renames: Dict[str, str] = {}
+    if tm.is_file():
+        try:
+            from taxjson.bin.taxjson_ticker_map import (load_map_file,
+                                                        merge_renames)
+            import contextlib as _cl
+            import io as _io
+            with _cl.redirect_stderr(_io.StringIO()):
+                renames = merge_renames(load_map_file(tm), to_base=True)
+        except (OSError, ValueError):
+            renames = {}
+    from taxjson.bin.taxjson_ticker_map import map_symbol
+
+    def key(sym: str) -> str:
+        s = str(sym or "").strip()
+        return map_symbol(s, renames).upper() if renames else s.upper()
+    return key
+
+
+def transfer_arrivals(root: Path, cache: Path,
+                      accounts: Optional[Dict[str, Any]] = None):
+    """[transfer_in.Arrival] of every taxable equity account (the
+    shares that arrived by transfer from outside the books), each
+    marked covered when its account's converted .tt rows account for
+    it. Read from work/ (the sidecars and the converted .tt files)."""
+    from taxjson.lib import transfer_in as TI
+    if accounts is None:
+        accounts = _soft_config(root).get("accounts") or {}
+    names = [n for n, c in accounts.items()
+             if isinstance(c, dict) and c.get("type") == "taxable"
+             and not c.get("crypto") and not c.get("transfers")]
+    if not names:
+        return []
+    key = _transfer_key(root)
+    found = TI.arrivals(TI.sidecar_rows(cache, names), key=key)
+    tt_rows: Dict[str, List[Dict[str, Any]]] = {}
+    import json as _json
+    for n in {a.account for a in found}:
+        rows: List[Dict[str, Any]] = []
+        for tt in input_files(root / "inputs" / n, ".tt"):
+            p = tt_json_path(cache, n, tt.name)
+            try:
+                doc = _json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            rows += [t for t in (doc.get("transactions") or [])
+                     if isinstance(t, dict)]
+        tt_rows[n] = rows
+    TI.mark_covered(found, tt_rows, key=key)
+    return found
+
+
+def stage_transfer_arrivals(name: str, root: Path, cache: Path,
+                            tt_jsons: List[Path], country: str
+                            ) -> Optional[Path]:
+    """The acquisitions a taxable account's books take for shares that
+    arrived by transfer at a STATED book value
+    (work/<name>_transfer_costs.json, a source of the books; None when
+    there are none), and one ATTENTION line per kind of uncovered
+    arrival — every run, so a fixed one (a .tt line covering it) goes
+    quiet. tt_jsons: this account's converted .tt files, already
+    written."""
+    from taxjson.lib import transfer_in as TI
+    out = cache / f"{name}{TRANSFER_COSTS_SUFFIX}"
+    try:
+        found = [a for a in transfer_arrivals(root, cache)
+                 if a.account == name]
+    except Exception as e:                          # noqa: BLE001
+        print(f"  warning: transfer-ins not checked ({type(e).__name__}: "
+              f"{e}).", file=sys.stderr)
+        found = []
+    rows = TI.booked_rows(found)
+    for ln in TI.attention_lines(found, country):
+        print(f"  {ATTENTION_PREFIX} {ln}")
+    if not rows:
+        out.unlink(missing_ok=True)
+        return None
+    import json as _json
+    text = _json.dumps({"transactions": rows,
+                        # No source_brokerage: the fees report counts
+                        # broker trades only (these are not trades).
+                        "metadata": {"kind": "transfer_book_value",
+                                     "account": name}},
+                       indent=2, sort_keys=True) + "\n"
+    try:
+        same = out.read_text(encoding="utf-8") == text
+    except OSError:
+        same = False
+    if not same:
+        write_text_atomic(out, text)
+    return out
 
 
 def _sidecar_transfer_rows(names: List[str], cache: Path
@@ -4958,24 +5070,26 @@ def cmd_run(args: argparse.Namespace) -> None:
     # evidence is parsed first (cached), so the moves are known before
     # any account's books are merged; each account's legs file is then
     # one of its sources.
-    from taxjson.lib.country import basis_pooled_across_accounts
-    if not basis_pooled_across_accounts(_country(settings)):
-        _equity_first = [(n, c) for n, c in accounts.items()
-                         if (c or {}).get("type") == "taxable"
-                         and not (c or {}).get("crypto")
-                         and not (c or {}).get("transfers")]
-        if len(_equity_first) >= 2:
-            for name, acfg in _equity_first:
-                try:
-                    stage_account(name, acfg, settings, inputs_dir, cache,
-                                  reports_dir, rates, ticker_map_arg,
-                                  sec_overrides_arg, args.force,
-                                  incomplete_history=mh_arg,
-                                  no_input=no_input,
-                                  strict=getattr(args, "strict", False),
-                                  parse_only=True)
-                except PendingElectionsError:
-                    pass
+    # Both countries: a transfer-in that pairs with a transfer-out of
+    # another of your taxable accounts is not an arrival from outside
+    # the books (lib/transfer_in) — every account's evidence must be
+    # current before any account's books are merged.
+    _equity_first = [(n, c) for n, c in accounts.items()
+                     if (c or {}).get("type") == "taxable"
+                     and not (c or {}).get("crypto")
+                     and not (c or {}).get("transfers")]
+    if len(_equity_first) >= 2:
+        for name, acfg in _equity_first:
+            try:
+                stage_account(name, acfg, settings, inputs_dir, cache,
+                              reports_dir, rates, ticker_map_arg,
+                              sec_overrides_arg, args.force,
+                              incomplete_history=mh_arg,
+                              no_input=no_input,
+                              strict=getattr(args, "strict", False),
+                              parse_only=True)
+            except PendingElectionsError:
+                pass
     stage_own_account_moves(root, {"accounts": accounts,
                                    "settings": settings},
                             settings, cache,
@@ -6859,6 +6973,28 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
     if want:
         rows = [r for r in rows if r["account"] == want]
     rows.sort(key=lambda r: (r["date"], r["account"], r["symbol"]))
+    # What the books did with each transfer-IN of a taxable account
+    # (lib/transfer_in): your own move (its out leg is yours too), booked
+    # at the broker's stated book value, covered by your .tt purchase,
+    # or NO COST — shares from outside the books with no cost.
+    _status = {"book_value": "book value", "covered": ".tt covers",
+               "no_cost": "NO COST"}
+    try:
+        _arr: Dict[Tuple[str, str, str], List[str]] = {}
+        for a in transfer_arrivals(root, cache, cfg.get("accounts")):
+            _arr.setdefault((a.account, a.symbol, a.date), []).append(
+                _status[a.status])
+    except Exception:                               # noqa: BLE001
+        _arr = {}
+    _tax_eq = {n for n, c in (cfg.get("accounts") or {}).items()
+               if isinstance(c, dict) and c.get("type") == "taxable"
+               and not c.get("crypto") and not c.get("transfers")}
+    for r in rows:
+        r["arrival"] = "-"
+        if (r["where"] == "sidecar" and r["quantity"] > 0
+                and r["account"] in _tax_eq):
+            got = _arr.get((r["account"], r["symbol"], r["date"][:10]))
+            r["arrival"] = got.pop(0) if got else "own move"
     if getattr(args, "json", False):
         _json_out({"transfers": rows, "count": len(rows)})
         return
@@ -6872,7 +7008,7 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
               + " — re-run `taxjson run` after enabling the sidecar, "
                 "or the broker reported none.")
         return
-    out_lines = ["DATE ACCOUNT SYMBOL QTY TYPE VALUE FEE CUR WHERE"]
+    out_lines = ["DATE ACCOUNT SYMBOL QTY TYPE VALUE FEE CUR WHERE IN_BOOKS"]
     for r in rows:
         # Type column: the transfer KIND (InterDepot/Internal/ATON…);
         # some brokers put a whole sentence here — cap it, the --json
@@ -6887,9 +7023,17 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
             (f"{r['fee']:g}" if r["fee"]
              else (f"{r['fee_qty']:g}_{r['fee_currency']}".rstrip("_")
                    if r["fee_qty"] else "-")),
-            r["currency"], r["where"]]))
+            r["currency"], r["where"], r["arrival"].replace(" ", "_")]))
     _print_report_table(out_lines)
     print(f"\n{len(rows)} transfer row(s).")
+    if any(r["arrival"] != "-" for r in rows):
+        print("IN_BOOKS (a taxable account's transfer-in): own_move = "
+              "your own shares moving (a transfer-out of yours cancels "
+              "it); book_value = from outside your books, booked at the "
+              "book value the broker states on the row; .tt_covers = "
+              "your .tt purchase covers it; NO_COST = from outside your "
+              "books with no cost: add the original purchase to a .tt "
+              "file (docs/getting-started.md, step 5c).")
 
 
 def _cannot_write_decisions(path, e: OSError) -> str:

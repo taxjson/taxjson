@@ -79,6 +79,207 @@ _CLEAN_TT = ("BUYSELL  2025-01-10  09:30:00  ABC.TO  10  CAD  20  200  0\n"
              "BUYSELL  2025-03-10  09:30:00  ABC.TO  -10  CAD  25  250  0\n")
 
 
+# ---------------------------------------------------------------- item 3
+
+class TestTransferInLib(unittest.TestCase):
+    """Item 3: which transfer-ins came from outside the books."""
+
+    def _rows(self, *rows):
+        return [(a, b, dict(t, action="TRANSFER")) for a, b, t in rows]
+
+    def test_own_moves_and_journals_cancel(self):
+        from taxjson.lib.transfer_in import arrivals
+        rows = self._rows(
+            # a broker's internal shuffle and the move to another broker
+            ("margin", "rbc_direct", {"symbol": "AAA.TO", "quantity": -10,
+                                      "date": "2025-06-30",
+                                      "book_value": 100}),
+            ("margin", "rbc_direct", {"symbol": "AAA.TO", "quantity": 10,
+                                      "date": "2025-06-30",
+                                      "book_value": 100}),
+            ("margin", "rbc_direct", {"symbol": "AAA.TO", "quantity": -10,
+                                      "date": "2025-07-02",
+                                      "book_value": 100}),
+            ("margin", "ib", {"symbol": "AAA.TO", "quantity": 10,
+                              "date": "2025-07-08"}),
+            # a move between two of your taxable accounts
+            ("cash", "questrade", {"symbol": "BBB.TO", "quantity": -5,
+                                   "date": "2025-02-01"}),
+            ("margin", "questrade", {"symbol": "BBB.TO", "quantity": 5,
+                                     "date": "2025-02-03",
+                                     "book_value": 50}),
+            # a listing journal with no ticker.map rule
+            ("margin", "questrade", {"symbol": "CCC.U.TO", "quantity": -7,
+                                     "date": "2025-04-01"}),
+            ("margin", "questrade", {"symbol": "CCC.TO", "quantity": 7,
+                                     "date": "2025-04-01",
+                                     "book_value": 70}),
+            # shares from outside: the only arrival
+            ("margin", "questrade", {"symbol": "DDD.TO", "quantity": 20,
+                                     "date": "2025-05-01",
+                                     "book_value": 400}))
+        found = arrivals(rows)
+        self.assertEqual([(a.symbol, a.quantity, a.book_value, a.status)
+                          for a in found],
+                         [("DDD.TO", 20.0, 400.0, "book_value")])
+
+    def test_market_value_is_never_a_cost(self):
+        # IB's transfer VALUE (net_amount) is the market value: no
+        # stated book value, so the arrival has no cost.
+        from taxjson.lib.transfer_in import arrivals, booked_rows
+        found = arrivals(self._rows(
+            ("margin", "ib", {"symbol": "EEE.US", "quantity": 30,
+                              "date": "2025-05-01", "net_amount": 9000.0,
+                              "currency": "USD"})))
+        self.assertEqual([(a.status, a.book_value) for a in found],
+                         [("no_cost", None)])
+        self.assertEqual(booked_rows(found), [])
+
+    def test_partial_arrival_takes_its_share_of_the_book_value(self):
+        from taxjson.lib.transfer_in import arrivals
+        found = arrivals(self._rows(
+            ("margin", "questrade", {"symbol": "FFF.TO", "quantity": -40,
+                                     "date": "2025-05-01"}),
+            ("margin", "questrade", {"symbol": "FFF.TO", "quantity": 100,
+                                     "date": "2025-05-02",
+                                     "book_value": 1000})))
+        self.assertEqual([(a.quantity, a.book_value) for a in found],
+                         [(60.0, 600.0)])
+
+    def test_a_tt_purchase_covers_the_arrival(self):
+        from taxjson.lib.transfer_in import arrivals, mark_covered
+        found = arrivals(self._rows(
+            ("margin", "questrade", {"symbol": "GGG.TO", "quantity": 10,
+                                     "date": "2025-05-02",
+                                     "book_value": 100}),
+            ("margin", "questrade", {"symbol": "HHH.TO", "quantity": 10,
+                                     "date": "2025-05-02"})))
+        mark_covered(found, {"margin": [
+            {"action": "BUYSELL", "symbol": "GGG.TO", "quantity": 10,
+             "date": "2021-03-15"},
+            # dated AFTER the arrival: not the shares that arrived
+            {"action": "BUYSELL", "symbol": "HHH.TO", "quantity": 10,
+             "date": "2025-06-01"}]})
+        self.assertEqual({a.symbol: a.status for a in found},
+                         {"GGG.TO": "covered", "HHH.TO": "no_cost"})
+
+
+def _bv_project(td, country):
+    cur, sym = (("CAD", "XYZ.TO") if country == "canada"
+                else ("USD", "XYZ"))
+    return _project(td, country=country, files={
+        "inputs/margin/questrade.csv": _QH
+        + _qrow("2025-03-03", "TF6", sym,
+                "XYZ CORP TRANSFER BOOK VALUE 5000.00", 100, "0.00",
+                "0.00", "0.00", cur=cur, act="Transfers")
+        + _qrow("2025-04-01", "Sell", sym, "XYZ CORP", -100, "60.00",
+                "6000.00", "6000.00", cur=cur)})
+
+
+class TestTransferInBookValue(unittest.TestCase):
+    """Item 3 end to end: the stated book value is the incoming cost."""
+
+    def _gain(self, root):
+        j = json.loads(cli(root, "sum", "--json").stdout)
+        return j["filing"]["totals"]["gain"]
+
+    @rule("CA-ACB-TRANSFER-BV")
+    def test_canada_book_value_is_the_acb(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _bv_project(td, "canada")
+            r = cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertIn("ATTENTION: transfer-in: margin: 1 transfer-in(s) "
+                          "from outside your books booked at the ACB the "
+                          "broker states on the row (Questrade: 100 XYZ.TO "
+                          "(2025-03-03))", r.stdout)
+            self.assertIn("add the original purchase as a .tt BUYSELL",
+                          r.stdout)
+            self.assertNotIn("holding period", r.stdout)
+            # The parser's own no-book-value caveat stays quiet: the run
+            # says it (or not) once.
+            self.assertNotIn("carry no TRANSFER BOOK VALUE", r.stderr)
+            self.assertEqual(self._gain(root), 1000.0)
+            # `taxjson transfers` says what the books did with the row.
+            j = json.loads(cli(root, "transfers", "--json").stdout)
+            self.assertEqual([t["arrival"] for t in j["transfers"]],
+                             ["book value"])
+            # The original purchase as a .tt line overrides it, and the
+            # ATTENTION stops.
+            (root / "inputs" / "margin" / "start.tt").write_text(
+                "BUYSELL 2021-03-15 09:30:00 XYZ.TO 100 CAD 40 4000 0\n")
+            r = cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertNotIn("transfer-in:", r.stdout)
+            self.assertFalse((root / "work" /
+                              "margin_transfer_costs.json").exists())
+            self.assertEqual(self._gain(root), 2000.0)
+            j = json.loads(cli(root, "transfers", "--json").stdout)
+            self.assertEqual([t["arrival"] for t in j["transfers"]],
+                             [".tt covers"])
+
+    @rule("US-BASIS-TRANSFER-BV")
+    def test_us_book_value_is_the_basis_with_the_holding_period_caveat(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _bv_project(td, "usa")
+            r = cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertIn("booked at the basis the broker states on the "
+                          "row (Questrade: 100 XYZ.US (2025-03-03))",
+                          r.stdout)
+            self.assertIn("holding period starts on the arrival date",
+                          r.stdout)
+            self.assertEqual(self._gain(root), 1000.0)
+
+    @rule("CA-ACB-TRANSFER-BV")
+    def test_canada_own_account_move_is_not_booked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(td, accounts=(
+                '[accounts.qa]\ntype = "taxable"\n'
+                '[accounts.qb]\ntype = "taxable"\n'), files={
+                "inputs/qa/questrade.csv": _QH
+                + _qrow("2025-02-02", "Buy", "XYZ.TO", "XYZ CORP", 100,
+                        "50.00", "-5000.00", "-5000.00")
+                + _qrow("2025-03-02", "TF6", "XYZ.TO", "XYZ CORP TRANSFER "
+                        "OUT", -100, "0.00", "0.00", "0.00",
+                        act="Transfers"),
+                "inputs/qb/questrade.csv": _QH
+                + _qrow("2025-03-03", "TF6", "XYZ.TO", "XYZ CORP TRANSFER "
+                        "BOOK VALUE 5000.00", 100, "0.00", "0.00", "0.00",
+                        act="Transfers", acct="55500002")})       # pii-ok
+            r = cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertNotIn("transfer-in:", r.stdout)
+            self.assertFalse((root / "work" / "qb_transfer_costs.json")
+                             .exists())
+            j = json.loads(cli(root, "transfers", "--json").stdout)
+            self.assertEqual({(t["account"], t["arrival"])
+                              for t in j["transfers"]},
+                             {("qa", "-"), ("qb", "own move")})
+
+
+class TestTransferArrivalIsNotAReplacement(unittest.TestCase):
+    """CA-ACB-TRANSFER-BV / US-BASIS-TRANSFER-BV: the arrival is dated by
+    its custody move, not an acquisition — never the purchase that makes
+    a loss superficial / a wash sale (in both countries)."""
+
+    @rule("CA-ACB-TRANSFER-BV")
+    @rule("US-BASIS-TRANSFER-BV")
+    def test_arrival_inside_the_window_denies_nothing(self):
+        book = [tx("BUYSELL", "2025-01-02", "LSS.US", 100, 5000),
+                tx("BUYSELL", "2025-03-03", "LSS.US", -100, 3000),
+                tx("BUYSELL", "2025-03-10", "LSS.US", 100, 3100,
+                   type="transfer_book_value")]
+        r = gains_both(book, year=2025)
+        for c in ("canada", "usa"):
+            self.assertEqual(r[c]["summary"]["total_disallowed"], 0.0, c)
+        # The same row as an ordinary purchase is denied in both.
+        book[-1] = tx("BUYSELL", "2025-03-10", "LSS.US", 100, 3100)
+        r = gains_both(book, year=2025)
+        for c in ("canada", "usa"):
+            self.assertGreater(r[c]["summary"]["total_disallowed"], 0.0, c)
+
+
 # ---------------------------------------------------------------- item 4
 
 class TestMessages(unittest.TestCase):

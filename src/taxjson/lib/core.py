@@ -2051,6 +2051,13 @@ _MOVE_DESC_RE = re.compile(r'own-account move #\d+: (\S+) -> (\S+)')
 REORG_356_TYPE = 'reorg_356'
 _LOT_EVENT_TYPES = (SPINOFF_355_TYPE, REORG_356_TYPE)
 
+# Shares that arrived by transfer from outside the books, booked at the
+# broker's stated book value on their ARRIVAL date (lib/transfer_in,
+# CA-ACB-TRANSFER-BV / US-BASIS-TRANSFER-BV). Held like any lot, but
+# never a purchase for the superficial-loss / wash-sale window: the
+# arrival is not when they were acquired.
+TRANSFER_BOOK_VALUE_TYPE = 'transfer_book_value'
+
 
 def is_stock_dividend(tx) -> bool:
     """A parser's stock-dividend row (a $0 BUYSELL of new shares)."""
@@ -3655,6 +3662,8 @@ class CanadaTaxRules(TaxRules):
                     # (synthetic), and the bookkeeping actions.
                     if t.action not in ('BUYSELL', 'ASSIGN'):
                         continue
+                    if getattr(t, 'type', '') == TRANSFER_BOOK_VALUE_TYPE:
+                        continue    # an arrival, not an acquisition
                     t_date = datetime.strptime(get_sort_date(t), '%Y-%m-%d')
                     if abs((t_date - loss_date).days) <= 30:
                         if t.quantity > 0:
@@ -3720,6 +3729,7 @@ class CanadaTaxRules(TaxRules):
                     for t in all_txs:
                         if (t.id == tx.id or t.action != 'BUYSELL'
                                 or t.quantity <= 0
+                                or (t.type or '') == TRANSFER_BOOK_VALUE_TYPE
                                 or parse_option_right(t.symbol) != 'C'):
                             continue
                         _und = _call_und(t.symbol)
@@ -5086,7 +5096,8 @@ class USATaxRules(TaxRules):
                 continue
 
             if (ev.quantity > 0 and ev.action == 'BUYSELL'
-                    and (ev.type or '') in _LOT_EVENT_TYPES):
+                    and (ev.type or '') in (_LOT_EVENT_TYPES
+                                            + (TRANSFER_BOOK_VALUE_TYPE,))):
                 # Shares received in a §355 spin-off or a §356 exchange
                 # are not acquired "by purchase or by an exchange on which
                 # the entire amount of gain or loss was recognized"
