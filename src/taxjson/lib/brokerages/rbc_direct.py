@@ -16,6 +16,7 @@ as ONE event each; real mergers ("... MERGER TO ...") and spin-offs are
 left to taxjson-corp-actions, which asks for the tax election.
 """
 
+from taxjson.lib.stage_msg import emit_line
 import csv
 import io
 import re
@@ -1105,7 +1106,7 @@ class RbcAccountContext:
             return
         self.emitted = True
         for m in self.messages:
-            print(m, file=sys.stderr)
+            emit_line(m)
 
     def ticker_for_name(self, key: str, date: str, *,
                         before_only: bool = False) -> Optional[str]:
@@ -1478,12 +1479,12 @@ class RbcBrokerage(BaseBrokerage):
         A2-0007, A2-0612; owner decision S065-12: not an error)."""
         tag = ('UNBOOKED: ' if unbooked
                else 'ATTENTION: ' if attention else '')
-        print(f"warning: {tag}{self._fname}: {msg}", file=sys.stderr)
+        emit_line(f"warning: {tag}{self._fname}: {msg}")
         if lint or unbooked or attention:
             self.lint_findings.append(msg)
 
     def _note(self, msg: str) -> None:
-        print(f"note: {self._fname}: {msg}", file=sys.stderr)
+        emit_line(f"note: {self._fname}: {msg}")
 
     # Set by taxjson-brokerage (see `prepare_files`) to share identity
     # maps across all of an account's RBC exports; None = this file alone.

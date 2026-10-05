@@ -24,6 +24,7 @@ don't halt the run, mirroring `taxjson-validate`'s own behaviour. Pass
 `--validate-strict` to make any validation error fail the command.
 """
 
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import json
 import re
@@ -90,17 +91,15 @@ def warn_duplicate_splits(txs, conflicts=None) -> int:
         ratios = sorted({round(float(r.quantity or 0), 9) for r in rows})
         tgt = f" -> {new}" if new else ""
         if len(ratios) == 1:
-            print(f"warning: duplicate split: {sym}{tgt} x{ratios[0]:g} on "
+            emit_line(f"warning: duplicate split: {sym}{tgt} x{ratios[0]:g} on "
                   f"{date} appears {len(rows)} times in account {acct} "
                   f"(e.g. the broker parser books it AND a manual .tt SPLIT "
-                  f"line) — applied ONCE; delete the manual line.",
-                  file=sys.stderr)
+                  f"line) — applied ONCE; delete the manual line.")
         elif all(split_ratios_close(r, ratios[0]) for r in ratios):
-            print(f"warning: ATTENTION: split: {sym}{tgt} on {date} appears "
+            emit_line(f"warning: ATTENTION: split: {sym}{tgt} on {date} appears "
                   f"{len(rows)} times in account {acct} with ratios "
                   f"{ratios} that differ only by rounding — one event, "
-                  f"applied ONCE; delete the manual .tt SPLIT line.",
-                  file=sys.stderr)
+                  f"applied ONCE; delete the manual .tt SPLIT line.")
         else:
             prod = 1.0
             for r in ratios:
@@ -110,7 +109,7 @@ def warn_duplicate_splits(txs, conflicts=None) -> int:
                    f"different ratios {ratios} — EACH is applied "
                    f"(x{prod:g} in total); keep only the right one.")
             # ATTENTION + "split: " — `taxjson run` echoes it.
-            print(f"warning: ATTENTION: split: {msg}", file=sys.stderr)
+            emit_line(f"warning: ATTENTION: split: {msg}")
             if conflicts is not None:
                 conflicts.append((f"SPLIT {sym}{tgt} {date} ({acct})", msg))
     # The same event booked on two dates a few days apart (a .tt line on
@@ -141,10 +140,10 @@ def warn_duplicate_splits(txs, conflicts=None) -> int:
                 exact = round(pair[0], 9) == round(pair[1], 9)
                 head = ("warning: duplicate split:" if exact
                         else "warning: ATTENTION: split:")
-                print(f"{head} {sym}{tgt} is booked on {d1} (x{pair[0]:.9g}) "
+                emit_line(f"{head} {sym}{tgt} is booked on {d1} (x{pair[0]:.9g}) "
                       f"and {d2} (x{pair[1]:.9g}) in account {acct} — one "
                       f"event, applied ONCE on {d1}; delete the manual .tt "
-                      f"SPLIT line.", file=sys.stderr)
+                      f"SPLIT line.")
     return n
 
 
@@ -265,22 +264,21 @@ def cancel_trade_pairs(txs):
     partials: list = []
     kept, pairs, unmatched = pair_cancellations(txs, partials=partials)
     for orig, ca, red in partials:
-        print(f"note: the broker cancelled (Ca) {-ca.quantity:g} of the "
+        emit_line(f"note: the broker cancelled (Ca) {-ca.quantity:g} of the "
               f"{orig.symbol} order of {orig.quantity:g} @ {orig.price:g} "
               f"on {orig.date} (one execution); the order is booked as "
-              f"{red.quantity:g}.", file=sys.stderr)
+              f"{red.quantity:g}.")
     for orig, _ca in pairs:
-        print(f"note: dropped the {orig.symbol} trade of "
+        emit_line(f"note: dropped the {orig.symbol} trade of "
               f"{orig.quantity:g} @ {orig.price:g} on {orig.date} and "
-              f"its broker cancellation (Ca) from another statement.",
-              file=sys.stderr)
+              f"its broker cancellation (Ca) from another statement.")
     for ca in unmatched:
-        print(f"warning: {ca.symbol}: the broker cancelled (Ca) a trade "
+        emit_line(f"warning: {ca.symbol}: the broker cancelled (Ca) a trade "
               f"of {-ca.quantity:g} @ {ca.price:g} on {ca.date}, but the "
               f"original fill is in none of this account's inputs — the "
               f"cancellation stays booked as a reversing trade. Add the "
               f"statement holding the original (or remove both rows by "
-              f"hand) so the pair nets out.", file=sys.stderr)
+              f"hand) so the pair nets out.")
     return kept
 
 
@@ -311,7 +309,7 @@ def _load_json_files(paths, require_inputs=False):
         if not path.exists():
             label = 'error' if require_inputs else 'warning'
             tail = '' if require_inputs else ', skipping'
-            print(f"{label}: {p} not found{tail}", file=sys.stderr)
+            emit_line(f"{label}: {p} not found{tail}")
             had_error = True
             continue
         try:
@@ -319,19 +317,19 @@ def _load_json_files(paths, require_inputs=False):
             with path.open('r', encoding='utf-8-sig') as f:
                 data = json.loads(strip_json_comments(f.read()))
         except Exception as e:
-            print(f"error: reading {p}: {e}", file=sys.stderr)
+            emit_line(f"error: reading {p}: {e}")
             had_error = fatal = True
             continue
         txs = data.get('transactions', data) if isinstance(data, dict) else data
         if not isinstance(txs, list):
-            print(f"error: {p} has no 'transactions' list", file=sys.stderr)
+            emit_line(f"error: {p} has no 'transactions' list")
             had_error = fatal = True
             continue
         try:
             txs = [coerce_transaction_row(t, i, f"taxjson-merge2({p})")
                    for i, t in enumerate(txs)]
         except ValueError as e:
-            print(f"error: {e}", file=sys.stderr)
+            emit_line(f"error: {e}")
             had_error = fatal = True
             continue
         merged.extend(txs)
@@ -346,19 +344,18 @@ def _load_json_files(paths, require_inputs=False):
             **({'original_metadata': src_meta} if src_meta else {}),
         })
     if require_inputs and had_error:
-        print("error: --require-inputs is set and one or more inputs were "
-              "missing or unreadable; refusing to emit a partial merge.",
-              file=sys.stderr)
+        emit_line("error: --require-inputs is set and one or more inputs were "
+              "missing or unreadable; refusing to emit a partial merge.")
         sys.exit(2)                 # an unreadable input (A2-0164)
     if fatal:
-        print("error: one or more inputs exist but could not be read; "
-              "refusing to emit a partial merge.", file=sys.stderr)
+        emit_line("error: one or more inputs exist but could not be read; "
+              "refusing to emit a partial merge.")
         sys.exit(2)
     if paths and not sources:
         # Every input was missing: an empty merge at exit 0 is the
         # silent-empty-merge hazard in another costume.
-        print("error: none of the input files could be read; refusing "
-              "to emit an empty merge.", file=sys.stderr)
+        emit_line("error: none of the input files could be read; refusing "
+              "to emit an empty merge.")
         sys.exit(2)
     return merged, sources
 
@@ -468,10 +465,7 @@ def main():
             source_accounts=source_accounts_of(
                 s.get('original_metadata') for s in sources))
         if dropped:
-            print(
-                f"note: --dedup removed {len(dropped)} duplicate row(s):",
-                file=sys.stderr,
-            )
+            emit_line(f"note: --dedup removed {len(dropped)} duplicate row(s):")
             # One line per dropped row so the user can audit which
             # broker/account/date combinations are colliding. Useful
             # when the count is surprising (e.g. an expected 8 grows
@@ -486,14 +480,11 @@ def main():
                 net = getattr(tx, 'net_amount', 0) or 0
                 account = getattr(tx, 'account', 'default')
                 tx_id = getattr(tx, 'id', '') or ''
-                print(
-                    f"  {date} {time:<8} {action:<10} {symbol:<16} "
+                emit_line(f"  {date} {time:<8} {action:<10} {symbol:<16} "
                     f"qty={qty:>10} price={price:>10} net={net:>12} "
                     f"account={account} id={tx_id}"
                     + (f" source={tx.source}" if getattr(tx, 'source', '')
-                       else ""),
-                    file=sys.stderr,
-                )
+                       else ""))
 
     # --- Stage 2b: broker trade cancellations -------------------------
     # An IB `Ca` row whose original fill sits in ANOTHER statement of the
@@ -524,7 +515,7 @@ def main():
         try:
             txs = apply_dated_renames(txs, tmap.dated)
         except RenameConflict as e:
-            print(f"error: {e}", file=sys.stderr)
+            emit_line(f"error: {e}")
             return 1
         # An option the underlying rule would move onto a contract the
         # book already trades natively keeps its own symbol (R1-16).
@@ -532,7 +523,7 @@ def main():
             [t.symbol for t in txs], renames, prog="taxjson-merge2")
         # A rename to a bare symbol in a listed book (A2-0304).
         for _w in bare_target_warnings([t.symbol for t in txs], renames):
-            print(f"warning: ATTENTION: {_w}", file=sys.stderr)
+            emit_line(f"warning: ATTENTION: {_w}")
         # apply_mapping mutates and returns the same tx; that's fine here
         # because we built fresh TaxTransaction instances above.
         txs = [apply_mapping(t, renames) for t in txs]
@@ -548,7 +539,7 @@ def main():
             txs, year=args.year, country=args.country,
             base_currency=(args.target_currency or None))
     except OpeningError as e:
-        print(f"error: {e}", file=sys.stderr)
+        emit_line(f"error: {e}")
         return 1
 
     # Post-mapping (a DELETE'd or renamed row is judged as the engine will
@@ -565,13 +556,10 @@ def main():
             # Mirror the standalone CLI's loud warning — running merge2's
             # --to without --rates stamps every cross-currency row at the
             # explicit --default-rate (without it such a row stops).
-            print(
-                f"warning: --to {target_currency} given without --rates; "
+            emit_line(f"warning: --to {target_currency} given without --rates; "
                 f"every cross-currency row will be converted with the "
                 f"--default-rate ({describe_default_rate(resolve_default_rate(args.default_rate))}). Pass "
-                f"--rates rates.csv to use real historical rates.",
-                file=sys.stderr,
-            )
+                f"--rates rates.csv to use real historical rates.")
         # Per-run reset so a long-lived process doesn't accumulate stale
         # counts. process_transactions appends to the module-level tally;
         # emit_fallback_summary reads it out after we're done.
@@ -582,14 +570,14 @@ def main():
                 target_curr=target_currency,
             )
         except ValueError as e:
-            print(f"error: {e}", file=sys.stderr)
+            emit_line(f"error: {e}")
             return 1
         default_rate = resolve_default_rate(args.default_rate)
         try:
             txs = convert_transactions(txs, target_currency, history,
                                        default_rate, country=args.country)
         except ValueError as e:
-            print(f"error: {e}", file=sys.stderr)
+            emit_line(f"error: {e}")
             return 1
         emit_fallback_summary(default_rate)
         if abort_if_currency_uncovered(
@@ -627,9 +615,9 @@ def main():
                    f"(sum, t1135 threshold). Fix the rates file "
                    f"coverage and re-run.")
             if args.validate or args.validate_strict:
-                print(f"error: {msg}", file=sys.stderr)
+                emit_line(f"error: {msg}")
                 return 1
-            print(f"warning: {msg}", file=sys.stderr)
+            emit_line(f"warning: {msg}")
 
     # --- Stage 4.5: reconcile dividends with their withholding --------
     # Post-dedup and post-conversion: every dividend and withholding row
@@ -650,20 +638,14 @@ def main():
             issues[_ctx].append(_msg)
         error_count = sum(len(v) for v in issues.values())
         if error_count:
-            print(
-                f"validation: {error_count} error(s) across {len(issues)} transaction(s):",
-                file=sys.stderr,
-            )
+            emit_line(f"validation: {error_count} error(s) across {len(issues)} transaction(s):")
             for ctx, errs in sorted(issues.items()):
                 for err in errs:
-                    print(f"  {ctx}: {err}", file=sys.stderr)
+                    emit_line(f"  {ctx}: {err}")
         else:
             # Positive confirmation so the diagnostics section of a .sum
             # report records that validation actually ran and passed.
-            print(
-                f"OK: <merged>: {len(txs)} transactions validated.",
-                file=sys.stderr,
-            )
+            emit_line(f"OK: <merged>: {len(txs)} transactions validated.")
 
     # --- Emit ----------------------------------------------------------
     # In --validate-strict mode we bail BEFORE writing stdout when there
@@ -672,11 +654,8 @@ def main():
     # only checks `$?` would happily publish the file. Refusing to emit
     # makes "broken output" and "nonzero exit" the same observable.
     if args.validate_strict and error_count:
-        print(
-            f"error: --validate-strict aborted output emit due to "
-            f"{error_count} validation error(s) above.",
-            file=sys.stderr,
-        )
+        emit_line(f"error: --validate-strict aborted output emit due to "
+            f"{error_count} validation error(s) above.")
         sys.exit(1)
 
     output = {

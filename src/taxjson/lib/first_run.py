@@ -340,17 +340,27 @@ def is_clean(doc: Dict[str, Any]) -> bool:
         "transfer_in_no_cost", "unchecked_accounts", "income_not_held"))
 
 
-def render(doc: Dict[str, Any], *, mh_name: str = "missing_history.json"
-           ) -> List[str]:
-    """The summary's lines (none when clean)."""
+def _accounts_shown(items: Sequence[Dict[str, Any]], n: int = 6) -> str:
+    """`margin (8), qt (1)` — the first `n` accounts and `+N more`, so
+    the names add up to the count the line states."""
+    shown = ", ".join(f"{u['account']} ({u['positions']})"
+                      for u in items[:n])
+    return shown + (f" +{len(items) - n} more" if len(items) > n else "")
+
+
+def render(doc: Dict[str, Any], *, mh_name: str = "missing_history.json",
+           width_: Optional[int] = None) -> List[str]:
+    """The summary's lines (none when clean): a heading, one `- ` item
+    per finding (wrapped with a hanging indent at the house width; one
+    line each when nothing wraps) and the closing line."""
     if is_clean(doc):
         return []
+    from taxjson.lib import out
     yr = doc.get("year")
-    lines = ["==> before you trust these numbers (docs/getting-started.md, "
-             "step 5)"]
+    items: List[str] = []
     np_ = doc.get("no_purchase") or []
     if np_:
-        lines.append(f"  {len(np_)} position(s) sold in {yr} with no "
+        items.append(f"{len(np_)} position(s) sold in {yr} with no "
                      f"purchase in your files, not in {mh_name} — those "
                      f"sales are NOT in `taxjson sum`: {_names(np_)}. "
                      f"Run `taxjson find-missing-history`.")
@@ -358,27 +368,31 @@ def render(doc: Dict[str, Any], *, mh_name: str = "missing_history.json"
     if zs or zh:
         parts = ([f"{len(zs)} sold in {yr}"] if zs else []) \
             + ([f"{len(zh)} still held"] if zh else [])
-        lines.append(f"  {len(zs) + len(zh)} position(s) at a $0 cost "
+        items.append(f"{len(zs) + len(zh)} position(s) at a $0 cost "
                      f"({', '.join(parts)}): {_names(zs + zh)}. Run "
                      f"`taxjson find-missing-history`.")
     tn = doc.get("transfer_in_no_cost") or []
     if tn:
-        lines.append(f"  {len(tn)} transfer-in(s) from outside your books "
+        items.append(f"{len(tn)} transfer-in(s) from outside your books "
                      f"kept out with no cost: {_names(tn)}. Run `taxjson "
                      f"transfers`.")
     un = doc.get("unchecked_accounts") or []
     if un:
-        shown = ", ".join(f"{u['account']} ({u['positions']})"
-                          for u in un[:4])
-        lines.append(f"  {len(un)} account(s) with open positions and no "
-                     f"holdings file to check them against: {shown}. Run "
-                     f"`taxjson sanity` with the broker's positions.")
+        items.append(f"{len(un)} account(s) with open positions and no "
+                     f"holdings file to check them against: "
+                     f"{_accounts_shown(un)}. Run `taxjson sanity` with "
+                     f"the broker's positions.")
     inc = doc.get("income_not_held") or []
     if inc:
-        lines.append(f"  {len(inc)} security(ies) paid income in {yr} that "
+        items.append(f"{len(inc)} security(ies) paid income in {yr} that "
                      f"the books do not hold (a holding with no purchase "
                      f"in your files?): {_names(inc)}. Run `taxjson "
                      f"sanity`.")
-    lines.append("  Then `taxjson checklist`. Every step is in "
-                 f"{GUIDE}.")
+    w = out.width() if width_ is None else width_
+    lines = ["==> before you trust these numbers (docs/getting-started.md, "
+             "step 5)"]
+    for it in items:
+        lines += out.wrap(it, w, "  - ", "    ")
+    lines += out.wrap(f"Then `taxjson checklist`. Every step is in {GUIDE}.",
+                      w, "  ", "  ")
     return lines

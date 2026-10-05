@@ -18,6 +18,7 @@ Two jobs, both about refusing to produce a quietly-wrong number:
   (LocalTimezoneMissing) rather than dated in someone else's time.
 """
 
+from taxjson.lib.stage_msg import emit_line
 import os
 import re
 from collections.abc import Set as AbstractSet
@@ -329,11 +330,11 @@ def warn_depeg(coin: str, usd_price: float, qty: float, date: str,
         if conv is None:
             if cur not in _DEPEG_UNCHECKED:
                 _DEPEG_UNCHECKED.add(cur)
-                print(f"note: {where}: a {coin} fill valued in {cur} on "
+                emit_line(f"note: {where}: a {coin} fill valued in {cur} on "
                       f"{date} is not checked for a de-peg: no {cur} and "
                       f"USD rate for that day (`taxjson run` passes its "
                       f"rates; add {cur} to source_currencies). Further "
-                      f"{cur} fills are not named.", file=sys.stderr)
+                      f"{cur} fills are not named.")
             return False
         price = conv
     if abs(price - 1.0) <= DEPEG_TOLERANCE:
@@ -343,10 +344,10 @@ def warn_depeg(coin: str, usd_price: float, qty: float, date: str,
     # leave out.
     via = (f" ({native:.4f} {cur} at the day's rate)" if cur != 'USD'
            else "")
-    print(f"warning: ATTENTION: {where}: {coin} traded at {price:.4f} USD"
+    emit_line(f"warning: ATTENTION: {where}: {coin} traded at {price:.4f} USD"
           f"{via} on {date} "
           f"— stablecoins are booked as US-dollar cash (an "
           f"approximation), so the {abs(price - 1.0) * qty:,.2f} USD "
           f"de-peg difference on {qty:g} {coin} is not in the gains; "
-          f"report it by hand if it matters.", file=sys.stderr)
+          f"report it by hand if it matters.")
     return True

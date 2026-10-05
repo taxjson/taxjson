@@ -1,3 +1,4 @@
+from taxjson.lib.stage_msg import emit_line
 import functools
 import json
 import re
@@ -777,8 +778,7 @@ _LOSS_TERM = {'canada': 'the loss may be superficial',
 
 def _emit_option_replacement_stderr(warnings, *, country: str) -> None:
     for w in warnings:
-        print(f"warning: {format_option_replacement_warning(w, country=country)}",
-              file=sys.stderr)
+        emit_line(f"warning: {format_option_replacement_warning(w, country=country)}")
 
 
 def format_option_replacement_warning(w, *, country: str) -> str:
@@ -1181,11 +1181,10 @@ def _disambiguate_duplicate_ids(*books) -> None:
                 t.id = new_id
                 renamed += 1
     if renamed:
-        print(f"NOTE: {renamed} row(s) repeat an earlier row exactly "
+        emit_line(f"NOTE: {renamed} row(s) repeat an earlier row exactly "
               f"(same date, time, symbol, quantity, price and amount); "
               f"each is booked as a separate trade. If they are "
-              f"duplicates, drop them (taxjson-merge2 --dedup).",
-              file=sys.stderr)
+              f"duplicates, drop them (taxjson-merge2 --dedup).")
 
 
 def _warn_undrained_adjustments(pending: Dict[str, float], engine: str) -> None:
@@ -1204,8 +1203,7 @@ def _warn_undrained_adjustments(pending: Dict[str, float], engine: str) -> None:
     detail = ", ".join(f"{_kname(s)}: {amt:+.2f}"
                        for s, amt in sorted(undrained.items(),
                                             key=lambda kv: str(kv[0])))
-    print(
-        f"warning: {len(undrained)} unconsumed option-assignment "
+    emit_line(f"warning: {len(undrained)} unconsumed option-assignment "
         f"adjustment(s) at end of {engine} gains run — {detail}. An ASSIGN "
         f"option leg staged this premium, but no stock trade in its "
         f"account could be paired with it: none on that symbol in the "
@@ -1213,9 +1211,7 @@ def _warn_undrained_adjustments(pending: Dict[str, float], engine: str) -> None:
         f"{_MARKED_LEG_MAX_LAG_DAYS} days after the option row (missing "
         f"rows, a symbol mismatch, or a leg dated outside that window); "
         f"that premium is NOT reflected in any gain. Check the "
-        f"underlying's buy/sell rows around the assignment date.",
-        file=sys.stderr,
-    )
+        f"underlying's buy/sell rows around the assignment date.")
 
 
 # A marked assignment stock leg (the Webull two-row convention) is
@@ -1566,16 +1562,15 @@ def _make_assign_underlying_resolver(transactions, date_of, quiet=False):
         if len(near) == 1:
             out = near[0]
             if not quiet:
-                print(f"note: {tx.symbol}: option root {und} resolved to "
+                emit_line(f"note: {tx.symbol}: option root {und} resolved to "
                       f"{out}, the stock line this account trades at the "
                       f"assignment — the premium rolls into its "
-                      f"cost/proceeds.", file=sys.stderr)
+                      f"cost/proceeds.")
         elif len(near) > 1:
-            print(f"warning: {tx.symbol}: option root {und} matches "
+            emit_line(f"warning: {tx.symbol}: option root {und} matches "
                   f"several stock lines traded at the assignment "
                   f"({', '.join(near)}) — treated as cash-settled. Map "
-                  f"the option to its stock in ticker.map and re-run.",
-                  file=sys.stderr)
+                  f"the option to its stock in ticker.map and re-run.")
         cache[ck] = out
         return out
 
@@ -1656,14 +1651,14 @@ def _warn_ticker_reused_after_rename(txs, date_of, *, rule_text: str
         d = str(date_of(t) or '')
         if d > d_r and t.symbol not in seen:
             seen.add(t.symbol)
-            print(f"warning: {t.symbol} trades on {d}, after its "
+            emit_line(f"warning: {t.symbol} trades on {d}, after its "
                   f"rename to {new} on {d_r}: renames are dated, so "
                   f"taxjson treats these rows as a DIFFERENT security "
                   f"from {new} for {rule_text}. If the broker still books "
                   f"the renamed shares under {t.symbol}, declare it in "
                   f"ticker.map (RENAME {t.symbol} {new} {d_r} late=fold); "
                   f"if another company now uses the ticker, `late=separate`"
-                  f" (`taxjson renames`).", file=sys.stderr)
+                  f" (`taxjson renames`).")
 
 
 def disposition_groups(rows) -> Dict[int, int]:
@@ -1937,15 +1932,12 @@ def _verify_share_conservation(position_rows, actual_qty_by_symbol,
     for k in sorted(set(expected) | set(actual)):
         e, a = expected.get(k, 0.0), actual.get(k, 0.0)
         if abs(e - a) > 1e-3:
-            print(
-                f"warning: conservation: {engine_label} share-count "
+            emit_line(f"warning: conservation: {engine_label} share-count "
                 f"mismatch for {k}: replaying the transactions gives "
                 f"{e:.4f} but the engine's inventory holds {a:.4f} "
                 f"(delta {a - e:+.4f}). The gains for this symbol are "
                 f"NOT trustworthy — this indicates an engine ordering/"
-                f"split/opening-balance bug, not bad input data.",
-                file=sys.stderr,
-            )
+                f"split/opening-balance bug, not bad input data.")
 
 
 def _warn_stranded_basis(pools) -> None:
@@ -1968,14 +1960,11 @@ def _warn_stranded_basis(pools) -> None:
         seen_objs.add(id(pool))
         if (abs(pool['qty']) <= pool_qty_eps(sym)
                 and abs(float(pool['total_cost'])) > 0.02):
-            print(
-                f"warning: conservation: {sym} pool is EMPTY but carries "
+            emit_line(f"warning: conservation: {sym} pool is EMPTY but carries "
                 f"{float(pool['total_cost']):.2f} of stranded basis — "
                 f"either an engine chunk-math bug or an ADJUST/ROC row "
                 f"posted after the position was fully closed (the latter "
-                f"is a taxable event needing manual review).",
-                file=sys.stderr,
-            )
+                f"is a taxable event needing manual review).")
 
 
 def _dedupe_corporate_splits(txs: List[TaxTransaction], seen: set) -> List[TaxTransaction]:
@@ -2100,10 +2089,10 @@ def _fold_per_account_rename_ratios(taxable: List[TaxTransaction],
             **{**first.to_dict(), 'quantity': r_eff, 'id': first.id})
         for li, i, _t in rows[1:]:
             drop.add((li, i))
-        print(f"NOTE: {sym} -> {new} on {d}: per-account merger ratios "
+        emit_line(f"NOTE: {sym} -> {new} on {d}: per-account merger ratios "
               f"{sorted(set(round(v, 6) for v in ratio_of.values()))} "
               f"applied to the symbol-wide pool as one event at the "
-              f"holdings-weighted ratio {r_eff:.6g}.", file=sys.stderr)
+              f"holdings-weighted ratio {r_eff:.6g}.")
     out = []
     for li, lst in enumerate(lists):
         out.append([replace.get((li, i), t) for i, t in enumerate(lst)
@@ -2311,12 +2300,12 @@ class CanadaTaxRules(TaxRules):
                         _d['price'] = float(_t.price) / _f
                     _r = TaxTransaction(**{**_d, 'id': _t.id})
                     all_txs[_i] = _r
-                    print(f"NOTE: {_t.symbol}: re-denominated a "
+                    emit_line(f"NOTE: {_t.symbol}: re-denominated a "
                           f"{_t.quantity:g}-share trade executed "
                           f"{_t.date} through the x{_f:g} split "
                           f"inside its settle lag (booked as "
                           f"{_d['quantity']:g} post-split shares; "
-                          f"money unchanged).", file=sys.stderr)
+                          f"money unchanged).")
                 # Rebuild the per-book lists from the same slices
                 # (all_txs is transactions + sheltered + affiliated,
                 # in order) so every downstream walk sees the
@@ -2855,13 +2844,13 @@ class CanadaTaxRules(TaxRules):
                         # option's own P&L is realized here instead of
                         # being staged forever and dropped. The note
                         # keeps the missing-data case diagnosable.
-                        print(f"note: {symbol}: assignment treated as "
+                        emit_line(f"note: {symbol}: assignment treated as "
                               f"cash-settled ("
                               f"{parse_option_underlying(symbol) or exercise_target(tx) or '?'}"
                               f" never trades as stock in this book) — "
                               f"option P&L realized directly. If a stock "
                               f"leg is missing from your input, add it "
-                              f"and re-run.", file=sys.stderr)
+                              f"and re-run.")
                 
                 if action == 'DISALLOW':
                     note = "DISALLOWANCE"
@@ -2902,8 +2891,7 @@ class CanadaTaxRules(TaxRules):
                             # warning printed once PER ITERATION — one
                             # data problem masqueraded as several.
                             if _empty_roc:
-                                print(
-                                    f"warning: {symbol} return of capital "
+                                emit_line(f"warning: {symbol} return of capital "
                                     f"of {-float(tx.net_amount):.2f} on "
                                     f"{tx.date} hits an EMPTY pool — the "
                                     f"position was fully sold before it "
@@ -2912,10 +2900,9 @@ class CanadaTaxRules(TaxRules):
                                     f"that year (ITA s.40(3), ACB nil). "
                                     f"If it belongs to the sold position, "
                                     f"re-date the ADJUST before the final "
-                                    f"sale instead.", file=sys.stderr)
+                                    f"sale instead.")
                             else:
-                                print(
-                                    f"warning: {symbol} ADJUST of "
+                                emit_line(f"warning: {symbol} ADJUST of "
                                     f"{float(tx.net_amount):.2f} on {tx.date} "
                                     f"hits an EMPTY pool — the position was "
                                     f"fully sold before this ADJUST posted, so "
@@ -2924,7 +2911,7 @@ class CanadaTaxRules(TaxRules):
                                     f"earned it. Re-date the ADJUST before "
                                     f"the final sale (adjusting that "
                                     f"disposition's gain) or apply it "
-                                    f"manually.", file=sys.stderr)
+                                    f"manually.")
                         _applied_adj = float(tx.net_amount)
                         if (pool['qty'] < -1e-6
                                 and not str(tx.id or '').startswith('WASH_')):
@@ -2938,14 +2925,13 @@ class CanadaTaxRules(TaxRules):
                             # gain by the amount (2x off, audit R1-157).
                             _applied_adj = -_applied_adj
                             if iteration == 0:
-                                print(f"note: {symbol}: ADJUST of "
+                                emit_line(f"note: {symbol}: ADJUST of "
                                       f"{float(tx.net_amount):+.2f} on "
                                       f"{tx.date} lands on a SHORT "
                                       f"position — booked as the short "
                                       f"seller's compensation payment "
                                       f"(it changes the cover's gain by "
-                                      f"{-float(tx.net_amount):+.2f}).",
-                                      file=sys.stderr)
+                                      f"{-float(tx.net_amount):+.2f}).")
                         if _empty_roc:
                             _applied_adj = 0.0
                             _excess = -float(tx.net_amount)
@@ -3048,14 +3034,11 @@ class CanadaTaxRules(TaxRules):
                                     'note': 'DEEMED GAIN — return of capital exceeded ACB (ITA s.40(3)); ACB reset to nil',
                                     'trace': [],
                                 })
-                            print(
-                                f"NOTE: {symbol}: return of capital on "
+                            emit_line(f"NOTE: {symbol}: return of capital on "
                                 f"{tx.date} exceeded the ACB by "
                                 f"{_excess:.2f} — booked as a deemed "
                                 f"capital gain in that year (ITA s.40(3)); "
-                                f"ACB reset to nil.",
-                                file=sys.stderr,
-                            )
+                                f"ACB reset to nil.")
                     _shown_adj = (_applied_adj if not is_other_scope
                                   else tx.net_amount)
                     adjustment_shown = _shown_adj
@@ -3373,12 +3356,9 @@ class CanadaTaxRules(TaxRules):
                                 disp_dt = datetime.strptime(tx.date, '%Y-%m-%d')
                                 raw_days = (disp_dt - acq_dt).days
                                 if raw_days < 0:
-                                    print(
-                                        f"warning: negative days_held for {tx.symbol} "
+                                    emit_line(f"warning: negative days_held for {tx.symbol} "
                                         f"on {tx.date} (last_acq={pool['last_acq_date']}); "
-                                        f"this usually indicates out-of-order transactions",
-                                        file=sys.stderr,
-                                    )
+                                        f"this usually indicates out-of-order transactions")
                                 days_held = max(0, raw_days)
                             except ValueError: days_held = 0
                             
@@ -4556,9 +4536,9 @@ class CanadaTaxRules(TaxRules):
                                 # so an unexpected error doesn't
                                 # disappear: a missing trace block is
                                 # otherwise hard to diagnose.
-                                print(f"warning: skipped wash-trace "
+                                emit_line(f"warning: skipped wash-trace "
                                       f"context for {v.symbol}@{v.date} "
-                                      f"({e})", file=sys.stderr)
+                                      f"({e})")
                         
                         disallow_cmd = f"DISALLOW {v.date} {v.time} {v.symbol} {v.currency} {v.net_amount:.4f}"
                         adjust_cmd = f"ADJUST {adj.date} {adj.time} {adj.symbol} {adj.currency} {adj_total:.4f}" if adj else ""
@@ -4606,14 +4586,11 @@ class CanadaTaxRules(TaxRules):
         # best-effort fallback and emit a stderr warning so the caller
         # knows the result may be inconsistent.
         if not solver_converged:
-            print(
-                f"warning: the superficial-loss solver did not converge "
+            emit_line(f"warning: the superficial-loss solver did not converge "
                 f"within {solver_iterations_used} iterations — the "
                 f"superficial-loss list "
                 f"may be incomplete and ACB pools may be inconsistent. "
-                f"Check for unusual same-symbol activity in your input.",
-                file=sys.stderr,
-            )
+                f"Check for unusual same-symbol activity in your input.")
             # Fall back to the last iteration's state.
             if not final_realized_gains:
                 final_realized_gains = iteration_realized_gains
@@ -4802,17 +4779,11 @@ class CanadaTaxRules(TaxRules):
         sum_disallowed_on_gains = sum(g['disallowed'] for g in final_realized_gains)
         sum_disallowed_on_washes = sum(w['amount'] for w in final_wash_sales)
         if abs((sum_taxable - sum_raw) - sum_disallowed_on_gains) > 0.01:
-            print(
-                f"warning: gain disallowance invariant broken — "
-                f"taxable-raw={sum_taxable - sum_raw:.4f} vs gains-disallowed={sum_disallowed_on_gains:.4f}",
-                file=sys.stderr,
-            )
+            emit_line(f"warning: gain disallowance invariant broken — "
+                f"taxable-raw={sum_taxable - sum_raw:.4f} vs gains-disallowed={sum_disallowed_on_gains:.4f}")
         if abs(sum_disallowed_on_gains - sum_disallowed_on_washes) > 0.01:
-            print(
-                f"warning: wash-sale disallowance invariant broken — "
-                f"gains-disallowed={sum_disallowed_on_gains:.4f} vs wash-sales={sum_disallowed_on_washes:.4f}",
-                file=sys.stderr,
-            )
+            emit_line(f"warning: wash-sale disallowance invariant broken — "
+                f"gains-disallowed={sum_disallowed_on_gains:.4f} vs wash-sales={sum_disallowed_on_washes:.4f}")
         _warn_undrained_adjustments(pending_adjustments.undrained(), "canada")
 
         # Options as replacement property are ENFORCED in the solver
@@ -5074,7 +5045,7 @@ class USATaxRules(TaxRules):
 
         def _note(date_: str, text: str) -> None:
             if getattr(self, 'emit_replacement_stderr', True):
-                print(text, file=sys.stderr)
+                emit_line(text)
             else:
                 _dated_notes.append((date_, text))
 
@@ -5316,14 +5287,14 @@ class USATaxRules(TaxRules):
                         # and skip; affiliated (spouse) accounts keep
                         # the partition result, since they genuinely
                         # can short.
-                        print(f"warning: sheltered account "
+                        emit_line(f"warning: sheltered account "
                               f"{ev.account!r} sells {open_qty:g} "
                               f"{sym} beyond its recorded balance on "
                               f"{ev.date} — missing acquisition "
                               f"history; NOT treated as a §1091 short "
                               f"replacement. Add the missing sheltered "
                               f"buy/transfer rows for exact wash "
-                              f"matching.", file=sys.stderr)
+                              f"matching.")
                         open_qty = 0.0
                 else:
                     open_qty = abs(ev.quantity) - min(abs(ev.quantity), max(0.0, prev))
@@ -5372,12 +5343,12 @@ class USATaxRules(TaxRules):
                     # file must not kill the whole run (the Canada
                     # engine gates its check to the taxable scope the
                     # same way). Warn and keep the main book's label.
-                    print(f"warning: {_tx.symbol}: context book "
+                    emit_line(f"warning: {_tx.symbol}: context book "
                           f"transaction {_tx.id} on {_tx.date} is in "
                           f"{_tx.currency!r} but the main book uses "
                           f"{existing!r} — context amounts assumed "
                           f"comparable; convert the context file for "
-                          f"exact wash amounts.", file=sys.stderr)
+                          f"exact wash amounts.")
                     continue
                 raise ValueError(
                     f"Currency mismatch for {_tx.symbol}: previously seen as {existing!r} "
@@ -6197,12 +6168,11 @@ class USATaxRules(TaxRules):
                                      '(§301(c)(3)); basis reset to zero'),
                         })
                 if excess_total > D('0.005'):
-                    print(
-                        f"NOTE: {symbol}: nondividend distribution on "
+                    emit_line(f"NOTE: {symbol}: nondividend distribution on "
                         f"{tx.date} exceeded the basis by "
                         f"{float(excess_total):.2f} — booked as capital "
                         f"gain in that year (§301(c)(3)); the basis is "
-                        f"zero.", file=sys.stderr)
+                        f"zero.")
                 if trace:
                     symbol_traces[symbol].append(
                         f"# {tx.date} ADJUST   {tx.net_amount:10.4f} | "
@@ -6559,12 +6529,11 @@ class USATaxRules(TaxRules):
                 # stock leg can consume a staged premium — realize the
                 # option's own P&L via normal disposition accounting
                 # (mirrors the Canada engine, note and all).
-                print(f"note: {symbol}: assignment treated as "
+                emit_line(f"note: {symbol}: assignment treated as "
                       f"cash-settled ({_assign_und_named} never "
                       f"trades as stock in this book) — option P&L "
                       f"realized directly. If a stock leg is missing "
-                      f"from your input, add it and re-run.",
-                      file=sys.stderr)
+                      f"from your input, add it and re-run.")
                 is_option_assign = False
                 underlying_for_assign = None
 
@@ -7437,22 +7406,19 @@ class USATaxRules(TaxRules):
         sum_raw = sum(g.get('raw_gain', g['gain']) for g in sell_entries)
         sum_disallowed = sum(g.get('disallowed_amount', 0.0) for g in sell_entries)
         if abs((sum_allowed - sum_raw) - sum_disallowed) > 0.01:
-            print(
-                f"warning: US gain disallowance invariant broken — "
-                f"allowed-raw={sum_allowed - sum_raw:.4f} vs disallowed={sum_disallowed:.4f}",
-                file=sys.stderr,
-            )
+            emit_line(f"warning: US gain disallowance invariant broken — "
+                f"allowed-raw={sum_allowed - sum_raw:.4f} vs disallowed={sum_disallowed:.4f}")
         _warn_undrained_adjustments(pending_option_adjustments.undrained(), "usa")
         if _us_dust:
             _by: Dict[str, List[float]] = {}
             for _t in _us_dust:
                 _by.setdefault(_t.symbol, []).append(_t.quantity)
-            print("warning: rows smaller than 1e-08 units are not booked "
+            emit_line("warning: rows smaller than 1e-08 units are not booked "
                   "by the US engine: " + ", ".join(
                       f"{s_} ({len(q)} row(s), net {sum(q):+.3g})"
                       for s_, q in sorted(_by.items()))
                   + " — their units and money are left out of the lots "
-                  "and Form 8949.", file=sys.stderr)
+                  "and Form 8949.")
         for _what, _rows in (
                 ("a lot residue of at most 1e-08 units was folded into "
                  "the sale that closed the lot (its cost is in that "
@@ -7464,10 +7430,10 @@ class USATaxRules(TaxRules):
                 _agg: Dict[str, List[float]] = {}
                 for _s, _q in _rows:
                     _agg.setdefault(_s, []).append(_q)
-                print(f"warning: {_what}: " + ", ".join(
+                emit_line(f"warning: {_what}: " + ", ".join(
                     f"{s_} ({len(q)} time(s), {sum(q):+.3g} units)"
                     for s_, q in sorted(_agg.items()))
-                    + " (US-CRYPTO-08).", file=sys.stderr)
+                    + " (US-CRYPTO-08).")
 
         # Warn-only call-as-replacement scan (the experimental US engine
         # does not enforce it; always on — cross_asset is retired).

@@ -671,7 +671,7 @@ class TestRunNoteWording(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('wrote taxjson.toml.bak1', r.stdout)
         self.assertIn('re-add their sections (see taxjson.toml.bak1)',
-                      r.stdout)
+                      " ".join(r.stdout.split()).lower())
 
 
 if __name__ == '__main__':

@@ -24,13 +24,13 @@ explain and audit call the same functions, so they cannot drift.
 
 import json
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from taxjson.lib.core import TaxTransaction, get_tax_rules, is_stock_dividend
 from taxjson.lib.numeric import round_floats
+from taxjson.lib.stage_msg import emit_line, say
 from taxjson.lib.missing_history import (
     detect_missing_history,
     detect_superficial_loss_warnings,
@@ -356,11 +356,16 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
                 for _, _, _, seg in ev:
                     for idx, _t in seg:
                         restatement_rows.add(idx)
-                print(f"NOTE: account-wide restatement detected "
-                      f"({acct}): {len(syms)} symbols share zero-net "
-                      f"TRANSFER clusters over {lo:%Y-%m-%d}.."
-                      f"{hi:%Y-%m-%d} — netted as one custody event "
-                      f"(no attestation needed).", file=sys.stderr)
+                say("note", f"account-wide restatement detected ({acct}): "
+                    f"{len(syms)} symbols share zero-net TRANSFER "
+                    f"clusters over {lo:%Y-%m-%d} to {hi:%Y-%m-%d}",
+                    ["Netted as one custody event (no attestation "
+                     "needed)."],
+                    legacy=f"NOTE: account-wide restatement detected "
+                    f"({acct}): {len(syms)} symbols share zero-net "
+                    f"TRANSFER clusters over {lo:%Y-%m-%d}.."
+                    f"{hi:%Y-%m-%d} — netted as one custody event "
+                    f"(no attestation needed).")
 
             for e in entries:
                 # (c) EVENT SPAN CAP — one broker event is a few days
@@ -450,7 +455,26 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
                     # ALREADY nets to zero (it would unbalance it).
                     # Tell the user the attestation form instead.
                     _q = abs(seg[0][1].quantity)
-                    print(
+                    say("note", f"{symbol} ({account}): a zero-net "
+                        f"TRANSFER cluster ({len(seg)} rows, {date_lo} to "
+                        f"{date_hi}) was NOT netted out",
+                        [f"It sits within {_TRANSFER_NEAR_TRADE_PAD_DAYS} "
+                         f"days of a taxable-book trade of the symbol. If "
+                         f"this is broker churn (listing flip / custody "
+                         f"restatement — ownership never changed), attest "
+                         f"it by adding a hand-written zero-net pair to a "
+                         f".tt file in the same account (the trailing "
+                         f"DECLARED token marks a deliberate declaration), "
+                         f"e.g.:",
+                         f"  TRANSFER  {date_lo}  09:30:00  {symbol}  "
+                         f"{_q:g}  CAD  0.0  0.0  DECLARED",
+                         f"  TRANSFER  {date_lo}  09:30:00  {symbol}  "
+                         f"-{_q:g}  CAD  0.0  0.0  DECLARED",
+                         "Declared legs let the cluster net. If any leg "
+                         "was a genuine in-kind contribution or "
+                         "withdrawal, record THAT leg as a BUYSELL dated "
+                         "the true event day instead."],
+                        legacy=
                         f"NOTE: {symbol} ({account}): a zero-net "
                         f"TRANSFER cluster ({len(seg)} rows, "
                         f"{date_lo}..{date_hi}) was NOT netted out "
@@ -470,8 +494,7 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
                         f"  — declared legs let the cluster net. If any "
                         f"leg was a genuine in-kind contribution or "
                         f"withdrawal, record THAT leg as a BUYSELL "
-                        f"dated the true event day instead.",
-                        file=sys.stderr)
+                        f"dated the true event day instead.")
                     continue
                 if near and decl_dates:
                     _bpad = _td(days=_ATTEST_BLESS_PAD_DAYS)
@@ -486,7 +509,15 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
                             # The declared legs don't net within their
                             # own reach — refuse the whole segment; the
                             # survivors face the rewrite + guard.
-                            print(
+                            say("note", f"{symbol} ({account}): the "
+                                f"DECLARED attestation does not net to "
+                                f"zero within {_ATTEST_BLESS_PAD_DAYS} "
+                                f"days of its own legs — nothing was "
+                                f"netted",
+                                [f"Cover the whole cluster ({date_lo} to "
+                                 f"{date_hi}) or move the declared pair "
+                                 f"next to the rows it attests."],
+                                legacy=
                                 f"NOTE: {symbol} ({account}): the "
                                 f"DECLARED attestation does not net to "
                                 f"zero within {_ATTEST_BLESS_PAD_DAYS} "
@@ -494,7 +525,7 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
                                 f"netted. Cover the whole cluster "
                                 f"({date_lo}..{date_hi}) or move the "
                                 f"declared pair next to the rows it "
-                                f"attests.", file=sys.stderr)
+                                f"attests.")
                             continue
                 # Main-book SPLIT inside the span: splits are
                 # corporate-wide, so the legs are in different terms.
@@ -556,15 +587,23 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
                     _frm, _to = ((b.symbol, a.symbol)
                                  if b.symbol.endswith('.US')
                                  else (a.symbol, b.symbol))
-                print(f"NOTE: possible unmapped cross-listing journal "
-                      f"in {a.account}: {a.symbol} out "
-                      f"{a.quantity:g} ({a.date}) pairs with "
-                      f"{b.symbol} in +{b.quantity:g} ({b.date}). If "
-                      f"these are the SAME security's two listings, "
-                      f"add `TOBASE {_frm} {_to}` (or JOURNAL) to "
-                      f"ticker.map so the legs net as one symbol; if "
-                      f"they are different securities, ignore this "
-                      f"note.", file=sys.stderr)
+                say("note", f"possible unmapped cross-listing journal in "
+                    f"{a.account}: {a.symbol} out {a.quantity:g} "
+                    f"({a.date}) pairs with {b.symbol} in "
+                    f"+{b.quantity:g} ({b.date})",
+                    [f"If these are the SAME security's two listings, "
+                     f"add `TOBASE {_frm} {_to}` (or JOURNAL) to "
+                     f"ticker.map so the legs net as one symbol; if they "
+                     f"are different securities, ignore this note."],
+                    legacy=f"NOTE: possible unmapped cross-listing journal "
+                    f"in {a.account}: {a.symbol} out "
+                    f"{a.quantity:g} ({a.date}) pairs with "
+                    f"{b.symbol} in +{b.quantity:g} ({b.date}). If "
+                    f"these are the SAME security's two listings, "
+                    f"add `TOBASE {_frm} {_to}` (or JOURNAL) to "
+                    f"ticker.map so the legs net as one symbol; if "
+                    f"they are different securities, ignore this "
+                    f"note.")
 
     if not drop_idx:
         return transactions, dropped
@@ -813,32 +852,34 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
         # broker emitted but the engine deliberately ignored.
         summary = ", ".join(f"{sym} ({count} row{'s' if count != 1 else ''}, {acct})"
                             for sym, acct, count in dropped_pairs)
-        print(
-            f"NOTE: auto-dropped {sum(c for _, _, c in dropped_pairs)} self-cancelling "
-            f"TRANSFER row(s) (net-zero, no intervening sell): {summary}.",
-            file=sys.stderr,
-        )
+        _n_dropped = sum(c for _, _, c in dropped_pairs)
+        say("note", f"auto-dropped {_n_dropped} self-cancelling TRANSFER "
+            f"row(s) (net-zero, no intervening sell)", [f"{summary}."],
+            legacy=f"NOTE: auto-dropped {_n_dropped} self-cancelling "
+            f"TRANSFER row(s) (net-zero, no intervening sell): {summary}.")
 
     n_main = sum(1 for t in transactions if t.action == 'TRANSFER')
 
     if n_sh_rewritten:
-        print(
-            f"NOTE: {n_sh_rewritten} unmatched TRANSFER row(s) in the "
-            f"--sheltered context treated as sheltered "
+        say("note", f"{n_sh_rewritten} unmatched TRANSFER row(s) in the "
+            f"sheltered context booked as acquisitions/disposals",
+            [f"They count as sheltered acquisitions/disposals for the "
+             f"{_book_words(country)['walk']} (in-kind contributions/"
+             f"withdrawals; custody moves were netted out)."],
+            legacy=f"NOTE: {n_sh_rewritten} unmatched TRANSFER row(s) in "
+            f"the --sheltered context treated as sheltered "
             f"acquisitions/disposals for the "
             f"{_book_words(country)['walk']} "
             f"(in-kind contributions/withdrawals; custody moves were "
-            f"netted out).",
-            file=sys.stderr,
-        )
+            f"netted out).")
     if n_main == 0:
         if n_sh_stripped:
-            print(
-                f"NOTE: netted out {n_sh_stripped} TRANSFER row(s) from "
-                f"the --sheltered context (custody moves — not "
-                f"acquisitions).",
-                file=sys.stderr,
-            )
+            say("note", f"netted out {n_sh_stripped} TRANSFER row(s) from "
+                f"the --sheltered context (custody moves, not "
+                f"acquisitions)",
+                legacy=f"NOTE: netted out {n_sh_stripped} TRANSFER row(s) "
+                f"from the --sheltered context (custody moves — not "
+                f"acquisitions).")
         return transactions, sheltered_transactions
 
     if taxable:
@@ -882,7 +923,14 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
     if n_sh_stripped:
         msg += (f" Also netted out {n_sh_stripped} custody-move "
                 f"TRANSFER row(s) from --sheltered.")
-    print(msg, file=sys.stderr)
+    say("note", f"rewrote {n_main} TRANSFER row(s) to BUYSELL for "
+        f"{_book_words(country)['pool']} (sheltered-account "
+        f"approximation)",
+        ["Standalone `taxjson-gains`: pass --taxable to reject TRANSFER "
+         "rows instead."]
+        + ([f"Also netted out {n_sh_stripped} custody-move TRANSFER "
+            f"row(s) from --sheltered."] if n_sh_stripped else []),
+        legacy=msg)
     return rewritten, sheltered_transactions
 
 
@@ -986,23 +1034,31 @@ def prepare_books(transactions, sheltered_transactions=(),
         for _m in unbacked_option_close_messages(
                 transactions + sheltered_transactions
                 + affiliated_transactions):
-            print(_m, file=sys.stderr)
+            emit_line(_m)
         for c in candidates:
             if c.broker_says_closing and not _is_opt(c.symbol):
                 # The broker coded the sale CLOSING (IB code C): what it
                 # sold was bought before the data — not a short, not a
                 # written option, whatever the books do with it until
                 # the history is supplied (audit S013-00).
-                print(f"{ATTENTION_SHORT}{c.symbol} ({c.account}): the "
-                      f"broker codes the sale on {c.first_negative_date} "
-                      f"CLOSING (IB code C"
-                      + (f", IB Basis {c.broker_basis}" if c.broker_basis
-                         else "")
-                      + f"), but the data holds no position to close — "
-                        f"it is booked as a new short until the missing "
-                        f"purchase is supplied (`taxjson "
-                        f"find-missing-history --write-missing-history` "
-                        f"writes missing_history.json).", file=sys.stderr)
+                _basis = (f", IB Basis {c.broker_basis}" if c.broker_basis
+                          else "")
+                say("attention", f"short: {c.symbol} ({c.account}): the "
+                    f"broker codes the sale on {c.first_negative_date} "
+                    f"CLOSING (IB code C{_basis}), but the data holds no "
+                    f"position to close",
+                    ["It is booked as a new short until the missing "
+                     "purchase is supplied (`taxjson find-missing-history "
+                     "--write-missing-history` writes "
+                     "missing_history.json)."],
+                    legacy=f"{ATTENTION_SHORT}{c.symbol} ({c.account}): the "
+                    f"broker codes the sale on {c.first_negative_date} "
+                    f"CLOSING (IB code C" + _basis
+                    + f"), but the data holds no position to close — "
+                      f"it is booked as a new short until the missing "
+                      f"purchase is supplied (`taxjson "
+                      f"find-missing-history --write-missing-history` "
+                      f"writes missing_history.json).")
         # A short where none can exist (A2-0395 / A2-0137): the main
         # book's own accounts only — a context book's account says it in
         # its own stage.
@@ -1023,21 +1079,38 @@ def prepare_books(transactions, sheltered_transactions=(),
                         "cost is supplied")
             else:
                 continue
-            print(f"{ATTENTION_SHORT}{c.symbol} ({c.account}): {why} — "
-                  f"it sells {abs(c.peak_short):g} more than the data "
-                  f"holds from {c.first_negative_date}: history is missing "
-                  f"(a transfer-in, a deposit, or a purchase before the "
-                  f"data). Until it is supplied, {tail}. Supply it (the "
-                  f"transfer or purchase rows, or `taxjson "
-                  f"find-missing-history --write-missing-history`, which "
-                  f"writes missing_history.json).",
-                  file=sys.stderr)
+            say("attention", f"short: {c.symbol} ({c.account}): {why} — "
+                f"it sells {abs(c.peak_short):g} more than the data holds "
+                f"from {c.first_negative_date}",
+                ["History is missing (a transfer-in, a deposit, or a "
+                 f"purchase before the data). Until it is supplied, "
+                 f"{tail}. Supply it (the transfer or purchase rows, or "
+                 f"`taxjson find-missing-history --write-missing-history`, "
+                 f"which writes missing_history.json)."],
+                legacy=f"{ATTENTION_SHORT}{c.symbol} ({c.account}): {why} — "
+                f"it sells {abs(c.peak_short):g} more than the data "
+                f"holds from {c.first_negative_date}: history is missing "
+                f"(a transfer-in, a deposit, or a purchase before the "
+                f"data). Until it is supplied, {tail}. Supply it (the "
+                f"transfer or purchase rows, or `taxjson "
+                f"find-missing-history --write-missing-history`, which "
+                f"writes missing_history.json).")
         if candidates:
             n_reg = sum(1 for c in candidates if c.registered)
             preview = ', '.join(f"{c.symbol}/{c.account}" for c in candidates[:3])
             more = f" (+{len(candidates) - 3} more)" if len(candidates) > 3 else ""
-            print(
-                f"NOTE: {len(candidates)} (symbol, account) pair(s) go short in this data: "
+            say("note", f"{len(candidates)} (symbol, account) pair(s) go "
+                f"short in this data: {preview}{more}",
+                [f"{n_reg} are in {_book_words(country)['reg']}. If any of "
+                 f"these are sales of shares bought before your files "
+                 f"start (no purchase in the data) rather than real short "
+                 f"trades, list them in missing_history.json: `taxjson "
+                 f"find-missing-history --write-missing-history` in a "
+                 f"project (`taxjson run` picks the file up), or "
+                 f"`taxjson-gains --country canada|usa "
+                 f"--suggest-missing-history FILE` standalone."],
+                legacy=f"NOTE: {len(candidates)} (symbol, account) pair(s) "
+                f"go short in this data: "
                 f"{preview}{more}. {n_reg} are in "
                 f"{_book_words(country)['reg']}. "
                 f"If any of these are sales of shares bought before your "
@@ -1046,9 +1119,7 @@ def prepare_books(transactions, sheltered_transactions=(),
                 f"`taxjson find-missing-history --write-missing-history` "
                 f"in a project (`taxjson run` picks the file up), or "
                 f"`taxjson-gains --country canada|usa "
-                f"--suggest-missing-history FILE` standalone.",
-                file=sys.stderr,
-            )
+                f"--suggest-missing-history FILE` standalone.")
     return (transactions, sheltered_transactions, affiliated_transactions,
             missing_history_log)
 
@@ -1230,11 +1301,11 @@ def _warn_roc_moved_into_prior_year(results, moved, tax_date, year):
             f"{(e.get(key) or e.get('date'))} (gain now "
             f"{float(e.get('gain') or 0.0):,.2f})" for e in sales)
         amt = -float(t.net_amount or 0.0)
-        print(f"warning: {ATTENTION_INCOME_YEAR}{t.symbol}: the return of "
-              f"capital {amt:,.2f} {t.currency} paid {pay} (record date "
-              f"{rec}) lowers the ACB of the {rec[:4]} sale on {what}. If "
-              f"{rec[:4]} was filed without this ROC, that return needs an "
-              f"adjustment (T1-ADJ) for the gain.", file=sys.stderr)
+        emit_line(f"warning: {ATTENTION_INCOME_YEAR}{t.symbol}: the return "
+                  f"of capital {amt:,.2f} {t.currency} paid {pay} (record "
+                  f"date {rec}) lowers the ACB of the {rec[:4]} sale on "
+                  f"{what}. If {rec[:4]} was filed without this ROC, that "
+                  f"return needs an adjustment (T1-ADJ) for the gain.")
 
 # The run's ATTENTION channel for a wash-sale basis add that reaches a
 # replacement sold in a filed year (`taxjson run` echoes it).
@@ -1271,15 +1342,15 @@ def place_retro_wash_adjustments(results, tax_date: str,
                 moved.append(a)
                 continue
             if year is None or str(year) in (e_year, l_year):
-                print(f"note: {e.get('symbol')}: the {a['loss_date']} "
-                      f"wash-sale loss ({a['loss_account']}) adds "
-                      f"{a['amount']:,.2f} to the basis of the "
-                      f"replacement sold {e.get('date')} in "
-                      f"{e.get('account')} — that {e_year} sale's gain "
-                      f"changes (US-WASH-22). If {e_year} was filed "
-                      f"without it, amend that return, or lock the year "
-                      f"(`taxjson close-year`) to book the add in "
-                      f"{l_year} instead.", file=sys.stderr)
+                emit_line(f"note: {e.get('symbol')}: the {a['loss_date']} "
+                          f"wash-sale loss ({a['loss_account']}) adds "
+                          f"{a['amount']:,.2f} to the basis of the "
+                          f"replacement sold {e.get('date')} in "
+                          f"{e.get('account')} — that {e_year} sale's gain "
+                          f"changes (US-WASH-22). If {e_year} was filed "
+                          f"without it, amend that return, or lock the year "
+                          f"(`taxjson close-year`) to book the add in "
+                          f"{l_year} instead.")
         if not moved:
             continue
         amt = sum(float(a['amount']) for a in moved)
@@ -1295,7 +1366,7 @@ def place_retro_wash_adjustments(results, tax_date: str,
             if year is None or str(year) in (e_year,
                                              str(a['loss_date'])[:4],
                                              str(a['loss_date_settle'])[:4]):
-                print(f"warning: {ATTENTION_WASH_LOCKED}{e.get('symbol')}: "
+                emit_line(f"warning: {ATTENTION_WASH_LOCKED}{e.get('symbol')}: "
                       f"the {a['loss_date']} loss ({a['loss_account']}) "
                       f"is a wash sale whose replacement was bought and "
                       f"sold {e.get('date')} in {e.get('account')}, in "
@@ -1305,7 +1376,7 @@ def place_retro_wash_adjustments(results, tax_date: str,
                       f"{str(a.get('term') or '').replace('_', '-').lower()}"
                       f" loss on {a['loss_date']} instead. Your {e_year} "
                       f"return may need an amendment (Form 1040-X) for "
-                      f"that sale.", file=sys.stderr)
+                      f"that sale.")
             added.append({
                 'date': a['loss_date'],
                 'date_settle': a['loss_date_settle'],
@@ -1412,7 +1483,7 @@ def run_gains(transactions, sheltered_transactions=(),
     # it applies to a sheltered (registered) book (re-audit A2-1218).
     for _w in (income_rules.warnings(transactions, _warn_year)
                if req.taxable else ()):
-        print(f"warning: {_w}", file=sys.stderr)
+        emit_line(f"warning: {_w}")
     _roc_moved = apply_roc_record_dates(transactions, req)
     if req.country == 'canada':
         # The parsers book a stock dividend as a neutral $0 event; the
@@ -1448,7 +1519,7 @@ def run_gains(transactions, sheltered_transactions=(),
                 continue
             if _cost_added(_t):
                 continue
-            print(f"warning: ATTENTION: {_t.symbol}: stock dividend of "
+            emit_line(f"warning: ATTENTION: {_t.symbol}: stock dividend of "
                   f"{float(_t.quantity):g} share(s) on {_t.date} "
                   f"entered at $0 cost — in Canada it is a dividend at its "
                   f"declared amount, which is also the new shares' cost: "
@@ -1456,7 +1527,7 @@ def run_gains(transactions, sheltered_transactions=(),
                   f".tt ADJUST) for "
                   f"the correct ACB. That books the ACB only: report the "
                   f"dividend itself from the T5/T3 slip (taxjson does not "
-                  f"count it as income).", file=sys.stderr)
+                  f"count it as income).")
     _extra = engine_options(req)
     # The engine's option/right-replacement warnings are printed below,
     # after the year filter: printed by the engine they put a prior
@@ -1672,7 +1743,7 @@ def run_gains(transactions, sheltered_transactions=(),
     _notes = results.pop('dated_notes', None) or []
     for _d, _text in _notes:
         if not req.year or str(_d or '').startswith(str(req.year)):
-            print(_text, file=sys.stderr)
+            emit_line(_text)
 
     # The engine's option/right-replacement warnings, printed here after
     # the year filter above (audit S070-04).
@@ -1798,18 +1869,17 @@ def run_gains(transactions, sheltered_transactions=(),
     from taxjson.lib.missing_history import LOSS_CHECK_LABEL, LOSS_RULE
     for w in results.get('superficial_loss_warnings') or []:
         if w.get('message'):
-            print(f"warning: {LOSS_CHECK_LABEL[req.country]}: "
-                  f"{w['message']}", file=sys.stderr)
+            emit_line(f"warning: {LOSS_CHECK_LABEL[req.country]}: "
+                      f"{w['message']}")
         else:
-            print(f"warning: {LOSS_CHECK_LABEL[req.country]}: "
+            emit_line(f"warning: {LOSS_CHECK_LABEL[req.country]}: "
                   f"{w.get('symbol')} loss with unknown cost (no purchase "
                   f"in your files) of "
                   f"{abs(float(w.get('raw_loss') or 0.0)):.2f} on "
                   f"{w.get('loss_date')} with a buy on "
                   f"{w.get('acquisition_date')} inside the window — if "
                   f"you report this loss by hand, apply "
-                  f"{LOSS_RULE[req.country][0]} to that rebuy.",
-                  file=sys.stderr)
+                  f"{LOSS_RULE[req.country][0]} to that rebuy.")
 
     # Traces are emitted in the sidecar text file (when requested) — drop
     # them from the JSON unconditionally so stdout stays clean and

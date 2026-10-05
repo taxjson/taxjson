@@ -77,7 +77,7 @@ class TestWrongYearLock(unittest.TestCase):          # B2
             root = _project(td, year=2025, gains_year="2024")
             code, out, err = _call(R.cmd_summary, dir=str(root),
                                    account=None, json=False)
-            self.assertIn("WARNING: [settings].year is 2025", err)
+            self.assertIn("warning: [settings].year is 2025", err)
             self.assertIn("margin (2024)", err)
 
     def test_matching_year_is_quiet(self):

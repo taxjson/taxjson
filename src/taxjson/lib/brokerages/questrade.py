@@ -1,3 +1,4 @@
+from taxjson.lib.stage_msg import emit_line
 import csv
 import io
 import math
@@ -250,11 +251,11 @@ def _read_qt_rows(path: Path, warn: bool = False) -> List[tuple]:
             # file) — the account check and the Activity Type fallbacks
             # cannot see the row.
             if warn and not cut_meta:
-                print(f"warning: ATTENTION: {shown_name(path)} line {lineno}: the "
+                emit_line(f"warning: ATTENTION: {shown_name(path)} line {lineno}: the "
                       f"row has no {', '.join(short)} cell(s) (fewer cells "
                       f"than the header) — booked from its Action code; "
                       f"re-export the file if this is not a hand-made "
-                      f"fixture.", file=sys.stderr)
+                      f"fixture.")
             cut_meta.append(lineno)
             short = []
         if short:
@@ -328,7 +329,7 @@ class QtAccountContext:
             return
         self.emitted = True
         for m in self.messages:
-            print(m, file=sys.stderr)
+            emit_line(m)
 
     def position_on(self, listing: str, date: str, *,
                     before: bool = False) -> float:
@@ -639,8 +640,7 @@ class QuestradeBrokerage(BaseBrokerage):
         """A real row the parser could not book: `taxjson run` echoes
         the UNBOOKED prefix to the console and `run --strict` refuses
         to publish (the old skip note reached only the .sum banner)."""
-        print(f"warning: UNBOOKED: {self._where(lineno)}: {msg}",
-              file=sys.stderr)
+        emit_line(f"warning: UNBOOKED: {self._where(lineno)}: {msg}")
 
     def _in_real_order(self, path: Path, rows) -> List[tuple]:
         """Rows of one day tie (Questrade stamps 00:00:00) and keep the
@@ -675,10 +675,9 @@ class QuestradeBrokerage(BaseBrokerage):
                 mixed = True
             out.extend(head + body)
         if mixed:
-            print(f"note: {shown_name(path)}: rows are not in date order, so "
+            emit_line(f"note: {shown_name(path)}: rows are not in date order, so "
                   f"same-day rows keep the file's order (intra-day order "
-                  f"unknown) — check a same-day sale and rebuy.",
-                  file=sys.stderr)
+                  f"unknown) — check a same-day sale and rebuy.")
         return out
 
     def _check_account_mix(self, path: Path, rows) -> None:
@@ -731,8 +730,8 @@ class QuestradeBrokerage(BaseBrokerage):
                         if len(plans) > 1 else
                         f"the Account Type does not name one plan for "
                         f"every account ({desc})")
-            print(combined_accounts_note(shown_name(path), 'Questrade',
-                                         masked), file=sys.stderr)
+            emit_line(combined_accounts_note(shown_name(path), 'Questrade',
+                                         masked))
             return
         if wrong:
             raise BrokerageParseError(
@@ -744,11 +743,11 @@ class QuestradeBrokerage(BaseBrokerage):
                 f"so its trades would be booked there — refusing. Export "
                 f"each Questrade account separately into its own "
                 f"inputs/<account>/ folder.")
-        print(f"warning: ATTENTION: {shown_name(path)}: the export holds rows of "
+        emit_line(f"warning: ATTENTION: {shown_name(path)}: the export holds rows of "
               f"{len(accts)} Questrade accounts ({desc}) — every row is "
               f"booked to ONE account. That is right only when they are one "
               f"tax entity (two taxable accounts of yours); export a "
-              f"registered plan (TFSA/RRSP) separately.", file=sys.stderr)
+              f"registered plan (TFSA/RRSP) separately.")
 
     def _listing_currency(self, sym: str, currency: str) -> str:
         """The currency whose suffix a real (non-code) symbol takes: a
@@ -794,13 +793,12 @@ class QuestradeBrokerage(BaseBrokerage):
                 key = (own, tuple(others))
                 if key not in self._ambiguous_warned:
                     self._ambiguous_warned.add(key)
-                    print(f"warning: {self._qt_name}: {sym!r} is booked "
+                    emit_line(f"warning: {self._qt_name}: {sym!r} is booked "
                           f"under its own symbol, but the same security "
                           f"({(row.get('Description') or '')[:50]!r}) "
                           f"trades as {', '.join(others)} — if they are "
                           f"one security and ticker.map does not already "
-                          f"fold them, add a ticker.map rule.",
-                          file=sys.stderr)
+                          f"fold them, add a ticker.map rule.")
             return sym, cur
         if len(cands) == 1:
             return next(iter(cands))
@@ -810,13 +808,12 @@ class QuestradeBrokerage(BaseBrokerage):
                 self._ambiguous_warned.add(key)  # mapped (A2-1056)
             if key not in self._ambiguous_warned:
                 self._ambiguous_warned.add(key)
-                print(f"warning: {self._qt_name}: {sym or '(blank)'!r} "
+                emit_line(f"warning: {self._qt_name}: {sym or '(blank)'!r} "
                       f"({(row.get('Description') or '')[:60]!r}) matches "
                       f"several traded symbols "
                       f"({', '.join(s for s, _ in sorted(cands))}) — not "
                       f"rebound; map it with a ticker.map rule (moot if "
-                      f"ticker.map already maps it).",
-                      file=sys.stderr)
+                      f"ticker.map already maps it).")
         elif (_INTERNAL_CODE_RE.match(sym) and sym not in self._code_warned
               and not ticker_map_renames(
                   self.apply_currency_suffix(sym, currency))):
@@ -841,7 +838,7 @@ class QuestradeBrokerage(BaseBrokerage):
                    f" or the position will fragment.")
             # ATTENTION: on the run console (re-audit A2-0027 — a ROC
             # on the code is a phantom gain with rc 0).
-            print(f"warning: ATTENTION: {msg}", file=sys.stderr)
+            emit_line(f"warning: ATTENTION: {msg}")
             self.lint_findings.append(msg)
         return sym, currency
 
@@ -1533,22 +1530,21 @@ class QuestradeBrokerage(BaseBrokerage):
         _kept = {id(t) for t in transactions}
         for _tx, _msg in sd_notes:
             if id(_tx) in _kept:
-                print(_msg, file=sys.stderr)
+                emit_line(_msg)
         self.clamp_settlement_to_expiry(transactions, expiries)
         self.disambiguate_split_fills(transactions)
         if ca_legs:
-            print(f"note: {shown_name(path)}: {len(ca_legs)} quantity-bearing DIS "
+            emit_line(f"note: {shown_name(path)}: {len(ca_legs)} quantity-bearing DIS "
                   f"corporate-action leg(s) ({', '.join(ca_legs[:8])}"
                   f"{', ...' if len(ca_legs) > 8 else ''}) are not "
                   f"booked by the parser — taxjson-corp-actions books "
                   f"spinoff/rights chains (`taxjson run` does this); "
-                  f"check the position if you parse without it.",
-                  file=sys.stderr)
+                  f"check the position if you parse without it.")
         taxable = self._is_taxable()
         if net_of_tax and taxable is not False:
             # ATTENTION (re-audit A2-0276 / A2-0282): income and the
             # foreign tax credit are wrong until the slip is used.
-            print(f"warning: ATTENTION: {shown_name(path)}: {len(net_of_tax)} "
+            emit_line(f"warning: ATTENTION: {shown_name(path)}: {len(net_of_tax)} "
                   f"dividend(s) "
                   f"marked NON-RES TAX WITHHELD are booked at the NET "
                   f"amount — the export gives neither the gross nor the "
@@ -1559,8 +1555,7 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"withholding from "
                   f"{self.law('the T5/NR4 slip', 'the year-end tax statement (Form 1099-DIV / 1042-S, or the NR4 a Canadian payer issues)', 'the year-end tax slip')}"
                   f"."
-                  f"{'' if taxable else ' (Account type unknown — ignore in a registered account.)'}",
-                  file=sys.stderr)
+                  f"{'' if taxable else ' (Account type unknown — ignore in a registered account.)'}")
         if (no_book_value and taxable is not False
                 and not self.transfer_costs_checked_downstream):
             # What actually happens (audit S063-00): a TAXABLE account's
@@ -1572,7 +1567,7 @@ class QuestradeBrokerage(BaseBrokerage):
             # account and there is no OPENING_BALANCE .tt action.
             # ATTENTION (re-audit A2-0276 / A2-0283): the sale reads
             # as a short and the year's gain is missing.
-            print(f"warning: ATTENTION: {shown_name(path)}: {len(no_book_value)} "
+            emit_line(f"warning: ATTENTION: {shown_name(path)}: {len(no_book_value)} "
                   f"transfer-in(s) carry no TRANSFER BOOK VALUE "
                   f"({'; '.join(no_book_value[:6])}"
                   f"{'; ...' if len(no_book_value) > 6 else ''}). In a "
@@ -1583,19 +1578,18 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"{self.law('ACB', 'cost basis', 'cost')}) as a .tt BUYSELL "
                   f"row, or declare it in missing_history.json (`taxjson "
                   f"find-missing-history --write-missing-history`)."
-                  f"{'' if taxable else ' (Account type unknown — ignore in a registered account.)'}",
-                  file=sys.stderr)
+                  f"{'' if taxable else ' (Account type unknown — ignore in a registered account.)'}")
         for _t in transactions[_acct_from:]:
             if _acct:
                 _t.setdefault('broker_account', _acct)
         self._cost_journal_pairs(journal_txs)
         if journals:
-            print(f"note: {shown_name(path)}: {len(journals)} BRW journal row(s) "
+            emit_line(f"note: {shown_name(path)}: {len(journals)} BRW journal row(s) "
                   f"move units between the CAD and USD lines of one "
                   f"security ({', '.join(journals[:6])}) — booked as "
                   f"TRANSFER legs; a ticker.map JOURNAL rule (e.g. "
                   f"JOURNAL SAMPLF.U.TO SAMPLF.TO) makes the lines one pool so "
-                  f"the pair nets out.", file=sys.stderr)
+                  f"the pair nets out.")
         self.emit_skip_summary(path.name)
         return transactions
 
@@ -1894,17 +1888,16 @@ class QuestradeBrokerage(BaseBrokerage):
         held = (desc_number(m.group(1), where=self._where(lineno),
                             field="split base 'ON N SHS'") if m else 0.0)
         if not m or received == 0 or held <= 0:
-            print(f"warning: Questrade stock-split row not understood "
+            emit_line(f"warning: Questrade stock-split row not understood "
                   f"(need 'ON N SHS' and a nonzero quantity), skipping: "
-                  f"{desc!r}", file=sys.stderr)
+                  f"{desc!r}")
             return None
         symbol, scur = self._resolve_symbol(row, currency, lineno)
         raw_sym = (row.get('Symbol') or '').strip().lstrip('.').upper()
         if not symbol and not raw_sym:
-            print(f"warning: Questrade stock split: couldn't resolve a traded "
+            emit_line(f"warning: Questrade stock split: couldn't resolve a traded "
                   f"ticker for {symbol!r} ({desc!r}); the SPLIT may not apply "
-                  f"to the right pool — add a ticker.map rule if needed.",
-                  file=sys.stderr)
+                  f"to the right pool — add a ticker.map rule if needed.")
         symbol = self.apply_currency_suffix(symbol, scur)
 
         dt = self._date(row, 'Transaction Date', lineno)
@@ -1921,9 +1914,8 @@ class QuestradeBrokerage(BaseBrokerage):
         else:
             ratio = (held + received) / held
         if ratio <= 0:
-            print(f"warning: Questrade stock-split row gives a ratio of "
-                  f"{ratio:g} for {symbol} ({desc!r}) — not booked.",
-                  file=sys.stderr)
+            emit_line(f"warning: Questrade stock-split row gives a ratio of "
+                  f"{ratio:g} for {symbol} ({desc!r}) — not booked.")
             return None
         return {
             'action': 'SPLIT',

@@ -372,7 +372,8 @@ class TestMigrate(unittest.TestCase):
                          if p.is_file()}
                 self.assertEqual(r.returncode, 2, r.stdout)
                 self.assertIn(want, r.stderr)
-                self.assertIn("nothing was changed", " ".join(r.stderr.split()))
+                self.assertIn("nothing was changed",
+                          " ".join(r.stderr.split()).lower())
                 self.assertEqual(before, after)
 
     def test_identical_entries_are_skipped(self):

@@ -133,7 +133,7 @@ def run_to_file(cmd: List[str], out_path: Path, *, capture_diag: bool = True,
                 _drop_work_file(diag_path)
         if result.returncode != 0:
             if stderr_text:
-                sys.stderr.write(stderr_text)
+                _echo_stage_stderr(stderr_text)
             raise subprocess.CalledProcessError(result.returncode, cmd,
                                                 stderr=stderr_text)
 
@@ -246,7 +246,7 @@ def echo_parse_stats(out_path: Path) -> None:
                 and not _PARSE_COUNT_RE.match(line)):
             # An echoed warning's indented continuation (the GLOBAL line
             # under a ticker-change hint, re-audit A2-0613).
-            print(f"  {line}")
+            _echo_captured(line)
             continue
         echoing = line.startswith((UNBOOKED_PREFIX, ATTENTION_PREFIX))
         if _PARSE_COUNT_RE.match(line):
@@ -255,17 +255,79 @@ def echo_parse_stats(out_path: Path) -> None:
             print(line)
         elif line.startswith("warning: ") and " parsed to 0 transactions" in line:
             # Indent the warning to match per-file count nesting.
-            print(f"  {line}")
+            _echo_captured(line)
         elif line.startswith(UNBOOKED_PREFIX):
             # Input rows the parser knows are real events but could not
             # book (e.g. Kraken ledger trades with no trades-export
             # fill): the tax numbers are missing them. Console, always.
-            print(f"  {line}")
+            _echo_captured(line)
         elif line.startswith(ATTENTION_PREFIX):
             # Statement coverage / identity the numbers silently depend
             # on (an IB statement ending before year end, no Cash Report
             # to reconcile against). Console, always.
-            print(f"  {line}")
+            _echo_captured(line)
+
+
+def _echo_stage_stderr(text: str) -> None:
+    """A captured stage's stderr shown on the console (a failed stage, a
+    report tool's notes), each long line wrapped for the person at
+    display time (lib/stage_msg.console_lines); the captured text
+    itself is unchanged."""
+    for line in text.splitlines():
+        _echo_captured(line, indent="", file=sys.stderr)
+
+
+def _echo_captured(line: str, indent: str = "  ", file=None) -> None:
+    """Show one captured stage line (a .diag's ATTENTION / UNBOOKED line
+    or its continuation) on the run's console, wrapped for the person:
+    the marker first line keeps its prefix, the rest is an indented
+    headline + detail (lib/stage_msg.console_lines). The .diag and the
+    .sum DIAGNOSTICS keep the one line."""
+    from taxjson.lib.stage_msg import console_lines
+    file = sys.stdout if file is None else file
+    for ln in console_lines(line, indent, stream=file):
+        print(ln, file=file)
+
+
+def _out_wrap(text: str, indent: str = "", hang: Optional[str] = None,
+              file=None) -> List[str]:
+    """lib/out.wrap for the run console (stdout by default)."""
+    from taxjson.lib.out import wrap
+    return wrap(text, indent=indent, hang=hang,
+                stream=sys.stdout if file is None else file)
+
+
+def _split_msg(text: str) -> Tuple[str, ...]:
+    """A one-string message as (headline, detail) — split at its first
+    clause break (lib/stage_msg.split_message) — or (text,)."""
+    from taxjson.lib.stage_msg import split_message
+    head, rest = split_message(str(text))
+    return (head, rest) if rest else (head,)
+
+
+def _out_relpath(path: Path, root: Path) -> str:
+    from taxjson.lib.out import relpath
+    return relpath(path, root)
+
+
+def _wrote(path: Path, root: Path, what: str = "wrote") -> None:
+    """`  wrote reports/margin.sum`: a file the run wrote, named
+    relative to the project."""
+    from taxjson.lib.out import relpath
+    shown = relpath(path, root)
+    print(f"  {what} {shown}{'/' if path.is_dir() else ''}")
+
+
+def _say(kind: str, text: str, *details: str, prog: Optional[str] = None,
+         indent: str = "", file=None) -> None:
+    """A run-console message in the house style: `[<prog>: ]<kind>:
+    <headline>` and indented `details`, nested under `indent` (stderr
+    by default). kind: note | warning | attention | error."""
+    from taxjson.lib.stage_msg import message_lines
+    file = sys.stderr if file is None else file
+    for ln in message_lines(kind, text, details, prog=prog, indent=indent,
+                            stream=file):
+        print(ln, file=file)
 
 
 # Parser warning prefix for rows that are known tax events the parser
@@ -288,11 +350,11 @@ def echo_attention_lines(out_path: Path, prefix: str = "") -> None:
     echoing = False
     for line in lines:
         if echoing and line[:1] in (" ", "\t") and line.strip():
-            print(f"  {line}")
+            _echo_captured(line)
             continue
         echoing = line.startswith(ATTENTION_PREFIX + " " + prefix)
         if echoing:
-            print(f"  {line}")
+            _echo_captured(line)
 
 
 def _diag_lines(out_path: Path) -> List[str]:
@@ -443,7 +505,7 @@ def run_capture(cmd: List[str]) -> bytes:
     from taxjson.lib.dispatch import run_cmd
     result = run_cmd(cmd, capture_output=True)
     if result.stderr:
-        sys.stderr.write(result.stderr)
+        _echo_stage_stderr(result.stderr)
     if result.returncode != 0:
         raise subprocess.CalledProcessError(result.returncode, cmd)
     return (result.stdout or "").encode("utf-8")
@@ -1520,11 +1582,13 @@ CORP_ACTION_BROKERS = {"ib", "interactive_brokers", "questrade", "qt",
 from taxjson.lib.country import command_country_problem  # noqa: E402
 
 
+# (headline, detail) — `_say("note", *_US_EXPERIMENTAL_NOTE)`.
 _US_EXPERIMENTAL_NOTE = (
-    "NOTE: the US engine is EXPERIMENTAL — its rules are implemented and "
-    "unit-tested but have not been validated against a real account. "
-    "Treat the output as a draft, and consider contributing a redacted "
-    "export (`taxjson redact`) so it can be.")
+    "the US engine is EXPERIMENTAL",
+    "Its rules are implemented and unit-tested but have not been "
+    "validated against a real account. Treat the output as a draft, and "
+    "consider contributing a redacted export (`taxjson redact`) so it "
+    "can be.")
 
 
 def _normalize_country(c: str) -> str:
@@ -1640,7 +1704,7 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
     if lines:
         diag.write_text("\n".join(lines) + "\n", encoding="utf-8")
         for ln in lines:
-            print(f"  ! {ln}", file=sys.stderr)
+            _echo_captured(ln, file=sys.stderr)
     else:
         diag.unlink(missing_ok=True)
 
@@ -1752,7 +1816,7 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
     if lines:
         diag.write_text("\n".join(lines) + "\n", encoding="utf-8")
         for ln in lines:
-            print(f"  ! {ln}", file=sys.stderr)
+            _echo_captured(ln, file=sys.stderr)
     else:
         diag.unlink(missing_ok=True)
 
@@ -1938,9 +2002,11 @@ def _report_detection(name: str, found, cache: Path) -> None:
     if name not in _DETECTION_SHOWN:
         _DETECTION_SHOWN.add(name)
         for ln in lines:
-            print(f"  {ln}")
+            for _w in _out_wrap(ln, indent="  ", hang="      "):
+                print(_w)
         for n in notes:
-            print(f"    {n}")
+            for _w in _out_wrap(n, indent="    ", hang="      "):
+                print(_w)
     _txt = "".join(f"{x}\n" for x in lines + notes)
     _diag = cache / f"{name}_detect.diag"
     if _read_work_stamp(_diag) != _txt:
@@ -2197,11 +2263,11 @@ def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
         # usable-if-aging rates file into a hard failure — but say so
         # loudly: rows past the file's coverage convert at --default-rate.
         if had_previous:
-            print(f"taxjson: warning: FX rate refresh failed ({exc}); keeping the "
-                  f"existing to_base.csv. Transactions dated after its "
-                  f"coverage (beyond its last rate and the look-back) "
-                  f"have no rate and stop the conversion — re-run online "
-                  f"to refresh.", file=sys.stderr)
+            _say("warning", f"FX rate refresh failed ({exc}); keeping the "
+                 f"existing to_base.csv",
+                 "Transactions dated after its coverage (beyond its last "
+                 "rate and the look-back) have no rate and stop the "
+                 "conversion — re-run online to refresh.", prog=_PROG)
             return rates_path
         raise
     # Atomic: to_base.csv is mtime-cached, so a kill mid-write must never
@@ -2568,27 +2634,26 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
             _why = ("a payment is a sale at fair value; a gift is not a "
                     "sale for a US donor" if _ctry == "usa" else
                     "a gift or payment is a disposition at fair value")
-            print(f"  note: {adoc['undecided']} crypto send(s) not yet "
-                  f"classified as {_decs} — `taxjson "
-                  f"crypto-sends {name}` lists them ({_why}).",
-                  file=sys.stderr)
+            _say("note", f"{adoc['undecided']} crypto send(s) not yet "
+                 f"classified as {_decs}",
+                 f"`taxjson crypto-sends {name}` lists them ({_why}).",
+                 indent="  ")
             if strict and not unparsed:
                 # A pending decision, like a pending election: a send
                 # that may be a disposition is not in the books (A2-0362).
                 _diag.unlink(missing_ok=True)
-                sys.exit(f"taxjson run --strict: {name}: "
-                         f"{adoc['undecided']} crypto send(s) not yet "
-                         f"classified as {_decs} — decide "
-                         f"each with `taxjson crypto-sends {name} --set "
-                         f"ID=...` — aborting.")
+                _die(f"--strict: {name}: {adoc['undecided']} crypto "
+                     f"send(s) not yet classified as {_decs} — aborting",
+                     f"Decide each with `taxjson crypto-sends {name} "
+                     f"--set ID=...`.")
         if adoc.get("orphans"):
-            print(f"  note: inputs/{name}/{CS.MANIFEST_NAME} has "
-                  f"{len(adoc['orphans'])} decision(s) for send ids that "
-                  f"no longer exist ({', '.join(adoc['orphans'][:3])}"
-                  f"{' ...' if len(adoc['orphans']) > 3 else ''}) — the "
-                  f"inputs or local_timezone changed? They are ignored; "
-                  f"`taxjson crypto-sends {name}` lists the current ids.",
-                  file=sys.stderr)
+            _say("note", f"inputs/{name}/{CS.MANIFEST_NAME} has "
+                 f"{len(adoc['orphans'])} decision(s) for send ids that "
+                 f"no longer exist ({', '.join(adoc['orphans'][:3])}"
+                 f"{' ...' if len(adoc['orphans']) > 3 else ''})",
+                 f"The inputs or local_timezone changed? They are "
+                 f"ignored; `taxjson crypto-sends {name}` lists the "
+                 f"current ids.", indent="  ")
         _problems += [(ATTENTION_PREFIX, w)
                       for w in _crypto_sends_problems(name, adoc)]
         try:
@@ -2605,7 +2670,7 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
         # A saved decision the country refuses (a US gift): not booked,
         # and the run stops until sends.json says what it was.
         _diag.unlink(missing_ok=True)
-        sys.exit(f"taxjson run: {name}: crypto sends: {e}")
+        _die(f"{name}: crypto sends: {e}")
     except ValueError as e:
         # A decided gift/payment that cannot be written is a missing
         # disposition: the .sum DIAGNOSTICS carries it (A2-0112).
@@ -2616,13 +2681,13 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
             # (gift -> self), or a gift a US project refuses (US-SEND-02).
             # Booking it on a guess is worse than stopping (audit A2-0415).
             _diag.unlink(missing_ok=True)
-            sys.exit(f"taxjson run: {name}: crypto sends: {e} The "
-                     f"generated inputs/{name}/{CS.TT_NAME} was written "
-                     f"from the earlier decisions and is not booked on a "
-                     f"guess — fix the cause above (the decisions are "
-                     f"in inputs/{name}/{CS.MANIFEST_NAME}), or delete "
-                     f"{CS.TT_NAME} to run without the decided sales, "
-                     f"and run again.")
+            _die(f"{name}: crypto sends: {e}",
+                 f"The generated inputs/{name}/{CS.TT_NAME} was written "
+                 f"from the earlier decisions and is not booked on a "
+                 f"guess — fix the cause above (the decisions are in "
+                 f"inputs/{name}/{CS.MANIFEST_NAME}), or delete "
+                 f"{CS.TT_NAME} to run without the decided sales, and "
+                 f"run again.")
         msg = (f"{e} The decided gift(s)/payment(s) it names are NOT "
                f"booked"
                + (f"; the previous inputs/{name}/{CS.TT_NAME} is still "
@@ -2630,17 +2695,18 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
                + ". `run --strict` refuses this.")
         _problems.append((UNBOOKED_PREFIX, msg))
     for _p, w in _problems:
-        print(f"taxjson: WARNING: {name}: crypto sends: {w}",
-              file=sys.stderr)
+        _echo_captured(f"{_p} {name}: crypto sends: {w}", indent="",
+                       file=sys.stderr)
     for w in _dups:
-        print(f"taxjson: WARNING: {w}", file=sys.stderr)
+        _echo_captured(f"{ATTENTION_PREFIX} {w}", indent="",
+                       file=sys.stderr)
     _problems += [(ATTENTION_PREFIX, w) for w in _dups]
     # (a stand-in price function, as in tests, has no .attention)
     _id_notes = [f"crypto id: {w}"
                  for w in getattr(_price_fn, "attention", ())]
     for w in _id_notes:
-        print(f"taxjson: WARNING: {name}: crypto sends: {w}",
-              file=sys.stderr)
+        _echo_captured(f"{ATTENTION_PREFIX} {name}: crypto sends: {w}",
+                       indent="", file=sys.stderr)
     if _problems or _id_notes:
         _diag.write_text("".join(f"{p} {name}: crypto sends: {m}\n"
                                  for p, m in _problems + [
@@ -2650,9 +2716,8 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
     else:
         _diag.unlink(missing_ok=True)
     if strict and _problems:
-        sys.exit(f"taxjson run --strict: {name}: crypto sends: "
-                 f"{len(_problems)} problem(s) above would leave the books "
-                 f"wrong — aborting.")
+        _die(f"--strict: {name}: crypto sends: {len(_problems)} "
+             f"problem(s) above would leave the books wrong — aborting")
 
 
 def ib_foreign_roc_mode(settings: Dict[str, Any]) -> str:
@@ -2790,15 +2855,18 @@ def cmd_migrate(args: argparse.Namespace) -> None:
     try:
         pl = M.plan(root)
     except M.MigrateError as e:
-        _die_input(f"{e} — nothing was changed.")
+        _die_input(str(e), "Nothing was changed.")
     if not pl.names:
-        print(f"taxjson migrate: nothing to migrate in {root} (none of "
-              f"{', '.join(M.LEGACY_FILES)} is here).")
+        print("taxjson migrate: nothing to migrate in this project")
+        for _ln in _out_wrap(f"None of {', '.join(M.LEGACY_FILES)} is "
+                             f"here.", indent="  "):
+            print(_ln)
         return
     dry = bool(getattr(args, "dry_run", False))
     print(f"taxjson migrate{' --dry-run' if dry else ''}: {root}")
     for ln in pl.summary(dry):
-        print(f"  {ln}")
+        for _ln in _out_wrap(ln, indent="  ", hang="    "):
+            print(_ln)
     if dry:
         if pl.map_append:
             print("\n  would append to ticker.map:")
@@ -2812,16 +2880,19 @@ def cmd_migrate(args: argparse.Namespace) -> None:
                     "taxjson.toml", "taxjson.toml (migrated)", lineterm="",
                     n=1):
                 print(f"    {ln}")
-        print("\n  (dry run: nothing was written)")
+        print("\n  dry run: nothing was written")
         return
     try:
         M.apply(pl)
     except OSError as e:
         _die_input(f"could not write the migration: {e}")
-    print("  done. Review ticker.map and taxjson.toml and commit them "
-          "(in a git repository, `git rm` the old files too); delete the "
-          "*.migrated files once you are satisfied; run `taxjson run` to "
-          "rebuild.")
+    print("\nDone.")
+    for _ln in _out_wrap(
+            "Review ticker.map and taxjson.toml and commit them (in a git "
+            "repository, `git rm` the old files too); delete the "
+            "*.migrated files once you are satisfied; run `taxjson run` to "
+            "rebuild.", indent="  "):
+        print(_ln)
 
 
 def _refuse_unreadable_project_inputs(root: Path) -> None:
@@ -2878,8 +2949,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     first so each one's sends pair against current arrivals."""
     acct_dir = inputs_dir / name
     if not acct_dir.exists():
-        print(f"taxjson: warning: no inputs dir for account '{name}' "
-              f"({acct_dir}); skipping.", file=sys.stderr)
+        _say("warning", f"no inputs dir for account '{name}' "
+             f"(inputs/{name}); skipping", prog=_PROG)
         return None
 
     base_currency = settings["base_currency"]
@@ -2899,17 +2970,18 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         _pos_only = [d for d in _detected if d.positions]
         if _pos_only:
             _report_detection(name, _pos_only, cache)
-        _msg = (f"taxjson: warning: no CSVs or .tt files in "
-                f"{acct_dir}; skipping account '{name}'.")
+        _details = []
         if (cache / f"{name}_base.json").exists():
             # Inputs emptied but artifacts persist: every aggregate
             # keeps counting the account's OLD books with only this
             # line as the signal (2026-09 audit).
-            _msg += (f" Its work/ artifacts from previous runs STILL "
-                     f"EXIST and are still counted by sum/fees/"
-                     f"reports — delete work/{name}_* and "
-                     f"reports/{name}* if the account is truly gone.")
-        print(_msg, file=sys.stderr)
+            _details.append(
+                f"Its work/ artifacts from previous runs STILL EXIST and "
+                f"are still counted by sum/fees/reports — delete "
+                f"work/{name}_* and reports/{name}* if the account is "
+                f"truly gone.")
+        _say("warning", f"no CSVs or .tt files in inputs/{name}; "
+             f"skipping account '{name}'", *_details, prog=_PROG)
         return None
     # Path-selection cross-check (KNOWN_ISSUES "crypto-vs-equity path"):
     # the pipeline split keys on the account's `crypto` flag alone, so a
@@ -2928,14 +3000,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         _which = ", ".join(f"inputs/{name}/{p.name} ({b}: {_how.get(p, '?')})"
                            for b in sorted(_mismatched)
                            for p in grouped[b])
-        sys.exit(
-            f"taxjson: account '{name}' has {flag} in taxjson.toml but "
-            f"its inputs contain {', '.join(sorted(_mismatched))} files "
-            f"[{_which}] "
-            f"— the {'equity' if is_crypto else 'crypto'} data would be "
-            f"routed through the wrong pipeline. Move the files to an "
-            f"account of the matching type, or fix the account's "
-            f"`crypto` flag.")
+        _die(f"account '{name}' has {flag} in taxjson.toml but its inputs "
+             f"contain {', '.join(sorted(_mismatched))} files",
+             f"The {'equity' if is_crypto else 'crypto'} data would be "
+             f"routed through the wrong pipeline: {_which}.",
+             "Move the files to an account of the matching type, or fix "
+             "the account's `crypto` flag.")
     # .tt-only accounts (hand-maintained records — the documented .tt
     # use case) used to be skipped here with a misleading "no CSVs"
     # warning before the .tt conversion stage ever ran: the whole book
@@ -3113,9 +3183,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         # Outside the rebuild branch on purpose: `run --strict --fast`
         # on a cached parse must hit the same gate.
         if strict and unbooked_lines(out):
-            sys.exit(f"taxjson run --strict: {name}: {broker} input has "
-                     f"event(s) the parser could not book (UNBOOKED "
-                     f"warning above / in {out.name}.diag) — aborting.")
+            _die(f"--strict: {name}: {broker} input has event(s) the "
+                 f"parser could not book — aborting",
+                 f"See the UNBOOKED warning above (also in "
+                 f"work/{out.name}.diag).")
         parsed.append(out)
 
     # A non-empty export that parsed to 0 transactions (a renamed
@@ -3137,17 +3208,17 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     if _empty_files:
         _which = ", ".join(f"inputs/{name}/{f}" for f in _empty_files)
         if strict:
-            sys.exit(f"taxjson run --strict: {name}: {_which} parsed to 0 "
-                     f"transactions — every row in it would be missing "
-                     f"from the books. Check the file's header/format (or "
-                     f"its name: cb_/kr_/coinbase/kraken route it to a "
-                     f"crypto parser), or remove it from inputs/.")
+            _die(f"--strict: {name}: {_which} parsed to 0 transactions",
+                 "Every row in it would be missing from the books. Check "
+                 "the file's header/format (or its name: cb_/kr_/"
+                 "coinbase/kraken route it to a crypto parser), or remove "
+                 "it from inputs/.")
         for _f in _empty_files:
-            print(f"taxjson: WARNING: {name}: inputs/{name}/{_f} parsed to "
-                  f"0 transactions — NONE of its rows are in the books. "
-                  f"Check the file's header/format (or its name: cb_/kr_/"
-                  f"coinbase/kraken route it to a crypto parser); "
-                  f"`run --strict` refuses this.", file=sys.stderr)
+            _say("warning", f"{name}: inputs/{name}/{_f} parsed to 0 "
+                 f"transactions — NONE of its rows are in the books",
+                 "Check the file's header/format (or its name: cb_/kr_/"
+                 "coinbase/kraken route it to a crypto parser); `run "
+                 "--strict` refuses this.", prog=_PROG)
 
     if parse_only:
         # The transfer evidence of an export REMOVED from inputs/ must
@@ -3182,12 +3253,14 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         # merger/CIL rows on the assumption that corp-actions consumes
         # them. With neither owner, those share movements would silently
         # vanish from the books. Say so loudly.
-        print(f"taxjson: warning: country={country!r} has no corp-action election "
-              f"rules — merger/reorg rows in {', '.join(corp_brokers)} "
-              f"files for account {name!r} are NOT processed. RBC merger "
-              f"rows are skipped by the parser, so any reorganization's "
-              f"share movements will be MISSING from this account's books; "
-              f"record them manually via a .tt file.", file=sys.stderr)
+        _say("warning", f"country={country!r} has no corp-action "
+             f"election rules — merger/reorg rows in "
+             f"{', '.join(corp_brokers)} files for account {name!r} are "
+             f"NOT processed",
+             "RBC merger rows are skipped by the parser, so any "
+             "reorganization's share movements will be MISSING from this "
+             "account's books; record them manually via a .tt file.",
+             prog=_PROG)
     if not is_crypto and _country_has_corp_rules(country):
         manifest_path = _resolve_manifest(acct_dir, cache, name, create=True)
         for broker, csvs in grouped.items():
@@ -3248,12 +3321,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # --strict. They used to reach only the .diag and the .sum
             # (A2-0211, the S015-02 twin).
             for _ln in unbooked_lines(out):
-                print(f"  {_ln}")
+                _echo_captured(_ln)
             if strict and unbooked_lines(out):
-                sys.exit(f"taxjson run --strict: {name}: {broker} "
-                         f"corporate actions hold event(s) taxjson could "
-                         f"not book (UNBOOKED warning above / in "
-                         f"{out.name}.diag) — aborting.")
+                _die(f"--strict: {name}: {broker} corporate actions hold "
+                     f"event(s) taxjson could not book — aborting",
+                     f"See the UNBOOKED warning above (also in "
+                     f"work/{out.name}.diag).")
             corp_files.append(out)
         _warn_zero_value_spinoffs(name, is_taxable, corp_files, cache)
 
@@ -3272,9 +3345,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         _o = tt_json_path(cache, name, tt.name).name
         if _o in _tt_by_out:
             _die(f"inputs/{name}/{_tt_by_out[_o]} and inputs/{name}/"
-                 f"{tt.name} convert to the same work file ({_o}) — one "
-                 f"would overwrite the other's rows. Rename one (or "
-                 f"merge the two).")
+                 f"{tt.name} convert to the same work file ({_o})",
+                 "One would overwrite the other's rows. Rename one (or "
+                 "merge the two).")
         _tt_by_out[_o] = tt.name
     for tt in input_files(acct_dir, ".tt"):
         _stem = tt.stem.lower()
@@ -3285,9 +3358,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # spurious account "<acct>_tt_msft" in `sum`, its fees counted
             # twice (S037-15): the artifact roles come from file names.
             _die(f"inputs/{name}/{tt.name}: a .tt file name may not end "
-                 f"in {_clash!r} — its converted JSON would read as a "
-                 f"pipeline artifact (a spurious extra account in the reports). "
-                 f"Rename it, e.g. "
+                 f"in {_clash!r}",
+                 "Its converted JSON would read as a pipeline artifact (a "
+                 "spurious extra account in the reports). Rename it, e.g. "
                  f"{tt.stem[:-len(_clash)] + _clash.replace('_', '-')}.tt")
         out = tt_json_path(cache, name, tt.name)
         if force or needs_rebuild(out, tt, src_manifest):
@@ -3471,12 +3544,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # run instead of printing the report.
             sys.stderr.write(report)
             if strict:
-                sys.exit(f"taxjson run --strict: {name}: validation "
-                         f"ERROR(s) in the crypto books — aborting.")
-            print(f"  !! {name}: validation ERROR(s) in the crypto books "
-                  f"— numbers may be wrong. Details: reports/{name}.sum "
-                  f"DIAGNOSTICS (or {validate_diag.name}).",
-                  file=sys.stderr)
+                _die(f"--strict: {name}: validation ERROR(s) in the "
+                     f"crypto books — aborting")
+            _say("warning", f"{name}: validation ERROR(s) in the crypto "
+                 f"books — numbers may be wrong",
+                 f"Details: reports/{name}.sum DIAGNOSTICS (or "
+                 f"work/{validate_diag.name}).", indent="  ")
     else:
         cmd = _cmd("taxjson-merge2") + [
             "--sort", "--dedup", "--require-inputs",
@@ -3578,16 +3651,13 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     # --strict (KNOWN_ISSUES "per-account validation is
                     # non-fatal"): a CI/cron run must not publish a
                     # wrong .sum at exit 0.
-                    sys.exit(
-                        f"taxjson run --strict: {name}: "
-                        f"{_m.group(1)} validation ERROR(s) in the "
-                        f"merged books — aborting. Details: "
-                        f"{_diag.name}.")
-                print(f"  !! {name}: {_m.group(1)} validation "
-                      f"ERROR(s) in the merged books — numbers may "
-                      f"be wrong. Details: reports/{name}.sum "
-                      f"DIAGNOSTICS (or {_diag.name}).",
-                      file=sys.stderr)
+                    _die(f"--strict: {name}: {_m.group(1)} validation "
+                         f"ERROR(s) in the merged books — aborting",
+                         f"Details: work/{_diag.name}.")
+                _say("warning", f"{name}: {_m.group(1)} validation "
+                     f"ERROR(s) in the merged books — numbers may be "
+                     f"wrong", f"Details: reports/{name}.sum DIAGNOSTICS "
+                     f"(or work/{_diag.name}).", indent="  ")
 
     # Cross-file dedup ambiguities (bin/taxjson_sort.plan_dedup, audit
     # R1-296): echoed from the persisted .diag on EVERY run, cached or
@@ -3616,9 +3686,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     wash_flags = _wash_flags(is_taxable, is_crypto, country)
     cmd += wash_flags
     if "--no-wash" in wash_flags:
-        print("  note: wash-sale rule NOT applied — the IRS treats crypto "
-              "as property, not a security (§1091 does not reach it); "
-              "losses are allowed in full.")
+        _say("note", "wash-sale rule NOT applied to crypto",
+             "The IRS treats crypto as property, not a security (§1091 "
+             "does not reach it); losses are allowed in full.",
+             indent="  ", file=sys.stdout)
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
     cmd += _locked_year_flags(cache.parent, settings)
@@ -3656,18 +3727,17 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         _note = _short_positions_note(base_json, name, ticker_map,
                                       incomplete_history)
         if _note:
-            print(f"  {_note}")
+            _say("note", *_note, indent="  ", file=sys.stdout)
     # A short where none can exist (a registered account, spot crypto,
     # a sale the broker codes CLOSING): missing history the numbers
     # depend on — --strict refuses (re-audit A2-0395 / A2-0137 / A2-1223).
     _shorts = _attention_short_lines(gains_json)
     if _shorts and strict:
-        sys.exit(f"taxjson run --strict: {name}: {len(_shorts)} position(s) "
-                 f"go short where none can exist (registered account, "
-                 f"spot crypto, or a sale the broker codes closing) — "
-                 f"history is missing; see the ATTENTION short: lines "
-                 f"above. Spot crypto and registered accounts cannot be "
-                 f"short.")
+        _die(f"--strict: {name}: {len(_shorts)} position(s) go short where "
+             f"none can exist — history is missing",
+             "A registered account, spot crypto, or a sale the broker "
+             "codes closing: see the ATTENTION short: lines above. Spot "
+             "crypto and registered accounts cannot be short.")
     if is_taxable:
         _warn_expired_open_options(name, gains_json, cache, year,
                                    tax_date=_tax_date_basis(settings))
@@ -3700,7 +3770,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         # a raw merge an earlier version left behind).
         for _ln in _raw_align_adjust_currency(raw_json, rates,
                                               base_currency):
-            print(f"  note: {_ln}", file=sys.stderr)
+            _say("note", _ln, indent="  ")
         mixed = _raw_mixed_currency_symbols(raw_json)
         if mixed:
             # Unrepresentable in a native-currency book (cross-currency
@@ -3708,13 +3778,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # no rate on file): skip the raw view rather than kill the
             # run. The converted books, gains, wash and .sum reports
             # above are complete and authoritative.
-            print(f"  !! raw holdings skipped for '{name}': "
-                  f"{', '.join(mixed)} would pool mixed currencies "
-                  f"(a cross-currency rollover rename, or a cost "
-                  f"adjustment or corporate-action row in another "
-                  f"currency with no exchange rate on file). "
-                  f"{name}_holdings.toml was NOT refreshed this run.",
-                  file=sys.stderr)
+            _say("warning", f"raw holdings skipped for '{name}': "
+                 f"{', '.join(mixed)} would pool mixed currencies",
+                 "A cross-currency rollover rename, or a cost adjustment "
+                 "or corporate-action row in another currency with no "
+                 f"exchange rate on file. reports/{name}_holdings.toml "
+                 "was NOT refreshed this run.", indent="  ")
             # The native books of an EARLIER run (before the rollover
             # rows arrived) would otherwise keep serving `taxjson gains`
             # without the rolled-over disposition (2026-09 audit S037-23).
@@ -3821,7 +3890,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                            "--trades", str(raw_json)]
             export_cmd.append(str(raw_gains))
             run_to_file(export_cmd, holdings_toml, capture_diag=False)
-            print(f"  → {holdings_toml}")
+            _wrote(holdings_toml, reports_dir.parent)
             # Surface quantity changes vs the prior run so the user can
             # sanity-check trades at a glance (e.g. "I didn't expect SAMPLG
             # to move — did I import the wrong file?"). Silent on the
@@ -3833,7 +3902,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # then serves (same atomicity contract as run_to_file).
     sum_path = reports_dir / f"{name}.sum"
     sum_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    print(f"  → {sum_path}")
+    _wrote(sum_path, reports_dir.parent)
     from taxjson.lib.safe_write import atomic_open
     with atomic_open(sum_path, binary=True) as out:
         # The pre-blend baseline: the cross-account passes' notes
@@ -3867,8 +3936,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 base_transactions=_base_rows,
                 rules=_income_rules(settings))))
     except Exception as e:                      # advisory artifact only
-        print(f"taxjson: warning: could not write {name}_report.json: {e}",
-              file=sys.stderr)
+        _say("warning", f"could not write {name}_report.json: {e}",
+             prog=_PROG)
 
     return {"base": base_json, "gains": gains_json, "sum": sum_path}
 
@@ -3973,9 +4042,9 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
                 base_transactions=_base_rows,
                 rules=_income_rules(settings))))
     except Exception as e:                      # advisory artifact only
-        print(f"taxjson: warning: could not write {name}_report.json: {e}",
-              file=sys.stderr)
-    print(f"  → {wash_sum}")
+        _say("warning", f"could not write {name}_report.json: {e}",
+             prog=_PROG)
+    _wrote(wash_sum, reports_dir.parent)
 
 
 # A custody move's two legs (out of one account, into another) post a
@@ -4066,12 +4135,12 @@ def stage_transfer_arrivals(name: str, root: Path, cache: Path,
         found = [a for a in transfer_arrivals(root, cache)
                  if a.account == name]
     except Exception as e:                          # noqa: BLE001
-        print(f"  warning: transfer-ins not checked ({type(e).__name__}: "
-              f"{e}).", file=sys.stderr)
+        _say("warning", f"transfer-ins not checked ({type(e).__name__}: "
+             f"{e})", indent="  ")
         found = []
     rows = TI.booked_rows(found)
     for ln in TI.attention_lines(found, country):
-        print(f"  {ATTENTION_PREFIX} {ln}")
+        _echo_captured(f"{ATTENTION_PREFIX} {ln}")
     if not rows:
         out.unlink(missing_ok=True)
         return None
@@ -4260,8 +4329,8 @@ def stage_own_account_moves(root: Path, cfg: Dict[str, Any],
                 moves += CS.own_moves(root, cfg, crypto,
                                       _crypto_broker_files(root, cfg))
             except ValueError as e:
-                print(f"  warning: crypto moves between your accounts not "
-                      f"paired: {e}", file=sys.stderr)
+                _say("warning", f"crypto moves between your accounts not "
+                     f"paired: {e}", indent="  ")
         moves = _mapped_moves(moves, root)
     from taxjson.lib.country import home_currency
     legs = _move_legs(moves, str(settings.get("base_currency")
@@ -4287,22 +4356,25 @@ def stage_own_account_moves(root: Path, cfg: Dict[str, Any],
             cache.mkdir(parents=True, exist_ok=True)
             p.write_text(text, encoding="utf-8")
     for m in moves:
-        print(f"  own-account move: {m['symbol']} {m['qty']:g} "
-              f"{m['from']} -> {m['to']} ({m['date']}): not a sale — the "
-              f"lots' basis and purchase dates go to {m['to']}.")
+        for _ln in _out_wrap(
+                f"own-account move: {m['symbol']} {m['qty']:g} "
+                f"{m['from']} -> {m['to']} ({m['date']}): not a sale — "
+                f"the lots' basis and purchase dates go to {m['to']}.",
+                indent="  ", hang="    "):
+            print(_ln)
     for u in unpaired:
         ins = ", ".join(f"{q:g} into {b} ({d})" for b, q, d in u["ins"])
-        print(f"  warning: ATTENTION: {u['symbol']}: {u['qty']:g} moved out "
-              f"of {u['from']} ({u['date_out']}) and {ins} look like a move "
-              f"between your own accounts, but the quantities do not pair "
-              f"— the lots are NOT carried: {u['from']} keeps them and the "
-              f"receiving account's sales read as a short. Check the "
-              f"transfer rows (`taxjson transfers`) and report those sales "
-              f"by hand (US-BASIS-05).", file=sys.stderr)
+        _say("attention", f"{u['symbol']}: {u['qty']:g} moved out of "
+             f"{u['from']} ({u['date_out']}) and {ins} look like a move "
+             f"between your own accounts, but the quantities do not pair",
+             f"The lots are NOT carried: {u['from']} keeps them and the "
+             f"receiving account's sales read as a short. Check the "
+             f"transfer rows (`taxjson transfers`) and report those sales "
+             f"by hand (US-BASIS-05).", indent="  ")
     if unpaired and strict:
-        sys.exit(f"taxjson run --strict: {len(unpaired)} transfer(s) "
-                 f"between your own taxable accounts that do not pair "
-                 f"(ATTENTION above) — aborting.")
+        _die(f"--strict: {len(unpaired)} transfer(s) between your own "
+             f"taxable accounts that do not pair (ATTENTION above) — "
+             f"aborting")
     return moves
 
 
@@ -4401,9 +4473,9 @@ def stage_blended_wash_pass(names: List[str],
     _mv = [ln for ln in _diag_lines(combined_wash)
            if ln.startswith(ATTENTION_PREFIX + " own-account move: ")]
     if _mv and strict:
-        sys.exit(f"taxjson run --strict: {len(_mv)} move(s) between your "
-                 f"own accounts the sending account's lots do not cover "
-                 f"(ATTENTION above) — aborting.")
+        _die(f"--strict: {len(_mv)} move(s) between your own accounts "
+             f"the sending account's lots do not cover (ATTENTION above) "
+             f"— aborting")
     # The blended run's stderr lands in .blend_gains_wash.json.diag —
     # dot-prefixed, so collect_diagnostics' {account}_*.diag glob can
     # never surface it, and it is the ONLY pass that sees --sheltered
@@ -4444,7 +4516,8 @@ def stage_blended_wash_pass(names: List[str],
                 [_json.loads((cache / f"{name}_gains_wash.json")
                              .read_text(encoding="utf-8"))
                  for name in names]):
-            print(f"taxjson: warning: {_msg}", file=sys.stderr)
+            _echo_captured(f"{_PROG}: warning: {_msg}", indent="",
+                           file=sys.stderr)
     except (OSError, ValueError, AttributeError):
         pass
 
@@ -4519,8 +4592,10 @@ def _sweep_retired_exports(reports_dir: Path) -> None:
             f"{reports_dir.name}/exports/")
     if removed_dir:
         what += " and the folder"
-    print(f"  removed {what} (the Seeking Alpha / FastGraph / TradingView "
-          f"exports were removed)")
+    for _ln in _out_wrap(f"removed {what} (the Seeking Alpha / FastGraph / "
+                         f"TradingView exports were removed)",
+                         indent="  ", hang="    "):
+        print(_ln)
 
 
 def _duplicate_input_files(inputs_dir: Path,
@@ -4611,11 +4686,12 @@ def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> int:
             for h in sorted(set(seen[a]) & set(seen[b])):
                 shared += 1
                 same = len(seen[a][h] & seen[b][h])
-                print(f"  {ATTENTION_PREFIX} the same broker account "
-                      f"(#{h[:6]}) feeds two taxjson accounts, {a} and "
-                      f"{b} ({same} identical row(s)) — every row of it "
-                      f"is booked in BOTH. Put each broker account's "
-                      f"exports under ONE inputs/<account>/ folder.")
+                _say("attention", f"the same broker account (#{h[:6]}) "
+                     f"feeds two taxjson accounts, {a} and {b} ({same} "
+                     f"identical row(s))",
+                     "Every row of it is booked in BOTH. Put each broker "
+                     "account's exports under ONE inputs/<account>/ "
+                     "folder.", indent="  ", file=sys.stdout)
     return shared
 
 
@@ -4658,12 +4734,12 @@ def _warn_cross_taxable_overlap(taxable_bases: List[Tuple[str, Path]],
         "accounts (ITA s. 47)")
     shown = ", ".join(overlap[:8]) + (
         f" (+{len(overlap) - 8} more)" if len(overlap) > 8 else "")
-    print(f"taxjson: note: {shown} traded in more than one TAXABLE "
-          f"account — {consequence}. The wash-adjusted artifacts "
-          f"(<account>_wash.sum — the canonical filing numbers) carry "
-          f"the blended figures; the per-account <account>.sum "
-          f"baseline stays isolated, so the pair shows what blending "
-          f"changed.", file=sys.stderr)
+    _say("note", f"{shown} traded in more than one TAXABLE account",
+         f"{consequence[0].upper()}{consequence[1:]}. The wash-adjusted "
+         f"artifacts (<account>_wash.sum — the canonical filing numbers) "
+         f"carry the blended figures; the per-account <account>.sum "
+         f"baseline stays isolated, so the pair shows what blending "
+         f"changed.", prog=_PROG)
 
 
 def _wash_preferred_gains(p: Path) -> Path:
@@ -4752,7 +4828,7 @@ def stage_cross_reports(all_gains: List[Path],
         if ticker_map:
             cmd += ["--map", str(ticker_map)]
         run_to_file(cmd, reports_dir / "crosslistings.rpt", capture_diag=False)
-    print(f"  → {reports_dir}/")
+    _wrote(reports_dir, reports_dir.parent)
 
 
 def stage_fees(cache: Path, settings: Dict[str, Any], rates: Path,
@@ -4771,7 +4847,7 @@ def stage_fees(cache: Path, settings: Dict[str, Any], rates: Path,
         "--to", settings["base_currency"], "--rates", str(rates),
     ] + (["--ticker-map", str(_tm)] if _tm.exists() else []),
         reports_dir / "fees.rpt")
-    print(f"  → {reports_dir}/fees.rpt")
+    _wrote(reports_dir / "fees.rpt", reports_dir.parent)
 
 
 # ---------------------------------------------------------------- entry points
@@ -4803,7 +4879,7 @@ def _refuse_unknown_missing_history_accounts(mh_file: Path,
     try:
         pairs = load_missing_history(mh_file)
     except (OSError, ValueError) as e:
-        sys.exit(f"taxjson run: {mh_file}: {e}")
+        _die(f"{mh_file.name}: {e}")
     stale: Dict[str, List[str]] = {}
     for sym, acct in sorted(pairs):
         if acct not in accounts:
@@ -4819,14 +4895,13 @@ def _refuse_unknown_missing_history_accounts(mh_file: Path,
         lines.append(f"  {acct!r}: {len(syms)} entr"
                      f"{'y' if len(syms) == 1 else 'ies'} "
                      f"({', '.join(syms[:5])}{more}){hint}")
-    sys.exit(
-        f"taxjson run: {mh_file} names account(s) that are not in "
-        f"taxjson.toml [accounts] ({', '.join(known) or 'none'}):\n"
-        + "\n".join(lines)
-        + "\n  Those openings would be skipped and the gains would "
-        "change silently. Edit the \"account\" of each entry to the "
-        "current account name (or delete the entries if the account "
-        "is gone), then run again.")
+    _die(f"{mh_file.name} names account(s) that are not in taxjson.toml "
+         f"[accounts] ({', '.join(known) or 'none'})",
+         *[f"- {ln.strip()}" for ln in lines],
+         "Those openings would be skipped and the gains would change "
+         "silently. Edit the \"account\" of each entry to the current "
+         "account name (or delete the entries if the account is gone), "
+         "then run again.")
 
 
 def _warn_year_without_activity(year: Any, bases: List[Path]) -> None:
@@ -4854,10 +4929,10 @@ def _warn_year_without_activity(year: Any, bases: List[Path]) -> None:
                     hi = d if hi is None or d > hi else hi
     if lo is None:
         return                       # empty books: said elsewhere
-    print(f"taxjson: warning: no transaction in any account's books is "
-          f"dated {ys} (the books run {lo} .. {hi}) — every {ys} filing "
-          f"total will be 0. Is [settings] year in taxjson.toml right?",
-          file=sys.stderr)
+    _say("warning", f"no transaction in any account's books is dated {ys} "
+         f"(the books run {lo} to {hi})",
+         f"Every {ys} filing total will be 0. Is [settings] year in "
+         f"taxjson.toml right?", prog=_PROG)
 
 
 _RUN_LOCK_FH = None
@@ -4884,9 +4959,9 @@ def _acquire_run_lock(cache: Path) -> None:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         fh.close()
-        _die(f"another `taxjson run` is in progress in {cache.parent} — "
-             f"wait for it to finish (or stop it), then re-run. Nothing "
-             f"was run.")
+        _die("another `taxjson run` is in progress in this project",
+             "Wait for it to finish (or stop it), then re-run. Nothing "
+             "was run.")
     _RUN_LOCK_FH = fh
 
 
@@ -4906,11 +4981,11 @@ def cmd_run(args: argparse.Namespace) -> None:
     settings = cfg.get("settings", {})
     accounts = cfg.get("accounts", {})
     if _country(settings) == "usa":
-        print(_US_EXPERIMENTAL_NOTE, file=sys.stderr)
+        _say("note", *_US_EXPERIMENTAL_NOTE)
     _since_warn = _grant_since_warning(settings, root, accounts)
     if _since_warn:
         # (a crypto-only project writes no options — nothing to warn about)
-        print(f"taxjson: warning: {_since_warn}", file=sys.stderr)
+        _say("warning", *_split_msg(_since_warn), prog=_PROG)
 
     # Orphaned artifacts from RENAMED/REMOVED accounts: work/ files
     # keep matching the discovery globs (resolve_gains_files, fees
@@ -4920,27 +4995,25 @@ def cmd_run(args: argparse.Namespace) -> None:
     from taxjson.lib.checklist import orphan_work_accounts
     _orphans = orphan_work_accounts(root, accounts)
     if _orphans:
-        print(f"taxjson: warning: work/ carries artifacts for "
-              f"account(s) not in taxjson.toml: "
-              f"{', '.join(_orphans)} — these are STILL COUNTED "
-              f"by sum/fees/wash tools (a renamed account is "
-              f"counted twice). Delete work/<name>_* and "
-              f"reports/<name>* for each, or restore the account "
-              f"in the config.", file=sys.stderr)
+        _say("warning", f"work/ carries artifacts for account(s) not in "
+             f"taxjson.toml: {', '.join(_orphans)}",
+             "These are STILL COUNTED by sum/fees/wash tools (a renamed "
+             "account is counted twice). Delete work/<name>_* and "
+             "reports/<name>* for each, or restore the account in the "
+             "config.", prog=_PROG)
         if getattr(args, "strict", False):
             # Every aggregate would count them twice (A2-1165).
-            sys.exit("taxjson run --strict: work/ carries artifacts for "
-                     "account(s) not in taxjson.toml: "
-                     f"{', '.join(_orphans)} — aborting.")
+            _die("--strict: work/ carries artifacts for account(s) not in "
+                 f"taxjson.toml: {', '.join(_orphans)} — aborting")
     if not accounts:
         _die("no [accounts.*] sections in taxjson.toml")
     # Warnings FIRST: a typo'd `yeer = 2025` must show its did-you-mean
     # before the "missing year" death it causes.
     for msg in validate_config(cfg, root / "inputs"):
-        print(f"taxjson: warning: taxjson.toml: {msg}", file=sys.stderr)
+        _say("warning", *_split_msg(f"taxjson.toml: {msg}"), prog=_PROG)
     _fnote = _fetch_plugin_note(cfg)
     if _fnote:
-        print(f"taxjson: note: taxjson.toml: {_fnote}", file=sys.stderr)
+        _say("note", *_split_msg(f"taxjson.toml: {_fnote}"), prog=_PROG)
     for required in ("year", "country"):
         if required not in settings:
             _die(f"missing [settings] {required} in taxjson.toml")
@@ -4959,14 +5032,14 @@ def cmd_run(args: argparse.Namespace) -> None:
         try:
             _d.mkdir(parents=True, exist_ok=True, mode=0o700)
         except OSError as e:
-            _die(f"cannot use {_d}: "
+            _die(f"cannot use {_d.name}/: "
                  + ("it exists and is not a directory"
                     if isinstance(e, FileExistsError) or _d.is_file()
-                    else (e.strerror or str(e)))
-                 + " — nothing was run.")
+                    else (e.strerror or str(e))),
+                 "Nothing was run.")
         import os as _os_mod
         if not _os_mod.access(_d, _os_mod.W_OK | _os_mod.X_OK):
-            _die(f"cannot write to {_d} — nothing was run.")
+            _die(f"cannot write to {_d.name}/", "Nothing was run.")
     # One run per project at a time: the stages write fixed work/ names,
     # so a cron `watch` racing an interactive run crashed one of them
     # with a FileNotFoundError on a shared .part file (A2-0778).
@@ -4980,9 +5053,12 @@ def cmd_run(args: argparse.Namespace) -> None:
     if not args.force:
         _old_fp = (_read_work_stamp(_code_stamp) or "").strip()
         if _old_fp != _code_fp:
-            print("==> taxjson's code changed since the cached stages were "
-                  "built (or no complete run recorded it) — rebuilding "
-                  "everything; --fast applies from the next run")
+            print("==> rebuilding everything: taxjson's code changed since "
+                  "the cached stages were built")
+            for _ln in _out_wrap("(or no complete run recorded it); "
+                                 "--fast applies from the next run",
+                                 indent="  "):
+                print(_ln)
             args.force = True
     _drop_work_file(_code_stamp)
     # A project map that exists as a NAME but cannot be opened (a
@@ -4994,7 +5070,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     from taxjson.lib.migrate import retired_file_note, retired_files
     _retired = retired_files(root)
     if _retired:
-        print(f"NOTE: {retired_file_note(_retired)}", file=sys.stderr)
+        _say("note", *_split_msg(retired_file_note(_retired)),
+             prog=_PROG)
     # ticker.map — one keyword-prefixed symbol-rule file. GLOBAL renames
     # apply everywhere; TOBASE consolidations apply only in the main
     # (to-base) merge; JOURNAL pairs also net in the holdings export;
@@ -5015,15 +5092,14 @@ def cmd_run(args: argparse.Namespace) -> None:
             from taxjson.lib.cli_diag import describe_input_error
             _die_input(describe_input_error(e))
         if _tm_problems:
-            _die(f"{len(_tm_problems)} ticker.map problem(s) — a "
-                 f"malformed line's rule would be silently dropped, and "
-                 f"contradictory rules (a cycle, two targets for one "
-                 f"symbol, a DISTINCT pair the renames pool) have no "
-                 f"single meaning; either changes ACB pools and gains:"
-                 f"\n    "
-                 + "\n    ".join(_tm_problems)
-                 + "\n  Fix the line (KEYWORD FROM TO, separated by "
-                 "spaces; notes after `#`) or delete it.")
+            _die(f"{len(_tm_problems)} ticker.map problem(s)",
+                 *[f"- {p}" for p in _tm_problems],
+                 "A malformed line's rule would be silently dropped, and "
+                 "contradictory rules (a cycle, two targets for one "
+                 "symbol, a DISTINCT pair the renames pool) have no "
+                 "single meaning; either changes ACB pools and gains. Fix "
+                 "the line (KEYWORD FROM TO, separated by spaces; notes "
+                 "after `#`) or delete it.")
     # ticker.map EXTRACT lines — description-keyed ticker corrections
     # for securities the currency->exchange suffix mislabels. The parse
     # stage gets the map as taxjson-brokerage --security-overrides when
@@ -5039,10 +5115,10 @@ def cmd_run(args: argparse.Namespace) -> None:
             # TRADINGVIEW lines: the export they fed was removed. Ignored
             # (never an error — an older project may still carry them);
             # said once per run.
-            print(f"NOTE: {ticker_map.name} has {len(_side.retired)} "
-                  f"TRADINGVIEW line(s) ({', '.join(_side.retired)}) — "
-                  f"TradingView export removed; delete these lines (they "
-                  f"are ignored).", file=sys.stderr)
+            _say("note", f"{ticker_map.name} has {len(_side.retired)} "
+                 f"TRADINGVIEW line(s) ({', '.join(_side.retired)})",
+                 "TradingView export removed; delete these lines (they "
+                 "are ignored).", prog=_PROG)
     # missing_history.json — optional project-wide list of (symbol,
     # account) pairs sold with no purchase in the files (bought before
     # the data; from `find-missing-history --write-missing-history`). Its
@@ -5061,8 +5137,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     _ph_marker = cache / ".missing_history_applied"
     _ph_marker_old = cache / ".phantoms_applied"
     if mh_arg:
-        print(f"==> missing-history openings (sales with no purchase in "
-              f"the files): {mh_file.name}")
+        print(f"==> missing-history openings: {mh_file.name}")
+        print("  (sales with no purchase in the files)")
         cache.mkdir(parents=True, exist_ok=True, mode=0o700)
         _ph_marker.write_text(str(mh_file))
         _ph_marker_old.unlink(missing_ok=True)
@@ -5112,14 +5188,14 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     _dup_inputs = _duplicate_input_files(inputs_dir, accounts)
     for _paths in _dup_inputs:
-        print(f"  {ATTENTION_PREFIX} the same export file sits in two "
-              f"accounts: {', '.join(_paths)} (identical content) — every "
-              f"row of it is booked twice, once in each account. Keep "
-              f"each broker export under ONE inputs/<account>/ folder.",
-              file=sys.stderr)
+        _say("attention", f"the same export file sits in two accounts: "
+             f"{', '.join(_paths)} (identical content)",
+             "Every row of it is booked twice, once in each account. Keep "
+             "each broker export under ONE inputs/<account>/ folder.",
+             indent="  ")
     if _dup_inputs and getattr(args, "strict", False):
         _die("--strict: the same export file is in two accounts "
-             "(ATTENTION above), so its rows would be booked twice — "
+             "(ATTENTION above)", "Its rows would be booked twice — "
              "nothing was built.")
 
     print("==> currency rates")
@@ -5160,11 +5236,11 @@ def cmd_run(args: argparse.Namespace) -> None:
         _dups = _duplicate_crypto_exports(
             cache, [n for n, _c in _crypto_first])
         for _d in _dups:
-            print(f"taxjson: WARNING: {_d}", file=sys.stderr)
+            _say("warning", *_split_msg(_d), prog=_PROG)
         if _dups and getattr(args, "strict", False):
-            sys.exit("taxjson run --strict: the same exchange rows are in "
-                     "two crypto accounts (above) — every one would be "
-                     "booked twice. Remove the copy.")
+            _die("--strict: the same exchange rows are in two crypto "
+                 "accounts (above)", "Every one would be booked twice. "
+                 "Remove the copy.")
 
     # US: a move between two of your own taxable accounts carries its
     # lots (US-BASIS-05). Every taxable equity account's transfer
@@ -5207,8 +5283,8 @@ def cmd_run(args: argparse.Namespace) -> None:
                                 no_input=no_input,
                                 strict=getattr(args, "strict", False))
         except PendingElectionsError as pe:
-            print(f"  warning: {name}: corp-action elections required — "
-                  f"account deferred", file=sys.stderr)
+            _say("warning", f"{name}: corp-action elections required — "
+                 f"account deferred", indent="  ")
             pending_accounts.append(pe)
             continue
         if out is None:                     # unpopulated account — skipped
@@ -5242,22 +5318,25 @@ def cmd_run(args: argparse.Namespace) -> None:
                  and (input_files(inputs_dir / n, ".csv")
                       or input_files(inputs_dir / n, ".tt"))]
         if _lost:
-            _die(f"run --account {args.account}: the sheltered book(s) "
+            _die(f"--account {args.account}: the sheltered book(s) "
                  f"{', '.join(_lost)} are missing from work/ although "
-                 f"their accounts have inputs — sheltered_base.json was "
-                 f"left unchanged (rebuilding it without them would hide "
-                 f"their purchases from the superficial-loss checks). "
-                 f"Run `taxjson run` without --account to rebuild every "
-                 f"book.")
+                 f"their accounts have inputs",
+                 "sheltered_base.json was left unchanged (rebuilding it "
+                 "without them would hide their purchases from the "
+                 "superficial-loss checks). Run `taxjson run` without "
+                 "--account to rebuild every book.")
         _missing = [p.name for p in _others if not p.exists()]
         _sheltered_merge_inputs = (
             [o["base"] for _, o in sheltered_outputs]
             + [p for p in _others if p.exists()])
-        print(f"==> rebuilding sheltered_base.json from this run's "
-              f"{args.account} book plus the other sheltered accounts' "
-              f"last-built books"
-              + (f" (no book for {', '.join(_missing)}: no inputs, "
-                 f"or deferred on elections)" if _missing else ""))
+        print("==> rebuilding sheltered_base.json")
+        for _ln in _out_wrap(
+                f"from this run's {args.account} book plus the other "
+                f"sheltered accounts' last-built books"
+                + (f" (no book for {', '.join(_missing)}: no inputs, or "
+                   f"deferred on elections)" if _missing else ""),
+                indent="  "):
+            print(_ln)
     _pending_sheltered = {pe.account for pe in pending_accounts}
     if (not _sheltered_merge_inputs and not args.account
             and not _pending_sheltered):
@@ -5288,14 +5367,12 @@ def cmd_run(args: argparse.Namespace) -> None:
             # A clean exit, not a raw CalledProcessError traceback —
             # the validator's output above already names the offending
             # transaction(s); tell the user where to look next.
-            sys.exit(
-                "taxjson run: the combined sheltered book failed "
-                "validation (details above) — the wash pass cannot "
-                "trust it. The usual cause is a malformed row from a "
-                "corp-action election; check the named account's "
-                "DIAGNOSTICS in its .sum, fix the election "
-                "(`taxjson elect <account> --redo`) or the input row, "
-                "and re-run.")
+            _die("the combined sheltered book failed validation (details "
+                 "above) — the wash pass cannot trust it",
+                 "The usual cause is a malformed row from a corp-action "
+                 "election; check the named account's DIAGNOSTICS in its "
+                 ".sum, fix the election (`taxjson elect <account> "
+                 "--redo`) or the input row, and re-run.")
 
     taxable_outputs: List[Tuple[str, Dict[str, Path], bool]] = []
     _blend_names: List[str] = []
@@ -5345,8 +5422,8 @@ def cmd_run(args: argparse.Namespace) -> None:
                                 no_input=no_input,
                                 strict=getattr(args, "strict", False))
         except PendingElectionsError as pe:
-            print(f"  warning: {name}: corp-action elections required — "
-                  f"account deferred", file=sys.stderr)
+            _say("warning", f"{name}: corp-action elections required — "
+                 f"account deferred", indent="  ")
             pending_accounts.append(pe)
             continue
         if out is None:                     # unpopulated account — skipped
@@ -5397,9 +5474,9 @@ def cmd_run(args: argparse.Namespace) -> None:
             and not sheltered_outputs and not taxable_outputs):
         # Every account was skipped for having no inputs: "Done" with
         # exit 0 read as success on an empty project (2026-09 CLI audit).
-        print(f"\ntaxjson run: no account had any input — drop broker "
-              f"CSV exports (or .tt files) into {inputs_dir}/<account>/ "
-              f"and re-run. Nothing was computed.", file=sys.stderr)
+        _say("warning", "no account had any input — nothing was computed",
+             "Drop broker CSV exports (or .tt files) into "
+             "inputs/<account>/ and re-run.", prog=f"{_PROG} run")
         if getattr(args, "strict", False):
             raise SystemExit(1)
         return
@@ -5433,7 +5510,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                 if _stale.exists():
                     _stale.unlink()
                     print(f"  removed stale {_stale.name} ({_n} is "
-                          f"sheltered — no wash pass)")
+                          f"sheltered: no wash pass)")
 
     if pending_accounts:
         # Some account(s) stopped at unresolved corp-action elections.
@@ -5586,8 +5663,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     except SystemExit:
         raise
     except Exception as _e:              # advisory guard, never a crash
-        print(f"taxjson: warning: filed-year check failed: {_e}",
-              file=sys.stderr)
+        _say("warning", f"filed-year check failed: {_e}", prog=_PROG)
 
     if not args.account:
         # What these reports were built from (content hashes), so the
@@ -5597,14 +5673,13 @@ def cmd_run(args: argparse.Namespace) -> None:
             from taxjson.lib.checklist import record_input_fingerprint
             record_input_fingerprint(root, cfg)
         except Exception as _e:          # advisory, never a crash
-            print(f"taxjson: warning: could not record the input "
-                  f"fingerprint: {_e}", file=sys.stderr)
+            _say("warning", f"could not record the input fingerprint: "
+                 f"{_e}", prog=_PROG)
 
     try:
         _fx_cash_after_run(root, cache, reports_dir)
     except Exception as _e:              # advisory guard, never a crash
-        print(f"taxjson: warning: fx-cash report failed: {_e}",
-              file=sys.stderr)
+        _say("warning", f"fx-cash report failed: {_e}", prog=_PROG)
 
     # Filing-obligation reminder: a rollover elected in March is
     # forgotten by filing season, and the deferral is INVALID without
@@ -5630,10 +5705,11 @@ def cmd_run(args: argparse.Namespace) -> None:
                 # One unreadable manifest used to discard every
                 # account's reminder in silence (S038-23): name it and
                 # keep going.
-                print(f"taxjson: warning: could not read {_mp} ({_e}) — "
-                      f"its elections are not checked for a FILING "
-                      f"REQUIRED reminder; fix the file (`taxjson elect "
-                      f"{_name}` reads it too).", file=sys.stderr)
+                _say("warning", f"could not read {_out_relpath(_mp, root)} "
+                     f"({_e})",
+                     "Its elections are not checked for a FILING REQUIRED "
+                     f"reminder; fix the file (`taxjson elect {_name}` "
+                     "reads it too).", prog=_PROG)
                 continue
             for _rec in _recs:
                 _todo = FILING_REQUIRED_ELECTIONS.get(_rec.election)
@@ -5642,20 +5718,25 @@ def cmd_run(args: argparse.Namespace) -> None:
                 _sum = _rec.summary or ""
                 if _year and _sum[:4].isdigit() and _sum[:4] != _year:
                     continue          # election from another tax year
-                _obligations.append(f"  {_name}: {_sum or _rec.event_id}"
-                                    f"\n    -> {_todo}")
+                _obligations.append((f"{_name}: {_sum or _rec.event_id}",
+                                     _todo))
         if _obligations:
-            print(f"\n  ! FILING REQUIRED for {len(_obligations)} "
-                  f"election(s) — the deferral is only valid with the "
-                  f"paperwork:", file=sys.stderr)
-            for _o in _obligations:
-                print(_o, file=sys.stderr)
+            _say("warning", f"FILING REQUIRED for {len(_obligations)} "
+                 f"election(s) — the deferral is only valid with the "
+                 f"paperwork", prog=_PROG)
+            for _what, _todo in _obligations:
+                for _ln in _out_wrap(_what, indent="  - ", hang="    ",
+                                     file=sys.stderr):
+                    print(_ln, file=sys.stderr)
+                for _ln in _out_wrap(_todo, indent="    ",
+                                     file=sys.stderr):
+                    print(_ln, file=sys.stderr)
     except Exception:
         pass                          # reminder must never break a run
 
     if not args.account:
         _code_stamp.write_text(_code_fp + "\n", encoding="utf-8")
-    print(f"\nDone. Reports in {reports_dir}/")
+    print(f"\nDone. Reports in {_out_relpath(reports_dir, root)}/")
 
     # Broker-positions cross-check, when taxjson.toml declares any
     # account's `holdings` files. A WARNING, never a failing exit:
@@ -5673,8 +5754,8 @@ def cmd_run(args: argparse.Namespace) -> None:
             # One unreadable holdings file drops that account from the
             # compare while sanity itself still exits 0 — say so here,
             # or the run reads as fully checked (2026-09 audit R1-324).
-            print(f"  !! holdings check incomplete: {_n}",
-                  file=sys.stderr)
+            _say("warning", *_split_msg(f"holdings check incomplete: {_n}"),
+                 indent="  ")
         try:
             cmd_sanity(argparse.Namespace(dir=str(root), items=[],
                                           tolerance=None, json=False,
@@ -5684,20 +5765,20 @@ def cmd_run(args: argparse.Namespace) -> None:
                 # A message exit is a CONFIG problem (missing holdings
                 # file, unknown account, malformed .toml) — not a
                 # position difference (2026-09 CLI audit B13).
-                print(f"  !! holdings check could not run: {_e.code}",
-                      file=sys.stderr)
+                _say("warning", "holdings check could not run",
+                     *str(_e.code).splitlines(), indent="  ")
             elif _e.code:
-                print("  !! positions differ from the broker holdings "
-                      "files — on a first project the likely cause is "
-                      "missing history (purchases before your download "
-                      "starts: `taxjson find-missing-history`, "
-                      "docs/getting-started.md step 5); later, same-day "
-                      "trades not yet in the CSVs are the usual one; "
-                      "anything else is a booking problem (see `taxjson "
-                      "sanity`).",
-                      file=sys.stderr)
+                _say("warning", "positions differ from the broker "
+                     "holdings files",
+                     "On a first project the likely cause is missing "
+                     "history (purchases before your download starts: "
+                     "`taxjson find-missing-history`, "
+                     "docs/getting-started.md step 5); later, same-day "
+                     "trades not yet in the CSVs are the usual one; "
+                     "anything else is a booking problem (see `taxjson "
+                     "sanity`).", indent="  ")
         except Exception as _e:  # noqa: BLE001 — never break a run
-            print(f"  holdings sanity skipped: {_e}", file=sys.stderr)
+            _say("warning", f"holdings sanity skipped: {_e}", indent="  ")
     if not args.account:
         _first_run_summary(root, cfg, cache, mh_arg)
     if args.account:
@@ -5710,22 +5791,21 @@ def cmd_run(args: argparse.Namespace) -> None:
         # Canada's rule is the superficial-loss rule (audit A2-1360).
         _rule_n = ("wash-sale" if _country(settings) == "usa"
                    else "superficial-loss")
-        print(
-            f"\n  ! Single-account run ({args.account}): cross-account "
-            f"{_rule_n} detection and the combined cross-account reports "
-            f"were skipped — "
-            f"they keep the last full run's contents. Run `taxjson run` "
-            f"with no --account before filing.",
-            file=sys.stderr,
-        )
+        _say("warning", f"single-account run ({args.account}): cross-account "
+             f"{_rule_n} detection and the combined cross-account reports "
+             f"were skipped",
+             "They keep the last full run's contents. Run `taxjson run` "
+             "with no --account before filing.", prog=f"{_PROG} run")
 
 
 def _short_positions_note(base_json: Path, account: str,
                           ticker_map: Optional[Path],
-                          missing_history: Optional[Path]) -> str:
-    """One NOTE naming a taxable account's positions that go short in
-    its books — a sale with no purchase in the files, unless the broker
-    marks it a short sale — or '' (advisory: never breaks a run)."""
+                          missing_history: Optional[Path]
+                          ) -> Tuple[str, ...]:
+    """A note (headline, detail) naming a taxable account's positions
+    that go short in its books — a sale with no purchase in the files,
+    unless the broker marks it a short sale — or () (advisory: never
+    breaks a run)."""
     try:
         from taxjson.lib.core import load_transactions
         from taxjson.lib.first_run import read_missing_history_pairs
@@ -5745,16 +5825,17 @@ def _short_positions_note(base_json: Path, account: str,
                  and (str(c.symbol).upper(), account.lower())
                  not in covered]
     except Exception:                               # noqa: BLE001
-        return ""
+        return ()
     if not cands:
-        return ""
+        return ()
     shown = ", ".join(c.symbol for c in cands[:5]) \
         + (f" +{len(cands) - 5} more" if len(cands) > 5 else "")
-    return (f"NOTE: {len(cands)} position(s) go short in {account}'s data "
-            f"({shown}): sales with no purchase in your files, unless they "
-            f"were real short sales. Until the purchase is supplied their "
-            f"gain is in no total — `taxjson find-missing-history` lists "
-            f"them with the fixes.")
+    return (f"{len(cands)} position(s) go short in {account}'s data "
+            f"({shown})",
+            "Sales with no purchase in your files, unless they were real "
+            "short sales. Until the purchase is supplied their gain is in "
+            "no total — `taxjson find-missing-history` lists them with "
+            "the fixes.")
 
 
 def _uncovered_sales(root: Path, cfg: Dict[str, Any],
@@ -12651,7 +12732,7 @@ def _check_renamed_late(root: Path, *, strict: bool) -> None:
     try:
         rows = unresolved_late(root, load_config(root))
     except ValueError as e:
-        print(f"  warning: {e}", file=sys.stderr)
+        _say("warning", *_split_msg(str(e)), indent="  ")
         return
     seen: Dict[Tuple[str, str], int] = {}
     for x in rows:
@@ -12660,14 +12741,14 @@ def _check_renamed_late(root: Path, *, strict: bool) -> None:
     for (sym, d), n in sorted(seen.items()):
         new = next(x["renamed_to"] for x in rows
                    if (x["symbol"], x["rename_date"]) == (sym, d))
-        print(f"  warning: ATTENTION: {n} trade(s) in {sym} after "
-              f"its rename to {new} on {d} — booked as a separate "
-              f"security until ticker.map says which it is (`taxjson "
-              f"renames`).", file=sys.stderr)
+        _say("attention", f"{n} trade(s) in {sym} after its rename to "
+             f"{new} on {d}",
+             "Booked as a separate security until ticker.map says which "
+             "it is (`taxjson renames`).", indent="  ")
     if rows and strict:
-        sys.exit(f"taxjson run --strict: {len(rows)} trade(s) in a renamed "
-                 f"ticker after its rename are not declared in ticker.map "
-                 f"(ATTENTION above; `taxjson renames`) — aborting.")
+        _die(f"--strict: {len(rows)} trade(s) in a renamed ticker after "
+             f"its rename are not declared in ticker.map — aborting",
+             "See the ATTENTION lines above and `taxjson renames`.")
 
 
 def cmd_check_dates(args: argparse.Namespace) -> None:
@@ -15267,11 +15348,10 @@ def _warn_artifact_year(files: Dict[str, Path], config_year) -> None:
     if not bad:
         return
     got = ", ".join(f"{a} ({y})" for a, y in sorted(bad.items()))
-    _pfx = f"taxjson {_CURRENT_CMD}" if _CURRENT_CMD else "taxjson"
-    print(f"{_pfx}: WARNING: [settings].year is {config_year} but the "
-          f"work/ books were built for another tax year: {got}. These "
-          f"figures are NOT {config_year}'s — rebuild with `taxjson run` "
-          f"first.", file=sys.stderr)
+    _say("warning", f"[settings].year is {config_year} but the work/ "
+         f"books were built for another tax year: {got}",
+         f"These figures are NOT {config_year}'s — rebuild with `taxjson "
+         f"run` first.", prog=_cmd_prog())
 
 
 def _tax_date_basis(settings: Dict[str, Any]) -> str:
@@ -15354,11 +15434,12 @@ def _warn_run_state(root: Path, cfg: Dict[str, Any]) -> List[str]:
     _refuse_other_country_books(root, cfg)
     probs = _run_state_problems(root, cfg)
     if probs:
-        _pfx = f"taxjson {_CURRENT_CMD}" if _CURRENT_CMD else "taxjson"
-        print(f"{_pfx}: WARNING: these books are not the clean result of "
-              f"the current inputs — {'; '.join(probs)}. The figures "
-              f"below may leave sales out or carry default FX; fix and "
-              f"re-run `taxjson run` before using them.", file=sys.stderr)
+        _say("warning", "these books are not the clean result of the "
+             "current inputs",
+             *[f"- {p}" for p in probs],
+             "The figures below may leave sales out or carry default FX; "
+             "fix and re-run `taxjson run` before using them.",
+             prog=_cmd_prog())
     return probs
 
 
@@ -16695,9 +16776,9 @@ def _no_fetcher_exit() -> None:
     """`taxjson fetch` with no fetcher plugin installed: one line, exit 2
     (the core ships no broker client; lib/fetchers)."""
     from taxjson.lib.fetchers import INSTALL_HINT
-    print(f"taxjson fetch: no fetcher is installed — {INSTALL_HINT}.",
-          file=sys.stderr)
-    raise SystemExit(2)
+    # One message (one line when captured): the checklist and scripts
+    # read a failed command's last line.
+    _die_input(f"no fetcher is installed — {INSTALL_HINT}.")
 
 
 def cmd_fetch(args: argparse.Namespace) -> None:
@@ -16711,7 +16792,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     from taxjson.lib import fetchers as FP
     found, problems = FP.discover()
     for msg in problems:
-        print(f"taxjson fetch: warning: {msg}", file=sys.stderr)
+        _say("warning", msg, prog=f"{_PROG} fetch")
     if getattr(args, "list", False):
         rows = FP.listing()
         if getattr(args, "json", False):
@@ -16723,9 +16804,10 @@ def cmd_fetch(args: argparse.Namespace) -> None:
                 print(f"{r['name']}"
                       + (f" ({r['distribution']})" if r["distribution"]
                          else "")
-                      + f": {', '.join(r['brokerages']) or '-'}"
-                      + (f" — {r['description']}" if r["description"]
-                         else ""))
+                      + f": {', '.join(r['brokerages']) or '-'}")
+                if r["description"]:
+                    for _ln in _out_wrap(r["description"], indent="  "):
+                        print(_ln)
         return
     if not found:
         _no_fetcher_exit()
@@ -16733,39 +16815,36 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     if getattr(args, "fetcher", None):
         chosen = [f for f in found if f.name == args.fetcher]
         if not chosen:
-            sys.exit(f"taxjson fetch: no installed fetcher named "
-                     f"{args.fetcher!r} (installed: "
-                     f"{', '.join(f.name for f in found)}; see "
-                     f"`taxjson fetch --list`).")
+            _die(f"no installed fetcher named {args.fetcher!r}",
+                 f"Installed: {', '.join(f.name for f in found)}; see "
+                 f"`taxjson fetch --list`.")
     serves = FP.served_brokerages(chosen)
     root = Path(args.dir).resolve()
     cfg = load_config(root)
     declared = FP.declared_brokerages(cfg)
     if not declared:
         hints = [f.setup_hint for f in chosen if f.setup_hint]
-        sys.exit("taxjson fetch: no account declares a fetch source. "
-                 + ("\n".join(hints) if hints else
-                    "Add `brokerage = \"...\"` under [accounts.<name>] "
-                    f"in taxjson.toml ({', '.join(sorted(serves))})."))
+        _die("no account declares a fetch source",
+             *(hints or ["Add `brokerage = \"...\"` under "
+                         f"[accounts.<name>] in taxjson.toml "
+                         f"({', '.join(sorted(serves))})."]))
     accounts_cfg = cfg.get("accounts", {})
     wanted = list(args.account) if args.account else list(declared)
     for a in wanted:
         if a not in declared:
-            sys.exit(f"taxjson fetch: [accounts.{a}] declares no "
-                     f"`brokerage`."
-                     if a in accounts_cfg else
-                     f"taxjson fetch: no [accounts.{a}] in "
-                     f"taxjson.toml.")
+            _die(f"[accounts.{a}] declares no `brokerage`"
+                 if a in accounts_cfg else
+                 f"no [accounts.{a}] in taxjson.toml")
     if not args.account:
         wanted = sorted(wanted)
     by_fetcher: Dict[str, List[str]] = {}
     for a in wanted:
         f = serves.get(declared[a])
         if f is None:
-            sys.exit(f"taxjson fetch: [accounts.{a}] brokerage "
-                     f"{declared[a]!r} has no installed fetcher (served: "
-                     f"{', '.join(sorted(serves)) or 'none'}; see "
-                     f"`taxjson fetch --list`).")
+            _die(f"[accounts.{a}] brokerage {declared[a]!r} has no "
+                 f"installed fetcher",
+                 f"Served: {', '.join(sorted(serves)) or 'none'}; see "
+                 f"`taxjson fetch --list`.")
         by_fetcher.setdefault(f.name, []).append(a)
     json_mode = bool(getattr(args, "json", False))
     dry_run = bool(getattr(args, "dry_run", False))
@@ -16774,9 +16853,10 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     # before any plugin runs (security review L6); --list stays allowed.
     from taxjson.lib.offline import ENV_VAR as _OFF_VAR, offline_enabled
     if offline_enabled():
-        sys.exit(f"taxjson fetch: {_OFF_VAR} is set — a fetch downloads "
-                 f"from the broker, so nothing was fetched; unset it (or "
-                 f"set {_OFF_VAR}=0) to fetch.")
+        # One message (one line when captured).
+        _die(f"{_OFF_VAR} is set — a fetch downloads from the broker, so "
+             f"nothing was fetched; unset it (or set {_OFF_VAR}=0) to "
+             f"fetch.")
 
     def say(msg: str) -> None:
         # Progress lines move to stderr under --json so stdout stays
@@ -16797,8 +16877,8 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     if json_mode:
         _json_out({"accounts": results, "dry_run": dry_run})
     elif not dry_run:
-        print("fetch complete — run `taxjson run` to rebuild "
-              "(or chain: `taxjson fetch run`).")
+        print("fetch complete: run `taxjson run` to rebuild (or chain: "
+              "`taxjson fetch run`).")
 
 
 def _fx_cash_doc(root: Path, cache: Path):
@@ -18629,48 +18709,51 @@ def cmd_format(args: argparse.Namespace) -> None:
     root = Path(args.dir).resolve()
     cfg = root / "taxjson.toml"
     if not cfg.exists() and not cfg.is_symlink():
-        _die_input(f"no taxjson.toml in {root}. Run `taxjson init` first.")
+        _die_input(f"no taxjson.toml in {root}",
+                   "Run `taxjson init` first.")
     text = _read_config_text(cfg)
     try:
         res = format_config(text)
     except FormatError as e:
-        _die_input(f"{cfg}: {e}")
+        _die_input(f"taxjson.toml: {e}")
     if res.unrecognised:
-        print(f"note: kept {len(res.unrecognised)} key(s) the template "
-              f"does not know, flagged in the file: "
-              f"{', '.join(res.unrecognised)}", file=sys.stderr)
+        _say("note", f"kept {len(res.unrecognised)} key(s) the template "
+             f"does not know, flagged in the file: "
+             f"{', '.join(res.unrecognised)}", prog=f"{_PROG} format")
     if res.notes_lines:
-        print(f"note: {res.notes_lines} comment line(s) could not be "
-              f"attached to a setting; they are kept in the \"Your "
-              f"notes\" block at the end of the file.", file=sys.stderr)
+        _say("note", f"{res.notes_lines} comment line(s) could not be "
+             f"attached to a setting",
+             "They are kept in the \"Your notes\" block at the end of the "
+             "file.", prog=f"{_PROG} format")
     if not res.changed:
         print("taxjson.toml is already formatted.")
         return
     if args.check:
-        print("taxjson.toml is not formatted — `taxjson format` shows "
-              "the changes, `taxjson format --write` applies them.",
-              file=sys.stderr)
+        _say("warning", "taxjson.toml is not formatted",
+             "`taxjson format` shows the changes, `taxjson format "
+             "--write` applies them.", prog=f"{_PROG} format")
         sys.exit(1)
     if not args.write:
         sys.stdout.writelines(difflib.unified_diff(
             text.splitlines(keepends=True),
             res.text.splitlines(keepends=True),
             fromfile="taxjson.toml", tofile="taxjson.toml (formatted)"))
-        print("\n(dry run: nothing written — `taxjson format --write` "
-              "applies this; your configuration loads the same either "
-              "way)", file=sys.stderr)
+        _say("note", "dry run: nothing written",
+             "`taxjson format --write` applies this; your configuration "
+             "loads the same either way.", prog=f"{_PROG} format")
         return
     from taxjson.lib.safe_write import link_outside, write_atomic
     target = link_outside(cfg, root)
     if target is not None:
-        _die_input(f"{cfg} is a symlink to {target}, outside the project "
-                   f"— format the file it points at in its own project, "
-                   f"or replace the link with the file.")
+        _die_input(f"taxjson.toml is a symlink to {target}, outside the "
+                   f"project",
+                   "Format the file it points at in its own project, or "
+                   "replace the link with the file.")
     bak = None if args.no_backup else _backup_config(cfg)
     try:
         write_atomic(cfg, res.text, suffix=".format.part", keep_mode=True)
     except OSError as e:
-        _die_input(f"cannot write {cfg}: {e.strerror or e}")
+        _die_input(f"cannot write taxjson.toml: {e.strerror or e}")
     print("formatted taxjson.toml"
           + (f" (previous version: {bak})" if bak else ""))
 
@@ -18678,8 +18761,8 @@ def cmd_format(args: argparse.Namespace) -> None:
 def cmd_init(args: argparse.Namespace) -> None:
     country = _normalize_country(args.country)
     if country not in ("canada", "usa"):
-        sys.exit(f"taxjson init: unknown country {args.country!r} "
-                 f"(expected canada | ca | usa | us)")
+        _die(f"unknown country {args.country!r} (expected canada | ca | "
+             f"usa | us)")
 
     _year = getattr(args, "year", None)
     _max_year = date_cls.today().year + 1
@@ -18687,8 +18770,8 @@ def cmd_init(args: argparse.Namespace) -> None:
         # 0/-5/20255 scaffolded projects whose every report was
         # silently all-zero (REVIEW #28); 2099 fetched no FX rates
         # and built empty books (2026-09 CLI audit).
-        sys.exit(f"taxjson init: --year {_year} is not a plausible tax "
-                 f"year (expected 1900..{_max_year})")
+        _die(f"--year {_year} is not a plausible tax year (expected "
+             f"1900 to {_max_year})")
 
     # The positional `path` (if given) overrides the global -C/--dir flag.
     target = getattr(args, "path", None) or args.dir
@@ -18717,9 +18800,9 @@ def cmd_init(args: argparse.Namespace) -> None:
     for rel in ["inputs"] + [f"inputs/{a}" for a in account_names]:
         q = root / rel
         if q.exists() and not q.is_dir():
-            _die(f"cannot create {rel}/: {q} exists and is not a "
-                 f"directory — move it away, then re-run init. Nothing "
-                 f"was written.")
+            _die(f"cannot create {rel}/: it exists and is not a "
+                 f"directory", "Move it away, then re-run init. Nothing "
+                 "was written.")
     bak_name = "taxjson.toml.bak"
     if cfg.exists():
         # --force re-templates: keep the user's previous config (their
@@ -18731,8 +18814,6 @@ def cmd_init(args: argparse.Namespace) -> None:
     # taxjson.toml blocking the retry (re-audit A2-0477).
     write_text_atomic(cfg, config_text)
     written.append("taxjson.toml")
-    if country == "usa":
-        print(_US_EXPERIMENTAL_NOTE, file=sys.stderr)
 
     # Everything else is written ONLY when absent, so re-running `init
     # --force` re-templates the config without clobbering a ticker.map or
@@ -18745,10 +18826,10 @@ def cmd_init(args: argparse.Namespace) -> None:
             if p.is_symlink() and not p.exists():
                 # A dangling symlink: writing the stub would create its
                 # target, wherever it points (security review I3).
-                print(f"  note: {rel} is a symlink to a missing file "
-                      f"({os.readlink(p)}) — left as is, not written "
-                      f"through; remove it and re-run init for the "
-                      f"template.", file=sys.stderr)
+                _say("note", f"{rel} is a symlink to a missing file "
+                     f"({os.readlink(p)}) — left as is",
+                     "It is not written through; remove it and re-run "
+                     "init for the template.", prog=f"{_PROG} init")
             return
         from taxjson.lib.safe_write import write_atomic
         write_atomic(p, content)
@@ -18772,22 +18853,33 @@ def cmd_init(args: argparse.Namespace) -> None:
                       if d.is_dir() and d.name not in account_names
                       and d.name != "slips") if _inputs.is_dir() else []
     if _orphans:
-        print(f"  note: inputs/ has folder(s) with no [accounts.*] "
-              f"section in the new config: {', '.join(_orphans)} — "
-              f"re-add their sections (see {bak_name}) or remove "
-              f"the folders.")
+        for _ln in _out_wrap(
+                f"note: inputs/ has folder(s) with no [accounts.*] "
+                f"section in the new config: {', '.join(_orphans)}",
+                indent="  ", hang="    "):
+            print(_ln)
+        for _ln in _out_wrap(f"Re-add their sections (see {bak_name}) or "
+                             f"remove the folders.", indent="    "):
+            print(_ln)
     import shlex as _shlex
     print("\nNext:")
-    print(f"  1. edit {cfg} — set the year, accounts, and source currencies")
     from taxjson.lib.config_template import system_timezone as _systz
+    _step1 = ("1. Edit taxjson.toml: set the year, accounts, and source "
+              "currencies")
     if _systz() is None:
         # Left commented (UTC or unreadable here): there is no default,
         # and a crypto account stops the run until it is set.
-        print("     and [settings] local_timezone (your IANA zone, e.g. "
-              "\"America/Vancouver\": crypto rows are dated in it; this "
-              "machine's zone could not be read or is UTC)")
-    print("  2. drop broker CSV exports into inputs/<account>/")
-    print(f"  3. run: taxjson -C {_shlex.quote(str(root))} run")
+        _step1 += (", and [settings] local_timezone (your IANA zone, e.g. "
+                   "\"America/Vancouver\": crypto rows are dated in it; "
+                   "this machine's zone could not be read or is UTC)")
+    for _ln in _out_wrap(_step1 + ".", indent="  ", hang="     "):
+        print(_ln)
+    print("  2. Drop broker CSV exports into inputs/<account>/.")
+    print("  3. Run:")
+    # A command to copy: its own line, never wrapped.
+    print(f"       taxjson -C {_shlex.quote(str(root))} run")
+    if country == "usa":
+        _say("note", *_US_EXPERIMENTAL_NOTE, prog=f"{_PROG} init")
 
 
 # The carryover flag means what each country's return does with it

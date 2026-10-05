@@ -67,7 +67,23 @@
   are a one-line headline with indented details (`!!`, `NOTE:`,
   `WARNING:` and `->` retired); `check-filed` keeps `DRIFTED` on the
   warning's first line. No figure, `--json` output or file changes.
-
+- **`taxjson run`, `init`, `format`, `migrate` and `fetch` in the house
+  style.** The run's console wraps every message at the house width: a
+  stage's ATTENTION or UNBOOKED line keeps its marker first line and shows
+  the rest as an indented headline and detail; the run's own warnings and
+  refusals are a headline plus details (`NOTE:`, `WARNING:`, `!!`, `!`
+  and `->` retired); the files it writes are named relative to the
+  project (`wrote reports/margin.sum`); the "before you trust these
+  numbers" summary lists one finding per item. `init` shows its next
+  steps wrapped with the `taxjson -C ... run` line to copy on its own,
+  and `fetch --list` puts each fetcher's description under it. The
+  parsers', merge's and the gains engine's notes and warnings read the
+  same way when a person runs them; captured by the run, their text in
+  `work/*.diag` and the `.sum` DIAGNOSTICS is byte for byte as before.
+  The run's closing summary names every account it counts ("5
+  account(s) with open positions and no holdings file" named only four;
+  it now names up to six and says how many more). No figure, `--json`
+  output or file changes.
 - **The planning commands in the house output style.** `taxjson
   wash-radar` prints one section per advisory category (its title and
   row count) with a TICKER / TAXABLE / SHELTERED / CLEARS table and each

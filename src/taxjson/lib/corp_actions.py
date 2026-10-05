@@ -32,6 +32,7 @@ Three layers:
 
 from __future__ import annotations
 
+from taxjson.lib.stage_msg import emit_line
 import csv
 import hashlib
 import io
@@ -563,13 +564,12 @@ def _ib_warn_currency_tags(events: List[CorporateAction]) -> None:
             if tag.upper() not in _IB_CURRENCY_TAGS:
                 continue
             seen.add(root)
-            print(f"warning: IB corporate action {ev.event_id or ev.date}: "
+            emit_line(f"warning: IB corporate action {ev.event_id or ev.date}: "
                   f"symbol {root!r} ends in the currency/venue tag .{tag} "
                   f"— booked as {sym}, a security of its own apart from "
                   f"{base}. If it is the same security, join it in "
                   f"ticker.map with the listing that holds it (e.g. "
-                  f"`GLOBAL {sym} {base}.US` or `{base}.TO`).",
-                  file=sys.stderr)
+                  f"`GLOBAL {sym} {base}.US` or `{base}.TO`).")
 
 
 def _ib_norm_date_time(s: str) -> str:
@@ -806,14 +806,14 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
             continue                # another statement's event
         side = _side(bucket)
         if side != 'full':
-            print(f"warning: IB merger leg(s) "
+            emit_line(f"warning: IB merger leg(s) "
                   f"{bucket['legs'][0]['rec']['description'][:100]!r} on "
                   f"{bucket['date_time'][:10]} have no matching "
                   f"{'in' if side == 'out' else 'out'}-leg in any statement "
                   f"of this account — the merger cannot be booked. Add the "
                   f"statement holding the other leg (IB sometimes reports "
                   f"it in the next period), or book the exchange by hand "
-                  f"and mark the event `ignore`.", file=sys.stderr)
+                  f"and mark the event `ignore`.")
             blocked.append(('half', recs))
             continue
         src_isin, with_isin = bucket['src_isin'], bucket['with_isin']
@@ -825,12 +825,12 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
                 (l['qty'] > 0 and l['isin'] == src_isin)
                 or (l['qty'] < 0 and l['isin'] == with_isin)
                 for l in bucket['legs']):
-            print(f"warning: IB merger "
+            emit_line(f"warning: IB merger "
                   f"{bucket['legs'][0]['rec']['description'][:100]!r} on "
                   f"{bucket['date_time'][:10]} is a merger of a SHORT "
                   f"position — taxjson cannot book it. Record the cover of "
                   f"the old short and the new short by hand in a .tt file, "
-                  f"then mark the event `ignore`.", file=sys.stderr)
+                  f"then mark the event `ignore`.")
             blocked.append(('short', recs))
             continue
         # The same merger held in TWO listings of the source (TSX and
@@ -895,12 +895,12 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
         if mb['qty_out'] >= 0 or not mb['in_legs']:
             # Need both sides to emit safely — and say so: a silent skip
             # left the old shares alive and the successors unbooked.
-            print(f"warning: IB split-up {mb['descriptions'][0][:100]!r} "
+            emit_line(f"warning: IB split-up {mb['descriptions'][0][:100]!r} "
                   f"on {mb['date_time'][:10]} has no matching "
                   f"{'out' if mb['qty_out'] >= 0 else 'in'}-leg in any "
                   f"statement of this account — it cannot be booked. Add "
                   f"the statement holding the other leg(s), or book it by "
-                  f"hand and mark the event `ignore`.", file=sys.stderr)
+                  f"hand and mark the event `ignore`.")
             blocked.append(('half', mb['recs']))
             continue
         legs = mb['in_legs']
@@ -1017,9 +1017,9 @@ def _ib_spinoff_events(spin_rows, account, acct_of, fii=None
         target = _ib_leg_symbol(parts['target'], currency, fii or {},
                                 tsx_unit=parent.endswith('.U.TO'))
         if not parts['parent']:
-            print(f"warning: IB spin-off row names no parent ticker "
+            emit_line(f"warning: IB spin-off row names no parent ticker "
                   f"({desc[:90]!r}) — a tax-deferred spin-off's parent "
-                  f"cost reduction has nowhere to land.", file=sys.stderr)
+                  f"cost reduction has nowhere to land.")
         events.append(CorporateAction(
             date=date_part.strip(), time=(time_part.strip() or '20:25:00'),
             action_type='spinoff',
@@ -1066,12 +1066,11 @@ def _ib_unsupported_events(odd_rows, account, acct_of, quiet: bool = False
                 tgt = f"{_ib_ticker(mt.group(1))}.{_ib_ext(ins[0]['currency'])}"
         date_part, _, time_part = date_time.partition(',')
         if not quiet:
-            print(f"warning: IB corporate action taxjson cannot book: "
+            emit_line(f"warning: IB corporate action taxjson cannot book: "
                   f"{head['description'][:120]!r} on {date_part.strip()} "
                   f"— neither the old shares' disposal nor the new "
                   f"position is booked. Record the exchange by hand in a "
-                  f".tt file, then mark the event `ignore`.",
-                  file=sys.stderr)
+                  f".tt file, then mark the event `ignore`.")
         events.append(CorporateAction(
             date=date_part.strip(), time=(time_part.strip() or '20:25:00'),
             action_type='unsupported',
@@ -1498,13 +1497,13 @@ def parse_questrade_corporate_actions(
             # dropping it (audit S062-11): the units stay in inventory
             # and their ACB is never claimed.
             _syms = sorted({r['symbol'] for r in rows if r['symbol']})
-            print(f"warning: UNBOOKED: Questrade DIS corporate-action "
+            emit_line(f"warning: UNBOOKED: Questrade DIS corporate-action "
                   f"chain on {min(r['date'] for r in rows)} "
                   f"({', '.join(_syms) or 'no symbol'}) nets "
                   f"{net_qty:g} units — a removal, not a spinoff; NOT "
                   f"booked. If the units lapsed or were taken back, book "
                   f"the disposition (a $0 sale) in a .tt file: "
-                  f"{rows[0]['description'][:90]}", file=sys.stderr)
+                  f"{rows[0]['description'][:90]}")
             continue
         if net_qty <= 0:
             # Net zero: a posting and its reversal — nothing received.
@@ -1517,12 +1516,12 @@ def parse_questrade_corporate_actions(
         symbol = next((r['symbol'] for r in rows if r['symbol']), '')
         internal = bool(symbol and _INTERNAL_CODE_RE.match(symbol.upper()))
         if not symbol:
-            print(f"warning: Questrade spinoff chain on "
+            emit_line(f"warning: Questrade spinoff chain on "
                   f"{min(r['date'] for r in rows)} has NO resolvable "
                   f"target symbol — SKIPPED (an empty-symbol share "
                   f"row would corrupt the books). Add the position "
                   f"manually via a .tt file if it is real: "
-                  f"{rows[0]['description'][:90]}", file=sys.stderr)
+                  f"{rows[0]['description'][:90]}")
             continue
 
         # Extract parent reference from whichever row carries it: the
@@ -1550,14 +1549,14 @@ def parse_questrade_corporate_actions(
             if len(held) == 1:
                 cands = held
             else:
-                print(f"warning: Questrade spinoff parent "
+                emit_line(f"warning: Questrade spinoff parent "
                       f"{parent_name!r} (SEC# {parent_code}) trades under "
                       f"several listings in this account ("
                       f"{', '.join(_suffix(sy, c) for sy, c in cands)}) "
                       f"and the one held on {event_date} is not clear — "
                       f"not guessed; a tax-deferred spin-off's parent "
                       f"cost reduction would land on the SEC# code. Fold the listings "
-                      f"with a ticker.map rule.", file=sys.stderr)
+                      f"with a ticker.map rule.")
         hit = cands[0] if len(cands) == 1 else None
         if hit:
             parent_listing = hit[1].upper()
@@ -1569,7 +1568,7 @@ def parse_questrade_corporate_actions(
             from taxjson.bin.taxjson_ticker_map import map_symbol
             parent_symbol = map_symbol(parent_code, renames)
         elif parent_code and not cands:
-            print(f"warning: Questrade spinoff parent {parent_name or parent_code!r} "
+            emit_line(f"warning: Questrade spinoff parent {parent_name or parent_code!r} "
                   f"(SEC# {parent_code}) is not traded or transferred "
                   f"in any export of this account, so its ticker is "
                   f"unknown — a tax-deferred spin-off's parent cost "
@@ -1579,7 +1578,7 @@ def parse_questrade_corporate_actions(
                   f"this account, or — when the parent is held in a "
                   f"start .tt (a closing-year project) — name it in "
                   f"ticker.map:  GLOBAL {parent_code} <PARENT>.TO (or "
-                  f".US).", file=sys.stderr)
+                  f".US).")
 
         # The target's listing, the way the parser books its later
         # trades: its own trades' listing when it trades anywhere in the
@@ -1609,14 +1608,13 @@ def parse_questrade_corporate_actions(
             # Named as the books carry it, and quiet once ticker.map
             # renames it — the RBC twin's S072-03 rule (A2-0966).
             ext = symbol.rsplit('.', 1)[-1]
-            print(f"warning: Questrade spinoff chain on "
+            emit_line(f"warning: Questrade spinoff chain on "
                   f"{event_date} is booked under Questrade's INTERNAL "
                   f"code {symbol}, not a ticker "
                   f"({rows[0]['description'][:70]}). Its later trades "
                   f"use the real ticker, so map the code with a "
                   f"ticker.map line:  GLOBAL {symbol} <TICKER>.{ext} — "
-                  f"otherwise the position splits in two.",
-                  file=sys.stderr)
+                  f"otherwise the position splits in two.")
 
         # Ratio denominator (the parent share count the user held).
         source_qty = 0.0
@@ -2301,10 +2299,10 @@ def parse_rbc_corporate_actions(
                 opts = held
         if len(opts) > 1:
             shown = ', '.join(_rbc_ca_symbol(sy, c) for sy, c in opts)
-            print(f"warning: RBC {what}: the company trades under several "
+            emit_line(f"warning: RBC {what}: the company trades under several "
                   f"listings in this account ({shown}) — not guessed. "
                   f"Map the one that holds the shares with a ticker.map "
-                  f"GLOBAL line.", file=sys.stderr)
+                  f"GLOBAL line.")
             return None
         return _rbc_ca_symbol(*opts[0])
 
@@ -2341,26 +2339,21 @@ def parse_rbc_corporate_actions(
     events: List[CorporateAction] = []
     for leg in unmatched:
         if _rbc_short_merger_leg(leg):
-            print(
-                f"warning: RBC merger leg on {leg.date} ({leg.symbol}, qty "
+            emit_line(f"warning: RBC merger leg on {leg.date} ({leg.symbol}, qty "
                 f"{leg.qty:g}) is a merger of a SHORT position — taxjson "
                 f"cannot book it (the legs' signs are inverted). NOTHING "
                 f"was booked: record the cover of the old short and the "
-                f"new short by hand in a .tt file. {leg.desc[:90]!r}",
-                file=sys.stderr)
+                f"new short by hand in a .tt file. {leg.desc[:90]!r}")
             continue
         if leg.qty < 0 and _RBC_MERGER_TO_RE.search(leg.desc):
             oldm = _RBC_OLDCO_RE.search(leg.desc)
-            print(
-                f"warning: RBC merger removal on {leg.date} "
+            emit_line(f"warning: RBC merger removal on {leg.date} "
                 f"({(oldm.group(1).strip() if oldm else leg.symbol)!r}, "
                 f"qty {leg.qty:g}) has NO matching share receipt within "
                 f"7 days in any statement of this account — taxjson "
                 f"cannot book it. Add the statement holding the receipt "
                 f"row, or record the exchange by hand in a .tt file and "
-                f"mark the event `ignore`.",
-                file=sys.stderr,
-            )
+                f"mark the event `ignore`.")
             # Blocking, as on IB: the run stops until the user acts,
             # instead of continuing with the old shares neither removed
             # nor exchanged (A2-0214).
@@ -2399,17 +2392,14 @@ def parse_rbc_corporate_actions(
             if resolved:
                 src = resolved
             elif not syms:
-                print(
-                    f"warning: RBC merger removal for "
+                emit_line(f"warning: RBC merger removal for "
                     f"{(oldm.group(1).strip() if oldm else rem.symbol)!r} is "
                     f"booked under temporary reorg symbol {rem.symbol!r}, and "
                     f"no other row in the statement trades under that company — "
                     f"the rollover / disposition has no source lot to act on. If "
                     f"this position isn't in the imported history, add a manual "
                     f"opening lot or a ticker.map GLOBAL line for "
-                    f"{_rbc_ca_symbol(rem.symbol, rem.currency)}.",
-                    file=sys.stderr,
-                )
+                    f"{_rbc_ca_symbol(rem.symbol, rem.currency)}.")
         tgt = _rbc_ca_symbol(rc.symbol, rc.currency)
         # SIGNED: a reversal CIL row cancels its posting (audit S063-19).
         cil_amount = max(0.0, sum(c.value for c in ev.cil))
@@ -2460,11 +2450,11 @@ def parse_rbc_corporate_actions(
             # Spun-off shares DEBITED: the account was short the parent
             # and owes them. Snapped to a long buy it booked a negative
             # dividend and a phantom long (audit S072-04).
-            print(f"warning: RBC spin-off on {r.date} DEBITS {abs(r.qty):g} "
+            emit_line(f"warning: RBC spin-off on {r.date} DEBITS {abs(r.qty):g} "
                   f"{r.symbol} — the parent was held SHORT. taxjson cannot "
                   f"book a spin-off on a short position: NOTHING was "
                   f"booked; record the owed shares by hand in a .tt file. "
-                  f"{r.desc[:90]!r}", file=sys.stderr)
+                  f"{r.desc[:90]!r}")
             continue
         m = _RBC_SPINOFF_RE.search(r.desc)
         parent_qty = _num_text(m.group(1), where=r.label()) if m else 0.0
@@ -2497,11 +2487,11 @@ def parse_rbc_corporate_actions(
                 syms = {sy for sy, sc in scored.items() if sc == top}
         parent = _resolve(syms, '', what, r.date) if syms else None
         if not parent and not syms:
-            print(f"warning: RBC spin-off parent {parent_name or parent_code!r} "
+            emit_line(f"warning: RBC spin-off parent {parent_name or parent_code!r} "
                   f"(SEC# {parent_code}) is not traded in this statement, so "
                   f"its ticker is unknown — a tax-deferred spin-off's "
                   f"parent cost reduction would land on an empty pool. Include the "
-                  f"statement that bought the parent.", file=sys.stderr)
+                  f"statement that bought the parent.")
         # The parent's OWN listing, never the spun-off row's currency: a
         # TSX parent whose spin-off arrives in USD was PARENT.US, and the
         # s.86.1 ACB reduction became a phantom gain (audit S019-05).
@@ -2511,11 +2501,10 @@ def parse_rbc_corporate_actions(
             # Named as the books carry it (X000006.TO): the bare code in
             # a GLOBAL line matched nothing, and the warning used to stay
             # after the line was added (audit S072-03).
-            print(f"warning: RBC spin-off on {r.date} is booked under the "
+            emit_line(f"warning: RBC spin-off on {r.date} is booked under the "
                   f"temporary code {tgt} ({r.symdesc or r.desc[:60]!r}) "
                   f"— once the listed ticker is known, add to ticker.map:  "
-                  f"GLOBAL {tgt} <TICKER>.{tgt.rsplit('.', 1)[-1]}",
-                  file=sys.stderr)
+                  f"GLOBAL {tgt} <TICKER>.{tgt.rsplit('.', 1)[-1]}")
         events.append(CorporateAction(
             date=r.date, time='09:30:00', action_type='spinoff',
             source_symbol=src, source_isin=parent_code or src,
@@ -3137,11 +3126,11 @@ def _emit_taxable_exchange(event: CorporateAction, hints: dict,
         """(amount, currency) for a row wanting `to_cur`."""
         conv = _convert(hints, amount, from_cur, to_cur, event.date)
         if conv is None:
-            print(f"warning: {what} of the {event.source_symbol}→"
+            emit_line(f"warning: {what} of the {event.source_symbol}→"
                   f"{event.target_symbol} exchange on {event.date}: no "
                   f"{from_cur}->{to_cur} rate available, so the row is "
                   f"booked in {from_cur} (the conversion stage values "
-                  f"it at that date's rate).", file=sys.stderr)
+                  f"it at that date's rate).")
             return amount, from_cur
         return conv, to_cur
 
@@ -3156,16 +3145,13 @@ def _emit_taxable_exchange(event: CorporateAction, hints: dict,
                "(fmv_per_share=0)" if 'fmv_per_share' in (hints or {})
                else "the broker booked $0 and no fmv_per_share hint was "
                     "given")
-        print(
-            f"warning: taxable merger {event.source_symbol}→"
+        emit_line(f"warning: taxable merger {event.source_symbol}→"
             f"{event.target_symbol} on {event.date} has NO fair market "
             f"value for the new shares ({why}) — emitting zero-valued "
             f"rows: the SELL realizes a fake loss (proceeds are only the "
             f"cash-in-lieu, if any) and the BUY enters at $0 basis. Set "
             f"its value: taxjson elect {event.account} --set "
-            f"{event.event_id}=<election> --hint fmv_per_share=<value>",
-            file=sys.stderr,
-        )
+            f"{event.event_id}=<election> --hint fmv_per_share=<value>")
 
     # Proceeds in the source listing's currency: shares + cash-in-lieu.
     proceeds, proceeds_cur = _in(value, value_cur, src_cur,
@@ -3179,10 +3165,9 @@ def _emit_taxable_exchange(event: CorporateAction, hints: dict,
         if c_cur == proceeds_cur:
             proceeds += c
         else:                     # cannot sum across currencies: keep loud
-            print(f"warning: cash-in-lieu {cil_amt:g} {cil_cur} of "
+            emit_line(f"warning: cash-in-lieu {cil_amt:g} {cil_cur} of "
                   f"{event.source_symbol} on {event.date} could not be "
-                  f"added to the proceeds (no rate) — add it by hand.",
-                  file=sys.stderr)
+                  f"added to the proceeds (no rate) — add it by hand.")
     cost, cost_cur = _in(value, value_cur, target_currency,
                          'the new shares\' cost')
 
@@ -3459,33 +3444,27 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
         boot, tgt_fmv = usd_boot, usd_fmv
     elif 'USD' not in {tgt_cur, src_cur} or len({tgt_cur, src_cur,
                                                     fmv_cur}) > 1:
-        print(f"warning: boot merger {event.source_symbol}→"
+        emit_line(f"warning: boot merger {event.source_symbol}→"
               f"{event.target_symbol} on {event.date}: no exchange rate "
               f"for its currencies ({src_cur}/{tgt_cur}) — the cash and "
               f"the new shares' value are combined as entered; check the "
-              f"recognized gain.", file=sys.stderr)
+              f"recognized gain.")
 
     if boot <= 0:
-        print(
-            f"warning: boot merger {event.source_symbol}→"
+        emit_line(f"warning: boot merger {event.source_symbol}→"
             f"{event.target_symbol} on {event.date} has cash_boot=0 — "
             f"elect reorg_368 for an all-stock reorganization (`taxjson "
-            f"elect --redo`).",
-            file=sys.stderr,
-        )
+            f"elect --redo`).")
     if tgt_fmv <= 0 and event.qty_received > 0:
         # Without the new shares' value the realized gain is understated
         # (boot - basis), so the §356 gain is capped too low and the
         # §358 basis understated by the same amount (audit S073-22).
-        print(
-            f"warning: boot merger {event.source_symbol}→"
+        emit_line(f"warning: boot merger {event.source_symbol}→"
             f"{event.target_symbol} on {event.date} has no value for the "
             f"new shares (fmv_per_share=0 and none reported) — the "
             f"realized gain counts only the cash, so the recognized gain "
             f"and the new basis are understated. Re-run `taxjson elect "
-            f"--redo` with the FMV per new share.",
-            file=sys.stderr,
-        )
+            f"--redo` with the FMV per new share.")
 
     tgt_fmv = max(tgt_fmv, 0.0)
     realized_amount = tgt_fmv + boot
@@ -3509,10 +3488,9 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
             s_amount, s_boot, b_value = p, pb, b
         else:                     # keep both legs in USD, said loudly
             sell_cur = buy_cur = 'USD'
-            print(f"warning: boot merger {event.source_symbol}→"
+            emit_line(f"warning: boot merger {event.source_symbol}→"
                   f"{event.target_symbol} on {event.date}: no USD rate "
-                  f"for its listings — both legs are booked in USD.",
-                  file=sys.stderr)
+                  f"for its listings — both legs are booked in USD.")
     rows = [{
         'action': 'BUYSELL',
         'date': event.date, 'time': event.time, 'date_settle': event.date,
@@ -3808,13 +3786,13 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
         # §358(b) apportion by relative FMV): the parent kept its whole
         # cost and the spun-off shares booked at $0, with no word
         # (audits S073-21, S074-04). Loud; `taxjson run` repeats it.
-        print(f"warning: spin-off {event.source_symbol}→"
+        emit_line(f"warning: spin-off {event.source_symbol}→"
               f"{event.target_symbol} on {event.date}: the basis-allocating "
               f"election carries an allocated cost of 0 — the spun-off "
               f"shares get $0 cost and the parent keeps all of it, which "
               f"moves gain from the parent's sale to the spin-off's. "
               f"Enter the allocated amount (parent cost x the spin-off's "
-              f"share of the combined FMV).", file=sys.stderr)
+              f"share of the combined FMV).")
     whole_qty, adjusted_acb, frac_qty = _snap_received(event,
         event.qty_received, allocated_acb,
     )
@@ -3896,14 +3874,13 @@ def _canada_spinoff_rollover_s_86_1(event: CorporateAction, option: str, hints: 
     their return."""
     if 'allocated_acb_cad' not in hints and (event.currency or 'CAD'
                                              ).upper() != 'CAD':
-        print(f"warning: s.86.1 spin-off {event.source_symbol}→"
+        emit_line(f"warning: s.86.1 spin-off {event.source_symbol}→"
               f"{event.target_symbol} on {event.date}: the election "
               f"carries the legacy `allocated_acb` in {event.currency}, "
               f"converted at the spin-off date's rate. s.86.1(3) splits "
               f"the parent's CAD cost amount: re-elect with "
               f"`--hint allocated_acb_cad=<CAD amount>` (parent ACB in "
-              f"CAD x the spin-off's share of the combined FMV).",
-              file=sys.stderr)
+              f"CAD x the spin-off's share of the combined FMV).")
     # s.86.1(3): the parent's CAD cost amount x the spin-off's share of
     # the combined FMV, booked in CAD so the pools get exactly that
     # figure. The legacy `allocated_acb` is in the event's currency and
@@ -3956,12 +3933,12 @@ def _allocation_in_listing_currency(event: CorporateAction, hints: dict,
         amt = float(r.get('net_amount') or 0.0)
         conv = _convert(hints, amt, amount_cur, cur, event.date)
         if conv is None:
-            print(f"warning: {what} spin-off {event.source_symbol}→"
+            emit_line(f"warning: {what} spin-off {event.source_symbol}→"
                   f"{event.target_symbol} on {event.date}: no "
                   f"{amount_cur}->{cur} rate available, so the "
                   f"{r['symbol']} row is booked in {amount_cur} (the tax "
                   f"books are right; the native-currency holdings view "
-                  f"of that {cur} pool is skipped).", file=sys.stderr)
+                  f"of that {cur} pool is skipped).")
             return rows
         r = dict(r, currency=cur, net_amount=conv)
         qty = float(r.get('quantity') or 0.0)
@@ -4209,12 +4186,11 @@ def check_hints(event: CorporateAction, election_key: str,
     if missing:
         # Loud, not fatal: a missing value books the documented $0
         # "deferred" rows, which `taxjson run` keeps warning about.
-        print(f"warning: election {election_key!r} for event "
+        emit_line(f"warning: election {election_key!r} for event "
               f"{event.event_id} has no {', '.join(missing)} — the rows "
               f"are booked at $0 until you set it: `taxjson elect --set "
               f"{event.event_id}={election_key} "
-              + ' '.join(f'--hint {k}=<value>' for k in missing) + "`.",
-              file=sys.stderr)
+              + ' '.join(f'--hint {k}=<value>' for k in missing) + "`.")
 
 
 def resolve_event(

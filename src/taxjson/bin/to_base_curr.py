@@ -57,6 +57,7 @@ TAXJSON_OFFLINE=1: no fetch at all; rows come from the cache. The stage
 never fails for want of a rate — only the dates a transaction actually
 needs matter, and those are checked at conversion time.
 """
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import bisect
 import json
@@ -1044,9 +1045,8 @@ def main(argv=None):
         if not _DATE_RE.match(val):
             parser.error(f"{label} must be YYYY-MM-DD, got {val!r}")
     if to_curr != "CAD" and yf is None:
-        print(f"{PROG} needs the [fx] extra for a {to_curr} target "
-              f"(Yahoo Finance): {extra_hint('fx')}",
-              file=sys.stderr)
+        emit_line(f"{PROG} needs the [fx] extra for a {to_curr} target "
+              f"(Yahoo Finance): {extra_hint('fx')}")
         return 1
     if from_curr == to_curr:
         return 0
@@ -1062,15 +1062,14 @@ def main(argv=None):
         if spot:
             print(spot)
     for n in notes:
-        print(f"{PROG}: note: {n}", file=sys.stderr)
+        emit_line(f"{PROG}: note: {n}")
     for e in errors:
         if isinstance(e, CacheProblem):
-            print(f"{PROG}: warning: {e}", file=sys.stderr)
+            emit_line(f"{PROG}: warning: {e}")
             continue
-        print(f"{PROG}: warning: download failed — {e}; dates it would "
-              f"have covered have no rate this run.", file=sys.stderr)
-    print(f"{PROG}: note: FX {from_curr}→{to_curr}: {summarize(rows)}",
-          file=sys.stderr)
+        emit_line(f"{PROG}: warning: download failed — {e}; dates it would "
+              f"have covered have no rate this run.")
+    emit_line(f"{PROG}: note: FX {from_curr}→{to_curr}: {summarize(rows)}")
     return 0
 
 

@@ -1,3 +1,4 @@
+from taxjson.lib.stage_msg import emit_line
 import contextlib
 import csv
 import io
@@ -108,15 +109,12 @@ class WebullBrokerage(BaseBrokerage):
             # is UNBOOKED — the channel `taxjson run` echoes to the
             # console and `--strict` refuses, as every other parser
             # uses (audit A2-0285 / A2-0288 / A2-0289 / A2-1069).
-            print(
-                f"warning: Webull parser books only BUY/SELL rows — "
+            emit_line(f"warning: Webull parser books only BUY/SELL rows — "
                 f"skipped {sum(len(v) for v in skipped_actions.values())} "
                 f"row(s) with other action codes ({detail}); those "
                 f"events (a dividend, a transfer) are NOT booked. Enter "
                 f"any that matter via a .tt file, and check no position "
-                f"is left holding shares it no longer has.",
-                file=sys.stderr,
-            )
+                f"is left holding shares it no longer has.")
             for code, rows in sorted(skipped_actions.items()):
                 for where, sym, qty, amount in rows:
                     if not (qty or amount):
@@ -124,14 +122,13 @@ class WebullBrokerage(BaseBrokerage):
                     what = ", ".join(x for x in (
                         f"quantity {qty}" if qty else "",
                         f"amount {amount}" if amount else "") if x)
-                    print(f"warning: UNBOOKED: {where}: Webull {code} row "
+                    emit_line(f"warning: UNBOOKED: {where}: Webull {code} row "
                           f"{sym or '-'} ({what}) is not booked — if it "
                           f"matters, enter it as a .tt line: a dividend "
                           f"as DIVIDEND; shares transferred in as a "
                           f"BUYSELL dated the original purchase, at its "
                           f"cost (a .tt TRANSFER is refused in a taxable "
-                          f"account).",
-                          file=sys.stderr)
+                          f"account).")
         return transactions
 
     @staticmethod
@@ -716,7 +713,7 @@ class WebullBrokerage(BaseBrokerage):
             opt['action'] = 'ASSIGN'
             stock['action'] = 'ASSIGN'
             if id(opt) in own_ids or id(stock) in own_ids:
-                print(f"note: Webull {source}: inferred an exercise/"
+                emit_line(f"note: Webull {source}: inferred an exercise/"
                       f"assignment — {opt['symbol']} closed at $0 on "
                       f"{opt['date']} + {abs(float(stock['quantity'])):g} "
                       f"{stock['symbol']} at the strike {meta[oi][0]:g} "
@@ -724,8 +721,7 @@ class WebullBrokerage(BaseBrokerage):
                       f"{float(stock.get('fee') or 0):.2f}); both legs "
                       f"booked ASSIGN (the premium folds into the shares' "
                       f"cost or proceeds{meta[oi][1]}). Check it against "
-                      f"the statement.",
-                      file=sys.stderr)
+                      f"the statement.")
             # The shares are acquired/delivered ON the exercise, so the
             # stock leg's trade date is the option leg's date, stamped
             # just after it — both engines then see the option leg
@@ -752,7 +748,7 @@ class WebullBrokerage(BaseBrokerage):
                    f"an ordinary trade's fee, not the account's "
                    f"{float(self.exercise_fee):.2f} exercise/assignment "
                    f"charge (exercise_fee), so")
-            print(f"warning: Webull {source}: {opt['symbol']} closed at "
+            emit_line(f"warning: Webull {source}: {opt['symbol']} closed at "
                   f"$0 on {opt['date']} and "
                   f"{abs(float(stock['quantity'])):g} {stock['symbol']} "
                   f"traded at the strike {meta[oi][0]:g} settling "
@@ -763,8 +759,7 @@ class WebullBrokerage(BaseBrokerage):
                   f"If the statement shows an exercise/assignment, the "
                   f"premium belongs in the shares' cost or proceeds"
                   f"{meta[oi][1]} — see "
-                  f"KNOWN_ISSUES 'Webull exercise/assignment inference'.",
-                  file=sys.stderr)
+                  f"KNOWN_ISSUES 'Webull exercise/assignment inference'.")
         named = set()
         for oi, i in qty_mismatch:
             if oi in used_opt or i in used_stock or oi in named:
@@ -773,7 +768,7 @@ class WebullBrokerage(BaseBrokerage):
             if not (id(opt) in own_ids or id(stock) in own_ids):
                 continue
             named.add(oi)
-            print(f"warning: Webull {source}: {opt['symbol']} "
+            emit_line(f"warning: Webull {source}: {opt['symbol']} "
                   f"({abs(float(opt['quantity'])):g} contract(s)) closed at "
                   f"$0 on {opt['date']} and {abs(float(stock['quantity'])):g} "
                   f"{stock['symbol']} traded at the strike {meta[oi][0]:g} "
@@ -785,8 +780,7 @@ class WebullBrokerage(BaseBrokerage):
                   f"expiry plus a separate trade. If the statement shows "
                   f"an exercise/assignment, the premium belongs in the "
                   f"shares' cost or proceeds{meta[oi][1]} — book it by hand (see "
-                  f"KNOWN_ISSUES 'Webull exercise/assignment inference').",
-                  file=sys.stderr)
+                  f"KNOWN_ISSUES 'Webull exercise/assignment inference').")
 
     def _check_zero_closes(self, pool, expiries, source) -> None:
         """A $0 option row (no Price, no Proceeds) is booked only as a
@@ -826,12 +820,12 @@ class WebullBrokerage(BaseBrokerage):
                     f"mangled row? Refusing to book a premium-free "
                     f"{'write' if q < 0 else 'buy'}.")
             if exp and not at_expiry:
-                print(f"warning: Webull {source}: {e['symbol']} closed at "
+                emit_line(f"warning: Webull {source}: {e['symbol']} closed at "
                       f"$0 on {e['date']}, before its expiry {exp}, and no "
                       f"stock leg at the strike was found — booked as an "
                       f"expiry (the premium is realized on its own). An "
                       f"early exercise/assignment folds the premium into "
-                      f"the shares: check the statement.", file=sys.stderr)
+                      f"the shares: check the statement.")
 
     @staticmethod
     def _warn_ticker_changes(transactions, source, own=None) -> None:
@@ -875,7 +869,7 @@ class WebullBrokerage(BaseBrokerage):
                     continue    # ticker.map already joins them (A2-1056)
                 # ATTENTION: on the run console (re-audit A2-0279; the
                 # plain warning reached only the .sum).
-                print(f"warning: ATTENTION: Webull {source}: {sym} goes "
+                emit_line(f"warning: ATTENTION: Webull {source}: {sym} goes "
                       f"short with "
                       f"a SALE on {t['date']} and shares the Security "
                       f"Description {desc!r} with {prev_sym} — likely a "
@@ -884,8 +878,7 @@ class WebullBrokerage(BaseBrokerage):
                       f"`RENAME {prev_sym} {sym} {rows[0]['date']}` (the "
                       f"first {sym} row here; use the broker's change date "
                       f"if you know it) to ticker.map so both are one "
-                      f"position (`taxjson renames`).",
-                      file=sys.stderr)
+                      f"position (`taxjson renames`).")
 
     @staticmethod
     def _find_header(lines):
