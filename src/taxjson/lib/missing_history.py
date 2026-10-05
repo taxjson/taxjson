@@ -1564,13 +1564,13 @@ def synthesize_openings(
 #
 # A broker sometimes states the cost of what a sale with no purchase in
 # the files closed: IB's Trades `Basis` on a sale coded C (closing), with
-# the lots it closed when the statement lists Closed Lots; the
-# "TRANSFER BOOK VALUE" a Questrade or RBC transfer-in states. That figure is EVIDENCE: the
-# run never books it. These helpers draft `.tt` purchase lines from it
-# into a file the run does not read (DRAFT_NAME, suffix .tt.txt); the
-# user reviews each line, fills in what the broker does not say, and
-# renames the file to .tt — the kept line is then the user's assertion
-# (tax-logic CA-ACB-15 / US-BASIS-08).
+# the lots it closed when the statement lists Closed Lots; the "TRANSFER
+# BOOK VALUE" a Questrade or RBC transfer-in states. That figure is
+# EVIDENCE: the run never books it. These helpers draft `.tt` purchase
+# lines from it into a file the run does not read (DRAFT_NAME, suffix
+# .tt.txt); the user reviews each line, fills in what the broker does not
+# say, and renames the file to .tt — the kept line is then the user's
+# assertion (tax-logic CA-ACB-15 / US-BASIS-08).
 
 # The draft file: `.txt` is not an input suffix (`taxjson run` reads
 # only *.csv and *.tt directly in inputs/<account>/), so an unreviewed
