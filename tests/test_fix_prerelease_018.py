@@ -263,5 +263,44 @@ class TestQuestradeDescKeyLinear(unittest.TestCase):
         self.assertLess(time.perf_counter() - t0, 0.5)
 
 
+class TestCannotDetectMasked(unittest.TestCase):
+    def test_file_name_id_is_masked(self):
+        from taxjson.bin.taxjson_detect_brokerage import (
+            cannot_detect_message)
+
+        class Det:
+            path = Path("/tmp/U5550001_activity.csv")  # pii-ok
+            hint = ""
+        msg = cannot_detect_message(Det())
+        self.assertNotIn("5550001", msg)  # pii-ok
+        self.assertIn("U5***", msg)
+
+
+class TestChannelTag(unittest.TestCase):
+    def test_trailing_newline_is_not_a_release_tag(self):
+        from taxjson.lib import channels as ch
+        self.assertIsNone(ch.TAG_RE.match("v1.2.3\n"))
+        self.assertIsNotNone(ch.TAG_RE.match("v1.2.3"))
+        with self.assertRaises(ch.ChannelsError):
+            ch.parse_channels('{"stable": "v1.2.3\\n"}')
+
+
+class TestInitDanglingSymlink(unittest.TestCase):
+    def test_init_never_writes_through_a_dangling_link(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "p"
+            root.mkdir()
+            outside = Path(td) / "outside"
+            outside.mkdir()
+            for rel in ("ticker.map", ".gitignore"):
+                (root / rel).symlink_to(outside / rel)
+            r = cli(root, "init", "--country", "canada")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(list(outside.iterdir()), [])
+            self.assertTrue((root / "ticker.map").is_symlink())
+            self.assertIn("ticker.map", r.stdout + r.stderr)
+            self.assertTrue((root / "taxjson.toml").is_file())
+
+
 if __name__ == "__main__":
     unittest.main()

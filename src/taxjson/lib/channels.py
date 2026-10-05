@@ -35,7 +35,9 @@ CHANNELS = NAMED + ("latest",)         # latest = the newest release tag
 DEFAULT_LIMIT = 20
 # A release is exactly vX.Y.Z (scripts/release.sh makes nothing else, and
 # the installer never ships another shape of tag).
-TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+# \Z, not $: `$` also matches before a trailing newline, so "v1.2.3\n"
+# passed as a release tag (security review I1).
+TAG_RE = re.compile(r"v(\d+)\.(\d+)\.(\d+)\Z")
 
 
 class ChannelsError(ValueError):

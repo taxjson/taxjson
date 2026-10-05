@@ -18378,11 +18378,21 @@ def cmd_init(args: argparse.Namespace) -> None:
     # --force` re-templates the config without clobbering a ticker.map or
     # README the user has already populated.
     def _stub(rel: str, content: str) -> None:
+        import os
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        if not p.exists():
-            p.write_text(content, encoding="utf-8")
-            written.append(rel)
+        if os.path.lexists(p):
+            if p.is_symlink() and not p.exists():
+                # A dangling symlink: writing the stub would create its
+                # target, wherever it points (security review I3).
+                print(f"  note: {rel} is a symlink to a missing file "
+                      f"({os.readlink(p)}) — left as is, not written "
+                      f"through; remove it and re-run init for the "
+                      f"template.", file=sys.stderr)
+            return
+        from taxjson.lib.safe_write import write_atomic
+        write_atomic(p, content)
+        written.append(rel)
 
     _stub("ticker.map", _TEMPLATE_TICKER_MAP)
     _stub(".gitignore", _TEMPLATE_GITIGNORE)
