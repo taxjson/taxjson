@@ -226,9 +226,11 @@ def load_state(path: Path) -> Optional[Dict[str, Any]]:
         if bad:
             doc, why = None, f"damaged ({bad})"
     if doc is None:
-        print(f"taxjson watch: warning: state file {path.name} is {why} "
-              f"— recording a NEW baseline; changes since the previous "
-              f"run are not reported this time.", file=sys.stderr)
+        from taxjson.lib.out import warn
+        warn(f"state file {path.name} is {why} — recording a NEW "
+             f"baseline", prog="taxjson watch",
+             details=["Changes since the previous run are not reported "
+                      "this time."])
     return doc
 
 
@@ -247,16 +249,24 @@ def save_state(path: Path, radar: Dict[str, Dict[str, Any]],
 
 def render_report(changes: List[Dict[str, Any]], as_of: str,
                   since: Optional[str] = None,
-                  scope: Optional[str] = None) -> str:
-    """The change report; `scope` (lib/wash_scope.scope_note) closes it:
-    a CLEAR is "safe as far as this project's accounts show"
-    (tax-logic CA-PLAN-04 / US-PLAN-04, re-audit A2-0909)."""
+                  scope: Optional[str] = None,
+                  width_: Optional[int] = None) -> str:
+    """The change report: a title, each change as a `- ` item (a radar
+    note it quotes as its own `note:` item), then `scope`
+    (lib/wash_scope.scope_note) as a paragraph: a CLEAR is "safe as far
+    as this project's accounts show" (tax-logic CA-PLAN-04 /
+    US-PLAN-04, re-audit A2-0909). Wrapped at the house width."""
+    from taxjson.lib import out
+    from taxjson.lib.wash_scope import advisory_lines
+    w = out.width() if width_ is None else width_
     prev = f" (previous baseline {since})" if since else ""
-    lines = [f"WATCH — {len(changes)} change(s) since the last run"
-             f"{prev} (as of {as_of})", ""]
-    lines += [f"  {ch['line']}" for ch in changes]
+    lines = out.wrap(f"WATCH — {len(changes)} change(s) since the last "
+                     f"run{prev} (as of {as_of})", w)
+    lines.append("")
+    for ch in changes:
+        lines += advisory_lines(ch["line"], w, "- ", "  ")
     if scope:
-        lines += ["", scope]
+        lines += [""] + out.wrap(scope, w)
     return "\n".join(lines)
 
 

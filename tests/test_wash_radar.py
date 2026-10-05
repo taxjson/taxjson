@@ -14,6 +14,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from _radar_text import radar_rows
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -52,7 +54,7 @@ _SHELTERED = [
 
 class TestWashRadarDividendNotCountedAsPosition(unittest.TestCase):
     def _wsp_line(self, out):
-        line = next((ln for ln in out.splitlines() if ln.startswith("ZPL.TO")), None)
+        line = next((ln for ln in radar_rows(out) if ln.startswith("ZPL.TO")), None)
         self.assertIsNotNone(line, f"no ZPL.TO row in:\n{out}")
         return line
 
@@ -84,7 +86,7 @@ class TestWashRadarRecoveryLabel(unittest.TestCase):
             _tx("BUYSELL", "2026-06-10", "AAA.US", 100, 8200.0),    # substitute lot
         ]
         out = _run(taxable, [], "2026-06-15")
-        line = next(ln for ln in out.splitlines() if ln.startswith("AAA.US"))
+        line = next(ln for ln in radar_rows(out) if ln.startswith("AAA.US"))
         self.assertIn("VIOLATION:", line)
         self.assertNotIn("PENDING", line)
         # The VIOLATION section is the top (most-actionable) group.
@@ -98,7 +100,7 @@ def _split(date, symbol, ratio, account="acct", time="09:30:00"):
 
 def _cols(out, ticker):
     """Return (taxable_qty, sheltered_qty) for a ticker's report row."""
-    for ln in out.splitlines():
+    for ln in radar_rows(out):
         parts = [p.strip() for p in ln.split("|")]
         if len(parts) >= 3 and parts[0] == ticker:
             return float(parts[1]), float(parts[2])
@@ -151,7 +153,7 @@ class TestStillHeldTest(unittest.TestCase):
                  currency="CAD", account="margin")]
 
     def _line(self, out):
-        line = next((ln for ln in out.splitlines()
+        line = next((ln for ln in radar_rows(out)
                      if ln.startswith("QWT.US")), None)
         self.assertIsNotNone(line, out)
         return line
