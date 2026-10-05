@@ -200,7 +200,7 @@ class TestRunHasNoExportsStage(unittest.TestCase):
             root = _project(Path(td) / "p")
             r = cli(root, "run", "--no-input", "--account", "margin")
         self.assertEqual(r.returncode, 0, r.stderr[-3000:])
-        self.assertIn("Single-account run", r.stderr)
+        self.assertIn("single-account run", r.stderr)
         self.assertNotIn("exports", r.stderr)
 
 

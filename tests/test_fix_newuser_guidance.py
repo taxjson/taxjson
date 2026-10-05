@@ -128,10 +128,10 @@ class TestFirstRunSummary(unittest.TestCase):
                              "margin")
             self.assertEqual([x["symbol"] for x in doc["income_not_held"]],
                              ["DIV.TO"])
-            # The taxable account's short-position NOTE is on the console.
-            self.assertIn("NOTE: 1 position(s) go short in margin's data "
-                          "(SMA.TO): sales with no purchase in your files",
-                          out)
+            # The taxable account's short-position note is on the console.
+            self.assertIn("note: 1 position(s) go short in margin's data "
+                          "(SMA.TO) Sales with no purchase in your files",
+                          " ".join(out.split()))
 
     def test_clean_project_is_silent(self):
         with tempfile.TemporaryDirectory() as td:
