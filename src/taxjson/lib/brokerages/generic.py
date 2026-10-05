@@ -123,7 +123,7 @@ rebate), else an explicit [formats].fee_sign does; a rebate is booked as
 a NEGATIVE fee (Questrade's convention). With neither, the fee cell is a
 charge whatever its sign.
 
-Futures (`F:`, `/` or `\` prefix, all spelled `F:`) settle on the trade
+Futures (`F:`, `/` or `\\` prefix, all spelled `F:`) settle on the trade
 date, or on the next settlement day under `futures_settle = "next_day"`
 (the project setting, passed by taxjson-brokerage). An option closed at
 $0 on its expiry day is dated and settled that day; one posted up to 7

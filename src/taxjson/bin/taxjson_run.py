@@ -879,7 +879,10 @@ _TOP_DESCRIPTION = (
     "taxjson — capital gains, income and the superficial-loss / "
     "wash-sale rules from your broker exports, computed on your "
     "machine. `tjs` is the same program under a shorter name. Run with "
-    "no command for this page; `COMMAND -h` explains one command.")
+    "no command for this page; `COMMAND -h` explains one command. New "
+    "here? docs/getting-started.md walks a first project through, "
+    "missing purchase history included "
+    "(github.com/taxjson/taxjson/blob/main/docs/getting-started.md).")
 
 # The name the program was invoked as: `tjs` (the short console script)
 # or `taxjson` (also for `python -m taxjson.bin.taxjson_run`). Set by

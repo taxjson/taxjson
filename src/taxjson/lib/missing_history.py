@@ -28,6 +28,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -878,6 +879,30 @@ def detect_zero_basis_acquisitions(
     symbol, as detect_missing_history does (audit S075-19).
     """
     year_str = str(year) if year is not None else None
+    transactions = list(transactions)
+    # A positive ADJUST on the same (symbol, account) from 31 days before
+    # to 7 days after a $0 acquisition is its cost — the documented fix
+    # for a stock dividend (a .tt ADJUST or [[distributions]]), and the
+    # window the gains stage's stock-dividend ATTENTION uses. Such shares
+    # are not $0-basis.
+    cost_adjusts: Dict[Tuple[str, str], List[str]] = {}
+    for tx in transactions:
+        if tx.action == 'ADJUST' and float(tx.net_amount or 0.0) > 0:
+            cost_adjusts.setdefault((tx.symbol, tx.account), []).append(
+                str(tx.date)[:10])
+
+    def _cost_added(tx) -> bool:
+        dates = cost_adjusts.get((tx.symbol, tx.account))
+        if not dates:
+            return False
+        try:
+            d0 = date.fromisoformat(str(tx.date)[:10])
+        except ValueError:
+            return False
+        lo = (d0 - timedelta(days=31)).isoformat()
+        hi = (d0 + timedelta(days=7)).isoformat()
+        return any(lo <= d <= hi for d in dates)
+
     state: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
     # Same dedupe as the module's other two walks (detect_missing_history,
     # assess_tax_year_relevance): per-broker duplicate SPLIT rows would
@@ -938,7 +963,8 @@ def detect_zero_basis_acquisitions(
         cost = abs(float(tx.net_amount or 0.0))
         price = abs(float(tx.price or 0.0))
         if qty > 1e-9:                                   # acquisition
-            if cost < 1e-6 and price < 1e-6:             # ...at ~$0 cost
+            if (cost < 1e-6 and price < 1e-6             # ...at ~$0 cost
+                    and not _cost_added(tx)):
                 s['active'] = True
                 s['zero_qty'] += qty
                 if not s['acq_date']:

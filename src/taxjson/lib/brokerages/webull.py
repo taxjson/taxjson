@@ -125,9 +125,12 @@ class WebullBrokerage(BaseBrokerage):
                         f"quantity {qty}" if qty else "",
                         f"amount {amount}" if amount else "") if x)
                     print(f"warning: UNBOOKED: {where}: Webull {code} row "
-                          f"{sym or '-'} ({what}) is not booked — enter "
-                          f"it as a .tt line if it is a dividend, a "
-                          f"transfer or another taxable event.",
+                          f"{sym or '-'} ({what}) is not booked — if it "
+                          f"matters, enter it as a .tt line: a dividend "
+                          f"as DIVIDEND; shares transferred in as a "
+                          f"BUYSELL dated the original purchase, at its "
+                          f"cost (a .tt TRANSFER is refused in a taxable "
+                          f"account).",
                           file=sys.stderr)
         return transactions
 

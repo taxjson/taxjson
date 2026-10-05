@@ -537,18 +537,37 @@ def main(argv=None):
                 or any(r.affects_year for r in zero_rows))):
         # (registered rows included: their openings still feed the
         # cross-account loss walk)
-        print(f"\nTo fix truncated history (sales with no purchase in "
-              "your files): `taxjson find-missing-history "
-              "--write-missing-history` in the project (it writes "
-              "missing_history.json), review/prune it, then `taxjson run` "
-              "(it picks missing_history.json up). "
-              f"Standalone: taxjson-gains --country "
-              f"{country or 'canada|usa'} --year {yr} "
-              "--suggest-missing-history missing_history.json <base.json>, "
-              "then --incomplete-history missing_history.json."
-              "\nTo fix a $0-cost "
-              "corp action: declare it (merger/spinoff basis) so the received "
-              f"shares carry the correct {_cost}.")
+        _short_open = any(r.affects_year and not _covered(r)
+                          for r in short_rows)
+        _zero_open = any(r.affects_year for r in zero_rows)
+        if _short_open:
+            print("\nTo fix a sale with no purchase in your files, in this "
+                  "order: (1) add an older export that holds the purchase "
+                  "to inputs/<account>/; (2) or enter the purchase as a "
+                  ".tt BUYSELL line with its real date and cost (for "
+                  "shares transferred in: the original purchase at the "
+                  "other broker); (3) only when it cannot be recovered: "
+                  "`taxjson find-missing-history --write-missing-history` "
+                  "in the project writes missing_history.json — review "
+                  "it, then `taxjson run` (it picks missing_history.json "
+                  "up); those sales are then left out of the totals and "
+                  "must be reported by hand. Standalone: taxjson-gains "
+                  f"--country {country or 'canada|usa'} --year {yr} "
+                  "--suggest-missing-history missing_history.json "
+                  "<base.json>, then --incomplete-history "
+                  "missing_history.json.")
+        if _zero_open:
+            from taxjson.lib.country import is_canada
+            _stk = ("a stock dividend: its declared amount as a .tt "
+                    "ADJUST line on the dividend date (or "
+                    "[[distributions]]); " if is_canada(country) else "")
+            print(f"\nTo fix $0-cost shares, give them their {_cost}: "
+                  f"{_stk}a merger or spin-off: its election (`taxjson "
+                  "elect`); shares transferred in: a .tt BUYSELL with the "
+                  "original purchase date and cost.")
+        print("Walk-through: docs/getting-started.md, step 5 "
+              "(https://github.com/taxjson/taxjson/blob/main/docs/"
+              "getting-started.md).")
     return _incomplete(0)
 
 
