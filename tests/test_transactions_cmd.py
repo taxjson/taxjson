@@ -666,7 +666,7 @@ class TestWashRadarCmd(unittest.TestCase):
         self.assertIn("LCK.TO", r.stdout)
         # One combined invocation → the Definitions legend prints exactly once
         # (the old per-account loop duplicated it).
-        self.assertEqual(r.stdout.count("Definitions:"), 1)
+        self.assertEqual(r.stdout.count("DEFINITIONS"), 1)
 
     def test_single_account(self):
         with tempfile.TemporaryDirectory() as tmp:
