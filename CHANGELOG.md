@@ -154,6 +154,18 @@
   ends with the line the checklist shows.
 
 
+### Fixed
+
+- **`taxjson format` keeps a wrapped end-of-line comment together.** A
+  trailing comment the old aligned layout continued on the lines under
+  it (`#` lines indented under the comment, or padded as
+  `#      #   more text`) now moves above its key or table line as one
+  block, padding dropped; before, only the first line moved and the rest
+  went to the next key. A plain `# comment` line, one after a blank
+  line, or one under a line with no trailing comment is still the next
+  key's.
+
+
 ## v0.18.0 (2026-10-05)
 
 ### Security (pre-release review)

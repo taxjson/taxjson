@@ -45,12 +45,15 @@ no entry here.
   "Not in the template" line, alphabetically (a top-level key at the top,
   a table at the end of the file);
 - comments: a trailing comment on a key or table line moves to its own
-  line just above that line (after the key's description); a comment
-  block stays directly above the key or table line that follows it (a
-  commented-out key counts: the block goes above that key's template
-  line), and so moves with that key to its alphabetical place; a block
-  that holds a commented-out key of your own (`# province = "BC"`) goes
-  to that key; a block separated by a blank line from the next table goes
+  line just above that line (after the key's description), with the
+  comment lines directly under it that continue it (indented past the
+  line's start, padded with a second `#`, or padded out to its column —
+  the old aligned layout's wrapping; `_continuation`), padding dropped;
+  a comment block stays directly above the key or table line that
+  follows it (a commented-out key counts: the block goes above that
+  key's template line), and so moves with that key to its alphabetical
+  place; a block that holds a commented-out key of your own (`# province
+  = "BC"`) goes to that key; a block separated by a blank line from the next table goes
   to the end of the table it was in. Comment lines that are the
   template's own text — or text an earlier `taxjson init` wrote,
   recognised by hash — are regenerated rather than kept; a bare `#` line
@@ -759,7 +762,7 @@ class Extras:
     """What the user's file adds to the template: comment runs by slot,
     trailing comments and verbatim values by slot, and the notes."""
     runs: Dict[Slot, List[Run]] = field(default_factory=dict)
-    trailing: Dict[Slot, str] = field(default_factory=dict)
+    trailing: Dict[Slot, List[str]] = field(default_factory=dict)
     verbatim: Dict[Slot, str] = field(default_factory=dict)
     notes: List[Run] = field(default_factory=list)
 
@@ -848,9 +851,9 @@ class _Renderer:
         for ln in _doc_lines(doc):
             self.emit(ln)
         self.user_runs(slot)
-        tr = self.x.trailing.get(slot)
-        if tr and not commented:
-            self.emit(tr, template=False)
+        if not commented:
+            for ln in self.x.trailing.get(slot, ()):
+                self.emit(ln, template=False)
         self.emit(("# " if commented else "") + text)
 
     def keys(self, T: Tuple[Any, ...],
@@ -917,8 +920,8 @@ class _Renderer:
                 self.emit(ln)
             if e.slot:
                 self.user_runs(s)
-            if tr:
-                self.emit(tr, template=False)
+            for ln in tr or ():
+                self.emit(ln, template=False)
             value, verbatim = value_of(e)
             vlines = value.split("\n")
             pre = "# " if e.commented else ""
@@ -1284,6 +1287,8 @@ class _Item:
     inner: bool = False        # a multi-line value with comments inside
     inner_comments: List[str] = field(default_factory=list)
     end_line: int = 0
+    col: int = 0               # where the line's text starts (its indent)
+    tcol: int = -1             # the column of its trailing comment's '#'
 
 
 _KEY_PART = re.compile(r"[A-Za-z0-9_-]+")
@@ -1363,20 +1368,23 @@ def _scan(text: str) -> List[_Item]:
             items.append(_Item("blank", li))
             li += 1
             continue
+        indent = len(raw) - len(raw.lstrip())
         if st.startswith("#"):
-            items.append(_Item("comment", li, text=st))
+            items.append(_Item("comment", li, text=st, col=indent))
             li += 1
             continue
         if st.startswith("["):
             path, aot, rest = _parse_header(st)
             rest = rest.strip()
+            has = rest.startswith("#")
             items.append(_Item("header", li, text=st, path=path, aot=aot,
-                               trailing=rest if rest.startswith("#")
-                               else None))
+                               trailing=rest if has else None, col=indent,
+                               tcol=(len(raw.rstrip()) - len(rest)
+                                     if has else -1)))
             li += 1
             continue
         # key = value
-        off = starts[li] + (len(raw) - len(raw.lstrip()))
+        off = starts[li] + indent
         kp, i = _parse_keypath(text, off)
         assert text[i] == "="
         i += 1
@@ -1432,18 +1440,21 @@ def _scan(text: str) -> List[_Item]:
         end = p
         last_line = line_of(end - 1 if end > vstart else vstart)
         trailing = None
+        tcol = -1
         inner: List[str] = []
         vend = end
         for cs, ce in comments:
             if line_of(cs) == last_line and ce == end:
                 trailing = text[cs:ce].rstrip()
+                tcol = cs - starts[last_line]
                 vend = cs
             else:
                 inner.append(text[cs:ce].rstrip())
         value = text[vstart:vend].strip()
         items.append(_Item("kv", li, path=kp, trailing=trailing,
                            value=value, inner=bool(inner),
-                           inner_comments=inner, end_line=last_line))
+                           inner_comments=inner, end_line=last_line,
+                           col=indent, tcol=tcol))
         li = last_line + 1
     return items
 
@@ -1463,6 +1474,45 @@ def _commented_header(st: str) -> Optional[Tuple[Tuple[str, ...], bool]]:
     if rest and not rest.startswith("#"):
         return None
     return path, aot
+
+
+def _continuation(it: _Item, owner: _Item, is_template
+                  ) -> Optional[str]:
+    """The comment line `it`, directly under `owner` (a key or table line
+    with an end-of-line comment, or a continuation of one), as the text
+    that continues that comment — or None when it is a comment line of
+    its own (the next line's). A continuation is how the old aligned
+    layout wrapped a long end-of-line comment:
+
+        key = 1          # a long comment that
+                         # goes on here
+        #                #   or here (a '#' at column 0 keeps it a
+        #                    comment line; the padding is alignment)
+
+    so a continuation is a comment line indented past `owner`'s own
+    start, one with a second '#' as padding (`#   #   text`), or one
+    whose text is padded out to (about) the column of the comment it
+    continues. A plain `# text` at `owner`'s indent stays a comment line
+    of its own (the next key's)."""
+    st = it.text
+    # The padding: the leading '#', blanks, and any further '#' that is
+    # followed by a blank (`#   #   text`; `#123` is text).
+    i, n, double = 1, len(st), False
+    while True:
+        while i < n and st[i] in " \t":
+            i += 1
+        if i < n and st[i] == "#" and (i + 1 == n or st[i + 1] in " \t"):
+            i, double = i + 1, True
+            continue
+        break
+    text = st[i:]
+    if is_template(st) and (_COMMENTED_KEY.match(st)
+                            or _commented_header(st) is not None):
+        return None      # the template's commented-out key or table
+    if (it.col > owner.col or double
+            or (i >= 3 and it.col + i >= owner.tcol - 2)):
+        return text
+    return None
 
 
 @dataclass
@@ -1618,14 +1668,47 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
             pending.clear()
         gap = False
 
-    def set_trailing(slot: Slot, text: str) -> None:
+    def set_trailing(slot: Slot, text: str) -> List[str]:
+        """The trailing comment above its line; its lines (to which
+        continuation lines are added)."""
         kept.append(text)
         if slot in x.trailing:
             # Two lines fold into one (a sub-table and its key): the
             # second comment goes above the line.
-            x.runs.setdefault(slot, []).append(Run([text]))
-        else:
-            x.trailing[slot] = text
+            run = Run([text])
+            x.runs.setdefault(slot, []).append(run)
+            return run.lines
+        x.trailing[slot] = [text]
+        return x.trailing[slot]
+
+    # The line whose trailing comment the comment lines directly under it
+    # may continue (the old aligned layout wrapped a long end-of-line
+    # comment onto `#` lines aligned under it), and where those lines go:
+    # after the moved trailing comment of the user's; when the trailing
+    # comment was the template's (regenerated), above the line on their
+    # own; when the line has no place (a table written elsewhere), with
+    # the next line that has one, like the trailing comment itself.
+    cont: Optional[_Item] = None
+    cont_lines: Optional[List[str]] = None
+    cont_slot: Optional[Slot] = None
+
+    def start_cont(it: _Item, slot: Optional[Slot],
+                   lines: Optional[List[str]]) -> None:
+        nonlocal cont, cont_lines, cont_slot
+        cont = it if it.tcol >= 0 else None
+        cont_lines, cont_slot = lines, slot
+
+    def add_cont(line: str) -> None:
+        nonlocal cont_lines
+        if cont_slot is None:
+            add_user(line)
+            return
+        if cont_lines is None:
+            run = Run([])
+            x.runs.setdefault(cont_slot, []).append(run)
+            cont_lines = run.lines
+        kept.append(line)
+        cont_lines.append(line)
 
     def before_header() -> None:
         """At a table line: the runs a blank separates from it belong to
@@ -1673,6 +1756,7 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
     for it in items:
         blank_above, prev_blank = prev_blank, it.kind == "blank"
         if it.kind == "blank":
+            cont = None
             flush_target(blank_after=True)
             gap = True
             # (A commented-out section lasts to the next table line,
@@ -1680,6 +1764,15 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
             continue
         if it.kind == "comment":
             st = it.text
+            more = (_continuation(it, cont, is_template)
+                    if cont is not None else None)
+            if more is None:
+                cont = None
+            elif not is_template(st):
+                add_cont("# " + more)
+                continue
+            # (else the template's own continuation, or a bare '#':
+            # regenerated, or dropped)
             if not in_notes and not is_template(st):
                 # The user's own line, whatever it looks like (a
                 # commented-out table too): it travels with the next
@@ -1750,11 +1843,13 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
             # else: a table written elsewhere (`[accounts]` above its
             # accounts): its comments go with the next line that is.
             active = path
+            lines = None
             if it.trailing and not is_template(it.trailing):
                 if slot is None:
                     add_user(it.trailing)
                 else:
-                    set_trailing(slot, it.trailing)
+                    lines = set_trailing(slot, it.trailing)
+            start_cont(it, slot, lines)
             continue
         # kv
         commented_ctx = None
@@ -1775,8 +1870,10 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
             run = Run([c for c in it.inner_comments])
             kept.extend(run.lines)
             x.runs.setdefault(slot, []).append(run)
+        lines = None
         if it.trailing and not is_template(it.trailing):
-            set_trailing(slot, it.trailing)
+            lines = set_trailing(slot, it.trailing)
+        start_cont(it, slot, lines)
     flush_target()
     flush_end()
     return x, kept

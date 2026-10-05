@@ -1034,6 +1034,125 @@ class TestFormatToCanonicalLayout(unittest.TestCase):
         self.assertFalse(CT.format_config(r.text).changed)
 
 
+class TestTrailingCommentContinuation(unittest.TestCase):
+    """An end-of-line comment the old aligned layout wrapped onto the
+    lines under it (`#` lines aligned under the comment, often padded
+    with a second `#`) moves above its key with the first line, padding
+    normalised — not to the next key. Synthetic values."""
+
+    _HEAD = '[settings]\ncountry = "canada"\nyear = 2026\n'
+
+    def _fmt(self, body):
+        text = self._HEAD + body
+        r = CT.format_config(text)
+        self.assertEqual(tomllib.loads(r.text), tomllib.loads(text))
+        self.assertFalse(CT.format_config(r.text).changed, "not idempotent")
+        return r
+
+    def _above(self, out, key):
+        """The comment lines directly above `key`'s line, after its
+        description (the template's own lines dropped)."""
+        lines = out.split("\n")
+        i = next(i for i, ln in enumerate(lines)
+                 if re.match(rf"{key} +=", ln))
+        j = i
+        while j > 0 and lines[j - 1].startswith("#") \
+                and not re.match(r"# ?[A-Za-z0-9_-]+ +=", lines[j - 1]):
+            j -= 1
+        return lines[j:i]
+
+    def test_double_hash_padded_continuation_stays_with_its_key(self):
+        r = self._fmt(
+            "option_grant_timing_since = 2025      # first part of a note"
+            " that goes on\n"
+            "#                                     #   onto the next line"
+            " — still this key\n"
+            'option_buyback_loss_superficial = false\n')
+        self.assertEqual(self._above(r.text, "option_grant_timing_since")[-2:],
+                         ["# first part of a note that goes on",
+                          "# onto the next line — still this key"])
+        self.assertNotIn("onto the next line",
+                         "\n".join(self._above(
+                             r.text, "option_buyback_loss_superficial")))
+        self.assertNotRegex(r.text, r"#\s{3,}#")
+        self.assertEqual(r.kept_comments, 2)
+        self.assertEqual(r.notes_lines, 0)
+
+    def test_multi_line_continuations(self):
+        # An indented '#' under the comment, a column-0 '#' padded out to
+        # it, and the double-'#' form, one after the other.
+        r = self._fmt(
+            "leaps_months = 13            # one\n"
+            "                             # two\n"
+            "#                              three\n"
+            "#                            #   four\n"
+            "fx_cash_gains = true\n")
+        self.assertEqual(self._above(r.text, "leaps_months")[-4:],
+                         ["# one", "# two", "# three", "# four"])
+        self.assertEqual(r.kept_comments, 4)
+
+    def test_continuation_of_the_templates_own_comment(self):
+        # The old init layout: the template's end-of-line text
+        # (regenerated) with a line of the user's continuing it — the
+        # user's line stays with its key; a continuation that is the
+        # template's own text is regenerated, not kept.
+        r = self._fmt(
+            'tax_date = "settle"                 # settle | trade\n'
+            "#                                   #   settle | trade\n"
+            "#                                   #   my own reason\n"
+            "leaps_months = 13\n")
+        self.assertEqual(self._above(r.text, "tax_date")[-1:],
+                         ["# my own reason"])
+        self.assertRegex(r.text, r'\ntax_date += "settle" +# settle \| '
+                                 r'trade\n')
+        self.assertEqual(r.kept_comments, 1)
+        self.assertNotIn("my own reason",
+                         "\n".join(self._above(r.text, "leaps_months")))
+
+    def test_table_line_continuation(self):
+        r = self._fmt(
+            '[accounts.margin]   # the main account,\n'
+            '#                   #   opened long ago\n'
+            'type = "taxable"\n')
+        self.assertRegex(r.text, r"# the main account,\n# opened long ago\n"
+                                 r"\[accounts\.margin\]\n")
+
+    def test_comments_of_their_own_are_not_continuations(self):
+        cases = {
+            # a plain column-0 comment right under a trailing comment
+            "plain": ("leaps_months = 13   # mine\n"
+                      "# about the fee\n"
+                      "fx_cash_gains = true\n"),
+            # a blank line in between, even when padded
+            "blank": ("leaps_months = 13   # mine\n\n"
+                      "#                   #   about the fee\n"
+                      "fx_cash_gains = true\n"),
+            # no trailing comment to continue, even when indented
+            "no trailing": ("leaps_months = 13\n"
+                            "                    # about the fee\n"
+                            "fx_cash_gains = true\n"),
+        }
+        for name, body in cases.items():
+            with self.subTest(name):
+                r = self._fmt(body)
+                self.assertIn("about the fee",
+                              "\n".join(self._above(r.text, "fx_cash_gains")))
+                self.assertNotIn("about the fee",
+                                 "\n".join(self._above(r.text,
+                                                       "leaps_months")))
+
+    def test_indented_table_keeps_a_comment_at_its_own_indent(self):
+        # Keys indented under their table: a comment at the keys' indent
+        # is the next key's, not a continuation.
+        r = self._fmt(
+            "[accounts.margin]\n"
+            '  type = "taxable"   # mine\n'
+            "  # about the plan\n"
+            '  plan = "RRSP"\n')
+        self.assertRegex(r.text, r"# about the plan\nplan +=")
+        self.assertRegex(r.text, r"# mine\ntype +=")
+
+
 def _cli(root, *args):
     env = dict(os.environ, TAXJSON_OFFLINE="1")
     return subprocess.run(
