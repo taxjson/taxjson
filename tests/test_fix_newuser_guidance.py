@@ -460,9 +460,13 @@ class TestTransferInBookValue(unittest.TestCase):
     def test_canada_missing_history_entry_keeps_the_manual_report(self):
         with tempfile.TemporaryDirectory() as td:
             root = _bv_project(td, "canada")
+            self.assertEqual(cli(root, "run", "--no-input").returncode, 0)
+            self.assertTrue((root / "work" / "margin_transfer_costs.json")
+                            .exists())
             (root / "missing_history.json").write_text(json.dumps(
                 [{"symbol": "XYZ.TO", "account": "margin"}]))
-            r = cli(root, "run", "--no-input")
+            # --fast too: the bookings going away must re-merge the books.
+            r = cli(root, "run", "--no-input", "--fast")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             self.assertNotIn("transfer-in:", r.stdout)
             j = json.loads(cli(root, "sum", "--json").stdout)

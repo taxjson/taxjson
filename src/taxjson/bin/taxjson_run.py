@@ -3283,10 +3283,17 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # the broker's stated book value, or said to have no cost
     # (lib/transfer_in, CA-ACB-TRANSFER-BV / US-BASIS-TRANSFER-BV).
     if is_taxable and not is_crypto and not include_transfers:
+        _tc_had = (cache / f"{name}{TRANSFER_COSTS_SUFFIX}").exists()
         _tc = stage_transfer_arrivals(name, inputs_dir.parent, cache,
                                       tt_jsons, country)
         if _tc is not None:
             sources = sources + [_tc]
+        elif _tc_had:
+            # The bookings went away (a .tt line now covers them): no
+            # surviving dep is newer, so `run --fast` must be told to
+            # merge again (the FUZZ #J deletion-blindness class).
+            import os as _os
+            _os.utime(src_manifest)
     # A US project's moves between your own taxable accounts, written by
     # `taxjson run` before the accounts' books (stage_own_account_moves;
     # US-BASIS-05): their TRANSFER legs are part of this account's books.
