@@ -2002,8 +2002,10 @@ class RbcBrokerage(BaseBrokerage):
         the transferred-in ACB is not booked here (the engine consumes the
         TRANSFER before the ACB pass and missing basis surfaces as
         incomplete history). RBC's "BOOK VALUE nnn" is carried as
-        `book_value` EVIDENCE only — how transfers are booked is
-        unchanged. Gated by --transfers at the taxjson-brokerage wrapper."""
+        `book_value` evidence: in a taxable account `taxjson run` books
+        it as the cost of shares that arrive from outside the books
+        (lib/transfer_in). Gated by --transfers at the taxjson-brokerage
+        wrapper."""
         qty = r.qty
         if qty > 0 and _RBC_TRANSFER_OUT_RE.match(r.desc or ''):
             # Direction from RBC's code/verb only: 'DELIVER' anywhere in
@@ -2025,7 +2027,7 @@ class RbcBrokerage(BaseBrokerage):
                                                 r.currency, r)),
             'quantity': qty, 'currency': r.currency, 'price': 0.0,
             # Value column (0 on in-kind transfers; the description's
-            # BOOK VALUE is carried below as evidence, not booked).
+            # BOOK VALUE is carried below as `book_value` evidence).
             'net_amount': abs(r.value),
             'fee': 0.0,
             'account': self.DEFAULT_ACCOUNT, 'description': r.desc,

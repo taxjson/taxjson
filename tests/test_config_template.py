@@ -160,12 +160,13 @@ class TestInitScaffold(unittest.TestCase):
             self.assertEqual(s["local_timezone"], "Europe/Paris")
             want = {"year": 2025, "country": country,
                     "base_currency": C.home_currency(country),
-                    "source_currencies": ["USD" if country == "canada"
-                                          else "CAD"],
                     "tax_date": C.default_tax_date(country),
                     "local_timezone": "Europe/Paris"}
             if country == "canada":
                 want["option_grant_timing_since"] = 2025
+                # A US scaffold fetches no foreign rates by default
+                # (an all-USD project needs none).
+                want["source_currencies"] = ["USD"]
             self.assertEqual(s, want)
 
     def test_no_detected_zone_leaves_it_commented(self):

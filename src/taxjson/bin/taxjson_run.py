@@ -708,7 +708,12 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
                  + (f" (and {len(_crypto) - 1} more)" if len(_crypto) > 1
                     else "")
                  + " but [settings] has no local_timezone — "
-                 + missing_timezone_message("project"))
+                 + missing_timezone_message("project")
+                 # The scaffold has a crypto account whether or not the
+                 # user holds any coins (new-user study).
+                 + f" If you have no crypto, delete the "
+                   f"[accounts.{_crypto[0]}] section from taxjson.toml "
+                   f"instead.")
         # No crypto account: an outer TAXJSON_LOCAL_TZ still never dates
         # this project's rows (a crypto file in another account is
         # refused by its parser with the same message).
@@ -2926,7 +2931,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
     if parse_only:
         print(f"==> {name}  (crypto exports first: sends pair across "
-              f"accounts)")
+              f"accounts)" if is_crypto else
+              f"==> {name}  (transfer evidence first: moves between your "
+              f"accounts pair across them)")
     else:
         print(f"==> {name}  ({'taxable' if is_taxable else 'sheltered'}"
               f"{', crypto' if is_crypto else ''})")
@@ -3314,6 +3321,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 "_raw_base_gains.json", "_merged.json", "_sorted.json",
                 "_filled.json", "_mapped.json", "_report.json",
                 "_pending_elections.json", "_manifest.json",
+                TRANSFER_COSTS_SUFFIX,
                 "_blend.diag", OWN_MOVES_SUFFIX)):
             continue
         # A parsed-source artifact with no surviving input group.
@@ -3324,6 +3332,21 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                       f"files are gone)")
 
     sources = tt_jsons + parsed + corp_files
+    # Shares that arrived by transfer from outside the books: booked at
+    # the broker's stated book value, or said to have no cost
+    # (lib/transfer_in, CA-ACB-TRANSFER-BV / US-BASIS-TRANSFER-BV).
+    if is_taxable and not is_crypto and not include_transfers:
+        _tc_had = (cache / f"{name}{TRANSFER_COSTS_SUFFIX}").exists()
+        _tc = stage_transfer_arrivals(name, inputs_dir.parent, cache,
+                                      tt_jsons, country)
+        if _tc is not None:
+            sources = sources + [_tc]
+        elif _tc_had:
+            # The bookings went away (a .tt line now covers them): no
+            # surviving dep is newer, so `run --fast` must be told to
+            # merge again (the FUZZ #J deletion-blindness class).
+            import os as _os
+            _os.utime(src_manifest)
     # A US project's moves between your own taxable accounts, written by
     # `taxjson run` before the accounts' books (stage_own_account_moves;
     # US-BASIS-05): their TRANSFER legs are part of this account's books.
@@ -3609,6 +3632,18 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # A2-0229), a missing_history.json entry on a real short or a written
     # option (A2-0637 / A2-0639). One call covers all.
     echo_attention_lines(gains_json)
+    if is_taxable and not is_crypto:
+        # The positions that go short in a taxable account (sales with
+        # no purchase in the files): on the console, not only in the
+        # .sum's NOTE — the year's gain leaves those sales out until the
+        # history is supplied (new-user study). Read like
+        # find-missing-history reads them (ticker.map JOURNAL pairs,
+        # broker-marked real shorts and missing_history.json entries
+        # are not missing history).
+        _note = _short_positions_note(base_json, name, ticker_map,
+                                      incomplete_history)
+        if _note:
+            print(f"  {_note}")
     # A short where none can exist (a registered account, spot crypto,
     # a sale the broker codes CLOSING): missing history the numbers
     # depend on — --strict refuses (re-audit A2-0395 / A2-0137 / A2-1223).
@@ -3933,6 +3968,114 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
 # A custody move's two legs (out of one account, into another) post a
 # few days apart at most.
 _OWN_MOVE_DAYS = 10
+
+
+TRANSFER_COSTS_SUFFIX = "_transfer_costs.json"
+
+
+def _transfer_key(root: Path):
+    """The security a transfer row moves, after ticker.map's undated
+    renames (the books are mapped by the merge stage; the transfer
+    evidence is not)."""
+    tm = root / "ticker.map"
+    renames: Dict[str, str] = {}
+    if tm.is_file():
+        try:
+            from taxjson.bin.taxjson_ticker_map import (load_map_file,
+                                                        merge_renames)
+            import contextlib as _cl
+            import io as _io
+            with _cl.redirect_stderr(_io.StringIO()):
+                renames = merge_renames(load_map_file(tm), to_base=True)
+        except (OSError, ValueError):
+            renames = {}
+    from taxjson.bin.taxjson_ticker_map import map_symbol
+
+    def key(sym: str) -> str:
+        s = str(sym or "").strip()
+        return map_symbol(s, renames).upper() if renames else s.upper()
+    return key
+
+
+def transfer_arrivals(root: Path, cache: Path,
+                      accounts: Optional[Dict[str, Any]] = None):
+    """[transfer_in.Arrival] of every taxable equity account (the
+    shares that arrived by transfer from outside the books), each
+    marked covered when its account's converted .tt rows account for
+    it. Read from work/ (the sidecars and the converted .tt files)."""
+    from taxjson.lib import transfer_in as TI
+    if accounts is None:
+        accounts = _soft_config(root).get("accounts") or {}
+    names = [n for n, c in accounts.items()
+             if isinstance(c, dict) and c.get("type") == "taxable"
+             and not c.get("crypto") and not c.get("transfers")]
+    if not names:
+        return []
+    key = _transfer_key(root)
+    found = TI.arrivals(TI.sidecar_rows(cache, names), key=key)
+    tt_rows: Dict[str, List[Dict[str, Any]]] = {}
+    import json as _json
+    for n in {a.account for a in found}:
+        rows: List[Dict[str, Any]] = []
+        for tt in input_files(root / "inputs" / n, ".tt"):
+            p = tt_json_path(cache, n, tt.name)
+            try:
+                doc = _json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            rows += [t for t in (doc.get("transactions") or [])
+                     if isinstance(t, dict)]
+        tt_rows[n] = rows
+    TI.mark_covered(found, tt_rows, key=key)
+    # A missing_history.json entry is the user's own answer for the
+    # position (cost unknown, reported by hand): it wins over the
+    # broker's book value.
+    from taxjson.lib.first_run import read_missing_history_pairs
+    from taxjson.lib.missing_history import missing_history_path
+    TI.mark_missing_history(found, read_missing_history_pairs(
+        missing_history_path(root, note=False)))
+    return found
+
+
+def stage_transfer_arrivals(name: str, root: Path, cache: Path,
+                            tt_jsons: List[Path], country: str
+                            ) -> Optional[Path]:
+    """The acquisitions a taxable account's books take for shares that
+    arrived by transfer at a STATED book value
+    (work/<name>_transfer_costs.json, a source of the books; None when
+    there are none), and one ATTENTION line per kind of uncovered
+    arrival — every run, so a fixed one (a .tt line covering it) goes
+    quiet. tt_jsons: this account's converted .tt files, already
+    written."""
+    from taxjson.lib import transfer_in as TI
+    out = cache / f"{name}{TRANSFER_COSTS_SUFFIX}"
+    try:
+        found = [a for a in transfer_arrivals(root, cache)
+                 if a.account == name]
+    except Exception as e:                          # noqa: BLE001
+        print(f"  warning: transfer-ins not checked ({type(e).__name__}: "
+              f"{e}).", file=sys.stderr)
+        found = []
+    rows = TI.booked_rows(found)
+    for ln in TI.attention_lines(found, country):
+        print(f"  {ATTENTION_PREFIX} {ln}")
+    if not rows:
+        out.unlink(missing_ok=True)
+        return None
+    import json as _json
+    text = _json.dumps({"transactions": rows,
+                        # No source_brokerage: the fees report counts
+                        # broker trades only (these are not trades).
+                        "metadata": {"kind": "transfer_book_value",
+                                     "account": name}},
+                       indent=2, sort_keys=True) + "\n"
+    try:
+        same = out.read_text(encoding="utf-8") == text
+    except OSError:
+        same = False
+    if not same:
+        write_text_atomic(out, text)
+    return out
 
 
 def _sidecar_transfer_rows(names: List[str], cache: Path
@@ -5015,24 +5158,26 @@ def cmd_run(args: argparse.Namespace) -> None:
     # evidence is parsed first (cached), so the moves are known before
     # any account's books are merged; each account's legs file is then
     # one of its sources.
-    from taxjson.lib.country import basis_pooled_across_accounts
-    if not basis_pooled_across_accounts(_country(settings)):
-        _equity_first = [(n, c) for n, c in accounts.items()
-                         if (c or {}).get("type") == "taxable"
-                         and not (c or {}).get("crypto")
-                         and not (c or {}).get("transfers")]
-        if len(_equity_first) >= 2:
-            for name, acfg in _equity_first:
-                try:
-                    stage_account(name, acfg, settings, inputs_dir, cache,
-                                  reports_dir, rates, ticker_map_arg,
-                                  sec_overrides_arg, args.force,
-                                  incomplete_history=mh_arg,
-                                  no_input=no_input,
-                                  strict=getattr(args, "strict", False),
-                                  parse_only=True)
-                except PendingElectionsError:
-                    pass
+    # Both countries: a transfer-in that pairs with a transfer-out of
+    # another of your taxable accounts is not an arrival from outside
+    # the books (lib/transfer_in) — every account's evidence must be
+    # current before any account's books are merged.
+    _equity_first = [(n, c) for n, c in accounts.items()
+                     if (c or {}).get("type") == "taxable"
+                     and not (c or {}).get("crypto")
+                     and not (c or {}).get("transfers")]
+    if len(_equity_first) >= 2:
+        for name, acfg in _equity_first:
+            try:
+                stage_account(name, acfg, settings, inputs_dir, cache,
+                              reports_dir, rates, ticker_map_arg,
+                              sec_overrides_arg, args.force,
+                              incomplete_history=mh_arg,
+                              no_input=no_input,
+                              strict=getattr(args, "strict", False),
+                              parse_only=True)
+            except PendingElectionsError:
+                pass
     stage_own_account_moves(root, {"accounts": accounts,
                                    "settings": settings},
                             settings, cache,
@@ -5517,12 +5662,18 @@ def cmd_run(args: argparse.Namespace) -> None:
                       file=sys.stderr)
             elif _e.code:
                 print("  !! positions differ from the broker holdings "
-                      "files — same-day trades not yet in the CSVs are "
-                      "the usual cause; anything else is a booking "
-                      "problem (see `taxjson sanity`).",
+                      "files — on a first project the likely cause is "
+                      "missing history (purchases before your download "
+                      "starts: `taxjson find-missing-history`, "
+                      "docs/getting-started.md step 5); later, same-day "
+                      "trades not yet in the CSVs are the usual one; "
+                      "anything else is a booking problem (see `taxjson "
+                      "sanity`).",
                       file=sys.stderr)
         except Exception as _e:  # noqa: BLE001 — never break a run
             print(f"  holdings sanity skipped: {_e}", file=sys.stderr)
+    if not args.account:
+        _first_run_summary(root, cfg, cache, mh_arg)
     if args.account:
         # A single-account run can't do cross-account wash detection or the
         # combined cross-account reports — those are SKIPPED (previously they
@@ -5541,6 +5692,111 @@ def cmd_run(args: argparse.Namespace) -> None:
             f"with no --account before filing.",
             file=sys.stderr,
         )
+
+
+def _short_positions_note(base_json: Path, account: str,
+                          ticker_map: Optional[Path],
+                          missing_history: Optional[Path]) -> str:
+    """One NOTE naming a taxable account's positions that go short in
+    its books — a sale with no purchase in the files, unless the broker
+    marks it a short sale — or '' (advisory: never breaks a run)."""
+    try:
+        from taxjson.lib.core import load_transactions
+        from taxjson.lib.first_run import read_missing_history_pairs
+        from taxjson.lib.missing_history import (detect_missing_history,
+                                                  journal_targets)
+        txs = load_transactions(base_json)
+        journal = (journal_targets(str(ticker_map))
+                   if ticker_map and Path(ticker_map).is_file() else set())
+        covered = {(sym, a.lower()) for sym, a in
+                   read_missing_history_pairs(missing_history)}
+        cands = [c for c in detect_missing_history(
+                     txs, include_broker_shorts=True,
+                     registered_accounts={account: False},
+                     journal_symbols=journal)
+                 if c.account == account and not c.broker_marked_short
+                 and not c.broker_says_closing
+                 and (str(c.symbol).upper(), account.lower())
+                 not in covered]
+    except Exception:                               # noqa: BLE001
+        return ""
+    if not cands:
+        return ""
+    shown = ", ".join(c.symbol for c in cands[:5]) \
+        + (f" +{len(cands) - 5} more" if len(cands) > 5 else "")
+    return (f"NOTE: {len(cands)} position(s) go short in {account}'s data "
+            f"({shown}): sales with no purchase in your files, unless they "
+            f"were real short sales. Until the purchase is supplied their "
+            f"gain is in no total — `taxjson find-missing-history` lists "
+            f"them with the fixes.")
+
+
+def _uncovered_sales(root: Path, cfg: Dict[str, Any],
+                     account: Optional[str] = None) -> List[Dict[str, Any]]:
+    """[{symbol, account, sales, proceeds}] — the tax year's sales in
+    taxable accounts with no purchase in the files that
+    missing_history.json does not cover (lib/first_run). [] outside a
+    project or when the books cannot be read (advisory)."""
+    if not cfg:
+        return []
+    try:
+        from taxjson.lib import first_run as FR
+        from taxjson.lib.country import settings_tax_date
+        from taxjson.lib.missing_history import journal_targets
+        settings = cfg.get("settings") or {}
+        accounts = cfg.get("accounts") or {}
+        txs, _failed = FR.load_books(root / "work")
+        if not txs:
+            return []
+        sheltered = {str(n): (a.get("type") == "sheltered")
+                     for n, a in accounts.items() if isinstance(a, dict)
+                     and a.get("type") in ("taxable", "sheltered")}
+        tm = root / "ticker.map"
+        journal = journal_targets(str(tm)) if tm.is_file() else set()
+        from taxjson.lib.missing_history import missing_history_path
+        mh = missing_history_path(root, note=False)
+        rows = FR.uncovered_short_sales(
+            txs, settings.get("year"), sheltered=sheltered,
+            covered=FR.read_missing_history_pairs(mh),
+            date_basis=settings_tax_date(settings), journal=journal)
+    except Exception:                               # noqa: BLE001
+        return []
+    return [{"symbol": r.candidate.symbol, "account": r.candidate.account,
+             "sales": r.in_year_dispositions,
+             "proceeds": r.in_year_proceeds}
+            for r in rows if not account or r.candidate.account == account]
+
+
+def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
+                       mh_file: Optional[Path]) -> None:
+    """What the books show is still incomplete, each with the command
+    that lists it (lib/first_run): printed after a full run when any
+    count is nonzero, silent when clean; the counts also go to
+    reports/run_summary.json. Advisory — never breaks a run."""
+    from taxjson.lib import first_run as FR
+    try:
+        doc = FR.collect(root, cfg, missing_history=mh_file,
+                         arrivals=transfer_arrivals(root, cache,
+                                                    cfg.get("accounts")))
+    except Exception as e:                          # noqa: BLE001
+        print(f"taxjson: warning: the closing summary could not be built "
+              f"({type(e).__name__}: {e}).", file=sys.stderr)
+        return
+    import json as _json
+    try:
+        # In reports/, not work/: every work/*.json is read as a stage
+        # file by the fees report (and a planted symlink there must not
+        # break the next run's fees stage).
+        write_text_atomic(cache.parent / "reports" / FR.SUMMARY_FILE,
+                          _json.dumps(doc, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        pass
+    lines = FR.render(doc, mh_name=(mh_file.name if mh_file
+                                    else "missing_history.json"))
+    if lines:
+        print()
+        for ln in lines:
+            print(ln)
 
 
 # The taxjson.toml template — every key, documented, per country — and
@@ -5651,14 +5907,6 @@ export/
 .DS_Store
 """
 
-# Dropped into each empty inputs/<account>/ folder. Doubles as a placeholder
-# so the otherwise-empty directory survives a git commit.
-_INPUT_README = (
-    "Drop this account's broker CSV exports in this folder.\n\n"
-    "taxjson auto-detects the broker from each file's header (Interactive "
-    "Brokers, RBC Direct, Questrade, Webull). Name crypto exports so the "
-    "filename starts with `cb_` (Coinbase) or `kr_` (Kraken).\n"
-)
 
 
 def _manifest_path_for(acct_dir: Path, cache: Path, name: str) -> Path:
@@ -6921,6 +7169,29 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
     if want:
         rows = [r for r in rows if r["account"] == want]
     rows.sort(key=lambda r: (r["date"], r["account"], r["symbol"]))
+    # What the books did with each transfer-IN of a taxable account
+    # (lib/transfer_in): your own move (its out leg is yours too), booked
+    # at the broker's stated book value, covered by your .tt purchase,
+    # or NO COST — shares from outside the books with no cost.
+    _status = {"book_value": "book value", "covered": ".tt covers",
+               "missing_history": "missing history",
+               "no_cost": "NO COST"}
+    try:
+        _arr: Dict[Tuple[str, str, str], List[str]] = {}
+        for a in transfer_arrivals(root, cache, cfg.get("accounts")):
+            _arr.setdefault((a.account, a.symbol, a.date), []).append(
+                _status[a.status])
+    except Exception:                               # noqa: BLE001
+        _arr = {}
+    _tax_eq = {n for n, c in (cfg.get("accounts") or {}).items()
+               if isinstance(c, dict) and c.get("type") == "taxable"
+               and not c.get("crypto") and not c.get("transfers")}
+    for r in rows:
+        r["arrival"] = "-"
+        if (r["where"] == "sidecar" and r["quantity"] > 0
+                and r["account"] in _tax_eq):
+            got = _arr.get((r["account"], r["symbol"], r["date"][:10]))
+            r["arrival"] = got.pop(0) if got else "own move"
     if getattr(args, "json", False):
         _json_out({"transfers": rows, "count": len(rows)})
         return
@@ -6934,7 +7205,7 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
               + " — re-run `taxjson run` after enabling the sidecar, "
                 "or the broker reported none.")
         return
-    out_lines = ["DATE ACCOUNT SYMBOL QTY TYPE VALUE FEE CUR WHERE"]
+    out_lines = ["DATE ACCOUNT SYMBOL QTY TYPE VALUE FEE CUR WHERE IN_BOOKS"]
     for r in rows:
         # Type column: the transfer KIND (InterDepot/Internal/ATON…);
         # some brokers put a whole sentence here — cap it, the --json
@@ -6949,9 +7220,19 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
             (f"{r['fee']:g}" if r["fee"]
              else (f"{r['fee_qty']:g}_{r['fee_currency']}".rstrip("_")
                    if r["fee_qty"] else "-")),
-            r["currency"], r["where"]]))
+            r["currency"], r["where"], r["arrival"].replace(" ", "_")]))
     _print_report_table(out_lines)
     print(f"\n{len(rows)} transfer row(s).")
+    if any(r["arrival"] != "-" for r in rows):
+        print("IN_BOOKS (a taxable account's transfer-in): own_move = "
+              "your own shares moving (a transfer-out of yours cancels "
+              "it); book_value = from outside your books, booked at the "
+              "book value the broker states on the row; .tt_covers = "
+              "your .tt purchase covers it; missing_history = "
+              "missing_history.json lists it (cost unknown, reported by "
+              "hand); NO_COST = from outside your "
+              "books with no cost: add the original purchase to a .tt "
+              "file (docs/getting-started.md, step 5c).")
 
 
 def _cannot_write_decisions(path, e: OSError) -> str:
@@ -7886,7 +8167,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     base_cur = _base_currency(root)
     if tainted_skipped:
         print(f"taxjson ccd-sum: warning: skipped {tainted_skipped} "
-              f"tainted disposition(s) with unknown cost (no purchase in "
+              f"disposition(s) with an unknown cost (no purchase in "
               f"your files) — "
               f"matches form-export/carryover/leaps.", file=sys.stderr)
     if getattr(args, "json", False):
@@ -8020,7 +8301,7 @@ def cmd_winners(args: argparse.Namespace) -> None:
     base_cur = _base_currency(root)
     if tainted_skipped:
         print(f"taxjson winners: warning: skipped {tainted_skipped} "
-              f"tainted disposition(s) with unknown cost (no purchase in "
+              f"disposition(s) with an unknown cost (no purchase in "
               f"your files) — "
               f"matches form-export/carryover/leaps.", file=sys.stderr)
     if getattr(args, "json", False):
@@ -10474,7 +10755,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
     if tainted_included:
         # In-line tainted rows (raw engine output): counted in totals.
         print(f"taxjson sum: warning: totals include {tainted_included} "
-              f"tainted disposition(s) with unknown cost (no purchase in "
+              f"disposition(s) with an unknown cost (no purchase in "
               f"your files) — "
               f"form-export/carryover exclude them, so filing totals "
               f"will differ.", file=sys.stderr)
@@ -10484,12 +10765,31 @@ def cmd_summary(args: argparse.Namespace) -> None:
         # without this line `sum` gave no signal at all (round-five
         # audit finding: the warning was dead code for pipeline
         # files).
-        print(f"taxjson sum: warning: {tainted_routed} tainted "
-              f"disposition(s) were routed to manual reporting — "
+        print(f"taxjson sum: warning: {tainted_routed} "
+              f"disposition(s) with an unknown cost (no purchase in "
+              f"your files) were routed to manual reporting — "
               f"these totals EXCLUDE them (`taxjson form-export` "
               f"lists them in its MANUAL REPORTING section; report "
               f"them by hand).",
               file=sys.stderr)
+    # Sales with no purchase in the files that missing_history.json does
+    # not cover: the engine books them as an open short, so their gain is
+    # simply not in these totals — and nothing above said so for a
+    # Questrade / RBC / Webull sale (new-user study).
+    _uncovered = _uncovered_sales(root, cfg,
+                                  getattr(args, "account", None) or None)
+    if _uncovered:
+        _shown = ", ".join(f"{r['symbol']} ({r['account']})"
+                           for r in _uncovered[:4]) \
+            + (f" +{len(_uncovered) - 4} more" if len(_uncovered) > 4
+               else "")
+        print(f"taxjson {_CURRENT_CMD or 'sum'}: warning: "
+              f"{len(_uncovered)} position(s) sold in "
+              f"{(cfg.get('settings') or {}).get('year')} with no purchase "
+              f"in your files, not in missing_history.json: "
+              f"their gain is NOT in these totals ({_shown}). `taxjson "
+              f"find-missing-history` lists them and the fixes "
+              f"(docs/getting-started.md, step 5).", file=sys.stderr)
     # Scope: unlike the filing commands (carryover/t1135/form-export,
     # taxable-only by law), this summary rolls up EVERY account — say so
     # when sheltered accounts contribute, or the totals look like filing
@@ -10508,6 +10808,14 @@ def cmd_summary(args: argparse.Namespace) -> None:
             "accounts": acct_rows,
             "tainted_included": tainted_included,
             "tainted_routed": tainted_routed,
+            # The same counts under their plain name ("tainted" is the
+            # engine's word for a disposition with an unknown cost; the
+            # keys above stay for existing readers).
+            "unknown_cost_included": tainted_included,
+            "unknown_cost_routed": tainted_routed,
+            # Sales with no purchase that missing_history.json does not
+            # cover: not in the totals at all (an open short).
+            "no_purchase_uncovered": _uncovered,
             # Same row-sum path as the printed tables and subtotals, so
             # totals == Σ subtotals == Σ rows holds exactly for machine
             # consumers (the unrounded accumulation drifted by a cent).
@@ -13254,6 +13562,16 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             out_lines.append(" ".join(cells))
         _print_report_table(out_lines)
         print(f"\n{len(all_rows)} discrepancy(ies).")
+        if any(r["holdings_qty"] - r["taxjson_qty"] > 0 for r in all_rows):
+            # Fewer shares in the books than at the broker: on a first
+            # project that is history the download does not reach
+            # (new-user study), not a booking bug.
+            print("Fewer shares in taxjson than at the broker usually "
+                  "means missing history: purchases from before your "
+                  "download starts, or shares transferred in. See "
+                  "`taxjson find-missing-history`, `taxjson transfers` "
+                  "and docs/getting-started.md step 5. A trade after "
+                  "your last export is the other usual cause.")
     _sanity_print_extras(ordered, cost_all, cost_diffs, cost_matched,
                          cost_na, income_all, multi,
                          brief=getattr(args, "brief_extras", False))
@@ -18037,9 +18355,11 @@ def cmd_init(args: argparse.Namespace) -> None:
 
     _stub("ticker.map", _TEMPLATE_TICKER_MAP)
     _stub(".gitignore", _TEMPLATE_GITIGNORE)
+    from taxjson.lib.config_template import input_readme as _readme
     for acct in account_names:
         # The README also keeps the empty input dir present under git.
-        _stub(f"inputs/{acct}/README.txt", _INPUT_README)
+        # It says what to download from each broker (new-user study).
+        _stub(f"inputs/{acct}/README.txt", _readme(country, acct))
 
     print(f"Initialized taxjson project at {root}")
     for rel in written:
@@ -19563,10 +19883,72 @@ def _main() -> None:
             # explained WHY (run_to_file echoes it) — re-raising the
             # CalledProcessError just buried that explanation under a
             # second traceback (2026-09 audit).
-            sys.exit(f"taxjson: stage failed: "
-                     f"{' '.join(str(c) for c in (e.cmd or [])[-3:])} "
+            sys.exit(f"taxjson: stage failed: {_stage_description(e.cmd)} "
                      f"(exit {e.returncode}) — see the error above.")
     return
+
+
+# What each sub-tool does, for the one-line stage failure (new-user
+# study: the raw argv tail — two file paths and a flag — said nothing).
+_STAGE_WHAT = {
+    "taxjson_brokerage": "reading the broker files",
+    "taxjson_corp_actions": "the corporate actions",
+    "taxjson_convert_tt": "converting the .tt file",
+    "taxjson_merge": "merging the account's files",
+    "taxjson_merge2": "merging and converting the account's books",
+    "taxjson_sort": "sorting the books",
+    "taxjson_ticker_map": "applying ticker.map",
+    "fill_crypto_prices": "filling in crypto prices",
+    "taxjson_convert_currency": "converting to the base currency",
+    "taxjson_validate": "checking the books",
+    "taxjson_gains": "computing the gains",
+    "to_base_curr": "fetching currency rates",
+    "taxjson_apply_distributions": "applying [[distributions]]",
+}
+
+
+# The sub-tool options `taxjson run` passes that take no value.
+_STAGE_FLAG_OPTS = frozenset({
+    "--strict", "--dedup", "--sort", "--validate", "--transfers",
+    "--require-inputs", "--no-input", "--global-only", "--spot-crypto",
+    "--no-wash", "--require-prices", "--combined-broker-accounts",
+    "--taxable", "--lint"})
+
+
+def _stage_description(cmd) -> str:
+    """A human description of a failed sub-tool invocation: what it was
+    doing, for which account, on which input file(s) — never the raw
+    argv (paths, flags)."""
+    argv = [str(c) for c in (cmd or [])]
+    mod = next((a.rsplit(".", 1)[-1] for a in argv
+                if a.startswith("taxjson.bin.")), "")
+    what = _STAGE_WHAT.get(mod) or (f"the {mod.replace('_', '-')} step"
+                                    if mod else "a pipeline step")
+
+    def _opt(*names):
+        for n in names:
+            if n in argv[:-1]:
+                return argv[argv.index(n) + 1]
+        return ""
+    acct = _opt("--account", "--account-name")
+    # The inputs are the trailing positionals (every stage appends them
+    # last); an argument right after a value-taking option is its value.
+    files: List[str] = []
+    i = len(argv) - 1
+    while i > 0 and not argv[i].startswith("-"):
+        prev = argv[i - 1]
+        if prev.startswith("-") and prev not in _STAGE_FLAG_OPTS:
+            break
+        files.insert(0, Path(argv[i]).name)
+        i -= 1
+    out = what
+    if acct:
+        out += f" for account {acct}"
+    if files:
+        shown = ", ".join(_mask_ids_in_path(f) for f in files[:3])
+        out += (f" ({shown}" + (f" and {len(files) - 3} more" if
+                                len(files) > 3 else "") + ")")
+    return out
 
 
 def _guarded_func(args: argparse.Namespace) -> None:

@@ -656,6 +656,10 @@ Examples:
         if args.account_type and hasattr(extractor, 'account_taxable'):
             extractor.account_taxable = args.account_type == 'taxable'
         extractor.combined_broker_accounts = args.combined_broker_accounts
+        # The sidecar's reader (`taxjson run`) says what a transfer-in
+        # costs, once it knows which ones a .tt line covers.
+        extractor.transfer_costs_checked_downstream = bool(
+            args.transfers_out and not args.transfers)
         if args.exercise_fee is not None and hasattr(extractor,
                                                      'exercise_fee'):
             extractor.exercise_fee = args.exercise_fee

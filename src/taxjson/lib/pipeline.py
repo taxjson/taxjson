@@ -1762,7 +1762,7 @@ def run_gains(transactions, sheltered_transactions=(),
                                   '%Y-%m-%d')
             except ValueError:
                 continue
-            from taxjson.lib.core import is_opening_row as _is_open
+            from taxjson.lib.core import not_a_purchase as _is_open
             for a in transactions:
                 # An opening balance is not a purchase (CA-OPEN-01 /
                 # US-OPEN-01).
@@ -1783,7 +1783,7 @@ def run_gains(transactions, sheltered_transactions=(),
                         'loss_date': t.get('date'),
                         'raw_loss': raw,
                         'acquisition_date': a.date,
-                        'note': ('tainted (unknown-cost) loss with an '
+                        'note': ('unknown-cost loss with an '
                                  f'in-window acquisition ({_basis} dates) — '
                                  'if you claim this loss manually, apply '
                                  f'{_rule_name} to the rebuy'),

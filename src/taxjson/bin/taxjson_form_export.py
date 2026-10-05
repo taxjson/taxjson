@@ -1405,8 +1405,8 @@ def _main(args) -> int:
             f"({abs(float(m.get('proceeds') or 0.0)):,.2f})"
             for m in manual[:8])
         _more = f" (+{len(manual) - 8} more)" if len(manual) > 8 else ""
-        print(f"warning: {max(tainted, len(manual))} tainted "
-              f"disposition(s) with unknown cost (no purchase in your "
+        print(f"warning: {max(tainted, len(manual))} "
+              f"disposition(s) with an unknown cost (no purchase in your "
               f"files) are NOT in the "
               f"{'TXF' if args.form == 'txf' else 'form'} rows or totals "
               f"— proceeds {manual_proceeds:,.2f}: {_names}{_more}. "

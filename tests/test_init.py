@@ -70,7 +70,11 @@ class TestInit(unittest.TestCase):
             self.assertEqual(s["country"], "usa")
             self.assertEqual(s["base_currency"], "USD")
             self.assertEqual(s["tax_date"], "trade")
-            self.assertEqual(s["source_currencies"], ["CAD"])
+            # No CAD rates fetched for an all-USD user: the key is
+            # left commented, with a note on when to set it.
+            self.assertNotIn("source_currencies", s)
+            self.assertRegex((root / "taxjson.toml").read_text(),
+                             r"(?m)^# source_currencies\s+= \[\"CAD\"\]")
             self.assertEqual(sorted(cfg["accounts"]), _US_ACCOUNTS)
             # No Canadian account types in a US scaffold.
             self.assertNotIn("rrsp", cfg["accounts"])

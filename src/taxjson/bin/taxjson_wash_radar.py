@@ -31,8 +31,8 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from taxjson.lib.cli_diag import guard_main
-from taxjson.lib.core import (TaxTransaction, is_opening_row,
-                              is_stock_dividend)
+from taxjson.lib.core import (TaxTransaction, is_stock_dividend,
+                              not_a_purchase)
 from taxjson.lib.country import add_country_argument
 from taxjson.lib.corporate_timeline import (SplitTimeline, radar_priority,
                                             split_seen)
@@ -893,9 +893,9 @@ def main():
                 account_pool_acb[key] += _money(tx)
 
             if (tx.action in ('TRANSFER', 'OPENING_BALANCE')
-                    or is_opening_row(tx)):
-                # An opening balance (a positions report's snapshot,
-                # CA-OPEN-01 / US-OPEN-01) is not a purchase either.
+                    or not_a_purchase(tx)):
+                # An opening balance or a transfer-in at its book value
+                # (CA-OPEN-01, CA-ACB-TRANSFER-BV) is not a purchase either.
                 # Moving/synthesizing your own shares acquires nothing:
                 # neither is a superficial-loss trigger (the gains
                 # engine excludes both — core.py's trigger filter), so
@@ -987,7 +987,7 @@ def main():
                 # record it like any opening, or the new short/long is
                 # invisible to the trigger walk (2026-09 audit).
                 if (tx.action not in ('TRANSFER', 'OPENING_BALANCE')
-                        and not is_opening_row(tx)):
+                        and not not_a_purchase(tx)):
                     _record_acq(cls, tx, acct, leftover_qty,
                                 'LONG' if qty_raw > 0 else 'SHORT')
         

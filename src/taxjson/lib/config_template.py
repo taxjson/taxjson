@@ -156,9 +156,13 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
     Key("base_currency", '"{home}"',
         {"canada": "Report currency: CAD (Bank of Canada rates).",
          "usa": "Report currency: USD."}),
-    Key("source_currencies", {"canada": '["USD"]', "usa": "[]"},
-        "Currencies you hold besides base_currency (their FX rates are "
-        "fetched)."),
+    Key("source_currencies", {"canada": '["USD"]', "usa": '["CAD"]'},
+        {"canada": "Currencies you hold besides base_currency (their FX "
+                   "rates are fetched). Default [\"USD\"].",
+         "usa": "Currencies you hold besides USD (their FX rates are "
+                "fetched). Default none: an all-USD project needs nothing "
+                "here; uncomment it only for an account or trade in "
+                "another currency."}),
     Key("tax_date", '"{tax_date}"',
         {"canada": "settle | trade. Default settle: CRA dates a sale by "
                    "settlement.",
@@ -987,9 +991,12 @@ def scaffold_document(country: str, year: int,
     s: Dict[str, Any] = {
         "year": year, "country": country,
         "base_currency": C.home_currency(country),
-        "source_currencies": ["USD" if country == C.CANADA else "CAD"],
         "tax_date": C.default_tax_date(country),
     }
+    if country == C.CANADA:
+        # A US project holds US dollars only unless it says otherwise:
+        # fetching CAD rates for an all-USD user is noise (and egress).
+        s["source_currencies"] = ["USD"]
     if tz:
         s["local_timezone"] = tz
     if country == C.CANADA:
@@ -1013,6 +1020,91 @@ def render_document(doc: Dict[str, Any], country: str,
     comments)."""
     country = C.canonical_country(country)
     return _Renderer(doc, country, _year_of(doc, year)).render()
+
+
+# What to download, per broker — the inputs/<account>/README.txt `taxjson
+# init` writes (docs/getting-started.md step 3 says the same).
+_EQUITY_EXPORTS = (
+    ("Interactive Brokers", "Activity Statement, CSV: the longest period "
+                            "allowed (one file per year is fine)."),
+    ("Questrade", "Account activity, CSV: every year available."),
+    ("RBC Direct Investing", "Transaction history, CSV: every year "
+                             "available."),
+    ("Webull", "Trading Summary, CSV: buys and sells only; enter "
+               "dividends and interest from your slips."),
+    ("Any other broker", "Any CSV, plus a column mapping (README, \"Any "
+                         "other broker\")."),
+)
+_CRYPTO_EXPORTS = (
+    ("Kraken", "Trades AND Ledgers, CSV: both, every year available."),
+    ("Coinbase", "Transaction history, CSV: every year available."),
+)
+
+
+def input_readme(country: str, name: str) -> str:
+    """The README.txt `taxjson init` writes in inputs/<name>/: which
+    export to download from each broker (all the history there is, plus
+    a positions report), for the scaffold account `name`."""
+    country = C.canonical_country(country)
+    crypto = name == "crypto"
+    sheltered = name not in ("margin", "crypto")
+    slips = "T5008" if country == C.CANADA else "1099-B"
+    loss_rule = ("superficial-loss" if country == C.CANADA
+                 else "wash-sale")
+    rows = _CRYPTO_EXPORTS if crypto else _EQUITY_EXPORTS
+    w = max(len(b) for b, _ in rows) + 2
+    lines = [
+        *textwrap.wrap(f"inputs/{name}/ holds the files of the account "
+                       f"[accounts.{name}] in taxjson.toml.", 72),
+        "",
+        "Put this account's broker exports here. Any file name works:",
+        "taxjson recognises each export by its header, and `taxjson run`",
+        "prints which broker it read each file as. Several files are fine;",
+        "rows that overlap are read once.",
+        "",
+        "Download ALL the history the broker will give you, not just the",
+        "tax year: the cost of something sold this year comes from the day",
+        "you bought it, which may be years back.",
+        "",
+    ]
+    for broker, what in rows:
+        wrapped = textwrap.wrap(what, 70 - w) or [""]
+        lines.append(f"  {broker:<{w}}{wrapped[0]}")
+        lines += [f"  {'':<{w}}{x}" for x in wrapped[1:]]
+    lines += [
+        "",
+        "Also save a positions report with book cost (\"Holdings\",",
+        "\"Positions\" or \"Portfolio\") for the date your download",
+        "starts and for the end of the tax year. An Interactive Brokers",
+        "Activity Statement (CSV) or an RBC Holdings Export is read as it",
+        "is; from another broker, type it into a [[holding]] .toml file.",
+        "The first becomes the opening balance (`taxjson opening",
+        "ACCOUNT FILE` writes an opening_DATE.tt here); the second is",
+        "what `taxjson sanity` checks the books against (quantities and",
+        "costs). `taxjson run` skips a positions report left here.",
+        "",
+        "Purchases the download does not reach go in a .tt file in this",
+        "folder: docs/getting-started.md, step 5.",
+    ]
+    if sheltered:
+        lines += [
+            "",
+            "Even though a sheltered account owes no tax, its purchases",
+            f"count for the {loss_rule} rule on your taxable accounts:",
+            "include its files too.",
+        ]
+    elif not crypto:
+        lines += [
+            "",
+            f"Your broker's {slips} slips are checked against the books by",
+            "`taxjson reconcile-slips` (keep them in inputs/slips/).",
+        ]
+    lines += [
+        "",
+        *textwrap.wrap(f"No such account? Delete this folder and its "
+                       f"[accounts.{name}] section from taxjson.toml.", 72),
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def render_init(country: str, year: Optional[int] = None,

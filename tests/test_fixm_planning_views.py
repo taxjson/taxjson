@@ -284,7 +284,7 @@ class TestWinnersScope(unittest.TestCase):
             doc = _json(root, "winners")
             r = _runsub(root, "winners")
         self.assertEqual(doc["tainted_skipped"], 1)
-        self.assertIn("1 tainted", r.stderr)
+        self.assertIn("1 disposition(s) with an unknown cost", r.stderr)
 
 
 class TestUnreadableInputsAreErrors(unittest.TestCase):
@@ -403,7 +403,7 @@ class TestCrossReports(unittest.TestCase):
             ccd = _tool("taxjson_ccd_gains", str(g))
             lg = _tool("taxjson_leaps_gains", str(g))
         self.assertRegex(ccd.stdout, r"\nTOTAL\s+500\.00\n")
-        self.assertIn("1 tainted", ccd.stdout)
+        self.assertIn("1 disposition(s) with an unknown cost", ccd.stdout)
         self.assertRegex(lg.stdout, r"\nTOTAL\s+300\.00\n")
         # Every long option of any tenor: say so, point at leaps-sum.
         self.assertNotIn("(LEAPS)", lg.stdout)

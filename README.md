@@ -413,6 +413,7 @@ For a configured project the entire pipeline runs from a **single command**. Set
 taxjson.toml          # year, country, base_currency, and [accounts.*] sections
 inputs/
   margin/ tfsa/ rrsp/ crypto/         # canada scaffold — one folder per account, drop broker CSVs in
+                                      # (each folder's README.txt says which export to download per broker)
   margin/ roth/ 401k/ crypto/         # usa scaffold (add a section + folder for any other account, e.g. a LIRA / an IRA)
 work/                 # intermediate per-stage artifacts (rebuildable; gitignored)
 reports/              # all outputs land here
@@ -454,11 +455,30 @@ time (`work/.run.lock`); a second one refuses.
 - `<account>.sum`, `<account>_wash.sum` — realized gains and wash-sale detail
 - `wash_radar_<account>.rpt` / `.json` — superficial-loss "safe to sell at a loss?" advisor (the JSON sidecar carries absolute clear dates; `harvest --radar` computes countdowns from it)
 - `work/<account>_<broker>_transfers.json` — custody-transfer sidecar: TRANSFER rows the parse stage keeps OUT of the books (evidence, not tax events); `taxjson transfers` reads these
+- `work/<account>_transfer_costs.json` — the acquisitions a taxable account's books take for shares that arrived by transfer from outside your books at a book value the broker states on the row (Questrade, RBC) — see [Transfers into a taxable account](#transfers-into-a-taxable-account)
 - `work/<account>_own_moves.json` — US projects: the moves between two of your own taxable accounts the run paired from that evidence (and the crypto-sends pairing), as TRANSFER legs in both accounts' books; the US engine hands the sender's FIFO lots (basis, purchase dates) to the receiver with no sale (tax-logic US-BASIS-05)
 - `crosslistings.rpt` — flags cross-listed (`.TO`/`.US`) tickers the radar may not consolidate
 - `fees.rpt` — trading fees by brokerage, with comparison stats
 - `ccd.rpt`, `leaps.rpt` — cross-account covered-call / long-option views (`leaps.rpt` lists every long option close of any tenor; `taxjson leaps-sum` is the LEAPS-only figure; unknown-cost rows (no purchase in your files) are excluded and counted, as in `ccd-sum`)
 - `<account>_holdings.toml` — machine-readable positions (native + base-currency cost; a cost adjustment paid in another currency than its listing — a USD return of capital on a `.TO` stock — is restated in the listing's currency at the row's date for the native view, with a note, and the per-position acquisition/sell `trades` history). `cost_per_share` is `total_cost / quantity`, so for an option it is per contract; divide by `contract_multiplier` for the per-share price the `trades` show (a futures option carries the future's `contract_multiplier` its broker rows declared — IB's instrument list: CL 1000, ES 50 — and none when no row declared it, never the equity 100; a plain future is `asset_type = "future"`)
+
+**What to check next.** A full run ends (after `Done.` and the holdings
+check) with a short summary of what the books themselves show is still
+incomplete — silent when there is nothing:
+
+```
+==> before you trust these numbers (docs/getting-started.md, step 5)
+  1 position(s) sold in 2025 with no purchase in your files, not in missing_history.json — those sales are NOT in `taxjson sum`: SAMPA.TO (margin). Run `taxjson find-missing-history`.
+  1 position(s) at a $0 cost (1 still held): SAMPQ.TO (margin). Run `taxjson find-missing-history`.
+  1 transfer-in(s) from outside your books kept out with no cost: SAMPK.TO (margin). Run `taxjson transfers`.
+  1 account(s) with open positions and no holdings file to check them against: margin (12). Run `taxjson sanity` with the broker's positions.
+  1 security(ies) paid income in 2025 that the books do not hold (a holding with no purchase in your files?): SAMPZ.TO (margin). Run `taxjson sanity`.
+  Then `taxjson checklist`. Every step is in docs/getting-started.md.
+```
+
+The same counts are written to `reports/run_summary.json`. A taxable
+account's positions that go short (sales with no purchase in the files)
+are also named on the console as the run builds that account.
 
 When the year is over, [`docs/filing.md`](./docs/filing.md) is the
 checklist that takes a project from "last export dropped in" to a filed
@@ -511,7 +531,8 @@ tax_date = "settle"            # settle (CRA default) | trade (IRS default)
 #                              # margin settles the P/L) | next_day (clearing premium date)
 # local_timezone = "America/New_York" # crypto UTC timestamps are dated in this zone (no default;
 #                              # required with a crypto account)
-source_currencies = ["USD"]    # currencies you hold besides base_currency (FX rates fetched)
+source_currencies = ["USD"]    # currencies you hold besides base_currency (FX rates fetched);
+#                              # a US scaffold leaves it commented: an all-USD project fetches none
 # province = "ON"              # canada tax-estimate default (ON/BC/AB)
 #   Canada-only keys (province, option_*, foreign_return_of_capital, and the
 #   [instalments] table / [estimate] deductions, carrying_charges & amt_carryover) are refused
@@ -894,6 +915,16 @@ TOTAL      950.00       -200.00      750.00       120.00      0.00       25.00  
 `TOTAL` = REALIZED + DIVIDEND. NON-OPT is every non-option disposition
 (shares, units, futures and crypto); the Schedule 3 / Form 8949 line
 split is the FOR THE RETURN block and `taxjson form-export`.
+
+`sum` warns about what its totals leave out: dispositions with an unknown
+cost that `missing_history.json` routed to manual reporting, and — whatever
+the broker — the tax year's sales with no purchase in your files that
+`missing_history.json` does not list (the books hold them as an open short,
+so their gain is in no total; `taxjson find-missing-history` lists them).
+`--json` carries the counts as `unknown_cost_routed` / `unknown_cost_included`
+(the older names `tainted_routed` / `tainted_included` are kept, same values:
+"tainted" is the engine's word for an unknown cost) and the uncovered sales as
+`no_purchase_uncovered`.
 
 **Tax estimate** — **`taxjson estimate`** (the front door; also
 `taxjson sum --other-income ...` to see it under the account table)
@@ -1456,7 +1487,7 @@ both print the per-row rounding note `sum` prints. `--csv` is written
 through a temporary file, so a failed write leaves the previous CSV intact.
 
 Both read the wash-adjusted gains (the allowed numbers a return reports).
-**Sales with no purchase in your files (tainted, unknown cost) are not in the
+**Sales with no purchase in your files (an unknown cost) are not in the
 rows or totals** — their cost is unknown — but they are never dropped silently: a stderr warning names
 each one with its proceeds, the text report ends with a **MANUAL REPORTING
 REQUIRED** section, the CSV carries them as `MANUAL` rows (blank cost and gain),
@@ -1831,6 +1862,9 @@ taxjson find-missing-history margin     # one account
 
 Rows marked **AFFECTS `<year>`** have an in-year sale drawing on the missing
 basis — fix those before filing. (Rows "not relevant" only touch other years.)
+$0-cost shares still held are listed under **HELD**: no gain yet, but their
+sale will overstate it (a US stock dividend's shares share the old shares'
+basis and are not listed).
 $0-cost shares count as covered once a positive `ADJUST` on the same symbol
 and account, dated from 31 days before to 7 days after their arrival, gives
 them a cost (the fix for a Canadian stock dividend's declared amount). The
@@ -2032,6 +2066,41 @@ A positions-only file (an RBC Holdings Export) dropped into
 `inputs/<account>/` is skipped by `taxjson run` with a note — it is not
 activity.
 
+### Transfers into a taxable account
+
+A broker's transfer rows in a taxable account are custody evidence, kept
+out of the books (`taxjson transfers` lists them): your cost comes from the
+purchase. Most are your own moves — a broker's internal account shuffle, a
+move between two of your accounts, a journal between a security's US- and
+Canadian-dollar lines — and their out and in rows cancel. What is left of a
+transfer-in came from **outside your books** (another broker whose history
+you have not imported), and `taxjson run` says so on every run:
+
+- **The broker states a book value on the row** (Questrade's `TRANSFER BOOK
+  VALUE`, RBC's `BOOK VALUE`): it becomes the cost of the incoming shares,
+  booked on the arrival date, with an `ATTENTION: transfer-in:` line naming
+  the broker and the rows. A broker's book value is its record, not always
+  your ACB/basis: check it. In a US project the lot's holding period starts
+  on the arrival date; enter the original lots for long-term treatment.
+- **No stated book value** (IB's transfer `VALUE` is the market value on the
+  transfer day and is never used as a cost; RBC's Value column is 0): the
+  shares stay out of the books with no cost, said as `ATTENTION:
+  transfer-in: ... have NO cost`, and counted in the run's closing summary.
+
+The fix, and the override, is the same: the original purchase as a `.tt`
+`BUYSELL` line in that account dated on or before the transfer (date and
+cost from the sending broker's statements). Once the account's `.tt`
+purchases of the security cover the transferred quantity, the book value is
+no longer used and the ATTENTION line stops — nothing else to configure.
+An opening balance (`taxjson opening`, "Opening balances") dated on or
+after the arrival covers it too: the shares are in the snapshot.
+A `missing_history.json` entry for the security and account also covers it:
+you declared its cost unknown (reported by hand), and the broker's book
+value never silently replaces that declaration.
+The arrival is never the purchase that makes a loss superficial (or a wash
+sale): it is dated by the custody move. Tax-logic: `CA-ACB-TRANSFER-BV`,
+`US-BASIS-TRANSFER-BV`.
+
 ### When you can't get the real cost basis
 
 A sale of shares whose purchase is not in your broker files (they were bought
@@ -2066,7 +2135,11 @@ ticker.map `JOURNAL` line is not offered as a candidate.
 the detection would not propose — a short the broker marks as a short sale
 (RBC `SHORT.`, IB code `O`) or an option the broker never coded closing — but
 prints an `ATTENTION` line for it, and `find-missing-history` lists it under
-"REMOVE from missing_history.json" (the checklist flags it). A buy the broker marks as
+"REMOVE from missing_history.json" (the checklist flags it). An entry whose
+position no longer goes short (its purchase is in the books now: an older
+export or a `.tt` line was added) does nothing; the run says so as
+`ATTENTION` and `find-missing-history` lists it under "STALE in
+missing_history.json" — delete it. A buy the broker marks as
 covering a short (RBC `COVER SHORT.`, IB code `C`) with no short in the data is
 reported as missing history too: the short was opened before the data.
 

@@ -484,3 +484,25 @@ class TestDrafterSeesOpenings(unittest.TestCase):
         op.source = "opening_2024-12-31.tt"
         drafts, gaps = draft_purchases(book + [op], country="canada")
         self.assertEqual((drafts, gaps), ([], []))
+
+
+class TestOpeningCoversTransferIn(unittest.TestCase):
+    """A transfer-in on or before an OPENING snapshot of the security is
+    in the snapshot: covered, never booked at its book value too."""
+
+    def test_snapshot_after_the_arrival_covers_it(self):
+        from taxjson.bin.taxjson_convert_tt import parse_tt_line
+        from taxjson.lib.transfer_in import arrivals, mark_covered
+        rows = [("margin", "questrade", dict(
+            action="TRANSFER", symbol="GGG.TO", quantity=10,
+            date="2025-05-02", book_value=100)),
+                ("margin", "questrade", dict(
+            action="TRANSFER", symbol="HHH.TO", quantity=10,
+            date="2025-08-02", book_value=100))]
+        found = arrivals(rows)
+        mark_covered(found, {"margin": [
+            parse_tt_line("OPENING 2025-06-30 GGG.TO 10 CAD 100", "margin"),
+            parse_tt_line("OPENING 2025-06-30 HHH.TO 10 CAD 100", "margin")]})
+        # GGG arrived before the snapshot; HHH after it (a new arrival).
+        self.assertEqual({a.symbol: a.status for a in found},
+                         {"GGG.TO": "covered", "HHH.TO": "book_value"})

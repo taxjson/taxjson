@@ -1136,7 +1136,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                   file=sys.stderr)
     if results.get('manual_reporting_required'):
         n = len(results['manual_reporting_required'])
-        print(f"warning: {n} tainted disposition(s) with unknown cost (no "
+        print(f"warning: {n} disposition(s) with an unknown cost (no "
               f"purchase in your files) are EXCLUDED from the ledger (see "
               f"manual_reporting_required in the gains output) — their "
               f"years' nets are incomplete until resolved.", file=sys.stderr)

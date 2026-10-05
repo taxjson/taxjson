@@ -641,6 +641,11 @@ class BaseBrokerage:
     # Whether the label is a taxable account (taxjson-brokerage
     # --account-type); None when the caller did not say.
     account_taxable: Optional[bool] = None
+    # The caller keeps the TRANSFER rows aside and decides what an
+    # incoming one costs (`taxjson run`, lib/transfer_in: covered by a
+    # .tt line, the broker's stated book value, or no cost — one
+    # ATTENTION there): a parser's own transfer-in caveat stays quiet.
+    transfer_costs_checked_downstream: bool = False
 
     def law(self, canada: str, usa: str, neutral: str = "") -> str:
         """The wording for the project's country: `canada` / `usa`, or

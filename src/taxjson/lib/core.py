@@ -394,7 +394,7 @@ def _opening_option_buys(events, date_of):
         # An opening balance holds the contract but did not buy it in
         # any window (CA-OPEN-01 / US-OPEN-01).
         if (ev.action != 'BUYSELL' or ev.quantity <= 0
-                or is_opening_row(ev)):
+                or not_a_purchase(ev)):
             continue
         opening = ev.quantity - min(ev.quantity, max(0.0, -before))
         if opening > 1e-9:
@@ -570,7 +570,7 @@ def detect_right_replacement_matches(loss_entries, events, *, date_of,
     acqs = []
     for ev in events:
         if (ev.action != 'BUYSELL' or ev.quantity <= 0
-                or is_opening_row(ev)):
+                or not_a_purchase(ev)):
             continue
         und = right_underlying(ev.symbol)
         if und:
@@ -2154,6 +2154,26 @@ def is_opening_row(tx) -> bool:
     a = tx.get('action') if isinstance(tx, dict) else getattr(tx, 'action', '')
     return a == 'BUYSELL' and (t or '') == OPENING_TYPE
 
+# Shares that arrived by transfer from outside the books, booked at the
+# broker's stated book value on their ARRIVAL date (lib/transfer_in,
+# CA-ACB-TRANSFER-BV / US-BASIS-TRANSFER-BV). Held like any lot, but
+# never a purchase for the superficial-loss / wash-sale window: the
+# arrival is not when they were acquired.
+TRANSFER_BOOK_VALUE_TYPE = 'transfer_book_value'
+
+
+def not_a_purchase(tx) -> bool:
+    """Shares that are held but were not ACQUIRED on the row's date: an
+    opening balance (CA-OPEN-01 / US-OPEN-01) or a transfer-in booked at
+    the broker's book value on its arrival (CA-ACB-TRANSFER-BV /
+    US-BASIS-TRANSFER-BV). Never a superficial-loss / wash-sale
+    replacement nor a recent buy; they count as held. Dict or
+    TaxTransaction."""
+    t = tx.get('type') if isinstance(tx, dict) else getattr(tx, 'type', '')
+    a = tx.get('action') if isinstance(tx, dict) else getattr(tx, 'action', '')
+    return a == 'BUYSELL' and (t or '') in (OPENING_TYPE,
+                                             TRANSFER_BOOK_VALUE_TYPE)
+
 
 def is_stock_dividend(tx) -> bool:
     """A parser's stock-dividend row (a $0 BUYSELL of new shares)."""
@@ -3209,7 +3229,7 @@ class CanadaTaxRules(TaxRules):
                     if trace:
                         if symbol not in symbol_acb_traces:
                             symbol_acb_traces[symbol] = [f"# --- ACB CALCULATION TRACE: {symbol} ---"]
-                        symbol_acb_traces[symbol].append(f"# {tx.date} OPENING_BALANCE {qty:10.4f} | Missing history (bought before the data) — pool TAINTED until drain to zero")
+                        symbol_acb_traces[symbol].append(f"# {tx.date} OPENING_BALANCE {qty:10.4f} | Missing history (bought before the data) — cost UNKNOWN until the pool drains to zero")
                 else:
                     # Only an exact zero is skipped (audit R1-24 /
                     # R1-245): the 1e-6 share epsilon dropped every
@@ -3784,11 +3804,12 @@ class CanadaTaxRules(TaxRules):
                     # (synthetic), and the bookkeeping actions.
                     if t.action not in ('BUYSELL', 'ASSIGN'):
                         continue
-                    # An opening balance (a positions report's snapshot)
-                    # is not a purchase: never a replacement, never
-                    # "acquired in the window" — its shares still count
-                    # as held at day 30 through the balances (CA-OPEN-01).
-                    if is_opening_row(t):
+                    # A transfer-in at its book value (an arrival) and an
+                    # opening balance (a positions report's snapshot) are
+                    # not purchases: never a replacement, never "acquired
+                    # in the window" — their shares still count as held
+                    # at day 30 through the balances (CA-OPEN-01).
+                    if not_a_purchase(t):
                         continue
                     t_date = datetime.strptime(get_sort_date(t), '%Y-%m-%d')
                     if abs((t_date - loss_date).days) <= 30:
@@ -3855,7 +3876,7 @@ class CanadaTaxRules(TaxRules):
                     for t in all_txs:
                         if (t.id == tx.id or t.action != 'BUYSELL'
                                 or t.quantity <= 0
-                                or is_opening_row(t)
+                                or not_a_purchase(t)
                                 or parse_option_right(t.symbol) != 'C'):
                             continue
                         _und = _call_und(t.symbol)
@@ -5228,7 +5249,7 @@ class USATaxRules(TaxRules):
             # purchase in any window either (US-OPEN-01).
             if (ev.quantity > 0 and ev.action == 'BUYSELL'
                     and ((ev.type or '') in _LOT_EVENT_TYPES
-                         or is_opening_row(ev))):
+                         or not_a_purchase(ev))):
                 # Shares received in a §355 spin-off or a §356 exchange
                 # are not acquired "by purchase or by an exchange on which
                 # the entire amount of gain or loss was recognized"

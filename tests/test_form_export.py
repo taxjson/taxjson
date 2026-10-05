@@ -219,7 +219,7 @@ class TestCli(unittest.TestCase):
             with redirect_stdout(io.StringIO()), redirect_stderr(err):
                 rc = main([str(g), "--country", "usa", "--form", "8949"])
             self.assertEqual(rc, 0)
-            self.assertIn("tainted", err.getvalue())
+            self.assertIn("unknown cost", err.getvalue())
 
     def test_missing_file(self):
         with redirect_stderr(io.StringIO()):

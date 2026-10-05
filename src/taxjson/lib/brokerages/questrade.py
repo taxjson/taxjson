@@ -1556,7 +1556,8 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"."
                   f"{'' if taxable else ' (Account type unknown — ignore in a registered account.)'}",
                   file=sys.stderr)
-        if no_book_value and taxable is not False:
+        if (no_book_value and taxable is not False
+                and not self.transfer_costs_checked_downstream):
             # What actually happens (audit S063-00): a TAXABLE account's
             # TRANSFER rows are custody evidence kept OUT of the books,
             # so the shares never enter the pool and their later sale
@@ -2077,6 +2078,11 @@ class QuestradeBrokerage(BaseBrokerage):
             # Popped by parse_file (the no-book-value report).
             '_book_value': bool(m) or net > 0,
         }
+        if m:
+            # The broker's STATED book value: evidence the run may book
+            # as the incoming shares' cost (lib/transfer_in) — the Net
+            # Amount column never is.
+            tx['book_value'] = net
         if opt:
             tx['multiplier'] = mult
             tx['contract_size_basis'] = 'assumed'

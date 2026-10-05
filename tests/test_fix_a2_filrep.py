@@ -314,7 +314,7 @@ class TestManualRowsOnce(unittest.TestCase):
             rep = json.loads(out)
             self.assertEqual(len(rep["manual_reporting_required"]), 1)
             self.assertEqual(rep["manual_proceeds"], 148500.0)
-            self.assertIn("1 tainted", err)
+            self.assertIn("1 disposition(s) with an unknown cost", err)
 
 
 class TestRoundingNote(unittest.TestCase):

@@ -52,6 +52,13 @@
   run. A lot whose own date falls within 30 days of a loss is flagged
   for a manual check. `taxjson tax-logic` states the rules (CA-OPEN-01
   to 03, US-OPEN-01 to 03).
+- An opening balance and a transfer-in booked at the broker's book value
+  share one rule: shares held but not acquired on that date, never a
+  replacement or a recent buy (the wash radar, edge-cases and the
+  manual-check flags included). A transfer-in dated on or before an
+  opening snapshot of the security is covered by it, never booked at
+  its book value as well. The `inputs/<account>/README.txt` that `init`
+  writes points to `taxjson opening`.
 
 ### `taxjson sanity` compares costs
 
@@ -75,6 +82,58 @@
   description states its share count (`ON 500 SHS`) while the books
   held another number on its record date is listed — the usual sign of
   missing history.
+
+### Guidance for a first project (getting-started study)
+
+- **`taxjson run` ends with what to check next.** After `Done.` (and the
+  holdings check), a short list counts what the books show is still
+  incomplete: sales in the tax year with no purchase in your files that
+  `missing_history.json` does not cover, positions at a $0 cost (sold
+  this year or still held), shares transferred in from outside your
+  books with no cost, accounts with open positions and no holdings file,
+  and securities that paid you income the books do not hold. Each line
+  names the command that lists it, and the list points to the
+  getting-started guide. Nothing is printed when every count is zero;
+  the counts always go to `reports/run_summary.json`. A taxable account's
+  positions that go short are named on the console as the account is
+  built.
+- **`taxjson sum` warns about sales with no purchase** that
+  `missing_history.json` does not list, whatever the broker: their gain
+  is in no total. `--json` adds `no_purchase_uncovered`.
+- **"Tainted" is now "unknown cost"** in every message (sum, form-export,
+  carryover, t1135, ccd-sum, winners, leaps, reconcile-slips, the
+  traces). The JSON keys keep their names; `sum --json` adds
+  `unknown_cost_routed` / `unknown_cost_included` beside
+  `tainted_routed` / `tainted_included`.
+- **`find-missing-history` lists $0-cost shares still held** (HELD), not
+  only those already sold, and an entry of `missing_history.json` whose
+  purchase is now in the books (STALE: it does nothing; the run also
+  says so, in one ATTENTION line). In a US project a stock dividend's shares are
+  no longer listed as $0-cost: they share the old shares' basis.
+- **Transfers into a taxable account use the broker's stated book
+  value.** Shares that arrive from outside your books (a transfer-in that
+  no transfer-out of yours cancels) are booked at the book value the
+  broker prints on the row (Questrade, RBC), with an ATTENTION line
+  naming the broker; a transfer value that is a market value (IB) is
+  never used, and such shares are said to have no cost. A `.tt` purchase
+  of the security dated on or before the transfer covers it: the book
+  value is then not used and the line stops — the override, with nothing
+  to configure. A `missing_history.json` entry for the security covers
+  it too (your declared unknown cost is kept). US projects: the lot's holding period starts on the
+  arrival date (said in the line). The arrival is never the purchase
+  that makes a loss superficial or a wash sale. `taxjson transfers` has
+  an IN_BOOKS column for each transfer-in. Tax-logic
+  `CA-ACB-TRANSFER-BV` / `US-BASIS-TRANSFER-BV`.
+- **Messages.** The missing-time-zone refusal says to delete
+  `[accounts.crypto]` if you have no crypto; a holdings mismatch names
+  missing history as the likely cause on a first project; a failed stage
+  is described in words ("reading the broker files for account margin
+  (activity.csv)"), not as its command line; each `inputs/<account>/
+  README.txt` written by `init` lists which export to download from
+  each broker, and the positions reports to keep.
+- **A US scaffold fetches no exchange rates.** `source_currencies` is
+  left commented in a US project's `taxjson.toml`, with a note on when
+  to set it.
 
 ### Purchase drafts from the broker's cost (owner request)
 

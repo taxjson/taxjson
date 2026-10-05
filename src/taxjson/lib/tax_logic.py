@@ -716,6 +716,23 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-ACB-10",
                  "A transfer into a taxable account stops the run until "
                  "the original purchase is declared (.tt ACQUIRED line)."),
+            Rule("CA-ACB-TRANSFER-BV",
+                 "A broker's transfer rows in a taxable account are kept "
+                 "out of the books. Shares that arrive from outside your "
+                 "books (a transfer-in no transfer-out of yours cancels: "
+                 "the same security after ticker.map, the same quantity "
+                 "and closest date first, across your taxable accounts, "
+                 "or another listing's leg of a journal) take the book "
+                 "value the broker states on the row (Questrade, RBC) as "
+                 "their ACB on the arrival date, said as ATTENTION. A "
+                 "transfer VALUE that is a market value (IB) is never a "
+                 "cost: those shares stay out with no ACB, said as "
+                 "ATTENTION. A .tt purchase of the security in that "
+                 "account dated on or before the arrival, or a "
+                 "missing_history.json entry for it (CA-ACB-11), covers "
+                 "it instead (no book value, no ATTENTION). The arrival "
+                 "is not an acquisition for the superficial-loss "
+                 "window."),
             Rule("CA-ACB-11",
                  "Shares sold with no purchase in your files (bought "
                  "before the data starts) go in missing_history.json "
@@ -1726,6 +1743,25 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "but do not pair, or a move larger than the lots the "
                  "sender holds, are said ATTENTION (--strict stops); "
                  "those shares' sales are then reported by hand."),
+            Rule("US-BASIS-TRANSFER-BV",
+                 "A broker's transfer rows in a taxable account are kept "
+                 "out of the books. Shares that arrive from outside your "
+                 "books (a transfer-in no transfer-out of yours cancels: "
+                 "the same security after ticker.map, the same quantity "
+                 "and closest date first, across your taxable accounts, "
+                 "or another listing's leg of a journal) take the basis "
+                 "the broker states on the row (Questrade, RBC) as the "
+                 "carryover basis of one lot dated the arrival, said as "
+                 "ATTENTION: its holding period starts on the arrival "
+                 "date, not the original purchase (§1223 tacking is not "
+                 "applied), so enter the original lots with their "
+                 "purchase dates for long-term treatment. A transfer "
+                 "VALUE that is a market value (IB) is never a basis: "
+                 "those shares stay out with no basis, said as "
+                 "ATTENTION. A .tt purchase of the security in that "
+                 "account dated on or before the arrival, or a "
+                 "missing_history.json entry for it, covers it instead. "
+                 "The arrival is not a §1091 replacement."),
             Rule("US-DIST-01",
                  "[[distributions]] (taxjson.toml): a non-cash distribution "
                  "(a reinvested capital-gain distribution, a late return-of-capital "
