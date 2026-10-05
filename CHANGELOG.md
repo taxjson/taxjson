@@ -22,6 +22,60 @@
   listed with the other files as skipped, and never parsed as trades.
   `taxjson-detect-brokerage` prints `positions:rbc_holdings` for it.
 
+### Opening balances (owner request)
+
+- **`taxjson opening ACCOUNT FILE`** turns a broker's positions report
+  (one of the readers above) into an opening balance:
+  `inputs/<account>/opening_<date>.tt`, one `OPENING` line per long
+  position with its quantity and the report's book cost. A position the
+  report gives no cost for, a short position or a futures contract is
+  listed and left out; `--dry-run` prints the lines instead.
+- **An opening balance is not a purchase.** The new `.tt` action
+  `OPENING <date> <symbol> <qty> <currency> <total-cost> [<lot-date>]`
+  sets a position and its cost on the statement day, but it never
+  replaces a superficial loss or a wash sale and is never a recent buy
+  in the planning tools. A purchase line dated on the statement day
+  was one, and could deny a loss sold in the following 30 days. Old
+  hand-written opening lines keep working unchanged.
+- **The snapshot replaces the history before it.** The account's
+  trades, transfers, renames and cost adjustments of a snapshot symbol
+  dated on or before the snapshot day are left out of the books (with
+  an ATTENTION line), so a statement that overlaps the download never
+  counts a share twice; income rows stay. A left-out sale of the tax
+  year, two snapshot dates for one symbol, or an OPENING line in a
+  crypto account stops the run.
+- Canada: the lines join the pooled ACB, and a foreign-currency cost is
+  converted at the snapshot day's Bank of Canada rate (a broker's book
+  value in Canadian dollars is used as it is). United States: one line
+  per lot with its purchase date, which sets the holding period and the
+  FIFO order; a line without a date or with a non-dollar cost stops the
+  run. A lot whose own date falls within 30 days of a loss is flagged
+  for a manual check. `taxjson tax-logic` states the rules (CA-OPEN-01
+  to 03, US-OPEN-01 to 03).
+
+### `taxjson sanity` compares costs
+
+- **Reads the brokers' positions reports directly** — an IB Activity
+  Statement with Open Positions, an RBC Holdings Export — besides the
+  holdings TOML, in its arguments and in `holdings = [...]`. A report
+  dated before the books' last row is compared with the books'
+  positions on its date.
+- **Costs, with a reason.** After the quantities, the books' cost is
+  compared with the report's for every position that ties: Canada's
+  filing ACB (pooled across taxable accounts, superficial losses added)
+  against the broker's book value, or a foreign-currency cost against
+  the account's own native-currency books; US basis against the
+  broker's lot basis. Each difference gets a reason (superficial loss,
+  pooling across accounts, return of capital, the broker's currency
+  conversion, lot basis against average cost; US: wash-sale additions,
+  the broker's lot method) or "unexplained". Informational: the exit
+  code is still the quantity check's; `--cost-tolerance` sets the
+  margin and `--json` adds the rows.
+- **Income on shares the books do not hold.** A dividend row whose
+  description states its share count (`ON 500 SHS`) while the books
+  held another number on its record date is listed — the usual sign of
+  missing history.
+
 ### Broker detection reads the file, not its name (owner request)
 
 - **Content first, for every supported export.** `taxjson run` now

@@ -71,8 +71,7 @@ it, which may be years back.
 | Anything else | Any CSV | A column mapping: README, "Any other broker". |
 
 Also save, for each account, **two positions reports with book cost**
-(the broker may call it "Holdings", "Positions" or "Portfolio"; PDF or a
-screenshot is fine, you only need to read it):
+(the broker may call it "Holdings", "Positions" or "Portfolio"):
 
 1. **at the earliest date your activity download covers** (for example,
    the month-end statement just before it starts), and
@@ -80,6 +79,13 @@ screenshot is fine, you only need to read it):
 
 The first one is how you will fill in history the download is missing
 (step 5). The second is what you check the books against (step 6).
+
+taxjson reads two brokers' reports as they are: an **Interactive
+Brokers** Activity Statement in CSV (its Open Positions section; the
+same file `tjs run` reads) and **RBC Direct Investing**'s Holdings
+Export (CSV). For any other broker, a PDF or a screenshot is fine: you
+type its positions into a small file (step 5). Keep these reports out
+of `inputs/`, or leave them there: `tjs run` skips a positions report.
 
 ## 4. Run
 
@@ -165,9 +171,10 @@ SAMPG.US                 margin     CAD      -20.0000 2025-03-18            1   
 ```
 
 **2. Positions you still hold.** Nothing in the books can see these, so
-compare with the broker. Type today's positions report (step 3) into a
-small file, one `[[holding]]` per position, using the symbols `tjs list`
-shows:
+compare with the broker. An IB statement or an RBC Holdings Export
+(step 3) goes in as it is: `tjs sanity margin=statement.csv`. From any
+other broker, type today's positions report into a small file, one
+`[[holding]]` per position, using the symbols `tjs list` shows:
 
 ```toml
 # margin_positions.toml — the broker's positions on 2025-12-31
@@ -218,8 +225,9 @@ type     = "taxable"
 `tjs format --write` puts an edited `taxjson.toml` back into the layout
 `init` writes.
 
-`sanity` compares quantities only. It cannot tell you that a cost is
-wrong; that is what the book cost on the broker's report is for (5b).
+Add the book cost to each holding (`total_cost = 204.95`) and `sanity`
+also compares costs, once the quantities agree (5e). A broker's CSV
+report carries its cost already.
 
 **3. Shares that arrived by transfer.**
 
@@ -281,9 +289,9 @@ that works.
 Is the purchase in an older export you can still download?
 ├─ yes → (1) download it and drop it in inputs/<account>/
 └─ no
-   Do you have a statement from before the download starts
+   Do you have a positions report from before the download starts
    (quantity and book cost of each position)?
-   ├─ yes → (2) one opening line per position, from that statement
+   ├─ yes → (2) `tjs opening`: an opening balance from that report
    └─ no
       Do you have the trade confirmations?
       ├─ yes → (3) one line per purchase, from the confirmations
@@ -294,52 +302,106 @@ Is the purchase in an older export you can still download?
 trades, dividends and corporate actions. Add the files to the account's
 folder (keep the newer ones) and run again. Overlapping files are fine.
 
-**(2) An opening balance from a statement.** Write the positions you
-held on the day before your download starts into a `.tt` file in the
-account's folder, for example `inputs/margin/margin_start.tt`. One
-`BUYSELL` line per position, with the statement's quantity and book
-cost:
+**(2) An opening balance from a positions report.** Take the report
+from the day before your download starts (step 3). An IB statement or an
+RBC Holdings Export goes in as it is; from any other broker, type it
+into a small file with each position's book cost:
+
+```toml
+# margin_start.toml — the broker's positions on 2023-12-29
+[meta]
+as_of = "2023-12-29"
+
+[[holding]]
+symbol = "SAMPB.TO"
+quantity = 20
+currency = "CAD"
+total_cost = 204.95
+
+[[holding]]
+symbol = "SAMPC.TO"
+quantity = 10
+currency = "CAD"
+total_cost = 204.95
+
+[[holding]]
+symbol = "SAMPD.TO"
+quantity = 10
+currency = "CAD"
+total_cost = 504.95
+```
+
+```bash
+tjs opening margin margin_start.toml      # or: tjs opening margin statement.csv
+```
 
 ```
-# Opening balance from the December 2023 statement.
-#        date        time      symbol    qty  cur  price    total   fee
-BUYSELL  2023-12-29  09:30:00  SAMPB.TO  20   CAD  10.2475  204.95  0
-BUYSELL  2023-12-29  09:30:00  SAMPC.TO  10   CAD  20.4950  204.95  0
-BUYSELL  2023-12-29  09:30:00  SAMPD.TO  10   CAD  50.4950  504.95  0
+3 OPENING line(s) for account margin as of 2023-12-29 -> inputs/margin/opening_2023-12-29.tt
+Next: `taxjson run`, then `taxjson find-missing-history` and `taxjson sanity` (it compares quantities and costs).
 ```
 
-- `total` is the book cost; `price` is the book cost divided by the
-  quantity.
-- Use the symbol exactly as `tjs list` spells it (`.TO`, `.US`).
-- The date must be **before the first row of your download**.
-- **The date matters for losses.** The superficial-loss rule looks at
-  purchases 30 days around a loss. An opening line dated within 30 days
-  before a loss sale of the same stock counts as a purchase and can deny
-  that loss. If you know when you really bought, use that date. If not,
-  date the line at least 31 days before your first sale of that stock.
+The file it writes holds one line per position:
+
+```
+OPENING 2023-12-29 SAMPB.TO 20 CAD 204.95
+OPENING 2023-12-29 SAMPC.TO 10 CAD 204.95
+OPENING 2023-12-29 SAMPD.TO 10 CAD 504.95
+```
+
+- **An opening line is not a purchase.** The superficial-loss rule looks
+  at purchases 30 days around a loss; an opening balance is never one,
+  so a loss sold a few days after the statement is not denied because of
+  it. (A `BUYSELL` line dated on the statement day *would* be a
+  purchase. Old opening files written that way still work, but switch
+  to `OPENING` lines.)
+- The date is the report's own (`--date` when it has none). **The
+  opening replaces everything before it** for its stocks: rows of those
+  stocks in this account dated on or before that day are left out of
+  the books, so a statement that overlaps your download counts nothing
+  twice. `tjs run` says so in a `warning: ATTENTION: opening:` line.
+  Dividends stay.
+- Use a report from **before the tax year's first sale** of each stock:
+  a sale left out that way would drop out of the year's gains, so the
+  run stops instead.
+- The cost is the report's **book cost**, never its market value. A
+  position with no cost in the report, a short position (a written
+  option) or a futures contract is listed and skipped: write its line by
+  hand.
 - A broker's book cost is a good start, not always your ACB: it may not
   include a superficial loss, a return of capital, or the same stock in
-  another of your taxable accounts. Check the ones that matter.
+  another of your taxable accounts. `tjs sanity` compares the costs and
+  says which of these explains each difference (5e).
+- A cost in US dollars is converted at the Bank of Canada rate of the
+  report's day. A broker's book cost in Canadian dollars for a US stock
+  is used as the broker converted it.
 - **US projects:** one line **per lot**, each with its real purchase
-  date. The date decides short-term or long-term.
+  date, which decides short-term or long-term. A positions report rarely
+  lists lots: put one `[[holding]]` per lot in the file with
+  `acquired = "2019-06-03"`, or write the lines by hand:
+  `OPENING 2023-12-29 SAMPB.US 20 USD 204.95 2019-06-03`.
+- No report to read, only a PDF? Write the lines by hand, in the same
+  form: `OPENING <date> <symbol> <qty> <currency> <book cost>`, in any
+  `.tt` file of the account's folder.
 
 After `tjs run` the positions appear and the sale's cost is right:
 
 ```
-ACCOUNT   SYMBOL     QTY      COST   COST/SH   DEFERRED   SINCE
---------------------------------------------------------------------
-margin    SAMPB.TO    20    204.95     10.25          -   2023-12-29
-margin    SAMPC.TO    15    457.43     30.50          -   2023-12-29
-margin    SAMPD.TO    10    504.85     50.48      99.90   2023-12-29
+ACCOUNT   SYMBOL     QTY     COST   COST/SH   DEFERRED   SINCE
+-------------------------------------------------------------------
+margin    SAMPB.TO    20   204.95     10.25          -   2023-12-29
+margin    SAMPC.TO    15   457.43     30.50          -   2023-12-29
+margin    SAMPD.TO    10   504.85     50.48      99.90   2023-12-29
 ```
 
 (`SAMPD.TO` shows why partial history matters. The download held a buy at
 30.00 and a sale at 31.00 nine days later, which looked like a small gain.
 With the 10 shares held from before, the sale was really a loss, and a
-superficial one: denied, and added to the cost of the shares still held.)
+superficial one: denied, and added to the cost of the shares still held.
+The opening balance itself denied nothing.)
 
-**(3) Individual purchases from confirmations.** The same `.tt` file,
-one line per trade, with the real date and the net amount from the
+**(3) Individual purchases from confirmations.** A `.tt` file in the
+account's folder (for example `inputs/margin/margin_start.tt`), one line
+per trade, with the real date and the net amount from the
 confirmation:
 
 ```
@@ -441,12 +503,43 @@ tjs sanity                    # "OK: tickers and quantities agree"
 tjs list                      # no negative quantities, no surprise 0.00
 ```
 
+With a book cost on each holding, `sanity` then compares costs. The
+quantities agree, and one cost differs, with its reason:
+
+```
+OK: tickers and quantities agree in every group.
+
+COST — books vs the reports' cost: 3 compared, 2 within tolerance, 1 differ (informational: a broker's book value is not your ACB/basis; never changes the exit code).
+ACCOUNTS   SYMBOL     QTY   CUR   BROKER    BOOKS     DIFF   REASON
+-----------------------------------------------------------------------------
+margin     SAMPD.TO    10     -   404.95   504.85   +99.90   superficial-loss
+Reasons:
+  superficial-loss: the books' ACB carries denied superficial losses (s.53(1)(f)); a broker's book value does not
+```
+
+The broker does not add a denied superficial loss to its book cost; the
+books must. The other reasons `sanity` names: `pooled` (the same stock
+in another of your taxable accounts; your ACB averages them),
+`return-of-capital`, `broker-fx` (the broker converted a US stock's cost
+at its own rates), `lot-basis` (IB's cost is per lot; yours is an
+average), and `unexplained` — that one is a missing or mis-costed
+purchase, an opening line's cost, or the broker's own error, and is
+worth a look. A cost difference never changes the exit code.
+
+`sanity` also lists **income on shares the books do not hold**: a
+dividend whose description states its share count (`ON 500 SHS`, as RBC
+and Questrade write it) while the books held another number on its record
+date. It is the sign of a purchase still missing.
+
 ## 6. Check against the broker
 
 Before you file, update the positions file from step 5 with the broker's
-**year-end** positions and run `tjs sanity` again. Every difference is
-either a trade after your last export or something still missing. Once
-`holdings = [...]` is set, every run ends with the same check:
+**year-end** positions (or give `sanity` the year-end IB statement or
+RBC Holdings Export itself) and run `tjs sanity` again. A report dated
+before the books' last row is compared with the books' positions on its
+own date. Every difference is either a trade after your last export or
+something still missing. Once `holdings = [...]` is set (a `.toml` or a
+broker's report), every run ends with the same check:
 
 ```
 ==> holdings sanity (taxjson.toml `holdings`)
@@ -489,8 +582,9 @@ the open ones one at a time.
   broker's positions finds it. A dividend on a stock the books do not
   hold is a hint: `tjs divs-sum` lists dividends by stock.
 - **A wrong cost with the right quantity** (a transfer or opening line
-  with the wrong book cost). Compare `tjs list` with the broker's book
-  cost.
+  with the wrong book cost). `sanity` compares costs when the positions
+  report states them (5e); otherwise compare `tjs list` with the broker's
+  book cost.
 - **The wrong lot in a US sale.** With partial history, FIFO sells the
   oldest lot it can see, which may not be your oldest lot. The gain and
   the short/long-term split are then wrong with nothing negative to
