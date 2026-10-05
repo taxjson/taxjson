@@ -166,7 +166,8 @@ class TestFooting(unittest.TestCase):
             self.assertIn("PART 3, LINE 4 (LINES 13199/13200)", text)
             self.assertIn("PART 3, LINE 6 (LINES 15199/15300)", text)
             self.assertIn("PART 3, LINE 7 (LINES 15200/15301)", text)
-            self.assertIn("Line 15301 (gain/loss): -10,000.00", text)
+            self.assertIn("Line 15301 (gain/loss): -10,000.00",
+                          " ".join(text.split()))
             with out_csv.open() as fh:
                 rows = list(csv.DictReader(fh))
             by = {r["symbol"]: r for r in rows}

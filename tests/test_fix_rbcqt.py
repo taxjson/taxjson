@@ -824,7 +824,7 @@ class TestBrokerMarkedShorts(unittest.TestCase):
                  '--year', '2024', str(f)], capture_output=True, text=True,
                 env={**os.environ, 'PYTHONPATH': str(REPO / 'src')})
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn('Broker-marked short sales', r.stdout)
+        self.assertIn('BROKER-MARKED SHORT SALES', r.stdout)
         self.assertNotIn('AFFECTS 2024', r.stdout)
 
 

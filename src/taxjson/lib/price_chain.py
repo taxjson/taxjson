@@ -754,12 +754,15 @@ def fetch_prices(pairs: Dict[str, str], *,
         _save_cache(cache_path, cache)
 
     if remaining and offline:
-        raise SystemExit(
-            f"taxjson: TAXJSON_OFFLINE is set but current prices for "
-            f"{', '.join(sorted(remaining))} are not in the price cache "
-            f"({cache_path}) and would need IBKR / Yahoo Finance. Unset "
-            f"it to allow the lookup, or run once online to fill the "
-            f"cache.")
+        from taxjson.lib import out
+        out.fail(
+            f"TAXJSON_OFFLINE is set but current prices for "
+            f"{', '.join(sorted(remaining))} are not in the price cache",
+            prog="taxjson",
+            details=[f"They would need IBKR / Yahoo Finance; the cache is "
+                     f"{cache_path}.",
+                     "Unset TAXJSON_OFFLINE to allow the lookup, or run "
+                     "once online to fill the cache."])
     if remaining and verbose:
         print(f"price-chain: unpriced after all tiers: "
               f"{', '.join(sorted(remaining))}", file=sys.stderr)

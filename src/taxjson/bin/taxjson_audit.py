@@ -57,7 +57,7 @@ from taxjson.lib.country import (add_country_argument, canonical_country,
                                  refuse_foreign_flags)
 from taxjson.lib.pipeline import (GainsRequest, apply_roc_record_dates,
                                   engine_options, prepare_books)
-from taxjson.lib.trace_format import render_gain_block
+from taxjson.lib.trace_format import render_report_trace
 
 # Money agreement threshold for every cross-check in this tool: the
 # books are kept to the cent, so half a cent of float drift is the
@@ -563,13 +563,35 @@ _GUT = 13          # section-label gutter width
 
 
 def _sec(out, paint, label: str, first: str = ""):
-    """Start a section: cyan label in a fixed gutter, first line after."""
-    out.append(f"  {paint(label.ljust(_GUT), 'lbl')}{first}")
+    """Start a section: cyan label in a fixed gutter, first line after
+    (wrapped at the house width under the gutter, as _cont)."""
+    rest: List[str] = []
+    _cont(rest, first)
+    lead = f"  {' ' * _GUT}"
+    head = rest[0][len(lead):] if rest else ""
+    out.append(f"  {paint(label.ljust(_GUT), 'lbl')}{head}")
+    out.extend(rest[1:])
+
+
+_ANSI_WRAPPED = __import__("re").compile(
+    r"\A((?:\x1b\[[0-9;]*m)+)([^\x1b]*)\x1b\[0m\Z")
 
 
 def _cont(out, text: str):
-    """Continuation line inside the current section."""
-    out.append(f"  {' ' * _GUT}{text}")
+    """Continuation line inside the current section, wrapped at the
+    house width under the gutter (lib/out); a line painted as a whole is
+    wrapped and painted line by line."""
+    from taxjson.lib.out import wrap
+    lead = f"  {' ' * _GUT}"
+    m = _ANSI_WRAPPED.match(text)
+    if m:
+        for ln in wrap(m.group(2), None, lead, lead):
+            out.append(lead + m.group(1) + ln[len(lead):] + "\x1b[0m")
+        return
+    if "\x1b" in text:
+        out.append(lead + text)
+        return
+    out.extend(wrap(text, None, lead, lead))
 
 
 
@@ -598,8 +620,15 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
     # content hash; a Kraken row's id is the exchange's ledger txid — an
     # exchange reference, never an account number or wallet address —
     # so it is shown as is, unlike the parser's masked messages.
-    out.append(paint(head, "h")
-               + paint(f"   #{ev['id'][:12]}", "dim"))
+    from taxjson.lib.out import width as _width
+    _w = _width()
+    _hid = f"   #{ev['id'][:12]}"
+    if _w > 0 and len(head) + len(_hid) > _w:
+        # Too long for one line: the id (the handle --id takes) under it.
+        out.append(paint(head, "h"))
+        out.append(paint(f"  {_hid.strip()}", "dim"))
+    else:
+        out.append(paint(head, "h") + paint(_hid, "dim"))
     out.append(paint("\u2500" * W, "dim"))
 
     # ---- source ------------------------------------------------------
@@ -756,10 +785,8 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
                 f"s.53(1)(f))" if not _us else
                 f"{_fmt(perm)} denied loss PERMANENTLY lost (replacement "
                 f"in a sheltered account — Rev. Rul. 2008-5)")
-        import textwrap as _tw
         for dest in dests:
-            for _ln in _tw.wrap(dest, width=W - _GUT - 2):
-                _cont(out, paint(_ln, "dim"))
+            _cont(out, paint(dest, "dim"))
         money("allowed gain", float(ev.get("gain") or 0))
     else:
         money("gain", float(ev.get("gain") or 0))
@@ -781,24 +808,19 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
              f"disallowed {_fmt(tie['pipeline_disallowed'])}  "
              + (OK if tie["ties"] else BAD))
 
-    import textwrap as _tw2
+    from taxjson.lib.out import wrap as _wrap
     for w in ev.get("warnings") or []:
-        for _k, _ln in enumerate(_tw2.wrap(f"WARNING: {w}",
-                                           width=W - 2,
-                                           subsequent_indent="  ")):
-            out.append("  " + paint(_ln, "warn"))
+        for _ln in _wrap(f"warning: {w}", None, "  ", "    "):
+            out.append(paint(_ln, "warn"))
     for f in ev.get("failures") or []:
-        for _ln in _tw2.wrap(f"FAILED: {f}", width=W - 2,
-                             subsequent_indent="  "):
-            out.append("  " + paint(_ln, "bad"))
+        for _ln in _wrap(f"FAILED: {f}", None, "  ", "    "):
+            out.append(paint(_ln, "bad"))
 
     if show_trace and ev.get("trace"):
-        _sec(out, paint, "TRACE",
-             paint("engine pool history, base currency", "dim"))
-        for ln in render_gain_block({**ev, "trace": ev["trace"]},
-                                    align=True):
-            out.append(paint(ln, "dim") if ln.startswith("# =")
-                       else ln)
+        # The engine's pool history in the report layout (as `taxjson
+        # wash-sales --explain`), base currency; the trace files keep
+        # render_gain_block's '#' lines.
+        out += render_report_trace({**ev, "trace": ev["trace"]})
     return out
 
 
@@ -807,6 +829,7 @@ def render_reconciliation(events: List[Dict[str, Any]],
                           checks_supplied: bool,
                           use_color: bool = False,
                           country: Optional[str] = None) -> List[str]:
+    from taxjson.lib.out import wrap as _wrap
     W = 86
     paint = _mk_paint(use_color)
     OK = paint("\u2713", "ok")
@@ -855,19 +878,24 @@ def render_reconciliation(events: List[Dict[str, Any]],
                    f"MISMATCHED, {nocheck:,} not found  "
                    + mark(untied + nocheck,
                           untied == 0 and nocheck == 0))
+        # (The checklist reads the tie-out line and the unknown-cost
+        # count, each whole on its line: captured output is unwrapped.)
         if manual:
-            out.append(f"                     {manual:,} unknown-cost "
-                       f"disposition(s) tied to MANUAL REPORTING "
-                       f"REQUIRED — reported by hand, not in the total")
+            out.extend(_wrap(f"{manual:,} unknown-cost "
+                             f"disposition(s) tied to MANUAL REPORTING "
+                             f"REQUIRED — reported by hand, not in the "
+                             f"total", None, " " * 21, " " * 21))
         if outside:
-            out.append(f"                     {outside:,} outside the "
-                       f"saved books' tax year — not tied out (the "
-                       f"work/ gains files hold one year)")
+            out.extend(_wrap(f"{outside:,} outside the "
+                             f"saved books' tax year — not tied out (the "
+                             f"work/ gains files hold one year)", None,
+                             " " * 21, " " * 21))
     else:
         out.append("  pipeline tie-out   " + paint(
             "(no gains files supplied — engine re-run stands alone)",
             "dim"))
-    out.append(paint(f"  {totals_note(country)}", "dim"))
+    out.extend(paint(ln, "dim")
+               for ln in _wrap(totals_note(country), None, "  ", "  "))
     out.append(paint("\u2550" * W, "dim"))
     return out
 
@@ -1357,12 +1385,17 @@ def main(argv=None) -> int:
                                     use_color=use_color,
                                     country=country):
         print(ln)
+    from taxjson.lib.out import wrap as _wrap
     for f in reconciliation_failures:
-        print(f"FAILED: {f}")
+        for ln in _wrap(f"FAILED: {f}", None, "", "  "):
+            print(ln)
     if failed:
-        print("\ntaxjson-audit: CHECKS FAILED — see FAILED lines above. "
-              "The usual cause is stale work/ artifacts; re-run "
-              "`taxjson run` and audit again.", file=sys.stderr)
+        print(file=sys.stderr)
+        for ln in _wrap("taxjson-audit: CHECKS FAILED — see FAILED lines "
+                        "above. The usual cause is stale work/ artifacts; "
+                        "re-run `taxjson run` and audit again.", None, "",
+                        "  ", stream=sys.stderr):
+            print(ln, file=sys.stderr)
     return 1 if failed else 0
 
 

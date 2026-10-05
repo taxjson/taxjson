@@ -68,7 +68,7 @@ class TestWrongYearLock(unittest.TestCase):          # B2
             root = _project(td, year=2025, gains_year="2024")
             code, _o, _e = _call(R.cmd_close_year, dir=str(root),
                                  year=None, force=False)
-            self.assertIn("rebuild with `taxjson run` first", str(code))
+            self.assertIn("rebuild with `taxjson run` first", str(code).lower())
             self.assertIn("margin: 2024", str(code))
             self.assertFalse((root / "filed").exists())
 
@@ -361,7 +361,7 @@ class TestNoFalseCleanBeforeRun(unittest.TestCase):  # B22
         with tempfile.TemporaryDirectory() as td:
             r = _tj(self._root(td), "scan")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("run `taxjson run`", r.stderr)
+        self.assertIn("Run `taxjson run`", r.stderr)
         self.assertNotIn("clean scan", r.stdout)
 
     def test_leaps_without_books_exits_1(self):

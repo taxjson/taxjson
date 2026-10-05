@@ -314,17 +314,25 @@ def apply_jurisdiction(net_gain: float, country: str) -> Dict[str, Any]:
 
 
 def render_report(doc: Dict[str, Any], base: str, year: int,
-                  country: str, verdict: Dict[str, Any]) -> str:
+                  country: str, verdict: Dict[str, Any],
+                  width_: Optional[int] = None) -> str:
+    """The report in the house layout (docs/output-style.md), wrapped at
+    `width_` (default: the house width; 0 = never). Its LAST line is
+    what `taxjson checklist` shows for the fx-cash step: the CAVEAT
+    paragraph (or the no-activity line, or the unrated-events warning),
+    whole when unwrapped."""
+    from taxjson.lib import out
     from taxjson.lib.country import is_usa as _is_usa
-    from taxjson.lib.report_model import fmt_money, render_table
-    lines = [f"FX GAINS ON CASH — {base}, tax year {year}, "
-             f"{verdict['rule']}",
-             f"(ESTIMATE ONLY, not filing numbers — reconstructed "
-             f"from broker cash flows)",
-             f"Foreign cash is property: spending it realizes the FX "
-             f"move since acquisition.",
-             f"Ledger: taxable accounts' native books, pooled average "
-             f"cost.", ""]
+    from taxjson.lib.report_model import fmt_money
+    w = out.width() if width_ is None else width_
+    lines = out.wrap(f"FX GAINS ON CASH — {base}, tax year {year}, "
+                     f"{verdict['rule']}", w)
+    lines += out.wrap("ESTIMATE ONLY, not filing numbers — reconstructed "
+                      "from broker cash flows. Foreign cash is property: "
+                      "spending it realizes the FX move since "
+                      "acquisition. Ledger: taxable accounts' native "
+                      "books, pooled average cost.", w)
+    lines.append("")
     # Currencies with in-year activity only — a stale pool with no
     # movement this year is noise. Largest flow first.
     active = {c: s for c, s in doc["per_currency"].items()
@@ -339,9 +347,12 @@ def render_report(doc: Dict[str, Any], base: str, year: int,
                                key=lambda kv: -kv[1]["disposed"])]
     foot = [["NET", "", "", fmt_money(doc["net_gain"])],
             ["REPORTABLE", "", "", fmt_money(verdict["reportable"])]]
-    lines += render_table(["CUR", "ACQUIRED", "DISPOSED", "GAIN(LOSS)"],
-                          ["<", ">", ">", ">"], body, foot)
-    lines += ["", f"All amounts {base}. {verdict['note']}"]
+    lines += out.fit_table(["CUR", "ACQUIRED", "DISPOSED", "GAIN(LOSS)"],
+                           body, aligns=["<", ">", ">", ">"], foot=foot,
+                           width_=w)
+    lines.append("")
+    lines += out.wrap(f"All amounts {base}. {verdict['note']}", w)
+    # What to check, one paragraph each (continuation lines indented).
     warn: List[str] = []
     ye = doc.get("pools_year_end") or {}
     if ye:
@@ -354,7 +365,7 @@ def render_report(doc: Dict[str, Any], base: str, year: int,
     if doc["overdrafts"]:
         counts = ", ".join(f"{c} {n}" for c, n
                            in sorted(doc["overdrafts"].items()))
-        warn.append(f"WARNING: disposals exceeded the ledgered "
+        warn.append(f"warning: disposals exceeded the ledgered "
                     f"balance ({counts}; full history) — cash "
                     f"conversions/deposits the broker CSVs don't "
                     f"carry. The excess moves at the day's rate with "
@@ -371,13 +382,26 @@ def render_report(doc: Dict[str, Any], base: str, year: int,
     if doc["unrated"]:
         counts = ", ".join(f"{c} {n}" for c, n
                            in sorted(doc["unrated"].items()))
-        warn.append(f"WARNING: cash events skipped with no FX rate on "
+        warn.append(f"warning: cash events skipped with no FX rate on "
                     f"file ({counts}) — run `taxjson run` to refresh "
                     f"rates.")
-    if warn:
-        lines.append("")
-        lines += warn
+    lines.append("")
+    for t in warn:
+        lines += out.wrap(t, w, "", "  ")
     return "\n".join(lines)
+
+
+def render_events(events: List[Dict[str, Any]],
+                  width_: Optional[int] = None) -> List[str]:
+    """`fx-cash --events`: the ledger's cash events as a table."""
+    from taxjson.lib import out
+    return out.fit_table(
+        ["DATE", "ACCOUNT", "CUR", "UNITS", "RATE", "GAIN", "SYMBOL"],
+        [[e["date"], e["account"], e["currency"], f"{e['units']:,.2f}",
+          f"{e['rate']:g}", f"{e['gain']:+,.2f}", e["symbol"] or "-"]
+         for e in events],
+        aligns=["<", "<", "<", ">", ">", ">", "<"], width_=width_,
+        key=0)
 
 
 if __name__ == "__main__":                       # pragma: no cover

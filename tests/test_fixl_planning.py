@@ -216,7 +216,7 @@ class TestScopeDisclosure(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("s.251.1", r.stdout)
         self.assertIn("common-law partner", r.stdout)
-        self.assertNotIn("§1091", r.stdout.split("Definitions:")[1]
+        self.assertNotIn("§1091", r.stdout.split("DEFINITIONS")[1]
                          .split("Scope:")[1])
         j = json.loads(_run_radar(book, "2026-09-29").stdout)
         self.assertIn("s.251.1", j["scope_note"])

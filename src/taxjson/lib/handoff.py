@@ -1363,17 +1363,22 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
 
 
 def render(rep: Dict[str, Any], record_path: str) -> List[str]:
+    """The console report in the house style (docs/output-style.md): a
+    section per check — its findings as `- ` items, each with its why
+    indented under it — then the notes and a one-line verdict."""
+    from taxjson.lib.out import wrap
     y = rep["year"]
-    L = [f"HAND-OFF CHECK — {y} (closed) into {y + 1} (this project)",
-         f"record: {record_path}", ""]
+    L = [f"HAND-OFF CHECK — {y} (closed) into {y + 1} (this project)"]
+    L += wrap(f"Record: {record_path}")
+    L.append("")
 
     def sec(title, items, line):
-        L.append(f"== {title} ({len(items)})")
+        L.append(f"{title.upper()} ({len(items)})")
         if not items:
-            L.append("   OK.")
+            L.append("  OK.")
         for it in items:
-            L.append("   " + line(it))
-            L.append("      " + it["why"])
+            L.extend(wrap(line(it), None, "- ", "  "))
+            L.extend(wrap(it["why"], None, "    ", "    "))
         L.append("")
 
     if rep.get("partial"):
@@ -1408,8 +1413,9 @@ def render(rep: Dict[str, Any], record_path: str) -> List[str]:
                    + (f"   {y} record: {i['record']:,.2f}"
                       if isinstance(i['record'], (int, float)) else "")))
     for n in rep["notes"]:
-        L.append("note: " + n)
-    L.append("")
+        L.extend(wrap("note: " + n, None, "", "  "))
+    if rep["notes"]:
+        L.append("")
     L.append(f"{rep['problems']} problem(s)." if rep["problems"] else
              "Everything the closed year carried forward is here, once.")
     return L

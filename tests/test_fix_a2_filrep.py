@@ -403,7 +403,7 @@ class TestReturnFooters(unittest.TestCase):
                 g = _write(td2, "g.json", [e])
                 _rc, out, _err = _main([str(g), "--form", "schedule3",
                                         "--country", "canada"])
-                notes = out.split("Notes:")[1]
+                notes = out.split("NOTES")[1]
                 self.assertIn("affiliated-person", notes)
 
 

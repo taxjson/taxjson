@@ -216,9 +216,11 @@ def write_snapshot(root: Path, year, country: str, basis: str,
     sum of per-account cents (S031-20)."""
     path = snapshot_path(root, year)
     if path.exists() and not force:
-        sys.exit(f"taxjson close-year: {path} already exists — the "
-                 f"lock protects a filed year. Re-run with --force to "
-                 f"replace it (only if you re-filed/amended).")
+        from taxjson.lib.out import fail
+        fail(f"filed/{path.name} already exists — the lock protects a "
+             f"filed year", prog="taxjson close-year",
+             details=["Re-run with --force to replace it (only if you "
+                      "re-filed/amended)."])
     _money = ("realized", "disallowed", "income", "dividend", "pil",
               "proceeds", "st_gain", "lt_gain")
     src = raw if raw else accounts
@@ -255,8 +257,9 @@ def write_snapshot(root: Path, year, country: str, basis: str,
     except OSError as e:
         # filed/ is a file, or the project is read-only: one line, not a
         # traceback (S031-19). Nothing was written.
-        sys.exit(f"taxjson close-year: cannot write {path}: {e} — "
-                 f"nothing was written.")
+        from taxjson.lib.out import fail
+        fail(f"cannot write filed/{path.name}: {e}",
+             prog="taxjson close-year", details=["Nothing was written."])
     return path
 
 
@@ -441,8 +444,9 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
     present = [(a, cache / f"{a}_base.json") for a in accounts]
     for a, b in present:
         if not b.exists():
-            cli_diag.warn(PROG, f"{a}: no {b.name} in {cache} — cannot "
-                                f"recompute; run `taxjson run` first.")
+            cli_diag.warn(PROG, f"{a}: no work/{b.name} — cannot "
+                                f"recompute",
+                          details=["Run `taxjson run` first."])
             out[a] = None
     present = [(a, b) for a, b in present if b.exists()]
     if not present:
@@ -503,8 +507,9 @@ def recompute_year(cache: Path, account: str, year: int,
     Returns None (with a warning) when the base book is missing."""
     base = cache / f"{account}_base.json"
     if not base.exists():
-        cli_diag.warn(PROG, f"{account}: no {base.name} in {cache} — "
-                            f"cannot recompute; run `taxjson run` first.")
+        cli_diag.warn(PROG, f"{account}: no work/{base.name} — cannot "
+                            f"recompute",
+                      details=["Run `taxjson run` first."])
         return None
     # Canonical spelling: "Canada"/"CA" passed raw died in the engine's
     # argparse and disabled the drift guard (S031-24).

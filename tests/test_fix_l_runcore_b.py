@@ -356,8 +356,8 @@ class TestInstalmentInputs(unittest.TestCase):
             r = _run_cli(root, "instalments")
             self.assertEqual(r.returncode, 0, r.stderr)
             flat = " ".join(r.stdout.split())
-            self.assertIn("NOT MODELLED: CPP/EI payable on self-employment",
-                          flat)
+            self.assertIn("Not modelled - CPP/EI payable on "
+                          "self-employment", flat)
             self.assertIn("line 15300", flat)
             j = json.loads(_run_cli(root, "instalments", "--json").stdout)
             self.assertEqual(len(j["not_modelled"]), 2)
@@ -663,8 +663,9 @@ class TestViews(unittest.TestCase):
         r = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT,
                            capture_output=True, text=True,
                            stdin=subprocess.DEVNULL)
-        self.assertIn("USD 61,234.57 1.3579 +456.70 DLR.U.TO", r.stdout,
-                      r.stderr)
+        # (a table row now: compare its cells)
+        self.assertIn("USD 61,234.57 1.3579 +456.70 DLR.U.TO",
+                      " ".join(r.stdout.split()), r.stderr)
 
 
 class TestYearsAndLocks(unittest.TestCase):

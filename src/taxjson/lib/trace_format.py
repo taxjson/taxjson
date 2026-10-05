@@ -551,8 +551,9 @@ def render_summary_table(gains: List[Dict[str, Any]]) -> List[str]:
 # render_gain_block, for a reader at a terminal — no '#' comment column, prose
 # wrapped to the width, the pool history and the window as tables that fit
 # (a row too wide becomes a per-record block). `taxjson wash-sales
-# --explain` prints it; render_gain_block stays the layout of trace files
-# and `taxjson audit`.
+# --explain` prints it, and `taxjson audit` its trace sections
+# (render_report_trace); render_gain_block stays the layout of the trace
+# files.
 
 def _strip_hash(line: str) -> str:
     return line[1:] if line.startswith('#') else line
@@ -709,11 +710,26 @@ def render_report_block(g: Dict[str, Any], width_: Optional[int] = None,
             pairs.append(("days held", str(g['days_held'])))
     pairs.append(("id", (g.get('id') or '')[:16]))
     out = [head] + kv_lines(pairs, "  ", w)
+    return out + render_report_trace(g, w)
+
+
+def render_report_trace(g: Dict[str, Any],
+                        width_: Optional[int] = None) -> List[str]:
+    """The sections of render_report_block after its figures — the pool
+    history, the denial and the window — each opening with a blank line
+    and an indented sub-heading. `taxjson audit` prints them under its
+    own figures (render_gain_block's '#' lines stay the trace files').
+    [] when the gain carries no trace."""
+    from taxjson.lib.out import width
+    trace = list(g.get('trace') or [])
+    if not trace:
+        return []
+    w = width() if width_ is None else width_
     # Canada traces an ACB pool (its lines open with an 'ACB CALCULATION
     # TRACE' header); the US engine traces basis lots.
     acb = any('ACB CALCULATION TRACE' in l for l in trace)
-    out += ["", "  Pool history (ACB trace)" if acb
-            else "  Lot history (basis trace)"]
+    out = ["", "  Pool history (ACB trace)" if acb
+           else "  Lot history (basis trace)"]
     out += _trace_records(trace, w, "    ")
     wash = _report_wash_lines(g, w, "  ")
     if wash:

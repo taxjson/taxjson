@@ -440,8 +440,8 @@ class TestChannelsCommand(_Repos):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("(offline — showing what this clone already knows",
                       r.stdout)
-        self.assertIn("  stable   v0.2.0", r.stdout)
-        self.assertIn("this box v0.2.0", r.stdout)
+        self.assertIn("  stable:    v0.2.0", r.stdout)
+        self.assertIn("this box:  v0.2.0", r.stdout)
         self.assertIn("←stable", r.stdout)
         self.assertIn("5 older — taxjson channels all", r.stdout)
         # An unreachable remote is "offline" too, never an error.

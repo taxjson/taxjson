@@ -164,15 +164,16 @@ tjs find-missing-history
 ```
 
 ```
-## Truncated history - positions go short (missing a buy): 2 pair(s)
-   2 affect tax year 2025; 0 are in registered accounts; 0 do not.
+MISSING COST BASIS — tax year 2025
+
+TRUNCATED HISTORY — positions go short (missing a buy): 2 pair(s)
+2 affect tax year 2025; 0 are in registered accounts; 0 do not.
 
 AFFECTS 2025 - missing basis distorts this year's gain; fix before filing:
-------------------------------------------------------------------------------------------------
-Symbol                   Account    Cur     PeakShort FirstNeg      InYrSales   InYrProceeds Reg
-------------------------------------------------------------------------------------------------
-SAMPA.TO                 margin     CAD      -20.0000 2025-03-10            1         795.05
-SAMPK.TO                 margin     CAD      -10.0000 2025-05-12            1         115.05
+Symbol    Account  Cur  PeakShort  FirstNeg    InYrSales  InYrProceeds
+----------------------------------------------------------------------
+SAMPA.TO  margin   CAD   -20.0000  2025-03-10          1        795.05
+SAMPK.TO  margin   CAD   -10.0000  2025-05-12          1        115.05
 ```
 
 Every row marked **AFFECTS 2025** is a sale that is not in `tjs sum` yet.
@@ -187,8 +188,10 @@ The command ends with what to do next, in the order of 5b below. For an Interact
 Brokers sale, the row also prints IB's own cost for it:
 
 ```
-SAMPG.US                 margin     CAD      -20.0000 2025-03-18            1         714.87
-    broker says closing (IB code C): the sale closed a position bought before the data (IB Basis 301.00 USD) — add the missing purchase; it is not a short sale. `--write-purchases` drafts the line from IB's figure for you to review.
+SAMPG.US  margin   CAD   -20.0000  2025-03-18          1        714.87
+  broker says closing (IB code C): the sale closed a position bought before the data (IB Basis
+  301.00 USD) — add the missing purchase; it is not a short sale. `--write-purchases` drafts the
+  line from IB's figure for you to review.
 ```
 
 **2. Positions you still hold.** Nothing in the books can see these, so
@@ -215,16 +218,18 @@ tjs sanity margin=margin_positions.toml
 ```
 
 ```
-ACCOUNTS   SYMBOL     ISSUE                 TAXJSON   HOLDINGS   DIFF
----------------------------------------------------------------------
-margin     SAMPA.TO   MISSING_IN_HOLDINGS       -20          0    -20
-margin     SAMPB.TO   MISSING_IN_TAXJSON          0         20    -20
-margin     SAMPC.TO   QTY_MISMATCH                5         15    -10
-margin     SAMPD.TO   MISSING_IN_TAXJSON          0         10    -10
-margin     SAMPK.TO   QTY_MISMATCH              -10         30    -40
+ACCOUNTS  SYMBOL    ISSUE                TAXJSON  HOLDINGS  DIFF
+----------------------------------------------------------------
+margin    SAMPA.TO  MISSING_IN_HOLDINGS      -20         0   -20
+margin    SAMPB.TO  MISSING_IN_TAXJSON         0        20   -20
+margin    SAMPC.TO  QTY_MISMATCH               5        15   -10
+margin    SAMPD.TO  MISSING_IN_TAXJSON         0        10   -10
+margin    SAMPK.TO  QTY_MISMATCH             -10        30   -40
 
 5 discrepancy(ies).
-Fewer shares in taxjson than at the broker usually means missing history: purchases from before your download starts, or shares transferred in. See `taxjson find-missing-history`, `taxjson transfers` and docs/getting-started.md step 5. A trade after your last export is the other usual cause.
+Fewer shares in taxjson than at the broker usually means missing history: purchases from before your
+download starts, or shares transferred in. See `taxjson find-missing-history`, `taxjson transfers`
+and docs/getting-started.md step 5. A trade after your last export is the other usual cause.
 ```
 
 `SAMPA.TO` is the sale with no purchase from check 1, and `SAMPK.TO`

@@ -640,8 +640,10 @@ class TestRunNoteWording(unittest.TestCase):
                 {'transactions': [{'symbol': 'XEI.TO',
                                    'action': 'BUYSELL'}]}))
             r = _run_cli(root, 'scan')
+        # The rules are listed under the note, one item each.
         self.assertIn('(checked stock rows, option roots and rename '
-                      'chains): AAQ.US -> AAQ.TO', r.stdout)
+                      'chains)', r.stdout)
+        self.assertIn('\n- AAQ.US -> AAQ.TO\n', r.stdout)
 
     def test_us_estimate_assumptions_exclude_section_988(self):
         from taxjson.bin.taxjson_run import _print_tax_estimate
@@ -653,7 +655,7 @@ class TestRunNoteWording(unittest.TestCase):
                  'div_foreign': 0.0, 'pil': 0.0}, 'USD',
                 other_income=50000.0, other_losses=0.0, province=None)
         self.assertIn('interest income and the §988 result on foreign '
-                      'currency (`taxjson fx-cash`) not included.',
+                      'currency (`taxjson fx-cash`) not included',
                       ' '.join(out.getvalue().split()))
 
     def test_init_force_names_the_numbered_backup(self):

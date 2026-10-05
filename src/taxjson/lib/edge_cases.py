@@ -1041,136 +1041,145 @@ def _money(x: Optional[float]) -> str:
     return "-" if x is None else f"{x:,.2f}"
 
 
-def render_text(doc: Dict[str, Any], verbose: bool = False) -> List[str]:
+def render_text(doc: Dict[str, Any], verbose: bool = False,
+                width_: Optional[int] = None) -> List[str]:
+    """The report in the house layout (docs/output-style.md): a title,
+    one section per kind of edge — a short upper-case heading with its
+    count, the rule it turns on as a wrapped line, then a table that fits
+    the width with each row's why indented under it — and the counting
+    notes at the end."""
+    from taxjson.lib.out import Doc, fit_table, wrap
     y, basis = doc["year"], doc["basis"]
     usa = doc.get("country") == "usa"
     rule = "Wash-sale" if usa else "Superficial-loss"
-    L: List[str] = []
-    L.append(f"EDGE CASES — tax year {y}; date basis: {basis}"
-             f"{' (settlement date, CRA)' if basis == 'settle' and not usa else (' (settlement date)' if basis == 'settle' else ' (trade date)')}"
-             f"; futures: {doc['futures_settle']} date")
-    L.append("")
+    d = Doc(f"EDGE CASES — tax year {y}; date basis: {basis}"
+            f"{' (settlement date, CRA)' if basis == 'settle' and not usa else (' (settlement date)' if basis == 'settle' else ' (trade date)')}"
+            f"; futures: {doc['futures_settle']} date", width_=width_)
+    w = d.w
     yb = doc["year_boundary"]
 
-    def section(title: str, rows: List[Dict[str, Any]], line, empty: str):
-        L.append(f"== {title} ({len(rows)})")
+    def table(headers, rows, cells, details):
+        """Rows as a fitted table, each row's detail lines (wrapped,
+        indented) under it."""
+        body = [[str(c) for c in cells(r)] for r in rows]
+        lines = fit_table(headers, body, width_=w, indent="  ",
+                          per_record=False)
+        d.line("\n".join(lines[:2]))
+        for r, ln in zip(rows, lines[2:]):
+            d.line(ln)
+            for t in details(r):
+                for x in wrap(t, w, "    ", "      "
+                              if t.startswith("- ") else "    "):
+                    d.line(x)
+
+    def section(title, rows, headers, cells, empty="None.", note=None,
+                details=lambda r: [r["why"]] if r.get("why") else []):
+        d.section(f"{title.upper()} ({len(rows)})")
+        if note:
+            d.para(note, "  ")
         if not rows:
-            L.append(f"   {empty}")
-        for r in rows:
-            L.append("   " + line(r))
-            L.append("      " + r["why"]) if r.get("why") else None
-        L.append("")
+            d.para(empty, "  ")
+            return
+        table(headers, rows, cells, details)
 
     section("Trades that settle in a different year than they trade",
             yb["straddles"],
-            lambda r: (f"{r['account']:<8} {r['symbol']:<24} {r['qty']:>+12g}  "
-                       f"trade {r['trade_date']}  settle {r['settle_date']}  "
-                       f"-> {r['lands_in']}"),
-            "None.")
+            ["ACCOUNT", "SYMBOL", "QTY", "TRADE", "SETTLE", "LANDS IN"],
+            lambda r: (r["account"], r["symbol"], f"{r['qty']:+g}",
+                       r["trade_date"], r["settle_date"], r["lands_in"]))
     section("Dispositions in the last and first days of a year",
             yb["last_days"],
-            lambda r: (f"{r['account']:<8} {r['symbol']:<24} {r['qty']:>12g}  "
-                       f"{r['trade_date']} (settle {r['settle_date']})  gain "
-                       f"{_money(r['gain'])}  -> {r['lands_in']}"),
-            "None.")
+            ["ACCOUNT", "SYMBOL", "QTY", "TRADE", "SETTLE", "GAIN",
+             "LANDS IN"],
+            lambda r: (r["account"], r["symbol"], f"{r['qty']:g}",
+                       r["trade_date"], r["settle_date"], _money(r["gain"]),
+                       r["lands_in"]))
     if not usa:
-        L.append(f"== Written options across a year end ({len(yb['written_options'])})")
-        if not yb["written_options"]:
-            L.append("   None open across Dec 31.")
-        for r in yb["written_options"]:
-            L.append(f"   {r['account']:<8} {r['symbol']:<24} written {r['written']}  "
-                     f"premium {_money(r['premium'])}  closed {r['closed'] or 'open'}")
-            L.append(f"      {r['where']}")
-        L.append("")
+        section("Written options across a year end", yb["written_options"],
+                ["ACCOUNT", "SYMBOL", "WRITTEN", "PREMIUM", "CLOSED"],
+                lambda r: (r["account"], r["symbol"], r["written"],
+                           _money(r["premium"]), r["closed"] or "open"),
+                empty="None open across Dec 31.",
+                details=lambda r: [r["where"]] if r.get("where") else [])
     section("Options expiring at a year end", yb["option_expiries"],
-            lambda r: (f"{r['account']:<8} {r['symbol']:<24} held {r['held']:+g}"
-                       f"  expires {r['expiry']}  -> {r['lands_in']}"),
-            "None.")
+            ["ACCOUNT", "SYMBOL", "HELD", "EXPIRES", "LANDS IN"],
+            lambda r: (r["account"], r["symbol"], f"{r['held']:+g}",
+                       r["expiry"], r["lands_in"]))
     section(f"{rule} windows that span Dec 31", yb["loss_windows"],
-            lambda r: (f"{r['account']:<8} {r['symbol']:<24} loss "
-                       f"{_money(r['raw_loss'])} on {r['loss_date']}  denied "
-                       f"{_money(r['denied'])}"),
-            "None.")
+            ["ACCOUNT", "SYMBOL", "LOSS", "ON", "DENIED"],
+            lambda r: (r["account"], r["symbol"], _money(r["raw_loss"]),
+                       r["loss_date"], _money(r["denied"])))
     section(f"Denied losses carried in positions held at the end of {y}",
             yb["deferred_at_year_end"],
-            lambda r: (f"{r['account']:<8} {r['symbol']:<24} {r['qty']:>12g} "
-                       f"units  deferred {_money(r['deferred'])}"),
-            "None.")
+            ["ACCOUNT", "SYMBOL", "UNITS", "DEFERRED"],
+            lambda r: (r["account"], r["symbol"], f"{r['qty']:g}",
+                       _money(r["deferred"])))
     section("Income paid around New Year", yb["income"],
-            lambda r: (f"{r['account']:<8} {str(r['symbol']):<24} "
-                       f"{r['action']:<17} {r['date']}  {_money(r['amount'])}"
-                       f"  -> {r['lands_in']}"),
-            "None.")
+            ["ACCOUNT", "SYMBOL", "ACTION", "DATE", "AMOUNT", "LANDS IN"],
+            lambda r: (r["account"], str(r["symbol"]), r["action"],
+                       r["date"], _money(r["amount"]), r["lands_in"]))
     section("Crypto near midnight at a year end", yb["crypto_midnight"],
-            lambda r: (f"{r['account']:<8} {str(r['symbol']):<10} "
-                       f"{r['action']:<8} {r['local']}  {r['qty']:+g}"
-                       f"  -> {r['lands_in']}"),
-            "None.")
+            ["ACCOUNT", "SYMBOL", "ACTION", "LOCAL TIME", "QTY",
+             "LANDS IN"],
+            lambda r: (r["account"], str(r["symbol"]), r["action"],
+                       r["local"], f"{r['qty']:+g}", r["lands_in"]))
+
+    def loss_cells(r):
+        c = [r["account"], r["symbol"], _money(r["raw_loss"]),
+             r["loss_date"], f"{r['qty']:g}"]
+        return c + ([] if usa else [f"{r['held_at_day30']:g}"])
+    loss_headers = (["ACCOUNT", "SYMBOL", "LOSS", "ON", "UNITS"]
+                    + ([] if usa else ["HELD DAY 30"]))
+
+    def items(r):
+        # The verdict first, then each acquisition or sale near the edge.
+        return [f"verdict: {r['verdict']}"] + [f"- {it['why']}"
+                                                   for it in r["items"]]
 
     we = doc["window_edges"]
-    L.append(f"== {rule} window edges: {y} losses with activity "
-             f"within {doc['margin']} days of day 30 ({len(we)})")
-    if not we:
-        L.append("   None.")
-    for r in we:
-        L.append(f"   {r['account']:<8} {r['symbol']:<24} loss "
-                 f"{_money(r['raw_loss'])} on {r['loss_date']} "
-                 f"({r['qty']:g} units): {r['verdict']}"
-                 + ("" if usa else
-                    f"; held on day 30: {r['held_at_day30']:g}"))
-        for it in r["items"]:
-            L.append(f"      - {it['why']}")
-    L.append("")
+    section(f"{rule} window edges", we, loss_headers, loss_cells,
+            note=(f"{y} losses with activity within {doc['margin']} days "
+                  f"of day 30."), details=items)
     cw = doc.get("calls_in_windows") or []
-    if usa:
-        L.append(f"== Long calls bought inside a share loss's window "
-                 f"({len(cw)}): WARNING only — §1091 may treat a call as an "
-                 f"option to acquire the shares, but the US engine does "
-                 f"not deny the loss on it; check these by hand")
-    else:
-        L.append(f"== Long calls bought inside a share loss's window ({len(cw)}): "
-                 f"a call is a right to acquire the shares (s.54), so one still "
-                 f"held on day 30 is replacement property")
-    if not cw:
-        L.append("   None.")
-    for r in cw:
-        L.append(f"   {r['account']:<8} {r['symbol']:<24} loss "
-                 f"{_money(r['raw_loss'])} on {r['loss_date']} "
-                 f"({r['qty']:g} units): {r['verdict']}")
-        for it in r["items"]:
-            L.append(f"      - {it['why']}")
-    L.append("")
+    section("Long calls bought inside a share loss's window", cw,
+            loss_headers[:5],
+            lambda r: (r["account"], r["symbol"], _money(r["raw_loss"]),
+                       r["loss_date"], f"{r['qty']:g}"),
+            note=("A warning only: §1091 may treat a call as an option to "
+                  "acquire the shares, but the US engine does not deny the "
+                  "loss on it; check these by hand." if usa else
+                  "A call is a right to acquire the shares (s.54), so one "
+                  "still held on day 30 is replacement property."),
+            details=items)
     rl = doc.get("renamed_late") or []
-    L.append(f"== Trades in an old ticker after its rename ({len(rl)}): "
-             f"a separate security unless ticker.map folds them "
-             f"(`taxjson renames`)")
-    if not rl:
-        L.append("   None.")
-    for r in rl:
-        L.append(f"   {r['account']:<8} {str(r['symbol']):<24} "
-                 f"{r['qty']:>+12g}  {r['date']}  renamed to "
-                 f"{r['renamed_to']} on {r['rename_date']}: "
-                 f"{r['resolution']}")
-    L.append("")
+    section("Trades in an old ticker after its rename", rl,
+            ["ACCOUNT", "SYMBOL", "QTY", "DATE", "RENAMED TO", "ON"],
+            lambda r: (r["account"], str(r["symbol"]), f"{r['qty']:+g}",
+                       r["date"], r["renamed_to"], r["rename_date"]),
+            note=("A separate security unless ticker.map folds them "
+                  "(`taxjson renames`)."),
+            details=lambda r: [str(r["resolution"])])
+    d.section("HOW THE WINDOW IS COUNTED")
     if usa:
-        L.append("Window day counts are on TRADE dates, as the engine "
-                 "counts them whatever tax_date says (tax_date only "
-                 "decides the year). The window is the "
-                 "30 days before and after the loss (§1091): a purchase "
-                 "inside it in any account, IRAs included, makes the loss a "
-                 "wash sale whatever is sold later — there is no still-held "
-                 "test. Crypto is property, not a security: no wash-sale "
-                 "window.")
+        d.para("Window day counts are on TRADE dates, as the engine "
+               "counts them whatever tax_date says (tax_date only "
+               "decides the year). The window is the "
+               "30 days before and after the loss (§1091): a purchase "
+               "inside it in any account, IRAs included, makes the loss a "
+               "wash sale whatever is sold later — there is no still-held "
+               "test. Crypto is property, not a security: no wash-sale "
+               "window.", "  ")
     else:
-        L.append("Window day counts are on SETTLEMENT dates, as the engine "
-                 "counts them whatever tax_date says (tax_date only "
-                 "decides the year). The window is the 30 days "
-                 "before and after the loss, and the replacement must still be "
-                 "held at the end of day 30 (ITA s.54).")
+        d.para("Window day counts are on SETTLEMENT dates, as the engine "
+               "counts them whatever tax_date says (tax_date only "
+               "decides the year). The window is the 30 days "
+               "before and after the loss, and the replacement must still be "
+               "held at the end of day 30 (ITA s.54).", "  ")
+    d.blank()
     if doc.get("missing_books"):
-        L.append(f"No work files for: {', '.join(doc['missing_books'])} "
-                 f"(run `taxjson run`).")
-    L.append("Whether last year's closing positions, January settlements "
-             "and corrections are carried into this year exactly once: "
-             "`taxjson handoff`.")
-    return L
+        d.para(f"No work files for: {', '.join(doc['missing_books'])} "
+               f"(run `taxjson run`).")
+    d.para("Whether last year's closing positions, January settlements "
+           "and corrections are carried into this year exactly once: "
+           "`taxjson handoff`.")
+    return d.lines()
