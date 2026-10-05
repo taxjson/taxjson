@@ -1,0 +1,19 @@
+[settings]
+base_currency  = "USD"
+country        = "usa"
+local_timezone = "America/New_York"
+source_currencies = []
+tax_date       = "trade"
+year           = 2024
+
+[accounts.margin]
+type = "taxable"
+
+[accounts.roth]
+plan      = "roth"
+transfers = true
+type      = "sheltered"
+
+[accounts.crypto]
+crypto = true
+type   = "taxable"
