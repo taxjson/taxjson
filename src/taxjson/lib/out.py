@@ -444,7 +444,10 @@ def lint(text: str, width_: int = WIDTH,
     if lines and not lines[-1].strip():
         probs.append("trailing blank line")
     for i, ln in enumerate(lines, 1):
+        # A line that is one unbreakable word (a long path or URL) cannot
+        # wrap; it is not a style problem.
         if (len(ln) > width_ and not _looks_like_table_row(ln)
+                and len(ln.split()) > 1
                 and not any(a in ln for a in allow)):
             probs.append(f"line {i}: {len(ln)} columns: {ln[:60]}...")
         if i > 1 and not ln.strip() and not lines[i - 2].strip():

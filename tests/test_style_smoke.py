@@ -64,6 +64,15 @@ class TestConvertedCommands(unittest.TestCase):
                     "1 election pending: "))
 
 
+# ------------------------------------------------------------- lint
+class TestLintLongWord(unittest.TestCase):
+    def test_a_lone_unbreakable_word_is_not_a_problem(self):
+        from taxjson.lib import out
+        path = "/" + "x" * 130
+        self.assertEqual(out.lint("TITLE\n" + path + "\n"), [])
+        self.assertTrue(out.lint("TITLE\nsee " + path + "\n"))
+
+
 # ----------------------------------------------------- shared helpers
 class TestDie(_Width100):
     def test_die_is_an_error_headline_with_details(self):
