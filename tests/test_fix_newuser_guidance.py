@@ -183,6 +183,9 @@ class TestFirstRunLib(unittest.TestCase):
         found = income_without_position(rows, 2025)
         self.assertEqual([(h["symbol"], h["rows"]) for h in found],
                          [("NOT.TO", 1)])
+        # A holding declared in missing_history.json is not a surprise.
+        self.assertEqual(income_without_position(
+            rows, 2025, declared={("NOT.TO", "margin")}), [])
 
     def test_income_paid_just_after_a_sale_is_not_flagged(self):
         # Sold after the record date, paid after the sale: a late

@@ -138,7 +138,8 @@ def zero_cost_positions(txs: Sequence[TaxTransaction], year: Any, *,
 
 def income_without_position(txs: Sequence[TaxTransaction], year: Any, *,
                             skip_accounts: Iterable[str] = (),
-                            date_basis: str = "settle"
+                            date_basis: str = "settle",
+                            declared: Iterable[Tuple[str, str]] = ()
                             ) -> List[Dict[str, Any]]:
     """[{symbol, account, rows, first}] — the tax year's dividends (and
     payments in lieu) on a security the account's books did not hold on
@@ -146,8 +147,11 @@ def income_without_position(txs: Sequence[TaxTransaction], year: Any, *,
     is not in the files at all (nothing goes negative, so nothing else
     sees it). A payment in the first 60 days of the account's data is
     left out (shares sold just before the data starts are paid after
-    it), as are options and the given accounts (crypto staking)."""
+    it), as are options, the given accounts (crypto staking) and the
+    `declared` (SYMBOL, account) pairs — missing_history.json's, whose
+    holding the user has already declared."""
     skip = set(skip_accounts)
+    known = {(str(sy).upper(), str(a)) for sy, a in declared}
     ys = str(year) if year is not None else None
     grace = timedelta(days=_INCOME_GRACE_DAYS)
 
@@ -222,6 +226,8 @@ def income_without_position(txs: Sequence[TaxTransaction], year: Any, *,
             continue
         if not tx.symbol or is_option_symbol(tx.symbol):
             continue
+        if (str(tx.symbol).upper(), tx.account) in known:
+            continue
         amt = float(tx.gross_amount or 0.0) or float(tx.net_amount or 0.0)
         if amt <= 0:
             continue
@@ -292,7 +298,7 @@ def collect(root: Path, cfg: Dict[str, Any], *,
     zero_sold, zero_held = zero_cost_positions(
         txs, year, sheltered=sheltered, country=country, date_basis=basis)
     income = income_without_position(txs, year, skip_accounts=crypto,
-                                     date_basis=basis)
+                                     date_basis=basis, declared=covered)
     no_cost = [a for a in arrivals if getattr(a, "status", "") == "no_cost"]
     booked = [a for a in arrivals
               if getattr(a, "status", "") == "book_value"]
