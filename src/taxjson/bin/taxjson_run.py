@@ -13768,11 +13768,16 @@ def cmd_opening(args: argparse.Namespace) -> None:
         if out.exists() and not args.force:
             _die(f"taxjson opening: inputs/{name}/{out.name} exists — "
                  f"pass --force to replace it (the old file is kept as "
-                 f"{out.name}.bak).")
+                 f"{out.name}.bak, or the next free .bakN).")
         acct_dir.mkdir(parents=True, exist_ok=True)
-        if out.exists():
-            import shutil
-            shutil.copy2(out, out.with_name(out.name + ".bak"))
+        if out.is_file():
+            # The next free .bak/.bakN, never through a link planted at
+            # the name, never over an earlier backup (security review
+            # M1).
+            from taxjson.lib.safe_write import backup_copy
+            bak = backup_copy(out)
+            print(f"taxjson opening: kept the previous {out.name} as "
+                  f"{bak.name}", file=sys.stderr)
         from taxjson.lib.cli_diag import write_text_atomic
         write_text_atomic(out, text)
     for n in report.notes + notes:
@@ -18055,12 +18060,13 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
                           file=sys.stderr)
 
         rows = list(merged.values())
-        from taxjson.lib.safe_write import write_atomic
+        from taxjson.lib.safe_write import backup_copy, write_atomic
         try:
             if out.is_file() and not out.is_symlink():
-                # (a fresh .bak: never written through a symlink there)
-                _bak = out.with_name(out.name + ".bak")
-                write_atomic(_bak, out.read_bytes())
+                # The next free .bak/.bakN: an earlier backup is never
+                # overwritten, a symlink there never written through
+                # (security review M1).
+                _bak = backup_copy(out)
                 print(f"  kept the previous {out.name} as {_bak.name}",
                       file=sys.stderr)
             write_atomic(out, json.dumps(rows, indent=2) + "\n")
@@ -18206,22 +18212,10 @@ def _backup_config(cfg: Path) -> str:
     replaced the only copy of the user's config with the first template
     (R1-255) — the next free taxjson.toml.bakN is used instead, the same
     numbering as fetch's .bak files; an identical existing backup is
-    reused."""
-    bak_name = "taxjson.toml.bak"
-    bak = cfg.with_name(bak_name)
-    n = 1
-    # lexists: a dangling symlink at a .bak name is taken, never
-    # written through (security review M1).
-    from os.path import lexists
-    while lexists(bak) and not (
-            bak.is_file() and not bak.is_symlink()
-            and bak.read_bytes() == cfg.read_bytes()):
-        bak = cfg.with_name(f"{bak_name}{n}")
-        n += 1
-    if not lexists(bak):
-        from taxjson.lib.safe_write import write_atomic
-        write_atomic(bak, cfg.read_bytes(), keep_mode=False)
-    return bak.name
+    reused; a symlink at a .bak name is never written through
+    (lib/safe_write.backup_copy, security review M1)."""
+    from taxjson.lib.safe_write import backup_copy
+    return backup_copy(cfg).name
 
 
 def cmd_format(args: argparse.Namespace) -> None:
@@ -19688,7 +19682,8 @@ def _build_parser(prog: str = "taxjson"
                        help="With --write-missing-history or "
                             "--write-purchases, replace an existing FILE "
                             "(a reviewed file is otherwise refused; the "
-                            "old file is kept as FILE.bak)")
+                            "old file is kept as FILE.bak, or the next "
+                            "free .bakN)")
     p_fmh.set_defaults(func=cmd_find_missing_history)
 
     p_open = sub.add_parser(
@@ -19713,7 +19708,7 @@ def _build_parser(prog: str = "taxjson"
                         help="Print the lines instead of writing the file")
     p_open.add_argument("--force", action="store_true",
                         help="Replace an existing opening_DATE.tt (kept "
-                             "as .bak)")
+                             "as .bak, or the next free .bakN)")
     p_open.set_defaults(func=cmd_opening)
 
     p_fees = sub.add_parser(

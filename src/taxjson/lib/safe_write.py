@@ -147,3 +147,27 @@ def link_outside(path: Union[str, Path],
     except (OSError, RuntimeError, ValueError):
         return target
     return None
+
+
+def backup_copy(path: Union[str, Path]) -> Path:
+    """Keep the current contents of `path` beside it before it is
+    replaced, and return the backup's path: `<name>.bak`, or the next
+    free `<name>.bakN` — an earlier backup is never overwritten (a second
+    --force used to replace the only copy of the first version), and an
+    identical regular backup is reused. An entry at a .bak name that is
+    not a regular file (a symlink, dangling or not) is taken, never
+    written through; the copy is written fresh, owner-only, via
+    write_atomic (pre-release security review M1)."""
+    path = Path(path)
+    data = path.read_bytes()
+    base = path.name + ".bak"
+    bak = path.with_name(base)
+    n = 1
+    while os.path.lexists(str(bak)) and not (
+            bak.is_file() and not bak.is_symlink()
+            and bak.read_bytes() == data):
+        bak = path.with_name(f"{base}{n}")
+        n += 1
+    if not os.path.lexists(str(bak)):
+        write_atomic(bak, data, keep_mode=False)
+    return bak

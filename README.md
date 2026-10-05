@@ -1907,7 +1907,8 @@ written. Review it, then rename it to end in `.tt`:
 - Sheltered accounts, futures, real shorts and sales with no broker figure
   are not drafted; the file's last lines list them.
 - An existing draft is never overwritten (it may hold your edits) unless
-  you pass `--force`, which keeps the old one as `.bak`. By default only
+  you pass `--force`, which keeps the old one as `.bak` (or the next free
+  `.bakN`: an earlier backup is never overwritten). By default only
   positions with a sale in the tax year are drafted, each with every one
   of its sales (transfer-ins whatever their year); `--all-history` drafts
   them all.
@@ -2128,7 +2129,7 @@ it emits only rows affecting the tax year; add `--all-history` for every
 candidate. Without a FILE it writes `missing_history.json` at the project
 root. It never overwrites an existing file (a reviewed `missing_history.json`
 keeps your prunes and hand-added pairs): write to a new file and merge, or pass `--force` (the old
-file is kept as `<file>.bak`). A same-day Norbert's-gambit pair folded by a
+file is kept as `<file>.bak`, or the next free `<file>.bakN`). A same-day Norbert's-gambit pair folded by a
 ticker.map `JOURNAL` line is not offered as a candidate.
 
 `taxjson run` (and t1135, wash-radar, option-boundary) still applies an entry

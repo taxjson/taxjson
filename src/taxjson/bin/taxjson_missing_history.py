@@ -241,7 +241,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
     US-BASIS-08) into a file the run does not read."""
     from taxjson.lib.missing_history import (draft_purchases,
                                               format_purchase_drafts)
-    from taxjson.lib.safe_write import write_atomic
+    from taxjson.lib.safe_write import backup_copy, write_atomic
     country = country or args.country
     if not country:
         print("taxjson-missing-history: error: --write-purchases needs the "
@@ -324,6 +324,23 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
               f"{args.files[0]} — pass --write-purchases FILE.",
               file=sys.stderr)
         return 2
+    if explicit is None:
+        # The account name becomes a folder name: one read from the
+        # books ("../x") would write outside the project, so it must be
+        # a valid name AND one of the project's accounts (security
+        # review L5).
+        from taxjson.lib.config_check import ACCOUNT_NAME_RE
+        from taxjson.lib.missing_history import _project_doc_near
+        configured = _project_doc_near(args.files[0]).get("accounts") or {}
+        for a in drafting:
+            if not ACCOUNT_NAME_RE.fullmatch(a) or a not in configured:
+                print(f"taxjson-missing-history: error: the books name "
+                      f"account {ascii(a)}, which is not an account in "
+                      f"taxjson.toml (have: "
+                      f"{', '.join(sorted(configured)) or '-'}) — not "
+                      f"written; rebuild the books with `taxjson run`, "
+                      f"or pass --write-purchases FILE.", file=sys.stderr)
+                return 2
     targets = {a: (explicit if explicit is not None
                    else root / "inputs" / a / DRAFT_NAME)
                for a in drafting}
@@ -333,7 +350,8 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
                   f"— not overwritten (it may hold your edits). Rename "
                   f"what you reviewed to .tt first, or pass --force to "
                   f"replace it (the old file is kept as "
-                  f"{out.name}.bak).", file=sys.stderr)
+                  f"{out.name}.bak, or the next free .bakN).",
+                  file=sys.stderr)
             return 1
         if out.suffix.lower() in (".tt", ".csv"):
             print(f"taxjson-missing-history: error: {out.name}: a draft "
@@ -348,10 +366,12 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
             if out.is_file() and not out.is_symlink():
-                write_atomic(out.with_name(out.name + ".bak"),
-                             out.read_bytes())
+                # The next free .bak/.bakN: an earlier backup is never
+                # overwritten, a link at the name never written through
+                # (security review M1/L5).
+                bak = backup_copy(out)
                 print(f"  kept the previous {out.name} as "
-                      f"{out.name}.bak", file=sys.stderr)
+                      f"{bak.name}", file=sys.stderr)
             write_atomic(out, text)
         except OSError as e:
             print(f"taxjson-missing-history: error: cannot write {out}: "
@@ -443,7 +463,8 @@ def main(argv=None):
                          "not only those with a sale in --year")
     ap.add_argument("--force", action="store_true",
                     help="with --write-purchases: replace an existing "
-                         "draft (kept as <file>.bak)")
+                         "draft (kept as <file>.bak, or the next free "
+                         "<file>.bakN)")
     ap.add_argument("--country", choices=("canada", "usa"),
                     help="with --write-purchases outside a project: the "
                          "country whose rules the draft's notes follow "
