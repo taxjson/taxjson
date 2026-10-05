@@ -1564,8 +1564,8 @@ def synthesize_openings(
 #
 # A broker sometimes states the cost of what a sale with no purchase in
 # the files closed: IB's Trades `Basis` on a sale coded C (closing), with
-# the lots it closed when the statement lists Closed Lots; Questrade's
-# "TRANSFER BOOK VALUE" on a transfer-in. That figure is EVIDENCE: the
+# the lots it closed when the statement lists Closed Lots; the
+# "TRANSFER BOOK VALUE" a Questrade or RBC transfer-in states. That figure is EVIDENCE: the
 # run never books it. These helpers draft `.tt` purchase lines from it
 # into a file the run does not read (DRAFT_NAME, suffix .tt.txt); the
 # user reviews each line, fills in what the broker does not say, and
@@ -1582,9 +1582,10 @@ DRAFT_NAME = "purchases_draft.tt.txt"
 DATE_PLACEHOLDER = "YYYY-MM-DD"
 COST_PLACEHOLDER = "COST"
 _DRAFT_TIME = "09:30:00"
-# Questrade's transfer-in wording (lib/brokerages/questrade.py reads the
-# same figure as the row's net amount): the dealer's book value of what
-# was delivered, stated on the row.
+# A transfer-in row that states the delivering dealer's book value of
+# what was delivered: Questrade's "... TRANSFER BOOK VALUE <amount>"
+# (lib/brokerages/questrade.py reads it as the row's net amount), RBC's
+# "... ACCOUNT TRANSFER BOOK VALUE <amount> FROM ACCOUNT ...".
 _TRANSFER_BOOK_VALUE_RE = re.compile(
     r'TRANSFER\s+BOOK\s+VALUE\s+([\d,]+(?:\.\d+)?)', re.IGNORECASE)
 # A move between two of the user's own accounts posts its two legs a few
@@ -1758,6 +1759,7 @@ def draft_purchases(
     listed_pairs: Optional[Set[Tuple[str, str]]] = None,
     rename_sources: Optional[Dict[str, List[str]]] = None,
     accounts: Optional[Set[str]] = None,
+    symbol_key=None,
 ) -> Tuple[List[PurchaseDraft], List[DraftGap]]:
     """Draft `.tt` purchase lines from the broker's own cost evidence.
 
@@ -1770,7 +1772,7 @@ def draft_purchases(
        row (when they add up), else a COST_PLACEHOLDER with the
        arithmetic in the comment.
     2. A transfer-in that states the delivering broker's book value
-       (Questrade's "TRANSFER BOOK VALUE"; `transfer_rows` are the
+       (Questrade's or RBC's "TRANSFER BOOK VALUE"; `transfer_rows` are the
        transfer sidecars' rows, the run leaves them out of a taxable
        account's books): one line with the date placeholder — the
        transfer date is not the purchase date.
@@ -1783,7 +1785,10 @@ def draft_purchases(
     the purchase date (a split in the data after it is undone). Returns
     (drafts, gaps); gaps are the sales and transfer-ins left undrafted,
     with the reason. `accounts`: draft only these (every account's rows
-    still count for the Canadian cross-account check)."""
+    still count for the Canadian cross-account check). `symbol_key`: a
+    transfer row's symbol as the books spell it (ticker.map's renames —
+    the sidecars keep the broker's spelling, which the draft line
+    uses); identity by default."""
     from taxjson.lib.country import canonical_country, is_canada
     country = canonical_country(country)
     year_str = str(year) if year is not None else None
@@ -1933,12 +1938,12 @@ def draft_purchases(
         [r for r in transfer_rows
          if accounts is None or float(r.get('quantity') or 0) < 0
          or r.get('account') in accounts],
-        state, country, registered_accounts)
+        state, country, registered_accounts, symbol_key or (lambda x: x))
     # A sale whose units a drafted transfer-in delivered is fixed by
     # that line: not listed as undrafted.
     delivered: Dict[Tuple[str, str], float] = {}
     for dr in t_drafts:
-        k = (dr.symbol, dr.account)
+        k = ((symbol_key or (lambda x: x))(dr.symbol), dr.account)
         delivered[k] = delivered.get(k, 0.0) + dr.quantity
     kept: List[DraftGap] = []
     for g in gaps:
@@ -1993,9 +1998,21 @@ def _draft_sale(sale: Dict[str, Any], symbol: str, account: str,
             lot_note = ("IB's Closed Lots dated before your data do not "
                         "add up to the units missing — not used")
             lots = None
+    # The line goes under the broker's own spelling when ticker.map
+    # renames it into the books' symbol (the run maps the .tt line the
+    # same way; the holdings hand-off keys on the broker's listing —
+    # S049-01): the rename source whose root is IB's raw symbol.
     rename_note = ''
+    line_symbol = symbol
     srcs = rename_sources.get(symbol) or []
-    if srcs:
+    raw = str(getattr(tx, 'description', '') or '').strip().upper() \
+        .replace(' ', '.')
+    mine = [x for x in srcs if x.upper().rsplit('.', 1)[0] == raw]
+    if len(mine) == 1:
+        line_symbol = mine[0]
+        rename_note = (f"{line_symbol} is the broker's symbol: ticker.map "
+                       f"maps it to {symbol}, as it maps the sale.")
+    elif srcs:
         rename_note = (f"check: ticker.map renames {', '.join(srcs)} to "
                        f"{symbol} — enter the purchase under the "
                        f"broker's symbol and currency, as the account "
@@ -2016,7 +2033,7 @@ def _draft_sale(sale: Dict[str, Any], symbol: str, account: str,
             if rename_note:
                 comments.append(rename_note)
             out.append(PurchaseDraft(
-                account=account, symbol=old or symbol,
+                account=account, symbol=old or line_symbol,
                 quantity=lq / factor, currency=cur, cost=lc,
                 date=lot_date, multiplier=mult, source='ib-lot',
                 sale_date=sale_date, comments=tuple(comments)))
@@ -2050,7 +2067,7 @@ def _draft_sale(sale: Dict[str, Any], symbol: str, account: str,
     if rename_note:
         comments.append(rename_note)
     out.append(PurchaseDraft(
-        account=account, symbol=old or symbol, quantity=u / factor,
+        account=account, symbol=old or line_symbol, quantity=u / factor,
         currency=cur, cost=cost, date=None, multiplier=mult,
         source='ib-basis', sale_date=sale_date, comments=tuple(comments),
         warn=warn))
@@ -2059,7 +2076,7 @@ def _draft_sale(sale: Dict[str, Any], symbol: str, account: str,
 
 def _draft_transfers(rows: List[Dict[str, Any]],
                      state: Dict[Tuple[str, str], Dict[str, Any]],
-                     country: str, registered_accounts
+                     country: str, registered_accounts, key
                      ) -> Tuple[List[PurchaseDraft], List[DraftGap]]:
     """Drafts from transfer-ins that state the delivering broker's book
     value (rows of the transfer sidecars)."""
@@ -2098,13 +2115,14 @@ def _draft_transfers(rows: List[Dict[str, Any]],
                           f"purchase")
             gaps.append(gap)
             continue
-        if tt_left.get((symbol, account), 0.0) >= q - 1e-9:
-            tt_left[(symbol, account)] -= q
+        book_key = (key(symbol), account)
+        if tt_left.get(book_key, 0.0) >= q - 1e-9:
+            tt_left[book_key] -= q
             gap.reason = "your .tt purchase lines already cover it"
             gaps.append(gap)
             continue
-        if bv_left.get((symbol, account), 0.0) >= q - 1e-9:
-            bv_left[(symbol, account)] -= q
+        if bv_left.get(book_key, 0.0) >= q - 1e-9:
+            bv_left[book_key] -= q
             gap.reason = ("the run already books it at the stated book "
                           "value")
             gaps.append(gap)

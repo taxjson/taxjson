@@ -7,7 +7,7 @@
 - **`taxjson find-missing-history --write-purchases [FILE]`** drafts
   `.tt` purchase lines from the broker's own cost evidence: IB's `Basis`
   on a sale it codes closing with no purchase in your files, and a
-  Questrade transfer-in's stated book value. The draft goes to
+  book value a Questrade or RBC transfer-in states. The draft goes to
   `inputs/<account>/purchases_draft.tt.txt`, which the run does not read;
   each line sits under notes naming its source row (ids masked), the
   broker's figure and what to check. You review it and rename it to

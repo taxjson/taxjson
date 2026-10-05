@@ -354,8 +354,8 @@ README, "Importing manual cost basis".
 
 **Let the broker's figure draft the lines.** When the broker states what
 a sale with no purchase cost (IB's `Basis` on a sale coded closing), or
-what a transfer-in was worth on its books (Questrade's `TRANSFER BOOK
-VALUE`), taxjson can write the lines for you to check:
+what a transfer-in was worth on its books (`TRANSFER BOOK VALUE` on a
+Questrade or RBC transfer), taxjson can write the lines for you to check:
 
 ```bash
 tjs find-missing-history --write-purchases
@@ -432,8 +432,8 @@ BUYSELL  2021-03-15  09:30:00  SAMPJ.TO  20  CAD  30.00  600.00  0
   cost.
 - Questrade's printed book value is not used by taxjson as a cost; you
   still add the line. `tjs find-missing-history --write-purchases` drafts
-  it from the book value, with the purchase date left for you to fill in
-  (see (3) above). A Questrade transfer with no book value keeps
+  it from the book value (an RBC row's too, when its description states
+  one), with the purchase date left for you to fill in (see (3) above). A Questrade transfer with no book value keeps
   printing its `ATTENTION` line after you add it; `find-missing-history`
   and `sanity` are the check that it is fixed.
 - If you held the same stock at both brokers, both purchases go into one

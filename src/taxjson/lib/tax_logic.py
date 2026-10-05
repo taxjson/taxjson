@@ -728,8 +728,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-ACB-15",
                  "A broker's own figure for such shares — IB's Basis on a "
                  "sale it codes closing, with its Closed Lots when the "
-                 "statement lists them, or a Questrade transfer-in's book "
-                 "value — is evidence, never booked. `find-missing-history "
+                 "statement lists them, or the book value a transfer-in "
+                 "states (Questrade, RBC) — is evidence, never booked. `find-missing-history "
                  "--write-purchases` drafts it as .tt purchase lines in a "
                  "file the run does not read (inputs/<account>/"
                  "purchases_draft.tt.txt); a line you keep (renamed to "
@@ -1746,8 +1746,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-BASIS-08",
                  "A broker's own figure for such shares — IB's Basis on a "
                  "sale it codes closing, with its Closed Lots when the "
-                 "statement lists them, or a Questrade transfer-in's book "
-                 "value — is evidence, never booked. `find-missing-history "
+                 "statement lists them, or the book value a transfer-in "
+                 "states (Questrade, RBC) — is evidence, never booked. `find-missing-history "
                  "--write-purchases` drafts it as .tt purchase lines in a "
                  "file the run does not read (inputs/<account>/"
                  "purchases_draft.tt.txt): one line per lot IB lists, with "

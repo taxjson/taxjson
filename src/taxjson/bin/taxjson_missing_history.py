@@ -27,7 +27,7 @@ transaction history, not the year-filtered gains file:
   taxjson-missing-history work/margin_base.json     # no year scope
 
 To fix an AFFECTS row, add the purchase. When the broker states its cost
-(IB's Basis on a sale coded C, a Questrade transfer-in's book value),
+(IB's Basis on a sale coded C, a transfer-in's stated book value),
 --write-purchases drafts the .tt lines for you to review, into a file the
 run does not read (inputs/<account>/purchases_draft.tt.txt in a project):
   taxjson find-missing-history --write-purchases
@@ -253,8 +253,25 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
                  or r.get("account") in accounts]
     renamed = _rename_sources(args.ticker_map,
                               {t.symbol for t in txs if t.symbol})
+    # The transfer sidecars keep the broker's spelling; the books are
+    # mapped by ticker.map (the merge stage's renames, to base).
+    key = None
+    if args.ticker_map:
+        try:
+            from taxjson.bin.taxjson_ticker_map import (load_map_file,
+                                                        map_symbol,
+                                                        merge_renames)
+            _ren = merge_renames(load_map_file(Path(args.ticker_map)),
+                                 to_base=True)
+
+            def key(sym, _ren=_ren):
+                return map_symbol(str(sym or "").strip().upper(), _ren)
+        except (OSError, ValueError) as e:
+            print(f"taxjson-missing-history: warning: could not read "
+                  f"{args.ticker_map} ({e}) — transfer-ins are matched "
+                  f"to the books by their own spelling.", file=sys.stderr)
     drafts, gaps = draft_purchases(
-        txs, accounts=set(accounts), country=country,
+        txs, accounts=set(accounts), country=country, symbol_key=key,
         year=None if args.all_history else args.year, date_basis=basis,
         transfer_rows=transfers, registered_accounts=types or None,
         journal_symbols=journal, listed_pairs=mh_pairs,
@@ -399,7 +416,7 @@ def main(argv=None):
                     help="instead of the report, DRAFT .tt purchase lines "
                          "from the broker's own cost evidence (IB's Basis "
                          "on a closing sale with no purchase in the files, "
-                         "a Questrade transfer-in's book value) into a "
+                         "a transfer-in's stated book value) into a "
                          "file the run does not read: default "
                          f"inputs/<account>/{DRAFT_NAME} in the project. "
                          "Review it, fill in the placeholders, and rename "

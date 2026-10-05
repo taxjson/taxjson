@@ -149,6 +149,24 @@ class TestUsDrafts(unittest.TestCase):
         self.assertIn('2,881.00 - 1,801.00 = 1,080.00',
                       ' '.join(d.comments))
 
+    def test_a_renamed_symbol_is_drafted_under_the_brokers_spelling(self):
+        # ticker.map sends IB's QZB.US into the books as QZB.TO: the
+        # line goes under QZB.US, which the run maps like the sale.
+        rows = _parsed(SINGLE)
+        rows[0]['symbol'] = 'QZB.TO'
+        d, = draft_purchases(_book(rows), country='usa',
+                             rename_sources={'QZB.TO': ['QZB.US',
+                                                        'QZY.US']})[0]
+        self.assertEqual(d.symbol, 'QZB.US')
+        self.assertIn('maps it to QZB.TO', ' '.join(d.comments))
+        # Two spellings of the same root: not guessed, a CHECK instead.
+        d, = draft_purchases(_book(rows), country='usa',
+                             rename_sources={'QZB.TO': ['QZB.US',
+                                                        'QZB.NE']})[0]
+        self.assertEqual(d.symbol, 'QZB.TO')
+        self.assertIn('enter the purchase under the broker', ' '.join(
+            d.comments))
+
     def test_a_split_in_the_data_is_undone_on_the_draft(self):
         # A 2-for-1 split in the data after the purchase: the line is in
         # the purchase day's units (the run applies the split to it).
@@ -288,6 +306,33 @@ class TestCanadaDrafts(unittest.TestCase):
                                        transfer_rows=rows)
         self.assertEqual(drafts, [])
         self.assertIn('already books it', gaps[0].reason)
+
+    def test_rbc_wording_and_a_ticker_map_rename(self):
+        # RBC states the book value as "ACCOUNT TRANSFER BOOK VALUE n";
+        # the sidecar keeps the broker's spelling (QZW.US) while the
+        # books are mapped (QZW.TO): the sale of the transferred shares
+        # is matched through the map, and the line keeps QZW.US.
+        sale = TaxTransaction(action='BUYSELL', date='2025-06-02',
+                              symbol='QZW.TO', quantity=-12,
+                              net_amount=750, currency='CAD',
+                              account='margin')
+        rows = [{'action': 'TRANSFER', 'date': '2025-02-10',
+                 'symbol': 'QZW.US', 'quantity': 12.0, 'currency': 'USD',
+                 'account': 'margin',
+                 'description': 'QZW - QZW CORP ACCOUNT TRANSFER BOOK '
+                                'VALUE        480.00 FROM ACCOUNT 1'}]
+        drafts, gaps = draft_purchases(
+            [sale], country='canada', transfer_rows=rows,
+            symbol_key=lambda s: {'QZW.US': 'QZW.TO'}.get(s, s))
+        d, = drafts
+        self.assertEqual(d.tt_line().split()[3:8:2], ['QZW.US', 'USD',
+                                                      '480.00'])
+        self.assertEqual(gaps, [])
+        # The row's own text (which names the other account) is never
+        # copied into the draft.
+        text = format_purchase_drafts(drafts, gaps, country='canada',
+                                      account='margin')
+        self.assertNotIn('FROM ACCOUNT', text)
 
     def test_transfer_covered_by_tt_lines_is_not_drafted_again(self):
         tt = TaxTransaction(action='BUYSELL', date='2021-03-15',
