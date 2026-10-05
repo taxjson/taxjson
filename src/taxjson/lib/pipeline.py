@@ -862,11 +862,10 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
 
     if n_sh_rewritten:
         say("note", f"{n_sh_rewritten} unmatched TRANSFER row(s) in the "
-            f"--sheltered context treated as sheltered "
-            f"acquisitions/disposals",
-            [f"For the {_book_words(country)['walk']} (in-kind "
-             f"contributions/withdrawals; custody moves were netted "
-             f"out)."],
+            f"sheltered context booked as acquisitions/disposals",
+            [f"They count as sheltered acquisitions/disposals for the "
+             f"{_book_words(country)['walk']} (in-kind contributions/"
+             f"withdrawals; custody moves were netted out)."],
             legacy=f"NOTE: {n_sh_rewritten} unmatched TRANSFER row(s) in "
             f"the --sheltered context treated as sheltered "
             f"acquisitions/disposals for the "

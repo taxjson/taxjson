@@ -133,6 +133,39 @@ class TestFirstRunSummaryCount(_Width):
         self.assertEqual(len(render(self._doc(9), width_=0)), 3)
 
 
+# ------------------------------- report commands' book-state warnings
+class TestBookStateWarnings(_Width):
+    def _err(self, fn):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            fn()
+        return err.getvalue()
+
+    def test_artifact_year_and_run_state(self):
+        from taxjson.bin import taxjson_run as R
+        with mock.patch.object(R, "_CURRENT_CMD", "sum"), \
+                mock.patch.object(R, "_artifact_year_mismatch",
+                                  return_value={"margin": 2023}):
+            text = self._err(lambda: R._warn_artifact_year({}, 2024))
+        self.assertTrue(_flat(text).startswith(
+            "taxjson sum: warning: [settings].year is 2024 but the work/ "
+            "books were built for another tax year: margin (2023)"), text)
+        self.assertEqual(out.lint(text), [])
+        with mock.patch.object(R, "_CURRENT_CMD", "sum"), \
+                mock.patch.object(R, "_refuse_other_country_books"), \
+                mock.patch.object(R, "_run_state_problems",
+                                  return_value=["a stale wash pass",
+                                                "default FX " * 12]):
+            text = self._err(lambda: R._warn_run_state(Path("."), {}))
+        lines = text.splitlines()
+        self.assertEqual(lines[0], "taxjson sum: warning: these books are "
+                                   "not the clean result of the current "
+                                   "inputs")
+        self.assertEqual(lines[1], "  - a stale wash pass")
+        self.assertEqual(out.lint(text), [])
+        self.assertNotIn("WARNING", text)
+
+
 # --------------------------------------------------- the commands, live
 class TestRunStyle(unittest.TestCase):
     """A full run on a copy of the synthetic projects, piped (width 100)."""

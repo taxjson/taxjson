@@ -15348,11 +15348,10 @@ def _warn_artifact_year(files: Dict[str, Path], config_year) -> None:
     if not bad:
         return
     got = ", ".join(f"{a} ({y})" for a, y in sorted(bad.items()))
-    _pfx = f"taxjson {_CURRENT_CMD}" if _CURRENT_CMD else "taxjson"
-    print(f"{_pfx}: WARNING: [settings].year is {config_year} but the "
-          f"work/ books were built for another tax year: {got}. These "
-          f"figures are NOT {config_year}'s — rebuild with `taxjson run` "
-          f"first.", file=sys.stderr)
+    _say("warning", f"[settings].year is {config_year} but the work/ "
+         f"books were built for another tax year: {got}",
+         f"These figures are NOT {config_year}'s — rebuild with `taxjson "
+         f"run` first.", prog=_cmd_prog())
 
 
 def _tax_date_basis(settings: Dict[str, Any]) -> str:
@@ -15435,11 +15434,12 @@ def _warn_run_state(root: Path, cfg: Dict[str, Any]) -> List[str]:
     _refuse_other_country_books(root, cfg)
     probs = _run_state_problems(root, cfg)
     if probs:
-        _pfx = f"taxjson {_CURRENT_CMD}" if _CURRENT_CMD else "taxjson"
-        print(f"{_pfx}: WARNING: these books are not the clean result of "
-              f"the current inputs — {'; '.join(probs)}. The figures "
-              f"below may leave sales out or carry default FX; fix and "
-              f"re-run `taxjson run` before using them.", file=sys.stderr)
+        _say("warning", "these books are not the clean result of the "
+             "current inputs",
+             *[f"- {p}" for p in probs],
+             "The figures below may leave sales out or carry default FX; "
+             "fix and re-run `taxjson run` before using them.",
+             prog=_cmd_prog())
     return probs
 
 
