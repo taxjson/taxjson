@@ -282,6 +282,35 @@ def _num(raw, *, field: str, where: str, blank_ok: bool) -> Optional[float]:
     return v
 
 
+# A symbol or currency cell is copied into .tt lines (`taxjson opening`)
+# and reports: a control character (a newline) or, in a symbol taxjson
+# builds, whitespace is refused, never carried (security review M2).
+_CTRL_RE = re.compile('[\x00-\x1f\x7f\x85\u2028\u2029]')
+_CCY_RE = re.compile(r'[A-Z]{3}\Z')
+
+
+def _safe_cell(value: str, *, field: str, where: str,
+               spaces_ok: bool = False) -> str:
+    """`value` unchanged, or PositionsReportError naming the row when it
+    carries a control character (or any whitespace, unless spaces_ok:
+    a broker's raw option symbol has spaces)."""
+    if _CTRL_RE.search(value) or (not spaces_ok
+                                  and re.search(r'\s', value)):
+        raise PositionsReportError(
+            f"{where}: {field} {ascii(value)} has a control character or "
+            f"whitespace in it — not a {field.lower()} taxjson reads; fix "
+            f"the file (an unreadable row is never skipped)")
+    return value
+
+
+def _check_currency(cur: str, *, field: str, where: str) -> str:
+    if not _CCY_RE.match(cur):
+        raise PositionsReportError(
+            f"{where}: {field} {ascii(cur)} is not a 3-letter currency "
+            f"code — fix the file (an unreadable row is never skipped)")
+    return cur
+
+
 def _asset_type_of(symbol: str) -> str:
     from taxjson.lib.core import is_option_symbol
     if symbol.startswith('F:'):
@@ -362,6 +391,8 @@ def _read_ib(path: Path, text: str) -> PositionsReport:
         if cat in ('Forex', 'Cash') or not raw:
             skipped_cash += 1
             continue
+        _safe_cell(raw, field='Symbol', where=where, spaces_ok=True)
+        _check_currency(cur, field='Currency', where=where)
         qty = _num(g('Quantity'), field='Quantity', where=where,
                    blank_ok=False)
         if abs(qty) < 1e-12:
@@ -394,6 +425,7 @@ def _read_ib(path: Path, text: str) -> PositionsReport:
                 atype = 'other'
         except BrokerageParseError as e:
             raise PositionsReportError(str(e)) from e
+        _safe_cell(sym, field='Symbol', where=where)
         if mult is None:
             info = (fii.get((cat, raw))
                     or fii.get((cat, re.sub(r'\s+', ' ', raw))) or {})
@@ -495,9 +527,11 @@ def _read_rbc(path: Path, text: str) -> PositionsReport:
         qty = _num(g('qty'), field='Quantity', where=where, blank_ok=False)
         if abs(qty) < 1e-12:
             continue
+        _safe_cell(raw, field='Symbol', where=where, spaces_ok=True)
         cur = g('cur').upper()
         if not cur:
             raise PositionsReportError(f"{where}: {raw}: no Currency")
+        _check_currency(cur, field='Currency', where=where)
         opt = (ex.parse_option_from_description(g('name'))
                or ex.parse_option_from_description(raw))
         if opt:
@@ -506,6 +540,7 @@ def _read_rbc(path: Path, text: str) -> PositionsReport:
                                      opt['expiry'], opt['strike']), cur)
         else:
             sym = ex.apply_currency_suffix(raw.upper(), cur)
+        _safe_cell(sym, field='Symbol', where=where)
         cost = None
         cost_cur = cur
         if 'cost' in col and g('cost'):
@@ -606,6 +641,13 @@ def _read_toml(path: Path) -> PositionsReport:
             continue
         if abs(qty) <= 1e-12:
             continue
+        _safe_cell(sym, field='symbol', where=where)
+        for key in ('currency', 'cost_currency'):
+            if isinstance(h.get(key), str):
+                _safe_cell(h[key].strip(), field=key, where=f"{where} ({sym})")
+        if isinstance(h.get('acquired'), str):
+            _safe_cell(h['acquired'].strip(), field='acquired',
+                       where=f"{where} ({sym})", spaces_ok=True)
         if atype_raw == 'crypto' and _VENUE_SFX_RE.match(sym):
             sym = _VENUE_SFX_RE.match(sym).group(1)
 

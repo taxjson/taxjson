@@ -13578,6 +13578,22 @@ def cmd_sanity(args: argparse.Namespace) -> None:
     raise SystemExit(0 if not all_rows else 1)
 
 
+# What `taxjson opening` writes into a .tt line from a positions
+# report's cells (security review M2): anything else is skipped, named.
+_OPENING_SYMBOL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]*\Z")
+_OPENING_CURRENCY_RE = re.compile(r"[A-Z]{3}\Z")
+
+
+def _opening_iso_day(v: str) -> bool:
+    if not re.match(r"\d{4}-\d{2}-\d{2}\Z", v or ""):
+        return False
+    try:
+        datetime.strptime(v, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
+
+
 def _opening_lines(report, *, country: str, base_currency: str,
                    snapshot: str):
     """(OPENING .tt lines, [skipped (symbol, reason)], [notes]) for one
@@ -13594,7 +13610,11 @@ def _opening_lines(report, *, country: str, base_currency: str,
     usa = country == "usa"
     lots_kind = False
     for r in sorted(report.rows, key=lambda x: (x.symbol, x.lot_date)):
-        sym = r.symbol
+        # Written raw into the .tt line: a newline or a space in the
+        # symbol would book whatever follows as its own line (security
+        # review M2). Named escaped in the skip list.
+        safe_sym = bool(_OPENING_SYMBOL_RE.match(r.symbol or ""))
+        sym = r.symbol if safe_sym else ascii(r.symbol)
         q = float(r.quantity or 0.0)
         if abs(q) < 1e-12:
             continue
@@ -13605,7 +13625,8 @@ def _opening_lines(report, *, country: str, base_currency: str,
                                  "proceeds depend on the write: enter "
                                  "the write as a BUYSELL line)"))
             continue
-        if r.asset_type == "future" or sym.startswith(("F:", "/", "\\")):
+        if r.asset_type == "future" \
+                or (r.symbol or "").startswith(("F:", "/", "\\")):
             skipped.append((sym, "a futures contract (booked on its own "
                                  "basis: enter the opening trade as a "
                                  "BUYSELL line)"))
@@ -13624,7 +13645,15 @@ def _opening_lines(report, *, country: str, base_currency: str,
         if not cur:
             skipped.append((sym, "no currency for its cost"))
             continue
+        if not _OPENING_CURRENCY_RE.match(cur):
+            skipped.append((sym, f"its currency {ascii(cur)} is not a "
+                                 f"3-letter code"))
+            continue
         lot = r.lot_date or ""
+        if lot and not _opening_iso_day(lot):
+            skipped.append((sym, f"its lot date {ascii(lot)} is not a "
+                                 f"YYYY-MM-DD date"))
+            continue
         if usa:
             if not lot:
                 skipped.append((sym, "no purchase date: a US opening is "
@@ -13641,6 +13670,10 @@ def _opening_lines(report, *, country: str, base_currency: str,
         if lot and lot > snapshot:
             skipped.append((sym, f"its lot date {lot} is after the "
                                  f"snapshot date {snapshot}"))
+            continue
+        if not safe_sym:
+            skipped.append((sym, "not a symbol a .tt line can carry "
+                                 "(letters, digits and ._:/+- only)"))
             continue
         if r.cost_kind == COST_LOTS:
             lots_kind = True
@@ -13746,10 +13779,14 @@ def cmd_opening(args: argparse.Namespace) -> None:
     header = [
         f"# Opening balance of account {name} on {snapshot} "
         f"(`taxjson opening`).",
-        f"# From: {_mask_ids_in_path(shown_name(path))} — "
-        f"{kind_label(report.kind)}"
-        + (f", accounts {', '.join(report.accounts)}"
-           if report.accounts else "") + ".",
+        # A control character of the file name or an account cell (a
+        # newline) would end the comment and book the rest as a line
+        # (security review L3).
+        re.sub(r"[\x00-\x1f\x7f]", "?",
+               f"# From: {_mask_ids_in_path(shown_name(path))} — "
+               f"{kind_label(report.kind)}"
+               + (f", accounts {', '.join(report.accounts)}"
+                  if report.accounts else "") + "."),
         "# An OPENING line sets a position and its cost; it is not a "
         "purchase (tax-logic",
         "# CA-OPEN-01 / US-OPEN-01). The account's rows of these symbols "
