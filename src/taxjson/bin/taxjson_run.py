@@ -2878,8 +2878,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     grouped = _split_generic_groups(_grouped_raw)
     if not grouped and not input_files(acct_dir, ".tt"):
         # Say why a folder holding only a positions report has no books.
-        _report_detection(name, [d for d in _detected if d.positions],
-                          cache)
+        _pos_only = [d for d in _detected if d.positions]
+        if _pos_only:
+            _report_detection(name, _pos_only, cache)
         _msg = (f"taxjson: warning: no CSVs or .tt files in "
                 f"{acct_dir}; skipping account '{name}'.")
         if (cache / f"{name}_base.json").exists():
