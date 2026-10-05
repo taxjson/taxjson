@@ -725,9 +725,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "transfer VALUE that is a market value (IB) is never a "
                  "cost: those shares stay out with no ACB, said as "
                  "ATTENTION. A .tt purchase of the security in that "
-                 "account dated on or before the arrival covers it "
-                 "instead (no book value, no ATTENTION). The arrival is "
-                 "not an acquisition for the superficial-loss window."),
+                 "account dated on or before the arrival, or a "
+                 "missing_history.json entry for it (CA-ACB-11), covers "
+                 "it instead (no book value, no ATTENTION). The arrival "
+                 "is not an acquisition for the superficial-loss "
+                 "window."),
             Rule("CA-ACB-11",
                  "Shares sold with no purchase in your files (bought "
                  "before the data starts) go in missing_history.json "
@@ -1708,8 +1710,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "VALUE that is a market value (IB) is never a basis: "
                  "those shares stay out with no basis, said as "
                  "ATTENTION. A .tt purchase of the security in that "
-                 "account dated on or before the arrival covers it "
-                 "instead. The arrival is not a §1091 replacement."),
+                 "account dated on or before the arrival, or a "
+                 "missing_history.json entry for it, covers it instead. "
+                 "The arrival is not a §1091 replacement."),
             Rule("US-DIST-01",
                  "[[distributions]] (taxjson.toml): a non-cash distribution "
                  "(a reinvested capital-gain distribution, a late return-of-capital "

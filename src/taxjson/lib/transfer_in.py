@@ -20,7 +20,9 @@ This module finds them and decides what the run does with each:
 * such an arrival is COVERED when the receiving account's .tt files
   already hold purchases of that security, dated on or before the
   arrival, for its quantity (the documented fix: the original purchase
-  as a .tt line) — nothing more is said or booked;
+  as a .tt line), or when missing_history.json lists the security for
+  that account (you declared its cost unknown, to be reported by hand)
+  — nothing more is said or booked;
 * otherwise, when the broker STATES the book value on the row
   (Questrade "TRANSFER BOOK VALUE", RBC "BOOK VALUE"), it becomes the
   cost of the incoming shares: one acquisition on the arrival date at
@@ -64,13 +66,16 @@ class Arrival:
     broker: str
     source: str                 # the input file the row came from
     description: str
-    covered: bool = False       # the account's .tt lines cover it
+    covered: bool = False       # the account's .tt lines cover it, or
+    #                             missing_history.json lists the pair
+    covered_by: str = ""        # "tt" | "missing_history"
     row: Dict[str, Any] = field(default_factory=dict, repr=False)
 
     @property
     def status(self) -> str:
         if self.covered:
-            return "covered"
+            return ("missing_history" if self.covered_by == "missing_history"
+                    else "covered")
         return "book_value" if self.book_value else "no_cost"
 
 
@@ -214,8 +219,23 @@ def mark_covered(found: List[Arrival],
                         key=lambda x: (x.date, x.time)):
             avail = sum(q for d, q in held.get(a.key, []) if d <= a.date)
             if avail - used.get(a.key, 0.0) >= a.quantity - _EPS:
-                a.covered = True
+                a.covered, a.covered_by = True, "tt"
                 used[a.key] = used.get(a.key, 0.0) + a.quantity
+
+
+def mark_missing_history(found: List[Arrival],
+                         pairs: Iterable[Tuple[str, str]]) -> None:
+    """Cover each uncovered arrival whose (security, account)
+    missing_history.json lists: the user declared that position's cost
+    unknown (its sales are reported by hand), and a booking at the
+    broker's book value would silently replace that declaration."""
+    listed = {(str(s).upper(), str(a)) for s, a in pairs}
+    for a in found:
+        if a.covered:
+            continue
+        if ((a.key.upper(), a.account) in listed
+                or (a.symbol.upper(), a.account) in listed):
+            a.covered, a.covered_by = True, "missing_history"
 
 
 def booked_rows(found: Iterable[Arrival]) -> List[Dict[str, Any]]:

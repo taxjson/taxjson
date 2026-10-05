@@ -278,6 +278,9 @@ from **outside your books**, and `IN_BOOKS` says what the books did:
   purchase (5c below).
 - `.tt_covers`: your `.tt` purchase covers the row (5c). Nothing more is
   said.
+- `missing_history`: `missing_history.json` lists the stock for that
+  account (5b, step 4): its cost stays unknown and its sales are
+  reported by hand, as you declared; the book value is not used.
 
 Webull ACATS rows are not booked at all: the run prints `warning:
 UNBOOKED: ... Webull ACATS row ...`.

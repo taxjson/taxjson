@@ -27,7 +27,7 @@
 - **`find-missing-history` lists $0-cost shares still held** (HELD), not
   only those already sold, and an entry of `missing_history.json` whose
   purchase is now in the books (STALE: it does nothing; the run also
-  says so as ATTENTION). In a US project a stock dividend's shares are
+  says so, in one ATTENTION line). In a US project a stock dividend's shares are
   no longer listed as $0-cost: they share the old shares' basis.
 - **Transfers into a taxable account use the broker's stated book
   value.** Shares that arrive from outside your books (a transfer-in that
@@ -37,7 +37,8 @@
   never used, and such shares are said to have no cost. A `.tt` purchase
   of the security dated on or before the transfer covers it: the book
   value is then not used and the line stops — the override, with nothing
-  to configure. US projects: the lot's holding period starts on the
+  to configure. A `missing_history.json` entry for the security covers
+  it too (your declared unknown cost is kept). US projects: the lot's holding period starts on the
   arrival date (said in the line). The arrival is never the purchase
   that makes a loss superficial or a wash sale. `taxjson transfers` has
   an IN_BOOKS column for each transfer-in. Tax-logic

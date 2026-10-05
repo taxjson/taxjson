@@ -375,6 +375,19 @@ class TestTransferInLib(unittest.TestCase):
         self.assertEqual({a.symbol: a.status for a in found},
                          {"GGG.TO": "covered", "HHH.TO": "no_cost"})
 
+    def test_missing_history_entry_covers_the_arrival(self):
+        # The user's own answer (cost unknown, reported by hand) wins
+        # over the broker's book value.
+        from taxjson.lib.transfer_in import (arrivals, booked_rows,
+                                             mark_missing_history)
+        found = arrivals(self._rows(
+            ("margin", "rbc_direct", {"symbol": "JJJ.US", "quantity": 10,
+                                      "date": "2022-04-22",
+                                      "book_value": 900})))
+        mark_missing_history(found, {("JJJ.US", "margin")})
+        self.assertEqual([a.status for a in found], ["missing_history"])
+        self.assertEqual(booked_rows(found), [])
+
 
 def _bv_project(td, country):
     cur, sym = (("CAD", "XYZ.TO") if country == "canada"
@@ -442,6 +455,21 @@ class TestTransferInBookValue(unittest.TestCase):
             self.assertIn("holding period starts on the arrival date",
                           r.stdout)
             self.assertEqual(self._gain(root), 1000.0)
+
+    @rule("CA-ACB-TRANSFER-BV")
+    def test_canada_missing_history_entry_keeps_the_manual_report(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _bv_project(td, "canada")
+            (root / "missing_history.json").write_text(json.dumps(
+                [{"symbol": "XYZ.TO", "account": "margin"}]))
+            r = cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertNotIn("transfer-in:", r.stdout)
+            j = json.loads(cli(root, "sum", "--json").stdout)
+            self.assertEqual(j["unknown_cost_routed"], 1)
+            t = json.loads(cli(root, "transfers", "--json").stdout)
+            self.assertEqual([x["arrival"] for x in t["transfers"]],
+                             ["missing history"])
 
     @rule("CA-ACB-TRANSFER-BV")
     def test_canada_own_account_move_is_not_booked(self):
@@ -550,6 +578,21 @@ class TestMessages(unittest.TestCase):
                       "CMP.TO / margin, but its rows never go short any "
                       "more — the purchase is in the books now",
                       err.getvalue())
+
+    def test_several_stale_entries_are_one_line(self):
+        from taxjson.lib.missing_history import (
+            report_missing_history_log, synthesize_openings)
+        rows = [tx("BUYSELL", "2024-01-02", s, 10, 100, currency="CAD")
+                for s in ("CMA.TO", "CMB.TO")]
+        _ops, log = synthesize_openings(
+            rows, {("CMA.TO", "margin"), ("CMB.TO", "margin")})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            report_missing_history_log([log], {"margin"})
+        lines = [ln for ln in err.getvalue().splitlines() if ln.strip()]
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("lists 2 entries whose rows never go short any more "
+                      "(CMA.TO / margin, CMB.TO / margin)", lines[0])
 
     def test_stale_entry_listed_by_find_missing_history_and_run(self):
         with tempfile.TemporaryDirectory() as td:

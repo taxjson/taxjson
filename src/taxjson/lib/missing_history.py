@@ -30,7 +30,7 @@ import sys
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from taxjson.lib.core import TaxTransaction, is_stock_dividend
 from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
@@ -746,14 +746,25 @@ def stale_missing_history_entries(
 
 
 def complete_entry_message(symbol: str, account: str,
-                           file_name: str = MISSING_HISTORY_FILE) -> str:
+                           file_name: str = MISSING_HISTORY_FILE, *,
+                           more: Sequence[Tuple[str, str]] = ()) -> str:
     """A missing-history entry whose position never goes short: the
     purchase is in the books now (an older export or a .tt line was
-    added), so the entry does nothing."""
-    return (f"{file_name} lists {symbol} / {account}, but its rows never "
-            f"go short any more — the purchase is in the books now (an "
-            f"older export or a .tt line), so the entry does nothing. "
-            f"Remove it from {file_name}.")
+    added), so the entry does nothing. `more`: further such entries,
+    said in the same line."""
+    if not more:
+        return (f"{file_name} lists {symbol} / {account}, but its rows "
+                f"never go short any more — the purchase is in the books "
+                f"now (an older export or a .tt line), so the entry does "
+                f"nothing. Remove it from {file_name}.")
+    pairs = [(symbol, account)] + list(more)
+    shown = ", ".join(f"{s} / {a}" for s, a in pairs[:6]) + (
+        f" +{len(pairs) - 6} more" if len(pairs) > 6 else "")
+    return (f"{file_name} lists {len(pairs)} entries whose rows never go "
+            f"short any more ({shown}) — their purchases are in the books "
+            f"now (an older export or a .tt line), so the entries do "
+            f"nothing. Remove them from {file_name} (`taxjson "
+            f"find-missing-history` lists them under STALE).")
 
 
 def stale_entry_message(e: StaleMissingHistoryEntry) -> str:
@@ -1226,22 +1237,24 @@ def report_missing_history_log(logs: List[List[Dict[str, Any]]],
         for e in log or []:
             by_pair.setdefault((e.get('symbol', ''), e.get('account', '')),
                                []).append(e)
+    complete: List[Tuple[str, str]] = []
     for (symbol, account), es in sorted(by_pair.items()):
         if account not in accounts or any(e.get('inserted') for e in es):
             continue
         notes = [str(e.get('note') or '') for e in es]
         if any(n.startswith('no opening needed') for n in notes):
-            # ATTENTION (the run echoes it): the usual cause is the fix
-            # itself — the purchase was added (an older export, a .tt
-            # line) and the entry is now stale (new-user study).
-            print(f"warning: ATTENTION: "
-                  f"{complete_entry_message(symbol, account, file_name)}",
-                  file=sys.stderr)
+            complete.append((symbol, account))
         elif notes and all(n.startswith('no rows') for n in notes):
             print(f"warning: {file_name} lists {symbol} / {account}, but "
                   f"no row in the data has that symbol and account — "
                   f"nothing was applied. Check the spelling.",
                   file=sys.stderr)
+    if complete:
+        # ATTENTION (the run echoes it): the usual cause is the fix
+        # itself — the purchase was added (an older export, a .tt line)
+        # and the entry is now stale (new-user study). One line.
+        print("warning: ATTENTION: " + complete_entry_message(
+            *complete[0], file_name, more=complete[1:]), file=sys.stderr)
 
 
 def format_suggestions(candidates: List[MissingHistoryCandidate]) -> str:

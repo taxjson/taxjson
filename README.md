@@ -1982,6 +1982,9 @@ The fix, and the override, is the same: the original purchase as a `.tt`
 cost from the sending broker's statements). Once the account's `.tt`
 purchases of the security cover the transferred quantity, the book value is
 no longer used and the ATTENTION line stops — nothing else to configure.
+A `missing_history.json` entry for the security and account also covers it:
+you declared its cost unknown (reported by hand), and the broker's book
+value never silently replaces that declaration.
 The arrival is never the purchase that makes a loss superficial (or a wash
 sale): it is dated by the custody move. Tax-logic: `CA-ACB-TRANSFER-BV`,
 `US-BASIS-TRANSFER-BV`.

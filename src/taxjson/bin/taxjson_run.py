@@ -3958,6 +3958,13 @@ def transfer_arrivals(root: Path, cache: Path,
                      if isinstance(t, dict)]
         tt_rows[n] = rows
     TI.mark_covered(found, tt_rows, key=key)
+    # A missing_history.json entry is the user's own answer for the
+    # position (cost unknown, reported by hand): it wins over the
+    # broker's book value.
+    from taxjson.lib.first_run import read_missing_history_pairs
+    from taxjson.lib.missing_history import missing_history_path
+    TI.mark_missing_history(found, read_missing_history_pairs(
+        missing_history_path(root, note=False)))
     return found
 
 
@@ -7094,6 +7101,7 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
     # at the broker's stated book value, covered by your .tt purchase,
     # or NO COST — shares from outside the books with no cost.
     _status = {"book_value": "book value", "covered": ".tt covers",
+               "missing_history": "missing history",
                "no_cost": "NO COST"}
     try:
         _arr: Dict[Tuple[str, str, str], List[str]] = {}
@@ -7147,7 +7155,9 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
               "your own shares moving (a transfer-out of yours cancels "
               "it); book_value = from outside your books, booked at the "
               "book value the broker states on the row; .tt_covers = "
-              "your .tt purchase covers it; NO_COST = from outside your "
+              "your .tt purchase covers it; missing_history = "
+              "missing_history.json lists it (cost unknown, reported by "
+              "hand); NO_COST = from outside your "
               "books with no cost: add the original purchase to a .tt "
               "file (docs/getting-started.md, step 5c).")
 
