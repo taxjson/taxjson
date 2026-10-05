@@ -286,7 +286,8 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
     if not drafts:
         print(f"No purchase to draft{scope}: no sale with no purchase in "
               f"your files carries a broker cost (IB's Basis), and no "
-              f"transfer-in states a book value.")
+              f"transfer-in that needs a purchase line states a book "
+              f"value." + (f" Not drafted: {len(gaps)}." if gaps else ""))
         for g in gaps:
             print(f"  not drafted: {g.symbol} [{g.account}] {g.date} "
                   f"{g.quantity:g} units — {g.reason}")
