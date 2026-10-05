@@ -708,7 +708,12 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
                  + (f" (and {len(_crypto) - 1} more)" if len(_crypto) > 1
                     else "")
                  + " but [settings] has no local_timezone — "
-                 + missing_timezone_message("project"))
+                 + missing_timezone_message("project")
+                 # The scaffold has a crypto account whether or not the
+                 # user holds any coins (new-user study).
+                 + f" If you have no crypto, delete the "
+                   f"[accounts.{_crypto[0]}] section from taxjson.toml "
+                   f"instead.")
         # No crypto account: an outer TAXJSON_LOCAL_TZ still never dates
         # this project's rows (a crypto file in another account is
         # refused by its parser with the same message).
@@ -5454,9 +5459,13 @@ def cmd_run(args: argparse.Namespace) -> None:
                       file=sys.stderr)
             elif _e.code:
                 print("  !! positions differ from the broker holdings "
-                      "files — same-day trades not yet in the CSVs are "
-                      "the usual cause; anything else is a booking "
-                      "problem (see `taxjson sanity`).",
+                      "files — on a first project the likely cause is "
+                      "missing history (purchases before your download "
+                      "starts: `taxjson find-missing-history`, "
+                      "docs/getting-started.md step 5); later, same-day "
+                      "trades not yet in the CSVs are the usual one; "
+                      "anything else is a booking problem (see `taxjson "
+                      "sanity`).",
                       file=sys.stderr)
         except Exception as _e:  # noqa: BLE001 — never break a run
             print(f"  holdings sanity skipped: {_e}", file=sys.stderr)
@@ -5588,14 +5597,6 @@ export/
 .DS_Store
 """
 
-# Dropped into each empty inputs/<account>/ folder. Doubles as a placeholder
-# so the otherwise-empty directory survives a git commit.
-_INPUT_README = (
-    "Drop this account's broker CSV exports in this folder.\n\n"
-    "taxjson auto-detects the broker from each file's header (Interactive "
-    "Brokers, RBC Direct, Questrade, Webull). Name crypto exports so the "
-    "filename starts with `cb_` (Coinbase) or `kr_` (Kraken).\n"
-)
 
 
 def _manifest_path_for(acct_dir: Path, cache: Path, name: str) -> Path:
@@ -12990,6 +12991,16 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             out_lines.append(" ".join(cells))
         _print_report_table(out_lines)
         print(f"\n{len(all_rows)} discrepancy(ies).")
+        if any(r["holdings_qty"] - r["taxjson_qty"] > 0 for r in all_rows):
+            # Fewer shares in the books than at the broker: on a first
+            # project that is history the download does not reach
+            # (new-user study), not a booking bug.
+            print("Fewer shares in taxjson than at the broker usually "
+                  "means missing history: purchases from before your "
+                  "download starts, or shares transferred in. See "
+                  "`taxjson find-missing-history`, `taxjson transfers` "
+                  "and docs/getting-started.md step 5. A trade after "
+                  "your last export is the other usual cause.")
     raise SystemExit(0 if not all_rows else 1)
 
 
@@ -17465,9 +17476,11 @@ def cmd_init(args: argparse.Namespace) -> None:
 
     _stub("ticker.map", _TEMPLATE_TICKER_MAP)
     _stub(".gitignore", _TEMPLATE_GITIGNORE)
+    from taxjson.lib.config_template import input_readme as _readme
     for acct in account_names:
         # The README also keeps the empty input dir present under git.
-        _stub(f"inputs/{acct}/README.txt", _INPUT_README)
+        # It says what to download from each broker (new-user study).
+        _stub(f"inputs/{acct}/README.txt", _readme(country, acct))
 
     print(f"Initialized taxjson project at {root}")
     for rel in written:
@@ -18950,10 +18963,72 @@ def _main() -> None:
             # explained WHY (run_to_file echoes it) — re-raising the
             # CalledProcessError just buried that explanation under a
             # second traceback (2026-09 audit).
-            sys.exit(f"taxjson: stage failed: "
-                     f"{' '.join(str(c) for c in (e.cmd or [])[-3:])} "
+            sys.exit(f"taxjson: stage failed: {_stage_description(e.cmd)} "
                      f"(exit {e.returncode}) — see the error above.")
     return
+
+
+# What each sub-tool does, for the one-line stage failure (new-user
+# study: the raw argv tail — two file paths and a flag — said nothing).
+_STAGE_WHAT = {
+    "taxjson_brokerage": "reading the broker files",
+    "taxjson_corp_actions": "the corporate actions",
+    "taxjson_convert_tt": "converting the .tt file",
+    "taxjson_merge": "merging the account's files",
+    "taxjson_merge2": "merging and converting the account's books",
+    "taxjson_sort": "sorting the books",
+    "taxjson_ticker_map": "applying ticker.map",
+    "fill_crypto_prices": "filling in crypto prices",
+    "taxjson_convert_currency": "converting to the base currency",
+    "taxjson_validate": "checking the books",
+    "taxjson_gains": "computing the gains",
+    "to_base_curr": "fetching currency rates",
+    "taxjson_apply_distributions": "applying [[distributions]]",
+}
+
+
+# The sub-tool options `taxjson run` passes that take no value.
+_STAGE_FLAG_OPTS = frozenset({
+    "--strict", "--dedup", "--sort", "--validate", "--transfers",
+    "--require-inputs", "--no-input", "--global-only", "--spot-crypto",
+    "--no-wash", "--require-prices", "--combined-broker-accounts",
+    "--taxable", "--lint"})
+
+
+def _stage_description(cmd) -> str:
+    """A human description of a failed sub-tool invocation: what it was
+    doing, for which account, on which input file(s) — never the raw
+    argv (paths, flags)."""
+    argv = [str(c) for c in (cmd or [])]
+    mod = next((a.rsplit(".", 1)[-1] for a in argv
+                if a.startswith("taxjson.bin.")), "")
+    what = _STAGE_WHAT.get(mod) or (f"the {mod.replace('_', '-')} step"
+                                    if mod else "a pipeline step")
+
+    def _opt(*names):
+        for n in names:
+            if n in argv[:-1]:
+                return argv[argv.index(n) + 1]
+        return ""
+    acct = _opt("--account", "--account-name")
+    # The inputs are the trailing positionals (every stage appends them
+    # last); an argument right after a value-taking option is its value.
+    files: List[str] = []
+    i = len(argv) - 1
+    while i > 0 and not argv[i].startswith("-"):
+        prev = argv[i - 1]
+        if prev.startswith("-") and prev not in _STAGE_FLAG_OPTS:
+            break
+        files.insert(0, Path(argv[i]).name)
+        i -= 1
+    out = what
+    if acct:
+        out += f" for account {acct}"
+    if files:
+        shown = ", ".join(_mask_ids_in_path(f) for f in files[:3])
+        out += (f" ({shown}" + (f" and {len(files) - 3} more" if
+                                len(files) > 3 else "") + ")")
+    return out
 
 
 def _guarded_func(args: argparse.Namespace) -> None:
