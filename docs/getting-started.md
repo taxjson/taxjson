@@ -179,7 +179,7 @@ Brokers sale, the row also prints IB's own cost for it:
 
 ```
 SAMPG.US                 margin     CAD      -20.0000 2025-03-18            1         714.87
-    broker says closing (IB code C): the sale closed a position bought before the data (IB Basis 301.00 USD) — add the missing purchase; it is not a short sale.
+    broker says closing (IB code C): the sale closed a position bought before the data (IB Basis 301.00 USD) — add the missing purchase; it is not a short sale. `--write-purchases` drafts the line from IB's figure for you to review.
 ```
 
 **2. Positions you still hold.** Nothing in the books can see these, so
@@ -397,6 +397,39 @@ running with `taxjson-convert-tt --account margin inputs/margin/margin_start.tt`
 The full line format (sales, return of capital, options) is in the
 README, "Importing manual cost basis".
 
+**Let the broker's figure draft the lines.** When the broker states what
+a sale with no purchase cost (IB's `Basis` on a sale coded closing), or
+what a transfer-in was worth on its books (`TRANSFER BOOK VALUE` on a
+Questrade or RBC transfer), taxjson can write the lines for you to check:
+
+```bash
+tjs find-missing-history --write-purchases
+```
+
+```
+Wrote 1 draft purchase line(s) for margin to inputs/margin/purchases_draft.tt.txt (1 from IB's Basis).
+  1 need the purchase date (YYYY-MM-DD).
+```
+
+```
+# IB sale 2025-03-18 of 20 SAMPG.US (code C, row 3f***, ib_2025.csv)
+# IB Basis 301.00 USD for the 20 sold (no lot detail in the export)
+# fill in: the purchase date (the broker does not say when these units were bought).
+# check: IB's Basis is the cost of the lots IB closed (FIFO), not your ACB: ...
+BUYSELL  YYYY-MM-DD  09:30:00  SAMPG.US  20  USD  15.050000  301.00  0
+```
+
+taxjson does not read this file: its name ends in `.txt`. Check each
+line against your records, replace every `YYYY-MM-DD` with the real
+purchase date (and any `COST` with the real cost), delete what you cannot
+vouch for, then rename the file to end in `.tt` (e.g. `purchases.tt`) and
+`tjs run`. A line still holding a placeholder stops the run. The date
+matters: it is the Bank of Canada rate's date for a US-dollar cost, and
+the superficial-loss window's. If the statement lists Closed Lots, IB's
+own purchase dates are filled in for you, one line per lot. The broker's
+figure is only a start: once you keep a line, the cost is yours. A
+second `--write-purchases` keeps your draft unless you pass `--force`.
+
 **(4) What you cannot recover.** If a sale's purchase cannot be found
 at all, list it in `missing_history.json` so it is reported apart instead
 of being guessed. The command writes the file; open it and delete any
@@ -452,6 +485,11 @@ BUYSELL  2021-03-15  09:30:00  SAMPK.TO  40  CAD  15.00  600.00  0
   the run stops with `TRANSFER is not allowed in taxable accounts`.
 - Do not use IB's transfer `VALUE`: it is the market value, not your
   cost.
+- A transfer-in that `missing_history.json` covers (`missing_history`
+  in `tjs transfers`): `tjs find-missing-history --write-purchases`
+  drafts its purchase line from the broker's book value (Questrade,
+  RBC), with the purchase date left for you to fill in (see (3) above).
+  Once you add it, remove the entry from `missing_history.json`.
 - If you held the same stock at both brokers, both purchases go into one
   ACB.
 - For a sheltered account (`transfers = true`) the transfer is booked

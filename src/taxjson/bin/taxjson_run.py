@@ -17338,6 +17338,10 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
               file=sys.stderr)
         if args.write_missing_history is None:
             args.write_missing_history = args.gen_phantoms
+    if (getattr(args, "write_purchases", None) is not None
+            and args.write_missing_history is not None):
+        _die_input("--write-purchases and --write-missing-history write "
+                   "different files: run them one at a time.")
     # Both missing_history.json and its old name phantoms.json: refused
     # (exit 2) before any work; only the old name: read, with a NOTE.
     mh_file = _missing_history_path(root)
@@ -17527,6 +17531,17 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         return
 
     cmd = _cmd("taxjson-missing-history") + [str(f) for f in files]
+    if getattr(args, "write_purchases", None) is not None:
+        # Drafts of purchase lines from the broker's cost evidence
+        # (tax-logic CA-ACB-15 / US-BASIS-08): the tool writes them
+        # beside the account's inputs, as .tt.txt the run never reads.
+        cmd += ["--write-purchases", args.write_purchases]
+        if args.force:
+            cmd += ["--force"]
+        if args.all_history:
+            cmd += ["--all-history"]
+        if args.account:
+            cmd += ["--account", args.account]
     if not args.account:
         # The glob above sees only books that exist: a CONFIGURED
         # account whose book was never built (a failed parse, deferred
@@ -19093,14 +19108,25 @@ def _build_parser(prog: str = "taxjson"
     p_fmh.add_argument("--gen-phantoms", metavar="FILE",
                        help=argparse.SUPPRESS)
     p_fmh.add_argument("--all-history", action="store_true",
-                       help="With --write-missing-history, emit every "
-                            "candidate, not just those affecting the tax "
-                            "year")
+                       help="With --write-missing-history or "
+                            "--write-purchases, emit every candidate, not "
+                            "just those affecting the tax year")
+    p_fmh.add_argument("--write-purchases", metavar="FILE", nargs="?",
+                       const="", default=None,
+                       help="Instead of the report, DRAFT .tt purchase "
+                            "lines from the broker's own cost evidence "
+                            "(IB's Basis on a closing sale with no "
+                            "purchase in your files, a transfer-in's "
+                            "stated book value) into a file the run "
+                            "does NOT read (default: inputs/<account>/"
+                            "purchases_draft.tt.txt). Review it, fill in "
+                            "the YYYY-MM-DD / COST placeholders, then "
+                            "rename it to .tt")
     p_fmh.add_argument("--force", action="store_true",
-                       help="With --write-missing-history, replace an "
-                            "existing FILE (a reviewed missing_history.json "
-                            "is otherwise refused; the old file is kept as "
-                            "FILE.bak)")
+                       help="With --write-missing-history or "
+                            "--write-purchases, replace an existing FILE "
+                            "(a reviewed file is otherwise refused; the "
+                            "old file is kept as FILE.bak)")
     p_fmh.set_defaults(func=cmd_find_missing_history)
 
     p_fees = sub.add_parser(

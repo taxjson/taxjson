@@ -1648,6 +1648,689 @@ def synthesize_openings(
     return out, applied
 
 
+# --------------------------------------------------------------------
+# Purchase drafts (`find-missing-history --write-purchases`).
+#
+# A broker sometimes states the cost of what a sale with no purchase in
+# the files closed: IB's Trades `Basis` on a sale coded C (closing), with
+# the lots it closed when the statement lists Closed Lots; the "TRANSFER
+# BOOK VALUE" a Questrade or RBC transfer-in states. That figure is
+# EVIDENCE: the run never books it. These helpers draft `.tt` purchase
+# lines from it into a file the run does not read (DRAFT_NAME, suffix
+# .tt.txt); the user reviews each line, fills in what the broker does not
+# say, and renames the file to .tt — the kept line is then the user's
+# assertion (tax-logic CA-ACB-15 / US-BASIS-08).
+
+# The draft file: `.txt` is not an input suffix (`taxjson run` reads
+# only *.csv and *.tt directly in inputs/<account>/), so an unreviewed
+# draft can never be booked; renaming it to `<name>.tt` makes it input.
+DRAFT_NAME = "purchases_draft.tt.txt"
+# Placeholders the .tt reader refuses ("not a valid YYYY-MM-DD date";
+# a non-number total): a line still holding one stops the run, so a
+# file renamed before it was edited cannot book a guess.
+DATE_PLACEHOLDER = "YYYY-MM-DD"
+COST_PLACEHOLDER = "COST"
+_DRAFT_TIME = "09:30:00"
+# A transfer-in row that states the delivering dealer's book value of
+# what was delivered: Questrade's "... TRANSFER BOOK VALUE <amount>"
+# (lib/brokerages/questrade.py reads it as the row's net amount), RBC's
+# "... ACCOUNT TRANSFER BOOK VALUE <amount> FROM ACCOUNT ...".
+_TRANSFER_BOOK_VALUE_RE = re.compile(
+    r'TRANSFER\s+BOOK\s+VALUE\s+([\d,]+(?:\.\d+)?)', re.IGNORECASE)
+# A move between two of the user's own accounts posts its two legs a few
+# days apart at most (taxjson_run._OWN_MOVE_DAYS).
+_OWN_MOVE_DAYS = 10
+# The `type` of a books row that acquires transferred-in shares at the
+# broker's stated book value on their arrival date: such a transfer is
+# already costed by the run, so it is not drafted again.
+from taxjson.lib.core import TRANSFER_BOOK_VALUE_TYPE  # noqa: E402
+
+
+@dataclass
+class PurchaseDraft:
+    """One drafted `.tt` BUYSELL purchase. `date` None = the
+    DATE_PLACEHOLDER (the broker does not say when it was bought);
+    `cost` None = the COST_PLACEHOLDER (the broker's figure covers more
+    than the missing units)."""
+    account: str
+    symbol: str
+    quantity: float
+    currency: str
+    cost: Optional[float]
+    date: Optional[str]
+    multiplier: float = 1.0
+    source: str = ''          # 'ib-lot' | 'ib-basis' | 'transfer'
+    sale_date: str = ''       # the sale it backs ('' for a transfer-in)
+    comments: Tuple[str, ...] = ()
+    warn: bool = False        # a CHECK the user must not skip
+
+    def tt_line(self) -> str:
+        """The BUYSELL line (fee 0: a broker's basis already holds the
+        commission)."""
+        qty = f"{self.quantity:.10g}"
+        if self.cost is None:
+            price = total = COST_PLACEHOLDER
+        else:
+            unit = self.quantity * (self.multiplier or 1.0)
+            price = f"{(self.cost / unit if unit else 0.0):.6f}"
+            total = f"{self.cost:.2f}"
+        size = ''
+        if is_option_symbol(self.symbol) and self.multiplier \
+                and abs(self.multiplier - 100.0) > 1e-9:
+            size = f"  x{self.multiplier:g}"
+        return (f"BUYSELL  {self.date or DATE_PLACEHOLDER}  {_DRAFT_TIME}  "
+                f"{self.symbol}  {qty}  {self.currency}  {price}  {total}  "
+                f"0{size}")
+
+
+@dataclass
+class DraftGap:
+    """A sale with no purchase in the files (or a transfer-in) that no
+    draft line was written for, and why."""
+    account: str
+    symbol: str
+    date: str
+    quantity: float
+    reason: str
+
+
+def _mask_id(row_id: Any) -> str:
+    """A row id shortened the way every id is shown: 2 chars + ***."""
+    s = str(row_id or '')
+    return f"{s[:2]}***" if s else '?'
+
+
+def parse_broker_basis(text: str) -> Optional[Tuple[float, str]]:
+    """'1,234.56 USD' -> (1234.56, 'USD'); None when it does not read."""
+    m = re.match(r'^\s*([\d,]+(?:\.\d+)?)\s+([A-Za-z]{3})\s*$',
+                 str(text or ''))
+    if not m:
+        return None
+    try:
+        return float(m.group(1).replace(',', '')), m.group(2).upper()
+    except ValueError:
+        return None
+
+
+def parse_broker_lots(text: str) -> Optional[List[Tuple[str, float, float]]]:
+    """broker_lots evidence -> [(open date, qty, cost)]; None when there
+    is none or a lot did not read (the export's lots are then not used)."""
+    text = str(text or '').strip()
+    if not text or text == 'invalid':
+        return None
+    out = []
+    for part in text.split(';'):
+        bits = part.split()
+        if len(bits) != 3:
+            return None
+        try:
+            d = date.fromisoformat(bits[0]).isoformat()
+            q, c = float(bits[1]), float(bits[2])
+        except ValueError:
+            return None
+        if q <= 0 or c < 0:
+            return None
+        out.append((d, q, c))
+    return out or None
+
+
+def _drafting_caveats(country: str, currency: str, *, lots: bool,
+                      is_transfer: bool = False) -> List[str]:
+    """The per-line notes that differ by country (CA-ACB-15 /
+    US-BASIS-08)."""
+    from taxjson.lib.country import home_currency, is_canada
+    out: List[str] = []
+    if is_canada(country):
+        if is_transfer:
+            out.append("check: the delivering broker's book value is its "
+                       "average cost, which is your ACB only if this was "
+                       "your only position in it (s.47 averages every "
+                       "identical share in all your taxable accounts).")
+        else:
+            out.append("check: IB's Basis is the cost of the lots IB "
+                       "closed (FIFO), not your ACB: the ACB averages "
+                       "every identical share in all your taxable "
+                       "accounts (s.47). If you held more of it bought "
+                       "before the data (still held, or at another "
+                       "broker), add those purchases too.")
+        if currency and currency != home_currency(country):
+            out.append(f"check: the run converts this {currency} cost "
+                       f"to CAD at the Bank of Canada rate of the line's "
+                       f"date, so the date must be the real purchase "
+                       f"date.")
+        out.append("check: a purchase within 30 days (settlement dates) "
+                   "of a loss sale of the same stock is a replacement "
+                   "for the superficial-loss rule.")
+    else:
+        if lots:
+            out.append("check: IB's lot date and cost are this lot's basis "
+                       "and the start of its holding period; if IB "
+                       "adjusted the lot for a wash sale, enter the "
+                       "original cost (taxjson applies §1091 itself).")
+        elif is_transfer:
+            out.append("check: the book value may sum several lots: write "
+                       "one line per lot with its own purchase date and "
+                       "cost — the date decides short- or long-term.")
+        else:
+            out.append("check: IB's Basis may sum several lots (FIFO): "
+                       "write one line per lot with its own purchase date "
+                       "and cost — the date decides short- or long-term.")
+    return out
+
+
+def _splits_after(events: List[Tuple[str, float, str]],
+                  when: Optional[str]) -> Tuple[float, str]:
+    """(unit factor, symbol in force) at `when` (None: before the data)
+    from a pair's split/rename history [(date, ratio, old symbol or '')],
+    walking back from the sale: every split or rename dated after
+    `when` re-denominates the units and renames back."""
+    factor = 1.0
+    symbol = ''
+    for d, ratio, old in reversed(events):
+        if when is not None and d <= when:
+            break
+        if ratio and abs(ratio) > 1e-12:
+            factor *= ratio
+        if old:
+            symbol = old
+    return factor, symbol
+
+
+def draft_purchases(
+    transactions: Iterable[TaxTransaction],
+    *,
+    country: str,
+    year: Any = None,
+    date_basis: str = 'settle',
+    transfer_rows: Iterable[Dict[str, Any]] = (),
+    registered_accounts=None,
+    journal_symbols: Optional[Set[str]] = None,
+    listed_pairs: Optional[Set[Tuple[str, str]]] = None,
+    rename_sources: Optional[Dict[str, List[str]]] = None,
+    accounts: Optional[Set[str]] = None,
+    symbol_key=None,
+) -> Tuple[List[PurchaseDraft], List[DraftGap]]:
+    """Draft `.tt` purchase lines from the broker's own cost evidence.
+
+    1. An IB sale coded C (closing) that sells units the data never
+       bought, with IB's Basis: one line per lot when IB lists the lots
+       it closed (ClosedLot rows: open date, quantity, cost); else one
+       line with the purchase date left as DATE_PLACEHOLDER. When the
+       data held some of the units sold, IB's Basis covers those too:
+       the missing units get IB's lots dated before the account's first
+       row (when they add up), else a COST_PLACEHOLDER with the
+       arithmetic in the comment.
+    2. A transfer-in that states the delivering broker's book value
+       (Questrade's or RBC's "TRANSFER BOOK VALUE"; `transfer_rows` are the
+       transfer sidecars' rows, the run leaves them out of a taxable
+       account's books): one line with the date placeholder — the
+       transfer date is not the purchase date.
+
+    A pair is drafted whole (every one of its uncovered sales) when any
+    of its sales falls in `year` (on `date_basis`), or always when
+    `year` is None: a draft for one sale of a pair would otherwise be
+    consumed by an earlier one. Sheltered accounts are not drafted (no
+    gain is computed there). Quantities are in the units in force on
+    the purchase date (a split in the data after it is undone). Returns
+    (drafts, gaps); gaps are the sales and transfer-ins left undrafted,
+    with the reason. `accounts`: draft only these (every account's rows
+    still count for the Canadian cross-account check). `symbol_key`: a
+    transfer row's symbol as the books spell it (ticker.map's renames —
+    the sidecars keep the broker's spelling, which the draft line
+    uses); identity by default."""
+    from taxjson.lib.country import canonical_country, is_canada
+    country = canonical_country(country)
+    year_str = str(year) if year is not None else None
+    listed = {(str(s).upper(), str(a)) for s, a in (listed_pairs or ())}
+    txs = list(transactions)
+    first_day: Dict[str, str] = {}
+    for t in txs:
+        d = str(t.date or '')[:10]
+        if d and (t.account not in first_day or d < first_day[t.account]):
+            first_day[t.account] = d
+    sorted_txs = _drop_duplicate_splits(sorted(
+        txs, key=lambda t: (_walk_key(t, journal_symbols),
+                            0 if float(t.quantity or 0) > 0 else 1)))
+
+    def _new():
+        return {'qty': 0.0, 'cost': 0.0, 'events': [], 'sales': [],
+                'in_year': False, 'tt_qty': 0.0, 'low': 0.0,
+                'bought': False}
+    state: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    orders = OrderStarts()
+    for tx in sorted_txs:
+        key = (tx.symbol, tx.account)
+        if tx.action == 'SPLIT':
+            ratio = float(tx.quantity or 0.0)
+            new_sym = normalize_symbol_new(tx.symbol,
+                                           getattr(tx, 'symbol_new', ''))
+            s = state.setdefault(key, _new())
+            if new_sym:
+                t = state.setdefault((new_sym, tx.account), _new())
+                t['qty'] += s['qty'] * ratio
+                t['cost'] += s['cost']
+                t['events'] = (s['events'] + [(str(tx.date)[:10], ratio,
+                                               tx.symbol)])
+                t['low'] = min(t['low'], s['low'] * ratio)
+                t['bought'] = t['bought'] or s['bought']
+                s['qty'] = s['cost'] = 0.0
+            else:
+                s['qty'] *= ratio
+                s['events'].append((str(tx.date)[:10], ratio, ''))
+            continue
+        if tx.action not in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
+                             'TRANSFER'):
+            continue
+        s = state.setdefault(key, _new())
+        prev = s['qty']
+        q = float(tx.quantity or 0.0)
+        order_prev = orders.prev(key, tx, prev)
+        if q > 0:
+            if str(getattr(tx, 'type', '') or '') == \
+                    TRANSFER_BOOK_VALUE_TYPE:
+                s['booked_bv'] = s.get('booked_bv', 0.0) + q
+            s['qty'] = prev + q
+            s['bought'] = True
+            if prev >= 0:
+                s['cost'] += abs(float(tx.net_amount or 0.0))
+            else:
+                s['cost'] = (abs(float(tx.net_amount or 0.0))
+                             * max(0.0, prev + q) / q)
+            if (tx.action == 'BUYSELL'
+                    and str(getattr(tx, 'source', '') or '')
+                    .lower().endswith('.tt')):
+                s['tt_qty'] += q
+            continue
+        if q >= 0:
+            continue
+        held = max(prev, 0.0)
+        held_cost = s['cost'] if held > 1e-12 else 0.0
+        s['qty'] = prev + q
+        s['low'] = min(s['low'], s['qty'])
+        if prev > 1e-12:
+            s['cost'] = (s['cost'] * max(0.0, prev + q) / prev
+                         if prev + q > 1e-12 else 0.0)
+        unbacked = abs(q) - held
+        if unbacked <= 1e-9:
+            continue
+        closing = unbacked_close(tx, prev, order_prev)
+        if not closing and (broker_short_marker(tx)
+                            or _derivative_symbol(tx.symbol or '')):
+            # A short the broker declares (RBC SHORT., IB code O) or an
+            # option / future sold to open: a real position, not a
+            # missing purchase (R1-8, S013-00).
+            continue
+        if year_str is None or _basis_date(tx, date_basis).startswith(
+                year_str):
+            s['in_year'] = True
+        s['sales'].append({
+            'tx': tx, 'unbacked': unbacked, 'held': held,
+            'held_cost': held_cost, 'events': list(s['events']),
+        })
+
+    drafts: List[PurchaseDraft] = []
+    gaps: List[DraftGap] = []
+    # Canada pools identical shares across taxable accounts (s.47): the
+    # other taxable accounts that trade each symbol.
+    traded_in: Dict[str, Set[str]] = {}
+    for t in txs:
+        if (t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER')
+                and not is_registered_account(t.account,
+                                              registered_accounts,
+                                              country)):
+            traded_in.setdefault(t.symbol, set()).add(t.account)
+    for (symbol, account), s in sorted(state.items()):
+        if not s['sales'] or not s['in_year']:
+            continue
+        if accounts is not None and account not in accounts:
+            continue
+        if is_registered_account(account, registered_accounts, country):
+            for sale in s['sales']:
+                gaps.append(DraftGap(account, symbol,
+                                     str(sale['tx'].date), sale['unbacked'],
+                                     'sheltered account (no gain is '
+                                     'computed there)'))
+            continue
+        pair_drafts: List[PurchaseDraft] = []
+        pair_gaps: List[DraftGap] = []
+        for sale in s['sales']:
+            d, g = _draft_sale(sale, symbol, account, country,
+                               first_day.get(account, ''),
+                               rename_sources or {})
+            pair_drafts += d
+            pair_gaps += g
+        if pair_drafts and pair_gaps:
+            # The pair stays short until every gap is filled: say so on
+            # its drafts.
+            short = sum(g.quantity for g in pair_gaps)
+            for dr in pair_drafts:
+                dr.comments += (f"CHECK: {short:g} more unit(s) of "
+                                f"{symbol} were sold with no purchase in "
+                                f"your files and no broker cost — their "
+                                f"purchase is not drafted; without it the "
+                                f"sales still draw on missing history.",)
+                dr.warn = True
+        others = sorted(traded_in.get(symbol, set()) - {account})
+        if pair_drafts and others and is_canada(country):
+            for dr in pair_drafts:
+                dr.comments += (f"CHECK: you also hold or trade {symbol} "
+                                f"in {', '.join(others)}: the ACB pools "
+                                f"those shares with these (s.47), so "
+                                f"IB's lot cost is not this sale's ACB — "
+                                f"those accounts' history must be "
+                                f"complete too.",)
+                dr.warn = True
+        if pair_drafts and (str(symbol).upper(), account) in listed:
+            for dr in pair_drafts:
+                dr.comments += ("once these lines are in a .tt file, "
+                                "remove " + f"{symbol} / {account} from "
+                                "missing_history.json.",)
+        drafts += pair_drafts
+        gaps += pair_gaps
+
+    t_drafts, t_gaps = _draft_transfers(
+        [r for r in transfer_rows
+         if accounts is None or float(r.get('quantity') or 0) < 0
+         or r.get('account') in accounts],
+        state, country, registered_accounts, symbol_key or (lambda x: x))
+    # A sale whose units a drafted transfer-in delivered is fixed by
+    # that line: not listed as undrafted.
+    delivered: Dict[Tuple[str, str], float] = {}
+    for dr in t_drafts:
+        k = ((symbol_key or (lambda x: x))(dr.symbol), dr.account)
+        delivered[k] = delivered.get(k, 0.0) + dr.quantity
+        if (str(k[0]).upper(), dr.account) in listed:
+            dr.comments += ("once this line is in a .tt file, remove "
+                            f"{k[0]} / {dr.account} from "
+                            "missing_history.json.",)
+    kept: List[DraftGap] = []
+    for g in gaps:
+        left = delivered.get((g.symbol, g.account), 0.0)
+        if g.reason.startswith('no broker cost') and left > 1e-9:
+            used = min(left, g.quantity)
+            delivered[(g.symbol, g.account)] = left - used
+            if used >= g.quantity - 1e-9:
+                continue
+            g.quantity -= used
+            g.reason += (" (the rest of this sale is the drafted "
+                         "transfer-in's)")
+        kept.append(g)
+    return drafts + t_drafts, kept + t_gaps
+
+
+def _draft_sale(sale: Dict[str, Any], symbol: str, account: str,
+                country: str, first_day: str,
+                rename_sources: Dict[str, List[str]]
+                ) -> Tuple[List[PurchaseDraft], List[DraftGap]]:
+    """The draft lines (or the gap) for one sale with unbacked units."""
+    tx = sale['tx']
+    u = sale['unbacked']
+    sale_date = str(tx.date or '')[:10]
+    gap = DraftGap(account, symbol, sale_date, u, '')
+    if (symbol or '').startswith(('F:', '/', '\\')):
+        gap.reason = ("a future: IB's Basis on a futures close is not a "
+                      "purchase cost")
+        return [], [gap]
+    basis = parse_broker_basis(getattr(tx, 'broker_basis', '') or '')
+    if basis is None:
+        gap.reason = ("no broker cost on the sale (only an IB sale coded "
+                      "C carries one, in a statement with the Basis "
+                      "column)")
+        return [], [gap]
+    amount, cur = basis
+    mult = float(getattr(tx, 'multiplier', 0.0) or 0.0) or (
+        100.0 if is_option_symbol(symbol) else 1.0)
+    sold = abs(float(tx.quantity or 0.0))
+    src = (f"IB sale {sale_date} of {sold:g} {symbol} (code C, row "
+           f"{_mask_id(tx.id)}"
+           + (f", {tx.source}" if getattr(tx, 'source', '') else '')
+           + ")")
+    ev = f"IB Basis {amount:,.2f} {cur} for the {sold:g} sold"
+    lots = parse_broker_lots(getattr(tx, 'broker_lots', '') or '')
+    lot_note = ''
+    if lots is not None and abs(sum(q for _, q, _ in lots) - sold) > 1e-6:
+        lot_note = ("IB's Closed Lots do not add up to the sale's "
+                    "quantity — not used")
+        lots = None
+    if lots is not None and sale['held'] > 1e-12:
+        # Only the lots bought before the data are missing.
+        pre = [lt for lt in lots if first_day and lt[0] < first_day]
+        if abs(sum(q for _, q, _ in pre) - u) <= 1e-6:
+            lots = pre
+        else:
+            lot_note = ("IB's Closed Lots dated before your data do not "
+                        "add up to the units missing — not used")
+            lots = None
+    # The line goes under the broker's own spelling when ticker.map
+    # renames it into the books' symbol (the run maps the .tt line the
+    # same way; the holdings hand-off keys on the broker's listing —
+    # S049-01): the rename source whose root is IB's raw symbol.
+    rename_note = ''
+    line_symbol = symbol
+    srcs = rename_sources.get(symbol) or []
+    raw = str(getattr(tx, 'description', '') or '').strip().upper() \
+        .replace(' ', '.')
+    mine = [x for x in srcs if x.upper().rsplit('.', 1)[0] == raw]
+    if len(mine) == 1:
+        line_symbol = mine[0]
+        rename_note = (f"{line_symbol} is the broker's symbol: ticker.map "
+                       f"maps it to {symbol}, as it maps the sale.")
+    elif srcs:
+        rename_note = (f"check: ticker.map renames {', '.join(srcs)} to "
+                       f"{symbol} — enter the purchase under the "
+                       f"broker's symbol and currency, as the account "
+                       f"labels it.")
+    out: List[PurchaseDraft] = []
+    if lots is not None:
+        for lot_date, lq, lc in lots:
+            factor, old = _splits_after(sale['events'], lot_date)
+            comments = [src, f"{ev}; this lot: opened {lot_date}, "
+                             f"{lq:g} units, cost {lc:,.2f} {cur} "
+                             f"(IB Closed Lots)"]
+            if abs(factor - 1.0) > 1e-12 or old:
+                comments.append(
+                    f"quantity in the units of {lot_date}: a split or "
+                    f"rename in your data after it turns {lq / factor:g} "
+                    f"{old or symbol} into {lq:g} {symbol}.")
+            comments += _drafting_caveats(country, cur, lots=True)
+            if rename_note:
+                comments.append(rename_note)
+            out.append(PurchaseDraft(
+                account=account, symbol=old or line_symbol,
+                quantity=lq / factor, currency=cur, cost=lc,
+                date=lot_date, multiplier=mult, source='ib-lot',
+                sale_date=sale_date, comments=tuple(comments)))
+        return out, []
+    factor, old = _splits_after(sale['events'], None)
+    comments = [src, ev + (" (no lot detail in the export)"
+                           if not lot_note else f" ({lot_note})")]
+    warn = False
+    if sale['held'] > 1e-12:
+        rest = amount - sale['held_cost']
+        comments.append(
+            f"CHECK: your data held {sale['held']:g} of the units sold "
+            f"(cost {sale['held_cost']:,.2f} in the books' currency) and "
+            f"IB's Basis covers all {sold:g}: the {u:g} missing units' "
+            f"cost is not known. If this sale closed your whole position "
+            f"and the books' currency is {cur}, it is {amount:,.2f} - "
+            f"{sale['held_cost']:,.2f} = {rest:,.2f}; else use the "
+            f"purchase confirmation.")
+        cost = None
+        warn = True
+    else:
+        cost = amount
+    comments.append("fill in: the purchase date (the broker does not say "
+                    "when these units were bought).")
+    if abs(factor - 1.0) > 1e-12 or old:
+        comments.append(
+            f"quantity in the units before your data: a split or rename "
+            f"in your data turns {u / factor:g} {old or symbol} into "
+            f"{u:g} {symbol}.")
+    comments += _drafting_caveats(country, cur, lots=False)
+    if rename_note:
+        comments.append(rename_note)
+    out.append(PurchaseDraft(
+        account=account, symbol=old or line_symbol, quantity=u / factor,
+        currency=cur, cost=cost, date=None, multiplier=mult,
+        source='ib-basis', sale_date=sale_date, comments=tuple(comments),
+        warn=warn))
+    return out, []
+
+
+def _draft_transfers(rows: List[Dict[str, Any]],
+                     state: Dict[Tuple[str, str], Dict[str, Any]],
+                     country: str, registered_accounts, key
+                     ) -> Tuple[List[PurchaseDraft], List[DraftGap]]:
+    """Drafts from transfer-ins that state the delivering broker's book
+    value (rows of the transfer sidecars)."""
+    drafts: List[PurchaseDraft] = []
+    gaps: List[DraftGap] = []
+    outs = [r for r in rows if float(r.get('quantity') or 0) < 0]
+    tt_left: Dict[Tuple[str, str], float] = {
+        k: s.get('tt_qty', 0.0) for k, s in state.items()}
+    bv_left: Dict[Tuple[str, str], float] = {
+        k: s.get('booked_bv', 0.0) for k, s in state.items()}
+    for r in sorted(rows, key=lambda r: (str(r.get('date') or ''),
+                                         str(r.get('symbol') or ''))):
+        q = float(r.get('quantity') or 0)
+        if q <= 1e-12 or r.get('action', 'TRANSFER') != 'TRANSFER':
+            continue
+        m = _TRANSFER_BOOK_VALUE_RE.search(str(r.get('description') or ''))
+        if not m:
+            continue
+        symbol = str(r.get('symbol') or '')
+        account = str(r.get('account') or '')
+        d = str(r.get('date') or '')[:10]
+        gap = DraftGap(account, symbol, d, q, '')
+        if is_registered_account(account, registered_accounts, country):
+            gap.reason = 'sheltered account (no gain is computed there)'
+            gaps.append(gap)
+            continue
+        own = next((o for o in outs
+                    if o.get('account') != account
+                    and o.get('symbol') == symbol
+                    and abs(abs(float(o.get('quantity') or 0)) - q) < 1e-9
+                    and _day_gap(o.get('date') or '', d) <= _OWN_MOVE_DAYS),
+                   None)
+        if own is not None:
+            gap.reason = (f"a move from your account {own.get('account')}"
+                          f" — its cost carries over, it is not a "
+                          f"purchase")
+            gaps.append(gap)
+            continue
+        book_key = (key(symbol), account)
+        if tt_left.get(book_key, 0.0) >= q - 1e-9:
+            tt_left[book_key] -= q
+            gap.reason = "your .tt purchase lines already cover it"
+            gaps.append(gap)
+            continue
+        if bv_left.get(book_key, 0.0) >= q - 1e-9:
+            bv_left[book_key] -= q
+            gap.reason = ("the run already books it at the stated book "
+                          "value")
+            gaps.append(gap)
+            continue
+        st = state.get(book_key) or {}
+        if st.get('bought') and st.get('low', 0.0) >= -1e-9:
+            # Your files acquire it and no sale of it goes short: the
+            # shares are in the books already (another export, a .tt
+            # line under another quantity) — a draft would count them
+            # twice. Shares still held but missing show in `sanity`.
+            gap.reason = ("your files already acquire it and no sale "
+                          "goes short — a line would count it twice "
+                          "(`taxjson sanity` shows a position still "
+                          "short of the broker's)")
+            gaps.append(gap)
+            continue
+        try:
+            amount = float(m.group(1).replace(',', ''))
+        except ValueError:
+            continue
+        cur = str(r.get('currency') or '').upper()
+        mult = float(r.get('multiplier') or 0.0) or (
+            100.0 if is_option_symbol(symbol) else 1.0)
+        comments = [f"transfer-in {d} of {q:g} {symbol} (row "
+                    f"{_mask_id(r.get('id'))}"
+                    + (f", {r.get('source')}" if r.get('source') else '')
+                    + ")",
+                    f"the delivering broker's book value "
+                    f"{amount:,.2f} {cur}, as printed on the row",
+                    "fill in: the ORIGINAL purchase date at the other "
+                    "broker (the transfer date is not a purchase date)."]
+        warn = False
+        if st.get('bought') and -st.get('low', 0.0) < q - 1e-6:
+            comments.append(
+                f"CHECK: your files already acquire some {symbol} and "
+                f"its sales go at most {-st.get('low', 0.0):g} units "
+                f"short: part of these {q:g} may be in your files "
+                f"already — keep only the units that are not.")
+            warn = True
+        comments += _drafting_caveats(country, cur, lots=False,
+                                      is_transfer=True)
+        drafts.append(PurchaseDraft(
+            account=account, symbol=symbol, quantity=q, currency=cur,
+            cost=amount, date=None, multiplier=mult, source='transfer',
+            comments=tuple(comments), warn=warn))
+    return drafts, gaps
+
+
+def format_purchase_drafts(drafts: List[PurchaseDraft],
+                           gaps: List[DraftGap], *, country: str,
+                           account: str, final_name: str = "purchases.tt"
+                           ) -> str:
+    """The draft file's text for one account: a header that says how to
+    use it, then each line under its `#` notes."""
+    from taxjson.lib.country import is_canada
+    ca = is_canada(country)
+    head = [
+        f"# {DRAFT_NAME} — DRAFT purchase lines for account {account},",
+        "# written by `taxjson find-missing-history --write-purchases`.",
+        "#",
+        "# taxjson does NOT read this file (its name ends in .txt). For "
+        "each line:",
+        "#   1. check it against your records (statements, trade "
+        "confirmations);",
+        f"#   2. replace every {DATE_PLACEHOLDER} with the real purchase "
+        f"date and every {COST_PLACEHOLDER} with the real cost (total = "
+        "qty x price + commission; price = total / qty);",
+        "#   3. delete any line you cannot vouch for.",
+        f"# Then rename the file to {final_name} (any name ending in .tt) "
+        "in this folder and run `taxjson run`.",
+        f"# A line still holding {DATE_PLACEHOLDER} or {COST_PLACEHOLDER} "
+        "is refused by the run.",
+        "#",
+        "# The broker's figure is evidence; once you keep a line, its "
+        "cost is YOUR statement of what you paid "
+        + ("(tax-logic CA-ACB-15)." if ca else "(tax-logic US-BASIS-08)."),
+    ]
+    if ca:
+        head += [
+            "# Canada: your ACB is the average cost of every identical "
+            "share you held in all taxable accounts — a broker's lot cost "
+            "or book value is a start, not always your ACB. A non-CAD "
+            "line is converted at the Bank of Canada rate of its date.",
+        ]
+    else:
+        head += [
+            "# United States: each lot keeps its own basis and purchase "
+            "date; the date decides short- or long-term.",
+        ]
+    body: List[str] = []
+    for dr in drafts:
+        body.append("")
+        for c in dr.comments:
+            body.append(f"# {c}")
+        body.append(dr.tt_line())
+    tail: List[str] = []
+    if gaps:
+        tail += ["", "# Not drafted (fix these another way — "
+                     "docs/getting-started.md, step 5b):"]
+        for g in gaps:
+            tail.append(f"#   {g.symbol} {g.date} {g.quantity:g} units: "
+                        f"{g.reason}")
+    return "\n".join(head + body + tail) + "\n"
+
+
 # The names this module had as lib/phantom_holdings (before 2026-10),
 # kept so external code importing them keeps working.
 PhantomCandidate = MissingHistoryCandidate
