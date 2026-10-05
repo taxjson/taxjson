@@ -29,6 +29,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from _radar_text import radar_rows
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -255,7 +257,7 @@ class TestRadarMultiLossAndDirection(unittest.TestCase):
             _row("BUYSELL", "2026-06-20", "ML.TO", -10, 400.0),    # loss #2
         ]
         out = _radar(txs, "2026-06-25")
-        line = next(l for l in out.splitlines() if l.startswith("ML.TO"))
+        line = next(l for l in radar_rows(out) if l.startswith("ML.TO"))
         self.assertIn("VIOLATION", line)
         # loss #1's rescue deadline: settle bound 07-01, and the last
         # T+1 TRADE date that settles inside it is what the user is told
@@ -272,7 +274,7 @@ class TestRadarMultiLossAndDirection(unittest.TestCase):
             _row("BUYSELL", "2026-06-10", "SHT.TO", 40, 800.0),     # cover @loss
         ]
         out = _radar(txs, "2026-06-15")
-        line = next(l for l in out.splitlines() if l.startswith("SHT.TO"))
+        line = next(l for l in radar_rows(out) if l.startswith("SHT.TO"))
         self.assertNotIn("VIOLATION: Sell", line)
 
     def test_reshort_in_window_is_cover_violation(self):
@@ -288,10 +290,10 @@ class TestRadarMultiLossAndDirection(unittest.TestCase):
             _row("BUYSELL", "2026-06-12", "RSH.TO", -40, 400.0),    # re-short
         ]
         out = _radar(txs, "2026-06-15", "--country", "usa")
-        line = next(l for l in out.splitlines() if l.startswith("RSH.TO"))
+        line = next(l for l in radar_rows(out) if l.startswith("RSH.TO"))
         self.assertIn("WASHED:", line)
         out = _radar(txs, "2026-06-15")
-        line = next(l for l in out.splitlines() if l.startswith("RSH.TO"))
+        line = next(l for l in radar_rows(out) if l.startswith("RSH.TO"))
         self.assertNotIn("VIOLATION", line)
 
     def test_duplicate_same_account_split_rows_apply_once(self):
@@ -303,7 +305,7 @@ class TestRadarMultiLossAndDirection(unittest.TestCase):
             _row("BUYSELL", "2026-03-01", "DUP.TO", -200, 1000.0),  # closes all
         ]
         out = _radar(txs, "2026-03-05")
-        line = next((l for l in out.splitlines() if l.startswith("DUP.TO")), "")
+        line = next((l for l in radar_rows(out) if l.startswith("DUP.TO")), "")
         if line:      # position fully closed → qty column must be 0
             cells = [c.strip() for c in line.split("|")]
             self.assertAlmostEqual(float(cells[1]), 0.0)

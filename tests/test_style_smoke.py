@@ -33,6 +33,8 @@ class TestConvertedCommands(unittest.TestCase):
 
     CASES = [("wash-sales",), ("wash-sales", "--explain"), ("elect",),
              ("elect", "margin"),
+             ("wash-radar",), ("wash-radar", "--date", "2024-11-25", "--all"),
+             ("fx-cash",), ("fx-cash", "--events"),
              # group A (run, init, fetch: tests/test_style_run.py)
              ("format",), ("migrate", "--dry-run")]
 

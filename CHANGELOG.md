@@ -45,6 +45,25 @@
   it now names up to six and says how many more). No figure, `--json`
   output or file changes.
 
+- **The planning commands in the house output style.** `taxjson
+  wash-radar` prints one section per advisory category (its title and
+  row count) with a TICKER / TAXABLE / SHELTERED / CLEARS table and each
+  advisory once, wrapped, under the rows it applies to (a warn-only flag
+  as its own `note:` line), then the definitions as a list and the
+  scope paragraph — not a pipe table hundreds of columns wide.
+  `taxjson harvest` fits the width: a table too wide for it is split
+  into tables that fit, each led by ACCOUNT and SYMBOL — the position
+  and its verdict, the radar's advisory with the last buys, the cost
+  with the break-even price (narrower still, one block per position) —
+  and the column notes are a list under COLUMNS, the rest under NOTES;
+  its pricing progress is a note on stderr. `buy-check` and `sell-check` list each symbol's reasons as
+  items under its verdict; `scan`, `watch` (each change an item) and
+  `fx-cash` (the cash events as a table) wrap and separate their
+  sections; the scope paragraph these share wraps. Their errors and
+  warnings are a headline with indented details. No figure, `--json`
+  output or `reports/wash_radar_*.json` changes, and `fx-cash` still
+  ends with the line the checklist shows.
+
 
 ## v0.18.0 (2026-10-05)
 
