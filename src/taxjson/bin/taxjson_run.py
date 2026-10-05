@@ -1062,21 +1062,31 @@ def _child_error(stderr: Optional[str], limit: int = 400) -> str:
                      for k in keep)
 
 
-def _die(msg: str) -> None:
-    prefix = f"{_PROG} {_CURRENT_CMD}: " if _CURRENT_CMD else f"{_PROG}: "
-    sys.exit(prefix + msg)
+def _cmd_prog() -> str:
+    """`taxjson <command>` while a command runs (the prog of its
+    messages), else `taxjson` (`tjs` when invoked so)."""
+    return f"{_PROG} {_CURRENT_CMD}" if _CURRENT_CMD else _PROG
 
 
-def _die_input(msg: str) -> None:
+def _die(msg: str, *details: str) -> None:
+    """Stop the command, exit 1: `taxjson <cmd>: error: <msg>`, then each
+    of `details` as an indented paragraph (docs/output-style.md). Keep
+    `msg` a short headline — what was refused, about what — and put the
+    why and the fix in `details`. SystemExit carries the text, as
+    sys.exit(msg) did."""
+    from taxjson.lib.out import fail
+    fail(msg, prog=_cmd_prog(), details=details, code=1)
+
+
+def _die_input(msg: str, *details: str) -> None:
     """Like _die, with exit 2: a named input (or output) that is missing
     or cannot be read or written, or a usage error. Exit 1 stays the
     command's FINDING (drift, a handoff problem, PII found, a lint hit),
     so cron and the checklist can tell 'broken input' from 'finding' —
     the cli_diag convention every console script follows (re-audit
     A2-0164)."""
-    prefix = f"{_PROG} {_CURRENT_CMD}: " if _CURRENT_CMD else f"{_PROG}: "
-    print(prefix + msg, file=sys.stderr)
-    sys.exit(2)
+    from taxjson.lib.out import fail
+    fail(msg, prog=_cmd_prog(), details=details, code=2)
 
 
 
@@ -6807,10 +6817,13 @@ _align_columns = align_columns
 
 
 def _print_report_table(rows: List[str], padding: str = "   ",
-                        rule_before_last: bool = False) -> None:
-    """print()s taxjson.lib.report_model.format_report_table — see there."""
+                        rule_before_last: bool = False, **fit) -> None:
+    """print()s taxjson.lib.report_model.format_report_table — see there
+    (`fit=True, drop=..., key=...`: the house table that fits the
+    width)."""
     for line in format_report_table(rows, padding=padding,
-                                    rule_before_last=rule_before_last):
+                                    rule_before_last=rule_before_last,
+                                    **fit):
         print(line)
 
 
@@ -11517,12 +11530,11 @@ def cmd_amt(args: argparse.Namespace) -> None:
 
 
 def _wrap_note(text: str, indent: str = "  ") -> str:
-    """Report prose wrapped to the house 78-column width — the AMT
-    explanation and the assumptions footer ran off the edge on any
-    terminal while every table beside them was capped."""
-    import textwrap
-    return textwrap.fill(text, width=78, initial_indent=indent,
-                         subsequent_indent=indent)
+    """Report prose wrapped to the house width (lib/out: 100, or the
+    terminal's) — the AMT explanation and the assumptions footer ran off
+    the edge on any terminal while every table beside them was capped."""
+    from taxjson.lib.out import fill
+    return fill(text, indent=indent)
 
 
 def _trace_bracket_rows(brackets, ti_base: float, ti_with: float):

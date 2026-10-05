@@ -62,6 +62,36 @@ def fmt_qty6(x) -> str:
 # bare ints, percentages, or the '-' placeholder. Signs and thousands
 # separators included; anything else (tickers, dates, marks) is text.
 _NUMERIC_CELL_RE = re.compile(r"^[+-]?\d[\d,]*(\.\d+)?%?$|^-$")
+# The cells auto_aligns() right-aligns: the above, a `$` amount and the
+# `—` placeholder too (the house tables, docs/output-style.md).
+_NUMERIC_AUTO_RE = re.compile(r"^[+-]?\$?\d[\d,]*(\.\d+)?%?$|^[-—]$")
+
+
+def auto_aligns(headers, body) -> "list[str]":
+    """render_table aligns for `body`: '>' for a column whose every
+    non-empty cell is a number (money, count, percentage, a '-' or '—'
+    placeholder), '<' otherwise."""
+    aligns = []
+    for i in range(len(headers)):
+        cells = [str(r[i]) for r in body if i < len(r) and str(r[i])]
+        numeric = bool(cells) and all(_NUMERIC_AUTO_RE.match(c)
+                                      for c in cells)
+        aligns.append(">" if numeric else "<")
+    return aligns
+
+
+def _tokenize(lines: "list[str]") -> "list[list[str]]":
+    """Whitespace-split row strings; a row with MORE tokens than the
+    header gets its leading extras merged into the first cell (see
+    align_columns)."""
+    rows = [ln.split() for ln in lines]
+    if rows and rows[0]:
+        ncols = len(rows[0])
+        for r in rows:
+            if len(r) > ncols:
+                extra = len(r) - ncols + 1
+                r[:extra] = [" ".join(r[:extra])]
+    return rows
 
 
 def align_columns(lines: "list[str]", padding: str = " ",
@@ -78,13 +108,7 @@ def align_columns(lines: "list[str]", padding: str = " ",
     used to shift every subsequent column of that row under the wrong
     header (REVIEW #15). Merging left matches where free-text cells
     live (first column) in every table this renders."""
-    rows = [ln.split() for ln in lines]
-    if rows and rows[0]:
-        ncols = len(rows[0])
-        for r in rows:
-            if len(r) > ncols:
-                extra = len(r) - ncols + 1
-                r[:extra] = [" ".join(r[:extra])]
+    rows = _tokenize(lines)
     widths: "list[int]" = []
     for r in rows:
         for i, f in enumerate(r):
@@ -110,11 +134,31 @@ def align_columns(lines: "list[str]", padding: str = " ",
 
 
 def format_report_table(rows: "list[str]", padding: str = "   ",
-                        rule_before_last: bool = False) -> "list[str]":
+                        rule_before_last: bool = False, *,
+                        fit: bool = False, drop=(), key=0,
+                        width_: "Optional[int]" = None) -> "list[str]":
     """Aligned table lines (first row is the header) with a wider column
     gap and a `---` underline beneath the header — for the readable report
     views, as opposed to the compact taxtext logs. `rule_before_last` also
-    rules off the final row (e.g. a TOTAL). Returns the list of lines."""
+    rules off the final row (e.g. a TOTAL). Returns the list of lines.
+
+    `fit=True`: the house table (docs/output-style.md) — lib/out.fit_table
+    over the same cells: two-space gaps, numeric columns right-aligned,
+    and when wider than the width the `drop` columns go first (indexes,
+    least important first), then one record per row headed by the `key`
+    column(s). Opt in per table, after checking no program reads its rows
+    (the doc lists the ones that are read)."""
+    if fit:
+        from taxjson.lib.out import fit_table
+        cells = _tokenize(rows)
+        if not cells:
+            return []
+        body = cells[1:]
+        foot = []
+        if rule_before_last and len(body) > 1:
+            body, foot = body[:-1], body[-1:]
+        return fit_table(cells[0], body, foot=foot, drop=drop, key=key,
+                         width_=width_)
     aligned = align_columns(rows, padding=padding, numeric_right=True)
     if not aligned:
         return []
@@ -158,8 +202,12 @@ def load_report_json(path: Optional[Path] = None) -> Any:
 
 def render_table(headers, aligns, body, foot=(), gap="  "):
     """Render a column table sized to the data. A header may contain '\\n' to
-    stack lines; an all-empty column is dropped. Returns the list of lines."""
+    stack lines; an all-empty column is dropped. `aligns` None: numeric
+    columns right, the rest left (auto_aligns). Returns the list of lines.
+    (Not width-aware: lib/out.fit_table fits one to the width.)"""
     ncol = len(headers)
+    if aligns is None:
+        aligns = auto_aligns(headers, [list(r) for r in body] + list(foot))
     aligns = list(aligns) + [">"] * (ncol - len(aligns))
 
     def pad(row):

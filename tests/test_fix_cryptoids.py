@@ -133,7 +133,7 @@ class TestDefaultIdFailureNamesTheLine(unittest.TestCase):
     def test_mapped_id_failure_has_no_add_a_line_hint(self):
         p, err = self._price("QZX", {"QZX": "QZX55505"})
         self.assertEqual(p, 0.0)
-        self.assertIn("(Yahoo QZX55505-USD)", err)
+        self.assertIn("(Yahoo QZX55505-USD)", " ".join(err.split()))
         self.assertNotIn("CRYPTO QZX", err)
 
     def test_unpriced_summary_names_the_line_per_coin(self):

@@ -1,0 +1,12 @@
+# synthetic positions report
+date = "2024-12-31"
+[[holding]]
+symbol = "QZQ.US"
+quantity = 100
+currency = "USD"
+book_value = 240.10
+[[holding]]
+symbol = "SAMPA.US"
+quantity = 90
+currency = "USD"
+book_value = 340.00

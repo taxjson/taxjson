@@ -1,11 +1,13 @@
 """Canadian tax instalments: schedule, offset interest, s.163.1."""
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 from tax_rules import rule
 
@@ -200,13 +202,17 @@ class TestInstalmentsCli(unittest.TestCase):
     def test_schedule_interest_and_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp)
-            r = _cli(root, "instalments")
+            # At the house width (the suite runs unwrapped).
+            with mock.patch.dict(os.environ):
+                os.environ.pop("TAXJSON_WIDTH", None)
+                r = _cli(root, "instalments")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("TAX INSTALMENTS", r.stdout)
             self.assertIn("2026-03-16", r.stdout)
             self.assertIn("INTEREST (offset method", r.stdout)
             for line in r.stdout.splitlines():
-                self.assertLessEqual(len(line), 78, repr(line))
+                # The house width (docs/output-style.md).
+                self.assertLessEqual(len(line), 100, repr(line))
             rj = _cli(root, "instalments", "--json")
         doc = json.loads(rj.stdout)
         self.assertEqual(len(doc["required"]), 4)
@@ -306,7 +312,8 @@ class TestQuarterlyRateResets(unittest.TestCase):
         self.assertIn("8.00%", text)
         self.assertIn("10.00% from 2026-10-01", text)
         for line in text.splitlines():
-            self.assertLessEqual(len(line), 78, repr(line))
+            # The house width (docs/output-style.md).
+                self.assertLessEqual(len(line), 100, repr(line))
 
 
 class TestInterestUsesTheCheapestBasis(unittest.TestCase):
@@ -354,7 +361,8 @@ class TestInterestUsesTheCheapestBasis(unittest.TestCase):
         self.assertIn("2025 refund transferr", text)   # may elide
         self.assertIn("161(4.01)", text)
         for line in text.splitlines():
-            self.assertLessEqual(len(line), 78, repr(line))
+            # The house width (docs/output-style.md).
+                self.assertLessEqual(len(line), 100, repr(line))
 
 
 class TestRequirementTest(unittest.TestCase):
@@ -397,7 +405,8 @@ class TestRequirementTest(unittest.TestCase):
         self.assertIn("either of the two preceding years", flat)
         self.assertIn("placeholders", flat)
         for line in text.splitlines():
-            self.assertLessEqual(len(line), 78, repr(line))
+            # The house width (docs/output-style.md).
+                self.assertLessEqual(len(line), 100, repr(line))
 
 
 
@@ -644,7 +653,8 @@ class TestRenderBranches(unittest.TestCase):
         base.update(kw)
         text = render(build(**base), "CAD")
         for line in text.splitlines():
-            self.assertLessEqual(len(line), 78, repr(line))
+            # The house width (docs/output-style.md).
+                self.assertLessEqual(len(line), 100, repr(line))
         return text
 
     def test_below_threshold(self):

@@ -220,7 +220,7 @@ class TestLegacyMergeRefusesPartial(unittest.TestCase):
         self.assertEqual(r.returncode, 2)       # A2-0164
         self.assertEqual(r.stdout, "")
         self.assertIn("taxjson-merge: error: cannot read", r.stderr)
-        self.assertIn("partial merge", r.stderr)
+        self.assertIn("partial merge", " ".join(r.stderr.split()))
 
     def test_missing_input_is_fatal(self):
         with tempfile.TemporaryDirectory() as d:

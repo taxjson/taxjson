@@ -249,7 +249,7 @@ class TestReconcileStaleBooks(unittest.TestCase):
             slip = _slip(td, "Symbol,Proceeds\nAAPL,12000.00\n")
             r = _cli(root, "reconcile-slips", str(slip))
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("built for another tax year", r.stderr)
+        self.assertIn("built for another tax year", " ".join(r.stderr.split()))
         self.assertNotIn("MISSING_FROM_COMPUTED", r.stdout)
 
 
@@ -295,7 +295,7 @@ class TestPartialBooksRefused(unittest.TestCase):
                 r = _cli(root, cmd)
                 self.assertNotEqual(r.returncode, 0, (cmd, r.stdout))
                 self.assertIn("cash", r.stderr, cmd)
-                self.assertIn("did not build", r.stderr, cmd)
+                self.assertIn("did not build", " ".join(r.stderr.split()), cmd)
             self.assertFalse((root / "filed").exists())
             s = _cli(root, "sum")
             self.assertIn("not the clean result", s.stderr)
@@ -353,7 +353,7 @@ class TestInstalmentsCaveats(unittest.TestCase):
                 t.replace("year = 2025", "year = 2026"))
             r = _cli(root, "instalments")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("built for another tax year", r.stderr)
+        self.assertIn("built for another tax year", " ".join(r.stderr.split()))
 
     def test_vintage_note_for_an_old_year(self):
         """S043-16: a 2023 schedule says it used later tables."""

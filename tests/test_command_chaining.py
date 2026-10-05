@@ -138,7 +138,7 @@ class TestChainPreValidation(unittest.TestCase):
             root = _project(tmp)
             r = _cli(root, "events", "--", "30d")
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("nothing was executed", r.stderr)
+        self.assertIn("nothing was executed", " ".join(r.stderr.split()))
         self.assertFalse((Path(tmp) / "work").exists(),
                          "the first command must not have run")
 

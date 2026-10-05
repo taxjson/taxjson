@@ -127,7 +127,7 @@ class TestNoDefaultZone(_NoZoneEnv):
             # A UTC machine: no zone is suggested, an IANA name is asked.
             r = _cli(root, "run", "--no-input", tz="UTC")
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("cannot be read or is UTC", r.stderr)
+            self.assertIn("cannot be read or is UTC", " ".join(r.stderr.split()))
             # format / migrate still work (they date nothing).
             self.assertEqual(_cli(root, "format").returncode, 0)
             self.assertEqual(_cli(root, "migrate", "--dry-run").returncode,

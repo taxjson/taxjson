@@ -4,6 +4,13 @@
 
 ### Changed
 
+- **Every command's refusal reads `taxjson <command>: error: ...`**, wrapped
+  at the house width with its details indented under it, and the
+  `taxjson-*` tools' warnings and notes wrap the same way. What a program
+  captures (a stage's work/ and reports/ files, the `.diag` behind the
+  `.sum` DIAGNOSTICS, what the checklist reads) is never wrapped, so those
+  bytes do not change. Report notes that wrapped at 78 columns wrap at the
+  house width (100, or the terminal's).
 - **One output style, first for `elect` and `wash-sales`.** Prose wraps
   at 100 columns (at most the terminal's width; `TAXJSON_WIDTH` sets it,
   `0` turns wrapping off), sections are separated by one blank line,

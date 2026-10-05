@@ -339,7 +339,8 @@ class TestEstimateProvinceFirst(unittest.TestCase):  # B20
             root = Path(td)
             (root / "taxjson.toml").write_text(_TOML.format(year=2024))
             r = _tj(root, "estimate")
-        self.assertIn("taxjson estimate: no gains files", r.stderr)
+        # docs/output-style.md: `taxjson <cmd>: error: <headline>`.
+        self.assertIn("taxjson estimate: error: no gains files", r.stderr)
 
     def test_province_without_estimate_warns(self):
         with tempfile.TemporaryDirectory() as td:
@@ -369,7 +370,7 @@ class TestNoFalseCleanBeforeRun(unittest.TestCase):  # B22
             for sub in ("leaps", "leaps-sum"):
                 r = _tj(root, sub)
                 self.assertEqual(r.returncode, 1, sub)
-                self.assertIn(f"taxjson {sub}: no gains files", r.stderr)
+                self.assertIn(f"taxjson {sub}: error: no gains files", r.stderr)
 
 
 if __name__ == "__main__":

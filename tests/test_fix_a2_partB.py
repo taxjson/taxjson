@@ -218,13 +218,13 @@ class TestCryptoSendsGiftWording(unittest.TestCase):
         self.assertNotIn("gift or payment is a disposition", run_err)
         self.assertIn(".tt if payment:", listing)
         self.assertNotIn("gift/payment", listing)
-        self.assertIn("expected one of self, payment.", err)
+        self.assertIn("expected one of self, payment.", " ".join(err.split()))
         self.assertNotIn("(gift or payment), each is a taxable", summ)
         run_err, listing, err, summ = out["canada"]
         self.assertIn("a gift or payment is a disposition at fair value",
                       run_err)
         self.assertIn(".tt if gift/payment:", listing)
-        self.assertIn("expected one of self, gift, payment.", err)
+        self.assertIn("expected one of self, gift, payment.", " ".join(err.split()))
         self.assertIn("(gift or payment), each is a taxable", summ)
 
 

@@ -18,6 +18,17 @@ tests check the result with `out.lint()`.
   then switches to a per-record layout: one block per row, its key
   column(s) first, the other cells as `label value` pairs under it.
 
+Output **captured for a program** is never wrapped: inside
+`out.unwrapped()` `width()` is 0. `lib/dispatch.run_cmd` enters it (and
+sets `TAXJSON_WIDTH=0` for a subprocess) whenever it captures a tool's
+stdout or stderr — a stage's work/ or reports/ file, the `.diag` the
+`.sum` DIAGNOSTICS fold in — and `taxjson checklist` runs the commands
+it reads with `TAXJSON_WIDTH=0`. So those bytes never depend on a
+terminal, every line a program greps stays whole, and the checklist
+still shows a failed command's whole last line. Whoever shows captured
+text to a person wraps it then (the run's console echo of a stage's
+ATTENTION lines, for one).
+
 ## Structure
 
 - A **title** line first: `WHAT — context` (`WASH SALES — USD, tax year
@@ -69,6 +80,21 @@ out.fail("'X' matches no pending event — nothing was saved",
 does (in-process callers read the text from the exception); `code=2` (a
 usage or input error) prints and exits 2.
 
+The shared helpers already speak it:
+
+- `taxjson_run._die(headline, *details)` (exit 1) and
+  `_die_input(headline, *details)` (exit 2) print `taxjson <cmd>: error:
+  <headline>` and the details indented. An old one-string call still
+  works (the string wraps under its prefix); when you touch one, split it
+  into a short headline and details.
+- `lib/cli_diag.warn / note / error(prog, msg, details=())` print
+  `<prog>: warning: ...` the same way.
+- `_wrap_note` wraps at the house width (it was 78).
+
+Not yet converted, and each group's to do: the direct `sys.exit(f"taxjson
+<cmd>: ...")` calls, bare `print(f"warning: ...")` lines, and the
+`NOTE:` prints.
+
 ## Numbers, dates
 
 - Money: `fmt_money` — thousands separators, two decimals, `-` for a
@@ -77,6 +103,12 @@ usage or input error) prints and exits 2.
   four decimals.
 - Numbers right-align in tables (`fit_table` does it for every all-numeric
   column).
+- Tables: two-space gaps. `fit_table(headers, body, drop=, key=)` for
+  structured cells; for the views built as space-joined rows,
+  `format_report_table(rows, fit=True, drop=(...), key=(...))` (and
+  `_print_report_table(..., fit=True, ...)`) is the same table. Without
+  `fit=True` a report table keeps its old layout (three-space gaps, never
+  fitted): opt in per table, after checking no program reads its rows.
 - Dates are ISO, `YYYY-MM-DD`; a range is `FROM to TO`.
 - Paths inside the project are shown relative to it (`out.relpath`).
 
@@ -119,3 +151,28 @@ containing an `allow` substring — a command to copy — are exempt), no
 blank-line runs, no leading/trailing blank line, no retired prefix. Pin
 the meaning with the phrases a reader needs; a phrase may wrap, so compare
 against `" ".join(text.split())` when it is long.
+
+- The suite runs with `TAXJSON_WIDTH=0` (`scripts/ci.sh`, `run_tests.sh`),
+  so a phrase a test looks for never depends on where a temp path made a
+  message wrap. Run single modules the same way, or flatten the text.
+- Style tests set their own width: `tests/_style.py` builds the synthetic
+  style projects (`tests/fixtures/style/{canada,usa}`: options,
+  superficial losses, a spin-off, crypto with a send, dividends,
+  transfers, a sale with no purchase, slips, holdings, a price cache) once
+  per process and runs a command as a pipe would (width 100):
+
+  ```python
+  from _style import project, assert_styled
+  r = project("canada").run("harvest", "--no-ibkr", "--options")
+  assert_styled(self, r.stdout)              # out.lint at width 100
+  ```
+
+  `project(country, pending=True)` stops at the pending spin-off
+  election. Add each converted command to
+  `tests/test_style_smoke.py::TestConvertedCommands.CASES`.
+- Re-measure every command: `python3 scripts/style/survey.py OUTDIR`
+  (captures, both countries), then `python3 scripts/style/measure.py
+  OUTDIR` (worst first).
+- Synthetic amounts in docs, README, comments and fixtures stay under
+  1,000 (or carry a `pii-ok` marker), in the commit that adds them: the
+  pre-push check refuses an amount with thousands separators and cents.

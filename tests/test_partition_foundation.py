@@ -215,7 +215,7 @@ class TestSettingOwnership(unittest.TestCase):
                 self.assertNotEqual(r["usa"].returncode, 0)
                 self.assertIn(f"{key} is Canada-only", r["usa"].stderr)
                 self.assertIn('this project is country = "usa"',
-                              r["usa"].stderr)
+                              " ".join(r["usa"].stderr.split()))
                 # The same config in a Canada project is fine.
                 self.assertEqual(r["canada"].returncode, 0,
                                  r["canada"].stderr)
@@ -451,7 +451,7 @@ class TestBaseCurrencyFollowsCountry(unittest.TestCase):
                         validate_config(cfg)
                     self.assertIn(
                         f"filed in {C.home_currency(country)}",
-                        str(cm.exception.code))
+                        " ".join(str(cm.exception.code).split()))
 
     @rule("US-FX-01")
     @rule("CA-FX-01")

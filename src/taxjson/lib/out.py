@@ -18,6 +18,7 @@ reports/ that stages and users parse, and the run's marker lines keep
 their exact shapes (the doc lists them).
 """
 
+import contextlib
 import os
 import re
 import shutil
@@ -30,7 +31,7 @@ from taxjson.lib.report_model import fmt_money, fmt_qty, render_table
 __all__ = [
     "WIDTH", "width", "wrap", "fill", "message", "emit", "note", "warn",
     "attention", "error", "fail", "fit_table", "records", "kv_lines",
-    "relpath", "Doc", "lint", "Verbatim", "fmt_money", "fmt_qty",
+    "relpath", "Doc", "lint", "Verbatim", "unwrapped", "fmt_money", "fmt_qty",
 ]
 
 # Prose wraps here when stdout is not a terminal (a pipe, a file, a test)
@@ -44,10 +45,32 @@ MIN_WIDTH = 40
 DETAIL_INDENT = "  "
 
 
+# > 0 while output is captured for a program rather than shown to a
+# person (unwrapped()): a stage's stdout written to a work/ or reports/
+# file, its stderr kept as the .diag the .sum DIAGNOSTICS fold in, the
+# output `taxjson checklist` reads. Those are never wrapped, so their
+# bytes do not depend on a terminal and every line a program greps stays
+# whole; whoever shows them to a person wraps them then.
+_UNWRAPPED = 0
+
+
+@contextlib.contextmanager
+def unwrapped():
+    """Within it, width() is 0 — nothing wraps (see _UNWRAPPED)."""
+    global _UNWRAPPED
+    _UNWRAPPED += 1
+    try:
+        yield
+    finally:
+        _UNWRAPPED -= 1
+
+
 def width(stream=None) -> int:
-    """The wrap width for `stream` (stdout by default): TAXJSON_WIDTH when
-    set (0 = never wrap), else min(terminal width, 100) on a terminal,
-    else 100."""
+    """The wrap width for `stream` (stdout by default): 0 (never wrap)
+    inside unwrapped(); TAXJSON_WIDTH when set (0 = never wrap); else
+    min(terminal width, 100) on a terminal, else 100."""
+    if _UNWRAPPED:
+        return 0
     env = os.environ.get("TAXJSON_WIDTH", "").strip()
     if env:
         try:
@@ -87,7 +110,12 @@ def wrap(text: str, width_: Optional[int] = None, indent: str = "",
     out: List[str] = []
     first = True
     for part in str(text).split("\n"):
-        lead = indent if first else hang
+        own = part[:len(part) - len(part.lstrip())]
+        # A later line that brings its own indentation (a message's
+        # "\n  - item" lines) keeps it; a bare one hangs.
+        lead = indent if first else (own or hang)
+        hang_part = hang if first or not own else (
+            own + ("  " if part.lstrip().startswith("- ") else ""))
         first = False
         if not part.strip():
             out.append("")
@@ -99,7 +127,7 @@ def wrap(text: str, width_: Optional[int] = None, indent: str = "",
         else:
             lines = textwrap.wrap(
                 protected.strip(), width=max(w, len(lead) + 20),
-                initial_indent=lead, subsequent_indent=hang,
+                initial_indent=lead, subsequent_indent=hang_part,
                 break_long_words=False, break_on_hyphens=False) or [lead]
         out.extend(ln.replace(_NBSP, " ") for ln in lines)
     return out
@@ -191,16 +219,7 @@ def fail(text: str, *, prog: Optional[str] = None,
 
 
 # -------------------------------------------------------------- tables
-_NUMERIC_RE = re.compile(r"^[+-]?\$?\d[\d,]*(\.\d+)?%?$|^[-—]$")
-
-
-def _auto_aligns(headers, body) -> List[str]:
-    aligns = []
-    for i in range(len(headers)):
-        cells = [str(r[i]) for r in body if i < len(r) and str(r[i])]
-        numeric = bool(cells) and all(_NUMERIC_RE.match(c) for c in cells)
-        aligns.append(">" if numeric else "<")
-    return aligns
+from taxjson.lib.report_model import auto_aligns as _auto_aligns  # noqa: E402
 
 
 def records(headers: Sequence[str], body: Sequence[Sequence[str]],

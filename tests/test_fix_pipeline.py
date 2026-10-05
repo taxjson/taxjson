@@ -304,7 +304,7 @@ class TestMalformedTickerMapLine(unittest.TestCase):
                     "# header comment\nGLOBAL OLD.TO XEI.TO\n" + bad + "\n")
                 self.assertNotEqual(r.returncode, 0, r.stdout)
                 self.assertIn("ticker.map:3", r.stderr)
-                self.assertIn(bad, r.stderr)
+                self.assertIn(bad, " ".join(r.stderr.split()))
 
     def test_well_formed_map_runs_quietly(self):
         r = self._run_with_map(

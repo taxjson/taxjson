@@ -16,16 +16,21 @@ accepts both the bare and the prog-prefixed form.
 import sys
 
 
-def warn(prog: str, msg: str) -> None:
-    print(f"{prog}: warning: {msg}", file=sys.stderr)
+def warn(prog: str, msg: str, details=()) -> None:
+    """`<prog>: warning: <msg>` (+ indented `details`), wrapped to the
+    house width by lib/out (unwrapped when a program captures it)."""
+    from taxjson.lib.out import emit
+    emit("warning", msg, prog=prog, details=details, file=sys.stderr)
 
 
-def error(prog: str, msg: str) -> None:
-    print(f"{prog}: error: {msg}", file=sys.stderr)
+def error(prog: str, msg: str, details=()) -> None:
+    from taxjson.lib.out import emit
+    emit("error", msg, prog=prog, details=details, file=sys.stderr)
 
 
-def note(prog: str, msg: str) -> None:
-    print(f"{prog}: note: {msg}", file=sys.stderr)
+def note(prog: str, msg: str, details=()) -> None:
+    from taxjson.lib.out import emit
+    emit("note", msg, prog=prog, details=details, file=sys.stderr)
 
 
 

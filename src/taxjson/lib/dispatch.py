@@ -67,15 +67,20 @@ def run_cmd(cmd: List[str], *,
             # `taxjson-<tool>` (re-audit A2-0161).
             cmd = [cmd[0], "-m", "taxjson.bin._entry",
                    spec[0].rsplit(".", 1)[-1], *spec[1]]
+        # Captured output is for a program (a work/ file, a .diag, a
+        # caller that parses it): never wrapped (lib/out.unwrapped).
+        env = (dict(os.environ, TAXJSON_WIDTH="0")
+               if (capture_output or stdout is not None) and not interactive
+               else None)
         if stdout is not None:
             return subprocess.run(cmd, stdout=stdout,
                                   stderr=(None if interactive
                                           else subprocess.PIPE),
                                   stdin=(None if interactive
                                          else subprocess.DEVNULL),
-                                  cwd=cwd, text=not interactive)
+                                  cwd=cwd, text=not interactive, env=env)
         return subprocess.run(cmd, capture_output=capture_output,
-                              text=True, cwd=cwd)
+                              text=True, cwd=cwd, env=env)
 
     module_name, argv = spec
     out_buf = io.StringIO() if capture_output else None
@@ -92,6 +97,12 @@ def run_cmd(cmd: List[str], *,
         sys.argv = [module_name.rsplit(".", 1)[-1]] + argv
         module = importlib.import_module(module_name)
         with contextlib.ExitStack() as stack:
+            if out_target is not None or err_buf is not None:
+                # Captured for a program, not shown to a person: never
+                # wrapped (lib/out.unwrapped) — the .diag and work/
+                # files keep whole lines whatever the terminal.
+                from taxjson.lib.out import unwrapped
+                stack.enter_context(unwrapped())
             if out_target is not None:
                 stack.enter_context(contextlib.redirect_stdout(out_target))
             if err_buf is not None:

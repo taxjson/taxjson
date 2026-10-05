@@ -59,7 +59,10 @@ stage consistency bash scripts/check-consistency.sh
 stage tax-rules "$PY" scripts/check_tax_rules.py
 # The tree scan covers packages/ (every tracked and untracked file).
 stage pii bash scripts/check-pii.sh
-stage suite "$PY" -m unittest discover -s tests -p "test_*.py" -q
+# Unwrapped (docs/output-style.md): a phrase a test looks for never
+# depends on where a temp path made a message wrap. The style tests set
+# their own width (tests/_style.py, tests/test_output_style.py).
+stage suite env TAXJSON_WIDTH=0 "$PY" -m unittest discover -s tests -p "test_*.py" -q
 # The broker-fetch plugin (packages/taxjson-fetch): its own tests, run
 # from the checkout whether or not it is pip-installed here (its
 # tests/_support.py registers the entry point when it is not).

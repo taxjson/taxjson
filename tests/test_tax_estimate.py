@@ -18,6 +18,15 @@ from tax_rules import rule
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+
+def _wrapping_env():
+    """The environment with the house wrap width (the suite runs with
+    TAXJSON_WIDTH=0, docs/output-style.md)."""
+    import os
+    e = dict(os.environ)
+    e.pop("TAXJSON_WIDTH", None)
+    return e
+
 class TestBracketMath(unittest.TestCase):
     def test_progressive(self):
         b = [(10000, .10), (20000, .20), (float("inf"), .30)]
@@ -379,7 +388,7 @@ class TestEstimateCommand(unittest.TestCase):
              "inventory": [], "wash_sales": []}))
         return root
 
-    def _cli(self, root, *args):
+    def _cli(self, root, *args, env=None):
         import subprocess
         import sys
         from pathlib import Path
@@ -387,7 +396,7 @@ class TestEstimateCommand(unittest.TestCase):
             [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
              str(root), *args],
             cwd=Path(__file__).resolve().parent.parent,
-            capture_output=True, text=True)
+            capture_output=True, text=True, env=env)
 
     def test_estimate_prints_the_summary_then_the_estimate(self):
         import tempfile
@@ -409,10 +418,11 @@ class TestEstimateCommand(unittest.TestCase):
         # prose) while every table beside it was capped at 78.
         import tempfile
         with tempfile.TemporaryDirectory() as td:
-            r = self._cli(self._project(td), "estimate")
+            r = self._cli(self._project(td), "estimate",
+                          env=_wrapping_env())
         block = r.stdout[r.stdout.index("AMT CHECK"):]
         for line in block.splitlines():
-            self.assertLessEqual(len(line), 78, repr(line))
+            self.assertLessEqual(len(line), 100, repr(line))  # house width
 
     def test_estimate_json_carries_summary_and_estimate(self):
         import json
@@ -567,9 +577,9 @@ class TestAmtLossCapAndWidth(unittest.TestCase):
                 [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
                  str(root), "estimate"],
                 cwd=Path(__file__).resolve().parent.parent,
-                capture_output=True, text=True)
+                capture_output=True, text=True, env=_wrapping_env())
         self.assertEqual(r.returncode, 0, r.stderr)
         block = r.stdout[r.stdout.index("AMT CHECK"):]
         self.assertIn("AMT TOP-UP", block, "fixture must BIND")
         for line in block.splitlines():
-            self.assertLessEqual(len(line), 78, repr(line))
+            self.assertLessEqual(len(line), 100, repr(line))  # house width

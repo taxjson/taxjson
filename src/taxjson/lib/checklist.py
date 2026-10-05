@@ -318,7 +318,10 @@ def default_run_sub(root: Path) -> Callable[..., Tuple[int, str, str]]:
         try:
             p = subprocess.run(cmd, capture_output=True, text=True,
                                stdin=subprocess.DEVNULL, timeout=timeout,
-                               env={**os.environ, "NO_COLOR": "1"})
+                               # Read by the detectors below, never
+                               # shown as is: unwrapped (lib/out).
+                               env={**os.environ, "NO_COLOR": "1",
+                                    "TAXJSON_WIDTH": "0"})
         except subprocess.TimeoutExpired:
             return 124, "", f"timed out after {timeout}s"
         return p.returncode, p.stdout or "", p.stderr or ""
