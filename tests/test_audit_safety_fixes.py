@@ -301,8 +301,10 @@ class TestCorpActionsUnavailableGuard(unittest.TestCase):
     RBC_CSV = ("RBC Direct Investing\n"
                "Activity Export\n"
                "Account:,123456789\n"
-               "Date,Activity,Symbol,Description,Quantity,Price,Amount,"
-               "Currency\n")
+               # A complete RBC header: detection keys on the columns
+               # the RBC parser requires (Settlement Date among them).
+               "Date,Activity,Symbol,Description,Quantity,Price,"
+               "Settlement Date,Amount,Currency\n")
 
     def _run_stage(self, country):
         settings = {"base_currency": "CAD", "country": country,
