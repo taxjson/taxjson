@@ -1474,28 +1474,38 @@ _REVIEW_SHOWN = 25
 
 
 def print_report(src: Path, dst: Optional[Path], rep: Report) -> None:
+    """One file's report in the house layout (docs/output-style.md): the
+    file and where its copy went, then what was found as indented lines
+    wrapped at the house width, a note or a review list last."""
+    from taxjson.lib.out import wrap
+
+    def say(text: str, indent: str = "  ", hang: str = "    ") -> None:
+        for ln in wrap(text, None, indent, hang):
+            print(ln)
     shown_src = redacted_name(src, rep.accounts, rep.name_patterns,
                               rep.known_ids).replace(".redacted", "")
     where = f" -> {dst}" if dst else " (check only)"
-    print(f"{shown_src}{where}")
+    say(f"{shown_src}{where}", "", "  ")
     if rep.accounts and rep.unreplaced:
         left = sum(rep.unreplaced.values())
-        print(f"  account ids: {len(rep.accounts)} distinct — {left} "
-              f"occurrence(s) of {len(rep.unreplaced)} id(s) NOT replaced "
-              f"(see REVIEW below; fix by hand or with --also)")
+        say(f"account ids: {len(rep.accounts)} distinct — {left} "
+            f"occurrence(s) of {len(rep.unreplaced)} id(s) NOT replaced "
+            f"(see REVIEW below; fix by hand or with --also)")
         for orig, ph in rep.accounts.items():
             print(f"    {Report.masked(orig)} -> {ph}")
     elif rep.accounts:
-        print(f"  account ids: {len(rep.accounts)} distinct, every occurrence replaced")
+        say(f"account ids: {len(rep.accounts)} distinct, every occurrence "
+            f"replaced")
         for orig, ph in rep.accounts.items():
             print(f"    {Report.masked(orig)} -> {ph}")
     else:
-        print("  account ids: none found")
+        say("account ids: none found")
     if rep.name_ids:
-        print(f"  account ids in the FILE NAME only: {len(rep.name_ids)} "
-              f"({', '.join(rep.name_ids)}) — the copy's name gets a placeholder")
-    print(f"  identity rows/cells (name/alias/address): {rep.identity_rows}")
-    print(f"  e-mail addresses: {rep.emails}")
+        say(f"account ids in the FILE NAME only: {len(rep.name_ids)} "
+            f"({', '.join(rep.name_ids)}) — the copy's name gets a "
+            f"placeholder")
+    say(f"identity rows/cells (name/alias/address): {rep.identity_rows}")
+    say(f"e-mail addresses: {rep.emails}")
     for label, n in (("names in free text", rep.names),
                      ("phone numbers", rep.phones),
                      ("postal codes", rep.postal_codes),
@@ -1505,19 +1515,26 @@ def print_report(src: Path, dst: Optional[Path], rep: Report) -> None:
                      ("transaction ids (distinct, pseudonymised)", len(rep.txids)),
                      ("denylist / --also matches", rep.patterns)):
         if n:
-            print(f"  {label}: {n}")
+            say(f"{label}: {n}")
     for n in rep.notes:
-        print(f"  NOTE: {n}")
+        say(f"note: {n}")
     if rep.description_columns:
-        print(f"  NOTE: free-text Description columns ({', '.join(rep.description_columns)}) "
-              f"may still name people — read them once before sharing.")
+        say(f"note: free-text Description columns "
+            f"({', '.join(rep.description_columns)}) may still name people "
+            f"— read them once before sharing.")
     if rep.review:
-        print(f"  REVIEW these lines of the copy before sharing — free text "
-              f"the redactor could not classify ({len(rep.review)}):")
+        say(f"REVIEW these lines of the copy before sharing — free text "
+            f"the redactor could not classify ({len(rep.review)}):")
         for lineno, why in rep.review[:_REVIEW_SHOWN]:
-            print(f"    line {lineno}: {why}")
+            say(f"line {lineno}: {why}", "    ", "      ")
         if len(rep.review) > _REVIEW_SHOWN:
             print(f"    … and {len(rep.review) - _REVIEW_SHOWN} more")
+
+
+def _diag(kind: str, text: str) -> None:
+    """`taxjson redact: <kind>: ...` on stderr (lib/out.message)."""
+    from taxjson.lib.out import emit
+    emit(kind, text, prog="taxjson redact")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1544,50 +1561,57 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         deny = [] if args.no_denylist else load_denylist()
     except DenylistError as e:
-        print(f"taxjson redact: {e} — fix it (or pass --no-denylist). "
-              f"Nothing written.", file=sys.stderr)
+        _diag("error", f"{e} — fix it (or pass --no-denylist). Nothing "
+                       f"written.")
         return 2
     bad_deny = [i for i, p in enumerate(deny, 1) if compile_patterns([p])[1]]
     if bad_also or bad_deny:
         for b in bad_also:
-            print(f"taxjson redact: --also {b} is not a valid regular expression",
-                  file=sys.stderr)
+            _diag("error", f"--also {b} is not a valid regular expression")
         if bad_deny:
-            print(f"taxjson redact: denylist pattern(s) #{', #'.join(map(str, bad_deny))} "
-                  f"are not valid regular expressions (fix "
-                  f"~/.config/taxjson/pii-denylist or pass --no-denylist)",
-                  file=sys.stderr)
-        print("taxjson redact: nothing written.", file=sys.stderr)
+            _diag("error", f"denylist pattern(s) "
+                           f"#{', #'.join(map(str, bad_deny))} are not "
+                           f"valid regular expressions (fix "
+                           f"~/.config/taxjson/pii-denylist or pass "
+                           f"--no-denylist)")
+        _diag("note", "nothing written.")
         return 2
     extra = list(args.also) + deny
     rc = 0
     known_ids: Dict[str, str] = {}
     pseudonyms = Pseudonyms()
     written: set = set()
+    reported = 0
     for f in args.files:
         src = Path(f)
         if not src.is_file():
             # A missing input is exit 2, never the `--check` finding
             # code 1 (re-audit A2-0164).
-            print(f"taxjson redact: error: {f}: not a file", file=sys.stderr); rc = 2; continue
+            _diag("error", f"{f}: not a file")
+            rc = 2
+            continue
         if src.stem.endswith(".redacted"):
-            print(f"taxjson redact: {f}: already a redacted copy — skipped", file=sys.stderr); continue
+            _diag("note", f"{f}: already a redacted copy — skipped")
+            continue
         try:
             dst, rep = redact_file(src, Path(args.out) if args.out else None,
                                    extra, args.check, args.force,
                                    known_ids, written, pseudonyms)
         except InputRefused as e:
-            print(f"taxjson redact: {e}", file=sys.stderr)
+            _diag("error", str(e))
             rc = 2
             continue
         except OSError as e:
             # An unreadable input or an unwritable --out: one line, and
             # the rest of the batch is still redacted (S036-24, S037-01).
             what = e.filename or f
-            print(f"taxjson redact: {f}: {e.strerror or e} ({what}) — "
-                  f"nothing written for it", file=sys.stderr)
+            _diag("error", f"{f}: {e.strerror or e} ({what}) — nothing "
+                           f"written for it")
             rc = 2
             continue
+        if reported:
+            print()
+        reported += 1
         print_report(src, dst, rep)
         if args.check and rep.found_anything():
             rc = max(rc, 1)

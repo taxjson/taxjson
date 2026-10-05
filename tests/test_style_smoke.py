@@ -33,6 +33,12 @@ class TestConvertedCommands(unittest.TestCase):
 
     CASES = [("wash-sales",), ("wash-sales", "--explain"), ("elect",),
              ("elect", "margin")]
+    # group E (the rest, exit 1 by design, in tests/test_style_e.py)
+    CASES += [("tax-logic",), ("tax-logic", "--ids"), ("edge-cases",),
+              ("find-missing-history",), ("renames",), ("spinoffs",),
+              ("splits",), ("audit", "--summary"), ("audit", "QZQ.US"),
+              ("help",), ("help", "--all"), ("help", "audit"),
+              ("channels", "--offline")]
 
     def test_converted_commands(self):
         for country in ("canada", "usa"):

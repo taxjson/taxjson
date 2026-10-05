@@ -185,7 +185,8 @@ class TestOverridesAndRender(unittest.TestCase):
             self.assertTrue(res["fees"].passed)
             text = cl.render(list(res.values()), 2025, "canada")
             self.assertIn("[!] sanity", text)
-            self.assertIn("marked done: trades after the export  !! detector: 7 discrepancy(ies).", text)
+            flat = " ".join(text.split())
+            self.assertIn("marked done: trades after the export the detector still says: 7 discrepancy(ies).", flat)
             self.assertIn("[~] fees", text)
             cl.set_override(root, 2025, "sanity", None)
             self.assertIsNone(cl.evaluate(ctx, only=["sanity"])[0].override)
@@ -204,7 +205,7 @@ class TestOverridesAndRender(unittest.TestCase):
             text = cl.render(res, 2025, "canada", quick=True)
             self.assertTrue(text.startswith("FILING CHECKLIST — tax year 2025 (canada) — quick:"))
             for num, name in cl.STAGES:
-                self.assertIn(f"{num}. {name}", text)
+                self.assertIn(f"{num}. {name.upper()}", text)
 
 
 class TestCommand(unittest.TestCase):

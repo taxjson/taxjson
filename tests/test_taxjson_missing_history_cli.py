@@ -49,11 +49,11 @@ class TestMissingHistoryCli(unittest.TestCase):
         rc, out = _run(["--year", "2025"])
         self.assertEqual(rc, 0)
         # Merger reconstructed and labelled with both symbols.
-        self.assertIn("Reconstructed mergers", out)
+        self.assertIn("RECONSTRUCTED MERGERS", out)
         self.assertIn("A012345.US", out)
         self.assertIn("ABD.US", out)
         # Truncated-history short surfaced.
-        self.assertIn("Truncated history", out)
+        self.assertIn("TRUNCATED HISTORY", out)
         self.assertIn("FOO.US", out)
         # The clean position is not flagged anywhere.
         self.assertNotIn("OK.US", out)
