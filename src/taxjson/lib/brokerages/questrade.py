@@ -175,6 +175,11 @@ def _get_desc_key(desc: str) -> str:
     descriptions. Strips dividend/trade-specific suffixes and uppercases."""
     if not desc:
         return ''
+    # Whitespace collapsed FIRST: the `\s+SUFFIX.*$` patterns below are
+    # quadratic on a long whitespace run (a 40k-space description took
+    # over a minute; security review L2) and linear on single spaces.
+    # The key itself was always collapsed, so it is unchanged.
+    desc = re.sub(r'\s+', ' ', desc)
     m = _SPINOFF_PARENT_RE.search(desc)
     if m:
         desc = m.group(1)

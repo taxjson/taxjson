@@ -243,5 +243,25 @@ class TestOpeningHeaderName(unittest.TestCase):
             self.assertNotIn("\r", out.read_text())
 
 
+class TestQuestradeDescKeyLinear(unittest.TestCase):
+    def test_long_whitespace_run_is_fast_and_keys_unchanged(self):
+        from taxjson.lib.brokerages.questrade import _get_desc_key
+        self.assertEqual(_get_desc_key("SAMPLE CORP  CASH DIV ON 100 SHS"),
+                         "SAMPLE CORP")
+        self.assertEqual(_get_desc_key("SAMPLE CORP CLASS B SUB VTG"),
+                         "SAMPLE CORP CL B")
+        self.assertEqual(_get_desc_key("SAMPLE\tCORP WE ACTED AS AGENT"),
+                         "SAMPLE CORP")
+        desc = "SAMPLE" + " " * 40000 + "X"
+        t0 = time.perf_counter()
+        key = _get_desc_key(desc)
+        self.assertLess(time.perf_counter() - t0, 0.5)
+        self.assertEqual(key, "SAMPLE X")
+        t0 = time.perf_counter()
+        _get_desc_key(" " * 40000)
+        _get_desc_key("A" + "\t \n" * 15000 + "TRANSFER")
+        self.assertLess(time.perf_counter() - t0, 0.5)
+
+
 if __name__ == "__main__":
     unittest.main()
