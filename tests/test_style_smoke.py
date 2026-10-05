@@ -33,6 +33,19 @@ class TestConvertedCommands(unittest.TestCase):
 
     CASES = [("wash-sales",), ("wash-sales", "--explain"), ("elect",),
              ("elect", "margin"),
+             # group D: positions, period views, -sum roll-ups, stats,
+             # crypto sends
+             ("list",), ("list", "--negative"), ("list", "margin"),
+             ("shares",), ("shares", "--options"), ("events",),
+             ("events", "all"), ("trades",), ("divs",), ("dil",),
+             ("fees",), ("gains",), ("gains", "all"), ("leaps",),
+             ("roc",), ("transfers",), ("transfers", "margin"),
+             ("ccd-sum",), ("dil-sum",), ("divs-sum",), ("fees-sum",),
+             ("fees-sum", "--no-by-account"), ("leaps-sum",),
+             ("roc-sum",), ("trades-sum",), ("winners",),
+             ("winners", "all"), ("stats",), ("stats", "--all-history"),
+             ("crypto-sends",),
+             # group C
              ("wash-radar",), ("wash-radar", "--date", "2024-11-25", "--all"),
              ("fx-cash",), ("fx-cash", "--events"),
              # group B (tests/test_style_group_b.py has the rest)

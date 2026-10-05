@@ -154,18 +154,61 @@ def _bare_globals(path: str) -> Dict[str, str]:
 
 # ---------------------------------------------------------------- notes
 
-def note_builtin(kind: str, key: str, message: str) -> None:
+def note_builtin(kind: str, key: str, message: str, *,
+                 rollup: Optional[Tuple[str, str]] = None) -> None:
     """Print `message` once per (kind, key) per process, as a `note:`
-    line on stderr (a stage's DIAGNOSTICS)."""
+    line on stderr (a stage's DIAGNOSTICS).
+
+    `rollup` = (label, ...) rolls the notes of one `kind` up for a
+    person: shown to one (stderr wraps, docs/output-style.md), the
+    process prints ONE note at exit naming every key's `label` instead
+    of a line per key (_ROLLUPS words it). Captured for a program
+    (width 0: a stage's .diag, the .sum DIAGNOSTICS, the checklist) each
+    key keeps its own line, byte for byte as before."""
     k = (kind, key, ticker_map_path())
     if k in _NOTED:
         return
     _NOTED.add(k)
-    print(f"note: {message}", file=sys.stderr)
+    from taxjson.lib import out
+    if rollup is not None and kind in _ROLLUPS and out.width(sys.stderr):
+        if not _ROLLED:
+            import atexit
+            atexit.register(flush_notes)
+        _ROLLED.setdefault(kind, []).append(rollup[0])
+        return
+    # Wrapped at the house width for a person; one line when captured
+    # for a program (a stage's .diag), as before (docs/output-style.md).
+    out.note(message)
+
+
+# kind -> (headline(n), advice): the one note a rolled-up kind prints.
+_ROLLUPS = {
+    "mult": (lambda n: f"{n} option root(s) whose export does not state "
+             f"the contract size: 100 shares per contract (or the size "
+             f"shown) is ASSUMED where it matters (an exercise or "
+             f"assignment, replacement shares)",
+             "For a mini or an adjusted series add `MULT <ROOT> N` to "
+             "ticker.map."),
+}
+_ROLLED: Dict[str, list] = {}
+
+
+def flush_notes(file=None) -> None:
+    """Print the rolled-up notes (note_builtin(..., rollup=...)) and
+    forget them: one note per kind, its labels sorted and wrapped."""
+    from taxjson.lib import out
+    for kind in sorted(_ROLLED):
+        labels = sorted(set(_ROLLED[kind]))
+        head, advice = _ROLLUPS[kind]
+        out.note(head(len(labels)), details=[", ".join(labels) + ".",
+                                             advice],
+                 file=file)
+    _ROLLED.clear()
 
 
 def reset_notes() -> None:
     _NOTED.clear()
+    _ROLLED.clear()
 
 
 def _decide(kind: str, key: str, ovr: Dict[str, bool],

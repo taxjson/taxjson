@@ -301,64 +301,64 @@ def metrics(s: Dict[str, Any]) -> Dict[str, float]:
 _money = fmt_money                  # shared report-layer formatter
 
 
-_COLS = (f"{'BROKERAGE':<24} {'CUR':<4} {'TRADES':>7} {'TOTAL':>14} "
-         f"{'MEAN':>9} {'MEDIAN':>9} {'%NOTNL':>8} {'$/UNIT':>9} "
-         f"{'$/CONTR':>9}")
+_HEADERS = ["BROKERAGE", "CUR", "TRADES", "TOTAL", "MEAN", "MEDIAN",
+            "%NOTNL", "$/UNIT", "$/CONTR"]
+# Too wide for the width: the currency column goes first (a converted
+# report names its one currency in the title), then the per-unit and
+# per-contract rates, then the median.
+_DROP = (1, 8, 7, 5)
 
 
-def _row(name: str, s: Dict[str, Any], cur: str = "") -> str:
+def _cells(name: str, s: Dict[str, Any], cur: str = "") -> List[str]:
     m = metrics(s)
-    return (f"{name:<24} {cur:<4} {m['trades']:>7d} {_money(m['total']):>14} "
-            f"{_money(m['mean']):>9} {_money(m['median']):>9} "
-            f"{m['pct_notional']:>7.3f}% {m['per_share']:>9.4f} "
-            f"{m['per_contract']:>9.4f}")
+    return [name, cur, str(m["trades"]), _money(m["total"]),
+            _money(m["mean"]), _money(m["median"]),
+            f"{m['pct_notional']:.3f}%", f"{m['per_share']:.4f}",
+            f"{m['per_contract']:.4f}"]
+
+
+# The column legend, one item per column (docs/output-style.md lists).
+_DEFINITIONS = (
+    "TRADES: BUYSELL/ASSIGN rows with a non-zero fee (rebates included).",
+    "MEAN / MEDIAN: the fee per trade.",
+    "%NOTNL: fees as a percent of gross trade value (rows with notional "
+    "> 0).",
+    "$/UNIT: the non-option fee per unit (share, coin, contract of a "
+    "future); $/CONTR: the option fee per contract.",
+)
 
 
 def render_text(buckets, grand, info, *, to_curr, by_account, year,
                 default_rate, scope=None) -> List[str]:
+    """The report in the house layout (docs/output-style.md): a title,
+    the fee table fitted to the width, the non-option / option split and
+    the native currencies under their headings, the provenance footer
+    and the column definitions as a list."""
+    from taxjson.lib.out import Doc, fit_table, kv_lines
     converting = bool(to_curr)
-    out: List[str] = []
-    title = "TRADING FEES BY " + ("ACCOUNT / BROKERAGE" if by_account else "BROKERAGE")
+    title = ("TRADING FEES BY "
+             + ("ACCOUNT / BROKERAGE" if by_account else "BROKERAGE"))
+    ctx = []
     if scope:
-        title += f"  ({scope})"
+        ctx.append(scope)
     elif year:
         # The window is the TRADE date (fees are incurred at the trade),
         # not the project's tax_date — say so where the year is named
         # (A2-1102: the .sum and trades-sum place a Dec 30 trade that
         # settles in January in the next year).
-        title += f"  (tax year {year}, by TRADE date)"
+        ctx.append(f"tax year {year}, by TRADE date")
     if converting:
-        title += f"   [all amounts in {to_curr}]"
-    out.append(title)
-    out.append("")
-    out.append(_COLS)
-    out.append("-" * len(_COLS))
+        ctx.append(f"all amounts in {to_curr}")
+    doc = Doc(title + (" — " + "; ".join(ctx) if ctx else ""))
+    doc.blank()
 
+    body: List[List[str]] = []
+    foot: List[List[str]] = []
     if converting:
         rows = sorted(buckets.items(),
                       key=lambda kv: kv[1]["base"]["fee"], reverse=True)
-        for name, b in rows:
-            out.append(_row(name, b["base"], to_curr))
-        out.append("-" * len(_COLS))
-        out.append(_row("TOTAL", grand["base"], to_curr))
-        # Stock vs option split (absolute), and native composition.
-        out.append("")
-        # Non-option = shares, units, futures and crypto (a coin
-        # exchange's fees were labelled 'stocks', audit S031-04).
-        out.append("Non-option vs option fees:")
-        for name, b in rows:
-            m = metrics(b["base"])
-            out.append(f"  {name:<22} non-option {_money(m['stock_fee'])}  "
-                       f"options {_money(m['option_fee'])}")
-        mixed = [(n, b) for n, b in rows
-                 if any(c != to_curr for c in b["cur"])]
-        if mixed:
-            out.append("")
-            out.append(f"Native fees folded into the {to_curr} totals above:")
-            for name, b in mixed:
-                comp = ", ".join(f"{_money(c['fee'])} {cur}"
-                                 for cur, c in sorted(b["cur"].items()))
-                out.append(f"  {name:<22} {comp}")
+        body = [_cells(name, b["base"], to_curr) for name, b in rows]
+        foot = [_cells("TOTAL", grand["base"], to_curr)]
     else:
         # Native: one row per (brokerage, currency) so every average is
         # within a single currency. Sort brokers by total native fee.
@@ -367,56 +367,76 @@ def render_text(buckets, grand, info, *, to_curr, by_account, year,
                       reverse=True)
         for name, b in rows:
             for cur in sorted(b["cur"]):
-                out.append(_row(name, b["cur"][cur], cur))
-        out.append("-" * len(_COLS))
-        for cur in sorted(grand["cur"]):
-            out.append(_row("TOTAL", grand["cur"][cur], cur))
-        out.append("")
-        out.append("Note: amounts are in each fee's native currency. Pass "
-                   "--to CAD --rates <file> for one combined total.")
+                body.append(_cells(name, b["cur"][cur], cur))
+        foot = [_cells("TOTAL", grand["cur"][cur], cur)
+                for cur in sorted(grand["cur"])]
+    doc.table(_HEADERS, body, foot=foot,
+              drop=_DROP if converting else (8, 7, 5))
+    if converting:
+        # Stock vs option split (absolute), and native composition.
+        # Non-option = shares, units, futures and crypto (a coin
+        # exchange's fees were labelled 'stocks', audit S031-04).
+        doc.section("Non-option vs option fees")
+        split = []
+        for name, b in rows:
+            m = metrics(b["base"])
+            split.append([name, _money(m["stock_fee"]),
+                          _money(m["option_fee"])])
+        doc.line("\n".join(fit_table(["BROKERAGE", "NON-OPTION", "OPTIONS"],
+                                     split, indent="  ", width_=doc.w)))
+        mixed = [(n, b) for n, b in rows
+                 if any(c != to_curr for c in b["cur"])]
+        if mixed:
+            doc.section(f"Native fees folded into the {to_curr} totals")
+            doc.line("\n".join(kv_lines(
+                [(name, ", ".join(f"{_money(c['fee'])} {cur}"
+                                  for cur, c in sorted(b["cur"].items())))
+                 for name, b in mixed], indent="  ", width_=doc.w)))
+    else:
+        doc.blank()
+        doc.message("note", "amounts are in each fee's native currency; "
+                    "pass `--to CAD --rates <file>` for one combined "
+                    "total.")
 
     # Provenance + data-quality footer (in stdout so it survives even when
     # the pipeline runs this stage with stderr discarded).
-    out.append("")
-    out.append("-" * len(_COLS))
+    doc.blank()
     gen = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    out.append(f"Generated {gen} | files: {info['files_read']} | "
-               f"fee rows: {info['rows']} | dups collapsed: {info['dups']}"
-               + (f" | rows w/o id: {info['no_id']}" if info['no_id'] else ""))
+    doc.para(f"Generated {gen} | files: {info['files_read']} | "
+             f"fee rows: {info['rows']} | dups collapsed: {info['dups']}"
+             + (f" | rows w/o id: {info['no_id']}" if info['no_id'] else ""))
     if info["zero_fee"]:
         if info.get("manual_fees"):
             _un = info.get("unnamed") or [MANUAL_TT]
-            out.append(f"Brokers with no fees in their own exports this "
-                       f"period: {', '.join(info['zero_fee'])} — the "
-                       f"{' / '.join(_un)} fees above are not attributed "
-                       f"to a broker and may belong to one of them"
-                       + (" (give the generic mapping a [broker] name to "
-                          "attribute them)" if GENERIC in _un else "")
-                       + ".")
+            doc.para(f"Brokers with no fees in their own exports this "
+                     f"period: {', '.join(info['zero_fee'])} — the "
+                     f"{' / '.join(_un)} fees above are not attributed "
+                     f"to a broker and may belong to one of them"
+                     + (" (give the generic mapping a [broker] name to "
+                        "attribute them)" if GENERIC in _un else "")
+                     + ".")
         else:
-            out.append(f"Brokers with NO fees in this period: "
-                       f"{', '.join(info['zero_fee'])}")
+            doc.para(f"Brokers with NO fees in this period: "
+                     f"{', '.join(info['zero_fee'])}")
     if info["skipped"]:
         # In --cache mode most files legitimately lack a brokerage tag, so a
         # full dump is noise; name them only when the list is short.
         if len(info["skipped"]) <= 6:
-            out.append(f"Skipped {len(info['skipped'])} non-broker file(s): "
-                       f"{', '.join(info['skipped'])}")
+            doc.para(f"Skipped {len(info['skipped'])} non-broker file(s): "
+                     f"{', '.join(info['skipped'])}")
         else:
-            out.append(f"Skipped {len(info['skipped'])} file(s) with no "
-                       f"source_brokerage tag.")
+            doc.para(f"Skipped {len(info['skipped'])} file(s) with no "
+                     f"source_brokerage tag.")
     # FX fallback warning, surfaced into the report body.
     import taxjson.bin.taxjson_convert_currency as _cc
     if _cc._DEFAULT_RATE_FALLBACKS:
-        emit_fallback_summary(default_rate, stream=_StdoutList(out))
-    out.append("")
-    out.append("Definitions: TRADES = BUYSELL/ASSIGN rows with a non-zero fee "
-               "(rebates included); MEAN/MEDIAN are per-trade fee; %NOTNL = "
-               "fees as a percent of gross trade value (rows with notional > 0); "
-               "$/UNIT is non-option fee per unit (share, coin, "
-               "contract of a future), $/CONTR is option fee per "
-               "contract.")
-    return out
+        _fb: List[str] = []
+        emit_fallback_summary(default_rate, stream=_StdoutList(_fb))
+        for ln in _fb:
+            doc.para(ln)
+    doc.section("Definitions")
+    doc.items(_DEFINITIONS)
+    return doc.lines()
 
 
 class _StdoutList:
