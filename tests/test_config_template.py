@@ -6,6 +6,9 @@ it, `taxjson format` re-lays an existing file into it.
   template — so a new key without template documentation fails here —
   and no key, table or plan kind owned by the OTHER country is
   mentioned (the Canada/USA partition).
+- Layout: keys alphabetical in every table (active and commented in one
+  sequence), one `=` column per table, each description on the lines
+  above its key, a blank line between keys, no end-of-line comment.
 - `taxjson format`: lossless (the parsed configuration is identical),
   idempotent, keeps unknown keys (flagged) and the user's comments;
   --check / --write / --no-backup; the refusal paths.
@@ -19,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import date as _date
 from pathlib import Path
 from unittest import mock
 
@@ -138,15 +142,6 @@ class TestTemplateCompleteness(unittest.TestCase):
             for key in keys:
                 self.assertIn(key, known[table], f"[{table}] {key}")
 
-    def test_comment_column_is_aligned_in_each_settings_group(self):
-        for country in C.COUNTRIES:
-            init, _ = _templates(country)
-            block = init.split("[settings]\n", 1)[1].split("\n\n")
-            for group in block[:3]:
-                # (a value longer than the column gets one space)
-                cols = {ln.index("  # ") + 2 for ln in group.splitlines()
-                        if "  # " in ln and not ln.startswith("#  ")}
-                self.assertLessEqual(len(cols), 1, group)
 
 
 class TestInitScaffold(unittest.TestCase):
@@ -320,13 +315,15 @@ class TestFormatConfig(unittest.TestCase):
                   "# a note at the end of settings", "# second one",
                   "# the very last note"):
             self.assertIn(c, out)
-        # A commented-out key of the user's travels with the next line
-        # that has a place in the template.
-        self.assertRegex(out, r'# province = "BC"\ntax_date ')
-        self.assertRegex(out, r"\[accounts\.margin\]  # the main account")
-        self.assertRegex(out, r'tax_date\s+= "settle"\s+# my reason')
+        # A commented-out key of the user's goes to that key (above the
+        # template's own commented line), after its description.
+        self.assertRegex(out, r'# ON \| BC.*\n# province = "BC"\n'
+                              r'# province\s+= "ON"\n')
+        # A trailing comment moves onto its own line above its line.
+        self.assertRegex(out, r"# the main account\n\[accounts\.margin\]\n")
+        self.assertRegex(out, r'# my reason\ntax_date\s+= "settle"\n')
         # The verbatim multi-line value keeps its inner comment.
-        self.assertIn('holdings  = ["~/a.toml",  # first', out)
+        self.assertRegex(out, r'holdings\s+= \["~/a\.toml",  # first')
         # Canonical values: quoted string, a date as a date.
         self.assertRegex(out, r'(?m)^record_date = 2025-12-29$')
         self.assertRegex(out, r'(?m)^per_share\s+= 0\.25$')
@@ -342,8 +339,8 @@ class TestFormatConfig(unittest.TestCase):
         self.assertIn(CT._UNKNOWN_KEYS_LINE, out)
         self.assertIn("[other_table]", out)
         # The list of tables is laid out one per line.
-        self.assertIn('paid                 = [\n'
-                      '  { date = "2025-03-15", amount = 100 },', out)
+        self.assertRegex(out, r'paid\s+= \[\n'
+                              r'  \{ date = "2025-03-15", amount = 100 \},')
 
     def test_messy_us_config_keeps_canadian_keys_flagged(self):
         r = self._check(_MESSY_US)
@@ -394,6 +391,349 @@ class TestFormatConfig(unittest.TestCase):
         r = self._check(text)
         self.assertEqual(r.notes_lines, 1)
         self.assertTrue(r.text.rstrip().endswith("# kept for later"))
+
+
+_TABLE_LINE = re.compile(r"^(?:# )?\[\[?[^\]]+\]\]?$")
+_KEY_LINE = re.compile(r"^(# )?([A-Za-z0-9_-]+|\"[^\"]*\") *( = )")
+
+
+def _layout(text):
+    """The rendered file as tables: [(table line, [group, ...])], a group
+    being the [(line index, key, commented, `=` column)] of its key
+    lines (a "Not in the template" line starts a second group)."""
+    out = [("<top>", [[]])]
+    lines = text.split("\n")
+    for i, ln in enumerate(lines):
+        if _TABLE_LINE.match(ln):
+            out.append((ln, [[]]))
+            continue
+        if ln in (CT._UNKNOWN_KEYS_LINE, CT._UNKNOWN_TOP_LINE):
+            out[-1][1].append([])
+            continue
+        m = _KEY_LINE.match(ln)
+        if m:
+            out[-1][1][-1].append((i, m.group(2), bool(m.group(1)),
+                                   m.start(3)))
+    return [(t, gs) for t, gs in out if any(gs)]
+
+
+def _full(country):
+    """A document setting keys in every table (and unknown ones)."""
+    ca = country == C.CANADA
+    s = {"year": 2025, "country": country, "tax_date": "trade",
+         "leaps_months": 12, "zz_unknown": 1, "aa_unknown": "x",
+         "prior_year_record": "../2024/filed/a-rather-long-file-name-"
+                              "for-the-record-of-the-prior-year.json"}
+    doc = {"settings": s,
+           "accounts": {
+               "zeta": {"type": "taxable", "exercise_fee": 1.0,
+                        "holdings": [f"~/broker/holdings_file_{i}.toml"
+                                     for i in range(4)],
+                        "brokerage": "questrade", "odd_key": True},
+               "alpha": {"type": "sheltered", "transfers": True}},
+           "estimate": {"other_income": 1000},
+           "carryover": {"claimed": {"2024": 10.5}},
+           "distributions": [
+               {"symbol": "XYZQ.TO", "record_date": _date(2025, 12, 29),
+                "per_share": 0.25},
+               {"symbol": "ABCX.TO", "record_date": _date(2025, 6, 30),
+                "per_share": -0.1}]}
+    if ca:
+        s["province"] = "ON"
+        doc["instalments"] = {"basis": "prior_year", "paid": [
+            {"date": _date(2025, 3, 15), "amount": 100}]}
+        doc["capital_gains_dividends"] = [
+            {"symbol": "ABCX.TO", "year": 2025, "amount": "all"}]
+    return doc
+
+
+def _renders():
+    for country in C.COUNTRIES:
+        init, bare = _templates(country)
+        yield country, init
+        yield country, bare
+        yield country, CT.render_document(_full(country), country, 2025)
+
+
+class TestLayout(unittest.TestCase):
+    """Keys alphabetical per table (active and commented in one
+    sequence), one `=` column per table, descriptions on the lines above
+    the key, a blank line between keys, no end-of-line comment."""
+
+    def test_keys_are_alphabetical_in_every_table(self):
+        for country, text in _renders():
+            for table, groups in _layout(text):
+                for g in groups:
+                    keys = [k for _i, k, _c, _col in g]
+                    with self.subTest(country=country, table=table):
+                        self.assertEqual(keys, sorted(keys))
+
+    def test_one_equals_column_per_table(self):
+        for country, text in _renders():
+            for table, groups in _layout(text):
+                cols = {col for g in groups for _i, _k, _c, col in g}
+                with self.subTest(country=country, table=table):
+                    self.assertEqual(len(cols), 1, cols)
+
+    def test_mixed_active_and_commented_keys_interleave(self):
+        text = CT.render_document(_full("canada"), "canada", 2025)
+        settings = dict(_layout(text))["[settings]"]
+        seq = [(k, c) for _i, k, c, _col in settings[0]]
+        self.assertEqual([k for k, _c in seq],
+                         sorted(k.name for k in CT.SETTINGS_SPEC
+                                if CT.owned("canada", "settings", k.name)))
+        flags = dict(seq)
+        # commented, active, commented, active ... in one sequence
+        self.assertTrue(flags["fx_cash_gains"])
+        self.assertFalse(flags["leaps_months"])
+        self.assertTrue(flags["local_timezone"])
+        self.assertFalse(flags["prior_year_record"])
+        # The keys taxjson does not read: sorted, after their line.
+        self.assertEqual([k for _i, k, _c, _col in settings[1]],
+                         ["aa_unknown", "zz_unknown"])
+
+    def test_no_end_of_line_comments(self):
+        for country, text in _renders():
+            for ln in text.splitlines():
+                if ln.startswith("#"):
+                    continue
+                with self.subTest(country=country, line=ln):
+                    self.assertNotIn("#", ln)
+
+    def test_description_above_each_key_and_a_blank_between_keys(self):
+        for country, text in _renders():
+            lines = text.split("\n")
+            for table, groups in _layout(text):
+                for g in groups:
+                    for n, (i, key, _c, _col) in enumerate(g):
+                        j = i
+                        heads = (CT._UNKNOWN_KEYS_LINE, CT._UNKNOWN_TOP_LINE)
+                        while j > 0 and lines[j - 1].startswith("# ") \
+                                and not _TABLE_LINE.match(lines[j - 1]) \
+                                and lines[j - 1] not in heads:
+                            j -= 1
+                        if j == i:
+                            continue         # a key with no description
+                        with self.subTest(country=country, table=table,
+                                          key=key):
+                            before = lines[j - 1]
+                            if n == 0:
+                                self.assertTrue(
+                                    _TABLE_LINE.match(before)
+                                    or before in heads,
+                                    before)
+                            else:
+                                self.assertEqual(before, "")
+
+    def test_description_lines_never_read_as_a_commented_key(self):
+        known = set().union(*CT.spec_keys().values())
+        for country, text in _renders():
+            for ln in text.splitlines():
+                m = re.match(r"# ([A-Za-z0-9_-]+)\s*=", ln)
+                if m:
+                    self.assertIn(m.group(1), known, ln)
+
+    def test_long_descriptions_wrap(self):
+        for country, text in _renders():
+            for ln in text.splitlines():
+                if ln.startswith("# ") and not _KEY_LINE.match(ln) \
+                        and ln not in (CT._UNKNOWN_KEYS_LINE,
+                                       CT._UNKNOWN_TOP_LINE,
+                                       CT._UNKNOWN_TABLES_LINE,
+                                       CT.NOTES_HEADING):
+                    self.assertLessEqual(len(ln), CT.DOC_WIDTH + 2, ln)
+        lines = CT._doc_lines("word " * 60)
+        self.assertGreater(len(lines), 2)
+        self.assertTrue(all(ln.startswith("# ") for ln in lines))
+
+    def test_long_values_stay_whole(self):
+        text = CT.render_document(_full("canada"), "canada", 2025)
+        # A long string: one line, nothing after it.
+        self.assertRegex(text, r'(?m)^prior_year_record\s+= "\.\./2024/'
+                               r'filed/a-rather-long-[^"]*\.json"$')
+        # A long list: one element per line, `=` still in the column.
+        self.assertRegex(text, r'holdings\s+= \[\n  "~/broker/holdings_'
+                               r'file_0\.toml",\n')
+        self.assertFalse(CT.format_config(text).changed)
+
+    def test_every_render_formats_to_itself(self):
+        for country in C.COUNTRIES:
+            text = CT.render_document(_full(country), country, 2025)
+            r = CT.format_config(text)
+            with self.subTest(country=country):
+                self.assertFalse(r.changed)
+                self.assertEqual(r.notes_lines, 0)
+                self.assertEqual(r.kept_comments, 0)
+
+
+# The owner's complaint, with synthetic values: keys added by hand at the
+# top of [settings] and anywhere else, padding and `=` columns that do
+# not line up, comments at different columns, keys in no order.
+_HAND_EDITED = '''\
+# taxjson configuration — https://github.com/taxjson/taxjson
+
+[settings]
+leaps_months = 12     # longer LEAPS for me
+fx_cash_gains=true
+year              = 2025                  # tax year the pipeline reports on (required)
+country           = "canada"              # canada | ca | usa | us (required)
+  province = "ON"                                          # Ontario
+base_currency     = "CAD"                 # report currency: CAD (Bank of Canada rates)
+source_currencies = ["USD"]               # currencies you hold besides base_currency (FX rates fetched)
+tax_date          = "settle"              # settle | trade (default settle: CRA dates a sale by settlement)
+
+# Report views:
+# Futures and foreign-currency cash:
+# futures_settle = "trade"             # trade | next_day: futures and futures options settle on the TRADE date
+#                                      #   (daily variation margin); next_day = the clearing premium date
+
+[accounts.margin]
+year_end_posting = "06-30"
+type      = "taxable"             # REQUIRED: taxable | sheltered
+combined_broker_accounts=true
+holdings = ["~/h/a.toml"]
+
+[accounts.crypto]
+type   = "taxable"   # REQUIRED: taxable | sheltered
+crypto=true
+'''
+
+# A file the previous template wrote (grouped, descriptions at the end of
+# the line, continuation lines), synthetic values.
+_PREVIOUS_LAYOUT = '''\
+# taxjson configuration — https://github.com/taxjson/taxjson
+#
+# Every key taxjson reads is listed here, grouped and column-aligned so
+# year-over-year projects diff cleanly:
+#   diff ~/taxes/2024/taxjson.toml ~/taxes/2025/taxjson.toml
+# A commented key shows its default (or an example where it has none);
+# uncomment a line to change it. `taxjson format` puts an edited file
+# back into this layout, keeping your values and comments.
+
+[settings]
+year              = 2025                  # tax year the pipeline reports on (required)
+country           = "canada"              # canada | ca | usa | us (required)
+# province          = "ON"                # ON | BC | AB — `taxjson estimate` needs it (no default)
+base_currency     = "CAD"                 # report currency: CAD (Bank of Canada rates)
+tax_date          = "settle"              # settle | trade (default settle: CRA dates a sale by settlement)
+
+# Report views:
+# leaps_months = 9                   # LEAPS views (leaps, leaps-sum): a long option bought more than this many
+#                                    #   months before expiry (default 9; no effect on any tax figure)
+
+# Written-option premiums (ITA s.49(1)) — see `taxjson option-boundary`:
+# option_premium_timing           = "grant"             # "grant": the premium is a gain in the year WRITTEN
+#                                                       #   "close": it is netted at the closing transaction instead
+option_grant_timing_since       = 2025                  # contracts written before this year keep close timing (default: `year`)
+#                                                       #   SET ONCE to the first year you FILE under grant timing and keep it
+#                                                       #   UNCHANGED in every later year's project (do not bump it with `year`)
+
+# One [accounts.NAME] section per folder under inputs/ (the folder name
+# is the account name). Each key, with its default:
+#   type                     = "taxable"           # REQUIRED: taxable | sheltered
+#   transfers                = false               # true: keep TRANSFER rows (contributions/withdrawals)
+
+[accounts.margin]
+type      = "taxable"             # REQUIRED: taxable | sheltered
+
+# More accounts: one section per inputs/ folder, e.g. a locked-in retirement account:
+# [accounts.lira]
+# type      = "sheltered"
+# transfers = true                # keep TRANSFER rows (contributions/withdrawals)
+
+# Tax instalments (`taxjson instalments`, and a summary inside
+# `taxjson estimate`). Uncomment and fill in YOUR figures.
+[instalments]
+basis                = "prior_year"        # current_year | prior_year | cra_reminder
+prior_year_net_tax   = 100                 # last year's net tax owing (no default)
+#                                          #   both years as CRA's instalment chart defines it: lines 42000 + 42200
+#                                          #   + 42800 (+ 43200) minus 43700 and the refundable credits — NOT line
+#                                          #   48500. Supply BOTH even on current_year: a 0 reads as "I owed nothing"
+'''
+
+
+class TestFormatToCanonicalLayout(unittest.TestCase):
+    def test_hand_edited_file_formats_to_the_canonical_layout(self):
+        r = CT.format_config(_HAND_EDITED)
+        doc = tomllib.loads(_HAND_EDITED)
+        self.assertEqual(tomllib.loads(r.text), doc)
+        self.assertFalse(CT.format_config(r.text).changed, "idempotent")
+        self.assertEqual(r.notes_lines, 0)
+        # The user's two trailing comments, each on its own line just
+        # above its key (after the key's description) ...
+        self.assertRegex(r.text, r"\n# longer LEAPS for me\n"
+                                 r"leaps_months +=")
+        self.assertRegex(r.text, r"\n# Ontario\nprovince +=")
+        # ... and otherwise exactly the template filled with the values:
+        # the old descriptions and group headings are regenerated.
+        mine = {"# longer LEAPS for me", "# Ontario"}
+        self.assertEqual(
+            "\n".join(ln for ln in r.text.split("\n") if ln not in mine),
+            CT.render_document(doc, "canada"))
+        self.assertEqual(r.kept_comments, 2)
+
+    def test_previous_layout_is_regenerated_without_notes(self):
+        r = CT.format_config(_PREVIOUS_LAYOUT)
+        self.assertEqual(r.notes_lines, 0)
+        self.assertEqual(r.kept_comments, 0, r.text)
+        doc = tomllib.loads(_PREVIOUS_LAYOUT)
+        self.assertEqual(r.text, CT.render_document(doc, "canada"))
+
+    def test_trailing_comment_moves_above_and_stays(self):
+        text = ('[settings]\ncountry = "ca"  # mine\nyear = 2025\n'
+                '[accounts.margin]   # main\ntype = "taxable"\n')
+        r = CT.format_config(text)
+        self.assertRegex(r.text, r"\n# mine\ncountry +=")
+        self.assertRegex(r.text, r"\n# main\n\[accounts\.margin\]\n")
+        self.assertFalse(CT.format_config(r.text).changed)
+        for ln in r.text.splitlines():
+            if not ln.startswith("#"):
+                self.assertNotIn("#", ln)
+
+    def test_comments_anywhere_format_idempotently(self):
+        # Comment lines, blank lines, commented-out keys and tables and
+        # trailing comments dropped at random places (outside multi-line
+        # values): formatting keeps every one and a second format
+        # changes nothing.
+        import random
+        rnd = random.Random(20261004)
+        bases = [CT.render_document(_full(c), c, 2025)
+                 for c in C.COUNTRIES] + [_PREVIOUS_LAYOUT, _MESSY_CA]
+        extra = ['# note', '', '# province = "BC"', '# leaps_months = 4',
+                 '# type = "x"', '# [accounts.old]']
+        for n in range(160):
+            lines = rnd.choice(bases).split("\n")
+            for _ in range(rnd.randint(1, 6)):
+                i = rnd.randrange(len(lines))
+                if lines[i - 1].rstrip().endswith(("[", ",")) \
+                        or lines[i].lstrip().startswith(("{", "]", '"')):
+                    continue
+                if rnd.random() < 0.2 and re.match(r"[a-z_]+ += [^\[{]*$",
+                                                    lines[i]):
+                    lines[i] += "  # tr"
+                else:
+                    lines.insert(i, rnd.choice(extra))
+            text = "\n".join(lines)
+            try:
+                tomllib.loads(text)
+            except tomllib.TOMLDecodeError:
+                continue
+            with self.subTest(n=n):
+                r = CT.format_config(text)
+                self.assertEqual(tomllib.loads(r.text), tomllib.loads(text))
+                self.assertFalse(CT.format_config(r.text).changed)
+
+    def test_users_commented_key_joins_its_key(self):
+        # Written above the wrong key, it moves to its own key's place.
+        text = ('[settings]\ncountry = "ca"\n# was:\n'
+                '# leaps_months = 6\n\nyear = 2025\n# tax_date = "trade"\n'
+                'leaps_months = 3\n')
+        r = CT.format_config(text)
+        self.assertRegex(r.text, r'\n# was:\n# leaps_months = 6\n'
+                                 r'leaps_months +=')
+        self.assertRegex(r.text, r'\n# tax_date = "trade"\n'
+                                 r'# tax_date +=')
+        self.assertFalse(CT.format_config(r.text).changed)
 
 
 def _cli(root, *args):

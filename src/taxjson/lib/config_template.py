@@ -5,18 +5,25 @@ re-renders an existing project's file into it with the user's values and
 comments. One renderer serves both, so a fresh scaffold is already
 formatted (formatting it is a no-op).
 
-Layout. The sections come in a fixed order: [settings] (grouped),
-the accounts (a reference block naming every account key, then each
-[accounts.NAME] section in the user's order, then a commented example of
-one more account), [estimate], [carryover], [[distributions]], and for
-Canada [[capital_gains_dividends]] and [instalments]. A key that is set
-is written active, in its template position, with its one-line
-description as the trailing comment; a key that is not set is written
-commented out, showing its default (or an example where it has none).
-A table that is absent is written commented out. Only the keys the
-project's country owns are listed (lib/country SETTING_COUNTRY /
-CONFIG_COUNTRY / PLAN_COUNTRY): a Canadian file never mentions a US-only
-key and the other way round.
+Layout. The tables come in a fixed order: [settings]; the accounts (a
+commented `# [accounts.NAME]` reference block naming every account key,
+then each [accounts.NAME] table in the user's order, then a commented
+example of one more account); then [estimate], [carryover],
+[[distributions]], and for Canada [[capital_gains_dividends]] and
+[instalments]. Arrays of tables keep their entries' order. Inside every
+table the keys are in alphabetical order, active and commented-out keys
+interleaved in one sequence, and every key line of the table (`key` or
+`# key`) is padded to the table's widest so the `=` signs form one column.
+No line carries an end-of-line comment: a key's description is on the
+line(s) just above it (plain `# text`, wrapped), and a key with a
+description is separated from the one before by a blank line (keys
+without one — an [[...]] entry's, or keys the template does not know —
+follow each other directly). A key that is set is written active with its
+value; a key that is not set is written commented out, `# key = default`
+(or an example where it has none). A table that is absent is written
+commented out. Only the keys the project's country owns are listed
+(lib/country SETTING_COUNTRY / CONFIG_COUNTRY / PLAN_COUNTRY): a Canadian
+file never mentions a US-only key and the other way round.
 
 The key lists come from the validator (lib/config_check: ACCOUNT_KEYS,
 ESTIMATE_KEYS, ... and lib/country.SETTING_COUNTRY);
@@ -29,25 +36,28 @@ no entry here.
   checked before anything is returned; account order and the order of
   [[...]] entries are kept);
 - keys the template does not know, at the end of their table under a
-  "Not in the template" line (a top-level key at the top, a table at the
-  end of the file);
-- comments: a trailing comment stays on its key or table line (it
-  replaces the description there); a comment block stays directly above
-  the key or table line that follows it (a commented-out key counts: the
-  block goes above that key's template line); a block separated by a
-  blank line from the next table goes to the end of the table it was in.
-  Comment lines that are the template's own text — or text an earlier
-  `taxjson init` wrote, recognised by hash — are regenerated rather than
-  kept; a bare `#` line carries nothing and is dropped. A multi-line
-  value with comments inside it is kept verbatim. Anything that cannot
-  be placed goes to a "Your notes" block at the end of the file;
-  nothing is dropped.
+  "Not in the template" line, alphabetically (a top-level key at the top,
+  a table at the end of the file);
+- comments: a trailing comment on a key or table line moves to its own
+  line just above that line (after the key's description); a comment
+  block stays directly above the key or table line that follows it (a
+  commented-out key counts: the block goes above that key's template
+  line), and so moves with that key to its alphabetical place; a block
+  that holds a commented-out key of your own (`# province = "BC"`) goes
+  to that key; a block separated by a blank line from the next table goes
+  to the end of the table it was in. Comment lines that are the
+  template's own text — or text an earlier `taxjson init` wrote,
+  recognised by hash — are regenerated rather than kept; a bare `#` line
+  carries nothing and is dropped. A multi-line value with comments inside
+  it is kept verbatim. Anything that cannot be placed goes to a "Your
+  notes" block at the end of the file; nothing is dropped.
 """
 from __future__ import annotations
 
 import hashlib
 import os
 import re
+import textwrap
 from dataclasses import dataclass, field
 from datetime import date as _date
 from datetime import datetime as _datetime
@@ -61,9 +71,8 @@ from taxjson.lib.config_check import (ACCOUNT_KEYS, CARRYOVER_KEYS, CGD_KEYS,
                                       INSTALMENTS_KEYS, RETIRED_SETTINGS)
 from taxjson.lib.tomlcompat import tomllib
 
-# Comment column: a value is padded to this width so the descriptions
-# line up (and two projects' files differ only where their values do).
-COMMENT_COL = 22
+# Descriptions are wrapped to this many characters after the "# ".
+DOC_WIDTH = 76
 
 NOTES_HEADING = ("# Your notes (kept by tjs format) — comments it could "
                  "not attach to a setting:")
@@ -90,13 +99,11 @@ class Key:
     """One documented key. `value` is the TOML text shown when the key
     is not set (its default, or an example where it has none) and may
     hold placeholders ({year}, {prev_year}, {next_year}, {home},
-    {source}, {tax_date}, {tz}, {name}). `doc` is the one-line
-    description (a str, or {country: str}); `more` are continuation
-    lines for the few keys whose description needs them."""
+    {source}, {tax_date}, {tz}, {name}). `doc` is its description (a
+    str, or {country: str}), written wrapped on the lines above it."""
     name: str
     value: Text
     doc: Text
-    more: Union[Tuple[str, ...], Mapping[str, Tuple[str, ...]]] = ()
 
 
 def _pick(v: Any, country: str) -> Any:
@@ -127,126 +134,114 @@ def _bases() -> str:
 _FILE_HEADER = (
     "# taxjson configuration — https://github.com/taxjson/taxjson",
     "#",
-    "# Every key taxjson reads is listed here, grouped and column-aligned so",
-    "# year-over-year projects diff cleanly:",
+    "# Every key taxjson reads is listed here, alphabetically within each",
+    "# table and with one `=` column per table, so year-over-year projects",
+    "# diff cleanly:",
     "#   diff ~/taxes/{prev_year}/taxjson.toml ~/taxes/{year}/taxjson.toml",
-    "# A commented key shows its default (or an example where it has none);",
-    "# uncomment a line to change it. `taxjson format` puts an edited file",
-    "# back into this layout, keeping your values and comments.",
+    "# Each key's description is on the lines above it. A commented key shows",
+    "# its default (or an example where it has none); uncomment it to change",
+    "# it. `taxjson format` puts an edited file back into this layout,",
+    "# keeping your values and comments.",
 )
 
-# [settings], in groups: (heading lines, keys). A key the project's
-# country does not own is left out (lib/country.SETTING_COUNTRY).
-SETTINGS_GROUPS: Tuple[Tuple[Tuple[str, ...], Tuple[Key, ...]], ...] = (
-    ((), (
-        Key("year", "{year}", "tax year the pipeline reports on (required)"),
-        Key("country", '"{country}"', "canada | ca | usa | us (required)"),
-        Key("province", '"ON"',
-            "{provinces} — `taxjson estimate` needs it (no default)"),
-        Key("base_currency", '"{home}"',
-            {"canada": "report currency: CAD (Bank of Canada rates)",
-             "usa": "report currency: USD"}),
-        Key("source_currencies", {"canada": '["USD"]', "usa": "[]"},
-            "currencies you hold besides base_currency (FX rates fetched)"),
-        Key("tax_date", '"{tax_date}"',
-            {"canada": "settle | trade (default settle: CRA dates a sale "
-                       "by settlement)",
-             "usa": "trade | settle (default trade: the IRS dates a sale "
-                    "by trade date)"}),
-        Key("local_timezone", '"{tz}"',
-            "zone crypto UTC times are dated in (IANA name; no default — "
-            "required with a crypto account)"),
-        Key("prior_year_record", '"../{prev_year}/filed/{prev_year}.json"',
-            "last year's close-year record (`taxjson handoff`; no "
-            "default)"),
-    )),
-    (("# Report views:",), (
-        Key("leaps_months", "9",
-            "LEAPS views (leaps, leaps-sum): a long option bought more "
-            "than this many",
-            ("months before expiry (default 9; no effect on any tax "
-             "figure)",)),
-    )),
-    (("# Futures and foreign-currency cash:",), (
-        Key("futures_settle", '"trade"',
-            "trade | next_day: futures and futures options settle on the "
-            "TRADE date",
-            ("(daily variation margin); next_day = the clearing premium "
-             "date",)),
-        Key("fx_cash_gains", "false",
-            {"canada": "true: end-of-run FX-on-cash report (s.39(1.1), "
-                       "$200 de minimis)",
-             "usa": "true: end-of-run FX-on-cash report (§988, ordinary "
-                    "income)"}),
-    )),
-    (("# Income dating (README \"Income dating\"):",), (
-        Key("foreign_return_of_capital", '"dividend"',
-            "a non-Canadian issuer's return of capital (IB): \"dividend\" "
-            "(s.90(1)) | \"acb\""),
-        Key("corporate_distributions", '["XYZQ.TO"]',
-            "Canadian issuers whose distributions are a corporation's (no "
-            "default)"),
-        Key("ric_january_dividends", '["XYZQ.US {next_year}-01-30"]',
-            "January fund/REIT dividends taxed as received Dec 31 "
-            "(IRC §852(b)(7) / §857(b)(9)):",
-            ("\"SYMBOL\" (every January one) or \"SYMBOL YYYY-01-DD\" "
-             "(that payment); no default",)),
-    )),
-    (("# Written-option premiums (ITA s.49(1)) — see "
-      "`taxjson option-boundary`:",), (
-        Key("option_premium_timing", '"grant"',
-            "\"grant\": the premium is a gain in the year WRITTEN",
-            ("\"close\": it is netted at the closing transaction instead",)),
-        Key("option_grant_timing_since", "{year}",
-            "contracts written before this year keep close timing "
-            "(default: `year`)",
-            ("SET ONCE to the first year you FILE under grant timing and "
-             "keep it", "UNCHANGED in every later year's project (do not "
-             "bump it with `year`)")),
-        Key("option_buyback_loss_superficial", "false",
-            "true: strict s.54 reading — a buy-back loss is superficial "
-            "when identical",
-            ("options are bought within 30 days and still held",)),
-    )),
+# [settings]. A key the project's country does not own is left out
+# (lib/country.SETTING_COUNTRY). Written in alphabetical order.
+SETTINGS_SPEC: Tuple[Key, ...] = (
+    Key("year", "{year}",
+        "The tax year the pipeline reports on (required)."),
+    Key("country", '"{country}"', "canada | ca | usa | us (required)."),
+    Key("province", '"ON"',
+        "{provinces}: the province `taxjson estimate` taxes at. No "
+        "default."),
+    Key("base_currency", '"{home}"',
+        {"canada": "Report currency: CAD (Bank of Canada rates).",
+         "usa": "Report currency: USD."}),
+    Key("source_currencies", {"canada": '["USD"]', "usa": "[]"},
+        "Currencies you hold besides base_currency (their FX rates are "
+        "fetched)."),
+    Key("tax_date", '"{tax_date}"',
+        {"canada": "settle | trade. Default settle: CRA dates a sale by "
+                   "settlement.",
+         "usa": "trade | settle. Default trade: the IRS dates a sale by "
+                "trade date."}),
+    Key("local_timezone", '"{tz}"',
+        "The zone crypto UTC times are dated in (an IANA name). No "
+        "default: required with a crypto account."),
+    Key("prior_year_record", '"../{prev_year}/filed/{prev_year}.json"',
+        "Last year's close-year record (`taxjson handoff`). No default."),
+    Key("leaps_months", "9",
+        "Options bought more than this many months before expiry count as "
+        "LEAPS (the leaps and leaps-sum views only; no tax figure). "
+        "Default 9."),
+    Key("futures_settle", '"trade"',
+        "trade | next_day. trade: futures and futures options settle on "
+        "the TRADE date (daily variation margin); next_day: the clearing "
+        "premium date."),
+    Key("fx_cash_gains", "false",
+        {"canada": "true: an end-of-run FX-on-cash report (s.39(1.1), $200 "
+                   "de minimis).",
+         "usa": "true: an end-of-run FX-on-cash report (§988, ordinary "
+                "income)."}),
+    Key("foreign_return_of_capital", '"dividend"',
+        "A non-Canadian issuer's return of capital (IB): \"dividend\" "
+        "(s.90(1), the default) | \"acb\"."),
+    Key("corporate_distributions", '["XYZQ.TO"]',
+        "Canadian issuers whose distributions are a corporation's, dated "
+        "when paid (README \"Income dating\"). No default."),
+    Key("ric_january_dividends", '["XYZQ.US {next_year}-01-30"]',
+        "January fund/REIT dividends taxed as received Dec 31 (IRC "
+        "§852(b)(7) / §857(b)(9)): \"SYMBOL\" (every January one) or "
+        "\"SYMBOL YYYY-01-DD\" (that payment). No default."),
+    Key("option_premium_timing", '"grant"',
+        "\"grant\": a written option's premium is a gain in the year "
+        "WRITTEN (ITA s.49(1)); \"close\": it is netted at the closing "
+        "transaction instead. See `taxjson option-boundary`."),
+    Key("option_grant_timing_since", "{year}",
+        "Contracts written before this year keep close timing (default: "
+        "`year`). SET ONCE to the first year you FILE under grant timing "
+        "and keep it UNCHANGED in every later year's project (do not bump "
+        "it with `year`)."),
+    Key("option_buyback_loss_superficial", "false",
+        "true: the strict s.54 reading — a loss on buying back a written "
+        "option is superficial when identical options are bought within "
+        "30 days and still held."),
 )
 
 ACCOUNT_SPEC: Tuple[Key, ...] = (
-    Key("type", '"taxable"', "REQUIRED: taxable | sheltered"),
+    Key("type", '"taxable"', "REQUIRED: taxable | sheltered."),
     Key("plan", {"canada": '"rrsp"', "usa": '"ira"'},
-        "the plan when the name doesn't say (default: from the name):",
-        ("{plans}",)),
+        "The plan when the name doesn't say (default: from the name): "
+        "{plans}."),
     Key("crypto", "false",
-        "true: a Coinbase / Kraken account (crypto prices filled in by the "
-        "run)"),
+        "true: a Coinbase / Kraken account (crypto prices are filled in by "
+        "the run)."),
     Key("transfers", "false",
-        "true: keep TRANSFER rows (contributions/withdrawals)"),
+        "true: keep TRANSFER rows (contributions/withdrawals)."),
     Key("holdings", '["~/broker/{name}_holdings.toml"]',
-        "positions files `taxjson sanity` reconciles against (default: "
-        "none)"),
+        "Positions files `taxjson sanity` reconciles against. Default: "
+        "none."),
     Key("combined_broker_accounts", "false",
-        "true: every broker account in these statements is yours, "
-        "taxable together"),
+        "true: every broker account in these statements is yours, taxable "
+        "together."),
     Key("exercise_fee", "1.00",
-        "Webull: the exercise/assignment charge on the stock leg (no "
-        "default:",
-        ("without it no exercise/assignment is inferred — each candidate "
-         "is named)",)),
+        "Webull: the exercise/assignment charge on the stock leg. No "
+        "default: without it no exercise/assignment is inferred (each "
+        "candidate is named)."),
     Key("year_end_posting", '"06-30"',
         "RBC: the day next year by which year-end book-cost rows are "
-        "posted (default 06-30)"),
+        "posted. Default 06-30."),
     Key("brokerage", '"questrade"',
-        "`taxjson fetch` source (taxjson-fetch plugin): questrade | "
-        "ibkr_flex"),
+        "The `taxjson fetch` source (taxjson-fetch plugin): questrade | "
+        "ibkr_flex."),
     Key("account", '"12345678"',
-        "questrade: the account number `taxjson fetch` downloads"),
+        "questrade: the account number `taxjson fetch` downloads."),
     Key("query_id", '"123456"',
-        "ibkr_flex: the Flex query id `taxjson fetch` runs"),
+        "ibkr_flex: the Flex query id `taxjson fetch` runs."),
 )
 
 _ACCOUNTS_DOC = (
-    "# One [accounts.NAME] section per folder under inputs/ (the folder name",
-    "# is the account name). Each key, with its default:",
-)
+    "One [accounts.NAME] table per folder under inputs/ (the folder name is "
+    "the account name). Every key, with its default:")
 
 # The scaffold's accounts and the commented "one more account" example.
 SCAFFOLD_ACCOUNTS = {
@@ -254,10 +249,10 @@ SCAFFOLD_ACCOUNTS = {
     "usa": ("margin", "roth", "401k", "crypto"),
 }
 _MORE_ACCOUNT = {
-    "canada": ("lira", ("# More accounts: one section per inputs/ folder, "
-                        "e.g. a locked-in retirement account:",)),
-    "usa": ("ira", ("# More accounts: one section per inputs/ folder, e.g. "
-                    "a traditional IRA:",)),
+    "canada": ("lira", "More accounts: one table per inputs/ folder, e.g. a "
+                       "locked-in retirement account:"),
+    "usa": ("ira", "More accounts: one table per inputs/ folder, e.g. a "
+                   "traditional IRA:"),
 }
 
 
@@ -265,91 +260,97 @@ _MORE_ACCOUNT = {
 class Table:
     name: str
     aot: bool                      # an array of tables ([[name]])
-    doc: Mapping[str, Tuple[str, ...]]
+    doc: Text                      # the heading above the table line
     keys: Tuple[Key, ...]
 
 
+# After [settings] and the accounts, in this order.
 TABLES: Tuple[Table, ...] = (
     Table("estimate", False, {
-        "canada": ("# Estimate inputs (`taxjson estimate`, and the "
-                   "instalments current-year basis),",
-                   "# used when the command-line flags aren't given:"),
-        "usa": ("# Estimate inputs (`taxjson estimate`), used when the "
-                "command-line flags",
-                "# aren't given:")}, (
+        "canada": "Estimate inputs (`taxjson estimate`, and the instalments "
+                  "current-year basis), used when the command-line flags "
+                  "aren't given:",
+        "usa": "Estimate inputs (`taxjson estimate`), used when the "
+               "command-line flags aren't given:"}, (
         Key("other_income", "0",
-            "income besides these books (employment, interest ...)"),
+            "Income besides these books (employment, interest ...)."),
         Key("other_losses", "0",
-            {"canada": "net capital losses of earlier years applied, in "
-                       "FULL dollars",
-             "usa": "the SHORT-term capital loss carryover applied"}),
-        Key("deductions", "0", "RRSP 20800, FHSA, RPP ... (full under AMT)"),
-        Key("carrying_charges", "0", "line 22100 (50% under AMT)"),
+            {"canada": "Net capital losses of earlier years applied, in "
+                       "FULL dollars.",
+             "usa": "The SHORT-term capital loss carryover applied."}),
+        Key("deductions", "0", "RRSP 20800, FHSA, RPP ... (in full under "
+                               "AMT)."),
+        Key("carrying_charges", "0", "Line 22100 (50% under AMT)."),
         Key("amt_carryover", "{{ {prev_year} = 1200.50 }}",
-            "minimum tax carryover by year of origin (T691; no default)"),
+            "Minimum tax carryover by year of origin (T691). No default."),
         Key("long_term_losses", "0",
-            "the long-term capital loss carryover (Schedule D line 14)"),
+            "The long-term capital loss carryover (Schedule D line 14)."),
     )),
-    Table("carryover", False, {"*": (
-        "# Losses actually applied on filed returns (`taxjson carryover`), "
-        "by year:",)}, (
-        Key("claimed", "{{ {prev_year} = 4000.00 }}",
-            "net capital losses applied on each filed return (no "
-            "default)"),
-    )),
-    Table("distributions", True, {"*": (
-        "# Non-cash fund distributions (a reinvested capital-gains "
-        "distribution,",
-        "# a late return-of-capital factor) — `taxjson run` books each as "
-        "a cost",
-        "# adjustment on the shares held on the record date. One table "
-        "each:")}, (
-        Key("symbol", {"canada": '"XYZQ.TO"', "usa": '"XYZQ.US"'},
-            "the books' symbol"),
-        Key("record_date", "{year}-12-29", "the record date"),
-        Key("per_share", "0.25",
-            "base currency; negative = return of capital"),
-    )),
-    Table("capital_gains_dividends", True, {"*": (
-        "# T5 box 18 capital-gains dividends the books carry as dividends "
-        "(one",
-        "# table per payment or year; `taxjson divs-sum`, the estimate):")}, (
-        Key("symbol", '"ABCX.TO"', "the books' symbol"),
-        Key("year", "{year}", "every dividend of that tax year — or:"),
-        Key("date", "{year}-06-16", "one payment (instead of year)"),
-        Key("amount", '"all"', "\"all\" or the box 18 amount, e.g. 1.25"),
-        Key("account", '"margin"', "default: the taxable accounts"),
-    )),
-    Table("instalments", False, {"*": (
-        "# Tax instalments (`taxjson instalments`, and a summary inside",
-        "# `taxjson estimate`). Uncomment and fill in YOUR figures.")}, (
-        Key("basis", '"current_year"', "{bases}"),
-        Key("withheld", "0", "tax withheld at source this year"),
-        Key("prior_year_net_tax", "55000",
-            "last year's net tax owing (no default)",
-            ("both years as CRA's instalment chart defines it: lines 42000 "
-             "+ 42200",
-             "+ 42800 (+ 43200) minus 43700 and the refundable credits — "
-             "NOT line",
-             "48500. Supply BOTH even on current_year: a 0 reads as \"I "
-             "owed nothing\"")),
-        Key("second_prior_net_tax", "41000",
-            "the year before's net tax owing (no default)"),
-        Key("prescribed_rate", "0.07",
-            "CRA's overdue-tax rate (default: CRA's published rates)"),
-        Key("prescribed_rates",
-            "[\n  { from = \"{year}-01-01\", rate = 0.08 },\n"
-            "  { from = \"{year}-07-01\", rate = 0.07 },\n]",
-            "or a dated schedule: CRA resets the rate quarterly"),
-        Key("paid",
-            "[\n  { date = \"{year}-03-16\", amount = 15000 },\n"
-            "  { date = \"{year}-05-20\", amount = 12000, "
-            "note = \"refund transferred\" },\n]",
-            "instalments paid (no default)"),
-    )),
+    Table("carryover", False,
+          "Losses actually applied on filed returns (`taxjson carryover`), "
+          "by year:", (
+              Key("claimed", "{{ {prev_year} = 4000.00 }}",
+                  "Net capital losses applied on each filed return. No "
+                  "default."),
+          )),
+    Table("distributions", True,
+          "Non-cash fund distributions (a reinvested capital-gains "
+          "distribution, a late return-of-capital factor): `taxjson run` "
+          "books each as a cost adjustment on the shares held on the "
+          "record date. One table each:", (
+              Key("symbol", {"canada": '"XYZQ.TO"', "usa": '"XYZQ.US"'},
+                  "The books' symbol."),
+              Key("record_date", "{year}-12-29", "The record date."),
+              Key("per_share", "0.25",
+                  "Per share, in the base currency; negative = return of "
+                  "capital."),
+          )),
+    Table("capital_gains_dividends", True,
+          "T5 box 18 capital-gains dividends the books carry as dividends "
+          "(`taxjson divs-sum`, the estimate). One table per payment or "
+          "year:", (
+              Key("symbol", '"ABCX.TO"', "The books' symbol."),
+              Key("year", "{year}",
+                  "Every dividend of that tax year (instead of date)."),
+              Key("date", "{year}-06-16",
+                  "One payment's date (instead of year)."),
+              Key("amount", '"all"',
+                  "\"all\" or the box 18 amount, e.g. 1.25."),
+              Key("account", '"margin"', "Default: the taxable accounts."),
+          )),
+    Table("instalments", False,
+          "Tax instalments (`taxjson instalments`, and a summary inside "
+          "`taxjson estimate`). Uncomment and fill in YOUR figures.", (
+              Key("basis", '"current_year"', "{bases}."),
+              Key("withheld", "0", "Tax withheld at source this year."),
+              Key("prior_year_net_tax", "55000",
+                  "Last year's net tax owing (no default), both years as "
+                  "CRA's instalment chart defines it: lines 42000 + 42200 + "
+                  "42800 (+ 43200) minus 43700 and the refundable credits "
+                  "— NOT line 48500. Supply BOTH even on current_year: a 0 "
+                  "reads as \"I owed nothing\"."),
+              Key("second_prior_net_tax", "41000",
+                  "The year before's net tax owing. No default."),
+              Key("prescribed_rate", "0.07",
+                  "CRA's overdue-tax rate. Default: CRA's published "
+                  "rates."),
+              Key("prescribed_rates",
+                  "[\n  { from = \"{year}-01-01\", rate = 0.08 },\n"
+                  "  { from = \"{year}-07-01\", rate = 0.07 },\n]",
+                  "Or a dated schedule: CRA resets the rate quarterly."),
+              Key("paid",
+                  "[\n  { date = \"{year}-03-16\", amount = 15000 },\n"
+                  "  { date = \"{year}-05-20\", amount = 12000, "
+                  "note = \"refund transferred\" },\n]",
+                  "Instalments paid. No default."),
+          )),
 )
 
 TABLE_BY_NAME = {t.name: t for t in TABLES}
+
+
+def _sorted_keys(keys: Iterable[Key]) -> List[Key]:
+    return sorted(keys, key=lambda k: k.name)
 
 
 # ------------------------------------------------------------ ownership
@@ -388,8 +389,7 @@ def validator_keys() -> Dict[str, Tuple[str, ...]]:
 
 def spec_keys() -> Dict[str, Tuple[str, ...]]:
     """{table: keys} the template documents (every country)."""
-    out = {"settings": tuple(k.name for _h, ks in SETTINGS_GROUPS
-                             for k in ks),
+    out = {"settings": tuple(k.name for k in SETTINGS_SPEC),
            "accounts": tuple(k.name for k in ACCOUNT_SPEC)}
     for t in TABLES:
         out[t.name] = tuple(k.name for k in t.keys)
@@ -513,6 +513,8 @@ def toml_value(v: Any, *, top: bool = False) -> str:
     raise FormatError(f"cannot write a {type(v).__name__} value as TOML")
 
 
+
+
 # ------------------------------------------------------------ comment text
 
 def _norm(text: str) -> str:
@@ -530,7 +532,8 @@ def _hash(norm: str) -> str:
 # Comment lines (and trailing comments) earlier `taxjson init` versions
 # wrote, as hashes of their _norm text (sha256, first 16 hex digits; the
 # text of every '#' onward of every line each earlier template rendered,
-# both countries): `taxjson format` regenerates them as template text
+# both countries; the last block is the grouped, end-of-line-comment
+# layout before the alphabetical one): `taxjson format` regenerates them as template text
 # instead of keeping them as the user's notes. Hashes, not text: the old
 # examples are not carried in the source.
 _LEGACY_TEMPLATE_HASHES = frozenset("""
@@ -577,16 +580,57 @@ e8124ba3a75a0df6 e9022fb6222edde3 ea611fd67ade4a60 eb965c4fdc5d3c03
 ebbd3e946926ed52 ef76e3c53d8faf69 f15aa141b057bf99 f1b401f1b8b264ad
 f63135d2f08dab4b f78d515712ea08d9 f9fb15aa13e12b0d fc1abfeb6f1b68fc
 fdf9cee8b4418c3c ffbe9fc846897ac6
+
+0020a8a2bb20b4b0 017f380e0b6a61cd 02b32eac19a03203 02ba79867aeef1e0
+050cbabf558d4ecb 0577bde917765daa 06197cb162145559 0814740aa90e1950
+0d0c40c054acc31a 0d2cf31aa2284703 0f738480e8fe03b8 10b659cf0da612cc
+11e2ead3eba3776a 148a0c532bc5091b 17ad5cbb7bd1d2be 202f8c2b02ea0950
+2043092d13a9ddb3 23117108fd28266f 2415764f4feed561 24d8f1f04d743caa
+261627aa44cbdc94 2c0c8fef481bd01f 2ef4ed987f1ae220 34035ddf87becf93
+346bd9475d2e3215 36da47992ca584c8 37a5ba1b3cedbefb 39108663732ebb04
+394831e63e197bb6 3b8357c256930dd9 3ca00d59542fe219 412f6dd01f91ea0f
+4220244476add4aa 4238bb4a9afb8ef4 427e5cd459495369 4281fd4242594fb8
+43a15aebe25e6b53 43ae6016a35552dd 441f39bcd71b64e5 44b461f0217123f5
+465a7a123c8ef8cc 47cec92a60ecda34 4a268e776e126635 4ac72cb8fe7e77fe
+4af1b491da09956a 4b4e33fe3bb9a350 4d2cb169321dd299 4e5aa8ea61bd59e2
+4e88f3970457636f 52da1f548e5e2ea2 53121da7a98b7de9 534a3589a6211b65
+53b4ca4a22bbce94 556b2201e0c13c09 57e36152dad872e3 57ff33fde74d026c
+582202d4a85dd800 5e8929db0dd5bd39 5ec1bb6bf639f03e 5ec7d3d510c47edf
+65e1a5e08330cdd4 683be50d548f8ece 6d10e976ac83dd79 6d47a7057fd43813
+740f976c49440e89 79c65342c7fd5f80 7a99c4d34a5f93c7 7b88a5489c96f8cb
+7c75346facd241a6 7e0931955dc97aa1 8098edd7d1d5601b 8314dc304ee8b2ad
+83f5841141bce63b 8448413c0db31fce 844d37f9b6d81e2a 894ab90f7ee03325
+8aa2324136a181ed 8ac12a784aafed24 8b4221ef9f92d4b0 8e8e9e1e89d41810
+8ed8f9587a239b38 91f85c2031bd391f 941c0062a758f227 969da0ab7387952a
+974c9e54215d686d 9938602ebb977f88 a2099931061daf39 a20bdfef63be101c
+a241c1d56a25e7df a5df1718f282561e a87c85293a631c1e a967d25422a0e540
+ab285bc12d2069ed adb2d3408986568c ae2b5aea28b97b44 ae65f8ee35b6fa59
+af35c578acd79bf8 b56e4ded8d08b5d1 b84319370f594fb0 b9afb251203db520
+b9c950abd03274b0 b9cde5fb8083f99e c338b0af34ddad6d c4cf0e5ce40a86ad
+c7481d6fabf20f31 c7b9f353344d8db2 c9d32c92f851b258 cf7e145b2c49112f
+d11cb19291756534 d3dd27f21633653f d458915855596ff5 d515ff75ef8ed805
+d64261f122e3ef3b d9f29a1818b39472 db355040cbe26392 dded3781d12baa06
+de6895cedcfdb45b e1611727431c4224 e231a27e7e2d93d6 e6a4d654afa3a919
+e7375f9815cfd066 e7896eac1898cb23 e9cb1329e3f38abd e9f19ceb7012b0c0
+ea7321a84bbc15e7 ef63ed5daa1137fd f0e9983114ddefcf f6be3e07a2788417
 """.split())
 
 
 def _comment_suffixes(line: str) -> Iterable[str]:
     """_norm of the text from every '#' of a rendered template line (a
-    whole comment line, a trailing description, a continuation)."""
+    whole comment line, a description line, a commented-out key)."""
     for m in re.finditer("#", line):
         n = _norm(line[m.start():])
         if n:
             yield n
+
+
+def _doc_lines(text: str) -> List[str]:
+    """A description as `# ` comment lines, wrapped."""
+    if not text:
+        return []
+    return ["# " + ln for ln in textwrap.wrap(
+        text, DOC_WIDTH, break_long_words=False, break_on_hyphens=False)]
 
 
 # ------------------------------------------------------------ rendering
@@ -610,6 +654,20 @@ class Extras:
     trailing: Dict[Slot, str] = field(default_factory=dict)
     verbatim: Dict[Slot, str] = field(default_factory=dict)
     notes: List[Run] = field(default_factory=list)
+
+
+@dataclass
+class _Entry:
+    """One key line of a table, to be laid out with the others."""
+    key: str
+    value: str                 # TOML text (may span lines)
+    doc: str = ""              # the filled description
+    commented: bool = False
+    slot: bool = True          # a place the user's comments can attach to
+
+    @property
+    def prefix(self) -> str:
+        return ("# " if self.commented else "") + key_repr(self.key)
 
 
 class _Renderer:
@@ -657,10 +715,12 @@ class _Renderer:
 
     def user_runs(self, slot: Slot) -> None:
         self.slots.add(slot)
-        for run in self.x.runs.get(slot, ()):
+        runs = self.x.runs.get(slot, ())
+        for i, run in enumerate(runs):
             for ln in run.lines:
                 self.emit(ln, template=False)
-            if run.blank_after:
+            # (never a blank between the last run and its line)
+            if run.blank_after and i < len(runs) - 1:
                 self.lines.append("")
 
     def end(self, T: Tuple[Any, ...]) -> None:
@@ -671,42 +731,85 @@ class _Renderer:
                 self.emit(ln, template=False)
 
     def header(self, T: Tuple[Any, ...], text: str, *,
-               commented: bool = False) -> None:
+               commented: bool = False, doc: str = "") -> None:
+        """A table line, its heading above it; the user's comments (and a
+        trailing comment, moved onto its own line) between the two."""
         slot = ("hdr", T)
         self.table(T)
+        for ln in _doc_lines(doc):
+            self.emit(ln)
         self.user_runs(slot)
-        line = ("# " if commented else "") + text
         tr = self.x.trailing.get(slot)
         if tr and not commented:
-            self.emit(line + "  " + tr, template=False)
-        else:
-            self.emit(line)
+            self.emit(tr, template=False)
+        self.emit(("# " if commented else "") + text)
 
-    def key_line(self, T: Tuple[Any, ...], key: str, value: str, doc: str,
-                 *, K: int, commented: bool, more: Sequence[str] = (),
-                 slot: bool = True) -> None:
-        col = K + 3 + COMMENT_COL
-        s = ("key", T, key)
-        if slot:
-            self.user_runs(s)
-        pre = "# " if commented else ""
-        value = self.x.verbatim.get(s, value) if not commented else value
-        vlines = value.split("\n")
-        out = [f"{pre}{key_repr(key).ljust(K)} = {vlines[0]}"]
-        out += [(pre + ln) if commented else ln for ln in vlines[1:]]
-        tr = None if commented else self.x.trailing.get(s)
-        comment = tr if tr else (f"# {doc}" if doc else "")
-        user_line = len(out) - 1 if tr else None
-        if comment:
-            last = out[-1]
-            out[-1] = last + " " * max(1, col - len(last)) + comment
-        for i, ln in enumerate(out):
-            # A verbatim value or a user's trailing comment is the
-            # user's text, never matched as template text.
-            self.emit(ln, template=(i != user_line
-                                    and s not in self.x.verbatim))
-        for m in more:
-            self.emit("#" + " " * (col - 1) + "#   " + m)
+    def keys(self, T: Tuple[Any, ...],
+             entries: Sequence[Union[_Entry, str]]) -> None:
+        """A table's key lines (and its heading lines, as str), directly
+        under its table line: one `=` column for the whole table, each
+        key's description and the user's comments above it, a blank line
+        before every key that has comment lines."""
+        K = max([len(e.prefix) for e in entries if isinstance(e, _Entry)]
+                or [0])
+        first = True
+        for e in entries:
+            if isinstance(e, str):
+                self.blank()
+                self.emit(e)
+                first = True
+                continue
+            s = ("key", T, e.key)
+            doc = _doc_lines(e.doc)
+            runs = self.x.runs.get(s, ()) if e.slot else ()
+            tr = (self.x.trailing.get(s)
+                  if e.slot and not e.commented else None)
+            if not first and (doc or runs or tr):
+                self.blank()
+            first = False
+            for ln in doc:
+                self.emit(ln)
+            if e.slot:
+                self.user_runs(s)
+            if tr:
+                self.emit(tr, template=False)
+            verbatim = (e.slot and not e.commented
+                        and s in self.x.verbatim)
+            value = self.x.verbatim[s] if verbatim else e.value
+            vlines = value.split("\n")
+            pre = "# " if e.commented else ""
+            self.emit(f"{e.prefix.ljust(K)} = {vlines[0]}",
+                      template=not verbatim)
+            for ln in vlines[1:]:
+                # A verbatim value is the user's text, never matched as
+                # template text.
+                self.emit(pre + ln, template=not verbatim)
+
+    def entry(self, k: Key, values: Mapping[str, Any],
+              name: str = "NAME") -> _Entry:
+        """Key `k` set (active, with its value) or not (commented, with
+        its default or example)."""
+        c = self.country
+        doc = self.fill(_pick(k.doc, c), name)
+        if k.name in values:
+            return _Entry(k.name, toml_value(values[k.name], top=True), doc)
+        return _Entry(k.name, self.fill(_pick(k.value, c), name), doc,
+                      commented=True)
+
+    def unknown_entries(self, values: Mapping[str, Any],
+                        known: Sequence[str], label: str, *,
+                        owner_table: Optional[str] = None
+                        ) -> List[Union[_Entry, str]]:
+        c = self.country
+        extra = sorted(k for k in values
+                       if k not in known
+                       or (owner_table and not owned(c, owner_table, k)))
+        if not extra:
+            return []
+        for k in extra:
+            self.unknown.append(f"[{label}] {k}")
+        return [_UNKNOWN_KEYS_LINE] + [
+            _Entry(k, toml_value(values[k], top=True)) for k in extra]
 
     # -- sections
     def render(self) -> str:
@@ -744,15 +847,13 @@ class _Renderer:
         return "\n".join(self.lines) + "\n"
 
     def unknown_top(self) -> None:
-        keys = [k for k, v in self.doc.items() if not self._is_table(k, v)]
+        keys = sorted(k for k, v in self.doc.items()
+                      if not self._is_table(k, v))
         if not keys:
             return
-        self.emit(_UNKNOWN_TOP_LINE)
-        K = max(len(key_repr(k)) for k in keys)
-        for k in keys:
-            self.unknown.append(k)
-            self.key_line((), k, toml_value(self.doc[k], top=True), "", K=K,
-                          commented=False)
+        self.unknown.extend(keys)
+        self.keys((), [_UNKNOWN_TOP_LINE] + [
+            _Entry(k, toml_value(self.doc[k], top=True)) for k in keys])
 
     def _is_table(self, k: str, v: Any) -> bool:
         if isinstance(v, dict):
@@ -764,70 +865,28 @@ class _Renderer:
         c = self.country
         T = ("settings",)
         self.header(T, "[settings]")
-        first = True
-        for heading, keys in SETTINGS_GROUPS:
-            keys = tuple(k for k in keys if owned(c, "settings", k.name))
-            if not keys:
-                continue
-            if not first:
-                self.lines.append("")
-            first = False
-            for h in heading:
-                self.emit(self.fill(h))
-            K = max(len(k.name) for k in keys)
-            for k in keys:
-                self._key(T, k, s, K)
-        self._unknown_keys(T, s, spec_keys()["settings"], "settings",
-                           owner_table="settings", blank=True)
+        keys = _sorted_keys(k for k in SETTINGS_SPEC
+                            if owned(c, "settings", k.name))
+        self.keys(T, [self.entry(k, s) for k in keys]
+                  + self.unknown_entries(s, spec_keys()["settings"],
+                                         "settings",
+                                         owner_table="settings"))
         self.end(T)
-
-    def _key(self, T, k: Key, values: Mapping[str, Any], K: int,
-             name: str = "NAME") -> None:
-        c = self.country
-        doc = self.fill(_pick(k.doc, c), name)
-        more = [self.fill(m, name) for m in _pick(k.more, c)]
-        if k.name in values:
-            self.key_line(T, k.name, toml_value(values[k.name], top=True),
-                          doc, K=K, commented=False, more=more)
-        else:
-            self.key_line(T, k.name, self.fill(_pick(k.value, c), name),
-                          doc, K=K, commented=True, more=more)
-
-    def _unknown_keys(self, T, values: Mapping[str, Any],
-                      known: Sequence[str], label: str, *,
-                      owner_table: Optional[str] = None,
-                      blank: bool = False) -> None:
-        c = self.country
-        extra = [k for k in values
-                 if k not in known
-                 or (owner_table and not owned(c, owner_table, k))]
-        if not extra:
-            return
-        if blank:
-            self.lines.append("")
-        self.emit(_UNKNOWN_KEYS_LINE)
-        K = max(len(key_repr(k)) for k in extra)
-        for k in extra:
-            self.unknown.append(f"[{label}] {k}")
-            self.key_line(T, k, toml_value(values[k], top=True), "", K=K,
-                          commented=False)
 
     def accounts(self, accts: Any, present: bool) -> None:
         c = self.country
         self.lines.append("")
         T0 = ("accounts",)
         self.table(T0)
-        for ln in _ACCOUNTS_DOC:
+        for ln in _doc_lines(_ACCOUNTS_DOC):
             self.emit(ln)
-        Kr = max(len(k.name) for k in ACCOUNT_SPEC)
-        col = 4 + Kr + 3 + COMMENT_COL - 2
-        for k in ACCOUNT_SPEC:
-            head = (f"#   {k.name.ljust(Kr)} = "
-                    f"{self.fill(_pick(k.value, c))}")
-            self.emit(head + " " * max(1, col - len(head))
-                      + "# " + self.fill(_pick(k.doc, c)))
-            for m in _pick(k.more, c):
-                self.emit("#" + " " * (col - 1) + "#   " + self.fill(m))
+        # The reference block: every account key, commented (no place
+        # for the user's comments: they go to the next table).
+        self.emit("# [accounts.NAME]")
+        self.keys(T0, [
+            _Entry(k.name, self.fill(_pick(k.value, c)),
+                   self.fill(_pick(k.doc, c)), commented=True, slot=False)
+            for k in _sorted_keys(ACCOUNT_SPEC)])
         if present and not accts:
             self.lines.append("")
             self.header(T0, "[accounts]")
@@ -838,72 +897,52 @@ class _Renderer:
             T = ("accounts", name)
             self.lines.append("")
             self.header(T, f"[accounts.{key_repr(name)}]")
-            keys = [k for k in ACCOUNT_SPEC if k.name in acfg]
-            if keys:
-                K = max(9, max(len(k.name) for k in keys))
-                for k in keys:
-                    self._key(T, k, acfg, K, name)
-            self._unknown_keys(T, acfg, spec_keys()["accounts"],
-                               f"accounts.{name}")
+            keys = _sorted_keys(k for k in ACCOUNT_SPEC if k.name in acfg)
+            self.keys(T, [self.entry(k, acfg, name) for k in keys]
+                      + self.unknown_entries(acfg, spec_keys()["accounts"],
+                                             f"accounts.{name}"))
             self.end(T)
         more, intro = _MORE_ACCOUNT[c]
         if more not in names:
             T = ("accounts", more)
             self.lines.append("")
-            for ln in intro:
-                self.emit(ln)
-            self.header(T, f"[accounts.{more}]", commented=True)
-            self.key_line(T, "type", '"sheltered"', "", K=9,
-                          commented=True)
-            self.key_line(T, "transfers", "true",
-                          self.fill(_pick(TRANSFERS_DOC, c)), K=9,
-                          commented=True)
+            self.header(T, f"[accounts.{more}]", commented=True, doc=intro)
+            spec = {k.name: k for k in ACCOUNT_SPEC}
+            self.keys(T, [
+                _Entry(n, v, self.fill(_pick(spec[n].doc, c)),
+                       commented=True)
+                for n, v in (("transfers", "true"),
+                             ("type", '"sheltered"'))])
             self.end(T)
 
     def plain_table(self, t: Table, values: Any, present: bool) -> None:
         c = self.country
         T = (t.name,)
-        for ln in _pick(t.doc, c):
-            self.emit(self.fill(ln))
-        self.header(T, f"[{t.name}]", commented=not present)
-        keys = tuple(k for k in t.keys if owned(c, t.name, k.name))
-        K = max(len(k.name) for k in keys)
+        self.header(T, f"[{t.name}]", commented=not present,
+                    doc=self.fill(_pick(t.doc, c)))
+        keys = _sorted_keys(k for k in t.keys if owned(c, t.name, k.name))
         vals = values if isinstance(values, dict) else {}
-        for k in keys:
-            if present:
-                self._key(T, k, vals, K)
-            else:
-                self.key_line(T, k.name, self.fill(_pick(k.value, c)),
-                              self.fill(_pick(k.doc, c)), K=K,
-                              commented=True,
-                              more=[self.fill(m) for m in
-                                    _pick(k.more, c)])
-        self._unknown_keys(T, vals, [k.name for k in keys], t.name,
-                           owner_table=t.name)
+        self.keys(T, [self.entry(k, vals) for k in keys]
+                  + self.unknown_entries(vals, [k.name for k in keys],
+                                         t.name, owner_table=t.name))
         self.end(T)
 
     def aot(self, t: Table, entries: Any) -> None:
         c = self.country
         T0 = (t.name,)
-        for ln in _pick(t.doc, c):
-            self.emit(self.fill(ln))
-        self.header(T0, f"[[{t.name}]]", commented=True)
-        K = max(len(k.name) for k in t.keys)
-        for k in t.keys:
-            self.key_line(T0, k.name, self.fill(_pick(k.value, c)),
-                          self.fill(_pick(k.doc, c)), K=K, commented=True)
+        self.header(T0, f"[[{t.name}]]", commented=True,
+                    doc=self.fill(_pick(t.doc, c)))
+        self.keys(T0, [self.entry(k, {}) for k in _sorted_keys(t.keys)])
         self.end(T0)
         for i, e in enumerate(entries or []):
             T = (t.name, i)
             self.lines.append("")
             self.header(T, f"[[{t.name}]]")
-            keys = [k for k in t.keys if k.name in e]
-            Ke = max([len(k.name) for k in keys] or [1])
-            for k in keys:
-                self.key_line(T, k.name, toml_value(e[k.name], top=True), "",
-                              K=Ke, commented=False)
-            self._unknown_keys(T, e, [k.name for k in t.keys],
-                               f"[{t.name}] #{i + 1}")
+            keys = sorted(k.name for k in t.keys if k.name in e)
+            self.keys(T, [_Entry(k, toml_value(e[k], top=True))
+                          for k in keys]
+                      + self.unknown_entries(e, [k.name for k in t.keys],
+                                             f"[{t.name}] #{i + 1}"))
             self.end(T)
 
     def unknown_tables(self) -> None:
@@ -920,25 +959,15 @@ class _Renderer:
         for k in names:
             self.unknown.append(f"[{k}]")
             v = self.doc[k]
-            if isinstance(v, dict):
-                T = (k,)
+            for i, e in (((None, v),) if isinstance(v, dict)
+                         else enumerate(v)):
+                T = (k,) if i is None else (k, i)
                 self.lines.append("")
-                self.header(T, f"[{key_repr(k)}]")
-                K = max([len(key_repr(x)) for x in v] or [1])
-                for x, val in v.items():
-                    self.key_line(T, x, toml_value(val, top=True), "", K=K,
-                                  commented=False)
+                self.header(T, f"[{key_repr(k)}]" if i is None
+                            else f"[[{key_repr(k)}]]")
+                self.keys(T, [_Entry(x, toml_value(e[x], top=True))
+                              for x in sorted(e)])
                 self.end(T)
-            else:
-                for i, e in enumerate(v):
-                    T = (k, i)
-                    self.lines.append("")
-                    self.header(T, f"[[{key_repr(k)}]]")
-                    K = max([len(key_repr(x)) for x in e] or [1])
-                    for x, val in e.items():
-                        self.key_line(T, x, toml_value(val, top=True), "",
-                                      K=K, commented=False)
-                    self.end(T)
 
     @staticmethod
     def _shape_ok(name: str, v: Any) -> bool:
@@ -947,9 +976,6 @@ class _Renderer:
             return isinstance(v, list) and all(isinstance(e, dict)
                                                for e in v)
         return isinstance(v, dict)
-
-
-TRANSFERS_DOC = "keep TRANSFER rows (contributions/withdrawals)"
 
 
 # ------------------------------------------------------------ entry points
@@ -1325,10 +1351,14 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
 
     pending: List[Run] = []
     gap = False             # a blank since the last line that counted
+    blank_above = False     # the line just above is blank
     active: Tuple[Any, ...] = ()
     commented_ctx: Optional[Tuple[Any, ...]] = None
     aot_count: Dict[Tuple[Any, ...], int] = {}
     in_notes = False
+    # A run holding the user's own commented-out key (`# province =
+    # "BC"`) goes to that key when it ends, with the runs before it.
+    target: Optional[Slot] = None
 
     def add_user(line: str) -> None:
         nonlocal gap
@@ -1338,7 +1368,7 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
         else:
             if pending and gap:
                 pending[-1].blank_after = True
-            pending.append(Run([line], blank_before=gap))
+            pending.append(Run([line], blank_before=blank_above))
         gap = False
 
     def flush(slot: Slot) -> None:
@@ -1372,6 +1402,18 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
         flush_end()
         pending.append(last)
 
+    def flush_target(blank_after: bool = False) -> None:
+        """The run that held a commented-out key of the user's ended: it
+        (with the runs pending before it) goes above that key."""
+        nonlocal target
+        if target is None:
+            return
+        if blank_after and pending:
+            pending[-1].blank_after = True
+        x.runs.setdefault(target, []).extend(pending)
+        pending.clear()
+        target = None
+
     def flush_end() -> None:
         """Runs separated by a blank from the next table: the end of the
         table they were in."""
@@ -1389,14 +1431,38 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
             x.runs.setdefault(("end", T), []).extend(pending)
         pending.clear()
 
+    prev_blank = False
     for it in items:
+        blank_above, prev_blank = prev_blank, it.kind == "blank"
         if it.kind == "blank":
+            flush_target(blank_after=True)
             gap = True
-            # A commented-out section ends at a blank line.
-            commented_ctx = None
+            # (A commented-out section lasts to the next table line,
+            # blank lines included: its keys are blank-separated.)
             continue
         if it.kind == "comment":
             st = it.text
+            if not in_notes and not is_template(st):
+                # The user's own line, whatever it looks like (a
+                # commented-out table too): it travels with the next
+                # line that has a place in the template — or, when it is
+                # a commented-out key of this table, with that key.
+                add_user(st)
+                m = _COMMENTED_KEY.match(st)
+                if m and target is None:
+                    ctx = (commented_ctx if commented_ctx is not None
+                           else active)
+                    slot = resolve(ctx + (m.group(1),))
+                    if slot is not None and slot[0] == "key":
+                        target = slot
+                continue
+            hdr = _commented_header(st)
+            if hdr is not None and target is not None:
+                slot = resolve(hdr[0])
+                if slot is not None and slot[0] == "hdr":
+                    # A block directly above a table line stays with it.
+                    target = None
+            flush_target()
             if st.strip() == NOTES_HEADING.strip():
                 flush_end()
                 in_notes = True
@@ -1406,23 +1472,18 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
                 if not is_template(st):
                     add_user(st)
                 continue
-            if not is_template(st):
-                # The user's own line, whatever it looks like (a
-                # commented-out key or table too): it travels with the
-                # next line that has a place in the template.
-                add_user(st)
-                continue
             # The template's own line: regenerated, not kept — but a
             # commented-out table or key marks the place the comments
             # above it belong to.
-            hdr = _commented_header(st)
             if hdr is not None:
                 path, _aot = hdr
                 slot = resolve(path)
                 if slot is not None and slot[0] == "hdr":
                     before_header()
                     flush(slot)
-                commented_ctx = path
+                    commented_ctx = path
+                # (else the `# [accounts.NAME]` reference block: no
+                # place of its own; the table before it goes on)
                 continue
             m = _COMMENTED_KEY.match(st)
             if m:
@@ -1432,7 +1493,10 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
                     flush(slot)
             continue
         if it.kind == "header":
-            commented_ctx = None
+            # A block directly above a table line stays with it.
+            target = None
+        flush_target()
+        if it.kind == "header":
             in_notes = False
             path = it.path
             if it.aot:
@@ -1441,8 +1505,10 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
                 path = path + (n,)
             slot = resolve(path)
             if slot is not None:
+                # (the end of a commented-out section, when one is open)
                 before_header()
                 flush(slot)
+            commented_ctx = None
             # else: a table written elsewhere (`[accounts]` above its
             # accounts): its comments go with the next line that is.
             active = path
@@ -1473,5 +1539,6 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
             x.runs.setdefault(slot, []).append(run)
         if it.trailing and not is_template(it.trailing):
             set_trailing(slot, it.trailing)
+    flush_target()
     flush_end()
     return x, kept

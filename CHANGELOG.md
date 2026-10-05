@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### An ordered taxjson.toml (owner request)
+
+- **Keys in alphabetical order, one `=` column per table.** The file
+  `taxjson init` writes and `taxjson format` produces lists the keys of
+  every table — `[settings]`, each `[accounts.NAME]`, the account-key
+  reference block, `[estimate]`, `[carryover]`, `[instalments]`, each
+  `[[...]]` entry — alphabetically, set and commented-out keys in one
+  sequence, with every key line of a table padded so its `=` signs line
+  up. The tables keep their fixed order (settings, then the accounts in
+  your order, then the year-data tables), and so do `[[...]]` entries. The
+  in-table group headings are gone.
+- **Descriptions above the keys, no end-of-line comments.** Each key's
+  description is now on the line(s) above it, wrapped, and a blank line
+  separates one documented key from the next; a commented-out key is
+  always `# key = default` under its description.
+- **`taxjson format` reorders what you wrote.** Keys added by hand anywhere
+  in a table move to their alphabetical place, with the comments above
+  them; your trailing comments move onto their own line just above the key
+  or table line; a comment block holding a commented-out key of your own
+  goes to that key; descriptions an earlier `taxjson init` wrote at the end
+  of the line are recognised and regenerated in the new place. As before,
+  the formatted file must load to the same configuration or nothing is
+  written, and formatting twice changes nothing.
+
 ### No built-in security data in the flow (owner request)
 
 - **One shipped market-data file.** The market facts and security lists

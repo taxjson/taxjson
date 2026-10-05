@@ -2,6 +2,7 @@
 import os
 import argparse
 import io
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -166,12 +167,13 @@ class TestScaffoldCoversCurrentFeatures(unittest.TestCase):
 
     def test_scaffold_keys_are_column_aligned(self):
         # The point of the layout: two projects' files diff only where
-        # their values differ, so every [settings] comment starts in
-        # the same column.
+        # their values differ, so every [settings] key line, active or
+        # commented, has its `=` in the same column.
         t = self._toml("canada")
-        block = t.split("[settings]")[1].split("\n\n")[0]
-        cols = {line.index("#") for line in block.splitlines()
-                if "#" in line and not line.startswith("#")}
+        block = t.split("[settings]\n")[1].split("\n# One [accounts")[0]
+        cols = {m.start(1) for m in map(
+            re.compile(r"(?:# )?[a-z_]+ *( = )").match, block.splitlines())
+            if m}
         self.assertEqual(len(cols), 1, block)
 
     def test_scaffold_activates_nothing_new(self):
@@ -216,11 +218,12 @@ class TestScaffoldCommentsAreValidToml(unittest.TestCase):
                 continue
             if not st.startswith("#"):
                 break
-            body = st[1:]
-            body = body[1:] if body.startswith(" ") else body
-            if body.lstrip().startswith("#"):    # prose / alternative
+            # Uncomment the table line, the key lines and their values'
+            # continuation lines; a description line (plain `# text`,
+            # above its key) stays prose.
+            if not re.match(r"# (\[|[a-z_]+ *= |  |\])", ln):
                 continue
-            out.append(body)
+            out.append(ln[2:])
         block = "\n".join(out)
         doc = tomllib.loads(block)               # must not raise
         self.assertEqual(len(doc["instalments"]["paid"]), 2)
