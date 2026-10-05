@@ -84,7 +84,7 @@ class TestCommand(unittest.TestCase):
             t = cli(); self.assertEqual(t.returncode, 0, t.stderr)
             self.assertIn("1 item(s) require an amended return", t.stdout)
             (root / "taxjson.toml").write_text('[settings]\nyear = 2025\ncountry = "canada"\nbase_currency = "CAD"\noption_premium_timing = "close"\n[accounts.margin]\ntype = "taxable"\n')
-            t = cli(); self.assertIn("premium timing: close", t.stdout)
+            t = cli(); self.assertIn("premium timing: close", t.stdout.lower())
             self.assertIn("No amended return is required", t.stdout)
 
 

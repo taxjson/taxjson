@@ -336,9 +336,9 @@ class TestForm8949MultiRow(unittest.TestCase):
     def test_rendered_totals_line(self):
         rep, _ = quiet_8949(E8949)
         text = render_8949(rep, 2025, "USD")
-        self.assertIn("TOTALS (to Schedule D part I): proceeds 1,300.00 | "
-                      "cost 1,500.00 | adjustments 160.00 | gain -40.00",
-                      text)
+        self.assertIn("TOTALS (to Schedule D part I): proceeds: 1,300.00 "
+                      "cost: 1,500.00 adjustments: 160.00 gain: -40.00",
+                      " ".join(text.split()))
 
     @rule("US-RPT-01")
     def test_filing_parts_count_dispositions(self):
@@ -357,7 +357,7 @@ class TestForm8949MultiRow(unittest.TestCase):
         rep, err = quiet_8949([e])
         self.assertIn("AAA.US 2025-04-01: NEGATIVE disallowed_amount "
                       "-25.00", err)
-        self.assertIn("inspect before filing", err)
+        self.assertIn("inspect it before filing", err.lower())
         self.assertEqual(rep["part_I"][0]["code"], "")
 
     @rule("US-RPT-09")

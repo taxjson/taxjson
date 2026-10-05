@@ -32,7 +32,10 @@ class TestConvertedCommands(unittest.TestCase):
     """Every command converted to the house style, both countries."""
 
     CASES = [("wash-sales",), ("wash-sales", "--explain"), ("elect",),
-             ("elect", "margin")]
+             ("elect", "margin"),
+             # group B (tests/test_style_group_b.py has the rest)
+             ("sum",), ("sum", "--verbose"), ("form-export",),
+             ("carryover",), ("check-filed",)]
 
     def test_converted_commands(self):
         for country in ("canada", "usa"):

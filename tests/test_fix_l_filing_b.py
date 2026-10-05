@@ -936,9 +936,9 @@ class TestSchedule3Units(unittest.TestCase):
                cost=900.0)]), 2025)
         self.assertEqual(_row(rep, "BTC")["units"], 0.00003)
         self.assertEqual(_row(rep, "ETH")["units"], 0.34325885)
-        text = FE.render_schedule3(rep, 2025, "CAD")
-        self.assertIn("0.00003 | BTC", text)
-        self.assertIn("0.34325885 | ETH", text)
+        text = " ".join(FE.render_schedule3(rep, 2025, "CAD").split())
+        self.assertIn("0.00003 BTC", text)
+        self.assertIn("0.34325885 ETH", text)
 
 
 class TestSchedule3Amounts(unittest.TestCase):

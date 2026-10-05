@@ -735,11 +735,12 @@ def join_income_gains(gains_paths: List[Path], year: int,
     if tainted_skipped:
         _named = (f" ({', '.join(sorted(set(manual_syms)))})"
                   if manual_syms else "")
-        print(f"warning: {tainted_skipped} disposition(s) with an "
-              f"unknown cost (no purchase in your files){_named} "
-              f"EXCLUDED from the T1135 "
-              f"gain(loss) column — resolve the missing history and "
-              f"re-run (matches form-export/carryover).", file=sys.stderr)
+        from taxjson.lib.out import warn as _warn
+        _warn(f"{tainted_skipped} disposition(s) with an unknown cost (no "
+              f"purchase in your files){_named} EXCLUDED from the T1135 "
+              f"gain(loss) column",
+              details=["Resolve the missing history and re-run (matches "
+                       "form-export and carryover)."])
     return out
 
 
@@ -952,9 +953,10 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
     seen = {t.get("symbol") for t in txs if t.get("symbol")}
     unused_overrides = sorted(k for k in user_keys if k not in seen)
     for k in unused_overrides:
-        print(f"warning: ticker.map: `T1135 {k}` matches no symbol in the books "
-              f"(renamed, consolidated by ticker.map, or a typo?) — the "
-              f"override is not applied.", file=sys.stderr)
+        from taxjson.lib.out import warn as _warn
+        _warn(f"ticker.map: `T1135 {k}` matches no symbol in the books — "
+              f"the override is not applied",
+              details=["Renamed, consolidated by ticker.map, or a typo?"])
     # A Canadian issuer on a foreign listing (its ISIN says CA — IB
     # stamps issuer_country on the rows) is not specified foreign
     # property, yet the listing suffix classifies it foreign. Named, not
@@ -967,13 +969,14 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         and classify_country(str(t.get("symbol")), overrides)
         not in (None, CRYPTO)})
     if canadian_issuer:
-        print(f"warning: {len(canadian_issuer)} symbol(s) on a foreign "
-              f"listing carry a Canadian ISIN ({', '.join(canadian_issuer[:6])}"
-              f"{' ...' if len(canadian_issuer) > 6 else ''}): shares of a "
-              f"Canadian corporation are not specified foreign property, "
-              f"but they are counted here by their listing — add "
-              f"`T1135 SYMBOL CA` to ticker.map once confirmed.",
-              file=sys.stderr)
+        from taxjson.lib.out import warn as _warn
+        _warn(f"{len(canadian_issuer)} symbol(s) on a foreign listing "
+              f"carry a Canadian ISIN: {', '.join(canadian_issuer[:6])}"
+              f"{' ...' if len(canadian_issuer) > 6 else ''}",
+              details=["Shares of a Canadian corporation are not specified "
+                       "foreign property, but they are counted here by "
+                       "their listing — add `T1135 SYMBOL CA` to ticker.map "
+                       "once confirmed."])
     deferred: Dict[str, float] = {}
     if not full_history:
         # Year-only mode: a loss denied in an earlier year whose
@@ -1049,11 +1052,13 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         walk.get("last_date") or min(today, year_end))
     expired = list(walk.get("expired_options_held") or [])
     if expired:
-        print(f"warning: {len(expired)} long option(s) still held in the "
-              f"books after their expiry date ({', '.join(expired[:6])}"
-              f"{' ...' if len(expired) > 6 else ''}): their cost is still "
-              f"counted in the T1135 figures — add the missing expiry or "
-              f"exercise row and re-run.", file=sys.stderr)
+        from taxjson.lib.out import warn as _warn
+        _warn(f"{len(expired)} long option(s) still held in the books "
+              f"after their expiry date: {', '.join(expired[:6])}"
+              f"{' ...' if len(expired) > 6 else ''}",
+              details=["Their cost is still counted in the T1135 figures "
+                       "— add the missing expiry or exercise row and "
+                       "re-run."])
     return {
         "year": year,
         "base_currency": base_currency,
@@ -1099,58 +1104,73 @@ _money = fmt_money                  # shared report-layer formatter
 
 
 def render_report(rep: Dict[str, Any]) -> str:
+    """The console report, in the house style (docs/output-style.md):
+    the filing verdict, the per-property and per-country tables (fitted
+    to the width) with each property's notes listed under them, then
+    the notes. `--json` is the machine form."""
+    from taxjson.lib import out as _out
     cur = rep["base_currency"]
     complete = rep.get("year_complete", True)
     as_of = rep.get("as_of") or f"{rep['year']}-12-31"
     so_far = "" if complete else f" (books through {as_of})"
     lines: List[str] = []
-    lines.append(f"T1135 — Foreign Income Verification Statement helper "
-                 f"(tax year {rep['year']}, amounts in {cur})")
+
+    def para(text: str, indent: str = "", hang: Optional[str] = None):
+        lines.extend(_out.wrap(text, None, indent,
+                               indent if hang is None else hang))
+
+    def item(text: str):
+        para(text, "- ", "  ")
+
+    lines.append(f"T1135 — Foreign Income Verification Statement helper, "
+                 f"tax year {rep['year']}, {cur}")
     lines.append("")
-    lines.append("Filing requirement (total-cost test, ITA 233.3):")
+    lines.append("FILING REQUIREMENT (total-cost test, ITA 233.3)")
     when = f" on {rep['max_total_date']}" if rep["max_total_date"] else ""
-    lines.append(f"  Maximum total cost of specified foreign property during "
-                 f"{rep['year']}{so_far}: {_money(rep['max_total_cost'])} "
-                 f"{cur}{when}")
+    para(f"Maximum total cost of specified foreign property during "
+         f"{rep['year']}{so_far}: {_money(rep['max_total_cost'])} "
+         f"{cur}{when}", "  ", "    ")
     if rep["filing_required"]:
-        lines.append(f"  => T1135 FILING REQUIRED "
-                     f"(exceeds {_money(rep['filing_threshold'])} {cur})")
+        para(f"=> T1135 FILING REQUIRED "
+             f"(exceeds {_money(rep['filing_threshold'])} {cur})",
+             "  ", "     ")
         if rep["simplified_method_available"]:
-            lines.append(f"  => Simplified method (Part A) available "
-                         f"(stayed under {_money(rep['detailed_threshold'])} "
-                         f"{cur}{' so far' if not complete else ''}; "
-                         f"T1135 instructions)")
+            para(f"=> Simplified method (Part A) available "
+                 f"(stayed under {_money(rep['detailed_threshold'])} "
+                 f"{cur}{' so far' if not complete else ''}; "
+                 f"T1135 instructions)", "  ", "     ")
         else:
-            lines.append(f"  => Detailed method (Part B) required "
-                         f"(reached {_money(rep['detailed_threshold'])} "
-                         f"{cur}; T1135 instructions)")
+            para(f"=> Detailed method (Part B) required "
+                 f"(reached {_money(rep['detailed_threshold'])} "
+                 f"{cur}; T1135 instructions)", "  ", "     ")
     elif complete:
-        lines.append(f"  => below the {_money(rep['filing_threshold'])} {cur} "
-                     f"threshold on these books — no T1135 required this "
-                     f"year unless foreign property outside them (see "
-                     f"notes) takes the total over")
+        para(f"=> below the {_money(rep['filing_threshold'])} {cur} "
+             f"threshold on these books — no T1135 required this "
+             f"year unless foreign property outside them (see "
+             f"notes) takes the total over", "  ", "     ")
     else:
         # In-year (S051-22, S052-15): ITA 233.3 counts cost at ANY time
         # up to Dec 31 — a mid-year 'not required' is not a verdict.
-        lines.append(f"  => below the {_money(rep['filing_threshold'])} {cur} "
-                     f"threshold so far (books through {as_of}) — the test "
-                     f"runs to Dec 31; re-run after the year ends")
+        para(f"=> below the {_money(rep['filing_threshold'])} {cur} "
+             f"threshold so far (books through {as_of}) — the test "
+             f"runs to Dec 31; re-run after the year ends", "  ", "     ")
+    warns: List[str] = []
     if rep.get("expired_options_held"):
         _ex = rep["expired_options_held"]
-        lines.append(f"  !! {len(_ex)} long option(s) still held after their "
+        warns.append(f"{len(_ex)} long option(s) still held after their "
                      f"expiry date ({', '.join(_ex[:6])}"
                      f"{' ...' if len(_ex) > 6 else ''}) are counted at "
                      f"cost — the books lack their expiry/exercise row.")
     if rep.get("canadian_issuer_symbols"):
         _ci = rep["canadian_issuer_symbols"]
-        lines.append(f"  !! {len(_ci)} symbol(s) with a Canadian ISIN on a "
+        warns.append(f"{len(_ci)} symbol(s) with a Canadian ISIN on a "
                      f"foreign listing are counted as foreign property "
                      f"({', '.join(_ci[:6])}{' ...' if len(_ci) > 6 else ''})"
                      f" — a Canadian corporation's shares are not; map "
                      f"them `T1135 SYMBOL CA` in ticker.map once confirmed.")
     _dw = sum((rep.get("deferred_wash_not_in_cost") or {}).values())
     if _dw:
-        lines.append(f"  !! cost amounts EXCLUDE {_money(_dw)} {cur} of "
+        warns.append(f"cost amounts EXCLUDE {_money(_dw)} {cur} of "
                      f"denied superficial losses the engine added to the "
                      f"ACB of property still held (s.53(1)(f)): "
                      + ", ".join(f"{k} {_money(v)}" for k, v in sorted(
@@ -1159,10 +1179,12 @@ def render_report(rep: Dict[str, Any]) -> str:
                        "that much.")
         if (not rep["filing_required"]
                 and rep["max_total_cost"] + _dw > rep["filing_threshold"]):
-            lines.append(f"  !! with them the maximum could exceed "
+            warns.append(f"with them the maximum could exceed "
                          f"{_money(rep['filing_threshold'])} {cur} — the "
                          f"'no T1135 required' verdict is NOT reliable; "
                          f"work the cost out by hand.")
+    for w in warns:
+        para("warning: " + w, "  ", "    ")
     lines.append("")
 
     rows = rep["properties"]
@@ -1171,8 +1193,12 @@ def render_report(rep: Dict[str, Any]) -> str:
     end_col = "COST AT DEC 31" if complete else f"COST AT {as_of}"
     if rows:
         header = ("SYMBOL", "COUNTRY", "MAX COST IN YR", end_col,
-                  "INCOME", "GAIN(LOSS)", "NOTES")
+                  "INCOME", "GAIN(LOSS)")
         table = []
+        # A property's notes are listed under the table, one line per
+        # note with the symbols it applies to (a prose column made the
+        # rows run off the width).
+        by_note: Dict[str, List[str]] = {}
         for r in rows:
             notes = []
             if r["unknown_acb"]:
@@ -1183,23 +1209,18 @@ def render_report(rep: Dict[str, Any]) -> str:
             if r["country"] == REVIEW:
                 notes.append("unclassified — review / add a ticker.map T1135 line")
             elif r["country"] == CRYPTO:
-                notes.append("crypto — check where held (see notes)")
+                notes.append("crypto — check where held (see the notes)")
+            for n in notes:
+                by_note.setdefault(n, []).append(r["symbol"])
             table.append((r["symbol"], r["country"], _money(r["max_cost"]),
                           _money(r["year_end_cost"]), _money(r["income"]),
-                          _money(r["gain"]), "; ".join(notes)))
-        widths = [max(len(header[i]), *(len(row[i]) for row in table))
-                  for i in range(len(header))]
-        def fmt(row: Tuple[str, ...]) -> str:
-            cells = []
-            for i, cell in enumerate(row):
-                # Left-align text columns, right-align money.
-                cells.append(cell.ljust(widths[i]) if i in (0, 1, 6)
-                             else cell.rjust(widths[i]))
-            return " | ".join(cells).rstrip()
+                          _money(r["gain"])))
         lines.append("PER PROPERTY (taxable accounts only)")
-        lines.append(fmt(header))
-        lines.append("-+-".join("-" * w for w in widths))
-        lines.extend(fmt(row) for row in table)
+        lines.extend(_out.fit_table(header, table,
+                                    aligns=["<", "<", ">", ">", ">", ">"],
+                                    drop=(4,)))
+        for n, syms in by_note.items():
+            item(f"{', '.join(syms)}: {n}")
         lines.append("")
 
         lines.append("PER COUNTRY (upper-bound aggregates)")
@@ -1208,63 +1229,56 @@ def render_report(rep: Dict[str, Any]) -> str:
         ctable = [(c, _money(v["max_cost"]), _money(v["year_end_cost"]),
                    _money(v["income"]), _money(v["gain"]))
                   for c, v in sorted(rep["by_country"].items())]
-        cwidths = [max(len(cheader[i]), *(len(row[i]) for row in ctable))
-                   for i in range(len(cheader))]
-        def cfmt(row: Tuple[str, ...]) -> str:
-            return " | ".join(
-                (row[i].ljust(cwidths[i]) if i == 0 else row[i].rjust(cwidths[i]))
-                for i in range(len(row))).rstrip()
-        lines.append(cfmt(cheader))
-        lines.append("-+-".join("-" * w for w in cwidths))
-        lines.extend(cfmt(row) for row in ctable)
+        lines.extend(_out.fit_table(cheader, ctable,
+                                    aligns=["<", ">", ">", ">", ">"]))
         lines.append("")
     else:
         lines.append("No specified foreign property found in the inputs.")
         lines.append("")
 
-    lines.append("Notes:")
-    lines.append("  - Amounts are COST (ACB-style, settlement-dated), the "
-                 "correct basis for the filing threshold and the 'maximum "
-                 "cost amount' columns. The category-7 detailed method asks "
-                 "for month-end FAIR MARKET VALUE, which this tool does not "
-                 "fetch — use your broker's month-end statements for those "
-                 "boxes.")
-    lines.append("  - Per-country MAX COST sums per-symbol maxima (an upper "
-                 "bound); the filing-threshold test uses the true "
-                 "simultaneous total.")
-    lines.append("  - .TO/.V/.CN/.NE symbols are treated as Canadian (not "
-                 "SFP). A foreign-domiciled corp listed on a Canadian "
-                 "exchange IS still SFP — add `T1135 SYMBOL <ISO3>` to ticker.map. "
-                 "Conversely a Canadian corp held on a US exchange is NOT "
-                 "SFP — add `SYMBOL CA`.")
+    lines.append("NOTES")
+    item("Amounts are COST (ACB-style, settlement-dated), the "
+         "correct basis for the filing threshold and the 'maximum "
+         "cost amount' columns. The category-7 detailed method asks "
+         "for month-end FAIR MARKET VALUE, which this tool does not "
+         "fetch — use your broker's month-end statements for those "
+         "boxes.")
+    item("Per-country MAX COST sums per-symbol maxima (an upper "
+         "bound); the filing-threshold test uses the true "
+         "simultaneous total.")
+    item(".TO/.V/.CN/.NE symbols are treated as Canadian (not "
+         "SFP). A foreign-domiciled corp listed on a Canadian "
+         "exchange IS still SFP — add `T1135 SYMBOL <ISO3>` to ticker.map. "
+         "Conversely a Canadian corp held on a US exchange is NOT "
+         "SFP — add `SYMBOL CA`.")
     if rep.get("futures_symbols"):
-        lines.append(f"  - Futures contracts ({len(rep['futures_symbols'])}: "
-                     f"{', '.join(rep['futures_symbols'][:6])}"
-                     f"{' ...' if len(rep['futures_symbols']) > 6 else ''}) "
-                     "carry NO cost amount: nothing is paid to open one "
-                     "(initial margin is a deposit, variation margin "
-                     "settles daily), so their notional is left out of the "
-                     "cost columns and the threshold test. Options on "
-                     "futures count at their premium cost.")
+        item(f"Futures contracts ({len(rep['futures_symbols'])}: "
+             f"{', '.join(rep['futures_symbols'][:6])}"
+             f"{' ...' if len(rep['futures_symbols']) > 6 else ''}) "
+             "carry NO cost amount: nothing is paid to open one "
+             "(initial margin is a deposit, variation margin "
+             "settles daily), so their notional is left out of the "
+             "cost columns and the threshold test. Options on "
+             "futures count at their premium cost.")
     if rep.get("crypto_symbols"):
-        lines.append("  - CRYPTO rows (symbols with no market suffix): crypto "
-                     "held on a FOREIGN exchange or platform is generally "
-                     "specified foreign property — report it under that "
-                     "exchange's country (add `T1135 SYMBOL <ISO3>` to ticker.map). "
-                     "Crypto held with a Canadian platform may not be; add "
-                     "`SYMBOL CA` once you have checked. Until then it is "
-                     "counted toward the threshold (the conservative side).")
-    lines.append("  - Registered accounts (RRSP/TFSA/...) are excluded by "
-                 "law and were not read.")
-    lines.append("  - The test covers these brokerage books only. Specified "
-                 "foreign property held outside them — a foreign bank "
-                 "account or cash, shares held in certificate form, a "
-                 "foreign rental property — counts toward the same "
-                 "threshold at the same time: add its cost by hand.")
-    lines.append("  - US-situs property inside T1135 does not include US "
-                 "property held only through Canadian mutual funds/ETFs.")
-    lines.append("  - Not tax advice; reconcile against broker statements "
-                 "before filing.")
+        item("CRYPTO rows (symbols with no market suffix): crypto "
+             "held on a FOREIGN exchange or platform is generally "
+             "specified foreign property — report it under that "
+             "exchange's country (add `T1135 SYMBOL <ISO3>` to ticker.map). "
+             "Crypto held with a Canadian platform may not be; add "
+             "`SYMBOL CA` once you have checked. Until then it is "
+             "counted toward the threshold (the conservative side).")
+    item("Registered accounts (RRSP/TFSA/...) are excluded by "
+         "law and were not read.")
+    item("The test covers these brokerage books only. Specified "
+         "foreign property held outside them — a foreign bank "
+         "account or cash, shares held in certificate form, a "
+         "foreign rental property — counts toward the same "
+         "threshold at the same time: add its cost by hand.")
+    item("US-situs property inside T1135 does not include US "
+         "property held only through Canadian mutual funds/ETFs.")
+    item("Not tax advice; reconcile against broker statements "
+         "before filing.")
     return "\n".join(lines)
 
 
@@ -1402,8 +1416,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(e.code, file=sys.stderr)
         return 2
     except (OSError, ValueError) as e:
-        print(f"taxjson-t1135: could not read the base books: {e} — "
-              f"re-run `taxjson run` to rebuild them.", file=sys.stderr)
+        from taxjson.lib.out import error as _error
+        _error(f"could not read the base books: {e}",
+               prog="taxjson-t1135",
+               details=["Re-run `taxjson run` to rebuild them."])
         return 2
     if args.json:
         json.dump(rep, sys.stdout, indent=2, sort_keys=True)

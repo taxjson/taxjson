@@ -653,7 +653,7 @@ class TestRunNoteWording(unittest.TestCase):
                  'div_foreign': 0.0, 'pil': 0.0}, 'USD',
                 other_income=50000.0, other_losses=0.0, province=None)
         self.assertIn('interest income and the §988 result on foreign '
-                      'currency (`taxjson fx-cash`) not included.',
+                      'currency (`taxjson fx-cash`) not included',
                       ' '.join(out.getvalue().split()))
 
     def test_init_force_names_the_numbered_backup(self):

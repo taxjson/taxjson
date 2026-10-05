@@ -1071,7 +1071,7 @@ class TestMoreViews(unittest.TestCase):
                              .returncode, 0)
             r = _run_cli(root, "instalments")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("other income", r.stdout)
+            self.assertIn("other income", r.stdout.lower())
             self.assertIn("assumed 0", r.stdout)
             j = json.loads(_run_cli(root, "instalments", "--json").stdout)
             self.assertEqual(len(j["assumed_zero"]), 2)

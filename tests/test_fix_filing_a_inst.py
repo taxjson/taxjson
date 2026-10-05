@@ -1,6 +1,8 @@
 """Medium-round fixes, instalments (filing-a): R1-42, R1-214, R1-220,
 S034-16. Synthetic figures only."""
+import os
 import unittest
+from unittest import mock
 from datetime import date, timedelta
 
 from taxjson.bin import taxjson_instalments as INST
@@ -152,8 +154,12 @@ class TestS034_16_LeastCumulativePerDate(unittest.TestCase):
         self.assertAlmostEqual(doc["interest_if_unpaid"], a, places=1)
         flat = " ".join(render(doc, "CAD").split())
         self.assertIn("161(4.01)", flat)
-        for line in render(doc, "CAD").splitlines():
-            self.assertLessEqual(len(line), 78, repr(line))
+        # The house width (docs/output-style.md); the suite itself runs
+        # unwrapped (TAXJSON_WIDTH=0).
+        with mock.patch.dict(os.environ, {"TAXJSON_WIDTH": "100"}):
+            text = render(doc, "CAD")
+        for line in text.splitlines():
+            self.assertLessEqual(len(line), 100, repr(line))
 
     def test_single_method_keeps_its_name(self):
         doc = build(year=2026, basis="current_year",

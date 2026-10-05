@@ -356,8 +356,8 @@ class TestInstalmentInputs(unittest.TestCase):
             r = _run_cli(root, "instalments")
             self.assertEqual(r.returncode, 0, r.stderr)
             flat = " ".join(r.stdout.split())
-            self.assertIn("NOT MODELLED: CPP/EI payable on self-employment",
-                          flat)
+            self.assertIn("Not modelled - CPP/EI payable on "
+                          "self-employment", flat)
             self.assertIn("line 15300", flat)
             j = json.loads(_run_cli(root, "instalments", "--json").stdout)
             self.assertEqual(len(j["not_modelled"]), 2)
