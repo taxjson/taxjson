@@ -187,6 +187,18 @@ class TestOpeningCanada(unittest.TestCase):
             self.assertEqual(doc["cost"]["matched"], 2)
             self.assertEqual(doc["cost_differences"], [])
 
+    def test_holdings_toml_in_inputs_is_listed_and_skipped(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(Path(td) / "p", tt={("margin", "h.tt"): HIST})
+            _toml(root / "inputs" / "margin" / "positions.toml", [
+                {"symbol": "SAMPB.TO", "quantity": 20, "currency": "CAD",
+                 "total_cost": 200.0}], as_of="2025-01-31")
+            r = cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertIn("inputs/margin/positions.toml → positions report "
+                          "(holdings TOML, as of 2025-01-31) — not "
+                          "activity; skipped", r.stdout)
+
     def test_clashing_opening_lines_refused(self):
         with tempfile.TemporaryDirectory() as td:
             root = _project(Path(td) / "p", tt={
@@ -389,3 +401,55 @@ class TestIncomeShareCount(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCompareCost(unittest.TestCase):
+    """lib/positions_check.compare_cost: which books a cost is compared
+    with, and the reasons."""
+
+    def _cmp(self, **kw):
+        args = dict(symbol="SAMPU.US", broker_cost=1000.0,
+                    cost_currency="USD", cost_kind="lot basis",
+                    position_currency="USD", base="CAD", country="canada",
+                    filing={"total_cost": 1440.0, "deferred_wash": 0.0,
+                            "currency": "CAD", "qty": 10},
+                    own=1440.0,
+                    native={"total_cost": 1000.0, "deferred_wash": 0.0,
+                            "currency": "USD", "qty": 10},
+                    pooled=False, roc=False, tol_abs=1.0, tol_rel=0.001)
+        args.update(kw)
+        return PC.compare_cost(**args)
+
+    def test_foreign_cost_against_the_native_books(self):
+        r = self._cmp()
+        self.assertEqual(r["status"], "match")
+        self.assertTrue(r["basis"].startswith("native USD books"))
+        r = self._cmp(broker_cost=990.0)
+        self.assertEqual(r["status"], "differs")
+        self.assertEqual(r["reasons"], ["lot-basis"])
+
+    def test_base_currency_book_value_of_a_foreign_listing(self):
+        r = self._cmp(broker_cost=1400.0, cost_currency="CAD",
+                      cost_kind="average cost")
+        self.assertEqual(r["status"], "differs")
+        self.assertEqual(r["reasons"], ["broker-fx"])
+        self.assertAlmostEqual(r["diff"], 40.0)
+
+    def test_no_books_in_that_currency(self):
+        r = self._cmp(native=None)
+        self.assertEqual(r["status"], "n/a")
+        self.assertIn("no USD books", r["note"])
+
+    def test_tolerance(self):
+        self.assertEqual(self._cmp(broker_cost=1000.7)["status"], "match")
+        # 0.1% of a large cost
+        r = self._cmp(broker_cost=100000.0, native={
+            "total_cost": 100080.0, "currency": "USD"})
+        self.assertEqual(r["status"], "match")
+
+    def test_return_of_capital_and_unexplained(self):
+        r = self._cmp(broker_cost=900.0, roc=True, cost_kind="average cost")
+        self.assertEqual(r["reasons"], ["return-of-capital"])
+        r = self._cmp(broker_cost=900.0, cost_kind="average cost")
+        self.assertEqual(r["reasons"], ["unexplained"])
+        self.assertFalse(r["explained"])

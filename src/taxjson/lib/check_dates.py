@@ -38,6 +38,8 @@ from taxjson.lib import market_calendar as mc
 from taxjson.lib.dates import settlement_date
 
 TRADE_ACTIONS = ("BUYSELL", "ASSIGN")
+
+from taxjson.lib.core import is_opening_row  # noqa: E402
 INCOME_ACTIONS = ("DIVIDEND", "DIVIDEND_IN_LIEU", "INTEREST", "TAX",
                   "ROC", "PIL")
 from taxjson.lib.dates import CA_LISTING_SUFFIXES as CA_SUFFIXES  # noqa: E402
@@ -313,6 +315,11 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                             f"{r.get('currency') or ''}".strip())
                     continue
                 if action not in TRADE_ACTIONS:
+                    continue
+                if is_opening_row(r):
+                    # An opening balance is a positions report's date
+                    # (often a month's last day, a weekend), not a
+                    # trade (CA-OPEN-01 / US-OPEN-01).
                     continue
                 sym = r.get("symbol") or ""
                 cls = asset_class(sym, crypto)

@@ -302,10 +302,12 @@ class Book:
         US stock dividend is not a purchase (US-STKDIV-01), so the US
         never lists it as an in-window acquisition (re-audit A2-1547);
         Canada counts it (CA-STKDIV-01)."""
-        from taxjson.lib.core import is_stock_dividend
+        from taxjson.lib.core import is_opening_row, is_stock_dividend
         from taxjson.lib.country import stock_dividend_in_loss_window
+        # An opening balance is not a purchase (CA-OPEN-01 / US-OPEN-01).
         if (r.get("action") not in ACQ_ACTIONS
                 or r.get("action") == "OPENING_BALANCE"
+                or is_opening_row(r)
                 or not self.in_wash_scope(r["_acct"])):
             return False
         return (stock_dividend_in_loss_window(self.country)

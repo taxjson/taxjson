@@ -3281,7 +3281,9 @@ class CanadaTaxRules(TaxRules):
                                 fee_amt = _effective_fee_for_trace(tx)
                                 pool_cost_f = float(pool['total_cost'])
                                 acb_sh = _per_share(pool_cost_f, pool['qty'], symbol)
-                                symbol_acb_traces[symbol].append(f"# {tx.date} {tx.action} {qty:10.4f} @ {tx.price:7.4f} | Fee: {fee_amt:6.4f} | Cost_Added: {effective_cost:10.4f} | Pool_Qty: {pool['qty']:10.4f} | Pool_ACB: {pool_cost_f:10.4f} | ACB/Sh: {acb_sh:7.4f}")
+                                _lbl = ('OPENING' if is_opening_row(tx)
+                                        else tx.action)
+                                symbol_acb_traces[symbol].append(f"# {tx.date} {_lbl} {qty:10.4f} @ {tx.price:7.4f} | Fee: {fee_amt:6.4f} | Cost_Added: {effective_cost:10.4f} | Pool_Qty: {pool['qty']:10.4f} | Pool_ACB: {pool_cost_f:10.4f} | ACB/Sh: {acb_sh:7.4f}")
                         else:
                             # SELL (or Short covering) — divide in exact arithmetic.
                             if abs(pool['qty']) > _qeps:

@@ -74,7 +74,8 @@ File names do not decide which parser reads a CSV. For every CSV in
    dropped into an inputs folder matches no trade parser, and the run
    lists it as `→ positions report (RBC Holdings Export, as of ...) —
    not activity; skipped` and carries on (`taxjson sanity` and
-   `taxjson opening` read it). An IB Activity Statement is activity
+   `taxjson opening` read it); a `[[holding]]` TOML in the folder is
+   listed and skipped the same way. An IB Activity Statement is activity
    whatever sections it has; its Open Positions section is read by
    those two commands too.
 3. **Falls back to the file name** only when no header matched: a `cb_`

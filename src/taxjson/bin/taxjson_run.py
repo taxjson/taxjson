@@ -1875,6 +1875,27 @@ def group_inputs_detailed(account_dir: Path):
             _die(cannot_detect_message(det))
         out.setdefault(det.broker, []).append(csv)
         found.append(det)
+    # A [[holding]] TOML in the folder (a positions file, not a generic
+    # mapping sidecar `<file>.csv.toml` nor the folder's generic.toml)
+    # is never read by the run either: listed the same way, so its
+    # silence does not read as "taken into account".
+    from taxjson.lib.brokerages.detect import Detection
+    from taxjson.lib.positions_reports import (_is_holdings_toml,
+                                               read_positions)
+    for tml in input_files(account_dir, ".toml"):
+        low = tml.name.lower()
+        if low.endswith(".csv.toml") or low == "generic.toml":
+            continue
+        if not _is_holdings_toml(tml):
+            continue
+        try:
+            _asof = read_positions(tml).as_of
+        except Exception:
+            _asof = ""
+        found.append(Detection(
+            tml, None, "positions",
+            "holdings TOML" + (f", as of {_asof}" if _asof else ""),
+            positions="holdings_toml"))
     return out, found
 
 
@@ -5484,7 +5505,8 @@ def cmd_run(args: argparse.Namespace) -> None:
                   file=sys.stderr)
         try:
             cmd_sanity(argparse.Namespace(dir=str(root), items=[],
-                                          tolerance=None, json=False))
+                                          tolerance=None, json=False,
+                                          brief_extras=True))
         except SystemExit as _e:
             if isinstance(_e.code, str):
                 # A message exit is a CONFIG problem (missing holdings
@@ -12995,16 +13017,22 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         grp["positions"] = len(tax_book)
         all_rows.extend(rows)
     # ---- costs (never a failing exit; lib/positions_check) ----------------
-    _cfg_accts = (load_config(root).get("accounts") or {}) \
-        if (root / "taxjson.toml").exists() else {}
-    _settings = (load_config(root).get("settings") or {}) \
-        if (root / "taxjson.toml").exists() else {}
+    # Costs need the project's country and account types; a config the
+    # quantity check never needed must not stop it. With no country the
+    # costs are not compared (never a silent Canada).
     try:
-        _ctry = _country(_settings) if _settings else "canada"
+        _pcfg = (load_config(root) if (root / "taxjson.toml").exists()
+                 else {})
     except SystemExit:
-        _ctry = "canada"
+        _pcfg = {}
+    _cfg_accts = _pcfg.get("accounts") or {}
+    _settings = _pcfg.get("settings") or {}
+    try:
+        _ctry = _country(_settings) if _settings else None
+    except SystemExit:
+        _ctry = None
     _base_cur = str(_settings.get("base_currency") or "").upper() or (
-        "USD" if _ctry == "usa" else "CAD")
+        _home_currency(_settings) if _ctry else "")
     _taxable = {a for a, c in _cfg_accts.items()
                 if (c or {}).get("type") == "taxable"}
     _own_inv: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -13016,7 +13044,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         _nat_inv[acct] = PC.load_inventory(cache / f"{acct}_raw_gains.json")
     cost_all: List[Dict[str, Any]] = []
     income_all: List[Dict[str, Any]] = []
-    for grp in ordered:
+    for grp in ordered if _ctry else ():
         qty_bad = {r["symbol"] for r in grp["rows"]}
         ext_cost: Dict[str, Dict[str, Any]] = {}
         for _p in grp["files"]:
@@ -13226,7 +13254,8 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         _print_report_table(out_lines)
         print(f"\n{len(all_rows)} discrepancy(ies).")
     _sanity_print_extras(ordered, cost_all, cost_diffs, cost_matched,
-                         cost_na, income_all, multi)
+                         cost_na, income_all, multi,
+                         brief=getattr(args, "brief_extras", False))
     raise SystemExit(0 if not all_rows else 1)
 
 
@@ -13447,11 +13476,26 @@ def cmd_opening(args: argparse.Namespace) -> None:
 
 
 def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
-                         cost_na, income_all, multi) -> None:
+                         cost_na, income_all, multi,
+                         brief: bool = False) -> None:
     """The COST and INCOME sections of `taxjson sanity` (after the
-    quantity check, never changing its exit code)."""
+    quantity check, never changing its exit code). `brief` (the check
+    `taxjson run` ends with): one line each, the tables are
+    `taxjson sanity`'s."""
     from taxjson.lib.positions_check import REASON_TEXT
     compared = cost_matched + len(cost_diffs)
+    if brief:
+        if cost_diffs:
+            print(f"COST: {len(cost_diffs)} of {compared} position(s) "
+                  f"differ from the reports' cost "
+                  f"({sum(1 for c in cost_diffs if c['reasons'] == ['unexplained'])}"
+                  f" unexplained) — `taxjson sanity` lists them with "
+                  f"their reasons (informational).")
+        if income_all:
+            print(f"INCOME: {len(income_all)} dividend row(s) state a "
+                  f"share count the books did not hold — `taxjson "
+                  f"sanity` lists them.")
+        return
     if compared or cost_na:
         print()
         print(f"COST — books vs the reports' cost: {compared} compared, "
