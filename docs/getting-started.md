@@ -21,6 +21,9 @@ bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
 tjs --version
 ```
 
+This also installs the taxjson-fetch plugin (`taxjson fetch`: Questrade /
+IBKR Flex auto-fetch, a separate package that does nothing until you run
+it); add `_ --without-fetch` to the installer line to leave it out.
 Other ways to install (from a checkout, channels) are in the README's
 [Install](../README.md#install) section.
 

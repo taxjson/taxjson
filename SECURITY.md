@@ -70,9 +70,14 @@ still carries an identity shape (`--allow-unredacted` overrides) — run
 **Broker fetch is a separate package.** `taxjson fetch` in the core is
 a dispatcher over installed fetcher plugins (entry-point group
 `taxjson.fetchers`); with none installed it only prints how to install
-one. The Questrade / IBKR Flex fetcher is the optional `taxjson-fetch`
-distribution (`packages/taxjson-fetch` in this repository). Installed,
-it adds the broker egress, only when you run `taxjson fetch`: the
+one. The Questrade / IBKR Flex fetcher is the `taxjson-fetch`
+distribution (`packages/taxjson-fetch` in this repository; stdlib HTTP,
+no third-party dependency). The one-line installer installs it by
+default, so a default install carries this network code; it stays a
+separate package, and `--without-fetch` (remembered for upgrades)
+leaves it out or removes it. It does nothing unless you run `taxjson
+fetch` with an account that names a `brokerage` in `taxjson.toml`;
+then it adds the broker egress: the
 Questrade login and REST API (`https://login.questrade.com`, the
 `https://*.questrade.com` API server the login names; `fetch
 --positions` reads live positions) and the IBKR Flex Web Service
@@ -83,8 +88,8 @@ rights inside `taxjson fetch` — install only ones you trust.
 **Install only from the installer or a checkout.** taxjson and
 taxjson-fetch are not published on PyPI yet, so a `taxjson` or
 `taxjson-fetch` package there is not ours (anyone may register a free
-name). The installer clones the GitHub release and adds the plugin with
-`--with-fetch`; from a checkout, install the core (`pip install -e .`)
+name). The installer clones the GitHub release and installs the plugin
+from that same checkout; from a checkout, install the core (`pip install -e .`)
 before `pip install -e packages/taxjson-fetch`, so the plugin's
 `taxjson` dependency is met by the checkout and never fetched by name.
 

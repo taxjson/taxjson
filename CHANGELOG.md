@@ -4,6 +4,18 @@
 
 ### Changed
 
+- **The installer installs taxjson-fetch by default.** The broker-fetch
+  plugin (`taxjson fetch` for Questrade and IBKR Flex) stays its own
+  package with its own dependencies, loaded through an entry point, but
+  the one-line installer now puts it into the same environment unless
+  told not to: `--without-fetch` (or `TAXJSON_WITH_FETCH=0`) leaves it
+  out and removes it from an install that has it. The opt-out is
+  remembered in `~/.config/taxjson/fetch` like the channel, so a re-run
+  or `taxjson deploy` keeps it out; `--with-fetch` (or
+  `TAXJSON_WITH_FETCH=1`), still accepted, puts it back. The plugin
+  sends nothing unless `taxjson fetch` is run for an account with a
+  `brokerage` (SECURITY.md). The hint printed when no fetcher is
+  installed says to re-run the installer.
 - **Every command's refusal reads `taxjson <command>: error: ...`**, wrapped
   at the house width with its details indented under it, and the
   `taxjson-*` tools' warnings and notes wrap the same way. What a program

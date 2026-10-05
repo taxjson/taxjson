@@ -12584,7 +12584,9 @@ def cmd_deploy(args: argparse.Namespace) -> None:
     path (the development checkout's install.sh run against the
     production copy). The remembered channel is left as it is; the
     installer never moves a channel backwards, so the copy stays on TAG
-    until its channel passes it."""
+    until its channel passes it. No fetch flag is passed: the installer
+    installs taxjson-fetch unless this machine opted out (remembered in
+    ~/.config/taxjson/fetch) or TAXJSON_WITH_FETCH says otherwise."""
     import os
     from taxjson.lib import channels as ch
     dev = _release_dev_checkout("deploy")

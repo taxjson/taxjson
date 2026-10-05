@@ -162,7 +162,7 @@ ul { padding-left:18pt; margin:0 }
   <h2>Nothing personal leaves the machine</h2>
   <div class="row">
     <div class="card"><h3>Local by construction</h3><p>Parsing, pooling and the wash pass run on your computer — no server, no web UI, just commands and files. The pipeline's only network calls are FX rates (Bank of Canada, its noon rate before March 2017; Yahoo only before May 2007) and crypto prices for unpriced rows — both switchable off with <code>TAXJSON_OFFLINE=1</code>. SECURITY.md lists every egress.</p></div>
-    <div class="card"><h3>No credentials in the core</h3><p>The core holds no broker client and reads no credential. Broker fetch is a separate, optional package (taxjson-fetch): it uses your own token file, never writes it into a project, and sends it nowhere but that broker.</p></div>
+    <div class="card"><h3>No credentials in the core</h3><p>The core holds no broker client and reads no credential. Broker fetch is a separate package (taxjson-fetch, installed by default; <code>--without-fetch</code> leaves it out): it uses your own token file, never writes it into a project, and sends it nowhere but that broker.</p></div>
     <div class="card"><h3>The project guards itself</h3><p>A personal-data scan runs in every gate and as the pre-push hook, fails closed, and reads a private denylist kept outside the repository; the hook also refuses a commit message that quotes a money total. <code>redact</code> keeps every row shape and drops the identifiers it recognises — review before sharing.</p></div>
   </div>
   <div class="takeaway">Zero runtime dependencies in the core. A tax tool has to be trustworthy before it is clever.</div>
@@ -204,7 +204,7 @@ ul { padding-left:18pt; margin:0 }
   <p class="eyebrow">Install</p>
   <h2>Your first books in ten minutes</h2>
   <p><span class="cmdline">bash -c "$(curl -fsSL https://taxjson.com/install.sh)"</span></p>
-  <p class="small" style="margin:8pt 0 14pt">Installs the latest release into its own Python environment and links <code>taxjson</code> and its short name <code>tjs</code> onto your PATH. Needs git and Python 3.9+, nothing else. Re-run to upgrade; add <code>_ --with-fetch</code> for the Questrade / IBKR auto-fetch plugin.</p>
+  <p class="small" style="margin:8pt 0 14pt">Installs the latest release into its own Python environment and links <code>taxjson</code> and its short name <code>tjs</code> onto your PATH. Needs git and Python 3.9+, nothing else. Re-run to upgrade. The Questrade / IBKR auto-fetch plugin comes with it (add <code>_ --without-fetch</code> to leave it out).</p>
   <pre class="term">mkdir -p ~/taxes/2026 &amp;&amp; cd ~/taxes/2026
 tjs init --country canada     <span class="d"># taxjson.toml, ticker.map, inputs/</span>
 <span class="d"># drop broker CSVs into inputs/margin/, inputs/rrsp/, …</span>

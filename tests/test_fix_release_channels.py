@@ -31,7 +31,8 @@ GIT_ENV = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull,
                GIT_TERMINAL_PROMPT="0")
 for _k in ("TAXJSON_DEV_DIR", "TAXJSON_PROD_DIR", "TAXJSON_CHANNEL",
            "TAXJSON_OFFLINE", "TAXJSON_PROMOTE_TRAILERS", "TAXJSON_DIR",
-           "TAXJSON_BIN", "TAXJSON_DRY_RUN", "TAXJSON_REMEMBER_CHANNEL"):
+           "TAXJSON_BIN", "TAXJSON_DRY_RUN", "TAXJSON_REMEMBER_CHANNEL",
+           "TAXJSON_WITH_FETCH"):
     GIT_ENV.pop(_k, None)
 
 
@@ -342,6 +343,9 @@ class TestInstallerChannels(_Repos):
     def test_help(self):
         r = self.install("--help")
         self.assertIn("--channel stable|beta|latest|dev|vX.Y.Z", r.stdout)
+        # taxjson-fetch is installed by default: the help names the
+        # opt-out, and --with-fetch (old command lines) is still known.
+        self.assertIn("--without-fetch", r.stdout)
         self.assertIn("--with-fetch", r.stdout)
 
     def test_links_only_its_own(self):

@@ -15,9 +15,10 @@ the entry-point group `taxjson.fetchers`.
 Into the same Python environment as taxjson:
 
 ```bash
-# with the one-line installer (re-run it with --with-fetch; it adds the
-# plugin to the installer's own environment):
-bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --with-fetch
+# with the one-line installer: it installs this plugin by default into
+# its own environment (--without-fetch leaves it out; an install that
+# opted out takes it back with --with-fetch):
+bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
 # or, from a taxjson checkout, into the environment taxjson is installed in
 # (install the core first, `pip install -e .`):
 pip install -e packages/taxjson-fetch
