@@ -49,3 +49,7 @@ tmp*/
 *.xls
 *.pdf
 !/docs/deck/taxjson-deck.pdf
+
+# The output-style test projects are synthetic fixtures, tracked on purpose.
+!tests/fixtures/style/**
+!tests/fixtures/style/*/inputs/
