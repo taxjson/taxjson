@@ -526,8 +526,10 @@ class TestViewsSayWhatTheySkip(unittest.TestCase):
                              .returncode, 0)
             r = _run_cli(root, "wash-sales", "--explain")
             self.assertEqual(r.returncode, 0, r.stderr)
+            # One block per denial, headed "SYMBOL — DATE — ACCOUNT"
+            # (the report layout, docs/output-style.md).
             heads = [ln for ln in r.stdout.splitlines()
-                     if ln.startswith("# XEI.TO ")]
+                     if ln.startswith("XEI.TO — ")]
             self.assertEqual(len(heads), 1, heads)
             self.assertIn("2025-03-03", heads[0])
 

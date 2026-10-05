@@ -43,7 +43,8 @@ from taxjson.lib.country import (add_country_argument, default_tax_date,
 from taxjson.lib.pipeline import (GainsRequest, apply_roc_record_dates,
                                   engine_options, load_stdin_transactions,
                                   prepare_books)
-from taxjson.lib.trace_format import render_gain_block
+from taxjson.lib.trace_format import (render_gain_block,
+                                      render_report_block)
 
 
 COLORS = {
@@ -156,6 +157,11 @@ def parse_args():
         action="store_true",
         help="Don't re-pad pipe columns — preserve the engine's raw trace strings verbatim.",
     )
+    parser.add_argument(
+        "--layout", choices=["trace", "report"], default="trace",
+        help="trace (default): the '#'-commented blocks trace files and "
+             "`taxjson audit` use; report: the house report layout, "
+             "wrapped to the terminal (`taxjson wash-sales --explain`).")
     return parser.parse_args()
 
 
@@ -363,6 +369,20 @@ def main():
     if args.list:
         for g in matches:
             print(fmt_summary(g))
+        return
+
+    if args.layout == "report":
+        # One blank line between blocks, none before the first.
+        for i, g in enumerate(matches):
+            block = render_report_block(g, manual=bool(g.get('tainted')))
+            if not block:
+                print(f"taxjson-explain: note: no trace produced for "
+                      f"{g.get('id', '?')}", file=sys.stderr)
+                continue
+            if i:
+                print()
+            for ln in block:
+                print(ln)
         return
 
     for g in matches:

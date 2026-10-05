@@ -797,7 +797,8 @@ class TestWashExplainBlended(unittest.TestCase):
                 (root / "inputs" / a / "x.tt").write_text(tt)
             self.assertEqual(_cli(root, "run", "--no-input").returncode, 0)
             r = _cli(root, "wash-sales", "--explain")
-        self.assertIn("disallowed +$300.00", r.stdout)
+        # The report layout (docs/output-style.md).
+        self.assertIn("denied 300.00)", r.stdout)
         self.assertNotIn("no matching gains", r.stdout + r.stderr)
 
 

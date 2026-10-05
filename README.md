@@ -1267,23 +1267,35 @@ when the pipeline built it.
 
 ```
 $ taxjson wash-sales
-ACCOUNT   DATE         SYMBOL    QTY     PROCEEDS    COST        GAIN       DENIED   ALLOWED
---------------------------------------------------------------------------------------------
-margin    2025-10-08   ZZA.US    120     9,840.00    10,320.00   -480.00    400.00   -80.00
-margin    2025-10-17   ZZB.US    25      3,150.00    3,700.00    -550.00    550.00   0.00
+SUPERFICIAL LOSSES — CAD, tax year 2025, basis: wash-adjusted
+Losses denied under the superficial-loss rule, s.54.
 
-2 superficial loss(es); 950.00 CAD of losses denied.
+ACCOUNT  DATE        SYMBOL  QTY  PROCEEDS    COST     GAIN  DENIED  ALLOWED
+-----------------------------------------------------------------------------
+margin   2025-10-08  ZZA.US   10    820.00  860.00   -40.00   30.00   -10.00
+margin   2025-10-17  ZZB.US    5    630.00  740.00  -110.00  110.00     0.00
+
+2 superficial loss(es); 140.00 CAD of losses denied.
+
+WHAT DENIED MEANS
+- DENIED is added to the ACB of the substituted property (s.53(1)(f)): you
+  recover it on a later sale.
+...
 ```
 
 A DENIED loss is added to the ACB of the substituted property (s.53(1)(f);
 recovered on a later sale), except any amount permanently denied by a
 repurchase in a registered account. A Canadian project titles the report
-SUPERFICIAL LOSSES; a US one WASH SALES, with the §1091 basis wording.
+SUPERFICIAL LOSSES; a US one WASH SALES, with the §1091 basis wording. The
+table fits the width (docs/output-style.md): a long option symbol drops the
+COST, then the PROCEEDS column, and a narrow terminal gets one record per
+denial.
 
-Add **`--explain`** to see *how* each denial was computed — the full ACB /
-superficial-loss calculation trace (pool build-up, the triggering repurchase,
-the ±30-day affiliated-balance window, and the disallowance math) instead of the
-summary table. Country / tax-date / sheltered context come from the project.
+Add **`--explain`** to see *how* each denial was computed — for each one its
+figures, the ACB pool's history (US: the basis lots), the triggering
+repurchase and the disallowance math, and the ±30-day window as a table of
+the same-symbol rows with their roles — instead of the summary table.
+Country / tax-date / sheltered context come from the project.
 
 ```bash
 taxjson wash-sales margin --explain     # full calculation trace for each wash sale

@@ -36,6 +36,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from taxjson.lib import out as _out
 from taxjson.lib.country import add_country_argument
 
 from taxjson.lib.corp_actions import (
@@ -101,9 +102,12 @@ def _default_manifest_path(csv_path: Path) -> Path:
 
 
 def _format_options(options) -> str:
+    """The numbered option list of the election prompt: the key on the
+    number's line, its description wrapped under it."""
     lines = []
     for i, (key, desc) in enumerate(options, start=1):
-        lines.append(f"  [{i}] {key}\n      {desc}")
+        lines.append(f"  [{i}] {key}")
+        lines.extend(_out.wrap(desc, indent="      ", stream=sys.stderr))
     return "\n".join(lines)
 
 
@@ -115,24 +119,25 @@ def _prompt_election(event: CorporateAction, country: str) -> ElectionRecord:
     if not options or options == [IGNORE_ELECTION]:
         # No country rule for this event type — only `ignore` makes sense.
         # The user can still mark it ignored and move on.
-        print(
-            f"warning: no {country} rule for event type '{event.action_type}'. "
-            f"You can ignore this event or add a rule in taxjson.lib.corp_actions.",
-            file=sys.stderr,
-        )
+        _out.warn(f"no {country} rule for event type "
+                  f"'{event.action_type}'",
+                  details=["You can ignore this event, or add a rule in "
+                           "taxjson.lib.corp_actions."])
 
-    print(file=sys.stderr)
-    print(f"EVENT {event.event_id} — {event.summary()}", file=sys.stderr)
-    print(f"  qty_disposed: {event.qty_disposed}", file=sys.stderr)
-    print(f"  qty_received: {event.qty_received}", file=sys.stderr)
-    print(f"  account:      {event.account}", file=sys.stderr)
+    doc = _out.Doc(stream=sys.stderr)
+    doc.section(f"EVENT {event.event_id}")
+    doc.para(event.summary(), indent="  ")
+    doc.kv([("account", event.account),
+            ("qty disposed", f"{event.qty_disposed:g}"),
+            ("qty received", f"{event.qty_received:g}")], indent="  ")
     if event.raw_descriptions:
-        print("  source row(s):", file=sys.stderr)
+        doc.line("  source rows:")
         for d in event.raw_descriptions:
-            print(f"    {d}", file=sys.stderr)
+            doc.line(f"    {d}")
+    doc.section("Tax treatment options")
+    doc.line(_format_options(options))
     print(file=sys.stderr)
-    print("Tax treatment options:", file=sys.stderr)
-    print(_format_options(options), file=sys.stderr)
+    doc.print(file=sys.stderr)
     print(file=sys.stderr)
 
     # input() writes its prompt to stdout, which leaks into the emitted
@@ -176,8 +181,13 @@ def _prompt_election(event: CorporateAction, country: str) -> ElectionRecord:
         # when the event already carries the number (broker-reported FMV).
         if len(hint_spec) > 2 and not hint_spec[2](event):
             continue
+        # The explanation once; a re-entry asks for the number only.
+        print(file=sys.stderr)
+        for ln in _out.wrap(f"{hint_key}: {prompt_text}", indent="  ",
+                            hang="    ", stream=sys.stderr):
+            print(ln, file=sys.stderr)
         while True:
-            raw = _ask(f"  {hint_key}: {prompt_text}\n  > ")
+            raw = _ask(f"  {hint_key} = ")
             if raw == '':
                 confirm = _ask(
                     f"  empty input — record {hint_key}=0? "
@@ -500,15 +510,14 @@ def main():
         if args.no_input or not sys.stdin.isatty():
             reason = ("--no-input" if args.no_input
                       else "stdin is not a TTY")
-            print(
-                f"taxjson-corp-actions: error: {len(missing)} corp-action event(s) need an election but "
-                f"{reason}. Run interactively to populate "
-                f"{manifest_path}, or set each non-interactively with "
-                f"`taxjson elect <account> --set <event_id>=<election>`:",
-                file=sys.stderr,
-            )
-            for ev in missing:
-                print(f"  - {ev.event_id}: {ev.summary()}", file=sys.stderr)
+            _out.error(
+                f"{len(missing)} corp-action event(s) need an election "
+                f"but {reason}", prog="taxjson-corp-actions",
+                details=[f"- {ev.event_id}: {ev.summary()}"
+                         for ev in missing]
+                + [f"Answer at a terminal (`taxjson run`), or set each "
+                   f"with `taxjson elect ACCOUNT --set EVENT_ID=ELECTION`; "
+                   f"the elections are saved in {manifest_path}."])
             if args.pending_json:
                 doc = _pending_doc(missing, manifest_path, args.country)
                 Path(args.pending_json).parent.mkdir(parents=True,

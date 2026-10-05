@@ -202,9 +202,10 @@ class TestAccountOrderFollowsToml(unittest.TestCase):
     def test_wash_sales_explain_traces_the_run_book(self):
         """A2-1592 twin: _explain_wash_sales merged sorted(_by_name)."""
         r = _cli(self.roots["zeta_first"], "wash-sales", "--explain")
-        self.assertNotIn("LOSS SALE", r.stdout + r.stderr)
+        self.assertNotIn("  loss sale", r.stdout + r.stderr)
         r = _cli(self.roots["alpha_first"], "wash-sales", "--explain")
-        self.assertIn("LOSS SALE", r.stdout + r.stderr)
+        # The window table's role label (report layout).
+        self.assertIn("  loss sale", r.stdout + r.stderr)
 
     def test_check_filed_ok_right_after_close_year(self):
         """A2-0512: the drift check recomputed in the lock's alphabetical
@@ -427,8 +428,9 @@ class TestOptionTimingForwarded(unittest.TestCase):
     def test_wash_sales_explain_traces_the_denial(self):
         r = _cli(self.root, "wash-sales", "--explain")
         out = r.stdout + r.stderr
-        self.assertIn(f"{_CALL}   2025-03-20", out)
-        self.assertIn("disallowed +$5,000.00", out)
+        # The report layout: "SYMBOL — DATE — ACCOUNT", then the figures.
+        self.assertIn(f"{_CALL} — 2025-03-20", out)
+        self.assertIn("denied 5,000.00)", out)
 
     def test_close_year_lock_records_the_deferral(self):
         with tempfile.TemporaryDirectory() as td:
@@ -497,8 +499,10 @@ class TestPhantomsForwarded(unittest.TestCase):
     def test_wash_sales_explain(self):
         r = _cli(self.root, "wash-sales", "--explain")
         out = r.stdout + r.stderr
-        self.assertIn("ZZZ.TO   2025-03-10   qty=100.0000", out)
-        self.assertIn("raw -$500.00, disallowed +$500.00", out)
+        # The report layout: "SYMBOL — DATE — ACCOUNT", then the figures.
+        self.assertIn("ZZZ.TO — 2025-03-10", out)
+        self.assertIn("quantity:   100\n", out)
+        self.assertIn("(raw -500.00, denied 500.00)", out)
 
     def test_audit(self):
         r = _cli(self.root, "audit")

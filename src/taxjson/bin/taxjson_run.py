@@ -5194,7 +5194,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                                 no_input=no_input,
                                 strict=getattr(args, "strict", False))
         except PendingElectionsError as pe:
-            print(f"  !! {name}: corp-action elections required — "
+            print(f"  warning: {name}: corp-action elections required — "
                   f"account deferred", file=sys.stderr)
             pending_accounts.append(pe)
             continue
@@ -5332,7 +5332,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                                 no_input=no_input,
                                 strict=getattr(args, "strict", False))
         except PendingElectionsError as pe:
-            print(f"  !! {name}: corp-action elections required — "
+            print(f"  warning: {name}: corp-action elections required — "
                   f"account deferred", file=sys.stderr)
             pending_accounts.append(pe)
             continue
@@ -5453,21 +5453,34 @@ def cmd_run(args: argparse.Namespace) -> None:
         # tmp + replace: a reader never sees half a file (A2-0779)
         write_text_atomic(agg_path,
                           _json.dumps(agg, indent=2, sort_keys=True))
-        print(f"\ntaxjson run: {len(pending_accounts)} account(s) need "
-              f"corp-action elections before their books can build:",
-              file=sys.stderr)
+        from taxjson.lib import out as _out
+        _n = len(pending_accounts)
+        _sets = []
         for pe in pending_accounts:
             doc = agg["accounts"].get(pe.account) or {}
             for ev in doc.get("pending", []):
                 opts = "|".join(o["election"] for o in ev.get("options",
                                                              []))
-                print(f"  taxjson elect {pe.account} --set "
-                      f"{ev['event_id']}=<{opts}>", file=sys.stderr)
-        print(f"Details (options, descriptions, required hints): "
-              f"{agg_path}\nResolve each with `taxjson elect ... --set` "
-              f"(add --hint KEY=VALUE where required), or run "
-              f"`taxjson run` at a terminal to be prompted; then re-run.",
-              file=sys.stderr)
+                _sets.append(f"  taxjson elect {pe.account} --set "
+                             f"{ev['event_id']}=<{opts}>")
+        print(file=sys.stderr)
+        for ln in _out.message(
+                "error", f"{_n} account{'s' if _n != 1 else ''} "
+                f"need{'' if _n != 1 else 's'} corp-action elections "
+                f"before {'their' if _n != 1 else 'its'} books can build",
+                prog=f"{_PROG} run"):
+            print(ln, file=sys.stderr)
+        # The ready lines are commands to copy: never wrapped.
+        for ln in _sets:
+            print(ln, file=sys.stderr)
+        for ln in _out.wrap(
+                "`taxjson elect --pending` shows what each option books "
+                "and the hints it needs (also in "
+                f"{_out.relpath(agg_path, root)}). Set each with `taxjson "
+                "elect ACCOUNT --set` (add --hint KEY=VALUE where "
+                "required), or run `taxjson run` at a terminal to be "
+                "asked; then run again.", indent="  ", stream=sys.stderr):
+            print(ln, file=sys.stderr)
         raise SystemExit(3)
     _agg_path = cache / "pending_elections.json"
     if args.account and _agg_path.exists():
@@ -5917,31 +5930,65 @@ def _manifest_path_for(acct_dir: Path, cache: Path, name: str) -> Path:
     return _resolve_manifest(acct_dir, cache, name, create=False)
 
 
-def _print_elections(name: str, manifest_path: Path,
-                     country: Optional[str] = None) -> int:
+def _hint_text(hints: Dict[str, Any]) -> str:
+    """`key=value` pairs of an election's hints (400.0 -> 400)."""
+    def _v(v):
+        if isinstance(v, float) and v.is_integer() and abs(v) < 1e15:
+            return str(int(v))
+        return str(v)
+    return ", ".join(f"{k}={_v(v)}" for k, v in sorted(hints.items()))
+
+
+def _elections_section(doc, name: str, manifest_path: Path, root: Path,
+                       country: Optional[str] = None) -> int:
+    """One account's saved elections into `doc` (lib/out.Doc): a heading
+    naming the manifest, then one `- ID: election` item per event with
+    its summary, hints and notes aligned under it. Returns the count
+    (0: nothing added — the caller lists the empty accounts together)."""
+    from taxjson.lib import out as _out
     from taxjson.lib.corp_actions import Manifest, election_keys
     man = Manifest.load(manifest_path)
     if not man.records:
-        print(f"  {name}: no elections recorded.")
         return 0
     known = election_keys(country) if country else None
-    print(f"  {name}  ({manifest_path}):")
+    doc.section(f"{name} — {_out.relpath(manifest_path, root)}")
     for eid, r in sorted(man.records.items()):
         # A hand-typed key no rule knows: `taxjson run` refuses it, so
         # say so here too (audit S072-16 — it was listed as if valid).
-        bad = (f"   <- UNKNOWN election for {country}: `taxjson run` "
-               f"refuses it; fix with `taxjson elect {name} --redo "
-               f"--event {eid}`"
-               if known is not None and r.election
-               and r.election not in known else "")
-        print(f"    [{eid}] {r.election or '(none)'}{bad}")
+        bad = (known is not None and r.election
+               and r.election not in known)
+        doc.item(f"{eid}: {r.election or '(none)'}"
+                 + (f" — UNKNOWN election for {country}" if bad else ""))
+        pairs = []
         if r.summary:
-            print(f"        {r.summary}")
+            pairs.append(("event", r.summary))
         if r.hints:
-            print(f"        hints: {r.hints}")
+            pairs.append(("hints", _hint_text(r.hints)))
         if r.notes:
-            print(f"        notes: {r.notes}")
+            pairs.append(("notes", r.notes))
+        if bad:
+            pairs.append(("fix", f"`taxjson run` refuses it; choose again "
+                                 f"with `taxjson elect {name} --redo "
+                                 f"--event {eid}`"))
+        doc.kv(pairs, indent="  ")
     return len(man.records)
+
+
+def _print_elections(names: List[str], inputs_dir: Path, cache: Path,
+                     root: Path, country: Optional[str],
+                     footer: str) -> None:
+    """The saved-elections listing of `taxjson elect [ACCOUNT]`."""
+    from taxjson.lib.out import Doc
+    doc = Doc("CORPORATE-ACTION ELECTIONS")
+    empty = []
+    for name in names:
+        if not _elections_section(doc, name, _manifest_path_for(
+                inputs_dir / name, cache, name), root, country):
+            empty.append(name)
+    if empty:
+        doc.blank().para(f"No elections recorded: {', '.join(empty)}.")
+    doc.blank().para(footer)
+    doc.print()
 
 
 def _reextract_pending_entry(acct_dir: Path, name: str, country: str,
@@ -5984,17 +6031,84 @@ def _reextract_pending_entry(acct_dir: Path, name: str, country: str,
     return None
 
 
-def _print_wrong_country(wrong: List[Dict[str, str]], country: str) -> None:
+def _wrong_country_section(doc, wrong: List[Dict[str, str]],
+                           country: str) -> None:
     """`elect --pending`: the saved elections this country's rules do not
     know, each with the command that replaces it."""
     from taxjson.lib.country import display_name
-    print(f"Elections that are not {display_name(country)} elections "
-          f"(`taxjson run` refuses them):")
+    doc.section(f"NOT {display_name(country).upper()} ELECTIONS — "
+                f"`taxjson run` refuses them")
     for w in wrong:
-        print(f"{w['account']}: {w['event_id']}  {w['summary']}   "
-              f"[saved: {w['election']}]")
-        print(f"  taxjson elect {w['account']} --redo --event "
-              f"{w['event_id']}")
+        doc.item(f"{w['account']}: {w['event_id']} (saved: "
+                 f"{w['election']})")
+        from taxjson.lib.out import Verbatim
+        doc.kv([("event", w["summary"]),
+                ("redo", Verbatim(f"taxjson elect {w['account']} --redo "
+                                  f"--event {w['event_id']}"))],
+               indent="  ")
+
+
+def _print_pending(root: Path, inputs_dir: Path, cache: Path,
+                   agg: Dict[str, Any], wrong: List[Dict[str, str]],
+                   country: str) -> None:
+    """`taxjson elect --pending`: each deferred event with its options —
+    what each one books, the hints it needs and the ready `--set` line —
+    and a last line saying what to do (the checklist's elections step
+    shows that line)."""
+    from taxjson.lib.corp_actions import Manifest
+    from taxjson.lib.out import Doc, Verbatim
+    events = [(acct, ev) for acct, adoc in
+              sorted((agg.get("accounts") or {}).items())
+              for ev in (adoc.get("pending") or [])]
+    n = len(events)
+    doc = Doc(f"PENDING ELECTIONS — {n} event{'s' if n != 1 else ''}"
+              if events else None)
+    if wrong:
+        _wrong_country_section(doc, wrong, country)
+    open_n = 0
+    for acct, ev in events:
+        eid = ev.get("event_id", "")
+        man = Manifest.load(_manifest_path_for(inputs_dir / acct, cache,
+                                               acct))
+        rec = man.get(eid)
+        doc.section(f"{acct}: {eid}")
+        if ev.get("summary"):
+            doc.para(ev["summary"], indent="  ")
+        if rec is not None:
+            # The pending file only clears on the next successful run —
+            # without this marker, "did my --set take?" looked like NO
+            # and users re-set (or overwrote) their election.
+            doc.para(f"already elected: {rec.election} — re-run "
+                     f"`taxjson run` to apply", indent="  ")
+        else:
+            open_n += 1
+        for i, o in enumerate(ev.get("options", []), 1):
+            hints = o.get("hints") or []
+            doc.blank().line(f"  {i}. {o['election']}")
+            if o.get("description"):
+                doc.para(o["description"], indent="     ")
+            pairs = [("hint", f"{h['key']} — "
+                              f"{h.get('prompt') or 'a number'}")
+                     for h in hints]
+            hint_args = "".join(f" --hint {h['key']}=..." for h in hints)
+            pairs.append(("set", Verbatim(
+                f"taxjson elect {acct} --set {eid}={o['election']}"
+                f"{hint_args}")))
+            doc.kv(pairs, indent="     ")
+    doc.blank()
+    if open_n:
+        # ONE short line: `taxjson checklist` shows it as the step's
+        # detail.
+        doc.line(f"{open_n} election{'s' if open_n != 1 else ''} pending: "
+                 f"set each with `taxjson elect ACCOUNT --set`, then "
+                 f"`taxjson run`.")
+    elif events:
+        doc.line("Every pending event has an election saved: run "
+                 "`taxjson run` to apply them.")
+    else:
+        doc.line("Replace each of them with `taxjson elect ACCOUNT --redo "
+                 "--event ID`, then run `taxjson run`.")
+    doc.print()
 
 
 def _save_manifest(man, manifest_path: Path) -> None:
@@ -6063,6 +6177,14 @@ def cmd_elect(args: argparse.Namespace) -> None:
     rollover, FMV/ACB hints) that `taxjson run` otherwise prompts for once
     and then reuses silently."""
     from taxjson.lib.corp_actions import Manifest
+    from taxjson.lib import out as _out
+
+    def fail(headline: str, *details: str, code: int = 1):
+        # One headline naming what was refused, the why and the fix as
+        # indented detail lines (docs/output-style.md).
+        _out.fail(headline, prog=f"{_PROG} elect", details=details,
+                  code=code)
+
     root = Path(args.dir).resolve()
     cfg = load_config(root)
     accounts = cfg.get("accounts", {})
@@ -6080,7 +6202,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
         try:
             _wrong = wrong_country_elections(root, cfg)
         except ViewError as e:
-            _die(str(e))
+            fail(str(e))
         agg_path = cache / "pending_elections.json"
         if not agg_path.exists():
             if getattr(args, "json", False):
@@ -6090,7 +6212,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
                           | ({"wrong_country": _wrong} if _wrong else {}))
                 return
             if _wrong:
-                _print_wrong_country(_wrong, country)
+                _print_pending(root, inputs_dir, cache, {}, _wrong, country)
                 return
             print("No pending elections (no --no-input run has deferred "
                   "any, or they've been resolved).")
@@ -6101,51 +6223,27 @@ def cmd_elect(args: argparse.Namespace) -> None:
             # One line, exit 2 — not a traceback (re-audit A2-0471,
             # A2-0779, A2-1419, A2-1460). It is a work file `run`
             # rebuilds.
-            _die_input(f"{e} — a damaged work file: re-run `taxjson run "
-                       f"--no-input` to rebuild it.")
+            fail(str(e), "A damaged work file: re-run `taxjson run "
+                 "--no-input` to rebuild it.", code=2)
         if getattr(args, "json", False):
             if _wrong:
                 doc = dict(doc, wrong_country=_wrong)
             print(_json.dumps(doc, indent=2, sort_keys=True))
             return
-        if _wrong:
-            _print_wrong_country(_wrong, country)
-        from taxjson.lib.corp_actions import Manifest
-        for acct, adoc in sorted((doc.get("accounts") or {}).items()):
-            mpath = _manifest_path_for(inputs_dir / acct, cache, acct)
-            man = Manifest.load(mpath)
-            for ev in adoc.get("pending", []):
-                head = f"{acct}: {ev['event_id']}  {ev.get('summary', '')}"
-                rec = man.get(ev.get("event_id", ""))
-                if rec is not None:
-                    # The pending file only clears on the next
-                    # successful run — without this marker, "did my
-                    # --set take?" looked like NO and users re-set
-                    # (or overwrote) their election.
-                    head += (f"   [already elected: {rec.election} — "
-                             f"re-run `taxjson run` to apply]")
-                print(head)
-                for o in ev.get("options", []):
-                    hints = "".join(f" --hint {h['key']}=..."
-                                    for h in o.get("hints", []))
-                    print(f"  taxjson elect {acct} --set "
-                          f"{ev['event_id']}={o['election']}{hints}")
-                    print(f"      {o.get('description', '')}")
-                    for h in o.get("hints", []):
-                        if h.get("prompt"):
-                            print(f"      {h['key']}: {h['prompt']}")
+        _print_pending(root, inputs_dir, cache, doc, _wrong, country)
         return
 
     # No account → list every account's elections (read-only).
     if not args.account:
         if args.redo or args.reset:
-            _die("--redo/--reset need an account, e.g. "
-                     "`taxjson elect margin --redo`")
+            fail("--redo/--reset need an account",
+                 "For example: `taxjson elect margin --redo`.")
         if getattr(args, "set", None) or getattr(args, "hint", None):
             # Falling through to the read-only listing here looked like
             # success (exit 0) while saving NOTHING (REVIEW #7).
-            _die("--set/--hint need an account, e.g. "
-                     "`taxjson elect margin --set EVENT_ID=ELECTION`")
+            fail("--set/--hint need an account",
+                 "For example: `taxjson elect margin --set "
+                 "EVENT_ID=ELECTION`. Nothing was saved.")
         if getattr(args, "json", False):
             # Machine listing of SAVED elections (--pending --json
             # already covers the unresolved ones) — previously --json
@@ -6169,27 +6267,26 @@ def cmd_elect(args: argparse.Namespace) -> None:
                     for eid, rec in sorted(man.records.items())}
             _json_out({"accounts": doc})
             return
-        print("Corporate-action elections:")
-        for name in accounts:
-            _print_elections(name, _manifest_path_for(inputs_dir / name,
-                                                      cache, name), country)
-        print("\nRedo one: `taxjson elect <account> --redo` "
-              "(add --event <id> for just one event).")
+        _print_elections(list(accounts), inputs_dir, cache, root, country,
+                         "Redo one: `taxjson elect ACCOUNT --redo` (add "
+                         "`--event ID` for just one event).")
         return
 
     name = args.account
     if name not in accounts:
-        _die(f"no [accounts.{name}] in taxjson.toml")
+        fail(f"no [accounts.{name}] in taxjson.toml",
+             f"Accounts: {', '.join(accounts) or '(none)'}.")
     acct_dir = inputs_dir / name
     manifest_path = _manifest_path_for(acct_dir, cache, name)
     if getattr(args, "hint", None) and not getattr(args, "set", None):
-        _die("--hint only applies with --set EVENT_ID=ELECTION — "
-             "nothing was saved.")
+        fail("--hint only applies with --set EVENT_ID=ELECTION",
+             "Nothing was saved.")
     if getattr(args, "json", False):
         if args.redo or args.reset or getattr(args, "set", None):
-            _die("--json applies to the listings only (`taxjson elect "
-                 "[ACCOUNT] --json`, `taxjson elect --pending --json`), "
-                 "not to --set/--redo/--reset.")
+            fail("--json applies to the listings only, not to "
+                 "--set/--redo/--reset",
+                 "Listings: `taxjson elect [ACCOUNT] --json`, `taxjson "
+                 "elect --pending --json`.")
         # One account's SAVED elections — same shape as the
         # all-accounts listing (it printed the text listing before).
         doc_one: Dict[str, Any] = {}
@@ -6214,10 +6311,10 @@ def cmd_elect(args: argparse.Namespace) -> None:
         # (re-audit A2-0563 / A2-0568). --hint belongs to ONE election,
         # so one --set per command.
         if len(args.set) > 1:
-            sys.exit(f"taxjson elect: {len(args.set)} --set flags — give "
-                     f"ONE --set per command (its --hint flags belong to "
-                     f"it): run `taxjson elect {name} --set ...` once per "
-                     f"event. Nothing was saved.")
+            fail(f"{len(args.set)} --set flags — give ONE --set per "
+                 f"command",
+                 f"Its --hint flags belong to it: run `taxjson elect "
+                 f"{name} --set ...` once per event. Nothing was saved.")
         args.set = args.set[0]
     if getattr(args, "set", None):
         from taxjson.lib.corp_actions import (ElectionRecord,
@@ -6226,17 +6323,17 @@ def cmd_elect(args: argparse.Namespace) -> None:
             # The example names a key this country accepts (a US
             # project refuses the Canadian s.85.1 key; audit A2-0718).
             _ex = "reorg_368" if country == "usa" else "rollover_s_85_1_5"
-            sys.exit(f"taxjson elect --set expects EVENT_ID=ELECTION, "
-                     f"e.g. --set 20250317-abg-abh-1a2b={_ex} (`taxjson "
-                     f"elect {name}` lists each event's choices)")
+            fail("--set expects EVENT_ID=ELECTION",
+                 f"For example `--set 20250317-abg-abh-1a2b={_ex}`; "
+                 f"`taxjson elect --pending` lists each event's "
+                 f"choices.")
         event_id, election = args.set.split("=", 1)
         event_id, election = event_id.strip(), election.strip()
         if not event_id:
             # A ""-keyed record could never be targeted by --event
             # afterwards (REVIEW #34).
-            sys.exit("taxjson elect --set: empty EVENT_ID (expected "
-                     "EVENT_ID=ELECTION; list ids via `taxjson elect "
-                     "--pending`)")
+            fail("--set: empty EVENT_ID (expected EVENT_ID=ELECTION)",
+                 "`taxjson elect --pending` lists the ids.")
         # PER-EVENT validation on every --set: the country-wide set
         # accepted e.g. a spinoff election for a merger, which only
         # exploded at the NEXT run as a raw KeyError traceback (REVIEW
@@ -6273,21 +6370,23 @@ def cmd_elect(args: argparse.Namespace) -> None:
                     o.get("hints") or [])
         if event_options is not None:
             if election not in event_options:
-                _die(f"election {election!r} is not valid "
-                         f"for event {event_id} — this event offers: "
-                         f"{', '.join(sorted(event_options))}")
+                fail(f"election {election!r} is not valid for event "
+                     f"{event_id}",
+                     f"This event offers: "
+                     f"{', '.join(sorted(event_options))}.")
         else:
             known = {"ignore"}
             for rule in RULES_BY_COUNTRY.get(country, {}).values():
                 known.update(k for k, _ in rule.options)
             if election not in known:
-                _die(f"unknown election {election!r} for "
-                         f"country={country}. Valid: "
-                         f"{', '.join(sorted(known))}")
+                fail(f"unknown election {election!r} for "
+                     f"country={country}",
+                     f"Valid: {', '.join(sorted(known))}.")
         hints = {}
         for h in (args.hint or []):
             if "=" not in h:
-                sys.exit(f"taxjson elect --hint expects KEY=VALUE, got {h!r}")
+                fail(f"--hint expects KEY=VALUE, got {h!r}",
+                     "Nothing was saved.")
             k, v = h.split("=", 1)
             try:
                 hints[k.strip()] = float(v)
@@ -6298,15 +6397,15 @@ def cmd_elect(args: argparse.Namespace) -> None:
                     # nothing and a negative FMV booked negative
                     # dividend income, saved at exit 0; nan/inf failed
                     # only on the next run (S039-00).
-                    sys.exit(f"taxjson elect --hint: {_prob}")
+                    fail(f"--hint: {_prob}", "Nothing was saved.")
             except ValueError:
                 # Every hint consumer float()s its value — storing the
                 # raw string reported "Election saved" and then crashed
                 # the NEXT run with a ValueError traceback (REVIEW #5,
                 # classic trigger: European decimal comma).
-                sys.exit(f"taxjson elect --hint: {k.strip()}={v.strip()!r} "
-                         f"is not a number (use a decimal POINT, e.g. "
-                         f"{k.strip()}=12.50)")
+                fail(f"--hint: {k.strip()}={v.strip()!r} is not a number",
+                     f"Use a decimal POINT, e.g. `{k.strip()}=12.50`. "
+                     f"Nothing was saved.")
         if event_options is not None:
             # The pending doc declares exactly which hints this
             # election needs — a rollover saved WITHOUT its
@@ -6320,15 +6419,15 @@ def cmd_elect(args: argparse.Namespace) -> None:
             if missing:
                 specs = " ".join(f"--hint {k}=<value>"
                                  for k in sorted(missing))
-                sys.exit(f"taxjson elect: {election} needs "
-                         f"{', '.join(sorted(missing))} — add {specs} "
-                         f"(see `taxjson elect --pending` for what "
-                         f"each means)")
+                fail(f"{election} needs {', '.join(sorted(missing))}",
+                     f"Add `{specs}`; `taxjson elect --pending` says what "
+                     f"each means. Nothing was saved.")
             if unknown:
-                sys.exit(f"taxjson elect: {election} does not use "
-                         f"hint(s) {', '.join(sorted(unknown))}"
-                         + (f" (it takes: {', '.join(sorted(declared))})"
-                            if declared else " (it takes none)"))
+                fail(f"{election} does not use hint(s) "
+                     f"{', '.join(sorted(unknown))}",
+                     (f"It takes: {', '.join(sorted(declared))}."
+                      if declared else "It takes none.")
+                     + " Nothing was saved.")
         man = Manifest.load(manifest_path)
         prior = man.get(event_id)
         # Best summary available: pending doc (the happy path — user
@@ -6342,43 +6441,51 @@ def cmd_elect(args: argparse.Namespace) -> None:
         if prior is None and event_options is None:
             # Saving anyway left a junk record in the committed
             # manifest.json that no run ever reads (2026-09 CLI audit).
-            _die(f"{event_id!r} matches no pending event, no saved "
-                 f"election, and no corporate action in {name}'s "
-                 f"inputs — nothing was saved. Check the id with "
-                 f"`taxjson elect --pending` (after a `taxjson run "
-                 f"--no-input`) or `taxjson elect {name}`.")
+            fail(f"{event_id!r} matches no pending event — nothing was "
+                 f"saved",
+                 f"It is no saved election either, and no corporate "
+                 f"action in {name}'s inputs. Check the id with `taxjson "
+                 f"elect --pending` (after a `taxjson run --no-input`) or "
+                 f"`taxjson elect {name}`.")
         man.set(ElectionRecord(event_id=event_id, summary=summary,
                                election=election,
                                notes="set via elect --set",
                                hints=hints))
         _save_manifest(man, manifest_path)
-        print(f"Election saved: {event_id} = {election}"
-              + (f" (hints: {hints})" if hints else "")
-              + f" → {manifest_path}")
+        _done = _out.Doc(f"Election saved: {event_id} = {election}")
+        _done.kv(([("hints", _hint_text(hints))] if hints else [])
+                 + [("file", _out.Verbatim(_out.relpath(manifest_path,
+                                                        root)))],
+                 indent="  ")
+        _done.line("Run `taxjson run` to apply it.")
+        _done.print()
         if ("fmv_per_share" in hints and abs(hints["fmv_per_share"]) < 1e-12
                 and election.startswith("taxable_")):
             # 0 is the documented "defer" value (R1-11): say what it books.
-            print(f"taxjson elect: warning: fmv_per_share=0 books this "
-                  f"{election} at $0 — no income and a $0 cost for the "
-                  f"new shares. Every `taxjson run` and the checklist "
-                  f"flag it until a value is set.", file=sys.stderr)
+            _out.warn(f"fmv_per_share=0 books this {election} at $0",
+                      prog=f"{_PROG} elect",
+                      details=["No income and a $0 cost for the new "
+                               "shares. Every `taxjson run` and the "
+                               "checklist flag it until a value is "
+                               "set."])
         from taxjson.lib.corp_actions import ALLOCATED_BASIS_HINT
         _ak = ALLOCATED_BASIS_HINT.get(election)
         if _ak and _ak in hints and abs(hints[_ak]) < 0.005:
             # The missing hint is refused; an explicit 0 was saved with
             # no word (audits S073-21, S074-04).
-            print(f"taxjson elect: warning: {_ak}=0 moves NO cost to the "
-                  f"spun-off shares — they book at $0 and the parent "
-                  f"keeps all of it. Enter the allocated amount; every "
-                  f"`taxjson run` and the checklist flag it until then.",
-                  file=sys.stderr)
+            _out.warn(f"{_ak}=0 moves NO cost to the spun-off shares",
+                      prog=f"{_PROG} elect",
+                      details=["They book at $0 and the parent keeps all "
+                               "of it. Enter the allocated amount; every "
+                               "`taxjson run` and the checklist flag it "
+                               "until then."])
         return
 
     if not (args.redo or args.reset):
-        print("Corporate-action elections:")
-        _print_elections(name, manifest_path, country)
-        print(f"\nRedo all: `taxjson elect {name} --redo`  |  "
-              f"one: add `--event <id>`  |  just clear: `--reset`")
+        _print_elections([name], inputs_dir, cache, root, country,
+                         f"Redo all: `taxjson elect {name} --redo`; one "
+                         f"event: add `--event ID`; just clear: "
+                         f"`--reset`.")
         return
 
     # --redo / --reset: clear the chosen elections from the manifest.
@@ -6386,11 +6493,11 @@ def cmd_elect(args: argparse.Namespace) -> None:
         # The old path cleared FIRST and then crashed on the missing
         # TTY — the user's saved (non-rebuildable) elections were
         # already gone (REVIEW #4).
-        _die("--redo re-prompts interactively and needs a "
-                 "terminal. Headless: `taxjson elect {0} --reset "
-                 "[--event ID]` to clear, then `taxjson elect {0} --set "
-                 "EVENT_ID=ELECTION` (ids/options: `taxjson elect "
-                 "--pending` after a `run --no-input`).".format(name))
+        fail("--redo asks again, so it needs a terminal",
+             f"Headless: `taxjson elect {name} --reset [--event ID]` to "
+             f"clear, then `taxjson elect {name} --set EVENT_ID=ELECTION` "
+             f"(ids and options: `taxjson elect --pending` after a "
+             f"`taxjson run --no-input`). Nothing was cleared.")
     manifest_backup = (manifest_path.read_bytes()
                        if manifest_path.exists() else None)
     man = Manifest.load(manifest_path)
@@ -6398,15 +6505,16 @@ def cmd_elect(args: argparse.Namespace) -> None:
     # silently widen to ALL elections (REVIEW #34 wiped everything).
     if args.event is not None:
         if args.event not in man.records:
-            _die(f"no election '{args.event}' for account '{name}'. "
-                     f"Run `taxjson elect {name}` to list event ids.")
+            fail(f"no election '{args.event}' for account '{name}'",
+                 f"`taxjson elect {name}` lists the event ids.")
         targets = [args.event]
     else:
         targets = list(man.records)
     for eid in targets:
         man.records.pop(eid, None)
     _save_manifest(man, manifest_path)
-    print(f"Cleared {len(targets)} election(s) from {manifest_path}.")
+    print(f"Cleared {len(targets)} election(s) from "
+          f"{_out.relpath(manifest_path, root)}.")
 
     if args.reset:
         print(f"Next `taxjson run` will re-prompt for them.")
@@ -6445,12 +6553,13 @@ def cmd_elect(args: argparse.Namespace) -> None:
     except (subprocess.CalledProcessError, KeyboardInterrupt):
         if manifest_backup is not None:
             manifest_path.write_bytes(manifest_backup)
-        _die(f"--redo interrupted — previous elections for "
-                 f"'{name}' were restored unchanged.")
+        fail("--redo interrupted",
+             f"The previous elections for '{name}' were restored "
+             f"unchanged.")
     if not ran:
         print(f"No corp-action events to re-elect for '{name}'.")
     else:
-        print(f"\nElections saved. Re-run `taxjson run` to recompute.")
+        print("\nElections saved. Run `taxjson run` to recompute.")
 
 
 def _tx_period_cutoff(period: str):
@@ -14344,14 +14453,14 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
             flags.setdefault(_txt, acct)
     rows.sort(key=lambda r: (r[0], r[1], str(r[2].get("symbol") or "")))
 
-    def _print_flags():
+    from taxjson.lib.out import Doc
+
+    def _flags_section(doc):
         if not flags:
             return
-        print()
-        print(f"MANUAL CHECK — {len(flags)} warn-only flag(s); the books "
-              f"deny nothing for them, decide each by hand:")
-        for _txt in sorted(flags):
-            print(f"  {_txt}")
+        doc.section(f"MANUAL CHECK — {len(flags)} warn-only flag(s)")
+        doc.para("The books deny nothing for them: decide each by hand.")
+        doc.items(sorted(flags))
 
     # Deferred amounts still embedded in OPEN positions (across the
     # same canonical files): ties the historical denials to the present.
@@ -14385,12 +14494,13 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
         scope = f" for account {args.account!r}" if args.account else ""
         # Each country's own term (A2-1366): a Canadian project has
         # superficial losses, not wash sales.
-        print(f"No {'wash sales' if _usa else 'superficial losses'}"
-              f"{scope} — no losses were denied.")
-        _print_flags()
+        doc = Doc(f"No {'wash sales' if _usa else 'superficial losses'}"
+                  f"{scope} — no losses were denied.")
+        _flags_section(doc)
+        doc.print()
         return
 
-    out_lines = [" ".join(header)]
+    body = []
     total_denied = total_perm = 0.0
     for date, acct, t in rows:
         econ = float(t.get("raw_gain") or 0)        # true economic gain/loss
@@ -14398,43 +14508,50 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
         perm = float(t.get("permanently_disallowed") or 0)
         allowed = econ + denied                     # loss you can claim now
         _p, _c = _real_world_legs(t)                # S048-10
-        out_lines.append(" ".join([
+        body.append([
             acct, date or "-", str(t.get("symbol") or "?"),
             qfmt(float(t.get("qty") or 0)), money(_p),
             money(_c), money(econ), money(denied),
-            money(allowed)]))
+            money(allowed)])
         total_denied += denied
         total_perm += perm
 
     base = _base_currency(root)
-    print(f"{'WASH SALES' if _usa else 'SUPERFICIAL LOSSES'} — {base}, "
-          f"tax year {year}, basis: "
-          f"{gains_basis_label(resolved)}  "
-          f"(losses denied under "
-          f"{'the wash-sale rule, §1091' if _usa else 'the superficial-loss rule, s.54'})")
-    print()
-    _print_report_table(out_lines)
+    doc = Doc(f"{'WASH SALES' if _usa else 'SUPERFICIAL LOSSES'} — {base}, "
+              f"tax year {year}, basis: {gains_basis_label(resolved)}")
+    doc.para("Losses denied under "
+             + ("the wash-sale rule, §1091." if _usa
+                else "the superficial-loss rule, s.54."))
+    doc.blank()
+    # Too wide (a long option symbol): COST, then PROCEEDS, go first —
+    # GAIN is their difference.
+    doc.table(header, body, drop=(5, 4), key=(2, 1, 0))
     perm_note = (f" ({money(total_perm)} permanently denied)"
                  if total_perm > 0.005 else "")
-    print(f"\n{len(rows)} "
-          f"{'wash sale(s)' if _usa else 'superficial loss(es)'}; "
-          f"{money(total_denied)} {base} of losses denied{perm_note}.")
+    doc.blank()
+    doc.para(f"{len(rows)} "
+             f"{'wash sale(s)' if _usa else 'superficial loss(es)'}; "
+             f"{money(total_denied)} {base} of losses denied{perm_note}.")
     if embedded > 0.005:
-        print(f"Currently embedded in OPEN positions: {money(embedded)} "
-              f"{base} of deferred losses (see `taxjson list` DEFERRED).")
-    print(("DENIED is added to the cost basis of the repurchased shares "
-           "(you recover it on a later sale)" if _usa else
-           "DENIED is added to the ACB of the substituted property "
-           "(s.53(1)(f); you recover it on a later sale)")
-          + " — except any permanently-denied amount"
-          + (" from a repurchase in an IRA, which is lost for good."
-             if _usa else
-             # An affiliated person's purchase: their own ACB, not
-             # "lost for good" (S033-03 wording; re-audit A2-1233).
-             ": a repurchase in a registered account loses it for good; "
-             "one bought by an affiliated person is added to that "
-             "person's own ACB (s.53(1)(f)), not yours."))
-    _print_flags()
+        doc.para(f"Currently embedded in OPEN positions: {money(embedded)} "
+                 f"{base} of deferred losses (`taxjson list`, DEFERRED).")
+    doc.section("WHAT DENIED MEANS")
+    if _usa:
+        doc.item("DENIED is added to the cost basis of the repurchased "
+                 "shares: you recover it on a later sale.")
+        doc.item("A permanently-denied amount, from a repurchase in an "
+                 "IRA, is lost for good.")
+    else:
+        doc.item("DENIED is added to the ACB of the substituted property "
+                 "(s.53(1)(f)): you recover it on a later sale.")
+        # An affiliated person's purchase: their own ACB, not "lost
+        # for good" (S033-03 wording; re-audit A2-1233).
+        doc.item("A permanently-denied amount is lost for good when the "
+                 "repurchase is in a registered account; one bought by an "
+                 "affiliated person is added to that person's own ACB "
+                 "(s.53(1)(f)), not yours.")
+    _flags_section(doc)
+    doc.print()
 
 
 def cmd_t1135(args: argparse.Namespace) -> None:
@@ -15897,7 +16014,7 @@ def _explain_wash_sales(root: Path, cache: Path,
                      f"(run `taxjson run` first).")
 
     settings = _soft_settings(root)
-    common: List[str] = ["--wash-sales"]
+    common: List[str] = ["--wash-sales", "--layout", "report"]
     common += ["--country", _country(settings)]
     if _country(settings) in ("us", "usa"):
         # The blended table keeps FIFO per account (US-BASIS-01): said
@@ -15955,6 +16072,13 @@ def _explain_wash_sales(root: Path, cache: Path,
     import os as _os
     import tempfile as _tf
     from taxjson.lib.dispatch import run_cmd as _run_cmd
+    _usa = _country(settings) in ("us", "usa")
+    print(f"{'WASH SALES' if _usa else 'SUPERFICIAL LOSSES'} — how each "
+          f"denial was computed, {_base_currency(root)}"
+          + (f", tax year {settings['year']}"
+             if isinstance(settings.get("year"), int) else ""))
+    print()
+    sys.stdout.flush()
     rc = 0
     for grp in groups:
         target, tmp = grp[0], None

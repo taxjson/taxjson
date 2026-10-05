@@ -786,8 +786,10 @@ class TestWashSalesExplain(unittest.TestCase):
             r = _runsub(self._project(tmp), "wash-sales", "margin", "--explain")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("XYZ.TO", r.stdout)
-        self.assertIn("CALCULATION TRACE", r.stdout)
-        self.assertIn("SUPERFICIAL LOSS (ITA s.54)", r.stdout)  # Canada (A2-1352)
+        # The report layout (docs/output-style.md): the ACB pool's
+        # history, then the denial under Canada's own name (A2-1352).
+        self.assertIn("Pool history (ACB trace)", r.stdout)
+        self.assertIn("Superficial loss (ITA s.54)", r.stdout)
         # Color is off by default → no ANSI escapes leak into the output.
         self.assertNotIn("\x1b[", r.stdout)
 

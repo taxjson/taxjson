@@ -216,7 +216,8 @@ class TestCorporateDistributionIncomeAndExplain(unittest.TestCase):
     def test_explain_traces_the_pay_date_roc(self):
         r = _cli(self.root, "wash-sales", "--explain")
         self.assertEqual(r.returncode, 0, r.stderr[-1500:])
-        self.assertIn("raw -$200.00, disallowed +$200.00", r.stdout)
+        # The report layout (docs/output-style.md): "gain: ... (raw, denied)".
+        self.assertIn("(raw -200.00, denied 200.00)", r.stdout)
 
 
 def _ib_futures_csv(cur):

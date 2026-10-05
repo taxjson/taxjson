@@ -293,8 +293,9 @@ class TestCanadaCryptoExplainBlends(unittest.TestCase):
             _run(self, root)
             r = _cli(root, "wash-sales", "--explain")
         self.assertEqual(r.returncode, 0, r.stderr[-1500:])
-        self.assertIn("disallowed +$6,250.00", r.stdout)
-        self.assertIn("SUPERFICIAL LOSS (ITA s.54)", r.stdout)
+        # The report layout (docs/output-style.md).
+        self.assertIn("denied 6,250.00)", r.stdout)
+        self.assertIn("Superficial loss (ITA s.54)", r.stdout)
 
 
 # ------------------------------------------------- standalone audit dates

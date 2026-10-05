@@ -69,6 +69,85 @@ def align_pipe_lines(lines: List[str]) -> List[str]:
     return out
 
 
+# Role of each same-symbol transaction in a superficial-loss window:
+# the trace's long tag, the report layout's short label, and the legend
+# line that explains the short label.
+_ROLE_TAGS = {
+    'loss_sale': ("*** LOSS SALE ***", "loss sale", None),
+    'trigger': ("*** TRIGGER (denied loss added to the ACB) ***", "trigger",
+                "trigger: the denied loss is added to the ACB of these "
+                "units"),
+    'trigger_perm': ("*** TRIGGER (denial PERMANENT — no ACB bump) ***",
+                     "trigger, permanent",
+                     "trigger, permanent: a registered or affiliated "
+                     "holder's units — the denial is permanent, no ACB "
+                     "bump"),
+    'candidate': ("candidate (eligible; not needed — allocation takes "
+                  "buys after the sale first, then earlier buys latest "
+                  "first)", "candidate",
+                  "candidate: eligible but not needed — allocation takes "
+                  "buys after the sale first, then earlier buys latest "
+                  "first"),
+    'cover': ("closes a short — acquires nothing (not a trigger)", "cover",
+              "cover: closes a short — acquires nothing (not a trigger)"),
+    'other_sell': ("other sell in window (may produce its own loss)",
+                   "other sell", "other sell: may produce its own loss"),
+    'other_buy': ("other buy in window", "other buy", None),
+}
+
+
+def _wash_window_rows(txs) -> List[tuple]:
+    """One tuple per window transaction: (day, date, account, action,
+    qty, price, pool_bal, acb/sh, long role tag, short role label, role
+    key) — the first nine are the trace table's columns."""
+    def disp_action(t):
+        if t['action'] == 'BUYSELL':
+            return 'BUY' if t['qty'] > 0 else 'SELL'
+        return t['action']
+
+    rows = []
+    for t in txs:
+        day = f"T{t['days_from_loss']:+d}"
+        # Distinguish sheltered (your own RRSP/TFSA) from affiliated (spouse,
+        # controlled corp, affiliated trust — s.251.1). Both feed superficial-loss
+        # detection but the disallowance lands on different property.
+        if t.get('affiliated'):
+            sheltered = " [affiliated]"
+        elif t.get('sheltered'):
+            sheltered = " [sheltered]"
+        else:
+            sheltered = ""
+        role = t.get('role', '')
+        key = role
+        if role == 'trigger' and (t.get('sheltered') or t.get('affiliated')):
+            key = 'trigger_perm'
+        tag, short, _ = _ROLE_TAGS.get(key, (role, role, None))
+        tag += sheltered
+        short += sheltered
+
+        # Running affiliated balance after this tx (the wash test's
+        # running tally, all accounts pooled).
+        rb = t.get('running_bal')
+        rb_str = f"{rb:+.4f}" if rb is not None else "—"
+
+        # Per-share ACB of the taxable pool after this tx. Sheltered txs
+        # inherit the prior snapshot since they don't move the taxable
+        # pool — that's the correct semantics: the cost basis the pool
+        # carries is unchanged across a sheltered event.
+        acb_sh = t.get('acb_per_share_after')
+        if acb_sh is None:
+            acb_str = "—"
+        elif abs(acb_sh) < 1e-6:
+            acb_str = "—"   # pool empty
+        else:
+            acb_str = f"{acb_sh:.4f}"
+
+        rows.append((day, t['date'], t.get('account', ''), disp_action(t),
+                     f"{t['qty']:+.4f}", f"{t['price']:.4f}",
+                     rb_str, acb_str, tag, short, key))
+    return rows
+
+
 def _render_wash_window(g: Dict[str, Any]) -> List[str]:
     """Render the ±30 day window listing for a Canada wash sale.
 
@@ -127,65 +206,7 @@ def _render_wash_window(g: Dict[str, Any]) -> List[str]:
     if not txs:
         return out
 
-    # Column widths driven by the data.
-    def disp_action(t):
-        if t['action'] == 'BUYSELL':
-            return 'BUY' if t['qty'] > 0 else 'SELL'
-        return t['action']
-
-    rows = []
-    for t in txs:
-        day = f"T{t['days_from_loss']:+d}"
-        # Distinguish sheltered (your own RRSP/TFSA) from affiliated (spouse,
-        # controlled corp, affiliated trust — s.251.1). Both feed superficial-loss
-        # detection but the disallowance lands on different property.
-        if t.get('affiliated'):
-            sheltered = " [affiliated]"
-        elif t.get('sheltered'):
-            sheltered = " [sheltered]"
-        else:
-            sheltered = ""
-        role = t.get('role', '')
-        if role == 'loss_sale':
-            tag = "*** LOSS SALE ***"
-        elif role == 'trigger':
-            if t.get('sheltered') or t.get('affiliated'):
-                tag = "*** TRIGGER (denial PERMANENT — no ACB bump) ***"
-            else:
-                tag = "*** TRIGGER (denied loss added to the ACB) ***"
-        elif role == 'candidate':
-            tag = ("candidate (eligible; not needed — allocation takes "
-                   "buys after the sale first, then earlier buys latest first)")
-        elif role == 'cover':
-            tag = "closes a short — acquires nothing (not a trigger)"
-        elif role == 'other_sell':
-            tag = "other sell in window (may produce its own loss)"
-        elif role == 'other_buy':
-            tag = "other buy in window"
-        else:
-            tag = role
-        tag += sheltered
-
-        # Running affiliated balance after this tx (the wash test's
-        # running tally, all accounts pooled).
-        rb = t.get('running_bal')
-        rb_str = f"{rb:+.4f}" if rb is not None else "—"
-
-        # Per-share ACB of the taxable pool after this tx. Sheltered txs
-        # inherit the prior snapshot since they don't move the taxable
-        # pool — that's the correct semantics: the cost basis the pool
-        # carries is unchanged across a sheltered event.
-        acb_sh = t.get('acb_per_share_after')
-        if acb_sh is None:
-            acb_str = "—"
-        elif abs(acb_sh) < 1e-6:
-            acb_str = "—"   # pool empty
-        else:
-            acb_str = f"{acb_sh:.4f}"
-
-        rows.append((day, t['date'], t.get('account', ''), disp_action(t),
-                     f"{t['qty']:+.4f}", f"{t['price']:.4f}",
-                     rb_str, acb_str, tag))
+    rows = [r[:9] for r in _wash_window_rows(txs)]
 
     headers = ('day', 'date', 'account', 'action', 'qty', 'price',
                'pool_bal', 'acb/sh', 'role')
@@ -523,3 +544,181 @@ def render_summary_table(gains: List[Dict[str, Any]]) -> List[str]:
     return out
 
 
+
+
+# ------------------------------------------------------------------------
+# The report layout (docs/output-style.md): the same facts as
+# render_gain_block, for a reader at a terminal — no '#' comment column, prose
+# wrapped to the width, the pool history and the window as tables that fit
+# (a row too wide becomes a per-record block). `taxjson wash-sales
+# --explain` prints it; render_gain_block stays the layout of trace files
+# and `taxjson audit`.
+
+def _strip_hash(line: str) -> str:
+    return line[1:] if line.startswith('#') else line
+
+
+def _trace_records(trace: List[str], width_: Optional[int],
+                   indent: str) -> List[str]:
+    """The engine's pool-history lines ('# DATE ACTION QTY @ PRICE |
+    Key: value | ...') as an aligned table when it fits, else one block
+    per line: its first cell, then its `key value` cells packed under
+    it. Lines without cells ('--- ... ---' headers) are dropped — the
+    caller prints its own heading."""
+    from taxjson.lib.out import width as _width, wrap
+    w = _width() if width_ is None else width_
+    rows = [_strip_hash(l).strip() for l in trace]
+    rows = [r for r in rows if r and not r.startswith('---')]
+    aligned = [indent + r for r in align_pipe_lines(rows)]
+    if w <= 0 or max((len(r) for r in aligned), default=0) <= w:
+        return aligned
+    out: List[str] = []
+    for r in rows:
+        cells = [c.strip() for c in r.split('|')]
+        out.append(indent + " ".join(cells[0].split()))
+        rest = [" ".join(c.split()).replace(" ", " ")
+                for c in cells[1:] if c]
+        if rest:
+            out.extend(ln.replace(" ", " ") for ln in wrap(
+                "   ".join(rest), w, indent + "    ", indent + "    "))
+    return out
+
+
+def _report_wash_lines(g: Dict[str, Any], width_: Optional[int],
+                       indent: str) -> List[str]:
+    """_render_wash_explanation's facts as a heading and `- ` items."""
+    import re
+    from taxjson.lib.out import wrap
+    out: List[str] = []
+    for line in _render_wash_explanation(g):
+        text = _strip_hash(line)
+        body = text.strip()
+        if not body:
+            continue
+        if body.startswith('---') and body.endswith('---'):
+            # 'SUPERFICIAL LOSS (ITA s.54)' -> 'Superficial loss (ITA
+            # s.54)': a sub-block heading, like the others in the block.
+            head = body.strip('- ').strip()
+            out.append(indent + re.sub(
+                r"^[A-Z][A-Z -]*[A-Z](?= \(|$)",
+                lambda m: m.group(0).capitalize(), head))
+            continue
+        depth = len(text) - len(text.lstrip())
+        sub = "  " if depth > 3 else ""
+        if body.startswith("- "):
+            body = body[2:]
+        # The report's money has no '$' (the figures above it have
+        # none), and one space between words.
+        body = re.sub(r"([+-]?)\$(\d[\d,]*\.\d\d)", r"\1\2",
+                      " ".join(body.split()))
+        out.extend(wrap(body, width_, indent + "  " + sub + "- ",
+                        indent + "  " + sub + "  "))
+    return out
+
+
+def _report_window_lines(g: Dict[str, Any], width_: Optional[int],
+                         indent: str) -> List[str]:
+    """The superficial-loss window: its dates, the test and its result as
+    `label:  value` lines, then the same-symbol activity as a table that
+    fits (pool_bal, context only, is the first column to go) with a
+    legend for the role labels used."""
+    from taxjson.lib.out import fit_table, kv_lines, wrap
+    ww = g.get('wash_window')
+    if not ww:
+        return []
+    bal = float(ww.get('bal_at_end', 0.0) or 0.0)
+    loss_qty = float(ww.get('loss_qty', 0.0) or 0.0)
+    dq = float(ww.get('disallowed_qty', 0.0) or 0.0)
+
+    def _q(x: float) -> str:
+        return f"{x:.4f}" if abs(x) >= 0.01 or x == 0 else f"{x:.8g}"
+    full = abs(dq - loss_qty) <= 1e-6 * max(abs(loss_qty), 1e-9)
+    result = (f"full disallowance — {_q(dq)} of {_q(loss_qty)} units "
+              f"backed by substituted property" if full else
+              f"partial disallowance — {_q(dq)} of {_q(loss_qty)} units "
+              f"backed by substituted property (acquired in the window "
+              f"and still held at T+30)")
+    out = [indent + "Superficial-loss window (±30 days, all accounts)"]
+    out += kv_lines([
+        ("window", f"{ww['window_start']} to {ww['window_end']} (loss "
+                   f"{ww['loss_date']})"),
+        ("test", "ITA s.54, per holder: units a holder ACQUIRED in the "
+                 "window and still holds at T+30 back the denial (holders: "
+                 "your taxable accounts together; each registered or "
+                 "affiliated account on its own)"),
+        ("context", f"all-account quantity at T+30 = {bal:+.4f} (does not "
+                    f"decide the result)"),
+        ("result", result),
+    ], indent + "  ", width_)
+    txs = list(ww.get('transactions') or [])
+    if not txs:
+        return out
+    rows = _wash_window_rows(txs)
+    out.append("")
+    out += fit_table(
+        ["DAY", "DATE", "ACCOUNT", "ACTION", "QTY", "PRICE", "POOL_BAL",
+         "ACB/SH", "ROLE"],
+        [r[:8] + (r[9],) for r in rows],
+        aligns=["<", "<", "<", "<", ">", ">", ">", ">", "<"],
+        drop=(6, 5), width_=width_, indent=indent + "  ")
+    legend = []
+    for key in dict.fromkeys(r[10] for r in rows):
+        line = _ROLE_TAGS.get(key, (None, None, None))[2]
+        if line:
+            legend.append(line)
+    legend.append("POOL_BAL: the running quantity across all accounts "
+                  "(context); ACB/SH: the taxable pool's ACB per unit "
+                  "after the row")
+    out.append("")
+    for ln in legend:
+        out += wrap(ln, width_, indent + "  ", indent + "    ")
+    return out
+
+
+def render_report_block(g: Dict[str, Any], width_: Optional[int] = None,
+                        manual: bool = False) -> List[str]:
+    """One disposition in the report layout: a heading line, its figures
+    as `label:  value` lines, then the pool history, the denial and the
+    window as indented blocks separated by one blank line. [] when the
+    gain carries no trace (as render_gain_block)."""
+    from taxjson.lib.out import fmt_money, fmt_qty, kv_lines, width
+    trace = list(g.get('trace') or [])
+    if not trace:
+        return []
+    w = width() if width_ is None else width_
+    gain = _denoise(g.get('gain', 0.0))
+    raw = _denoise(g.get('raw_gain', gain))
+    dis = _denoise(g.get('disallowed_amount', 0.0))
+    head = " — ".join(str(x) for x in (
+        g.get('symbol', '?'), g.get('date', '?'), g.get('account'))
+        if x)
+    pairs = [("quantity", fmt_qty(g.get('qty', 0.0)))]
+    if manual:
+        pairs.append(("proceeds", fmt_money(abs(float(
+            g.get('proceeds', 0.0) or 0.0)))))
+        pairs.append(("gain", "not computed — no purchase in your files "
+                              "(cost unknown); not in the gains total"))
+    else:
+        g_txt = fmt_money(gain)
+        if dis > 0.001:
+            g_txt += f" (raw {fmt_money(raw)}, denied {fmt_money(dis)})"
+        pairs.append(("gain", g_txt))
+        if g.get('term'):
+            pairs.append(("term", str(g['term'])))
+        if g.get('days_held') is not None:
+            pairs.append(("days held", str(g['days_held'])))
+    pairs.append(("id", (g.get('id') or '')[:16]))
+    out = [head] + kv_lines(pairs, "  ", w)
+    # Canada traces an ACB pool (its lines open with an 'ACB CALCULATION
+    # TRACE' header); the US engine traces basis lots.
+    acb = any('ACB CALCULATION TRACE' in l for l in trace)
+    out += ["", "  Pool history (ACB trace)" if acb
+            else "  Lot history (basis trace)"]
+    out += _trace_records(trace, w, "    ")
+    wash = _report_wash_lines(g, w, "  ")
+    if wash:
+        out += [""] + wash
+    window = _report_window_lines(g, w, "  ")
+    if window:
+        out += [""] + window
+    return out

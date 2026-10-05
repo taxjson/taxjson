@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Changed
+
+- **One output style, first for `elect` and `wash-sales`.** Prose wraps
+  at 100 columns (at most the terminal's width; `TAXJSON_WIDTH` sets it,
+  `0` turns wrapping off), sections are separated by one blank line,
+  lists hang under their text, and a long message is a one-line headline
+  with indented detail lines (docs/output-style.md). `taxjson elect`
+  lists each election with its event, hints and notes aligned and the
+  manifest path relative to the project; `elect --pending` numbers each
+  option with its description, the hint it needs and the ready `--set`
+  line, and ends with one line saying what to do (the checklist shows
+  it); the election prompt wraps its descriptions. `taxjson wash-sales`
+  fits its table to the width (a long symbol drops COST, then PROCEEDS,
+  then lists one record per denial) and explains DENIED as a list;
+  `--explain` prints each denial as a block — figures, the pool history,
+  the denial, the ±30-day window as a table with a legend — instead of
+  the `#`-commented trace (`taxjson audit` and trace files keep it). No
+  figure, `--json` output or file changes.
+
 
 ## v0.18.0 (2026-10-05)
 
