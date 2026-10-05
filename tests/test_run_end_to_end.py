@@ -144,7 +144,7 @@ class TestRunEndToEnd(unittest.TestCase):
             r = _run_cli(root, "run")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             self.assertIn("==> holdings sanity", r.stdout)
-            self.assertIn("accounts: rrsp", r.stdout)
+            self.assertRegex(r.stdout, r"accounts: +rrsp")
             self.assertIn("OK: tickers and quantities agree", r.stdout)
             self.assertNotIn("positions differ", r.stderr)
             # Drift the broker file: warning on stderr, exit still 0.

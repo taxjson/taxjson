@@ -838,15 +838,18 @@ _CURRENT_CMD = ""
 
 
 class _CappedHelpFormatter(argparse.HelpFormatter):
-    """Help wrapped at a readable width. argparse wraps to the FULL
-    terminal width, so on a wide monitor the option descriptions
-    sprawl into hard-to-scan lines; classic ~78 columns reads better
-    and still shrinks with genuinely narrow terminals."""
+    """Help wrapped at the house width (lib/out.width, docs/output-
+    style.md): argparse wraps to the FULL terminal width, so on a wide
+    monitor the option descriptions sprawl into hard-to-scan lines; the
+    house width caps it at 100 columns and still shrinks with a narrow
+    terminal (TAXJSON_WIDTH=N sets it; 0 keeps the house width)."""
 
     def __init__(self, prog, **kw):
-        import shutil
-        kw.setdefault("width",
-                      min(shutil.get_terminal_size().columns - 2, 78))
+        from taxjson.lib.out import WIDTH, width
+        w = width()
+        # A help page is always for a person: unwrapped (width 0) it
+        # would be one line per option, so it keeps the house width.
+        kw.setdefault("width", w if w > 0 else WIDTH)
         super().__init__(prog, **kw)
 
 
@@ -12594,15 +12597,14 @@ def cmd_check_dates(args: argparse.Namespace) -> None:
     root = Path(args.dir).resolve()
     cfg = load_config(root)
     if not (root / "work").is_dir():
-        sys.exit("taxjson check-dates: no work/ — run `taxjson run` first.")
+        _die("no work/ — run `taxjson run` first")
     try:
         doc = analyze(root, cfg, account=args.account)
     except ValueError as e:
         # [settings] futures_settle refused as `run` refuses it (A2-0697).
-        sys.exit(f"taxjson check-dates: {e}")
+        _die(str(e))
     if not doc["sources"]:
-        sys.exit("taxjson check-dates: no parsed sources in work/ — run "
-                 "`taxjson run` first.")
+        _die("no parsed sources in work/ — run `taxjson run` first")
     if not args.account:
         _warn_accounts_without_books(root, _discover_tx_accounts(root / "work"),
                                      "check-dates", "parsed source")
@@ -12627,20 +12629,19 @@ def cmd_edge_cases(args: argparse.Namespace) -> None:
     root = Path(args.dir).resolve()
     cfg = load_config(root)
     if not (root / "work").is_dir():
-        sys.exit("taxjson edge-cases: no work/ directory — run `taxjson run` first.")
+        _die("no work/ directory — run `taxjson run` first")
     _require_books(root, args.account)
     if args.margin < 0:
         # A negative margin emptied the window-edge section at rc 0
         # (audit A2-1198); winners --top refuses < 1 the same way.
-        sys.exit(f"taxjson edge-cases: --margin must be >= 0, got "
-                 f"{args.margin}")
+        _die(f"--margin must be >= 0, got {args.margin}")
     try:
         doc = analyze(root, cfg, margin=args.margin, account=args.account)
     except ValueError as e:
         # An unreadable work file, a damaged row (lib/json_input's row
         # funnel, A2-0330) or an invalid futures_settle: named, never a
         # silent "None." or a traceback (audit A2-1199, A2-0697).
-        sys.exit(f"taxjson edge-cases: {e}")
+        _die(str(e))
     if getattr(args, "json", False):
         _json_out(doc)
         return
@@ -12827,13 +12828,13 @@ def cmd_checklist(args: argparse.Namespace) -> None:
     settings = cfg.get("settings") or {}
     year = settings.get("year")
     if not isinstance(year, int):
-        sys.exit("taxjson checklist: [settings] year is required")
+        _die("[settings] year is required in taxjson.toml")
     country = _country(settings)
 
     ids = [s[0] for s in cl.STEPS]
     if args.note and not (args.done or args.skip):
-        sys.exit("taxjson checklist: --note goes with --done or --skip "
-                 "(it is stored with the mark).")
+        _die("--note goes with --done or --skip (it is stored with "
+             "the mark)")
     # Every repeated --done/--skip/--undo is recorded (only the last one
     # was, silently — A2-1159); an unknown id stops before any is written.
     marks = ([(st, "done") for st in (args.done or [])]
@@ -12841,8 +12842,7 @@ def cmd_checklist(args: argparse.Namespace) -> None:
              + [(st, None) for st in (args.undo or [])])
     for step, _m in marks:
         if step not in ids:
-            sys.exit(f"taxjson checklist: unknown step {step!r} "
-                     f"(ids: {', '.join(ids)})")
+            _die(f"unknown step {step!r}", f"Step ids: {', '.join(ids)}.")
     recorded: List[Dict[str, Any]] = []
     for step, mark in marks:
         if step:
@@ -12850,10 +12850,9 @@ def cmd_checklist(args: argparse.Namespace) -> None:
                 changed = cl.set_override(root, year, step, mark,
                                           note=args.note or "")
             except KeyError:
-                sys.exit(f"taxjson checklist: unknown step {step!r} "
-                         f"(ids: {', '.join(ids)})")
+                _die(f"unknown step {step!r}", f"Step ids: {', '.join(ids)}.")
             except cl.StateFileError as e:
-                sys.exit(f"taxjson checklist: {e}")
+                _die(str(e))
             verb = {"done": "marked done", "skipped": "marked skipped",
                     None: "mark removed"}[mark]
             if not changed:
@@ -12868,7 +12867,7 @@ def cmd_checklist(args: argparse.Namespace) -> None:
         try:
             existed = cl.reset_state(root)
         except cl.StateFileError as e:
-            sys.exit(f"taxjson checklist: {e}")
+            _die(str(e))
         recorded.append({"step": None, "mark": "reset", "changed": existed})
         if not args.json:
             print(f"taxjson checklist: {cl.STATE_FILE} removed." if existed
@@ -12885,29 +12884,29 @@ def cmd_checklist(args: argparse.Namespace) -> None:
                  run_sub=cl.default_run_sub(root))
     only = [args.only] if args.only else None
     if only and args.only not in ids:
-        sys.exit(f"taxjson checklist: unknown step {args.only!r} "
-                 f"(ids: {', '.join(ids)})")
+        _die(f"unknown step {args.only!r}", f"Step ids: {', '.join(ids)}.")
     if only and args.quick:
-        print("taxjson checklist: --only names one step; ignoring --quick.",
-              file=sys.stderr)
+        from taxjson.lib.out import note as _note
+        _note("--only names one step; ignoring --quick.",
+              prog="taxjson checklist")
         args.quick = False
 
     if args.walk:
         if not sys.stdin.isatty():
-            sys.exit("taxjson checklist --walk needs a terminal (use "
-                     "`taxjson checklist` for the report, --done/--skip to "
-                     "record steps).")
+            _die("--walk needs a terminal",
+                 "Use `taxjson checklist` for the report, --done/--skip to "
+                 "record steps.")
         try:
             _checklist_walk(ctx, cl, only, quick=args.quick)
         except cl.StateFileError as e:
-            sys.exit(f"taxjson checklist: {e}")
+            _die(str(e))
         return
 
     try:
         results = cl.evaluate(ctx, only=only, quick=args.quick,
                               progress=cl.stderr_progress)
     except cl.StateFileError as e:
-        sys.exit(f"taxjson checklist: {e}")
+        _die(str(e))
     if args.json:
         print(_json.dumps(cl.to_json(results, year, country), indent=2))
     else:
@@ -12917,9 +12916,12 @@ def cmd_checklist(args: argparse.Namespace) -> None:
 
 
 def _walk_interrupted(sid: str, ctx) -> None:
-    print(f"\ntaxjson checklist: interrupted at {sid} — it is not "
-          f"recorded; the marks made so far are kept in "
-          f"{ctx.root / 'checklist.json'}.", file=sys.stderr)
+    from taxjson.lib.out import error
+    print(file=sys.stderr)
+    error(f"interrupted at {sid} — it is not recorded",
+          prog="taxjson checklist",
+          details=[f"The marks made so far are kept in "
+                   f"{ctx.root / 'checklist.json'}."])
     sys.exit(1)
 
 
@@ -12929,10 +12931,12 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
     take a minute on a big book), with why it matters and what was found,
     then the user's decision is recorded. Ends with the summary; exit 1
     while anything is still open (also after [q]uit)."""
+    from taxjson.lib.out import kv_lines, wrap
     country = _country(ctx.settings)
     ids = [s[0] for s in cl.STEPS if not only or s[0] in only]
     keys = "[d]one  [s]kip  [r]e-check  [n]ext  [q]uit  (Enter = next)"
-    print(f"Filing checklist walk. For each open step: {keys}\n")
+    print("FILING CHECKLIST WALK")
+    print(f"For each open step: {keys}\n")
     seen = 0
     quit_early = False
     left_open = 0
@@ -12940,8 +12944,10 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
         r = cl.evaluate(ctx, only=[sid], quick=quick,
                         progress=cl.stderr_progress)[0]
         if r.passed:
-            print(f"    {cl.SYMBOL[r.effective]} {sid}: {r.detail}"
-                  + (f" (marked {r.override})" if r.override else ""))
+            for ln in wrap(f"{cl.SYMBOL[r.effective]} {sid}: {r.detail}"
+                           + (f" (marked {r.override})" if r.override
+                              else ""), None, "  ", "      "):
+                print(ln)
             continue
         seen += 1
         _, stage, title, cmd, why = cl.step_meta(sid, country)
@@ -12949,17 +12955,19 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
         show = True
         while True:
             if show:
-                print(f"\n--- [{stage}. {stage_name}]  {sid}")
-                print(f"    {title}")
-                print(f"    why:     {why}")
-                print(f"    proves:  {cmd}")
-                print(f"    found:   {cl.SYMBOL[r.effective]} {r.detail}"
-                      + (f" (marked {r.override}"
-                         + (f": {r.note}" if r.note else "") + ")"
-                         if r.override else ""))
+                print(f"\n{stage}. {stage_name.upper()} — {sid}")
+                for ln in wrap(title, None, "  ", "  "):
+                    print(ln)
+                for ln in kv_lines([
+                        ("why", why), ("proves", cmd),
+                        ("found", f"{cl.SYMBOL[r.effective]} {r.detail}"
+                         + (f" (marked {r.override}"
+                            + (f": {r.note}" if r.note else "") + ")"
+                            if r.override else ""))], "  "):
+                    print(ln)
             show = False
             try:
-                ans = input("    > ").strip().lower()
+                ans = input("  > ").strip().lower()
             except EOFError:
                 print()
                 quit_early = True
@@ -12971,8 +12979,8 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
                 # (re-audit A2-1394): this step is not recorded, the
                 # marks made so far are kept.
                 try:
-                    note = input("    note (optional): " if ans[0] == "d"
-                                 else "    reason (optional): ").strip()
+                    note = input("  note (optional): " if ans[0] == "d"
+                                 else "  reason (optional): ").strip()
                 except (EOFError, KeyboardInterrupt):
                     _walk_interrupted(sid, ctx)
             if ans in ("q", "quit"):
@@ -12980,27 +12988,29 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
                 break
             if ans in ("d", "done"):
                 cl.set_override(ctx.root, ctx.year, sid, "done", note=note)
-                print(f"    recorded: {sid} done")
+                print(f"  recorded: {sid} done")
                 break
             if ans in ("s", "skip"):
                 cl.set_override(ctx.root, ctx.year, sid, "skipped", note=note)
-                print(f"    recorded: {sid} skipped")
+                print(f"  recorded: {sid} skipped")
                 break
             if ans in ("r", "recheck", "re-check"):
                 r = cl.evaluate(ctx, only=[sid], progress=cl.stderr_progress)[0]
                 if r.passed:
-                    print(f"    now: {cl.SYMBOL[r.effective]} {r.detail}")
+                    for ln in wrap(f"now: {cl.SYMBOL[r.effective]} "
+                                   f"{r.detail}", None, "  ", "    "):
+                        print(ln)
                     break
                 show = True
                 continue
             if ans in ("", "n", "next"):
                 left_open += 1
                 break
-            print(f"    unknown key {ans!r} — {keys}")
+            print(f"  unknown key {ans!r} — {keys}")
         if quit_early:
             break
     print(f"\n{seen} open step(s) visited. Summary "
-          f"(`taxjson checklist` re-checks everything):")
+          f"(`taxjson checklist` re-checks everything):\n")
     results = cl.evaluate(ctx, only=only, quick=True)
     print(cl.render(results, ctx.year, country, quick=True))
     if quit_early or left_open:
@@ -13016,6 +13026,12 @@ def _mask_ids_in_path(path: str) -> str:
     name = re.sub(r"(?<![A-Za-z0-9])(U\d{5,}|\d{5,})(?!\d)",
                   lambda m: m.group(1)[:2] + "***", name)
     return head + sep + name
+
+
+def _sanity_note(text: str) -> None:
+    """`taxjson sanity: note: ...` on stderr, wrapped (lib/out)."""
+    from taxjson.lib.out import note
+    note(text, prog="taxjson sanity")
 
 
 def cmd_sanity(args: argparse.Namespace) -> None:
@@ -13066,12 +13082,12 @@ def cmd_sanity(args: argparse.Namespace) -> None:
     cost_tol = float(1.0 if getattr(args, "cost_tolerance", None) is None
                      else args.cost_tolerance)
     if tomllib is None:
-        sys.exit("taxjson sanity: needs tomllib (py3.11+) or tomli")
+        _die("needs tomllib (py3.11+) or tomli")
 
     # ---- taxjson side ---------------------------------------------------
     resolved = resolve_gains_files(cache)
     if not resolved:
-        sys.exit(f"taxjson sanity: no gains files in {cache} "
+        _die(f"no gains files in {cache} "
                  f"(run `taxjson run` first).")
     basis = gains_basis_label(resolved)
     tax: Dict[str, Dict[str, float]] = {}
@@ -13082,8 +13098,8 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             if not isinstance(data, dict):
                 raise ValueError("not a gains document")
         except (OSError, ValueError) as e:
-            print(f"taxjson: warning: could not read {f}: {e}",
-                  file=sys.stderr)
+            from taxjson.lib.out import warn as _warn
+            _warn(f"could not read {f}: {e}", prog="taxjson sanity")
             unreadable[acct] = f"work/{f.name}: {e}"
             continue
         book: Dict[str, float] = {}
@@ -13106,10 +13122,10 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         if name in unreadable:
             # Its book exists but is corrupt: say so, not "not an
             # account" (R1-338 — that sent the user to the config).
-            sys.exit(f"taxjson sanity: {ctx}: the books of {name!r} "
+            _die(f"{ctx}: the books of {name!r} "
                      f"cannot be read ({unreadable[name]}) — re-run "
                      f"`taxjson run` to rebuild them.")
-        sys.exit(f"taxjson sanity: {ctx}: {name!r} is not an account "
+        _die(f"{ctx}: {name!r} is not an account "
                  f"(have: {', '.join(sorted(tax))})")
 
     def _resolved(name: str) -> Optional[Path]:
@@ -13146,11 +13162,10 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                 # Summing a duplicate DOUBLED its positions and every
                 # one showed as a 2x QTY_MISMATCH — while the header
                 # printed the deduplicated list. Count once, say so.
-                print(f"taxjson sanity: note: account {acct!r} given "
-                      f"more than once — counted once.",
-                      file=sys.stderr)
+                _sanity_note(f"account {acct!r} given more than once — "
+                             f"counted once.")
             else:
-                sys.exit(f"taxjson sanity: account {acct!r} appears in "
+                _die(f"account {acct!r} appears in "
                          f"more than one group ({owner} and {gname})")
         if path is not None:
             owner = placed_files.get(path)
@@ -13158,12 +13173,10 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                 placed_files[path] = gname
                 group["files"].append(path)
             elif owner == gname:
-                print(f"taxjson sanity: note: file "
-                      f"{_mask_ids_in_path(path.name)} given "
-                      f"more than once — counted once.",
-                      file=sys.stderr)
+                _sanity_note(f"file {_mask_ids_in_path(path.name)} given "
+                             f"more than once — counted once.")
             else:
-                sys.exit(f"taxjson sanity: file "
+                _die(f"file "
                          f"{_mask_ids_in_path(path.name)} appears in "
                          f"more than one group ({owner} and {gname})")
 
@@ -13182,12 +13195,12 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                                                                 root)
         if not config_groups:
             for n in config_notes:
-                print(f"taxjson sanity: note: {n}", file=sys.stderr)
+                _sanity_note(n)
             if config_notes:
-                sys.exit("taxjson sanity: none of the `holdings` files "
+                _die("none of the `holdings` files "
                          "in taxjson.toml could be checked (see the "
                          "notes above) — fix the paths.")
-            sys.exit("taxjson sanity: no arguments, and no account in "
+            _die("no arguments, and no account in "
                      "taxjson.toml declares `holdings = [...]` (paths "
                      "of its broker positions .toml files). Either "
                      "pass items — `taxjson sanity margin=positions.toml` — "
@@ -13208,7 +13221,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             names = [x for x in lhs.split("+") if x.strip()]
             paths = [x for x in rhs.split("+") if x.strip()]
             if not names or not paths:
-                sys.exit(f"taxjson sanity: {a!r}: paired form is "
+                _die(f"{a!r}: paired form is "
                          f"ACCOUNT[+ACCOUNT...]=FILE[+FILE...]")
             key = tuple(sorted(dict.fromkeys(
                 _account(n.strip(), a) for n in names)))
@@ -13227,13 +13240,13 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         if p2 is not None:
             _place(bare, "the aggregate group", None, p2)
             continue
-        sys.exit(f"taxjson sanity: {_mask_ids_in_path(a)!r} is neither "
+        _die(f"{_mask_ids_in_path(a)!r} is neither "
                  f"an account "
                  f"(have: {', '.join(sorted(tax))}) nor an existing "
                  f".toml file")
     if bare["accounts"] or bare["files"]:
         if not (bare["accounts"] and bare["files"]):
-            sys.exit("taxjson sanity: the aggregate form needs at least "
+            _die("the aggregate form needs at least "
                      "one ACCOUNT and one FILE.toml (free mix, e.g. "
                      "`taxjson sanity margin rrsp margin.toml "
                      "rrsp.toml`), or pair them: "
@@ -13242,7 +13255,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
     if bare["accounts"]:
         ordered.append(bare)
     if not ordered:
-        sys.exit("taxjson sanity: nothing to check")
+        _die("nothing to check")
 
     # Same consolidation the canonical pipeline applied: GLOBAL+TOBASE
     # renames from ticker.map; options follow their underlying.
@@ -13260,9 +13273,9 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             native_renames = merge_renames(load_map_file(map_file),
                                            to_base=False)
         except Exception as e:
-            print(f"taxjson sanity: warning: ticker.map not applied "
-                  f"({e}) — cross-listed symbols may mismatch.",
-                  file=sys.stderr)
+            from taxjson.lib.out import warn as _warn
+            _warn(f"ticker.map not applied ({e}) — cross-listed symbols "
+                  f"may mismatch.", prog="taxjson sanity")
             renames = None
 
     def _mapped(sym: str) -> str:
@@ -13302,7 +13315,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                 try:
                     rep_ = read_positions(path)
                 except PositionsReportError as e:
-                    _die_input(f"taxjson sanity: {e}")
+                    _die_input(str(e))
                 reports_of[path] = rep_
                 labels.append(", ".join(rep_.accounts) or path.stem)
                 for r in rep_.rows:
@@ -13329,11 +13342,11 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                           else path.stem)
             holdings = doc.get("holding") if isinstance(doc, dict) else None
             if not isinstance(holdings, list):
-                sys.exit(f"taxjson sanity: {path.name} has no [[holding]] "
+                _die(f"{path.name} has no [[holding]] "
                          f"array (a holdings file has [[holding]] tables)")
             for h in holdings:
                 if not isinstance(h, dict):
-                    sys.exit(f"taxjson sanity: {path.name}: a [[holding]] "
+                    _die(f"{path.name}: a [[holding]] "
                              f"entry is not a table")
                 if (str(h.get("asset_type") or "")).lower() == "cash":
                     continue
@@ -13344,7 +13357,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                     # A missing or blank quantity read as 0 and the row
                     # vanished: sanity said OK and the checklist ticked
                     # the step (S044-18).
-                    sys.exit(f"taxjson sanity: {path.name}: "
+                    _die(f"{path.name}: "
                              f"{sym or '?'}: a [[holding]] row has no "
                              f"quantity — fix the file (an unreadable "
                              f"row is never skipped).")
@@ -13355,15 +13368,15 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                         raise TypeError("bool")
                     q = float(_qraw)
                 except (TypeError, ValueError):
-                    sys.exit(f"taxjson sanity: {path.name}: {sym or '?'}: "
+                    _die(f"{path.name}: {sym or '?'}: "
                              f"quantity {h.get('quantity')!r} is not a number")
                 if q != q or q in (float("inf"), float("-inf")):
-                    sys.exit(f"taxjson sanity: {path.name}: {sym or '?'}: "
+                    _die(f"{path.name}: {sym or '?'}: "
                              f"quantity is not finite")
                 if not sym and abs(q) > 1e-12:
                     _cus = str(h.get("cusip") or h.get("isin")
                                or "").strip()
-                    sys.exit(f"taxjson sanity: {path.name}: a [[holding]] "
+                    _die(f"{path.name}: a [[holding]] "
                              f"row has quantity {q:g} but no symbol"
                              + (f" ({_cus})" if _cus else "")
                              + " — it cannot be compared; fix the file.")
@@ -13609,25 +13622,29 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         })
         raise SystemExit(0 if not all_rows else 1)
 
+    from taxjson.lib.out import kv_lines as _kv, wrap as _wrap
     for n in config_notes:
-        print(f"taxjson sanity: note: {n}", file=sys.stderr)
+        _sanity_note(n)
     multi = len(ordered) > 1 or any(g["paired"] for g in ordered)
     _what = ("external holdings TOML"
              if all(p2.suffix.lower() == ".toml"
                     for g in ordered for p2 in g["files"])
              else "the broker's positions")
-    print(f"SANITY — taxjson positions (basis: {basis}) vs {_what} "
-          f"({'paired' if multi else 'loose aggregate'} check)")
-    print()
+    for ln in _wrap(f"SANITY — taxjson positions (basis: {basis}) vs "
+                    f"{_what} ({'paired' if multi else 'loose aggregate'} "
+                    f"check)", None, "", "  "):
+        print(ln)
     for grp in ordered:
+        print()
         tag = ("paired" if grp["paired"] else "aggregate") if multi else ""
-        print(f"  accounts: {', '.join(sorted(grp['accounts']))}  "
-              f"({grp['positions']} combined position(s))"
-              + (f"  [{tag}]" if tag else ""))
+        pairs = [("accounts", f"{', '.join(sorted(grp['accounts']))}  "
+                              f"({grp['positions']} combined position(s))"
+                              + (f"  [{tag}]" if tag else ""))]
         if grp["as_of"]:
-            print(f"  as of:    {grp['as_of']} — the report's date; the "
-                  f"books' positions on that day (rebuilt from "
-                  f"work/<account>_base.json)")
+            pairs.append(("as of", f"{grp['as_of']} — the report's date; "
+                                   f"the books' positions on that day "
+                                   f"(rebuilt from "
+                                   f"work/<account>_base.json)"))
         # One line per file, PATH first: the label alone (the file's
         # meta.account, else its stem) didn't say which export was
         # actually read — a stale or wrong path is the first thing to
@@ -13635,51 +13652,64 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         for p2, lbl in zip(grp["files"], grp["labels"]):
             shown = str(p2)
             try:
-                shown = "~/" + str(p2.relative_to(Path.home()))
-            except ValueError:
-                pass
+                # Inside the project: relative to it (lib/out.relpath).
+                shown = str(p2.resolve().relative_to(root))
+            except (ValueError, OSError):
+                try:
+                    shown = "~/" + str(p2.relative_to(Path.home()))
+                except ValueError:
+                    pass
             # A holdings file named after the broker account put the
             # real account number on the console (R1-351): the file
             # name's ids are masked like the IB warning masks them.
             shown = _mask_ids_in_path(shown)
             extra = (f"  (account {_mask_ids_in_path(lbl)})"
                      if lbl not in p2.stem else "")
-            print(f"  file:     {shown}{extra}")
+            pairs.append(("file", f"{shown}{extra}"))
         for a, b in grp["via_underlying"]:
-            print(f"  -- option {a} matched taxjson's {b} via its "
-                  f"underlying (same contract, different option root)")
+            pairs.append(("option", f"{a} matched taxjson's {b} via its "
+                                    f"underlying (same contract, "
+                                    f"different option root)"))
         if multi:
-            if grp["rows"]:
-                print(f"  -> {len(grp['rows'])} discrepancy(ies)")
-            else:
-                print("  -> OK")
-            print()
-    for a in uncovered:
-        print(f"  -- account {a} not included "
-              f"({len(tax[a])} position(s) unchecked)")
-    if not multi or uncovered:
+            pairs.append(("result", f"{len(grp['rows'])} discrepancy(ies)"
+                                    if grp["rows"] else "OK"))
+        for ln in _kv(pairs, "  "):
+            print(ln)
+    if uncovered:
         print()
+        for a in uncovered:
+            print(f"  - account {a} not included "
+                  f"({len(tax[a])} position(s) unchecked)")
+    print()
     if uncovered and not items:
         # The checklist's sanity step reads this line: "done" while
         # whole accounts were never tied was a false certificate
         # (S044-19).
-        print(f"UNCHECKED: account(s) "
-              f"{', '.join(f'{a} ({len(tax[a])} position(s))' for a in uncovered)}"
-              f" have open positions but no `holdings` file in "
-              f"taxjson.toml — not compared with the broker.")
+        for ln in _wrap(
+                f"UNCHECKED: account(s) "
+                f"{', '.join(f'{a} ({len(tax[a])} position(s))' for a in uncovered)}"
+                f" have open positions but no `holdings` file in "
+                f"taxjson.toml — not compared with the broker.",
+                None, "", "  "):
+            print(ln)
     if config_notes:
         # A configured holdings file that could not be read drops its
         # whole account from the compare: never let that read as a
         # clean check (the checklist and run's auto-sanity key on this
         # line — 2026-09 audit R1-324).
-        print(f"INCOMPLETE: {len(config_notes)} account(s) with "
-              f"`holdings` in taxjson.toml were NOT checked (see the "
-              f"notes on stderr) — fix the paths, then re-run.")
+        for ln in _wrap(
+                f"INCOMPLETE: {len(config_notes)} account(s) with "
+                f"`holdings` in taxjson.toml were NOT checked (see the "
+                f"notes on stderr) — fix the paths, then re-run.",
+                None, "", "  "):
+            print(ln)
     if not all_rows:
         print("OK: tickers and quantities agree"
               + (" in every checked group." if config_notes
                  else " in every group." if multi else "."))
     else:
+        if (uncovered and not items) or config_notes:
+            print()
         out_lines = [("ACCOUNTS SYMBOL ISSUE TAXJSON HOLDINGS DIFF"
                       if multi else
                       "SYMBOL ISSUE TAXJSON HOLDINGS DIFF")]
@@ -13690,18 +13720,21 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             if multi:
                 cells.insert(0, "+".join(r["accounts"]))
             out_lines.append(" ".join(cells))
-        _print_report_table(out_lines)
+        _print_report_table(out_lines, fit=True, key=(0, 1) if multi
+                            else 0)
         print(f"\n{len(all_rows)} discrepancy(ies).")
         if any(r["holdings_qty"] - r["taxjson_qty"] > 0 for r in all_rows):
             # Fewer shares in the books than at the broker: on a first
             # project that is history the download does not reach
             # (new-user study), not a booking bug.
-            print("Fewer shares in taxjson than at the broker usually "
-                  "means missing history: purchases from before your "
-                  "download starts, or shares transferred in. See "
-                  "`taxjson find-missing-history`, `taxjson transfers` "
-                  "and docs/getting-started.md step 5. A trade after "
-                  "your last export is the other usual cause.")
+            for ln in _wrap(
+                    "Fewer shares in taxjson than at the broker usually "
+                    "means missing history: purchases from before your "
+                    "download starts, or shares transferred in. See "
+                    "`taxjson find-missing-history`, `taxjson transfers` "
+                    "and docs/getting-started.md step 5. A trade after "
+                    "your last export is the other usual cause."):
+                print(ln)
     _sanity_print_extras(ordered, cost_all, cost_diffs, cost_matched,
                          cost_na, income_all, multi,
                          brief=getattr(args, "brief_extras", False))
@@ -13835,6 +13868,7 @@ def cmd_opening(args: argparse.Namespace) -> None:
     replaces the account's earlier rows of those symbols
     (lib/opening; tax-logic CA-OPEN-01..03 / US-OPEN-01..03)."""
     from taxjson.lib.brokerages.base import shown_name
+    from taxjson.lib.out import note as _note, warn as _warn, wrap as _wrap
     from taxjson.lib.positions_reports import (PositionsReportError,
                                                kind_label, read_positions)
     root = Path(args.dir).resolve()
@@ -13846,39 +13880,37 @@ def cmd_opening(args: argparse.Namespace) -> None:
     accounts = cfg.get("accounts") or {}
     name = args.account
     if name not in accounts:
-        _die(f"taxjson opening: {name!r} is not an account in "
-             f"taxjson.toml (have: {', '.join(sorted(accounts)) or '-'})")
+        _die(f"{name!r} is not an account in taxjson.toml",
+             f"Accounts: {', '.join(sorted(accounts)) or '-'}.")
     if (accounts.get(name) or {}).get("crypto"):
-        _die(f"taxjson opening: account {name} is a crypto account — an "
-             f"opening balance is for share accounts (enter the coins' "
-             f"purchases as BUYSELL lines).")
+        _die(f"account {name} is a crypto account",
+             "An opening balance is for share accounts: enter the coins' "
+             "purchases as BUYSELL lines.")
     path = Path(args.file).expanduser()
     if not path.is_file():
-        _die_input(f"taxjson opening: {_mask_ids_in_path(str(path))} is "
-                   f"not a file")
+        _die_input(f"{_mask_ids_in_path(str(path))} is not a file")
     try:
         report = read_positions(path)
     except PositionsReportError as e:
-        _die_input(f"taxjson opening: {e}")
+        _die_input(str(e))
     snapshot = args.date or report.as_of
     if not snapshot:
-        _die(f"taxjson opening: {shown_name(path)} does not say which day "
-             f"its positions are for — pass --date YYYY-MM-DD (the "
-             f"statement's date).")
+        _die(f"{shown_name(path)} does not say which day its positions "
+             f"are for",
+             "Pass --date YYYY-MM-DD (the statement's date).")
     try:
         datetime.strptime(snapshot, "%Y-%m-%d")
     except ValueError:
-        _die(f"taxjson opening: --date {snapshot!r} is not YYYY-MM-DD")
+        _die(f"--date {snapshot!r} is not YYYY-MM-DD")
     if args.date and report.as_of and args.date != report.as_of:
-        print(f"taxjson opening: note: the report is as of "
-              f"{report.as_of}; the opening is dated {args.date} as "
-              f"given (--date).", file=sys.stderr)
+        _note(f"the report is as of {report.as_of}; the opening is dated "
+              f"{args.date} as given (--date).", prog="taxjson opening")
     brokers = sorted({r.account for r in report.rows if r.account})
     if len(brokers) > 1:
-        _die(f"taxjson opening: {shown_name(path)} lists "
-             f"{len(brokers)} broker accounts ({', '.join(brokers)}) — "
-             f"an opening is one taxjson account's: export each broker "
-             f"account's positions separately (or split the file).")
+        _die(f"{shown_name(path)} lists {len(brokers)} broker accounts "
+             f"({', '.join(brokers)})",
+             "An opening is one taxjson account's: export each broker "
+             "account's positions separately (or split the file).")
     lines, skipped, notes = _opening_lines(report, country=country,
                                            base_currency=base,
                                            snapshot=snapshot)
@@ -13902,10 +13934,10 @@ def cmd_opening(args: argparse.Namespace) -> None:
                     and parts[2].upper() in syms:
                 clash.append((f.name, parts[2].upper()))
     if clash:
-        _die(f"taxjson opening: inputs/{name}/{clash[0][0]} already has "
-             f"OPENING lines for {', '.join(sorted({s for _f, s in clash})[:6])}"
-             f" — one opening per symbol per account (remove that file, "
-             f"or the lines, first).")
+        _die(f"inputs/{name}/{clash[0][0]} already has OPENING lines for "
+             f"{', '.join(sorted({s for _f, s in clash})[:6])}",
+             "One opening per symbol per account: remove that file, or "
+             "the lines, first.")
     header = [
         f"# Opening balance of account {name} on {snapshot} "
         f"(`taxjson opening`).",
@@ -13933,8 +13965,8 @@ def cmd_opening(args: argparse.Namespace) -> None:
         pass
     else:
         if out.exists() and not args.force:
-            _die(f"taxjson opening: inputs/{name}/{out.name} exists — "
-                 f"pass --force to replace it (the old file is kept as "
+            _die(f"inputs/{name}/{out.name} exists",
+                 f"Pass --force to replace it (the old file is kept as "
                  f"{out.name}.bak, or the next free .bakN).")
         acct_dir.mkdir(parents=True, exist_ok=True)
         if out.is_file():
@@ -13943,27 +13975,30 @@ def cmd_opening(args: argparse.Namespace) -> None:
             # M1).
             from taxjson.lib.safe_write import backup_copy
             bak = backup_copy(out)
-            print(f"taxjson opening: kept the previous {out.name} as "
-                  f"{bak.name}", file=sys.stderr)
+            _note(f"kept the previous {out.name} as {bak.name}",
+                  prog="taxjson opening")
         from taxjson.lib.cli_diag import write_text_atomic
         write_text_atomic(out, text)
     for n in report.notes + notes:
-        print(f"taxjson opening: note: {n}", file=sys.stderr)
+        _note(n, prog="taxjson opening")
     for sym, why in skipped:
-        print(f"taxjson opening: skipped {sym}: {why}", file=sys.stderr)
+        _warn(f"skipped {sym}: {why}", prog="taxjson opening")
     if not lines:
-        _die(f"taxjson opening: no position of {shown_name(path)} could "
-             f"be written (see above) — nothing written.")
+        _die(f"no position of {shown_name(path)} could be written (see "
+             f"above) — nothing written")
     where = ("(dry run — nothing written)" if getattr(args, "dry_run",
                                                        False)
              else f"-> inputs/{name}/{out.name}")
-    print(f"{len(lines)} OPENING line(s) for account {name} as of "
-          f"{snapshot} {where}"
-          + (f"; {len(skipped)} position(s) skipped (see above)"
-             if skipped else ""))
+    for ln in _wrap(f"{len(lines)} OPENING line(s) for account {name} as "
+                    f"of {snapshot} {where}"
+                    + (f"; {len(skipped)} position(s) skipped (see above)"
+                       if skipped else "")):
+        print(ln)
     if not getattr(args, "dry_run", False):
-        print("Next: `taxjson run`, then `taxjson find-missing-history` "
-              "and `taxjson sanity` (it compares quantities and costs).")
+        for ln in _wrap("Next: `taxjson run`, then `taxjson "
+                        "find-missing-history` and `taxjson sanity` (it "
+                        "compares quantities and costs)."):
+            print(ln)
 
 
 def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
@@ -13974,26 +14009,33 @@ def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
     `taxjson run` ends with): one line each, the tables are
     `taxjson sanity`'s."""
     from taxjson.lib.positions_check import REASON_TEXT
+    from taxjson.lib.out import wrap as _wrap
+
+    def _p(text: str, indent: str = "", hang: str = "  ") -> None:
+        # Wrapped at the house width; captured (the checklist reads the
+        # last line) it stays one line, as before.
+        for ln in _wrap(text, None, indent, hang):
+            print(ln)
     compared = cost_matched + len(cost_diffs)
     if brief:
         if cost_diffs:
-            print(f"COST: {len(cost_diffs)} of {compared} position(s) "
-                  f"differ from the reports' cost "
-                  f"({sum(1 for c in cost_diffs if c['reasons'] == ['unexplained'])}"
-                  f" unexplained) — `taxjson sanity` lists them with "
-                  f"their reasons (informational).")
+            _p(f"COST: {len(cost_diffs)} of {compared} position(s) "
+               f"differ from the reports' cost "
+               f"({sum(1 for c in cost_diffs if c['reasons'] == ['unexplained'])}"
+               f" unexplained) — `taxjson sanity` lists them with "
+               f"their reasons (informational).")
         if income_all:
-            print(f"INCOME: {len(income_all)} dividend row(s) state a "
-                  f"share count the books did not hold — `taxjson "
-                  f"sanity` lists them.")
+            _p(f"INCOME: {len(income_all)} dividend row(s) state a "
+               f"share count the books did not hold — `taxjson "
+               f"sanity` lists them.")
         return
     if compared or cost_na:
         print()
-        print(f"COST — books vs the reports' cost: {compared} compared, "
-              f"{cost_matched} within tolerance, {len(cost_diffs)} "
-              f"differ" + (f", {cost_na} not compared" if cost_na else "")
-              + " (informational: a broker's book value is not your "
-                "ACB/basis; never changes the exit code).")
+        _p(f"COST — books vs the reports' cost: {compared} compared, "
+           f"{cost_matched} within tolerance, {len(cost_diffs)} "
+           f"differ" + (f", {cost_na} not compared" if cost_na else "")
+           + " (informational: a broker's book value is not your "
+             "ACB/basis; never changes the exit code).")
     if cost_diffs:
         lines = [("ACCOUNTS " if multi else "")
                  + "SYMBOL QTY CUR BROKER BOOKS DIFF REASON"]
@@ -14008,7 +14050,11 @@ def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
                 cells.insert(0, "+".join(c["accounts"]))
             lines.append(" ".join(x.replace(" ", "_") if i < len(cells) - 1
                                   else x for i, x in enumerate(cells)))
-        _print_report_table(lines)
+        print()
+        _print_report_table(lines, fit=True, drop=(len(lines[0].split())
+                                                    - 1,),
+                            key=(0, 1) if multi else 0)
+        print()
         used = sorted({r for c in cost_diffs for r in c["reasons"]})
         print("Reasons" + (" (a ? = a possible cause, not checked to "
                            "close the gap):"
@@ -14016,27 +14062,29 @@ def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
                                   and c["reasons"] != ["unexplained"]
                                   for c in cost_diffs) else ":"))
         for r in used:
-            print(f"  {r}: {REASON_TEXT.get(r, r)}")
+            _p(f"{r}: {REASON_TEXT.get(r, r)}", "  ", "    ")
         natives = sorted({c["basis"] for c in cost_diffs
                           if c.get("basis", "").startswith("native")})
         for b in natives:
-            print(f"  BOOKS here is the {b}.")
+            _p(f"BOOKS here is the {b}.", "  ", "    ")
     na = [c for c in cost_all if c.get("status") == "n/a"]
     if na:
-        print("Not compared: " + "; ".join(
+        _p("Not compared: " + "; ".join(
             f"{c['symbol']} ({c.get('note') or 'n/a'})" for c in na[:8])
             + (f"; +{len(na) - 8} more" if len(na) > 8 else ""))
     if income_all:
         print()
-        print(f"INCOME ON SHARES THE BOOKS DO NOT HOLD — {len(income_all)} "
-              f"dividend row(s) state a share count the books did not "
-              f"hold (missing history or a missing trade is the usual "
-              f"cause; informational):")
+        _p(f"INCOME ON SHARES THE BOOKS DO NOT HOLD — {len(income_all)} "
+           f"dividend row(s) state a share count the books did not "
+           f"hold (missing history or a missing trade is the usual "
+           f"cause; informational):")
         lines = ["ACCOUNT SYMBOL PAID ON STATED BOOKS"]
         for m in income_all:
             lines.append(f"{m['account']} {m['symbol']} {m['date']} "
                          f"{m['on']}_({m['basis'].replace(' ', '_')}) "
                          f"{m['stated_shares']:g} {m['books_shares']:g}")
+        # The old layout on purpose: the checklist's sanity step shows
+        # the output's last line, which is this table's last row.
         _print_report_table(lines)
 
 
@@ -17751,6 +17799,12 @@ def _check_books_before_merge(paths: List[Path]) -> None:
                  f"rebuild it.")
 
 
+def _audit_diag(kind: str, text: str) -> None:
+    """`taxjson audit: <kind>: ...` on stderr, wrapped (lib/out)."""
+    from taxjson.lib.out import emit
+    emit(kind, text, prog="taxjson audit")
+
+
 def cmd_audit(args: argparse.Namespace) -> None:
     """`taxjson audit`: the authoritative justification of every
     capital-gain figure. One block per taxable disposition: the parsed
@@ -17838,28 +17892,28 @@ def cmd_audit(args: argparse.Namespace) -> None:
                         if isinstance(_lock, dict) else None)
             except (OSError, ValueError) as e:
                 _lot = None
-                print(f"taxjson audit: warning: cannot read "
-                      f"{_lname} ({e}) — {year} is recomputed "
-                      f"with this project's option timing and date "
-                      f"basis, which may not be the ones it was filed "
-                      f"on.", file=sys.stderr)
+                _audit_diag("warning",
+                            f"cannot read {_lname} ({e}) — {year} is "
+                            f"recomputed with this project's option "
+                            f"timing and date basis, which may not be "
+                            f"the ones it was filed on.")
             _lb = _tf.lock_settings(_lock, settings).get("tax_date") \
                 if isinstance(_lock, dict) else None
             if _lb in ("settle", "trade") and _lb != tax_date:
-                print(f"taxjson audit: note: {year} is locked "
-                      f"({_lname}) — recomputed on the {_lb} date basis "
-                      f"its lock recorded, not this project's "
-                      f"{tax_date} basis.", file=sys.stderr)
+                _audit_diag("note",
+                            f"{year} is locked ({_lname}) — recomputed on "
+                            f"the {_lb} date basis its lock recorded, not "
+                            f"this project's {tax_date} basis.")
                 tax_date = _lb
             if isinstance(_lot, dict):
                 _lf = _tf._lock_timing_flags(settings, int(year), _lot)
                 if _lf != _timing_flags:
-                    print(f"taxjson audit: note: {year} is locked "
-                          f"({_lname}) — recomputed with the "
-                          f"option timing its lock recorded "
-                          f"({' '.join(_lf)}), not this project's "
-                          f"({' '.join(_timing_flags) or 'none'}).",
-                          file=sys.stderr)
+                    _audit_diag("note",
+                                f"{year} is locked ({_lname}) — "
+                                f"recomputed with the option timing its "
+                                f"lock recorded ({' '.join(_lf)}), not "
+                                f"this project's "
+                                f"({' '.join(_timing_flags) or 'none'}).")
                 _timing_flags = _lf
 
     def common_flags() -> List[str]:
@@ -17920,9 +17974,8 @@ def cmd_audit(args: argparse.Namespace) -> None:
                    and n not in _no_input]
         _uncovered.extend(missing)
         if missing:
-            print(f"taxjson audit: note: no books yet for "
-                  f"{', '.join(missing)} — run `taxjson run` to include "
-                  f"them.", file=sys.stderr)
+            _audit_diag("note", f"no books yet for {', '.join(missing)} "
+                                f"— run `taxjson run` to include them.")
         if not bases:
             return
         cleanup: Optional[Path] = None
@@ -17974,8 +18027,8 @@ def cmd_audit(args: argparse.Namespace) -> None:
         if not base.exists():
             if n not in _no_input:
                 _uncovered.append(n)
-                print(f"taxjson audit: note: no books yet for {n} — run "
-                      f"`taxjson run` to include it.", file=sys.stderr)
+                _audit_diag("note", f"no books yet for {n} — run "
+                                    f"`taxjson run` to include it.")
             continue
         fl = common_flags() + ["--base", str(base)]
         if country in ("us", "usa"):
@@ -18054,10 +18107,12 @@ def cmd_audit(args: argparse.Namespace) -> None:
     if getattr(args, "json", False):
         _json_out(_merge_audit_json(json_docs, base_currency, country))
     if _uncovered and not _acct:
-        print(f"taxjson audit: WARNING: not audited — no books for "
+        # One line (the checklist shows a failed command's last line).
+        from taxjson.lib.out import warn as _warn
+        _warn(f"not audited — no books for "
               f"{', '.join(sorted(set(_uncovered)))}; their dispositions "
               f"are not in the tie-out above. Run `taxjson run`.",
-              file=sys.stderr)
+              prog="taxjson audit")
         rc = max(rc, 1)
     if rc:
         raise SystemExit(rc)
@@ -19639,8 +19694,9 @@ def _build_parser(prog: str = "taxjson"
         "audit",
         help="Trace every capital gain back to its broker row",
         description="The authoritative justification of every capital "
-             "gain: one block per disposition tracing broker row -> "
-             "ticker map -> FX rate -> ACB/FIFO pool -> gain, with the "
+             "gain: one block per disposition tracing it from the "
+             "broker row through the ticker map, the FX rate and the "
+             "ACB/FIFO pool to the gain, with the "
              "wash/superficial-loss math shown, every step recomputed "
              "and cross-checked against the books, and a tie-out "
              "against the pipeline's saved gains files. Exit 1 when "

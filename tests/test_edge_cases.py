@@ -133,7 +133,7 @@ class EdgeCaseProject(unittest.TestCase):
         self.assertEqual(d[0]["deferred"], 40.0)
         text = "\n".join(render_text(doc))
         self.assertIn("EDGE CASES — tax year 2025", text)
-        self.assertIn("Superficial-loss window edges", text)
+        self.assertIn("SUPERFICIAL-LOSS WINDOW EDGES", text)
 
     def test_registered_losses_not_reported(self):
         work = self.root / "work"

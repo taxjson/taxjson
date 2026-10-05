@@ -2201,7 +2201,13 @@ def stderr_progress(sid: str, cmd: str) -> None:
 
 
 def render(results: List[Result], year: int, country: str,
-           quick: bool = False) -> str:
+           quick: bool = False, width_: Optional[int] = None) -> str:
+    """The checklist in the house layout (docs/output-style.md): a title
+    and the counts, then one section per stage; each step is its mark,
+    id and title on one line with its detail wrapped under the title,
+    one blank line between steps. The last line says how to walk the
+    open steps."""
+    from taxjson.lib.out import Doc, wrap
     by_stage: Dict[int, List[Result]] = {}
     for r in results:
         stage = next(s[1] for s in STEPS if s[0] == r.id)
@@ -2211,31 +2217,40 @@ def render(results: List[Result], year: int, country: str,
     att = sum(1 for r in results if r.effective == "attention")
     man = sum(1 for r in results if r.effective == "manual")
     todo = sum(1 for r in results if r.effective in ("todo", "blocked"))
-    lines = [f"FILING CHECKLIST — tax year {year} ({country})"
-             f"{' — quick' if quick else ''}: {done}/{total} done, "
-             f"{att} need attention, {man} need your confirmation, {todo} to do",
-             ""]
+    d = Doc(f"FILING CHECKLIST — tax year {year} ({country})"
+            f"{' — quick' if quick else ''}: {done}/{total} done",
+            width_=width_)
+    d.para(f"{att} need attention, {man} need your confirmation, "
+           f"{todo} to do")
+    # The step id column: the longest id, so every title starts at the
+    # same column and a detail wraps under it.
+    idw = max((len(r.id) for r in results), default=0)
+    lead = " " * (2 + 3 + 1 + idw + 2)
     for num, name in STAGES:
         rows = by_stage.get(num)
         if not rows:
             continue
-        lines.append(f"{num}. {name}")
-        for r in rows:
+        d.section(f"{num}. {name.upper()}")
+        for i, r in enumerate(rows):
+            if i:
+                d.blank()
             sym = SYMBOL[r.effective]
             title = step_meta(r.id, country)[2]
-            tail = r.detail
+            for ln in wrap(title, d.w, f"  {sym} {r.id:<{idw}}  ", lead):
+                d.line(ln)
             if r.override:
-                tail = f"marked {r.override}" + (f": {r.note}" if r.note else "")
+                d.para(f"marked {r.override}"
+                       + (f": {r.note}" if r.note else ""), lead)
                 if r.finding:
-                    tail += f"  !! detector: {r.finding}"
-            lines.append(f"  {sym} {r.id:<17} {title}")
-            if tail:
-                lines.append(f"      {tail}")
-        lines.append("")
-    lines.append("[x] done  [!] needs attention  [ ] to do  [m] confirm with "
-                 "`taxjson checklist --done ID`  [b] blocked  [-] n/a  [~] skipped")
-    lines.append("Walk the open steps one at a time: `taxjson checklist --walk`")
-    return "\n".join(lines)
+                    d.para(f"the detector still says: {r.finding}", lead)
+            elif r.detail:
+                d.para(r.detail, lead)
+    d.blank()
+    d.line("[x] done  [!] needs attention  [ ] to do  [b] blocked  "
+           "[-] n/a  [~] skipped")
+    d.line("[m] confirm it, then `taxjson checklist --done ID`")
+    d.line("Walk the open steps one at a time: `taxjson checklist --walk`")
+    return d.text()
 
 
 def to_json(results: List[Result], year: int, country: str) -> Dict[str, Any]:

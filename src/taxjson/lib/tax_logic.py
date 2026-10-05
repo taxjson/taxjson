@@ -22,7 +22,8 @@ API:
   settings in force filled in.
 - ``sections(country, settings, ids=False)`` -> [(title, [str])]: the
   rendered bullets (Rules marked ``cont`` join the previous bullet).
-- ``render(country, settings, width=88, ids=False)``: the plain text;
+- ``render(country, settings, width=None, ids=False)``: the plain text
+  (wrapped at the house width, lib/out);
   ``ids=True`` prefixes each statement with ``[ID]``.
 - ``catalog(country=None)`` -> {id: Rule} over every settings variant
   (``VARIANT_AXES``): the full set of ids the checker knows.
@@ -42,7 +43,6 @@ the detail.
 from __future__ import annotations
 
 import itertools
-import textwrap
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -2413,25 +2413,25 @@ def sections(country: str, settings: Dict[str, Any],
             rule_sections(country, settings)]
 
 
-def render(country: str, settings: Dict[str, Any], width: int = 88,
-           ids: bool = False) -> str:
+def render(country: str, settings: Dict[str, Any],
+           width: Optional[int] = None, ids: bool = False) -> str:
+    """The plain text: a title, then each section's statements as `- `
+    items wrapped at `width` (default: the house width, lib/out; 0 = one
+    line per statement). Words and rule ids are never broken."""
+    from taxjson.lib.out import Doc
     c = _C.canonical_country(country)
     name = ("United States (experimental)" if c == _C.USA
             else _C.DISPLAY_NAME[c])
     year = settings.get("year")
-    out = [f"TAX LOGIC — {name}" + (f", tax year {year}" if year else "")
-           + ", with this project's settings", ""]
+    d = Doc(f"TAX LOGIC — {name}" + (f", tax year {year}" if year else "")
+            + ", with this project's settings", width_=width)
     for title, rules in sections(c, settings, ids=ids):
-        out.append(title.upper())
-        for r in rules:
-            # An id never wraps at its hyphens ([CA-SL-\n02]).
-            out.append(textwrap.fill(r, width=width, initial_indent="  - ",
-                                     subsequent_indent="    ",
-                                     break_on_hyphens=not ids))
-        out.append("")
-    out.append("Detail and sources: README.md and REFERENCES.md. taxjson "
-               "computes; it does not give tax advice.")
-    return "\n".join(out)
+        d.section(title.upper())
+        d.items(rules, indent="  ")
+    d.blank()
+    d.para("Detail and sources: README.md and REFERENCES.md. taxjson "
+           "computes; it does not give tax advice.")
+    return d.text()
 
 
 def variants(country: str):

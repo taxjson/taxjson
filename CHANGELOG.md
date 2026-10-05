@@ -27,6 +27,29 @@
   the denial, the ±30-day window as a table with a legend — instead of
   the `#`-commented trace (`taxjson audit` and trace files keep it). No
   figure, `--json` output or file changes.
+- **The explain-and-check commands in the house output style.**
+  `taxjson audit` prints each disposition's pool history in the report
+  layout `wash-sales --explain` uses (no `#` column; the trace files keep
+  it), wraps its sections under the label gutter and its warnings, and
+  keeps the reconciliation's tie-out line whole for the checklist.
+  `taxjson checklist` puts each step's detail under its title, one blank
+  line between steps, stage headings in capitals; a mark beside a finding
+  reads "the detector still says" (the `!!` is gone). `find-missing-history`
+  has a title, short capitalised section headings, fitted tables with each
+  row's broker note indented under it, the broker-marked shorts as a list
+  ending in one "nothing to fix" line, and its fix as a numbered list.
+  `edge-cases` and `check-dates` print short headings and fitted tables
+  with each row's reason under it. `sanity` lists each group as aligned
+  `label:  value` lines (the holdings files relative to the project),
+  fits its quantity and cost tables and wraps its notes. `spinoffs`,
+  `splits` and `renames` align their figures, wrap their notes and print
+  the ticker.map lines to copy on their own lines. `tax-logic` wraps at
+  the house width (it wrapped at 88; the rule text is unchanged).
+  `channels`, `redact` and `opening` wrap their messages (`NOTE:` is now
+  `note:`), and every command's help page wraps at the house width (it
+  was capped at 78 columns). The lines the checklist reads from these
+  commands keep their text, no figure, `--json` output or file changes,
+  and every exit code is the same.
 - **taxjson.toml reads in groups and compactly** (`taxjson init`, `taxjson
   format`). `[settings]` comes in groups — Project, Currencies, Options,
   Income, Futures — each under a `# --- Name ---` heading, keys

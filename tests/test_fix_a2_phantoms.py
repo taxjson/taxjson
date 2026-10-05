@@ -249,7 +249,7 @@ class TestUnbackedCovers(unittest.TestCase):
             r = _run_mod("taxjson.bin.taxjson_missing_history",
                          "--year", "2025", base)
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("Covers of a short opened before the data",
+            self.assertIn("COVERS OF A SHORT OPENED BEFORE THE DATA",
                           r.stdout)
             self.assertIn("AFFECTS 2025", r.stdout)
             self.assertIn("QQA.TO", r.stdout)
