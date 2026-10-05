@@ -26,8 +26,14 @@ transaction history, not the year-filtered gains file:
   taxjson-missing-history --year 2025 work/*_base.json
   taxjson-missing-history work/margin_base.json     # no year scope
 
-To actually fix an AFFECTS row, list the sales with no purchase in your
-files (a missing-history file) and re-run. In a project:
+To fix an AFFECTS row, add the purchase. When the broker states its cost
+(IB's Basis on a sale coded C, a transfer-in's stated book value),
+--write-purchases drafts the .tt lines for you to review, into a file the
+run does not read (inputs/<account>/purchases_draft.tt.txt in a project):
+  taxjson find-missing-history --write-purchases
+  # fill in each YYYY-MM-DD / COST, then rename the file to .tt
+Only when a purchase cannot be recovered, list the sale in a
+missing-history file and re-run. In a project:
   taxjson find-missing-history --write-missing-history   # writes missing_history.json
   # then prune any real shorts from it, and: taxjson run
 Standalone:
@@ -47,7 +53,8 @@ from taxjson.lib.core import load_transactions
 from taxjson.lib.missing_history import (
     detect_missing_history, assess_tax_year_relevance, detect_zero_basis_acquisitions,
     detect_corp_action_links, detect_unbacked_covers, stale_missing_history_entries,
-    stale_entry_message,
+    stale_entry_message, DRAFT_NAME, DATE_PLACEHOLDER as _PH_DATE,
+    COST_PLACEHOLDER as _PH_COST,
 )
 
 
@@ -103,7 +110,11 @@ def _print_section(title, rows, *, show_year_cols):
                      else "")
                   + " — add the missing purchase; it is not a short sale"
                   + (" or a written option" if _is_derivative(c.symbol)
-                     else "") + ".")
+                     else "") + "."
+                  + (" `--write-purchases` drafts the line from IB's "
+                     "figure for you to review."
+                     if c.broker_basis and not c.symbol.startswith(
+                         ('F:', '/', '\\')) else ""))
 
 
 def _print_zero_section(title, rows):
@@ -168,6 +179,202 @@ def _rename_sources(map_path, symbols):
     return out
 
 
+def _project_root(path):
+    """The project folder holding taxjson.toml beside a book file
+    (<root>/work/<acct>_base.json) or one level up; None outside one."""
+    try:
+        p = Path(path).resolve()
+    except (OSError, RuntimeError):
+        return None
+    for d in (p.parent, p.parent.parent):
+        if (d / "taxjson.toml").is_file():
+            return d
+    return None
+
+
+def _transfer_sidecar_rows(files):
+    """Every TRANSFER row of the transfer sidecars beside the book files
+    (work/<account>_<broker>_transfers.json — the rows `taxjson run`
+    leaves out of a taxable account's books), each stamped with its
+    sidecar's account."""
+    rows, seen = [], set()
+    for f in files:
+        d = Path(f).resolve().parent
+        if d in seen:
+            continue
+        seen.add(d)
+        for sc in sorted(d.glob("*_transfers.json")):
+            try:
+                doc = json.loads(sc.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            md = (doc.get("metadata") or {}) if isinstance(doc, dict) \
+                else {}
+            if not isinstance(md, dict) or md.get("kind") != \
+                    "transfer_sidecar" or not md.get("account"):
+                continue
+            for t in doc.get("transactions") or []:
+                if isinstance(t, dict) and t.get("action") == "TRANSFER":
+                    rows.append(dict(t, account=md["account"]))
+    return rows
+
+
+def _write_purchases(args, txs, *, country, basis, types, journal,
+                     unchecked):
+    """--write-purchases: draft .tt purchase lines (tax-logic CA-ACB-15 /
+    US-BASIS-08) into a file the run does not read."""
+    from taxjson.lib.missing_history import (draft_purchases,
+                                              format_purchase_drafts)
+    from taxjson.lib.safe_write import write_atomic
+    country = country or args.country
+    if not country:
+        print("taxjson-missing-history: error: --write-purchases needs the "
+              "project's country: run it on a project's work/ files "
+              "(`taxjson find-missing-history --write-purchases`) or pass "
+              "--country canada|usa.", file=sys.stderr)
+        return 2
+    mh_pairs = set()
+    if args.missing_history:
+        try:
+            for e in json.loads(Path(args.missing_history).read_text(
+                    encoding="utf-8-sig")) or []:
+                if isinstance(e, dict) and e.get("symbol") \
+                        and e.get("account"):
+                    mh_pairs.add((str(e["symbol"]).strip().upper(),
+                                  str(e["account"]).strip()))
+        except (OSError, ValueError) as e:
+            print(f"taxjson-missing-history: warning: could not read "
+                  f"{args.missing_history}: {e}", file=sys.stderr)
+    accounts = sorted({t.account for t in txs if t.account})
+    if args.account:
+        accounts = [args.account]
+    transfers = [r for r in _transfer_sidecar_rows(args.files)
+                 if float(r.get("quantity") or 0) < 0
+                 or r.get("account") in accounts]
+    renamed = _rename_sources(args.ticker_map,
+                              {t.symbol for t in txs if t.symbol})
+    # The transfer sidecars keep the broker's spelling; the books are
+    # mapped by ticker.map (the merge stage's renames, to base).
+    key = None
+    if args.ticker_map:
+        try:
+            from taxjson.bin.taxjson_ticker_map import (load_map_file,
+                                                        map_symbol,
+                                                        merge_renames)
+            _ren = merge_renames(load_map_file(Path(args.ticker_map)),
+                                 to_base=True)
+
+            def key(sym, _ren=_ren):
+                return map_symbol(str(sym or "").strip().upper(), _ren)
+        except (OSError, ValueError) as e:
+            print(f"taxjson-missing-history: warning: could not read "
+                  f"{args.ticker_map} ({e}) — transfer-ins are matched "
+                  f"to the books by their own spelling.", file=sys.stderr)
+    drafts, gaps = draft_purchases(
+        txs, accounts=set(accounts), country=country, symbol_key=key,
+        year=None if args.all_history else args.year, date_basis=basis,
+        transfer_rows=transfers, registered_accounts=types or None,
+        journal_symbols=journal, listed_pairs=mh_pairs,
+        rename_sources=renamed)
+    by_acct = {}
+    for d in drafts:
+        by_acct.setdefault(d.account, [[], []])[0].append(d)
+    for g in gaps:
+        by_acct.setdefault(g.account, [[], []])[1].append(g)
+    scope = (f" with a sale in {args.year}" if args.year
+             and not args.all_history else "")
+    if not drafts:
+        print(f"No purchase to draft{scope}: no sale with no purchase in "
+              f"your files carries a broker cost (IB's Basis), and no "
+              f"transfer-in that needs a purchase line states a book "
+              f"value." + (f" Not drafted: {len(gaps)}." if gaps else ""))
+        for g in gaps:
+            print(f"  not drafted: {g.symbol} [{g.account}] {g.date} "
+                  f"{g.quantity:g} units — {g.reason}")
+        return 1 if unchecked else 0
+    explicit = Path(args.write_purchases) if args.write_purchases else None
+    drafting = sorted(a for a, (ds, _) in by_acct.items() if ds)
+    if explicit is not None and len(drafting) > 1:
+        print(f"taxjson-missing-history: error: drafts for "
+              f"{len(drafting)} accounts ({', '.join(drafting)}) — a .tt "
+              f"file belongs to one account: name it (--account, or "
+              f"`taxjson find-missing-history ACCOUNT --write-purchases "
+              f"FILE`), or leave FILE out to write "
+              f"inputs/<account>/{DRAFT_NAME} for each.", file=sys.stderr)
+        return 2
+    root = _project_root(args.files[0])
+    if explicit is None and root is None:
+        print(f"taxjson-missing-history: error: no project around "
+              f"{args.files[0]} — pass --write-purchases FILE.",
+              file=sys.stderr)
+        return 2
+    targets = {a: (explicit if explicit is not None
+                   else root / "inputs" / a / DRAFT_NAME)
+               for a in drafting}
+    for a, out in targets.items():
+        if (out.exists() or out.is_symlink()) and not args.force:
+            print(f"taxjson-missing-history: error: {out} already exists "
+                  f"— not overwritten (it may hold your edits). Rename "
+                  f"what you reviewed to .tt first, or pass --force to "
+                  f"replace it (the old file is kept as "
+                  f"{out.name}.bak).", file=sys.stderr)
+            return 1
+        if out.suffix.lower() in (".tt", ".csv"):
+            print(f"taxjson-missing-history: error: {out.name}: a draft "
+                  f"must not end in {out.suffix} — the run would read it "
+                  f"before you reviewed it (use a name ending in .txt, "
+                  f"e.g. {DRAFT_NAME}).", file=sys.stderr)
+            return 2
+    for a in drafting:
+        ds, gs = by_acct[a]
+        out = targets[a]
+        text = format_purchase_drafts(ds, gs, country=country, account=a)
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            if out.is_file() and not out.is_symlink():
+                write_atomic(out.with_name(out.name + ".bak"),
+                             out.read_bytes())
+                print(f"  kept the previous {out.name} as "
+                      f"{out.name}.bak", file=sys.stderr)
+            write_atomic(out, text)
+        except OSError as e:
+            print(f"taxjson-missing-history: error: cannot write {out}: "
+                  f"{e}", file=sys.stderr)
+            return 2
+        n_lot = sum(1 for d in ds if d.source == "ib-lot")
+        n_ib = sum(1 for d in ds if d.source == "ib-basis")
+        n_tr = sum(1 for d in ds if d.source == "transfer")
+        n_date = sum(1 for d in ds if d.date is None)
+        n_cost = sum(1 for d in ds if d.cost is None)
+        n_chk = sum(1 for d in ds if d.warn)
+        shown = out
+        try:
+            shown = out.resolve().relative_to(root.resolve()) if root \
+                else out
+        except ValueError:
+            pass
+        parts = [f"{n} {what}" for n, what in (
+            (n_lot, "from IB's closed lots"),
+            (n_ib, "from IB's Basis"),
+            (n_tr, "from a transfer-in's book value")) if n]
+        print(f"Wrote {len(ds)} draft purchase line(s) for {a} to {shown} "
+              f"({'; '.join(parts)}).")
+        todo = [f"{n} need {what}" for n, what in (
+            (n_date, f"the purchase date ({_PH_DATE})"),
+            (n_cost, f"the cost ({_PH_COST})"),
+            (n_chk, "a CHECK resolved")) if n]
+        if todo:
+            print(f"  {'; '.join(todo)}.")
+        if gs:
+            print(f"  {len(gs)} sale(s) or transfer-in(s) of {a} could "
+                  f"not be drafted — listed at the end of the file.")
+    print(f"taxjson does not read a draft. Review every line, fill in "
+          f"the placeholders, then rename the file to end in .tt (e.g. "
+          f"purchases.tt) and `taxjson run`; `taxjson find-missing-"
+          f"history` should then drop the fixed positions.")
+    return 1 if unchecked else 0
+
+
 @guard_main("taxjson-missing-history")
 def main(argv=None):
     ap = argparse.ArgumentParser(
@@ -205,6 +412,26 @@ def main(argv=None):
                          "that is a rename target is shown with the "
                          "broker's own ticker, where a missing buy "
                          "belongs")
+    ap.add_argument("--write-purchases", metavar="FILE", nargs="?",
+                    const="", default=None,
+                    help="instead of the report, DRAFT .tt purchase lines "
+                         "from the broker's own cost evidence (IB's Basis "
+                         "on a closing sale with no purchase in the files, "
+                         "a transfer-in's stated book value) into a "
+                         "file the run does not read: default "
+                         f"inputs/<account>/{DRAFT_NAME} in the project. "
+                         "Review it, fill in the placeholders, and rename "
+                         "it to .tt")
+    ap.add_argument("--all-history", action="store_true",
+                    help="with --write-purchases: draft every position, "
+                         "not only those with a sale in --year")
+    ap.add_argument("--force", action="store_true",
+                    help="with --write-purchases: replace an existing "
+                         "draft (kept as <file>.bak)")
+    ap.add_argument("--country", choices=("canada", "usa"),
+                    help="with --write-purchases outside a project: the "
+                         "country whose rules the draft's notes follow "
+                         "(a project's taxjson.toml decides otherwise)")
     args = ap.parse_args(argv)
     if args.phantoms_old:
         print("taxjson-missing-history: note: --phantoms is now "
@@ -297,6 +524,10 @@ def main(argv=None):
             print(f"taxjson-missing-history: warning: could not read "
                   f"{args.ticker_map} ({e}) — JOURNAL pairs are walked "
                   f"in clock order.", file=sys.stderr)
+    if args.write_purchases is not None:
+        return _write_purchases(args, txs, country=country, basis=basis,
+                                types=types, journal=journal,
+                                unchecked=unchecked)
     candidates = detect_missing_history(txs, include_options=args.include_options,
                                  include_broker_shorts=True,
                                  registered_accounts=types or None,
@@ -546,7 +777,10 @@ def main(argv=None):
                   "to inputs/<account>/; (2) or enter the purchase as a "
                   ".tt BUYSELL line with its real date and cost (for "
                   "shares transferred in: the original purchase at the "
-                  "other broker); (3) only when it cannot be recovered: "
+                  "other broker) — `taxjson find-missing-history "
+                  "--write-purchases` drafts these lines from IB's Basis "
+                  "or a transfer's stated book value, for you to review; "
+                  "(3) only when it cannot be recovered: "
                   "`taxjson find-missing-history --write-missing-history` "
                   "in the project writes missing_history.json — review "
                   "it, then `taxjson run` (it picks missing_history.json "

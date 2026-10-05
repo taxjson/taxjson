@@ -728,6 +728,21 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "such a sale at a loss with a purchase in that window, is "
                  "flagged for a manual superficial-loss check.",
                  cont=True),
+            Rule("CA-ACB-15",
+                 "A broker's own figure for such shares — IB's Basis on a "
+                 "sale it codes closing, with its Closed Lots when the "
+                 "statement lists them, or the book value a transfer-in "
+                 "states (Questrade, RBC) — is evidence, never booked. `find-missing-history "
+                 "--write-purchases` drafts it as .tt purchase lines in a "
+                 "file the run does not read (inputs/<account>/"
+                 "purchases_draft.tt.txt); a line you keep (renamed to "
+                 ".tt) is your own statement of the cost. IB's figure is "
+                 "the cost of the lots IB closed (FIFO), not the ACB, "
+                 "which averages every identical share in all your "
+                 "taxable accounts (s.47); a non-CAD cost is converted at "
+                 "the Bank of Canada rate of the purchase date, so a draft "
+                 "without lot detail leaves that date as a placeholder "
+                 "the run refuses until you fill it in."),
             Rule("CA-OPEN-01",
                  "An opening balance (`taxjson opening`, a .tt OPENING "
                  "line from a broker's positions report) sets a position "
@@ -1762,6 +1777,20 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "(trade dates) of such a sale, or such a sale at a loss "
                  "with a purchase in that window, is flagged for a manual "
                  "wash-sale check (not for crypto accounts)."),
+            Rule("US-BASIS-08",
+                 "A broker's own figure for such shares — IB's Basis on a "
+                 "sale it codes closing, with its Closed Lots when the "
+                 "statement lists them, or the book value a transfer-in "
+                 "states (Questrade, RBC) — is evidence, never booked. `find-missing-history "
+                 "--write-purchases` drafts it as .tt purchase lines in a "
+                 "file the run does not read (inputs/<account>/"
+                 "purchases_draft.tt.txt): one line per lot IB lists, with "
+                 "its purchase date and cost (that lot's basis and holding "
+                 "period); without lot detail one line whose purchase date "
+                 "is a placeholder the run refuses until you fill it in, "
+                 "since the holding period needs the real date. A line "
+                 "you keep (renamed to .tt) is your own statement of the "
+                 "basis."),
             Rule("US-OPEN-01",
                  "An opening balance (`taxjson opening`, a .tt OPENING "
                  "line from a broker's positions report) is one line per "

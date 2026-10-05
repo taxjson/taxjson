@@ -690,7 +690,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson run --strict` | Promote per-account validation ERRORs (oversold positions, malformed rows) and an input file that parsed to 0 transactions to fatal instead of publishing reports with a DIAGNOSTICS banner. Also fatal: UNBOOKED rows, an undecided crypto send, a gift/payment send with no fair value, a send booked twice (a hand-written .tt line next to crypto_sends.tt), work/ books of an account no longer in taxjson.toml, and filed-year drift. Recommended for CI/cron. |
 | `taxjson run sum` (chaining) | Subcommands chain in one invocation, each with its own flags: `taxjson run close-year check-filed`. Note a chained `--json` command's stdout follows the earlier commands' progress output — pipe consumers should run the JSON command standalone. A failing command stops the chain and its exit code propagates. Option values that collide with command names are handled (`--account sum`); for the rare ambiguous positional, separate with `--`. |
 | `taxjson crypto-sends [ACCOUNT] [--json]` | Every crypto withdrawal/send that did **not** arrive in another of your crypto accounts (a send is paired with an arrival of the same coin on another exchange, or on the same exchange in another account, from 10 minutes before to 3 days after the send, losing at most 10% to the network fee), with your decision — `self` (your own wallet: no tax event), `gift` or `payment` (a disposition at fair market value; a gift under ITA s.69(1)(b)) — or PENDING. For each: the fair value per coin and in CAD with its source (the exchange's spot price when the row carries one — Coinbase; otherwise the Yahoo daily close `fill-crypto` uses, at the send date, times the Bank of Canada rate), and the ready line `BUYSELL <date> <local time> <COIN> -<qty> CAD <price> <proceeds> 0`. A Kraken network fee taken in the coin is already booked by the parser and is not in the quantity; a matched send that arrived short with no fee stated (a Coinbase Send carries its network fee inside the quantity) has the shortfall booked as a sale at fair value — a `<send id>-fee` line in `crypto_sends.tt`, in both countries (in a Canada project a stablecoin's shortfall is US-dollar cash, not a sale). Stablecoins (USDC/USDT/DAI/PYUSD/GUSD) are US-dollar cash in the books, so a gift/payment of one gets no sale line: the command shows the **currency gain** instead — value at the send-date Bank of Canada rate minus the average CAD cost of the USD-cash/stablecoin pool rebuilt from the ledgers — flagged when likely superficial (USD/stablecoins acquired within 30 days and still held), with the year's total. `--set ID=self\|gift\|payment [--note TEXT] [--price P]` records a decision (repeatable; `--price` when the price lookup fails), `--unset ID` removes one (the send is undecided again), `--set ID=gift|payment --unpair` keeps a send the tool paired with an arrival unpaired (that arrival was unrelated; without `--unpair` a saved gift or payment on a paired send is not booked and is warned about, and `run --strict` stops), `--write` regenerates `inputs/<acct>/crypto_sends.tt` (idempotent; it warns when another `.tt` already sells the same coin, date and quantity). `taxjson run` asks at a terminal (self / gift / payment / skip) after the crypto parse and refreshes the file; headless it prints one note. While another crypto account's exports have not been parsed yet, a send to it would look unmatched: `--set`/`--write` refuse until `taxjson run` reads them. Ids carry exchange, local date/time, coin and quantity — never a txid or address; refs are masked (`LG***`). A `checklist` step. |
-| `taxjson find-missing-history [NAME]` | Report positions with missing cost basis (truncated buy history, or $0-basis corp-action shares) that distort a year's gain; pairs the project's `missing_history.json` already covers are listed apart (COVERED), not as work to do; `--write-missing-history [FILE]` writes the candidates instead. See "Importing manual cost basis". |
+| `taxjson find-missing-history [NAME]` | Report positions with missing cost basis (truncated buy history, or $0-basis corp-action shares) that distort a year's gain; pairs the project's `missing_history.json` already covers are listed apart (COVERED), not as work to do; `--write-missing-history [FILE]` writes the candidates instead; `--write-purchases [FILE]` drafts `.tt` purchase lines from the broker's own cost (IB's `Basis` on a closing sale, with one line per lot when the statement lists Closed Lots; the book value a Questrade or RBC transfer-in states) into `inputs/<account>/purchases_draft.tt.txt`, which the run does not read until you review it and rename it to `.tt` (an existing draft is kept unless `--force`, as `.bak`). See "Importing manual cost basis". |
 | `taxjson opening ACCOUNT FILE [--date D] [--dry-run] [--force]` | An **opening balance** from a broker's positions report — an Interactive Brokers Activity Statement (its Open Positions section), an RBC Holdings Export, or a `[[holding]]` TOML: writes `inputs/ACCOUNT/opening_<date>.tt`, one `OPENING <date> <symbol> <qty> <currency> <total-cost> [<lot-date>]` line per long position with the report's **book cost** (never its market value; a position with no cost, a short or a futures contract is listed and skipped). The date is the report's own (`--date` when it has none). An OPENING line sets the position and its cost but is **not a purchase**: no superficial-loss / wash-sale window, no "recent buy" (CA-OPEN-01 / US-OPEN-01). The snapshot replaces the account's earlier rows of its symbols — trades, transfers, renames and cost adjustments dated on or before it are left out of the books with an `ATTENTION: opening:` line (income rows stay); a left-out sale of the tax year stops the run (CA-OPEN-03). A US project needs one line per lot with its purchase date and a US-dollar cost (a holdings TOML with `acquired = "YYYY-MM-DD"` per lot); Canada pools the lines (s.47) and converts a foreign-currency cost at the snapshot day's Bank of Canada rate (a broker's CAD book value is used as is). See "Opening balances". |
 
 #### Summaries
@@ -1844,6 +1844,39 @@ with no position in the data to close sold something bought before the data:
 it is always listed, also for an option or a future (which are otherwise
 skipped as normal sell-to-open), with IB's own `Basis` for it, and
 `option-boundary` calls it a missing purchase instead of a write.
+
+**Drafts from the broker's cost.** IB's `Basis` and the `TRANSFER BOOK VALUE`
+a Questrade or RBC transfer-in states are evidence; the run never books them. To start from
+them, `taxjson find-missing-history --write-purchases` writes one draft file
+per account, `inputs/<account>/purchases_draft.tt.txt` (or `--write-purchases
+FILE` for one account): a `.tt` `BUYSELL` line per purchase, each under `#`
+notes naming the source row (ids masked), the broker's figure and what to
+check. The run reads only `*.csv` and `*.tt`, so the draft is never booked as
+written. Review it, then rename it to end in `.tt`:
+
+- IB lists the lots a sale closed (the statement's Closed Lots): one line
+  per lot, with IB's open date and cost. Otherwise one line whose date is
+  the literal `YYYY-MM-DD`, which the `.tt` reader refuses until you replace
+  it with the real purchase date. When your data held some of the units
+  sold, IB's figure covers those too, so the cost is the literal `COST`
+  (refused the same way) and the note shows the arithmetic.
+- A transfer-in's book value gets the date placeholder: the transfer date
+  is not the purchase date. A move between two of your own accounts, a
+  transfer your `.tt` lines already cover, and one whose shares your files
+  already acquire (no sale of them goes short) are not drafted.
+- The line is in the broker's currency. In a Canadian project a non-CAD
+  line is converted at the Bank of Canada rate of its date, and IB's figure
+  is the cost of the lots IB closed (FIFO), not your ACB, which averages
+  every identical share in all your taxable accounts (tax-logic CA-ACB-15).
+  In a US project a lot's date and cost are its basis and holding period
+  (US-BASIS-08).
+- Sheltered accounts, futures, real shorts and sales with no broker figure
+  are not drafted; the file's last lines list them.
+- An existing draft is never overwritten (it may hold your edits) unless
+  you pass `--force`, which keeps the old one as `.bak`. By default only
+  positions with a sale in the tax year are drafted, each with every one
+  of its sales (transfer-ins whatever their year); `--all-history` drafts
+  them all.
 
 To fix one, import the real trades from your brokerage confirmations as a
 TaxTrak **`.tt`** file in the account's input folder — e.g. add lines to

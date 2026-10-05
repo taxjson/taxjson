@@ -76,6 +76,35 @@
   held another number on its record date is listed — the usual sign of
   missing history.
 
+### Purchase drafts from the broker's cost (owner request)
+
+- **`taxjson find-missing-history --write-purchases [FILE]`** drafts
+  `.tt` purchase lines from the broker's own cost evidence: IB's `Basis`
+  on a sale it codes closing with no purchase in your files, and a
+  book value a Questrade or RBC transfer-in states. The draft goes to
+  `inputs/<account>/purchases_draft.tt.txt`, which the run does not read;
+  each line sits under notes naming its source row (ids masked), the
+  broker's figure and what to check. You review it and rename it to
+  `.tt`. Nothing is booked automatically.
+- **One line per lot when IB lists them.** The IB parser now keeps a
+  statement's Closed Lots (open date, quantity, cost) on the closing sale
+  as evidence. Without them the line's date is the literal `YYYY-MM-DD`,
+  which the `.tt` reader refuses until it is replaced, so an unedited
+  draft cannot be booked. When your data held part of the sale, the cost
+  is left as `COST` the same way, with the arithmetic in the note.
+- **Each country's caveats.** Canada: the line stays in the broker's
+  currency and is converted at the Bank of Canada rate of the date you
+  fill in; IB's figure is the cost of the lots IB closed, not the ACB,
+  and a draft says so, louder when another taxable account trades the
+  same security (tax-logic CA-ACB-15). United States: a lot's date and
+  cost are its basis and holding period (US-BASIS-08).
+- **Never overwrites a draft** without `--force` (the old one is kept as
+  `.bak`). A file name ending in `.tt` or `.csv` is refused, since the
+  run would read it before review. Sheltered accounts, futures, real
+  shorts, moves between your own accounts, transfers whose shares your
+  files already acquire and sales with no broker figure are not
+  drafted; the draft lists them at the end.
+
 ### Broker detection reads the file, not its name (owner request)
 
 - **Content first, for every supported export.** `taxjson run` now

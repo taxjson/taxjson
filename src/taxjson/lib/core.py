@@ -112,6 +112,12 @@ class TaxTransaction:
     # "C") — shown next to a closing sale that has no position in the
     # data. Evidence only, never booked.
     broker_basis: str = ''
+    # The lots that closing trade closed, when the export lists them
+    # (IB ClosedLot rows): "<open date> <qty> <cost>" per lot, joined by
+    # ";", in broker_basis's currency ("invalid" when a lot row did not
+    # read). Evidence for `find-missing-history --write-purchases`,
+    # never booked; NOT part of compute_id, omitted when empty.
+    broker_lots: str = ''
     # Contract size the parser read from the export (IB Financial
     # Instrument Information Multiplier: 100 per equity option, 1000 per
     # CL future or futures option, 0.1 per micro-crypto future) — kept
@@ -217,7 +223,8 @@ INCOME_FACT_FIELDS = ('record_date', 'ex_date', 'income_label',
                       'dealer_country', 'issuer_country')
 # The other optional evidence fields, omitted from to_dict() when empty.
 EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
-                   'broker_basis', 'multiplier', 'contract_size_basis',
+                   'broker_basis', 'broker_lots', 'multiplier',
+                   'contract_size_basis',
                    'source', 'source_key',
                    'source_account', 'exercise_of', 'corp_cash',
                    'lot_date')
@@ -926,7 +933,7 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                  'record_date', 'ex_date', 'income_label',
                  'dealer_country', 'issuer_country', 'broker_time',
                  'security_name', 'open_close', 'broker_basis',
-                 'exercise_of', 'corp_cash', 'contract_size_basis',
+                 'broker_lots', 'exercise_of', 'corp_cash', 'contract_size_basis',
                  'lot_date'):
         if _fld not in clean_t:
             continue
