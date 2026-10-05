@@ -13,7 +13,7 @@
   and securities that paid you income the books do not hold. Each line
   names the command that lists it, and the list points to the
   getting-started guide. Nothing is printed when every count is zero;
-  the counts always go to `work/run_summary.json`. A taxable account's
+  the counts always go to `reports/run_summary.json`. A taxable account's
   positions that go short are named on the console as the account is
   built.
 - **`taxjson sum` warns about sales with no purchase** that

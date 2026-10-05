@@ -5,7 +5,7 @@
    held), transfer-ins kept out with no cost, accounts with open
    positions and no holdings check, income on a security the books do
    not hold — each with its command; silent when clean; the counts in
-   work/run_summary.json. The short-position NOTE of a taxable account
+   reports/run_summary.json. The short-position NOTE of a taxable account
    is on the console.
 2. `taxjson sum` warns about uncovered sales with no purchase; "tainted"
    is "unknown cost" in every message (JSON keys kept, aliases added).
@@ -112,7 +112,7 @@ class TestFirstRunSummary(unittest.TestCase):
             # Short: a heading, one line per finding, one closing line.
             block = tail[tail.index("==> before"):].strip().splitlines()
             self.assertLessEqual(len(block), 8, block)
-            doc = json.loads((root / "work" / "run_summary.json")
+            doc = json.loads((root / "reports" / "run_summary.json")
                              .read_text())
             self.assertEqual([x["symbol"] for x in doc["no_purchase"]],
                              ["SMA.TO"])
@@ -144,7 +144,7 @@ class TestFirstRunSummary(unittest.TestCase):
             r = cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             self.assertNotIn("before you trust these numbers", r.stdout)
-            doc = json.loads((root / "work" / "run_summary.json")
+            doc = json.loads((root / "reports" / "run_summary.json")
                              .read_text())
             self.assertFalse(doc["no_purchase"] or doc["zero_cost_held"])
 

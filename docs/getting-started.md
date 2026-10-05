@@ -112,7 +112,7 @@ Done. Reports in ~/taxes/2025/reports/
 The list can also name positions at a $0 cost (sold this year or still
 held) and stocks that paid you income the books do not hold. A run with
 nothing to report ends at `Done.`; the same counts are always written to
-`work/run_summary.json`.
+`reports/run_summary.json`.
 
 Read every line that starts with `warning:`, `ATTENTION` or `NOTE`. A
 warning that an account folder is empty is expected for an account you

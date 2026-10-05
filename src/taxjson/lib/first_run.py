@@ -18,7 +18,7 @@ that lists and fixes it (docs/getting-started.md, step 5):
     purchase at all; `taxjson sanity`.
 
 Silent when every count is zero. The same counts go to
-work/run_summary.json. `taxjson sum` uses `uncovered_short_sales` for
+reports/run_summary.json. `taxjson sum` uses `uncovered_short_sales` for
 its own warning.
 """
 from __future__ import annotations

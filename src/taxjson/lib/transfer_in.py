@@ -261,8 +261,10 @@ def booked_rows(found: Iterable[Arrival]) -> List[Dict[str, Any]]:
             "gross_amount": a.book_value,
             "fee": 0.0,
             "account": a.account,
-            "description": (f"TRANSFER-IN AT THE BROKER'S BOOK VALUE: "
-                            f"{a.description}")[:200],
+            # Never the broker's own text: an RBC transfer description
+            # names the other account's number.
+            "description": (f"TRANSFER-IN AT THE BROKER'S BOOK VALUE "
+                            f"({a.broker or 'broker'})"),
         }
         if a.source:
             row["source"] = a.source

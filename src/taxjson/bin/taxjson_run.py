@@ -5709,7 +5709,7 @@ def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
     """What the books show is still incomplete, each with the command
     that lists it (lib/first_run): printed after a full run when any
     count is nonzero, silent when clean; the counts also go to
-    work/run_summary.json. Advisory — never breaks a run."""
+    reports/run_summary.json. Advisory — never breaks a run."""
     from taxjson.lib import first_run as FR
     try:
         doc = FR.collect(root, cfg, missing_history=mh_file,
@@ -5721,7 +5721,10 @@ def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
         return
     import json as _json
     try:
-        write_text_atomic(cache / FR.SUMMARY_FILE,
+        # In reports/, not work/: every work/*.json is read as a stage
+        # file by the fees report (and a planted symlink there must not
+        # break the next run's fees stage).
+        write_text_atomic(cache.parent / "reports" / FR.SUMMARY_FILE,
                           _json.dumps(doc, indent=2, sort_keys=True) + "\n")
     except OSError:
         pass

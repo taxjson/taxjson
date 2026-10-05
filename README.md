@@ -468,7 +468,7 @@ incomplete — silent when there is nothing:
   Then `taxjson checklist`. Every step is in docs/getting-started.md.
 ```
 
-The same counts are written to `work/run_summary.json`. A taxable
+The same counts are written to `reports/run_summary.json`. A taxable
 account's positions that go short (sales with no purchase in the files)
 are also named on the console as the run builds that account.
 
