@@ -851,7 +851,8 @@ class _CappedHelpFormatter(argparse.HelpFormatter):
 # command table uses the same groups in the same order.
 _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Set up", ("init", "format", "migrate", "fetch", "elect")),
-    ("Build the books", ("run", "crypto-sends", "find-missing-history")),
+    ("Build the books", ("run", "crypto-sends", "find-missing-history",
+                         "opening")),
     ("Summaries", ("amt", "estimate", "fx-cash", "instalments", "stats",
                    "sum")),
     ("Positions", ("list", "shares")),
@@ -12580,14 +12581,29 @@ def cmd_sanity(args: argparse.Namespace) -> None:
     (same basis as `taxjson list` — wash-adjusted where built, post
     ticker.map). The files' symbols get the same GLOBAL+TOBASE renames,
     with options following their underlying's rename. Exit 1 on any
-    discrepancy in any group."""
+    discrepancy in any group.
+
+    A FILE may also be a broker's own positions report
+    (lib/positions_reports: an IB Activity Statement's Open Positions,
+    an RBC Holdings Export). When a report is dated before the books'
+    last row, the books' positions ON that day are compared (rebuilt
+    from work/<acct>_base.json). After the quantities, the books' COST
+    is compared with the report's where it states one, with a reason
+    for each difference (lib/positions_check) — never a failing exit —
+    and a dividend paid on a share count the books did not hold on its
+    record date is listed (informational)."""
     import json
     from taxjson.lib.report_model import (gains_basis_label,
                                           resolve_gains_files)
+    from taxjson.lib import positions_check as PC
+    from taxjson.lib.positions_reports import (PositionsReportError,
+                                               read_positions)
     root = Path(args.dir).resolve()
     cache = root / "work"
     tol = float(1e-4 if getattr(args, "tolerance", None) is None
                     else args.tolerance)
+    cost_tol = float(1.0 if getattr(args, "cost_tolerance", None) is None
+                     else args.cost_tolerance)
     if tomllib is None:
         sys.exit("taxjson sanity: needs tomllib (py3.11+) or tomli")
 
@@ -12770,6 +12786,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
     # Same consolidation the canonical pipeline applied: GLOBAL+TOBASE
     # renames from ticker.map; options follow their underlying.
     renames: Optional[Dict[str, str]] = None
+    native_renames: Optional[Dict[str, str]] = None
     map_symbol = None
     map_file = root / "ticker.map"
     if map_file.exists():
@@ -12779,6 +12796,8 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                                                         merge_renames)
             renames = merge_renames(load_map_file(map_file),
                                     to_base=True)
+            native_renames = merge_renames(load_map_file(map_file),
+                                           to_base=False)
         except Exception as e:
             print(f"taxjson sanity: warning: ticker.map not applied "
                   f"({e}) — cross-listed symbols may mismatch.",
@@ -12788,6 +12807,11 @@ def cmd_sanity(args: argparse.Namespace) -> None:
     def _mapped(sym: str) -> str:
         if renames is not None and map_symbol is not None:
             return map_symbol(sym, renames)
+        return sym
+
+    def _native_mapped(sym: str) -> str:
+        if native_renames is not None and map_symbol is not None:
+            return map_symbol(sym, native_renames)
         return sym
 
     _OPT_RE = re.compile(r'^((?:F:)?[A-Z0-9.]+?)(\d{6}[CP]\d+)\.(\S+)$',
@@ -12811,6 +12835,27 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         labels: List[str] = []
         alt: Dict[str, str] = {}
         for path in paths:
+            if path.suffix.lower() != ".toml":
+                # A broker's own positions report (CSV): read by
+                # lib/positions_reports, one reader per broker export.
+                try:
+                    rep_ = read_positions(path)
+                except PositionsReportError as e:
+                    _die_input(f"taxjson sanity: {e}")
+                reports_of[path] = rep_
+                labels.append(", ".join(rep_.accounts) or path.stem)
+                for r in rep_.rows:
+                    if r.asset_type == "cash" or abs(r.quantity) <= 1e-12:
+                        continue
+                    tgt = _mapped(r.symbol)
+                    book[tgt] = book.get(tgt, 0.0) + r.quantity
+                continue
+            # The same file through the positions reader, for its cost
+            # columns (the quantity checks below stay the authority).
+            try:
+                reports_of[path] = read_positions(path)
+            except PositionsReportError:
+                reports_of[path] = None
             # A broker/position file re-saved with a BOM was refused
             # (re-audit A2-1409, A2-1453); unreadable is exit 2 (A2-0164).
             try:
@@ -12885,12 +12930,47 @@ def cmd_sanity(args: argparse.Namespace) -> None:
     # Positions can NET to zero across accounts (or vs the files' sum);
     # only keep true residues.
     all_rows: List[Dict[str, Any]] = []
+    reports_of: Dict[Path, Any] = {}
+    base_rows: Dict[str, List[Dict[str, Any]]] = {}
+
+    def _rows_of(acct: str) -> List[Dict[str, Any]]:
+        if acct not in base_rows:
+            base_rows[acct] = PC.load_base_rows(cache, acct)
+        return base_rows[acct]
+
     for grp in ordered:
         ext_book, file_labels, alt = _ext_book(grp["files"])
         tax_book: Dict[str, float] = {}
         for acct in grp["accounts"]:
             for sym, q in tax[acct].items():
                 tax_book[sym] = tax_book.get(sym, 0.0) + q
+        # A broker report dated before the books' last row is compared
+        # with the books' positions ON its date (rebuilt from the
+        # account's rows); a holdings TOML only with an explicit
+        # [meta] as_of. One date for the group, else the latest books.
+        grp["as_of"] = ""
+        _dates = set()
+        for _p in grp["files"]:
+            _rp = reports_of.get(_p)
+            if _rp is None or not _rp.as_of:
+                _dates.add("")
+                continue
+            if _p.suffix.lower() == ".toml":
+                try:
+                    _meta = (tomllib.loads(_p.read_text(
+                        encoding="utf-8-sig")).get("meta") or {})
+                except Exception:
+                    _meta = {}
+                if not (isinstance(_meta, dict) and _meta.get("as_of")):
+                    _dates.add("")
+                    continue
+            _dates.add(_rp.as_of)
+        _grows = [r for a in grp["accounts"] for r in _rows_of(a)]
+        _books_end = PC.last_day(_grows)
+        if (len(_dates) == 1 and "" not in _dates and _books_end
+                and next(iter(_dates)) < _books_end):
+            grp["as_of"] = next(iter(_dates))
+            tax_book = PC.positions_on(_grows, grp["as_of"])
         via_underlying: List[Tuple[str, str]] = []
         for sym, via in alt.items():
             if sym in ext_book and sym not in tax_book \
@@ -12914,6 +12994,105 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         grp["labels"] = file_labels
         grp["positions"] = len(tax_book)
         all_rows.extend(rows)
+    # ---- costs (never a failing exit; lib/positions_check) ----------------
+    _cfg_accts = (load_config(root).get("accounts") or {}) \
+        if (root / "taxjson.toml").exists() else {}
+    _settings = (load_config(root).get("settings") or {}) \
+        if (root / "taxjson.toml").exists() else {}
+    try:
+        _ctry = _country(_settings) if _settings else "canada"
+    except SystemExit:
+        _ctry = "canada"
+    _base_cur = str(_settings.get("base_currency") or "").upper() or (
+        "USD" if _ctry == "usa" else "CAD")
+    _taxable = {a for a, c in _cfg_accts.items()
+                if (c or {}).get("type") == "taxable"}
+    _own_inv: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    _nat_inv: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    _fil_inv: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for acct, f in resolved.items():
+        _fil_inv[acct] = PC.load_inventory(f)
+        _own_inv[acct] = PC.load_inventory(cache / f"{acct}_gains.json")
+        _nat_inv[acct] = PC.load_inventory(cache / f"{acct}_raw_gains.json")
+    cost_all: List[Dict[str, Any]] = []
+    income_all: List[Dict[str, Any]] = []
+    for grp in ordered:
+        qty_bad = {r["symbol"] for r in grp["rows"]}
+        ext_cost: Dict[str, Dict[str, Any]] = {}
+        for _p in grp["files"]:
+            _rp = reports_of.get(_p)
+            if _rp is None:
+                continue
+            for r in _rp.rows:
+                if r.asset_type == "cash" or abs(r.quantity) <= 1e-12:
+                    continue
+                k = _mapped(r.symbol)
+                e = ext_cost.setdefault(k, {
+                    "cost": 0.0, "currencies": set(), "kinds": set(),
+                    "missing": False, "pos_cur": r.currency or "",
+                    "native": _native_mapped(r.symbol), "qty": 0.0})
+                e["qty"] += r.quantity
+                if r.cost is None or not r.cost_kind:
+                    e["missing"] = True
+                    continue
+                e["cost"] += float(r.cost)
+                e["currencies"].add((r.cost_currency or r.currency
+                                     or "").upper())
+                e["kinds"].add(r.cost_kind)
+        _grows = [r for a in grp["accounts"] for r in _rows_of(a)]
+        _after = (PC.touched_after(_grows, grp["as_of"])
+                  if grp["as_of"] else set())
+        _roc = PC.roc_symbols(_grows)
+        crow_list: List[Dict[str, Any]] = []
+        for sym in sorted(ext_cost):
+            e = ext_cost[sym]
+            if sym in qty_bad or abs(e["qty"]) <= tol:
+                continue
+            base_row = {"symbol": sym, "accounts": sorted(grp["accounts"]),
+                        "quantity": e["qty"]}
+            if e["missing"] or len(e["currencies"]) != 1:
+                cost_all.append(dict(base_row, status="n/a",
+                                     note=("the report states no cost"
+                                           if e["missing"] else
+                                           "costs in several currencies")))
+                continue
+            if sym in _after:
+                cost_all.append(dict(base_row, status="n/a",
+                                     note=f"the books changed after the "
+                                          f"report's date {grp['as_of']}"))
+                continue
+
+            def _sum(inv, key):
+                hit = [inv[a][key] for a in grp["accounts"]
+                       if key in inv.get(a, {})]
+                if not hit:
+                    return None
+                return {"total_cost": sum(h["total_cost"] for h in hit),
+                        "deferred_wash": sum(h["deferred_wash"]
+                                             for h in hit),
+                        "currency": hit[0].get("currency") or "",
+                        "qty": sum(h["qty"] for h in hit)}
+            _own = _sum(_own_inv, sym)
+            _pooled = any(sym in _fil_inv.get(a, {})
+                          for a in _taxable - set(grp["accounts"]))
+            res = PC.compare_cost(
+                symbol=sym, broker_cost=e["cost"],
+                cost_currency=next(iter(e["currencies"])),
+                cost_kind=sorted(e["kinds"])[0],
+                position_currency=e["pos_cur"], base=_base_cur,
+                country=_ctry, filing=_sum(_fil_inv, sym),
+                own=(_own or {}).get("total_cost"),
+                native=_sum(_nat_inv, e["native"]),
+                pooled=_pooled, roc=sym in _roc, tol_abs=cost_tol,
+                tol_rel=0.001)
+            cost_all.append(dict(base_row, **res))
+        for a in grp["accounts"]:
+            income_all.extend(PC.income_share_mismatches(_rows_of(a), a,
+                                                         tol))
+    cost_diffs = [c for c in cost_all if c.get("status") == "differs"]
+    cost_matched = sum(1 for c in cost_all if c.get("status") == "match")
+    cost_na = sum(1 for c in cost_all if c.get("status") == "n/a")
+
     accounts = sorted(placed_accounts)
     files: List[Path] = [p2 for g in ordered for p2 in g["files"]]
     file_labels = [lbl for g in ordered for lbl in g["labels"]]
@@ -12937,8 +13116,18 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                             {"file_symbol": a, "taxjson_symbol": b}
                             for a, b in g["via_underlying"]],
                         "discrepancies": g["rows"],
+                        "as_of": g["as_of"] or None,
                         "clean": not g["rows"]}
                        for g in ordered],
+            # Costs and income share counts (lib/positions_check):
+            # informational, never part of `clean` or the exit code.
+            "cost": {"compared": cost_matched + len(cost_diffs),
+                     "matched": cost_matched,
+                     "not_compared": cost_na,
+                     "tolerance": cost_tol,
+                     "rows": cost_all},
+            "cost_differences": cost_diffs,
+            "income_share_mismatches": income_all,
             "discrepancies": all_rows,
             "uncovered_accounts": uncovered,
             "notes": config_notes,
@@ -12956,15 +13145,22 @@ def cmd_sanity(args: argparse.Namespace) -> None:
     for n in config_notes:
         print(f"taxjson sanity: note: {n}", file=sys.stderr)
     multi = len(ordered) > 1 or any(g["paired"] for g in ordered)
-    print(f"SANITY — taxjson positions (basis: {basis}) vs external "
-          f"holdings TOML ({'paired' if multi else 'loose aggregate'} "
-          f"check)")
+    _what = ("external holdings TOML"
+             if all(p2.suffix.lower() == ".toml"
+                    for g in ordered for p2 in g["files"])
+             else "the broker's positions")
+    print(f"SANITY — taxjson positions (basis: {basis}) vs {_what} "
+          f"({'paired' if multi else 'loose aggregate'} check)")
     print()
     for grp in ordered:
         tag = ("paired" if grp["paired"] else "aggregate") if multi else ""
         print(f"  accounts: {', '.join(sorted(grp['accounts']))}  "
               f"({grp['positions']} combined position(s))"
               + (f"  [{tag}]" if tag else ""))
+        if grp["as_of"]:
+            print(f"  as of:    {grp['as_of']} — the report's date; the "
+                  f"books' positions on that day (rebuilt from "
+                  f"work/<account>_base.json)")
         # One line per file, PATH first: the label alone (the file's
         # meta.account, else its stem) didn't say which export was
         # actually read — a stale or wrong path is the first thing to
@@ -13029,7 +13225,284 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             out_lines.append(" ".join(cells))
         _print_report_table(out_lines)
         print(f"\n{len(all_rows)} discrepancy(ies).")
+    _sanity_print_extras(ordered, cost_all, cost_diffs, cost_matched,
+                         cost_na, income_all, multi)
     raise SystemExit(0 if not all_rows else 1)
+
+
+def _opening_lines(report, *, country: str, base_currency: str,
+                   snapshot: str):
+    """(OPENING .tt lines, [skipped (symbol, reason)], [notes]) for one
+    positions report's rows (lib/positions_reports). Long positions
+    with a stated cost only: a short (a written option, a short sale)
+    depends on its write; a row without a cost is never written at a
+    market value (CA-OPEN-01). A US project needs each lot's own
+    purchase date and a US-dollar cost (US-OPEN-01/02)."""
+    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.positions_reports import COST_LOTS
+    lines: List[str] = []
+    skipped: List[Tuple[str, str]] = []
+    notes: List[str] = []
+    usa = country == "usa"
+    lots_kind = False
+    for r in sorted(report.rows, key=lambda x: (x.symbol, x.lot_date)):
+        sym = r.symbol
+        q = float(r.quantity or 0.0)
+        if abs(q) < 1e-12:
+            continue
+        if r.asset_type in ("cash",):
+            continue
+        if q < 0:
+            skipped.append((sym, "a short position (its premium or "
+                                 "proceeds depend on the write: enter "
+                                 "the write as a BUYSELL line)"))
+            continue
+        if r.asset_type == "future" or sym.startswith(("F:", "/", "\\")):
+            skipped.append((sym, "a futures contract (booked on its own "
+                                 "basis: enter the opening trade as a "
+                                 "BUYSELL line)"))
+            continue
+        if r.cost is None or not r.cost_kind:
+            skipped.append((sym, "the report states no cost for it (a "
+                                 "market value is never a cost) — write "
+                                 "its line by hand from a statement "
+                                 "with book cost"))
+            continue
+        cost = float(r.cost)
+        if cost < 0:
+            skipped.append((sym, f"a negative cost {cost:,.2f}"))
+            continue
+        cur = (r.cost_currency or r.currency or "").upper()
+        if not cur:
+            skipped.append((sym, "no currency for its cost"))
+            continue
+        lot = r.lot_date or ""
+        if usa:
+            if not lot:
+                skipped.append((sym, "no purchase date: a US opening is "
+                                     "one line per lot with its own date "
+                                     "(US-OPEN-01) — list the lots in a "
+                                     "holdings TOML (`acquired = ...`) "
+                                     "or write the lines by hand"))
+                continue
+            if cur != base_currency.upper():
+                skipped.append((sym, f"its cost is in {cur}: a US lot's "
+                                     f"basis is its {base_currency} cost "
+                                     f"on its purchase date (US-OPEN-02)"))
+                continue
+        if lot and lot > snapshot:
+            skipped.append((sym, f"its lot date {lot} is after the "
+                                 f"snapshot date {snapshot}"))
+            continue
+        if r.cost_kind == COST_LOTS:
+            lots_kind = True
+        lines.append(f"OPENING {snapshot} {sym} {q:.8g} {cur} "
+                     f"{cost:.2f}" + (f" {lot}" if lot else ""))
+        if is_option_symbol(sym) and not usa and r.multiplier \
+                and float(r.multiplier) not in (0.0, 100.0):
+            notes.append(f"{sym}: contract size {float(r.multiplier):g} "
+                         f"— add `MULT` to ticker.map if the books need "
+                         f"it")
+    if lots_kind and not usa:
+        notes.append("the report's cost is the broker's LOT basis (each "
+                     "lot at its own price, sales matched by the broker's "
+                     "lot method); Canadian ACB is the average cost of "
+                     "all identical shares (s.47). They differ when part "
+                     "of a position was sold before the snapshot — check "
+                     "those with `taxjson sanity` once the books are "
+                     "built.")
+    return lines, skipped, notes
+
+
+def cmd_opening(args: argparse.Namespace) -> None:
+    """`taxjson opening ACCOUNT FILE [--date D] [--dry-run] [--force]`:
+    turn a broker's positions report (lib/positions_reports: an IB
+    Activity Statement's Open Positions, an RBC Holdings Export, a
+    `[[holding]]` TOML) into an opening balance —
+    inputs/<ACCOUNT>/opening_<date>.tt with one OPENING line per long
+    position (per lot with its date in a US project). The snapshot then
+    replaces the account's earlier rows of those symbols
+    (lib/opening; tax-logic CA-OPEN-01..03 / US-OPEN-01..03)."""
+    from taxjson.lib.brokerages.base import shown_name
+    from taxjson.lib.positions_reports import (PositionsReportError,
+                                               kind_label, read_positions)
+    root = Path(args.dir).resolve()
+    cfg = load_config(root)
+    settings = cfg.get("settings") or {}
+    country = _country(settings)
+    base = str(settings.get("base_currency") or "").upper() \
+        or _home_currency(settings)
+    accounts = cfg.get("accounts") or {}
+    name = args.account
+    if name not in accounts:
+        _die(f"taxjson opening: {name!r} is not an account in "
+             f"taxjson.toml (have: {', '.join(sorted(accounts)) or '-'})")
+    if (accounts.get(name) or {}).get("crypto"):
+        _die(f"taxjson opening: account {name} is a crypto account — an "
+             f"opening balance is for share accounts (enter the coins' "
+             f"purchases as BUYSELL lines).")
+    path = Path(args.file).expanduser()
+    if not path.is_file():
+        _die_input(f"taxjson opening: {_mask_ids_in_path(str(path))} is "
+                   f"not a file")
+    try:
+        report = read_positions(path)
+    except PositionsReportError as e:
+        _die_input(f"taxjson opening: {e}")
+    snapshot = args.date or report.as_of
+    if not snapshot:
+        _die(f"taxjson opening: {shown_name(path)} does not say which day "
+             f"its positions are for — pass --date YYYY-MM-DD (the "
+             f"statement's date).")
+    try:
+        datetime.strptime(snapshot, "%Y-%m-%d")
+    except ValueError:
+        _die(f"taxjson opening: --date {snapshot!r} is not YYYY-MM-DD")
+    if args.date and report.as_of and args.date != report.as_of:
+        print(f"taxjson opening: note: the report is as of "
+              f"{report.as_of}; the opening is dated {args.date} as "
+              f"given (--date).", file=sys.stderr)
+    brokers = sorted({r.account for r in report.rows if r.account})
+    if len(brokers) > 1:
+        _die(f"taxjson opening: {shown_name(path)} lists "
+             f"{len(brokers)} broker accounts ({', '.join(brokers)}) — "
+             f"an opening is one taxjson account's: export each broker "
+             f"account's positions separately (or split the file).")
+    lines, skipped, notes = _opening_lines(report, country=country,
+                                           base_currency=base,
+                                           snapshot=snapshot)
+    acct_dir = root / "inputs" / name
+    out = acct_dir / f"opening_{snapshot}.tt"
+    # Another opening file of this account for the same symbols would
+    # count them twice (two .tt files are two records — never deduped).
+    from taxjson.bin.taxjson_convert_tt import strip_tt_comment
+    syms = {ln.split()[2] for ln in lines}
+    clash = []
+    for f in sorted(acct_dir.glob("*.tt")) if acct_dir.is_dir() else []:
+        if f.resolve() == out.resolve():
+            continue
+        try:
+            text = f.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for ln in text.splitlines():
+            parts = strip_tt_comment(ln).split()
+            if len(parts) >= 3 and parts[0] == "OPENING" \
+                    and parts[2].upper() in syms:
+                clash.append((f.name, parts[2].upper()))
+    if clash:
+        _die(f"taxjson opening: inputs/{name}/{clash[0][0]} already has "
+             f"OPENING lines for {', '.join(sorted({s for _f, s in clash})[:6])}"
+             f" — one opening per symbol per account (remove that file, "
+             f"or the lines, first).")
+    header = [
+        f"# Opening balance of account {name} on {snapshot} "
+        f"(`taxjson opening`).",
+        f"# From: {_mask_ids_in_path(shown_name(path))} — "
+        f"{kind_label(report.kind)}"
+        + (f", accounts {', '.join(report.accounts)}"
+           if report.accounts else "") + ".",
+        "# An OPENING line sets a position and its cost; it is not a "
+        "purchase (tax-logic",
+        "# CA-OPEN-01 / US-OPEN-01). The account's rows of these symbols "
+        "dated on or",
+        "# before the snapshot day are left out of the books "
+        "(CA-OPEN-03 / US-OPEN-03).",
+        "#       snapshot    symbol  qty  currency  total-cost  "
+        "[lot-date]",
+    ]
+    text = "\n".join(header + lines) + "\n"
+    if getattr(args, "dry_run", False):
+        sys.stdout.write(text)
+    elif not lines:
+        pass
+    else:
+        if out.exists() and not args.force:
+            _die(f"taxjson opening: inputs/{name}/{out.name} exists — "
+                 f"pass --force to replace it (the old file is kept as "
+                 f"{out.name}.bak).")
+        acct_dir.mkdir(parents=True, exist_ok=True)
+        if out.exists():
+            import shutil
+            shutil.copy2(out, out.with_name(out.name + ".bak"))
+        from taxjson.lib.cli_diag import write_text_atomic
+        write_text_atomic(out, text)
+    for n in report.notes + notes:
+        print(f"taxjson opening: note: {n}", file=sys.stderr)
+    for sym, why in skipped:
+        print(f"taxjson opening: skipped {sym}: {why}", file=sys.stderr)
+    if not lines:
+        _die(f"taxjson opening: no position of {shown_name(path)} could "
+             f"be written (see above) — nothing written.")
+    where = ("(dry run — nothing written)" if getattr(args, "dry_run",
+                                                       False)
+             else f"-> inputs/{name}/{out.name}")
+    print(f"{len(lines)} OPENING line(s) for account {name} as of "
+          f"{snapshot} {where}"
+          + (f"; {len(skipped)} position(s) skipped (see above)"
+             if skipped else ""))
+    if not getattr(args, "dry_run", False):
+        print("Next: `taxjson run`, then `taxjson find-missing-history` "
+              "and `taxjson sanity` (it compares quantities and costs).")
+
+
+def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
+                         cost_na, income_all, multi) -> None:
+    """The COST and INCOME sections of `taxjson sanity` (after the
+    quantity check, never changing its exit code)."""
+    from taxjson.lib.positions_check import REASON_TEXT
+    compared = cost_matched + len(cost_diffs)
+    if compared or cost_na:
+        print()
+        print(f"COST — books vs the reports' cost: {compared} compared, "
+              f"{cost_matched} within tolerance, {len(cost_diffs)} "
+              f"differ" + (f", {cost_na} not compared" if cost_na else "")
+              + " (informational: a broker's book value is not your "
+                "ACB/basis; never changes the exit code).")
+    if cost_diffs:
+        lines = [("ACCOUNTS " if multi else "")
+                 + "SYMBOL QTY CUR BROKER BOOKS DIFF REASON"]
+        for c in cost_diffs:
+            cells = [c["symbol"], f"{c['quantity']:g}", c["cost_currency"]
+                     or "-", f"{c['broker_cost']:,.2f}",
+                     f"{c['books_cost']:,.2f}", f"{c['diff']:+,.2f}",
+                     ",".join(c["reasons"])
+                     + ("" if c.get("explained") or
+                        c["reasons"] == ["unexplained"] else "?")]
+            if multi:
+                cells.insert(0, "+".join(c["accounts"]))
+            lines.append(" ".join(x.replace(" ", "_") if i < len(cells) - 1
+                                  else x for i, x in enumerate(cells)))
+        _print_report_table(lines)
+        used = sorted({r for c in cost_diffs for r in c["reasons"]})
+        print("Reasons" + (" (a ? = a possible cause, not checked to "
+                           "close the gap):"
+                           if any(not c.get("explained")
+                                  and c["reasons"] != ["unexplained"]
+                                  for c in cost_diffs) else ":"))
+        for r in used:
+            print(f"  {r}: {REASON_TEXT.get(r, r)}")
+        natives = sorted({c["basis"] for c in cost_diffs
+                          if c.get("basis", "").startswith("native")})
+        for b in natives:
+            print(f"  BOOKS here is the {b}.")
+    na = [c for c in cost_all if c.get("status") == "n/a"]
+    if na:
+        print("Not compared: " + "; ".join(
+            f"{c['symbol']} ({c.get('note') or 'n/a'})" for c in na[:8])
+            + (f"; +{len(na) - 8} more" if len(na) > 8 else ""))
+    if income_all:
+        print()
+        print(f"INCOME ON SHARES THE BOOKS DO NOT HOLD — {len(income_all)} "
+              f"dividend row(s) state a share count the books did not "
+              f"hold (missing history or a missing trade is the usual "
+              f"cause; informational):")
+        lines = ["ACCOUNT SYMBOL PAID ON STATED BOOKS"]
+        for m in income_all:
+            lines.append(f"{m['account']} {m['symbol']} {m['date']} "
+                         f"{m['on']}_({m['basis'].replace(' ', '_')}) "
+                         f"{m['stated_shares']:g} {m['books_shares']:g}")
+        _print_report_table(lines)
 
 
 def cmd_positions(args: argparse.Namespace) -> None:
@@ -18425,6 +18898,11 @@ def _build_parser(prog: str = "taxjson"
                             "broker positions files)")
     p_san.add_argument("--tolerance", type=_nonneg_float_arg, default=1e-4,
                        help="Quantity tolerance (default: 0.0001)")
+    p_san.add_argument("--cost-tolerance", type=_nonneg_float_arg,
+                       default=1.0,
+                       help="Cost difference ignored, in the cost's "
+                            "currency (default: 1.00, or 0.1%% of the "
+                            "cost when larger)")
     p_san.add_argument("--json", action="store_true",
                        help="Emit JSON instead of text")
     p_san.set_defaults(func=cmd_sanity)
@@ -18821,6 +19299,31 @@ def _build_parser(prog: str = "taxjson"
                             "is otherwise refused; the old file is kept as "
                             "FILE.bak)")
     p_fmh.set_defaults(func=cmd_find_missing_history)
+
+    p_open = sub.add_parser(
+        "opening",
+        help="Opening balance from a broker's positions report",
+        description="Turn a broker's positions report (an Interactive "
+             "Brokers Activity Statement's Open Positions, an RBC "
+             "Holdings Export, or a [[holding]] TOML) into "
+             "inputs/ACCOUNT/opening_DATE.tt: one OPENING line per long "
+             "position with its quantity and the report's book cost "
+             "(never its market value) — per lot with its purchase date "
+             "in a US project. An opening balance is not a purchase "
+             "(no superficial-loss / wash-sale window), and it replaces "
+             "the account's rows of those symbols dated on or before it "
+             "(`taxjson tax-logic`: CA-OPEN / US-OPEN).")
+    p_open.add_argument("account", help="The taxjson account it opens")
+    p_open.add_argument("file", help="The positions report")
+    p_open.add_argument("--date", metavar="YYYY-MM-DD",
+                        help="The snapshot day (default: the report's "
+                             "own as-of date; required when it has none)")
+    p_open.add_argument("--dry-run", action="store_true",
+                        help="Print the lines instead of writing the file")
+    p_open.add_argument("--force", action="store_true",
+                        help="Replace an existing opening_DATE.tt (kept "
+                             "as .bak)")
+    p_open.set_defaults(func=cmd_opening)
 
     p_fees = sub.add_parser(
         "fees",
