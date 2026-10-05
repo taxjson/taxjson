@@ -346,7 +346,9 @@ def equity_option_size(opt_tx) -> float:
             f"{root} options: the export does not state the contract size, "
             f"so {size:g} shares per contract is ASSUMED where it matters "
             f"(an exercise or assignment, replacement shares); for a mini "
-            f"or an adjusted series add `MULT {root} N` to ticker.map.")
+            f"or an adjusted series add `MULT {root} N` to ticker.map.",
+            rollup=(root if size == OPTION_CONTRACT_SHARES
+                    else f"{root} ({size:g} shares)",))
     return size
 
 # Actions that never touch a symbol's ACB / basis pool, so their currency

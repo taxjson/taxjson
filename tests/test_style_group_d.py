@@ -117,5 +117,53 @@ class TestTaxtextUnchanged(unittest.TestCase):
         self.assertRegex(first, r"^[A-Z_]+ +\d{4}-\d{2}-\d{2} ")
 
 
+class TestContractSizeNoteRollUp(unittest.TestCase):
+    """lib/markets: the per-root 'export does not state the contract
+    size' note is ONE note for a person (the roots listed) and stays a
+    line per root when captured for a program (width 0: a stage's .diag
+    and the .sum DIAGNOSTICS keep their bytes)."""
+
+    def _emit(self, width):
+        import contextlib
+        import io
+        import os
+        from unittest import mock
+        from taxjson.lib import core, markets
+
+        class _Opt:
+            multiplier = 0.0
+            contract_size_basis = "assumed"
+
+            def __init__(self, sym):
+                self.symbol = sym
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"TAXJSON_WIDTH": str(width)}), \
+                contextlib.redirect_stderr(err):
+            markets.reset_notes()
+            for sym in ("QZB250117C00040000.US", "QZA250117C00040000.US",
+                        "QZB250117P00030000.US"):
+                core.equity_option_size(_Opt(sym))
+            markets.flush_notes()
+            markets.reset_notes()
+        return err.getvalue()
+
+    def test_one_note_for_a_person(self):
+        text = self._emit(100)
+        self.assertEqual(text.count("note:"), 1, text)
+        self.assertTrue(text.startswith("note: 2 option root(s) whose "
+                                        "export does not state"), text)
+        self.assertIn("\n  QZA, QZB.\n", text)
+        self.assertIn("`MULT <ROOT> N`", text)
+        assert_styled(self, text)
+
+    def test_a_line_per_root_when_captured(self):
+        lines = self._emit(0).splitlines()
+        self.assertEqual(len(lines), 2, lines)
+        self.assertTrue(lines[0].startswith("note: QZB options: the export "
+                                            "does not state the contract "
+                                            "size"), lines)
+        self.assertIn("`MULT QZA N`", lines[1])
+
+
 if __name__ == "__main__":
     unittest.main()
