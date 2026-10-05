@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.18.0 (2026-10-05)
+
 ### Security (pre-release review)
 
 - **Backups never overwrite a backup or follow a symlink.** `taxjson
