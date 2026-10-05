@@ -1,0 +1,26 @@
+[settings]
+base_currency  = "CAD"
+country        = "canada"
+local_timezone = "America/Toronto"
+source_currencies = ["USD"]
+tax_date       = "settle"
+year           = 2024
+option_grant_timing_since = 2024
+
+[accounts.margin]
+type = "taxable"
+
+[accounts.qt]
+type = "taxable"
+
+[accounts.tfsa]
+transfers = true
+type      = "sheltered"
+
+[accounts.rrsp]
+transfers = true
+type      = "sheltered"
+
+[accounts.crypto]
+crypto = true
+type   = "taxable"
