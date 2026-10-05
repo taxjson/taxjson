@@ -52,9 +52,9 @@ Open `taxjson.toml` and make the accounts match yours:
 ## 3. Download your broker files
 
 Put each account's files in its own folder, `inputs/<account>/`. Any file
-name works, except crypto: start Coinbase files with `cb_` and Kraken
-files with `kr_`. Several files for one account are fine; overlapping
-rows are read once.
+name works: taxjson recognises each broker's export by its header, and
+`taxjson run` prints which broker it read each file as. Several files for
+one account are fine; overlapping rows are read once.
 
 Download **all the history the broker will give you**, not just the tax
 year. Your cost for a share sold this year comes from the day you bought
