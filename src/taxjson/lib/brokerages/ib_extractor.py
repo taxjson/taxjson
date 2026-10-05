@@ -1929,6 +1929,42 @@ class IbBrokerage(BaseBrokerage):
             f"index e-mini, ...) cannot be guessed. Export the full Activity Statement "
             f"(it lists every instrument).")
 
+    def _closed_lot(self, closing: Optional[Dict[str, Any]], row,
+                    header_map, asset_cat: str, where: str) -> None:
+        """One IB ClosedLot row (a lot the closing trade above it
+        closed: open date, quantity, cost) appended to that trade's
+        `broker_lots` evidence as "<date> <qty> <basis>", lots joined
+        by ";" — read only by `find-missing-history --write-purchases`,
+        never booked. A lot whose cells do not read marks the trade's
+        lots "invalid" (the drafter then uses IB's total Basis); a
+        ClosedLot row of another security than the closing trade above
+        it is ignored."""
+        if closing is None or closing.get('broker_lots') == 'invalid':
+            return
+        if (self._cell(row, header_map, 'Symbol')
+                != closing.get('description')
+                or self._cell(row, header_map, 'Currency')
+                != closing.get('currency')):
+            return
+        try:
+            lot_date, _ = _ib_split_datetime(
+                self._cell(row, header_map, 'Date/Time'), where)
+            qty = abs(parse_strict_number(
+                self._cell(row, header_map, 'Quantity'),
+                field='Quantity', where=where))
+            basis = (abs(parse_strict_number(
+                self._cell(row, header_map, 'Basis'), field='Basis',
+                where=where)) if 'Basis' in header_map else None)
+        except (BrokerageParseError, ValueError):
+            closing['broker_lots'] = 'invalid'
+            return
+        if basis is None or qty <= 1e-12:
+            closing['broker_lots'] = 'invalid'
+            return
+        lot = f"{lot_date} {qty:.10g} {basis:.2f}"
+        closing['broker_lots'] = (f"{closing['broker_lots']};{lot}"
+                                  if closing.get('broker_lots') else lot)
+
     @staticmethod
     def _security_name(asset_cat: str, raw_symbol: str,
                        fii: Dict[tuple, Any]) -> str:
@@ -2425,6 +2461,10 @@ class IbBrokerage(BaseBrokerage):
         # Trades rows coded `Ca` (cancelled): paired with their original
         # after the loop (lib/trade_cancel).
         trade_cancels: List[Dict[str, Any]] = []
+        # The last closing trade that carries IB's Basis: the ClosedLot
+        # rows that follow it are its lots (open date, quantity, cost),
+        # kept as evidence for `find-missing-history --write-purchases`.
+        _last_closing: Optional[Dict[str, Any]] = None
         # Unknown (non-allowlisted) sections already warned about.
         unknown_sections: set = set()
 
@@ -2798,6 +2838,9 @@ class IbBrokerage(BaseBrokerage):
                 if 'DataDiscriminator' in header_map:
                     _disc = _pre_disc
                     if _disc in ('ClosedLot', 'SubTotal', 'Total'):
+                        if _disc == 'ClosedLot':
+                            self._closed_lot(_last_closing, row,
+                                             header_map, asset_cat, where)
                         self.count_skip(f"{_NE}Trades roll-up row "
                                         f"({_disc})")
                         continue
@@ -3079,6 +3122,8 @@ class IbBrokerage(BaseBrokerage):
                     _trade_tx['type'] = TRADE_CANCEL_TYPE
                     trade_cancels.append(_trade_tx)
                 transactions.append(_trade_tx)
+                _last_closing = (_trade_tx if _trade_tx.get('broker_basis')
+                                 else None)
                 if is_expiry:
                     expiry_txs.append(_trade_tx)
                 if action == 'ASSIGN' and asset_cat == 'Equity and Index Options':
