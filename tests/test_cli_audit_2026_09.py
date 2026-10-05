@@ -361,7 +361,7 @@ class TestNoFalseCleanBeforeRun(unittest.TestCase):  # B22
         with tempfile.TemporaryDirectory() as td:
             r = _tj(self._root(td), "scan")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("run `taxjson run`", r.stderr)
+        self.assertIn("Run `taxjson run`", r.stderr)
         self.assertNotIn("clean scan", r.stdout)
 
     def test_leaps_without_books_exits_1(self):

@@ -720,10 +720,10 @@ def main(argv: Optional[List[str]] = None,
                 if s.upper() not in held and "." not in s]
         positions = [r for r in positions if r["symbol"].upper() in want]
         if bare:
-            print(f"{PROG}: {'error' if not positions else 'warning'}: "
-                  f"no open position for symbol(s) {', '.join(bare)} — "
-                  f"harvest takes listed symbols such as AAA.TO / BBB.US "
-                  f"(not account names).", file=sys.stderr)
+            (warn if positions else error)(
+                PROG, f"no open position for symbol(s) {', '.join(bare)}",
+                details=["harvest takes listed symbols such as AAA.TO / "
+                         "BBB.US (not account names)."])
             if not positions:
                 return 1
     if not positions:
@@ -751,10 +751,10 @@ def main(argv: Optional[List[str]] = None,
     option_tickers = sorted({r["symbol"] for r in positions
                              if r.get("is_option")})
     total = len(tickers) + len(option_tickers)
-    print(f"Resolving current prices for {total} symbol(s) "
-          f"(IBKR -> yfinance -> cache"
-          f"{'; options: IBKR -> cache' if option_tickers else ''})...",
-          file=sys.stderr if args.json else sys.stdout)
+    # Progress, on stderr: stdout is the report (or the --json document).
+    from taxjson.lib.cli_diag import note as _note
+    _note(PROG, f"pricing {total} symbol(s): IBKR -> yfinance -> cache"
+          f"{' (options: IBKR -> cache)' if option_tickers else ''}")
 
     # The project's ticker.map QUOTE lines: next to the inputs, then the
     # project root above work/ — the cwd only last. Looking in the cwd first
@@ -1063,15 +1063,60 @@ def main(argv: Optional[List[str]] = None,
         total_cells.append("-")                 # SH_ADD
     total_cells.append("-")                     # ADVISORY
 
-    print(f"\nHARVEST — unrealized open positions, {args.base_currency}, "
-          f"basis: {basis}  (PRICE marks its source: ^ IBKR, "
-          f"+ yfinance, * cache; losses first; ADVISORY from the "
-          f"wash radar)")
-    print()
-    from taxjson.lib.report_model import render_table
-    for line in render_table(header, aligns, body,
-                             foot=[total_cells], gap="   "):
-        print(line)
+    from taxjson.lib import out
+    from taxjson.lib.wash_scope import advisory_parts
+    doc = out.Doc(f"HARVEST — unrealized open positions, "
+                  f"{args.base_currency}, basis: {basis}")
+    doc.para("Losses first. PRICE marks its source: ^ IBKR, + yfinance, "
+             "* cache. ADVISORY is the wash radar's.")
+    doc.blank()
+    # Too wide for the width: the columns are packed into as few tables
+    # as fit, each led by ACCOUNT and SYMBOL — the position and its
+    # verdict; the radar's advisory and the last buys; the cost and the
+    # break-even price — a group split only when it cannot fit whole;
+    # the TOTAL row stays under UNREALIZED. A table that cannot fit even
+    # one column goes one block per position. Unwrapped (TAXJSON_WIDTH=0,
+    # a captured run): the one full table, as before.
+    def _fit(cols, per_record=True):
+        foot = ([[total_cells[i] for i in cols]]
+                if header.index(f"UNREALIZED\n{_bc}") in cols else ())
+        return out.fit_table(
+            [header[i] for i in cols], [[r[i] for i in cols] for r in body],
+            aligns=[aligns[i] for i in cols], foot=foot,
+            width_=doc.w, key=(0, 1), per_record=per_record)
+
+    def _fits(cols):
+        return max(map(len, _fit([0, 1] + cols, per_record=False))) <= doc.w
+
+    full = _fit(list(range(len(header))), per_record=False)
+    if doc.w <= 0 or max(map(len, full)) <= doc.w:
+        doc.line("\n".join(full))
+    else:
+        def _idx(*names):
+            return [header.index(h) for h in names if h in header]
+        wash = _idx("ADVISORY", "TX_ADD", "SH_ADD")
+        cost = _idx(f"COST/SH\n{_bc}", "EXIT@\nnative")
+        core = [i for i in range(2, len(header))
+                if i not in wash and i not in cost]
+        tables: List[List[int]] = []
+        cur: List[int] = []
+        for group in (core, wash, cost):
+            if cur and _fits(cur + group):
+                cur += group
+                continue
+            if cur:
+                tables.append(cur)
+                cur = []
+            for i in group:
+                if cur and not _fits(cur + [i]):
+                    tables.append(cur)
+                    cur = []
+                cur.append(i)
+        tables.append(cur)
+        for k, cols in enumerate(tables):
+            if k:
+                doc.blank()
+            doc.line("\n".join(_fit([0, 1] + cols)))
 
     # When can the paper losses become CLAIMED losses? Cumulative
     # schedule from the radar's clear dates.
@@ -1082,12 +1127,13 @@ def main(argv: Optional[List[str]] = None,
             parts.append(f"<={k} {fmt_money(schedule[k])}")
         if schedule["later"] > schedule["30d"]:
             parts.append(f"later {fmt_money(schedule['later'])}")
-        line = f"\nHARVESTABLE LOSSES ({cur}, cumulative): " + \
+        line = f"HARVESTABLE LOSSES ({cur}, cumulative): " + \
                " | ".join(parts)
         if schedule["no_clear"]:
             line += (f"  [+{fmt_money(schedule['no_clear'])} with no "
                      f"clear date — see ADVISORY]")
-        print(line)
+        doc.blank()
+        doc.line("\n".join(out.wrap(line, doc.w, "", "  ")))
         _risk_now = sum(abs(float(r.get("unrealized") or 0.0))
                         for r in rows
                         if r.get("verdict") == "LOSS"
@@ -1096,40 +1142,33 @@ def main(argv: Optional[List[str]] = None,
         if _risk_now > 0.005:
             _pause = ("IRA buys and dividend reinvestment" if is_usa
                       else "DRIPs/sheltered adds")
-            print(f"RISK rows ({fmt_money(_risk_now)}) count as "
-                  f"claimable now — no buys inside the past 30 days; "
-                  f"pause {_pause} for 30 days AFTER "
-                  f"selling or the denial is permanent.")
+            doc.item(f"RISK rows ({fmt_money(_risk_now)}) count as "
+                     f"claimable now — no buys inside the past 30 days; "
+                     f"pause {_pause} for 30 days AFTER "
+                     f"selling or the denial is permanent.")
         _blocked_now = sum(abs(float(r.get("unrealized") or 0.0))
                            for r in rows
                            if r.get("verdict") == "LOSS"
                            and ((r.get("radar") or {}).get("category")
                                 == "BLOCKED"))
         if _blocked_now > 0.005:
-            print(f"BLOCKED rows ({fmt_money(_blocked_now)}) count as "
-                  f"claimable now — a recent loss with no buys inside "
-                  f"its window; selling more at a loss today is clean. "
-                  f"Do NOT rebuy before the no-rebuy-until date or "
-                  f"BOTH losses are denied.")
-        print("Estimates at today's prices; any new buy on either side "
-              "pushes a clear date out.")
-    legend = ["TX_ADD: last buy in the taxable accounts — a rebuy "
-              "within 30 days of a loss sale defers the loss (it moves "
-              "into the new shares' basis) and extends the clear date.",
-              "EXIT@: the NATIVE-currency price at which a full exit "
-              "today books no base-currency loss — book cost converted "
-              "at today's FX rate, plus a 2% buffer for fees/slippage/"
-              "FX drift. LOSS rows (long) only."]
-    if any((r.get("recognised_premium") or 0) > 0.005 for r in rows):
-        legend.append("Written options under grant timing: the premium "
-                      "was taxed when the option was written, so COST "
-                      "leaves it out and UNREALIZED is the capital loss "
-                      "a buy-back books today (the whole buy-back cost).")
-    if any(r.get("wash_exempt") for r in rows):
-        legend.append("no-wash-rule(crypto): a crypto account is not "
-                      "subject to the wash-sale rule (US-WASH-13) — its "
-                      "losses are claimable now and a rebuy does not "
-                      "defer them; TX_ADD does not apply to those rows.")
+            doc.item(f"BLOCKED rows ({fmt_money(_blocked_now)}) count as "
+                     f"claimable now — a recent loss with no buys inside "
+                     f"its window; selling more at a loss today is clean. "
+                     f"Do NOT rebuy before the no-rebuy-until date or "
+                     f"BOTH losses are denied.")
+        doc.item("Estimates at today's prices; any new buy on either side "
+                 "pushes a clear date out.")
+
+    # What the columns mean.
+    legend: List[str] = [
+        "TX_ADD: last buy in the taxable accounts — a rebuy within 30 "
+        "days of a loss sale defers the loss (it moves into the new "
+        "shares' basis) and extends the clear date.",
+        "EXIT@: the NATIVE-currency price at which a full exit today "
+        "books no base-currency loss — book cost converted at today's FX "
+        "rate, plus a 2% buffer for fees/slippage/FX drift. LOSS rows "
+        "(long) only."]
     if show_options:
         legend.append("Options: PRICE and COST/SH are per-share premium "
                       "(UNREALIZED carries the contract size the rows "
@@ -1160,33 +1199,54 @@ def main(argv: Optional[List[str]] = None,
     legend.append("Signed days: -Nd = N days ago, +Nd = N days ahead "
                   "(ADVISORY clear dates). The radar's clear date runs "
                   "from the MOST RECENT buy on either side.")
+    if is_usa:
+        legend.append("LT_IN approximates from the position start date; "
+                      "per-lot ST/LT is decided by the engine at sale "
+                      "time. An open short shows ST: covering it is "
+                      "short-term (US-HOLD-03).")
+    doc.section("COLUMNS")
+    doc.items(legend)
+
+    notes: List[str] = []
+    if any((r.get("recognised_premium") or 0) > 0.005 for r in rows):
+        notes.append("Written options under grant timing: the premium "
+                     "was taxed when the option was written, so COST "
+                     "leaves it out and UNREALIZED is the capital loss "
+                     "a buy-back books today (the whole buy-back cost).")
+    if any(r.get("wash_exempt") for r in rows):
+        notes.append("no-wash-rule(crypto): a crypto account is not "
+                     "subject to the wash-sale rule (US-WASH-13) — its "
+                     "losses are claimable now and a rebuy does not "
+                     "defer them; TX_ADD does not apply to those rows.")
     tot_deferred = sum(float(r.get("deferred_wash") or 0) for r in rows)
     if tot_deferred > 0.005:
         carriers = sum(1 for r in rows
                        if float(r.get("deferred_wash") or 0) > 0.005)
-        legend.append(f"DEFERRED WASH: {fmt_money(tot_deferred)} of the "
-                      f"book cost across {carriers} position(s) is "
-                      f"prior DENIED losses — UNREALIZED on those rows "
-                      f"includes recycled loss, not only new loss "
-                      f"(per-row amounts in --json / `taxjson list`).")
+        notes.append(f"DEFERRED WASH: {fmt_money(tot_deferred)} of the "
+                     f"book cost across {carriers} position(s) is "
+                     f"prior DENIED losses — UNREALIZED on those rows "
+                     f"includes recycled loss, not only new loss "
+                     f"(per-row amounts in --json / `taxjson list`).")
     _flagged = [(r["symbol"], n) for r in rows
-                 for n in ((r.get("radar") or {}).get("notes") or [])
-                 if r.get("verdict") == "LOSS"]
+                for n in ((r.get("radar") or {}).get("notes") or [])
+                if r.get("verdict") == "LOSS"]
+    if notes or _flagged:
+        doc.section("NOTES")
+        doc.items(notes)
     if _flagged:
         # CA-SL-14/15, US-WASH-12/14/15: the engine only warns, so the
         # loss still counts as claimable — but check it by hand.
-        legend.append("ADVISORY '*': flagged for a manual check (the "
-                      "engine only warns; the loss is counted as "
-                      "claimable):")
-        legend.extend(f"  {sym}: {n}"
-                      for sym, n in dict.fromkeys(_flagged))
+        doc.item("ADVISORY '*': flagged for a manual check (the "
+                 "engine only warns; the loss is counted as "
+                 "claimable):")
+        for sym, n in dict.fromkeys(_flagged):
+            body, more = advisory_parts(f"{sym}: {n}")
+            for t in [body] + [f"note: {m}" for m in more]:
+                doc.item(t, indent="  ")
     # CA-PLAN-04 / US-PLAN-04 (audit S054-22).
-    legend.append(_scope)
-    print("\n" + "\n".join(legend))
-    if is_usa:
-        print("\nLT_IN approximates from the position start date; per-lot "
-              "ST/LT is decided by the engine at sale time. An open short "
-              "shows ST: covering it is short-term (US-HOLD-03).")
+    doc.blank()
+    doc.para(_scope)
+    doc.print()
     return 0
 
 

@@ -640,8 +640,10 @@ class TestRunNoteWording(unittest.TestCase):
                 {'transactions': [{'symbol': 'XEI.TO',
                                    'action': 'BUYSELL'}]}))
             r = _run_cli(root, 'scan')
+        # The rules are listed under the note, one item each.
         self.assertIn('(checked stock rows, option roots and rename '
-                      'chains): AAQ.US -> AAQ.TO', r.stdout)
+                      'chains)', r.stdout)
+        self.assertIn('\n- AAQ.US -> AAQ.TO\n', r.stdout)
 
     def test_us_estimate_assumptions_exclude_section_988(self):
         from taxjson.bin.taxjson_run import _print_tax_estimate

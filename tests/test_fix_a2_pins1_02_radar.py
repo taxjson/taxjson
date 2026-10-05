@@ -506,10 +506,11 @@ class TestRadarWordingByCountry(unittest.TestCase):
             for cat, title in titles[c].items():
                 self.assertTrue(title.startswith(cat), (c, cat, title))
         txt = {c: _run(c, t, s, json_out=False) for c in ("canada", "usa")}
-        self.assertIn("--- RISK — sellable now; sheltered still holds",
+        # Each section opens with its title (and its row count).
+        self.assertIn("\nRISK — sellable now; sheltered still holds",
                       txt["canada"])
         self.assertNotIn("an IRA still holds", txt["canada"])
-        self.assertIn("--- RISK — sellable now; an IRA still holds",
+        self.assertIn("\nRISK — sellable now; an IRA still holds",
                       txt["usa"])
 
 

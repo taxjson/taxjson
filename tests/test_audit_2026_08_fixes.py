@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from _radar_text import radar_rows
+
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
 from tax_rules import rule
 
@@ -1404,7 +1406,8 @@ class TestRadarViolationRescueDeadline(unittest.TestCase):
                 cwd=REPO_ROOT, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         m = _re.search(r"VIOLATION: Sell [\d.]+ shares \([^)]*\) by "
-                       r"(\d{4}-\d{2}-\d{2})", r.stdout)
+                       r"(\d{4}-\d{2}-\d{2})",
+                       "\n".join(radar_rows(r.stdout)))
         self.assertIsNotNone(m, f"no VIOLATION advisory in:\n{r.stdout}")
         return m.group(1)
 

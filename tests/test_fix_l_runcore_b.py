@@ -663,8 +663,9 @@ class TestViews(unittest.TestCase):
         r = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT,
                            capture_output=True, text=True,
                            stdin=subprocess.DEVNULL)
-        self.assertIn("USD 61,234.57 1.3579 +456.70 DLR.U.TO", r.stdout,
-                      r.stderr)
+        # (a table row now: compare its cells)
+        self.assertIn("USD 61,234.57 1.3579 +456.70 DLR.U.TO",
+                      " ".join(r.stdout.split()), r.stderr)
 
 
 class TestYearsAndLocks(unittest.TestCase):
