@@ -367,6 +367,10 @@
 
 ### Command line
 
+- **`taxjson init` writes only its scaffold accounts** (Canada: margin, TFSA, RRSP,
+  crypto; US: margin, Roth, 401(k), crypto) and a one-line note on adding
+  more — no commented example account. `taxjson format` drops the earlier
+  example from an existing file.
 - **`taxjson init` scaffolds the common accounts:** margin, TFSA, RRSP and a
   crypto account in Canada; margin, Roth, 401(k) and a crypto account in the
   US. Any other account (a LIRA, an RESP, a traditional IRA …) is one more

@@ -247,17 +247,13 @@ _ACCOUNTS_DOC = (
     "One [accounts.NAME] table per folder under inputs/ (the folder name is "
     "the account name). Every key, with its default:")
 
-# The scaffold's accounts and the commented "one more account" example.
+# The scaffold's accounts (anything else is one more table plus folder).
 SCAFFOLD_ACCOUNTS = {
     "canada": ("margin", "tfsa", "rrsp", "crypto"),
     "usa": ("margin", "roth", "401k", "crypto"),
 }
-_MORE_ACCOUNT = {
-    "canada": ("lira", "More accounts: one table per inputs/ folder, e.g. a "
-                       "locked-in retirement account:"),
-    "usa": ("ira", "More accounts: one table per inputs/ folder, e.g. a "
-                   "traditional IRA:"),
-}
+_MORE_ACCOUNTS_NOTE = ("More accounts: add an [accounts.NAME] table (keys above) "
+                       "and an inputs/NAME folder for it.")
 
 
 @dataclass(frozen=True)
@@ -541,6 +537,7 @@ def _hash(norm: str) -> str:
 # instead of keeping them as the user's notes. Hashes, not text: the old
 # examples are not carried in the source.
 _LEGACY_TEMPLATE_HASHES = frozenset("""
+00155ff5fe04a837 b466672d86933a32 cc383b0ee44d380c ccf1f0fb14c5c312
 e7866667d98a969c 8210ac89894ed17f
 001abf630b6115d0 002632fa29f5bc3d 00b37cf395b3dd0b 02add596de115d47
 03d445a98351bec2 06af278016053226 084cbf481f008f28 0ea1fe5c78966f11
@@ -906,18 +903,9 @@ class _Renderer:
                       + self.unknown_entries(acfg, spec_keys()["accounts"],
                                              f"accounts.{name}"))
             self.end(T)
-        more, intro = _MORE_ACCOUNT[c]
-        if more not in names:
-            T = ("accounts", more)
-            self.lines.append("")
-            self.header(T, f"[accounts.{more}]", commented=True, doc=intro)
-            spec = {k.name: k for k in ACCOUNT_SPEC}
-            self.keys(T, [
-                _Entry(n, v, self.fill(_pick(spec[n].doc, c)),
-                       commented=True)
-                for n, v in (("transfers", "true"),
-                             ("type", '"sheltered"'))])
-            self.end(T)
+        self.blank()
+        for ln in textwrap.wrap(_MORE_ACCOUNTS_NOTE, 76):
+            self.emit(f"# {ln}")
 
     def plain_table(self, t: Table, values: Any, present: bool) -> None:
         c = self.country

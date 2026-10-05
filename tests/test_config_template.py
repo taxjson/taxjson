@@ -188,12 +188,31 @@ class TestInitScaffold(unittest.TestCase):
         self.assertFalse(CT.valid_timezone("Not/AZone"))
         self.assertTrue(CT.valid_timezone("UTC"))
 
-    def test_more_accounts_example_is_country_shaped(self):
-        ca, _ = CT.render_init("canada", 2025)
-        us, _ = CT.render_init("usa", 2025)
-        self.assertIn("# [accounts.lira]", ca)
-        self.assertIn("# [accounts.ira]", us)
-        self.assertNotIn("# [accounts.crypto]", ca + us)
+    def test_only_the_scaffold_accounts_no_example_account(self):
+        # The owner: init shows margin/tfsa/rrsp/crypto (US: margin/roth/
+        # 401k/crypto) and nothing else — no commented example account,
+        # just a note on adding one.
+        for country, names in CT.SCAFFOLD_ACCOUNTS.items():
+            text, accts = CT.render_init(country, 2025)
+            self.assertEqual(tuple(accts), names)
+            self.assertNotRegex(text, r"(?m)^#\s*\[accounts\.(?!NAME\])")
+            self.assertIn("More accounts: add an [accounts.NAME] table", text)
+
+    def test_a_previous_example_account_is_regenerated_not_kept(self):
+        # A file an earlier init wrote with the commented LIRA example
+        # formats without it: template text, not the user's notes.
+        old = CT.render_init("canada", 2025)[0].replace(
+            "# Estimate inputs",
+            "# More accounts: one table per inputs/ folder, e.g. a locked-in "
+            "retirement\n# account:\n# [accounts.lira]\n"
+            "# true: keep TRANSFER rows (contributions/withdrawals).\n"
+            "# transfers = true\n\n# REQUIRED: taxable | sheltered.\n"
+            "# type      = \"sheltered\"\n\n# Estimate inputs", 1)
+        self.assertIn("# [accounts.lira]", old)
+        r = CT.format_config(old)
+        self.assertNotIn("[accounts.lira]", r.text)
+        self.assertNotIn("locked-in", r.text)
+        self.assertEqual((r.notes_lines, r.kept_comments), (0, 0))
 
     def test_no_real_security_examples(self):
         # Placeholder tickers only (owner rule: no real security in a
