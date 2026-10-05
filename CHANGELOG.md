@@ -27,6 +27,21 @@
   the denial, the ±30-day window as a table with a legend — instead of
   the `#`-commented trace (`taxjson audit` and trace files keep it). No
   figure, `--json` output or file changes.
+- **taxjson.toml reads in groups and compactly** (`taxjson init`, `taxjson
+  format`). `[settings]` comes in groups — Project, Currencies, Options,
+  Income, Futures — each under a `# --- Name ---` heading, keys
+  alphabetical within a group and a blank line between groups.
+  Descriptions stay on the line above each key, but there is no blank
+  line between keys inside a group or table, and a key whose comment is
+  just its list of values (`tax_date = "settle"  # settle | trade`) — or
+  what `true` means for a switch — carries it at the end of its line,
+  aligned within the group. `[accounts.NAME]` tables are
+  key lines only, `type` first (the commented reference block documents
+  every account key once). The fetch keys (`brokerage`, `account`,
+  `query_id`) are documented without naming a broker. `taxjson format`
+  re-lays an existing file into this layout without changing what it
+  configures; the previous layout's descriptions are recognised and
+  regenerated, never kept as your notes.
 
 
 ## v0.18.0 (2026-10-05)

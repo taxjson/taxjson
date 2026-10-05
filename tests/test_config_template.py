@@ -6,9 +6,15 @@ it, `taxjson format` re-lays an existing file into it.
   template — so a new key without template documentation fails here —
   and no key, table or plan kind owned by the OTHER country is
   mentioned (the Canada/USA partition).
-- Layout: keys alphabetical in every table (active and commented in one
-  sequence), one `=` column per table, each description on the lines
-  above its key, a blank line between keys, no end-of-line comment.
+- Layout: [settings] in groups (each key in exactly one, a heading line
+  per group, keys alphabetical within it, a blank line between groups);
+  every other table's keys alphabetical (an account table's `type`
+  first), active and commented in one sequence; one `=` column per
+  table; each description on the lines above its key, no blank line
+  between keys; [accounts.NAME] tables compact (no descriptions: the
+  reference block documents every account key); the only end-of-line
+  comment is a key's inline text (its values), aligned per group; no
+  fetch-plugin broker named.
 - `taxjson format`: lossless (the parsed configuration is identical),
   idempotent, keeps unknown keys (flagged) and the user's comments;
   --check / --write / --no-backup; the refusal paths.
@@ -36,6 +42,7 @@ from taxjson.lib.tomlcompat import tomllib
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "config_template"
 
 
 def _validator_keys():
@@ -337,11 +344,11 @@ class TestFormatConfig(unittest.TestCase):
             self.assertIn(c, out)
         # A commented-out key of the user's goes to that key (above the
         # template's own commented line), after its description.
-        self.assertRegex(out, r'# ON \| BC.*\n# province = "BC"\n'
-                              r'# province\s+= "ON"\n')
+        self.assertRegex(out, r'# The province .*\n# province = "BC"\n'
+                              r'# province\s+= "ON" +# ON \| BC')
         # A trailing comment moves onto its own line above its line.
         self.assertRegex(out, r"# the main account\n\[accounts\.margin\]\n")
-        self.assertRegex(out, r'# my reason\ntax_date\s+= "settle"\n')
+        self.assertRegex(out, r'# my reason\ntax_date\s+= "settle" +# settle')
         # The verbatim multi-line value keeps its inner comment.
         self.assertRegex(out, r'holdings\s+= \["~/a\.toml",  # first')
         # Canonical values: quoted string, a date as a date.
@@ -414,20 +421,34 @@ class TestFormatConfig(unittest.TestCase):
 
 
 _TABLE_LINE = re.compile(r"^(?:# )?\[\[?[^\]]+\]\]?$")
+_GROUP_LINES = {CT.group_heading(g) for g, _keys in CT.SETTINGS_GROUPS}
+# A key line ending in an inline comment: (prefix, key, text).
+_INLINE = re.compile(r"^((?:# )?([A-Za-z0-9_-]+) *= .*?\S)  +# (.+)$")
+
+
+def _inlines(country):
+    """{key: filled inline text} of every key that has one."""
+    r = CT._Renderer({}, country, 2025)
+    keys = list(CT.SETTINGS_SPEC) + list(CT.ACCOUNT_SPEC) + [
+        k for t in CT.TABLES for k in t.keys]
+    return {k.name: r.fill(CT._pick(k.inline, country)) for k in keys
+            if CT._pick(k.inline, country)}
 _KEY_LINE = re.compile(r"^(# )?([A-Za-z0-9_-]+|\"[^\"]*\") *( = )")
 
 
 def _layout(text):
     """The rendered file as tables: [(table line, [group, ...])], a group
     being the [(line index, key, commented, `=` column)] of its key
-    lines (a "Not in the template" line starts a second group)."""
+    lines (a [settings] group heading or a "Not in the template" line
+    starts a new group)."""
     out = [("<top>", [[]])]
     lines = text.split("\n")
     for i, ln in enumerate(lines):
         if _TABLE_LINE.match(ln):
             out.append((ln, [[]]))
             continue
-        if ln in (CT._UNKNOWN_KEYS_LINE, CT._UNKNOWN_TOP_LINE):
+        if ln in (CT._UNKNOWN_KEYS_LINE, CT._UNKNOWN_TOP_LINE) \
+                or ln in _GROUP_LINES:
             out[-1][1].append([])
             continue
         m = _KEY_LINE.match(ln)
@@ -449,7 +470,7 @@ def _full(country):
                "zeta": {"type": "taxable", "exercise_fee": 1.0,
                         "holdings": [f"~/broker/holdings_file_{i}.toml"
                                      for i in range(4)],
-                        "brokerage": "questrade", "odd_key": True},
+                        "brokerage": "examplefetch", "odd_key": True},
                "alpha": {"type": "sheltered", "transfers": True}},
            "estimate": {"other_income": 1000},
            "carryover": {"claimed": {"2024": 10.5}},
@@ -475,18 +496,31 @@ def _renders():
         yield country, CT.render_document(_full(country), country, 2025)
 
 
-class TestLayout(unittest.TestCase):
-    """Keys alphabetical per table (active and commented in one
-    sequence), one `=` column per table, descriptions on the lines above
-    the key, a blank line between keys, no end-of-line comment."""
+def _is_account(table):
+    return table == "# [accounts.NAME]" or table.startswith("[accounts.")
 
-    def test_keys_are_alphabetical_in_every_table(self):
+
+def _expected_order(table, keys):
+    """Alphabetical; an account table's `type` first."""
+    if _is_account(table):
+        return sorted(keys, key=lambda k: (k != "type", k))
+    return sorted(keys)
+
+
+class TestLayout(unittest.TestCase):
+    """[settings] in groups, every other table's keys alphabetical (an
+    account's `type` first; active and commented in one sequence), one
+    `=` column per table, descriptions on the lines above the key, no
+    blank line between keys, compact account tables, end-of-line comments
+    only for a key's inline text."""
+
+    def test_keys_are_in_order_in_every_table_and_group(self):
         for country, text in _renders():
             for table, groups in _layout(text):
                 for g in groups:
                     keys = [k for _i, k, _c, _col in g]
                     with self.subTest(country=country, table=table):
-                        self.assertEqual(keys, sorted(keys))
+                        self.assertEqual(keys, _expected_order(table, keys))
 
     def test_one_equals_column_per_table(self):
         for country, text in _renders():
@@ -498,10 +532,10 @@ class TestLayout(unittest.TestCase):
     def test_mixed_active_and_commented_keys_interleave(self):
         text = CT.render_document(_full("canada"), "canada", 2025)
         settings = dict(_layout(text))["[settings]"]
-        seq = [(k, c) for _i, k, c, _col in settings[0]]
-        self.assertEqual([k for k, _c in seq],
-                         sorted(k.name for k in CT.SETTINGS_SPEC
-                                if CT.owned("canada", "settings", k.name)))
+        seq = [(k, c) for g in settings[:-1] for _i, k, c, _col in g]
+        want = [n for _h, names in CT.SETTINGS_GROUPS
+                for n in sorted(names) if CT.owned("canada", "settings", n)]
+        self.assertEqual([k for k, _c in seq], want)
         flags = dict(seq)
         # commented, active, commented, active ... in one sequence
         self.assertTrue(flags["fx_cash_gains"])
@@ -509,41 +543,227 @@ class TestLayout(unittest.TestCase):
         self.assertTrue(flags["local_timezone"])
         self.assertFalse(flags["prior_year_record"])
         # The keys taxjson does not read: sorted, after their line.
-        self.assertEqual([k for _i, k, _c, _col in settings[1]],
+        self.assertEqual([k for _i, k, _c, _col in settings[-1]],
                          ["aa_unknown", "zz_unknown"])
 
-    def test_no_end_of_line_comments(self):
+    def test_only_a_keys_inline_text_ends_a_line(self):
+        # An end-of-line comment is a key's inline text (its values, or
+        # what `true` means) — nothing else, and never in an account
+        # table (compact) or after a description.
         for country, text in _renders():
+            inl = _inlines(country)
             for ln in text.splitlines():
-                if ln.startswith("#"):
-                    continue
-                with self.subTest(country=country, line=ln):
-                    self.assertNotIn("#", ln)
+                m = _INLINE.match(ln)
+                if not ln.startswith("#"):
+                    with self.subTest(country=country, line=ln):
+                        if "#" in ln:
+                            self.assertTrue(m, ln)
+                            self.assertEqual(m.group(3), inl[m.group(2)])
+                elif m and _KEY_LINE.match(ln):
+                    with self.subTest(country=country, line=ln):
+                        self.assertEqual(m.group(3), inl[m.group(2)])
+            for m in re.finditer(r"(?m)^\[accounts\.[^\]]+\]\n((?:.+\n)*)",
+                                 text):
+                self.assertNotIn("#", m.group(1))
 
-    def test_description_above_each_key_and_a_blank_between_keys(self):
+    def test_listed_values_render_inline_and_aligned(self):
+        for country, text in _renders():
+            inl = _inlines(country)
+            lines = text.split("\n")
+            for table, groups in _layout(text):
+                for g in groups:
+                    cols = set()
+                    for i, key, _c, _col in g:
+                        if table.startswith(("[accounts.", "[[")):
+                            continue     # compact: no comments
+                        if key not in inl or len(lines[i]) > 100:
+                            continue
+                        m = _INLINE.match(lines[i])
+                        with self.subTest(country=country, line=lines[i]):
+                            if m:
+                                cols.add(m.start(3) - 2)
+                            else:
+                                # Pushed to the line above (a long value).
+                                self.assertIn(f"# {inl[key]}",
+                                              lines[:i][-6:])
+                    with self.subTest(country=country, table=table):
+                        self.assertLessEqual(len(cols), 1, cols)
+        ca, _ = CT.render_init("canada", 2025)
+        self.assertRegex(ca, r'(?m)^tax_date +="settle" +# settle \| trade$'
+                         .replace('="', '= "'))
+        self.assertRegex(ca, r'(?m)^country +=.*  # canada \| ca \| usa \| us')
+        self.assertRegex(ca, r'(?m)^# type +=.*  # taxable \| sheltered')
+        us, _ = CT.render_init("usa", 2025)
+        self.assertRegex(us, r'(?m)^tax_date +="trade" +# trade \| settle$'
+                         .replace('="', '= "'))
+        # One column per group: tax_date's and country's comments line up.
+        col = {ln.index("  # ") for ln in ca.split("\n")
+               if ln.startswith(("country ", "tax_date ", "# province "))}
+        self.assertEqual(len(col), 1, col)
+
+    def test_a_long_value_puts_its_inline_text_above(self):
+        doc = {"settings": {"country": "canada", "year": 2025,
+                            "province": "ON" * 30}}
+        text = CT.render_document(doc, "canada", 2025)
+        self.assertRegex(text, r"\n# ON \| BC \| AB\nprovince += \"(ON)+\"\n")
+        # ... and the other keys of the group keep their column.
+        self.assertRegex(text, r'(?m)^country +=.*  # canada')
+        r = CT.format_config(text)
+        self.assertFalse(r.changed)
+        self.assertEqual((r.notes_lines, r.kept_comments), (0, 0))
+        # A short value again: the text goes back to the line's end.
+        r = CT.format_config(text.replace("ON" * 30, "BC"))
+        self.assertRegex(r.text, r'(?m)^province +=.*"BC" +# ON \| BC \| AB$')
+        self.assertEqual((r.notes_lines, r.kept_comments), (0, 0))
+
+    def test_description_above_each_key_no_blank_between_keys(self):
+        heads = (CT._UNKNOWN_KEYS_LINE, CT._UNKNOWN_TOP_LINE)
         for country, text in _renders():
             lines = text.split("\n")
             for table, groups in _layout(text):
                 for g in groups:
                     for n, (i, key, _c, _col) in enumerate(g):
                         j = i
-                        heads = (CT._UNKNOWN_KEYS_LINE, CT._UNKNOWN_TOP_LINE)
                         while j > 0 and lines[j - 1].startswith("# ") \
+                                and not _KEY_LINE.match(lines[j - 1]) \
                                 and not _TABLE_LINE.match(lines[j - 1]) \
-                                and lines[j - 1] not in heads:
+                                and lines[j - 1] not in heads \
+                                and lines[j - 1] not in _GROUP_LINES:
                             j -= 1
-                        if j == i:
-                            continue         # a key with no description
+                        before = lines[j - 1]
                         with self.subTest(country=country, table=table,
-                                          key=key):
-                            before = lines[j - 1]
+                                          key=key, before=before):
                             if n == 0:
+                                # Under its table line or its heading.
                                 self.assertTrue(
                                     _TABLE_LINE.match(before)
-                                    or before in heads,
-                                    before)
+                                    or before in heads
+                                    or before in _GROUP_LINES, before)
                             else:
-                                self.assertEqual(before, "")
+                                # Directly under the previous key's value
+                                # (a multi-line value ends in `]`).
+                                self.assertNotEqual(before, "")
+                                self.assertTrue(
+                                    _KEY_LINE.match(before)
+                                    or before.lstrip("# ") in ("]", "}")
+                                    or before.startswith(("  ", "#   ")),
+                                    before)
+
+    def test_no_blank_line_inside_a_table_or_group(self):
+        # A blank line only before a [settings] group heading (and a
+        # "Not in the template" line), never between two keys.
+        for country, text in _renders():
+            lines = text.split("\n")
+            for i, ln in enumerate(lines[1:-1], 1):
+                if ln:
+                    continue
+                prev, nxt = lines[i - 1], lines[i + 1]
+                if not (_KEY_LINE.match(prev) or prev.lstrip("# ") in
+                        ("]", "}")):
+                    continue
+                with self.subTest(country=country, line=i, next=nxt):
+                    # After a key: what follows is a new group, a new
+                    # table (its heading or table line) or a note.
+                    self.assertFalse(_KEY_LINE.match(nxt), nxt)
+                    if nxt.startswith("# ") and not (
+                            nxt in _GROUP_LINES or _TABLE_LINE.match(nxt)
+                            or nxt in (CT._UNKNOWN_KEYS_LINE,
+                                       CT._UNKNOWN_TOP_LINE,
+                                       CT._UNKNOWN_TABLES_LINE)):
+                        # A table heading (description) is followed, within
+                        # its paragraph, by its table line.
+                        k = i + 1
+                        while lines[k].startswith("# ") \
+                                and not _TABLE_LINE.match(lines[k]):
+                            k += 1
+                        self.assertTrue(
+                            _TABLE_LINE.match(lines[k])
+                            or lines[k] == "" and
+                            lines[k - 1].startswith("# More accounts")
+                            or lines[k] == "" and
+                            lines[k - 1].endswith("folder for it."),
+                            lines[i + 1:k + 1])
+
+    def test_settings_groups_partition_the_settings(self):
+        names = [n for _h, keys in CT.SETTINGS_GROUPS for n in keys]
+        self.assertEqual(len(names), len(set(names)), "a key in two groups")
+        self.assertEqual(sorted(names),
+                         sorted(k.name for k in CT.SETTINGS_SPEC),
+                         "every [settings] key in exactly one group")
+        # (and so every setting the validator accepts: the completeness
+        # test above ties SETTINGS_SPEC to it)
+        self.assertEqual(set(names), set(_validator_keys()["settings"]))
+
+    def test_group_headings_in_order_with_their_keys(self):
+        for country in C.COUNTRIES:
+            init, bare = _templates(country)
+            for text in (init, bare,
+                         CT.render_document(_full(country), country, 2025)):
+                settings = text.split("[settings]\n", 1)[1].split(
+                    "# [accounts.NAME]")[0]
+                lines = settings.split("\n")
+                # The first group heading directly under [settings].
+                self.assertEqual(lines[0], CT.group_heading("Project"))
+                want = [(h, sorted(n for n in keys
+                                   if CT.owned(country, "settings", n)))
+                        for h, keys in CT.SETTINGS_GROUPS]
+                want = [(CT.group_heading(h), ks) for h, ks in want if ks]
+                got = []
+                for ln in lines:
+                    if ln in _GROUP_LINES:
+                        got.append((ln, []))
+                    elif ln in (CT._UNKNOWN_KEYS_LINE,):
+                        break
+                    else:
+                        m = _KEY_LINE.match(ln)
+                        if m and got:
+                            got[-1][1].append(m.group(2))
+                with self.subTest(country=country):
+                    self.assertEqual(got, want)
+                    # A blank line before every heading but the first.
+                    for h, _ks in want[1:]:
+                        self.assertIn("\n\n" + h + "\n", settings)
+
+    def test_account_tables_are_compact_type_first(self):
+        for country, text in _renders():
+            for m in re.finditer(r"(?m)^\[accounts\.[^\]]+\]\n((?:.+\n)*)",
+                                 text):
+                body = m.group(1).rstrip("\n").split("\n")
+                with self.subTest(country=country, table=m.group(0)):
+                    keys = [_KEY_LINE.match(ln) for ln in body]
+                    if CT._UNKNOWN_KEYS_LINE in body:
+                        body = body[:body.index(CT._UNKNOWN_KEYS_LINE)]
+                    # Key lines only (a long list's continuation lines
+                    # aside): no description, no blank line.
+                    for ln in body:
+                        self.assertFalse(ln.startswith("#"), ln)
+                    keys = [k.group(2) for k in
+                            (_KEY_LINE.match(ln) for ln in body) if k]
+                    self.assertEqual(keys[0], "type")
+                    self.assertEqual(keys, _expected_order("[accounts.", keys))
+        text, _ = CT.render_init("canada", 2025)
+        self.assertIn('[accounts.rrsp]\ntype      = "sheltered"\n'
+                      'transfers = true\n', text)
+
+    def test_reference_block_documents_every_account_key_type_first(self):
+        for country in C.COUNTRIES:
+            text, _ = CT.render_init(country, 2025)
+            block = text.split("# [accounts.NAME]\n", 1)[1].split("\n\n")[0]
+            keys = [m.group(2) for m in map(_KEY_LINE.match,
+                                            block.split("\n")) if m]
+            self.assertEqual(keys, ["type"] + sorted(
+                k.name for k in CT.ACCOUNT_SPEC if k.name != "type"))
+            # Every key under its description, no blank line in between.
+            self.assertNotIn("\n\n", block)
+
+    def test_no_fetch_broker_named_in_the_template(self):
+        # The owner: the fetch keys stay documented, generically — no
+        # broker the fetch plugin serves is singled out.
+        for country, text in _renders():
+            with self.subTest(country=country):
+                self.assertNotRegex(text, r"(?i)questrade|ibkr_flex")
+                for key in ("brokerage", "account", "query_id"):
+                    self.assertRegex(text, rf"(?m)^# {key} +=")
 
     def test_description_lines_never_read_as_a_commented_key(self):
         known = set().union(*CT.spec_keys().values())
@@ -698,6 +918,62 @@ class TestFormatToCanonicalLayout(unittest.TestCase):
         self.assertEqual(r.kept_comments, 0, r.text)
         doc = tomllib.loads(_PREVIOUS_LAYOUT)
         self.assertEqual(r.text, CT.render_document(doc, "canada"))
+        self.assertFalse(CT.format_config(r.text).changed)
+
+    def test_alphabetical_layout_is_regenerated_without_notes(self):
+        # Files the alphabetical layout (before the grouped [settings]
+        # and compact tables) wrote — init scaffolds and a file setting
+        # keys in every table, both countries: every comment line is the
+        # template's (by hash), nothing is kept as the user's.
+        for path in sorted(_FIXTURES.glob("alphabetical_*.toml")):
+            old = path.read_text(encoding="utf-8")
+            doc = tomllib.loads(old)
+            country = C.canonical_country(doc["settings"]["country"])
+            with self.subTest(path=path.name):
+                r = CT.format_config(old)
+                self.assertTrue(r.changed)
+                self.assertEqual((r.notes_lines, r.kept_comments), (0, 0))
+                self.assertEqual(tomllib.loads(r.text), doc)
+                self.assertEqual(list(tomllib.loads(r.text)["accounts"]),
+                                 list(doc["accounts"]))
+                self.assertEqual(r.text, CT.render_document(doc, country))
+                self.assertNotIn("questrade", r.text.lower())
+                self.assertFalse(CT.format_config(r.text).changed)
+
+    def test_alphabetical_layout_keeps_the_users_comments(self):
+        old = (_FIXTURES / "alphabetical_canada.toml").read_text(
+            encoding="utf-8")
+        mine = ["# my own note on LEAPS", "# mine, trailing",
+                "# a note at the end of settings", "# about zeta"]
+        text = (old.replace("\nleaps_months", f"\n{mine[0]}\nleaps_months", 1)
+                .replace("\nyear                              = 2025\n",
+                         "\nyear                              = 2025  "
+                         f"{mine[1]}\n", 1)
+                .replace("\n\n# One [accounts.NAME]",
+                         f"\n\n{mine[2]}\n\n# One [accounts.NAME]", 1)
+                .replace("\n[accounts.zeta]", f"\n{mine[3]}\n[accounts.zeta]",
+                         1))
+        for m in mine:
+            self.assertIn(m, text)
+        r = CT.format_config(text)
+        self.assertEqual((r.notes_lines, r.kept_comments), (0, len(mine)))
+        self.assertEqual(tomllib.loads(r.text), tomllib.loads(old))
+        self.assertRegex(r.text, rf"\n{mine[0]}\nleaps_months +=")
+        self.assertRegex(r.text, rf"\n{mine[1]}\nyear +=")
+        self.assertRegex(r.text, rf"\n{mine[3]}\n\[accounts\.zeta\]\n")
+        self.assertRegex(r.text, rf"futures_settle += .*\n\n{mine[2]}\n\n"
+                                 r"# One \[accounts\.NAME\]")
+        again = CT.format_config(r.text)
+        self.assertFalse(again.changed, "not idempotent")
+        self.assertEqual(again.kept_comments, len(mine))
+
+    def test_a_canadian_users_us_default_line_is_kept(self):
+        # A line only the US template writes is a Canadian user's own.
+        text = ('[settings]\ncountry = "ca"\nyear = 2025\n'
+                '# tax_date = "trade"\n')
+        r = CT.format_config(text)
+        self.assertEqual(r.kept_comments, 1)
+        self.assertIn('\n# tax_date = "trade"\n', r.text)
 
     def test_trailing_comment_moves_above_and_stays(self):
         text = ('[settings]\ncountry = "ca"  # mine\nyear = 2025\n'
@@ -708,7 +984,9 @@ class TestFormatToCanonicalLayout(unittest.TestCase):
         self.assertFalse(CT.format_config(r.text).changed)
         for ln in r.text.splitlines():
             if not ln.startswith("#"):
-                self.assertNotIn("#", ln)
+                # (only the template's inline text ends a line)
+                self.assertNotIn("# mine", ln)
+                self.assertNotIn("# main", ln)
 
     def test_comments_anywhere_format_idempotently(self):
         # Comment lines, blank lines, commented-out keys and tables and

@@ -199,9 +199,10 @@ class TestFuturesSettleConfig(unittest.TestCase):
         from taxjson.lib.config_template import render_init
         for country in ('canada', 'usa'):
             text = render_init(country, 2025)[0]
-            # (the description on the lines above the commented key)
-            self.assertRegex(text, r'(?m)^# trade \| next_day.*\n(?:# .*\n)*'
-                                   r'# futures_settle\s+= "trade"$')
+            # (the commented key with its default, its values at the
+            # end of the line)
+            self.assertRegex(text, r'(?m)^# futures_settle\s+= "trade" +'
+                                   r'# trade \| next_day$')
 
 
 if __name__ == '__main__':
