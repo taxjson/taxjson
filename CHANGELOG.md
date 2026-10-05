@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Getting started
+
+- **A getting-started guide**, `docs/getting-started.md`, linked from the
+  top of the README and from `taxjson help`: install, `init`, which
+  exports to download, the first run, and a step-by-step way to find and
+  fill missing purchase history (sales with no purchase, holdings with
+  missing or partial history, transfers in, $0-cost corporate-action
+  shares), then `sanity` and `checklist`.
+- **`find-missing-history` ends with the fixes in order**: an older
+  export, then the purchase as a `.tt` line (the original purchase for
+  shares transferred in), and `missing_history.json` only for what cannot
+  be recovered; the $0-cost hint names the stock-dividend `ADJUST` (Canada),
+  the election for a merger or spin-off, and the purchase for a transfer.
+- **A stock dividend given its cost by an `ADJUST` line is no longer
+  reported as $0-cost shares** by `find-missing-history` (and the
+  checklist's missing-history step), matching the run, which already
+  treated it as fixed.
+- Webull: the UNBOOKED line for a non-trade row now says how to enter a
+  transfer in (a `.tt` BUYSELL at the original purchase), not a `.tt`
+  TRANSFER, which a taxable account refuses.
+- A fresh install no longer prints a `SyntaxWarning` from the generic
+  importer on its first run.
+
 ### An ordered taxjson.toml (owner request)
 
 - **Keys in alphabetical order, one `=` column per table.** The file

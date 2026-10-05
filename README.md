@@ -8,6 +8,17 @@ Website: **[taxjson.com](https://taxjson.com)** · one-line install below · eve
 
 > **Not tax advice.** This tool produces numbers; it does not give legal or accounting advice. Always reconcile against your broker's official tax slips (T5008, 1099-B, etc.) and consult a qualified professional before filing.
 
+## Getting started
+
+New here? **[docs/getting-started.md](docs/getting-started.md)** walks a first project through, with worked examples. In short:
+
+1. Install: `bash -c "$(curl -fsSL https://taxjson.com/install.sh)"` ([Install](#install)).
+2. Make a project for the year you file: `mkdir -p ~/taxes/2025 && cd ~/taxes/2025 && tjs init --country canada --year 2025` (or `--country usa`), then set your accounts in `taxjson.toml`.
+3. Download **all** the history each broker gives you into `inputs/<account>/`, and keep a positions report with book cost from the start of that history and from today.
+4. `tjs run`, then `tjs sum` and `tjs list`.
+5. **Fill the missing history.** Exports rarely reach back to every purchase: `tjs find-missing-history` finds sales with no purchase, `tjs sanity` (against the broker's positions) finds holdings with missing or partial history, `tjs transfers` lists shares moved in from another broker. Fix them with older exports, opening balances or purchases as `.tt` lines, and `missing_history.json` only for what cannot be recovered.
+6. `tjs sanity` against the year-end positions, then `tjs checklist` until every step is done.
+
 ## What it does
 
 > **Scope.** The Canada engine is the supported product: it has been run against real multi-account books for two tax years and reconciled against the brokers' own positions. The **US engine is experimental** — the rules are implemented and unit-tested (§1091, holding periods, Form 8949 codes) but it has not been validated on a real account. Use it, but treat its output as a draft, and please [contribute a redacted export](CONTRIBUTING.md#help-wanted-broker-exports) if you do.
@@ -1763,6 +1774,11 @@ taxjson find-missing-history margin     # one account
 
 Rows marked **AFFECTS `<year>`** have an in-year sale drawing on the missing
 basis — fix those before filing. (Rows "not relevant" only touch other years.)
+$0-cost shares count as covered once a positive `ADJUST` on the same symbol
+and account, dated from 31 days before to 7 days after their arrival, gives
+them a cost (the fix for a Canadian stock dividend's declared amount). The
+report ends with the fixes in order of preference; the
+[getting-started guide](docs/getting-started.md) walks through them.
 A short the broker itself declares is listed apart as a real short, not
 missing history: RBC's `SHORT.` description, or an IB sale whose Trades
 `Code` says it OPENED a position (`O`, or `C;O` — closed the long and opened
