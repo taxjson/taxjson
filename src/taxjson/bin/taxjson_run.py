@@ -13112,7 +13112,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                 own=(_own or {}).get("total_cost"),
                 native=_sum(_nat_inv, e["native"]),
                 pooled=_pooled, roc=sym in _roc, tol_abs=cost_tol,
-                tol_rel=0.001)
+                tol_rel=0.001, short=e["qty"] < 0)
             cost_all.append(dict(base_row, **res))
         for a in grp["accounts"]:
             income_all.extend(PC.income_share_mismatches(_rows_of(a), a,

@@ -156,7 +156,8 @@ def income_share_mismatches(rows: List[Dict[str, Any]], account: str,
     in the 45 days before it is accepted (the record date sits in that
     span). Rows of one broker account are compared with that account's
     rows (and the hand-written ones): one taxjson account may hold two
-    brokers' accounts."""
+    brokers' accounts (a count the whole account held is
+    accepted too)."""
     out: List[Dict[str, Any]] = []
     for r in rows:
         if r.get("action") not in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
@@ -200,6 +201,18 @@ def income_share_mismatches(rows: List[Dict[str, Any]], account: str,
             when, basis = pay, "pay date"
         if abs(held - stated) <= tol:
             continue
+        if mine is not rows and len(mine) != len(rows):
+            # The whole account's position on that day (a holding moved
+            # between the account's brokers, rows stamped with another
+            # broker account): a match there is no finding.
+            if rec:
+                alt = positions_on(rows, rec, settled=True).get(sym, 0.0)
+            elif exd:
+                alt = positions_on(rows, exd, before=True).get(sym, 0.0)
+            else:
+                alt = positions_on(rows, pay).get(sym, 0.0)
+            if abs(alt - stated) <= tol:
+                continue
         out.append({"account": account, "symbol": sym, "date": pay,
                     "on": when, "basis": basis, "stated_shares": stated,
                     "books_shares": held,
@@ -219,7 +232,7 @@ def compare_cost(*, symbol: str, broker_cost: float, cost_currency: str,
                  country: str, filing: Optional[Dict[str, Any]],
                  own: Optional[float], native: Optional[Dict[str, Any]],
                  pooled: bool, roc: bool, tol_abs: float,
-                 tol_rel: float) -> Dict[str, Any]:
+                 tol_rel: float, short: bool = False) -> Dict[str, Any]:
     """One symbol's cost row. `filing`: the summed filing-books
     inventory entry (base currency) of the group's accounts; `own`: the
     accounts' own pre-pooling cost (base currency); `native`: the
@@ -251,6 +264,12 @@ def compare_cost(*, symbol: str, broker_cost: float, cost_currency: str,
         row.update(books_cost=books,
                    basis=f"native {cur} books (this account's own cost: "
                          f"no {'wash-sale additions' if usa else 'superficial-loss additions, no s.47 pooling'})")
+    if short and books * broker_cost < 0:
+        # A short position's cost is its opening proceeds: the books
+        # carry it negative (the inventory convention), some reports
+        # positive — compared as magnitudes.
+        books, broker_cost = abs(books), abs(broker_cost)
+        row.update(books_cost=books, broker_cost=broker_cost)
     diff = books - broker_cost
     row["diff"] = diff
     if _within(books, broker_cost, tol_abs, tol_rel):

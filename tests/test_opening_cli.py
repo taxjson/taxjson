@@ -453,3 +453,15 @@ class TestCompareCost(unittest.TestCase):
         r = self._cmp(broker_cost=900.0, cost_kind="average cost")
         self.assertEqual(r["reasons"], ["unexplained"])
         self.assertFalse(r["explained"])
+
+
+class TestShortCostSign(unittest.TestCase):
+    def test_short_compared_as_magnitudes(self):
+        r = PC.compare_cost(
+            symbol="SAMPP.US", broker_cost=200.0, cost_currency="USD",
+            cost_kind="average cost", position_currency="USD", base="CAD",
+            country="canada", filing=None, own=None,
+            native={"total_cost": -200.0, "currency": "USD"},
+            pooled=False, roc=False, tol_abs=1.0, tol_rel=0.001,
+            short=True)
+        self.assertEqual(r["status"], "match")
