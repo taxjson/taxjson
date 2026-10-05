@@ -180,6 +180,18 @@ def stock_dividend_in_loss_window(country: str) -> bool:
     return STOCK_DIVIDEND_IN_LOSS_WINDOW[canonical_country(country)]
 
 
+# Whether a stock dividend's new shares carry a $0 cost of their own
+# until their cost is entered: Canada books them at $0 (the declared
+# amount is added by an ADJUST, CA-STKDIV-01); the US spreads the old
+# shares' basis over old and new (§307, US-STKDIV-01), so they are not
+# missing a cost.
+STOCK_DIVIDEND_ZERO_COST = {CANADA: True, USA: False}
+
+
+def stock_dividend_zero_cost(country: str) -> bool:
+    return STOCK_DIVIDEND_ZERO_COST[canonical_country(country)]
+
+
 def default_tax_date(country: str) -> str:
     """CRA dates a disposition by settlement, the IRS by trade date."""
     return DEFAULT_TAX_DATE[canonical_country(country)]

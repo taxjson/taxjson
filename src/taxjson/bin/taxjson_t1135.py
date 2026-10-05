@@ -735,7 +735,7 @@ def join_income_gains(gains_paths: List[Path], year: int,
     if tainted_skipped:
         _named = (f" ({', '.join(sorted(set(manual_syms)))})"
                   if manual_syms else "")
-        print(f"warning: {tainted_skipped} tainted disposition(s) with "
+        print(f"warning: {tainted_skipped} disposition(s) with an "
               f"unknown cost (no purchase in your files){_named} "
               f"EXCLUDED from the T1135 "
               f"gain(loss) column — resolve the missing history and "

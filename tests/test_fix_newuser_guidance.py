@@ -79,6 +79,218 @@ _CLEAN_TT = ("BUYSELL  2025-01-10  09:30:00  ABC.TO  10  CAD  20  200  0\n"
              "BUYSELL  2025-03-10  09:30:00  ABC.TO  -10  CAD  25  250  0\n")
 
 
+class TestFirstRunSummary(unittest.TestCase):
+    """Item 1: the closing summary of `taxjson run`."""
+
+    def test_every_finding_is_counted_with_its_command(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(td, files={
+                "inputs/margin/questrade.csv": _CA_QT,
+                "inputs/margin/extra.tt": _CA_TT})
+            r = cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            out = r.stdout
+            tail = out[out.index("Done. Reports"):]
+            self.assertIn("before you trust these numbers", tail)
+            self.assertIn("1 position(s) sold in 2025 with no purchase in "
+                          "your files, not in missing_history.json", tail)
+            self.assertIn("SMA.TO (margin)", tail)
+            self.assertIn("`taxjson find-missing-history`", tail)
+            # $0 cost: still held, which the detector used to ignore.
+            self.assertIn("1 position(s) at a $0 cost (1 still held): "
+                          "ZRO.TO (margin)", tail)
+            self.assertIn("1 transfer-in(s) from outside your books kept "
+                          "out with no cost: QRS.TO (margin)", tail)
+            self.assertIn("`taxjson transfers`", tail)
+            self.assertIn("no holdings file to check them against: "
+                          "margin", tail)
+            self.assertIn("paid income in 2025 that the books do not "
+                          "hold", tail)
+            self.assertIn("DIV.TO (margin)", tail)
+            self.assertIn("`taxjson checklist`", tail)
+            self.assertIn("docs/getting-started.md", tail)
+            # Short: a heading, one line per finding, one closing line.
+            block = tail[tail.index("==> before"):].strip().splitlines()
+            self.assertLessEqual(len(block), 8, block)
+            doc = json.loads((root / "work" / "run_summary.json")
+                             .read_text())
+            self.assertEqual([x["symbol"] for x in doc["no_purchase"]],
+                             ["SMA.TO"])
+            self.assertEqual([x["symbol"] for x in doc["zero_cost_held"]],
+                             ["ZRO.TO"])
+            self.assertEqual(
+                [x["symbol"] for x in doc["transfer_in_no_cost"]],
+                ["QRS.TO"])
+            self.assertEqual(
+                [x["symbol"] for x in doc["transfer_in_book_value"]],
+                ["XYZ.TO"])
+            self.assertEqual(doc["unchecked_accounts"][0]["account"],
+                             "margin")
+            self.assertEqual([x["symbol"] for x in doc["income_not_held"]],
+                             ["DIV.TO"])
+            # The taxable account's short-position NOTE is on the console.
+            self.assertIn("NOTE: 1 position(s) go short in margin's data "
+                          "(SMA.TO): sales with no purchase in your files",
+                          out)
+
+    def test_clean_project_is_silent(self):
+        with tempfile.TemporaryDirectory() as td:
+            hold = Path(td) / "h.toml"
+            hold.write_text('[[holding]]\nsymbol = "XXX.TO"\nquantity = 0\n')
+            root = _project(td, accounts=(
+                '[accounts.margin]\ntype = "taxable"\n'
+                f'holdings = ["{hold}"]\n'),
+                files={"inputs/margin/start.tt": _CLEAN_TT})
+            r = cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertNotIn("before you trust these numbers", r.stdout)
+            doc = json.loads((root / "work" / "run_summary.json")
+                             .read_text())
+            self.assertFalse(doc["no_purchase"] or doc["zero_cost_held"])
+
+    def test_missing_history_covers_the_sale(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(td, files={
+                "inputs/margin/questrade.csv": _CA_QT,
+                "missing_history.json": json.dumps(
+                    [{"symbol": "SMA.TO", "account": "margin"}])})
+            r = cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertNotIn("sold in 2025 with no purchase", r.stdout)
+            # ... and `sum` names it as an unknown cost, not "tainted".
+            s = cli(root, "sum")
+            self.assertIn("1 disposition(s) with an unknown cost (no "
+                          "purchase in your files) were routed to manual "
+                          "reporting", s.stderr)
+            self.assertNotIn("tainted", s.stderr + s.stdout)
+            j = json.loads(cli(root, "sum", "--json").stdout)
+            self.assertEqual(j["unknown_cost_routed"], 1)
+            self.assertEqual(j["tainted_routed"], 1)      # kept for readers
+            self.assertEqual(j["no_purchase_uncovered"], [])
+
+
+class TestFirstRunLib(unittest.TestCase):
+    """Item 1, the detectors under the summary."""
+
+    def test_income_on_a_security_never_held(self):
+        from taxjson.lib.first_run import income_without_position
+        rows = [tx("BUYSELL", "2025-01-02", "HLD.TO", 10, 100,
+                   currency="CAD"),
+                tx("DIVIDEND", "2025-03-31", "HLD.TO", 0, 5,
+                   currency="CAD"),
+                tx("DIVIDEND", "2025-03-31", "NOT.TO", 0, 5,
+                   currency="CAD")]
+        found = income_without_position(rows, 2025)
+        self.assertEqual([(h["symbol"], h["rows"]) for h in found],
+                         [("NOT.TO", 1)])
+
+    def test_income_paid_just_after_a_sale_is_not_flagged(self):
+        # Sold after the record date, paid after the sale: a late
+        # payment on shares just held, not a missing holding.
+        from taxjson.lib.first_run import income_without_position
+        rows = [tx("BUYSELL", "2025-01-02", "LTE.TO", 10, 100,
+                   currency="CAD"),
+                tx("BUYSELL", "2025-03-20", "LTE.TO", -10, 120,
+                   currency="CAD"),
+                tx("DIVIDEND", "2025-04-15", "LTE.TO", 0, 5,
+                   currency="CAD"),
+                tx("DIVIDEND", "2025-09-15", "LTE.TO", 0, 5,
+                   currency="CAD")]
+        found = income_without_position(rows, 2025)
+        self.assertEqual([(h["symbol"], h["first"]) for h in found],
+                         [("LTE.TO", "2025-09-15")])
+
+    def test_income_beside_its_shares_or_at_the_data_start_is_not_flagged(self):
+        # A spin-off's deemed dividend is booked beside the shares it
+        # delivers (same day, the dividend row first); a payment in the
+        # first 60 days of the data is for shares sold just before it.
+        from taxjson.lib.first_run import income_without_position
+        rows = [tx("DIVIDEND", "2025-01-03", "OLD.TO", 0, 5,
+                   currency="CAD"),
+                tx("BUYSELL", "2025-01-05", "AAA.TO", 10, 100,
+                   currency="CAD"),
+                tx("DIVIDEND", "2025-10-22", "SPN.US", 0, 1.15),
+                tx("BUYSELL", "2025-10-22", "SPN.US", 60, 1.15,
+                   time="16:00:00")]
+        self.assertEqual(income_without_position(rows, 2025), [])
+
+    def test_zero_cost_still_held_is_reported(self):
+        from taxjson.lib.missing_history import (
+            detect_zero_basis_acquisitions)
+        rows = [tx("BUYSELL", "2025-01-02", "FRE.TO", 5, 0, price=0,
+                   currency="CAD")]
+        self.assertEqual(detect_zero_basis_acquisitions(rows, 2025), [])
+        held = detect_zero_basis_acquisitions(rows, 2025,
+                                              include_held=True)
+        self.assertEqual([(r.symbol, r.still_held_qty, r.sold,
+                           r.affects_year) for r in held],
+                         [("FRE.TO", 5.0, False, False)])
+
+    @rule("CA-STKDIV-01")
+    def test_canada_stock_dividend_shares_are_zero_cost(self):
+        from taxjson.lib.first_run import zero_cost_positions
+        rows = [tx("BUYSELL", "2025-01-02", "STK.TO", 100, 1000,
+                   currency="CAD"),
+                tx("BUYSELL", "2025-03-02", "STK.TO", 5, 0, price=0,
+                   currency="CAD", type="stock_dividend")]
+        sold, held = zero_cost_positions(rows, 2025, sheltered={},
+                                         country="canada")
+        self.assertEqual([r.symbol for r in held], ["STK.TO"])
+
+    @rule("US-STKDIV-01")
+    def test_us_stock_dividend_shares_share_the_basis(self):
+        # §307: the basis is spread over old and new shares — the new
+        # shares are not missing a cost (no $0-cost finding).
+        from taxjson.lib.first_run import zero_cost_positions
+        rows = [tx("BUYSELL", "2025-01-02", "STK.US", 100, 1000),
+                tx("BUYSELL", "2025-03-02", "STK.US", 5, 0, price=0,
+                   type="stock_dividend")]
+        sold, held = zero_cost_positions(rows, 2025, sheltered={},
+                                         country="usa")
+        self.assertEqual((sold, held), ([], []))
+
+
+class TestSumWarnsUncoveredSales(unittest.TestCase):
+    """Item 2: a Questrade / RBC / Webull sale with no purchase was
+    silent in `sum`."""
+
+    def test_sum_names_the_sale_and_the_command(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(td, files={
+                "inputs/margin/questrade.csv": _CA_QT})
+            self.assertEqual(cli(root, "run", "--no-input").returncode, 0)
+            r = cli(root, "sum")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("taxjson sum: warning: 1 position(s) sold in "
+                          "2025 with no purchase in your files, not in "
+                          "missing_history.json: their gain is NOT in "
+                          "these totals (SMA.TO (margin))", r.stderr)
+            self.assertIn("taxjson find-missing-history", r.stderr)
+            j = json.loads(cli(root, "sum", "--json").stdout)
+            self.assertEqual(j["no_purchase_uncovered"],
+                             [{"symbol": "SMA.TO", "account": "margin",
+                               "sales": 1, "proceeds": 800.0}])
+
+    def test_no_user_facing_tainted_left(self):
+        # Every message string of the package says "unknown cost".
+        import re
+        import tokenize
+        root = Path(__file__).resolve().parents[1] / "src" / "taxjson"
+        msg = re.compile(r"\btainted (disposition|row|sale)|"
+                         r"pool TAINTED|tainted \(unknown", re.I)
+        hits = []
+        for p in root.rglob("*.py"):
+            with open(p, encoding="utf-8") as fh:
+                for t in tokenize.generate_tokens(fh.readline):
+                    if t.type == tokenize.STRING or t.type == getattr(
+                            tokenize, "FSTRING_MIDDLE", -1):
+                        if (msg.search(t.string)
+                                and not t.string.lstrip("rbuf").startswith(
+                                    ('"""', "'''"))):
+                            hits.append(f"{p.name}:{t.start[0]}")
+        self.assertEqual(hits, [])
+
+
 # ---------------------------------------------------------------- item 3
 
 class TestTransferInLib(unittest.TestCase):
@@ -317,6 +529,41 @@ class TestMessages(unittest.TestCase):
                 "--country", "canada", "--year", "2025",
                 "/w/margin_base.json"]),
             "computing the gains (margin_base.json)")
+
+    def test_stale_missing_history_entry_is_reported(self):
+        from taxjson.lib.missing_history import (
+            report_missing_history_log, stale_missing_history_entries,
+            synthesize_openings)
+        rows = [tx("BUYSELL", "2024-01-02", "CMP.TO", 10, 100,
+                   currency="CAD"),
+                tx("BUYSELL", "2025-02-10", "CMP.TO", -10, 120,
+                   currency="CAD")]
+        st = stale_missing_history_entries(rows, {("CMP.TO", "margin")},
+                                           complete=True)
+        self.assertEqual([(e.symbol, e.reason) for e in st],
+                         [("CMP.TO", "complete")])
+        _ops, log = synthesize_openings(rows, {("CMP.TO", "margin")})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            report_missing_history_log([log], {"margin"})
+        self.assertIn("warning: ATTENTION: missing_history.json lists "
+                      "CMP.TO / margin, but its rows never go short any "
+                      "more — the purchase is in the books now",
+                      err.getvalue())
+
+    def test_stale_entry_listed_by_find_missing_history_and_run(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(td, files={
+                "inputs/margin/start.tt": _CLEAN_TT,
+                "missing_history.json": json.dumps(
+                    [{"symbol": "ABC.TO", "account": "margin"}])})
+            r = cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertIn("ATTENTION: missing_history.json lists ABC.TO / "
+                          "margin, but its rows never go short", r.stdout)
+            f = cli(root, "find-missing-history")
+            self.assertIn("STALE in missing_history.json", f.stdout)
+            self.assertIn("ABC.TO margin", f.stdout)
 
     def test_init_readme_says_what_to_download(self):
         from taxjson.lib.config_template import input_readme

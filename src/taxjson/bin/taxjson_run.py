@@ -3563,6 +3563,18 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # A2-0229), a missing_history.json entry on a real short or a written
     # option (A2-0637 / A2-0639). One call covers all.
     echo_attention_lines(gains_json)
+    if is_taxable and not is_crypto:
+        # The positions that go short in a taxable account (sales with
+        # no purchase in the files): on the console, not only in the
+        # .sum's NOTE — the year's gain leaves those sales out until the
+        # history is supplied (new-user study). Read like
+        # find-missing-history reads them (ticker.map JOURNAL pairs,
+        # broker-marked real shorts and missing_history.json entries
+        # are not missing history).
+        _note = _short_positions_note(base_json, name, ticker_map,
+                                      incomplete_history)
+        if _note:
+            print(f"  {_note}")
     # A short where none can exist (a registered account, spot crypto,
     # a sale the broker codes CLOSING): missing history the numbers
     # depend on — --strict refuses (re-audit A2-0395 / A2-0137 / A2-1223).
@@ -5583,6 +5595,8 @@ def cmd_run(args: argparse.Namespace) -> None:
                       file=sys.stderr)
         except Exception as _e:  # noqa: BLE001 — never break a run
             print(f"  holdings sanity skipped: {_e}", file=sys.stderr)
+    if not args.account:
+        _first_run_summary(root, cfg, cache, mh_arg)
     if args.account:
         # A single-account run can't do cross-account wash detection or the
         # combined cross-account reports — those are SKIPPED (previously they
@@ -5601,6 +5615,108 @@ def cmd_run(args: argparse.Namespace) -> None:
             f"with no --account before filing.",
             file=sys.stderr,
         )
+
+
+def _short_positions_note(base_json: Path, account: str,
+                          ticker_map: Optional[Path],
+                          missing_history: Optional[Path]) -> str:
+    """One NOTE naming a taxable account's positions that go short in
+    its books — a sale with no purchase in the files, unless the broker
+    marks it a short sale — or '' (advisory: never breaks a run)."""
+    try:
+        from taxjson.lib.core import load_transactions
+        from taxjson.lib.first_run import read_missing_history_pairs
+        from taxjson.lib.missing_history import (detect_missing_history,
+                                                  journal_targets)
+        txs = load_transactions(base_json)
+        journal = (journal_targets(str(ticker_map))
+                   if ticker_map and Path(ticker_map).is_file() else set())
+        covered = {(sym, a.lower()) for sym, a in
+                   read_missing_history_pairs(missing_history)}
+        cands = [c for c in detect_missing_history(
+                     txs, include_broker_shorts=True,
+                     registered_accounts={account: False},
+                     journal_symbols=journal)
+                 if c.account == account and not c.broker_marked_short
+                 and not c.broker_says_closing
+                 and (str(c.symbol).upper(), account.lower())
+                 not in covered]
+    except Exception:                               # noqa: BLE001
+        return ""
+    if not cands:
+        return ""
+    shown = ", ".join(c.symbol for c in cands[:5]) \
+        + (f" +{len(cands) - 5} more" if len(cands) > 5 else "")
+    return (f"NOTE: {len(cands)} position(s) go short in {account}'s data "
+            f"({shown}): sales with no purchase in your files, unless they "
+            f"were real short sales. Until the purchase is supplied their "
+            f"gain is in no total — `taxjson find-missing-history` lists "
+            f"them with the fixes.")
+
+
+def _uncovered_sales(root: Path, cfg: Dict[str, Any],
+                     account: Optional[str] = None) -> List[Dict[str, Any]]:
+    """[{symbol, account, sales, proceeds}] — the tax year's sales in
+    taxable accounts with no purchase in the files that
+    missing_history.json does not cover (lib/first_run). [] outside a
+    project or when the books cannot be read (advisory)."""
+    if not cfg:
+        return []
+    try:
+        from taxjson.lib import first_run as FR
+        from taxjson.lib.country import settings_tax_date
+        from taxjson.lib.missing_history import journal_targets
+        settings = cfg.get("settings") or {}
+        accounts = cfg.get("accounts") or {}
+        txs, _failed = FR.load_books(root / "work")
+        if not txs:
+            return []
+        sheltered = {str(n): (a.get("type") == "sheltered")
+                     for n, a in accounts.items() if isinstance(a, dict)
+                     and a.get("type") in ("taxable", "sheltered")}
+        tm = root / "ticker.map"
+        journal = journal_targets(str(tm)) if tm.is_file() else set()
+        from taxjson.lib.missing_history import missing_history_path
+        mh = missing_history_path(root, note=False)
+        rows = FR.uncovered_short_sales(
+            txs, settings.get("year"), sheltered=sheltered,
+            covered=FR.read_missing_history_pairs(mh),
+            date_basis=settings_tax_date(settings), journal=journal)
+    except Exception:                               # noqa: BLE001
+        return []
+    return [{"symbol": r.candidate.symbol, "account": r.candidate.account,
+             "sales": r.in_year_dispositions,
+             "proceeds": r.in_year_proceeds}
+            for r in rows if not account or r.candidate.account == account]
+
+
+def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
+                       mh_file: Optional[Path]) -> None:
+    """What the books show is still incomplete, each with the command
+    that lists it (lib/first_run): printed after a full run when any
+    count is nonzero, silent when clean; the counts also go to
+    work/run_summary.json. Advisory — never breaks a run."""
+    from taxjson.lib import first_run as FR
+    try:
+        doc = FR.collect(root, cfg, missing_history=mh_file,
+                         arrivals=transfer_arrivals(root, cache,
+                                                    cfg.get("accounts")))
+    except Exception as e:                          # noqa: BLE001
+        print(f"taxjson: warning: the closing summary could not be built "
+              f"({type(e).__name__}: {e}).", file=sys.stderr)
+        return
+    import json as _json
+    try:
+        write_text_atomic(cache / FR.SUMMARY_FILE,
+                          _json.dumps(doc, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        pass
+    lines = FR.render(doc, mh_name=(mh_file.name if mh_file
+                                    else "missing_history.json"))
+    if lines:
+        print()
+        for ln in lines:
+            print(ln)
 
 
 # The taxjson.toml template — every key, documented, per country — and
@@ -7968,7 +8084,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     base_cur = _base_currency(root)
     if tainted_skipped:
         print(f"taxjson ccd-sum: warning: skipped {tainted_skipped} "
-              f"tainted disposition(s) with unknown cost (no purchase in "
+              f"disposition(s) with an unknown cost (no purchase in "
               f"your files) — "
               f"matches form-export/carryover/leaps.", file=sys.stderr)
     if getattr(args, "json", False):
@@ -8102,7 +8218,7 @@ def cmd_winners(args: argparse.Namespace) -> None:
     base_cur = _base_currency(root)
     if tainted_skipped:
         print(f"taxjson winners: warning: skipped {tainted_skipped} "
-              f"tainted disposition(s) with unknown cost (no purchase in "
+              f"disposition(s) with an unknown cost (no purchase in "
               f"your files) — "
               f"matches form-export/carryover/leaps.", file=sys.stderr)
     if getattr(args, "json", False):
@@ -10556,7 +10672,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
     if tainted_included:
         # In-line tainted rows (raw engine output): counted in totals.
         print(f"taxjson sum: warning: totals include {tainted_included} "
-              f"tainted disposition(s) with unknown cost (no purchase in "
+              f"disposition(s) with an unknown cost (no purchase in "
               f"your files) — "
               f"form-export/carryover exclude them, so filing totals "
               f"will differ.", file=sys.stderr)
@@ -10566,12 +10682,31 @@ def cmd_summary(args: argparse.Namespace) -> None:
         # without this line `sum` gave no signal at all (round-five
         # audit finding: the warning was dead code for pipeline
         # files).
-        print(f"taxjson sum: warning: {tainted_routed} tainted "
-              f"disposition(s) were routed to manual reporting — "
+        print(f"taxjson sum: warning: {tainted_routed} "
+              f"disposition(s) with an unknown cost (no purchase in "
+              f"your files) were routed to manual reporting — "
               f"these totals EXCLUDE them (`taxjson form-export` "
               f"lists them in its MANUAL REPORTING section; report "
               f"them by hand).",
               file=sys.stderr)
+    # Sales with no purchase in the files that missing_history.json does
+    # not cover: the engine books them as an open short, so their gain is
+    # simply not in these totals — and nothing above said so for a
+    # Questrade / RBC / Webull sale (new-user study).
+    _uncovered = _uncovered_sales(root, cfg,
+                                  getattr(args, "account", None) or None)
+    if _uncovered:
+        _shown = ", ".join(f"{r['symbol']} ({r['account']})"
+                           for r in _uncovered[:4]) \
+            + (f" +{len(_uncovered) - 4} more" if len(_uncovered) > 4
+               else "")
+        print(f"taxjson {_CURRENT_CMD or 'sum'}: warning: "
+              f"{len(_uncovered)} position(s) sold in "
+              f"{(cfg.get('settings') or {}).get('year')} with no purchase "
+              f"in your files, not in missing_history.json: "
+              f"their gain is NOT in these totals ({_shown}). `taxjson "
+              f"find-missing-history` lists them and the fixes "
+              f"(docs/getting-started.md, step 5).", file=sys.stderr)
     # Scope: unlike the filing commands (carryover/t1135/form-export,
     # taxable-only by law), this summary rolls up EVERY account — say so
     # when sheltered accounts contribute, or the totals look like filing
@@ -10590,6 +10725,14 @@ def cmd_summary(args: argparse.Namespace) -> None:
             "accounts": acct_rows,
             "tainted_included": tainted_included,
             "tainted_routed": tainted_routed,
+            # The same counts under their plain name ("tainted" is the
+            # engine's word for a disposition with an unknown cost; the
+            # keys above stay for existing readers).
+            "unknown_cost_included": tainted_included,
+            "unknown_cost_routed": tainted_routed,
+            # Sales with no purchase that missing_history.json does not
+            # cover: not in the totals at all (an open short).
+            "no_purchase_uncovered": _uncovered,
             # Same row-sum path as the printed tables and subtotals, so
             # totals == Σ subtotals == Σ rows holds exactly for machine
             # consumers (the unrounded accumulation drifted by a cent).

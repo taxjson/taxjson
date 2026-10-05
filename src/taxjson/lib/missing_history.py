@@ -32,7 +32,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from taxjson.lib.core import TaxTransaction
+from taxjson.lib.core import TaxTransaction, is_stock_dividend
 from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
                                              normalize_symbol_new)
 
@@ -665,7 +665,7 @@ class StaleMissingHistoryEntry:
     A2-0637 / A2-0638 / A2-0639, R1-8)."""
     symbol: str
     account: str
-    reason: str               # 'broker-short' | 'derivative'
+    reason: str               # 'broker-short' | 'derivative' | 'complete'
     marker: str = ''          # how the broker marks the short
     file_name: str = MISSING_HISTORY_FILE   # the file that lists it
 
@@ -675,11 +675,14 @@ def stale_missing_history_entries(
     pairs: Optional[Set[Tuple[str, str]]] = None,
     *, phantoms: Optional[Set[Tuple[str, str]]] = None,
     file_name: Optional[str] = None,
+    complete: bool = False,
 ) -> List[StaleMissingHistoryEntry]:
     """The listed pairs that are a broker-marked real short or a
     derivative the broker did not code CLOSING (the two cases
-    detect_missing_history leaves out by default). `phantoms=`: the old
-    keyword for `pairs`."""
+    detect_missing_history leaves out by default) — and, with
+    `complete=True`, the listed pairs whose rows never go short any more
+    (reason 'complete': the purchase is now in the books, so the entry
+    does nothing). `phantoms=`: the old keyword for `pairs`."""
     if pairs is None:
         pairs = phantoms
     if not pairs:
@@ -704,12 +707,60 @@ def stale_missing_history_entries(
             out.append(StaleMissingHistoryEntry(c.symbol, c.account,
                                                 'derivative',
                                                 file_name=name))
+    if complete:
+        # Listed, has rows, never goes short: the history is complete.
+        # (A pair with no rows at all is a spelling question, or another
+        # account's books — not reported here.) Rename chains: the walk
+        # reports a short under the NEW symbol, so an entry naming either
+        # end of a chain that goes short is not complete.
+        short = {(str(c.symbol).upper(), c.account) for c in cands}
+        chain: Dict[Tuple[str, str], Set[Tuple[str, str]]] = {}
+        for t in txs:
+            if t.action == 'SPLIT':
+                new_sym = normalize_symbol_new(t.symbol,
+                                               getattr(t, 'symbol_new', ''))
+                if new_sym:
+                    a = (str(t.symbol).upper(), t.account)
+                    b = (str(new_sym).upper(), t.account)
+                    chain.setdefault(a, set()).add(b)
+                    chain.setdefault(b, set()).add(a)
+
+        def _linked(p):
+            seen, stack = set(), [p]
+            while stack:
+                q = stack.pop()
+                if q in seen:
+                    continue
+                seen.add(q)
+                stack.extend(chain.get(q, ()))
+            return seen
+        have = {(str(t.symbol).upper(), t.account) for t in txs
+                if t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER')}
+        for pair in sorted(listed):
+            if pair not in have or _linked(pair) & short:
+                continue
+            out.append(StaleMissingHistoryEntry(pair[0], pair[1],
+                                                'complete',
+                                                file_name=name))
     return out
+
+
+def complete_entry_message(symbol: str, account: str,
+                           file_name: str = MISSING_HISTORY_FILE) -> str:
+    """A missing-history entry whose position never goes short: the
+    purchase is in the books now (an older export or a .tt line was
+    added), so the entry does nothing."""
+    return (f"{file_name} lists {symbol} / {account}, but its rows never "
+            f"go short any more — the purchase is in the books now (an "
+            f"older export or a .tt line), so the entry does nothing. "
+            f"Remove it from {file_name}.")
 
 
 def stale_entry_message(e: StaleMissingHistoryEntry) -> str:
     """One ATTENTION line for a stale entry (run, gains and every other
     missing-history applier print it; find-missing-history lists it)."""
+    if e.reason == 'complete':
+        return complete_entry_message(e.symbol, e.account, e.file_name)
     if e.reason == 'broker-short':
         how = ("codes the sale O (opening)" if e.marker == 'IB code O'
                else f"marks the sales {e.marker}")
@@ -848,6 +899,11 @@ class ZeroBasisRow:
     affects_year: bool          # has a disposition-while-contaminated in `year`
     in_year_dispositions: int
     in_year_proceeds: float
+    # Shares of the pool still held at the end of the data while it
+    # holds $0-cost shares (include_held): their cost is understated
+    # now, and their sale will overstate a gain.
+    still_held_qty: float = 0.0
+    sold: bool = True           # some $0-cost shares were sold
 
 
 def detect_zero_basis_acquisitions(
@@ -856,6 +912,8 @@ def detect_zero_basis_acquisitions(
     *,
     include_options: bool = False,
     date_basis: str = 'settle',
+    include_held: bool = False,
+    stock_dividends_spread: bool = False,
 ) -> List[ZeroBasisRow]:
     """Flag (symbol, account) pairs that ACQUIRED shares at ~$0 cost — almost
     always a broker corporate-action row (a merger/spinoff "shares received"
@@ -877,6 +935,15 @@ def detect_zero_basis_acquisitions(
     engine's year, audit S075-16); None reports every flagged pair.
     Rename-SPLITs carry the pool (and its $0 contamination) to the new
     symbol, as detect_missing_history does (audit S075-19).
+
+    `include_held`: also report pairs whose pool still holds shares at
+    the end of the data while it carries $0-cost shares, sold or not
+    (`still_held_qty`; affects_year stays about in-year sales) — the
+    positions whose cost is understated today.
+
+    `stock_dividends_spread` (a US project, lib/country
+    .stock_dividend_zero_cost): a stock dividend's shares share the old
+    shares' basis, so they are never $0-cost here.
     """
     year_str = str(year) if year is not None else None
     transactions = list(transactions)
@@ -964,7 +1031,9 @@ def detect_zero_basis_acquisitions(
         price = abs(float(tx.price or 0.0))
         if qty > 1e-9:                                   # acquisition
             if (cost < 1e-6 and price < 1e-6             # ...at ~$0 cost
-                    and not _cost_added(tx)):
+                    and not _cost_added(tx)
+                    and not (stock_dividends_spread
+                             and is_stock_dividend(tx))):
                 s['active'] = True
                 s['zero_qty'] += qty
                 if not s['acq_date']:
@@ -988,16 +1057,21 @@ def detect_zero_basis_acquisitions(
 
     out: List[ZeroBasisRow] = []
     for (symbol, account, currency), s in state.items():
-        if s['zero_qty'] <= 0 or s['any_disp'] == 0:
+        held = (s['running'] if include_held and s['active']
+                and s['running'] > 1e-6 else 0.0)
+        if s['zero_qty'] <= 0 or (s['any_disp'] == 0 and not held):
             continue                                      # no $0 basis hit a sale
         out.append(ZeroBasisRow(
             symbol=symbol, account=account, currency=currency,
             zero_cost_qty=round(s['zero_qty'], 4),
             acquisition_date=s['acq_date'], description=s['desc'][:80],
             looks_corp_action=s['corp'],
-            affects_year=(year_str is None or s['in_year'] > 0),
+            affects_year=(s['any_disp'] > 0
+                          and (year_str is None or s['in_year'] > 0)),
             in_year_dispositions=s['in_year'],
             in_year_proceeds=round(s['in_year_proc'], 2),
+            still_held_qty=round(held, 4),
+            sold=s['any_disp'] > 0,
         ))
     out.sort(key=lambda r: (r.symbol, r.account))
     return out
@@ -1157,9 +1231,11 @@ def report_missing_history_log(logs: List[List[Dict[str, Any]]],
             continue
         notes = [str(e.get('note') or '') for e in es]
         if any(n.startswith('no opening needed') for n in notes):
-            print(f"note: {file_name} lists {symbol} / {account}, but "
-                  f"its rows never go short — no opening was needed; "
-                  f"remove the entry if its history is complete.",
+            # ATTENTION (the run echoes it): the usual cause is the fix
+            # itself — the purchase was added (an older export, a .tt
+            # line) and the entry is now stale (new-user study).
+            print(f"warning: ATTENTION: "
+                  f"{complete_entry_message(symbol, account, file_name)}",
                   file=sys.stderr)
         elif notes and all(n.startswith('no rows') for n in notes):
             print(f"warning: {file_name} lists {symbol} / {account}, but "
@@ -1320,7 +1396,7 @@ def detect_superficial_loss_warnings(
                 'tainted_dispositions': nearby,
                 'message': (
                     f"Clean loss of {abs(loss.get('gain', 0.0)):.2f} on {loss.get('symbol')} "
-                    f"({loss.get('date')}) has {len(nearby)} tainted disposition(s) within "
+                    f"({loss.get('date')}) has {len(nearby)} unknown-cost disposition(s) within "
                     f"±{window_days} days ({LOSS_RULE[canonical_country(country)][1]} "
                     f"dates). {LOSS_RULE[canonical_country(country)][0][0].upper()}"
                     f"{LOSS_RULE[canonical_country(country)][0][1:]} may apply; "

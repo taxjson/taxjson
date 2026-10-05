@@ -251,6 +251,6 @@ def main(*, prog: str, description: str, direction: str, calls_only: bool,
         print("(mixed currencies: totals are per currency — run on the "
               "converted gains file for one base-currency total)")
     if tainted:
-        print(f"\nNOTE: {tainted} tainted disposition(s) with unknown cost "
+        print(f"\nNOTE: {tainted} disposition(s) with an unknown cost "
               f"(no purchase in your files) excluded (report them by "
               f"hand; form-export lists them).")

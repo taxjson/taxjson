@@ -47,7 +47,7 @@ from taxjson.lib.core import load_transactions
 from taxjson.lib.missing_history import (
     detect_missing_history, assess_tax_year_relevance, detect_zero_basis_acquisitions,
     detect_corp_action_links, detect_unbacked_covers, stale_missing_history_entries,
-    stale_entry_message,
+    stale_entry_message, is_registered_account,
 )
 
 
@@ -166,6 +166,22 @@ def _rename_sources(map_path, symbols):
         if key in by_target:
             out[sym] = sorted(by_target[key])
     return out
+
+
+_WALK_THROUGH = ("Walk-through: docs/getting-started.md, step 5 "
+                 "(https://github.com/taxjson/taxjson/blob/main/docs/"
+                 "getting-started.md).")
+
+
+def _print_zero_fix(country, cost) -> None:
+    from taxjson.lib.country import is_canada
+    _stk = ("a stock dividend: its declared amount as a .tt "
+            "ADJUST line on the dividend date (or "
+            "[[distributions]]); " if is_canada(country) else "")
+    print(f"\nTo fix $0-cost shares, give them their {cost}: "
+          f"{_stk}a merger or spin-off: its election (`taxjson "
+          "elect`); shares transferred in: a .tt BUYSELL with the "
+          "original purchase date and cost.")
 
 
 @guard_main("taxjson-missing-history")
@@ -339,16 +355,30 @@ def main(argv=None):
         except (OSError, ValueError):
             pass                     # reported below (the _ph read)
         stale = [e for e in stale_missing_history_entries(
-                     txs, ph_pairs, file_name=mh_name)
+                     txs, ph_pairs, file_name=mh_name, complete=True)
                  if not args.account or e.account == args.account]
+    # Entries whose purchase is in the books now: harmless (the run
+    # applies nothing for them), listed apart from the REMOVE ones the
+    # checklist counts.
+    complete = [e for e in stale if e.reason == 'complete']
+    stale = [e for e in stale if e.reason != 'complete']
     stale_pairs = {(e.symbol.upper(), e.account) for e in stale}
 
-    # --- 2. $0-cost corp-action acquisitions later sold ---
-    zero_rows = [r for r in detect_zero_basis_acquisitions(
+    # --- 2. $0-cost corp-action acquisitions later sold (and, apart,
+    #        those still held: their cost is understated now) ---
+    from taxjson.lib.country import stock_dividend_zero_cost
+    zero_all = [r for r in detect_zero_basis_acquisitions(
                     txs, args.year, include_options=args.include_options,
-                    date_basis=basis)
-                 if (r.symbol, r.account) not in linked_new
-                 and (not args.account or r.account == args.account)]
+                    date_basis=basis, include_held=True,
+                    stock_dividends_spread=(
+                        country is not None
+                        and not stock_dividend_zero_cost(country)))
+                if (r.symbol, r.account) not in linked_new
+                and (not args.account or r.account == args.account)]
+    zero_rows = [r for r in zero_all if r.sold]
+    zero_held = [r for r in zero_all if r.still_held_qty > 0
+                 and not is_registered_account(r.account, types or None,
+                                               country)]
 
     if broker_shorts:
         print(f"\n## Broker-marked short sales (real shorts, NOT missing "
@@ -377,6 +407,14 @@ def main(argv=None):
             print(f"{e.symbol} {e.account}")
             print(f"    {stale_entry_message(e)}")
 
+    if complete:
+        print(f"\n## {mh_name} entries whose purchase is now in the "
+              f"books: {len(complete)}")
+        print(f"STALE in {mh_name} - the position never goes short any "
+              f"more, so the entry does nothing; delete it:")
+        for e in complete:
+            print(f"{e.symbol} {e.account}")
+
     if covers:
         print(f"\n## Covers of a short opened before the data (missing "
               f"history): {len(covers)}")
@@ -404,9 +442,30 @@ def main(argv=None):
                       f"{c.unbacked_qty:12.4f} {c.proceeds:14.2f} "
                       f"{c.marker}")
 
+    if zero_held:
+        print(f"\n## $0-cost shares still held (their sale will overstate "
+              f"the gain): {len(zero_held)} pair(s)")
+        print(f"HELD - no gain yet; give them their {_cost} before they "
+              f"are sold:")
+        hdr = (f"{'Symbol':<24} {'Account':<10} {'Cur':<4} {'HeldQty':>10} "
+               f"{'ZeroQty':>10} {'AcqDate':<12} {'Why'}")
+        print("-" * len(hdr))
+        print(hdr)
+        print("-" * len(hdr))
+        for r in zero_held:
+            why = "corp action" if r.looks_corp_action else "$0 cost"
+            print(f"{r.symbol:<24} {r.account:<10} {(r.currency or '?'):<4} "
+                  f"{r.still_held_qty:10.4f} {r.zero_cost_qty:10.4f} "
+                  f"{r.acquisition_date:<12} {why}")
+            if r.description:
+                print(f"    └ {r.description}")
+
     if not short_rows and not zero_rows and not links:
         scope = f" (account {args.account})" if args.account else ""
-        if stale or covers:
+        if zero_held:
+            _print_zero_fix(country, _cost)
+            print(_WALK_THROUGH)
+        if stale or covers or complete or zero_held:
             return _incomplete(0)
         if unchecked:
             print(f"No missing-cost-basis issues found{scope} in the "
@@ -494,7 +553,6 @@ def main(argv=None):
     if zero_rows:
         print(f"\n## $0-cost corp-action shares that were later sold "
               f"(inflated gain): {len(zero_rows)} pair(s)")
-        from taxjson.lib.missing_history import is_registered_account
 
         def _reg(r):
             return is_registered_account(r.account, types or None, country)
@@ -534,12 +592,13 @@ def main(argv=None):
 
     if (yr and (any(r.affects_year and not _covered(r)
                     for r in short_rows)
-                or any(r.affects_year for r in zero_rows))):
+                or any(r.affects_year for r in zero_rows) or zero_held)):
         # (registered rows included: their openings still feed the
         # cross-account loss walk)
         _short_open = any(r.affects_year and not _covered(r)
                           for r in short_rows)
-        _zero_open = any(r.affects_year for r in zero_rows)
+        _zero_open = (any(r.affects_year for r in zero_rows)
+                      or bool(zero_held))
         if _short_open:
             print("\nTo fix a sale with no purchase in your files, in this "
                   "order: (1) add an older export that holds the purchase "
@@ -557,17 +616,8 @@ def main(argv=None):
                   "<base.json>, then --incomplete-history "
                   "missing_history.json.")
         if _zero_open:
-            from taxjson.lib.country import is_canada
-            _stk = ("a stock dividend: its declared amount as a .tt "
-                    "ADJUST line on the dividend date (or "
-                    "[[distributions]]); " if is_canada(country) else "")
-            print(f"\nTo fix $0-cost shares, give them their {_cost}: "
-                  f"{_stk}a merger or spin-off: its election (`taxjson "
-                  "elect`); shares transferred in: a .tt BUYSELL with the "
-                  "original purchase date and cost.")
-        print("Walk-through: docs/getting-started.md, step 5 "
-              "(https://github.com/taxjson/taxjson/blob/main/docs/"
-              "getting-started.md).")
+            _print_zero_fix(country, _cost)
+        print(_WALK_THROUGH)
     return _incomplete(0)
 
 

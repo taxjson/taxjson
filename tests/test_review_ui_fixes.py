@@ -250,7 +250,7 @@ class TestR4_TaintedConsistency(unittest.TestCase):
         self.assertNotIn("PHANTOM.TO", tickers)
         self.assertEqual(doc["tainted_skipped"], 2)
         self.assertAlmostEqual(doc["total_gain"], 1000.0, places=2)
-        self.assertIn("tainted", r.stderr)
+        self.assertIn("unknown cost", r.stderr)
 
     def test_ccd_sum_excludes_and_warns(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -259,7 +259,7 @@ class TestR4_TaintedConsistency(unittest.TestCase):
         doc = json.loads(r.stdout)
         self.assertEqual(doc["rows"], [])          # phantom call gone
         self.assertEqual(doc["tainted_skipped"], 1)
-        self.assertIn("tainted", r.stderr)
+        self.assertIn("unknown cost", r.stderr)
 
     def test_sum_keeps_engine_parity_but_warns(self):
         with tempfile.TemporaryDirectory() as tmp:

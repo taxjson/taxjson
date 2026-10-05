@@ -632,7 +632,7 @@ def _compare(label: str, s: Dict[str, Any], c: Dict[str, Any],
                          f"legitimate ({_WORDS[country]['cost_note']}); "
                          f"document the reason")
     if c.get("tainted_rows"):
-        notes.append(f"{int(c['tainted_rows'])} tainted disposition(s) with "
+        notes.append(f"{int(c['tainted_rows'])} disposition(s) with an "
                      f"unknown cost (no purchase in your files) included")
     return {"symbol": label, "status": "MISMATCH" if problems else "OK",
             "detail": "; ".join(problems + notes)}

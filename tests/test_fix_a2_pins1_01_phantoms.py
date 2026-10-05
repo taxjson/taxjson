@@ -121,7 +121,7 @@ class TestRunAndCarryoverApplyPhantoms(unittest.TestCase):
         row = {x["year"]: x for x in json.loads(r.stdout)["rows"]}[2025]
         self.assertEqual(row["dispositions"], 1)
         self.assertAlmostEqual(row["net_gain"], 0.0, places=2)
-        self.assertIn("tainted disposition", r.stderr)
+        self.assertIn("disposition(s) with an unknown cost", r.stderr)
 
 
 class TestDistributionsSizedWithPhantomsThroughRun(unittest.TestCase):

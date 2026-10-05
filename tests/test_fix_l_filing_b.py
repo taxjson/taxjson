@@ -245,7 +245,7 @@ class TestReconcileSlipPins(unittest.TestCase):
         rep = RS.reconcile(slip, computed, 1.0)
         detail = rep["rows"][0]["detail"]
         self.assertIn("slip cost differs by -1,000.00", detail)
-        self.assertIn("1 tainted disposition(s)", detail)
+        self.assertIn("1 disposition(s) with an unknown cost", detail)
 
 
 if __name__ == "__main__":

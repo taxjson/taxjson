@@ -1780,7 +1780,7 @@ def run_gains(transactions, sheltered_transactions=(),
                         'loss_date': t.get('date'),
                         'raw_loss': raw,
                         'acquisition_date': a.date,
-                        'note': ('tainted (unknown-cost) loss with an '
+                        'note': ('unknown-cost loss with an '
                                  f'in-window acquisition ({_basis} dates) — '
                                  'if you claim this loss manually, apply '
                                  f'{_rule_name} to the rebuy'),

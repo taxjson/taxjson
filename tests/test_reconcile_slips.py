@@ -147,7 +147,7 @@ class TestReconcile(unittest.TestCase):
         slip = {"AAPL": {"qty": 100.0, "proceeds": 12000.0, "cost": None,
                          "rows": 1}}
         rep = reconcile(slip, computed, 1.0)
-        self.assertIn("tainted", rep["rows"][0]["detail"])
+        self.assertIn("unknown cost", rep["rows"][0]["detail"])
 
 
 class TestCli(unittest.TestCase):

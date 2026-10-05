@@ -3106,7 +3106,7 @@ class CanadaTaxRules(TaxRules):
                     if trace:
                         if symbol not in symbol_acb_traces:
                             symbol_acb_traces[symbol] = [f"# --- ACB CALCULATION TRACE: {symbol} ---"]
-                        symbol_acb_traces[symbol].append(f"# {tx.date} OPENING_BALANCE {qty:10.4f} | Missing history (bought before the data) — pool TAINTED until drain to zero")
+                        symbol_acb_traces[symbol].append(f"# {tx.date} OPENING_BALANCE {qty:10.4f} | Missing history (bought before the data) — cost UNKNOWN until the pool drains to zero")
                 else:
                     # Only an exact zero is skipped (audit R1-24 /
                     # R1-245): the 1e-6 share epsilon dropped every
