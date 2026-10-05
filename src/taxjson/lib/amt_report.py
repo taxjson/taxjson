@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from taxjson.lib import out as _out
 from taxjson.lib.report_model import fmt_money as m
 
 LAW = ("ITA s.127.5-127.55 (form T691); carryover s.120.2 (T691 Part 8, "
@@ -47,9 +48,22 @@ def _amt_note(n: str) -> bool:
 
 
 def _row(label: str, amount: Optional[float], note: str = "") -> str:
+    """`  label  amount  [note]`; a note too long for the width wraps
+    under itself (the result may hold several lines)."""
     amt = "" if amount is None else m(amount)
-    return (f"  {label:<46}{amt:>14}" + (f"  {note}" if note else "")
-            ).rstrip()
+    head = f"  {label:<46}{amt:>14}"
+    if not note:
+        return head.rstrip()
+    return "\n".join(_out.wrap(note, None, head + "  ",
+                               " " * (len(head) + 2)))
+
+
+def _notes(notes: List[str]) -> List[str]:
+    """The NOTES section: one `- ` item per note, wrapped."""
+    L: List[str] = ["", "  Notes"]
+    for n in notes:
+        L += _out.wrap(n, None, "  - ", "    ")
+    return L
 
 
 def render(doc: Dict[str, Any]) -> List[str]:
@@ -57,9 +71,12 @@ def render(doc: Dict[str, Any]) -> List[str]:
     prov = doc.get("province") or "?"
     cur = doc.get("currency") or "CAD"
     L = [f"MINIMUM TAX (AMT) — canada/{prov}, tax year {doc['year']}, "
-         f"rates vintage {doc.get('vintage')} (ESTIMATE ONLY, not filing "
-         f"numbers; {cur}; taxable accounts plus your other income)",
-         f"Law: {LAW}.", ""]
+         f"{cur}"]
+    L += _out.wrap(f"ESTIMATE ONLY, not filing numbers: the taxable "
+                   f"accounts plus your other income, rates vintage "
+                   f"{doc.get('vintage')}.")
+    L += _out.wrap(f"Law: {LAW}.")
+    L.append("")
     reg = doc.get("tax_regular") or {}
     L.append("REGULAR TAX")
     L.append(_row("Taxable income (line 26000)", doc["taxable_income"]))
@@ -112,9 +129,9 @@ def render(doc: Dict[str, Any]) -> List[str]:
     c = a.get("carryover") or {}
     L.append("MINIMUM TAX CARRYOVER (s.120.2)")
     src = (doc.get("carry_sources") or {}).get("amt_carryover")
-    L.append("  From: " + (src or "nothing entered ([estimate] "
-                                  "amt_carryover) and no earlier "
-                                  "close-year record"))
+    L += _out.wrap(src or "nothing entered ([estimate] amt_carryover) "
+                          "and no earlier close-year record", None,
+                   "  From: ", "        ")
     avail = c.get("available_by_year") or {}
     if avail:
         L.append(f"  {'ORIGIN':<8}{'AVAILABLE':>14}  {'USABLE THROUGH':<15}"
@@ -164,21 +181,19 @@ def render(doc: Dict[str, Any]) -> List[str]:
         "estimated_tax_with_amt")))
     notes = doc.get("notes") or []
     if notes:
-        L.append("")
-        import textwrap
-        for n in notes:
-            L.append(textwrap.fill("NOTE: " + n, width=78,
-                                   initial_indent="  ",
-                                   subsequent_indent="  "))
+        L += _notes(notes)
     return L
 
 
 def render_recorded(year: Any, label: str, mt: Dict[str, Any]
                     ) -> List[str]:
     """A closed year's minimum tax as its close-year lock recorded it."""
-    L = [f"MINIMUM TAX (AMT) — tax year {year}, as recorded by close-year "
-         f"in {label}", f"Law: {LAW}.", ""]
-    L.append(f"  Opening carryover from: {mt.get('opening_source') or '?'}")
+    L = [f"MINIMUM TAX (AMT) — tax year {year}, as recorded by close-year"]
+    L += _out.wrap(f"Lock: {label}.")
+    L += _out.wrap(f"Law: {LAW}.")
+    L.append("")
+    L += _out.wrap(str(mt.get('opening_source') or '?'), None,
+                   "  Opening carryover from: ", "    ")
     for o, v in (mt.get("opening_by_year") or {}).items():
         L.append(f"    {o}: {m(v)} (usable through {int(o) + 7})")
     for o, v in (mt.get("expired_by_year") or {}).items():
@@ -191,12 +206,12 @@ def render_recorded(year: Any, label: str, mt: Dict[str, Any]
     L.append(_row(f"Carried forward to {int(year) + 1}", mt.get("closing")))
     for o, v in (mt.get("closing_by_year") or {}).items():
         L.append(f"    {o}: {m(v)}")
+    notes = []
     if not mt.get("other_income_entered"):
-        L.append("")
-        L.append("  NOTE: the record was computed with no other income "
-                 "entered ([estimate] other_income) — compare it with the "
-                 "T691 you filed.")
-    L.append("")
-    L.append(f"  The full computation is in the {year} project "
-             f"(`taxjson amt` there).")
+        notes.append("The record was computed with no other income "
+                     "entered ([estimate] other_income) — compare it "
+                     "with the T691 you filed.")
+    notes.append(f"The full computation is in the {year} project "
+                 f"(`taxjson amt` there).")
+    L += _notes(notes)
     return L

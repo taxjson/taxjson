@@ -50,6 +50,23 @@
   was capped at 78 columns). The lines the checklist reads from these
   commands keep their text, no figure, `--json` output or file changes,
   and every exit code is the same.
+- **The filing and planning views in the house style.** `taxjson sum` and
+  `estimate` fit their account tables and the FOR THE RETURN table to the
+  width (FEES, then PIL, then DENIED go first when it is short; the
+  denied total is in the notes) and list the return's notes, the estimate
+  notes and its assumptions as `- ` items instead of one-line paragraphs;
+  an estimate row's bracketed note wraps under itself. `form-export`'s
+  console view drops the ` | ` table for a fitted one, lists each row's
+  note under its table (`- SYMBOL: ...`) and aligns the line totals —
+  the `--csv`, `--json` and TXF exports are unchanged. `t1135`,
+  `carryover` and `reconcile-slips` do the same (a property's or a
+  year's notes under the table, a symbol's detail wrapped under it, a
+  NOTES section); `amt`, `instalments`, `option-boundary`, `close-year`,
+  `check-filed` and `handoff` wrap at the house width with their notes
+  as lists and paths relative to the project. Their warnings and errors
+  are a one-line headline with indented details (`!!`, `NOTE:`,
+  `WARNING:` and `->` retired); `check-filed` keeps `DRIFTED` on the
+  warning's first line. No figure, `--json` output or file changes.
 
 - **The planning commands in the house output style.** `taxjson
   wash-radar` prints one section per advisory category (its title and

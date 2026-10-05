@@ -34,7 +34,10 @@ class TestConvertedCommands(unittest.TestCase):
     CASES = [("wash-sales",), ("wash-sales", "--explain"), ("elect",),
              ("elect", "margin"),
              ("wash-radar",), ("wash-radar", "--date", "2024-11-25", "--all"),
-             ("fx-cash",), ("fx-cash", "--events")]
+             ("fx-cash",), ("fx-cash", "--events"),
+             # group B (tests/test_style_group_b.py has the rest)
+             ("sum",), ("sum", "--verbose"), ("form-export",),
+             ("carryover",), ("check-filed",)]
     # group E (the rest, exit 1 by design, in tests/test_style_e.py)
     CASES += [("tax-logic",), ("tax-logic", "--ids"), ("edge-cases",),
               ("find-missing-history",), ("renames",), ("spinoffs",),

@@ -358,9 +358,10 @@ def load_slip(path: Path, renames: Optional[Dict[str, str]] = None,
             # RECONCILE — silently dropping it certified a disagreeing
             # slip as fully reconciled at exit 0 (REVIEW #21, R1-201).
             dropped += 1
-            print(f"taxjson-reconcile-slips: warning: {path.name}: "
-                  f"{what} — row NOT reconciled; fix the slip CSV cell.",
-                  file=sys.stderr)
+            from taxjson.lib.out import warn as _warn
+            _warn(f"{path.name}: {what} — row NOT reconciled",
+                  prog="taxjson-reconcile-slips",
+                  details=["Fix the slip CSV cell."])
 
         for lineno, row in enumerate(reader, 2):
             cells = {k: (row.get(cols[k]) or "").strip()
@@ -762,67 +763,83 @@ def reconcile(slip: Dict[str, Dict[str, Any]],
 
 def render(rep: Dict[str, Any], tolerance: float,
            country: Optional[str] = None) -> str:
+    """The console report in the house style (docs/output-style.md):
+    one line per symbol — SYMBOL, STATUS and the detail wrapped under
+    itself — the counts, then the notes. `--json` is the machine form."""
+    from taxjson.lib.out import wrap
     lines = ["SLIP RECONCILIATION — computed dispositions vs broker tax "
              "slips", ""]
     if not rep["rows"]:
         lines.append("Nothing to reconcile (no symbols on either side).")
         return "\n".join(lines)
+
+    def item(text: str) -> None:
+        lines.extend(wrap(text, None, "- ", "  "))
+
     width = max(len(r["symbol"]) for r in rep["rows"])
     swidth = max(len(r["status"]) for r in rep["rows"])
     for r in rep["rows"]:
-        lines.append(f"{r['symbol'].ljust(width)}  "
-                     f"{r['status'].ljust(swidth)}  {r['detail']}".rstrip())
+        head = f"{r['symbol'].ljust(width)}  {r['status'].ljust(swidth)}  "
+        if not r["detail"]:
+            lines.append(head.rstrip())
+        elif len(head) <= 50:
+            lines.extend(wrap(r["detail"], None, head, " " * len(head)))
+        else:
+            # A long symbol: the detail goes under the row, indented.
+            lines.append(head.rstrip())
+            lines.extend(wrap(r["detail"], None, "    ", "    "))
     c = rep["counts"]
     lines.append("")
-    lines.append(f"{c['ok']} OK, {c['mismatch']} mismatch, "
-                 f"{c['missing_from_computed']} missing from computed, "
-                 f"{c['missing_from_slip']} missing from slip"
-                 + (f", {c['ambiguous_listing']} ambiguous listing"
-                    if c.get("ambiguous_listing") else "")
-                 + (f", {c['no_slip_expected']} with no slip row "
-                    f"expected (not a failure)"
-                    if c.get("no_slip_expected") else "")
-                 + f" (tolerance ±{tolerance:,.2f}).")
+    lines.extend(wrap(
+        f"{c['ok']} OK, {c['mismatch']} mismatch, "
+        f"{c['missing_from_computed']} missing from computed, "
+        f"{c['missing_from_slip']} missing from slip"
+        + (f", {c['ambiguous_listing']} ambiguous listing"
+           if c.get("ambiguous_listing") else "")
+        + (f", {c['no_slip_expected']} with no slip row "
+           f"expected (not a failure)"
+           if c.get("no_slip_expected") else "")
+        + f" (tolerance ±{tolerance:,.2f})."))
     lines.append("")
-    lines.append("Notes:")
+    lines.append("NOTES")
     if country == "usa":
-        lines.append("  - MISSING_FROM_SLIP can be benign: corp-action "
-                     "dispositions don't always get 1099-B rows. "
-                     "Worthless option expiries are listed as "
-                     "NO_SLIP_EXPECTED and do not fail the check.")
+        item("MISSING_FROM_SLIP can be benign: corp-action "
+             "dispositions don't always get 1099-B rows. "
+             "Worthless option expiries are listed as "
+             "NO_SLIP_EXPECTED and do not fail the check.")
     else:
-        lines.append("  - MISSING_FROM_SLIP can be benign: corp-action "
-                     "dispositions don't always get T5008 rows. "
-                     "Worthless option expiries, and options written "
-                     "this year under grant timing and still open at "
-                     "the year end, are listed as NO_SLIP_EXPECTED and "
-                     "do not fail the check.")
-    lines.append("  - A slip symbol without a listing suffix matches every "
-                 "listing of that root; when the books hold two (SAMPLB.TO "
-                 "CDR and SAMPLB.US), write the suffix in the slip CSV.")
-    lines.append("  - Slips aggregated per type code (IB's SHS/OPC/FUT "
-                 "rows identified 'Various') cannot be compared per "
-                 "security: transcribe a per-security CSV.")
+        item("MISSING_FROM_SLIP can be benign: corp-action "
+             "dispositions don't always get T5008 rows. "
+             "Worthless option expiries, and options written "
+             "this year under grant timing and still open at "
+             "the year end, are listed as NO_SLIP_EXPECTED and "
+             "do not fail the check.")
+    item("A slip symbol without a listing suffix matches every "
+         "listing of that root; when the books hold two (SAMPLB.TO "
+         "CDR and SAMPLB.US), write the suffix in the slip CSV.")
+    item("Slips aggregated per type code (IB's SHS/OPC/FUT "
+         "rows identified 'Various') cannot be compared per "
+         "security: transcribe a per-security CSV.")
     if country == "usa":
-        lines.append("  - Slip cost (1099-B box 1e) is the broker's basis "
-                     "for the lots it sold; it can differ from taxjson's "
-                     "when a wash sale crossed accounts (box 1g covers "
-                     "only the broker's own) or shares came in by "
-                     "transfer — document it, don't 'fix' it.")
+        item("Slip cost (1099-B box 1e) is the broker's basis "
+             "for the lots it sold; it can differ from taxjson's "
+             "when a wash sale crossed accounts (box 1g covers "
+             "only the broker's own) or shares came in by "
+             "transfer — document it, don't 'fix' it.")
     else:
-        lines.append("  - Slip cost (T5008 box 20) is per-broker book value; a "
-                     "difference from blended ACB is expected when you hold the "
-                     "security at more than one broker — document it, don't "
-                     "'fix' it.")
+        item("Slip cost (T5008 box 20) is per-broker book value; a "
+             "difference from blended ACB is expected when you hold the "
+             "security at more than one broker — document it, don't "
+             "'fix' it.")
     if country == "usa":
-        lines.append("  - Amounts are compared in the project base "
-                     "currency; a slip whose currency column names "
-                     "another currency is refused, not converted.")
+        item("Amounts are compared in the project base "
+             "currency; a slip whose currency column names "
+             "another currency is refused, not converted.")
     else:
-        lines.append("  - Amounts are compared in the project base "
-                     "currency; a slip whose currency column (T5008 Box "
-                     "13) names another currency is refused, not "
-                     "converted.")
+        item("Amounts are compared in the project base "
+             "currency; a slip whose currency column (T5008 Box "
+             "13) names another currency is refused, not "
+             "converted.")
     return "\n".join(lines)
 
 
@@ -945,8 +962,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         print(render(rep, args.tolerance, args.country))
         if dropped_rows:
-            print(f"\nNOT RECONCILED: {dropped_rows} slip row(s) had "
-                  f"an unreadable cell (see warnings above).")
+            from taxjson.lib.out import fill
+            print()
+            print(fill(f"NOT RECONCILED: {dropped_rows} slip row(s) had "
+                       f"an unreadable cell (see the warnings above)."))
     return 0 if rep["clean"] else 1
 
 

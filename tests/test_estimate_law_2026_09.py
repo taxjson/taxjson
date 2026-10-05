@@ -286,7 +286,7 @@ class TestStakingIsOrdinaryIncome(unittest.TestCase):
         self.assertRegex(t.stdout, r"Crypto staking \(ordinary\)\s+"
                                    r"1,000\.00")
         self.assertIn("ELIGIBLE (non-eligible", t.stdout)
-        self.assertIn("NOTE: Included in the ON figure", t.stdout)
+        self.assertIn("- Included in the ON figure", t.stdout)
 
 
 class TestInstalmentLawFixes(unittest.TestCase):

@@ -298,10 +298,10 @@ def build_8949(entries: List[Dict[str, Any]],
             # A negative disallowance is not a shape this renderer can
             # file (code W adjustments are positive); rendering would
             # silently disagree with the engine's allowed gain.
-            print(f"warning: {e.get('symbol')} {e.get('date')}: "
-                  f"NEGATIVE disallowed_amount {adj:.2f} — row "
-                  f"rendered without an adjustment; inspect before "
-                  f"filing.", file=sys.stderr)
+            from taxjson.lib.out import warn as _warn
+            _warn(f"{e.get('symbol')} {e.get('date')}: NEGATIVE "
+                  f"disallowed_amount {adj:.2f} — row rendered without an "
+                  f"adjustment", details=["Inspect it before filing."])
         # (h) must equal (d) - (e) + (g) with the RENDERED adjustment;
         # the engine's allowed gain is the authority — surface drift
         # instead of silently printing either.
@@ -345,9 +345,10 @@ def build_8949(entries: List[Dict[str, Any]],
             "account": e.get("account") or "",
         })
     if drift_warned:
-        print(f"warning: {drift_warned} row(s) where (d)-(e)+(g) differs "
-              f"from the engine's allowed gain by more than $0.02 — "
-              f"inspect before filing.", file=sys.stderr)
+        from taxjson.lib.out import warn as _warn
+        _warn(f"{drift_warned} row(s) where (d)-(e)+(g) differs from the "
+              f"engine's allowed gain by more than $0.02",
+              details=["Inspect them before filing."])
     for rows in list(parts.values()):
         rows.sort(key=lambda r: (r["digital_asset"], r["date_sold"],
                                  r["description"]))
@@ -894,21 +895,22 @@ def section_1256_lines(rep: Dict[str, Any], cur: str) -> List[str]:
         return []
     t = rep.get("section_1256_totals") or {}
     lines = [f"FORM 6781 BY HAND — {len(rows)} §1256 contract "
-             f"disposition(s), net {t.get('gain', 0.0):,.2f} {cur}: NOT in "
-             f"the Form 8949 rows or totals above."]
+             f"disposition(s)"]
+    lines += _para(f"Net {t.get('gain', 0.0):,.2f} {cur}: NOT in the Form "
+                   f"8949 rows or totals above.")
     table = [(r["description"], r["kind"], r["date_acquired"],
               r["date_sold"], f"{r['gain']:,.2f}") for r in rows]
     lines += _table(("CONTRACT", "KIND", "ACQUIRED", "CLOSED",
                      "GAIN(LOSS)"), table, right={4})
-    lines.append("  " + SEC1256_NOTE)
+    lines += _item(SEC1256_NOTE)
     lines.append("")
     return lines
 
-def year_not_ended_note(year: Any, today: Optional[Any] = None) -> str:
-    """'' once `year` has ended; else a one-line note that the filing
+def year_not_ended_text(year: Any, today: Optional[Any] = None) -> str:
+    """'' once `year` has ended; else a sentence saying the filing
     figures are year-to-date (A2-1103: Schedule 3, Form 8949 and the
     sum FOR THE RETURN block presented an unfinished year as a complete
-    return, while t1135 and close-year say so)."""
+    return, while t1135 and close-year say so) — the console wording."""
     from datetime import date as _date
     try:
         y = int(year)
@@ -917,25 +919,90 @@ def year_not_ended_note(year: Any, today: Optional[Any] = None) -> str:
     today = today or _date.today()
     if today > _date(y, 12, 31):
         return ""
-    return (f"NOTE: tax year {y} has not ended (today {today.isoformat()}) "
+    return (f"Tax year {y} has not ended (today {today.isoformat()}) "
             f"— these are YEAR-TO-DATE figures, not a complete return; "
             f"re-run after Dec 31.")
 
 
+def year_not_ended_note(year: Any, today: Optional[Any] = None) -> str:
+    """year_not_ended_text as the `--json` report's `year_not_ended`
+    field carries it (`NOTE: tax year ...`, unchanged for readers)."""
+    t = year_not_ended_text(year, today)
+    return ("NOTE: t" + t[1:]) if t else ""
+
+
 # ---------------------------------------------------------------- render
+# The console view only (docs/output-style.md): `--csv`, `--json` and the
+# TXF are the exports and keep their bytes. manual_section() above is
+# shared with the account .sum reports and keeps its layout.
 
 def _table(header: Tuple[str, ...], rows: List[Tuple[str, ...]],
            right: set) -> List[str]:
+    """A table fitted to the house width (lib/out.fit_table): too wide,
+    one record per row headed by its first column."""
+    from taxjson.lib.out import fit_table
     if not rows:
         return ["  (no dispositions)"]
-    widths = [max(len(header[i]), *(len(r[i]) for r in rows))
-              for i in range(len(header))]
-    def fmt(row: Tuple[str, ...]) -> str:
-        return " | ".join(
-            (row[i].rjust(widths[i]) if i in right else row[i].ljust(widths[i]))
-            for i in range(len(row))).rstrip()
-    return [fmt(header), "-+-".join("-" * w for w in widths)] + \
-           [fmt(r) for r in rows]
+    aligns = [">" if i in right else "<" for i in range(len(header))]
+    return fit_table(header, rows, aligns=aligns)
+
+
+def _para(text: str, indent: str = "",
+          hang: Optional[str] = None) -> List[str]:
+    from taxjson.lib.out import wrap
+    return wrap(text, None, indent, indent if hang is None else hang)
+
+
+def _item(text: str, indent: str = "") -> List[str]:
+    return _para(text, indent + "- ", indent + "  ")
+
+
+def _row_notes(rows: List[Tuple[str, str]]) -> List[str]:
+    """`- SYMBOL, SYMBOL: note` under a table, one item per distinct
+    note (the prose column made the rows run off the width)."""
+    by_note: Dict[str, List[str]] = {}
+    for sym, note in rows:
+        if note:
+            syms = by_note.setdefault(note, [])
+            if sym not in syms:
+                syms.append(sym)
+    out: List[str] = []
+    for note, syms in by_note.items():
+        out += _item(f"{', '.join(syms)}: {note}")
+    return out
+
+
+def _amounts(pairs: List[Tuple[str, float]], indent: str) -> List[str]:
+    """`label:  amount` lines, labels padded and amounts right-aligned."""
+    if not pairs:
+        return []
+    lw = max(len(k) for k, _ in pairs) + 1
+    vals = [f"{v:,.2f}" for _, v in pairs]
+    vw = max(len(v) for v in vals)
+    return [f"{indent}{k + ':':<{lw}}  {v:>{vw}}"
+            for (k, _), v in zip(pairs, vals)]
+
+
+def _manual_console(rows: List[Dict[str, Any]], cur: str) -> List[str]:
+    """manual_section() in the console layout."""
+    if not rows:
+        return []
+    total = sum(abs(float(r.get("proceeds") or 0.0)) for r in rows)
+    lines = [f"MANUAL REPORTING REQUIRED — {len(rows)} sale(s) with no "
+             f"purchase in your files"]
+    lines += _para(f"Unknown cost (missing_history.json), proceeds "
+                   f"{total:,.2f} {cur}: NOT in the rows or totals above. "
+                   f"Report each by hand once its cost is known "
+                   f"(`taxjson find-missing-history`).")
+    table = [(str(r.get("symbol") or ""), str(r.get("date") or ""),
+              _qty_str(abs(float(r.get("qty") or 0.0))),
+              f"{abs(float(r.get('proceeds') or 0.0)):,.2f}",
+              str(r.get("account") or ""))
+             for r in rows]
+    lines += _table(("SYMBOL", "DATE", "UNITS", "PROCEEDS", "ACCOUNT"),
+                    table, right={2, 3})
+    lines.append("")
+    return lines
 
 
 def _rounding_note(rep: Dict[str, Any]) -> List[str]:
@@ -962,18 +1029,25 @@ def _rounding_note(rep: Dict[str, Any]) -> List[str]:
             continue
         gap = round(float(shown) - float(raw), 2)
         if abs(gap) >= 0.005:
-            out.append(f"  - Rows are rounded to the cent, as filed: the "
-                       f"gains files' unrounded total {label} is "
-                       f"{float(raw):,.2f} ({gap:+,.2f} on the totals "
-                       f"above).")
+            out += _item(f"Rows are rounded to the cent, as filed: the "
+                         f"gains files' unrounded total {label} is "
+                         f"{float(raw):,.2f} ({gap:+,.2f} on the totals "
+                         f"above).")
     return out
 
 
+def _year_note(rep: Dict[str, Any]) -> List[str]:
+    """The year-not-ended sentence (the --json field keeps its NOTE:)."""
+    t = str(rep.get("year_not_ended") or "")
+    if t.startswith("NOTE: t"):
+        t = "T" + t[len("NOTE: t"):]
+    return _para(t) if t else []
+
+
 def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str) -> str:
-    lines = [f"FORM 8949 — Sales and Other Dispositions of Capital Assets "
-             f"(tax year {year or '?'}, amounts in {cur})"]
-    if rep.get("year_not_ended"):
-        lines.append(rep["year_not_ended"])
+    lines = [f"FORM 8949 — Sales and Other Dispositions of Capital Assets, "
+             f"tax year {year or '?'}, {cur}"]
+    lines += _year_note(rep)
     lines.append("")
     header = ("(a) DESCRIPTION", "(b) ACQUIRED", "(c) SOLD",
               "(d) PROCEEDS", "(e) COST", "(f)", "(g) ADJ",
@@ -985,6 +1059,12 @@ def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str) -> str:
              f"{r['proceeds']:,.2f}", f"{r['cost']:,.2f}", r["code"],
              f"{r['adjustment']:,.2f}" if r["code"] else "",
              f"{r['gain']:,.2f}") for r in rows], right={3, 4, 6, 7})
+
+    def _totals(label: str, t: Dict[str, float]) -> List[str]:
+        return [f"  {label}"] + _amounts(
+            [("proceeds", t['proceeds']), ("cost", t['cost']),
+             ("adjustments", t['adjustment']), ("gain", t['gain'])],
+            "    ")
 
     has_da = any(r.get("digital_asset") for p in ("I", "II")
                  for r in rep[f"part_{p}"])
@@ -1008,127 +1088,125 @@ def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str) -> str:
                 lines += _rows_table([r for r in rows
                                       if r["digital_asset"]
                                       == g["digital_asset"]])
-                gt = g["totals"]
-                lines.append(f"  box {g['boxes']} totals: proceeds "
-                             f"{gt['proceeds']:,.2f} | cost "
-                             f"{gt['cost']:,.2f} | adjustments "
-                             f"{gt['adjustment']:,.2f} | gain "
-                             f"{gt['gain']:,.2f}")
+                lines += _totals(f"Box {g['boxes']} totals:", g["totals"])
         else:
             lines += _rows_table(rows)
         if rows:
-            lines.append(f"  TOTALS (to Schedule D part {part}): proceeds "
-                         f"{t['proceeds']:,.2f} | cost {t['cost']:,.2f} | "
-                         f"adjustments {t['adjustment']:,.2f} | gain "
-                         f"{t['gain']:,.2f}")
+            lines += _totals(f"TOTALS (to Schedule D part {part}):", t)
         lines.append("")
     lines += section_1256_lines(rep, cur)
-    lines += manual_section(rep.get("manual_reporting_required") or [],
-                            cur)
-    lines.append("Notes:")
-    lines.append("  - Code W rows are wash sales; column (g) is the "
-                 "disallowed loss added back, so (h) is the allowed amount.")
+    lines += _manual_console(rep.get("manual_reporting_required") or [],
+                             cur)
+    lines.append("NOTES")
+    lines += _item("Code W rows are wash sales; column (g) is the "
+                   "disallowed loss added back, so (h) is the allowed "
+                   "amount.")
     _y = year or rep.get("year")
     if _y is not None and int(_y) >= DIGITAL_ASSET_BOXES_FROM:
-        lines.append("  - Check the correct 8949 box: securities A/B/C "
-                     "(short-term) or D/E/F (long-term) by whether the "
-                     "1099-B reported basis; digital assets (crypto "
-                     "accounts) G/H/I or J/K/L by whether a Form 1099-DA "
-                     "reported them and their basis — never A-F.")
+        lines += _item("Check the correct 8949 box: securities A/B/C "
+                       "(short-term) or D/E/F (long-term) by whether the "
+                       "1099-B reported basis; digital assets (crypto "
+                       "accounts) G/H/I or J/K/L by whether a Form 1099-DA "
+                       "reported them and their basis — never A-F.")
     else:
-        lines.append("  - Check the correct 8949 box (A/B/C, D/E/F) "
-                     "against whether your broker reported basis on the "
-                     "1099-B.")
-    lines.append("  - Short sales show the cover date in both date columns.")
+        lines += _item("Check the correct 8949 box (A/B/C, D/E/F) "
+                       "against whether your broker reported basis on the "
+                       "1099-B.")
+    lines += _item("Short sales show the cover date in both date columns.")
     lines += _rounding_note(rep)
-    lines.append("  - Not tax advice; reconcile against your 1099-B before "
-                 "filing.")
+    lines += _item("Not tax advice; reconcile against your 1099-B before "
+                   "filing.")
     return "\n".join(lines)
 
 
 def render_schedule3(rep: Dict[str, Any], year: Optional[int],
                      cur: str) -> str:
     year = year or rep.get("year")
-    lines = [f"SCHEDULE 3 — Capital Gains (or Losses) (tax year "
-             f"{year or '?'}, amounts in {cur})"]
-    if rep.get("year_not_ended"):
-        lines.append(rep["year_not_ended"])
+    lines = [f"SCHEDULE 3 — Capital Gains (or Losses), tax year "
+             f"{year or '?'}, {cur}"]
+    lines += _year_note(rep)
     lines.append("")
     header = ("UNITS", "SYMBOL", "ACQ. YEAR", "PROCEEDS", "ACB",
-              "OUTLAYS", "GAIN(LOSS)", "NOTES")
+              "OUTLAYS", "GAIN(LOSS)")
     by_line = rep.get("lines") or []
     if not by_line:
         spec = schedule3_line("shares", year)
-        lines.append(f"{line_title(spec).upper()} — {spec['label']}")
+        lines.append(line_title(spec).upper())
+        lines += _para(spec['label'])
         lines += _table(header, [], right=set())
         lines.append("")
     for ln in by_line:
-        lines.append(f"{ln['title'].upper()} — {ln['label']}")
+        lines.append(ln['title'].upper())
+        lines += _para(ln['label'])
+        sel = [r for r in rep["rows"] if r["line_key"] == ln["key"]]
         table = [(f"{r['units']:,.8f}".rstrip("0").rstrip(".") or "0",
                   r["symbol"],
                   str(r["acq_year"]), f"{r['proceeds']:,.2f}",
                   f"{r['acb']:,.2f}", f"{r['outlays']:,.2f}",
-                  f"{r['gain']:,.2f}", r["notes"])
-                 for r in rep["rows"] if r["line_key"] == ln["key"]]
+                  f"{r['gain']:,.2f}")
+                 for r in sel]
         lines += _table(header, table, right={0, 3, 4, 5, 6})
-        lines.append(f"  Line {ln['proceeds_code']} (proceeds of "
-                     f"disposition): {ln['proceeds']:,.2f}")
-        lines.append(f"  Line {ln['gain_code']} (gain/loss): "
-                     f"{ln['gain']:,.2f}")
+        lines += _amounts(
+            [(f"Line {ln['proceeds_code']} (proceeds of disposition)",
+              ln['proceeds']),
+             (f"Line {ln['gain_code']} (gain/loss)", ln['gain'])], "  ")
+        lines += _row_notes([(r["symbol"], r["notes"]) for r in sel])
         lines.append("")
-    lines += manual_section(rep.get("manual_reporting_required") or [],
-                            cur)
-    lines.append("Notes:")
+    lines += _manual_console(rep.get("manual_reporting_required") or [],
+                             cur)
+    lines.append("NOTES")
     if year is not None and int(year) == PERIOD_YEAR:
         # The 2024 form's two periods (A2-0166).
-        lines.append("  - The 2024 Schedule 3 splits each line by the date "
-                     "of the disposition: Period 1 (January 1 to June 24, "
-                     "2024) — shares and fund units on 10689/10690, "
-                     "options, futures, crypto-assets and other "
-                     "properties on 10693/10694; Period 2 (June 25 to "
-                     "December 31) — 13199/13200 and 15199/15300. A "
-                     "security sold in both periods has a row in each.")
+        lines += _item("The 2024 Schedule 3 splits each line by the date "
+                       "of the disposition: Period 1 (January 1 to June "
+                       "24, 2024) — shares and fund units on 10689/10690, "
+                       "options, futures, crypto-assets and other "
+                       "properties on 10693/10694; Period 2 (June 25 to "
+                       "December 31) — 13199/13200 and 15199/15300. A "
+                       "security sold in both periods has a row in each.")
     else:
-        lines.append("  - Each disposition is on the line for its property "
-                     "type: shares and fund units on 13199/13200; options, "
-                     "futures and other properties on 15199/15300 (T4037); "
-                     # The same routing the rows use (S032-23): a second,
-                     # separate year test could contradict them.
-                     + ("crypto-assets on 15200/15301."
-                        if schedule3_line("crypto", year)["key"] == "crypto"
-                        else "crypto-assets with the other properties "
-                             "(15199/15300) for this year."))
-    lines.append("  - GAIN(LOSS) is the ALLOWED amount. Every row foots: "
-                 "PROCEEDS − ACB − OUTLAYS = GAIN(LOSS); where a "
-                 "superficial loss was denied the ACB shown is reduced "
-                 "by the denied amount, which is added to the ACB of "
-                 "the replacement property instead — except a denial "
-                 "caused by a registered-account or affiliated-person "
-                 "acquisition, which is permanent for this return with "
-                 "no ACB addition here (an affiliated person adds it to "
-                 "their own ACB, s.53(1)(f); noted per row).")
-    lines.append("  - Apply the inclusion rate on Schedule 3 itself; these "
-                 "are 100% amounts.")
-    lines.append("  - PROCEEDS re-adds sell-side commissions so OUTLAYS can "
-                 "be shown separately (a commission rebate stays netted in "
-                 "PROCEEDS); the gain is unchanged.")
+        lines += _item("Each disposition is on the line for its property "
+                       "type: shares and fund units on 13199/13200; "
+                       "options, futures and other properties on "
+                       "15199/15300 (T4037); "
+                       # The same routing the rows use (S032-23): a
+                       # second, separate year test could contradict them.
+                       + ("crypto-assets on 15200/15301."
+                          if schedule3_line("crypto", year)["key"]
+                          == "crypto"
+                          else "crypto-assets with the other properties "
+                               "(15199/15300) for this year."))
+    lines += _item("GAIN(LOSS) is the ALLOWED amount. Every row foots: "
+                   "PROCEEDS − ACB − OUTLAYS = GAIN(LOSS); where a "
+                   "superficial loss was denied the ACB shown is reduced "
+                   "by the denied amount, which is added to the ACB of "
+                   "the replacement property instead — except a denial "
+                   "caused by a registered-account or affiliated-person "
+                   "acquisition, which is permanent for this return with "
+                   "no ACB addition here (an affiliated person adds it to "
+                   "their own ACB, s.53(1)(f); noted per row).")
+    lines += _item("Apply the inclusion rate on Schedule 3 itself; these "
+                   "are 100% amounts.")
+    lines += _item("PROCEEDS re-adds sell-side commissions so OUTLAYS can "
+                   "be shown separately (a commission rebate stays netted "
+                   "in PROCEEDS); the gain is unchanged.")
     lines += _rounding_note(rep)
-    lines.append("  - FX gains on foreign cash (s.39(1.1), `taxjson "
-                 "fx-cash`) are not in these rows; T4037 puts them on "
-                 "line 15300.")
-    lines.append("  - Capital gains paid out by funds and trusts are not "
-                 "in these rows either: T3 box 21 goes on line 17600 and "
-                 "T5/T5013 box 18 on line 17400"
-                 + (" (for 2024, the slips' Period 1 amounts on 17599 "
-                    "and 17399, Period 2 on 17600 and 17400)"
-                    if year is not None and int(year) == PERIOD_YEAR
-                    else "")
-                 + ". Enter them from the "
-                 "slips; the books carry those distributions as "
-                 "dividends, so line 19700 is these rows plus the slip "
-                 "lines.")
-    lines.append("  - Not tax advice; reconcile against your T5008 slips "
-                 "before filing (see taxjson-reconcile-slips).")
+    lines += _item("FX gains on foreign cash (s.39(1.1), `taxjson "
+                   "fx-cash`) are not in these rows; T4037 puts them on "
+                   "line 15300.")
+    lines += _item("Capital gains paid out by funds and trusts are not "
+                   "in these rows either: T3 box 21 goes on line 17600 "
+                   "and T5/T5013 box 18 on line 17400"
+                   + (" (for 2024, the slips' Period 1 amounts on 17599 "
+                      "and 17399, Period 2 on 17600 and 17400)"
+                      if year is not None and int(year) == PERIOD_YEAR
+                      else "")
+                   + ". Enter them from the "
+                   "slips; the books carry those distributions as "
+                   "dividends, so line 19700 is these rows plus the slip "
+                   "lines.")
+    lines += _item("Not tax advice; reconcile against your T5008 slips "
+                   "before filing (`taxjson reconcile-slips`).")
     return "\n".join(lines)
 
 
@@ -1328,10 +1406,11 @@ def _check_currency(paths: List[Path], base: str) -> None:
         if blank:
             # A disposition with no currency cannot be verified as in
             # the return's currency (A2-0652): said, not skipped.
-            print(f"warning: {p}: {blank} disposition(s) carry no "
-                  f"currency — cannot verify they are in {base}; the "
-                  f"pipeline's converted gains files always carry it.",
-                  file=sys.stderr)
+            from taxjson.lib.out import warn as _warn
+            _warn(f"{p}: {blank} disposition(s) carry no currency — "
+                  f"cannot verify they are in {base}",
+                  details=["The pipeline's converted gains files always "
+                           "carry it."])
         if other:
             got = ", ".join(f"{n} {c}" for c, n in sorted(other.items()))
             print(f"taxjson-form-export: {p}: dispositions in another "
@@ -1405,46 +1484,49 @@ def _main(args) -> int:
             f"({abs(float(m.get('proceeds') or 0.0)):,.2f})"
             for m in manual[:8])
         _more = f" (+{len(manual) - 8} more)" if len(manual) > 8 else ""
-        print(f"warning: {max(tainted, len(manual))} "
-              f"disposition(s) with an unknown cost (no purchase in your "
-              f"files) are NOT in the "
+        from taxjson.lib.out import warn as _warn
+        _warn(f"{max(tainted, len(manual))} disposition(s) with an "
+              f"unknown cost (no purchase in your files) are NOT in the "
               f"{'TXF' if args.form == 'txf' else 'form'} rows or totals "
-              f"— proceeds {manual_proceeds:,.2f}: {_names}{_more}. "
-              f"Report them by hand once their cost is known "
-              f"(`taxjson find-missing-history`); they are listed in the "
-              f"MANUAL REPORTING section.", file=sys.stderr)
+              f"— proceeds {manual_proceeds:,.2f}",
+              details=[f"{_names}{_more}.",
+                       "Report them by hand once their cost is known "
+                       "(`taxjson find-missing-history`); they are listed "
+                       "in the MANUAL REPORTING section."])
 
     rep_8949 = (build_8949(entries, args.year)
                 if args.form in ("8949", "txf") else None)
     if rep_8949 is not None:
         _s1256 = rep_8949["section_1256_totals"]
         if _s1256["dispositions"]:
-            print(f"warning: {_s1256['dispositions']} §1256 contract "
+            from taxjson.lib.out import warn as _warn
+            _warn(f"{_s1256['dispositions']} §1256 contract "
                   f"disposition(s) (net {_s1256['gain']:,.2f}) are NOT in "
-                  f"the {'TXF records' if args.form == 'txf' else 'Form 8949 rows'}"
-                  f" — {SEC1256_NOTE}"
-                  + (" `--form 8949` lists them." if args.form == "txf"
-                     else ""), file=sys.stderr)
+                  f"the {'TXF records' if args.form == 'txf' else 'Form 8949 rows'}",
+                  details=[SEC1256_NOTE
+                           + (" `--form 8949` lists them."
+                              if args.form == "txf" else "")])
     if args.form == "txf":
+        from taxjson.lib.out import warn as _warn
         if args.csv or args.json:
-            print("warning: --csv/--json have no effect with "
-                  "--form txf (TXF is its own format) — ignored.",
-                  file=sys.stderr)
+            _warn("--csv/--json have no effect with --form txf (TXF is its "
+                  "own format) — ignored")
         # TXF rides on the 8949 model — same rows, same code-W math.
         rep = rep_8949
-        _ynote = year_not_ended_note(args.year or _infer_year(entries))
+        _ynote = year_not_ended_text(args.year or _infer_year(entries))
         if _ynote:
-            print(f"warning: {_ynote}", file=sys.stderr)
+            _warn(_ynote)
         doc = build_txf(rep, args.box)
         _da_rows = [r for p in ("I", "II") for r in rep[f"part_{p}"]
                     if r.get("digital_asset")]
         if _da_rows:
-            print(f"warning: {len(_da_rows)} digital-asset disposition(s) "
+            _warn(f"{len(_da_rows)} digital-asset disposition(s) "
                   f"(proceeds {sum(r['proceeds'] for r in _da_rows):,.2f}) "
-                  f"are NOT in the TXF: from 2025 they go on Form 8949 "
-                  f"boxes G-L, which have no TXF reference number taxjson "
-                  f"knows — enter them by hand (`--form 8949` lists them "
-                  f"by box).", file=sys.stderr)
+                  f"are NOT in the TXF",
+                  details=["From 2025 they go on Form 8949 boxes G-L, "
+                           "which have no TXF reference number taxjson "
+                           "knows — enter them by hand (`--form 8949` "
+                           "lists them by box)."])
         if args.out:
             from taxjson.lib.safe_write import write_atomic
             try:

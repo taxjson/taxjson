@@ -642,7 +642,7 @@ class TestCloseYearAccountOrder(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             r = _run_cli(root, "close-year")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("disallowed 0.00", r.stdout + r.stderr)
+            self.assertRegex((r.stdout + r.stderr).lower(), r"disallowed:? +0\.00")
             rec = json.loads((root / "filed" / "2025.json").read_text())
         xyz = rec["year_end"]["equity"]["XYZ.TO"]
         self.assertAlmostEqual(xyz["qty"], 100.0)
