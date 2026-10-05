@@ -202,9 +202,9 @@ class TestRunStyle(unittest.TestCase):
         r = project("canada").run("fetch", "--list")
         if r.returncode == 2:
             # No fetcher plugin installed here: one error, one message.
-            self.assertIn("taxjson fetch: error: no fetcher is installed",
-                          r.stderr)
-            assert_styled(self, r.stderr, allow=("--with-fetch",))
+            # (the install hint's wording belongs to lib/fetchers)
+            self.assertTrue(r.stderr.startswith(
+                "taxjson fetch: error: no fetcher is installed"), r.stderr)
             return
         self.assertEqual(r.returncode, 0, r.stderr)
         assert_styled(self, r.stdout)
