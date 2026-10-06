@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A Questrade or RBC symbol filed on the other currency's row is read as
+  the listing the books show.** Questrade's website export files interlisted
+  shares that arrived from another broker under the TSX ticker on a USD row;
+  the listing came from the currency, so the transfer-in became a `.US`
+  listing that does not exist and the cross-listing join pooled the company
+  under it. When the transfer journal pairs it with another US ticker's
+  transfer out (or the same ticker's other listing) under an equal name, or
+  the `.TO` listing is in the books under an equal name, every row of the
+  symbol is booked as the `.TO` listing, with a Warning naming the
+  `DISTINCT` line that undoes it; `taxjson ticker-map --suggest` shows the
+  explicit lines (tax-logic CA-XLIST-02 / US-XLIST-02).
+
 ### Changed
 
 - **taxjson.toml: the file header sits on `[settings]`, and a blank line
