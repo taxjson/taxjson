@@ -2,28 +2,6 @@
 
 ## Unreleased
 
-### Added
-
-- **In-kind moves between a taxable and a registered account are booked.**
-  `taxjson run` pairs a taxable account's transfer-out with a registered
-  account's transfer-in of the same stock and quantity within 10 days (or the
-  reverse), across brokers; a move between two taxable or two registered
-  accounts stays a move of your own. Canada: a contribution in kind is a sale
-  at fair market value on the transfer date — a gain is taxed, a loss is
-  denied for good (s.40(2)(g)(iv)), shown by `taxjson sum` and form-export on
-  its own line and never added to an ACB — and the plan's purchase counts for
-  the superficial-loss rule whatever `transfers_as_acquisitions` says. A
-  withdrawal in kind is a purchase at fair market value (the run notes the
-  T4RSP / T4RIF income; a TFSA withdrawal is not taxed), so its later sale no
-  longer reads as a short. US: a transfer of shares into an IRA, Roth or
-  401(k) is warned about and not booked (contributions are cash only); a
-  distribution in kind is a purchase at fair market value. The value comes
-  from a new `.tt` `INKIND` line, else the market value IB prints on the
-  transfer row, else Yahoo's close on the day (marked ESTIMATED; with
-  `TAXJSON_OFFLINE` and no cached close the run stops and prints the line to
-  add). One warning per run lists each move; `taxjson transfers` labels the
-  rows. Tax-logic CA-INKIND-01..06, US-INKIND-01..03.
-
 ### Fixed
 
 - **Cross-listing auto-join: a dealer's trade-confirmation wording is no longer
@@ -67,6 +45,26 @@
   crypto send decisions) with the meaning, default, country, when to change it
   and an example. `tests/test_settings_doc.py` fails when the validator accepts
   a key or tax-logic adds a rule that the pages do not cover.
+
+- **In-kind moves between a taxable and a registered account are booked.**
+  `taxjson run` pairs a taxable account's transfer-out with a registered
+  account's transfer-in of the same stock and quantity within 10 days (or the
+  reverse), across brokers; a move between two taxable or two registered
+  accounts stays a move of your own. Canada: a contribution in kind is a sale
+  at fair market value on the transfer date — a gain is taxed, a loss is
+  denied for good (s.40(2)(g)(iv)), shown by `taxjson sum` and form-export on
+  its own line and never added to an ACB — and the plan's purchase counts for
+  the superficial-loss rule whatever `transfers_as_acquisitions` says. A
+  withdrawal in kind is a purchase at fair market value (the run notes the
+  T4RSP / T4RIF income; a TFSA withdrawal is not taxed), so its later sale no
+  longer reads as a short. US: a transfer of shares into an IRA, Roth or
+  401(k) is warned about and not booked (contributions are cash only); a
+  distribution in kind is a purchase at fair market value. The value comes
+  from a new `.tt` `INKIND` line, else the market value IB prints on the
+  transfer row, else Yahoo's close on the day (marked ESTIMATED; with
+  `TAXJSON_OFFLINE` and no cached close the run stops and prints the line to
+  add). One warning per run lists each move; `taxjson transfers` labels the
+  rows. Tax-logic CA-INKIND-01..06, US-INKIND-01..03.
 
 
 ## v0.22.0 (2026-10-06)
