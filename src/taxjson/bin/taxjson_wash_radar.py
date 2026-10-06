@@ -510,16 +510,26 @@ def main():
     _shl_rows = [t for t in transactions if t._group != 'TAXABLE']
     _tax_rows, _ = _drop_self_cancelling_transfers(_tax_rows)
     # The sheltered book gets the same treatment the engine's wash
-    # context does (lib/pipeline._handle_transfers): moves near a
-    # taxable trade of the symbol are not netted, and a netted own-
-    # account move (rrsp -> rrsp2) stays as balance-only TRANSFER rows —
-    # dropping both legs left the receiver short and the sender long,
-    # so per-account holdings (and who bought what) came out wrong.
+    # context does (lib/pipeline._handle_transfers), under the project's
+    # transfer policy (--transfers-as-acquisitions, pre-release review
+    # L5): by default (CA-SL-16 / US-WASH-23) zero-net clusters and own-
+    # account moves net whatever trades sit near them and an unmatched
+    # TRANSFER is a custody move (held, never a purchase); strict
+    # (CA-SL-17 / US-WASH-24) moves near a taxable trade are not netted
+    # and an unmatched sheltered transfer-in counts as an acquisition.
+    # A netted own-account move (rrsp -> rrsp2) stays as balance-only
+    # TRANSFER rows — dropping both legs left the receiver short and the
+    # sender long, so per-account holdings came out wrong.
+    _strict_xfer = bool(getattr(args, 'transfers_as_acquisitions', False))
     _shl_rows, _ = _drop_self_cancelling_transfers(
-        _shl_rows, main_transactions=_tax_rows)
+        _shl_rows, main_transactions=_tax_rows,
+        near_trade_guard=_strict_xfer)
     _own_moves: list = []
     _shl_rows = _net_cross_account_transfers(
-        _shl_rows, main_transactions=_tax_rows, netted_out=_own_moves)
+        _shl_rows, main_transactions=_tax_rows, netted_out=_own_moves,
+        near_trade_guard=_strict_xfer)
+    for _t in _own_moves:
+        _t._own_move = True
     _shl_rows = _shl_rows + _own_moves
 
     # Missing-history openings (missing_history.json): the SAME
@@ -685,6 +695,13 @@ def main():
     def _holder(group, pool_acct):
         return ('TAXABLE', '') if group == 'TAXABLE' else ('SHELTERED',
                                                            pool_acct)
+
+    def _xfer_acq(tx, qty_raw):
+        """Strict transfer policy: an unmatched sheltered transfer-in
+        is an acquisition (the engine's transfer_rewrite row)."""
+        return (_strict_xfer and tx.action == 'TRANSFER'
+                and tx._group != 'TAXABLE' and qty_raw > 0
+                and not getattr(tx, '_own_move', False))
 
     def _record_acq(cls, tx, pool_acct, qty, direction):
         _d = _tax_day(tx)
@@ -902,8 +919,9 @@ def main():
             else:
                 account_pool_acb[key] += _money(tx)
 
-            if (tx.action in ('TRANSFER', 'OPENING_BALANCE')
-                    or not_a_purchase(tx)):
+            if ((tx.action in ('TRANSFER', 'OPENING_BALANCE')
+                    or not_a_purchase(tx))
+                    and not _xfer_acq(tx, qty_raw)):
                 # An opening balance or a transfer-in at its book value
                 # (CA-OPEN-01, CA-ACB-TRANSFER-BV) is not a purchase either.
                 # Moving/synthesizing your own shares acquires nothing:
@@ -996,8 +1014,9 @@ def main():
                 # The leftover OPENS a fresh position on the flip side —
                 # record it like any opening, or the new short/long is
                 # invisible to the trigger walk (2026-09 audit).
-                if (tx.action not in ('TRANSFER', 'OPENING_BALANCE')
-                        and not not_a_purchase(tx)):
+                if ((tx.action not in ('TRANSFER', 'OPENING_BALANCE')
+                        and not not_a_purchase(tx))
+                        or _xfer_acq(tx, qty_raw)):
                     _record_acq(cls, tx, acct, leftover_qty,
                                 'LONG' if qty_raw > 0 else 'SHORT')
         

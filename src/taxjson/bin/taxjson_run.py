@@ -17608,8 +17608,9 @@ def _radar_engine_args(bases: List[Path],
     watch, buy-check, sell-check and the run's reports/wash_radar_*):
     the taxable accounts' gains files (wash-adjusted, s.47-blended — the
     engine decides which sales were losses), the project's
-    missing_history.json (the same openings the gains pass applies) and its
-    country (Canada's per-holder s.54 test vs the US s.1091 rules)."""
+    missing_history.json (the same openings the gains pass applies), its
+    country (Canada's per-holder s.54 test vs the US s.1091 rules) and its
+    transfer policy (--transfers-as-acquisitions)."""
     from taxjson.lib.report_model import resolve_gains_files
     # --country is required by the radar (lib/country): never omitted.
     out: List[str] = ["--country", _normalize_country(str(country))]
@@ -17625,6 +17626,16 @@ def _radar_engine_args(bases: List[Path],
             out += ["--gains", str(g)]
     if missing_history is not None and Path(missing_history).exists():
         out += ["--incomplete-history", str(missing_history)]
+    if missing_history is not None:
+        # The project's transfer policy, as the engine passes read it
+        # (CA-SL-16/17, US-WASH-23/24; pre-release review L5).
+        try:
+            from taxjson.lib.pipeline import transfers_as_acquisitions
+            if transfers_as_acquisitions(_soft_settings(
+                    Path(missing_history).parent)):
+                out.append("--transfers-as-acquisitions")
+        except Exception:                                  # noqa: BLE001
+            pass
     if missing_history is not None and out[1] == "canada":
         # The project's corporate_distributions list: the radar's own
         # pool moves a Canadian TRUST's return of capital to its record

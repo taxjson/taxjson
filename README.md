@@ -343,10 +343,13 @@ it — a broker TRANSFER date is an *arrival* date, not an acquisition date.
 Custody churn that nets to zero, and moves between your own sheltered accounts,
 are netted out. Instead of stopping, the run prints **one warning** listing
 every transfer-in (account, symbol, quantity, date) that sits inside the
-±30-day window of a taxable loss sale:
+±30-day window of a taxable loss sale — and every netted move or zero-net
+cluster with a leg inside such a window (one leg may have been a
+contribution):
 
 ```
-Warning: 1 transfer-in in a taxable loss's 30-day window counted as an account move, not a purchase
+Warning: 2 transfers in a taxable loss's 30-day window counted as account moves, not purchases
+  - SAMPLE.TO 100 moved rrsp→tfsa 2025-04-20/21 inside the 2025-04-15 loss window in margin — if one leg was a contribution, the loss may be superficial (s.54)
   - rrsp: SAMPLE.TO +80 on 2025-05-09 (loss sale 2025-04-15 in margin)
   If one was an in-kind contribution or a purchase rather than an account move, ...
 ```

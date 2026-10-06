@@ -181,7 +181,8 @@ def _main_trade_dates(main_transactions):
 
 def _drop_self_cancelling_transfers(transactions, main_transactions=None,
                                     base_currency=None,
-                                    near_trade_guard=True):
+                                    near_trade_guard=True,
+                                    netted_segments=None):
     """Drop TRANSFER groups that net to zero WITHIN ONE TIME CLUSTER and
     have no intervening trade or split.
 
@@ -243,6 +244,10 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
     restatement pre-pass and their notes: a zero-net cluster nets
     whatever trades sit near it, as a custody move would. The SPLIT
     blocks and the journal-candidate post-pass stay.
+
+    `netted_segments`, when given, receives each dropped segment's rows
+    (a list per segment): the default policy's caller lists the ones
+    inside a loss's window (transfers_in_loss_windows).
 
     Returns the filtered list plus a list of (symbol, account, count)
     tuples for the caller to log.
@@ -547,6 +552,8 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
             for idx, _ in blessed_seg:
                 drop_idx.add(idx)
             n_dropped += len(blessed_seg)
+            if netted_segments is not None and blessed_seg:
+                netted_segments.append([t for _, t in blessed_seg])
         if n_dropped:
             dropped.append((symbol, account, n_dropped))
 
@@ -619,7 +626,9 @@ OWN_MOVE_TYPE = 'own_account_move'
 
 
 def _net_cross_account_transfers(transactions, main_transactions=(),
-                                 netted_out: Optional[list] = None):
+                                 netted_out: Optional[list] = None, *,
+                                 near_trade_guard: bool = True,
+                                 netted_segments: Optional[list] = None):
     """Net out TRANSFER groups that cancel at the SYMBOL level across
     accounts within one time cluster — a registered-to-registered move
     of the user's own shares (rrsp → rrsp2). Ownership never changed, so
@@ -647,6 +656,13 @@ def _net_cross_account_transfers(transactions, main_transactions=(),
     Segments whose lo..hi span exceeds _TRANSFER_SEGMENT_MAX_SPAN_DAYS
     are never netted (chained-gap residue — see that constant).
 
+    `near_trade_guard=False` (the default transfer policy, CA-SL-16 /
+    US-WASH-23) drops the near-trade refusal only: the SPLIT guard reads
+    `main_transactions` whatever the policy (a main-book split changes
+    the share terms of the legs). `netted_segments`, when given,
+    receives each netted segment's rows (a list per segment) — the
+    default policy's caller lists those inside a loss's window.
+
     The netted legs are removed from the returned list and, when
     `netted_out` is given, appended to it: _handle_transfers keeps them
     in the wash context as balance-only rows (action TRANSFER,
@@ -673,7 +689,8 @@ def _net_cross_account_transfers(transactions, main_transactions=(),
         except (TypeError, ValueError):
             return None
 
-    main_trades = _main_trade_dates(main_transactions)
+    main_trades = (_main_trade_dates(main_transactions)
+                   if near_trade_guard else {})
 
     drop_idx = set()
     for symbol, rows in groups.items():
@@ -711,11 +728,14 @@ def _net_cross_account_transfers(transactions, main_transactions=(),
             # date): don't guess — let the rewrite + engine guard
             # force a declaration if it matters.
             _pad = _td(days=_TRANSFER_NEAR_TRADE_PAD_DAYS)
-            if any(lo - _pad <= sd <= hi + _pad
-                   for sd in main_trades.get(symbol, ())):
+            if near_trade_guard and any(
+                    lo - _pad <= sd <= hi + _pad
+                    for sd in main_trades.get(symbol, ())):
                 continue
             for idx, _ in seg:
                 drop_idx.add(idx)
+            if netted_segments is not None:
+                netted_segments.append([t for _, t in seg])
     if not drop_idx:
         return transactions
     if netted_out is not None:
@@ -758,7 +778,8 @@ def _book_words(country: Optional[str]) -> Dict[str, str]:
 
 def _handle_transfers(transactions, sheltered_transactions, *, taxable,
                       base_currency=None, country=None,
-                      transfers_as_acquisitions=False):
+                      transfers_as_acquisitions=False,
+                      moves_out: Optional[list] = None):
     """Pre-process TRANSFER rows before they reach the gains engine.
 
     The --sheltered file is for cross-account wash-sale context only. Its
@@ -788,6 +809,13 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
     near-trade refusals, and the survivors booked as acquisitions /
     disposals whose arrival date the engine refuses to guess
     (AmbiguousTransferDateError).
+
+    `moves_out` (default policy only): receives the sheltered context's
+    netted transfer clusters (a zero-net cluster in one account, a move
+    between two of your accounts), one list of rows each — netted here
+    whatever trades sit near them, so run_gains lists those inside a
+    loss's window in its one transfer warning (one leg may have been a
+    contribution: pre-release review M1).
     """
     # The --sheltered context file's TRANSFER rows need three-way
     # handling, not the old unconditional strip. Stripping everything
@@ -818,7 +846,8 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
         transactions, sheltered_transactions = _handle_transfers(
             transactions, sheltered_transactions, taxable=taxable,
             base_currency=base_currency, country=country,
-            transfers_as_acquisitions=transfers_as_acquisitions)
+            transfers_as_acquisitions=transfers_as_acquisitions,
+            moves_out=moves_out)
         return transactions + _lot_moves, sheltered_transactions
     n_sh_before = sum(1 for t in sheltered_transactions
                       if t.action == 'TRANSFER')
@@ -831,16 +860,21 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
     # TransferValidationError hard-error path instead).
     # Default policy (CA-SL-16 / US-WASH-23): no near-trade refusal —
     # a transfer is a custody move whatever trades sit near it.
+    _moves = (moves_out if moves_out is not None
+              and not transfers_as_acquisitions else None)
     sheltered_transactions, _sh_pairs = _drop_self_cancelling_transfers(
         sheltered_transactions, main_transactions=transactions,
         base_currency=base_currency,
-        near_trade_guard=transfers_as_acquisitions)
+        near_trade_guard=transfers_as_acquisitions,
+        netted_segments=_moves)
     _own_moves: list = []
+    # The main book always reaches the netter: its SPLIT guard holds in
+    # both policies; only the near-trade refusal is the strict one's.
     sheltered_transactions = _net_cross_account_transfers(
-        sheltered_transactions,
-        main_transactions=(transactions if transfers_as_acquisitions
-                           else ()),
-        netted_out=_own_moves)
+        sheltered_transactions, main_transactions=transactions,
+        netted_out=_own_moves,
+        near_trade_guard=transfers_as_acquisitions,
+        netted_segments=_moves)
     from taxjson.lib.core import TRANSFER_CUSTODY_TYPE
     # type='transfer_rewrite' (strict): the engine refuses to use the
     # row as a wash TRIGGER (its date may be a custody-arrival date,
@@ -981,7 +1015,8 @@ def prepare_books(transactions, sheltered_transactions=(),
                   base_currency: Optional[str] = None,
                   spot_crypto: bool = False,
                   country: Optional[str] = None,
-                  transfers_as_acquisitions: bool = False):
+                  transfers_as_acquisitions: bool = False,
+                  moves_out: Optional[list] = None):
     """The load-side preprocessing every gains consumer must share:
     TRANSFER handling (strip/drop/rewrite/reject) then missing-history
     opening synthesis. Returns (transactions, sheltered, affiliated,
@@ -1006,6 +1041,7 @@ def prepare_books(transactions, sheltered_transactions=(),
         transactions, sheltered_transactions, taxable=taxable,
         base_currency=base_currency, country=country,
         transfers_as_acquisitions=transfers_as_acquisitions,
+        moves_out=moves_out,
     )
 
     missing_history_log: list = []
@@ -1505,6 +1541,9 @@ def run_gains(transactions, sheltered_transactions=(),
                         "required)")
     tax_date = req.effective_tax_date()
 
+    # The sheltered context's netted transfer clusters (default policy):
+    # listed below when one sits inside a loss's window.
+    _netted_moves: list = []
     if books_prepared:
         missing_history_log = []
     else:
@@ -1516,7 +1555,8 @@ def run_gains(transactions, sheltered_transactions=(),
             phantom_hint=req.phantom_hint, spot_crypto=req.spot_crypto,
             base_currency=HOME_CURRENCY.get(req.country),
             country=req.country,
-            transfers_as_acquisitions=req.transfers_as_acquisitions)
+            transfers_as_acquisitions=req.transfers_as_acquisitions,
+            moves_out=_netted_moves)
 
     rules = get_tax_rules(req.country)
     income_rules = req.income_rules()
@@ -1915,7 +1955,8 @@ def run_gains(transactions, sheltered_transactions=(),
     if _loss_rule:
         _xw = transfers_in_loss_windows(
             clean_txs, list(transactions) + list(sheltered_transactions)
-            + list(affiliated_transactions or []), req.country)
+            + list(affiliated_transactions or []), req.country,
+            moves=_netted_moves)
         if _xw:
             results['transfers_in_loss_windows'] = _xw
             _h, _det, _leg = transfer_window_message(_xw, req.country)
@@ -1959,7 +2000,8 @@ TRANSFER_WINDOW_HEAD = "warning: transfer-in inside a loss window: "
 
 
 def transfers_in_loss_windows(losses, rows, country: str,
-                              window_days: int = 30) -> List[Dict[str, Any]]:
+                              window_days: int = 30, *,
+                              moves=()) -> List[Dict[str, Any]]:
     """Each transfer-in the books hold but never count as a purchase
     (core.TRANSFER_CUSTODY_TYPE: a sheltered account's custody move;
     core.TRANSFER_BOOK_VALUE_TYPE: a taxable arrival at the broker's
@@ -1967,7 +2009,15 @@ def transfers_in_loss_windows(losses, rows, country: str,
     `losses` (gain rows; the raw loss before any denial) on the same
     symbol, measured on the country's window dates (settle in Canada,
     trade in the US). One record per transfer row, naming the nearest
-    loss: {account, symbol, qty, date, loss_date, loss_account}."""
+    loss: {account, symbol, qty, date, loss_date, loss_account}.
+
+    `moves`: the transfer clusters the default policy netted out of the
+    sheltered context (_handle_transfers moves_out — a move between two
+    of your accounts, a zero-net cluster in one), one list of TRANSFER
+    rows each. A cluster with a leg inside a loss's window is one record
+    too, kind "move": {kind, account ("rrsp→tfsa"), from_accounts,
+    to_accounts, symbol, qty (the shares moved), date, date_end,
+    loss_date, loss_account} — one leg may have been a contribution."""
     from datetime import datetime as _dt
     from taxjson.lib.core import (TRANSFER_BOOK_VALUE_TYPE,
                                   TRANSFER_CUSTODY_TYPE)
@@ -2020,8 +2070,54 @@ def transfers_in_loss_windows(losses, rows, country: str,
                     'qty': float(t.quantity), 'date': t.date,
                     'loss_date': e.get('date'),
                     'loss_account': e.get('account')})
+    for seg in moves or ():
+        legs = [t for t in seg if getattr(t, 'action', '') == 'TRANSFER']
+        if not legs:
+            continue
+        sym = legs[0].symbol
+        cands = by_sym.get(sym)
+        if not cands:
+            continue
+        near = []
+        for t in legs:
+            td = _day(loss_window_date({'date': t.date,
+                                        'date_settle': t.date_settle},
+                                       country))
+            if td is None:
+                continue
+            near += [(abs((td - d).days), d, e) for d, e in cands
+                     if abs((td - d).days) <= window_days]
+        if not near:
+            continue
+        _gap, _d, e = min(near, key=lambda x: (x[0], x[1]))
+        outs = sorted({t.account for t in legs if t.quantity < 0})
+        ins = sorted({t.account for t in legs if t.quantity > 0})
+        dates = sorted(t.date for t in legs)
+        qty = sum(float(t.quantity) for t in legs if t.quantity > 0)
+        acct = f"{'+'.join(outs) or '?'}→{'+'.join(ins) or '?'}"
+        key = ('move', acct, sym, dates[0], qty)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({'kind': 'move', 'account': acct, 'symbol': sym,
+                    'from_accounts': outs, 'to_accounts': ins,
+                    'qty': qty, 'date': dates[0], 'date_end': dates[-1],
+                    'loss_date': e.get('date'),
+                    'loss_account': e.get('account')})
     out.sort(key=lambda r: (r['date'], r['account'], r['symbol']))
     return out
+
+
+def _date_span(a: str, b: str) -> str:
+    """2025-04-20/21, 2025-04-30/05-02, or one date."""
+    a, b = str(a or ''), str(b or '')
+    if not b or a == b:
+        return a
+    if a[:7] == b[:7]:
+        return f"{a}/{b[8:]}"
+    if a[:4] == b[:4]:
+        return f"{a}/{b[5:]}"
+    return f"{a}/{b}"
 
 
 def transfer_window_message(items, country: Optional[str]
@@ -2034,14 +2130,23 @@ def transfer_window_message(items, country: Optional[str]
     rule = ("the loss may be superficial (s.54)" if country == 'canada'
             else "the loss may be a wash sale (§1091)" if country == 'usa'
             else "the loss may be denied")
-    head = (f"{n} transfer-in in a taxable loss's 30-day window counted "
+    head = (f"{n} transfer in a taxable loss's 30-day window counted "
             f"as an account move, not a purchase" if n == 1 else
-            f"{n} transfer-ins in a taxable loss's 30-day window counted "
+            f"{n} transfers in a taxable loss's 30-day window counted "
             f"as account moves, not purchases")
-    rows = [f"- {x['account']}: {x['symbol']} +{x['qty']:g} on "
-            f"{x['date']} (loss sale {x['loss_date']}"
-            + (f" in {x['loss_account']}" if x.get('loss_account') else '')
-            + ")" for x in items]
+
+    def _row(x):
+        where = (f" in {x['loss_account']}" if x.get('loss_account')
+                 else '')
+        if x.get('kind') == 'move':
+            return (f"- {x['symbol']} {float(x.get('qty') or 0):g} moved "
+                    f"{x['account']} "
+                    f"{_date_span(x.get('date'), x.get('date_end'))} "
+                    f"inside the {x['loss_date']} loss window{where} — "
+                    f"if one leg was a contribution, {rule}")
+        return (f"- {x['account']}: {x['symbol']} +{x['qty']:g} on "
+                f"{x['date']} (loss sale {x['loss_date']}{where})")
+    rows = [_row(x) for x in items]
     tail = (f"If one was an in-kind contribution or a purchase rather "
             f"than an account move, {rule}: record it as a BUYSELL dated "
             f"the day it was acquired to have it counted "

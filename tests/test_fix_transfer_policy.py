@@ -107,7 +107,10 @@ class TestDefaultPolicyEngine(unittest.TestCase):
 
     @rule("CA-SL-16")
     @rule("US-WASH-23")
-    def test_zero_net_cluster_near_a_trade_nets_quietly(self):
+    def test_zero_net_cluster_near_a_trade_nets_and_is_listed(self):
+        # Netted without a DECLARED attestation, and — inside the loss's
+        # window — named in the one transfer warning (pre-release review
+        # M1: it used to vanish quietly).
         main, _ = _book()
         shel = [tx("TRANSFER", "2025-04-20", "SAMPXF.US", -50, 0.0,
                    account="rrsp"),
@@ -119,7 +122,13 @@ class TestDefaultPolicyEngine(unittest.TestCase):
                 err = r[c]["_stderr"]
                 self.assertNotIn("NOT netted", err)
                 self.assertNotIn("account-wide restatement", err)
-                self.assertNotIn("transfers_in_loss_windows", r[c])
+                self.assertEqual(
+                    [(x["kind"], x["account"], x["date"], x["date_end"])
+                     for x in r[c]["transfers_in_loss_windows"]],
+                    [("move", "rrsp→rrsp", "2025-04-20", "2025-04-22")])
+                self.assertIn("SAMPXF.US 50 moved rrsp→rrsp 2025-04-20/22 "
+                              "inside the 2025-04-15 loss window",
+                              " ".join(err.split()))
                 self.assertEqual(_disallowed(r[c]), 0.0)
 
 

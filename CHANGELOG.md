@@ -58,6 +58,19 @@
   broker's description** in a message; only the message's own suggestion
   counts.
 
+- **A netted move inside a loss's window is listed.** With the default transfer
+  policy, a move between two of your registered accounts, or a zero-net
+  transfer cluster in one, was netted out silently even inside a taxable loss's
+  30-day window; it is now in the run's one transfer warning ("moved rrsp→tfsa
+  … inside the … loss window — if one leg was a contribution, the loss may be
+  superficial"). A split in the taxable books during such a move still stops
+  it from being netted, whatever the policy.
+
+- **`taxjson wash-radar` follows `transfers_as_acquisitions`.** The radar
+  always netted transfers the strict way and never counted one as a purchase;
+  it now uses the project's policy (default: account moves; strict: a
+  sheltered transfer-in counts as an acquisition), and `taxjson run` passes it.
+
 - **A Questrade dividend row's code is matched by the security's name, not the
   event wording.** "<NAME> CASH DIV ON … SHS REC … PAY …" and "<NAME> SUBST PAY ON …
   IN LIEU OF DIVIDEND" are compared as <NAME>, so the same security's plain name
@@ -80,8 +93,9 @@
   no longer stops `taxjson run` with an "arrival date" error, and zero-net
   transfer clusters near a trade are netted without asking for a DECLARED
   attestation. The shares still count as held; the run prints one warning
-  listing each transfer-in inside a loss's window, so an in-kind contribution
-  can be recorded as a BUYSELL. `[settings] transfers_as_acquisitions = true`
+  listing each transfer-in inside a loss's window, and each netted move or
+  zero-net cluster with a leg inside one, so an in-kind contribution can be
+  recorded as a BUYSELL. `[settings] transfers_as_acquisitions = true`
   restores the old strict treatment (tax-logic CA-SL-16/17, US-WASH-23/24).
 - **Two listings moved by a transfer journal are joined automatically.** When a
   broker journals a position from one listing to another (an out-leg of one

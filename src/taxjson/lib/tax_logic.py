@@ -1018,7 +1018,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                   "its shares count as held at day 30, but it never "
                   "replaces a loss, whatever trades sit near it. One "
                   "warning per run lists each transfer-in inside a "
-                  "taxable loss's window; an in-kind contribution or a "
+                  "taxable loss's window, and each netted move (between "
+                  "two registered accounts, or a zero-net cluster in "
+                  "one) with a leg inside it — one leg may have been a "
+                  "contribution; an in-kind contribution or a "
                   "purchase recorded as a BUYSELL is counted "
                   "(transfers_as_acquisitions = false).",
                   keys=("transfers_as_acquisitions",))),
@@ -2179,8 +2182,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                   "a custody move) is a move between accounts, not a "
                   "purchase or sale: it never replaces a loss, whatever "
                   "trades sit near it. One warning per run lists each "
-                  "transfer-in inside a taxable loss's window; a purchase "
-                  "recorded as a BUYSELL is counted "
+                  "transfer-in inside a taxable loss's window, and each "
+                  "netted move (between two retirement accounts, or a "
+                  "zero-net cluster in one) with a leg inside it; a "
+                  "purchase recorded as a BUYSELL is counted "
                   "(transfers_as_acquisitions = false).",
                   keys=("transfers_as_acquisitions",))),
         ]),
