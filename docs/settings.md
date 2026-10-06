@@ -409,7 +409,7 @@ The project's one mapping file, at the project root; one rule per line, symbols 
 
 #### `JOURNAL`
 - **Form:** `JOURNAL FROM TO`
-- **Meaning:** like `TOBASE`, and also nets the two legs together in the holdings view (a Norbert's Gambit pair of one fund's USD and CAD units).
+- **Meaning:** like `TOBASE`, and also nets the two legs together in the holdings view (a Norbert's Gambit pair of one fund's USD and CAD units). A Canadian run adds this line itself for a Questrade currency journal (BRW) the parser pairs; a line of yours naming either listing wins.
 - **Country:** both.
 - **Example:** `JOURNAL ZZG.U.TO ZZG.TO`
 
@@ -461,7 +461,7 @@ The project's one mapping file, at the project root; one rule per line, symbols 
 
 ### Market lists (extend or override the shipped data)
 
-The lists taxjson cannot read from an export ship in `src/taxjson/data/markets.toml` (read only by `src/taxjson/lib/markets.py` — `data`, `overrides`). Whenever a built-in list decides an outcome the run prints one note per symbol naming the line that would change it. These ticker.map lines change one entry each:
+The lists taxjson cannot read from an export ship in `src/taxjson/data/markets.toml` (read only by `src/taxjson/lib/markets.py` — `data`, `overrides`). Whenever a built-in list decides an outcome the run prints one note per symbol naming the line that would change it. The file also states listing conventions: `[conventions] ca_usd_class_series` makes a Canadian listing's US-dollar class `SYMBOL.U.TO` (used for a Questrade currency journal's USD leg when the account's own rows show no USD listing of the security; an `EXTRACT` or `GLOBAL` line overrides it for one security; `src/taxjson/lib/markets.py` — `ca_usd_class`). These ticker.map lines change one entry each:
 
 #### `STABLE`
 - **Form:** `STABLE SYMBOL USD` or `STABLE SYMBOL NO`
