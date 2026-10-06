@@ -211,30 +211,34 @@ def legs(rows: Iterable[Tuple[str, str, Dict[str, Any]]],
 
 def pair(all_legs: Sequence[Leg], days: int = PAIR_DAYS) -> List[Move]:
     """The in-kind moves among `all_legs`. Every out leg is paired with
-    an in leg of another account: the same security and quantity,
-    within `days` days, the closest date first (each leg once). A pair
-    between two taxable or two registered accounts is a move of your own
-    (not returned); a pair across the two kinds is an in-kind move."""
+    an in leg: the same security and quantity, within `days` days, legs
+    of one account first (a journal, a cancel and rebook), then the
+    closest date (each leg once). A pair within one account or between
+    two taxable or two registered accounts is a move of your own (not
+    returned); a pair across the two kinds is an in-kind move."""
     outs = [g for g in all_legs if g.qty < 0]
     ins = [g for g in all_legs if g.qty > 0]
     cands = []
     for i, o in enumerate(outs):
         for j, n in enumerate(ins):
-            if (o.key != n.key or o.account == n.account
-                    or abs(-o.qty - n.qty) > _EPS):
+            if o.key != n.key or abs(-o.qty - n.qty) > _EPS:
                 continue
             g = _gap(o.date, n.date)
             if g <= days:
-                cands.append((g, o.date, o.account, n.account, i, j))
+                # Legs of ONE account first: a journal between two
+                # listings ticker.map joins, a broker's cancel and
+                # rebook — never a move to another account.
+                cands.append((o.account != n.account, g, o.date,
+                              o.account, n.account, i, j))
     used_o, used_i = set(), set()
     moves: List[Move] = []
-    for _g, _d0, _a, _b, i, j in sorted(cands):
+    for *_rank, i, j in sorted(cands):
         if i in used_o or j in used_i:
             continue
         used_o.add(i)
         used_i.add(j)
         o, n = outs[i], ins[j]
-        if o.registered == n.registered:
+        if o.account == n.account or o.registered == n.registered:
             continue                    # your own move: not in kind
         if o.registered:
             moves.append(Move(WITHDRAWAL, taxable=n, registered=o,

@@ -438,6 +438,18 @@ class TestPairing(unittest.TestCase):
                          [("contribution", "rrsp")])
 
     @rule("CA-INKIND-01")
+    def test_a_journal_inside_each_account_is_not_a_move(self):
+        # ticker.map joins two listings: each account journals its own
+        # units out of one and into the other on the same day. The two
+        # accounts' legs must not pair with each other.
+        legs = [self._leg("margin", -300, "2025-09-25"),
+                self._leg("margin", 300, "2025-09-25"),
+                self._leg("rrsp", -300, "2025-09-25", "rrsp"),
+                self._leg("rrsp", 300, "2025-09-25", "rrsp")]
+        from taxjson.lib import in_kind as IK
+        self.assertEqual(IK.pair(legs), [])
+
+    @rule("CA-INKIND-01")
     def test_inkind_line_declares_a_move_to_a_plan_outside(self):
         from taxjson.lib import in_kind as IK
         legs = [self._leg("margin", -100, "2025-03-14")]
