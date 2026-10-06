@@ -318,3 +318,28 @@ class TestScanFlagsACutDescription(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRowWordingIsNotTheName(unittest.TestCase):
+    """A Questrade dividend / substitute-payment row describes the event
+    after the name ("<NAME> CASH DIV ON 49 SHS REC ..."): the wording is
+    cut before the names are compared, so the dividend's code matches the
+    same security's plain name elsewhere at the broker."""
+
+    NAME = "QZSECTOR TRUST STATE QZSTREET HEALTH CARE QZSECTOR ETF"
+
+    def test_cash_dividend_and_substitute_payment_rows(self):
+        from taxjson.lib import symbol_codes as S
+        for row in (self.NAME + " CASH DIV ON 49 SHS REC 09/21/26 PAY 09/23/26",
+                    self.NAME + " SUBST PAY ON 41 SHS REC 09/21/26 PAY 09/23/26"
+                    " IN LIEU OF DIVIDEND"):
+            ok, why = S.names_agree(row, self.NAME, "name_only",
+                                    same_broker=True)
+            self.assertTrue(ok, why)
+
+    def test_class_still_decides(self):
+        from taxjson.lib import symbol_codes as S
+        ok, _ = S.names_agree("QZALPHA INC CLASS A CASH DIV ON 5 SHS",
+                              "QZALPHA INC CLASS C", "name_only",
+                              same_broker=True)
+        self.assertFalse(ok)
