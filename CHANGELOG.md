@@ -26,6 +26,11 @@
   `find-missing-history --write-missing-history --outside-year` adds the others to
   missing_history.json so the run stops listing them, without changing the year's numbers. The
   .diag files and the .sum DIAGNOSTICS keep every line.
+- **`taxjson list` tells a missing purchase from a real short.** A short that is a sale with
+  nothing to close (no short-sale marker, a sale the broker coded closing, or any short in a
+  registered account) is marked `missing history?` (JSON: `missing_history_suspect`), and
+  `list --negative` lists **Short positions** and **Missing history** apart, ending with the
+  command that records them — the pairs `find-missing-history` reports.
 - **Each engine message once per run.** A short-position warning said by an account's gains and
   again by the blended pass (or a failed stage's echo, or a registered account's short read as
   context by a taxable pass) is shown once.

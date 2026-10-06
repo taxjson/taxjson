@@ -197,12 +197,28 @@ SAMPK.TO  margin   CAD   -10.0000  2025-05-12          1        115.05
 ```
 
 Every row marked **AFFECTS 2025** is a sale that is not in `tjs sum` yet.
-`tjs list --negative` shows the same positions. `tjs run` names them as
-it builds the account and in its closing list, and `tjs sum` warns:
+`tjs list --negative` shows the same positions, under **Missing history (a
+sale with no purchase in your files)**, apart from real shorts (the plain
+`tjs list` marks them `missing history?`). `tjs run` names them after the
+accounts' books (`==> Checking for missing purchase history`) and in its
+closing list, and `tjs sum` warns:
 
 ```
 Warning: 2 position(s) sold in 2025 with no purchase in your files, not in missing_history.json: their gain is NOT in these totals (SAMPA.TO (margin), SAMPK.TO (margin)). `taxjson find-missing-history` lists them and the fixes (docs/getting-started.md, step 5).
 ```
+
+A position that went short in an earlier year and has nothing in 2025 (no
+trade, transfer or income; in Canada, no other taxable account trading it)
+does not change 2025's numbers: `tjs run` counts those in one `Info:` line and
+`find-missing-history` lists them under **NOT relevant to 2025**. To stop the
+run listing them without hunting the history down:
+
+```bash
+tjs find-missing-history --write-missing-history --outside-year
+```
+
+It adds only those positions to missing_history.json (keeping what is
+there); 2025's numbers do not change.
 
 The command ends with what to do next, in the order of 5b below. For an Interactive
 Brokers sale, the row also prints IB's own cost for it:

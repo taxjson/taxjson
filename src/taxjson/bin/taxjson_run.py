@@ -43,7 +43,7 @@ import subprocess
 import sys
 from datetime import date as date_cls, datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from taxjson.lib.cli_diag import note, write_text_atomic
 from taxjson.lib.cli_diag import tax_year as _tax_year_arg
@@ -15177,8 +15177,13 @@ def cmd_positions(args: argparse.Namespace) -> None:
 
     header = ["ACCOUNT", "SYMBOL", "QTY", "COST", "COST/SH",
               "DEFERRED", "SINCE"]
-    out_lines = [" ".join(header)]
+    out_rows: List[List[str]] = []
     json_rows: List[Dict[str, Any]] = []
+    # A short that is a purchase missing from the files (a sale with
+    # nothing to close), told apart from a real short — the pairs
+    # find-missing-history reports (lib/missing_history.
+    # missing_history_suspect).
+    _suspects = _missing_history_suspects(root, cache)
     total_cost = 0.0
     total_deferred = 0.0
     n_pos = 0
@@ -15214,18 +15219,21 @@ def cmd_positions(args: argparse.Namespace) -> None:
                      and not _is_future_sym(_sym) else 1.0)
             cps = cost / (qty * _mult) if qty else 0.0
             deferred = float(h.get("deferred_wash", 0) or 0)
-            out_lines.append(" ".join([
+            suspect = qty < 0 and (_sym, acct) in _suspects
+            out_rows.append([
                 acct, str(h.get("symbol") or "?"), qfmt(qty), money(cost),
                 money(cps),
                 money(deferred) if deferred > 0.005 else "-",
-                str(h.get("position_start_date") or "-")]))
+                str(h.get("position_start_date") or "-"),
+                "missing history?" if suspect else "-"])
             json_rows.append({"account": acct,
                               "symbol": h.get("symbol"),
                               "qty": qty, "cost": round(cost, 2),
                               "cost_per_share": round(cps, 4),
                               "deferred_wash": round(deferred, 2),
                               "since": h.get("position_start_date"),
-                              "last_acq_date": h.get("last_acq_date")})
+                              "last_acq_date": h.get("last_acq_date"),
+                              "missing_history_suspect": suspect})
             total_cost += cost
             total_deferred += deferred
             n_pos += 1
@@ -15265,11 +15273,48 @@ def cmd_positions(args: argparse.Namespace) -> None:
     _vprint(f"COST is book cost after ticker.map and the base-currency "
             f"conversion, basis: {basis}.")
     print()
-    # Too wide: SINCE, then COST/SH, then DEFERRED go first.
-    _print_report_table(out_lines, fit=True, drop=(6, 4, 5), key=(0, 1))
-    print()
+    from taxjson.lib.out import fit_table as _fit_table
+    n_sus = sum(1 for r in out_rows if r[7] != "-")
+
+    def _table(rows, note=True):
+        # Too wide: SINCE, then COST/SH, then DEFERRED go first. The
+        # NOTE column only when a row carries one.
+        cols = header + (["NOTE"] if n_sus and note else [])
+        for ln in _fit_table(cols, [r[:len(cols)] for r in rows],
+                             drop=(6, 4, 5), key=(0, 1)):
+            print(ln)
+    if negative_only and n_sus:
+        # Two kinds of negative position: a real short (the broker marks
+        # it, an option or a future sold to open) and a purchase missing
+        # from the files.
+        shorts = [r for r in out_rows if r[7] == "-"]
+        if shorts:
+            _vprint(f"Short positions ({len(shorts)}):")
+            _table(shorts, note=False)
+            print()
+        _vprint(f"Missing history (a sale with no purchase in your files) "
+                f"({n_sus}):")
+        _table([r for r in out_rows if r[7] != "-"], note=False)
+        print()
+        _vprint("Each is a sale your files show nothing to close for: a "
+                "purchase before the data (or a transfer-in) is missing. "
+                "Supply it (`taxjson find-missing-history` lists the "
+                "fixes), or record them all as openings with no cost so "
+                "the shorts disappear: `taxjson find-missing-history "
+                "--write-missing-history --all-history` (their sales then "
+                "leave the totals and are reported by hand; "
+                "`--outside-year` records only the ones that do not touch "
+                "the tax year).", hang="  ")
+        print()
+    else:
+        _table(out_rows)
+        print()
     _vprint(f"{n_pos} position(s), total book cost {money(total_cost)} "
             f"{base}")
+    if n_sus and not negative_only:
+        _vprint(f"{n_sus} short position(s) marked `missing history?`: a "
+                f"sale with no purchase in your files, not a real short — "
+                f"`taxjson list --negative` lists them apart.", hang="  ")
     if total_deferred > 0.005:
         _us_l = _country(_soft_settings(root)) == "usa"
         _vprint(f"DEFERRED: {money(total_deferred)} {base} of the book "
@@ -19152,6 +19197,39 @@ def _year_short_rows(root: Path, files: List[Path], year: Any):
         date_basis=_tax_date_basis(settings), journal_symbols=journal)
 
 
+def _missing_history_suspects(root: Path, cache: Path
+                              ) -> Set[Tuple[str, str]]:
+    """{(symbol, account)} of the positions that go short in the
+    project's books because a sale had nothing to close
+    (lib/missing_history.missing_history_suspect) — read like
+    find-missing-history reads them. Empty when the books cannot be
+    read (advisory)."""
+    try:
+        from taxjson.lib.core import load_transactions
+        from taxjson.lib.missing_history import (account_types_near,
+                                                  journal_targets,
+                                                  missing_history_suspects)
+        files = _project_base_files(cache)
+        txs = []
+        for f in files:
+            try:
+                txs.extend(load_transactions(f))
+            except (OSError, ValueError):
+                continue
+        journal: set = set()
+        if (root / "ticker.map").is_file():
+            try:
+                journal = journal_targets(root / "ticker.map")
+            except Exception:                       # noqa: BLE001
+                journal = set()
+        return missing_history_suspects(
+            txs, registered=(account_types_near(files[0]) if files
+                             else {}),
+            country=_country(_soft_settings(root)), journal_symbols=journal)
+    except Exception:                               # noqa: BLE001
+        return set()
+
+
 def _outside_year_rows(root: Path, files: List[Path], year: Any,
                        suggested: List[Dict[str, Any]], out: Path,
                        mh_file: Path) -> Optional[List[Dict[str, Any]]]:
@@ -20384,10 +20462,11 @@ def _build_parser(prog: str = "taxjson"
                             "superficial-loss / wash-sale deferral but "
                             "before the cross-account wash pass")
     p_pos.add_argument("--negative", action="store_true",
-                       help="Show only positions with negative quantity "
-                            "(short positions — or, in accounts that "
-                            "can't short, missed corporate actions / "
-                            "import gaps)")
+                       help="Show only positions with negative quantity, "
+                            "in two sections: real short positions, and "
+                            "missing history (a sale with no purchase in "
+                            "your files: marked `missing history?` in the "
+                            "plain list)")
     p_pos.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
     p_pos.set_defaults(func=cmd_positions)

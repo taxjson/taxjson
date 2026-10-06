@@ -1028,6 +1028,36 @@ def classify_year_shorts(transactions: Iterable[TaxTransaction], year: Any,
                 txs, cands, year, date_basis=date_basis,
                 journal_symbols=journal_symbols, pool=pool)}
 
+
+def missing_history_suspect(c: MissingHistoryCandidate) -> bool:
+    """A pair that goes short because a sale had nothing to close — a
+    purchase missing from the files, not a short: no broker short-sale
+    marker, and a share or coin (an option or a future sold to open is
+    an ordinary short) unless the broker coded the sale CLOSING (IB code
+    C) or the account is registered. The pairs find-missing-history
+    reports as TRUNCATED HISTORY, `taxjson run` warns about and `taxjson
+    list` marks `missing history?`."""
+    if c.broker_marked_short:
+        return False
+    if c.broker_says_closing or c.registered:
+        return True
+    return not _derivative_symbol(c.symbol)
+
+
+def missing_history_suspects(transactions: Iterable[TaxTransaction], *,
+                             registered: Optional[Dict[str, bool]] = None,
+                             country: Optional[str] = None,
+                             journal_symbols: Optional[Set[str]] = None
+                             ) -> Set[Tuple[str, str]]:
+    """{(symbol, account)} of every missing_history_suspect pair in the
+    books."""
+    return {(c.symbol, c.account) for c in detect_missing_history(
+                transactions, include_options=True,
+                include_broker_shorts=True,
+                registered_accounts=registered or None, country=country,
+                journal_symbols=journal_symbols)
+            if missing_history_suspect(c)}
+
 # Description keywords that mark a broker row as a corporate action — used
 # only to annotate WHY a $0-cost acquisition happened, not to gate detection.
 _CORP_ACTION_RE = re.compile(

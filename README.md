@@ -769,7 +769,7 @@ Files the pipeline reads and writes (all map files are optional):
 
 | Command | Purpose |
 | --- | --- |
-| `taxjson list` | Positions held per account — see below. `list --date YYYY-MM-DD` shows positions AS OF that date (each account's books recomputed alone via the engine's `--as-of` cutoff, on the project's date basis — the settlement date unless `tax_date = "trade"`, so a sale traded Dec 31 that settles in January is still held at Dec 31, as in the gains year and `t1135`: Canada: per-account ACB — not the s.47 blend across taxable accounts that plain `list` and the return use; USA: the per-account FIFO basis the return uses, so no note — with in-account deferred wash and missing_history.json applied; the books are already ticker.map-consolidated, and the cross-account wash pass is not in it); plain `list` shows the positions at the end of the books (the header names the date); `list --negative` shows only negative-quantity positions — real shorts, or (in accounts that can't short) missed corporate actions / import gaps. |
+| `taxjson list` | Positions held per account — see below. `list --date YYYY-MM-DD` shows positions AS OF that date (each account's books recomputed alone via the engine's `--as-of` cutoff, on the project's date basis — the settlement date unless `tax_date = "trade"`, so a sale traded Dec 31 that settles in January is still held at Dec 31, as in the gains year and `t1135`: Canada: per-account ACB — not the s.47 blend across taxable accounts that plain `list` and the return use; USA: the per-account FIFO basis the return uses, so no note — with in-account deferred wash and missing_history.json applied; the books are already ticker.map-consolidated, and the cross-account wash pass is not in it); plain `list` shows the positions at the end of the books (the header names the date); `list --negative` shows only negative-quantity positions, in two sections: **Short positions** (a short the broker marks, an option or a future sold to open) and **Missing history** (a sale with no purchase in your files — no short-sale marker, or the broker coded it closing, or the account is registered; the plain list marks these `missing history?` and `--json` sets `missing_history_suspect`), the pairs `find-missing-history` reports. |
 | `taxjson shares [--options] [--taxable\|--sheltered] [--sort qty] [--json]` | Combined quantity held of each symbol across all accounts (post ticker.map, wash-adjusted where built) with a per-account breakdown and combined book cost; shorts net against longs. Option contracts only with `--options`; futures contracts are left out. Like `list`, it is the end of the books (the header says the date), not the tax year's Dec 31. |
 
 #### Row listings
@@ -1209,6 +1209,14 @@ s.47 blend; USA: wash-sale basis adjustments on per-account FIFO), as its
 book cost, cost/share (per SHARE for an equity option — 100 a contract, as
 harvest and the holdings report show it), and the position's start date;
 fully-closed positions are omitted. Pass an account to scope to one.
+A short that is a purchase missing from your files — a sale with nothing to
+close: no broker short-sale marker, or a sale the broker coded closing (IB code
+`C`), or any short in a registered account — is marked `missing history?` in a
+NOTE column (`"missing_history_suspect": true` in `--json`); the same pairs
+`find-missing-history` reports and `taxjson run` warns about. `list --negative`
+lists them apart from the real shorts and ends with the command that records
+them as openings (`taxjson find-missing-history --write-missing-history
+--all-history`; `--outside-year` for only those that do not touch the tax year).
 
 ```
 $ taxjson list
