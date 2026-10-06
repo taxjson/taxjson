@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.20.0 (2026-10-06)
+
 ### Changed
 
 - **Messages start with their label: `Info:`, `Warning:`, `Error:`.**
