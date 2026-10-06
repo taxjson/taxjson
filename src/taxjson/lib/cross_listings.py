@@ -140,6 +140,7 @@ class Row:
     description: str
     key: Tuple[str, ...]            # symbol_codes.exact_name of its name
     action: str = ""
+    name: str = ""                  # the name (symbol_codes._row_name)
 
 
 def gather(cache: Path, accounts: Iterable[str],
@@ -185,7 +186,8 @@ def gather(cache: Path, accounts: Iterable[str],
                                     str(t.get("currency") or "").upper(),
                                     str(t.get("description") or ""),
                                     exact_name(_row_name(t, broker)),
-                                    str(t.get("action") or "").upper()))
+                                    str(t.get("action") or "").upper(),
+                                    _row_name(t, broker)))
                 if not _plain_listing(sym) or is_code(sym):
                     continue
                 toks = exact_name(_row_name(t, broker))
@@ -421,38 +423,49 @@ def _groups(keys: Iterable[Tuple[str, ...]]) -> List[Set[Tuple[str, ...]]]:
 
 
 def extract_words(target: List[str], others: List[str],
-                  min_words: int = _MIN_WORDS) -> Optional[str]:
+                  min_words: int = _MIN_WORDS,
+                  seeds: Iterable[str] = ()) -> Optional[str]:
     """The shortest run of whole words (at least `min_words`, or the
     whole description when shorter, with one strong word) that EVERY
     description of `target` carries and NO description of `others` does
     — tested with the matcher an EXTRACT line uses
     (base.extract_words_match), so the line moves exactly those rows. The
-    run is taken from the shortest target description; among equally
-    short runs the one with the fewest one- or two-letter words, then
-    the first. None when no run qualifies."""
+    run is taken from the security's names first (`seeds`: the names the
+    brokers' wording was cut from, symbol_codes.rbc_name /
+    questrade_name — no dealer wording in them), shortest first, else
+    from the shortest target description; among equally short runs the
+    one with the fewest one- or two-letter words, then the first. None
+    when no run qualifies."""
     from taxjson.lib.brokerages.base import extract_words_match
     descs = sorted({" ".join(d.split()) for d in target if d.strip()},
                    key=lambda d: (len(d), d))
     if not descs:
         return None
     others = [d for d in {" ".join(o.split()) for o in others} if d]
-    words = descs[0].split()
-    n = len(words)
-    for size in range(min(min_words, n), n + 1):
-        # Fewest short words first ("DLR CURRENCY ETF" before "U S DLR":
-        # a one- or two-letter word is the spelling brokers vary), then
-        # the earliest.
-        spans = sorted(range(0, n - size + 1), key=lambda i: (
-            sum(len(w) < 3 for w in words[i:i + size]), i))
-        for i in spans:
-            run = words[i:i + size]
-            cand = " ".join(run)
-            if (not any(len(w) >= 3 and w.isalpha() for w in run)
-                    or "|" in cand or "#" in cand):
+    sources = [x.split() for x in sorted(
+        {" ".join(x.split()) for x in seeds if x.strip()},
+        key=lambda d: (len(d), d))] + [descs[0].split()]
+    longest = max(len(w) for w in sources)
+    for size in range(1, longest + 1):
+        for words in sources:
+            n = len(words)
+            if size > n or size < min(min_words, n):
                 continue
-            if all(extract_words_match(cand, d) for d in descs) and \
-                    not any(extract_words_match(cand, o) for o in others):
-                return cand
+            # Fewest short words first ("DLR CURRENCY ETF" before "U S
+            # DLR": a one- or two-letter word is the spelling brokers
+            # vary), then the earliest.
+            spans = sorted(range(0, n - size + 1), key=lambda i: (
+                sum(len(w) < 3 for w in words[i:i + size]), i))
+            for i in spans:
+                run = words[i:i + size]
+                cand = " ".join(run)
+                if (not any(len(w) >= 3 and w.isalpha() for w in run)
+                        or "|" in cand or "#" in cand):
+                    continue
+                if (all(extract_words_match(cand, d) for d in descs)
+                        and not any(extract_words_match(cand, o)
+                                    for o in others)):
+                    return cand
     return None
 
 
@@ -524,7 +537,8 @@ def collisions(rows: List[Row], names: Dict[str, Set[Tuple[str, ...]]],
         for g, g_rows, fam, lead, _units in odd:
             fam_ids = {id(r) for r in fam}
             others = [r.description for r in rows if id(r) not in fam_ids]
-            words = extract_words([r.description for r in fam], others)
+            words = extract_words([r.description for r in fam], others,
+                                  seeds=[r.name for r in fam])
             why = (f"its rows read as a Canadian-listed fund's US-dollar "
                    f"units: {target}")
             if words is None:

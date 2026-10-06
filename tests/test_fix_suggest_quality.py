@@ -189,8 +189,13 @@ IB_NAME = 'QZREALTY TRUST INC'
 
 
 def _row(acct, broker, sym, cur, desc, name=None, action='BUYSELL'):
-    return XL.Row(acct, broker, sym, cur, desc, exact_name(name or desc),
-                  action)
+    from taxjson.lib.symbol_codes import questrade_name, rbc_name
+    if name is None:
+        name = (rbc_name(desc, trade=True) if broker == 'rbc_direct'
+                else questrade_name(desc) if broker == 'questrade'
+                else desc)
+    return XL.Row(acct, broker, sym, cur, desc, exact_name(name), action,
+                  name)
 
 
 def _book():
