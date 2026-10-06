@@ -224,6 +224,9 @@ disposition, decided once and saved. Opening balances come from a broker's
 positions report.
 
 - `src/taxjson/lib/transfer_in.py` — `Arrival`, `arrivals`, `sidecar_rows`, `booked_rows`, `mark_covered`, `attention_lines`: shares that arrived by transfer.
+- `src/taxjson/lib/in_kind.py` — `Leg`, `Move`, `legs`, `pair`, `apply_lines`, `decide`, `value`, `booked_rows`, `mark_sheltered`, `message`, `contribution_results`: in-kind contributions and withdrawals between a taxable and a registered account (CA-INKIND-* / US-INKIND-*).
+- `src/taxjson/bin/taxjson_run.py` — `in_kind_state`, `stage_in_kind_context`, `_say_in_kind`, `in_kind_taxable_legs`, `_registered_transfer_rows`, `_inkind_lines`, `_in_kind_close`: the run's in-kind moves (work/in_kind.json), the plan's purchase marked in work/sheltered_base.json, the one warning.
+- `src/taxjson/bin/taxjson_convert_tt.py` — `parse_inkind_line`: the `.tt` INKIND line (a value, never a row of the books).
 - `src/taxjson/bin/taxjson_run.py` — `stage_transfer_arrivals`, `transfer_arrivals`, `stage_own_account_moves`, `own_account_custody_moves`, `_stage_crypto_sends`, `cmd_crypto_sends`, `cmd_opening`, `_opening_lines`: where the run books arrivals and own-account moves; the crypto sends hook and `taxjson crypto-sends`; `taxjson opening`, which writes OPENING lines from a positions report.
 - `src/taxjson/lib/crypto_sends.py` — `load_transfer_rows`, `match_transfers`, `build_report`, `record_decision`, `prompt_undecided`, `render_tt`, `DECISIONS`: crypto sends, their decisions and the generated crypto_sends.tt.
 - `src/taxjson/lib/opening.py` — `apply_opening_cutoff`, `snapshots`, `OpeningError`, `ATTENTION_OPENING`: OPENING rows and the cutoff they impose on earlier rows.
@@ -251,7 +254,7 @@ view). The US engine (experimental) keeps FIFO lots, per account when asked,
 and applies the wash-sale rule. Both handle splits, renames, option exercise
 and assignment, and option replacement.
 
-- `src/taxjson/lib/core.py` — `TaxTransaction`, `load_transactions`, `TaxRules`, `CanadaTaxRules`, `USATaxRules`, `get_tax_rules`, `compute_gains`, `find_replacements_in_window`, `make_gain_entry`, `detect_option_replacement_matches`, `_AssignPremiumLedger`, `disposition_groups`, `is_option_symbol`, `held_more_than_one_year`: the transaction model and loading; the two engines (search `class CanadaTaxRules`, then its `compute_gains`); the US lot and wash-sale machinery; option replacement checks, assignment premiums, disposition grouping and option helpers.
+- `src/taxjson/lib/core.py` — `TaxTransaction`, `load_transactions`, `TaxRules`, `CanadaTaxRules`, `USATaxRules`, `get_tax_rules`, `compute_gains`, `find_replacements_in_window`, `make_gain_entry`, `detect_option_replacement_matches`, `_AssignPremiumLedger`, `disposition_groups`, `is_option_symbol`, `held_more_than_one_year`, `not_a_purchase`, `IN_KIND_CONTRIBUTION_TYPE`: the transaction model and loading; the two engines (search `class CanadaTaxRules`, then its `compute_gains`); the US lot and wash-sale machinery; option replacement checks, assignment premiums, disposition grouping and option helpers.
 - `src/taxjson/lib/numeric.py` — `D`, `round_half_up`, `round_floats`: decimal arithmetic for money.
 - `src/taxjson/lib/wash_scope.py` — `scope_note`, `scope_lines`, `advisory_lines`: what the planning verdicts can and cannot see, per country.
 
@@ -372,6 +375,7 @@ straddle a year end.
 - `src/taxjson/lib/option_boundary.py` — `write_lots`, `straddling`, `expired_open`, `filed_locks`, `WriteLot`: written options across a year boundary.
 - `src/taxjson/bin/taxjson_lint_crosslistings.py` — `analyze`, `venue_splits`, `main`: cross-listed holdings the radar would see as two.
 - `src/taxjson/lib/price_chain.py` — `fetch_prices`, `fetch_option_prices`, `PriceQuote`, `yf_symbol_for`, `latest_rate`: current prices (IBKR, then yfinance, then the cache).
+- `src/taxjson/lib/price_chain.py` — `close_on`, `DayClose`, `OfflineCloseMissing`: one day's close (the close cache, then Yahoo's history) for an in-kind move's value.
 
 ## Filing forms and slips
 

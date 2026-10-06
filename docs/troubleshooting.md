@@ -211,9 +211,23 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### "Warning: 1 transfer in a taxable loss's 30-day window counted as an account move, not a purchase"
 - **Check:** the detail lines name each transfer, its date and the loss sale; `tjs transfers` lists the rows.
 - **Cause:** a transfer between your accounts moves shares; it is not an acquisition, so it does not deny the loss (CA-SL-16 / US-WASH-23). If one leg was really a contribution to a registered plan or a purchase, the loss may be superficial (or a wash sale).
-- **Fix:** if it was an account move, nothing. If it was an in-kind contribution or a purchase, record it as a BUYSELL dated the day it was acquired; `[settings] transfers_as_acquisitions = true` counts every transfer.
+- **Fix:** if it was an account move, nothing. A contribution in kind from one of your taxable accounts in the project is not listed here: the run pairs it with the taxable account's transfer-out, books the sale at fair market value and counts the plan's purchase (the "in-kind move(s) … booked" warning; CA-INKIND-04). If it was a contribution from outside the project or a purchase, record it as a BUYSELL dated the day it was acquired (or, for a transfer-out of your taxable account whose plan is not in the project, an `INKIND` line with `plan=`); `[settings] transfers_as_acquisitions = true` counts every transfer.
 - **Fixed in:** `v0.22.0`
-- **Code:** `src/taxjson/lib/pipeline.py` — `transfer_window_message`, `transfers_as_acquisitions`; `src/taxjson/bin/taxjson_run.py` — `_say_transfer_windows`
+- **Code:** `src/taxjson/lib/pipeline.py` — `transfer_window_message`, `transfers_as_acquisitions`; `src/taxjson/bin/taxjson_run.py` — `_say_transfer_windows`, `stage_in_kind_context`
+
+### "Warning: 1 in-kind move(s) between your taxable and registered accounts booked at fair market value" (or "… NOT booked")
+- **Check:** each detail line names the move (`contribution margin → rrsp: 100 QZQ.TO on 2025-03-14`), its value and where the value came from, and the gain or the loss denied; `tjs transfers` labels both rows `in-kind_contribution` / `in-kind_withdrawal`.
+- **Cause:** a taxable account's transfer-out and a registered account's transfer-in of the same security and quantity within 10 days (or the reverse) are an in-kind contribution (withdrawal), not a move of your own. Canada books a contribution as a sale at fair market value (a loss is nil for good, s.40(2)(g)(iv), shown apart from DENIED) and a withdrawal as a purchase at that value (CA-INKIND-01 … CA-INKIND-06). A US contribution is NOT booked: an IRA takes cash only (US-INKIND-01). A move is NOT booked either when no value was found (no `INKIND` line, no market value on the transfer rows, no close from Yahoo).
+- **Fix:** check each value; a value marked ESTIMATED is Yahoo's split-adjusted close. To set your own, add the line the warning prints to a `.tt` file in the taxable account's folder (`INKIND 2025-03-14 QZQ.TO -100 CAD 15.00`; negative = shares out to the plan). A US contribution in kind is usually a mistake in the rows (or a rollover between retirement accounts): check `tjs transfers`. `tjs run --strict` stops while a move is not booked.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/in_kind.py` — `message`, `NOT booked`, `pair`, `value`; `src/taxjson/bin/taxjson_run.py` — `_say_in_kind`, `in_kind_state`
+
+### "Error: 1 in-kind move(s) between your taxable and registered accounts cannot be valued: TAXJSON_OFFLINE is set and the close cache has no price for the date"
+- **Check:** the detail lines name each move and the `INKIND` line to add; `echo $TAXJSON_OFFLINE` is set.
+- **Cause:** neither transfer row states a market value (Questrade, RBC), so the value would be Yahoo's close on the date, and TAXJSON_OFFLINE forbids the lookup with no cached close in `work/.close_cache.json` (CA-INKIND-06 / US-INKIND-03). The run stops rather than book the move at no value.
+- **Fix:** add the printed line to a `.tt` file in the taxable account's folder with the fair market value per share (the day's close from the broker's statement or the contribution receipt): `INKIND 2025-03-14 QZQ.TO -100 CAD 15.00`. Or unset TAXJSON_OFFLINE once to look the close up (an estimate, then cached).
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `in_kind_state`, `cannot be valued`; `src/taxjson/lib/price_chain.py` — `close_on`, `OfflineCloseMissing`
 
 ### "Warning: 2 positions at a $0 cost (1 sold in 2025, 1 still held)"
 - **Check:** `tjs find-missing-history` lists them under "$0-cost corp-action shares".
