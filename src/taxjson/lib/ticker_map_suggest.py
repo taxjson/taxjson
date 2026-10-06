@@ -23,8 +23,23 @@ in work/ (nothing is recomputed but the cheap reads):
 
 A line the map already has, or one whose symbol the map already renames
 (the user's rule wins; an EXTRACT for the same currency and symbol), is
-left out; of two EXTRACT lines for one listing the first is offered. A line with a placeholder
+left out; of two EXTRACT lines for one listing the first is offered (the
+other is listed as covered by it). A line with a placeholder
 (`<number>`, OLD/NEW, `a|b`) is a template, never a suggestion.
+
+A CONDITIONAL hint — the clause that names the line says "if" ("Only if
+the position is really held under the other listing …, add to
+ticker.map: TOBASE ROOT.US ROOT.TO", "add `GLOBAL A B` … if it is the
+same security") — is offered only when the project's books hold every
+symbol the line joins (books_symbols: the parsed exports, .tt files and
+opening balances, and the holdings files taxjson.toml lists; an option
+counts for its underlying). Without that evidence the hint is a guess:
+RBC books a dividend on a symbol no file of the account trades under
+the payment currency's listing and names the other listing, which for a
+US stock does not exist. The run's own message stays; --suggest shows
+nothing. An EXTRACT line creates its symbol (its evidence is the row
+description the parser read) and a CRYPTO line's id is a Yahoo id: both
+are offered as before.
 """
 from __future__ import annotations
 
@@ -71,6 +86,9 @@ class Suggestion:
     # A line with a placeholder the user must edit (an EXTRACT whose
     # listing or words could not be derived): listed, never written.
     template: bool = False
+    # The hint says "if …": offered only when the books hold every
+    # symbol the line joins (`needs`; pending).
+    conditional: bool = False
 
     @property
     def keyword(self) -> str:
@@ -81,6 +99,14 @@ class Suggestion:
         if self.keyword == "EXTRACT":
             return [self.line.rsplit("|", 1)[1].strip()]
         return self.line.split()[1:]
+
+    @property
+    def needs(self) -> List[str]:
+        """The symbols of the books a conditional line joins (none for
+        an EXTRACT, which creates its symbol, or a CRYPTO id)."""
+        if self.keyword in ("EXTRACT", "CRYPTO"):
+            return []
+        return [x.upper() for x in self.symbols[:2]]
 
     @property
     def extract_key(self) -> Tuple[str, str]:
@@ -154,6 +180,26 @@ def _headline(text: str, limit: int = 160) -> str:
     return t if len(t) <= limit else t[:limit - 1].rstrip() + "…"
 
 
+# Where a message's clause ends: a sentence ("… listing. Only if …",
+# not "e.g. `GLOBAL …`"), a semicolon or a dash.
+_BREAK_RE = re.compile(r"(?<!\be\.g)(?<!\bi\.e)\.\s+(?=[A-Z])|;\s|\s—\s")
+_IF_RE = re.compile(r"\bif\b", re.I)
+
+
+def _conditional(text: str, start: int, end: int) -> bool:
+    """True when the clause of `text` holding text[start:end] (the
+    suggested line) puts it under a condition: "Only if …, add …",
+    "add … if it is the same security"."""
+    if start < 0:
+        return bool(_IF_RE.search(text))
+    begin = 0
+    for m in _BREAK_RE.finditer(text, 0, start):
+        begin = m.end()
+    m = _BREAK_RE.search(text, end)
+    stop = m.start() if m else len(text)
+    return bool(_IF_RE.search(text[begin:start] + " " + text[end:stop]))
+
+
 def _messages(text: str) -> Iterable[Tuple[str, List[str]]]:
     """(marker line, continuation lines) of a captured .diag."""
     head: Optional[str] = None
@@ -182,16 +228,25 @@ def from_diag(path: Path, rel: str) -> List[Suggestion]:
     out: List[Suggestion] = []
     for head, cont in _messages(text):
         whole = _unquoted(" ".join([head] + [c.strip() for c in cont]))
-        found = [m.group(1) for m in _TICK_RE.finditer(whole)
+        # (candidate, its span in `whole`: the clause around it says
+        # whether the hint is conditional)
+        found = [(m.group(1), m.start(), m.end())
+                 for m in _TICK_RE.finditer(whole)
                  if not m.group(1).startswith("EXTRACT")]
-        found += [m.group(1) for m in _ADD_RE.finditer(whole)]
-        found += [m.group(0) for m in _EXTRACT_RE.finditer(whole)]
-        found += [m.group(1) for c in cont
-                  for m in [_BARE_RE.match(_unquoted(c))] if m]
-        for f in found:
+        found += [(m.group(1), m.start(), m.end())
+                  for m in _ADD_RE.finditer(whole)]
+        found += [(m.group(0), m.start(), m.end())
+                  for m in _EXTRACT_RE.finditer(whole)]
+        for c in cont:
+            m = _BARE_RE.match(_unquoted(c))
+            if m:
+                i = whole.find(m.group(1))
+                found.append((m.group(1), i, i + len(m.group(1))))
+        for f, a, b in found:
             line = _clean(f)
             if line:
-                out.append(Suggestion(line, _headline(head), rel))
+                out.append(Suggestion(line, _headline(head), rel,
+                                      conditional=_conditional(whole, a, b)))
     return out
 
 
@@ -231,7 +286,7 @@ def from_cross_listings(cache: Path) -> List[Suggestion]:
             f"{i.get('symbol')} in ({i.get('date')}); not joined "
             f"automatically: {r.get('reason') or 'unconfirmed'} — add it "
             f"only if they are one security",
-            f"work/{XL.STATE}"))
+            f"work/{XL.STATE}", conditional=True))
     return out
 
 
@@ -249,14 +304,16 @@ def from_symbol_codes(cache: Path) -> List[Suggestion]:
         for code, info in sorted((doc.get("unresolved") or {}).items()):
             if not isinstance(info, dict):
                 continue
-            detail = str(info.get("detail") or "")
-            for m in _TICK_RE.finditer(_unquoted(detail)):
+            detail = _unquoted(str(info.get("detail") or ""))
+            for m in _TICK_RE.finditer(detail):
                 line = _clean(m.group(1))
                 if line:
                     out.append(Suggestion(
                         line, f"{acct}: Questrade code {code} "
                         f"{_headline(detail.split(' — add ')[0], 200)}",
-                        f"work/{p.name}"))
+                        f"work/{p.name}",
+                        conditional=_conditional(detail, m.start(),
+                                                 m.end())))
     return out
 
 
@@ -265,10 +322,11 @@ def from_listing_suffix(cache: Path) -> List[Suggestion]:
     evidence, not the row currency (lib/listing_suffix)."""
     from taxjson.lib import listing_suffix as LS
     out = []
-    for line, reason in LS.suggestions(cache):
+    for line, reason, cond in LS.suggestions(cache):
         ln = _clean(line)
         if ln:
-            out.append(Suggestion(ln, reason, f"work/*{LS.SUFFIX}"))
+            out.append(Suggestion(ln, reason, f"work/*{LS.SUFFIX}",
+                                  conditional=cond))
     return out
 
 
@@ -291,6 +349,68 @@ def gather(root: Path) -> List[Suggestion]:
         seen.add(s.line)
         out.append(s)
     return out
+
+
+def _holdings_files(root: Path) -> List[Path]:
+    """The holdings files taxjson.toml's accounts list (`holdings`)."""
+    from taxjson.lib.tomlcompat import tomllib
+    cfg_path = root / "taxjson.toml"
+    if tomllib is None or not cfg_path.is_file():
+        return []
+    try:
+        cfg = tomllib.loads(cfg_path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return []
+    out: List[Path] = []
+    accts = cfg.get("accounts") if isinstance(cfg, dict) else None
+    for acfg in (accts.values() if isinstance(accts, dict) else []):
+        raw = acfg.get("holdings") if isinstance(acfg, dict) else None
+        for x in ([raw] if isinstance(raw, str) else
+                  raw if isinstance(raw, list) else []):
+            pp = Path(str(x)).expanduser()
+            pp = pp if pp.is_absolute() else root / pp
+            if pp.is_file():
+                out.append(pp)
+    return out
+
+
+def books_symbols(root: Path) -> Set[str]:
+    """Every symbol the project's books name before ticker.map renames
+    them — the evidence a conditional hint needs: each account's parsed
+    exports and transfer sidecars, corporate-action rows and .tt files
+    (OPENING balances too) in work/ (never a derived book: those carry
+    the map's renames), plus the holdings files taxjson.toml lists. An
+    option adds its underlying listing."""
+    from taxjson.bin.taxjson_run import _AUDIT_DERIVED_SUFFIXES
+    from taxjson.lib.core import parse_option_underlying
+    syms: Set[str] = set()
+    cache = Path(root) / "work"
+    for p in sorted(cache.glob("*.json")) if cache.is_dir() else []:
+        if p.name.endswith(_AUDIT_DERIVED_SUFFIXES):
+            continue
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError, RecursionError):
+            continue
+        rows = doc.get("transactions") if isinstance(doc, dict) else None
+        for t in rows if isinstance(rows, list) else []:
+            if isinstance(t, dict):
+                syms.update(str(t.get(k) or "").upper()
+                            for k in ("symbol", "symbol_new"))
+    from taxjson.lib.positions_reports import (PositionsReportError,
+                                               read_positions)
+    for p in _holdings_files(Path(root)):
+        try:
+            syms.update(str(r.symbol).upper()
+                        for r in read_positions(p).rows)
+        except (PositionsReportError, OSError, ValueError):
+            continue
+    syms.discard("")
+    for s in list(syms):
+        und = parse_option_underlying(s)
+        if und:
+            syms.add(str(und).upper())
+    return syms
 
 
 @dataclass
@@ -365,29 +485,48 @@ def already(s: Suggestion, st: MapState) -> Optional[str]:
     return None
 
 
+# The start of the reason a suggestion is left out for another one
+# (covered_by_suggestion), never for the map.
+_COVERED = "another suggestion "
+
+
+def covered_by_suggestion(why: str) -> bool:
+    """True when `why` (pending's reason) names another suggestion, not
+    a ticker.map rule."""
+    return why.startswith(_COVERED)
+
+
 def pending(root: Path) -> Tuple[List[Suggestion], List[Tuple[Suggestion, str]]]:
-    """(the suggestions to offer, [(a suggestion left out, why)])."""
+    """(the suggestions to offer, [(a suggestion left out, why)]). A
+    conditional suggestion whose symbols the books do not all hold is
+    in neither list (books_symbols)."""
     st = map_state(Path(root) / "ticker.map")
     offer: List[Suggestion] = []
     skipped: List[Tuple[Suggestion, str]] = []
     froms: Dict[str, str] = {}
     extracts: Dict[Tuple[str, str], str] = {}
+    books: Optional[Set[str]] = None
     for s in gather(root):
         why = already(s, st)
         if why:
             skipped.append((s, why))
             continue
+        if s.conditional and s.needs:
+            if books is None:
+                books = books_symbols(Path(root))
+            if not all(x in books for x in s.needs):
+                continue
         if s.keyword == "EXTRACT":
             prev = extracts.get(s.extract_key)
             if prev is not None:
-                skipped.append((s, f"another suggestion moves those rows "
+                skipped.append((s, f"{_COVERED}moves those rows "
                                    f"({prev})"))
                 continue
             extracts[s.extract_key] = s.line
         if s.keyword in _RENAMES:
             prev = froms.get(s.symbols[0])
             if prev is not None:
-                skipped.append((s, f"another suggestion maps "
+                skipped.append((s, f"{_COVERED}maps "
                                    f"{s.symbols[0]} ({prev})"))
                 continue
             froms[s.symbols[0]] = s.line

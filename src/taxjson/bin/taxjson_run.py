@@ -14152,8 +14152,9 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
     offer, skipped = TS.pending(root)
     if getattr(args, "json", False):
         _json_out({"suggestions": [s.record() for s in offer],
-                   "skipped": [dict(s.record(), why=w)
-                               for s, w in skipped]})
+                   "skipped": [dict(s.record(), why=w, by=(
+                       "suggestion" if TS.covered_by_suggestion(w)
+                       else "ticker.map")) for s, w in skipped]})
         if not args.write:
             return
     elif not args.write or not offer:
@@ -14164,10 +14165,17 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
                 d.line(s.line + ("   (a template: edit, then add it by "
                                  "hand)" if s.template else ""))
                 d.para(s.reason, indent="  ")
-        if skipped:
-            d.section(f"Already answered by ticker.map ({len(skipped)})")
-            for s, why in skipped:
-                d.item(f"{s.line}: {why}", "  ")
+        # A suggestion another one covers is not answered by the map:
+        # its own heading.
+        covered = [x for x in skipped if TS.covered_by_suggestion(x[1])]
+        answered = [x for x in skipped
+                    if not TS.covered_by_suggestion(x[1])]
+        for head, items in (("Already answered by ticker.map", answered),
+                            ("Covered by another suggestion", covered)):
+            if items:
+                d.section(f"{head} ({len(items)})")
+                for s, why in items:
+                    d.item(f"{s.line}: {why}", "  ")
         d.blank()
         d.para("Add a line only when it is right for your securities: "
                "`taxjson ticker-map --suggest --write` asks for each one "

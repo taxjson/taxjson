@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **`taxjson ticker-map --suggest` no longer offers a conditional hint as a
+  plain suggestion.** A parser hint phrased "only if …" (RBC's dividend on a
+  symbol no RBC file trades, which names `TOBASE ROOT.US ROOT.TO`; RBC's
+  re-described option; IB's currency-tagged symbol; a Questrade code's
+  look-alike) is offered only when the project's books hold every symbol the
+  line joins. For a US stock whose other listing appears nowhere in the
+  project, `--suggest --write` wrote a line moving its rows to a TSX listing
+  that does not exist. A suggestion covered by another suggestion is now
+  listed under "Covered by another suggestion", not "Already answered by
+  ticker.map".
 - **A Questrade currency journal (Norbert's gambit) from the website export
   is booked as one.** Its two BRW rows (`... JOURNAL POSITION TO USD` /
   `... JOURNAL POSITION FROM CAD BOOK VALUE ...`, or the reverse) name the
@@ -15,7 +25,6 @@
   one internal-codes note), and a Canadian run joins the two lines as a
   ticker.map `JOURNAL` line would (tax-logic CA-XLIST-03). A leg with no
   partner is an ATTENTION line naming both row shapes.
-
 - **IB temporary symbols are folded onto their ticker.** Around a corporate
   action IB lists the old contract under a time-stamped symbol (the stamp
   YYYYMMDDHHMMSS, then the ticker) beside the ticker itself. Its rows are now
