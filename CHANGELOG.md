@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Cross-listing auto-join: a dealer's trade-confirmation wording is no longer
+  part of the security name.** An RBC or Questrade trade row's
+  "UNSOLICITED WE ACTED AS PRINCIPAL AVG PRICE SHOWN-DETAILS ON REQ DA" left the
+  word AS (a corporate form) in the name, so a real pair of listings stayed a
+  suggestion. RBC rows are now read through their own name path (the event code
+  and dividend / transfer wording cut too, so another account's number no longer
+  shows in a suggestion); a share designator in the cut wording is kept and
+  another class is still refused (CA-XLIST-01 / US-XLIST-01).
+
 ### Changed
 
 - **taxjson.toml: the file header sits on `[settings]`, and a blank line
