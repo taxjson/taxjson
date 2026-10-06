@@ -342,6 +342,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/lib/brokerages/questrade.py` — `looks renamed to`; `src/taxjson/lib/brokerages/rbc_direct.py` — `looks renamed to`; `src/taxjson/lib/brokerages/ib_extractor.py` — `under several symbols`; `src/taxjson/lib/brokerages/webull.py` — `ticker change Webull reported without a`
 
+### `tjs ticker-map --suggest`: "TOBASE QZQ.US QZQ.TO … transfer journal … not joined automatically: the names are not equal word for word (…)"
+- **Check:** `tjs ticker-map --suggest` lists the line with its reason; the transfer journal moves one listing of the security out and the other in (a USD line to its CAD line, say).
+- **Cause:** taxjson joins two listings of one security on its own only when their security names agree word for word, corporate form and share designators included (tax-logic CA-XLIST-01 / US-XLIST-01); anything less stays a suggestion, so two share classes are never merged. On v0.22.0 and earlier an RBC trade row's confirmation wording ("UNSOLICITED WE ACTED AS PRINCIPAL AVG PRICE …") stayed in the name and "AS" read as a corporate form, so a real pair was only suggested; the next release cuts that wording.
+- **Fix:** if both listings are one security, `tjs ticker-map --suggest --write` adds the line (or add it to `ticker.map` by hand), then `tjs run`. If they are different classes or companies, leave it out.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/cross_listings.py` — `_names_verdict`, `the names are not equal word for word `; `src/taxjson/lib/symbol_codes.py` — `_CONFIRM_RE`, `rbc_name`, `questrade_name`; `src/taxjson/lib/ticker_map_suggest.py` — `from_cross_listings`, `not joined `
+
 ### Questrade: "Warning: 99900001.csv: 1 dividend(s) marked NON-RES TAX WITHHELD are booked at the NET amount"
 - **Check:** the next line lists each dividend (`QZQ.US 2025-03-15 8.50`); `tjs divs` shows it at the net amount with no TAX row. On RBC the same wording is grossed up instead: `tjs events` shows a TAX row described `(Implied Tax)` at 15% of the gross.
 - **Cause:** Questrade's export gives neither the gross nor the tax of such a dividend, so it is booked at the net: income understated, foreign tax missing. RBC's export also gives only the net; its parser assumes the 15% US treaty rate (`gross = net / 0.85`) whatever the issuer's country.
@@ -437,19 +444,12 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ## Currency rates
 
-### "Error: no exchange rate for 1 row(s): USD->CAD on 2025-09-25 (BUYSELL QZQ.US; no rates for currency)."
-- **Check:** the run printed "Info: TAXJSON_OFFLINE is set — using cached rates only (no download)" or a "download failed" warning (next entry) before it, and "Info: FX USD→CAD: Bank of Canada Valet for 0 dates". The run then stops at "merging and converting the account's books" (exit 1).
-- **Cause:** taxjson converts each row at the rate of its date, or the latest rate of the 5 days before it, and never uses a built-in rate. Offline (`TAXJSON_OFFLINE=1`) with an empty or old rate cache (`~/.currency_price_cache.json`) there is no rate. The same message for another currency (`EUR->CAD`) means that currency is not in `[settings] source_currencies`, so its rates were never fetched.
+### "Error: no exchange rate for 1 row(s): USD->CAD on 2025-09-25 (BUYSELL QZQ.US; no rates for currency)." (often after "Warning: download failed — Bank of Canada FXUSDCAD …")
+- **Check:** before it the run printed "Info: TAXJSON_OFFLINE is set — using cached rates only (no download)", or a "download failed" warning ("Bank of Canada FXUSDCAD", "Bank of Canada noon USDCAD" or "Yahoo Finance USDCAD=X") followed by "Dates it would have covered have no rate this run.", and "Info: FX USD→CAD: Bank of Canada Valet for 0 dates". The run stops at "merging and converting the account's books" (exit 1).
+- **Cause:** taxjson converts each row at the rate of its date, or the latest rate of the 5 days before it, and never uses a built-in rate. Offline (`TAXJSON_OFFLINE=1`) with an empty or old rate cache (`~/.currency_price_cache.json`), or with the Bank of Canada Valet API (or the Yahoo fallback before 2017) unreachable (no network, a firewall or proxy, an outage), there is no rate; a failed download is never replaced by another source's rate. The same message for another currency (`EUR->CAD`) means that currency is not in `[settings] source_currencies`, so its rates were never fetched.
 - **Fix:** run `tjs run` once online (unset `TAXJSON_OFFLINE`); the rates are cached and later offline runs use them. For a new currency, add it: `source_currencies = ["USD", "EUR"]`. If no source has a rate for that date, enter the row in CAD at that date's rate as a `.tt` line.
 - **Fixed in:** —
-- **Code:** `src/taxjson/bin/taxjson_convert_currency.py` — `missing_rate_message`, `no exchange rate for`; `src/taxjson/bin/to_base_curr.py` — `resolve_rows`, `using cached rates only`
-
-### "Warning: download failed — Bank of Canada FXUSDCAD 2017-01-03..2025-10-06: <urlopen error [Errno 111] Connection refused>"
-- **Check:** the next line says "Dates it would have covered have no rate this run." Similar lines may name "Bank of Canada noon USDCAD" or "Yahoo Finance USDCAD=X". `Info: FX USD→CAD: Bank of Canada Valet for 0 dates` follows when nothing was cached.
-- **Cause:** the Bank of Canada Valet API (or the Yahoo fallback for years before 2017) could not be reached: no network, a firewall or proxy, or an outage. A failed download is never replaced by another source's rate.
-- **Fix:** re-run `tjs run` when the network works. Rates already in the cache are still used; a row whose date has no cached rate stops the run with "no exchange rate for …" (entry above).
-- **Fixed in:** —
-- **Code:** `src/taxjson/bin/to_base_curr.py` — `refresh_boc`, `download failed —`; `src/taxjson/bin/taxjson_run.py` — `stage_currency_rates`
+- **Code:** `src/taxjson/bin/taxjson_convert_currency.py` — `missing_rate_message`, `no exchange rate for`; `src/taxjson/bin/to_base_curr.py` — `resolve_rows`, `refresh_boc`, `using cached rates only`, `download failed —`; `src/taxjson/bin/taxjson_run.py` — `stage_currency_rates`
 
 ## Options
 

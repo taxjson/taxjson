@@ -166,7 +166,7 @@ tickers from the other accounts' evidence.
 - `src/taxjson/bin/taxjson_ticker_map.py` — `apply_mapping`, `load_map_file`, `map_file_problems`, `merge_renames`, `bare_target_warnings`, `guard_option_listing_collisions`: the `taxjson-ticker-map` stage applied to a book.
 - `src/taxjson/lib/renames.py` — `DatedRename`, `rename_events`, `apply_dated_renames`, `late_rows`, `unresolved_late`, `render`: renames as dated events and `taxjson renames`.
 - `src/taxjson/lib/cross_listings.py` — `gather`, `analyze`, `map_lines`, `effective_map_text`, `joined_note`: two listings joined by their transfer journal.
-- `src/taxjson/lib/symbol_codes.py` — `resolve`, `project_evidence`, `names_agree`, `is_code`, `read_state`, `codes_note`: Questrade internal codes resolved to tickers.
+- `src/taxjson/lib/symbol_codes.py` — `resolve`, `project_evidence`, `names_agree`, `is_code`, `read_state`, `codes_note`, `exact_name`, `questrade_name`, `rbc_name`, `_CONFIRM_RE`: Questrade internal codes resolved to tickers; the security names (dealer confirmation wording cut) that codes and cross-listings compare.
 - `src/taxjson/bin/taxjson_run.py` — `stage_cross_listings`, `stage_symbol_codes`, `cmd_ticker_map`, `cmd_renames`, `_check_renamed_late`: where the run and the commands use them.
 - `src/taxjson/lib/ticker_map_suggest.py` — `gather`, `Suggestion`, `from_diag`, `from_cross_listings`, `from_symbol_codes`, `appended_text`: `taxjson ticker-map --suggest` and `--write`.
 - `src/taxjson/lib/t1135_country.py` — `parse_country`, `override_value`, `NOT_FOREIGN`: the country word of a T1135 line in ticker.map.
