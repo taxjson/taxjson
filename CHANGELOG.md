@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.19.0 (2026-10-05)
+
 ### Changed
 
 - **The installer installs taxjson-fetch by default.** The broker-fetch
