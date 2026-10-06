@@ -14,7 +14,8 @@
 # into the same environment by default. --without-fetch (or
 # TAXJSON_WITH_FETCH=0) leaves it out, and removes it from an install
 # that has it. The opt-out is remembered in ~/.config/taxjson/fetch, so
-# an upgrade keeps it out; --with-fetch (or TAXJSON_WITH_FETCH=1) puts
+# an upgrade keeps it out (off/0/no/false there; on/1/yes/true installs
+# it); --with-fetch (or TAXJSON_WITH_FETCH=1) puts
 # it back. Re-running is safe and is how you upgrade. Nothing touches
 # your tax project folders.
 #
@@ -69,6 +70,14 @@ done
 # on, else stable.
 CHANNEL="${CHANNEL_ARG:-${TAXJSON_CHANNEL:-}}"
 if [ -z "$CHANNEL" ] && [ -f "$CHANNEL_FILE" ]; then CHANNEL="$(tr -d '[:space:]' < "$CHANNEL_FILE")"; fi
+# A directory where the remembered channel belongs cannot be written:
+# say so now and do not remember (a failed write after the checkout
+# moved would stop the install half-way).
+REMEMBER_CHANNEL="${TAXJSON_REMEMBER_CHANNEL:-1}"
+if [ -d "$CHANNEL_FILE" ] && [ ! -L "$CHANNEL_FILE" ]; then
+  printf 'warning: %s is a directory, not a file — the channel is not remembered (move it aside to fix)\n' "$CHANNEL_FILE" >&2
+  REMEMBER_CHANNEL=0
+fi
 CHANNEL="${CHANNEL:-stable}"
 case "$CHANNEL" in
   release) CHANNEL=latest ;;              # its name before channels existed
@@ -87,8 +96,22 @@ case "$FETCH_ASKED" in
   *) printf 'TAXJSON_WITH_FETCH=%s — use 1 (install taxjson-fetch, the default) or 0 (leave it out)\n' "$FETCH_ASKED" >&2; exit 2 ;;
 esac
 WITH_FETCH="$FETCH_ASKED"
-if [ -z "$WITH_FETCH" ] && [ -f "$FETCH_FILE" ] && [ "$(tr -d '[:space:]' < "$FETCH_FILE")" = off ]; then
-  WITH_FETCH=0
+# The remembered choice: off/0/no/false leaves it out, on/1/yes/true
+# installs it (any case, spaces ignored); anything else is reported and
+# the default (installed) applies. Checked here, before anything is
+# cloned or checked out.
+if [ -d "$FETCH_FILE" ] && [ ! -L "$FETCH_FILE" ]; then
+  if [ "$FETCH_ASKED" = 0 ]; then
+    printf '%s is a directory, not a file, so --without-fetch cannot be remembered — move it aside and re-run\n' "$FETCH_FILE" >&2
+    exit 2
+  fi
+  printf 'warning: %s is a directory, not a file — ignored (taxjson-fetch is installed, the default)\n' "$FETCH_FILE" >&2
+elif [ -z "$WITH_FETCH" ] && [ -f "$FETCH_FILE" ]; then
+  case "$(tr -d '[:space:]' < "$FETCH_FILE" | tr '[:upper:]' '[:lower:]')" in
+    off|0|no|false) WITH_FETCH=0 ;;
+    on|1|yes|true) WITH_FETCH=1 ;;
+    *) printf 'warning: %s should say off (leave taxjson-fetch out) or on — ignored (taxjson-fetch is installed, the default)\n' "$FETCH_FILE" >&2 ;;
+  esac
 fi
 WITH_FETCH="${WITH_FETCH:-1}"
 OS="$(uname -s)"
@@ -96,6 +119,19 @@ OS="$(uname -s)"
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 die() { printf '\n\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
+# remember FILE VALUE: FILE (under ~/.config/taxjson, made private) holds
+# VALUE, mode 600 — written to a temporary file and renamed into place,
+# so a symlink planted at FILE is replaced, never written through.
+remember() {
+  local d tmp; d="$(dirname "$1")"
+  mkdir -p "$(dirname "$d")"
+  mkdir -p -m 700 "$d"
+  tmp="$(mktemp "$d/.$(basename "$1").XXXXXX")"
+  printf '%s\n' "$2" > "$tmp"
+  chmod 600 "$tmp"
+  if [ -L "$1" ]; then rm -f "$1"; fi
+  mv -f "$tmp" "$1"
+}
 
 main() {
 say "1/4 Prerequisites"
@@ -197,21 +233,20 @@ fi
 # re-running upgrades along the same channel. A pinned version is
 # remembered too. `taxjson deploy` keeps the remembered one
 # (TAXJSON_REMEMBER_CHANNEL=0).
-if [ "${TAXJSON_REMEMBER_CHANNEL:-1}" != 0 ]; then
-  mkdir -p "$(dirname "$CHANNEL_FILE")"
-  printf '%s\n' "$CHANNEL" > "$CHANNEL_FILE"
+if [ "$REMEMBER_CHANNEL" != 0 ]; then
+  remember "$CHANNEL_FILE" "$CHANNEL"
 fi
 # The fetch opt-out, remembered the same way (only when one was asked
 # for: a plain re-run, or `taxjson deploy`, keeps what is there).
 if [ "$FETCH_ASKED" = 0 ]; then
-  mkdir -p "$(dirname "$FETCH_FILE")"
-  printf 'off\n' > "$FETCH_FILE"
-elif [ "$FETCH_ASKED" = 1 ]; then
+  remember "$FETCH_FILE" off
+elif [ "$FETCH_ASKED" = 1 ] && { [ -f "$FETCH_FILE" ] || [ -L "$FETCH_FILE" ]; }; then
   rm -f "$FETCH_FILE"
 fi
 
 say "3/4 Python environment"
-[ -x "$DIR/venv/bin/python" ] || "$PY" -m venv "$DIR/venv"
+FRESH_VENV=0
+[ -x "$DIR/venv/bin/python" ] || { "$PY" -m venv "$DIR/venv"; FRESH_VENV=1; }
 "$DIR/venv/bin/python" -m pip install --quiet --upgrade pip
 if [ -n "$EXTRAS" ]; then
   "$DIR/venv/bin/python" -m pip install --quiet -e "$DIR[$EXTRAS]" \
@@ -234,7 +269,15 @@ elif [ "$WITH_FETCH" = 0 ]; then
     echo "   taxjson-fetch left out (--without-fetch; --with-fetch adds it)"
   fi
 else
-  "$DIR/venv/bin/python" -m pip install --quiet -e "$DIR/packages/taxjson-fetch"
+  # An install from before v0.19.0 (core only) gains the plugin on its
+  # next upgrade: say so once, with the way to keep it out.
+  if [ "$FRESH_VENV" = 0 ] && [ -z "$FETCH_ASKED" ] \
+      && ! "$DIR/venv/bin/python" -m pip show --quiet taxjson-fetch >/dev/null 2>&1; then
+    echo "   adding taxjson-fetch (installed by default since v0.19.0; re-run with --without-fetch to keep it out)"
+  fi
+  # --no-deps: its only dependency is the core, installed just above
+  # from this same checkout — nothing is resolved by name from an index.
+  "$DIR/venv/bin/python" -m pip install --quiet --no-deps -e "$DIR/packages/taxjson-fetch"
   echo "   taxjson-fetch installed: $("$DIR/venv/bin/taxjson" fetch --list | head -1)"
 fi
 echo "   $("$DIR/venv/bin/taxjson" --version)"

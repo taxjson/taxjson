@@ -10,8 +10,9 @@ python3 -m venv venv                       # no-op if venv already exists
 venv/bin/pip install --upgrade pip --quiet
 venv/bin/pip install -e ".[fx,dev]"
 # The broker-fetch plugin (`taxjson fetch`: Questrade, IBKR Flex) — a separate
-# distribution in packages/, installed beside the core.
-venv/bin/pip install -e packages/taxjson-fetch
+# distribution in packages/, installed beside the core. --no-deps: its only
+# dependency is the core installed just above from this checkout.
+venv/bin/pip install --no-deps -e packages/taxjson-fetch
 
 # Pre-push personal-data scan (a push to a public repo IS publication).
 if [ -d .git/hooks ]; then

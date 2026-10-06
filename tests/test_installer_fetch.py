@@ -174,5 +174,109 @@ class TestInstallerFetch(_Repos):
         self.assertIn("--without-fetch", r.stderr)
 
 
+    # ---- v0.19.0 pre-release review (M2, L1-L3)
+
+    NOTICE = ("adding taxjson-fetch (installed by default since v0.19.0; "
+              "re-run with --without-fetch to keep it out)")
+
+    def test_upgrade_of_a_core_only_install_says_the_plugin_is_added(self):
+        # A fresh install: nothing to announce.
+        r = self.install("--channel", "v0.4.0", "--without-fetch")
+        self.assertNotIn("adding taxjson-fetch", r.stdout)
+        # A core-only install from before v0.19.0 (no opt-out on record):
+        # its next upgrade adds the plugin, and says so once.
+        self.fetchfile.unlink()
+        r = self.install()
+        self.assertIn(self.NOTICE, r.stdout)
+        self.assertTrue(self.installed())
+        r = self.install()
+        self.assertNotIn("adding taxjson-fetch", r.stdout)
+        # Asked for by name: no notice.
+        self.install("--without-fetch")
+        r = self.install("--with-fetch")
+        self.assertNotIn("adding taxjson-fetch", r.stdout)
+        self.assertTrue(self.installed())
+
+    def test_fresh_install_has_no_notice(self):
+        r = self.install("--channel", "v0.4.0")
+        self.assertNotIn("adding taxjson-fetch", r.stdout)
+
+    def test_the_plugin_installs_without_resolving_dependencies(self):
+        self.install("--channel", "v0.4.0")
+        self.assertIn("--no-deps", self.fetch_installs()[0])
+        dev = (REPO / "scripts" / "dev-setup.sh").read_text()
+        self.assertIn("pip install --no-deps -e packages/taxjson-fetch", dev)
+
+    def test_remembered_value_spellings(self):
+        self.install("--channel", "v0.4.0")
+        self.fetchfile.parent.mkdir(parents=True, exist_ok=True)
+        for text, want in (("off\n", False), (" OFF \n", False),
+                           ("no", False), ("False\n", False), ("0\n", False),
+                           ("on\n", True), ("YES", True), (" true\n", True),
+                           ("1", True)):
+            with self.subTest(text=text):
+                self.fetchfile.write_text(text)
+                r = self.install()
+                self.assertEqual(self.installed(), want, r.stdout)
+                self.assertNotIn("warning", r.stderr)
+        self.fetchfile.write_text("maybe\n")
+        r = self.install()
+        self.assertTrue(self.installed())
+        self.assertIn(f"warning: {self.fetchfile} should say off", r.stderr)
+        self.assertIn("installed, the default", r.stderr)
+
+    def test_a_directory_at_the_remembered_paths(self):
+        self.fetchfile.mkdir(parents=True)
+        # --without-fetch cannot be remembered: refused before cloning.
+        r = self.install("--channel", "v0.4.0", "--without-fetch", ok=False)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(f"{self.fetchfile} is a directory", r.stderr)
+        self.assertFalse(self.inst.exists(), "refused before cloning")
+        # Otherwise: reported, ignored, and the install completes.
+        chan = self.fetchfile.parent / "channel"
+        chan.mkdir()
+        r = self.install("--channel", "v0.4.0")
+        self.assertIn(f"warning: {self.fetchfile} is a directory", r.stderr)
+        self.assertIn(f"warning: {chan} is a directory", r.stderr)
+        self.assertTrue(self.installed())
+        self.assertTrue(self.fetchfile.is_dir() and chan.is_dir())
+        r = self.install("--with-fetch")
+        self.assertTrue(self.fetchfile.is_dir())
+
+    def test_remembered_files_are_private_and_never_written_through(self):
+        victims = self.d / "victims"
+        victims.mkdir()
+        cfg = self.fetchfile.parent
+        cfg.parent.mkdir(parents=True)
+        r = self.install("--channel", "v0.4.0", "--without-fetch")
+        self.assertEqual(oct(cfg.stat().st_mode & 0o777), oct(0o700))
+        for f in (self.fetchfile, cfg / "channel"):
+            self.assertEqual(oct(f.stat().st_mode & 0o777), oct(0o600), f)
+        # A symlink planted at either file is replaced, not followed.
+        # (A link is still read: the victim reads as a valid value.)
+        for name, text in (("fetch", "on\n"), ("channel", "v0.4.0\n")):
+            v = victims / name
+            v.write_text(text)
+            (cfg / name).unlink()
+            (cfg / name).symlink_to(v)
+        self.install("--without-fetch")
+        for name, text in (("fetch", "on\n"), ("channel", "v0.4.0\n")):
+            self.assertEqual((victims / name).read_text(), text)
+            self.assertFalse((cfg / name).is_symlink(), name)
+            self.assertEqual(oct((cfg / name).stat().st_mode & 0o777),
+                             oct(0o600))
+        self.assertEqual(self.fetchfile.read_text(), "off\n")
+        self.assertEqual((cfg / "channel").read_text(), "v0.4.0\n")
+        # A symlink to a directory is replaced too (mv never moves into it).
+        (cfg / "fetch").unlink()
+        (cfg / "fetch").symlink_to(victims)
+        self.install("--without-fetch")
+        self.assertEqual(sorted(p.name for p in victims.iterdir()),
+                         ["channel", "fetch"])
+        self.assertEqual(self.fetchfile.read_text(), "off\n")
+        self.assertEqual([p.name for p in cfg.iterdir()
+                          if p.name.startswith(".")], [], "no temp left")
+
+
 if __name__ == "__main__":
     unittest.main()

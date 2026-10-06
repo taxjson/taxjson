@@ -15,7 +15,16 @@
   `TAXJSON_WITH_FETCH=1`), still accepted, puts it back. The plugin
   sends nothing unless `taxjson fetch` is run for an account with a
   `brokerage` (SECURITY.md). The hint printed when no fetcher is
-  installed says to re-run the installer.
+  installed says to re-run the installer. An existing core-only install
+  gains the plugin on its next upgrade, and the installer says so in one
+  line: "adding taxjson-fetch (installed by default since v0.19.0;
+  re-run with --without-fetch to keep it out)". The remembered file
+  accepts `off`/`0`/`no`/`false` and `on`/`1`/`yes`/`true` in any case
+  (anything else is reported and the default applies); it and the
+  remembered channel are written mode 600 in a private directory,
+  replacing (never writing through) a symlink at their path. The plugin
+  is installed with `--no-deps`: its only dependency is the core from
+  the same checkout.
 - **Every command's refusal reads `taxjson <command>: error: ...`**, wrapped
   at the house width with its details indented under it, and the
   `taxjson-*` tools' warnings and notes wrap the same way. What a program

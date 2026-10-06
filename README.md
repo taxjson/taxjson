@@ -401,7 +401,7 @@ pip install -e ".[all]"         # everything (the core's extras)
 pip install -e packages/taxjson-fetch   # the separate broker-fetch plugin: `taxjson fetch` for Questrade / IBKR Flex
 ```
 
-The curl installer installs the core and, by default, the taxjson-fetch plugin (still its own package, with its own dependencies, loaded through an entry point). `--without-fetch` (or `TAXJSON_WITH_FETCH=0`) leaves the plugin out and removes it from an install that has it; the choice is remembered in `~/.config/taxjson/fetch`, so re-running the installer (or `taxjson deploy`) keeps it out, and `--with-fetch` (or `TAXJSON_WITH_FETCH=1`) puts it back.
+The curl installer installs the core and, by default, the taxjson-fetch plugin (still its own package, with its own dependencies, loaded through an entry point). `--without-fetch` (or `TAXJSON_WITH_FETCH=0`) leaves the plugin out and removes it from an install that has it; the choice is remembered in `~/.config/taxjson/fetch`, so re-running the installer (or `taxjson deploy`) keeps it out, and `--with-fetch` (or `TAXJSON_WITH_FETCH=1`) puts it back. An install from before v0.19.0 gains the plugin on its next upgrade; the installer says so in one line.
 
 Or run `scripts/dev-setup.sh` for a one-shot venv with the `[fx,dev]` extras and the taxjson-fetch plugin, then `source setup.sh` to activate it.
 
