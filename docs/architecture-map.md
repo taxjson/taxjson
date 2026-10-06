@@ -167,8 +167,9 @@ tickers from the other accounts' evidence.
 - `src/taxjson/lib/renames.py` — `DatedRename`, `rename_events`, `apply_dated_renames`, `late_rows`, `unresolved_late`, `render`: renames as dated events and `taxjson renames`.
 - `src/taxjson/lib/cross_listings.py` — `gather`, `analyze`, `map_lines`, `effective_map_text`, `joined_note`: two listings joined by their transfer journal (a TOBASE line), or by a Questrade currency journal the parser paired (a JOURNAL line, Canada only).
 - `src/taxjson/lib/symbol_codes.py` — `resolve`, `project_evidence`, `names_agree`, `is_code`, `read_state`, `codes_note`, `exact_name`, `questrade_name`, `rbc_name`, `_CONFIRM_RE`: Questrade internal codes resolved to tickers; the security names (dealer confirmation wording cut) that codes and cross-listings compare.
-- `src/taxjson/bin/taxjson_run.py` — `stage_cross_listings`, `stage_symbol_codes`, `cmd_ticker_map`, `cmd_renames`, `_check_renamed_late`: where the run and the commands use them.
-- `src/taxjson/lib/ticker_map_suggest.py` — `gather`, `Suggestion`, `from_diag`, `from_cross_listings`, `from_symbol_codes`, `appended_text`: `taxjson ticker-map --suggest` and `--write`.
+- `src/taxjson/lib/listing_suffix.py` — `scan_questrade`, `scan_rbc`, `project_evidence`, `resolve`, `fixes`, `corrections_note`, `suggestions`: a Questrade / RBC bare ticker's listing read from the books, not the row currency (applied by `taxjson-brokerage --listing-fixes`).
+- `src/taxjson/bin/taxjson_run.py` — `stage_cross_listings`, `stage_symbol_codes`, `stage_listing_suffix`, `_listing_suffix_stale`, `cmd_ticker_map`, `cmd_renames`, `_check_renamed_late`: where the run and the commands use them.
+- `src/taxjson/lib/ticker_map_suggest.py` — `gather`, `Suggestion`, `from_diag`, `from_cross_listings`, `from_symbol_codes`, `from_listing_suffix`, `appended_text`: `taxjson ticker-map --suggest` and `--write`.
 - `src/taxjson/lib/t1135_country.py` — `parse_country`, `override_value`, `NOT_FOREIGN`: the country word of a T1135 line in ticker.map.
 
 ## Corporate actions and elections

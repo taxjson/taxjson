@@ -478,6 +478,18 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--listing-fixes", dest="listing_fixes", metavar="FILE",
+        default=None,
+        help=(
+            "Questrade / RBC: the listings `taxjson run` read from the "
+            "project's other exports for symbols whose suffix came from "
+            "the row currency alone (work/<acct>_<broker>"
+            "_listing_suffix.state, lib/listing_suffix): every row of such "
+            "a symbol is booked under that listing. ticker.map EXTRACT "
+            "lines still win."
+        ),
+    )
+    parser.add_argument(
         "--rates", dest="rates", metavar="FILE", default=None,
         help=(
             "The run's currency rates (work/to_base.csv, `taxjson run` "
@@ -520,6 +532,12 @@ Examples:
         emit_line(f"taxjson-brokerage: error: no such file: --symbol-codes "
                   f"{args.symbol_codes}")
         sys.exit(2)
+    if args.listing_fixes and not Path(args.listing_fixes).exists():
+        emit_line(f"taxjson-brokerage: error: no such file: --listing-fixes "
+                  f"{args.listing_fixes}")
+        sys.exit(2)
+    from taxjson.lib.listing_suffix import fixes as _listing_fixes
+    listing_fixes = _listing_fixes(args.listing_fixes)
     if args.rates:
         if not Path(args.rates).exists():
             emit_line(f"taxjson-brokerage: error: no such file: --rates "
@@ -816,6 +834,13 @@ Examples:
         # and before the id hash is computed, so dedup and every
         # downstream tool see the right symbol.
         for t in transactions:
+            # A listing named from the row currency alone that the
+            # project's books name otherwise (lib/listing_suffix): every
+            # row of the symbol, before the EXTRACT lines (which win).
+            for _f in ('symbol', 'symbol_new'):
+                _sym = str(t.get(_f) or '').upper()
+                if _sym in listing_fixes:
+                    t[_f] = listing_fixes[_sym]
             _before = t.get('symbol') or ''
             _hit = apply_security_override(t, overrides, override_hits)
             if _hit is not None and _before:

@@ -46,18 +46,19 @@ NE = IbBrokerage.KNOWN_NONEVENT_PREFIX
 
 
 def _parse(parser_cls, text, prefix="x_"):
-    """(parser, transactions, stderr) for an in-memory CSV."""
-    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False,
-                                     prefix=prefix) as f:
-        f.write(text)
-        name = f.name
+    """(parser, transactions, stderr) for an in-memory CSV, alone in a
+    directory of its own: the Kraken parser reads a sibling ledger
+    export, and another test's (or another gate's) kr_ledgers_*.csv in
+    the shared temp directory was read with it."""
     parser = parser_cls()
     err = io.StringIO()
-    try:
+    with tempfile.TemporaryDirectory() as td:
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False,
+                                         prefix=prefix, dir=td) as f:
+            f.write(text)
+            name = f.name
         with contextlib.redirect_stderr(err):
             txs = parser.parse_file(Path(name))
-    finally:
-        os.remove(name)
     return parser, txs, err.getvalue()
 
 

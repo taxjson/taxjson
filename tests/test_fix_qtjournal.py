@@ -1,4 +1,4 @@
-"""Questrade BRW currency journals (tax-logic CA-XLIST-02, CA-ACB-CODES).
+"""Questrade BRW currency journals (tax-logic CA-XLIST-03, CA-ACB-CODES).
 
 Owner report (new-user run, Questrade website CSV, an RRSP): a Norbert's-
 gambit journal between an ETF's CAD and USD lines arrives as two BRW rows
@@ -237,7 +237,7 @@ class TestParser(unittest.TestCase):
         self.assertNotIn(SC.NOTE_HEAD, err)
 
 
-@rule("CA-XLIST-02")
+@rule("CA-XLIST-03")
 class TestAnalyze(unittest.TestCase):
     def _legs(self):
         out = []
@@ -319,7 +319,7 @@ def _symbols(root, acct):
             for t in doc['transactions']}
 
 
-@rule("CA-XLIST-02")
+@rule("CA-XLIST-03")
 class TestRunCanada(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -375,7 +375,7 @@ class TestRunCanada(unittest.TestCase):
             self.assertEqual((c['symbol'], c['how']), ('QZD.U.TO', 'journal'))
 
 
-@rule("CA-XLIST-02")
+@rule("CA-XLIST-03")
 class TestRunOverrides(unittest.TestCase):
     def test_extract_line_wins(self):
         with tempfile.TemporaryDirectory() as td:
@@ -399,7 +399,7 @@ class TestRunOverrides(unittest.TestCase):
 
 
 @rule("US-XLIST-01")
-@rule_absent("CA-XLIST-02", country="usa")
+@rule_absent("CA-XLIST-03", country="usa")
 class TestRunUsa(unittest.TestCase):
     def test_usa_does_not_join_on_the_brokers_pairing(self):
         with tempfile.TemporaryDirectory() as td:

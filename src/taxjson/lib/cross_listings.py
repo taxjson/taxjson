@@ -43,7 +43,7 @@ user's own exports.
 A broker's CURRENCY journal (Questrade's BRW "JOURNAL POSITION TO USD" /
 "FROM CAD" pair, which the parser pairs within one account and marks
 with a `journal_pair` id) moves units between the CAD and USD lines of
-one security. In a Canadian project (tax-logic CA-XLIST-02) the two
+one security. In a Canadian project (tax-logic CA-XLIST-03) the two
 lines are joined as a ticker.map `JOURNAL FROM TO` line would — one
 security for the cost and the loss rules, netted in the holdings view —
 on the parser's pairing alone (the legs share one description). The
@@ -256,7 +256,7 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
     """{"joined": [...], "suggested": [...]}: the cross-listing journals
     the legs show (module docstring). `currency_journals`: join the
     parser-paired currency journals as JOURNAL lines (Canada,
-    CA-XLIST-02; the caller gates the country)."""
+    CA-XLIST-03; the caller gates the country)."""
     named = {s.upper() for s in map_named}
     apart = {frozenset(x.upper() for x in pair) for pair in map_distinct}
     joined: List[Pair] = []
@@ -404,11 +404,15 @@ def effective_map_text(ticker_map: Optional[Path],
         "\n".join(lines) + "\n"
 
 
-def joined_note(account: str, joined: Iterable[Pair]
+def joined_note(account: str, joined: Iterable[Pair],
+                corrected: Optional[Dict[Tuple[str, str], str]] = None
                 ) -> Optional[Tuple[str, List[str]]]:
     """(headline, details) of the one Warning per account naming the
     pairs joined through its legs, each with the ticker.map line that
-    undoes it; None when there are none."""
+    undoes it; None when there are none. `corrected`: {(account,
+    listing): why} for a leg whose listing was read from the evidence,
+    not the row currency (lib/listing_suffix) — said with its pair."""
+    corrected = corrected or {}
     items: List[str] = []
     undo: List[str] = []
     seen = set()
@@ -433,8 +437,12 @@ def joined_note(account: str, joined: Iterable[Pair]
                         f"add `DISTINCT {p.out.symbol} {p.into.symbol}` "
                         f"to ticker.map")
             continue
+        fixed = [corrected[k] for k in ((p.out.account, p.out.symbol),
+                                        (p.into.account, p.into.symbol))
+                 if k in corrected]
         items.append(f"{p.out.symbol} ↔ {p.into.symbol} (transfer "
-                     f"{p.out.date})")
+                     f"{p.out.date}" + "".join(f"; {w}" for w in fixed)
+                     + ")")
         undo.append(f"- {p.out.symbol} ↔ {p.into.symbol}: their names are "
                     f"the same word for word "
                     f"({p.names[0] or p.names[1]!r}); if they are not one "

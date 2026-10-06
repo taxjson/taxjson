@@ -118,7 +118,7 @@ PARTITION_RULES = frozenset({
     "CA-STKDIV-01",    # stock dividend: $0 acquisition (counts for s.54)
     "CA-ACB-12",       # manual missing-history loss check on settle dates
     "CA-OPEN-01",      # opening balance: pooled, not a purchase (US: lot dates)
-    "CA-XLIST-02",     # a broker's CAD/USD currency journal joined (US: transfer legs)
+    "CA-XLIST-03",     # a broker's CAD/USD currency journal joined (US: transfer legs)
     "CA-OPEN-02",      # opening cost at the snapshot day's BoC rate (US: USD only)
     "CA-CRYPTO-02",    # stablecoins as US-dollar cash
     "CA-DATE-01",      # settle-date tax year by default
@@ -817,6 +817,32 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "line for the pair, always wins; anything less certain "
                  "stays a suggestion (`taxjson ticker-map --suggest`)."),
             Rule("CA-XLIST-02",
+                 "Each listing's symbol is read from the evidence, not "
+                 "the row currency alone: Questrade and RBC write a bare "
+                 "ticker and a currency, and a broker may file one "
+                 "listing on the other currency's row (Questrade files "
+                 "interlisted shares that arrived from another broker "
+                 "under the TSX ticker on a USD row). Such a symbol is "
+                 "the other listing (ROOT.US read as ROOT.TO) when its "
+                 "transfer-in is the unique arrival of a transfer out of "
+                 "the same quantity within 5 days, under an EQUAL name, "
+                 "of the same ticker's other listing or of ANOTHER ticker "
+                 "on the same currency's listing (two US tickers never "
+                 "name one company's identical shares); or, for shares "
+                 "that arrived on a USD row by a transfer the books do "
+                 "not pair, when ROOT.TO is in the project's books under "
+                 "an equal name (shares bought at the broker keep the "
+                 "listing its USD trade rows name). Never when a ticker.map rule names the "
+                 "symbol (`DISTINCT ROOT.US ROOT.TO` keeps the row "
+                 "currency's listing), when another broker that names "
+                 "its listings trades ROOT.US, when a rename row joins "
+                 "the two tickers, or when the account also holds the "
+                 "other listing in another currency (then a TOBASE line "
+                 "is suggested). Every row of the symbol in that "
+                 "broker's exports of the account takes the listing; "
+                 "each correction is a Warning, and `taxjson ticker-map "
+                 "--suggest` shows the equivalent explicit lines."),
+            Rule("CA-XLIST-03",
                  "A broker's currency journal between the Canadian-dollar "
                  "and US-dollar lines of one security (Questrade's BRW "
                  "rows \"<NAME> JOURNAL POSITION TO USD\" and \"<NAME> "
@@ -1952,6 +1978,32 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "security's CAD and US-dollar lines) is not expected "
                  "in a US project: its legs are read as such a transfer "
                  "journal, never joined on the broker's pairing alone."),
+            Rule("US-XLIST-02",
+                 "Each listing's symbol is read from the evidence, not "
+                 "the row currency alone: Questrade and RBC write a bare "
+                 "ticker and a currency, and a broker may file one "
+                 "listing on the other currency's row (Questrade files "
+                 "interlisted shares that arrived from another broker "
+                 "under the TSX ticker on a USD row). Such a symbol is "
+                 "the other listing (ROOT.US read as ROOT.TO) when its "
+                 "transfer-in is the unique arrival of a transfer out of "
+                 "the same quantity within 5 days, under an EQUAL name, "
+                 "of the same ticker's other listing or of ANOTHER ticker "
+                 "on the same currency's listing (two US tickers never "
+                 "name one company's identical shares); or, for shares "
+                 "that arrived on a USD row by a transfer the books do "
+                 "not pair, when ROOT.TO is in the project's books under "
+                 "an equal name (shares bought at the broker keep the "
+                 "listing its USD trade rows name). Never when a ticker.map rule names the "
+                 "symbol (`DISTINCT ROOT.US ROOT.TO` keeps the row "
+                 "currency's listing), when another broker that names "
+                 "its listings trades ROOT.US, when a rename row joins "
+                 "the two tickers, or when the account also holds the "
+                 "other listing in another currency (then a TOBASE line "
+                 "is suggested). Every row of the symbol in that "
+                 "broker's exports of the account takes the listing; "
+                 "each correction is a Warning, and `taxjson ticker-map "
+                 "--suggest` shows the equivalent explicit lines."),
             Rule("US-BASIS-07",
                  "Accounts typed \"sheltered\" (an IRA, Roth IRA, "
                  "401(k)...) are tracked but kept out of the filing "

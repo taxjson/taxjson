@@ -477,7 +477,7 @@ def _journal_listing(ctx: QtAccountContext, helper, sym: str, cur: str,
 
 def _plan_qt_journals(ctx: QtAccountContext, helper) -> None:
     """Pair the BRW currency-journal legs of one account (tax-logic
-    CA-XLIST-02): an out-leg "<NAME> JOURNAL POSITION TO USD" (-q, in
+    CA-XLIST-03): an out-leg "<NAME> JOURNAL POSITION TO USD" (-q, in
     CAD) and an in-leg "<NAME> JOURNAL POSITION FROM CAD BOOK VALUE: $X
     CNV@ r" (+q, in USD) — or TO CAD / FROM USD the other way — of the
     same Account #, day, description and quantity are one journal
@@ -1568,7 +1568,7 @@ class QuestradeBrokerage(BaseBrokerage):
                     if _jl.get('pair'):
                         # The pair's id: `taxjson run` joins the two lines
                         # as a ticker.map JOURNAL line would (Canada,
-                        # tax-logic CA-XLIST-02; lib/cross_listings).
+                        # tax-logic CA-XLIST-03; lib/cross_listings).
                         _jtx['journal_pair'] = _jl['pair']
                     if _bv:
                         _jtx['book_value'] = parse_strict_number(

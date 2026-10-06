@@ -13,8 +13,21 @@
   US-dollar line (the account's own USD rows, else `SYMBOL.U.TO` by the TSX
   convention in `data/markets.toml`), books the code under that line (in the
   one internal-codes note), and a Canadian run joins the two lines as a
-  ticker.map `JOURNAL` line would (tax-logic CA-XLIST-02). A leg with no
+  ticker.map `JOURNAL` line would (tax-logic CA-XLIST-03). A leg with no
   partner is an ATTENTION line naming both row shapes.
+
+- **A Questrade or RBC symbol filed on the other currency's row is read as
+  the listing the books show.** Questrade's website export files interlisted
+  shares that arrived from another broker under the TSX ticker on a USD row;
+  the listing came from the currency, so the transfer-in became a `.US`
+  listing that does not exist and the cross-listing join pooled the company
+  under it. When the transfer journal pairs it with another US ticker's
+  transfer out (or the same ticker's other listing) under an equal name, or
+  shares that arrived by an unpaired transfer have their `.TO` listing in the
+  books under an equal name, every row of the
+  symbol is booked as the `.TO` listing, with a Warning naming the
+  `DISTINCT` line that undoes it; `taxjson ticker-map --suggest` shows the
+  explicit lines (tax-logic CA-XLIST-02 / US-XLIST-02).
 
 - **Cross-listing auto-join: a dealer's trade-confirmation wording is no longer
   part of the security name.** An RBC or Questrade trade row's
