@@ -194,6 +194,18 @@ def from_symbol_codes(cache: Path) -> List[Suggestion]:
     return out
 
 
+def from_listing_suffix(cache: Path) -> List[Suggestion]:
+    """The explicit lines of the listings `taxjson run` read from the
+    evidence, not the row currency (lib/listing_suffix)."""
+    from taxjson.lib import listing_suffix as LS
+    out = []
+    for line, reason in LS.suggestions(cache):
+        ln = _clean(line)
+        if ln:
+            out.append(Suggestion(ln, reason, f"work/*{LS.SUFFIX}"))
+    return out
+
+
 def gather(root: Path) -> List[Suggestion]:
     """Every suggestion in the project's work/ (deduplicated by line, the
     first source's reason kept), in a stable order."""
@@ -202,6 +214,7 @@ def gather(root: Path) -> List[Suggestion]:
     if cache.is_dir():
         found += from_cross_listings(cache)
         found += from_symbol_codes(cache)
+        found += from_listing_suffix(cache)
         for p in sorted(cache.glob("*.diag")):
             found += from_diag(p, f"work/{p.name}")
     out: List[Suggestion] = []

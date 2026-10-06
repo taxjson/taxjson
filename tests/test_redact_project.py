@@ -202,7 +202,7 @@ class TestRedactProject(unittest.TestCase):
         self.assertIn("Warning: inputs/margin/statement.xlsx not copied",
                       r.stderr)
         # Counts only: no identifier is printed except in the name map.
-        no_map = re.sub(r"(?m)^  inputs/.*→.*$", "", r.stdout + r.stderr)
+        no_map = re.sub(r"(?m)^(?:  )?inputs/.*→.*$", "", r.stdout + r.stderr)
         for s in SECRETS:
             self.assertNotIn(s, no_map)
 

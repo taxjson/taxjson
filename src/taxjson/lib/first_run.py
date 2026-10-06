@@ -357,8 +357,20 @@ def render(doc: Dict[str, Any], *, mh_name: str = "missing_history.json",
     """The summary's lines (none when clean), on the run's console
     (docs/output-style.md, The run's console): a `==> ` heading, one
     `Warning:` (a number the totals miss) or `Info:` (a check not yet
-    made) per finding — its wrapped lines two spaces in; one line each
-    when nothing wraps — and the closing `Info:` line."""
+    made) per finding — its wrapped lines flush-left, a blank line after
+    a finding of more than one line; one line each when nothing wraps —
+    and the closing `Info:` line."""
+    from taxjson.lib import out
+    return out.join_blocks(render_blocks(doc, mh_name=mh_name,
+                                         width_=width_))
+
+
+def render_blocks(doc: Dict[str, Any], *,
+                  mh_name: str = "missing_history.json",
+                  width_: Optional[int] = None) -> List[List[str]]:
+    """render() as its entries (the heading, each finding, the closing
+    line), each a list of lines: lib/out.show_blocks prints them with a
+    blank line after an entry of more than one line."""
     if is_clean(doc):
         return []
     from taxjson.lib import out
@@ -396,10 +408,11 @@ def render(doc: Dict[str, Any], *, mh_name: str = "missing_history.json",
                      f"holding with no purchase in your files?): "
                      f"{_names(inc)}. Run `taxjson sanity`."))
     w = out.width() if width_ is None else width_
-    lines = ["==> Before you trust these numbers (docs/getting-started.md, "
-             "step 5)"]
+    hang = "" if w > 0 else "  "
+    blocks = [["==> Before you trust these numbers "
+               "(docs/getting-started.md, step 5)"]]
     for kind, it in items:
-        lines += out.wrap(f"{kind}: {it}", w, "", "  ")
-    lines += out.wrap(f"Info: Then run `taxjson checklist`. Every step is "
-                      f"in {GUIDE}.", w, "", "  ")
-    return lines
+        blocks.append(out.wrap(f"{kind}: {it}", w, "", hang))
+    blocks.append(out.wrap(f"Info: Then run `taxjson checklist`. Every "
+                           f"step is in {GUIDE}.", w, "", hang))
+    return blocks

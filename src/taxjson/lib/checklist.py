@@ -2196,7 +2196,15 @@ def evaluate(ctx: Ctx, only: Optional[List[str]] = None,
 
 def stderr_progress(sid: str, cmd: str) -> None:
     """Default progress line: what is being checked, on stderr so that
-    `--json` stdout stays machine-readable."""
+    `--json` stdout stays machine-readable. Shown to a person it is a
+    step (`==> Checking sanity (taxjson sanity)`, docs/output-style.md,
+    The run's console); captured (width 0), the old line."""
+    from taxjson.lib import out
+    if out.width(sys.stderr) > 0:
+        out.show(out.wrap(f"==> Checking {sid} ({cmd})", None, "", "",
+                          stream=sys.stderr), sys.stderr)
+        sys.stderr.flush()
+        return
     print(f"  checking {sid} ({cmd}) ...", file=sys.stderr, flush=True)
 
 

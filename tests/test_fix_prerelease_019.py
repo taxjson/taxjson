@@ -49,7 +49,7 @@ class TestPrintable(unittest.TestCase):
         self.assertEqual(out.wrap(f"sold {SYM}", 0), [f"sold {SYM}"])
         self.assertEqual(out.message("note", SYM, details=[SYM],
                                      width_=100),
-                         [f"Info: {SHOWN}", f"  {SHOWN}"])
+                         [f"Info: {SHOWN}", f"{SHOWN}"])
         self.assertEqual(out.message("note", SYM, width_=0),
                          [f"note: {SYM}"])
         for width, want in (("100", SHOWN), ("0", SYM)):

@@ -58,12 +58,18 @@ def _env():
 
 
 def _messages(text):
-    """The console's message blocks (a labelled line and its two-space
-    continuations), steps left out."""
+    """The console's message blocks (a labelled line and the lines that
+    continue it, flush-left), steps and blank lines left out."""
     out, cur = [], None
     for ln in text.splitlines():
-        if ln.startswith("  ") and cur is not None:
+        if (ln.strip() and cur is not None
+                and not re.match(r"(?:==> |Info: |Warning: |Error: )", ln)):
             cur.append(ln)
+            continue
+        if not ln.strip():
+            if cur is not None:
+                out.append("\n".join(cur))
+            cur = None
             continue
         if cur is not None:
             out.append("\n".join(cur))

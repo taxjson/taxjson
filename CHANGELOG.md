@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- **A Questrade or RBC symbol filed on the other currency's row is read as
+  the listing the books show.** Questrade's website export files interlisted
+  shares that arrived from another broker under the TSX ticker on a USD row;
+  the listing came from the currency, so the transfer-in became a `.US`
+  listing that does not exist and the cross-listing join pooled the company
+  under it. When the transfer journal pairs it with another US ticker's
+  transfer out (or the same ticker's other listing) under an equal name, or
+  shares that arrived by an unpaired transfer have their `.TO` listing in the
+  books under an equal name, every row of the
+  symbol is booked as the `.TO` listing, with a Warning naming the
+  `DISTINCT` line that undoes it; `taxjson ticker-map --suggest` shows the
+  explicit lines (tax-logic CA-XLIST-02 / US-XLIST-02).
+
 - **Cross-listing auto-join: a dealer's trade-confirmation wording is no longer
   part of the security name.** An RBC or Questrade trade row's
   "UNSOLICITED WE ACTED AS PRINCIPAL AVG PRICE SHOWN-DETAILS ON REQ DA" left the
@@ -18,6 +31,18 @@
 - **taxjson.toml: the file header sits on `[settings]`, and a blank line
   separates `[settings]` from its first group**, so the table line stands apart
   from the data. `taxjson format` applies it to an existing file.
+- **Wider output.** On a terminal, text now wraps at the terminal's full
+  width, up to 160 columns (it was capped at 100); piped or redirected it
+  wraps at 120 (was 100). `TAXJSON_WIDTH` still sets the width, and 0 still
+  turns wrapping off. What the run writes to `work/` and `reports/` is
+  unchanged.
+- **Messages without indented continuation lines.** On the `taxjson run`
+  console and in every command's `Info:` / `Warning:` / `Error:` messages, a
+  message that wraps, its details and its `- ` items continue at the left
+  margin instead of two spaces in, and a message that takes more than one
+  line is followed by one blank line (a one-line message or a `==>` step is
+  not; the output never ends with a blank line). `taxjson checklist` shows
+  its progress as `==> Checking ...` steps.
 
 ### Added
 
