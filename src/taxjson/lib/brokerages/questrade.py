@@ -423,7 +423,7 @@ def scan_code_uses(paths, *, helper=None) -> list:
     key, the row currencies (listing currency for an EXCHANGE RATE row)
     and each transfer-in's (date, quantity) — what `taxjson run` needs
     to infer the ticker from the project's other exports."""
-    from taxjson.lib.symbol_codes import CodeUse
+    from taxjson.lib.symbol_codes import CodeUse, desc_cut
     helper = helper or QuestradeBrokerage()
     paths = [Path(p) for p in paths]
     if not any(_INTERNAL_CODE_RE.match(
@@ -456,6 +456,7 @@ def scan_code_uses(paths, *, helper=None) -> list:
             key = _get_desc_key(desc)
             if transfer and key and not u.name:
                 u.name = key
+                u.name_cut = desc_cut(desc, key)
             if cur and cur not in u.currencies:
                 u.currencies.append(cur)
             if not transfer:
@@ -474,7 +475,9 @@ def scan_code_uses(paths, *, helper=None) -> list:
         for _ln, row in _read_qt_rows(Path(k)):
             sym = (row.get('Symbol') or '').strip().lstrip('.').upper()
             if sym in uses and not uses[sym].name:
-                uses[sym].name = _get_desc_key(row.get('Description') or '')
+                desc = row.get('Description') or ''
+                uses[sym].name = _get_desc_key(desc)
+                uses[sym].name_cut = desc_cut(desc, uses[sym].name)
     return [uses[c] for c in sorted(uses)]
 
 

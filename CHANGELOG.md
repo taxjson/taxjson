@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Questrade internal symbol codes pair with more transfers.** The names
+  of the two legs of a transfer are now compared with common abbreviations
+  read as the word (RES / RESOURCES, MFG, HLDGS, INTL, `N V` / NV, `&` /
+  AND ...) and broker boilerplate cut (a depositary's `REPSTG 5 COM ...`,
+  `TRANSFER IN INTERACTIVE BROKER...`, IB's `/CAYMAN ISL` domicile); a
+  class letter or ORDINARY / ADR stated by one broker only no longer
+  refuses a transfer that pairs by quantity and date (two different ones
+  still do). A code named only by a description Questrade cut off matches
+  the one listing whose Questrade description in another account starts
+  with it. Another share class or company is still never joined, and a
+  near miss names the `GLOBAL` line to add. `symbol_codes.names_agree` is
+  the one test, for reuse.
+
 ### Changed
 
 - **taxjson.toml descriptions use the full 100-column width.** `taxjson init` and
