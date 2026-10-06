@@ -42,7 +42,8 @@ def ok_listing(listing, cur):
 
 def use(code, desc, arrivals=(), cur='USD', cut=False):
     """A code as scan_code_uses builds it: the description KEY."""
-    return SC.CodeUse(code=code, name=_get_desc_key(desc), currencies=[cur],
+    return SC.CodeUse(code=code, name=SC.questrade_name(desc),
+                      currencies=[cur],
                       arrivals=list(arrivals), rows=1, name_cut=cut)
 
 
@@ -153,14 +154,18 @@ class TestSixRealShapes(unittest.TestCase):
         self.assertEqual(r['resolved']['N000003']['symbol'], 'QZNU.US')
 
     def test_truncated_dividend_name_matches_the_same_brokers_full_name(self):
-        # A dividend-only code whose description the export cut mid-word;
-        # the full description is on another account's Questrade rows.
+        # A dividend-only code whose description the export cut mid-word
+        # at its width; the full description is on another account's
+        # Questrade rows.
         full = ('QZSEL SECTOR SPDR TRUST STATE STREET HEALTH CARE SELECT '
                 'SECTOR SPDR ETF')
-        r = res([use('S000006', 'QZSEL SECTOR SPDR TRUST STATE STREET '
-                                'HEALTH CARE SELECT SEC')],
-                names=[entry('QZXLV.US', full, acct='tfsa',
-                             broker='questrade')])
+        short = 'QZSEL SECTOR SPDR TRUST STATE STREET HEALTH CARE SELECT SEC'
+        names = [entry('QZXLV.US', full, acct='tfsa', broker='questrade')]
+        # No width evidence (the row is not exactly the export's width):
+        # a word that looks cut is not enough (pre-release review M2).
+        self.assertEqual(res([use('S000006', short)], names=names)
+                         ['resolved'], {})
+        r = res([use('S000006', short, cut=True)], names=names)
         got = r['resolved']['S000006']
         self.assertEqual((got['symbol'], got['how']), ('QZXLV.US', 'name'))
         self.assertIn('cut off', got['evidence'])
@@ -245,10 +250,13 @@ class TestStillRefused(unittest.TestCase):
                              names=[entry('QZXLV.US', full)])['resolved'],
                          {})
         self.assertFalse(SC.names_agree(cut, full, mode="name_only")[0])
+        # The same broker's, but no evidence the export cut it: never.
+        self.assertFalse(SC.names_agree(cut, full, mode="name_only",
+                                        same_broker=True)[0])
         self.assertTrue(SC.names_agree(cut, full, mode="name_only",
-                                       same_broker=True)[0])
+                                       same_broker=True, a_cut=True)[0])
         # Two listings it is a prefix of: never guessed.
-        r = res([use('X000012', cut)],
+        r = res([use('X000012', cut, cut=True)],
                 names=[entry('QZXLV.US', full, **qt),
                        entry('QZXLR.US', full.replace('ETF', 'FUND'), **qt)])
         self.assertEqual(r['resolved'], {})
@@ -333,13 +341,14 @@ class TestRowWordingIsNotTheName(unittest.TestCase):
         for row in (self.NAME + " CASH DIV ON 49 SHS REC 09/21/26 PAY 09/23/26",
                     self.NAME + " SUBST PAY ON 41 SHS REC 09/21/26 PAY 09/23/26"
                     " IN LIEU OF DIVIDEND"):
-            ok, why = S.names_agree(row, self.NAME, "name_only",
-                                    same_broker=True)
+            ok, why = S.names_agree(S.questrade_name(row), self.NAME,
+                                    "name_only", same_broker=True)
             self.assertTrue(ok, why)
 
     def test_class_still_decides(self):
         from taxjson.lib import symbol_codes as S
-        ok, _ = S.names_agree("QZALPHA INC CLASS A CASH DIV ON 5 SHS",
+        ok, _ = S.names_agree(S.questrade_name(
+                                  "QZALPHA INC CLASS A CASH DIV ON 5 SHS"),
                               "QZALPHA INC CLASS C", "name_only",
                               same_broker=True)
         self.assertFalse(ok)

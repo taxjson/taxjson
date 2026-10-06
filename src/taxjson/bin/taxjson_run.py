@@ -2171,8 +2171,9 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
     to work/cross_listings.state, and — when any pair is joined — the map
     the merge stages read becomes work/ticker.map.effective (the
     project's ticker.map plus a TOBASE line per pair). Returns the map
-    path the account's merge stages use. One `Info:` line per account
-    names the pairs joined through its legs."""
+    path the account's merge stages use. One `Warning:` per account
+    names the pairs joined through its legs and the `DISTINCT` line that
+    undoes each."""
     from taxjson.lib import cross_listings as XL
     key = cache.resolve()
     if key not in _XLIST_THIS_RUN:
@@ -2224,13 +2225,10 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
             path = ticker_map
         _XLIST_THIS_RUN[key] = (path, result)
     path, result = _XLIST_THIS_RUN[key]
-    line = XL.joined_note(name, result["joined"])
-    if line:
-        _say_once(("xlist", name), "note", line,
-                  "Their transfer journal pairs them and their names "
-                  "agree: booked as one security (a ticker.map rule "
-                  "renaming either listing wins; `DISTINCT A B` keeps the "
-                  "pair apart).",
+    msg = XL.joined_note(name, result["joined"])
+    if msg:
+        # A Warning: the join changes the books (pre-release review H1).
+        _say_once(("xlist", name), "warning", msg[0], *msg[1],
                   indent="  ", file=sys.stdout)
     return path
 

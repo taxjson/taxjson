@@ -25,6 +25,39 @@
 
 ### Fixed
 
+- **Two listings are joined by their transfer journal only when their names are
+  equal.** The automatic join used to accept a name that is part of the other's
+  or states a share class the other leaves out, so "<NAME> CORP" could join
+  "<NAME> CORP CL B", a partnership's LP units its exchangeable corporation, a
+  bank another issuer whose name adds "OF CANADA", and an index ETF its
+  currency-hedged line. Now every word counts once case, punctuation,
+  abbreviations, broker wording and the words COMMON / SHARES are set aside —
+  the corporate form (LP, CORP, TRUST, FUND) and every designator included;
+  anything else stays a `taxjson ticker-map --suggest` line. Each join is now a
+  `Warning:` naming the pair and the `DISTINCT` line that undoes it.
+
+- **A Questrade code is no longer matched to a longer name without evidence of a
+  cut.** A description whose last word is a complete word starting a longer one
+  (PARTNERS / PARTNERSHIP) matched that longer name; a cut-off match now needs
+  the description to be exactly the export's width.
+
+- **Another broker's security name keeps its class.** Questrade's event wording
+  (dividend, transfer and "COMMON STOCK ..." suffixes) was cut from every
+  broker's names, so "<NAME> INC COMMON STOCK CLASS C" lost its class. It is now
+  cut from Questrade descriptions only, a designator after COMMON STOCK is kept,
+  and a one-sided class letter or ORDINARY / ADR is tolerated only when the
+  transfer pairs with no other leg and no designator went with cut-off wording.
+
+- **A name with a very long run of spaces is read at once** (it took over a
+  minute).
+
+- **A joined or suggested listing is one ticker.map token**: a symbol holding
+  `#` or a Unicode line separator is never written into the map.
+
+- **`taxjson ticker-map --suggest` no longer offers a rule quoted inside a
+  broker's description** in a message; only the message's own suggestion
+  counts.
+
 - **A Questrade dividend row's code is matched by the security's name, not the
   event wording.** "<NAME> CASH DIV ON … SHS REC … PAY …" and "<NAME> SUBST PAY ON …
   IN LIEU OF DIVIDEND" are compared as <NAME>, so the same security's plain name
@@ -53,10 +86,11 @@
 - **Two listings moved by a transfer journal are joined automatically.** When a
   broker journals a position from one listing to another (an out-leg of one
   symbol and an in-leg of another, the same quantity, within 5 days, in your
-  accounts), the pair is unique and the exports' security names agree on the
-  company and the share class, `taxjson run` books the two listings as one
-  security, as a ticker.map `TOBASE` line would, and says so in one `Info:`
-  line per account. A ticker.map rule renaming either listing, or a
+  accounts), the pair is unique and the exports' security names are equal
+  word for word (the corporate form and every share designator included),
+  `taxjson run` books the two listings as one security, as a ticker.map
+  `TOBASE` line would, and says so in one `Warning:` per account naming each
+  pair and the `DISTINCT` line that undoes it. A ticker.map rule renaming either listing, or a
   `DISTINCT` line for the pair, wins; anything less certain stays a
   suggestion. Every equity
   account is now read in the run's first pass when there are two or more.

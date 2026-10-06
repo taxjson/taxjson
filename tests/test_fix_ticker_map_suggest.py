@@ -105,7 +105,7 @@ class TestCommand(unittest.TestCase):
             self.assertIn("TICKER.MAP SUGGESTIONS — 1 from the last run",
                           r.stdout)
             self.assertIn("\nTOBASE SAMPQ.TO SAMPR.TO\n", r.stdout)
-            self.assertIn("the names differ: another issue or kind",
+            self.assertIn("another name of the listings states another share",
                           " ".join(r.stdout.split()))
             js = json.loads(_tjs(root, "ticker-map", "--suggest",
                                  "--json").stdout)

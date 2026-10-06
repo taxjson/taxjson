@@ -16,12 +16,16 @@ line would, when the evidence is unambiguous:
   brokers), the same quantity, dated within PAIR_DAYS of each other, and
   neither leg pairs with any other candidate (after the same-symbol legs
   cancel each other);
-* the security names agree: some name the exports give X and some name
-  they give Y normalise to the same company and the same share
-  (lib/symbol_codes.names_agree, mode "pairing"), and no two of their
-  names disagree on the share (class letter, voting, form, preferred,
-  unit ...) — an ADR never joins its ordinary shares (one stated by a
-  single name is enough to refuse), class A never joins class B;
+* the security names are EQUAL: some name the exports give X and some
+  name they give Y are the same word for word once normalised
+  (lib/symbol_codes.exact_name: case, punctuation, abbreviations, broker
+  boilerplate and the generic share words set aside) — every share
+  designator and the corporate form included: LP is not CORP, TRUST is
+  not FUND, "QZCO CORP" is not "QZCO CORP CL B", "QZALPHA BANK" is not
+  "QZALPHA BANK OF CANADA", and a word such as HEDGED must be on both
+  sides too. No subset of words, no designator stated by one name only.
+  And every other name either listing has states the same designators
+  and corporate form (a listing also named "... CL B" never joins);
 * no ticker.map rule renames or deletes X or Y (TOBASE / JOURNAL /
   GLOBAL / RENAME / DELETE, either side) and no DISTINCT line pairs the
   two: the user's map always wins, DISTINCT keeps them apart;
@@ -31,6 +35,8 @@ Everything else stays a suggestion (`taxjson ticker-map --suggest`). The
 joins are written to work/cross_listings.state (JSON) and appended, as
 TOBASE lines, to the effective map the merge stages read
 (work/ticker.map.effective: the project's ticker.map plus those lines).
+A join changes the books, so the run says each one as a Warning naming
+the pair and the ticker.map line that undoes it (`DISTINCT X Y`).
 No security data is kept here: names, symbols and dates come from the
 user's own exports.
 """
@@ -117,10 +123,11 @@ def _parsed_files(cache: Path, acct: str) -> List[Tuple[str, Path, bool]]:
 def gather(cache: Path, accounts: Iterable[str]
            ) -> Tuple[List[Leg], Dict[str, Set[Tuple[str, ...]]],
                       Dict[Tuple[str, ...], str]]:
-    """(transfer legs, symbol -> normalised names, normalised name -> the
-    name as written) from every account's parsed exports in work/."""
+    """(transfer legs, symbol -> normalised names (symbol_codes.
+    exact_name), normalised name -> the name as written) from every
+    account's parsed exports in work/."""
     from taxjson.lib.symbol_codes import (_CONTROL_RE, _plain_listing,
-                                          _row_name, is_code, name_tokens)
+                                          _row_name, exact_name, is_code)
     legs: List[Leg] = []
     names: Dict[str, Set[Tuple[str, ...]]] = {}
     shown: Dict[Tuple[str, ...], str] = {}
@@ -149,7 +156,7 @@ def gather(cache: Path, accounts: Iterable[str]
                 sym = str(t.get("symbol") or "").upper()
                 if not _plain_listing(sym) or is_code(sym):
                     continue
-                toks = name_tokens(_row_name(t, broker))
+                toks = exact_name(_row_name(t, broker))
                 if toks:
                     names.setdefault(sym, set()).add(toks)
                     shown.setdefault(toks, _CONTROL_RE.sub(
@@ -195,36 +202,28 @@ def _same_qty(a: Leg, b: Leg) -> bool:
 
 def _names_verdict(nx: Set[Tuple[str, ...]], ny: Set[Tuple[str, ...]],
                    shown: Dict[Tuple[str, ...], str]) -> str:
-    """"" when the two listings' names agree, else why not. Each pair of
-    their names is put to lib/symbol_codes.names_agree (mode "pairing":
-    the legs already pair by quantity and date): some pair must agree,
-    and no pair may refuse on the share (another class, voting rights,
-    form or kind of security). Stricter than a transfer of one listing:
-    an ADR / ordinary-share designator stated by one name only refuses
-    too — a depositary receipt is never joined to its shares here."""
-    from taxjson.lib.symbol_codes import _FORM_MARKS, names_agree
+    """"" when the two listings' names agree, else why not. Exact
+    equality only (lib/symbol_codes.exact_name): some name of X must be
+    some name of Y word for word — the corporate form and every share
+    designator included — and no other name of either listing may state
+    other designators or another corporate form than that shared name
+    (symbol_codes.exact_marks). Anything less stays a suggestion."""
+    from taxjson.lib.symbol_codes import exact_marks
     if not nx or not ny:
         return "no security name for " + ("either listing" if not nx
                                           and not ny else "one listing")
-    agreed = False
-    refusal = ""
-    for a in sorted(nx):
-        for b in sorted(ny):
-            ok, why = names_agree(shown.get(a, " ".join(a)),
-                                  shown.get(b, " ".join(b)), "pairing")
-            fa = {m for m in a if m in _FORM_MARKS}
-            fb = {m for m in b if m in _FORM_MARKS}
-            if ok and fa != fb:
-                ok, why = False, ("a depositary receipt / ordinary share "
-                                  "named on one side only")
-            if ok:
-                agreed = True
-            elif why != "different companies" and not refusal:
-                refusal = why
-    if refusal:
-        return f"the names differ: {refusal}"
-    if not agreed:
-        return "the names do not match"
+    both = sorted(nx & ny)
+    if not both:
+        a, b = min(nx), min(ny)
+        return (f"the names are not equal word for word "
+                f"({shown.get(a, ' '.join(a))!r} vs "
+                f"{shown.get(b, ' '.join(b))!r})")
+    marks = exact_marks(both[0])
+    for n in sorted(nx | ny):
+        if exact_marks(n) != marks:
+            return (f"another name of the listings states another share "
+                    f"or corporate form ({shown.get(n, ' '.join(n))!r} vs "
+                    f"{shown.get(both[0], ' '.join(both[0]))!r})")
     return ""
 
 
@@ -347,9 +346,13 @@ def effective_map_text(ticker_map: Optional[Path],
         "\n".join(lines) + "\n"
 
 
-def joined_note(account: str, joined: Iterable[Pair]) -> Optional[str]:
-    """One line per account: the pairs joined through its legs."""
-    items = []
+def joined_note(account: str, joined: Iterable[Pair]
+                ) -> Optional[Tuple[str, List[str]]]:
+    """(headline, details) of the one Warning per account naming the
+    pairs joined through its legs, each with the ticker.map line that
+    undoes it; None when there are none."""
+    items: List[str] = []
+    undo: List[str] = []
     seen = set()
     for p in sorted(joined, key=lambda p: (p.out.date, p.frm)):
         if account not in (p.out.account, p.into.account):
@@ -360,6 +363,15 @@ def joined_note(account: str, joined: Iterable[Pair]) -> Optional[str]:
         seen.add(k)
         items.append(f"{p.out.symbol} ↔ {p.into.symbol} (transfer "
                      f"{p.out.date})")
+        undo.append(f"- {p.out.symbol} ↔ {p.into.symbol}: their names are "
+                    f"the same word for word "
+                    f"({p.names[0] or p.names[1]!r}); if they are not one "
+                    f"security, add `DISTINCT {p.out.symbol} {p.into.symbol}` "
+                    f"to ticker.map")
     if not items:
         return None
-    return f"{account}: joined as one security: " + ", ".join(items)
+    return (f"{account}: joined as one security by their transfer journal: "
+            + ", ".join(items),
+            ["Booked as one security (one cost pool, one security for the "
+             "loss rules), as a ticker.map TOBASE line would — this "
+             "changes your books."] + undo)

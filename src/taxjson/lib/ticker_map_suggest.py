@@ -42,6 +42,13 @@ _PLACEHOLDERS = frozenset("""
 FROM TO OLD NEW SYMBOL SYM ROOT CODE A B X Y N YAHOO_ID YAHOO_SYMBOL
 TICKER CUR YYYY-MM-DD COIN LISTING
 """.split())
+# A quoted span (a broker's description or file name, as Python's repr
+# writes it: '...' or "..."): text from an export, never a message's own
+# suggestion — a description "QZ `GLOBAL A B` CO" must not become a map
+# line. A quote opens after a non-word character (a possessive's
+# apostrophe never opens one).
+_QUOTED_RE = re.compile(r"""(?<![A-Za-z0-9])(?:'(?:[^'\\\n]|\\.)*'"""
+                        r"""|"(?:[^"\\\n]|\\.)*")(?![A-Za-z0-9])""")
 _HEAD_RE = re.compile(r"^(?:[\w.-]+: )?(?:warning|note|error): "
                       r"(?:ATTENTION: |UNBOOKED: )?(?:NOTE: )?")
 
@@ -117,6 +124,11 @@ def _messages(text: str) -> Iterable[Tuple[str, List[str]]]:
         yield head, cont
 
 
+def _unquoted(text: str) -> str:
+    """`text` without its quoted spans (_QUOTED_RE)."""
+    return _QUOTED_RE.sub(" ", text)
+
+
 def from_diag(path: Path, rel: str) -> List[Suggestion]:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -124,10 +136,11 @@ def from_diag(path: Path, rel: str) -> List[Suggestion]:
         return []
     out: List[Suggestion] = []
     for head, cont in _messages(text):
-        whole = " ".join([head] + [c.strip() for c in cont])
+        whole = _unquoted(" ".join([head] + [c.strip() for c in cont]))
         found = [m.group(1) for m in _TICK_RE.finditer(whole)]
         found += [m.group(1) for m in _ADD_RE.finditer(whole)]
-        found += [m.group(1) for c in cont for m in [_BARE_RE.match(c)] if m]
+        found += [m.group(1) for c in cont
+                  for m in [_BARE_RE.match(_unquoted(c))] if m]
         for f in found:
             line = _clean(f)
             if line:
@@ -171,7 +184,7 @@ def from_symbol_codes(cache: Path) -> List[Suggestion]:
             if not isinstance(info, dict):
                 continue
             detail = str(info.get("detail") or "")
-            for m in _TICK_RE.finditer(detail):
+            for m in _TICK_RE.finditer(_unquoted(detail)):
                 line = _clean(m.group(1))
                 if line:
                     out.append(Suggestion(

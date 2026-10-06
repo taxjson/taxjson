@@ -27,7 +27,8 @@ before the account is parsed, in this order, and records the evidence:
    normalised name (name_tokens) EQUALS the name of exactly ONE listing
    known elsewhere in the project's books — share designators
    included — or, failing that, exactly one listing of the SAME
-   broker's descriptions of which the code's is a cut-off prefix
+   broker's descriptions of which the code's is a cut-off prefix, the
+   code's description being exactly the export's width
    (names_agree mode="name_only", same_broker);
 3. otherwise the code stays as exported: one ATTENTION line per code
    with the GLOBAL line to add (and a quantity/date or near-name
@@ -168,6 +169,9 @@ _FORM_MARKS = frozenset(("~ADR", "~ORDINARY", "~UNSPONSORED"))
 # A name the export cut right after CL / CLASS: its class is unknown, so
 # it agrees only with a name cut the same way.
 _CUT_CLASS = "~CLASS?"
+# A name whose cut-off boilerplate held a share designator (name_tokens):
+# it agrees only on designators both names state.
+_CUT_MARK = "~!"
 
 # The width Questrade's website export cuts a description at (the rows of
 # a transferred-in code): a description of exactly this many characters,
@@ -225,11 +229,22 @@ def name_words(text: str) -> Tuple[Tuple[str, ...], bool]:
     name ("INTERACTIVE BROKERS ..."). `chopped`: something was cut off
     the end, so the name no longer ends where the export cut it. Every
     word is kept in order (the generic words too): the truncation check
-    compares word sequences."""
-    s = _CONTROL_RE.sub(" ", str(text or "").upper())
-    s2 = _strip_row_wording(s)
-    cut_wording = s2 != s
-    s = s2
+    compares word sequences.
+
+    No broker's event wording is cut here: a Questrade row description
+    is read through questrade_name first (its dividend / transfer / trade
+    wording is Questrade's own; another broker's name is the name)."""
+    words, chopped, _tail = _name_words_tail(text)
+    return words, chopped
+
+
+def _name_words_tail(text: str
+                     ) -> Tuple[Tuple[str, ...], bool, Tuple[str, ...]]:
+    """name_words plus the words cut off the end (the boilerplate and
+    everything after it)."""
+    # Whitespace collapsed FIRST: the patterns below are quadratic on a
+    # long run of spaces (40,000 took over a minute).
+    s = " ".join(_CONTROL_RE.sub(" ", str(text or "").upper()).split())
     for rx, rep in _PHRASES:
         s = rx.sub(rep, s)
     s = _DOMICILE_RE.sub(_keep_domicile, s)
@@ -241,26 +256,113 @@ def name_words(text: str) -> Tuple[Tuple[str, ...], bool]:
                     and (i == len(words) - 1
                          or words[i + 1] in _TRANSFER_NEXT))
                 or _dealer_at(words, i)):
-            return tuple(words[:i]), True
-    return tuple(words), cut_wording
+            return tuple(words[:i]), True, tuple(words[i:])
+    return tuple(words), False, ()
 
 
 # A Questrade row describes the event after the security's name: "<NAME>
 # CASH DIV ON 49 SHS REC 09/21/26 PAY 09/23/26", "<NAME> SUBST PAY ON 41
-# SHS ... IN LIEU OF DIVIDEND". The parser's own description-key patterns
-# (questrade._DESC_NOISE_RES: dividend, distribution, tax, DRIP, split,
-# transfer and trade wording) cut that wording off, so the name compares
+# SHS ... IN LIEU OF DIVIDEND". The parser's own description key
+# (questrade._get_desc_key: dividend, distribution, tax, DRIP, split,
+# transfer and trade wording) cuts that wording off, so the name compares
 # as the security's name; a substitute payment's wording is added here
-# (the parser keeps it in its key on purpose).
+# (the parser keeps it in its key on purpose). Questrade's wording only:
+# another broker's name is never cut by these patterns.
 _SUBST_PAY_RE = re.compile(r"\s+SUBST(?:ITUTE)?\s+PAY(?:MENT)?\b.*$")
+# The one cut of the parser's key that is not event wording: "<NAME>
+# COMMON STOCK ..." — what follows may still name the share ("QZCO INC
+# COMMON STOCK CLASS C"), so its designators are carried into the name.
+_COMMON_STOCK_RE = re.compile(r"\s+COMMON\s+STOCK\b(.*)$")
+_CLASS_LETTER_RE = re.compile(r"\b(?:CL|CLASS)\s+([A-Z])\b")
 
 
-def _strip_row_wording(s: str) -> str:
-    from taxjson.lib.brokerages.questrade import _DESC_NOISE_RES
-    s = _SUBST_PAY_RE.sub("", s)
+def questrade_name(desc: str) -> str:
+    """The security name a Questrade row description gives: the parser's
+    description key (questrade._get_desc_key — its event wording cut),
+    without a substitute payment's wording, and with any share designator
+    the key's "COMMON STOCK ..." cut dropped carried back ("QZCO INC
+    COMMON STOCK CLASS C" is "QZCO INC CL C", never "QZCO INC")."""
+    from taxjson.lib.brokerages.questrade import (_DESC_NOISE_RES,
+                                                   _get_desc_key)
+    d = " ".join(str(desc or "").split())
+    key = " ".join(_SUBST_PAY_RE.sub("", _get_desc_key(d)).split())
+    if not key:
+        return key
+    # The tail the COMMON STOCK cut removes, once the event wording
+    # (cut first, as the key cuts it) is gone.
+    rest = _SUBST_PAY_RE.sub("", d.upper())
     for rx in _DESC_NOISE_RES:
-        s = rx.sub("", s)
-    return s.strip()
+        if "COMMON STOCK" in rx.pattern:
+            break
+        rest = rx.sub("", rest)
+    m = _COMMON_STOCK_RE.search(rest)
+    if not m:
+        return key
+    tail = m.group(1)
+    carried: List[str] = []
+    for c in _CLASS_LETTER_RE.findall(tail):
+        carried += ["CL", c]
+    carried += [w for w in _WORD_RE.findall(_CLASS_LETTER_RE.sub(" ", tail))
+                if w in _DESIGNATORS]
+    if carried and not (_marks(_tokens(carried))
+                        <= _marks(_tokens(_WORD_RE.findall(key)))):
+        key = f"{key} {' '.join(carried)}"
+    return key
+    m = _COMMON_STOCK_RE.search(d.upper())
+    if not m:
+        return key
+    tail = m.group(1)
+    carried: List[str] = []
+    for c in _CLASS_LETTER_RE.findall(tail):
+        carried += ["CL", c]
+    for w in _WORD_RE.findall(_CLASS_LETTER_RE.sub(" ", tail)):
+        if w in _DESIGNATORS:
+            carried.append(w)
+    have = set(_WORD_RE.findall(key))
+    extra = [w for w in carried if w not in have or w == "CL"]
+    if extra and " ".join(extra) not in key:
+        key = f"{key} {' '.join(extra)}"
+    return key
+
+
+# Spellings of one word folded for the exact comparison (exact_name):
+# the same word, never another corporate form.
+_EXACT_FOLD = {"CL": "CLASS", "INCORPORATED": "INC", "LIMITED": "LTD"}
+# The generic share words exact_name sets aside ("QZX INC COMMON SHARES"
+# is "QZX INC"); every other word counts, the corporate form included.
+_SHARE_WORDS = frozenset("COMMON COM STOCK STK SHARES SHARE SHS SHRS"
+                         .split())
+
+
+def exact_name(text: str) -> Tuple[str, ...]:
+    """A security name for an EXACT comparison (cross-listing joins,
+    tax-logic CA-XLIST-01 / US-XLIST-01): name_words (case, punctuation,
+    the abbreviation table, broker boilerplate), the generic share words
+    (COMMON, STOCK, SHARES ...) set aside and one spelling per word
+    (CL / CLASS, SUB / SUBORDINATE, SPONSORED ADR / ADR, INCORPORATED /
+    INC) — every other word kept in order: the corporate form (LP, CORP,
+    TRUST, FUND are different), each share designator, and words such
+    as HEDGED or OF. Boilerplate cut off with a designator in it is kept
+    (it names the share)."""
+    words, _chopped, cut_off = _name_words_tail(text)
+    if _cut_designators(cut_off):
+        words = words + cut_off
+    out: List[str] = []
+    for w in words:
+        if w in _SHARE_WORDS:
+            continue
+        w = _EXACT_FOLD.get(w, w)
+        w = _DESIGNATORS.get(w, w)
+        if not out or out[-1] != w:
+            out.append(w)
+    return tuple(out)
+
+
+def exact_marks(key: Iterable[str]) -> frozenset:
+    """The share designators, class letters and corporate-form words of
+    an exact_name key: what says WHICH security of an issuer it is."""
+    return frozenset(w for w in key if w in _DESIGNATORS.values()
+                     or w in _FORM or (len(w) == 1 and not w.isdigit()))
 
 
 def _is_mark_word(w: str) -> bool:
@@ -295,17 +397,32 @@ def name_tokens(text: str, cut: bool = False) -> Tuple[str, ...]:
     word may be a fragment, so it is left out (unless it is a designator
     or a lone letter); a name cut right after CL / CLASS has an unknown
     class (it then agrees with no name that is not cut the same way)."""
-    words, chopped = name_words(text)
-    tail = ()
+    words, chopped, cut_off = _name_words_tail(text)
+    tail: Tuple[str, ...] = ()
+    if _cut_designators(cut_off):
+        # A share designator went with the boilerplate cut off ("ADS
+        # EACH RPRSNTNG ONE CL A ORD"): this name never agrees on the
+        # strength of a designator stated by the other name only.
+        tail = (_CUT_MARK,)
     if cut and not chopped and words:
         if words[-1] in _CLASS_WORDS:
-            tail = (_CUT_CLASS,)
+            tail += (_CUT_CLASS,)
         elif not _is_mark_word(words[-1]):
             words = words[:-1]
     toks = _tokens(words)
     if tail:
         toks = _core(toks) + tuple(sorted(set(_marks(toks)) | set(tail)))
     return toks
+
+
+def _cut_designators(words: Iterable[str]) -> bool:
+    """A share designator among the words name_words cut off: a
+    designator word, or a class letter after CL / CLASS."""
+    ws = list(words)
+    return any(w in _DESIGNATORS
+               or (w in _CLASS_WORDS and k + 1 < len(ws)
+                   and len(ws[k + 1]) == 1 and not ws[k + 1].isdigit())
+               for k, w in enumerate(ws))
 
 
 def _core(tokens: Iterable[str]) -> Tuple[str, ...]:
@@ -343,7 +460,8 @@ def _companies_match(a: Tuple[str, ...], b: Tuple[str, ...]) -> bool:
 
 
 def _shown(marks: Iterable[str]) -> str:
-    return " ".join(sorted(m[1:] for m in marks)) or "none"
+    return " ".join(sorted(m[1:] for m in marks
+                           if m != _CUT_MARK)) or "none"
 
 
 def _share_agrees(a: Tuple[str, ...], b: Tuple[str, ...],
@@ -361,6 +479,10 @@ def _share_agrees(a: Tuple[str, ...], b: Tuple[str, ...],
     * the rest (NEW, PREFERRED, SERIES, UNIT, WARRANT, RIGHT, a class cut
       off by the export) must be equal."""
     ma, mb = _marks(a), _marks(b)
+    if ma == mb:
+        return True, ""
+    cut_off = _CUT_MARK in ma or _CUT_MARK in mb
+    ma, mb = ma - {_CUT_MARK}, mb - {_CUT_MARK}
     if ma == mb:
         return True, ""
     if mode == "name_only":
@@ -392,6 +514,10 @@ def _share_agrees(a: Tuple[str, ...], b: Tuple[str, ...],
                            f"{_shown(fb)})")
     elif fa or fb:
         notes.append(f"{_shown(fa or fb)} named on one side only")
+    if notes and cut_off:
+        return False, ("a share designator named on one side only, and "
+                       "the other name's designators were cut off with "
+                       "its broker wording")
     return True, "; ".join(notes)
 
 
@@ -417,12 +543,17 @@ def names_match(a: Tuple[str, ...], b: Tuple[str, ...]) -> bool:
 
 
 def _truncation_agrees(short: str, long: str, cut: bool) -> bool:
-    """`short` is `long` cut off by the export: its words are the first
-    words of `long`, its last word may be a fragment of the next one (a
-    word cut in the middle is itself the sign of the cut; a cut on a word
-    boundary needs `cut`, the caller's evidence that the export cut
-    `short` at its width), at least three strong words come before the
-    cut, and the part cut off holds no share designator."""
+    """`short` is `long` cut off by the export: `cut` — the caller's
+    evidence that the export cut `short` at its width (the row's
+    description is exactly QT_DESC_WIDTH characters, all of it the name:
+    desc_cut) — is required, whatever the last word looks like (a
+    complete word that starts a longer one, PARTNERS / PARTNERSHIP, is
+    not a cut by itself); then its words are the first words of `long`,
+    its last word may be a fragment of the next one, at least three
+    strong words come before the cut, and the part cut off holds no
+    share designator."""
+    if not cut:
+        return False
     sw, chopped = name_words(short)
     lw, _ = name_words(long)
     if chopped or not sw or len(sw) > len(lw):
@@ -432,8 +563,6 @@ def _truncation_agrees(short: str, long: str, cut: bool) -> bool:
     if tuple(lw[:k]) != head or not lw[k].startswith(last):
         return False
     whole = lw[k] == last
-    if whole and not cut:
-        return False
     if whole and len(sw) == len(lw):
         return False                      # equal: not a truncation
     kept = sw if whole else head
@@ -466,9 +595,10 @@ def names_agree(a: str, b: str, mode: str = "pairing", *,
     mode="name_only" — no transfer pairs the names: the normalised names
     must be EQUAL, designators included; or, with `same_broker` (both
     descriptions written by the same broker), one is the other cut off by
-    the export (`a_cut` / `b_cut`: that name may have been cut at the
-    export's width; a last word cut mid-word is evidence by itself) with
-    three strong words before the cut and no designator cut off.
+    the export (`a_cut` / `b_cut`: the evidence that the export cut
+    that name at its width — required; a last word that merely starts a
+    longer word is no evidence) with three strong words before the cut
+    and no designator cut off.
     Uniqueness (one listing only) is the caller's test.
 
     The reason is "" never: "same company and share" (plus any one-sided
@@ -514,9 +644,11 @@ def is_code(symbol: str) -> bool:
 
 def _plain_listing(symbol: str) -> bool:
     """A share listing (ROOT.SUFFIX), not an option / future / code."""
+    from taxjson.lib.ticker_map_suggest import _TOKEN_RE
     s = str(symbol or "")
-    return (bool(s) and " " not in s and not s.startswith("F:")
-            and not _CONTROL_RE.search(s)
+    # One ticker.map token (no '#', no Unicode line separator): the
+    # symbol is written into a map line (a join, a suggestion).
+    return (bool(s) and bool(_TOKEN_RE.fullmatch(s)) and not s.startswith("F:")
             and "." in s and not is_code(s)
             and not re.search(r"\d{6}[CP]\d", s))
 
@@ -587,8 +719,7 @@ def _row_name(t: Dict[str, Any], broker: str) -> str:
         return ""
     desc = str(t.get("description") or "").strip()
     if broker == "questrade":
-        from taxjson.lib.brokerages.questrade import _get_desc_key
-        return _get_desc_key(desc)
+        return questrade_name(desc)
     return desc
 
 
@@ -749,6 +880,8 @@ def resolve(uses: Iterable[CodeUse], outs: List[OutLeg],
         for d, q in sorted(u.arrivals):
             dd = _d(d)
             cands, near = [], []
+            tolerated: List[OutLeg] = []
+            n_sib = 0
             for o in outs:
                 od = _d(o.date)
                 if dd is None or od is None:
@@ -767,10 +900,20 @@ def resolve(uses: Iterable[CodeUse], outs: List[OutLeg],
                     if all(w for r, w in rels if r == "same"):
                         notes[id(o)] = min(w for r, w in rels
                                            if r == "same")
+                        tolerated.append(o)
                 elif "class" in rel:
                     siblings.setdefault(u.code, []).append(o)
+                    n_sib += 1
                 else:
                     near.append(o)
+            if tolerated and len(cands) + n_sib + len(near) > 1:
+                # A designator stated by one name only is let through
+                # only when the leg is the arrival's ONLY quantity-and-
+                # date partner: with another leg in the window it may
+                # be another share of the company — not inferred.
+                for o in tolerated:
+                    cands.remove(o)
+                    siblings.setdefault(u.code, []).append(o)
             pairs[u.code].append(((d, q), cands))
             loose.setdefault(u.code, []).extend(near)
     # One outgoing transfer pairs with one code.

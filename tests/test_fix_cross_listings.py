@@ -2,7 +2,9 @@
 (CA-XLIST-01 / US-XLIST-01): when an out-leg of one listing and an
 in-leg of another pair uniquely and the exports' security names agree,
 `taxjson run` books them as one security, as a ticker.map TOBASE line
-would — with one Info line per account. A ticker.map rule (DISTINCT
+would — with one Warning per account naming the DISTINCT line that
+undoes it. The names must be EQUAL word for word (pre-release review
+H1): the corporate form and every designator count. A ticker.map rule (DISTINCT
 included) wins; ambiguous pairs and disagreeing names stay suggestions.
 
 Synthetic data only.
@@ -14,7 +16,7 @@ from pathlib import Path
 
 from taxjson.lib import cross_listings as XL
 from taxjson.lib.country import COUNTRIES
-from taxjson.lib.symbol_codes import name_tokens
+from taxjson.lib.symbol_codes import exact_name
 from tax_rules import rule
 from tax_rules.dual import cli, projects_both
 
@@ -24,7 +26,68 @@ def _leg(sym, date, qty, account="rrsp"):
 
 
 def _names(**kw):
-    return {s.replace("_", "."): {name_tokens(n)} for s, n in kw.items()}
+    return {s.replace("_", "."): {exact_name(n)} for s, n in kw.items()}
+
+
+class TestExactNames(unittest.TestCase):
+    """Pre-release review H1: the auto-join takes EQUAL names only —
+    no subset rule, no designator stated by one side only, and the
+    corporate form counts."""
+
+    def _run(self, a, b):
+        names = _names(SAMPQ_US=a, SAMPQ_TO=b)
+        shown = {t: " ".join(t) for v in names.values() for t in v}
+        return XL.analyze([_leg("SAMPQ.US", "2025-03-03", -100),
+                           _leg("SAMPQ.TO", "2025-03-04", 100)],
+                          names, shown, base_currency="CAD")
+
+    @rule("CA-XLIST-01")
+    def test_different_securities_are_only_suggested(self):
+        for a, b in (("QZCO CORP", "QZCO CORP CL B"),
+                     ("QZFIELD INFRASTRUCTURE PARTNERS LP",
+                      "QZFIELD INFRASTRUCTURE CORP"),
+                     ("QZALPHA BANK", "QZALPHA BANK OF CANADA"),
+                     ("QZWORLD S&P 500 INDEX ETF",
+                      "QZWORLD S&P 500 INDEX ETF CAD HEDGED"),
+                     ("QZTRUST UNITS TRUST", "QZTRUST UNITS FUND"),
+                     ("QZCO INC", "QZCO CORP"),
+                     ("QZCO INC CLASS B SUB VTG", "QZCO INC CL B")):
+            for x, y in ((a, b), (b, a)):
+                with self.subTest(a=x, b=y):
+                    r = self._run(x, y)
+                    self.assertEqual(r["joined"], [])
+                    self.assertEqual(len(r["suggested"]), 1)
+                    self.assertTrue(r["suggested"][0].reason.startswith(
+                        "the names are not equal word for word"))
+
+    @rule("CA-XLIST-01")
+    def test_spellings_of_the_same_words_still_join(self):
+        for a, b in (("QZCO INC CL B SUB VTG", "QZCO INC CLASS B "
+                      "SUBORDINATE VOTING SHARES"),
+                     ("QZEN RES LTD", "QZEN RESOURCES LIMITED"),
+                     ("QZX N.V. SPONSORED ADR", "QZX NV ADR"),
+                     ("QZPIPE & CO", "QZPIPE AND COMPANY")):
+            with self.subTest(a=a, b=b):
+                self.assertEqual(len(self._run(a, b)["joined"]), 1)
+
+    @rule("CA-XLIST-01")
+    def test_another_name_of_a_listing_with_another_class_refuses(self):
+        names = {"SAMPQ.US": {exact_name("QZCO CORP")},
+                 "SAMPQ.TO": {exact_name("QZCO CORP"),
+                              exact_name("QZCO CORP CL B")}}
+        shown = {t: " ".join(t) for v in names.values() for t in v}
+        r = XL.analyze([_leg("SAMPQ.US", "2025-03-03", -100),
+                        _leg("SAMPQ.TO", "2025-03-04", 100)],
+                       names, shown)
+        self.assertEqual(r["joined"], [])
+        self.assertTrue(r["suggested"][0].reason.startswith(
+            "another name of the listings states another share"))
+
+    @rule("US-XLIST-01")
+    def test_usa_lp_never_joins_its_exchangeable_corp(self):
+        r = self._run("QZFIELD INFRASTRUCTURE PARTNERS LP",
+                      "QZFIELD INFRASTRUCTURE CORP")
+        self.assertEqual(r["joined"], [])
 
 
 class TestAnalyze(unittest.TestCase):
@@ -38,17 +101,21 @@ class TestAnalyze(unittest.TestCase):
     def test_unique_pair_with_agreeing_names_joins(self):
         r = self._run([_leg("SAMPQ.US", "2025-03-03", -100),
                        _leg("SAMPQ.TO", "2025-03-05", 100)],
-                      _names(SAMPQ_US="SAMPQ ENERGY INC",
-                             SAMPQ_TO="SAMPQ ENERGY CORP"),
+                      _names(SAMPQ_US="SAMPQ ENERGY INC COMMON SHARES",
+                             SAMPQ_TO="Sampq Energy Incorporated"),
                       base_currency="CAD")
         self.assertEqual([(p.frm, p.to) for p in r["joined"]],
                          [("SAMPQ.US", "SAMPQ.TO")])
         self.assertEqual(r["suggested"], [])
         self.assertEqual(XL.map_lines(r["joined"])[0].split("#")[0].strip(),
                          "TOBASE SAMPQ.US SAMPQ.TO")
-        self.assertEqual(XL.joined_note("rrsp", r["joined"]),
-                         "rrsp: joined as one security: SAMPQ.US ↔ "
-                         "SAMPQ.TO (transfer 2025-03-03)")
+        head, details = XL.joined_note("rrsp", r["joined"])
+        self.assertEqual(head, "rrsp: joined as one security by their "
+                         "transfer journal: SAMPQ.US ↔ SAMPQ.TO (transfer "
+                         "2025-03-03)")
+        self.assertIn("changes your books", details[0])
+        self.assertIn("add `DISTINCT SAMPQ.US SAMPQ.TO` to ticker.map",
+                      details[1])
 
     @rule("CA-XLIST-01")
     def test_a_map_rule_wins(self):
@@ -94,18 +161,20 @@ class TestAnalyze(unittest.TestCase):
                  "no security name for one listing"),
                 (_names(SAMPQ_US="SAMPQ ENERGY INC CL A",
                         SAMPQ_TO="SAMPQ ENERGY INC CL B"),
-                 "the names differ: another share class (A vs B)"),
+                 "the names are not equal word for word ('SAMPQ ENERGY "
+                 "INC CLASS A' vs 'SAMPQ ENERGY INC CLASS B')"),
                 (_names(SAMPQ_US="SAMPQ ENERGY INC SPONSORED ADR",
                         SAMPQ_TO="SAMPQ ENERGY INC"),
-                 "the names differ: a depositary receipt / ordinary "
-                 "share named on one side only"),
+                 "the names are not equal word for word ('SAMPQ ENERGY "
+                 "INC ADR' vs 'SAMPQ ENERGY INC')"),
                 (_names(SAMPQ_US="SAMPQ ENERGY INC PFD SER 2",
                         SAMPQ_TO="SAMPQ ENERGY INC"),
-                 "the names differ: another issue or kind of security "
-                 "(PREFERRED SERIES vs none)"),
+                 "the names are not equal word for word ('SAMPQ ENERGY "
+                 "INC PREFERRED SERIES 2' vs 'SAMPQ ENERGY INC')"),
                 (_names(SAMPQ_US="SAMPQ ENERGY INC",
                         SAMPQ_TO="QZWV MINING LTD"),
-                 "the names do not match")):
+                 "the names are not equal word for word ('SAMPQ ENERGY "
+                 "INC' vs 'QZWV MINING LTD')")):
             with self.subTest(why=why, names=names):
                 r = self._run(legs, names)
                 self.assertEqual(r["joined"], [])
@@ -188,8 +257,13 @@ class TestRun(unittest.TestCase):
             self.assertEqual(r.returncode, 0, out)
             sfx = "TO" if country == "canada" else "US"
             self.assertEqual(out.count("joined as one security"), 1, out)
-            self.assertIn(f"margin: joined as one security: SAMPQ.{sfx} ↔ "
-                          f"SAMPR.{sfx} (transfer 2025-03-03)", out)
+            # A Warning (`warning:` when captured at width 0).
+            self.assertIn(f"warning: margin: joined as one security by "
+                          f"their transfer journal: sampq.{sfx.lower()} ↔ "
+                          f"sampr.{sfx.lower()} (transfer 2025-03-03)",
+                          out.lower())
+            self.assertIn(f"add `DISTINCT SAMPQ.{sfx} SAMPR.{sfx}` to "
+                          f"ticker.map", out)
             # Bought as SAMPQ, sold as SAMPR: one security, gain 1500.
             self.assertAlmostEqual(_gain(root), 1500.0, places=2)
             eff = (root / "work" / XL.EFFECTIVE_MAP).read_text()
@@ -239,8 +313,10 @@ class TestRun(unittest.TestCase):
             "canada", in_desc="SAMPQ ENERGY INC PFD SER 2 TRANSFER")
         self.assertEqual(st["joined"], [])
         self.assertEqual(len(st["suggested"]), 1)
+        # SAMPR is also sold as "SAMPQ ENERGY INC": its names disagree.
         self.assertTrue(st["suggested"][0]["reason"].startswith(
-            "the names differ: another issue or kind of security"))
+            "another name of the listings states another share"),
+            st["suggested"][0]["reason"])
 
     @rule("US-XLIST-01")
     def test_usa_adr_is_never_joined(self):
