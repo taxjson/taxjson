@@ -102,11 +102,9 @@ def of(txs, **kw):
 
 class TestConvention(unittest.TestCase):
     def test_usd_class_of_a_canadian_listing(self):
-        self.assertEqual(markets.ca_usd_class('QZD.TO'), 'QZD.U.TO')
-        self.assertEqual(markets.ca_usd_class('QZD.U.TO'), 'QZD.U.TO')
-        self.assertIsNone(markets.ca_usd_class('QZD.US'))
-        self.assertEqual(
-            markets.data()['conventions']['ca_usd_class_series'], 'U')
+        # The convention fix/suggest-quality ships ([usd_unit_class]).
+        self.assertEqual(markets.usd_unit_listing('QZD'), 'QZD.U.TO')
+        self.assertEqual(markets.usd_unit_listing('QZD.U.TO'), 'QZD.U.TO')
 
 
 @rule("CA-ACB-CODES")

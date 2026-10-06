@@ -450,7 +450,7 @@ The project's one mapping file, at the project root; one rule per line, symbols 
 - **Form:** `EXTRACT DESCRIPTION WORDS | CURRENCY | SYMBOL`
 - **Meaning:** a parser symbol override: a broker row whose description contains the words (whole words, any case) and whose currency is CURRENCY (`*` = any) gets SYMBOL. First matching line wins; options and futures are never rewritten.
 - **Country:** both.
-- **When:** the currency-to-suffix rule mislabels a security (a TSX-only USD unit).
+- **When:** the currency-to-suffix rule mislabels a security (a TSX-only USD unit). `taxjson run` warns when a `.US` symbol carries such a unit beside another company ("names two securities") and `taxjson ticker-map --suggest` offers the line, its words the shortest run common to every description of the fund in the project and in no other row's (the words must match the broker's description as written: `US DLR` and `U S DLR` are different words).
 - **Example:** `EXTRACT Sample US Dollar Fund | USD | ZZD.U.TO`
 
 #### `T1135`
@@ -461,7 +461,7 @@ The project's one mapping file, at the project root; one rule per line, symbols 
 
 ### Market lists (extend or override the shipped data)
 
-The lists taxjson cannot read from an export ship in `src/taxjson/data/markets.toml` (read only by `src/taxjson/lib/markets.py` — `data`, `overrides`). Whenever a built-in list decides an outcome the run prints one note per symbol naming the line that would change it. The file also states listing conventions: `[conventions] ca_usd_class_series` makes a Canadian listing's US-dollar class `SYMBOL.U.TO` (used for a Questrade currency journal's USD leg when the account's own rows show no USD listing of the security; an `EXTRACT` or `GLOBAL` line overrides it for one security; `src/taxjson/lib/markets.py` — `ca_usd_class`). These ticker.map lines change one entry each:
+The lists taxjson cannot read from an export ship in `src/taxjson/data/markets.toml` (read only by `src/taxjson/lib/markets.py` — `data`, `overrides`). Whenever a built-in list decides an outcome the run prints one note per symbol naming the line that would change it. The file also states a listing convention: `[usd_unit_class]` makes a Canadian-listed fund's US-dollar units `ROOT.U.TO` (suggested for a symbol collision, and used for a Questrade currency journal's USD leg when the account's own rows show no USD listing of the security; an `EXTRACT` or `GLOBAL` line overrides it for one security; `src/taxjson/lib/markets.py` — `usd_unit_listing`). These ticker.map lines change one entry each:
 
 #### `STABLE`
 - **Form:** `STABLE SYMBOL USD` or `STABLE SYMBOL NO`

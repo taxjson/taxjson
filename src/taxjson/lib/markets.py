@@ -26,6 +26,7 @@ line that would change it.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -323,21 +324,6 @@ def currency_suffix(currency: str) -> Optional[str]:
     return data()["currency_suffix"].get(str(currency or "").upper())
 
 
-def ca_usd_class(listing: str) -> Optional[str]:
-    """The US-dollar class of a Canadian listing by the market's
-    convention (markets.toml [conventions] ca_usd_class_series): ZZD.TO
-    -> ZZD.U.TO; a listing already in that series is returned as is.
-    None when `listing` is not a Canadian listing."""
-    s = str(listing or "").strip().upper()
-    if not is_canadian_listing(s):
-        return None
-    series = str(data()["conventions"]["ca_usd_class_series"]).upper()
-    root, sfx = s.rsplit(".", 1)
-    if root.endswith(f".{series}"):
-        return s
-    return f"{root}.{series}.{sfx}"
-
-
 def isin_country_suffix(cc: str) -> Optional[str]:
     return data()["isin_country_suffix"].get(str(cc or "").upper())
 
@@ -351,6 +337,25 @@ def ib_venue_suffix(code: str) -> Optional[str]:
     if c in o:
         return o[c] or ""
     return data()["ib_venues"].get(c)
+
+
+# A description naming a fund's US-dollar units or class ("... U S DLR
+# CURRENCY ETF", "... USD UNITS"): vocabulary, not security data.
+USD_UNITS_RE = re.compile(
+    r'\b(?:U\.?\s?S\.?\s+(?:DOLLAR|DLR)|USD)\s+'
+    r'(?:UNITS?|CLASS|SERIES|CURRENCY)\b', re.I)
+
+
+def usd_unit_listing(root: str) -> str:
+    """The book symbol of a Canadian-listed fund's US-dollar unit class
+    ([usd_unit_class]: ROOT.U.TO), from a root that may already carry
+    the class or a suffix (QZD, QZD.U, QZD.US, QZD.U.TO)."""
+    conv = data()["usd_unit_class"]
+    cls, sfx = str(conv["class"]).upper(), str(conv["suffix"]).upper()
+    r = strip_listing_suffix(str(root or "").strip().upper())
+    if r.endswith(f".{cls}"):
+        r = r[:-len(cls) - 1]
+    return f"{r}.{cls}.{sfx}"
 
 
 # ------------------------------------------------------------ currencies

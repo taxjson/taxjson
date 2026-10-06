@@ -700,7 +700,15 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "the ticker. Such trades are listed by `taxjson renames` "
                  "and stop `run --strict` until declared. An undated "
                  "rename (GLOBAL, or RENAME without a date) applies to "
-                 "every row of OLD.", cont=True),
+                 "every row of OLD. "
+                 "IB's temporary symbol (a time stamp YYYYMMDDHHMMSS before "
+                 "the ticker, given around a corporate action) listed "
+                 "under the ticker's own contract id is that ticker: "
+                 "its rows are booked as the ticker, no ticker.map line "
+                 "needed; a ticker change IB shows only as one contract "
+                 "id under two symbols is suggested as the dated line "
+                 "(OLD the symbol whose rows end first, the date NEW's "
+                 "first row), never toward a temporary symbol.", cont=True),
             Rule("CA-ACB-05",
                  "Accounts typed \"sheltered\" (RRSP, TFSA, FHSA, LIRA, "
                  "RESP...) are tracked but kept out of the filing totals. "
@@ -815,7 +823,15 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "the `DISTINCT X Y` ticker.map line that undoes it. A "
                  "ticker.map rule renaming either listing, or a DISTINCT "
                  "line for the pair, always wins; anything less certain "
-                 "stays a suggestion (`taxjson ticker-map --suggest`)."),
+                 "stays a suggestion (`taxjson ticker-map --suggest`) — "
+                 "but two listings whose names name different companies "
+                 "(no leading company word in common) are never joined "
+                 "nor suggested, and a .US symbol whose rows name two "
+                 "different companies, one of them a Canadian-listed "
+                 "fund's US-dollar units, is a symbol collision: a "
+                 "Warning and the EXTRACT line that gives the fund's "
+                 "rows their own symbol (ROOT.U.TO), never a join "
+                 "through it."),
             Rule("CA-XLIST-02",
                  "Each listing's symbol is read from the evidence, not "
                  "the row currency alone: Questrade and RBC write a bare "
@@ -1946,7 +1962,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "ticker. Such trades are listed by `taxjson renames` and "
                  "stop `run --strict` until declared. An undated rename "
                  "(GLOBAL, or RENAME without a date) applies to every row "
-                 "of OLD.", cont=True),
+                 "of OLD. "
+                 "IB's temporary symbol (a time stamp YYYYMMDDHHMMSS before "
+                 "the ticker, given around a corporate action) listed "
+                 "under the ticker's own contract id is that ticker: "
+                 "its rows are booked as the ticker, no ticker.map line "
+                 "needed; a ticker change IB shows only as one contract "
+                 "id under two symbols is suggested as the dated line "
+                 "(OLD the symbol whose rows end first, the date NEW's "
+                 "first row), never toward a temporary symbol.", cont=True),
             Rule("US-XLIST-01",
                  "Two listings of one company's same class of shares (a "
                  "US line and its Canadian line, two currency lines of "
@@ -1973,7 +1997,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "the `DISTINCT X Y` ticker.map line that undoes it. A "
                  "ticker.map rule renaming either listing, or a DISTINCT "
                  "line for the pair, always wins; anything less certain "
-                 "stays a suggestion (`taxjson ticker-map --suggest`). A "
+                 "stays a suggestion (`taxjson ticker-map --suggest`) — "
+                 "but two listings whose names name different companies "
+                 "(no leading company word in common) are never joined "
+                 "nor suggested, and a .US symbol whose rows name two "
+                 "different companies, one of them a Canadian-listed "
+                 "fund's US-dollar units, is a symbol collision: a "
+                 "Warning and the EXTRACT line that gives the fund's "
+                 "rows their own symbol (ROOT.U.TO), never a join "
+                 "through it. A "
                  "Canadian broker's currency journal (Questrade BRW: a "
                  "security's CAD and US-dollar lines) is not expected "
                  "in a US project: its legs are read as such a transfer "

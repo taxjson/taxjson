@@ -454,9 +454,9 @@ def _journal_listing(ctx: QtAccountContext, helper, sym: str, cur: str,
     - The USD line: the listing this account's own USD rows of the same
       security (same description) are booked under, when exactly one;
       else the market's convention for a Canadian listing's US-dollar
-      class (markets.ca_usd_class: SYM.U.TO).
+      unit class (markets.usd_unit_listing: SYM.U.TO).
     A ticker.map EXTRACT line still rewrites the row after the parse."""
-    from taxjson.lib.markets import ca_usd_class
+    from taxjson.lib.markets import usd_unit_listing
     if sym and canonical_ca_listing(sym, cur) is not None:
         return helper.apply_currency_suffix(sym, cur)
     base = sym if sym and not _INTERNAL_CODE_RE.match(sym) else partner
@@ -468,10 +468,7 @@ def _journal_listing(ctx: QtAccountContext, helper, sym: str, cur: str,
                       if c == 'USD'})
         if len(own) == 1:
             return own[0]
-        usd = ca_usd_class(helper.apply_currency_suffix(
-            _journal_root(base), 'CAD'))
-        if usd:
-            return usd
+        return usd_unit_listing(_journal_root(base))
     return helper.apply_currency_suffix(sym, cur)
 
 

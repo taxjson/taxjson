@@ -8,17 +8,22 @@ in work/ (nothing is recomputed but the cheap reads):
 
 * work/cross_listings.state — the transfer journals between two listings
   that `taxjson run` did not join itself (lib/cross_listings: the names
-  are missing or disagree, the pairing is ambiguous): `TOBASE FROM TO`;
+  are missing or disagree, the pairing is ambiguous): `TOBASE FROM TO`
+  (never for two companies); and the symbol collisions (one symbol, two
+  companies): `EXTRACT words | CURRENCY | SYMBOL` with its `JOURNAL`, or
+  a template with a placeholder (listed, never written);
 * work/<account>_symbol_codes.state — Questrade internal codes the run
   could not resolve, with a "looks like" candidate: `GLOBAL CODE TICKER`;
 * every stage's .diag — a ticker.map line a message names: IB's "one
-  stock under several symbols" (`GLOBAL OLD NEW`), Questrade's and RBC's
-  "looks renamed" hints (`add to ticker.map:  GLOBAL OLD NEW`), the
+  stock under several symbols" (a dated `RENAME OLD NEW YYYY-MM-DD`),
+  Questrade's and RBC's "looks renamed" hints (`add to ticker.map:
+  GLOBAL OLD NEW`), RBC's US-dollar unit hint (`EXTRACT ...`), the
   crypto price checks' `CRYPTO SYMBOL ID` lines, the gains stage's
   unmapped cross-listing journal (`TOBASE FROM TO`).
 
 A line the map already has, or one whose symbol the map already renames
-(the user's rule wins), is left out. A line with a placeholder
+(the user's rule wins; an EXTRACT for the same currency and symbol), is
+left out; of two EXTRACT lines for one listing the first is offered. A line with a placeholder
 (`<number>`, OLD/NEW, `a|b`) is a template, never a suggestion.
 """
 from __future__ import annotations
@@ -31,12 +36,17 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 # The keywords a suggestion may carry.
-KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DISTINCT", "RENAME", "CRYPTO")
+KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DISTINCT", "RENAME", "CRYPTO",
+            "EXTRACT")
 _RENAMES = ("GLOBAL", "TOBASE", "JOURNAL", "RENAME")
 _KW = "|".join(KEYWORDS)
 _TICK_RE = re.compile(rf"`((?:{_KW}) [^`]+)`")
 _ADD_RE = re.compile(rf"add to ticker\.map:\s+((?:{_KW})\s+\S+\s+\S+)")
 _BARE_RE = re.compile(rf"^\s+((?:{_KW})\s+\S+\s+\S+)\s*$")
+# `EXTRACT description words | CURRENCY | SYMBOL` (its words hold
+# spaces: read on its own; a backticked one ends at the backtick).
+_EXTRACT_RE = re.compile(r"\bEXTRACT\s+([^|`\n]+?)\s*\|\s*([A-Za-z*]{1,5})"
+                         r"\s*\|\s*([^\s`|]+)")
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-_:/=^]*$")
 _PLACEHOLDERS = frozenset("""
 FROM TO OLD NEW SYMBOL SYM ROOT CODE A B X Y N YAHOO_ID YAHOO_SYMBOL
@@ -58,6 +68,9 @@ class Suggestion:
     line: str           # the ticker.map line, e.g. "TOBASE ABC.US ABC.TO"
     reason: str         # one sentence: where it comes from, and why
     source: str         # the work/ file it was read from
+    # A line with a placeholder the user must edit (an EXTRACT whose
+    # listing or words could not be derived): listed, never written.
+    template: bool = False
 
     @property
     def keyword(self) -> str:
@@ -65,11 +78,40 @@ class Suggestion:
 
     @property
     def symbols(self) -> List[str]:
+        if self.keyword == "EXTRACT":
+            return [self.line.rsplit("|", 1)[1].strip()]
         return self.line.split()[1:]
 
+    @property
+    def extract_key(self) -> Tuple[str, str]:
+        """(CURRENCY, SYMBOL) of an EXTRACT line."""
+        parts = [p.strip() for p in self.line.split("|")]
+        return parts[1].upper(), parts[2].upper()
+
     def record(self) -> Dict[str, Any]:
-        return {"line": self.line, "reason": self.reason,
-                "source": self.source}
+        out = {"line": self.line, "reason": self.reason,
+               "source": self.source}
+        if self.template:
+            out["template"] = True
+        return out
+
+
+def clean_extract(words: str, cur: str, sym: str) -> Optional[str]:
+    """`EXTRACT words | CUR | SYM` as a ticker.map line (the parser's
+    rule: lib/ticker_map.parse_side_line), or None for a template or a
+    line the map would refuse."""
+    from taxjson.lib.ticker_map import parse_side_line
+    words = " ".join(str(words or "").split())
+    line = f"EXTRACT {words} | {str(cur or '').upper()} | {sym}"
+    if (not words or any(c in line for c in "<>…#`")
+            or str(sym).upper() in _PLACEHOLDERS
+            or not _TOKEN_RE.match(str(sym or ""))):
+        return None
+    try:
+        parse_side_line("EXTRACT", line)
+    except ValueError:
+        return None
+    return line
 
 
 def _clean(line: str) -> Optional[str]:
@@ -78,6 +120,9 @@ def _clean(line: str) -> Optional[str]:
     if len(parts) < 3:
         return None
     kw = parts[0].upper()
+    if kw == "EXTRACT":
+        m = _EXTRACT_RE.match(line.strip())
+        return clean_extract(*m.groups()) if m else None
     if kw not in KEYWORDS:
         return None
     args = parts[1:]
@@ -137,8 +182,10 @@ def from_diag(path: Path, rel: str) -> List[Suggestion]:
     out: List[Suggestion] = []
     for head, cont in _messages(text):
         whole = _unquoted(" ".join([head] + [c.strip() for c in cont]))
-        found = [m.group(1) for m in _TICK_RE.finditer(whole)]
+        found = [m.group(1) for m in _TICK_RE.finditer(whole)
+                 if not m.group(1).startswith("EXTRACT")]
         found += [m.group(1) for m in _ADD_RE.finditer(whole)]
+        found += [m.group(0) for m in _EXTRACT_RE.finditer(whole)]
         found += [m.group(1) for c in cont
                   for m in [_BARE_RE.match(_unquoted(c))] if m]
         for f in found:
@@ -151,7 +198,26 @@ def from_diag(path: Path, rel: str) -> List[Suggestion]:
 def from_cross_listings(cache: Path) -> List[Suggestion]:
     from taxjson.lib import cross_listings as XL
     out = []
-    for r in XL.read_state(cache / XL.STATE).get("suggested") or []:
+    state = XL.read_state(cache / XL.STATE)
+    for c in state.get("collisions") or []:
+        names = " vs ".join(repr(str(n)) for n in (c.get("names") or []))
+        why = (f"{c.get('symbol')} names two securities ({names}): the "
+               f"rows of {str(c.get('odd') or '')!r} get their own symbol")
+        ext = str(c.get("extract") or "")
+        m = _EXTRACT_RE.match(ext)
+        line = clean_extract(*m.groups()) if m else None
+        if line and not c.get("template"):
+            out.append(Suggestion(line, why, f"work/{XL.STATE}"))
+        elif ext.startswith("EXTRACT ") and "\n" not in ext:
+            out.append(Suggestion(
+                ext, f"{why} — a template: {c.get('why') or 'edit it'}, "
+                f"then add it by hand", f"work/{XL.STATE}", template=True))
+        jl = _clean(str(c.get("journal") or ""))
+        if jl:
+            out.append(Suggestion(
+                jl, f"{why}; its transfer journal pairs the separated "
+                f"rows with this listing", f"work/{XL.STATE}"))
+    for r in state.get("suggested") or []:
         o, i = r.get("out") or {}, r.get("in") or {}
         line = _clean(f"TOBASE {r.get('from')} {r.get('to')}")
         if not line:
@@ -233,12 +299,14 @@ class MapState:
     named: Set[str]                 # every symbol a rule names
     distinct: Set[frozenset]
     crypto: Set[str]
+    extract: List[Tuple[str, str, str]]  # (words lower, CUR, SYMBOL)
     lines: Set[str]                 # the map's rule lines, normalised
+    dated: Set[frozenset] = frozenset()   # the dated RENAME pairs
 
 
 def map_state(path: Path) -> MapState:
     if not Path(path).is_file():
-        return MapState({}, set(), set(), set(), set())
+        return MapState({}, set(), set(), set(), [], set())
     from taxjson.bin.taxjson_ticker_map import _parse_map_file, named_symbols
     from taxjson.lib.ticker_map import read_side_rules
     tm = _parse_map_file(Path(path))[0]
@@ -254,7 +322,11 @@ def map_state(path: Path) -> MapState:
             lines.add(ln)
     return MapState(renamed, set(named_symbols(tm)),
                     {frozenset(p) for p in tm.distinct},
-                    {str(k).upper() for k in side.crypto}, lines)
+                    {str(k).upper() for k in side.crypto},
+                    [(d, c, str(v).upper()) for d, c, v in side.extract],
+                    lines,
+                    {frozenset((dr.old.upper(), dr.new.upper()))
+                     for dr in tm.dated})
 
 
 def already(s: Suggestion, st: MapState) -> Optional[str]:
@@ -262,6 +334,13 @@ def already(s: Suggestion, st: MapState) -> Optional[str]:
     if s.line.upper() in st.lines:
         return "already in ticker.map"
     kw, syms = s.keyword, s.symbols
+    if kw == "EXTRACT":
+        cur, sym = s.extract_key
+        words = s.line.split("|")[0][len("EXTRACT"):].strip().lower()
+        for d, c, v in st.extract:
+            if c in (cur, "*") and (d == words or v == sym):
+                return "ticker.map has an EXTRACT line for it"
+        return None
     if kw == "CRYPTO":
         return ("ticker.map has a CRYPTO line for it"
                 if syms[0] in st.crypto else None)
@@ -270,6 +349,8 @@ def already(s: Suggestion, st: MapState) -> Optional[str]:
         return "ticker.map keeps the two apart (DISTINCT)"
     if kw == "DISTINCT":
         return None
+    if frozenset((a, b)) in st.dated:
+        return "ticker.map already renames the two (a dated RENAME)"
     if a in st.renamed:
         return f"ticker.map already maps {a}"
 
@@ -290,11 +371,19 @@ def pending(root: Path) -> Tuple[List[Suggestion], List[Tuple[Suggestion, str]]]
     offer: List[Suggestion] = []
     skipped: List[Tuple[Suggestion, str]] = []
     froms: Dict[str, str] = {}
+    extracts: Dict[Tuple[str, str], str] = {}
     for s in gather(root):
         why = already(s, st)
         if why:
             skipped.append((s, why))
             continue
+        if s.keyword == "EXTRACT":
+            prev = extracts.get(s.extract_key)
+            if prev is not None:
+                skipped.append((s, f"another suggestion moves those rows "
+                                   f"({prev})"))
+                continue
+            extracts[s.extract_key] = s.line
         if s.keyword in _RENAMES:
             prev = froms.get(s.symbols[0])
             if prev is not None:

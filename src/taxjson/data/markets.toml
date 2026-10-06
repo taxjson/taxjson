@@ -61,17 +61,6 @@ USD = "US"
 AUD = "AX"
 GBP = "L"
 
-# Listing conventions: how a market spells one security's other lines.
-# `ca_usd_class_series`: the US-dollar class of a Canadian-listed
-# security is the same symbol with this series on the Canadian venue
-# (TSX convention: ZZD.TO's US-dollar units are ZZD.U.TO). Used where a
-# broker names only the security and a currency — a Questrade BRW
-# journal between the CAD and USD lines — and the account's own rows
-# show no US-dollar listing of it. A ticker.map EXTRACT line (the row's
-# description and currency) or GLOBAL line overrides it per security.
-[conventions]
-ca_usd_class_series = "U"
-
 # An ISIN's country prefix → the listing suffix of its home market (IB
 # income rows name the security by ISIN). IE (Irish UCITS funds) is
 # assumed to be an LSE line.
@@ -81,6 +70,16 @@ US = "US"
 GB = "L"
 IE = "L"
 AU = "AX"
+
+# A Canadian-listed fund's US-dollar unit class: the TSX lists it as the
+# fund's root with a `.U` class (book symbol ROOT.U.TO). A market
+# convention, not a list of funds: taxjson suggests this spelling for a
+# USD row that names a fund's US-dollar units (ticker-map --suggest), and
+# books a Questrade currency journal's USD leg on it when the account's
+# own rows show no US-dollar listing of the security.
+[usd_unit_class]
+class = "U"
+suffix = "TO"
 
 # Interactive Brokers "Listing Exch" codes (Financial Instrument
 # Information) → listing suffix. A USD `.U` unit on a Canadian venue is
