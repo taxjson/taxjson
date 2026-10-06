@@ -203,19 +203,27 @@ _REWORD = [
                 "wallet needs nothing" + ("; with --country usa only a "
                                           "payment is a sale" if m["us"]
                                           else "") + ")."]),
-    (re.compile(r"\s+(?P<f>.+?): (?P<n>\d+) TRANSFER row\(s\) kept aside "
+    (re.compile(r"\s+(?P<f>\S.*?): (?P<n>\d+) TRANSFER row\(s\) kept aside "
                 r"\(custody evidence, not tax events — view with "
                 r"`taxjson transfers`\)"),
      lambda m: [f"note: {m['f']}: {_plural(m['n'], 'transfer row')} kept "
                 f"aside (not tax events; `taxjson transfers` lists them)"]),
-    (re.compile(r"\s+(?P<f>.+?): (?P<n>\d+) tax objects\b(?P<r>.*)"),
+    (re.compile(r"\s+(?P<f>\S.*?): (?P<n>\d+) tax objects\b(?P<r>.*)"),
      lambda m: [f"note: {m['f']}: {m['n']} tax objects{m['r']}"]),
 ]
+
+
+# A line longer than this is shown as is: the notes _REWORD shortens are
+# a few hundred characters, and a pathological line (broker data with a
+# huge run of spaces) must not cost the regexes quadratic time.
+_REWORD_MAX = 2000
 
 
 def reword(line: str) -> List[str]:
     """A captured stage line's display form: [line, detail ...] — a
     frequent wordy note shortened (_REWORD), else [line]. Display only."""
+    if len(line) > _REWORD_MAX:
+        return [line]
     for rx, build in _REWORD:
         m = rx.fullmatch(line)
         if m:

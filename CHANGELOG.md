@@ -53,6 +53,10 @@
   the check, the error names the source file, the row id (masked), the
   coin and the date, says that the account's files are not booked until
   it is fixed and what to do, instead of `tx[947]`.
+- **The run console no longer slows down on a very long line.** Two of
+  the patterns that shorten frequent notes took time growing with the
+  square of a line's leading spaces; they now match in one pass, and a
+  line over 2000 characters is shown as is.
 
 
 ## v0.20.0 (2026-10-06)
