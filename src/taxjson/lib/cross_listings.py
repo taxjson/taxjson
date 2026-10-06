@@ -18,10 +18,10 @@ line would, when the evidence is unambiguous:
   cancel each other);
 * the security names agree: some name the exports give X and some name
   they give Y normalise to the same company and the same share
-  (lib/symbol_codes.name_relation "same"), and no two of their names
-  disagree on the share designators (class letter, voting, ADR,
-  preferred, unit ...) — an ADR never joins its ordinary shares, class A
-  never joins class B;
+  (lib/symbol_codes.names_agree, mode "pairing"), and no two of their
+  names disagree on the share (class letter, voting, form, preferred,
+  unit ...) — an ADR never joins its ordinary shares (one stated by a
+  single name is enough to refuse), class A never joins class B;
 * no ticker.map rule renames or deletes X or Y (TOBASE / JOURNAL /
   GLOBAL / RENAME / DELETE, either side) and no DISTINCT line pairs the
   two: the user's map always wins, DISTINCT keeps them apart;
@@ -193,18 +193,37 @@ def _same_qty(a: Leg, b: Leg) -> bool:
     return abs(qa - qb) <= max(_EPS, 1e-6 * max(qa, qb))
 
 
-def _names_verdict(nx: Set[Tuple[str, ...]], ny: Set[Tuple[str, ...]]
-                   ) -> str:
-    """"" when the two listings' names agree (some pair names the same
-    share, none names another class of it), else why not."""
-    from taxjson.lib.symbol_codes import name_relation
+def _names_verdict(nx: Set[Tuple[str, ...]], ny: Set[Tuple[str, ...]],
+                   shown: Dict[Tuple[str, ...], str]) -> str:
+    """"" when the two listings' names agree, else why not. Each pair of
+    their names is put to lib/symbol_codes.names_agree (mode "pairing":
+    the legs already pair by quantity and date): some pair must agree,
+    and no pair may refuse on the share (another class, voting rights,
+    form or kind of security). Stricter than a transfer of one listing:
+    an ADR / ordinary-share designator stated by one name only refuses
+    too — a depositary receipt is never joined to its shares here."""
+    from taxjson.lib.symbol_codes import _FORM_MARKS, names_agree
     if not nx or not ny:
         return "no security name for " + ("either listing" if not nx
                                           and not ny else "one listing")
-    rel = {name_relation(a, b) for a in nx for b in ny}
-    if "class" in rel:
-        return "the names differ in the share class or kind"
-    if "same" not in rel:
+    agreed = False
+    refusal = ""
+    for a in sorted(nx):
+        for b in sorted(ny):
+            ok, why = names_agree(shown.get(a, " ".join(a)),
+                                  shown.get(b, " ".join(b)), "pairing")
+            fa = {m for m in a if m in _FORM_MARKS}
+            fb = {m for m in b if m in _FORM_MARKS}
+            if ok and fa != fb:
+                ok, why = False, ("a depositary receipt / ordinary share "
+                                  "named on one side only")
+            if ok:
+                agreed = True
+            elif why != "different companies" and not refusal:
+                refusal = why
+    if refusal:
+        return f"the names differ: {refusal}"
+    if not agreed:
         return "the names do not match"
     return ""
 
@@ -258,7 +277,7 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             if len(ms) > 1 or len(back.get(m, ())) > 1:
                 p.reason = "the legs pair with more than one other leg"
             else:
-                p.reason = _names_verdict(nx, ny)
+                p.reason = _names_verdict(nx, ny, shown)
             (suggested if p.reason else joined).append(p)
     # One partner per symbol: a listing joined to two others is ambiguous.
     partners: Dict[str, Set[str]] = {}

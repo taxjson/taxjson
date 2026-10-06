@@ -4,6 +4,14 @@
 
 ### Added
 
+- **`taxjson ticker-map --suggest [--write]`** (help group "Set up") lists
+  every ticker.map line the last run suggested — listings a transfer journal
+  pairs that the run did not join, a Questrade code with a likely ticker, a
+  ticker change IB, Questrade or RBC shows, a coin's Yahoo id — each with its
+  reason. `--write` appends the chosen ones (asked one by one on a terminal;
+  `--all` adds every one), each under a comment, never a line the map already
+  answers, keeping `ticker.map.bak`.
+
 - **`taxjson redact` with no file copies the project's inputs and redacts the copy.** Run in a
   project (or with `-C DIR`), it copies the whole `inputs/` folder to `inputs_redact/` (or `--out
   DIR`), keeping every folder and text file (exports, `.tt` files, sidecars, READMEs), and redacts
@@ -43,22 +51,14 @@
   accounts), the pair is unique and the exports' security names agree on the
   company and the share class, `taxjson run` books the two listings as one
   security, as a ticker.map `TOBASE` line would, and says so in one `Info:`
-  line per account. A ticker.map rule naming either listing (`DISTINCT`
-  included) wins; anything less certain stays a suggestion. Every equity
+  line per account. A ticker.map rule renaming either listing, or a
+  `DISTINCT` line for the pair, wins; anything less certain stays a
+  suggestion. Every equity
   account is now read in the run's first pass when there are two or more.
 - **taxjson.toml descriptions use the full 100-column width.** `taxjson init` and
   `taxjson format` wrapped `## ` prose at 79 columns; they now wrap at 100, the house width.
   `taxjson format` reflows an existing file's template text.
 
-### Added
-
-- **`taxjson ticker-map --suggest [--write]`** (help group "Set up") lists
-  every ticker.map line the last run suggested — listings a transfer journal
-  pairs that the run did not join, a Questrade code with a likely ticker, a
-  ticker change IB, Questrade or RBC shows, a coin's Yahoo id — each with its
-  reason. `--write` appends the chosen ones (asked one by one on a terminal;
-  `--all` adds every one), each under a comment, never a line the map already
-  answers, keeping `ticker.map.bak`.
 
 ## v0.21.0 (2026-10-06)
 

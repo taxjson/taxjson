@@ -98,14 +98,14 @@ class TestCommand(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = XT._projects(
                 tmp, tail="GLOBAL SAMPZ.TO SAMPY.TO\n",
-                in_desc="SAMPQ ENERGY INC CL B TRANSFER")["canada"]
+                in_desc="SAMPQ ENERGY INC PFD SER 2 TRANSFER")["canada"]
             self.assertEqual(_tjs(root, "run", "--no-input").returncode, 0)
             r = _tjs(root, "ticker-map", "--suggest")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("TICKER.MAP SUGGESTIONS — 1 from the last run",
                           r.stdout)
             self.assertIn("\nTOBASE SAMPQ.TO SAMPR.TO\n", r.stdout)
-            self.assertIn("the names differ in the share class",
+            self.assertIn("the names differ: another issue or kind",
                           " ".join(r.stdout.split()))
             js = json.loads(_tjs(root, "ticker-map", "--suggest",
                                  "--json").stdout)

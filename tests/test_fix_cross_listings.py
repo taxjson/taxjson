@@ -94,10 +94,15 @@ class TestAnalyze(unittest.TestCase):
                  "no security name for one listing"),
                 (_names(SAMPQ_US="SAMPQ ENERGY INC CL A",
                         SAMPQ_TO="SAMPQ ENERGY INC CL B"),
-                 "the names differ in the share class or kind"),
+                 "the names differ: another share class (A vs B)"),
                 (_names(SAMPQ_US="SAMPQ ENERGY INC SPONSORED ADR",
                         SAMPQ_TO="SAMPQ ENERGY INC"),
-                 "the names differ in the share class or kind"),
+                 "the names differ: a depositary receipt / ordinary "
+                 "share named on one side only"),
+                (_names(SAMPQ_US="SAMPQ ENERGY INC PFD SER 2",
+                        SAMPQ_TO="SAMPQ ENERGY INC"),
+                 "the names differ: another issue or kind of security "
+                 "(PREFERRED SERIES vs none)"),
                 (_names(SAMPQ_US="SAMPQ ENERGY INC",
                         SAMPQ_TO="QZWV MINING LTD"),
                  "the names do not match")):
@@ -229,12 +234,13 @@ class TestRun(unittest.TestCase):
         self._check_not_joined("usa", tail="DISTINCT SAMPQ.US SAMPR.US\n")
 
     @rule("CA-XLIST-01")
-    def test_canada_class_conflict_is_a_suggestion(self):
+    def test_canada_preferred_vs_common_is_a_suggestion(self):
         st = self._check_not_joined(
-            "canada", in_desc="SAMPQ ENERGY INC CL B TRANSFER")
+            "canada", in_desc="SAMPQ ENERGY INC PFD SER 2 TRANSFER")
         self.assertEqual(st["joined"], [])
-        self.assertEqual([s["reason"] for s in st["suggested"]],
-                         ["the names differ in the share class or kind"])
+        self.assertEqual(len(st["suggested"]), 1)
+        self.assertTrue(st["suggested"][0]["reason"].startswith(
+            "the names differ: another issue or kind of security"))
 
     @rule("US-XLIST-01")
     def test_usa_adr_is_never_joined(self):

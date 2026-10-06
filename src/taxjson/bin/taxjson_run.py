@@ -2160,8 +2160,9 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
     if line:
         _say_once(("xlist", name), "note", line,
                   "Their transfer journal pairs them and their names "
-                  "agree: booked as one security (a ticker.map rule naming "
-                  "either listing wins; `DISTINCT A B` keeps them apart).",
+                  "agree: booked as one security (a ticker.map rule "
+                  "renaming either listing wins; `DISTINCT A B` keeps the "
+                  "pair apart).",
                   indent="  ", file=sys.stdout)
     return path
 
