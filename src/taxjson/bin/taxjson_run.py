@@ -13779,7 +13779,8 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
         # A suggestion another one covers is not answered by the map:
         # its own heading.
         covered = [x for x in skipped if TS.covered_by_suggestion(x[1])]
-        answered = [x for x in skipped if x not in covered]
+        answered = [x for x in skipped
+                    if not TS.covered_by_suggestion(x[1])]
         for head, items in (("Already answered by ticker.map", answered),
                             ("Covered by another suggestion", covered)):
             if items:
