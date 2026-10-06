@@ -231,9 +231,10 @@ def name_words(text: str) -> Tuple[Tuple[str, ...], bool]:
     word is kept in order (the generic words too): the truncation check
     compares word sequences.
 
-    No broker's event wording is cut here: a Questrade row description
-    is read through questrade_name first (its dividend / transfer / trade
-    wording is Questrade's own; another broker's name is the name)."""
+    No broker's event wording is cut here: a Questrade or RBC row
+    description is read through questrade_name / rbc_name first (its
+    dividend / transfer / trade wording is that broker's own; another
+    broker's name is the name)."""
     words, chopped, _tail = _name_words_tail(text)
     return words, chopped
 
@@ -274,18 +275,55 @@ _SUBST_PAY_RE = re.compile(r"\s+SUBST(?:ITUTE)?\s+PAY(?:MENT)?\b.*$")
 # COMMON STOCK CLASS C"), so its designators are carried into the name.
 _COMMON_STOCK_RE = re.compile(r"\s+COMMON\s+STOCK\b(.*)$")
 _CLASS_LETTER_RE = re.compile(r"\b(?:CL|CLASS)\s+([A-Z])\b")
+# A Canadian dealer's trade-confirmation wording after the security's
+# name, with everything after it: "<NAME> UNSOLICITED WE ACTED AS
+# PRINCIPAL AVG PRICE SHOWN-DETAILS ON REQ DA" (RBC), "<NAME> WE ACTED AS
+# AGENT AVG PRICE - ASK US FOR DETAILS AS OF 07/01/26" (Questrade). Left
+# in, "WE ACTED AS ..." gave the name the word AS (a corporate form, A/S)
+# and the exact comparison refused a real pair of listings. Language
+# only (no security data); never the name's first word.
+_CONFIRM_RE = re.compile(
+    r"\s+(?:(?:UNSOLICITED|SOLICITED|WE\s+ACTED\s+AS\s+(?:AGENT|PRINCIPAL)"
+    r"|AVG\.?\s+PRICE|PROSPECTUS\s+ENCLOSED|ISSUER\s+CONNECTED\s+TO)\b"
+    r"|AS\s+OF\s+\d).*$")
+
+
+def _carry_designators(key: str, tail: str) -> str:
+    """`key` with the share designators of the cut-off `tail` added back
+    (a class letter after CL / CLASS, VOTING, ADR ...) when the key does
+    not already state them: "QZCO INC COMMON STOCK CLASS C" is "QZCO INC
+    CL C", never "QZCO INC"."""
+    carried: List[str] = []
+    for c in _CLASS_LETTER_RE.findall(tail):
+        carried += ["CL", c]
+    carried += [w for w in _WORD_RE.findall(_CLASS_LETTER_RE.sub(" ", tail))
+                if w in _DESIGNATORS]
+    if carried and not (_marks(_tokens(carried))
+                        <= _marks(_tokens(_WORD_RE.findall(key)))):
+        key = f"{key} {' '.join(carried)}"
+    return key
+
+
+def _cut_confirmation(key: str) -> Tuple[str, str]:
+    """(name, the confirmation wording cut off it): _CONFIRM_RE."""
+    m = _CONFIRM_RE.search(key)
+    if not m:
+        return key, ""
+    return key[:m.start()].strip(), m.group(0)
 
 
 def questrade_name(desc: str) -> str:
     """The security name a Questrade row description gives: the parser's
     description key (questrade._get_desc_key — its event wording cut),
-    without a substitute payment's wording, and with any share designator
-    the key's "COMMON STOCK ..." cut dropped carried back ("QZCO INC
-    COMMON STOCK CLASS C" is "QZCO INC CL C", never "QZCO INC")."""
+    without a substitute payment's wording or the trade-confirmation
+    wording (_CONFIRM_RE), and with any share designator either cut
+    dropped carried back ("QZCO INC COMMON STOCK CLASS C" is "QZCO INC
+    CL C", never "QZCO INC")."""
     from taxjson.lib.brokerages.questrade import (_DESC_NOISE_RES,
                                                    _get_desc_key)
     d = " ".join(str(desc or "").split())
     key = " ".join(_SUBST_PAY_RE.sub("", _get_desc_key(d)).split())
+    key, confirm = _cut_confirmation(key)
     if not key:
         return key
     # The tail the COMMON STOCK cut removes, once the event wording
@@ -296,33 +334,59 @@ def questrade_name(desc: str) -> str:
             break
         rest = rx.sub("", rest)
     m = _COMMON_STOCK_RE.search(rest)
-    if not m:
-        return key
-    tail = m.group(1)
-    carried: List[str] = []
-    for c in _CLASS_LETTER_RE.findall(tail):
-        carried += ["CL", c]
-    carried += [w for w in _WORD_RE.findall(_CLASS_LETTER_RE.sub(" ", tail))
-                if w in _DESIGNATORS]
-    if carried and not (_marks(_tokens(carried))
-                        <= _marks(_tokens(_WORD_RE.findall(key)))):
-        key = f"{key} {' '.join(carried)}"
-    return key
-    m = _COMMON_STOCK_RE.search(d.upper())
-    if not m:
-        return key
-    tail = m.group(1)
-    carried: List[str] = []
-    for c in _CLASS_LETTER_RE.findall(tail):
-        carried += ["CL", c]
-    for w in _WORD_RE.findall(_CLASS_LETTER_RE.sub(" ", tail)):
-        if w in _DESIGNATORS:
-            carried.append(w)
-    have = set(_WORD_RE.findall(key))
-    extra = [w for w in carried if w not in have or w == "CL"]
-    if extra and " ".join(extra) not in key:
-        key = f"{key} {' '.join(extra)}"
-    return key
+    return _carry_designators(key, m.group(1) if m else confirm)
+
+
+# RBC's event wording after the security's name (a dividend, a
+# distribution, a transfer, a reorganization, a tax row): cut with
+# everything after it, nothing carried (what follows is not the share's
+# name: "NON-RES", a new issuer's name). Language only, from RBC's own
+# rows; the event CODE before the name ("DIV - ", "TFO - ") is the
+# parser's (rbc_direct._RBC_CODE_RE).
+_RBC_EVENT_RE = re.compile(
+    r"\s+(?:(?:CASH\s+DIV(?:IDEND)?\s+ON|DIST\s+ON|DIV\s+ON|REINV\s*@"
+    r"|ACCOUNT\s+TRANSFER|TRANSFER\s+(?:FROM|TO|IN|BOOK\s+VALUE)"
+    r"|BOOK\s+VALUE|(?:STK\.?|STOCK)\s+(?:SPLIT|DIV(?:IDEND)?)"
+    r"|REV(?:ERSE)?\s+SPLIT|CASH\s+IN\s+LIEU|IN\s+LIEU\s+OF|SPINOFF\s+ON"
+    r"|NON-RES|TAX\s+WITHHELD|RETURN\s+OF\s+CAPITAL|RESULT\s+OF"
+    r"|NAME\s+CHANGE|SHRS\s+RECEIVED|RETRACTION\s+AT"
+    r"|ADJUSTMENT\s+TO\s+BOOK\s+COST|EXP\s+\d)\b"
+    r"|TO\s+[^;]*;\s*[\d.]+\s+FOR\s+[\d.]+\b|TRANSFER$).*$")
+# RBC's own trade wording (a short sale, a due-bill trade, an
+# assignment's stock leg): cut, designators carried.
+_RBC_TRADE_RE = re.compile(
+    r"\s+(?:SHORT\.(?=\s|$)|WITH\s+DUE-BILL\b|ASSIGNMENT\s+OF\s+OPTION\b)"
+    r".*$")
+# The desk codes that end an RBC trade row ("... DA", "... CA JNL",
+# "... DA OPEN CONTRACT"): cut on a trade row only.
+_RBC_DESK_RE = re.compile(
+    r"\s+(?:CA|DA)(?:\s+JNL)?(?:\s+(?:OPEN|CLOSE)\s+CONTRACT)?$")
+
+
+def rbc_name(desc: str, trade: bool = False) -> str:
+    """The security name an RBC Direct Investing row description gives:
+    the event code before it ("DIV - ", "TFO - ") and the event wording
+    after it (_RBC_EVENT_RE, the transfer's "TO ACCOUNT ..." with it)
+    cut, then the trade wording (_RBC_TRADE_RE, _CONFIRM_RE) with any
+    share designator in it carried back; on a trade row (`trade`) the
+    closing desk code ("DA", "CA JNL") too."""
+    from taxjson.lib.brokerages.rbc_direct import _RBC_CODE_RE
+    s = " ".join(_CONTROL_RE.sub(" ", str(desc or "").upper()).split())
+    m = _RBC_CODE_RE.match(s)
+    if m:
+        s = s[m.end():].strip()
+    s = _RBC_EVENT_RE.sub("", s).strip()
+    tail = ""
+    m = _RBC_TRADE_RE.search(s)
+    if m:
+        s, tail = s[:m.start()].strip(), m.group(0)
+    s, confirm = _cut_confirmation(s)
+    tail = f"{confirm} {tail}"
+    if trade:
+        s = _RBC_DESK_RE.sub("", s).strip()
+    if not s:
+        return s
+    return _carry_designators(s, tail)
 
 
 # Spellings of one word folded for the exact comparison (exact_name):
@@ -720,6 +784,9 @@ def _row_name(t: Dict[str, Any], broker: str) -> str:
     desc = str(t.get("description") or "").strip()
     if broker == "questrade":
         return questrade_name(desc)
+    if broker == "rbc_direct":
+        return rbc_name(desc, trade=t.get("action") in ("BUYSELL",
+                                                         "ASSIGN"))
     return desc
 
 
