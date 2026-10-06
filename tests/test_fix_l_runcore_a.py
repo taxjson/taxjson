@@ -375,7 +375,7 @@ class TestDiagnosticsBanner(unittest.TestCase):
             _crypto_project(root, {"kr1": fixed, "kr2": _KR2})
             r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("crypto pass", r.stdout)
+            self.assertIn("across crypto accounts (kr1, kr2)", r.stdout)
             self.assertEqual(_count(rep / "kr1_wash.sum", "go short"), 0)
             # S038-08: short again inside the blend, then kr2 leaves.
             _crypto_project(root, {"kr1": _KR1_SHORT, "kr2": _KR2})
@@ -699,7 +699,7 @@ class TestFastCache(unittest.TestCase):
             r = _run_cli(root, "run", "--fast", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("code changed", r.stdout)
-            self.assertIn("parse questrade", r.stdout)
+            self.assertIn("==> Reading 1 file", r.stdout)
 
     def test_tt_stem_with_reserved_suffix_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
