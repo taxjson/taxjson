@@ -148,13 +148,22 @@ class TestResolve(unittest.TestCase):
                          "TOBASE QZAX.US QZAX.TO")
 
     def test_the_other_listing_known_elsewhere(self):
-        s = _scan(QZAX_US=("USD", "QZALPHA MINES CORP", ()))
+        # Arrived by a transfer nothing in the books pairs with.
+        s = _scan(QZAX_US=("USD", "QZALPHA MINES CORP", self.ARR))
         r = _res(s, _ev(seen=[("QZAX.TO", "tfsa", "questrade", "CAD",
                                "QZALPHA MINES CORP")]))
         self.assertEqual(r["corrected"]["QZAX.US"]["how"], "listing")
         r = _res(s, _ev(seen=[("QZAX.TO", "tfsa", "questrade", "CAD",
                                "QZOTHER HOLDINGS INC")]))
         self.assertEqual(r["corrected"], {})
+
+    def test_shares_bought_on_a_usd_row_keep_the_us_listing(self):
+        # The same ticker on the NYSE and the TSX (an interlisted
+        # company): a USD trade of the bare ticker is the US listing.
+        s = _scan(QZAX_US=("USD", "QZALPHA MINES CORP", ()))
+        r = _res(s, _ev(seen=[("QZAX.TO", "tfsa", "questrade", "CAD",
+                               "QZALPHA MINES CORP")]))
+        self.assertEqual(r, {"corrected": {}, "kept": {}})
 
 
 @rule("CA-XLIST-02")

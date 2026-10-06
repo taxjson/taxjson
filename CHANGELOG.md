@@ -11,7 +11,8 @@
   listing that does not exist and the cross-listing join pooled the company
   under it. When the transfer journal pairs it with another US ticker's
   transfer out (or the same ticker's other listing) under an equal name, or
-  the `.TO` listing is in the books under an equal name, every row of the
+  shares that arrived by an unpaired transfer have their `.TO` listing in the
+  books under an equal name, every row of the
   symbol is booked as the `.TO` listing, with a Warning naming the
   `DISTINCT` line that undoes it; `taxjson ticker-map --suggest` shows the
   explicit lines (tax-logic CA-XLIST-02 / US-XLIST-02).

@@ -28,9 +28,13 @@ the project's other books instead, in this order:
    An out-leg of the very listing the currency names (a custody move),
    or of another ticker on the other listing (an ordinary TSX -> NYSE
    journal), confirms the row currency's listing.
-2. the other listing known (a USD row only): the project's books hold
-   ROOT.TO elsewhere — another account or broker, Questrade's own CAD or
-   .TO rows included — under an EQUAL name: the row is ROOT.TO.
+2. the other listing known (a USD row only, of shares that arrived by a
+   transfer the books do not pair): the project's books hold ROOT.TO
+   elsewhere — another account or broker, Questrade's own CAD or .TO
+   rows included — under an EQUAL name: the row is ROOT.TO. Shares
+   bought at the broker keep the listing its USD trade rows name: many
+   Canadian companies trade under the same ticker on the NYSE, and a
+   USD trade of the bare ticker is that US listing.
 
 Never corrected (the symbol keeps the row currency's listing):
 * a ticker.map rule naming the listing (a rename, DELETE, a dated
@@ -496,7 +500,7 @@ def resolve(scan: Scan, ev: Evidence, *, account: str, broker: str,
                     "account": o.account, "broker": o.broker}
         elif vs:
             continue            # the transfer confirms the row's listing
-        elif c.currency == "USD" and alt in known:
+        elif c.currency == "USD" and c.arrivals and alt in known:
             names = set().union(*(nm for _a, _b, nm in known[alt]))
             if not names or not _names_ok(c.names, names, shown):
                 continue
