@@ -126,18 +126,19 @@ Info: activity.csv: 6 tax objects
 ...
 ==> Done. Reports are in reports/
 ==> Before you trust these numbers (docs/getting-started.md, step 5)
-Warning: 2 positions sold in 2025 with no purchase in your files, not in missing_history.json:
-  SAMPA.TO (margin), SAMPK.TO (margin). Those sales are NOT in `taxjson sum`; run
-  `taxjson find-missing-history`.
-Warning: 1 transfer-in from outside your books kept out with no cost: SAMPK.TO (margin). Run
-  `taxjson transfers`.
-Info: 1 account with open positions and no holdings file to check them against: margin (4). Run
-  `taxjson sanity` with the broker's positions.
+Warning: 2 positions sold in 2025 with no purchase in your files, not in missing_history.json: SAMPA.TO (margin),
+SAMPK.TO (margin). Those sales are NOT in `taxjson sum`; run `taxjson find-missing-history`.
+
+Warning: 1 transfer-in from outside your books kept out with no cost: SAMPK.TO (margin). Run `taxjson transfers`.
+Info: 1 account with open positions and no holdings file to check them against: margin (4). Run `taxjson sanity` with
+the broker's positions.
+
 Info: Then run `taxjson checklist`. Every step is in docs/getting-started.md.
 ```
 
 Every line starts with `==> ` (a step the run is doing), `Info:`,
-`Warning:` or `Error:`, or two spaces (the line above continues).
+`Warning:` or `Error:`, or continues the message above it. A message
+that takes more than one line is followed by one blank line.
 
 The list can also name positions at a $0 cost (sold this year or still
 held) and stocks that paid you income the books do not hold. A run with

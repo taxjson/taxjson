@@ -1413,8 +1413,16 @@ def render(rep: Dict[str, Any], record_path: str) -> List[str]:
                       else str(i['here']))
                    + (f"   {y} record: {i['record']:,.2f}"
                       if isinstance(i['record'], (int, float)) else "")))
-    for n in rep["notes"]:
-        L.extend(wrap(label("note", stream=sys.stdout) + n, None, "", "  "))
+    from taxjson.lib.out import width as _width
+    _shown = _width(sys.stdout) > 0
+    for i, n in enumerate(rep["notes"]):
+        # A message: shown to a person its lines flush-left, one blank
+        # line after it when it wraps (docs/output-style.md, Messages).
+        block = wrap(label("note", stream=sys.stdout) + n, None, "",
+                     "" if _shown else "  ")
+        L.extend(block)
+        if _shown and len(block) > 1 and i + 1 < len(rep["notes"]):
+            L.append("")
     if rep["notes"]:
         L.append("")
     L.append(f"{rep['problems']} problem(s)." if rep["problems"] else

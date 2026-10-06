@@ -36,7 +36,7 @@ other country owns is refused). Several commands on one line (`taxjson run sum`)
 are split into segments and run in order.
 
 - `src/taxjson/bin/taxjson_run.py` — `main`, `_main`, `_build_parser`, `_COMMAND_GROUPS`, `_GroupedHelpParser`, `_enforce_command_country`, `_refuse_unknown_account`, `_split_command_segments`, `_help_country`, `_failure_headline`, `_die`: the entry point, the parser and the grouped help page (the other country's commands hidden); the checks applied before every command; command chaining (`taxjson run sum`); how a failed stage or bad input becomes one short message.
-- `src/taxjson/lib/cli_diag.py` — `guard_main`, `run_top_level`, `labelled_usage_errors`, `describe_input_error`, `tolerant_stdout`: the top-level wrapper every tool runs under (broken pipes, unreadable input, usage errors).
+- `src/taxjson/lib/cli_diag.py` — `guard_main`, `run_top_level`, `labelled_usage_errors`, `describe_input_error`, `tolerant_stdout`: the top-level wrapper every tool runs under (broken pipes, unreadable input, usage errors, the settling streams that print a multi-line message's blank line).
 - `src/taxjson/lib/country.py` — `COMMAND_COUNTRY`, `command_country_problem`, `flag_country_problems`, `given_flags`: which commands and flags belong to one country.
 
 ## Stand-alone tools and in-process dispatch
@@ -62,7 +62,7 @@ drift check and the end-of-run summary. A full rebuild is the default;
 `--fast` reuses cached stages only when this same code built them.
 
 - `src/taxjson/bin/taxjson_run.py` — `cmd_run`, `_acquire_run_lock`, `needs_rebuild`, `_package_fingerprint`, `stage_account`, `stage_wash_pass`, `stage_blended_wash_pass`, `stage_cross_reports`, `stage_fees`, `collect_diagnostics`, `echo_attention_lines`, `_first_run_summary`: the run, its one-run-per-project lock and the `--fast` cache rules; `stage_account` is the per-account chain (parse, corp actions, .tt files, transfer arrivals, merge, gains, raw holdings, the `.sum` report); then the passes across accounts; what each stage printed, folded into the console and the `.sum` DIAGNOSTICS section; the closing summary.
-- `src/taxjson/lib/first_run.py` — `collect`, `render`, `uncovered_short_sales`, `zero_cost_positions`, `income_without_position`, `SUMMARY_FILE`: the "what to check next" counts at the end of a run.
+- `src/taxjson/lib/first_run.py` — `collect`, `render`, `render_blocks`, `uncovered_short_sales`, `zero_cost_positions`, `income_without_position`, `SUMMARY_FILE`: the "what to check next" counts at the end of a run.
 
 ## Input discovery and broker detection
 
@@ -291,8 +291,8 @@ All human output follows docs/output-style.md: wrapped prose, labelled
 messages (Warning, Note, Error, ATTENTION), aligned tables. Stage messages are
 captured during a run and re-worded for the console.
 
-- `src/taxjson/lib/out.py` — `wrap`, `message`, `warn`, `note`, `attention`, `error`, `fail`, `fit_table`, `Doc`, `lint`, `console_lint`, `WIDTH`: the house style; the style checks tests use, and the wrap width (`TAXJSON_WIDTH`).
-- `src/taxjson/lib/stage_msg.py` — `emit_line`, `say`, `reword`, `console_lines`, `split_message`: stage messages and the run console.
+- `src/taxjson/lib/out.py` — `wrap`, `message`, `warn`, `note`, `attention`, `error`, `fail`, `fit_table`, `Doc`, `lint`, `console_lint`, `WIDTH`, `MAX_WIDTH`, `width`, `show`, `show_blocks`, `join_blocks`, `settle`, `settling_streams`: the house style; the style checks tests use; the wrap width (`TAXJSON_WIDTH`; 120 piped, the terminal's up to 160); a message printed with its lines flush-left and the one blank line a multi-line message owes its destination.
+- `src/taxjson/lib/stage_msg.py` — `emit_line`, `say`, `reword`, `console_lines`, `is_continuation`, `split_message`: stage messages and the run console.
 - `src/taxjson/lib/cli_diag.py` — `warn`, `error`, `note`, `read_text_utf8`, `write_text_atomic`, `InputReadError`: stderr diagnostics and safe reads and writes for tools.
 - `src/taxjson/lib/trace_format.py` — `render_gain_block`, `render_report_trace`, `render_summary_table`, `render_document_header`: the per-gain trace boxes.
 - `src/taxjson/lib/install_hint.py` — `extra_hint`, `INSTALLER`, `NOT_ON_PYPI`: the install lines the CLI prints.

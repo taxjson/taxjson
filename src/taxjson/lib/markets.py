@@ -207,7 +207,8 @@ def _shown_to_a_person() -> bool:
     stage_msg._captured rule. A redirected sys.stderr (a buffer an
     in-process caller reads or discards) is captured."""
     from taxjson.lib import out
-    return sys.stderr is sys.__stderr__ and out.width(sys.stderr) > 0
+    return (out.real_stream(sys.stderr) is sys.__stderr__
+            and out.width(sys.stderr) > 0)
 
 
 def flush_notes(file=None) -> None:

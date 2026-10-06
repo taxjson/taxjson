@@ -15,6 +15,8 @@ from taxjson.lib.tax_estimate import (_bracket_tax, estimate_canada,
                                       estimate_usa)
 from tax_rules import rule
 
+from taxjson.lib.out import WIDTH as PIPE_WIDTH
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -422,7 +424,7 @@ class TestEstimateCommand(unittest.TestCase):
                           env=_wrapping_env())
         block = r.stdout[r.stdout.index("AMT CHECK"):]
         for line in block.splitlines():
-            self.assertLessEqual(len(line), 100, repr(line))  # house width
+            self.assertLessEqual(len(line), PIPE_WIDTH, repr(line))  # house width
 
     def test_estimate_json_carries_summary_and_estimate(self):
         import json
@@ -582,4 +584,4 @@ class TestAmtLossCapAndWidth(unittest.TestCase):
         block = r.stdout[r.stdout.index("AMT CHECK"):]
         self.assertIn("AMT TOP-UP", block, "fixture must BIND")
         for line in block.splitlines():
-            self.assertLessEqual(len(line), 100, repr(line))  # house width
+            self.assertLessEqual(len(line), PIPE_WIDTH, repr(line))  # house width

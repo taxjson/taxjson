@@ -55,8 +55,9 @@ class _NoWidthEnv(unittest.TestCase):
 
 # ------------------------------------------------------------- lib/out
 class TestWidth(_NoWidthEnv):
-    def test_pipe_is_100_and_env_overrides(self):
-        self.assertEqual(out.width(io.StringIO()), 100)
+    def test_pipe_is_120_and_env_overrides(self):
+        self.assertEqual(out.width(io.StringIO()), 120)
+        self.assertEqual(out.WIDTH, 120)
         os.environ["TAXJSON_WIDTH"] = "72"
         self.assertEqual(out.width(io.StringIO()), 72)
         os.environ["TAXJSON_WIDTH"] = "0"
@@ -64,16 +65,27 @@ class TestWidth(_NoWidthEnv):
         os.environ["TAXJSON_WIDTH"] = "10"
         self.assertEqual(out.width(io.StringIO()), out.MIN_WIDTH)
 
-    def test_terminal_is_capped_at_100(self):
+    def test_terminal_is_its_full_width_capped_at_160(self):
         class Tty(io.StringIO):
             def isatty(self):
                 return True
+        for cols, want in ((200, 160), (160, 160), (140, 140),
+                           (70, 70), (20, out.MIN_WIDTH)):
+            with self.subTest(cols=cols), mock.patch(
+                    "shutil.get_terminal_size",
+                    return_value=os.terminal_size((cols, 50))):
+                self.assertEqual(out.width(Tty()), want)
+        # TAXJSON_WIDTH wins over the terminal; 0 never wraps.
         with mock.patch("shutil.get_terminal_size",
-                        return_value=os.terminal_size((180, 50))):
-            self.assertEqual(out.width(Tty()), 100)
-        with mock.patch("shutil.get_terminal_size",
-                        return_value=os.terminal_size((70, 50))):
-            self.assertEqual(out.width(Tty()), 70)
+                        return_value=os.terminal_size((200, 50))):
+            os.environ["TAXJSON_WIDTH"] = "90"
+            self.assertEqual(out.width(Tty()), 90)
+            os.environ["TAXJSON_WIDTH"] = "0"
+            self.assertEqual(out.width(Tty()), 0)
+            del os.environ["TAXJSON_WIDTH"]
+            # Captured for a program: 0 whatever the terminal says.
+            with out.unwrapped():
+                self.assertEqual(out.width(Tty()), 0)
 
 
 class TestWrapAndMessages(_NoWidthEnv):
@@ -91,18 +103,20 @@ class TestWrapAndMessages(_NoWidthEnv):
 
     def test_message_headline_and_details(self):
         lines = out.message("warning", "short headline", prog="taxjson x",
-                            details=["why " * 40, "- an item " * 12],
+                            details=["why " * 40, "- an item " + "word " * 20],
                             width_=60)
         # Shown to a person: the label starts the line, no program name.
         self.assertEqual(lines[0], "Warning: short headline")
-        self.assertTrue(all(ln.startswith("  ") for ln in lines[1:]))
+        # Every later line is flush-left (an item and its wrapped lines
+        # too: no indentation in a message).
+        self.assertTrue(all(ln and not ln[0].isspace() for ln in lines),
+                        lines)
         self.assertTrue(all(len(ln) <= 60 for ln in lines))
-        item = [ln for ln in lines if ln.startswith("  - ")]
+        item = [ln for ln in lines if ln.startswith("- ")]
         self.assertEqual(len(item), 1)
-        # Every line after the headline is a continuation, exactly two
-        # spaces in (an item's wrapped lines too: the run's console rule).
         cont = lines[lines.index(item[0]) + 1]
-        self.assertTrue(cont.startswith("  ") and cont[2] != " ", cont)
+        self.assertTrue(cont.startswith("word"), cont)
+        self.assertEqual(out.console_lint("\n".join(lines), 60), [])
 
     def test_captured_message_keeps_the_gnu_bytes(self):
         # Width 0 (a .diag, the checklist's read): `<prog>: <kind>:`.
@@ -173,11 +187,134 @@ class TestWrapAndMessages(_NoWidthEnv):
     def test_fail_exit_1_carries_the_text(self):
         with self.assertRaises(SystemExit) as cm:
             out.fail("it broke", prog="taxjson x", details=["fix it"])
-        self.assertEqual(str(cm.exception), "Error: it broke\n  fix it")
+        # Shown to a person: the detail flush-left.
+        self.assertEqual(str(cm.exception), "Error: it broke\nfix it")
         with out.unwrapped(), self.assertRaises(SystemExit) as cm:
             out.fail("it broke", prog="taxjson x", details=["fix it"])
         self.assertEqual(str(cm.exception),
                          "taxjson x: error: it broke\n  fix it")
+
+
+class TestBlankLineAfterMultiLineMessages(_NoWidthEnv):
+    """A message (or step) of more than one line is followed by exactly
+    one blank line — owed, printed before the next text to the same
+    destination, never at the end; a one-line message owes nothing."""
+
+    def setUp(self):
+        super().setUp()
+        out._OWED.clear()
+        self.addCleanup(out._OWED.clear)
+
+    LONG = "word " * 40
+
+    def test_one_line_messages_have_no_blank_line(self):
+        buf = io.StringIO()
+        out.note("one", file=buf)
+        out.warn("two", file=buf)
+        self.assertEqual(buf.getvalue(), "Info: one\nWarning: two\n")
+
+    def test_multi_line_message_then_one_blank_line_never_at_the_end(self):
+        buf = io.StringIO()
+        out.warn(self.LONG, file=buf)
+        text = buf.getvalue()
+        self.assertFalse(text.endswith("\n\n"), text)    # owed, not printed
+        out.note("next", file=buf)
+        text = buf.getvalue()
+        self.assertIn("\n\nInfo: next\n", text)
+        self.assertNotIn("\n\n\n", text)
+        self.assertEqual(out.console_lint(text), [])
+        # Details: headline and detail lines flush-left, one blank after.
+        buf = io.StringIO()
+        out.error("head", details=["why", "- an item"], file=buf)
+        out.error("again", file=buf)
+        self.assertEqual(buf.getvalue(),
+                         "Error: head\nwhy\n- an item\n\nError: again\n")
+
+    def test_captured_owes_nothing(self):
+        os.environ["TAXJSON_WIDTH"] = "0"
+        buf = io.StringIO()
+        out.warn("w", details=["d " * 80], file=buf)
+        out.note("n", file=buf)
+        self.assertEqual(buf.getvalue(),
+                         "warning: w\n  " + ("d " * 80).strip()
+                         + "\nnote: n\n")
+        self.assertEqual(out._OWED, {})
+
+    def test_owed_per_destination(self):
+        # stdout and stderr to different places (`2>err.txt`): each
+        # keeps its own messages apart, neither gets the other's blank.
+        a, b = io.StringIO(), io.StringIO()
+        out.warn(self.LONG, file=a)
+        out.note("on b", file=b)
+        out.note("on a", file=a)
+        self.assertEqual(b.getvalue(), "Info: on b\n")
+        self.assertIn("\n\nInfo: on a\n", a.getvalue())
+
+    def test_one_destination_two_streams(self):
+        # `2>&1`, a terminal: two streams, one pipe — the blank line is
+        # printed before the next text whichever stream says it.
+        r, w = os.pipe()
+        w2 = os.dup(w)
+        f1 = os.fdopen(w, "w")
+        f2 = os.fdopen(w2, "w")
+        try:
+            out.show(["Warning: x", "more"], f1)
+            f1.flush()
+            out.show(["==> step"], f2)
+            f2.flush()
+        finally:
+            f1.close()
+            f2.close()
+        with os.fdopen(r) as rf:
+            self.assertEqual(rf.read(), "Warning: x\nmore\n\n==> step\n")
+
+    def test_continuation_joins_the_entry(self):
+        buf = io.StringIO()
+        out.show(["Warning: head"], buf)
+        out.show(["detail"], buf, cont=True)
+        out.show(["Info: next"], buf)
+        self.assertEqual(buf.getvalue(),
+                         "Warning: head\ndetail\n\nInfo: next\n")
+
+    def test_settling_streams_cover_a_raw_print(self):
+        outb, errb = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(outb), \
+                contextlib.redirect_stderr(errb), out.settling_streams():
+            out.warn(self.LONG, file=sys.stdout)
+            print("REPORT TITLE")              # a raw print
+            out.warn(self.LONG, file=sys.stdout)
+            print()                            # its own blank line
+            print("next")
+        text = outb.getvalue()
+        self.assertIn("\n\nREPORT TITLE\n", text)
+        self.assertNotIn("\n\n\n", text)
+        self.assertTrue(text.endswith("\n\nnext\n"), text)
+
+    def test_run_top_level_settles_before_an_exit_text(self):
+        from taxjson.lib import cli_diag
+        errb = io.StringIO()
+
+        def main():
+            out.warn(self.LONG, file=sys.stderr)
+            raise SystemExit("Error: stop")
+        with contextlib.redirect_stderr(errb), \
+                self.assertRaises(SystemExit):
+            cli_diag.run_top_level("taxjson-x", main)
+        # The interpreter prints the exit text next: the blank is there.
+        self.assertTrue(errb.getvalue().endswith("\n\n"), errb.getvalue())
+
+    def test_join_blocks(self):
+        self.assertEqual(out.join_blocks([["==> a"], ["Info: b", "c"],
+                                          ["Info: d"], ["Info: e", "f"]]),
+                         ["==> a", "Info: b", "c", "", "Info: d",
+                          "Info: e", "f"])
+
+    def test_doc_message(self):
+        d = out.Doc("TITLE", width_=60)
+        d.message("warning", self.LONG).line("next").message("note", "x")
+        lines = d.lines()
+        self.assertEqual(lines[-3:], ["", "next", "Info: x"])
+        self.assertEqual(out.lint(d.text(), 60), [])
 
 
 class TestTables(_NoWidthEnv):
@@ -216,7 +353,7 @@ class TestTables(_NoWidthEnv):
         self.assertEqual(out.lint(d.text()), [])
 
     def test_lint_finds_problems(self):
-        bad = "\nNOTE: x\n\n\n" + "y " * 60 + "\n"
+        bad = "\nNOTE: x\n\n\n" + "y " * 70 + "\n"
         probs = " | ".join(out.lint(bad))
         for want in ("leading blank", "retired prefix", "two blank",
                      "columns"):
@@ -344,7 +481,7 @@ class TestElectStyle(_NoWidthEnv):
         msg = str(cm.exception)
         self.assertTrue(msg.startswith("Error: "
                                        "rollover_s_86_1 needs "
-                                       "allocated_acb_cad\n  "), msg)
+                                       "allocated_acb_cad\nAdd "), msg)
         self.assertEqual(out.lint(msg), [], msg)
 
     def test_set_confirmation_and_zero_warning(self):
