@@ -12,7 +12,8 @@ so this test fails when:
   plain substring);
 - a `tjs COMMAND` / `taxjson COMMAND` it quotes is not a command;
 - a troubleshooting entry lacks Check / Cause / Fix / Fixed in / Code, or its
-  "Fixed in" is not a released version heading in CHANGELOG.md;
+  "Fixed in" is not a released version heading in CHANGELOG.md, `—`, or
+  `unreleased` (scripts/release.sh turns `unreleased` into the new tag);
 - the pack (or the bug-report template) holds personal data: an e-mail address, an account-number shape
   (an IB U-number or an 8+ digit run that is not a synthetic id or a date),
   a money amount of 1,000 or more with cents, or anything
@@ -208,8 +209,8 @@ class TestTroubleshooting(unittest.TestCase):
             for v in re.findall(r"`v(\d+\.\d+\.\d+)`", fixed):
                 if v not in released:
                     bad.append(f"{title}: v{v} is not a release heading in CHANGELOG.md")
-            if fixed and not re.search(r"`v\d+\.\d+\.\d+`|—", fixed):
-                bad.append(f"{title}: Fixed in is a version in backticks or —")
+            if fixed and not re.search(r"`v\d+\.\d+\.\d+`|—|^unreleased$", fixed):
+                bad.append(f"{title}: Fixed in is a version in backticks, — or unreleased")
             code = re.search(r"^- \*\*Code:\*\*\s*(.*)$", e, re.M)
             code = code.group(1) if code else ""
             if code and not any(_is_repo_path(_split_path_symbol(t)[0])

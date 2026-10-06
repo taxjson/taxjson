@@ -90,7 +90,8 @@ IRS guidance and a tax professional.
 
 `docs/troubleshooting.md`, `docs/architecture-map.md`, `docs/tax-rules.md`,
 `docs/settings.md`. Keep it true as you work: a fix for a problem users can
-hit adds or updates its troubleshooting entry; moving or renaming code the
+hit adds or updates its troubleshooting entry (Fixed in: `unreleased`; the
+release script fills in the version); moving or renaming code the
 map names updates the map. A code reference is written
 `` `path` — `symbol` `` or `` `path` — `sym1`, `sym2` `` (repo-relative path;
 each symbol an identifier in that file or a literal fragment of it).

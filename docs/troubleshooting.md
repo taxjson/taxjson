@@ -8,7 +8,8 @@ Each entry says how to **check** it is this problem: run that first, since sever
 their wording. Most problems are an input (a missing older export, a transfer in, an election not
 made), not a bug.
 **Fixed in** names the release whose code fixed it: on an older install (`tjs --version`) the fix
-starts with upgrading (re-run the installer). `—` means a setting, an input or the design.
+starts with upgrading (re-run the installer). `—` means a setting, an input or the design;
+`unreleased` means fixed on `main`, in the next release.
 **Code** names the file and the function or message to search for; `docs/architecture-map.md` maps
 the rest. taxjson computes and shows its work; it gives no tax advice. The rules it applies are in
 `tjs tax-logic` (with `--ids`).
@@ -219,14 +220,14 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** each detail line names the move (`contribution margin → rrsp: 100 QZQ.TO on 2025-03-14`), its value and where the value came from, and the gain or the loss denied; `tjs transfers` labels both rows `in-kind_contribution` / `in-kind_withdrawal`.
 - **Cause:** a taxable account's transfer-out and a registered account's transfer-in of the same security and quantity within 10 days (or the reverse) are an in-kind contribution (withdrawal), not a move of your own. Canada books a contribution as a sale at fair market value (a loss is nil for good, s.40(2)(g)(iv), shown apart from DENIED) and a withdrawal as a purchase at that value (CA-INKIND-01 … CA-INKIND-06). A US contribution is NOT booked: an IRA takes cash only (US-INKIND-01). A move is NOT booked either when no value was found (no `INKIND` line, no market value on the transfer rows, no close from Yahoo).
 - **Fix:** check each value; a value marked ESTIMATED is Yahoo's split-adjusted close. To set your own, add the line the warning prints to a `.tt` file in the taxable account's folder (`INKIND 2025-03-14 QZQ.TO -100 CAD 15.00`; negative = shares out to the plan). A US contribution in kind is usually a mistake in the rows (or a rollover between retirement accounts): check `tjs transfers`. `tjs run --strict` stops while a move is not booked.
-- **Fixed in:** —
+- **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/in_kind.py` — `message`, `NOT booked`, `pair`, `value`; `src/taxjson/bin/taxjson_run.py` — `_say_in_kind`, `in_kind_state`
 
 ### "Error: 1 in-kind move(s) between your taxable and registered accounts cannot be valued: TAXJSON_OFFLINE is set and the close cache has no price for the date"
 - **Check:** the detail lines name each move and the `INKIND` line to add; `echo $TAXJSON_OFFLINE` is set.
 - **Cause:** neither transfer row states a market value (Questrade, RBC), so the value would be Yahoo's close on the date, and TAXJSON_OFFLINE forbids the lookup with no cached close in `work/.close_cache.json` (CA-INKIND-06 / US-INKIND-03). The run stops rather than book the move at no value.
 - **Fix:** add the printed line to a `.tt` file in the taxable account's folder with the fair market value per share (the day's close from the broker's statement or the contribution receipt): `INKIND 2025-03-14 QZQ.TO -100 CAD 15.00`. Or unset TAXJSON_OFFLINE once to look the close up (an estimate, then cached).
-- **Fixed in:** —
+- **Fixed in:** unreleased
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `in_kind_state`, `cannot be valued`; `src/taxjson/lib/price_chain.py` — `close_on`, `OfflineCloseMissing`
 
 ### "Warning: 2 positions at a $0 cost (1 sold in 2025, 1 still held)"
@@ -353,7 +354,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the export's `Other` rows of an earlier day hold the two BRW legs `<NAME> JOURNAL POSITION TO USD` (-300, CAD) and `<NAME> JOURNAL POSITION FROM CAD BOOK VALUE: $X CNV@ r` (+300, USD), or TO CAD / FROM USD the other way, and the later sale `<NAME> WE ACTED AS AGENT` is under a code (one letter and digits). On a release with the fix the run says instead "Questrade internal symbol codes resolved" with `G000123 → QZD.U.TO (journal in-leg of 300 on …)` and, in a Canadian project, "joined as one security by their transfer journal: QZD.TO ↔ QZD.U.TO (currency journal …)".
 - **Cause:** the website export names both legs by the bare symbol. The USD leg was read as a US listing (QZD.US) and the code of the sale, which no trade or transfer of the account names, stayed a security of its own, so the sale of the journaled units read as a short. Now the parser pairs the legs (one account, one day, one name, the same quantity), books the USD leg on the security's US-dollar line (the account's own USD listing of it, else `SYMBOL.U.TO` by the TSX convention in `src/taxjson/data/markets.toml`), books the code under that line, and a Canadian run joins the two lines as a ticker.map `JOURNAL` line would (tax-logic CA-XLIST-03): the units keep the CAD purchase's ACB. A leg whose partner is missing from the export stays a transfer of its own line, said with both row shapes.
 - **Fix:** re-run `tjs run` on a release with the fix. On an older install add `EXTRACT <NAME> | USD | QZD.U.TO` and `JOURNAL QZD.U.TO QZD.TO` to `ticker.map`. For a lone leg, re-export the journal's day so both rows are in the file. A short that remains on the CAD line (QZD.TO) is the units' real purchase missing from your files: supply it (`tjs find-missing-history`).
-- **Fixed in:** —
+- **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/brokerages/questrade.py` — `_plan_qt_journals`, `_journal_listing`, `journal_codes`, `has no partner`; `src/taxjson/lib/cross_listings.py` — `analyze`, `currency journal`; `src/taxjson/lib/markets.py` — `usd_unit_listing`
 
 ### "Warning: 99900001.csv: Questrade symbol QZOLD.US looks renamed to QZNEW.US" or "Warning: 99900001.csv: RBC symbol QZOLD (USD) looks renamed to QZNEW"
@@ -367,14 +368,14 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the warning names the dated line to add, e.g. `RENAME QZOLD.US QZNEW.US 2025-05-12`; `tjs shares` shows QZOLD open and QZNEW short. On v0.22.0 and earlier it suggested an undated `GLOBAL` line, ordered by first trade, and could point the real ticker at IB's temporary symbol (a time stamp YYYYMMDDHHMMSS before the ticker, given around a corporate action): `GLOBAL QZX.US <stamp>QZX.US`. Never add that line.
 - **Cause:** IB changed the ticker of one contract id without a corporate-action row, so the parser books each symbol as its own security. A temporary time-stamped symbol listed under the ticker's own contract id is now folded onto the ticker by the parser, with one Info line ("… is IB's temporary symbol for QZX …") and no ticker.map line.
 - **Fix:** if they are one security, add the `RENAME OLD NEW YYYY-MM-DD` line the warning gives (OLD is the symbol whose rows end first, the date the first row of the one that continues; `tjs ticker-map --suggest --write` adds it), then `tjs run`. Remove a `GLOBAL` line that maps a ticker onto a time-stamped symbol.
-- **Fixed in:** —
+- **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `_warn_stock_aliases`, `under several symbols`, `ib_temp_symbol_ticker`, `_ib_temp_folds`, `_ib_fold_rows`, `is IB's temporary symbol for`; `src/taxjson/lib/ticker_map_suggest.py` — `already`
 
 ### `tjs ticker-map --suggest`: "TOBASE QZQ.US QZQ.TO … transfer journal … not joined automatically: the names are not equal word for word (…)"
 - **Check:** `tjs ticker-map --suggest` lists the line with its reason; the transfer journal moves one listing of the security out and the other in (a USD line to its CAD line, say).
 - **Cause:** taxjson joins two listings of one security on its own only when their security names agree word for word, corporate form and share designators included (tax-logic CA-XLIST-01 / US-XLIST-01); anything less stays a suggestion, so two share classes are never merged. On v0.22.0 and earlier an RBC trade row's confirmation wording ("UNSOLICITED WE ACTED AS PRINCIPAL AVG PRICE …") stayed in the name and "AS" read as a corporate form, so a real pair was only suggested; the next release cuts that wording.
 - **Fix:** if both listings are one security, `tjs ticker-map --suggest --write` adds the line (or add it to `ticker.map` by hand), then `tjs run`. If they are different classes or companies, leave it out. Two listings whose names share no leading company word are no longer suggested at all (on v0.22.0 and earlier they were).
-- **Fixed in:** —
+- **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/cross_listings.py` — `_names_verdict`, `the names are not equal word for word `; `src/taxjson/lib/symbol_codes.py` — `_CONFIRM_RE`, `rbc_name`, `questrade_name`; `src/taxjson/lib/ticker_map_suggest.py` — `from_cross_listings`, `not joined `
 
 
@@ -382,21 +383,21 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs ticker-map --suggest` lists the line, but no account, `.tt` file or holdings file in the project has the `QZLR.TO` listing (every QZLR row in every broker is in USD). The run's own message ("… booked as QZLR.US, the payment currency's listing. Only if the position is really held under the other listing …") is right to stay.
 - **Cause:** a parser hint that says "only if …" (RBC's dividend on a symbol no RBC file trades; RBC's re-described option; IB's currency-tagged symbol; a Questrade code's look-alike) became an unconditional suggestion, so `--suggest --write --all` wrote a line moving a US stock's rows to a TSX listing that does not exist. In the same listing, a suggestion that another suggestion covers (two `EXTRACT` lines for one listing) was headed "Already answered by ticker.map" with no rule in the map.
 - **Fix:** upgrade. Such a hint is now suggested only when the project's books hold every symbol the line joins (another account's rows, a `.tt` or `OPENING` line, a holdings file; an option counts for its listing); otherwise `--suggest` shows nothing for it. A covered suggestion is listed under "Covered by another suggestion". If you added the line, remove it from `ticker.map` and run `tjs run`.
-- **Fixed in:** —
+- **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/ticker_map_suggest.py` — `books_symbols`, `pending`, `_conditional`, `covered_by_suggestion`; `src/taxjson/bin/taxjson_run.py` — `cmd_ticker_map`, `Covered by another suggestion`; `src/taxjson/lib/brokerages/rbc_direct.py` — `_report_untraded_income`
 
 ### "Warning: QZD.US names two securities: 'QZREALTY TRUST INC' in rrsp at Interactive Brokers; 'SAMPLEX US DLR CURRENCY ETF UNIT' in margin at RBC Direct Investing — add the EXTRACT line"
 - **Check:** `tjs ticker-map --suggest` lists `EXTRACT DLR CURRENCY ETF | USD | QZD.U.TO` and `JOURNAL QZD.U.TO QZD.TO`. On v0.22.0 and earlier there was no warning; the suggestion was `TOBASE QZD.US QZD.TO` ("another name of the listings states another share or corporate form ('QZREALTY TRUST INC' vs …)"). Never add that line: it merges the fund into the other company's pool.
 - **Cause:** RBC (or another broker that writes only the bare symbol) books a TSX fund's US-dollar unit in USD as `ROOT.US`, the same symbol as an NYSE stock of that root held elsewhere: one symbol, two securities, one pool. The fund's real listing is the TSX unit class `ROOT.U.TO` (the convention in `src/taxjson/data/markets.toml`).
 - **Fix:** add the suggested `EXTRACT` line (its words match every description of the fund in the project and no other row's), and the `JOURNAL` line when a journal moved the units to the CAD line, then `tjs run`; the warning stops. A suggestion with a placeholder (`<words that name it>`) is a template: write the words of the fund's description by hand (they must match the broker's text: `US DLR` and `U S DLR` are different words).
-- **Fixed in:** —
+- **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/cross_listings.py` — `collisions`, `extract_words`, `companies_differ`, `collision_note`, `names two securities`; `src/taxjson/lib/markets.py` — `usd_unit_listing`, `USD_UNITS_RE`; `src/taxjson/lib/ticker_map_suggest.py` — `from_cross_listings`, `clean_extract`; `src/taxjson/bin/taxjson_run.py` — `stage_cross_listings`
 
 ### "Warning: rrsp: joined as one security by their transfer journal: QZCJ.US ↔ QZCC.US …" where QZCC.US does not exist (Questrade or RBC files the TSX listing on a USD row)
 - **Check:** the in-leg is a Questrade (or RBC) symbol on a USD row whose company trades under another ticker in the US (`tjs transfers` shows QZCJ.US out of IB and QZCC.US into Questrade the same week). The current release says it instead: "QZCJ.US ↔ QZCC.TO (transfer 2025-09-01; QZCC.US read as QZCC.TO: Questrade files the TSX listing on a USD row)", or, for a symbol not in a join, a Warning of its own ending "add `DISTINCT QZCC.US QZCC.TO` to ticker.map".
 - **Cause:** Questrade's website export (and RBC) writes a bare ticker and a currency, and the listing suffix came from the currency alone. Interlisted shares that arrived from another broker are filed under the TSX ticker on a USD row, so the transfer-in became a `.US` listing no market has, and the join pooled the company under it (quotes, T1135 domicile, the loss rules). Now the listing is read from the books (tax-logic CA-XLIST-02 / US-XLIST-02): a transfer-in that is the unique arrival, under an equal name, of another ticker's transfer out on the same currency's listing (or the same ticker's other listing), or shares arrived by an unpaired transfer whose `.TO` listing is in the books under an equal name, are booked as `ROOT.TO` in every row of that broker's exports of the account. Not when a ticker.map rule names the symbol, another broker that names its listings trades `ROOT.US`, a rename row joins the tickers, or the account holds `ROOT.TO` in another currency (then `tjs ticker-map --suggest` offers `TOBASE ROOT.US ROOT.TO`).
 - **Fix:** upgrade and `tjs run`. If the symbol really is the US listing, add `DISTINCT QZCC.US QZCC.TO` to `ticker.map`. To make a correction explicit, `tjs ticker-map --suggest` lists the equivalent `GLOBAL QZCC.US QZCC.TO` and `TOBASE QZCJ.US QZCC.TO` lines (write both).
-- **Fixed in:** —
+- **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/listing_suffix.py` — `resolve`, `scan_questrade`, `scan_rbc`, `why`, `listing on a`; `src/taxjson/bin/taxjson_run.py` — `stage_listing_suffix`, `_listing_suffix_stale`, `stage_cross_listings`; `src/taxjson/bin/taxjson_brokerage.py` — `listing_fixes`; `src/taxjson/lib/cross_listings.py` — `joined_note`
 
 ### Questrade: "Warning: 99900001.csv: 1 dividend(s) marked NON-RES TAX WITHHELD are booked at the NET amount"

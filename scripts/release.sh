@@ -7,7 +7,8 @@
 # (docs/releasing.md). This script is the only way a tag should be made:
 #   1. refuses on a dirty tree or off main;
 #   2. turns the CHANGELOG's "## Unreleased" into "## vX.Y.Z (date)"
-#      (or requires that heading to exist already);
+#      (or requires that heading to exist already), and each
+#      "Fixed in: unreleased" in docs/troubleshooting.md into the tag;
 #   3. bumps pyproject.toml and, in lockstep, the taxjson-fetch plugin's
 #      packages/taxjson-fetch/pyproject.toml (its version and its
 #      `taxjson>=` floor), reinstalls so `taxjson --version` agrees;
@@ -44,6 +45,8 @@ elif grep -q "^## Unreleased" CHANGELOG.md; then
 else
   echo "CHANGELOG.md has neither '## Unreleased' nor '## $TAG'"; exit 1
 fi
+# The playbook's entries fixed since the last release name this one.
+sed -i "s/^- \*\*Fixed in:\*\* unreleased\$/- **Fixed in:** \`$TAG\`/" docs/troubleshooting.md
 sed -i "s/^version = \"[^\"]*\"/version = \"$V\"/" pyproject.toml
 grep -q "^version = \"$V\"" pyproject.toml || { echo "pyproject version bump failed"; exit 1; }
 # The broker-fetch plugin ships from the same tag, version for version,
@@ -59,7 +62,7 @@ grep -q "^version = \"$V\"" "$FETCH_TOML" && grep -q "\"taxjson>=$V\"" "$FETCH_T
 echo "== full gate =="
 scripts/ci.sh || { echo "gate FAILED — release aborted (CHANGELOG/pyproject edits left for you to inspect)"; exit 1; }
 
-git add CHANGELOG.md pyproject.toml "$FETCH_TOML"
+git add CHANGELOG.md pyproject.toml "$FETCH_TOML" docs/troubleshooting.md
 # An earlier aborted run may already have committed the bump: tag HEAD then.
 git diff --cached --quiet || git commit -q -m "release $TAG"
 git tag -a "$TAG" -m "taxjson $TAG"
