@@ -629,11 +629,15 @@ class TestTickerChangeHint(unittest.TestCase):
         return err.getvalue()
 
     def test_hint_is_old_first_with_the_listing_suffix(self):
-        self.assertIn('`GLOBAL QZMR.TO QZKB.TO`', self._run())
+        # A dated rename since renames are events (the date: QZKB's
+        # first row); GLOBAL folded every row at any date.
+        self.assertIn('`RENAME QZMR.TO QZKB.TO 2025-09-10`', self._run())
 
     def test_quiet_once_ticker_map_joins_them(self):
         self.assertNotIn('several symbols',
                          self._run('GLOBAL QZMR.TO QZKB.TO\n'))
+        self.assertNotIn('several symbols',
+                         self._run('RENAME QZMR.TO QZKB.TO 2025-09-10\n'))
 
 
 class TestAssignmentSettleRootAware(unittest.TestCase):

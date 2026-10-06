@@ -4,6 +4,45 @@
 
 ### Fixed
 
+- **IB temporary symbols are folded onto their ticker.** Around a corporate
+  action IB lists the old contract under a time-stamped symbol (the stamp
+  YYYYMMDDHHMMSS, then the ticker) beside the ticker itself. Its rows are now
+  booked as the ticker, with one Info line naming the fold; the "several
+  symbols" hint no longer suggested mapping the real ticker onto the temporary
+  one.
+- **A ticker change IB shows only through one contract id is suggested as a
+  dated rename** (`RENAME OLD NEW YYYY-MM-DD`: OLD is the symbol whose rows end
+  first, the date the first row of the one that continues), not an undated
+  `GLOBAL` line, and never toward a temporary symbol. `taxjson ticker-map
+  --suggest` reads it, and a dated RENAME of the pair in ticker.map answers it.
+- **No TOBASE / JOURNAL suggestion between two different companies.** A
+  transfer journal between two listings whose security names share no leading
+  company word is neither joined nor suggested.
+- **Symbol collisions are detected.** A `.US` symbol whose rows name two
+  different companies, one of them a Canadian-listed fund's US-dollar units (a
+  TSX currency fund's US-dollar unit booked `.US` beside an NYSE stock of the
+  same root at another broker), is now a `Warning:` on the run's console, and `taxjson ticker-map --suggest` offers the
+  `EXTRACT words | USD | ROOT.U.TO` line that separates the fund's rows (its
+  words the shortest run common to every description of the fund in the
+  project and in no other row's), plus the `JOURNAL` pairing the unit with its
+  Canadian-dollar line. Where no such run of words exists, the line is a
+  template with a placeholder: listed, never written by `--write`.
+  The suggestions now include `EXTRACT` lines, such as RBC's US-dollar unit
+  hint. The TSX unit-class spelling (`ROOT.U.TO`) is a convention in
+  `markets.toml`.
+- **A Questrade or RBC symbol filed on the other currency's row is read as
+  the listing the books show.** Questrade's website export files interlisted
+  shares that arrived from another broker under the TSX ticker on a USD row;
+  the listing came from the currency, so the transfer-in became a `.US`
+  listing that does not exist and the cross-listing join pooled the company
+  under it. When the transfer journal pairs it with another US ticker's
+  transfer out (or the same ticker's other listing) under an equal name, or
+  shares that arrived by an unpaired transfer have their `.TO` listing in the
+  books under an equal name, every row of the
+  symbol is booked as the `.TO` listing, with a Warning naming the
+  `DISTINCT` line that undoes it; `taxjson ticker-map --suggest` shows the
+  explicit lines (tax-logic CA-XLIST-02 / US-XLIST-02).
+
 - **Cross-listing auto-join: a dealer's trade-confirmation wording is no longer
   part of the security name.** An RBC or Questrade trade row's
   "UNSOLICITED WE ACTED AS PRINCIPAL AVG PRICE SHOWN-DETAILS ON REQ DA" left the

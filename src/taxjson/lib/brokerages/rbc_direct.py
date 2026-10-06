@@ -124,9 +124,7 @@ _TRADE_DESC_RE = re.compile(r'\b(?:Buy|Sell)\b')
 # `EXTRACT description words | USD | ROOT.U.TO` line moves the rows, and
 # until it does the row's .US listing is said out loud with that line
 # (re-audit A2-1043).
-_RBC_USD_UNITS_RE = re.compile(
-    r'\b(?:U\.?\s?S\.?\s+(?:DOLLAR|DLR)|USD)\s+'
-    r'(?:UNITS?|CLASS|SERIES|CURRENCY)\b', re.I)
+from taxjson.lib.markets import USD_UNITS_RE as _RBC_USD_UNITS_RE  # noqa: E402
 
 # Option description as RBC writes it, with the codes that may prefix it
 # (EXP expiry, ASN assignment, XCH adjustment/exchange). Overrides the
@@ -1767,8 +1765,9 @@ class RbcBrokerage(BaseBrokerage):
             self._usd_units_warned.add(symbol.upper())
             # The TSX unit's spelling: ROOT.U.TO whether the row says
             # ZSP, ZSP.U or ZSP.U.TO (it suggested ZSP.U.TO.U.TO).
-            _root = re.sub(r'(\.U)?(\.(TO|US))?$', '', symbol.upper())
-            if ticker_map_joins(out, f"{_root}.U.TO"):
+            from taxjson.lib.markets import usd_unit_listing
+            _unit = usd_unit_listing(symbol)
+            if ticker_map_joins(out, _unit):
                 return out      # ticker.map already folds them (A2-1056)
             if self._extract_covers(r.desc, currency):
                 return out      # an EXTRACT line rewrites the row
@@ -1778,7 +1777,7 @@ class RbcBrokerage(BaseBrokerage):
                        f"booked as {out}, a US listing (off the T1135, one "
                        f"pool with IB/Questrade's .U.TO only with a map "
                        f"line). If it trades on the TSX, add to ticker.map:"
-                       f"  EXTRACT {_words} | USD | {_root}.U.TO",
+                       f"  EXTRACT {_words} | USD | {_unit}",
                        attention=True)
         return out
 
