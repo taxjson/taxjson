@@ -996,7 +996,8 @@ class _CappedHelpFormatter(argparse.HelpFormatter):
 # sits in exactly one group (tests/test_cli_polish.py); the README's
 # command table uses the same groups in the same order.
 _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Set up", ("init", "format", "migrate", "fetch", "elect")),
+    ("Set up", ("init", "format", "migrate", "fetch", "elect",
+                "ticker-map")),
     ("Build the books", ("run", "crypto-sends", "find-missing-history",
                          "opening")),
     ("Summaries", ("amt", "estimate", "fx-cash", "instalments", "stats",
@@ -13412,6 +13413,96 @@ def cmd_renames(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def cmd_ticker_map(args: argparse.Namespace) -> None:
+    """`taxjson ticker-map --suggest [--write [--all]] [--json]`: every
+    ticker.map line the last run suggested (lib/ticker_map_suggest),
+    each with its reason; --write appends the chosen ones to ticker.map
+    (one by one on a terminal: y/n/q; --all: every one), a comment line
+    above each, never a line the map already answers, through
+    safe_write with a backup of the old file."""
+    from taxjson.lib import ticker_map_suggest as TS
+    from taxjson.lib.out import Doc
+    root = Path(args.dir).resolve()
+    if not getattr(args, "suggest", False):
+        _die_input("ticker-map: say what to do: --suggest lists the "
+                   "ticker.map lines the last run suggested",
+                   "`taxjson ticker-map --suggest --write` appends them.")
+    load_config(root)
+    if not (root / "work").is_dir():
+        _die("no work/ — run `taxjson run` first",
+             "The suggestions come from the run's messages.")
+    offer, skipped = TS.pending(root)
+    if getattr(args, "json", False):
+        _json_out({"suggestions": [s.record() for s in offer],
+                   "skipped": [dict(s.record(), why=w)
+                               for s, w in skipped]})
+        if not args.write:
+            return
+    elif not args.write or not offer:
+        d = Doc(f"TICKER.MAP SUGGESTIONS — {len(offer)} from the last run")
+        if offer:
+            d.blank()
+            for s in offer:
+                d.line(s.line)
+                d.para(s.reason, indent="  ")
+        if skipped:
+            d.section(f"Already answered by ticker.map ({len(skipped)})")
+            for s, why in skipped:
+                d.item(f"{s.line}: {why}", "  ")
+        d.blank()
+        d.para("Add a line only when it is right for your securities: "
+               "`taxjson ticker-map --suggest --write` asks for each one "
+               "(--all adds every one), then re-run `taxjson run`."
+               if offer else "Nothing to add.")
+        d.print()
+        return
+    interactive = sys.stdin.isatty() and not args.all
+    if not interactive and not args.all:
+        _die_input("ticker-map --write: not a terminal, so nothing can be "
+                   "asked",
+                   "Add --all to append every suggestion, or run it in a "
+                   "terminal to choose one by one.")
+    chosen = []
+    for s in offer:
+        if interactive:
+            print(s.line)
+            for ln in _out_wrap(s.reason, indent="  ", hang="  "):
+                print(ln)
+            try:
+                ans = input("Add this line? [y/n/q] ").strip().lower()
+            except EOFError:
+                ans = "q"
+            if ans.startswith("q"):
+                break
+            if not ans.startswith("y"):
+                continue
+        chosen.append(s)
+    if not chosen:
+        print("Nothing added to ticker.map.")
+        return
+    tm = root / "ticker.map"
+    from taxjson.lib.cli_diag import read_text_utf8
+    from taxjson.lib.safe_write import backup_copy, write_atomic
+    current = read_text_utf8(tm) if tm.is_file() else ""
+    text = TS.appended_text(current, chosen)
+    # The new map must be one `taxjson run` accepts (no contradiction).
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as _d:
+        _probe = Path(_d) / "ticker.map"
+        _probe.write_text(text, encoding="utf-8")
+        from taxjson.bin.taxjson_ticker_map import map_file_problems
+        _problems = map_file_problems(_probe)
+    if _problems:
+        _die("ticker-map --write: the lines would make ticker.map "
+             "contradict itself — nothing was written",
+             *[f"- {p}" for p in _problems])
+    bak = backup_copy(tm) if tm.is_file() else None
+    write_atomic(tm, text)
+    print(f"Added {len(chosen)} line(s) to ticker.map"
+          + (f" (the old file is {bak.name})" if bak else "")
+          + ". Run `taxjson run` to apply them.")
+
+
 def _check_renamed_late(root: Path, *, strict: bool) -> None:
     """A trade in a renamed ticker after its rename date that no
     ticker.map line declares (lib/renames, A2-0197): ATTENTION, and
@@ -20387,6 +20478,28 @@ def _build_parser(prog: str = "taxjson"
     p_split.add_argument("--json", action="store_true",
                          help="Emit JSON instead of text")
     p_split.set_defaults(func=cmd_splits)
+
+    p_tm = sub.add_parser(
+        "ticker-map",
+        help="ticker.map lines the last run suggested; add them",
+        description="Every ticker.map line the last `taxjson run` "
+             "suggested — two listings a transfer journal pairs but the "
+             "run did not join, a Questrade code with a likely ticker, "
+             "a ticker change IB, Questrade or RBC shows, a coin's "
+             "Yahoo id — each with its reason. --write appends the "
+             "chosen ones (asked one by one on a terminal; --all: every "
+             "one), with a comment, never one the map already answers, "
+             "keeping a backup of the old file.")
+    p_tm.add_argument("--suggest", action="store_true",
+                      help="List the suggested lines (required)")
+    p_tm.add_argument("--write", action="store_true",
+                      help="Append the chosen lines to ticker.map")
+    p_tm.add_argument("--all", action="store_true",
+                      help="With --write: append every suggestion without "
+                           "asking")
+    p_tm.add_argument("--json", action="store_true",
+                      help="Emit JSON instead of text")
+    p_tm.set_defaults(func=cmd_ticker_map)
 
     p_ren = sub.add_parser(
         "renames",

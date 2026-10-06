@@ -21,11 +21,19 @@
   line per account. A ticker.map rule naming either listing (`DISTINCT`
   included) wins; anything less certain stays a suggestion. Every equity
   account is now read in the run's first pass when there are two or more.
-
 - **taxjson.toml descriptions use the full 100-column width.** `taxjson init` and
   `taxjson format` wrapped `## ` prose at 79 columns; they now wrap at 100, the house width.
   `taxjson format` reflows an existing file's template text.
 
+### Added
+
+- **`taxjson ticker-map --suggest [--write]`** (help group "Set up") lists
+  every ticker.map line the last run suggested — listings a transfer journal
+  pairs that the run did not join, a Questrade code with a likely ticker, a
+  ticker change IB, Questrade or RBC shows, a coin's Yahoo id — each with its
+  reason. `--write` appends the chosen ones (asked one by one on a terminal;
+  `--all` adds every one), each under a comment, never a line the map already
+  answers, keeping `ticker.map.bak`.
 
 ## v0.21.0 (2026-10-06)
 

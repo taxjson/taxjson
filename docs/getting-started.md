@@ -574,7 +574,19 @@ BUYSELL  2021-03-15  09:30:00  SAMPK.TO  40  CAD  15.00  600.00  0
   ACB.
 - For a sheltered account (`transfers = true`) the transfer is booked
   as a purchase at the broker's value. That is fine there: no tax is
-  computed on it.
+  computed on it. For the superficial-loss / wash-sale rule it is a move
+  between accounts, not a purchase; the run prints one warning listing
+  each transfer-in inside a taxable loss's 30-day window. If one was an
+  in-kind contribution, record it as a `BUYSELL` dated the contribution
+  day.
+- A position the broker moved from one listing of a stock to another
+  (`SAMPK.US` out, `SAMPK.TO` in, the same quantity) is joined into one
+  security when the exports' names agree: an `Info: ... joined as one
+  security` line names it. When the run cannot be sure, it suggests a
+  ticker.map line instead. `tjs ticker-map --suggest` lists every
+  ticker.map line the run suggested (listings, Questrade codes, ticker
+  changes, coin ids) with its reason; `tjs ticker-map --suggest --write`
+  asks for each one and adds the ones you accept.
 
 ### 5d. Corporate-action shares at $0
 
