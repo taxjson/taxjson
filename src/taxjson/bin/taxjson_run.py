@@ -4617,7 +4617,13 @@ def transfer_arrivals(root: Path, cache: Path,
     if not names:
         return []
     key = _transfer_key(root)
-    found = TI.arrivals(TI.sidecar_rows(cache, names), key=key)
+    # The taxable legs of the in-kind moves the run booked (lib/in_kind,
+    # written to work/in_kind.json): a withdrawal's in leg is a purchase
+    # at fair market value, not an arrival; a contribution's out leg
+    # cancels nothing.
+    _ik = in_kind_taxable_legs(cache)
+    found = TI.arrivals([r for r in TI.sidecar_rows(cache, names)
+                         if _leg_ident(r[0], r[2]) not in _ik], key=key)
     tt_rows: Dict[str, List[Dict[str, Any]]] = {}
     import json as _json
     for n in {a.account for a in found}:
@@ -4654,6 +4660,10 @@ def stage_transfer_arrivals(name: str, root: Path, cache: Path,
     written."""
     from taxjson.lib import transfer_in as TI
     out = cache / f"{name}{TRANSFER_COSTS_SUFFIX}"
+    # In-kind moves to and from your registered accounts first: they
+    # decide which transfer rows are not arrivals (lib/in_kind).
+    _ik_rows = in_kind_state(root, cache, _soft_config(root)
+                             .get("settings") or {}).rows.get(name, [])
     try:
         found = [a for a in transfer_arrivals(root, cache)
                  if a.account == name]
@@ -4661,7 +4671,7 @@ def stage_transfer_arrivals(name: str, root: Path, cache: Path,
         _say("warning", f"transfer-ins not checked ({type(e).__name__}: "
              f"{e})", indent="  ")
         found = []
-    rows = TI.booked_rows(found)
+    rows = TI.booked_rows(found) + _ik_rows
     for ln in TI.attention_lines(found, country):
         _echo_captured(f"{ATTENTION_PREFIX} {ln}")
     if not rows:
@@ -4681,6 +4691,299 @@ def stage_transfer_arrivals(name: str, root: Path, cache: Path,
     if not same:
         write_text_atomic(out, text)
     return out
+
+
+IN_KIND_FILE = "in_kind.json"
+
+
+def _leg_ident(account: str, t: Dict[str, Any]) -> Tuple[str, str, str, float]:
+    """A transfer row's identity (lib/in_kind.Leg.ident)."""
+    try:
+        q = round(float(t.get("quantity") or 0.0), 8)
+    except (TypeError, ValueError):
+        q = 0.0
+    return (account, str(t.get("symbol") or ""),
+            str(t.get("date") or "")[:10], q)
+
+
+def in_kind_taxable_legs(cache: Path) -> Set[Tuple[str, str, str, float]]:
+    """The taxable transfer rows the last run's booked in-kind moves
+    account for (work/in_kind.json)."""
+    import json as _json
+    try:
+        doc = _json.loads((cache / IN_KIND_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    out = set()
+    for m in (doc.get("moves") or []) if isinstance(doc, dict) else []:
+        leg = m.get("taxable_leg") if isinstance(m, dict) else None
+        if m.get("booked") and isinstance(leg, list) and len(leg) == 4:
+            try:
+                out.add((str(leg[0]), str(leg[1]), str(leg[2]),
+                         round(float(leg[3]), 8)))
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+class _InKindState:
+    """The in-kind moves of one run (lib/in_kind): the moves, the
+    INKIND-line problems, and the taxable accounts' booked rows."""
+
+    def __init__(self, moves=None, problems=None, rows=None):
+        self.moves = list(moves or [])
+        self.problems = list(problems or [])
+        self.rows: Dict[str, List[Dict[str, Any]]] = dict(rows or {})
+
+
+# {work dir: _InKindState} — computed once per run (cmd_run clears it).
+_IN_KIND_THIS_RUN: Dict[Path, _InKindState] = {}
+
+
+def _in_kind_plans(accounts: Dict[str, Any], country: str) -> Dict[str, str]:
+    """account -> "" (a taxable equity account whose transfer rows are
+    kept out of the books) or its plan (a registered equity account)."""
+    plans: Dict[str, str] = {}
+    for n, c in (accounts or {}).items():
+        if not isinstance(c, dict) or c.get("crypto"):
+            continue
+        if c.get("type") == "taxable":
+            if not c.get("transfers"):
+                plans[n] = ""
+        elif c.get("type", "sheltered") == "sheltered":
+            plans[n] = _account_plan(n, c, country)
+    return plans
+
+
+def _registered_transfer_rows(names: List[str], cache: Path
+                              ) -> List[Tuple[str, str, Dict[str, Any]]]:
+    """(account, broker, TRANSFER row) of registered accounts: the
+    transfer sidecars (transfers = false) and the parsed exports'
+    in-book TRANSFER rows (transfers = true), both before the books'
+    currency conversion."""
+    import json as _json
+    from taxjson.lib import transfer_in as TI
+    rows = list(TI.sidecar_rows(cache, names))
+    longer = sorted(names, key=len, reverse=True)
+    for n in names:
+        others = [o for o in longer if o != n and o.startswith(f"{n}_")]
+        for p in sorted(cache.glob(f"{n}_*.json")):
+            if any(p.name.startswith(f"{o}_") for o in others):
+                continue
+            try:
+                doc = _json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            md = doc.get("metadata") if isinstance(doc, dict) else None
+            # A broker parse (taxjson-brokerage's output) only.
+            if (not isinstance(md, dict) or not md.get("format_version")
+                    or not md.get("source_brokerage")
+                    or md.get("kind")):
+                continue
+            broker = p.name[len(n) + 1:-len(".json")]
+            for t in doc.get("transactions") or []:
+                if (isinstance(t, dict) and t.get("action") == "TRANSFER"
+                        and t.get("symbol") and t.get("account") == n):
+                    rows.append((n, broker, t))
+    return rows
+
+
+def _inkind_lines(root: Path, names: List[str]
+                  ) -> Tuple[List[Tuple[str, Dict[str, Any]]], List[str]]:
+    """((account, INKIND line), problems) from the .tt files of the
+    taxable accounts `names`."""
+    from taxjson.bin.taxjson_convert_tt import parse_inkind_line
+    from taxjson.lib.brokerages.base import shown_name
+    from taxjson.lib.cli_diag import read_text_utf8
+    out: List[Tuple[str, Dict[str, Any]]] = []
+    problems: List[str] = []
+    for n in names:
+        for tt in input_files(root / "inputs" / n, ".tt"):
+            try:
+                text = read_text_utf8(tt)
+            except (OSError, ValueError):
+                continue
+            for i, line in enumerate(text.splitlines(), 1):
+                if "INKIND" not in line:
+                    continue
+                try:
+                    ln = parse_inkind_line(line, f"{shown_name(tt)}:{i}")
+                except ValueError as e:
+                    problems.append(f"{e} — ignored")
+                    continue
+                if ln is not None:
+                    out.append((n, ln))
+    return out, problems
+
+
+def _in_kind_close(root: Path, cache: Path):
+    """The close lookup lib/in_kind.value uses: Yahoo's close on the
+    move's date through the price chain (ticker.map QUOTE spelling, else
+    the derived one), cached in work/.close_cache.json; TAXJSON_OFFLINE
+    serves the cache only."""
+    from taxjson.lib import in_kind as IK
+    from taxjson.lib import price_chain as PC
+    try:
+        quote = PC.load_yf_map([root])
+    except Exception:                               # noqa: BLE001
+        quote = {}
+
+    def close(m):
+        q = quote.get(m.key)
+        if q is not None and abs(float(q[1]) - 1.0) > 1e-9:
+            return None             # a merged ticker's ratio: not a close
+        ysym = q[0] if q is not None else PC.yf_symbol_for(m.key)
+        if not ysym or PC.is_crypto_symbol(m.key):
+            return None
+        try:
+            return PC.close_on(m.key, ysym, m.date,
+                               cache_path=cache / ".close_cache.json")
+        except PC.OfflineCloseMissing as e:
+            raise IK.CloseUnavailable(str(e))
+    return close
+
+
+def in_kind_state(root: Path, cache: Path, settings: Dict[str, Any]
+                  ) -> _InKindState:
+    """The in-kind moves between your taxable and registered accounts
+    (lib/in_kind; tax-logic CA-INKIND-* / US-INKIND-*), computed once per
+    run from the transfer evidence in work/ (every equity account is
+    parsed before any books are merged) and the taxable accounts' .tt
+    INKIND lines; written to work/in_kind.json. A move that cannot be
+    valued because TAXJSON_OFFLINE hides the close stops the run."""
+    key_dir = cache.resolve()
+    st = _IN_KIND_THIS_RUN.get(key_dir)
+    if st is not None:
+        return st
+    from taxjson.lib import in_kind as IK
+    from taxjson.lib.brokerages.detect import DISPLAY_NAMES
+    cfg = _soft_config(root)
+    accounts = cfg.get("accounts") or {}
+    country = _normalize_country(settings.get("country")
+                                 or (cfg.get("settings") or {})
+                                 .get("country") or "canada")
+    plans = _in_kind_plans(accounts, country)
+    taxable = sorted(n for n, p in plans.items() if not p)
+    registered = sorted(n for n, p in plans.items() if p)
+    st = _InKindState()
+    _IN_KIND_THIS_RUN[key_dir] = st
+    if not taxable:
+        (cache / IN_KIND_FILE).unlink(missing_ok=True)
+        return st
+    from taxjson.lib import transfer_in as TI
+    key = _transfer_key(root)
+    rows = list(TI.sidecar_rows(cache, taxable))
+    if registered:
+        rows += _registered_transfer_rows(registered, cache)
+    legs = IK.legs(rows, plans, key=key)
+    moves = IK.pair(legs)
+    lines, problems = _inkind_lines(root, taxable)
+    problems += IK.apply_lines(moves, lines, legs, key=key)
+    IK.decide(moves, country)
+    IK.value(moves, _in_kind_close(root, cache),
+             broker_names=DISPLAY_NAMES)
+    st.moves, st.problems = moves, problems
+    st.rows = IK.booked_rows(moves, country)
+    import json as _json
+    p = cache / IN_KIND_FILE
+    if moves or problems:
+        text = _json.dumps({"metadata": {"kind": "in_kind_moves"},
+                            "moves": [m.as_dict() for m in moves],
+                            "problems": problems},
+                           indent=2, sort_keys=True) + "\n"
+        try:
+            same = p.read_text(encoding="utf-8") == text
+        except OSError:
+            same = False
+        if not same:
+            cache.mkdir(parents=True, exist_ok=True)
+            write_text_atomic(p, text)
+    else:
+        p.unlink(missing_ok=True)
+    offline = [m for m in moves if m.problem == "offline"]
+    if offline:
+        _die(f"{len(offline)} in-kind move(s) between your taxable and "
+             f"registered accounts cannot be valued: TAXJSON_OFFLINE is "
+             f"set and the close cache has no price for the date",
+             *[f"{m.kind} {m.pair_text()}: {m.quantity:g} {m.symbol} on "
+               f"{m.date} — add to a .tt file in inputs/"
+               f"{m.taxable.account}/: INKIND {m.date} {m.symbol} "
+               f"{(-m.quantity if m.kind == IK.CONTRIBUTION else m.quantity):g} "
+               f"{m.taxable.currency or 'CAD'} <price per share>"
+               for m in offline],
+             "Or unset TAXJSON_OFFLINE to look the close up (an "
+             "estimate). docs/getting-started.md, step 5c.")
+    return st
+
+
+def stage_in_kind_context(root: Path, cache: Path, settings: Dict[str, Any],
+                          sheltered_base: Optional[Path]) -> Optional[Path]:
+    """The loss-rule context (work/sheltered_base.json): each booked
+    in-kind contribution's plan acquisition is a purchase for s.54 /
+    §1091 whatever the transfer policy (CA-INKIND-04), and a withdrawal
+    leg the context lacks is the plan's disposal (lib/in_kind.
+    mark_sheltered). With no registered book in the project the context
+    is written for those rows alone. Returns the context's path (None
+    when there is none)."""
+    from taxjson.lib import in_kind as IK
+    st = in_kind_state(root, cache, settings)
+    if not any(m.booked for m in st.moves):
+        return sheltered_base
+    import json as _json
+    p = sheltered_base or (cache / "sheltered_base.json")
+    if sheltered_base is None and p.exists():
+        return None             # a previous run's context (--account)
+    doc: Dict[str, Any] = {"transactions": []}
+    if sheltered_base is not None:
+        try:
+            doc = _json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return sheltered_base
+    rows = doc.get("transactions") if isinstance(doc, dict) else None
+    if not isinstance(rows, list):
+        return sheltered_base
+    n = IK.mark_sheltered(rows, st.moves, key=_transfer_key(root),
+                          currency=str(settings.get("base_currency")
+                                       or "").upper())
+    if not n:
+        return sheltered_base
+    write_text_atomic(p, _json.dumps(doc, indent=2, sort_keys=True))
+    return p
+
+
+def _say_in_kind(root: Path, cache: Path, settings: Dict[str, Any], *,
+                 strict: bool = False) -> None:
+    """ONE warning per run: each in-kind move booked (accounts, symbol,
+    quantity, date, value and its source, the gain or the denied loss
+    from the books) and each one not booked (CA-INKIND-* /
+    US-INKIND-*). `strict`: a move not booked stops the run."""
+    st = _IN_KIND_THIS_RUN.get(cache.resolve())
+    if st is None or ("inkind",) in _SHOWN_THIS_RUN:
+        return
+    from taxjson.lib import in_kind as IK
+    from taxjson.lib.report_model import resolve_gains_files
+    import json as _json
+    docs = []
+    for _a, p in resolve_gains_files(cache).items():
+        try:
+            docs.append(_json.loads(p.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+    key = _transfer_key(root)
+    res = IK.contribution_results(docs, key=key)
+    msg = IK.message(st.moves, st.problems, res,
+                     _normalize_country(settings["country"]),
+                     str(settings.get("base_currency") or "").upper())
+    if msg is None:
+        return
+    _SHOWN_THIS_RUN.add(("inkind",))
+    _say("warning", msg[0], *msg[1], indent="  ", file=sys.stdout)
+    _unbooked = [m for m in st.moves if not m.booked]
+    if strict and (_unbooked or st.problems):
+        _die(f"--strict: {len(_unbooked) + len(st.problems)} in-kind "
+             f"move(s) or INKIND line(s) not booked (warning above)",
+             "Value each with a .tt INKIND line, or fix the transfer "
+             "rows; nothing else was changed.")
 
 
 def _sidecar_transfer_rows(names: List[str], cache: Path
@@ -5507,6 +5810,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     _SHOWN_THIS_RUN.clear()
     _LOSS_CONTEXT_GAINS.clear()
     _XLIST_THIS_RUN.clear()
+    _IN_KIND_THIS_RUN.clear()
     _SHORT_SOURCES.clear()
     root = Path(args.dir).resolve()
     cfg = load_config(root)
@@ -5906,6 +6210,13 @@ def cmd_run(args: argparse.Namespace) -> None:
         run_to_file(_cmd("taxjson-merge")
                     + [str(p) for p in _sheltered_merge_inputs],
                     sheltered_base)
+    # An in-kind contribution's plan acquisition is a purchase for the
+    # loss rule (CA-INKIND-04): marked in the combined book (or the
+    # book written for it) before it is validated.
+    if not args.account or _sheltered_merge_inputs:
+        sheltered_base = stage_in_kind_context(root, cache, settings,
+                                               sheltered_base)
+    if sheltered_base is not None:
         # Sanity-check the combined sheltered file before the wash-radar
         # pass consumes it. Quiet on success; surface and halt on failure.
         from taxjson.lib.dispatch import run_cmd as _run_cmd
@@ -6046,6 +6357,8 @@ def cmd_run(args: argparse.Namespace) -> None:
                                 spot_crypto=not _crypto_blend,
                                 strict=getattr(args, "strict", False))
     _say_transfer_windows(settings)
+    _say_in_kind(root, cache, settings,
+                 strict=getattr(args, "strict", False))
     if not args.account and not pending_accounts:
         # A sheltered account never gets a wash pass. One re-typed from
         # taxable kept its old <name>_gains_wash.json / _wash.sum, which
@@ -8162,9 +8475,29 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
     _tax_eq = {n for n, c in (cfg.get("accounts") or {}).items()
                if isinstance(c, dict) and c.get("type") == "taxable"
                and not c.get("crypto") and not c.get("transfers")}
+    # The legs of the in-kind moves to and from your registered
+    # accounts (lib/in_kind, work/in_kind.json).
+    _ik: Dict[Tuple[str, str, str, float], str] = {}
+    try:
+        import json as _json
+        _ikdoc = _json.loads((cache / IN_KIND_FILE).read_text(
+            encoding="utf-8"))
+        for _m in _ikdoc.get("moves") or []:
+            _lbl = (f"in-kind {_m.get('kind')}"
+                    + ("" if _m.get("booked") else " (NOT booked)"))
+            for _leg in (_m.get("taxable_leg"), _m.get("registered_leg")):
+                if isinstance(_leg, list) and len(_leg) == 4:
+                    _ik[(str(_leg[0]), str(_leg[1]), str(_leg[2]),
+                         round(float(_leg[3]), 8))] = _lbl
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
     for r in rows:
         r["arrival"] = "-"
-        if (r["where"] == "sidecar" and r["quantity"] > 0
+        _lbl = _ik.get((r["account"], r["symbol"], r["date"][:10],
+                        round(float(r["quantity"]), 8)))
+        if _lbl:
+            r["arrival"] = _lbl
+        elif (r["where"] == "sidecar" and r["quantity"] > 0
                 and r["account"] in _tax_eq):
             got = _arr.get((r["account"], r["symbol"], r["date"][:10]))
             r["arrival"] = got.pop(0) if got else "own move"
@@ -8260,7 +8593,11 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
             "unknown, reported by hand).",
             "NO_COST: from outside your books with no cost — add the "
             "original purchase to a .tt file (docs/getting-started.md, "
-            "step 5c)."])
+            "step 5c).",
+            "in-kind_contribution / in-kind_withdrawal: a move between a "
+            "taxable and a registered account, booked in the taxable "
+            "account as a sale / purchase at fair market value (`taxjson "
+            "run` lists each)."])
     _codes_section(doc)
     doc.print()
 
@@ -11787,6 +12124,12 @@ def cmd_summary(args: argparse.Namespace) -> None:
     filing_total["permanently_denied"] = round(sum(
         float(e.get("permanently_disallowed") or 0.0)
         for e in _ents_8949), 2)
+    if not _is_us:
+        # An in-kind contribution's loss, nil by s.40(2)(g)(iv) — its own
+        # figure, never in DENIED (CA-INKIND-03).
+        filing_total["denied_contribution"] = round(sum(
+            float(e.get("denied_contribution") or 0.0)
+            for e in _ents_8949), 2)
     if _filing_6781 is not None:
         filing_total["section_1256_gain"] = _filing_6781["gain"]
     # The RETURN row sums the per-row cents, as filed; the gains files,
@@ -12081,6 +12424,14 @@ def cmd_summary(args: argparse.Namespace) -> None:
                   f"their own ACB, s.53(1)(f)) — no ACB addition here"
                   + (f" ({money(_permd)} of the DENIED total)"
                      if _permd > 0.005 else "") + ".")
+            _dcon = filing_total.get("denied_contribution") or 0.0
+            if _dcon > 0.005:
+                _item(f"Denied: contribution to a registered plan — "
+                      f"{money(_dcon)} of losses on in-kind contributions "
+                      f"to an RRSP/TFSA/... are nil (s.40(2)(g)(iv)): the "
+                      f"ACB shown is reduced by them, they are lost for "
+                      f"good (no ACB addition anywhere) and they are not "
+                      f"in DENIED.")
             if abs(_round_gap) >= 0.005:
                 _item(f"Rows are rounded to the cent, as filed: the gains "
                       f"files' unrounded total gain is "

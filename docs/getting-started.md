@@ -330,6 +330,10 @@ from **outside your books**, and `IN_BOOKS` says what the books did:
 - `missing_history`: `missing_history.json` lists the stock for that
   account (5b, step 4): its cost stays unknown and its sales are
   reported by hand, as you declared; the book value is not used.
+- `in-kind_contribution` / `in-kind_withdrawal`: shares moved between a
+  taxable account and one of your registered accounts (RRSP, TFSA ...;
+  IRA in the US). The run books them in the taxable account at their
+  fair market value (5c).
 
 Webull ACATS rows are not booked at all: the run prints `Warning:
 UNBOOKED: ... Webull ACATS row ...`.
@@ -599,9 +603,45 @@ BUYSELL  2021-03-15  09:30:00  SAMPK.TO  40  CAD  15.00  600.00  0
   as a purchase at the broker's value. That is fine there: no tax is
   computed on it. For the superficial-loss / wash-sale rule it is a move
   between accounts, not a purchase; the run prints one warning listing
-  each transfer-in inside a taxable loss's 30-day window. If one was an
-  in-kind contribution, record it as a `BUYSELL` dated the contribution
-  day.
+  each transfer-in inside a taxable loss's 30-day window.
+- **Shares moved between a taxable account and a registered one** (an
+  in-kind contribution to your RRSP or TFSA, or a withdrawal in kind) are
+  not a move of your own: ownership changes. The run pairs the taxable
+  account's transfer row with the registered account's row of the same
+  stock and quantity (within 10 days, across brokers) and books the move
+  in the taxable account at the shares' **fair market value** on the
+  transfer date. One warning per run lists each move, its value, where
+  the value came from, and the gain or the denied loss:
+  - Canada, a contribution is a sale at that value. A gain is taxed; a
+    loss is **denied for good** (s.40(2)(g)(iv)) — `tjs sum` shows it on
+    its own line ("Denied: contribution to a registered plan"), never
+    added to an ACB. The plan's purchase counts for the superficial-loss
+    rule: a loss on the same stock in a taxable account within 30 days
+    is lost for good.
+  - Canada, a withdrawal is a purchase at that value (your ACB). From an
+    RRSP or RRIF the value is also income on your T4RSP / T4RIF, which
+    you enter from the slip; from a TFSA it is not taxed.
+  - US: an IRA, Roth or 401(k) takes contributions in cash only, so a
+    transfer of shares into one is reported as a likely error and not
+    booked. A distribution in kind is a purchase at fair market value
+    (your basis; the taxable amount is on Form 1099-R).
+
+  The value comes from, in order: an `INKIND` line in a `.tt` file in the
+  taxable account's folder; the market value the broker prints on the
+  transfer row (IB's `VALUE`); Yahoo's close on that day, marked
+  ESTIMATED. With `TAXJSON_OFFLINE` set and no cached close the run stops
+  and prints the line to add. The line (no time column; the quantity is
+  negative for shares out to the plan, positive for shares back):
+
+  ```
+  # 100 SAMPK.TO contributed to my RRSP, at the day's closing price
+  INKIND  2024-06-03  SAMPK.TO  -100  CAD  15.00
+  ```
+
+  A total works too (`INKIND 2024-06-03 SAMPK.TO -100 CAD 0 750.00`). When
+  the plan's account is not in the project, the same line declares the
+  move for the taxable account's transfer row; add `plan=rrsp` (or
+  `tfsa`, `ira` ...).
 - A position the broker moved from one listing of a stock to another
   (`SAMPK.US` out, `SAMPK.TO` in, the same quantity) is joined into one
   security when the exports' names agree: an `Info: ... joined as one

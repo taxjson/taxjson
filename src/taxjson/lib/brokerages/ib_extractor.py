@@ -4386,7 +4386,12 @@ class IbBrokerage(BaseBrokerage):
                     'price': price,
                     'net_amount': abs(total_cost),
                     'account': 'IB',
-                    'description': xfer_desc
+                    'description': xfer_desc,
+                    # IB's Market Value: the fair market value of the
+                    # moved shares on the transfer day — the value of
+                    # an in-kind move to or from a registered account
+                    # (lib/in_kind), never a cost (lib/transfer_in).
+                    'market_value': abs(total_cost),
                 })
                 _name = self._security_name(
                     asset_cat, self._cell(row, header_map, 'Symbol'), fii)

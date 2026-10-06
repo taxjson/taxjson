@@ -105,6 +105,7 @@ NON_RULE_SETTINGS: Dict[str, str] = {
 # written yet. Add a rule here when a Phase-B fix makes it one country's.
 PARTITION_RULES = frozenset({
     # Canada
+    "CA-INKIND-02",    # in-kind contribution booked as a sale (US: warned)
     "CA-SL-01",        # s.54 window on settle dates
     "CA-SL-02",        # s.54 still held at the end of day 30
     "CA-SL-05",        # a long call replaces the shares (enforced)
@@ -131,6 +132,7 @@ PARTITION_RULES = frozenset({
     "CA-AMT-04",       # s.120.2 carryover recovered in the estimate
     "CA-CARRY-01",     # close-year records the net capital loss + AMT
     # United States
+    "US-INKIND-01",    # contribution in kind warned, not booked (CA: a sale)
     "US-WASH-01",      # §1091 window on trade dates
     "US-WASH-06",      # no still-held test
     "US-WASH-22",      # a replacement sold before the loss still washes
@@ -1025,6 +1027,61 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                   "purchase recorded as a BUYSELL is counted "
                   "(transfers_as_acquisitions = false).",
                   keys=("transfers_as_acquisitions",))),
+        ]),
+        ("In-kind moves to and from registered plans", [
+            Rule("CA-INKIND-01",
+                 "A move of shares between a taxable account and a "
+                 "registered account (RRSP, RRIF, TFSA, FHSA, RDSP, "
+                 "LIRA/LIF ...) is an in-kind contribution or withdrawal, "
+                 "not a custody move: the run pairs a taxable account's "
+                 "transfer-out with a registered account's transfer-in "
+                 "(or the reverse) of the same security (after ticker.map) "
+                 "and quantity within 10 days, across brokers, the "
+                 "closest date first — a move between two taxable or two "
+                 "registered accounts stays a move of your own. A .tt "
+                 "`INKIND` line in the taxable account's folder values a "
+                 "pair, or declares one whose plan is outside the project "
+                 "(`plan=rrsp`). One warning per run lists each move, its "
+                 "value and its source, and the gain or the denied loss."),
+            Rule("CA-INKIND-02",
+                 "A contribution in kind is a disposition at fair market "
+                 "value on the transfer date (the taxable account's row): "
+                 "booked as a sale at that value; a gain is taxed (CRA "
+                 "T4040, RC4466)."),
+            Rule("CA-INKIND-03",
+                 "A loss on it is denied for good (s.40(2)(g)(iv): a "
+                 "disposition to an RRSP, RRIF, TFSA, FHSA or RDSP trust; "
+                 "an account whose plan is not named is taken as one): "
+                 "the loss is nil, not a superficial loss, and never added "
+                 "to any ACB; `sum` and form-export show it on its own "
+                 "(\"denied: contribution to a registered plan\"), not "
+                 "in DENIED. A contribution to an RESP or PRPP is a sale "
+                 "at fair market value whose loss is an ordinary one.",
+                 cont=True),
+            Rule("CA-INKIND-04",
+                 "The plan's acquisition is an acquisition of identical "
+                 "property for s.54 on its own transfer date, whatever "
+                 "transfers_as_acquisitions says: a taxable loss on the "
+                 "same security within 30 days before or after it, with "
+                 "the plan still holding at day 30, is superficial and "
+                 "lost for good (CA-SL-09)."),
+            Rule("CA-INKIND-05",
+                 "A withdrawal in kind is an acquisition by the taxable "
+                 "account at fair market value on the transfer date (its "
+                 "ACB; an acquisition for s.54). From an RRSP or RRIF "
+                 "that value is also income on the T4RSP / T4RIF, from a "
+                 "TFSA it is not taxed: the warning says so; the books "
+                 "hold capital property only and do not book the income."),
+            Rule("CA-INKIND-06",
+                 "The fair market value, in order: the `INKIND` line; the "
+                 "market value the broker states on the transfer row (IB's "
+                 "Market Value — a value, never a cost elsewhere, CA-ACB-"
+                 "TRANSFER-BV); else Yahoo's close on the date (or the last "
+                 "one before it), marked ESTIMATED (split-adjusted). It is "
+                 "converted at the Bank of Canada rate of the date like any "
+                 "row. With TAXJSON_OFFLINE and no cached close the run "
+                 "stops and names the INKIND line to add; a move with no "
+                 "value is listed NOT booked (`run --strict` stops)."),
         ]),
         ("Options (s.49)", prem + [
             Rule("CA-OPT-06",
@@ -2188,6 +2245,34 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                   "purchase recorded as a BUYSELL is counted "
                   "(transfers_as_acquisitions = false).",
                   keys=("transfers_as_acquisitions",))),
+        ]),
+        ("In-kind moves to and from retirement accounts", [
+            Rule("US-INKIND-01",
+                 "An IRA, Roth IRA, 401(k), HSA or 529 takes contributions "
+                 "in cash only: a transfer of shares from a taxable account "
+                 "into one (the run pairs a taxable account's transfer-out "
+                 "with a retirement account's transfer-in of the same "
+                 "security and quantity within 10 days, across brokers) "
+                 "is a likely error — warned about, NOT booked: the shares "
+                 "stay in the taxable books (`run --strict` stops). A move "
+                 "between two taxable or two retirement accounts stays a "
+                 "move of your own."),
+            Rule("US-INKIND-02",
+                 "A distribution in kind from a retirement account is an "
+                 "acquisition by the taxable account at fair market value "
+                 "on the distribution date: its basis, and its holding "
+                 "period starts then; a §1091 replacement like any "
+                 "purchase. The taxable amount is on Form 1099-R: the "
+                 "warning says so; the books do not book the income."),
+            Rule("US-INKIND-03",
+                 "The fair market value, in order: a .tt `INKIND` line in "
+                 "the taxable account's folder; the market value the "
+                 "broker states on the transfer row (IB's Market Value); "
+                 "else Yahoo's close on the date (or the last one before "
+                 "it), marked ESTIMATED (split-adjusted). With "
+                 "TAXJSON_OFFLINE and no cached close the run stops and "
+                 "names the INKIND line to add. One warning per run lists "
+                 "each move, its value and its source."),
         ]),
         ("Corporate actions (elections in the account manifest)", [
             Rule("US-CORP-01",

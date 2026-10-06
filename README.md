@@ -357,7 +357,46 @@ Warning: 2 transfers in a taxable loss's 30-day window counted as account moves,
 If one of them *was* an in-kind contribution or a purchase, record it as a
 BUYSELL dated the day it was acquired (in a `.tt` file in that account's
 `inputs/` directory): a BUYSELL is counted, and in a registered account the
-denied loss is gone for good.
+denied loss is gone for good. A contribution from one of your taxable accounts
+in the project needs nothing: the run finds it (below).
+
+**In-kind moves between a taxable and a registered account are booked.** A
+taxable account's transfer-out paired with a registered account's transfer-in
+of the same security and quantity within 10 days (or the reverse; across
+brokers) is an in-kind contribution (withdrawal), not a move of your own. The
+run books it in the taxable account at the shares' **fair market value** on
+the transfer date and prints one warning listing each move, its value and
+where the value came from, and the gain or the denied loss:
+
+- **Canada.** A contribution is a sale at fair market value: a gain is taxed,
+  a loss is nil for good (s.40(2)(g)(iv) — an RRSP, RRIF, TFSA, FHSA or RDSP;
+  an account with no `plan` is taken as one). `taxjson sum` and form-export
+  show that loss on its own line ("Denied: contribution to a registered
+  plan"), apart from DENIED, and it is never added to an ACB. The plan's
+  purchase is an acquisition for s.54 whatever `transfers_as_acquisitions`
+  says, so a taxable loss on the same stock within 30 days is superficial and
+  lost for good. A withdrawal is a purchase at fair market value (its ACB); the
+  run notes that an RRSP/RRIF withdrawal's value is income on the T4RSP/T4RIF
+  (not booked) and that a TFSA withdrawal is not taxed.
+- **US.** An IRA, Roth, 401(k) or HSA takes contributions in cash only: a
+  transfer of shares from a taxable account into one is warned about as a
+  likely error and not booked (`run --strict` stops). A distribution in kind is
+  a purchase at fair market value (its basis; holding period from that day;
+  the taxable amount is on Form 1099-R).
+
+The value comes from, in order: a `.tt` line in the taxable account's folder,
+`INKIND <date> <symbol> <qty> <currency> <price> [<total>] [plan=<kind>]` (no
+time column; the quantity negative for shares out to the plan, positive for
+shares back — the same line declares a move whose plan is not in the project);
+the market value the broker prints on the transfer row (IB's `VALUE` — a value
+here, never a cost); else Yahoo's close on that day, marked ESTIMATED
+(split-adjusted; cached in `work/.close_cache.json`). It is converted at the
+Bank of Canada rate of the date like any row. With `TAXJSON_OFFLINE` set and no
+cached close the run stops and prints the `INKIND` line to add; a move with no
+value is listed as NOT booked. `taxjson transfers` labels both legs
+`in-kind_contribution` / `in-kind_withdrawal`. Partial deliveries (one
+transfer-out received as two transfer-ins) are not paired: declare them with
+`INKIND` lines.
 
 `[settings] transfers_as_acquisitions = true` restores the strict treatment:
 every unmatched sheltered TRANSFER is an acquisition or disposition on its

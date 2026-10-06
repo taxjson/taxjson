@@ -350,7 +350,8 @@ def convert_transaction(
         # if every field succeeded.
         staged: Dict[str, float] = {}
         any_failure = False
-        for field in ["proceeds", "commission", "fee", "price", "net_amount", "gross_amount"]:
+        for field in ["proceeds", "commission", "fee", "price", "net_amount", "gross_amount",
+                      "market_value"]:
             value = getattr(tx, field, None)
             if value is None:
                 continue

@@ -171,6 +171,13 @@ class TaxTransaction:
     # description, so two lots that differ only by it keep two ids.
     # NOT part of compute_id, omitted from to_dict() when empty.
     lot_date: str = ''
+    # The market value the broker states for a TRANSFER row (IB's
+    # Transfers `Market Value`), in the row's currency: the fair market
+    # value of an in-kind move between a taxable and a registered
+    # account (lib/in_kind, CA-INKIND-06 / US-INKIND-03) — never a cost
+    # of its own. Evidence only: NOT part of compute_id, omitted from
+    # to_dict() when 0.
+    market_value: float = 0.0
 
     def __post_init__(self):
         if self.id is None:
@@ -228,7 +235,7 @@ EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
                    'contract_size_basis',
                    'source', 'source_key',
                    'source_account', 'exercise_of', 'corp_cash',
-                   'lot_date')
+                   'lot_date', 'market_value')
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]
 # e.g. "SAMPLG250120C00150000.US", "ABC271217P00029000.TO", or
@@ -909,7 +916,8 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
     # phantom walk's arithmetic, and `"symbol": 0` crashed the engines
     # — none of them caught by the tools' ValueError handlers.
     for _fld in ('quantity', 'price', 'proceeds', 'commission', 'fee',
-                 'net_amount', 'gross_amount', 'multiplier'):
+                 'net_amount', 'gross_amount', 'multiplier',
+                 'market_value'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]
@@ -2158,6 +2166,27 @@ TRANSFER_BOOK_VALUE_TYPE = 'transfer_book_value'
 # wash-sale window. `[settings] transfers_as_acquisitions = true` books
 # such rows as 'transfer_rewrite' instead (CA-SL-17 / US-WASH-24).
 TRANSFER_CUSTODY_TYPE = 'transfer_custody'
+
+
+# An in-kind move between a TAXABLE account and a REGISTERED account of
+# the same taxpayer (lib/in_kind, booked by `taxjson run` from the pair
+# of transfer rows or a .tt INKIND line):
+# * IN_KIND_CONTRIBUTION_TYPE: the taxable account's SALE at fair market
+#   value when its shares go into an RRSP/RRIF/TFSA/FHSA/RDSP/LIRA... —
+#   a gain is taxed, a loss is denied for good (s.40(2)(g)(iv), CA-
+#   INKIND-03): never a superficial loss, never added to any ACB. The
+#   same type marks the PLAN's acquisition in the loss-rule context: a
+#   purchase for s.54 whatever the transfer policy (CA-INKIND-04).
+# * IN_KIND_DISPOSITION_TYPE: the same sale into a plan s.40(2)(g)(iv)
+#   does not name (an RESP, a PRPP): a loss is an ordinary loss.
+# * IN_KIND_WITHDRAWAL_TYPE: the taxable account's PURCHASE at fair
+#   market value of shares withdrawn in kind from a plan (CA-INKIND-05 /
+#   US-INKIND-02) — an acquisition like any other.
+IN_KIND_CONTRIBUTION_TYPE = 'in_kind_contribution'
+IN_KIND_DISPOSITION_TYPE = 'in_kind_disposition'
+IN_KIND_WITHDRAWAL_TYPE = 'in_kind_withdrawal'
+IN_KIND_TYPES = (IN_KIND_CONTRIBUTION_TYPE, IN_KIND_DISPOSITION_TYPE,
+                 IN_KIND_WITHDRAWAL_TYPE)
 
 
 def not_a_purchase(tx) -> bool:
@@ -3413,12 +3442,44 @@ class CanadaTaxRules(TaxRules):
                                 # so the report can split them into the
                                 # "manual reporting required" section.
                                 is_tainted = pool.get('tainted', False)
+                                # An in-kind contribution of LONG shares
+                                # to a registered plan (lib/in_kind): a
+                                # sale at fair market value whose loss
+                                # s.40(2)(g)(iv) denies for good — not a
+                                # superficial loss, no ACB addition
+                                # anywhere (CA-INKIND-03).
+                                _ik_type = getattr(tx, 'type', '') or ''
+                                _ik = (_ik_type if _ik_type in (
+                                    IN_KIND_CONTRIBUTION_TYPE,
+                                    IN_KIND_DISPOSITION_TYPE)
+                                    and pool['qty'] > 0 else '')
+                                _ik_denied = (
+                                    -_rec_gain
+                                    if (_ik == IN_KIND_CONTRIBUTION_TYPE
+                                        and _rec_gain < -0.001
+                                        and not is_tainted) else 0.0)
                                 iteration_realized_gains.append({
                                     'tx_id': tx.id, 'symbol': symbol, 'date': tx.date,
                                     'date_settle': tx.date_settle or tx.date,
                                     'gain': _rec_gain,
                                     'qty': closing_qty, 'cost': _rec_cost, 'proceeds': effective_proceeds,
-                                    'disallowed': disallowed_amt, 'taxable_gain': _rec_gain + disallowed_amt,
+                                    'disallowed': disallowed_amt, 'taxable_gain': _rec_gain + disallowed_amt + _ik_denied,
+                                    **({'in_kind': 'contribution',
+                                        'denied_contribution': _ik_denied,
+                                        'note': (
+                                            'in-kind contribution to a '
+                                            'registered plan: a sale at '
+                                            'fair market value'
+                                            + ('; the loss is denied '
+                                               '(s.40(2)(g)(iv)), no ACB '
+                                               'addition'
+                                               if _ik_denied else '')
+                                            if _ik == IN_KIND_CONTRIBUTION_TYPE
+                                            else 'in-kind contribution to '
+                                            'a plan s.40(2)(g)(iv) does '
+                                            'not name: a sale at fair '
+                                            'market value')}
+                                       if _ik else {}),
                                     'days_held': days_held, 'account': account,
                                     'currency': tx.currency,
                                     'commission': float(tx.commission or 0) * fee_share,
@@ -3464,7 +3525,8 @@ class CanadaTaxRules(TaxRules):
                                 # Every RAW loss re-enters the solver on every
                                 # pass (a fully denied one too), so each pass
                                 # shares the replacements out from scratch.
-                                if _rec_gain < -0.001 and not is_tainted and _wash_eligible:
+                                if (_rec_gain < -0.001 and not is_tainted
+                                        and _wash_eligible and not _ik_denied):
                                     iteration_losses.append({
                                         'tx': tx, 'loss_amount': abs(_rec_gain),
                                         'qty': closing_qty, 'direction': 'LONG' if pool['qty'] > 0 else 'SHORT'
@@ -4665,6 +4727,13 @@ class CanadaTaxRules(TaxRules):
                 'grant': bool(g.get('grant', False)),
                 'deemed': bool(g.get('deemed', False)),
             }
+            if g.get('in_kind'):
+                # CA-INKIND-02/03: the sale of an in-kind contribution;
+                # the s.40(2)(g)(iv) denial is its own figure, never the
+                # superficial-loss one.
+                gain_entry['in_kind'] = g['in_kind']
+                gain_entry['denied_contribution'] = round(
+                    float(g.get('denied_contribution') or 0.0), 6)
             if g.get('grant_closed') is not None:
                 # A buy-back of grant-timed lots: {write year: {units,
                 # premium}} of the lots it closed (see _short_lot_close).

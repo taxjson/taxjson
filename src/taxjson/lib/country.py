@@ -192,6 +192,20 @@ def stock_dividend_zero_cost(country: str) -> bool:
     return STOCK_DIVIDEND_ZERO_COST[canonical_country(country)]
 
 
+# Whether an in-kind contribution from a taxable account to a registered
+# plan is booked: Canada books it as a sale at fair market value (a loss
+# denied by s.40(2)(g)(iv) — CA-INKIND-02/03); a US IRA, Roth, 401(k) or
+# HSA takes contributions in cash only, so a transfer from a taxable
+# account into one is warned about as a likely error and not booked
+# (US-INKIND-01). A withdrawal in kind is booked in both countries at
+# fair market value (CA-INKIND-05 / US-INKIND-02).
+IN_KIND_CONTRIBUTION_BOOKED = {CANADA: True, USA: False}
+
+
+def in_kind_contribution_booked(country: str) -> bool:
+    return IN_KIND_CONTRIBUTION_BOOKED[canonical_country(country)]
+
+
 def default_tax_date(country: str) -> str:
     """CRA dates a disposition by settlement, the IRS by trade date."""
     return DEFAULT_TAX_DATE[canonical_country(country)]

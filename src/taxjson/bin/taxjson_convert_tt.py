@@ -34,8 +34,10 @@ _VALID_ACTIONS = (
     'BUYSELL', 'TRANSFER', 'SPLIT', 'ASSIGN', 'ADJUST', 'DISALLOW',
     'DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST', 'FEE', 'OPENING',
 )
-# Line-level sugar expanded by tt_to_json before parse_tt_line.
-_SUGAR_ACTIONS = ('ACQUIRED',)
+# Line-level sugar expanded by tt_to_json before parse_tt_line, and
+# INKIND (the value of an in-kind move between a taxable and a registered
+# account: read by `taxjson run`, lib/in_kind — never a row of the books).
+_SUGAR_ACTIONS = ('ACQUIRED', 'INKIND')
 # The time an OPENING row is booked at: the start of the snapshot day,
 # before anything else that day (the line itself has no time column).
 OPENING_TIME = '00:00:00'
@@ -371,6 +373,92 @@ def parse_tt_line(line: str, account_name: str = 'default',
     _warn_unknown_suffix(tx, line, source)
     tx['id'] = compute_tt_id(tx)
     return tx
+
+
+def parse_inkind_line(line: str, source: str = ''):
+    """`INKIND <date> <symbol> <qty> <currency> <price> [<total>]
+    [plan=<kind>]` -> the value of one in-kind move between this taxable
+    account and a registered plan (lib/in_kind, tax-logic CA-INKIND-06 /
+    US-INKIND-03), or None when the line is not an INKIND line. No time
+    column. `qty` is signed as the shares move in THIS account: negative
+    = out, into a plan (a contribution); positive = in, from a plan (a
+    withdrawal). `price` is the fair market value per share (option: per
+    share of the contract) in `currency`; give 0 and a `total` to state
+    the whole value instead. `plan=` names the plan when its account is
+    not in the project (rrsp, tfsa, ira ...). The line values the move
+    the run pairs from the transfer rows on that date (within 10 days),
+    or declares one for a transfer row of this account whose other side
+    is outside the project. Raises ValueError on a malformed line."""
+    where = _where(source)
+    body = strip_tt_comment(line)
+    parts = body.split()
+    if not parts or parts[0] != 'INKIND':
+        return None
+    facts = {}
+    while parts and _FACT_RE.match(parts[-1]):
+        k, v = _FACT_RE.match(parts.pop()).groups()
+        facts[k] = v
+    form = ("`INKIND <date> <symbol> <qty> <currency> <price> [<total>] "
+            "[plan=<kind>]` (no time column; qty negative = out of this "
+            "account into a plan, positive = in from a plan)")
+    if len(parts) > 2 and _TIME_RE.match(parts[2]):
+        raise ValueError(f"{where}an INKIND line has no time column: "
+                         f"{form}: {line.strip()!r}")
+    if len(parts) not in (6, 7):
+        raise ValueError(f"{where}malformed INKIND line — expected {form}, "
+                         f"got {len(parts) - 1} field(s): {line.strip()!r}")
+    bad = sorted(set(facts) - {'plan'})
+    if bad:
+        raise ValueError(f"{where}INKIND line: unknown key {bad[0]}= (only "
+                         f"plan=<kind>): {line.strip()!r}")
+    _, day, sym, qty_t, cur, price_t = parts[:6]
+    _check_date(day, 'date', line, source)
+    try:
+        qty = _tt_num(qty_t)
+        price = _tt_num(price_t)
+        total = _tt_num(parts[6]) if len(parts) == 7 else None
+    except ValueError as e:
+        raise ValueError(f"{where}malformed INKIND line ({e}): "
+                         f"{line.strip()!r}") from e
+    if abs(qty) < 1e-12:
+        raise ValueError(f"{where}INKIND quantity is 0 — negative for "
+                         f"shares out to a plan, positive for shares in "
+                         f"from one: {line.strip()!r}")
+    if price < 0 or (total is not None and total < 0):
+        raise ValueError(f"{where}INKIND value is negative — the fair "
+                         f"market value is a positive amount: "
+                         f"{line.strip()!r}")
+    if not re.match(r'^[A-Z]{3}$', cur.upper()):
+        raise ValueError(f"{where}INKIND currency {cur!r} is not a "
+                         f"three-letter code (CAD, USD): {line.strip()!r}")
+    from taxjson.lib.core import is_option_symbol
+    size = 100.0 if is_option_symbol(sym.upper()) else 1.0
+    by_price = abs(qty) * price * size
+    if total is None:
+        if price <= 0:
+            raise ValueError(f"{where}INKIND line has no value — give the "
+                             f"fair market value per share, or 0 and the "
+                             f"total: {line.strip()!r}")
+        total = by_price
+    elif price > 0 and abs(total - by_price) > max(
+            0.05, 0.01 * max(by_price, 1.0)):
+        raise ValueError(f"{where}INKIND total {total:.2f} differs from "
+                         f"qty x price {by_price:.2f} — give one of them "
+                         f"(price 0 and the total, or the price alone): "
+                         f"{line.strip()!r}")
+    if total <= 0:
+        raise ValueError(f"{where}INKIND value is 0 — a move in kind is "
+                         f"valued at the shares' fair market value: "
+                         f"{line.strip()!r}")
+    plan = (facts.get('plan') or '').lower()
+    if plan:
+        from taxjson.lib.country import PLAN_COUNTRY
+        if plan not in PLAN_COUNTRY or plan == 'taxable':
+            raise ValueError(f"{where}INKIND plan={plan!r} is not a "
+                             f"registered plan kind: {line.strip()!r}")
+    return {'date': day, 'symbol': sym.upper(), 'quantity': qty,
+            'currency': cur.upper(), 'total': float(total), 'plan': plan,
+            'source': source}
 
 
 def parse_opening_line(parts, line: str, account_name: str,
@@ -845,6 +933,10 @@ def tt_to_json(input_path: Path, account_name: str) -> dict:
     with io.StringIO(_text) as f:
         for lineno, line in enumerate(f, 1):
             source = f"{shown_name(input_path)}:{lineno}"
+            # An INKIND line values an in-kind move (`taxjson run` reads
+            # it, lib/in_kind): checked here, never a row of the books.
+            if parse_inkind_line(line, source) is not None:
+                continue
             try:
                 expanded = expand_acquired(line)
             except ValueError as e:

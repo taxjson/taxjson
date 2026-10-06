@@ -639,7 +639,8 @@ def build_schedule3(entries: List[Dict[str, Any]],
         rec = recs.setdefault((lkey, symbol), {
             "symbol": symbol, "units": 0.0, "acq_year": None,
             "proceeds": 0.0, "outlays": 0.0, "gain": 0.0,
-            "denied": 0.0, "perm_denied": 0.0, "short": False,
+            "denied": 0.0, "perm_denied": 0.0, "denied_contrib": 0.0,
+            "short": False,
             "classes": set(), "n": 0, "grant_units": 0.0,
             "short_close_units": 0.0,
         })
@@ -714,6 +715,10 @@ def build_schedule3(entries: List[Dict[str, Any]],
         rec["gain"] += gain
         rec["denied"] += float(e.get("disallowed_amount") or 0.0)
         rec["perm_denied"] += float(e.get("permanently_disallowed") or 0.0)
+        # An in-kind contribution's loss (s.40(2)(g)(iv), CA-INKIND-03):
+        # nil, like a denied superficial loss the footing ACB absorbs it
+        # — but its own figure, never in DENIED.
+        rec["denied_contrib"] += float(e.get("denied_contribution") or 0.0)
         acq = _acquired_date(e)
         if acq:
             y = acq[:4]
@@ -746,6 +751,11 @@ def build_schedule3(entries: List[Dict[str, Any]],
                          f"or bought by an affiliated person — no ACB "
                          f"addition on this return; an affiliated "
                          f"person adds it to their own ACB)")
+        if r["denied_contrib"] > _EPS:
+            notes.append(f"loss {r['denied_contrib']:,.2f} on an in-kind "
+                         f"contribution to a registered plan DENIED for "
+                         f"good (s.40(2)(g)(iv)): ACB shown reduced by "
+                         f"it; no ACB addition anywhere")
         if "futures" in r["classes"]:
             notes.append("futures / option on futures — reported with "
                          "the other properties (options, T4037)"
@@ -777,6 +787,7 @@ def build_schedule3(entries: List[Dict[str, Any]],
             "outlays": outlays,
             "gain": gain,
             "denied": _cents(r["denied"]),
+            "denied_contribution": _cents(r["denied_contrib"]),
             "dispositions": r["n"],
             "notes": "; ".join(notes),
         })
@@ -789,7 +800,8 @@ def build_schedule3(entries: List[Dict[str, Any]],
             continue
         spec = schedule3_line(lkey, year, 2)
         agg = {k: round(sum(r[k] for r in lrows), 2) + 0.0
-               for k in ("proceeds", "acb", "outlays", "gain", "denied")}
+               for k in ("proceeds", "acb", "outlays", "gain", "denied",
+                         "denied_contribution")}
         lines.append({**spec, "title": line_title(spec), **agg,
                       "dispositions": sum(r["dispositions"] for r in lrows),
                       "rows": len(lrows)})
@@ -838,11 +850,15 @@ def filing_totals(entries: List[Dict[str, Any]],
     # re-deriving ACB as a residual of the sums was a second residual
     # site that showed ACB -0.01 for a zero-ACB sale (A2-1107).
     agg = {k: round(sum(r[k] for r in rep["rows"]), 2) + 0.0
-           for k in ("proceeds", "acb", "outlays", "gain", "denied")}
+           for k in ("proceeds", "acb", "outlays", "gain", "denied",
+                     "denied_contribution")}
     return {"proceeds": agg["proceeds"],
             "acb": agg["acb"],
             "outlays": agg["outlays"], "gain": agg["gain"],
             "denied": agg["denied"],
+            # An in-kind contribution's loss, nil by s.40(2)(g)(iv) — not
+            # in `denied` (CA-INKIND-03).
+            "denied_contribution": agg["denied_contribution"],
             "dispositions": len(entries)}
 
 

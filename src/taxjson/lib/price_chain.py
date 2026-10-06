@@ -768,3 +768,104 @@ def fetch_prices(pairs: Dict[str, str], *,
         print(f"price-chain: unpriced after all tiers: "
               f"{', '.join(sorted(remaining))}", file=sys.stderr)
     return quotes
+
+
+# ------------------------------------------------------------ one day's close
+
+# How far back a close is looked for when the day itself had none (a
+# weekend, a holiday): the last close on or before the day, within this
+# many days.
+CLOSE_LOOKBACK_DAYS = 7
+
+
+@dataclass
+class DayClose:
+    """A security's close on (or just before) one day."""
+    price: float
+    currency: Optional[str]
+    day: str            # the day the close is from (<= the asked day)
+    source: str         # 'yfinance' | 'cache' | a test fetcher's label
+
+
+class OfflineCloseMissing(ValueError):
+    """TAXJSON_OFFLINE is set and the close cache has no price for the
+    asked day: the caller names its own override."""
+
+
+def close_on(symbol: str, quote_symbol: str, day: str, *,
+             cache_path: Path,
+             fetchers: Optional[List[Callable]] = None,
+             offline: Optional[bool] = None,
+             verbose: bool = False) -> Optional[DayClose]:
+    """The close of `symbol` (Yahoo spelling `quote_symbol`) on `day`,
+    or the last one before it within CLOSE_LOOKBACK_DAYS: from the
+    on-disk close cache (work/.close_cache.json, keyed SYMBOL@DAY), else
+    Yahoo's daily history (written back to the cache). None when no
+    tier has it. Yahoo's closes are split-adjusted: a split after `day`
+    makes the figure wrong — the caller says the value is an estimate.
+
+    `fetchers` replaces the live tier for tests: callables taking
+    ({sym: yahoo_sym}, start, end) and returning {sym: {day: close}} or
+    {sym: ({day: close}, currency)}. TAXJSON_OFFLINE (or offline=True)
+    skips the live tier; a miss then raises OfflineCloseMissing."""
+    from datetime import date as _date, timedelta as _td
+    from taxjson.lib.offline import offline_enabled
+    key = f"{symbol}@{day}"
+    cache = _load_cache(cache_path)
+    rec = cache.get(key)
+    if isinstance(rec, dict):
+        price = _cached_price(rec)
+        if price is not None:
+            price, cur, _p = clean_quote_currency(price, rec.get("currency"))
+            return DayClose(price=price,
+                            currency=cur or quote_currency(quote_symbol),
+                            day=str(rec.get("day") or day),
+                            source="cache")
+    if offline is None:
+        offline = offline_enabled() and fetchers is None
+    if offline:
+        raise OfflineCloseMissing(
+            f"TAXJSON_OFFLINE is set and the close of {symbol} on {day} "
+            f"is not in {cache_path.name}")
+    try:
+        start = (_date.fromisoformat(day)
+                 - _td(days=CLOSE_LOOKBACK_DAYS)).isoformat()
+    except ValueError:
+        return None
+    if fetchers is None:
+        fetchers = [lambda pairs, s, e: _yf_history_fetcher(
+            pairs, start=s, end=e, verbose=verbose)]
+    for fetcher in fetchers:
+        try:
+            got = fetcher({symbol: quote_symbol}, start, day)
+        except Exception as exc:                        # noqa: BLE001
+            if verbose:
+                print(f"price-chain: close tier failed ({exc})",
+                      file=sys.stderr)
+            continue
+        hit = got.get(symbol) if isinstance(got, dict) else None
+        cur = None
+        if isinstance(hit, tuple):
+            hit, cur = hit[0], (hit[1] if len(hit) > 1 else None)
+        if not isinstance(hit, dict):
+            continue
+        days = sorted(d for d, px in hit.items()
+                      if start <= str(d)[:10] <= day
+                      and isinstance(px, (int, float))
+                      and math.isfinite(px) and px > 0)
+        if not days:
+            continue
+        used = days[-1]
+        price, cur, _p = clean_quote_currency(float(hit[used]), cur)
+        cur = cur or quote_currency(quote_symbol)
+        if cur is None and minor_unit_listing(quote_symbol):
+            return None             # pence or pounds: not guessed
+        cache[key] = {"price": price, "day": str(used)[:10],
+                      "asof": _date.today().isoformat(),
+                      "source": "yfinance"}
+        if cur:
+            cache[key]["currency"] = cur
+        _save_cache(cache_path, cache)
+        return DayClose(price=price, currency=cur, day=str(used)[:10],
+                        source="yfinance")
+    return None
