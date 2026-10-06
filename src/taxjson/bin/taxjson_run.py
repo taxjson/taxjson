@@ -2241,10 +2241,23 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
         _h, _d = XL.collision_note(_c)
         _say_once(("xcollide", _c.symbol), "warning", _h, *_d,
                   indent="  ", file=sys.stdout)
-    msg = XL.joined_note(name, result["joined"])
+    # A listing read from the evidence, not the row currency (lib/
+    # listing_suffix): the join that names it says so; the others get
+    # a Warning of their own (it changes the books too).
+    from taxjson.lib import listing_suffix as LS
+    _fixed = {k: LS.why(frm, r)
+              for k, (frm, r) in LS.all_corrections(cache).items()}
+    msg = XL.joined_note(name, result["joined"], corrected=_fixed)
     if msg:
         # A Warning: the join changes the books (pre-release review H1).
         _say_once(("xlist", name), "warning", msg[0], *msg[1],
+                  indent="  ", file=sys.stdout)
+    _in_joins = {p.into.symbol for p in result["joined"]
+                 if p.into.account == name} | {
+        p.out.symbol for p in result["joined"] if p.out.account == name}
+    msg = LS.corrections_note(name, cache, skip=_in_joins)
+    if msg:
+        _say_once(("listing", name), "warning", msg[0], *msg[1],
                   indent="  ", file=sys.stdout)
     return path
 
@@ -3466,8 +3479,17 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     _codes_state = cache / f"{name}{_symbol_codes_suffix()}"
     if "questrade" not in grouped or is_crypto:
         _codes_state.unlink(missing_ok=True)
+    from taxjson.lib import listing_suffix as _LS
+    for _b in _LS.CURRENCY_SUFFIX_BROKERS:
+        if _b not in grouped or is_crypto:
+            _LS.state_path(cache, name, _b).unlink(missing_ok=True)
+    # A broker that names a listing from the row currency alone (lib/
+    # listing_suffix) after the ones that name it: its listings are
+    # read from their rows (stage_listing_suffix).
     for broker, csvs in sorted(grouped.items(),
-                               key=lambda kv: kv[0] == "questrade"):
+                               key=lambda kv: (kv[0] in
+                                               _LS.CURRENCY_SUFFIX_BROKERS,
+                                               kv[0] == "questrade")):
         out = cache / f"{name}_{broker}.json"
         # ticker_map dep: a parser's identity hint the map now answers
         # is dropped (taxjson-brokerage --ticker-map, A2-1056).
@@ -3481,6 +3503,13 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                                _codes_state)
             deps.append(_codes_state)
             _codes_args = ["--symbol-codes", str(_codes_state)]
+        if broker in _LS.CURRENCY_SUFFIX_BROKERS and not is_crypto:
+            # The listings read from the evidence (a dep, rewritten only
+            # when they change).
+            _ls_state = stage_listing_suffix(name, broker, csvs,
+                                             inputs_dir.parent, cache)
+            deps.append(_ls_state)
+            _codes_args += ["--listing-fixes", str(_ls_state)]
         if _is_generic_group(broker):
             # A mapping edit must rebuild the parse like a CSV edit.
             for _c in csvs:
@@ -4548,6 +4577,78 @@ def stage_symbol_codes(name: str, csvs: List[Path], root: Path,
     text = SC.state_text(name, result)
     if _read_work_stamp(out) != text:
         _write_work_stamp(out, text)
+    return out
+
+
+# The currency-suffix groups staged this run: {(work dir, account):
+# {broker: csvs}} (stage_listing_suffix; the first pass re-reads a group
+# whose listings changed once every account is parsed).
+_LISTING_GROUPS: Dict[Tuple[Path, str], Dict[str, List[Path]]] = {}
+
+
+def _listing_suffix_text(name: str, broker: str, csvs: List[Path],
+                         root: Path, cache: Path) -> str:
+    """The state text stage_listing_suffix writes (lib/listing_suffix)."""
+    from taxjson.lib import listing_suffix as LS
+    scan = LS.SCANNERS[broker](csvs)
+    result: Dict[str, Any] = {"corrected": {}, "kept": {}}
+    if scan.cands:
+        accounts = [n for n, c in (_soft_config(root).get("accounts")
+                                   or {}).items()
+                    if isinstance(c, dict) and not c.get("crypto")]
+        ev = LS.project_evidence(cache, accounts or [name],
+                                 receiving=(name, broker))
+        # ANY ticker.map rule naming the listing (a rename either way,
+        # DELETE, DISTINCT, a dated RENAME) wins: `DISTINCT ROOT.US
+        # ROOT.TO` keeps the row currency's listing, and a rule written
+        # for the listing as filed keeps meaning what it says.
+        named = {str(x).upper() for x in _ticker_map_named(root)}
+        result = LS.resolve(scan, ev, account=name, broker=broker,
+                            mapped=lambda s: s in named)
+        # The TOBASE line of a correction's transfer journal, as the
+        # join will read it (the explicit lines `ticker-map --suggest`
+        # shows).
+        from taxjson.lib.cross_listings import tobase_direction
+        base = str(((_soft_config(root).get("settings") or {})
+                    .get("base_currency")) or "").upper() or None
+        for r in result["corrected"].values():
+            o = str((r.get("pair") or {}).get("symbol") or "")
+            if o and o != r["symbol"]:
+                r["join"] = list(tobase_direction(o, r["symbol"], base))
+    return LS.state_text(name, broker, result)
+
+
+def stage_listing_suffix(name: str, broker: str, csvs: List[Path],
+                         root: Path, cache: Path) -> Path:
+    """work/<name>_<broker>_listing_suffix.state: the symbols of this
+    group whose listing suffix came from the row currency alone and that
+    the project's other books name as the other listing (lib/
+    listing_suffix, tax-logic CA-XLIST-02 / US-XLIST-02). Written only
+    when it changes — it is a dep of the parse, which books every row of
+    such a symbol under that listing (--listing-fixes)."""
+    from taxjson.lib import listing_suffix as LS
+    out = LS.state_path(cache, name, broker)
+    _LISTING_GROUPS.setdefault((cache.resolve(), name), {})[broker] = \
+        list(csvs)
+    text = _listing_suffix_text(name, broker, csvs, root, cache)
+    if _read_work_stamp(out) != text:
+        _write_work_stamp(out, text)
+    return out
+
+
+def _listing_suffix_stale(root: Path, cache: Path) -> List[str]:
+    """The accounts whose listing evidence changed after every account
+    was parsed (an account parsed before the one holding its evidence)."""
+    from taxjson.lib import listing_suffix as LS
+    out: List[str] = []
+    for (c, name), groups in sorted(_LISTING_GROUPS.items()):
+        if c != cache.resolve():
+            continue
+        for broker, csvs in sorted(groups.items()):
+            text = _listing_suffix_text(name, broker, csvs, root, cache)
+            if _read_work_stamp(LS.state_path(cache, name, broker)) != text:
+                out.append(name)
+                break
     return out
 
 
@@ -5825,6 +5926,24 @@ def cmd_run(args: argparse.Namespace) -> None:
         _equity_first.sort(key=lambda nc: nc[0] in _code_accts)
     if _equity_first:
         for name, acfg in _equity_first:
+            try:
+                stage_account(name, acfg, settings, inputs_dir, cache,
+                              reports_dir, rates, ticker_map_arg,
+                              sec_overrides_arg, args.force,
+                              incomplete_history=mh_arg,
+                              no_input=no_input,
+                              strict=getattr(args, "strict", False),
+                              parse_only=True)
+            except PendingElectionsError:
+                pass
+        # A listing read from another account's books (lib/
+        # listing_suffix) whose evidence that account parsed only after
+        # this one: read the account again, so every account's books
+        # are final before any is merged (the order never matters).
+        _stale = set(_listing_suffix_stale(root, cache))
+        for name, acfg in _equity_first:
+            if name not in _stale:
+                continue
             try:
                 stage_account(name, acfg, settings, inputs_dir, cache,
                               reports_dir, rates, ticker_map_arg,
