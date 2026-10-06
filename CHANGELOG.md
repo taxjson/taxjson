@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Changed
+
+- **Prose comments in taxjson.toml start with `##`.** `taxjson init` and
+  `taxjson format` now write every prose comment line (the file header,
+  the `## --- Project ---` group headings, each key's and table's
+  description, the account reference block's descriptions, the note on
+  adding accounts) as `## text`, so it no longer looks like a setting
+  switched off. A commented-out key or table keeps a single `# `
+  (`# province = "ON"`, `# [instalments]`, every line of a commented-out
+  multi-line value): deleting the `# ` still switches it on. A key's
+  end-of-line comment (`tax_date = "settle"  # settle | trade`) keeps its
+  single `#`, since it follows a value and cannot be mistaken for a
+  commented-out line. `taxjson format` writes your own comment lines the
+  same way: a line whose text is TOML (a key and value, known or not, a
+  table line, or a line of a commented-out multi-line value) stays
+  `# text`; any other comment line becomes `## text`, whatever number of
+  `#` it started with, its text unchanged. A file written in the old
+  single-`#` layout formats cleanly: its prose is recognised as template
+  text and rewritten, not kept as notes.
+
 
 ## v0.19.0 (2026-10-05)
 

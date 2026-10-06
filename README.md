@@ -500,7 +500,7 @@ block listing every account key, then your `[accounts.NAME]` tables in
 your order), then `[estimate]`, `[carryover]`, `[[distributions]]` and, in
 Canada, `[[capital_gains_dividends]]` and `[instalments]` (`[[...]]`
 entries keep their order). `[settings]` comes in groups — Project,
-Currencies, Options, Income, Futures — each under a `# --- Name ---`
+Currencies, Options, Income, Futures — each under a `## --- Name ---`
 heading, the keys alphabetical within a group and a blank line between
 groups; every other table's keys are alphabetical, except that an
 account table starts with `type`. Set and commented-out keys are in one
@@ -511,18 +511,32 @@ for a switch) ends its line instead, those comments aligned in one
 column per group (a value too long for the column gets it on the line
 above). An `[accounts.NAME]` table is key lines only: the commented
 reference block above the accounts documents every account key once.
+Comment lines come in two kinds: prose (the file header, the headings,
+every description, notes) starts with `## `; a commented-out key or table
+starts with a single `# ` — `# province = "ON"`, `# [instalments]`, each
+line of a commented-out multi-line value — and is switched on by deleting
+the `# `. A key's end-of-line comment keeps a single `#`: it follows a
+value, so it cannot be mistaken for a commented-out line. `taxjson format`
+writes your own comment lines the same way: a line whose text is TOML (a
+key and value, known to taxjson or not, a table line, or a line of a
+commented-out multi-line value) keeps one `# `; any other comment line
+becomes `## text` (a `#`, `###` ... prefix is normalised; the text is
+unchanged). A file written before the `## ` mark formats to the new
+layout with its old prose recognised as template text, not kept as notes.
 
 ```toml
 [settings]
-# --- Project ---
+## --- Project ---
 country                           = "canada"  # canada | ca | usa | us (required)
-# Default settle: CRA dates a sale by settlement.
+## The province `taxjson estimate` taxes at. No default.
+# province                        = "ON"      # ON | BC | AB
+## Default settle: CRA dates a sale by settlement.
 tax_date                          = "settle"  # settle | trade
-# The tax year the pipeline reports on (required).
+## The tax year the pipeline reports on (required).
 year                              = 2025
 
-# --- Currencies ---
-# Report currency: CAD (Bank of Canada rates).
+## --- Currencies ---
+## Report currency: CAD (Bank of Canada rates).
 base_currency                     = "CAD"
 
 [accounts.rrsp]
