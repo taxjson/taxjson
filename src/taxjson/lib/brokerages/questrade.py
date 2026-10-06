@@ -916,7 +916,7 @@ class QuestradeBrokerage(BaseBrokerage):
             if key not in self._ambiguous_warned:
                 self._ambiguous_warned.add(key)
                 emit_line(f"warning: {self._qt_name}: {sym or '(blank)'!r} "
-                      f"({(row.get('Description') or '')[:60]!r}) matches "
+                      f"({(row.get('Description') or '')[:160]!r}) matches "
                       f"several traded symbols "
                       f"({', '.join(s for s, _ in sorted(cands))}) — not "
                       f"rebound; map it with a ticker.map rule (moot if "
@@ -943,7 +943,7 @@ class QuestradeBrokerage(BaseBrokerage):
             _why = (f" ({_un['detail']})" if _un.get('detail') else "")
             msg = (f"{where}: {(row.get('Action') or '').strip() or '?'} "
                    f"row keeps internal symbol code {sym!r} "
-                   f"({(row.get('Description') or '')[:60]!r}) — no trade "
+                   f"({(row.get('Description') or '')[:160]!r}) — no trade "
                    f"or transfer in this account's exports resolves it, "
                    f"and no transfer or name elsewhere in the project "
                    f"identifies it{_why}. "

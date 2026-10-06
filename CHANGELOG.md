@@ -17,6 +17,11 @@
 
 ### Fixed
 
+- **A Questrade dividend row's code is matched by the security's name, not the
+  event wording.** "<NAME> CASH DIV ON … SHS REC … PAY …" and "<NAME> SUBST PAY ON …
+  IN LIEU OF DIVIDEND" are compared as <NAME>, so the same security's plain name
+  elsewhere at the broker identifies the code. The warning quotes the full description.
+
 - **Questrade internal symbol codes pair with more transfers.** The names of the two legs of a
   transfer are now compared with common abbreviations read as the word (RES / RESOURCES, MFG, HLDGS,
   INTL, `N V` / NV, `&` / AND ...) and broker boilerplate cut (a depositary's `REPSTG 5 COM ...`,

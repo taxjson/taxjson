@@ -227,6 +227,9 @@ def name_words(text: str) -> Tuple[Tuple[str, ...], bool]:
     word is kept in order (the generic words too): the truncation check
     compares word sequences."""
     s = _CONTROL_RE.sub(" ", str(text or "").upper())
+    s2 = _strip_row_wording(s)
+    cut_wording = s2 != s
+    s = s2
     for rx, rep in _PHRASES:
         s = rx.sub(rep, s)
     s = _DOMICILE_RE.sub(_keep_domicile, s)
@@ -239,7 +242,25 @@ def name_words(text: str) -> Tuple[Tuple[str, ...], bool]:
                          or words[i + 1] in _TRANSFER_NEXT))
                 or _dealer_at(words, i)):
             return tuple(words[:i]), True
-    return tuple(words), False
+    return tuple(words), cut_wording
+
+
+# A Questrade row describes the event after the security's name: "<NAME>
+# CASH DIV ON 49 SHS REC 09/21/26 PAY 09/23/26", "<NAME> SUBST PAY ON 41
+# SHS ... IN LIEU OF DIVIDEND". The parser's own description-key patterns
+# (questrade._DESC_NOISE_RES: dividend, distribution, tax, DRIP, split,
+# transfer and trade wording) cut that wording off, so the name compares
+# as the security's name; a substitute payment's wording is added here
+# (the parser keeps it in its key on purpose).
+_SUBST_PAY_RE = re.compile(r"\s+SUBST(?:ITUTE)?\s+PAY(?:MENT)?\b.*$")
+
+
+def _strip_row_wording(s: str) -> str:
+    from taxjson.lib.brokerages.questrade import _DESC_NOISE_RES
+    s = _SUBST_PAY_RE.sub("", s)
+    for rx in _DESC_NOISE_RES:
+        s = rx.sub("", s)
+    return s.strip()
 
 
 def _is_mark_word(w: str) -> bool:
