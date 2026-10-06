@@ -391,6 +391,21 @@ class TestRedactProjectSymlinks(unittest.TestCase):
         self.assertIn("inputs/qt/gone.csv not copied", text)
         self.assertEqual((outside / "secret.csv").read_text(), QT_CSV)
 
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0,
+                     "root reads anything")
+    def test_unreadable_folder_is_named(self):
+        locked = self.root / "inputs" / "locked"
+        locked.mkdir()
+        (locked / "a.csv").write_text(QT_CSV)
+        locked.chmod(0)
+        try:
+            r = tj(self.root, "redact", "--no-denylist")
+        finally:
+            locked.chmod(0o700)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("inputs/locked not copied: a folder that cannot be "
+                      "read", flat(r))
+
 
 class TestTreeNames(unittest.TestCase):
     def test_renamed_name_never_takes_an_existing_one(self):

@@ -20130,7 +20130,9 @@ def _build_parser(prog: str = "taxjson"
         description="Strip the account numbers, names and contact "
              "details it recognises from broker exports (row shapes "
              "kept) so a statement can be shared as a parser sample or "
-             "bug report — review the output before sharing.")
+             "bug report — review the output before sharing. With no "
+             "FILE, copy the project's inputs/ to inputs_redact/ and "
+             "redact the copy (inputs/ is never changed).")
     p_red.add_argument("files", nargs="*", metavar="FILE",
                        help="Exports to redact (each copied as "
                             "NAME.redacted.EXT). None: copy the project's "

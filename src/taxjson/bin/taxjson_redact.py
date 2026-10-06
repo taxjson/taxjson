@@ -1612,7 +1612,16 @@ def _walk_inputs(src: Path) -> Tuple[List[Path], List[_TreeFile], int]:
     dirs: List[Path] = []
     files: List[_TreeFile] = []
     hidden = 0
-    for dirpath, dirnames, filenames in os.walk(src, followlinks=False):
+
+    def unreadable(e: OSError) -> None:
+        # A folder os.walk cannot list was dropped without a word.
+        tf = _TreeFile(Path(e.filename).relative_to(src)
+                       if e.filename and Path(e.filename) != src
+                       else Path("."))
+        tf.skip = f"a folder that cannot be read ({e.strerror or e})"
+        files.append(tf)
+    for dirpath, dirnames, filenames in os.walk(src, onerror=unreadable,
+                                                followlinks=False):
         here = Path(dirpath)
         rel_here = here.relative_to(src)
         keep = []
