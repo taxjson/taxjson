@@ -219,9 +219,50 @@ _REWORD = [
 _REWORD_MAX = 2000
 
 
+# lib/symbol_codes' evidence for a resolved code, shortened for the
+# console (the captured note keeps it whole).
+_CODE_EVIDENCE = (
+    (re.compile(r"paired with the (?P<b>.+?) transfer out of (?P<q>\S+) "
+                r"on (?P<d>\S+), account (?P<a>.+)"),
+     "{b} transfer out of {q} on {d}, {a}"),
+    (re.compile(r"name match: (?P<n>.+) on (?P<b>.+?) rows of account "
+                r"(?P<a>.+)"),
+     "same name as {n} in {a}"),
+)
+
+
+def _codes_note(line: str) -> Optional[List[str]]:
+    """lib/symbol_codes' one-line note of the Questrade internal codes
+    an account's books carry under a ticker, as a person reads it: its
+    head and count, then one detail line per code (`X000001 → QZM.US
+    (...)`) and the override. None when `line` is not that note (or no
+    entry parses: shown as it is)."""
+    from taxjson.lib.symbol_codes import NOTE_HEAD, parse_codes_note
+    if not line.startswith(NOTE_HEAD):
+        return None
+    codes = parse_codes_note(line)
+    if not codes:
+        return None
+    out = [f"{NOTE_HEAD} ({len(codes)}):"]
+    for code, (listing, evidence) in codes.items():
+        for rx, fmt in _CODE_EVIDENCE:
+            m = rx.fullmatch(evidence)
+            if m:
+                evidence = fmt.format(**m.groupdict())
+                break
+        out.append(f"{code} → {listing} ({evidence})")
+    out.append("Inferred from your other exports (`taxjson transfers` "
+               "lists them); a ticker.map GLOBAL line for a code "
+               "overrides it.")
+    return out
+
+
 def reword(line: str) -> List[str]:
     """A captured stage line's display form: [line, detail ...] — a
     frequent wordy note shortened (_REWORD), else [line]. Display only."""
+    codes = _codes_note(line)
+    if codes is not None:
+        return codes
     if len(line) > _REWORD_MAX:
         return [line]
     for rx, build in _REWORD:

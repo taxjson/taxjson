@@ -170,6 +170,12 @@ captured line in work/ keeps it), no `(content: ...)` detection detail
 (work/`<acct>`_detect.diag keeps it). `out.console_lint(text)` checks it;
 tests/test_run_console.py runs it on the style projects.
 
+A message an engine pass says is shown once per run, whichever pass
+says it (the account's gains, the blended pass, a failed stage's echo):
+keyed on its text, a short position on its symbol and account. A failed
+stage's last line repeats its own error headline. stdout and stderr are
+line-buffered, so a pipe (`2>&1 | tee`) keeps whole lines in order.
+
 The captured text never changes for this: at width 0 (TAXJSON_WIDTH=0,
 a stage's stderr in work/*.diag, the `.sum` DIAGNOSTICS) every message
 keeps its bytes. The display form is made at display time —
@@ -185,6 +191,7 @@ whose stage is cached under `--fast` is not shown):
 
 | step | when |
 | --- | --- |
+| `==> Checking the project` | always: the checks before the first stage (config warnings, a $0 election, a leftover file) are under it |
 | `==> Rebuilding everything: taxjson's code changed ...` | `--fast` after an upgrade |
 | `==> Reading missing_history.json (openings for sales with no purchase in the files)` | the project has one |
 | `==> Loading currency rates` | always |
@@ -204,6 +211,7 @@ whose stage is cached under `--fast` is not shown):
 | `==> Writing holdings reports/tfsa_holdings.toml` | equity accounts (the native-currency holdings stages are not shown) |
 | `==> Writing summary reports/tfsa.sum` | every account |
 | `==> Combining sheltered accounts` | registered accounts, for the loss checks |
+| `==> Checking for missing purchase history` | a position goes short with no purchase in the files: after every account's books, each one that bears on the tax year as a `Warning:` (or one `Info:` per taxable account), the rest in ONE `Info:` line naming `find-missing-history --write-missing-history --outside-year` |
 | `==> Checking crypto for superficial losses with the sheltered accounts` | one crypto account (US: wash sales) |
 | `==> Pooling cost and checking superficial losses across taxable accounts (margin, qt)` | Canada's blended pass (US: `Checking wash sales across ...`; crypto: `... crypto accounts`) |
 | `==> Writing summary reports/margin_wash.sum` | the filing-basis summary |

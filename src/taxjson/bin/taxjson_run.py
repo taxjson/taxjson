@@ -325,13 +325,38 @@ def _echo_stage_stderr(text: str) -> None:
     """A captured stage's stderr shown on the console (a failed stage, a
     report tool's notes), each long line wrapped for the person at
     display time (lib/stage_msg.console_lines); the captured text
-    itself is unchanged."""
+    itself is unchanged. A message this run already showed (another
+    engine pass said it: the per-account gains, the blended pass with
+    the sheltered context) is not shown again (_echo_captured once)."""
+    _ECHO_SKIP[0] = False
     for line in text.splitlines():
-        _echo_captured(line, indent="", file=sys.stderr)
+        _echo_captured(line, indent="", file=sys.stderr, once=True)
+    _ECHO_SKIP[0] = False
+
+
+# A position short in the books, as an engine pass says it (lib/pipeline
+# ATTENTION_SHORT): its symbol and account key the message, whichever
+# pass and wording (a registered account's short is said by its own
+# gains stage and again by a taxable pass that reads it as context).
+_SHORT_KEY_RE = re.compile(r"(?:[\w./-]+: )?warning: ATTENTION: short: "
+                           r"(?P<sym>\S+) \((?P<acct>[^()]+)\)")
+# The continuation lines of a message _echo_captured left out.
+_ECHO_SKIP = [False]
+
+
+def _echo_key(line: str) -> Tuple[str, ...]:
+    """The run-wide key of a captured message line (_SHOWN_THIS_RUN): a
+    short position by (symbol, account), any other by its text without
+    the program name."""
+    m = _SHORT_KEY_RE.match(line)
+    if m:
+        return ("short", m["sym"], m["acct"])
+    from taxjson.lib.out import relabel
+    return ("echo", relabel(line.strip(), source=False))
 
 
 def _echo_captured(line: str, indent: str = "  ", file=None,
-                   source: bool = True) -> None:
+                   source: bool = True, once: bool = False) -> None:
     """Show one captured stage line (a .diag's ATTENTION / UNBOOKED line
     or its continuation) on the run's console, wrapped for the person:
     the marker first line keeps its prefix, the rest is an indented
@@ -344,6 +369,22 @@ def _echo_captured(line: str, indent: str = "  ", file=None,
     from taxjson.lib.stage_msg import console_lines
     from taxjson.lib.out import width as _w
     file = sys.stdout if file is None else file
+    if once:
+        # An engine message is shown once per run (owner request): the
+        # gains stage, the raw-holdings pass, the blended pass and a
+        # failed stage's echo all say the same lines. A continuation
+        # follows its message's fate. The captured .diag / .sum keep
+        # every pass's lines.
+        if line[:1] in (" ", "\t") and not _PARSE_COUNT_RE.match(line):
+            if _ECHO_SKIP[0]:
+                return
+        elif line.strip():
+            key = _echo_key(line)
+            if key in _SHOWN_THIS_RUN:
+                _ECHO_SKIP[0] = True
+                return
+            _SHOWN_THIS_RUN.add(key)
+            _ECHO_SKIP[0] = False
     if _w(file) > 0:
         indent, source = "", False
     for ln in console_lines(line, indent, stream=file, source=source):
@@ -369,6 +410,21 @@ def _split_msg(text: str) -> Tuple[str, ...]:
 def _out_relpath(path: Path, root: Path) -> str:
     from taxjson.lib.out import relpath
     return relpath(path, root)
+
+
+def _console_line_buffered() -> None:
+    """stdout and stderr flushed at every line end. Read through a pipe
+    (`taxjson run 2>&1 | tee log`) a block-buffered stdout came out in
+    chunks while stderr came out at once: a warning landed in the middle
+    of an earlier stdout line, or before the step it belongs to."""
+    import io as _io
+    for st in (sys.stdout, sys.stderr):
+        try:
+            st.flush()
+            st.reconfigure(line_buffering=True)
+        except (AttributeError, ValueError, OSError,
+                _io.UnsupportedOperation):
+            pass
 
 
 def _step(text: str, file=None) -> None:
@@ -415,9 +471,13 @@ UNBOOKED_PREFIX = "warning: UNBOOKED:"
 ATTENTION_PREFIX = "warning: ATTENTION:"
 
 
-def echo_attention_lines(out_path: Path, prefix: str = "") -> None:
+def echo_attention_lines(out_path: Path, prefix: str = "",
+                         exclude: Optional[str] = None,
+                         once: bool = False) -> None:
     """Print the ATTENTION lines of a stage's persisted .diag (only
-    those whose text starts with `prefix`) on the console."""
+    those whose text starts with `prefix`, none starting with `exclude`)
+    on the console. `once`: an engine pass's line — shown once per run
+    whichever pass says it (_echo_captured)."""
     diag_path = out_path.with_name(out_path.name + ".diag")
     try:
         lines = diag_path.read_text(errors="replace").splitlines()
@@ -426,11 +486,13 @@ def echo_attention_lines(out_path: Path, prefix: str = "") -> None:
     echoing = False
     for line in lines:
         if echoing and line[:1] in (" ", "\t") and line.strip():
-            _echo_captured(line)
+            _echo_captured(line, once=once)
             continue
-        echoing = line.startswith(ATTENTION_PREFIX + " " + prefix)
+        echoing = (line.startswith(ATTENTION_PREFIX + " " + prefix)
+                   and not (exclude and line.startswith(
+                       ATTENTION_PREFIX + " " + exclude)))
         if echoing:
-            _echo_captured(line)
+            _echo_captured(line, once=once)
 
 
 def _diag_lines(out_path: Path) -> List[str]:
@@ -583,7 +645,8 @@ def run_capture(cmd: List[str]) -> bytes:
     if result.stderr:
         _echo_stage_stderr(result.stderr)
     if result.returncode != 0:
-        raise subprocess.CalledProcessError(result.returncode, cmd)
+        raise subprocess.CalledProcessError(result.returncode, cmd,
+                                            stderr=result.stderr)
     return (result.stdout or "").encode("utf-8")
 
 
@@ -3779,7 +3842,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # `report` is text (run_cmd captures with text=True);
             # stderr.buffer.write(str) raised TypeError and crashed the
             # run instead of printing the report.
-            sys.stderr.write(report)
+            _echo_stage_stderr(report)
             if strict:
                 _die(f"--strict: {name}: validation ERROR(s) in the "
                      f"crypto books — aborting")
@@ -3850,7 +3913,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                            if incomplete_history else []),
                         capture_output=True)
                     if _dres.stderr:
-                        sys.stderr.write(_dres.stderr)
+                        _echo_stage_stderr(_dres.stderr)
                     if _dres.returncode != 0:
                         sys.exit(exit_text(f"taxjson run: apply-distributions "
                                            f"failed for {name} (see above)."))
@@ -3954,25 +4017,19 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # cannot back (audit A2-0006), an unapplied basis adjustment
     # (A2-0199), income a record date moves across a year end (A2-0073,
     # A2-0229), a missing_history.json entry on a real short or a written
-    # option (A2-0637 / A2-0639). One call covers all.
-    echo_attention_lines(gains_json)
-    if is_taxable and not is_crypto:
-        # The positions that go short in a taxable account (sales with
-        # no purchase in the files): on the console, not only in the
-        # .sum's NOTE — the year's gain leaves those sales out until the
-        # history is supplied (new-user study). Read like
-        # find-missing-history reads them (ticker.map JOURNAL pairs,
-        # broker-marked real shorts and missing_history.json entries
-        # are not missing history).
-        _note = _short_positions_note(base_json, name, ticker_map,
-                                      incomplete_history)
-        if _note:
-            _say("note", *_note, indent="  ", file=sys.stdout)
+    # option (A2-0637 / A2-0639). One call covers all — but the positions
+    # that go short: the run lists those once, after every account's
+    # books, the ones that bear on the tax year one by one and the rest
+    # in one line (_report_short_positions).
+    echo_attention_lines(gains_json, exclude="short: ", once=True)
+    _SHORT_SOURCES.append((name, base_json, gains_json,
+                           is_taxable and not is_crypto))
     # A short where none can exist (a registered account, spot crypto,
     # a sale the broker codes CLOSING): missing history the numbers
     # depend on — --strict refuses (re-audit A2-0395 / A2-0137 / A2-1223).
     _shorts = _attention_short_lines(gains_json)
     if _shorts and strict:
+        echo_attention_lines(gains_json, prefix="short: ", once=True)
         _die(f"--strict: {name}: {len(_shorts)} position(s) go short where "
              f"none can exist — history is missing",
              "A registered account, spot crypto, or a sale the broker "
@@ -4809,10 +4866,12 @@ def stage_blended_wash_pass(names: List[str],
     # is decided only here, across accounts: on the console.
     from taxjson.lib.pipeline import ATTENTION_WASH_LOCKED
     echo_attention_lines(combined_wash,
-                         prefix=ATTENTION_WASH_LOCKED[len("ATTENTION: "):])
+                         prefix=ATTENTION_WASH_LOCKED[len("ATTENTION: "):],
+                         once=True)
     # A move between your own accounts that the sender's lots cannot
     # back (US-BASIS-05): on the console, and --strict stops.
-    echo_attention_lines(combined_wash, prefix="own-account move: ")
+    echo_attention_lines(combined_wash, prefix="own-account move: ",
+                         once=True)
     _mv = [ln for ln in _diag_lines(combined_wash)
            if ln.startswith(ATTENTION_PREFIX + " own-account move: ")]
     if _mv and strict:
@@ -5313,6 +5372,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     _DETECTION_SHOWN.clear()            # each run lists its inputs once
     _PARSED_THIS_RUN.clear()
     _SHOWN_THIS_RUN.clear()
+    _SHORT_SOURCES.clear()
     root = Path(args.dir).resolve()
     cfg = load_config(root)
     # Register the config path globally so every `needs_rebuild` call
@@ -5715,7 +5775,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         vres = _run_cmd(_cmd("taxjson-validate") + [str(sheltered_base)],
                         capture_output=True)
         if vres.returncode != 0:
-            sys.stderr.write((vres.stdout or "") + (vres.stderr or ""))
+            _echo_stage_stderr((vres.stdout or "") + (vres.stderr or ""))
             # A clean exit, not a raw CalledProcessError traceback —
             # the validator's output above already names the offending
             # transaction(s); tell the user where to look next.
@@ -5832,6 +5892,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         if getattr(args, "strict", False):
             raise SystemExit(1)
         return
+    _report_short_positions(root, settings, cache, ticker_map_arg, mh_arg)
     if not pending_accounts:
         _check_renamed_late(root, strict=getattr(args, "strict", False))
     if _blend_names and not args.account and not pending_accounts:
@@ -6248,14 +6309,15 @@ def _sanity_console(root: Path) -> None:
         raise SystemExit(1)
 
 
-def _short_positions_note(base_json: Path, account: str,
-                          ticker_map: Optional[Path],
-                          missing_history: Optional[Path]
-                          ) -> Tuple[str, ...]:
-    """A note (headline, detail) naming a taxable account's positions
-    that go short in its books — a sale with no purchase in the files,
-    unless the broker marks it a short sale — or () (advisory: never
-    breaks a run)."""
+def _short_positions_cands(base_json: Path, account: str,
+                           ticker_map: Optional[Path],
+                           missing_history: Optional[Path]) -> List[Any]:
+    """A taxable account's positions that go short in its books — a sale
+    with no purchase in the files, unless the broker marks it a short
+    sale or codes it closing (those are said as ATTENTION lines) — read
+    like find-missing-history reads them (ticker.map JOURNAL pairs and
+    missing_history.json entries are not missing history). [] when the
+    books cannot be read (advisory: never breaks a run)."""
     try:
         from taxjson.lib.core import load_transactions
         from taxjson.lib.first_run import read_missing_history_pairs
@@ -6266,26 +6328,130 @@ def _short_positions_note(base_json: Path, account: str,
                    if ticker_map and Path(ticker_map).is_file() else set())
         covered = {(sym, a.lower()) for sym, a in
                    read_missing_history_pairs(missing_history)}
-        cands = [c for c in detect_missing_history(
-                     txs, include_broker_shorts=True,
-                     registered_accounts={account: False},
-                     journal_symbols=journal)
-                 if c.account == account and not c.broker_marked_short
-                 and not c.broker_says_closing
-                 and (str(c.symbol).upper(), account.lower())
-                 not in covered]
+        return [c for c in detect_missing_history(
+                    txs, include_broker_shorts=True,
+                    registered_accounts={account: False},
+                    journal_symbols=journal)
+                if c.account == account and not c.broker_marked_short
+                and not c.broker_says_closing
+                and (str(c.symbol).upper(), account.lower())
+                not in covered]
     except Exception:                               # noqa: BLE001
-        return ()
-    if not cands:
-        return ()
-    shown = ", ".join(c.symbol for c in cands[:5]) \
-        + (f" +{len(cands) - 5} more" if len(cands) > 5 else "")
-    return (f"{len(cands)} position(s) go short in {account}'s data "
+        return []
+
+
+def _short_positions_note(account: str, symbols: List[str]
+                          ) -> Tuple[str, ...]:
+    """The note (headline, detail) naming a taxable account's positions
+    that go short (_short_positions_cands) and bear on the tax year."""
+    shown = ", ".join(symbols[:5]) \
+        + (f" +{len(symbols) - 5} more" if len(symbols) > 5 else "")
+    return (f"{len(symbols)} position(s) go short in {account}'s data "
             f"({shown})",
             "Sales with no purchase in your files, unless they were real "
             "short sales. Until the purchase is supplied their gain is in "
             "no total — `taxjson find-missing-history` lists them with "
             "the fixes.")
+
+
+# The accounts whose gains this run built or echoed, in run order:
+# (name, base book, gains book, taxable equity) — _report_short_positions.
+_SHORT_SOURCES: List[Tuple[str, Path, Path, bool]] = []
+
+
+def _short_blocks(gains_json: Path) -> List[List[str]]:
+    """The `ATTENTION: short:` messages of a gains stage's .diag, each
+    with its continuation lines."""
+    from taxjson.lib.pipeline import ATTENTION_SHORT
+    out: List[List[str]] = []
+    cur: Optional[List[str]] = None
+    for line in _diag_lines(gains_json):
+        if cur is not None and line[:1] in (" ", "\t") and line.strip():
+            cur.append(line)
+            continue
+        cur = None
+        if line.startswith(ATTENTION_SHORT):
+            cur = [line]
+            out.append(cur)
+    return out
+
+
+def _report_short_positions(root: Path, settings: Dict[str, Any],
+                            cache: Path, ticker_map: Optional[Path],
+                            missing_history: Optional[Path]) -> None:
+    """The positions that go short in this run's books (sales with no
+    purchase in the files), once, after every account's books: the ones
+    that bear on the tax year one by one — a row of the year draws on
+    the missing purchase or touches the position at all, or (Canada) an
+    other taxable account of its ACB pool trades it that year; the test
+    find-missing-history sorts by (lib/missing_history.
+    classify_year_shorts) — and the rest in ONE line that names the
+    command recording them. Display only: each gains stage's .diag and
+    the .sum DIAGNOSTICS keep every line (owner request: a position
+    that went short years ago and never comes up again is noise)."""
+    sources = list(_SHORT_SOURCES)
+    _SHORT_SOURCES.clear()
+    year = settings.get("year")
+    blocks: List[Tuple[Tuple[str, str], List[str]]] = []
+    unmarked: List[Tuple[str, List[Any]]] = []
+    for name, base_json, gains_json, taxable_equity in sources:
+        for b in _short_blocks(gains_json):
+            m = _SHORT_KEY_RE.match(b[0])
+            blocks.append(((m["sym"], m["acct"]) if m else ("", ""), b))
+        if taxable_equity:
+            unmarked.append((name, _short_positions_cands(
+                base_json, name, ticker_map, missing_history)))
+    if not blocks and not any(c for _n, c in unmarked):
+        return
+    rows = (_year_short_rows(root, _project_base_files(cache), year)
+            if year else {})
+
+    def _listed(key) -> bool:
+        r = rows.get(key)
+        return r is None or r.year_listed
+
+    shown_blocks, outside = [], {}
+    for key, b in blocks:
+        if _listed(key):
+            shown_blocks.append(b)
+        else:
+            outside[key] = rows[key]
+            # (a later pass's echo of it — the blended pass, a failed
+            # stage — is not shown either)
+            _SHOWN_THIS_RUN.add(("short",) + key)
+    notes: List[Tuple[str, List[str]]] = []
+    for name, cands in unmarked:
+        keep = []
+        for c in cands:
+            key = (c.symbol, c.account)
+            if _listed(key):
+                keep.append(c.symbol)
+            else:
+                outside[key] = rows[key]
+        if keep:
+            notes.append((name, keep))
+    _step("Checking for missing purchase history")
+    for b in shown_blocks:
+        for line in b:
+            _echo_captured(line, once=True)
+    for name, syms in notes:
+        _say("note", *_short_positions_note(name, syms), indent="  ",
+             file=sys.stdout)
+    if outside:
+        n = len(outside)
+        when = ("before" if all(
+            (r.candidate.first_negative_date or "") < f"{year}-01-01"
+            for r in outside.values()) else "outside")
+        _say("note", f"{n} position{'' if n == 1 else 's'} went short "
+             f"{when} {year} with missing history; no effect on {year}'s "
+             f"numbers",
+             f"No purchase in your files and no {year} activity. `taxjson "
+             f"find-missing-history` lists {'it' if n == 1 else 'them'}; "
+             f"`taxjson find-missing-history --write-missing-history "
+             f"--outside-year` records {'it' if n == 1 else 'them'} in "
+             f"missing_history.json so the run stops listing "
+             f"{'it' if n == 1 else 'them'}.", indent="  ",
+             file=sys.stdout)
 
 
 def _uncovered_sales(root: Path, cfg: Dict[str, Any],
@@ -18946,6 +19112,92 @@ def _merge_audit_json(docs: List[Dict[str, Any]], base_currency: str,
             "failed": any(d.get("failed") for d in docs)}
 
 
+def _project_base_files(cache: Path) -> List[Path]:
+    """work/<account>_base.json of every account (not the raw/native
+    books, not the combined sheltered book, not a dot-prefixed pass)."""
+    return sorted(p for p in cache.glob("*_base.json")
+                  if not p.name.endswith("_raw_base.json")
+                  and p.name != "sheltered_base.json"
+                  and not p.name.startswith("."))
+
+
+def _year_short_rows(root: Path, files: List[Path], year: Any):
+    """{(symbol, account): MissingHistoryRow} of every pair that goes
+    short in the project's books, judged against `year`
+    (lib/missing_history.classify_year_shorts) — the one test the run's
+    console and `find-missing-history --outside-year` share."""
+    from taxjson.lib.core import load_transactions
+    from taxjson.lib.missing_history import (account_types_near,
+                                              classify_year_shorts,
+                                              journal_targets)
+    txs = []
+    for f in files:
+        try:
+            txs.extend(load_transactions(f))
+        except (OSError, ValueError):
+            continue
+    settings = _soft_settings(root)
+    journal: set = set()
+    if (root / "ticker.map").is_file():
+        try:
+            journal = journal_targets(root / "ticker.map")
+        except Exception:                           # noqa: BLE001
+            journal = set()
+    types = (account_types_near(files[0]) if files else {})
+    return classify_year_shorts(
+        txs, year, country=_country(settings), registered=types,
+        date_basis=_tax_date_basis(settings), journal_symbols=journal)
+
+
+def _outside_year_rows(root: Path, files: List[Path], year: Any,
+                       suggested: List[Dict[str, Any]], out: Path,
+                       mh_file: Path) -> Optional[List[Dict[str, Any]]]:
+    """`--write-missing-history --outside-year`: the file's entries
+    (kept as they are) plus each suggested pair that does NOT bear on
+    `year` (MissingHistoryRow.year_listed false: no row of the year
+    draws on it or touches it, and — Canada — no other taxable account
+    of its ACB pool trades it in the year). None when there is nothing
+    to add (said)."""
+    import json as _json
+    rows_by = _year_short_rows(root, files, year)
+    existing: List[Dict[str, Any]] = []
+    src = out if out.exists() else (mh_file if mh_file.exists()
+                                    and out.resolve() == mh_file.resolve()
+                                    else None)
+    if src is not None and src.is_file():
+        try:
+            existing = _json.loads(src.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError) as e:
+            _die_input(f"--outside-year: cannot read {src}: {e} — fix or "
+                       f"move it first (its entries are kept).")
+        if not isinstance(existing, list):
+            _die_input(f"--outside-year: {src} is not a JSON array of "
+                       f"entries — fix or move it first.")
+    have = {(str(e.get("symbol") or "").strip().upper(),
+             str(e.get("account") or "").strip())
+            for e in existing if isinstance(e, dict)}
+    added: List[Dict[str, Any]] = []
+    for e in suggested:
+        key = (e.get("symbol"), e.get("account"))
+        r = rows_by.get(key)
+        if r is None or r.year_listed:
+            continue
+        if (str(key[0]).upper(), str(key[1])) in have:
+            continue
+        added.append(dict(e, _outside_year=year,
+                          _note=(f"No {year} activity: written by "
+                                 f"--outside-year. " + (e.get("_note")
+                                                        or ""))))
+    if not added:
+        _say("note", f"nothing to add to {out.name}",
+             f"Every position that goes short with no purchase in your "
+             f"files bears on {year} or is already listed. `taxjson "
+             f"find-missing-history` lists them.",
+             prog=f"{_PROG} find-missing-history")
+        return None
+    return existing + added
+
+
 def cmd_find_missing_history(args: argparse.Namespace) -> None:
     """Convenience wrapper over `taxjson-missing-history`: resolve the account
     base file(s) from the project and default the year from taxjson.toml."""
@@ -18968,6 +19220,10 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
     # Both missing_history.json and its old name phantoms.json: refused
     # (exit 2) before any work; only the old name: read, with a NOTE.
     mh_file = _missing_history_path(root)
+    # Per-account full-history base files only — skip the raw/native
+    # derivatives and the combined sheltered file (its accounts are
+    # already covered individually).
+    all_files = _project_base_files(cache)
     if args.account:
         f = cache / f"{args.account}_base.json"
         if not f.exists():
@@ -18975,16 +19231,17 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
                                f"(run `taxjson run` first, or check the name)."))
         files = [f]
     else:
-        # Per-account full-history base files only — skip the raw/native
-        # derivatives and the combined sheltered file (its accounts are
-        # already covered individually).
-        files = sorted(p for p in cache.glob("*_base.json")
-                       if not p.name.endswith("_raw_base.json")
-                       and p.name != "sheltered_base.json"
-                       and not p.name.startswith("."))
+        files = all_files
         if not files:
             sys.exit(exit_text(f"taxjson find-missing-history: no base files in {cache} "
                                f"(run `taxjson run` first)."))
+    outside = bool(getattr(args, "outside_year", False))
+    if outside and args.write_missing_history is None:
+        _die_input("--outside-year goes with --write-missing-history (it "
+                   "writes the pairs that do not bear on the tax year).")
+    if outside and args.all_history:
+        _die_input("--outside-year and --all-history choose different "
+                   "pairs: give one.")
 
     year = args.year
     if year is None:
@@ -19006,9 +19263,13 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         from taxjson.lib.missing_history import (
             LEGACY_MISSING_HISTORY_FILE, MISSING_HISTORY_FILE)
 
-        _flag = "--write-missing-history"
+        _flag = ("--write-missing-history --outside-year" if outside
+                 else "--write-missing-history")
         out = (Path(args.write_missing_history)
                if args.write_missing_history else root / MISSING_HISTORY_FILE)
+        if outside and not year:
+            _die_input(f"{_flag}: no tax year — set [settings] year in "
+                       f"taxjson.toml or pass --year.")
         # Writing missing_history.json next to the old phantoms.json would
         # leave the project with both names, which every command refuses.
         if (out.resolve() == (root / MISSING_HISTORY_FILE).resolve()
@@ -19024,7 +19285,9 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         # back and dropped the hand-added pairs, silently (audit A2-0312).
         # Refused up front — before the per-account work — unless
         # --force, which keeps a .bak like `init --force`.
-        if out.exists() and not out.is_dir():
+        if out.exists() and not out.is_dir() and not outside:
+            # (--outside-year only ADDS pairs the file does not list:
+            # every entry already in it is kept as it is.)
             if not getattr(args, "force", False):
                 sys.exit(exit_text(f"taxjson find-missing-history {_flag}: "
                                    f"{out} already exists — not overwritten (a "
@@ -19056,7 +19319,7 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
                 cmd += ["--year", str(year)]
             if args.include_options:
                 cmd += ["--include-options-in-suggestions"]
-            if args.all_history:
+            if args.all_history or outside:
                 cmd += ["--all-history"]
             cmd += [str(f)]
             # Capture the inner tool's stderr and re-emit everything except
@@ -19121,6 +19384,11 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
                           file=sys.stderr)
 
         rows = list(merged.values())
+        if outside:
+            rows = _outside_year_rows(root, all_files or files, year, rows,
+                                      out, mh_file)
+            if rows is None:
+                return
         from taxjson.lib.safe_write import backup_copy, write_atomic
         try:
             if out.is_file() and not out.is_symlink():
@@ -19137,6 +19405,18 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
             _die_input(f"cannot write "
                      f"{_flag} {out}: {e} — pass a FILE path, "
                      f"e.g. {out / MISSING_HISTORY_FILE if out.is_dir() else MISSING_HISTORY_FILE}")
+        if outside:
+            _n_new = sum(1 for e in rows if e.get("_outside_year") == year)
+            _kept = len(rows) - _n_new
+            _say("note", f"added {_n_new} position(s) that went short with "
+                 f"no purchase in your files and no {year} activity to "
+                 f"{_out_relpath(out, root)}",
+                 f"{_kept} entr{'y' if _kept == 1 else 'ies'} already "
+                 f"there kept as they are. Their sales are left out of the "
+                 f"totals of the years they fall in (not {year}); `taxjson "
+                 f"run` stops listing them.", prog=f"{_PROG} "
+                 f"find-missing-history")
+            return
         n_reg = sum(1 for e in rows
                     if "Registered" in (e.get("_note") or ""))
         # Resolved: a relative path names a file under the CWD, and
@@ -19154,7 +19434,15 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
               f"positions. Then {hint}.", file=sys.stderr)
         return
 
-    cmd = _cmd("taxjson-missing-history") + [str(f) for f in files]
+    # Every book is read (a Canadian ACB pool spans the taxable
+    # accounts: lib/missing_history.year_pool); ACCOUNT narrows the
+    # report with --account.
+    cmd = _cmd("taxjson-missing-history") + [
+        str(f) for f in (all_files if args.account and files[0] in all_files
+                         else files)]
+    if (args.account and files[0] in all_files and len(all_files) > 1
+            and getattr(args, "write_purchases", None) is None):
+        cmd += ["--account", args.account]
     if getattr(args, "write_purchases", None) is not None:
         # Drafts of purchase lines from the broker's cost evidence
         # (tax-logic CA-ACB-15 / US-BASIS-08): the tool writes them
@@ -20752,6 +21040,15 @@ def _build_parser(prog: str = "taxjson"
                        help="With --write-missing-history or "
                             "--write-purchases, emit every candidate, not "
                             "just those affecting the tax year")
+    p_fmh.add_argument("--outside-year", action="store_true",
+                       help="With --write-missing-history: ADD to the "
+                            "file only the positions that do NOT bear on "
+                            "the tax year (no row of the year draws on or "
+                            "touches them; Canada: no other taxable "
+                            "account trades the symbol that year), keeping "
+                            "every entry already there. `taxjson run` then "
+                            "stops listing them; the year's numbers do not "
+                            "change")
     p_fmh.add_argument("--write-purchases", metavar="FILE", nargs="?",
                        const="", default=None,
                        help="Instead of the report, DRAFT .tt purchase "
@@ -20926,6 +21223,14 @@ def _main() -> None:
     for seg in segments:
         args = p.parse_args(seg)
         _CURRENT_CMD = next((t for t in seg if t in commands), "")
+        if args.cmd == "run":
+            # The run's console: whole lines in order whatever reads
+            # them (a pipe, `| tee`), and every line under a step —
+            # the checks before the first stage (config warnings, a
+            # $0 election, a leftover file) under this one
+            # (docs/output-style.md, The run's console).
+            _console_line_buffered()
+            _step("Checking the project")
         if (args.cmd not in ("init", "help", "redact") + _RELEASE_CMDS
                 and not Path(args.dir).is_dir()):
             # `-C typo sum` said "no gains files in typo/work (run
@@ -20963,9 +21268,47 @@ def _main() -> None:
             # explained WHY (run_to_file echoes it) — re-raising the
             # CalledProcessError just buried that explanation under a
             # second traceback (2026-09 audit).
-            sys.exit(exit_text(f"taxjson: stage failed: {_stage_description(e.cmd)} "
-                               f"(exit {e.returncode}) — see the error above."))
+            # Its own error headline is repeated here: the explanation
+            # may be hundreds of lines up (owner request).
+            _why = _failure_headline(e.stderr)
+            sys.exit(exit_text(
+                f"taxjson: stopped at {_stage_description(e.cmd)}"
+                + (f": {_why} (exit {e.returncode}; details above)"
+                   if _why else
+                   f" (exit {e.returncode}) — see the error above.")))
     return
+
+
+# A failed stage's error line: `[<prog>: ]error: <what>` (or the last
+# line of a traceback, `ValueError: <what>`).
+_FAIL_LINE_RE = re.compile(r"^(?:[\w./-]+:\s+)?(?:error|fatal):\s*(?P<m>.+)$",
+                           re.IGNORECASE)
+_TRACE_LAST_RE = re.compile(r"^(?:[\w.]+(?:Error|Exception)):\s*(?P<m>.+)$")
+# The longest headline the run's last line repeats.
+_FAIL_HEAD_MAX = 160
+
+
+def _failure_headline(stderr: Any) -> str:
+    """The headline of a failed stage's own error (its last `error:`
+    line, else a traceback's last line), for the run's final line — ''
+    when its stderr says none."""
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", "replace")
+    if not stderr:
+        return ""
+    found = ""
+    for line in str(stderr).splitlines():
+        line = line.strip()
+        m = _FAIL_LINE_RE.match(line) or _TRACE_LAST_RE.match(line)
+        if m:
+            found = m["m"].strip()
+    if not found:
+        return ""
+    from taxjson.lib.stage_msg import split_message
+    head = split_message(found)[0]
+    if len(head) > _FAIL_HEAD_MAX:
+        head = head[:_FAIL_HEAD_MAX - 1].rstrip() + "…"
+    return head
 
 
 # What each sub-tool does, for the one-line stage failure (new-user
