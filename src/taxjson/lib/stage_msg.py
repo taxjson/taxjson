@@ -251,7 +251,7 @@ def _codes_note(line: str) -> Optional[List[str]]:
                 evidence = fmt.format(**m.groupdict())
                 break
         out.append(f"{code} → {listing} ({evidence})")
-    out.append("Inferred from your other exports (`taxjson transfers` "
+    out.append("Inferred from your exports (`taxjson transfers` "
                "lists them); a ticker.map GLOBAL line for a code "
                "overrides it.")
     return out

@@ -14,6 +14,17 @@
   that does not exist. A suggestion covered by another suggestion is now
   listed under "Covered by another suggestion", not "Already answered by
   ticker.map".
+- **A Questrade currency journal (Norbert's gambit) from the website export
+  is booked as one.** Its two BRW rows (`... JOURNAL POSITION TO USD` /
+  `... JOURNAL POSITION FROM CAD BOOK VALUE ...`, or the reverse) name the
+  bare symbol: the USD leg became a US listing and the later sale, written
+  under Questrade's internal code, read as a short in find-missing-history.
+  The parser now pairs the legs, books the USD leg on the security's
+  US-dollar line (the account's own USD rows, else `SYMBOL.U.TO` by the TSX
+  convention in `data/markets.toml`), books the code under that line (in the
+  one internal-codes note), and a Canadian run joins the two lines as a
+  ticker.map `JOURNAL` line would (tax-logic CA-XLIST-03). A leg with no
+  partner is an ATTENTION line naming both row shapes.
 - **IB temporary symbols are folded onto their ticker.** Around a corporate
   action IB lists the old contract under a time-stamped symbol (the stamp
   YYYYMMDDHHMMSS, then the ticker) beside the ticker itself. Its rows are now
