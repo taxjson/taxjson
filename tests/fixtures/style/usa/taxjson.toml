@@ -8,8 +8,8 @@
 ## commented-out key (`# key = value`) shows its default (or an example where it has none): delete
 ## the `# ` to change it. `taxjson format` puts an edited file back into this layout, keeping your
 ## values and comments.
-
 [settings]
+
 ## --- Project ---
 country                     = "usa"    # canada | ca | usa | us (required)
 ## The zone crypto UTC times are dated in (an IANA name). No default: required with a crypto

@@ -908,8 +908,8 @@ class _Renderer:
         """A table's key lines (and its heading lines, as str), directly
         under its table line: one `=` column for the whole table, each
         key's description and the user's comments above it, no blank line
-        between keys; a blank line before each heading (but the first
-        line under a table line). An entry's inline text is an end-of-line
+        between keys; a blank line before each heading — [settings]'s first
+        heading included, so the table line stays apart from its data. An entry's inline text is an end-of-line
         comment at one column per group (the run of keys between two
         headings) — or, when its value is too long or spans lines, a line
         above the key."""
@@ -950,7 +950,7 @@ class _Renderer:
         first = True
         for e in entries:
             if isinstance(e, str):
-                if not (first and T):
+                if not (first and T) or T == ("settings",):
                     self.blank()
                 self.emit(e)
                 first = False
@@ -1016,9 +1016,13 @@ class _Renderer:
         for ln in _FILE_HEADER:
             self.emit(self.fill(ln))
         self.table(())
+        n_head = len(self.lines)
         self.unknown_top()
         self.end(())
-        self.lines.append("")
+        # The header sits directly on [settings] (a blank line only after
+        # top-level lines that are not the header's).
+        if len(self.lines) > n_head:
+            self.lines.append("")
         self.settings(doc.get("settings") or {})
         self.accounts(doc.get("accounts"), "accounts" in doc)
         for t in TABLES:

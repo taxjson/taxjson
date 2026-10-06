@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- **taxjson.toml: the file header sits on `[settings]`, and a blank line
+  separates `[settings]` from its first group**, so the table line stands apart
+  from the data. `taxjson format` applies it to an existing file.
+
 
 ## v0.22.0 (2026-10-06)
 

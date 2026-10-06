@@ -704,8 +704,13 @@ class TestLayout(unittest.TestCase):
                 settings = text.split("[settings]\n", 1)[1].split(
                     "# [accounts.NAME]")[0]
                 lines = settings.split("\n")
-                # The first group heading directly under [settings].
-                self.assertEqual(lines[0], CT.group_heading("Project"))
+                # [settings] stands apart from its data: one blank line,
+                # then the first group heading; the file header sits
+                # directly above it.
+                self.assertEqual(lines[0], "")
+                self.assertEqual(lines[1], CT.group_heading("Project"))
+                self.assertTrue(text.split("[settings]\n", 1)[0]
+                                .endswith("## values and comments.\n"))
                 want = [(h, sorted(n for n in keys
                                    if CT.owned(country, "settings", n)))
                         for h, keys in CT.SETTINGS_GROUPS]
