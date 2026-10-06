@@ -665,7 +665,7 @@ class GenericBrokerage(BaseBrokerage):
         # detection read it; a legacy encoding is refused naming the file
         # (audit A2-1083).
         try:
-            text = decode_broker_text(path.read_bytes(), path.name)
+            text = decode_broker_text(path.read_bytes(), shown_name(path))
         except BrokerageParseError as e:
             raise ValueError(f"generic importer: {e}")
         # The file's last record has no line break after it: a cut-off

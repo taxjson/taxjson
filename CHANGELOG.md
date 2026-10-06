@@ -57,6 +57,17 @@
   text and rewritten, not kept as notes.
 
 
+### Fixed
+
+- **A file name holding a newline or another control character stays one
+  line.** The run console now names files as they are on disk; such a
+  name could start a line of its own there and in the saved `.diag`
+  files a later stage reads back. Newline, carriage return, tab and every
+  other control character in a file name are shown escaped (`\n`,
+  `\x1b`). Lines relayed with their `Info:` / `Warning:` label (a plugin's
+  progress lines, `taxjson-validate`'s findings) show control characters
+  from the data escaped too, as every other message already did.
+
 ## v0.19.0 (2026-10-05)
 
 ### Changed

@@ -238,9 +238,12 @@ def _console_names(files) -> Callable[[str], str]:
     (shown_name), the person's own terminal names each file as it is on
     disk. A masked name two of `files` share stays masked."""
     from taxjson.lib.brokerages.base import shown_name
+    from taxjson.lib.out import one_line
     real: Dict[str, set] = {}
     for p in files or ():
-        real.setdefault(shown_name(p), set()).add(Path(p).name)
+        # Control characters escaped (one_line): a name holding a
+        # newline stays one console line.
+        real.setdefault(shown_name(p), set()).add(one_line(Path(p).name))
     pairs = sorted(((m, next(iter(r))) for m, r in real.items()
                     if len(r) == 1 and next(iter(r)) != m),
                    key=lambda mr: -len(mr[0]))
@@ -1996,8 +1999,10 @@ def group_inputs_detailed(account_dir: Path):
             # On the console: the file as it is on disk (an export's
             # default name is its account number; masking it here hid
             # which of two such files is meant).
+            from taxjson.lib.out import one_line as _one_line
             _die(cannot_detect_message(
-                det, shown=f"inputs/{account_dir.name}/{csv.name}"))
+                det, shown=f"inputs/{account_dir.name}/"
+                           f"{_one_line(csv.name)}"))
         out.setdefault(det.broker, []).append(csv)
         found.append(det)
     # A [[holding]] TOML in the folder (a positions file, not a generic
@@ -2039,16 +2044,20 @@ def _report_detection(name: str, found, cache: Path) -> None:
     every saved diagnostic, masks account-number-like parts
     (shown_name)."""
     from taxjson.lib.brokerages.base import shown_name
+    from taxjson.lib.out import one_line
     lines: List[str] = []
     notes: List[str] = []
     console: List[Tuple[str, str]] = []
     for det in found:
         masked = shown_name(det.path)
+        # A control character in the name is escaped (one_line): a
+        # newline in it must not start a line of its own.
+        on_disk = one_line(det.path.name)
         lines.append(det.line(f"inputs/{name}/{masked}"))
-        console.append(("  ", det.line(f"inputs/{name}/{det.path.name}")))
+        console.append(("  ", det.line(f"inputs/{name}/{on_disk}")))
         if det.note:
             notes.append(f"note: {det.note}")
-            real = (det.note.replace(masked, det.path.name, 1)
+            real = (det.note.replace(masked, on_disk, 1)
                     if det.note.startswith(masked) else det.note)
             console.append(("    ", f"note: {real}"))
     if name not in _DETECTION_SHOWN:
@@ -3051,7 +3060,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     if _mismatched:
         flag = "crypto = true" if is_crypto else "no crypto flag"
         _how = {d.path: d.reason for d in _detected}
-        _which = ", ".join(f"inputs/{name}/{p.name} ({b}: {_how.get(p, '?')})"
+        from taxjson.lib.out import one_line as _one_line
+        _which = ", ".join(f"inputs/{name}/{_one_line(p.name)} "
+                           f"({b}: {_how.get(p, '?')})"
                            for b in sorted(_mismatched)
                            for p in grouped[b])
         _die(f"account '{name}' has {flag} in taxjson.toml but its inputs "

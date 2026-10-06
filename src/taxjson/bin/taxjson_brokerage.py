@@ -201,7 +201,7 @@ def final_record_cut(path: Path) -> str:
     (RBC exports end without a line break, on a quoted cell). '' when
     nothing looks cut."""
     try:
-        text = decode_broker_text(Path(path).read_bytes(), path.name)
+        text = decode_broker_text(Path(path).read_bytes(), shown_name(path))
     except (OSError, BrokerageParseError):
         return ''               # the parser reports an unreadable file
     if not text or text[-1] in '\r\n':

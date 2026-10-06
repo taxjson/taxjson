@@ -350,8 +350,11 @@ def shown_name(path) -> str:
     """A file's name as diagnostics print it: account-id-shaped tokens
     masked to their first 2 characters + *** (the parsers' rule for ids
     in the data), so a broker's default download name does not carry
-    the id into reports/ (audit S027-02 / S059-10)."""
-    name = Path(str(path)).name
+    the id into reports/ (audit S027-02 / S059-10). Control characters
+    are escaped (out.one_line): a name holding a newline must not add a
+    line to a .diag a program reads back."""
+    from taxjson.lib.out import one_line
+    name = one_line(Path(str(path)).name)
 
     def _mask(m):
         tok = m.group(0)

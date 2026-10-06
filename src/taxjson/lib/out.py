@@ -113,6 +113,25 @@ def printable(text) -> str:
     return _CONTROL_RE.sub(lambda m: "\\x%02x" % ord(m.group(0)), text)
 
 
+# Every control character, newline and tab included.
+_ANY_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_NAMED_ESCAPES = {"\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
+
+def one_line(text) -> str:
+    r"""`text` with EVERY control character escaped — newline, carriage
+    return and tab as `\n` `\r` `\t`, the rest as `\xNN` — so a file
+    name (which may hold any of them) is one line wherever it is shown
+    or written: on the console, in a .diag line a program reads back.
+    Idempotent on its own output."""
+    text = str(text)
+    if not _ANY_CONTROL_RE.search(text):
+        return text
+    return _ANY_CONTROL_RE.sub(
+        lambda m: _NAMED_ESCAPES.get(m.group(0),
+                                     "\\x%02x" % ord(m.group(0))), text)
+
+
 def shown(text, stream=None) -> str:
     """`text` as printed to `stream` (stdout by default): printable()
     when it is shown to a person (width > 0), as is when captured."""
@@ -242,10 +261,14 @@ def labelled(text: str, stream=None, *, source: bool = False) -> str:
     """`text` as printed to `stream` (stdout by default): each line
     relabel()ed when shown to a person (width > 0), as is when captured
     (width 0). For a message line built as text (`note: ...`) that is
-    also written where a program reads it."""
+    also written where a program reads it. Shown to a person, every
+    control character but newline and tab is escaped (printable())."""
     if width(sys.stdout if stream is None else stream) <= 0:
         return str(text)
-    return "\n".join(relabel(ln, source=source)
+    # Shown to a person: a control character from the data (a broker
+    # export's description, a plugin's message) is shown escaped, never
+    # sent to the terminal (printable()).
+    return "\n".join(relabel(printable(ln), source=source)
                      for ln in str(text).split("\n"))
 
 
