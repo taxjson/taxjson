@@ -116,6 +116,9 @@ def console_lines(line: str, indent: str = "  ", stream=None,
         if width_ is None else width_
     if w <= 0:
         return [indent + line]
+    # Shown to a person: a control character from broker data (an ESC
+    # sequence) is shown escaped, never sent to the terminal.
+    line = out.printable(line)
     # A retired prefix (`NOTE:`, `WARNING:`) the captured text keeps is
     # shown in the house's lower case.
     body = line.lstrip()

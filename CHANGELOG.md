@@ -65,6 +65,13 @@
   the detail indented below. `events PERIOD ACCOUNT` stays re-importable
   `.tt` text, byte for byte; no figure, `--json` output or other file
   changes.
+- **Control characters in broker data never reach the terminal.** Text
+  shown to a person (anything printed wrapped: messages, notes, tables,
+  the run's echoed ATTENTION lines, the closing first-run list) shows a
+  control character other than newline and tab as the visible text
+  `\x1b` (an ESC sequence in a symbol, a BEL, a carriage return), so an
+  export cannot drive the terminal. Captured output (work/, reports/, a
+  stage's `.diag`, the `.sum`) keeps its bytes.
 - **The "export does not state the contract size" note is one note.** A
   command shown to a person names every option root it assumed a
   100-share contract for in one note with the single `MULT <ROOT> N`

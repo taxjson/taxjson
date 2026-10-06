@@ -252,7 +252,9 @@ def echo_parse_stats(out_path: Path) -> None:
         if _PARSE_COUNT_RE.match(line):
             # Keep the parser's own leading indent — it visually nests
             # the per-file counts under the `parse {broker}: …` header.
-            print(line)
+            # (A file name's control characters are shown escaped.)
+            from taxjson.lib.out import shown
+            print(shown(line))
         elif line.startswith("warning: ") and " parsed to 0 transactions" in line:
             # Indent the warning to match per-file count nesting.
             _echo_captured(line)

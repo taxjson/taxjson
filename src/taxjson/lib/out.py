@@ -32,6 +32,7 @@ __all__ = [
     "WIDTH", "width", "wrap", "fill", "message", "emit", "note", "warn",
     "attention", "error", "fail", "fit_table", "records", "kv_lines",
     "relpath", "Doc", "lint", "Verbatim", "unwrapped", "fmt_money", "fmt_qty",
+    "printable", "shown",
 ]
 
 # Prose wraps here when stdout is not a terminal (a pipe, a file, a test)
@@ -92,6 +93,29 @@ def width(stream=None) -> int:
     return max(MIN_WIDTH, min(cols, WIDTH))
 
 
+# Control characters other than newline and tab: C0, DEL and C1. Text
+# shown to a person (width > 0) carries each as a visible `\xNN`, so a
+# symbol or description from a broker export cannot drive the terminal
+# (an ESC sequence, a BEL, a carriage return that overprints a line).
+# Captured output (width 0: work/, reports/, a .diag) keeps its bytes.
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def printable(text) -> str:
+    r"""`text` with every control character but newline and tab shown as
+    the four characters `\xNN` (ESC -> `\x1b`). Idempotent."""
+    text = str(text)
+    if not _CONTROL_RE.search(text):
+        return text
+    return _CONTROL_RE.sub(lambda m: "\\x%02x" % ord(m.group(0)), text)
+
+
+def shown(text, stream=None) -> str:
+    """`text` as printed to `stream` (stdout by default): printable()
+    when it is shown to a person (width > 0), as is when captured."""
+    return printable(text) if width(stream) > 0 else str(text)
+
+
 # A `code span` (a command to copy, a key=value, a path) is never broken
 # across lines: its spaces become non-breaking while wrapping.
 _CODE_RE = re.compile(r"`[^`\n]+`")
@@ -104,9 +128,14 @@ def wrap(text: str, width_: Optional[int] = None, indent: str = "",
     the first starting with `indent`, the rest with `hang` (default:
     `indent`). Words, hyphenated ids and `code spans` are never broken;
     a single word longer than the line stands on its own line. Width 0:
-    one line. Existing newlines start new lines (each wrapped alike)."""
+    one line. Existing newlines start new lines (each wrapped alike).
+    Wrapped for a person (width > 0), control characters are shown
+    escaped (printable()); width 0 keeps the text's bytes."""
     w = width(stream) if width_ is None else width_
     hang = indent if hang is None else hang
+    if w > 0:
+        text = printable(text)
+        indent, hang = printable(indent), printable(hang)
     out: List[str] = []
     first = True
     for part in str(text).split("\n"):
@@ -261,9 +290,10 @@ def fit_table(headers: Sequence[str], body: Sequence[Sequence[str]], *,
     the column(s) that head each record, as records()). Rows are
     never wrapped mid-row. Width 0: the full table."""
     w = width(None) if width_ is None else width_
-    body = [[("" if c is None else str(c)) for c in r] for r in body]
-    foot = [[("" if c is None else str(c)) for c in r] for r in foot]
-    headers = [str(h) for h in headers]
+    cell = printable if w > 0 else str      # shown to a person: escaped
+    body = [[("" if c is None else cell(c)) for c in r] for r in body]
+    foot = [[("" if c is None else cell(c)) for c in r] for r in foot]
+    headers = [cell(h) for h in headers]
     aligns = list(aligns) if aligns else _auto_aligns(headers, body)
     keep = list(range(len(headers)))
 
@@ -302,6 +332,10 @@ def kv_lines(pairs: Iterable[Tuple[str, str]], indent: str = "",
     pairs = [(str(k), "" if v is None else v) for k, v in pairs]
     if not pairs:
         return []
+    w = width(None) if width_ is None else width_
+    if w > 0:
+        pairs = [(printable(k), Verbatim(printable(v))
+                  if isinstance(v, Verbatim) else v) for k, v in pairs]
     lw = max(len(k) for k, _ in pairs) + 1
     out: List[str] = []
     for k, v in pairs:
@@ -354,13 +388,15 @@ class Doc:
         return self
 
     def line(self, text: str = "") -> "Doc":
-        """A verbatim line (a command to copy, a pre-formatted row)."""
-        self._lines.extend(str(text).split("\n"))
+        """A verbatim line (a command to copy, a pre-formatted row);
+        control characters escaped when shown to a person."""
+        text = printable(text) if self.w > 0 else str(text)
+        self._lines.extend(text.split("\n"))
         return self
 
     def section(self, heading: str) -> "Doc":
         self.blank()
-        self._lines.append(heading)
+        self._lines.append(printable(heading) if self.w > 0 else heading)
         return self
 
     def para(self, text: str, indent: str = "") -> "Doc":

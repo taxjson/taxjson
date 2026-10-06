@@ -29,6 +29,14 @@ still shows a failed command's whole last line. Whoever shows captured
 text to a person wraps it then (the run's console echo of a stage's
 ATTENTION lines, for one).
 
+Text **shown to a person** (width > 0) never carries a control character
+other than newline and tab: `out.wrap` (so `fill`, `message`, `emit`,
+`note` ...), `fit_table`, `kv_lines`, `Doc` and
+`stage_msg.console_lines` show each as the visible text `\xNN`
+(`out.printable`; `out.shown(text, stream)` for a line printed as is),
+so an ESC sequence in a broker symbol cannot drive the terminal.
+Captured output (width 0) keeps its bytes.
+
 ## Structure
 
 - A **title** line first: `WHAT — context` (`WASH SALES — USD, tax year
