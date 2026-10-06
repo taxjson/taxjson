@@ -1234,7 +1234,7 @@ def codes_note(resolved: Dict[str, Dict[str, Any]]) -> str:
     items = [f"{c} → {r['symbol']} ({r['evidence']})"
              for c, r in sorted(resolved.items())]
     return (f"{NOTE_HEAD} ({len(items)}): " + "; ".join(items)
-            + " — inferred from the project's other exports (`taxjson "
+            + " — inferred from the project's exports (`taxjson "
               "transfers` lists them); a ticker.map GLOBAL line for the "
               "code overrides the inference.")
 

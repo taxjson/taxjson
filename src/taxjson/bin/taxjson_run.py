@@ -2203,6 +2203,7 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
                 for _dr in _tm.dated:
                     named.update((_dr.old, _dr.new))
                 apart = set(_tm.distinct)
+        from taxjson.lib.country import is_canada
         _rows: list = []
         legs, names, shown = XL.gather(cache, accounts or [name], _rows)
         _base = str(settings.get("base_currency") or "").upper() or None
@@ -2213,7 +2214,14 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
                               base_currency=_base)
         result = XL.analyze(legs, names, shown, map_named=named,
                             map_distinct=apart, base_currency=_base,
-                            collided=[c.symbol for c in _coll])
+                            collided=[c.symbol for c in _coll],
+                            # A broker's currency journal between a
+                            # security's CAD and USD lines is joined as a
+                            # JOURNAL line in a Canadian project only
+                            # (CA-XLIST-03); a US project reads its legs
+                            # as transfers.
+                            currency_journals=is_canada(
+                                settings.get("country")))
         result["collisions"] = _coll
         state = cache / XL.STATE
         text = XL.state_text(result)
@@ -4543,11 +4551,16 @@ def stage_symbol_codes(name: str, csvs: List[Path], root: Path,
     which books the codes under their tickers and says so in one note."""
     from taxjson.lib import symbol_codes as SC
     from taxjson.lib.brokerages.questrade import (QuestradeBrokerage,
+                                                  journal_codes,
                                                   scan_code_uses)
     try:
         uses = scan_code_uses(csvs)
     except Exception:                              # noqa: BLE001
         uses = []           # the parse itself names a broken export
+    try:
+        by_journal = journal_codes(csvs)
+    except Exception:                              # noqa: BLE001
+        by_journal = {}     # the parse itself names a broken export
     result: Dict[str, Any] = {"resolved": {}, "unresolved": {}}
     if uses:
         accounts = [n for n, c in (_soft_config(root).get("accounts")
@@ -4574,6 +4587,19 @@ def stage_symbol_codes(name: str, csvs: List[Path], root: Path,
         result = SC.resolve(uses, outs, names, listing_ok=listing_ok,
                             mapped=mapped,
                             code_listing=helper.apply_currency_suffix)
+    if by_journal:
+        # Codes a BRW journal leg of this account names (the parser
+        # books them so): recorded for `taxjson transfers`; a ticker.map
+        # rule naming the code wins here too.
+        named_j = _ticker_map_named(root)
+        _h = QuestradeBrokerage()
+        for code, r in sorted(by_journal.items()):
+            if any(_h.apply_currency_suffix(code, c) in named_j
+                   for c in ("USD", "CAD", r.get("currency") or "USD")):
+                result.setdefault("mapped", {})[code] = {
+                    "how": "ticker.map", "evidence": "ticker.map rule"}
+            else:
+                result["resolved"][code] = dict(r)
     text = SC.state_text(name, result)
     if _read_work_stamp(out) != text:
         _write_work_stamp(out, text)
@@ -8346,8 +8372,10 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
         if not codes:
             return
         doc.section("SYMBOL CODES — Questrade internal codes")
-        doc.para("Booked under the ticker inferred from your other "
-                 "exports (a ticker.map GLOBAL line for the code "
+        doc.para("Booked under the ticker inferred from your exports "
+                 "(another account's transfer or name, or a currency "
+                 "journal of the account; a ticker.map GLOBAL line for "
+                 "the code "
                  "overrides it); an unresolved code stays its own "
                  "security until ticker.map maps it.")
         doc.items([f"{c['account']}: {c['code']} → {c['symbol']} "
@@ -19855,6 +19883,11 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         # ticker.map, so the JOURNAL symbols are re-checked here with
         # the walk that knows them.
         _tm_path = root / "ticker.map"
+        # The map the books were merged with: the run's joins (a
+        # currency journal's JOURNAL line, lib/cross_listings) included.
+        from taxjson.lib.cross_listings import EFFECTIVE_MAP as _EFF
+        if (cache / _EFF).is_file():
+            _tm_path = cache / _EFF
         if _tm_path.exists() and merged:
             from taxjson.lib.missing_history import (detect_missing_history,
                                                       journal_targets)

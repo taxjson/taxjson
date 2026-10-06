@@ -74,7 +74,9 @@ AU = "AX"
 # A Canadian-listed fund's US-dollar unit class: the TSX lists it as the
 # fund's root with a `.U` class (book symbol ROOT.U.TO). A market
 # convention, not a list of funds: taxjson suggests this spelling for a
-# USD row that names a fund's US-dollar units (ticker-map --suggest).
+# USD row that names a fund's US-dollar units (ticker-map --suggest), and
+# books a Questrade currency journal's USD leg on it when the account's
+# own rows show no US-dollar listing of the security.
 [usd_unit_class]
 class = "U"
 suffix = "TO"
