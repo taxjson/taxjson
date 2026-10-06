@@ -20,6 +20,16 @@ cd "$(dirname "$0")/.."
 # wait on the keyboard (and then record the default — a wrong exit code)
 # when the gate is run from a terminal, e.g. by scripts/release.sh.
 exec </dev/null
+# A private temp root for the whole gate, removed on exit. A parser reads
+# the broker CSVs beside a file (Kraken ledgers, Webull years), so a file
+# another run or agent left in the shared temp dir must never sit beside
+# this run's test files; the tests also keep each file in its own folder
+# (tests/_tmpfiles.py). Defence in depth.
+CI_TMP=$(mktemp -d "${TMPDIR:-/tmp}/taxjson-ci.XXXXXX") || exit 2
+trap 'rm -rf "$CI_TMP"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+export TMPDIR="$CI_TMP"
 PY="${PYTHON:-$PWD/venv/bin/python3}"
 MODE=default
 for a in "$@"; do case "$a" in
