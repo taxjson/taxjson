@@ -96,6 +96,13 @@ Export (CSV). For any other broker, a PDF or a screenshot is fine: you
 type its positions into a small file (step 5). Keep these reports out
 of `inputs/`, or leave them there: `tjs run` skips a positions report.
 
+**Sharing a sample** (a broker taxjson does not read yet, or a bug
+report): run `tjs redact` in the project. It copies `inputs/` to
+`inputs_redact/` and replaces account numbers, names and contact details
+in the copy, file names included; `inputs/` is not changed, and the run
+never reads `inputs_redact/`. Read the copy before you share it: the
+redactor works from patterns, so it can miss something.
+
 ## 4. Run
 
 ```bash
