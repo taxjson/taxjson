@@ -31,7 +31,15 @@ line would, when the evidence is unambiguous:
   two: the user's map always wins, DISTINCT keeps them apart;
 * neither symbol is joined to a third listing by another pair.
 
-Everything else stays a suggestion (`taxjson ticker-map --suggest`). The
+Everything else stays a suggestion (`taxjson ticker-map --suggest`) —
+except two listings whose names name different companies (no leading
+company word in common, companies_differ): never a join, never a TOBASE
+suggestion. A `.US` symbol whose rows name two different companies, one
+of them a Canadian-listed fund's US-dollar units (a TSX fund's US-dollar
+unit booked `.US` beside an NYSE stock of the same root), is a SYMBOL
+COLLISION (`collisions`): a Warning on the run's console and the EXTRACT
+line (plus a JOURNAL) that gives the fund's rows their own symbol, never
+a join through that symbol. The
 joins are written to work/cross_listings.state (JSON) and appended, as
 TOBASE lines, to the effective map the merge stages read
 (work/ticker.map.effective: the project's ticker.map plus those lines).
@@ -120,12 +128,30 @@ def _parsed_files(cache: Path, acct: str) -> List[Tuple[str, Path, bool]]:
     return files
 
 
-def gather(cache: Path, accounts: Iterable[str]
+@dataclass
+class Row:
+    """One parsed row of a share listing (or a broker code): what an
+    EXTRACT line would match (its description and currency) and the
+    security name it carries."""
+    account: str
+    broker: str
+    symbol: str
+    currency: str
+    description: str
+    key: Tuple[str, ...]            # symbol_codes.exact_name of its name
+    action: str = ""
+    name: str = ""                  # the name (symbol_codes._row_name)
+
+
+def gather(cache: Path, accounts: Iterable[str],
+           rows: Optional[List[Row]] = None
            ) -> Tuple[List[Leg], Dict[str, Set[Tuple[str, ...]]],
                       Dict[Tuple[str, ...], str]]:
     """(transfer legs, symbol -> normalised names (symbol_codes.
     exact_name), normalised name -> the name as written) from every
-    account's parsed exports in work/."""
+    account's parsed exports in work/. `rows`, when given, receives
+    every share-listing and broker-code row (Row: the symbol-collision
+    check, `collisions`)."""
     from taxjson.lib.symbol_codes import (_CONTROL_RE, _plain_listing,
                                           _row_name, exact_name, is_code)
     legs: List[Leg] = []
@@ -154,6 +180,14 @@ def gather(cache: Path, accounts: Iterable[str]
                 if not isinstance(t, dict):
                     continue
                 sym = str(t.get("symbol") or "").upper()
+                if rows is not None and sym and (
+                        _plain_listing(sym) or is_code(sym)):
+                    rows.append(Row(acct, broker, sym,
+                                    str(t.get("currency") or "").upper(),
+                                    str(t.get("description") or ""),
+                                    exact_name(_row_name(t, broker)),
+                                    str(t.get("action") or "").upper(),
+                                    _row_name(t, broker)))
                 if not _plain_listing(sym) or is_code(sym):
                     continue
                 toks = exact_name(_row_name(t, broker))
@@ -190,6 +224,40 @@ def tobase_direction(out_sym: str, in_sym: str,
     return (in_sym, out_sym) if in_sym.endswith(".US") else (out_sym, in_sym)
 
 
+# _names_verdict: the two listings' names name different companies.
+DIFFERENT = "the names name different companies"
+# How many of a name's leading company words `lead_words` reads.
+_LEAD = 3
+
+
+def lead_words(key: Iterable[str]) -> frozenset:
+    """The first company words of a name (an exact_name key, read again
+    through symbol_codes.name_tokens: generic share words, corporate
+    form, designators and transfer wording set aside), at most _LEAD
+    strong ones (3+ letters, not a number). A broker's trailing
+    boilerplate rarely reaches them: the name comes first."""
+    from taxjson.lib.symbol_codes import name_tokens
+    out: List[str] = []
+    for w in name_tokens(" ".join(key)):
+        if w.startswith("~") or len(w) < 3 or w.isdigit():
+            continue
+        out.append(w)
+        if len(out) == _LEAD:
+            break
+    return frozenset(out)
+
+
+def companies_differ(a: Iterable[str], b: Iterable[str]) -> bool:
+    """Two names (exact_name keys) clearly name different companies:
+    each has leading company words (lead_words) and they share none
+    ("QZREALTY TRUST INC" vs "SAMPLEX US DLR CURRENCY ETF"). A shared
+    word — the same issuer, a rebranded fund ("QZOLD U S DLR CURRENCY
+    ETF" / "QZNEW US DLR CURRENCY ETF"), or a name too short to tell —
+    is inconclusive, never "different"."""
+    la, lb = lead_words(a), lead_words(b)
+    return bool(la) and bool(lb) and not (la & lb)
+
+
 def _close(a: Leg, b: Leg, days: int) -> bool:
     da, db = _d(a.date), _d(b.date)
     return bool(da and db and abs((da - db).days) <= days)
@@ -209,6 +277,8 @@ def _names_verdict(nx: Set[Tuple[str, ...]], ny: Set[Tuple[str, ...]],
     other designators or another corporate form than that shared name
     (symbol_codes.exact_marks). Anything less stays a suggestion."""
     from taxjson.lib.symbol_codes import exact_marks
+    if nx and ny and all(companies_differ(a, b) for a in nx for b in ny):
+        return DIFFERENT
     if not nx or not ny:
         return "no security name for " + ("either listing" if not nx
                                           and not ny else "one listing")
@@ -232,9 +302,14 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             map_named: Iterable[str] = (),
             map_distinct: Iterable[Iterable[str]] = (),
             base_currency: Optional[str] = None,
-            days: int = PAIR_DAYS) -> Dict[str, List[Pair]]:
+            days: int = PAIR_DAYS,
+            collided: Iterable[str] = ()) -> Dict[str, List[Pair]]:
     """{"joined": [...], "suggested": [...]}: the cross-listing journals
-    the legs show (module docstring)."""
+    the legs show (module docstring). A pair whose names name different
+    companies (companies_differ) is neither joined nor suggested; a pair
+    with a `collided` symbol (one symbol, two companies: `collisions`)
+    is left to the collision's EXTRACT line."""
+    collided = {s.upper() for s in collided}
     named = {s.upper() for s in map_named}
     apart = {frozenset(x.upper() for x in pair) for pair in map_distinct}
     ins = [g for g in legs if g.quantity > 0]
@@ -273,10 +348,15 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             if (o.symbol in named or i.symbol in named
                     or frozenset((o.symbol, i.symbol)) in apart):
                 continue                # the user's map decides
+            if o.symbol in collided or i.symbol in collided:
+                continue                # separate the symbol first
+            verdict = _names_verdict(nx, ny, shown)
+            if verdict == DIFFERENT:
+                continue                # two companies: no TOBASE line
             if len(ms) > 1 or len(back.get(m, ())) > 1:
                 p.reason = "the legs pair with more than one other leg"
             else:
-                p.reason = _names_verdict(nx, ny, shown)
+                p.reason = verdict
             (suggested if p.reason else joined).append(p)
     # One partner per symbol: a listing joined to two others is ambiguous.
     partners: Dict[str, Set[str]] = {}
@@ -293,6 +373,216 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
     return {"joined": keep, "suggested": suggested}
 
 
+@dataclass
+class Collision:
+    """One book symbol whose exports name two (or more) different
+    companies: the rows of one of them (`odd`) get their own symbol with
+    an EXTRACT line."""
+    symbol: str
+    names: List[str]                # one name per company, as written
+    where: List[str]                # "account (broker)" per company
+    odd: str                        # the name of the rows to move
+    extract: str                    # the EXTRACT line
+    template: bool                  # extract has a placeholder to edit
+    journal: str = ""               # JOURNAL line for the moved rows
+    why: str = ""                   # how the target / words were found
+
+    def record(self) -> Dict[str, Any]:
+        return {"symbol": self.symbol, "names": self.names,
+                "where": self.where, "odd": self.odd,
+                "extract": self.extract, "template": self.template,
+                "journal": self.journal, "why": self.why}
+
+
+# The placeholder of a template EXTRACT line (the user edits it).
+PLACEHOLDER_WORDS = "<words that name it>"
+# The fewest words a suggested EXTRACT names (a shorter phrase, such as
+# one generic word, may match another security's row later).
+_MIN_WORDS = 3
+
+
+def _groups(keys: Iterable[Tuple[str, ...]]) -> List[Set[Tuple[str, ...]]]:
+    """The names, grouped by company: two names whose companies are not
+    clearly different (companies_differ) are one company, and so is
+    anything linked through them."""
+    keys = sorted(set(keys))
+    up = {k: k for k in keys}
+
+    def top(k):
+        while up[k] != k:
+            k = up[k]
+        return k
+    for n, a in enumerate(keys):
+        for b in keys[n + 1:]:
+            if not companies_differ(a, b):
+                up[top(a)] = top(b)
+    out: Dict[Tuple[str, ...], Set[Tuple[str, ...]]] = {}
+    for k in keys:
+        out.setdefault(top(k), set()).add(k)
+    return sorted(out.values(), key=lambda g: sorted(g))
+
+
+def extract_words(target: List[str], others: List[str],
+                  min_words: int = _MIN_WORDS,
+                  seeds: Iterable[str] = ()) -> Optional[str]:
+    """The shortest run of whole words (at least `min_words`, or the
+    whole description when shorter, with one strong word) that EVERY
+    description of `target` carries and NO description of `others` does
+    — tested with the matcher an EXTRACT line uses
+    (base.extract_words_match), so the line moves exactly those rows. The
+    run is taken from the security's names first (`seeds`: the names the
+    brokers' wording was cut from, symbol_codes.rbc_name /
+    questrade_name — no dealer wording in them), shortest first, else
+    from the shortest target description; among equally short runs the
+    one with the fewest one- or two-letter words, then the first. None
+    when no run qualifies."""
+    from taxjson.lib.brokerages.base import extract_words_match
+    descs = sorted({" ".join(d.split()) for d in target if d.strip()},
+                   key=lambda d: (len(d), d))
+    if not descs:
+        return None
+    others = [d for d in {" ".join(o.split()) for o in others} if d]
+    sources = [x.split() for x in sorted(
+        {" ".join(x.split()) for x in seeds if x.strip()},
+        key=lambda d: (len(d), d))] + [descs[0].split()]
+    longest = max(len(w) for w in sources)
+    for size in range(1, longest + 1):
+        for words in sources:
+            n = len(words)
+            if size > n or size < min(min_words, n):
+                continue
+            # Fewest short words first ("DLR CURRENCY ETF" before "U S
+            # DLR": a one- or two-letter word is the spelling brokers
+            # vary), then the earliest.
+            spans = sorted(range(0, n - size + 1), key=lambda i: (
+                sum(len(w) < 3 for w in words[i:i + size]), i))
+            for i in spans:
+                run = words[i:i + size]
+                cand = " ".join(run)
+                if (not any(len(w) >= 3 and w.isalpha() for w in run)
+                        or "|" in cand or "#" in cand):
+                    continue
+                if (all(extract_words_match(cand, d) for d in descs)
+                        and not any(extract_words_match(cand, o)
+                                    for o in others)):
+                    return cand
+    return None
+
+
+def _display(group: Iterable[Tuple[str, ...]],
+             shown: Dict[Tuple[str, ...], str]) -> str:
+    """A company's name as one of its rows writes it: the shortest (the
+    one with the least broker wording)."""
+    return min((shown.get(k) or " ".join(k) for k in group),
+               key=lambda t: (len(t), t))
+
+
+def collisions(rows: List[Row], names: Dict[str, Set[Tuple[str, ...]]],
+               shown: Dict[Tuple[str, ...], str], legs: List[Leg], *,
+               base_currency: Optional[str] = None,
+               days: int = PAIR_DAYS) -> List[Collision]:
+    """Book symbols that carry two securities: a `.US` symbol whose trade
+    / transfer rows name two clearly different companies
+    (companies_differ), the rows of one of them reading as a
+    Canadian-listed fund's US-dollar units (markets.USD_UNITS_RE: "... U
+    S DLR CURRENCY ETF", "... USD UNITS") and the other's not — a TSX
+    fund's US-dollar unit booked `.US` beside an NYSE stock of the same
+    root. Names alone never decide it: a company that renamed itself
+    (two names, one security) is common, so without that positive
+    evidence there is no collision. For each:
+
+    * the rows to move: that fund's; their target the TSX unit class
+      (markets.usd_unit_listing, ROOT.U.TO);
+    * the words: extract_words over the descriptions of every row of the
+      fund in the project (any broker, any symbol whose leading company
+      words share two with it), none of another security's — a template
+      with a placeholder when no run qualifies;
+    * a transfer journal pairing the symbol with another listing of the
+      fund adds `JOURNAL <target> <listing>` (tobase_direction).
+    """
+    from taxjson.lib.markets import (USD_UNITS_RE, strip_listing_suffix,
+                                     usd_unit_listing)
+    from taxjson.lib.symbol_codes import _broker_name
+    out: List[Collision] = []
+    for sym in sorted({r.symbol for r in rows}):
+        if not sym.endswith(".US"):
+            continue
+        mine = [r for r in rows if r.symbol == sym and r.key
+                and r.action in ("BUYSELL", "TRANSFER")]
+        groups = _groups(r.key for r in mine)
+        if len(groups) < 2:
+            continue
+        root = strip_listing_suffix(sym)
+        info = []
+        for g in groups:
+            lead = frozenset().union(*(lead_words(k) for k in g))
+            g_rows = [r for r in rows if r.symbol == sym and r.key in g]
+            # Every row of this security in the project: its own rows
+            # under the symbol, and any listing's or broker code's rows
+            # whose leading words share two with it.
+            fam = g_rows + [r for r in rows if r.symbol != sym
+                            and r.key and len(lead_words(r.key) & lead) >= 2]
+            units = (all(r.currency == "USD" for r in g_rows)
+                     and any(USD_UNITS_RE.search(r.description)
+                             for r in g_rows))
+            info.append((g, g_rows, fam, lead, units))
+        odd = [x for x in info if x[4]]
+        if not odd or len(odd) == len(info):
+            continue
+        target = usd_unit_listing(root)
+        sh = [_display(x[0], shown) for x in info]
+        wh = [", ".join(sorted({f"{r.account} at {_broker_name(r.broker)}"
+                                for r in x[1]})) or "?"
+              for x in info]
+        for g, g_rows, fam, lead, _units in odd:
+            fam_ids = {id(r) for r in fam}
+            others = [r.description for r in rows if id(r) not in fam_ids]
+            words = extract_words([r.description for r in fam], others,
+                                  seeds=[r.name for r in fam])
+            why = (f"its rows read as a Canadian-listed fund's US-dollar "
+                   f"units: {target}")
+            if words is None:
+                why += ("; no run of words is common to its descriptions "
+                        "and absent from every other row's: replace the "
+                        "placeholder with words that name it")
+            line = f"EXTRACT {words or PLACEHOLDER_WORDS} | USD | {target}"
+            partners = set()
+            for o in legs:
+                for i in legs:
+                    if (o.quantity < 0 < i.quantity and _same_qty(o, i)
+                            and _close(o, i, days)
+                            and sym in (o.symbol, i.symbol)
+                            and o.symbol != i.symbol):
+                        p = i.symbol if o.symbol == sym else o.symbol
+                        if (p != target and any(
+                                len(lead_words(k) & lead) >= 2
+                                for k in names.get(p, ()))):
+                            partners.add(p)
+            journal = ""
+            if len(partners) == 1:
+                frm, to = tobase_direction(target, partners.pop(),
+                                           base_currency)
+                journal = f"JOURNAL {frm} {to}"
+            out.append(Collision(sym, sh, wh, _display(g, shown), line,
+                                 words is None, journal, why))
+    return out
+
+
+def collision_note(c: Collision) -> Tuple[str, List[str]]:
+    """(headline, details) of the run's Warning for one collision."""
+    named = "; ".join(f"{n!r} in {w}" for n, w in zip(c.names, c.where))
+    det = [f"One symbol for {len(c.names)} securities: their rows share "
+           f"one pool and one security for the loss rules until the "
+           f"rows of {c.odd!r} get their own symbol:",
+           f"  {c.extract}"]
+    if c.journal:
+        det.append(f"  {c.journal}")
+    if c.template:
+        det.append(f"The line has a placeholder to edit first ({c.why}).")
+    return (f"{c.symbol} names two securities: {named} — add the EXTRACT "
+            f"line (`taxjson ticker-map --suggest`)", det)
+
+
 def map_lines(joined: Iterable[Pair]) -> List[str]:
     """The TOBASE lines of the joins, one per pair of listings, each with
     its evidence as a comment."""
@@ -307,10 +597,12 @@ def map_lines(joined: Iterable[Pair]) -> List[str]:
     return out
 
 
-def state_text(result: Dict[str, List[Pair]]) -> str:
+def state_text(result: Dict[str, List[Any]]) -> str:
     doc = {"format": FORMAT,
            "joined": [p.record() for p in result["joined"]],
-           "suggested": [p.record() for p in result["suggested"]]}
+           "suggested": [p.record() for p in result["suggested"]],
+           "collisions": [c.record()
+                          for c in result.get("collisions") or []]}
     return json.dumps(doc, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
@@ -322,9 +614,9 @@ def read_state(path: Path) -> Dict[str, List[Dict[str, Any]]]:
     except (OSError, ValueError, RecursionError):
         doc = None
     if not isinstance(doc, dict) or doc.get("format") != FORMAT:
-        return {"joined": [], "suggested": []}
+        return {"joined": [], "suggested": [], "collisions": []}
     return {k: [r for r in (doc.get(k) or []) if isinstance(r, dict)]
-            for k in ("joined", "suggested")}
+            for k in ("joined", "suggested", "collisions")}
 
 
 def effective_map_text(ticker_map: Optional[Path],

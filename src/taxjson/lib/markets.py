@@ -26,6 +26,7 @@ line that would change it.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -336,6 +337,25 @@ def ib_venue_suffix(code: str) -> Optional[str]:
     if c in o:
         return o[c] or ""
     return data()["ib_venues"].get(c)
+
+
+# A description naming a fund's US-dollar units or class ("... U S DLR
+# CURRENCY ETF", "... USD UNITS"): vocabulary, not security data.
+USD_UNITS_RE = re.compile(
+    r'\b(?:U\.?\s?S\.?\s+(?:DOLLAR|DLR)|USD)\s+'
+    r'(?:UNITS?|CLASS|SERIES|CURRENCY)\b', re.I)
+
+
+def usd_unit_listing(root: str) -> str:
+    """The book symbol of a Canadian-listed fund's US-dollar unit class
+    ([usd_unit_class]: ROOT.U.TO), from a root that may already carry
+    the class or a suffix (QZD, QZD.U, QZD.US, QZD.U.TO)."""
+    conv = data()["usd_unit_class"]
+    cls, sfx = str(conv["class"]).upper(), str(conv["suffix"]).upper()
+    r = strip_listing_suffix(str(root or "").strip().upper())
+    if r.endswith(f".{cls}"):
+        r = r[:-len(cls) - 1]
+    return f"{r}.{cls}.{sfx}"
 
 
 # ------------------------------------------------------------ currencies

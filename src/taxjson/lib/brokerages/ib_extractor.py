@@ -988,39 +988,157 @@ def _ib_stock_symbol(asset_cat: str, raw_symbol: str, currency: str,
     return f"{sym}.{_ib_listing_ext(asset_cat, raw_symbol, currency, fii)}"
 
 
+# IB's TEMPORARY symbol: around a corporate action IB renames the old
+# contract to a time stamp (YYYYMMDDHHMMSS) followed by the ticker
+# ("20260101093000QZX"), and its Financial Instrument Information then
+# lists one contract id under the ticker AND the stamped spelling. The
+# stamp is IB's format, not security data.
+_IB_TEMP_SYMBOL_RE = re.compile(
+    r'^((?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])'
+    r'(?:[01]\d|2[0-3])[0-5]\d[0-5]\d)([A-Z][A-Z0-9]*(?:\.[A-Z0-9]+)*)$')
+
+
+def ib_temp_symbol_ticker(root: str) -> Optional[str]:
+    """The ticker inside an IB temporary symbol ('20260101093000QZX' ->
+    'QZX'), None when `root` is not one."""
+    m = _IB_TEMP_SYMBOL_RE.match((root or '').strip().upper())
+    return m.group(2) if m else None
+
+
+def _ib_temp_folds(conid_syms: Dict[str, set]) -> Dict[str, str]:
+    """{temporary root: plain root} for every IB temporary symbol listed
+    under the SAME contract id as the plain ticker it stamps: one
+    security under IB's working name, folded onto the ticker with no
+    ticker.map line. A stamped symbol whose ticker the contract does not
+    also list stays as it is (no evidence it is that ticker)."""
+    out: Dict[str, str] = {}
+    for _conid, syms in conid_syms.items():
+        for s in syms:
+            tk = ib_temp_symbol_ticker(s)
+            if tk and tk in syms:
+                out[s] = tk
+    return out
+
+
+def _ib_fold_rows(rows: List[List[str]], folds: Dict[str, str]
+                  ) -> List[List[str]]:
+    """`rows` with every IB temporary symbol of `folds` written as its
+    ticker (the stamp dropped) in every section but the Financial
+    Instrument Information, whose symbol lists are the evidence: a Trades
+    or Transfers Symbol, a Corporate Actions or Dividends description
+    ('(20260101093000QZX, QZX CORP, ...)')."""
+    if not folds:
+        return rows
+    alts = []
+    for temp in sorted(folds, key=len, reverse=True):
+        m = _IB_TEMP_SYMBOL_RE.match(temp)
+        tk = re.escape(m.group(2)).replace(r'\.', r'[.\s]')
+        alts.append(rf'{m.group(1)}(?={tk}(?![A-Za-z0-9]))')
+    rx = re.compile(r'(?<![A-Za-z0-9])(?:' + '|'.join(alts) + r')')
+    out = []
+    for row in rows:
+        if (len(row) > 1 and row[0] != 'Financial Instrument Information'
+                and any(rx.search(c) for c in row)):
+            row = [rx.sub('', c) for c in row]
+        out.append(row)
+    return out
+
+
+def _note_temp_folds(folds: Dict[str, str], where: str) -> None:
+    """One Info line per fold (the console's `note:` channel)."""
+    for temp, tk in sorted(folds.items()):
+        emit_line(f"note: {where}: {temp} is IB's temporary symbol for "
+                  f"{tk} (the same contract id, renamed around a corporate "
+                  f"action) — its rows are booked as {tk}; no ticker.map "
+                  f"line is needed.")
+
+
 def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
                         first_seen=None, listing=None,
-                        mapping=None) -> None:
+                        mapping=None, last_seen=None,
+                        folds=None) -> None:
     """One stock conid listed under several symbols (a ticker change
     with no corporate-action row): the parser books each symbol as its
     own security, so the position splits into two pools (audit S059-13 /
-    S060-17). Said on the console with the ticker.map fix: the OLD
-    symbol (first traded) first, each with the listing suffix it is
-    booked under (an alphabetical pair with a hard-coded .US joined
-    nothing, or renamed new to old — audit A2-0611); quiet once the
-    project's ticker.map (`mapping`) joins them."""
+    S060-17). Said on the console with the ticker.map fix — a DATED
+    rename (renames are events, lib/renames): `RENAME OLD NEW
+    YYYY-MM-DD`, OLD the symbol whose rows end first, NEW the one that
+    continues, the date NEW's first row; each with the listing suffix it
+    is booked under (an alphabetical pair with a hard-coded .US joined
+    nothing, or renamed new to old — audit A2-0611). IB's temporary
+    symbols (`folds`, _ib_temp_folds) are already the ticker and never
+    a rename target; a stamped symbol of another ticker is named but
+    never suggested. Quiet once the project's ticker.map (`mapping`:
+    (renames, dated pairs)) joins them."""
     first_seen = first_seen or {}
+    last_seen = last_seen or {}
     listing = listing or {}
+    folds = folds or {}
     for conid, syms in sorted(conid_syms.items()):
+        syms = {x for x in syms if x not in folds}
         if len(syms) < 2:
             continue
-        order = sorted(syms, key=lambda x: (first_seen.get(x) or '9999',
+        real = [x for x in syms if not ib_temp_symbol_ticker(x)]
+        temps = sorted(x for x in syms if ib_temp_symbol_ticker(x))
+        order = sorted(real, key=lambda x: (last_seen.get(x) or '9999',
+                                            first_seen.get(x) or '9999',
                                             x))
         full = [listing.get(x) or f"{x}.US" for x in order]
-        if ticker_map_loaded():
-            # The map `taxjson-brokerage --ticker-map` loaded (A2-1056).
-            if all(ticker_map_joins(full[0], f) for f in full[1:]):
+        if len(full) >= 2:
+            if ticker_map_loaded():
+                # The map `taxjson-brokerage --ticker-map` loaded (A2-1056).
+                if all(ticker_map_joins(full[0], f) for f in full[1:]):
+                    continue
+            elif mapping is not None and _project_map_joins(full, mapping):
                 continue
-        elif mapping is not None:
-            from taxjson.bin.taxjson_ticker_map import map_symbol
-            if len({map_symbol(f, mapping) for f in full}) == 1:
-                continue
-        a, b = full[0], full[-1]
+        named = ', '.join(order + temps)
+        _is = ("is an IB temporary symbol" if len(temps) == 1
+               else "are IB temporary symbols")
+        tmp_note = (f" {', '.join(temps)} {_is} (a time stamp before the "
+                    f"ticker, given around a "
+                    f"corporate action) for another ticker — never a "
+                    f"rename target; check that corporate action."
+                    if temps else "")
+        if len(full) < 2:
+            emit_line(f"{ATTENTION_PREFIX} {where}: IB lists one stock "
+                      f"(contract id {conid}) under several symbols: "
+                      f"{named}.{tmp_note}")
+            continue
+        dated = [first_seen.get(x) for x in order[1:]]
+        if all(dated) and all(last_seen.get(x) for x in order):
+            lines = [f"`RENAME {full[k]} {full[k + 1]} {dated[k]}`"
+                     for k in range(len(full) - 1)]
+            how = (f"{' and '.join(lines)} (OLD is the symbol whose rows "
+                   f"end first, the date the first row of the one that "
+                   f"continues)")
+        else:
+            how = (f"`RENAME {full[0]} {full[-1]} YYYY-MM-DD` with the date "
+                   f"of the change (OLD is the symbol whose rows end "
+                   f"first)")
         emit_line(f"{ATTENTION_PREFIX} {where}: IB lists one stock (contract "
-              f"id {conid}) under several symbols: {', '.join(order)}"
-              f" — a ticker change. Each symbol is booked as its own "
-              f"security until you join them in ticker.map, e.g. "
-              f"`GLOBAL {a} {b}` (old symbol first, as first traded).")
+                  f"id {conid}) under several symbols: {named} — a ticker "
+                  f"change. Each symbol is booked as its own security "
+                  f"until ticker.map records the change as a dated event, "
+                  f"e.g. {how}.{tmp_note}")
+
+
+def _project_map_joins(full: List[str], mapping) -> bool:
+    """The project ticker.map (`_project_ticker_map`: (renames, dated
+    (old, new) pairs)) joins every listing of `full` to the first."""
+    from taxjson.bin.taxjson_ticker_map import map_symbol
+    ren, dated = mapping
+    ends = {map_symbol(f, ren) for f in full}
+    up = {e: e for e in ends}
+
+    def _top(x):
+        while up[x] != x:
+            x = up[x]
+        return x
+    for old, new in dated:
+        a, b = map_symbol(old, ren), map_symbol(new, ren)
+        if a in up and b in up:
+            up[_top(a)] = _top(b)
+    return len({_top(e) for e in ends}) == 1
 
 
 _IB_UNMATCHED_CA_SKIP = ("Corporate Actions Ca row whose original is not "
@@ -1063,9 +1181,10 @@ def _flush_ca_side_effects(path, late_warnings, cash_takeovers,
 
 
 def _project_ticker_map(paths):
-    """The rename map of the project ticker.map next to inputs/<account>/
-    <statement>, or None (a statement outside a project, no map, or a
-    map that does not parse)."""
+    """(the rename map, the dated RENAME (old, new) pairs) of the project
+    ticker.map next to inputs/<account>/<statement>, or None (a
+    statement outside a project, no map, or a map that does not
+    parse)."""
     for path in paths:
         try:
             pp = Path(path).resolve().parents
@@ -1077,8 +1196,9 @@ def _project_ticker_map(paths):
         try:
             from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
                                                         merge_renames)
-            return merge_renames(_parse_map_file(root / 'ticker.map')[0],
-                                 True)
+            tm = _parse_map_file(root / 'ticker.map')[0]
+            return (merge_renames(tm, True),
+                    [(dr.old, dr.new) for dr in tm.dated])
         except Exception:               # the run reports a bad map
             return None
     return None
@@ -1098,7 +1218,7 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
         'has_order_level': False, 'order_levels': {},
         'stock_isins': {}, 'stock_conid_syms': {}, 'opt_underlying': {},
         'held_rows': [], 'broker_name': '', 'cash_bad': {},
-        'first_seen': {}, 'stock_listing': {},
+        'first_seen': {}, 'last_seen': {}, 'stock_listing': {},
     }
     occ_by_conid: Dict[str, set] = {}
     contract_conids: Dict[tuple, set] = {}
@@ -1134,6 +1254,8 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
                 _prev = out['first_seen'].get(_sroot)
                 if _prev is None or _sday[0] < _prev:
                     out['first_seen'][_sroot] = _sday[0]
+                if _sday[0] > out['last_seen'].get(_sroot, ''):
+                    out['last_seen'][_sroot] = _sday[0]
         if (sec == 'Trades'
                 and g('DataDiscriminator') in ('Order', 'Trade')):
             # Quantity per (category, symbol, trade day) and detail
@@ -1388,14 +1510,35 @@ class IbBrokerage(BaseBrokerage):
             'opt_underlying': {}, 'stock_conid_syms': {},
             'stock_isins': {}, 'held': set(), 'posted_dividends': [],
             'tender_parked': {}, 'accrual_facts': [],
-            'file_accounts': {}, 'first_seen': {}, 'stock_listing': {}}
+            'file_accounts': {}, 'first_seen': {}, 'last_seen': {},
+            'stock_listing': {}, 'stock_folds': {}}
+        read: List[tuple] = []
         for path in paths:
-            name = Path(path).name
             try:
                 rows = cls._read_rows(Path(path))
                 pre = _ib_prescan(rows, shown_name(path))
             except (OSError, UnicodeError, BrokerageParseError):
                 continue                 # parse_file reports it
+            read.append((path, rows, pre))
+        # IB's temporary symbols listed under the ticker's own contract
+        # id in ANY statement are the ticker in every statement.
+        _all_syms: Dict[str, set] = {}
+        for _p, _r, _pre in read:
+            for conid, syms in _pre['stock_conid_syms'].items():
+                _all_syms.setdefault(conid, set()).update(syms)
+        folds = ctx['stock_folds'] = _ib_temp_folds(_all_syms)
+        if folds:
+            _note_temp_folds(folds, "the account's IB statements")
+        for path, rows, pre in read:
+            name = Path(path).name
+            if folds:
+                _folded = _ib_fold_rows(rows, folds)
+                if _folded != rows:
+                    try:
+                        rows, pre = _folded, _ib_prescan(_folded,
+                                                         shown_name(path))
+                    except BrokerageParseError:
+                        continue         # parse_file reports it
             accts = frozenset(pre['accounts'])
             ctx['file_accounts'][name] = accts
             for row in rows:
@@ -1426,6 +1569,9 @@ class IbBrokerage(BaseBrokerage):
             for root, d in pre['first_seen'].items():
                 if d < ctx['first_seen'].get(root, '9999'):
                     ctx['first_seen'][root] = d
+            for root, d in pre['last_seen'].items():
+                if d > ctx['last_seen'].get(root, ''):
+                    ctx['last_seen'][root] = d
             for root, full in pre['stock_listing'].items():
                 ctx['stock_listing'].setdefault(root, full)
             for sym, cat, cur in pre['held_rows']:
@@ -1470,8 +1616,10 @@ class IbBrokerage(BaseBrokerage):
         _warn_stock_aliases(ctx['stock_conid_syms'],
                             'the account\'s IB statements',
                             first_seen=ctx['first_seen'],
+                            last_seen=ctx['last_seen'],
                             listing=ctx['stock_listing'],
-                            mapping=_project_ticker_map(paths))
+                            mapping=_project_ticker_map(paths),
+                            folds=folds)
         return ctx
 
     @classmethod
@@ -2614,6 +2762,19 @@ class IbBrokerage(BaseBrokerage):
         rows = self._read_rows(path)
         pre = _ib_prescan(rows, shown_name(path))
         ctx = self.account_context
+        # IB's temporary symbols (a time stamp before the ticker, listed
+        # under the ticker's contract id): the ticker's rows — the
+        # account's statements decide (prepare_files), a lone statement
+        # its own instrument list.
+        _folds = (ctx.get('stock_folds', {}) if ctx
+                  else _ib_temp_folds(pre['stock_conid_syms']))
+        if _folds:
+            _folded = _ib_fold_rows(rows, _folds)
+            if _folded != rows:
+                rows = _folded
+                pre = _ib_prescan(rows, shown_name(path))
+            if not ctx:
+                _note_temp_folds(_folds, shown_name(path))
         # The statement's first day. A row dated before it (a Trades,
         # Transfers or Corporate Actions row) is IB's cancel-and-rebook
         # of a row of an EARLIER statement: under the account context
@@ -2654,7 +2815,9 @@ class IbBrokerage(BaseBrokerage):
         else:
             _warn_stock_aliases(pre['stock_conid_syms'], shown_name(path),
                                 first_seen=pre['first_seen'],
-                                listing=pre['stock_listing'])
+                                last_seen=pre['last_seen'],
+                                listing=pre['stock_listing'],
+                                folds=_folds)
         self._ib_pre = pre
         self._check_statement_kind(pre, path)
         fii = pre['fii']

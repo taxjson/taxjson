@@ -450,7 +450,7 @@ The project's one mapping file, at the project root; one rule per line, symbols 
 - **Form:** `EXTRACT DESCRIPTION WORDS | CURRENCY | SYMBOL`
 - **Meaning:** a parser symbol override: a broker row whose description contains the words (whole words, any case) and whose currency is CURRENCY (`*` = any) gets SYMBOL. First matching line wins; options and futures are never rewritten.
 - **Country:** both.
-- **When:** the currency-to-suffix rule mislabels a security (a TSX-only USD unit).
+- **When:** the currency-to-suffix rule mislabels a security (a TSX-only USD unit). `taxjson run` warns when a `.US` symbol carries such a unit beside another company ("names two securities") and `taxjson ticker-map --suggest` offers the line, its words the shortest run common to every description of the fund in the project and in no other row's (the words must match the broker's description as written: `US DLR` and `U S DLR` are different words).
 - **Example:** `EXTRACT Sample US Dollar Fund | USD | ZZD.U.TO`
 
 #### `T1135`
