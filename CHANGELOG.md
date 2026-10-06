@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.22.0 (2026-10-06)
+
 ### Added
 
 - **`taxjson ticker-map --suggest [--write]`** (help group "Set up") lists
