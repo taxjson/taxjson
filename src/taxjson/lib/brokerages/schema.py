@@ -94,7 +94,13 @@ _DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 from taxjson.lib.markets import known_suffixes as _known_sfx  # noqa: E402
 KNOWN_SUFFIXES = _known_sfx()
 
-_QTY_EPS = 1e-9
+# The books' zero for a traded quantity: a BUYSELL under it has no
+# direction (the sign is the direction) and is refused. Parsers that can
+# meet a sub-zero quantity (a Kraken dust-sweep leg of a few
+# ten-billionths of a coin) leave the row out against this same value
+# (tax-logic CA-CRYPTO-11 / US-CRYPTO-07).
+QTY_ZERO = 1e-9
+_QTY_EPS = QTY_ZERO
 # Futures symbol prefixes (lib/futures.py).
 _FUTURES_PREFIXES = ('F:', '/', '\\')
 _MONEY_EPS = 0.005
@@ -110,9 +116,22 @@ _MONEY_EPS = 0.005
 ATTENTION_TAG = "ATTENTION: "
 
 
+def _masked_id(raw: Any) -> str:
+    s = str(raw or '').strip()
+    return f"{s[:2]}***" if s else ''
+
+
 def _who(tx: Dict[str, Any], i: int) -> str:
-    return (f"tx[{i}] {tx.get('action', '?')} {tx.get('symbol', '?')} "
+    """The row as the user can find it: its source file and (masked)
+    row id when the parser stamped them, else its place in the parsed
+    list."""
+    what = (f"{tx.get('action', '?')} {tx.get('symbol', '?')} "
             f"{tx.get('date', '?')}")
+    src = str(tx.get('source') or '').strip()
+    if not src:
+        return f"tx[{i}] {what}"
+    rid = _masked_id(tx.get('id'))
+    return f"{src}{f' (row id {rid})' if rid else ''}: {what}"
 
 
 def validate_transactions(txs: List[Dict[str, Any]],
@@ -160,8 +179,14 @@ def validate_transactions(txs: List[Dict[str, Any]],
 
         if action in ('BUYSELL', 'ASSIGN'):
             if action == 'BUYSELL' and abs(qty) < _QTY_EPS:
-                errors.append(f"{_who(tx, i)}: BUYSELL with quantity 0 "
-                              f"(direction lives in the quantity sign)")
+                errors.append(
+                    f"{_who(tx, i)}: a trade of quantity 0 (under "
+                    f"{QTY_ZERO:g} units) — it has no direction (buy or "
+                    f"sell is the quantity's sign) and cannot be booked; "
+                    f"this account's files are not booked until it is "
+                    f"fixed. Correct the row in the export, or remove "
+                    f"it and enter the trade via a .tt file (and report "
+                    f"it: the parser should not emit it).")
             # A SELL may net negative: closing an option at 0.01 with a
             # 1.00+ commission brings in less than nothing, and the
             # engine books those negative proceeds (core._trade_money).

@@ -10,10 +10,12 @@ from typing import Any, Dict, List, Optional
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          read_broker_text,
                                          shown_name)
+from taxjson.lib.brokerages.schema import QTY_ZERO
 from taxjson.lib.brokerages._crypto_common import (FIAT_CURRENCIES,
                                                    USD_STABLECOINS,
                                                    same_coin_hint,
                                                    strict_money, utc_to_local,
+                                                   usd_value as _usd_value,
                                                    warn_depeg)
 
 
@@ -276,6 +278,11 @@ def _kraken_siblings(path: Path) -> List[Path]:
     return same_broker_siblings(
         Path(path), 'kraken',
         by_name=lambda n: n.startswith('kr_') or 'kraken' in n)
+
+
+def _units(q: float) -> str:
+    """A coin quantity in plain decimals (0.0000000004, not 4e-10)."""
+    return f"{q:.12f}".rstrip('0').rstrip('.') or '0'
 
 
 def _mask(ref: Any) -> str:
@@ -1314,6 +1321,16 @@ class KrakenBrokerage(BaseBrokerage):
         fee_sym = self._norm(fee_ccy)
         if not fee or fee_sym in self._fiat:
             return []
+        if abs(fee) < QTY_ZERO:
+            # Under the books' zero: no row (a 0-unit sale has no
+            # direction and the schema refuses it); the coins stay as a
+            # residue, as a dust-sweep leg's do (CA-CRYPTO-11).
+            emit_line(f"note: Kraken {ctx}: a {type_raw} fee of "
+                      f"{_units(abs(fee))} {fee_ccy} is under the books' zero "
+                      f"({QTY_ZERO:g} units) — not booked as a sale.")
+            self.count_nonevent(f"Kraken dust leg under {QTY_ZERO:g} "
+                                f"units (not booked)")
+            return []
         fee_tx = {
             'action': 'BUYSELL',
             'date': date, 'time': time,
@@ -1432,6 +1449,16 @@ class KrakenBrokerage(BaseBrokerage):
                 self.count_nonevent(
                     "Kraken Earn reward fully consumed by its fee")
                 return []
+            if net_qty < QTY_ZERO and asset_name not in self._fiat:
+                # Under the books' zero: its acquisition cannot be a
+                # BUYSELL (0 units, refused by the schema) and its
+                # income is nil at that size (CA-CRYPTO-11).
+                emit_line(f"note: Kraken {ctx}: a {asset_name} reward of "
+                          f"{_units(net_qty)} is under the books' zero "
+                          f"({QTY_ZERO:g} units) — not booked.")
+                self.count_nonevent(f"Kraken dust leg under {QTY_ZERO:g} "
+                                    f"units (not booked)")
+                return []
             net_usd = None
             if usd_value:
                 f_usd = fee_usd or 0.0
@@ -1452,6 +1479,16 @@ class KrakenBrokerage(BaseBrokerage):
                 f"{fee_qty:g} fee charged in {fee_ccy} (feecurrency) and "
                 f"no amountusd/feeusd to value it — refusing to guess the "
                 f"net income. Enter this reward via a .tt file{_TT_REMOVE}.")
+        if gross_qty < QTY_ZERO and asset_name not in self._fiat:
+            # A reward under the books' zero is not booked (see the
+            # same-currency case); a coin fee on it still left.
+            emit_line(f"note: Kraken {ctx}: a {asset_name} reward of "
+                      f"{_units(gross_qty)} is under the books' zero "
+                      f"({QTY_ZERO:g} units) — not booked.")
+            self.count_nonevent(f"Kraken dust leg under {QTY_ZERO:g} "
+                                f"units (not booked)")
+            return self._fee_coin_sale(row, ctx, fee_qty, fee_ccy, 'reward',
+                                       date, time, txid, fee_usd=fee_usd)
         # The commission reduces the income, and the fee COINS left the
         # account: a sale of them at that value (A2-0582) — they used to
         # stay in the book.
@@ -1549,7 +1586,73 @@ class KrakenBrokerage(BaseBrokerage):
         has none) and every disposed asset is booked. The old model
         kept one spend leg and dropped the rest, leaving the swept
         coins in the book forever. Several legs on BOTH sides has no
-        defensible split and raises."""
+        defensible split and raises.
+
+        A coin leg under the books' zero (schema.QTY_ZERO: Kraken writes
+        a swept coin's amount to ten decimals, so a leg can be a few
+        ten-billionths of a coin) is not booked: a BUYSELL of 0 units
+        has no direction and the schema refuses it, which stopped the
+        whole account. The leg is a disposition of a negligible amount;
+        the receipt is split over the other legs and the coins stay in
+        the holdings as a residue (tax-logic CA-CRYPTO-11 /
+        US-CRYPTO-07). One note per refid names the dropped legs."""
+        self._dust_legs: List[Dict[str, Any]] = []
+        self._dust_split = False
+        out = self._instant_trades(sides, refid)
+        if self._dust_legs:
+            self._note_dust(refid)
+        return out
+
+    def _leg_coins(self, leg, received):
+        """The units a leg moved: Kraken ledger fees are in the row's
+        asset and the balance moves by amount − fee — a receive credits
+        amount − fee, a spend debits |amount| + fee. A fiat leg is its
+        amount (its fee stays money)."""
+        if leg['asset'] in self._fiat:
+            return leg['amount']
+        return (leg['amount'] - leg['fee'] if received
+                else leg['amount'] + leg['fee'])
+
+    def _is_dust(self, leg, received):
+        """A coin leg under the books' zero (a fiat leg is cash)."""
+        return (leg['asset'] not in self._fiat
+                and abs(self._leg_coins(leg, received)) < QTY_ZERO)
+
+    def _drop_dust(self, pairs):
+        """[(tx, leg)] -> the txs at or above the books' zero; a leg
+        under it is recorded for the refid's note, not booked."""
+        out = []
+        for tx, leg in pairs:
+            if abs(tx['quantity']) < QTY_ZERO:
+                dust = self.__dict__.setdefault('_dust_legs', [])
+                if not any(d is leg for d in dust):
+                    dust.append(leg)
+                continue
+            out.append(tx)
+        return out
+
+    def _note_dust(self, refid):
+        def _usd(leg):
+            if leg.get('usd') is None:
+                return "no USD value in the export"
+            return f"{leg['usd']:.2f} USD"
+        names = "; ".join(
+            f"{leg.get('raw') or leg['asset']} {_units(leg['amount'])} "
+            f"({_usd(leg)})" for leg in self._dust_legs)
+        n = len(self._dust_legs)
+        split = (" The receipt is split over the other legs."
+                 if self._dust_split else "")
+        emit_line(f"note: Kraken ledger refid {_mask(refid)} "
+                  f"({self._dust_legs[0]['date']}): {names} — "
+                  f"{'a leg' if n == 1 else f'{n} legs'} under the books' "
+                  f"zero ({QTY_ZERO:g} units), not booked: a disposition "
+                  f"of a negligible amount; the coins stay in the "
+                  f"holdings as a residue.{split}")
+        for _ in range(n):
+            self.count_nonevent(f"Kraken dust leg under {QTY_ZERO:g} "
+                                f"units (not booked)")
+
+    def _instant_trades(self, sides, refid=''):
         spends = list(sides['spend'].values())
         recvs = list(sides['receive'].values())
         if not spends or not recvs:
@@ -1579,18 +1682,53 @@ class KrakenBrokerage(BaseBrokerage):
         many, one, many_side = ((spends, recvs[0], 'spend')
                                 if len(spends) > 1
                                 else (recvs, spends[0], 'receive'))
-        weights = [leg['usd'] for leg in many]
-        if all(w is not None for w in weights) and sum(weights) > 0:
+        # A leg under the books' zero takes no share: the receipt goes
+        # to the other legs (by amountusd), its own share (nil at that
+        # size) with it. All legs dust: the counter-leg still pairs with
+        # one of them, so a coin receipt is still acquired; that dust
+        # leg's own zero-unit row is left out by _drop_dust.
+        received = many_side == 'receive'
+        kept = [leg for leg in many if not self._is_dust(leg, received)]
+        self._dust_legs.extend(leg for leg in many
+                               if self._is_dust(leg, received))
+        self._dust_split = bool(kept) and len(kept) < len(many)
+        if not kept:
+            kept = [many[0]]
+        if len(kept) == 1:
+            return self._split_legs(kept, [1.0], one, many_side, refid)
+        weights = [self._leg_usd(leg) for leg in kept]
+        missing = [leg['asset'] for leg, w in zip(kept, weights)
+                   if w is None]
+        if not missing and sum(weights) > 0:
             total = sum(weights)
             shares = [w / total for w in weights]
             basis = 'amountusd'
         else:
-            shares = [1.0 / len(many)] * len(many)
-            basis = 'equal shares (no amountusd in this export)'
-        emit_line(f"note: Kraken ledger refid {_mask(refid)}: {len(many)} "
-              f"{many_side} legs ({', '.join(l['asset'] for l in many)}) "
+            shares = [1.0 / len(kept)] * len(kept)
+            basis = ('equal shares (no amountusd in this export)'
+                     if len(missing) == len(kept)
+                     else f"equal shares (no amountusd on "
+                          f"{', '.join(missing)})" if missing
+                     else 'equal shares (amountusd is 0 on every leg)')
+        emit_line(f"note: Kraken ledger refid {_mask(refid)}: {len(kept)} "
+              f"{many_side} legs ({', '.join(l['asset'] for l in kept)}) "
               f"share one {one['asset']} {'receipt' if many_side == 'spend' else 'payment'} "
               f"— split by {basis}; each asset is booked separately.")
+        return self._split_legs(kept, shares, one, many_side, refid)
+
+    @staticmethod
+    def _leg_usd(leg):
+        """A leg's USD value: the export's amountusd, else a USD leg's
+        own amount."""
+        if leg['usd'] is not None:
+            return leg['usd']
+        if leg['asset'] in _FIAT_CURRENCIES:
+            # A fiat leg is its own value: USD as is, another currency
+            # through the run's rates (None without one).
+            return _usd_value(leg['amount'], leg['asset'], leg['date'])
+        return None
+
+    def _split_legs(self, many, shares, one, many_side, refid):
         out = []
         for leg, share in zip(many, shares):
             part = dict(one, amount=one['amount'] * share,
@@ -1651,11 +1789,7 @@ class KrakenBrokerage(BaseBrokerage):
         # (the fee coins are part of what was given up / never arrived)
         # instead of dropping it, which left phantom units in the book.
         # Fiat-leg fees stay money (see fiat_fee below).
-        def _coins(leg, received):
-            if leg['asset'] in self._fiat:
-                return leg['amount']
-            return (leg['amount'] - leg['fee'] if received
-                    else leg['amount'] + leg['fee'])
+        _coins = self._leg_coins
 
         if spend['asset'] == recv['asset'] and \
                 spend['asset'] not in self._fiat:
@@ -1783,7 +1917,7 @@ class KrakenBrokerage(BaseBrokerage):
             if refid:
                 sell_leg['id'] = f'{refid}-sell'
                 buy_leg['id'] = f'{refid}-buy'
-            return [sell_leg, buy_leg]
+            return self._drop_dust([(sell_leg, spend), (buy_leg, recv)])
 
         price = (round(quote_amt / base_amt, 8)
                  if base_amt > 0 else 0.0)
@@ -1812,4 +1946,4 @@ class KrakenBrokerage(BaseBrokerage):
         }
         if refid:
             tx['id'] = refid
-        return [tx]
+        return self._drop_dust([(tx, recv if is_buy else spend)])

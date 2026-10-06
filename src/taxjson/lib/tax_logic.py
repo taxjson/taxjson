@@ -1099,7 +1099,20 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "into one receipt) is a sale of each coin: the receipt "
                  "is split over them by the export's amountusd, or "
                  "equally when the export has none (the parse says "
-                 "which).", cont=True),
+                 "which; a US-dollar leg with no amountusd is its own "
+                 "amount). A fiat leg of a sweep (CAD) is cash, not a "
+                 "sale: its share of the receipt is a currency "
+                 "conversion. A coin leg under 1e-09 units (the books' "
+                 "zero; Kraken writes amounts to ten decimals) is not "
+                 "booked: it is the disposition of a negligible amount, "
+                 "its share of the receipt goes to the sweep's other "
+                 "legs by amountusd (nothing to move when its amountusd "
+                 "is 0), and the coins stay in the holdings as a "
+                 "residue (CA-CRYPTO-09); when every coin leg is that "
+                 "small no sale is booked. The parse names each such "
+                 "leg (coin, amount, USD value) once per sweep. A Kraken "
+                 "fee or reward under 1e-09 units is likewise not "
+                 "booked.", cont=True),
             Rule("CA-CRYPTO-09",
                  "Any amount of a coin is property: a residue left after a "
                  "sale, however small, stays in the holdings with its "
@@ -2136,7 +2149,20 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "into one receipt) is a sale of each coin: the receipt "
                  "is split over them by the export's amountusd, or "
                  "equally when the export has none (the parse says "
-                 "which).", cont=True),
+                 "which; a US-dollar leg with no amountusd is its own "
+                 "amount). A foreign-currency leg of a sweep (CAD) is "
+                 "cash, not a sale: its share of the receipt is a "
+                 "currency conversion. A coin leg under 1e-09 units "
+                 "(Kraken writes amounts to ten decimals) is not booked: "
+                 "it is the disposition of a negligible amount, its "
+                 "share of the receipt goes to the sweep's other legs by "
+                 "amountusd (nothing to move when its amountusd is 0), "
+                 "and the coins stay in the lots as a residue (folded "
+                 "into the sale that closes the lot, US-CRYPTO-08); "
+                 "when every coin leg is that small no sale is booked. "
+                 "The parse names each such leg (coin, amount, USD "
+                 "value) once per sweep. A Kraken fee or reward under "
+                 "1e-09 units is likewise not booked.", cont=True),
             Rule("US-CRYPTO-08",
                  "The US engine counts less than 1e-08 units as zero: a "
                  "purchase or sale row under 1e-08 units is not booked "

@@ -26,6 +26,26 @@
   text — work/*.diag, the `.sum` DIAGNOSTICS, reports/, `--json`, exit
   codes — is byte for byte unchanged.
 
+### Fixed
+
+- **Kraken: a dust-sweep leg smaller than the books' zero no longer stops
+  the crypto account.** Kraken writes a swept coin's amount to ten
+  decimals, so a "convert small balances" sweep can spend a few
+  ten-billionths of a coin; that leg became a trade of 0 units, the
+  check refused it and the whole account's files went unbooked. A coin
+  leg under 1e-09 units is now left out (a disposition of a negligible
+  amount): the receipt is split over the sweep's other legs by their USD
+  value, the coins stay in the holdings as a residue, and one note per
+  sweep names each such leg with its amount and USD value. A sweep made
+  only of such legs books no sale; a fiat leg (CAD) stays cash; a
+  US-dollar leg with no USD value counts at its own amount. A Kraken
+  coin fee or reward that small is not booked either. A sweep with no
+  such leg books as before.
+- **A zero-unit trade names its file and row.** Should one still reach
+  the check, the error names the source file, the row id (masked), the
+  coin and the date, says that the account's files are not booked until
+  it is fixed and what to do, instead of `tx[947]`.
+
 
 ## v0.20.0 (2026-10-06)
 
