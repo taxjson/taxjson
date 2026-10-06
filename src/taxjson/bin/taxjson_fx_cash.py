@@ -388,7 +388,15 @@ def render_report(doc: Dict[str, Any], base: str, year: int,
                     f"file ({counts}) — run `taxjson run` to refresh "
                     f"rates.")
     lines.append("")
-    for t in warn:
+    for i, t in enumerate(warn):
+        if w > 0 and t.startswith(_W):
+            # A message (docs/output-style.md, Messages): its lines
+            # flush-left, one blank line after it when it wraps.
+            block = out.wrap(t, w, "", "")
+            lines += block
+            if len(block) > 1 and i + 1 < len(warn):
+                lines.append("")
+            continue
         lines += out.wrap(t, w, "", "  ")
     return "\n".join(lines)
 

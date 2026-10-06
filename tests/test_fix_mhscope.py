@@ -131,7 +131,7 @@ class TestShortsScopedToTheYear(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         text = r.stdout + r.stderr
         from taxjson.lib import out
-        self.assertEqual(out.console_lint(r.stdout, 100), [], r.stdout)
+        self.assertEqual(out.console_lint(r.stdout), [], r.stdout)
         shown = re.findall(r"(?m)^Warning: Short position: (\S+) \((\w+)\)",
                            text)
         # The year's shorts, once each; not the ones that went short in
@@ -416,7 +416,7 @@ class TestRunConsoleLines(unittest.TestCase):
                  if ln.startswith("==> margin  (taxable"))
         self.assertGreater(w, m, r.stdout)
         from taxjson.lib import out
-        self.assertEqual(out.console_lint(r.stdout, 100), [], r.stdout)
+        self.assertEqual(out.console_lint(r.stdout), [], r.stdout)
 
     def test_failed_stage_headline_in_the_last_line(self):
         tmp, root = _make("canada")
@@ -459,10 +459,10 @@ class TestCodesNoteDisplay(unittest.TestCase):
         shown = console_lines(line, "", width_=100)
         self.assertEqual(shown[0], "Info: Questrade internal symbol codes "
                                    "resolved (2):")
-        self.assertEqual(shown[1], "  X000001 → QZM.TO (Interactive "
+        self.assertEqual(shown[1], "X000001 → QZM.TO (Interactive "
                                    "Brokers transfer out of 24 on "
                                    "2026-09-01, ibm)")
-        self.assertEqual(shown[2], "  X000004 → QZB.TO (same name as "
+        self.assertEqual(shown[2], "X000004 → QZB.TO (same name as "
                                    "'QZB BANK CORP' in ibm)")
         # Captured: the one parseable line, as symbol_codes wrote it.
         self.assertEqual(console_lines(line, "", width_=0), [line])

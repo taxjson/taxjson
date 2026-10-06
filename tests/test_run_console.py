@@ -1,9 +1,10 @@
 """`taxjson run`'s console (docs/output-style.md, The run's console).
 
-Every line a person reads starts with `==> ` (a step), `Info: `,
-`Warning: `, `Error: `, or two spaces (the continuation of the line
-above); no blank line, no `ATTENTION:` word, no `(content: ...)`
-detection detail. The captured text (work/*.diag, reports/) does not
+Every non-blank line a person reads starts with `==> ` (a step),
+`Info: `, `Warning: `, `Error: `, or continues the entry above it,
+flush-left; one blank line after an entry of more than one line and
+nowhere else (never at the end); no `ATTENTION:` word, no
+`(content: ...)` detection detail. The captured text (work/*.diag, reports/) does not
 depend on it: a run shown to a person and a run captured for a program
 (TAXJSON_WIDTH=0) write the same bytes. Every fixture is synthetic."""
 import contextlib
@@ -86,10 +87,46 @@ class TestEveryLine(_Runs):
                 self._check(r.stdout, "stdout")
                 self._check(r.stderr, "stderr")
 
-    def test_no_blank_line(self):
+    def test_blank_line_only_after_a_multi_line_message(self):
         _p, r = self.run_of("canada")
-        self.assertNotIn("\n\n", r.stdout)
+        self.assertNotIn("\n\n\n", r.stdout)
         self.assertFalse(r.stdout.startswith("\n"))
+        self.assertFalse(r.stdout.endswith("\n\n"))
+        lines = r.stdout.splitlines()
+        blanks = [i for i, ln in enumerate(lines) if not ln]
+        self.assertTrue(blanks, r.stdout)
+        for i in blanks:
+            # The line above a blank continues a message (flush-left),
+            # the line below starts a new entry.
+            self.assertFalse(out.CONSOLE_LINE_RE.match(lines[i - 1]),
+                             lines[i - 1])
+            self.assertFalse(lines[i - 1][:1].isspace(), lines[i - 1])
+            self.assertTrue(out.CONSOLE_LINE_RE.match(lines[i + 1]),
+                            lines[i + 1])
+        # A one-line message or step is never followed by a blank line.
+        for i, ln in enumerate(lines[:-1]):
+            if out.CONSOLE_LINE_RE.match(ln) and not lines[i + 1]:
+                self.fail(f"blank line after a one-line entry: {ln}")
+
+    def test_merged_console(self):
+        # stdout and stderr to one pipe (`2>&1`), as on a terminal: one
+        # console, the rule holds across both streams.
+        import subprocess
+        from _style import env
+        for country, pending in (("canada", False), ("usa", True)):
+            with self.subTest(country=country, pending=pending):
+                p, tmp = self._copy(country, pending)
+                self.addCleanup(shutil.rmtree, tmp, True)
+                r = subprocess.run(
+                    [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
+                     str(p.root), "run", "--no-input"], cwd=p.root,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, env=env(), stdin=subprocess.DEVNULL,
+                    timeout=900)
+                self.assertEqual(r.returncode, 3 if pending else 0,
+                                 r.stdout)
+                assert_console(self, r.stdout, allow=("taxjson elect ",))
+                self.assertFalse(r.stdout.endswith("\n\n"))
 
 
 class TestSteps(_Runs):
@@ -201,7 +238,7 @@ class TestHoldingsCheck(_Runs):
             'holdings = ["holdings.toml"]\n'))
         r = p.run("run", "--no-input")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(out.console_lint(r.stdout, 100), [], r.stdout)
+        self.assertEqual(out.console_lint(r.stdout), [], r.stdout)
         tail = r.stdout[r.stdout.index(
             "==> Checking positions against the broker's holdings files"):]
         body = tail[:tail.index("==> Before you trust")].splitlines()[1:]
@@ -229,7 +266,7 @@ class TestFiledYears(_Runs):
         assert_console(self, r.stderr)
         self.assertIn("\n==> Checking the filed years\nInfo: Filed 2024: OK",
                       r.stdout)
-        # Drifted: a Warning, its `- ` detail lines two spaces in.
+        # Drifted: a Warning, its `- ` detail lines flush-left.
         lock = p.root / "filed" / "2024.json"
         doc = json.loads(lock.read_text())
         acct = sorted(doc["accounts"])[-1]
@@ -246,6 +283,16 @@ class TestReword(_Width):
     def _shown(self, line):
         from taxjson.lib.stage_msg import console_lines
         return console_lines(line, "", width_=100, source=False)
+
+    def _assert_shown(self, line, want):
+        """The headline exactly; the details' words (they wrap at 100),
+        every line flush-left."""
+        got = self._shown(line)
+        self.assertEqual(got[0], want[0])
+        self.assertEqual(_flat(" ".join(got[1:])),
+                         _flat(" ".join(want[1:])))
+        self.assertTrue(all(x and not x[0].isspace() for x in got), got)
+        self.assertTrue(all(len(x) <= 100 for x in got), got)
 
     def test_kraken_notes(self):
         cases = {
@@ -267,12 +314,12 @@ class TestReword(_Width):
             "fees-sum, the .sum FEES line).":
                 ["Info: Kraken kr_t.csv: 1 fill paid the fee in the traded "
                  "coin",
-                 "  Booked as fewer coins received or more given; these "
+                 "Booked as fewer coins received or more given; these "
                  "fees are not in the fee reports."],
             "note: kr_l.csv: 3 recognized non-event row(s) not translated "
             "— Kraken Earn wallet move (allocation/deallocation): 3.":
                 ["Info: kr_l.csv: 3 rows skipped (not tax events)",
-                 "  Kraken Earn wallet move (allocation/deallocation): 3."],
+                 "Kraken Earn wallet move (allocation/deallocation): 3."],
             "  kr_l.csv: 2 TRANSFER row(s) kept aside (custody evidence, "
             "not tax events — view with `taxjson transfers`)":
                 ["Info: kr_l.csv: 2 transfer rows kept aside (not tax "
@@ -287,11 +334,11 @@ class TestReword(_Width):
             "split over the other legs.":
                 ["Info: Kraken: dust sweep DS*** (2026-10-01): 2 legs under "
                  "1e-09 units not booked",
-                 "  AVAX 0.0000000003 (0.00 USD); SOL 0.0000000002 (0.00 "
+                 "AVAX 0.0000000003 (0.00 USD); SOL 0.0000000002 (0.00 "
                  "USD): worth at most 0.01 USD. A disposition",
-                 "  of a negligible amount; the coins stay in the holdings "
+                 "of a negligible amount; the coins stay in the holdings "
                  "as a residue. The receipt is split over the",
-                 "  other legs."],
+                 "other legs."],
             "note: Kraken ledger refid XA*** (2026-03-12): instant trade: "
             "BTC 0.0000000006 received (0.00 USD) — a leg under the books' "
             "zero (1e-09 units) and worth at most 0.01 USD, not booked: an "
@@ -299,13 +346,13 @@ class TestReword(_Width):
             "to the holdings.":
                 ["Info: Kraken: instant trade XA*** (2026-03-12): 1 leg under "
                  "1e-09 units not booked",
-                 "  BTC 0.0000000006 received (0.00 USD): worth at most 0.01 "
+                 "BTC 0.0000000006 received (0.00 USD): worth at most 0.01 "
                  "USD. An acquisition of a negligible",
-                 "  amount; the coins are not added to the holdings."],
+                 "amount; the coins are not added to the holdings."],
         }
         for line, want in cases.items():
             with self.subTest(line=line[:40]):
-                self.assertEqual(self._shown(line), want)
+                self._assert_shown(line, want)
 
     def test_crypto_sends_hint_keeps_the_action(self):
         for line, words in (
@@ -346,15 +393,20 @@ class TestReword(_Width):
             self._shown("warning: ATTENTION: x.csv: no Cash Report"),
             ["Warning: x.csv: no Cash Report"])
 
-    def test_continuations_are_two_spaces(self):
+    def test_continuations_are_flush_left(self):
+        from taxjson.lib.stage_msg import is_continuation
         for line in ("  - an item", "      deeply indented detail",
                      "\tA tab-indented detail"):
             with self.subTest(line=line):
-                self.assertEqual(self._shown(line),
-                                 ["  " + line.strip()])
+                self.assertEqual(self._shown(line), [line.strip()])
+                self.assertTrue(is_continuation(line))
         long = "    " + "word " * 40
         lines = self._shown(long)
-        self.assertTrue(all(re.match(r"  \S", x) for x in lines), lines)
+        self.assertGreater(len(lines), 1)
+        self.assertTrue(all(re.match(r"\S", x) for x in lines), lines)
+        # A parser's indented count line is a message of its own.
+        self.assertFalse(is_continuation("  kr_l.csv: 251 tax objects"))
+        self.assertFalse(is_continuation("warning: x"))
 
     def test_no_break_inside_parentheses(self):
         from taxjson.lib.stage_msg import split_message
@@ -368,23 +420,38 @@ class TestReword(_Width):
 
 
 class TestMessageDetails(_Width):
-    def test_list_items_continue_at_two_spaces(self):
+    def test_list_items_are_flush_left(self):
         lines = out.message("error", "2 problems", details=[
             "- " + "a long item " * 12, "- short"], width_=100)
         self.assertEqual(lines[0], "Error: 2 problems")
-        self.assertTrue(all(re.match(r"  \S", x) for x in lines[1:]),
-                        lines)
+        self.assertEqual(len(lines), 4, lines)
+        self.assertTrue(lines[1].startswith("- a long item"), lines)
+        # The item's wrapped line: flush-left, no hanging indent.
+        self.assertTrue(lines[2].startswith("long item"), lines)
+        self.assertEqual(lines[3], "- short")
         # Captured (width 0): the bytes as they always were.
         cap = out.message("error", "2 problems", details=["- a", "- b"],
                           width_=0)
         self.assertEqual(cap, ["error: 2 problems", "  - a", "  - b"])
 
     def test_console_lint(self):
-        self.assertEqual(out.console_lint(
-            "==> Step\nInfo: x\n  more\nWarning: y\nError: z\n"), [])
-        for bad in ("    deep\n", "plain\n", "\n",
-                    "Info: x\n\nInfo: y\n", "Warning: ATTENTION: x\n",
-                    "Info: a.csv → IB (content: x)\n", "note: x\n"):
+        for good in ("==> Step\nInfo: x\nmore\n\nWarning: y\nError: z\n",
+                     "==> A long step\nwrapped\n\n==> Next\n",
+                     "Error: x\n- item\nwrapped item\n- item 2",
+                     "Info: one\nInfo: two\n==> step\n"):
+            with self.subTest(good=good):
+                self.assertEqual(out.console_lint(good), [])
+        for bad in (
+                "    deep\n", "plain\n", "\n",
+                "Info: x\n  more\n",                 # indented
+                "Info: x\n\nInfo: y\n",              # blank after one line
+                "==> step\n\n==> step\n",
+                "Info: x\nmore\nInfo: y\n",          # no blank after 2 lines
+                "Info: x\nmore\n\n\nInfo: y\n",      # two blank lines
+                "Info: x\nmore\n\n",                 # blank at the end
+                "Info: x\nmore\n\nmore\n",           # a bare line
+                "Warning: ATTENTION: x\n",
+                "Info: a.csv → IB (content: x)\n", "note: x\n"):
             with self.subTest(bad=bad):
                 self.assertTrue(out.console_lint(bad), bad)
 
@@ -398,7 +465,7 @@ class TestRunHelpers(_Width):
             R._say("warning", "x: elections required", "Detail.",
                    indent="  ")
         self.assertEqual(err.getvalue(),
-                         "Warning: x: elections required\n  Detail.\n")
+                         "Warning: x: elections required\nDetail.\n")
 
     def test_step(self):
         from taxjson.bin import taxjson_run as R
@@ -408,7 +475,9 @@ class TestRunHelpers(_Width):
             R._step("Writing summary reports/a_very_long_account_name.sum")
         lines = buf.getvalue().splitlines()
         self.assertTrue(lines[0].startswith("==> Writing summary"))
-        self.assertTrue(all(x.startswith("  ") for x in lines[1:]))
+        self.assertGreater(len(lines), 1)
+        # A wrapped step continues flush-left.
+        self.assertTrue(all(x and not x[0].isspace() for x in lines[1:]))
 
 
 if __name__ == "__main__":

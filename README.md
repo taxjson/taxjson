@@ -95,8 +95,7 @@ Info: File inputs/margin/generic_ws.csv → identified as generic
 ==> crypto  (taxable, crypto)
 Info: File inputs/crypto/export.csv → identified as Kraken
 Info: File inputs/crypto/cb_old.csv → identified as Coinbase
-Info: cb_old.csv: read as Coinbase by its file name ("cb_") only — its header matches no
-  supported export.
+Info: cb_old.csv: read as Coinbase by its file name ("cb_") only — its header matches no supported export.
 ```
 
 The console names each file as it is on disk (two exports whose default
@@ -349,9 +348,10 @@ contribution):
 
 ```
 Warning: 2 transfers in a taxable loss's 30-day window counted as account moves, not purchases
-  - SAMPLE.TO 100 moved rrsp→tfsa 2025-04-20/21 inside the 2025-04-15 loss window in margin — if one leg was a contribution, the loss may be superficial (s.54)
-  - rrsp: SAMPLE.TO +80 on 2025-05-09 (loss sale 2025-04-15 in margin)
-  If one was an in-kind contribution or a purchase rather than an account move, ...
+- SAMPLE.TO 100 moved rrsp→tfsa 2025-04-20/21 inside the 2025-04-15 loss window in margin — if one leg was a
+contribution, the loss may be superficial (s.54)
+- rrsp: SAMPLE.TO +80 on 2025-05-09 (loss sale 2025-04-15 in margin)
+If one was an in-kind contribution or a purchase rather than an account move, ...
 ```
 
 If one of them *was* an in-kind contribution or a purchase, record it as a
@@ -488,16 +488,17 @@ incomplete — silent when there is nothing:
 
 ```
 ==> Before you trust these numbers (docs/getting-started.md, step 5)
-Warning: 1 position sold in 2025 with no purchase in your files, not in missing_history.json:
-  SAMPA.TO (margin). Those sales are NOT in `taxjson sum`; run `taxjson find-missing-history`.
-Warning: 1 position at a $0 cost (1 still held): SAMPQ.TO (margin). Run
-  `taxjson find-missing-history`.
-Warning: 1 transfer-in from outside your books kept out with no cost: SAMPK.TO (margin). Run
-  `taxjson transfers`.
-Info: 1 account with open positions and no holdings file to check them against: margin (12). Run
-  `taxjson sanity` with the broker's positions.
-Warning: 1 security paid income in 2025 that the books do not hold (a holding with no purchase in
-  your files?): SAMPZ.TO (margin). Run `taxjson sanity`.
+Warning: 1 position sold in 2025 with no purchase in your files, not in missing_history.json: SAMPA.TO (margin). Those
+sales are NOT in `taxjson sum`; run `taxjson find-missing-history`.
+
+Warning: 1 position at a $0 cost (1 still held): SAMPQ.TO (margin). Run `taxjson find-missing-history`.
+Warning: 1 transfer-in from outside your books kept out with no cost: SAMPK.TO (margin). Run `taxjson transfers`.
+Info: 1 account with open positions and no holdings file to check them against: margin (12). Run `taxjson sanity` with
+the broker's positions.
+
+Warning: 1 security paid income in 2025 that the books do not hold (a holding with no purchase in your files?): SAMPZ.TO
+(margin). Run `taxjson sanity`.
+
 Info: Then run `taxjson checklist`. Every step is in docs/getting-started.md.
 ```
 

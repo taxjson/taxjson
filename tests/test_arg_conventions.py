@@ -308,8 +308,10 @@ class TestSubcommandSynopsis(unittest.TestCase):
 
 class TestHelpWidth(unittest.TestCase):
     def test_help_capped_at_the_house_width_on_wide_terminals(self):
-        # docs/output-style.md: prose wraps at 100 columns at most (it
-        # was a 78-column cap); the suite's TAXJSON_WIDTH=0 keeps it too.
+        # docs/output-style.md: piped, prose wraps at 120 columns
+        # (lib/out.WIDTH; it was a 78-, then a 100-column cap); the
+        # suite's TAXJSON_WIDTH=0 keeps it too.
+        from taxjson.lib.out import WIDTH
         import os
         import subprocess
         import sys
@@ -324,7 +326,7 @@ class TestHelpWidth(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             widest = max(len(ln) for ln in r.stdout.splitlines())
             self.assertLessEqual(
-                widest, 100,
+                widest, WIDTH,
                 f"{cmd or ['top-level']}: a {widest}-char help line — "
                 f"the width cap (or the COMMAND metavar for the "
                 f"choices blob) regressed")

@@ -12,15 +12,16 @@ forms:
     always held;
   * shown to a person (width > 0: a stage run by hand, the in-process
     pipeline of `wash-sales`, `harvest` ...): `<Label>: <headline>`
-    (`Info:` / `Warning:` / `Error:`, lib/out.label) and indented detail
-    lines, wrapped at the house width.
+    (`Info:` / `Warning:` / `Error:`, lib/out.label) and its detail
+    lines flush-left, wrapped at the house width, one blank line after
+    a message of more than one line (lib/out.show).
 
 `console_lines` is the other direction: a captured line the run echoes
 to the console (an ATTENTION or UNBOOKED line from a .diag) shown to the
 person at display time — its label first (`Warning: ...`, lib/out.relabel;
 the ATTENTION word is the captured form's), a frequent wordy note in its
-short display form (reword), continuation lines indented exactly two
-spaces, wrapped; the .diag keeps the captured line.
+short display form (reword), continuation lines flush-left, wrapped;
+the .diag keeps the captured line.
 """
 
 import re
@@ -31,7 +32,7 @@ from typing import Iterable, List, Optional
 from taxjson.lib import out
 
 __all__ = ["say", "message_lines", "console_lines", "split_message",
-           "emit_line", "reword"]
+           "emit_line", "reword", "is_continuation"]
 
 
 def message_lines(kind: str, text: str, details: Iterable[str] = (), *,
@@ -55,7 +56,7 @@ def _captured(file) -> bool:
     into a buffer it reads, line by line)."""
     if out.width(file) <= 0:
         return True
-    return file not in (sys.__stderr__, sys.__stdout__)
+    return out.real_stream(file) not in (sys.__stderr__, sys.__stdout__)
 
 
 def say(kind: str, headline: str, details: Iterable[str] = (), *,
@@ -69,9 +70,8 @@ def say(kind: str, headline: str, details: Iterable[str] = (), *,
     if legacy is not None and _captured(file):
         print(legacy, file=file)
         return
-    for ln in message_lines(kind, headline, details, prog=prog,
-                            indent=indent, stream=file):
-        print(ln, file=file)
+    out.show(message_lines(kind, headline, details, prog=prog,
+                           indent=indent, stream=file), file)
 
 
 # Where a long captured one-liner splits into headline + detail: the
@@ -276,6 +276,17 @@ def reword(line: str) -> List[str]:
 _LABELLED = re.compile(r"(?:Info|Warning|Error): ")
 
 
+def is_continuation(line: str) -> bool:
+    """True when a captured stage line continues the message above it
+    (an indented line that is not itself a message once shown — a
+    parser's indented `  x.csv: N tax objects` count is one)."""
+    if not line[:1].isspace():
+        return False
+    first = reword(out.printable(line))[0]
+    return (first[:1].isspace()
+            and not _LABELLED.match(out.relabel(first).strip()))
+
+
 def console_lines(line: str, indent: str = "", stream=None,
                   width_: Optional[int] = None,
                   source: bool = True) -> List[str]:
@@ -286,9 +297,11 @@ def console_lines(line: str, indent: str = "", stream=None,
     `Info:`; `source` keeps the program name a line carried after the
     label, False drops it), at `indent` whatever indentation it had; a
     long one becomes its headline and a detail paragraph. A line that
-    is not a message (an indented continuation of the one above) is
-    shown indented exactly two spaces past `indent`; so are details.
-    Display only — the .diag keeps the one line."""
+    is not a message (is_continuation: an indented continuation of the
+    one above) and every detail line is shown at `indent` too — flush-
+    left on the run's console. Display only — the .diag keeps the one
+    line. Print the lines with lib/out.show (cont=is_continuation(line))
+    so a message of more than one line is followed by a blank line."""
     w = out.width(stream if stream is not None else sys.stdout) \
         if width_ is None else width_
     if w <= 0:
@@ -298,19 +311,18 @@ def console_lines(line: str, indent: str = "", stream=None,
     # starts the line.
     shown = reword(out.printable(line))
     body = out.relabel(shown[0], source=source).strip()
-    cont = indent + out.DETAIL_INDENT
     if shown[0][:1].isspace() and not _LABELLED.match(body):
         # The continuation of the message above.
-        lines = out.wrap(body, w, cont, cont)
+        lines = out.wrap(body, w, indent, indent)
     elif len(indent + body) <= w:
         lines = [indent + body]
     else:
         head, rest = split_message(body)
-        lines = out.wrap(head, w, indent, cont)
+        lines = out.wrap(head, w, indent, indent)
         if rest:
-            lines += out.wrap(rest, w, cont, cont)
+            lines += out.wrap(rest, w, indent, indent)
     for d in shown[1:]:
-        lines += out.wrap(d, w, cont, cont)
+        lines += out.wrap(d, w, indent, indent)
     return lines
 
 
@@ -319,12 +331,19 @@ def emit_line(text: str, *, file=None, indent: str = "") -> None:
     ...`, `<prog>: error: ...`): as is when captured (_captured — the
     .diag keeps its bytes), else as console_lines shows it: the label
     first (`Warning: ...`, `Info: ...`; the program's own name dropped),
-    the headline and an indented detail, wrapped. Each line of a
-    multi-line `text` is shown so."""
+    the headline and its detail flush-left, wrapped, one blank line
+    after it when it spans more than one line (lib/out.show). Each line
+    of a multi-line `text` is shown so; an indented one continues the
+    message above it."""
     file = sys.stderr if file is None else file
     if _captured(file):
         print(text, file=file)
         return
+    blocks: List[List[str]] = []
     for part in str(text).split("\n"):
-        for ln in console_lines(part, indent, stream=file, source=False):
-            print(ln, file=file)
+        lines = console_lines(part, indent, stream=file, source=False)
+        if blocks and is_continuation(part):
+            blocks[-1].extend(lines)
+        else:
+            blocks.append(lines)
+    out.show_blocks(blocks, file)

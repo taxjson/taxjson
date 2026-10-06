@@ -103,7 +103,7 @@ class TestDie(_Width100):
                    * 12)
         text = str(cm.exception)
         self.assertTrue(text.startswith(
-            "Error: no gains files in work/\n  Run "), text)
+            "Error: no gains files in work/\nRun "), text)
         self.assertEqual(out.lint(text), [])
 
     def test_die_input_exits_2_on_stderr(self):
@@ -132,18 +132,20 @@ class TestDie(_Width100):
             cli_diag.note("taxjson-x", "short")
         lines = err.getvalue().splitlines()
         self.assertTrue(lines[0].startswith("Warning: word"))
-        self.assertTrue(lines[1].startswith("  word"))
-        self.assertEqual(lines[-1], "Info: short")
+        self.assertTrue(lines[1].startswith("word"))
+        # One blank line after the wrapped warning, before the next one.
+        self.assertEqual(lines[-2:], ["", "Info: short"])
         self.assertEqual(out.lint(err.getvalue()), [])
+        self.assertEqual(out.console_lint(err.getvalue()), [])
 
 
 class TestUnwrappedWhenCaptured(_Width100):
     def test_context(self):
-        self.assertEqual(out.width(io.StringIO()), 100)
+        self.assertEqual(out.width(io.StringIO()), out.WIDTH)
         with out.unwrapped():
             self.assertEqual(out.width(io.StringIO()), 0)
             self.assertEqual(len(out.message("warning", "w " * 80)), 1)
-        self.assertEqual(out.width(io.StringIO()), 100)
+        self.assertEqual(out.width(io.StringIO()), out.WIDTH)
 
     def test_a_captured_stage_keeps_whole_lines(self):
         # What a .diag (and so the .sum DIAGNOSTICS) receives: a tool's

@@ -5,7 +5,7 @@ once per test process — options, superficial losses (one re-bought in a
 registered account), a spin-off (elected), crypto with a send, dividends,
 transfers, a sale with no purchase, a T5008/1099-B slip, a holdings file,
 a price cache — and runs commands on them as a person piping the output
-would (width 100, TAXJSON_OFFLINE=1, stdin /dev/null).
+would (width 120, lib/out.WIDTH; TAXJSON_OFFLINE=1, stdin /dev/null).
 
     from _style import project, assert_styled
 
@@ -50,7 +50,7 @@ _tmp = None
 
 def env(**extra) -> dict:
     """The environment a style test runs taxjson in: this checkout's
-    code, offline, no TAXJSON_WIDTH (piped = width 100)."""
+    code, offline, no TAXJSON_WIDTH (piped = width 120, lib/out.WIDTH)."""
     e = dict(os.environ)
     e.pop("TAXJSON_WIDTH", None)
     e["TAXJSON_OFFLINE"] = "1"
@@ -138,7 +138,11 @@ def project(country: str = "canada", pending: bool = False) -> Project:
     return _built[key]
 
 
-def assert_styled(tc, text: str, width: int = 100, allow=()) -> None:
+# The width a style test's command runs at: piped, lib/out.WIDTH.
+PIPE_WIDTH = 120
+
+
+def assert_styled(tc, text: str, width: int = PIPE_WIDTH, allow=()) -> None:
     """Fail `tc` with the out.lint problems of `text` (lines over
     `width` that are not table rows or contain an `allow` substring,
     blank-line runs, a leading/trailing blank line, retired prefixes — a
@@ -151,12 +155,15 @@ def assert_styled(tc, text: str, width: int = 100, allow=()) -> None:
                 + "\n--- output ---\n" + text[:4000])
 
 
-def assert_console(tc, text: str, width: int = 100, allow=()) -> None:
-    """Fail `tc` unless every line of `text` (the run's console, or a
-    command's stderr messages) starts with `==> `, `Info: `, `Warning: `,
-    `Error: ` or a two-space continuation — no blank line, no ATTENTION
-    word, no detection detail (out.console_lint;
-    docs/output-style.md, The run's console)."""
+def assert_console(tc, text: str, width: int = PIPE_WIDTH,
+                   allow=()) -> None:
+    """Fail `tc` unless every non-blank line of `text` (the run's
+    console, or a command's stderr messages) starts with `==> `,
+    `Info: `, `Warning: `, `Error: ` or continues the entry on the line
+    above, flush-left; a blank line only (and always) after an entry of
+    more than one line, none at the end; no ATTENTION word, no
+    detection detail (out.console_lint; docs/output-style.md, The run's
+    console)."""
     from taxjson.lib.out import console_lint
     probs = console_lint(text, width, allow)
     if probs:

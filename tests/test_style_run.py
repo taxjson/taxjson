@@ -62,8 +62,11 @@ class TestStageMessages(_Width):
                 legacy="NOTE: one line")
         lines = err.getvalue().splitlines()
         self.assertEqual(lines[0], "Info: 3 rows rewritten")
-        self.assertTrue(all(ln.startswith("  ") for ln in lines[1:]))
+        # The details flush-left; one message of more than one line.
+        self.assertGreater(len(lines), 1)
+        self.assertTrue(all(ln and not ln[0].isspace() for ln in lines))
         self.assertEqual(out.lint(err.getvalue()), [])
+        self.assertEqual(out.console_lint(err.getvalue()), [])
 
     def test_a_redirected_stream_is_captured(self):
         # An in-process caller reading a stage's stderr line by line
@@ -91,7 +94,7 @@ class TestStageMessages(_Width):
         # form's); the message words follow it unchanged.
         self.assertEqual(lines[0], "Warning: x.csv: the "
                                    "statement has no Cash Report")
-        self.assertTrue(lines[1].startswith("  Parsed money is NOT"))
+        self.assertTrue(lines[1].startswith("Parsed money is NOT"))
         self.assertEqual(out.console_lint("\n".join(lines)), [])
         self.assertEqual(_flat(" ".join(lines)).replace("Parsed", "parsed"),
                          _flat(self.LONG.replace(" —", "")
@@ -174,7 +177,7 @@ class TestBookStateWarnings(_Width):
         self.assertEqual(lines[0], "Warning: these books are "
                                    "not the clean result of the current "
                                    "inputs")
-        self.assertEqual(lines[1], "  - a stale wash pass")
+        self.assertEqual(lines[1], "- a stale wash pass")
         self.assertEqual(out.lint(text), [])
         self.assertNotIn("WARNING", text)
 

@@ -3,9 +3,11 @@
 One home for how taxjson prints to people: the wrap width, prose
 paragraphs and `- ` lists with a hanging indent, aligned `label:  value`
 blocks, tables that fit the width, and the message labels with a
-one-line headline and indented detail lines: shown to a person,
-`Info:` / `Warning:` / `Error:` start the line (the must-act ATTENTION
-lines are shown as `Warning:`, their topic capitalised);
+headline and detail lines: shown to a person, `Info:` / `Warning:` /
+`Error:` start the line (the must-act ATTENTION lines are shown as
+`Warning:`, their topic capitalised), every later line of the message
+flush-left, and a message of more than one line followed by one blank
+line (show(): printed before whatever comes next, never at the end);
 captured for a program (width 0), the GNU `<prog>: note:` /
 `warning:` / `error:` bytes programs read are kept (label(), relabel()).
 
@@ -36,17 +38,20 @@ __all__ = [
     "attention", "error", "fail", "fit_table", "records", "kv_lines",
     "relpath", "Doc", "lint", "Verbatim", "unwrapped", "fmt_money", "fmt_qty",
     "printable", "shown", "label", "relabel", "labelled", "exit_text",
-    "LABELS", "console_lint", "CONSOLE_LINE_RE",
+    "LABELS", "console_lint", "CONSOLE_LINE_RE", "show", "show_blocks",
+    "join_blocks", "settle", "settling_streams", "real_stream",
 ]
 
-# Prose wraps here when stdout is not a terminal (a pipe, a file, a test)
-# and at most here on a terminal.
-WIDTH = 100
+# Prose wraps here when stdout is not a terminal (a pipe, a file, a test).
+WIDTH = 120
+# On a terminal it wraps at the terminal's width, at most this.
+MAX_WIDTH = 160
 # Never wrap narrower than this, whatever the terminal says.
 MIN_WIDTH = 40
-# The hanging indent of a message's continuation and detail lines (the
-# run's DIAGNOSTICS collector keeps a marker line plus the indented lines
-# that follow it).
+# The hanging indent of a captured message's continuation and detail
+# lines (width 0: the run's DIAGNOSTICS collector keeps a marker line
+# plus the indented lines that follow it) and of a per-record table
+# layout. Shown to a person, a message's later lines are flush-left.
 DETAIL_INDENT = "  "
 
 
@@ -73,7 +78,8 @@ def unwrapped():
 def width(stream=None) -> int:
     """The wrap width for `stream` (stdout by default): 0 (never wrap)
     inside unwrapped(); TAXJSON_WIDTH when set (0 = never wrap); else
-    min(terminal width, 100) on a terminal, else 100."""
+    the terminal's width on a terminal (at most MAX_WIDTH, 160; at
+    least MIN_WIDTH, 40), else WIDTH (120)."""
     if _UNWRAPPED:
         return 0
     env = os.environ.get("TAXJSON_WIDTH", "").strip()
@@ -94,7 +100,7 @@ def width(stream=None) -> int:
     if not tty:
         return WIDTH
     cols = shutil.get_terminal_size((WIDTH, 24)).columns
-    return max(MIN_WIDTH, min(cols, WIDTH))
+    return max(MIN_WIDTH, min(cols, MAX_WIDTH))
 
 
 # Control characters other than newline and tab: C0, DEL and C1. Text
@@ -317,17 +323,22 @@ def labelled(text: str, stream=None, *, source: bool = False) -> str:
 def message(kind: str, text: str, *, prog: Optional[str] = None,
             details: Iterable[str] = (), width_: Optional[int] = None,
             stream=None) -> List[str]:
-    """A diagnostic as lines: the label and a one-line headline (wrapped
-    with a two-space hanging indent), then each detail as its own
-    indented paragraph. `kind`: note | warning | attention (the run's
+    """A diagnostic as lines: the label and a headline, then each detail
+    as its own paragraph. `kind`: note | warning | attention (the run's
     ATTENTION channel) | error.
 
     Shown to a person (width > 0) the line starts with the label —
     `Info: ` / `Warning: ` (ATTENTION too, its topic capitalised) /
-    `Error: ` — every later line is indented exactly two spaces, and
-    `prog` is not shown (it is the command the person ran). Captured for
+    `Error: ` — every later line (the headline's wrap, a detail, a `- `
+    item and its wrapped lines) starts at column 0, and `prog` is not
+    shown (it is the command the person ran). Printed with show(), a
+    message of more than one line is followed by one blank line. A
+    relayed captured line in a detail (`<prog>: error: ...`) is shown
+    with its label first, as a message of its own (a blank line before
+    it when the message so far spans more than one line). Captured for
     a program (width 0) it is `[<prog>: ]<kind>: <headline>`, lower
-    case, the bytes the run and the checklist read (label()).
+    case, the details indented two spaces — the bytes the run and the
+    checklist read (label()).
 
     Keep the headline short and complete — what happened, to what — and
     put the why and the fix in `details`: a reader (and a grep for the
@@ -339,36 +350,217 @@ def message(kind: str, text: str, *, prog: Optional[str] = None,
     head = LABELS[kind] if w > 0 else \
         (f"{prog}: " if prog else "") + _KINDS[kind]
     text = str(text).strip()
-    if w > 0 and kind == "attention":
+    if w <= 0:
+        # Captured: the bytes programs read, as they always were (the
+        # details indented two spaces, a `- ` item hanging under its
+        # text).
+        out = wrap(head + text, w, "", DETAIL_INDENT, stream)
+        for d in details:
+            if d is None:
+                continue
+            d = str(d).strip()
+            hang = DETAIL_INDENT + ("  " if d.startswith("- ") else "")
+            out.extend(wrap(d, w, DETAIL_INDENT, hang, stream))
+        return out
+    if kind == "attention":
         text = shown_topic(text)
-    out = wrap(head + text, w, "", DETAIL_INDENT, stream)
+    # Shown to a person: every line after the label's is flush-left.
+    out = []
+    for part in (head + text).split("\n"):
+        if part.strip():
+            out.extend(wrap(part.strip(), w, "", "", stream))
     for d in details:
         if d is None:
             continue
-        d = str(d).strip()
-        if w <= 0:
-            # Captured: the bytes programs read, as they always were (a
-            # `- ` item hangs under its text).
-            hang = DETAIL_INDENT + ("  " if d.startswith("- ") else "")
-            out.extend(wrap(d, w, DETAIL_INDENT, hang, stream))
-            continue
-        # Shown to a person: every line after the headline is a
-        # continuation, indented exactly two spaces (a `- ` item and its
-        # wrapped lines too); a relayed captured line (a stage's
-        # `<prog>: error: ...`) is shown with its label first.
-        for x in d.split("\n"):
+        for x in str(d).strip().split("\n"):
             x = relabel(x).strip()
-            if x:
-                out.extend(wrap(x, w, DETAIL_INDENT, DETAIL_INDENT, stream))
+            if not x:
+                continue
+            if _SHOWN_LABEL_RE.match(x) and _entry_len(out) > 1:
+                out.append("")
+            out.extend(wrap(x, w, "", "", stream))
     return out
+
+
+# A line a person is shown that starts a message.
+_SHOWN_LABEL_RE = re.compile(r"(?:Info|Warning|Error): ")
+
+
+def _entry_len(lines: Sequence[str]) -> int:
+    """How many lines the last entry of `lines` spans (after its last
+    blank line)."""
+    n = 0
+    for ln in reversed(lines):
+        if not ln.strip():
+            break
+        n += 1
+    return n
+
+
+# ------------------------------------------------- one blank line after
+# A message (or a wrapped step) that spans more than one line is
+# followed by exactly one blank line on the console (docs/output-style.md,
+# The run's console). The blank line is owed, not printed: it is printed
+# before the next text written to the same destination (show(), or any
+# write through a settling_streams() stream), so the output never ends
+# with a blank line, and a stream redirected on its own (`2>err.txt`)
+# keeps its own messages apart without a blank line from the other one.
+# stdout and stderr share a destination when they are the same terminal,
+# pipe or file (`2>&1`): {destination: weakref to the stream}.
+_OWED: dict = {}
+
+
+def real_stream(stream):
+    """The stream a settling_streams() proxy writes to (else `stream`)."""
+    return getattr(stream, "_tj_inner", stream)
+
+
+def _dest(stream):
+    s = real_stream(stream)
+    try:
+        st = os.fstat(s.fileno())
+        return ("fd", st.st_dev, st.st_ino)
+    except Exception:                               # noqa: BLE001
+        # No file descriptor (a StringIO: io.UnsupportedOperation), a
+        # closed stream: the object itself.
+        return ("obj", id(s))
+
+
+def _owe(stream) -> None:
+    import weakref
+    s = real_stream(stream)
+    try:
+        ref = weakref.ref(s)
+    except TypeError:
+        ref = (lambda s=s: s)
+    _OWED[_dest(s)] = ref
+
+
+def _unowe(stream) -> None:
+    if _OWED:
+        _OWED.pop(_dest(stream), None)
+
+
+def _take_owed(stream) -> bool:
+    """True (and the debt cleared) when `stream`'s destination owes a
+    blank line."""
+    if not _OWED:
+        return False
+    key = _dest(stream)
+    ref = _OWED.pop(key, None)
+    if ref is None:
+        return False
+    if key[0] == "obj" and ref() is not real_stream(stream):
+        return False        # another object that reused the id
+    return True
+
+
+def settle(stream=None) -> None:
+    """Print the blank line `stream`'s destination owes (stdout by
+    default), if any — before text a program prints there by other
+    means (an exit message the interpreter prints)."""
+    stream = sys.stdout if stream is None else stream
+    if _take_owed(stream):
+        try:
+            real_stream(stream).write("\n")
+        except (ValueError, OSError):
+            pass
+
+
+def join_blocks(blocks: Iterable[Sequence[str]]) -> List[str]:
+    """Entries (each a list of lines: a message, a step) as one list of
+    lines, one blank line after every entry of more than one line —
+    none after the last."""
+    out: List[str] = []
+    last = 0
+    for b in blocks:
+        b = list(b)
+        if not b:
+            continue
+        if last > 1:
+            out.append("")
+        out.extend(b)
+        last = _entry_len(b)
+    return out
+
+
+def show(lines: Sequence[str], file=None, *, cont: bool = False) -> None:
+    """Print one entry a person reads (a message, a step: its lines) to
+    `file` (stderr by default): first the blank line the destination
+    owes (settle), then the lines; an entry of more than one line owes
+    one blank line before the next text there. `cont`: the lines
+    continue the entry printed last (a captured continuation line the
+    run echoes): no blank line between, and the entry now spans more
+    than one line. Captured for a program (width 0) the lines are
+    printed as they are, owing nothing."""
+    file = sys.stderr if file is None else file
+    lines = list(lines)
+    if not lines:
+        return
+    if width(file) <= 0:
+        for ln in lines:
+            print(ln, file=file)
+        return
+    if cont:
+        _unowe(file)
+    else:
+        settle(file)
+    for ln in lines:
+        print(ln, file=file)
+    if cont or _entry_len(lines) > 1:
+        _owe(file)
+
+
+def show_blocks(blocks: Iterable[Sequence[str]], file=None) -> None:
+    """show() each entry in turn."""
+    for b in blocks:
+        show(b, file)
+
+
+class _Settling:
+    """A text stream that writes the blank line its destination owes
+    (show()) before the next text written to it. A write that is itself
+    only newlines (a program's own blank line) pays the debt instead."""
+
+    def __init__(self, inner):
+        self._tj_inner = inner
+
+    def write(self, s):
+        if _OWED and s and _take_owed(self._tj_inner):
+            if s.strip("\n"):
+                self._tj_inner.write("\n")
+        return self._tj_inner.write(s)
+
+    def __getattr__(self, name):
+        return getattr(self._tj_inner, name)
+
+
+@contextlib.contextmanager
+def settling_streams():
+    """Within it, sys.stdout and sys.stderr write the blank line a
+    multi-line message owes (show()) before whatever any code prints
+    next to the same destination — a report's raw print() included.
+    The top of a process only (lib/cli_diag.run_top_level)."""
+    saved = sys.stdout, sys.stderr
+    if not isinstance(sys.stdout, _Settling):
+        sys.stdout = _Settling(sys.stdout)
+    if not isinstance(sys.stderr, _Settling):
+        sys.stderr = _Settling(sys.stderr)
+    try:
+        yield
+    finally:
+        # (a caller that replaced them meanwhile — redirect_stdout —
+        # restored its own; put back the ones found at entry)
+        sys.stdout, sys.stderr = saved
 
 
 def emit(kind: str, text: str, *, prog: Optional[str] = None,
          details: Iterable[str] = (), file=None) -> None:
-    """Print message(...) to `file` (stderr by default)."""
+    """Print message(...) to `file` (stderr by default), show()n: one
+    blank line after it when it spans more than one line."""
     file = sys.stderr if file is None else file
-    for ln in message(kind, text, prog=prog, details=details, stream=file):
-        print(ln, file=file)
+    show(message(kind, text, prog=prog, details=details, stream=file),
+         file)
 
 
 def note(text: str, *, prog: Optional[str] = None,
@@ -430,8 +622,7 @@ def fail(text: str, *, prog: Optional[str] = None,
                     stream=sys.stderr)
     if code == 1:
         raise SystemExit("\n".join(lines))
-    for ln in lines:
-        print(ln, file=sys.stderr)
+    show(lines, sys.stderr)
     raise SystemExit(code)
 
 
@@ -613,8 +804,13 @@ class Doc:
 
     def message(self, kind: str, text: str, details=(),
                 prog: Optional[str] = None) -> "Doc":
-        self._lines.extend(message(kind, text, prog=prog, details=details,
-                                   width_=self.w))
+        lines = message(kind, text, prog=prog, details=details,
+                        width_=self.w)
+        self._lines.extend(lines)
+        if self.w > 0 and _entry_len(lines) > 1:
+            # Shown: one blank line after a message of more than one
+            # line (lines() drops it at the end, never doubles it).
+            self._lines.append("")
         return self
 
     def lines(self) -> List[str]:
@@ -635,6 +831,8 @@ class Doc:
 
     def print(self, file=None) -> None:
         file = sys.stdout if file is None else file
+        if self.w > 0:
+            settle(file)
         for ln in self.lines():
             print(ln, file=file)
 
@@ -690,25 +888,46 @@ def lint(text: str, width_: int = WIDTH,
     return probs
 
 
-# A line of a console a person reads (`taxjson run`): a step (`==> `), a
-# message label, or a two-space continuation of the line above.
-CONSOLE_LINE_RE = re.compile(r"(?:==> |Info: |Warning: |Error: |  \S)")
+# A line of a console a person reads (`taxjson run`, a command's
+# messages) that starts an entry: a step (`==> `) or a message label.
+# Any other non-blank line continues the entry above it, flush-left.
+CONSOLE_LINE_RE = re.compile(r"(?:==> |Info: |Warning: |Error: )")
 
 
 def console_lint(text: str, width_: int = WIDTH,
                  allow: Iterable[str] = ()) -> List[str]:
     """lint() plus the console rule (docs/output-style.md, The run's
-    console): every line starts with `==> `, `Info: `, `Warning: `,
-    `Error: ` or two spaces and a non-space; no blank line; no
-    `ATTENTION:` word and no `(content: ...)` detection detail. []
-    when clean."""
+    console): every non-blank line starts with `==> `, `Info: `,
+    `Warning: ` or `Error: `, or continues the entry (step or message)
+    on the line directly above, flush-left; a blank line comes only
+    after an entry of more than one line, and such an entry is always
+    followed by one (unless it ends the text); no `ATTENTION:` word and
+    no `(content: ...)` detection detail. [] when clean."""
     probs = lint(text, width_, allow)
-    for i, ln in enumerate(text.split("\n"), 1):
-        if ln == "" and i == len(text.split("\n")):
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+    entry = 0                   # lines of the entry so far (0: none)
+    for i, ln in enumerate(lines, 1):
+        if not ln.strip():
+            if entry < 2:
+                probs.append(f"line {i}: blank line not after a message "
+                             f"of more than one line")
+            entry = 0
             continue
-        if not CONSOLE_LINE_RE.match(ln):
-            probs.append(f"line {i}: not a step, label or continuation: "
-                         f"{ln[:60]!r}")
+        if CONSOLE_LINE_RE.match(ln):
+            if entry > 1:
+                probs.append(f"line {i}: no blank line after the "
+                             f"{entry}-line message above")
+            entry = 1
+        else:
+            if not entry:
+                probs.append(f"line {i}: not a step, label or "
+                             f"continuation: {ln[:60]!r}")
+            elif ln[:1].isspace():
+                probs.append(f"line {i}: indented continuation: "
+                             f"{ln[:60]!r}")
+            entry += 1
         if "ATTENTION:" in ln:
             probs.append(f"line {i}: ATTENTION word shown: {ln[:60]}")
         if "(content: " in ln:
