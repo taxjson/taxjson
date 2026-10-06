@@ -2066,6 +2066,65 @@ def group_inputs_detailed(account_dir: Path):
 # Accounts whose per-file detection lines this `taxjson run` printed
 # already (a crypto account is staged twice: parse first, then books).
 _DETECTION_SHOWN: set = set()
+# The broker parses this `taxjson run` made, by output: (what the parse
+# read — its command and the bytes of every file it reads; what it
+# wrote — its outputs as left on disk). An account read in the first
+# pass (transfers / sends between your accounts) is staged again for its
+# books: the same command over the same bytes is the same parse, so the
+# books' pass takes it instead of parsing (and printing its messages)
+# a second time (_reused_parse).
+_PARSED_THIS_RUN: Dict[Path, Tuple[Any, Any]] = {}
+# Run-console messages a stage shows once per run although the account
+# is staged twice (first pass, then books): their keys.
+_SHOWN_THIS_RUN: set = set()
+
+
+def _say_once(key: Any, kind: str, text: str, *details: str,
+              **kw: Any) -> None:
+    """_say, unless this run already showed the message keyed `key`."""
+    if key in _SHOWN_THIS_RUN:
+        return
+    _SHOWN_THIS_RUN.add(key)
+    _say(kind, text, *details, **kw)
+
+
+def _parse_reads(cmd: List[str], acct_dir: Path, reads: List[Path]
+                 ) -> Tuple[Any, ...]:
+    """What a broker parse reads: its command, and the name, size and
+    SHA-256 of every file it opens — `reads` (its inputs, maps, rates)
+    and every CSV and mapping file of the account's folder (a parser
+    reads a sibling export: a Kraken ledger beside its trades)."""
+    files = list(reads)
+    try:
+        files += [p for p in acct_dir.iterdir()
+                  if p.suffix.lower() in (".csv", ".toml")]
+    except OSError:
+        pass
+    return (tuple(cmd), _inputs_fingerprint(
+        [p for p in files if p.is_file()]))
+
+
+def _parse_outputs(out: Path) -> Tuple[Any, ...]:
+    """A broker parse's outputs as they are on disk: the books, its
+    .diag, its transfers sidecar, its overrides log — present or not,
+    each by inode, size and mtime."""
+    state = []
+    for p in (out, out.with_name(out.name + ".diag"),
+              out.with_name(out.stem + "_transfers.json"),
+              out.with_name(out.stem + ".overrides")):
+        try:
+            st = p.stat()
+            state.append((p.name, st.st_ino, st.st_size, st.st_mtime_ns))
+        except OSError:
+            state.append((p.name, None))
+    return tuple(state)
+
+
+def _reused_parse(out: Path, reads: Tuple[Any, ...]) -> bool:
+    """True when this run already made the parse `out` from the same
+    `reads` (_parse_reads) and its outputs are as it left them."""
+    seen = _PARSED_THIS_RUN.get(out)
+    return seen is not None and seen == (reads, _parse_outputs(out))
 
 
 def _report_detection(name: str, found, cache: Path) -> None:
@@ -3082,8 +3141,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     first so each one's sends pair against current arrivals."""
     acct_dir = inputs_dir / name
     if not acct_dir.exists():
-        _say("warning", f"no inputs dir for account '{name}' "
-             f"(inputs/{name}); skipping", prog=_PROG)
+        # Once per run: the first pass stages the account too.
+        _say_once(("no-dir", name), "warning",
+                  f"no inputs dir for account '{name}' (inputs/{name}); "
+                  f"skipping", prog=_PROG)
         return None
 
     base_currency = settings["base_currency"]
@@ -3113,8 +3174,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 f"are still counted by sum/fees/reports — delete "
                 f"work/{name}_* and reports/{name}* if the account is "
                 f"truly gone.")
-        _say("warning", f"no CSVs or .tt files in inputs/{name}; "
-             f"skipping account '{name}'", *_details, prog=_PROG)
+        _say_once(("no-inputs", name),
+                  "warning", f"no CSVs or .tt files in inputs/{name}; "
+                  f"skipping account '{name}'", *_details, prog=_PROG)
         return None
     # Path-selection cross-check (KNOWN_ISSUES "crypto-vs-equity path"):
     # the pipeline split keys on the account's `crypto` flag alone, so a
@@ -3268,11 +3330,6 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 if _m.exists():
                     deps.append(_m)
         if force or needs_rebuild(out, *deps):
-            from taxjson.lib.brokerages.detect import DISPLAY_NAMES
-            _step(f"Reading {len(csvs)} "
-                  + (f"{DISPLAY_NAMES.get(broker, broker)} "
-                     if len(grouped) > 1 else "")
-                  + ("file" if len(csvs) == 1 else "files"))
             # --strict: a schema ERROR (negative trade net, zero split
             # ratio, a notional that contradicts the row's declared
             # contract multiplier ...) stops the run instead of
@@ -3309,11 +3366,6 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             _sidecar = out.with_name(out.stem + "_transfers.json")
             if include_transfers:
                 cmd.append("--transfers")
-                # transfers=false -> true toggle: a stale sidecar
-                # would be consumed ALONGSIDE the now-in-book rows
-                # (double-counted by the transfers view and the
-                # holdings evidence flips) — round-five audit.
-                _sidecar.unlink(missing_ok=True)
             else:
                 # Custody evidence sidecar: excluded TRANSFER rows are
                 # kept queryable (`taxjson transfers`) instead of
@@ -3324,16 +3376,39 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 cmd += ["--security-overrides", str(security_overrides),
                         "--override-log",
                         str(out.with_name(out.stem + ".overrides"))]
-            else:
-                out.with_name(out.stem + ".overrides").unlink(
-                    missing_ok=True)
             cmd += [str(p) for p in csvs]
-            run_to_file(cmd, out)
-            # Surface per-file transaction counts (and any 0-tx
-            # warnings) inline so the user can sanity-check at a
-            # glance that each CSV contributed the expected number
-            # of rows.
-            echo_parse_stats(out, csvs)
+            # The first pass (transfers / sends between your accounts)
+            # parsed this account in this run: the same command over
+            # the same bytes is the same parse — taken as it is, its
+            # messages already shown under the first pass.
+            _reads = _parse_reads(
+                cmd, acct_dir,
+                [d for d in deps if d != src_manifest]
+                + ([Path(rates)] if rates else [])
+                + ([security_overrides] if security_overrides else []))
+            if not _reused_parse(out, _reads):
+                from taxjson.lib.brokerages.detect import DISPLAY_NAMES
+                _step(f"Reading {len(csvs)} "
+                      + (f"{DISPLAY_NAMES.get(broker, broker)} "
+                         if len(grouped) > 1 else "")
+                      + ("file" if len(csvs) == 1 else "files"))
+                if include_transfers:
+                    # transfers=false -> true toggle: a stale sidecar
+                    # would be consumed ALONGSIDE the now-in-book rows
+                    # (double-counted by the transfers view and the
+                    # holdings evidence flips) — round-five audit.
+                    _sidecar.unlink(missing_ok=True)
+                if not security_overrides:
+                    out.with_name(out.stem + ".overrides").unlink(
+                        missing_ok=True)
+                _PARSED_THIS_RUN.pop(out, None)
+                run_to_file(cmd, out)
+                _PARSED_THIS_RUN[out] = (_reads, _parse_outputs(out))
+                # Surface per-file transaction counts (and any 0-tx
+                # warnings) inline so the user can sanity-check at a
+                # glance that each CSV contributed the expected number
+                # of rows.
+                echo_parse_stats(out, csvs)
         # Outside the rebuild branch on purpose: `run --strict --fast`
         # on a cached parse must hit the same gate.
         if strict and unbooked_lines(out):
@@ -3370,11 +3445,13 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                  "coinbase/kraken route it to a crypto parser), or remove "
                  "it from inputs/.")
         for _f in _empty_files:
-            _say("warning", f"{name}: inputs/{name}/{_f} parsed to 0 "
-                 f"transactions — NONE of its rows are in the books",
-                 "Check the file's header/format (or its name: cb_/kr_/"
-                 "coinbase/kraken route it to a crypto parser); `run "
-                 "--strict` refuses this.", prog=_PROG)
+            # Once per run: the first pass reads the account too.
+            _say_once(("empty", name, _f), "warning",
+                      f"{name}: inputs/{name}/{_f} parsed to 0 "
+                      f"transactions — NONE of its rows are in the books",
+                      "Check the file's header/format (or its name: cb_/"
+                      "kr_/coinbase/kraken route it to a crypto parser); "
+                      "`run --strict` refuses this.", prog=_PROG)
 
     if parse_only:
         # The transfer evidence of an export REMOVED from inputs/ must
@@ -3847,10 +3924,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     wash_flags = _wash_flags(is_taxable, is_crypto, country)
     cmd += wash_flags
     if "--no-wash" in wash_flags:
-        _say("note", "wash-sale rule NOT applied to crypto",
-             "The IRS treats crypto as property, not a security (§1091 "
-             "does not reach it); losses are allowed in full.",
-             indent="  ", file=sys.stdout)
+        # A rule of the run, not of the account: said once.
+        _say_once("no-crypto-wash", "note",
+                  "wash-sale rule NOT applied to crypto",
+                  "The IRS treats crypto as property, not a security "
+                  "(§1091 does not reach it); losses are allowed in full.",
+                  indent="  ", file=sys.stdout)
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
     cmd += _locked_year_flags(cache.parent, settings)
@@ -5232,6 +5311,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     # feed a filing decision. `--fast` opts back into the mtime cache.
     args.force = not getattr(args, "fast", False)
     _DETECTION_SHOWN.clear()            # each run lists its inputs once
+    _PARSED_THIS_RUN.clear()
+    _SHOWN_THIS_RUN.clear()
     root = Path(args.dir).resolve()
     cfg = load_config(root)
     # Register the config path globally so every `needs_rebuild` call
