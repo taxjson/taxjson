@@ -215,11 +215,20 @@ def run_top_level(prog, fn, *a, interrupt_note="", **kw):
     run in-process by another: its Ctrl-C must stop the whole run."""
     tolerant_stdout()
     labelled_usage_errors()
+    from taxjson.lib import out as _out
     try:
-        r = fn(*a, **kw)
+        # A message of more than one line shown to a person owes one
+        # blank line before whatever is printed next, a raw print()
+        # included (lib/out.show, docs/output-style.md).
+        with _out.settling_streams():
+            r = fn(*a, **kw)
         _flush_stdout()
         return r
-    except SystemExit:
+    except SystemExit as e:
+        if e.code is not None and not isinstance(e.code, int):
+            # The interpreter prints the exit text to stderr: after the
+            # blank line a message there owes.
+            _out.settle(sys.stderr)
         _flush_stdout()
         raise
     except BrokenPipeError:

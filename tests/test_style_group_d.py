@@ -6,7 +6,7 @@ width (dropping the least important columns first), and the re-importable
 (tests/_style.py) only."""
 import unittest
 
-from _style import assert_styled, project
+from _style import assert_console, assert_styled, project
 
 # The commands converted here (their stdout is in
 # test_style_smoke.TestConvertedCommands.CASES).
@@ -27,11 +27,9 @@ class TestDiagnostics(unittest.TestCase):
                     r = p.run(*args)
                     self.assertEqual(r.returncode, 0, r.stderr)
                     assert_styled(self, r.stderr)
-                    for ln in r.stderr.splitlines():
-                        if ln and not ln.startswith(" "):
-                            # The label starts the line, no program name.
-                            self.assertRegex(
-                                ln, r"^(Info|Warning|Error): ", ln)
+                    # The label starts each message, no program name;
+                    # its later lines continue it flush-left.
+                    assert_console(self, r.stderr)
 
     def test_note_is_a_headline_with_detail(self):
         r = project("canada").run("gains")
@@ -39,7 +37,7 @@ class TestDiagnostics(unittest.TestCase):
         lines = r.stderr.splitlines()
         i = next(i for i, ln in enumerate(lines)
                  if ln.startswith("Info: crypto account"))
-        self.assertTrue(lines[i + 1].startswith("  Its gains are in "))
+        self.assertTrue(lines[i + 1].startswith("Its gains are in "))
 
     def test_errors_start_with_the_label(self):
         p = project("usa")
@@ -163,7 +161,7 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
         self.assertEqual(text.count("Info:"), 1, text)
         self.assertTrue(text.startswith("Info: 2 option root(s) whose "
                                         "export does not state"), text)
-        self.assertIn("\n  QZA, QZB.\n", text)
+        self.assertIn("\nQZA, QZB.\n", text)
         self.assertIn("`MULT <ROOT> N`", text)
         assert_styled(self, text)
 

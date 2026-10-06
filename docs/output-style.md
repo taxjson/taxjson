@@ -6,9 +6,10 @@ tests check the result with `out.lint()`.
 
 ## Width
 
-- Prose wraps at **100 columns** when the output is not a terminal (a
-  pipe, a file, a test), and at **min(terminal width, 100)** on a
-  terminal (never narrower than 40).
+- On a terminal, prose wraps at the **terminal's full width, at most
+  160 columns** (never narrower than 40). When the output is not a
+  terminal (a pipe, a file, a test) it wraps at **120 columns**
+  (`out.WIDTH`; `out.MAX_WIDTH` is the terminal cap).
 - `TAXJSON_WIDTH=N` sets the width; `TAXJSON_WIDTH=0` turns wrapping off.
 - Words, hyphenated ids and `` `code spans` `` are never broken. A command
   the reader is meant to copy is printed on its own line and never
@@ -46,8 +47,9 @@ Captured output (width 0) keeps its bytes.
   line first or last.
 - Inside a block, sub-headings are sentence case (`Pool history (ACB
   trace)`), indented under their block.
-- **Lists** are `- ` items with a hanging indent: the second line starts
-  under the text, not under the dash.
+- **Lists** in a document are `- ` items with a hanging indent: the
+  second line starts under the text, not under the dash. (Inside a
+  message they are flush-left: see Messages.)
 - **Key/value blocks** align their values: `label:  value`, the labels
   padded to the longest; a long value wraps under itself.
 - The **last line** of a listing that asks for action says what to do, in
@@ -73,14 +75,28 @@ position:`, `income year:` is `Income year:` ...).
 
 ```
 Warning: Short position: ABC.TO (margin) goes short on 2025-03-04
-  The books sell 10 more than they hold. ...
+The books sell 10 more than they hold. ...
+
 Error: no gains files in work/
-  Run `taxjson run` first.
+Run `taxjson run` first.
 ```
 
-Shown to a person, every line after a message's headline is a
-continuation indented **exactly two spaces** — a detail, a `- ` item and
-its wrapped lines alike (`out.message`, `stage_msg.console_lines`).
+Shown to a person, every line after a message's label line continues
+it **flush-left** — the headline's wrap, a detail, a `- ` item and its
+wrapped lines alike: no indentation (`out.message`,
+`stage_msg.console_lines`). A message that takes **more than one line
+is followed by exactly one blank line**; a one-line message, and a
+`==> ` step, by none. The blank line is *owed*, not printed:
+`out.show(lines, file)` prints a message and, when it spans more than
+one line, the next text written to the same destination (a terminal, a
+pipe, a file — stdout and stderr together when they go to one place,
+apart when they do not) starts with the blank line. So the output never
+ends with a blank line, there are never two in a row, and
+`tjs run 2>err.txt` keeps each file clean on its own. At the top of a
+process (`cli_diag.run_top_level`) `out.settling_streams()` makes every
+write — a report's raw `print()` too — pay the debt first; a program's
+own blank line pays it instead of adding a second. Several messages
+built as lines at once: `out.join_blocks` / `out.show_blocks`.
 
 **The source.** A message never starts with a program name. The
 command the person typed is not named at all (`Warning: ...`, not
@@ -104,9 +120,10 @@ its GNU bytes, `[<prog>: ]note: / warning: / warning: ATTENTION: /
 error: ...` lower case — never changed by a style pass (see below).
 
 A long message is a **one-line headline** (what happened, to what) and
-**indented detail lines** (why, and the fix) — not a 400-column line.
-The headline carries the words a reader (or a grep for the marker) needs:
-the detail lines are its continuation, indented two spaces.
+**detail lines** (why, and the fix) — not a 400-column line. The
+headline carries the words a reader (or a grep for the marker) needs:
+the detail lines are its continuation, flush-left under it when shown
+(two spaces in when captured, width 0).
 
 Retired at the start of a line a person sees: the lower-case `note:`,
 `warning:`, `error:` (the captured form), `NOTE:`, `Note:`, `WARNING:`,
@@ -133,10 +150,10 @@ The shared helpers speak it:
 
 - `taxjson_run._die(headline, *details)` (exit 1) and
   `_die_input(headline, *details)` (exit 2) print `Error: <headline>`
-  and the details indented (`taxjson <cmd>: error: <headline>`
-  captured). An old one-string call still works (the string wraps under
-  its label); when you touch one, split it into a short headline and
-  details.
+  and the details under it, flush-left (`taxjson <cmd>: error:
+  <headline>` and the details two spaces in, captured). An old
+  one-string call still works (the string wraps under its label); when
+  you touch one, split it into a short headline and details.
 - `lib/cli_diag.warn / note / error(prog, msg, details=())` print
   `Warning: ...` / `Info: ...` / `Error: ...` the same way.
 - `lib/stage_msg.say(kind, headline, details, legacy=...)` and
@@ -154,21 +171,42 @@ The shared helpers speak it:
 ## The run's console
 
 What `taxjson run` prints for a person (width > 0, stdout and stderr) is
-read by someone with little attention to spare. Every line starts with
-exactly one of:
+read by someone with little attention to spare. Every non-blank line
+starts with exactly one of:
 
 | start | meaning |
 | --- | --- |
 | `==> ` | a step the run is doing (`_step` in taxjson_run.py) |
 | `Info: ` / `Warning: ` / `Error: ` | a message, the label at column 0 |
-| two spaces | the continuation of the line above |
+| anything else, flush-left | the continuation of the entry (step or message) on the line directly above |
 
-No other indentation, no bare line, no blank line (not even between
-accounts), no lower-case label, no `ATTENTION:` word, no stage program
-name (`taxjson-gains:` — the stage is an implementation detail; its
-captured line in work/ keeps it), no `(content: ...)` detection detail
-(work/`<acct>`_detect.diag keeps it). `out.console_lint(text)` checks it;
-tests/test_run_console.py runs it on the style projects.
+A blank line comes **only after an entry of more than one line**, and
+such an entry always has one after it (unless it is the last line): one
+blank line, never two, never first or last. No indentation, no bare line
+(a continuation with no entry above it), no lower-case label, no
+`ATTENTION:` word, no stage program name (`taxjson-gains:` — the stage
+is an implementation detail; its captured line in work/ keeps it), no
+`(content: ...)` detection detail (work/`<acct>`_detect.diag keeps it).
+For example:
+
+```
+==> Reading 2 files
+Warning: ib_demo.csv: the statement has no Cash Report
+Parsed money is NOT reconciled against IB's own totals. Include the Cash Report section in the export (Flex: add it to
+the query).
+
+Info: ib_demo.csv: 9 tax objects
+==> Processing corporate actions
+```
+
+`out.console_lint(text)` checks it (a continuation is valid only
+directly under an entry line or another continuation; a blank line
+only after an entry of more than one line);
+tests/test_run_console.py runs it on the style projects, on stdout and
+stderr apart and merged (`2>&1`). The same rule holds for any command's
+stderr messages (`tests/_style.assert_console`). The other commands'
+progress lines are steps too (`taxjson checklist`: `==> Checking sanity
+(taxjson sanity)`).
 
 A message an engine pass says is shown once per run, whichever pass
 says it (the account's gains, the blended pass, a failed stage's echo):
@@ -182,8 +220,11 @@ keeps its bytes. The display form is made at display time —
 `out.relabel` (the label, ATTENTION dropped, the topic capitalised),
 `stage_msg.reword` (a table of the frequent wordy stage notes, keyed on
 their captured text, in a short display form; a line it does not match
-is shown as it is), `stage_msg.console_lines` (the two-space
-continuations, the wrap). A reworded message keeps its meaning and every
+is shown as it is), `stage_msg.console_lines` (the flush-left
+continuations, the wrap; `stage_msg.is_continuation` tells a captured
+continuation line from a new message, so the run's echo prints it with
+`out.show(..., cont=True)` and the blank line falls after the whole
+message). A reworded message keeps its meaning and every
 action the reader must take.
 
 The steps, in run order (an account's steps repeat per account; a step
@@ -276,8 +317,9 @@ bytes alone:
 
 ## Tests
 
-Pin the layout, not the wording, with `out.lint(text, width_=100,
-allow=(...))`: no prose line over the width (table rows and lines
+Pin the layout, not the wording, with `out.lint(text, width_=120,
+allow=(...))` (the default width is `out.WIDTH`, the piped width): no
+prose line over the width (table rows and lines
 containing an `allow` substring — a command to copy — are exempt), no
 blank-line runs, no leading/trailing blank line, no retired prefix. Pin
 the meaning with the phrases a reader needs; a phrase may wrap, so compare
@@ -290,12 +332,14 @@ against `" ".join(text.split())` when it is long.
   style projects (`tests/fixtures/style/{canada,usa}`: options,
   superficial losses, a spin-off, crypto with a send, dividends,
   transfers, a sale with no purchase, slips, holdings, a price cache) once
-  per process and runs a command as a pipe would (width 100):
+  per process and runs a command as a pipe would (width 120,
+  `out.WIDTH`; `_style.PIPE_WIDTH`):
 
   ```python
   from _style import project, assert_styled
   r = project("canada").run("harvest", "--no-ibkr", "--options")
-  assert_styled(self, r.stdout)              # out.lint at width 100
+  assert_styled(self, r.stdout)              # out.lint at width 120
+  assert_console(self, r.stderr)             # out.console_lint
   ```
 
   `project(country, pending=True)` stops at the pending spin-off

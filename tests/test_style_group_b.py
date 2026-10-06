@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from _style import Project, assert_styled, project
+from _style import Project, assert_console, assert_styled, project
 
 
 def _copy(country: str, extra_toml: str = "") -> Project:
@@ -101,8 +101,10 @@ class TestBothCountries(unittest.TestCase):
         lines = r.stderr.splitlines()
         self.assertTrue(lines[0].startswith("Warning: 2 "
                                             "position(s) sold"), r.stderr)
-        self.assertTrue(all(ln.startswith("  ") for ln in lines[1:]))
+        # Its details flush-left (docs/output-style.md, Messages).
+        self.assertTrue(all(not ln[:1].isspace() for ln in lines[1:]))
         assert_styled(self, r.stderr)
+        assert_console(self, r.stderr)
 
     def test_sum_return_block_fits(self):
         r = project("canada").run("sum")

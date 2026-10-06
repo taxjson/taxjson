@@ -11,6 +11,8 @@ from unittest import mock
 
 from tax_rules import rule
 
+from taxjson.lib import out
+
 from taxjson.bin.taxjson_instalments import (build, due_dates,
                                              interest_and_penalty,
                                              required_schedule)
@@ -219,8 +221,8 @@ class TestInstalmentsCli(unittest.TestCase):
             self.assertIn("2026-03-16", r.stdout)
             self.assertIn("INTEREST (offset method", r.stdout)
             for line in r.stdout.splitlines():
-                # The house width (docs/output-style.md).
-                self.assertLessEqual(len(line), 100, repr(line))
+                # The house width, piped (docs/output-style.md).
+                self.assertLessEqual(len(line), out.WIDTH, repr(line))
             rj = _cli(root, "instalments", "--json")
         doc = json.loads(rj.stdout)
         self.assertEqual(len(doc["required"]), 4)

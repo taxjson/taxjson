@@ -31,6 +31,18 @@
 - **taxjson.toml: the file header sits on `[settings]`, and a blank line
   separates `[settings]` from its first group**, so the table line stands apart
   from the data. `taxjson format` applies it to an existing file.
+- **Wider output.** On a terminal, text now wraps at the terminal's full
+  width, up to 160 columns (it was capped at 100); piped or redirected it
+  wraps at 120 (was 100). `TAXJSON_WIDTH` still sets the width, and 0 still
+  turns wrapping off. What the run writes to `work/` and `reports/` is
+  unchanged.
+- **Messages without indented continuation lines.** On the `taxjson run`
+  console and in every command's `Info:` / `Warning:` / `Error:` messages, a
+  message that wraps, its details and its `- ` items continue at the left
+  margin instead of two spaces in, and a message that takes more than one
+  line is followed by one blank line (a one-line message or a `==>` step is
+  not; the output never ends with a blank line). `taxjson checklist` shows
+  its progress as `==> Checking ...` steps.
 
 ### Added
 
