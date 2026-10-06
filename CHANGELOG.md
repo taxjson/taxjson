@@ -18,6 +18,26 @@
   what the checklist reads) messages keep the lower-case
   `taxjson <command>: warning: ...` form, and `--json` and exit codes do
   not change. docs/output-style.md states the rule.
+- **Questrade internal symbol codes are resolved from your other
+  exports.** A Questrade website export writes shares transferred in from
+  another broker under an internal code (`X000123`) on the transfer-in,
+  its dividends and later rows; each code was an ATTENTION line asking for
+  a ticker.map GLOBAL line. `taxjson run` now parses the other accounts
+  first and books every row of such a code under the ticker of the
+  transfer it arrived by (the other broker's transfer out of the same
+  quantity a few days earlier, whose security name matches), else of the
+  one listing in your books with the same name; the run says so in ONE
+  note per account with the evidence, and `taxjson transfers` lists the
+  codes. A code nothing identifies keeps its ATTENTION line, once per
+  code instead of once per file, with any near miss named. A ticker.map
+  line for the code still wins. Tax-logic `CA-ACB-CODES` /
+  `US-BASIS-CODES`.
+- **The run console names input files as they are on disk.** The
+  per-file detection lines, the parse counts and the "cannot detect
+  broker" message showed account-number-like parts of file names masked,
+  so two exports named after account numbers could read alike. The
+  saved `.diag` and `.sum` files keep masking them (Questrade's parse
+  warnings now do too: they named the file unmasked).
 - **Prose comments in taxjson.toml start with `##`.** `taxjson init` and
   `taxjson format` now write every prose comment line (the file header,
   the `## --- Project ---` group headings, each key's and table's

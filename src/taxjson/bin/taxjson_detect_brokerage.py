@@ -45,22 +45,23 @@ def detect_brokerage(file_path: Path) -> Optional[str]:
         return None
 
 
-def cannot_detect_message(det) -> str:
+def cannot_detect_message(det, shown=None) -> str:
     """The advice for a CSV no rule routes (shared with `taxjson run`):
     the header first, then a generic mapping, then the rename
-    fallback."""
-    from taxjson.lib.brokerages.base import shown_name
+    fallback. `shown`: how to name the file. The message goes to the
+    person's own terminal, so it names the file as it is on disk (the
+    path given, or the run's inputs/<account>/<file>) — a masked name
+    could not tell 55500001.csv from 55500001_2.csv; saved diagnostics
+    (.diag, .sum) mask account-number-like parts instead (shown_name)."""
     near = f" Closest: {det.hint}." if det.hint else ""
-    # The file's name masked like every other diagnostic: a broker's
-    # default download name carries the account id (security review
-    # L4).
-    name = shown_name(det.path)
+    name = shown if shown is not None else str(det.path)
+    tail = Path(name).name
     return (f"cannot detect broker for {name}.{near} Check the header "
             f"first: the file must carry its export's own header row "
             f"(Interactive Brokers, Questrade, Webull, RBC Direct, Coinbase "
             f"or Kraken — README \"How a file's broker is detected\"). "
             f"Another broker: add a generic column mapping, "
-            f"{name}.toml (see examples/generic_wealthsimple.toml). "
+            f"{tail}.toml (see examples/generic_wealthsimple.toml). "
             f"Last resort for a Coinbase or Kraken export whose header is "
             f"not recognised: rename it to start with cb_ or kr_.")
 

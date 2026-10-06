@@ -296,6 +296,14 @@ class QtAccountContext:
     # Keys learned from Transfers rows that no Trades key prefixes: they
     # may carry the delivering dealer's name after the security's.
     transfer_keys: set = field(default_factory=set)
+    # Internal codes `taxjson run` resolved from the project's other
+    # exports (lib/symbol_codes, `--symbol-codes`): code -> {symbol,
+    # currency, how, evidence}; and the codes it could not, with why.
+    inferred: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    unresolved: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Codes already warned about: ONE line per code per account, not
+    # per file or row.
+    code_warned: set = field(default_factory=set)
 
     def key_candidates(self, key: str, transfer_row: bool = False) -> set:
         """{(symbol, currency)} for a description key: the exact key;
@@ -405,6 +413,68 @@ def build_qt_account_context(paths, *, helper=None) -> QtAccountContext:
     _detect_qt_ticker_changes(ctx, by_name, where)
     _plan_qt_reversals(ctx, helper)
     return ctx
+
+
+def scan_code_uses(paths, *, helper=None) -> list:
+    """[symbol_codes.CodeUse] for the internal codes in one account's
+    exports that the account's own trades and transfers do not resolve
+    (the rows _resolve_symbol would keep the code on): the description
+    key, the row currencies (listing currency for an EXCHANGE RATE row)
+    and each transfer-in's (date, quantity) — what `taxjson run` needs
+    to infer the ticker from the project's other exports."""
+    from taxjson.lib.symbol_codes import CodeUse
+    helper = helper or QuestradeBrokerage()
+    paths = [Path(p) for p in paths]
+    if not any(_INTERNAL_CODE_RE.match(
+            (r.get('Symbol') or '').strip().lstrip('.').upper())
+            for p in paths for _ln, r in _read_qt_rows(p)):
+        return []                    # the common case: no code at all
+    ctx = build_qt_account_context(paths, helper=helper)
+    uses: Dict[str, Any] = {}
+    for k in ctx.files:
+        for _ln, row in _read_qt_rows(Path(k)):
+            sym = (row.get('Symbol') or '').strip().lstrip('.').upper()
+            if not _INTERNAL_CODE_RE.match(sym):
+                continue
+            desc = row.get('Description') or ''
+            if helper.parse_option_from_description(desc):
+                continue
+            act = (row.get('Activity Type') or '').strip()
+            action = _canon_action(row.get('Action'))
+            transfer = act == 'Transfers' or action == 'TF6'
+            if ctx.key_candidates(_get_desc_key(desc),
+                                  transfer_row=transfer):
+                continue
+            cur = (row.get('Currency') or '').strip().upper()
+            if cur == 'CAD' and _FX_SETTLED_RE.search(desc):
+                cur = 'USD'
+            u = uses.get(sym)
+            if u is None:
+                u = uses[sym] = CodeUse(code=sym, name='')
+            u.rows += 1
+            key = _get_desc_key(desc)
+            if transfer and key and not u.name:
+                u.name = key
+            if cur and cur not in u.currencies:
+                u.currencies.append(cur)
+            if not transfer:
+                continue
+            try:
+                q = parse_strict_number(row.get('Quantity'),
+                                        field='Quantity', allow_blank=True,
+                                        blank=0.0)
+            except BrokerageParseError:
+                continue                 # parse_file names the row
+            dt = helper.parse_date(
+                (row.get('Transaction Date') or '').strip(), *_DATE_FMTS)
+            if dt is not None and q > 1e-9:
+                u.arrivals.append((dt.strftime('%Y-%m-%d'), q))
+    for k in ctx.files:                  # a name from any row of the code
+        for _ln, row in _read_qt_rows(Path(k)):
+            sym = (row.get('Symbol') or '').strip().lstrip('.').upper()
+            if sym in uses and not uses[sym].name:
+                uses[sym].name = _get_desc_key(row.get('Description') or '')
+    return [uses[c] for c in sorted(uses)]
 
 
 def _qt_reversal_kind(row, helper) -> Optional[Tuple[tuple, bool, str]]:
@@ -624,12 +694,30 @@ class QuestradeBrokerage(BaseBrokerage):
         return strict_option_from_description(self, desc)
 
     @classmethod
-    def prepare_files(cls, paths) -> QtAccountContext:
+    def prepare_files(cls, paths, symbol_codes=None) -> QtAccountContext:
         """Read ALL of one account's Questrade exports once and build the
         identity maps every per-file parse shares (description ->
         traded symbol, a symbol's listing currency, position timelines).
-        Account-level warnings print here, once."""
+        Account-level warnings print here, once. `symbol_codes`: the
+        record `taxjson run` wrote (lib/symbol_codes) — the internal
+        codes it resolved from the project's other exports, listed in
+        ONE note."""
         ctx = build_qt_account_context(list(paths), helper=cls())
+        if symbol_codes:
+            from taxjson.lib.symbol_codes import codes_note, read_state
+            st = read_state(Path(symbol_codes))
+            ctx.unresolved = dict(st.get('unresolved') or {})
+            for code, r in sorted((st.get('resolved') or {}).items()):
+                if not isinstance(r, dict) or not r.get('symbol'):
+                    continue
+                # A ticker.map rule for the code wins over the inference.
+                if any(ticker_map_renames(cls().apply_currency_suffix(
+                        code, c)) for c in ('USD', 'CAD',
+                                            r.get('currency') or 'USD')):
+                    continue
+                ctx.inferred[code.upper()] = r
+            if ctx.inferred:
+                ctx.messages.append(codes_note(ctx.inferred))
         ctx.emit()
         return ctx
 
@@ -762,6 +850,16 @@ class QuestradeBrokerage(BaseBrokerage):
             return next(iter(curs))
         return currency
 
+    def _inferred_code(self, sym: str) -> Optional[Tuple[str, str]]:
+        """(listing, currency) `taxjson run` inferred for internal code
+        `sym` from the project's other exports (lib/symbol_codes), or
+        None."""
+        r = self._ctx.inferred.get((sym or '').upper()) if self._ctx \
+            else None
+        if not r:
+            return None
+        return str(r['symbol']), str(r.get('currency') or '')
+
     def _resolve_symbol(self, row: Dict[str, Any], currency: str,
                         lineno: Optional[int] = None):
         """(symbol, suffix currency) for a non-trade row. Questrade
@@ -802,6 +900,9 @@ class QuestradeBrokerage(BaseBrokerage):
             return sym, cur
         if len(cands) == 1:
             return next(iter(cands))
+        inferred = self._inferred_code(sym)
+        if not cands and inferred is not None:
+            return inferred
         if len(cands) > 1:
             key = (sym, tuple(sorted(cands)))
             if ticker_map_renames(self.apply_currency_suffix(sym, currency)):
@@ -814,7 +915,8 @@ class QuestradeBrokerage(BaseBrokerage):
                       f"({', '.join(s for s, _ in sorted(cands))}) — not "
                       f"rebound; map it with a ticker.map rule (moot if "
                       f"ticker.map already maps it).")
-        elif (_INTERNAL_CODE_RE.match(sym) and sym not in self._code_warned
+        elif (_INTERNAL_CODE_RE.match(sym)
+              and sym not in self._ctx.code_warned
               and not ticker_map_renames(
                   self.apply_currency_suffix(sym, currency))):
             # A row booked under Questrade's internal code that no trade
@@ -823,15 +925,20 @@ class QuestradeBrokerage(BaseBrokerage):
             # gain; stock-dividend / DRIP / spinoff shares sit on a
             # phantom pool while the sale goes short). Loud, and a lint
             # finding (audit R1-67, S062-24, R1-3).
-            self._code_warned.add(sym)
+            # ONE line per code per account (not per file or row).
+            self._ctx.code_warned.add(sym)
             where = self._where(lineno) if lineno else self._qt_name
             # Printed at parse time, before ticker.map is applied: say
             # it is moot once the line exists (audit S063-10).
             _key = self.apply_currency_suffix(sym, currency)
+            _un = self._ctx.unresolved.get(sym) or {}
+            _why = (f" ({_un['detail']})" if _un.get('detail') else "")
             msg = (f"{where}: {(row.get('Action') or '').strip() or '?'} "
                    f"row keeps internal symbol code {sym!r} "
                    f"({(row.get('Description') or '')[:60]!r}) — no trade "
-                   f"or transfer in this account's exports resolves it. "
+                   f"or transfer in this account's exports resolves it, "
+                   f"and no transfer or name elsewhere in the project "
+                   f"identifies it{_why}. "
                    f"Unless ticker.map already maps {_key}, add "
                    f"GLOBAL {_key} "
                    f"<TICKER>.{self.apply_currency_suffix('X', currency)[2:]}"
@@ -850,10 +957,11 @@ class QuestradeBrokerage(BaseBrokerage):
         # shared context taxjson-brokerage builds via prepare_files); a
         # lone file gets a context of its own.
         path = Path(path)
-        self._qt_name = path.name
+        # Masked like every diagnostic (a default download name is the
+        # account number).
+        self._qt_name = shown_name(path)
         self._qt_path = path
         self._ambiguous_warned: set = set()
-        self._code_warned: set = set()
         self.lint_findings: List[str] = []
         ctx = self.account_context
         if ctx is None or str(path.resolve()) not in ctx.files:
@@ -1445,6 +1553,13 @@ class QuestradeBrokerage(BaseBrokerage):
                 # Upper-cased: 'sample.to' split the pool from SAMPLE.TO
                 # (audit R1-71).
                 symbol = (row.get('Symbol') or '').strip().upper()
+                # An internal code the run resolved from the project's
+                # other exports (a later sale of transferred-in shares).
+                _inf = (self._inferred_code(symbol.lstrip('.'))
+                        if _INTERNAL_CODE_RE.match(symbol.lstrip('.'))
+                        else None)
+                if _inf is not None:
+                    symbol, listing_currency = _inf
             symbol = self.apply_currency_suffix(symbol, listing_currency)
             self.note_row_consumed()
             if date_settle is None:

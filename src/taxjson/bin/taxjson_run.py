@@ -43,7 +43,7 @@ import subprocess
 import sys
 from datetime import date as date_cls, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from taxjson.lib.cli_diag import note, write_text_atomic
 from taxjson.lib.cli_diag import tax_year as _tax_year_arg
@@ -232,18 +232,41 @@ def print_holdings_diff(prev: Dict[str, Tuple[float, float]],
             print(line)
 
 
-def echo_parse_stats(out_path: Path) -> None:
+def _console_names(files) -> Callable[[str], str]:
+    """A function giving a captured line back its real file names for
+    the console: the .diag masks account-number-like parts of names
+    (shown_name), the person's own terminal names each file as it is on
+    disk. A masked name two of `files` share stays masked."""
+    from taxjson.lib.brokerages.base import shown_name
+    real: Dict[str, set] = {}
+    for p in files or ():
+        real.setdefault(shown_name(p), set()).add(Path(p).name)
+    pairs = sorted(((m, next(iter(r))) for m, r in real.items()
+                    if len(r) == 1 and next(iter(r)) != m),
+                   key=lambda mr: -len(mr[0]))
+    if not pairs:
+        return lambda line: line
+    rx = re.compile("|".join(
+        r"(?<![\w*])" + re.escape(m) + r"(?![\w*])" for m, _r in pairs))
+    table = dict(pairs)
+    return lambda line: rx.sub(lambda mm: table[mm.group(0)], line)
+
+
+def echo_parse_stats(out_path: Path, files=None) -> None:
     """Re-emit per-file transaction counts and parse warnings from the
     parser's stderr (captured to `<out_path>.diag` by `run_to_file`)
     onto the wrapper's stdout. Visibility is the safety net that
     would have caught the cycle-4 Webull `_find_header` regression
     instantly instead of needing an empty cache file to surface the
-    silent zero-tx output."""
+    silent zero-tx output. `files`: the parsed inputs — the console
+    names them as they are on disk (the .diag keeps them masked)."""
     diag_path = out_path.with_name(out_path.name + ".diag")
     if not diag_path.exists():
         return
+    _real = _console_names(files)
     echoing = False
     for line in diag_path.read_text(errors="replace").splitlines():
+        line = _real(line)
         if (echoing and line[:1] in (" ", "\t") and line.strip()
                 and not _PARSE_COUNT_RE.match(line)):
             # An echoed warning's indented continuation (the GLOBAL line
@@ -270,6 +293,16 @@ def echo_parse_stats(out_path: Path) -> None:
             # on (an IB statement ending before year end, no Cash Report
             # to reconcile against). Console, always.
             _echo_captured(line)
+        elif line.startswith(_codes_note_head()):
+            # Questrade internal codes booked under the tickers the
+            # project's other exports name (lib/symbol_codes): one note
+            # per account, in place of the per-code ATTENTION lines.
+            _echo_captured(line)
+
+
+def _codes_note_head() -> str:
+    from taxjson.lib.symbol_codes import NOTE_HEAD
+    return NOTE_HEAD
 
 
 def _echo_stage_stderr(text: str) -> None:
@@ -1960,7 +1993,11 @@ def group_inputs_detailed(account_dir: Path):
                 _die(str(not_utf8(csv, e)))
             except OSError:
                 pass
-            _die(cannot_detect_message(det))
+            # On the console: the file as it is on disk (an export's
+            # default name is its account number; masking it here hid
+            # which of two such files is meant).
+            _die(cannot_detect_message(
+                det, shown=f"inputs/{account_dir.name}/{csv.name}"))
         out.setdefault(det.broker, []).append(csv)
         found.append(det)
     # A [[holding]] TOML in the folder (a positions file, not a generic
@@ -1996,23 +2033,32 @@ def _report_detection(name: str, found, cache: Path) -> None:
     """Print one line per input CSV — how its broker was detected — and
     persist them to work/<acct>_detect.diag, whose `note:` lines (the
     name disagreed with the content, a name-only routing) reach the
-    account's .sum DIAGNOSTICS. File names are shown masked
-    (shown_name), like every other diagnostic."""
+    account's .sum DIAGNOSTICS. The console names each file as it is on
+    disk (two exports whose names mask alike, 55500001.csv and
+    55500001_2.csv, must be told apart there); the saved .diag, like
+    every saved diagnostic, masks account-number-like parts
+    (shown_name)."""
     from taxjson.lib.brokerages.base import shown_name
     lines: List[str] = []
     notes: List[str] = []
+    console: List[Tuple[str, str]] = []
     for det in found:
-        lines.append(det.line(f"inputs/{name}/{shown_name(det.path)}"))
+        masked = shown_name(det.path)
+        lines.append(det.line(f"inputs/{name}/{masked}"))
+        console.append(("  ", det.line(f"inputs/{name}/{det.path.name}")))
         if det.note:
             notes.append(f"note: {det.note}")
+            real = (det.note.replace(masked, det.path.name, 1)
+                    if det.note.startswith(masked) else det.note)
+            console.append(("    ", f"note: {real}"))
     if name not in _DETECTION_SHOWN:
         _DETECTION_SHOWN.add(name)
-        for ln in lines:
-            for _w in _out_wrap(ln, indent="  ", hang="      "):
-                print(_w)
+        # Lines first, then the notes, as the .diag keeps them (a note
+        # shown with its label first, lib/out.labelled).
         from taxjson.lib.out import labelled as _labelled
-        for n in notes:
-            for _w in _out_wrap(_labelled(n), indent="    ", hang="      "):
+        for ind, ln in ([c for c in console if c[0] == "  "]
+                        + [c for c in console if c[0] != "  "]):
+            for _w in _out_wrap(_labelled(ln), indent=ind, hang="      "):
                 print(_w)
     _txt = "".join(f"{x}\n" for x in lines + notes)
     _diag = cache / f"{name}_detect.diag"
@@ -3110,15 +3156,28 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         import os as _os
         _os.utime(src_manifest)
 
-    # 1. brokerage parse per broker
-    parsed: List[Path] = []
-    for broker, csvs in grouped.items():
+    # 1. brokerage parse per broker. Questrade last: its internal symbol
+    # codes are resolved from the other exports' transfers and names
+    # (stage_symbol_codes), this account's included.
+    _parsed_by: Dict[str, Path] = {}
+    _codes_state = cache / f"{name}{_symbol_codes_suffix()}"
+    if "questrade" not in grouped or is_crypto:
+        _codes_state.unlink(missing_ok=True)
+    for broker, csvs in sorted(grouped.items(),
+                               key=lambda kv: kv[0] == "questrade"):
         out = cache / f"{name}_{broker}.json"
         # ticker_map dep: a parser's identity hint the map now answers
         # is dropped (taxjson-brokerage --ticker-map, A2-1056).
         deps = (list(csvs) + [src_manifest]
                 + ([security_overrides] if security_overrides else [])
                 + ([ticker_map] if ticker_map else []))
+        _codes_args: List[str] = []
+        if broker == "questrade" and not is_crypto:
+            # Rewritten only when the inference changes: a dep.
+            stage_symbol_codes(name, csvs, inputs_dir.parent, cache,
+                               _codes_state)
+            deps.append(_codes_state)
+            _codes_args = ["--symbol-codes", str(_codes_state)]
         if _is_generic_group(broker):
             # A mapping edit must rebuild the parse like a CSV edit.
             for _c in csvs:
@@ -3155,6 +3214,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 cmd += ["--tax-year", str(year)]
             if ticker_map:
                 cmd += ["--ticker-map", str(ticker_map)]
+            cmd += _codes_args
             if rates and Path(rates).is_file() and Path(rates).stat().st_size:
                 # A stablecoin fill valued in CAD/EUR is checked against
                 # the peg through these rates (A2-0590; a warning only,
@@ -3187,7 +3247,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # warnings) inline so the user can sanity-check at a
             # glance that each CSV contributed the expected number
             # of rows.
-            echo_parse_stats(out)
+            echo_parse_stats(out, csvs)
         # Outside the rebuild branch on purpose: `run --strict --fast`
         # on a cached parse must hit the same gate.
         if strict and unbooked_lines(out):
@@ -3195,7 +3255,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                  f"parser could not book — aborting",
                  f"See the UNBOOKED warning above (also in "
                  f"work/{out.name}.diag).")
-        parsed.append(out)
+        _parsed_by[broker] = out
+    # The sources keep the folder's broker order.
+    parsed: List[Path] = [_parsed_by[b] for b in grouped]
 
     # A non-empty export that parsed to 0 transactions (a renamed
     # header, a kr_-named file that is not a Kraken ledger) drops that
@@ -4061,6 +4123,81 @@ _OWN_MOVE_DAYS = 10
 
 
 TRANSFER_COSTS_SUFFIX = "_transfer_costs.json"
+
+
+def _symbol_codes_suffix() -> str:
+    from taxjson.lib.symbol_codes import SUFFIX
+    return SUFFIX
+
+
+def stage_symbol_codes(name: str, csvs: List[Path], root: Path,
+                       cache: Path, out: Path) -> Path:
+    """work/<name>_symbol_codes.state: the Questrade internal codes of
+    this account that its own rows do not resolve, inferred from the
+    project's other exports (lib/symbol_codes: a paired transfer out,
+    else a unique name match; a ticker.map rule for the code wins).
+    Written only when it changes — it is a dep of the Questrade parse,
+    which books the codes under their tickers and says so in one note."""
+    from taxjson.lib import symbol_codes as SC
+    from taxjson.lib.brokerages.questrade import (QuestradeBrokerage,
+                                                  scan_code_uses)
+    try:
+        uses = scan_code_uses(csvs)
+    except Exception:                              # noqa: BLE001
+        uses = []           # the parse itself names a broken export
+    result: Dict[str, Any] = {"resolved": {}, "unresolved": {}}
+    if uses:
+        accounts = [n for n, c in (_soft_config(root).get("accounts")
+                                   or {}).items()
+                    if isinstance(c, dict) and not c.get("crypto")]
+        outs, names = SC.project_evidence(
+            cache, accounts or [name], receiving=(name, "questrade"))
+        key = _transfer_key(root)
+        helper = QuestradeBrokerage()
+
+        def listing_ok(listing: str, cur: str) -> bool:
+            return helper.apply_currency_suffix(listing, cur) == listing
+
+        def mapped(code: str) -> bool:
+            for cur in sorted({"USD", "CAD"}
+                              | {c for u in uses if u.code == code
+                                 for c in u.currencies}):
+                lst = helper.apply_currency_suffix(code, cur)
+                if key(lst) != lst.upper():
+                    return True
+            return False
+        result = SC.resolve(uses, outs, names, listing_ok=listing_ok,
+                            mapped=mapped)
+    text = SC.state_text(name, result)
+    if _read_work_stamp(out) != text:
+        _write_work_stamp(out, text)
+    return out
+
+
+def _accounts_with_symbol_codes(inputs_dir: Path,
+                                accounts: Dict[str, Any]) -> List[str]:
+    """The equity accounts whose Questrade exports hold internal codes
+    their own rows do not resolve: `taxjson run` parses every other
+    account first, so the inference sees their transfers and names."""
+    from taxjson.lib.brokerages.detect import detect
+    from taxjson.lib.brokerages.questrade import scan_code_uses
+    out = []
+    for n, c in accounts.items():
+        if not isinstance(c, dict) or c.get("crypto"):
+            continue
+        qt = []
+        for csv in input_files(inputs_dir / n, ".csv"):
+            try:
+                if detect(csv).broker == "questrade":
+                    qt.append(csv)
+            except Exception:                      # noqa: BLE001
+                continue    # the account's own stage reports the file
+        try:
+            if qt and scan_code_uses(qt):
+                out.append(n)
+        except Exception:                          # noqa: BLE001
+            continue
+    return out
 
 
 def _transfer_key(root: Path):
@@ -5263,7 +5400,19 @@ def cmd_run(args: argparse.Namespace) -> None:
                      if (c or {}).get("type") == "taxable"
                      and not (c or {}).get("crypto")
                      and not (c or {}).get("transfers")]
-    if len(_equity_first) >= 2:
+    if len(_equity_first) < 2:
+        _equity_first = []
+    # Questrade internal symbol codes are resolved from the OTHER
+    # accounts' transfers and names (stage_symbol_codes): those accounts
+    # are parsed first, the accounts holding codes last.
+    _code_accts = (_accounts_with_symbol_codes(inputs_dir, accounts)
+                   if len(accounts) >= 2 else [])
+    if _code_accts:
+        _equity_first += [(n, c) for n, c in accounts.items()
+                          if not (c or {}).get("crypto")
+                          and n not in {x for x, _c in _equity_first}]
+        _equity_first.sort(key=lambda nc: nc[0] in _code_accts)
+    if _equity_first:
         for name, acfg in _equity_first:
             try:
                 stage_account(name, acfg, settings, inputs_dir, cache,
@@ -7422,10 +7571,43 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                 and r["account"] in _tax_eq):
             got = _arr.get((r["account"], r["symbol"], r["date"][:10]))
             r["arrival"] = got.pop(0) if got else "own move"
+    # Questrade internal codes the run booked under a ticker it inferred
+    # from the other exports (lib/symbol_codes), and those it could not.
+    from taxjson.lib.symbol_codes import SUFFIX as _SC_SUFFIX, read_state
+    codes: List[Dict[str, Any]] = []
+    for name in sorted(cfg.get("accounts") or {}):
+        if want and name != want:
+            continue
+        st = read_state(cache / f"{name}{_SC_SUFFIX}")
+        for code, r in sorted((st.get("resolved") or {}).items()):
+            codes.append({"account": name, "code": code,
+                          "symbol": r.get("symbol") or "",
+                          "how": r.get("how") or "",
+                          "evidence": r.get("evidence") or ""})
+        for code, r in sorted((st.get("unresolved") or {}).items()):
+            codes.append({"account": name, "code": code, "symbol": "",
+                          "how": "unresolved",
+                          "evidence": r.get("detail") or
+                          "no transfer or name in the project identifies "
+                          "it"})
     if getattr(args, "json", False):
-        _json_out({"transfers": rows, "count": len(rows)})
+        _json_out({"transfers": rows, "count": len(rows),
+                   "symbol_codes": codes})
         return
     from taxjson.lib.out import Doc
+
+    def _codes_section(doc) -> None:
+        if not codes:
+            return
+        doc.section("SYMBOL CODES — Questrade internal codes")
+        doc.para("Booked under the ticker inferred from your other "
+                 "exports (a ticker.map GLOBAL line for the code "
+                 "overrides it); an unresolved code stays its own "
+                 "security until ticker.map maps it.")
+        doc.items([f"{c['account']}: {c['code']} → {c['symbol']} "
+                   f"({c['evidence']})" if c["how"] != "unresolved" else
+                   f"{c['account']}: {c['code']} UNRESOLVED "
+                   f"({c['evidence']})" for c in codes])
     doc = Doc("CUSTODY TRANSFERS — evidence, not tax events")
     doc.para("Basis comes from the buy and sell history. WHERE: sidecar = "
              "kept out of the books; book = a sheltered account's "
@@ -7436,6 +7618,7 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                  + (f" for account {want!r}" if want else "")
                  + " — re-run `taxjson run` after enabling the sidecar, "
                    "or the broker reported none.")
+        _codes_section(doc)
         doc.print()
         return
     body = []
@@ -7472,6 +7655,7 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
             "NO_COST: from outside your books with no cost — add the "
             "original purchase to a .tt file (docs/getting-started.md, "
             "step 5c)."])
+    _codes_section(doc)
     doc.print()
 
 

@@ -466,6 +466,17 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--symbol-codes", dest="symbol_codes", metavar="FILE",
+        default=None,
+        help=(
+            "Questrade: the internal security codes `taxjson run` "
+            "resolved from the project's other exports (work/<acct>"
+            "_symbol_codes.state, lib/symbol_codes): every row of a "
+            "resolved code is booked under its ticker, said in one note. "
+            "A ticker.map rule for the code wins."
+        ),
+    )
+    parser.add_argument(
         "--rates", dest="rates", metavar="FILE", default=None,
         help=(
             "The run's currency rates (work/to_base.csv, `taxjson run` "
@@ -504,6 +515,10 @@ Examples:
             except (OSError, ValueError) as e:
                 emit_line(f"taxjson-brokerage: error: {args.ticker_map}: {e}")
                 sys.exit(2)
+    if args.symbol_codes and not Path(args.symbol_codes).exists():
+        emit_line(f"taxjson-brokerage: error: no such file: --symbol-codes "
+                  f"{args.symbol_codes}")
+        sys.exit(2)
     if args.rates:
         if not Path(args.rates).exists():
             emit_line(f"taxjson-brokerage: error: no such file: --rates "
@@ -572,6 +587,8 @@ Examples:
                 _pkw['combined'] = args.combined_broker_accounts
             if 'taxable' in _pp and args.account_type:
                 _pkw['taxable'] = args.account_type == 'taxable'
+            if 'symbol_codes' in _pp and args.symbol_codes:
+                _pkw['symbol_codes'] = args.symbol_codes
             shared_context = _prepare(input_paths, **_pkw)
         except csv.Error as e:
             emit_line(f"taxjson-brokerage: error: the CSV module refused an "

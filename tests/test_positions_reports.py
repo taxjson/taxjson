@@ -341,12 +341,18 @@ class TestRunSkipsPositionsReports(unittest.TestCase):
                 r = _cli(*args, root=root)
                 with self.subTest(args=args):
                     self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+                    # The console names the file as it is on disk; the
+                    # saved .diag masks it.
                     self.assertIn(
-                        "  inputs/margin/holdings_55***.csv → positions "
-                        "report (RBC Holdings Export, as of 2026-01-05) — "
-                        "not activity; skipped (read it with `taxjson "
-                        "sanity` or `taxjson opening`)", r.stdout)
-                    self.assertNotIn("55500001", r.stdout + r.stderr)  # pii-ok
+                        "  inputs/margin/holdings_55500001.csv → "  # pii-ok
+                        "positions report (RBC Holdings Export, as of "
+                        "2026-01-05) — not activity; skipped (read it with "
+                        "`taxjson sanity` or `taxjson opening`)", r.stdout)
+                    diag = (root / "work" /
+                            "margin_detect.diag").read_text()
+                    self.assertIn("inputs/margin/holdings_55***.csv → "
+                                  "positions report", diag)
+                    self.assertNotIn("55500001", diag)  # pii-ok
 
     def test_folder_with_only_a_positions_report(self):
         with tempfile.TemporaryDirectory() as td:
