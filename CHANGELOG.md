@@ -28,6 +28,19 @@
 
 ### Fixed
 
+- **`taxjson run` shows each parser message once.** With two or more
+  taxable accounts (or two crypto accounts) the run reads every one of
+  them first, so a transfer (or a coin send) pairs across your accounts;
+  each account's books then read its files again and printed the
+  parser's warnings and counts a second time. The second read now takes
+  the first one's result when the command and every file it reads are
+  unchanged — each message appears once, under the first pass, and the
+  run is faster. A message the first pass gives (a refusal under
+  `--strict`, a file that parsed to no rows, an account with no input
+  files) is still shown, once. A US project's "wash-sale rule NOT
+  applied to crypto" note is said once per run, not once per crypto
+  account. work/, reports/ and the `.sum` files are unchanged.
+
 - **Kraken: a dust-sweep leg smaller than the books' zero no longer stops
   the crypto account.** Kraken writes a swept coin's amount to ten
   decimals, so a "convert small balances" sweep can spend a few

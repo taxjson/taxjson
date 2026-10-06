@@ -189,7 +189,7 @@ whose stage is cached under `--fast` is not shown):
 | `==> Reading missing_history.json (openings for sales with no purchase in the files)` | the project has one |
 | `==> Loading currency rates` | always |
 | `==> Downloading USD → CAD rates` | a rate refresh |
-| `==> margin  (taxable, first pass: transfers between your accounts)` | accounts read first so transfers (crypto: sends) pair across them |
+| `==> margin  (taxable, first pass: transfers between your accounts)` | accounts read first so transfers (crypto: sends) pair across them; the account's books later take this read (same command, same files), so its `Reading` step and messages are shown once, here |
 | `==> tfsa  (sheltered)` / `==> margin  (taxable)` / `==> crypto  (taxable, crypto)` | an account's books |
 | `Info: File inputs/tfsa/x.csv → identified as Interactive Brokers` | one per input file (a message, not a step) |
 | `==> Reading 2 files` / `==> Reading 1 Kraken file` | the broker parse (the broker named when the account has several) |
