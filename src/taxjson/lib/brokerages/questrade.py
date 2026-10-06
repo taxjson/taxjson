@@ -850,7 +850,9 @@ class QuestradeBrokerage(BaseBrokerage):
         # shared context taxjson-brokerage builds via prepare_files); a
         # lone file gets a context of its own.
         path = Path(path)
-        self._qt_name = path.name
+        # Masked like every diagnostic (a default download name is the
+        # account number).
+        self._qt_name = shown_name(path)
         self._qt_path = path
         self._ambiguous_warned: set = set()
         self._code_warned: set = set()

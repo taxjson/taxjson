@@ -263,8 +263,12 @@ class TestQuestradeDescKeyLinear(unittest.TestCase):
         self.assertLess(time.perf_counter() - t0, 0.5)
 
 
-class TestCannotDetectMasked(unittest.TestCase):
-    def test_file_name_id_is_masked(self):
+class TestCannotDetectNamesTheFile(unittest.TestCase):
+    """The message goes to the person's own terminal: it names the file
+    as it is on disk (a masked name could not tell 55500001.csv from
+    55500001_2.csv); saved diagnostics mask instead (owner,
+    2026-10-05)."""
+    def test_file_name_is_shown_as_given(self):
         from taxjson.bin.taxjson_detect_brokerage import (
             cannot_detect_message)
 
@@ -272,8 +276,11 @@ class TestCannotDetectMasked(unittest.TestCase):
             path = Path("/tmp/U5550001_activity.csv")  # pii-ok
             hint = ""
         msg = cannot_detect_message(Det())
-        self.assertNotIn("5550001", msg)  # pii-ok
-        self.assertIn("U5***", msg)
+        self.assertIn("/tmp/U5550001_activity.csv", msg)  # pii-ok
+        msg = cannot_detect_message(
+            Det(), shown="inputs/m/U5550001_activity.csv")  # pii-ok
+        self.assertIn("for inputs/m/U5550001_activity.csv.", msg)  # pii-ok
+        self.assertIn(" U5550001_activity.csv.toml", msg)  # pii-ok
 
 
 class TestChannelTag(unittest.TestCase):

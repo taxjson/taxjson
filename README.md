@@ -89,19 +89,23 @@ detected:
 
 ```
 ==> margin  (taxable)
-  inputs/margin/U5***_2025.csv → Interactive Brokers (content: "Statement,Header" preamble)
+  inputs/margin/activity_2025.csv → Interactive Brokers (content: "Statement,Header" preamble)
   inputs/margin/generic_ws.csv → generic (mapping generic_ws.csv.toml)
 ==> crypto  (taxable, crypto)
   inputs/crypto/export.csv → Kraken (content: ledger columns txid,refid,time…)
   inputs/crypto/cb_old.csv → Coinbase (file name "cb_" — no content match)
 ```
 
-The lines are also kept in `work/<account>_detect.diag`, and the notes
-(a name that disagrees with the content, a name-only routing) appear in
-the account's `.sum` DIAGNOSTICS. Account-number-like parts of file
-names are masked, as in every diagnostic. A file nothing routes stops
-the run: check its header first (re-export it with the broker's own
-columns; the message names the closest layout it nearly matched), add a
+The console names each file as it is on disk (two exports whose default
+names carry the same account number, `<number>.csv` and `<number>_2.csv`,
+must be told apart there). The lines are also kept in
+`work/<account>_detect.diag`, and the notes (a name that disagrees with
+the content, a name-only routing) appear in the account's `.sum`
+DIAGNOSTICS; those saved files mask account-number-like parts of file
+names (`U5***_2025.csv`), as every saved diagnostic does. A file nothing
+routes stops the run: check its header first (re-export it with the
+broker's own columns; the message names the closest layout it nearly
+matched), add a
 generic mapping for another broker, or, as a last resort for a Coinbase
 or Kraken export, rename it to start with `cb_` / `kr_`.
 `taxjson-detect-brokerage FILE` answers the same question for one file:

@@ -445,15 +445,23 @@ class TestRunPrintsDetection(unittest.TestCase):
                           summ)
             self.assertNotIn("→ Questrade", summ)
 
-    def test_account_ids_in_names_are_masked(self):
+    def test_console_names_the_file_and_the_diag_masks_it(self):
+        """The person's own terminal names each file as it is on disk
+        (two exports whose names mask alike must be told apart); the
+        saved .diag and .sum mask account-number-like parts (owner,
+        2026-10-05)."""
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, {"U5550001_2025.csv":  # pii-ok
                                  _QT_H + _QT_ROW})
             r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
-            self.assertIn("  inputs/margin/U5***_2025.csv → Questrade",
-                          r.stdout)
-            self.assertNotIn("U5550001", r.stdout)  # pii-ok
+            self.assertIn("  inputs/margin/U5550001_2025.csv → "  # pii-ok
+                          "Questrade", r.stdout)
+            diag = (root / "work" / "margin_detect.diag").read_text()
+            self.assertIn("inputs/margin/U5***_2025.csv → Questrade", diag)
+            self.assertNotIn("U5550001", diag)  # pii-ok
+            for p in (root / "reports").glob("*.sum"):
+                self.assertNotIn("U5550001", p.read_text())  # pii-ok
 
 
 class TestStandaloneTool(unittest.TestCase):

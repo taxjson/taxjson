@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+
+- **The run console names input files as they are on disk.** The
+  per-file detection lines, the parse counts and the "cannot detect
+  broker" message showed account-number-like parts of file names masked,
+  so two exports named after account numbers could read alike. The
+  saved `.diag` and `.sum` files keep masking them (Questrade's parse
+  warnings now do too: they named the file unmasked).
 
 ## v0.19.0 (2026-10-05)
 

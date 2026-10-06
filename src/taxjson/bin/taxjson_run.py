@@ -41,7 +41,7 @@ import subprocess
 import sys
 from datetime import date as date_cls, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from taxjson.lib.cli_diag import note, write_text_atomic
 from taxjson.lib.cli_diag import tax_year as _tax_year_arg
@@ -230,18 +230,41 @@ def print_holdings_diff(prev: Dict[str, Tuple[float, float]],
             print(line)
 
 
-def echo_parse_stats(out_path: Path) -> None:
+def _console_names(files) -> Callable[[str], str]:
+    """A function giving a captured line back its real file names for
+    the console: the .diag masks account-number-like parts of names
+    (shown_name), the person's own terminal names each file as it is on
+    disk. A masked name two of `files` share stays masked."""
+    from taxjson.lib.brokerages.base import shown_name
+    real: Dict[str, set] = {}
+    for p in files or ():
+        real.setdefault(shown_name(p), set()).add(Path(p).name)
+    pairs = sorted(((m, next(iter(r))) for m, r in real.items()
+                    if len(r) == 1 and next(iter(r)) != m),
+                   key=lambda mr: -len(mr[0]))
+    if not pairs:
+        return lambda line: line
+    rx = re.compile("|".join(
+        r"(?<![\w*])" + re.escape(m) + r"(?![\w*])" for m, _r in pairs))
+    table = dict(pairs)
+    return lambda line: rx.sub(lambda mm: table[mm.group(0)], line)
+
+
+def echo_parse_stats(out_path: Path, files=None) -> None:
     """Re-emit per-file transaction counts and parse warnings from the
     parser's stderr (captured to `<out_path>.diag` by `run_to_file`)
     onto the wrapper's stdout. Visibility is the safety net that
     would have caught the cycle-4 Webull `_find_header` regression
     instantly instead of needing an empty cache file to surface the
-    silent zero-tx output."""
+    silent zero-tx output. `files`: the parsed inputs — the console
+    names them as they are on disk (the .diag keeps them masked)."""
     diag_path = out_path.with_name(out_path.name + ".diag")
     if not diag_path.exists():
         return
+    _real = _console_names(files)
     echoing = False
     for line in diag_path.read_text(errors="replace").splitlines():
+        line = _real(line)
         if (echoing and line[:1] in (" ", "\t") and line.strip()
                 and not _PARSE_COUNT_RE.match(line)):
             # An echoed warning's indented continuation (the GLOBAL line
@@ -1956,7 +1979,11 @@ def group_inputs_detailed(account_dir: Path):
                 _die(str(not_utf8(csv, e)))
             except OSError:
                 pass
-            _die(cannot_detect_message(det))
+            # On the console: the file as it is on disk (an export's
+            # default name is its account number; masking it here hid
+            # which of two such files is meant).
+            _die(cannot_detect_message(
+                det, shown=f"inputs/{account_dir.name}/{csv.name}"))
         out.setdefault(det.broker, []).append(csv)
         found.append(det)
     # A [[holding]] TOML in the folder (a positions file, not a generic
@@ -1992,22 +2019,30 @@ def _report_detection(name: str, found, cache: Path) -> None:
     """Print one line per input CSV — how its broker was detected — and
     persist them to work/<acct>_detect.diag, whose `note:` lines (the
     name disagreed with the content, a name-only routing) reach the
-    account's .sum DIAGNOSTICS. File names are shown masked
-    (shown_name), like every other diagnostic."""
+    account's .sum DIAGNOSTICS. The console names each file as it is on
+    disk (two exports whose names mask alike, 55500001.csv and
+    55500001_2.csv, must be told apart there); the saved .diag, like
+    every saved diagnostic, masks account-number-like parts
+    (shown_name)."""
     from taxjson.lib.brokerages.base import shown_name
     lines: List[str] = []
     notes: List[str] = []
+    console: List[Tuple[str, str]] = []
     for det in found:
-        lines.append(det.line(f"inputs/{name}/{shown_name(det.path)}"))
+        masked = shown_name(det.path)
+        lines.append(det.line(f"inputs/{name}/{masked}"))
+        console.append(("  ", det.line(f"inputs/{name}/{det.path.name}")))
         if det.note:
             notes.append(f"note: {det.note}")
+            real = (det.note.replace(masked, det.path.name, 1)
+                    if det.note.startswith(masked) else det.note)
+            console.append(("    ", f"note: {real}"))
     if name not in _DETECTION_SHOWN:
         _DETECTION_SHOWN.add(name)
-        for ln in lines:
-            for _w in _out_wrap(ln, indent="  ", hang="      "):
-                print(_w)
-        for n in notes:
-            for _w in _out_wrap(n, indent="    ", hang="      "):
+        # Lines first, then the notes, as the .diag keeps them.
+        for ind, ln in ([c for c in console if c[0] == "  "]
+                        + [c for c in console if c[0] != "  "]):
+            for _w in _out_wrap(ln, indent=ind, hang="      "):
                 print(_w)
     _txt = "".join(f"{x}\n" for x in lines + notes)
     _diag = cache / f"{name}_detect.diag"
@@ -3181,7 +3216,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # warnings) inline so the user can sanity-check at a
             # glance that each CSV contributed the expected number
             # of rows.
-            echo_parse_stats(out)
+            echo_parse_stats(out, csvs)
         # Outside the rebuild branch on purpose: `run --strict --fast`
         # on a cached parse must hit the same gate.
         if strict and unbooked_lines(out):
