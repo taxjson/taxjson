@@ -34,6 +34,21 @@
 
 ### Added
 
+- **AGENTS.md and a knowledge pack for AI assistants.** AGENTS.md says how to
+  help someone run taxjson (the checks to run first, privacy, no tax advice)
+  and how to change the code (the gate, releases, the conventions the tests
+  enforce). `docs/troubleshooting.md` gives each known problem as the message
+  a user sees, how to check it, the cause, the fix and the code;
+  `docs/architecture-map.md` gives each feature's files and functions.
+  `tests/test_knowledge_pack.py` keeps them true: every file, symbol and
+  command they name must exist, every "Fixed in" must be a release, and they
+  must hold no personal data.
+- **Bug reports: one Markdown template, `.github/ISSUE_TEMPLATE/bug_report.md`,
+  replaces the `bug_report.yml` form.** It asks for the version, Python, OS,
+  the console's messages and the checklist and sanity summaries, never for
+  amounts, account numbers or names, and for a made-up input built from the
+  `examples/*_demo.csv` files instead of a real export. AGENTS.md tells an AI
+  assistant to build the report the same way and show it before filing.
 - **`docs/tax-rules.md` and `docs/settings.md`.** The tax rules page takes each
   rule taxjson applies (Canada and the United States in separate parts) and
   gives its source from REFERENCES.md, its `taxjson tax-logic` rule ids, the
