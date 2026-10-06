@@ -60,6 +60,19 @@ class TestAnalyze(unittest.TestCase):
         self.assertEqual(r, {"joined": [], "suggested": []})
 
     @rule("CA-XLIST-01")
+    def test_distinct_keeps_only_its_own_pair_apart(self):
+        legs = [_leg("SAMPQ.US", "2025-03-03", -100),
+                _leg("SAMPQ.TO", "2025-03-04", 100)]
+        names = _names(SAMPQ_US="SAMPQ ENERGY INC",
+                       SAMPQ_TO="SAMPQ ENERGY INC")
+        r = self._run(legs, names,
+                      map_distinct=[("SAMPQ.TO", "SAMPQ.US")])
+        self.assertEqual(r, {"joined": [], "suggested": []})
+        r = self._run(legs, names,
+                      map_distinct=[("SAMPQ.TO", "SAMPZ.US")])
+        self.assertEqual(len(r["joined"]), 1)
+
+    @rule("CA-XLIST-01")
     def test_ambiguous_pairing_is_only_suggested(self):
         r = self._run([_leg("SAMPQ.US", "2025-03-03", -100),
                        _leg("SAMPQ.TO", "2025-03-04", 100),

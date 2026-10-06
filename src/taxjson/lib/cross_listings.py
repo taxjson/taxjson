@@ -22,9 +22,9 @@ line would, when the evidence is unambiguous:
   disagree on the share designators (class letter, voting, ADR,
   preferred, unit ...) — an ADR never joins its ordinary shares, class A
   never joins class B;
-* no ticker.map rule names X or Y (TOBASE / JOURNAL / GLOBAL / RENAME /
-  DELETE / DISTINCT): the user's map always wins, DISTINCT keeps the two
-  apart;
+* no ticker.map rule renames or deletes X or Y (TOBASE / JOURNAL /
+  GLOBAL / RENAME / DELETE, either side) and no DISTINCT line pairs the
+  two: the user's map always wins, DISTINCT keeps them apart;
 * neither symbol is joined to a third listing by another pair.
 
 Everything else stays a suggestion (`taxjson ticker-map --suggest`). The
@@ -212,11 +212,13 @@ def _names_verdict(nx: Set[Tuple[str, ...]], ny: Set[Tuple[str, ...]]
 def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             shown: Dict[Tuple[str, ...], str], *,
             map_named: Iterable[str] = (),
+            map_distinct: Iterable[Iterable[str]] = (),
             base_currency: Optional[str] = None,
             days: int = PAIR_DAYS) -> Dict[str, List[Pair]]:
     """{"joined": [...], "suggested": [...]}: the cross-listing journals
     the legs show (module docstring)."""
     named = {s.upper() for s in map_named}
+    apart = {frozenset(x.upper() for x in pair) for pair in map_distinct}
     ins = [g for g in legs if g.quantity > 0]
     outs = [g for g in legs if g.quantity < 0]
     # 1. The same symbol's legs cancel (a custody move, a broker switch):
@@ -250,7 +252,8 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             p = Pair(o, i, frm, to,
                      names=(shown.get(min(nx), "") if nx else "",
                             shown.get(min(ny), "") if ny else ""))
-            if o.symbol in named or i.symbol in named:
+            if (o.symbol in named or i.symbol in named
+                    or frozenset((o.symbol, i.symbol)) in apart):
                 continue                # the user's map decides
             if len(ms) > 1 or len(back.get(m, ())) > 1:
                 p.reason = "the legs pair with more than one other leg"

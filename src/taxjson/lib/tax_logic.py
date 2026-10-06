@@ -782,7 +782,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "exports' security names agree on the company and the "
                  "share (class, voting, ADR, preferred, unit); one Info "
                  "line per account names the pairs. A ticker.map rule "
-                 "naming either listing (DISTINCT included) always wins; "
+                 "renaming either listing, or a DISTINCT line for the "
+                 "pair, always wins; "
                  "anything less certain stays a suggestion (`taxjson "
                  "ticker-map --suggest`)."),
             Rule("CA-ACB-11",
@@ -1858,8 +1859,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "quantity, within 5 days) and the exports' security "
                  "names agree on the company and the share (class, "
                  "voting, ADR, preferred, unit); one Info line per "
-                 "account names the pairs. A ticker.map rule naming "
-                 "either listing (DISTINCT included) always wins; "
+                 "account names the pairs. A ticker.map rule renaming "
+                 "either listing, or a DISTINCT line for the pair, "
+                 "always wins; "
                  "anything less certain stays a suggestion (`taxjson "
                  "ticker-map --suggest`)."),
             Rule("US-BASIS-07",

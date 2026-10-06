@@ -2111,16 +2111,27 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
         cfg = _soft_config(cache.parent)
         accounts = [n for n, c in ((cfg.get("accounts") or {}).items())
                     if not (c or {}).get("crypto")]
-        named: frozenset = frozenset()
+        named: set = set()
+        apart: set = set()
         if ticker_map is not None and ticker_map.is_file():
-            from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
-                                                        named_symbols)
+            from taxjson.bin.taxjson_ticker_map import _parse_map_file
             try:
-                named = named_symbols(_parse_map_file(ticker_map)[0])
+                _tm = _parse_map_file(ticker_map)[0]
             except (OSError, ValueError):
-                named = frozenset()
+                _tm = None
+            if _tm is not None:
+                # A rename / DELETE naming a listing decides it; a
+                # DISTINCT line keeps its own pair apart.
+                named = set(_tm.delete)
+                for _d in (_tm.glob, _tm.tobase, _tm.journal):
+                    named.update(_d)
+                    named.update(_d.values())
+                for _dr in _tm.dated:
+                    named.update((_dr.old, _dr.new))
+                apart = set(_tm.distinct)
         legs, names, shown = XL.gather(cache, accounts or [name])
         result = XL.analyze(legs, names, shown, map_named=named,
+                            map_distinct=apart,
                             base_currency=str(settings.get(
                                 "base_currency") or "").upper() or None)
         state = cache / XL.STATE
