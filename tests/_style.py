@@ -151,6 +151,19 @@ def assert_styled(tc, text: str, width: int = 100, allow=()) -> None:
                 + "\n--- output ---\n" + text[:4000])
 
 
+def assert_console(tc, text: str, width: int = 100, allow=()) -> None:
+    """Fail `tc` unless every line of `text` (the run's console, or a
+    command's stderr messages) starts with `==> `, `Info: `, `Warning: `,
+    `Error: ` or a two-space continuation — no blank line, no ATTENTION
+    word, no detection detail (out.console_lint;
+    docs/output-style.md, The run's console)."""
+    from taxjson.lib.out import console_lint
+    probs = console_lint(text, width, allow)
+    if probs:
+        tc.fail("console style:\n  " + "\n  ".join(probs[:20])
+                + "\n--- output ---\n" + text[:4000])
+
+
 # A message label in its captured (width 0) form at the start of a line:
 # shown to a person it is `Info:` / `Warning:` / `Error:` (lib/out).
 _CAPTURED_LABEL = re.compile(

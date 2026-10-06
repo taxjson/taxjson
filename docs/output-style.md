@@ -63,25 +63,36 @@ a person sees **starts with its label**, capitalised:
 | --- | --- |
 | `Error:` | the command could not do what was asked (non-zero exit) |
 | `Warning:` | the result may be wrong or incomplete; act on it |
-| `Warning: ATTENTION: <topic>:` | the run's must-act channel (see below) |
 | `Info:` | information; nothing to do |
 
+The run's must-act channel (ATTENTION) is a `Warning:` to a person; the
+word ATTENTION stays in the captured form only (`warning: ATTENTION:
+<topic>: ...`, what the run and the `.sum` read back). Its topic is
+shown capitalised (`out.ATTENTION_TOPICS`: `short:` is `Short
+position:`, `income year:` is `Income year:` ...).
+
 ```
-Warning: ATTENTION: short: ABC.TO (margin) goes short on 2025-03-04
+Warning: Short position: ABC.TO (margin) goes short on 2025-03-04
   The books sell 10 more than they hold. ...
 Error: no gains files in work/
   Run `taxjson run` first.
 ```
 
+Shown to a person, every line after a message's headline is a
+continuation indented **exactly two spaces** — a detail, a `- ` item and
+its wrapped lines alike (`out.message`, `stage_msg.console_lines`).
+
 **The source.** A message never starts with a program name. The
 command the person typed is not named at all (`Warning: ...`, not
 `taxjson sum: warning: ...`). A line captured from *another* program
-and shown by the command that ran it — a stage's stderr the run echoes,
-a child's error relayed in a detail line — keeps that program's name
-right after the label, as its source: `Error: taxjson-corp-actions: 1
-corp-action event(s) need an election ...`. Messages from a parser or
-the engine name their file or account in the text, and the run shows
-them under the account's heading. That is the one rule.
+and shown by the command that ran it — a child's error relayed in a
+detail line — keeps that program's name right after the label, as its
+source: `Error: taxjson-x: ...`. The one exception is `taxjson run`'s
+console: its stages are its own parts, so a stage's line is shown
+without the stage's name (`Error: 1 corp-action event(s) need an
+election ...`; the .diag keeps it). Messages from a parser or the engine
+name their file or account in the text, and the run shows them after
+the account's step line.
 
 **Shown vs captured.** The label is chosen in one place,
 `lib/out.label` / `out.message` (and `out.relabel` for a captured line
@@ -139,6 +150,70 @@ The shared helpers speak it:
 - An argparse usage error (`run_top_level`, every entry point) is
   `Error: <message>` under the usage line.
 - `_wrap_note` wraps at the house width (it was 78).
+
+## The run's console
+
+What `taxjson run` prints for a person (width > 0, stdout and stderr) is
+read by someone with little attention to spare. Every line starts with
+exactly one of:
+
+| start | meaning |
+| --- | --- |
+| `==> ` | a step the run is doing (`_step` in taxjson_run.py) |
+| `Info: ` / `Warning: ` / `Error: ` | a message, the label at column 0 |
+| two spaces | the continuation of the line above |
+
+No other indentation, no bare line, no blank line (not even between
+accounts), no lower-case label, no `ATTENTION:` word, no stage program
+name (`taxjson-gains:` — the stage is an implementation detail; its
+captured line in work/ keeps it), no `(content: ...)` detection detail
+(work/`<acct>`_detect.diag keeps it). `out.console_lint(text)` checks it;
+tests/test_run_console.py runs it on the style projects.
+
+The captured text never changes for this: at width 0 (TAXJSON_WIDTH=0,
+a stage's stderr in work/*.diag, the `.sum` DIAGNOSTICS) every message
+keeps its bytes. The display form is made at display time —
+`out.relabel` (the label, ATTENTION dropped, the topic capitalised),
+`stage_msg.reword` (a table of the frequent wordy stage notes, keyed on
+their captured text, in a short display form; a line it does not match
+is shown as it is), `stage_msg.console_lines` (the two-space
+continuations, the wrap). A reworded message keeps its meaning and every
+action the reader must take.
+
+The steps, in run order (an account's steps repeat per account; a step
+whose stage is cached under `--fast` is not shown):
+
+| step | when |
+| --- | --- |
+| `==> Rebuilding everything: taxjson's code changed ...` | `--fast` after an upgrade |
+| `==> Reading missing_history.json (openings for sales with no purchase in the files)` | the project has one |
+| `==> Loading currency rates` | always |
+| `==> Downloading USD → CAD rates` | a rate refresh |
+| `==> margin  (taxable, first pass: transfers between your accounts)` | accounts read first so transfers (crypto: sends) pair across them |
+| `==> tfsa  (sheltered)` / `==> margin  (taxable)` / `==> crypto  (taxable, crypto)` | an account's books |
+| `Info: File inputs/tfsa/x.csv → identified as Interactive Brokers` | one per input file (a message, not a step) |
+| `==> Reading 2 files` / `==> Reading 1 Kraken file` | the broker parse (the broker named when the account has several) |
+| `Info: x.csv: 384 tax objects` | one per file parsed |
+| `==> Processing corporate actions` | once per account |
+| `==> Reading tfsa_extra.tt` | a .tt file |
+| `==> Sorting, de-duplicating, mapping tickers, converting currency` | the books (equity) |
+| `==> Applying [[distributions]] from taxjson.toml` | taxable books with distributions |
+| `==> Merging the exports`, `==> Sorting, de-duplicating`, `==> Mapping tickers`, `==> Looking up crypto prices`, `==> Converting currency to CAD` | the books (crypto) |
+| `==> Writing crypto sends inputs/crypto/crypto_sends.tt` | decided sends booked |
+| `==> Calculating capital gains` | the gains |
+| `==> Writing holdings reports/tfsa_holdings.toml` | equity accounts (the native-currency holdings stages are not shown) |
+| `==> Writing summary reports/tfsa.sum` | every account |
+| `==> Combining sheltered accounts` | registered accounts, for the loss checks |
+| `==> Checking crypto for superficial losses with the sheltered accounts` | one crypto account (US: wash sales) |
+| `==> Pooling cost and checking superficial losses across taxable accounts (margin, qt)` | Canada's blended pass (US: `Checking wash sales across ...`; crypto: `... crypto accounts`) |
+| `==> Writing summary reports/margin_wash.sum` | the filing-basis summary |
+| `==> Writing cross-account reports to reports/` | full runs |
+| `==> Writing fees report reports/fees.rpt` | always |
+| `==> Checking the filed years` | filed/ locks exist |
+| `==> Calculating FX gains on cash (fx_cash_gains = true)` | opted in |
+| `==> Done. Reports are in reports/` | the run finished |
+| `==> Checking positions against the broker's holdings files` | `holdings` configured (one message per finding; `taxjson sanity` has the tables) |
+| `==> Before you trust these numbers (docs/getting-started.md, step 5)` | something is incomplete: a `Warning:` per number the totals miss, an `Info:` per check not made, `Info: Then run taxjson checklist ...` |
 
 ## Numbers, dates
 

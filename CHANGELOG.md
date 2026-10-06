@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Changed
+
+- **`taxjson run` reads as a short list of steps and messages.** Every
+  console line now starts with `==> ` (a step the run is doing, in plain
+  words: `==> Reading 2 files`, `==> Processing corporate actions`,
+  `==> Calculating capital gains`, `==> Writing summary reports/tfsa.sum`),
+  `Info:`, `Warning:` or `Error:`, or two spaces when the line above
+  continues; there are no blank lines and no nested indentation. Each
+  input file is one line, `Info: File inputs/<account>/<file> → identified
+  as <broker>` (how it was recognised stays in
+  `work/<account>_detect.diag`); the internal native-currency holdings
+  stages are no longer listed; the end-of-run summary is one `Warning:`
+  or `Info:` per finding; the holdings check names what differs in a few
+  lines (`taxjson sanity` still has the tables). Lines that need action
+  are plain `Warning:` lines with a capitalised topic (`Warning: Short
+  position: ...`); the word ATTENTION, the stage program names and the
+  `(content: ...)` detail stay in the captured text only. Frequent parser
+  notes are shown shorter (Kraken's matched trade rows, ignored cash
+  rows and fees paid in the coin, rows skipped as not tax events, the
+  crypto-sends hint). Every other command's messages follow the same
+  line rule: a detail or list item continues two spaces in. The captured
+  text — work/*.diag, the `.sum` DIAGNOSTICS, reports/, `--json`, exit
+  codes — is byte for byte unchanged.
+
 
 ## v0.20.0 (2026-10-06)
 

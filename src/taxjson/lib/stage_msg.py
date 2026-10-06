@@ -17,10 +17,13 @@ forms:
 
 `console_lines` is the other direction: a captured line the run echoes
 to the console (an ATTENTION or UNBOOKED line from a .diag) shown to the
-person at display time — its label first (`Warning: ATTENTION: ...`,
-lib/out.relabel) and wrapped; the .diag keeps the captured line.
+person at display time — its label first (`Warning: ...`, lib/out.relabel;
+the ATTENTION word is the captured form's), a frequent wordy note in its
+short display form (reword), continuation lines indented exactly two
+spaces, wrapped; the .diag keeps the captured line.
 """
 
+import re
 import sys
 from bisect import bisect_left
 from typing import Iterable, List, Optional
@@ -28,7 +31,7 @@ from typing import Iterable, List, Optional
 from taxjson.lib import out
 
 __all__ = ["say", "message_lines", "console_lines", "split_message",
-           "emit_line"]
+           "emit_line", "reword"]
 
 
 def message_lines(kind: str, text: str, details: Iterable[str] = (), *,
@@ -87,9 +90,22 @@ def split_message(text: str):
     # backticks. Their positions, once (linear in the text, however many
     # breaks an unclosed span holds).
     ticks = [j for j, c in enumerate(text) if c == "`"]
+    # Nor is one inside parentheses (`(a trust's, s.104(13); the T3)`):
+    # the paren depth before each position, once.
+    depth, d = [], 0
+    for c in text:
+        depth.append(d)
+        d += (c == "(") - (c == ")")
+    depth.append(d)
+
+    def _inside(i: int) -> bool:
+        # (the `): ` break closes its group: judged after the paren)
+        j = i + 1 if text.startswith("): ", i) else i
+        return bool(bisect_left(ticks, i) % 2) or depth[j] > 0
+
     for brk in _BREAKS:
         i = text.find(brk, _MIN_HEAD)
-        while i >= 0 and bisect_left(ticks, i) % 2:
+        while i >= 0 and _inside(i):
             i = text.find(brk, i + 1)
         if i >= 0 and (best is None or i < best[0]):
             best = (i, brk)
@@ -101,22 +117,117 @@ def split_message(text: str):
     rest = text[i + len(brk):].strip()
     if not rest:
         return text, ""
-    if rest[0].islower() and brk != "; ":
+    # The detail is a sentence of its own: capitalised — after a `; `
+    # only when it starts with a plain word (never an id or a `code`).
+    if rest[0].islower() and (brk != "; " or re.match(r"[a-z]+ ", rest)):
         rest = rest[0].upper() + rest[1:]
     return head, rest
 
 
-def console_lines(line: str, indent: str = "  ", stream=None,
+def _plural(n, word: str, plural: Optional[str] = None) -> str:
+    n = int(n)
+    return f"{n} {word if n == 1 else (plural or word + 's')}"
+
+
+def _kinds(text: str) -> str:
+    """`deposit x12, transfer x1` -> `12 deposits, 1 transfer`."""
+    out_ = []
+    for part in text.split(", "):
+        m = re.fullmatch(r"(.+?) x(\d+)", part.strip())
+        out_.append(_plural(m.group(2), m.group(1)) if m else part)
+    return ", ".join(out_)
+
+
+# The display form of frequent wordy stage lines (parser notes a person
+# reads on every run): (captured-line pattern, builder of [line in the
+# captured form, detail ...]). Display only — the .diag, the .sum
+# DIAGNOSTICS and every reader keep the captured line. A line no pattern
+# matches is shown as it is (relabelled, wrapped). Keep the meaning and
+# every action a reader must take; drop only the explanation.
+_REWORD = [
+    # lib/brokerages/kraken.py
+    (re.compile(r"note: Kraken ledger (?P<f>.+?): (?P<n>\d+) trade "
+                r"row\(s\) \((?P<t>\d+) trade\(s\)\) are booked from the "
+                r"trades export beside it — every one matched\."),
+     lambda m: [f"note: Kraken {m['f']}: {_plural(m['n'], 'ledger trade row')}"
+                f" matched the trades export"]),
+    (re.compile(r"note: Kraken ledger (?P<f>.+?): ignored (?P<n>\d+) "
+                r"fiat-cash or zero-amount row\(s\) \((?P<k>[^()]*)\) — "
+                r".* is not a tax event\."),
+     lambda m: [f"note: Kraken {m['f']}: ignored "
+                f"{_plural(m['n'], 'fiat/zero row')} ({_kinds(m['k'])}) — "
+                f"not tax events"]),
+    (re.compile(r"note: Kraken trades (?P<f>.+?): (?P<n>\d+) fill\(s\) "
+                r"had the fee taken in the traded coin \(per the ledger\) "
+                r"— .*"),
+     lambda m: [f"note: Kraken {m['f']}: {_plural(m['n'], 'fill')} paid "
+                f"the fee in the traded coin",
+                "Booked as fewer coins received or more given; these fees "
+                "are not in the fee reports."]),
+    (re.compile(r"note: Kraken trades (?P<f>.+?): (?P<n>\d+) fill\(s\) "
+                r"paid their fee with Kraken fee credits \(KFEE\) — .*"),
+     lambda m: [f"note: Kraken {m['f']}: {_plural(m['n'], 'fill')} paid "
+                f"with fee credits (KFEE), booked with no fee"]),
+    # lib/brokerages/base.py emit_skip_summary (every parser)
+    (re.compile(r"note: (?P<f>[^:]+): (?P<n>\d+) recognized non-event "
+                r"row\(s\) not translated — (?P<l>.*?)\.?"),
+     lambda m: [f"note: {m['f']}: {_plural(m['n'], 'row')} skipped (not "
+                f"tax events)", m["l"] + "."]),
+    # bin/taxjson_brokerage.py: the crypto-sends hint, the custody rows
+    # kept aside, the per-file count.
+    (re.compile(r"\s*NOTE: (?P<n>\d+) crypto withdrawal/send\(s\) among "
+                r"them — if any paid for something \(payment\), .*"),
+     lambda m: [f"note: {_plural(m['n'], 'crypto send')} among them: a "
+                f"payment is a sale at fair value",
+                "`taxjson crypto-sends` lists them (a gift is not a sale "
+                "for a US donor; a move to your own wallet needs nothing)."]),
+    (re.compile(r"\s*NOTE: (?P<n>\d+) crypto withdrawal/send\(s\) among "
+                r"them — if any left your ownership \(gift or payment\), "
+                r".*?(?P<us>; with --country usa only a payment is a "
+                r"sale)?\."),
+     lambda m: [f"note: {_plural(m['n'], 'crypto send')} among them: a "
+                f"gift or payment is a disposition at fair value",
+                "`taxjson crypto-sends` lists them (a move to your own "
+                "wallet needs nothing" + ("; with --country usa only a "
+                                          "payment is a sale" if m["us"]
+                                          else "") + ")."]),
+    (re.compile(r"\s+(?P<f>.+?): (?P<n>\d+) TRANSFER row\(s\) kept aside "
+                r"\(custody evidence, not tax events — view with "
+                r"`taxjson transfers`\)"),
+     lambda m: [f"note: {m['f']}: {_plural(m['n'], 'transfer row')} kept "
+                f"aside (not tax events; `taxjson transfers` lists them)"]),
+    (re.compile(r"\s+(?P<f>.+?): (?P<n>\d+) tax objects\b(?P<r>.*)"),
+     lambda m: [f"note: {m['f']}: {m['n']} tax objects{m['r']}"]),
+]
+
+
+def reword(line: str) -> List[str]:
+    """A captured stage line's display form: [line, detail ...] — a
+    frequent wordy note shortened (_REWORD), else [line]. Display only."""
+    for rx, build in _REWORD:
+        m = rx.fullmatch(line)
+        if m:
+            return build(m)
+    return [line]
+
+
+# A line that starts with a person's label (relabelled).
+_LABELLED = re.compile(r"(?:Info|Warning|Error): ")
+
+
+def console_lines(line: str, indent: str = "", stream=None,
                   width_: Optional[int] = None,
                   source: bool = True) -> List[str]:
     """A captured stage line as the run shows it under `indent`: as is
-    when nothing wraps (width 0); else with its label first
-    (lib/out.relabel: `warning: ATTENTION: ...` -> `Warning: ATTENTION:
-    ...`, an old `NOTE:` -> `Info:`; `source` keeps the program name a
-    line carried after the label, False drops it), unchanged when it
-    fits, else a marker line becomes its headline and an indented detail
-    paragraph, and an indented continuation line wraps under its own
-    indentation. Display only — the .diag keeps the one line."""
+    when nothing wraps (width 0); else in its display form (reword: a
+    frequent wordy note shortened), with its label first (lib/out.relabel:
+    `warning: ATTENTION: ...` -> `Warning: ...`, an old `NOTE:` ->
+    `Info:`; `source` keeps the program name a line carried after the
+    label, False drops it), at `indent` whatever indentation it had; a
+    long one becomes its headline and a detail paragraph. A line that
+    is not a message (an indented continuation of the one above) is
+    shown indented exactly two spaces past `indent`; so are details.
+    Display only — the .diag keeps the one line."""
     w = out.width(stream if stream is not None else sys.stdout) \
         if width_ is None else width_
     if w <= 0:
@@ -124,20 +235,21 @@ def console_lines(line: str, indent: str = "  ", stream=None,
     # Shown to a person: a control character from broker data (an ESC
     # sequence) is shown escaped, never sent to the terminal; the label
     # starts the line.
-    line = out.relabel(out.printable(line), source=source)
-    body = line.lstrip()
-    own = line[:len(line) - len(body)]
-    shown = indent + line
-    if len(shown) <= w:
-        return [shown]
-    if own:
-        lead = indent + own
-        return out.wrap(line.strip(), w, lead, lead + "  ")
-    head, rest = split_message(line.strip())
-    lines = out.wrap(head, w, indent, indent + out.DETAIL_INDENT)
-    if rest:
-        lines += out.wrap(rest, w, indent + out.DETAIL_INDENT,
-                          indent + out.DETAIL_INDENT)
+    shown = reword(out.printable(line))
+    body = out.relabel(shown[0], source=source).strip()
+    cont = indent + out.DETAIL_INDENT
+    if shown[0][:1].isspace() and not _LABELLED.match(body):
+        # The continuation of the message above.
+        lines = out.wrap(body, w, cont, cont)
+    elif len(indent + body) <= w:
+        lines = [indent + body]
+    else:
+        head, rest = split_message(body)
+        lines = out.wrap(head, w, indent, cont)
+        if rest:
+            lines += out.wrap(rest, w, cont, cont)
+    for d in shown[1:]:
+        lines += out.wrap(d, w, cont, cont)
     return lines
 
 

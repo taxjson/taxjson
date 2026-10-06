@@ -227,6 +227,15 @@ def print_holdings_diff(prev: Dict[str, Tuple[float, float]],
                 f"({sign}{_fmt_qty(delta)})"
             )
     if changes:
+        from taxjson.lib.out import width as _w
+        if _w(sys.stdout) > 0:
+            # The run's console: a message and its two-space continuation
+            # lines (docs/output-style.md, The run's console).
+            print(f"Info: holdings changed since the last run "
+                  f"({len(changes)}):")
+            for line in changes:
+                print("  " + line.strip())
+            return
         print(f"  holdings changes vs prior run ({len(changes)}):")
         for line in changes:
             print(line)
@@ -278,11 +287,15 @@ def echo_parse_stats(out_path: Path, files=None) -> None:
             continue
         echoing = line.startswith((UNBOOKED_PREFIX, ATTENTION_PREFIX))
         if _PARSE_COUNT_RE.match(line):
-            # Keep the parser's own leading indent — it visually nests
-            # the per-file counts under the `parse {broker}: …` header.
-            # (A file name's control characters are shown escaped.)
-            from taxjson.lib.out import shown
-            print(shown(line))
+            # Shown to a person: `Info: <file>: N tax objects`
+            # (stage_msg.reword). Captured: the parser's own line, its
+            # leading indent kept. (A file name's control characters
+            # are shown escaped.)
+            from taxjson.lib.out import shown, width as _w
+            if _w(sys.stdout) > 0:
+                _echo_captured(line)
+            else:
+                print(shown(line))
         elif line.startswith("warning: ") and " parsed to 0 transactions" in line:
             # Indent the warning to match per-file count nesting.
             _echo_captured(line)
@@ -324,9 +337,15 @@ def _echo_captured(line: str, indent: str = "  ", file=None,
     the marker first line keeps its prefix, the rest is an indented
     headline + detail (lib/stage_msg.console_lines). The .diag and the
     .sum DIAGNOSTICS keep the one line. `source=False`: the run's own
-    line (its program name is not shown)."""
+    line (its program name is not shown). Shown to a person, the run's
+    console rule applies whatever `indent` and `source` say: the label
+    at column 0, continuations two spaces in, no stage program name
+    (docs/output-style.md, The run's console)."""
     from taxjson.lib.stage_msg import console_lines
+    from taxjson.lib.out import width as _w
     file = sys.stdout if file is None else file
+    if _w(file) > 0:
+        indent, source = "", False
     for ln in console_lines(line, indent, stream=file, source=source):
         print(ln, file=file)
 
@@ -352,21 +371,36 @@ def _out_relpath(path: Path, root: Path) -> str:
     return relpath(path, root)
 
 
-def _wrote(path: Path, root: Path, what: str = "wrote") -> None:
-    """`  wrote reports/margin.sum`: a file the run wrote, named
-    relative to the project."""
+def _step(text: str, file=None) -> None:
+    """`==> <text>`: a step the run is doing, on its console
+    (docs/output-style.md, The run's console: short, plain, one verb
+    form — the table there lists every step)."""
+    from taxjson.lib.out import wrap
+    file = sys.stdout if file is None else file
+    for ln in wrap("==> " + text, None, "", "  ", stream=file):
+        print(ln, file=file)
+
+
+def _wrote(path: Path, root: Path, what: str = "summary") -> None:
+    """`==> Writing summary reports/margin.sum`: a file the run writes,
+    named relative to the project."""
     from taxjson.lib.out import relpath
     shown = relpath(path, root)
-    print(f"  {what} {shown}{'/' if path.is_dir() else ''}")
+    _step(f"Writing {what} {shown}{'/' if path.is_dir() else ''}")
 
 
 def _say(kind: str, text: str, *details: str, prog: Optional[str] = None,
          indent: str = "", file=None) -> None:
     """A run-console message in the house style: `[<prog>: ]<kind>:
-    <headline>` and indented `details`, nested under `indent` (stderr
-    by default). kind: note | warning | attention | error."""
+    <headline>` and indented `details` (stderr by default). kind: note |
+    warning | attention | error. `indent` nests the captured form
+    (width 0) only: shown to a person the label starts the line and
+    its continuations are two spaces in (The run's console)."""
     from taxjson.lib.stage_msg import message_lines
+    from taxjson.lib.out import width as _w
     file = sys.stderr if file is None else file
+    if _w(file) > 0:
+        indent = ""
     for ln in message_lines(kind, text, details, prog=prog, indent=indent,
                             stream=file):
         print(ln, file=file)
@@ -2060,7 +2094,31 @@ def _report_detection(name: str, found, cache: Path) -> None:
             real = (det.note.replace(masked, on_disk, 1)
                     if det.note.startswith(masked) else det.note)
             console.append(("    ", f"note: {real}"))
-    if name not in _DETECTION_SHOWN:
+    from taxjson.lib.out import width as _width
+    if name not in _DETECTION_SHOWN and _width(sys.stdout) > 0:
+        _DETECTION_SHOWN.add(name)
+        # Shown to a person (The run's console): one `Info:` line per
+        # file, what it was identified as — how (the content's header)
+        # stays in work/<acct>_detect.diag; then the notes.
+        for det in found:
+            on_disk = one_line(det.path.name)
+            where = f"inputs/{name}/{on_disk}"
+            if det.positions:
+                text = (f"Info: File {where} is a positions report, not "
+                        f"activity: skipped (`taxjson sanity` and "
+                        f"`taxjson opening` read it)")
+            elif det.broker:
+                text = f"Info: File {where} → identified as {det.display}"
+            else:
+                text = (f"Warning: File {where} → not identified"
+                        + (f" ({det.reason})" if det.reason else ""))
+            for _w in _out_wrap(text, hang="  "):
+                print(_w)
+        for ind, ln in console:
+            if ind != "  ":
+                for _w in _out_wrap(_labelled_note(ln), hang="  "):
+                    print(_w)
+    elif name not in _DETECTION_SHOWN:
         _DETECTION_SHOWN.add(name)
         # Lines first, then the notes, as the .diag keeps them (a note
         # shown with its label first, lib/out.labelled).
@@ -2073,6 +2131,12 @@ def _report_detection(name: str, found, cache: Path) -> None:
     _diag = cache / f"{name}_detect.diag"
     if _read_work_stamp(_diag) != _txt:
         _write_work_stamp(_diag, _txt)
+
+
+def _labelled_note(line: str) -> str:
+    """A `note: ...` line as a person is shown it (lib/out.labelled)."""
+    from taxjson.lib.out import labelled
+    return labelled(line)
 
 
 def _is_generic_group(broker: str) -> bool:
@@ -2318,7 +2382,7 @@ def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
     parts: List[bytes] = []
     try:
         for src in sources:
-            print(f"  fetching {src} → {base} rates")
+            _step(f"Downloading {src} → {base} rates")
             parts.append(run_capture(_cmd("taxjson-to-base-curr") + [src, base]))
     except Exception as exc:
         # A refresh attempt (e.g. offline, yfinance hiccup) must not turn a
@@ -2374,9 +2438,10 @@ def _resolve_manifest(acct_dir: Path, cache: Path, name: str,
         # intact legacy copy on every later run (A2-0218).
         from taxjson.lib.safe_write import write_atomic
         write_atomic(user_manifest, legacy.read_text(encoding="utf-8"))
-        print(f"  migrated elections manifest → {user_manifest} "
-              f"(version-control this file; the work/ copy is no longer "
-              f"read once this exists)")
+        _say("note", f"migrated the elections manifest to "
+             f"{user_manifest}",
+             "Version-control this file; the work/ copy is no longer "
+             "read once it exists.", file=sys.stdout)
         return user_manifest
     if create:
         acct_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -2724,8 +2789,10 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
             status, dups = getattr(e, "status", ""), getattr(e, "dups", [])
             # A declared disposition the run could not book (R1-104).
             _problems.append((UNBOOKED_PREFIX, str(e)))
-        if status in ("written", "removed"):
-            print(f"  crypto-sends: inputs/{name}/{CS.TT_NAME} {status}")
+        if status == "written":
+            _step(f"Writing crypto sends inputs/{name}/{CS.TT_NAME}")
+        elif status == "removed":
+            _step(f"Removing crypto sends inputs/{name}/{CS.TT_NAME}")
         # Booked twice (A2-0127): --strict stops, the .sum says so.
         _dups = _dup_warning(name, dups)
     except CS.RefusedDecision as e:
@@ -3077,14 +3144,15 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # silently vanished from every report at exit 0 (REVIEW #20).
 
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _kind = (f"{'taxable' if is_taxable else 'sheltered'}"
+             f"{', crypto' if is_crypto else ''}")
     if parse_only:
-        print(f"==> {name}  (crypto exports first: sends pair across "
-              f"accounts)" if is_crypto else
-              f"==> {name}  (transfer evidence first: moves between your "
-              f"accounts pair across them)")
+        # Read first so moves between your accounts pair across them.
+        _step(f"{name}  ({_kind}, first pass: "
+              f"{'sends' if is_crypto else 'transfers'} between your "
+              f"accounts)")
     else:
-        print(f"==> {name}  ({'taxable' if is_taxable else 'sheltered'}"
-              f"{', crypto' if is_crypto else ''})")
+        _step(f"{name}  ({_kind})")
     # How each input CSV was routed: one line per file (owner request —
     # detection must be visible, never a silent file-name guess).
     _report_detection(name, _detected, cache)
@@ -3197,7 +3265,11 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 if _m.exists():
                     deps.append(_m)
         if force or needs_rebuild(out, *deps):
-            print(f"  parse {broker}: {len(csvs)} file(s)")
+            from taxjson.lib.brokerages.detect import DISPLAY_NAMES
+            _step(f"Reading {len(csvs)} "
+                  + (f"{DISPLAY_NAMES.get(broker, broker)} "
+                     if len(grouped) > 1 else "")
+                  + ("file" if len(csvs) == 1 else "files"))
             # --strict: a schema ERROR (negative trade net, zero split
             # ratio, a notional that contradicts the row's declared
             # contract multiplier ...) stops the run instead of
@@ -3309,8 +3381,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             _side = cache / f"{name}_{_b}_transfers.json"
             if _b not in grouped and _side.exists():
                 _side.unlink()
-                print(f"  removed stale {_side.name} (its input files are "
-                      f"gone)")
+                _say("note", f"removed stale work/{_side.name} (its input "
+                     f"files are gone)", indent="  ", file=sys.stdout)
         return None
 
     # 1b. crypto sends: an outgoing transfer that never arrived on
@@ -3344,6 +3416,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
              prog=_PROG)
     if not is_crypto and _country_has_corp_rules(country):
         manifest_path = _resolve_manifest(acct_dir, cache, name, create=True)
+        _corp_step = False
         for broker, csvs in grouped.items():
             if broker not in CORP_ACTION_BROKERS:
                 continue
@@ -3360,7 +3433,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                                       src_manifest, rates,
                                       *([ticker_map] if ticker_map
                                         else [])):
-                print(f"  corp-actions {broker}")
+                if not _corp_step:
+                    _step("Processing corporate actions")
+                    _corp_step = True
                 cmd = _cmd("taxjson-corp-actions") + [
                     "--account-name", name,
                     "--country", country,
@@ -3445,7 +3520,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                  f"{tt.stem[:-len(_clash)] + _clash.replace('_', '-')}.tt")
         out = tt_json_path(cache, name, tt.name)
         if force or needs_rebuild(out, tt, src_manifest):
-            print(f"  convert-tt {_mask_ids_in_path(tt.name)}")
+            _step(f"Reading {_mask_ids_in_path(tt.name)}")
             run_to_file(_cmd("taxjson-convert-tt") + ["--account-name", name, str(tt)],
                         out)
         tt_jsons.append(out)
@@ -3495,8 +3570,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         for _victim in (_stale, _stale.with_name(_stale.name + ".diag")):
             if _victim.exists():
                 _victim.unlink()
-                print(f"  removed stale {_victim.name} (its input "
-                      f"files are gone)")
+                _say("note", f"removed stale work/{_victim.name} (its "
+                     f"input files are gone)", indent="  ",
+                     file=sys.stdout)
 
     sources = tt_jsons + parsed + corp_files
     # Shares that arrived by transfer from outside the books: booked at
@@ -3531,11 +3607,11 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         # only kr_*.csv) removes its parsed JSON from `sources`, and
         # without the manifest nothing newer remains to dirty `merged`.
         if force or needs_rebuild(merged, *sources, src_manifest):
-            print("  merge")
+            _step("Merging the exports")
             run_to_file(_cmd("taxjson-merge") + [str(p) for p in sources], merged)
         sorted_ = cache / f"{name}_sorted.json"
         if force or needs_rebuild(sorted_, merged):
-            print("  sort + dedup")
+            _step("Sorting, de-duplicating")
             run_to_file(_cmd("taxjson-sort") + ["--dedup", str(merged)], sorted_)
         # ticker.map GLOBAL/DELETE apply to crypto books too — the
         # README's contract is "every stage", but this path has no
@@ -3548,7 +3624,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         if ticker_map:
             mapped = cache / f"{name}_mapped.json"
             if force or needs_rebuild(mapped, sorted_, ticker_map):
-                print("  ticker-map (GLOBAL/DELETE)")
+                _step("Mapping tickers")
                 run_to_file(_cmd("taxjson-ticker-map") + [
                     str(sorted_), "--map", str(ticker_map),
                     "--global-only"], mapped)
@@ -3580,7 +3656,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         if (_read_work_stamp(_cstamp) or "").strip() != _cstate:
             _write_work_stamp(_cstamp, _cstate + "\n")
         if force or needs_rebuild(filled, mapped, _cstamp):
-            print("  fill-crypto-prices")
+            _step("Looking up crypto prices")
             run_to_file(_cmd("taxjson-fill-crypto") + [
                 "--project-root", str(inputs_dir.parent), str(mapped)],
                 filled)
@@ -3593,7 +3669,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         echo_attention_lines(filled,
                              prefix=_ATT_CID[len(ATTENTION_PREFIX) + 1:])
         if force or needs_rebuild(base_json, filled, rates):
-            print(f"  convert-currency → {base_currency}")
+            _step(f"Converting currency to {base_currency}")
             run_to_file(_cmd("taxjson-convert-currency") + [
                 str(filled), "--to", base_currency, "--rates", str(rates),
                 "--country", country,
@@ -3655,7 +3731,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             + ([incomplete_history]
                if _apply_dists and incomplete_history else [])
         if force or needs_rebuild(base_json, *deps):
-            print("  merge2 (sort, dedup, ticker-map, convert-currency, validate)")
+            _step("Sorting, de-duplicating, mapping tickers, converting "
+                  "currency")
             if not _apply_dists:
                 run_to_file(cmd, base_json)
             else:
@@ -3668,7 +3745,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 _stage = base_json.with_name(base_json.name + ".stage")
                 try:
                     run_to_file(cmd, _stage)
-                    print("  apply-distributions ([[distributions]])")
+                    _step("Applying [[distributions]] from taxjson.toml")
                     from taxjson.lib.dispatch import run_cmd as _run_cmd_d
                     _dres = _run_cmd_d(
                         _cmd("taxjson-apply-distributions") + [
@@ -3788,7 +3865,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         gains_deps.append(incomplete_history)
     cmd.append(str(base_json))
     if force or needs_rebuild(gains_json, *gains_deps):
-        print("  gains")
+        _step("Calculating capital gains")
         run_to_file(cmd, gains_json)
     # The gains stage's ATTENTION lines, from the persisted .diag on
     # EVERY run, cached or not: a broker-coded CLOSING row the books
@@ -3817,7 +3894,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         _die(f"--strict: {name}: {len(_shorts)} position(s) go short where "
              f"none can exist — history is missing",
              "A registered account, spot crypto, or a sale the broker "
-             "codes closing: see the ATTENTION short: lines above. Spot "
+             "codes closing: see the Short position warnings above. Spot "
              "crypto and registered accounts cannot be short.")
     if is_taxable:
         _warn_expired_open_options(name, gains_json, cache, year,
@@ -3840,8 +3917,6 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         raw_deps = (list(sources) + [src_manifest]
                     + ([ticker_map] if ticker_map else []))
         if force or needs_rebuild(raw_json, *raw_deps):
-            print(f"  raw merge (sort, dedup"
-                  f"{', ticker.map' if ticker_map else ''})")
             raw_cmd = _cmd("taxjson-merge2") + ["--sort", "--dedup"]
             if ticker_map:
                 raw_cmd += ["--map", str(ticker_map)]
@@ -3873,8 +3948,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                            cache / f"{name}_raw_base_gains.json"):
                 if _stale.exists():
                     _stale.unlink()
-                    print(f"  removed stale {_stale.name}",
-                          file=sys.stderr)
+                    _say("note", f"removed stale work/{_stale.name}",
+                         indent="  ")
         else:
             raw_gains = cache / f"{name}_raw_gains.json"
             # missing_history.json applies to the native books too:
@@ -3888,7 +3963,6 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             _ph_deps = ([incomplete_history]
                         if incomplete_history is not None else [])
             if force or needs_rebuild(raw_gains, raw_json, *_ph_deps):
-                print("  raw gains")
                 # Match the country to the rest of the pipeline (it is
                 # required; it used to default to Canada, and the US
                 # raw-holdings inventory would aggregate FIFO lots as a
@@ -3909,7 +3983,6 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # whether a position is in a gain or loss in base-currency terms.
             raw_base_json = cache / f"{name}_raw_base.json"
             if force or needs_rebuild(raw_base_json, raw_json, rates):
-                print(f"  raw convert-currency → {base_currency}")
                 # capture_diag here (unlike the other raw stages): convert-currency
                 # emits its --default-rate FX-fallback summary on stderr, and a
                 # silently-defaulted rate would corrupt base_total_cost. Persisting
@@ -3921,7 +3994,6 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             raw_base_gains = cache / f"{name}_raw_base_gains.json"
             if force or needs_rebuild(raw_base_gains, raw_base_json,
                                       *_ph_deps):
-                print("  raw base gains")
                 run_to_file(_cmd("taxjson-gains") + [
                     "--country", country,
                 ] + option_timing_flags(settings)
@@ -3971,7 +4043,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                            "--trades", str(raw_json)]
             export_cmd.append(str(raw_gains))
             run_to_file(export_cmd, holdings_toml, capture_diag=False)
-            _wrote(holdings_toml, reports_dir.parent)
+            _wrote(holdings_toml, reports_dir.parent, "holdings")
             # Surface quantity changes vs the prior run so the user can
             # sanity-check trades at a glance (e.g. "I didn't expect SAMPLG
             # to move — did I import the wrong file?"). Silent on the
@@ -4049,11 +4121,18 @@ def _diagnostics_banner(cache: Path, account: str, *,
             f"{diag}\n{rule}\n\n").encode()
 
 
+def _wash_rule_words(settings: Dict[str, Any]) -> str:
+    """The country's loss-denial rule, plural, for a console step."""
+    return ("wash sales" if _country(settings) in ("us", "usa")
+            else "superficial losses")
+
+
 def stage_wash_pass(name: str, settings: Dict[str, Any], cache: Path, reports_dir: Path,
                     sheltered_base: Path,
                     incomplete_history: Optional[Path] = None) -> None:
     """Re-run gains with --sheltered to apply cross-account wash sale."""
-    print(f"==> {name} wash-radar pass")
+    _step(f"Checking {name} for {_wash_rule_words(settings)} with the "
+          f"sheltered accounts")
     base_json = cache / f"{name}_base.json"
     wash_gains = cache / f"{name}_gains_wash.json"
     wash_traces = cache / f"{name}_gains_wash.traces"
@@ -4547,7 +4626,7 @@ def stage_own_account_moves(root: Path, cfg: Dict[str, Any],
              f"by hand (US-BASIS-05).", indent="  ")
     if unpaired and strict:
         _die(f"--strict: {len(unpaired)} transfer(s) between your own "
-             f"taxable accounts that do not pair (ATTENTION above) — "
+             f"taxable accounts that do not pair (warning above) — "
              f"aborting")
     return moves
 
@@ -4597,8 +4676,16 @@ def stage_blended_wash_pass(names: List[str],
     Single-account projects produce identical numbers by construction.
     The per-account `<name>.sum` stays the isolated pre-blend baseline —
     comparing the pair shows exactly what blending changed."""
-    print(f"==> blended taxable {'crypto ' if tag != 'blend' else ''}"
-          f"pass ({', '.join(names)})")
+    _us = _normalize_country(settings["country"]) in ("us", "usa")
+    _what = "crypto" if tag != "blend" else "taxable"
+    if no_wash:
+        _step(f"Carrying lots across {_what} accounts ({', '.join(names)})")
+    elif _us:
+        _step(f"Checking wash sales across {_what} accounts "
+              f"({', '.join(names)})")
+    else:
+        _step(f"Pooling cost and checking superficial losses across "
+              f"{_what} accounts ({', '.join(names)})")
     # Dot-prefixed intermediates: pathlib globs DO match leading dots
     # (`*_base.json` matches `.blend_base.json`), so every discovery
     # site — resolve_gains_files and the radar/missing-history fallback
@@ -4648,7 +4735,7 @@ def stage_blended_wash_pass(names: List[str],
            if ln.startswith(ATTENTION_PREFIX + " own-account move: ")]
     if _mv and strict:
         _die(f"--strict: {len(_mv)} move(s) between your own accounts "
-             f"the sending account's lots do not cover (ATTENTION above) "
+             f"the sending account's lots do not cover (warning above) "
              f"— aborting")
     # The blended run's stderr lands in .blend_gains_wash.json.diag —
     # dot-prefixed, so collect_diagnostics' {account}_*.diag glob can
@@ -4766,10 +4853,9 @@ def _sweep_retired_exports(reports_dir: Path) -> None:
             f"{reports_dir.name}/exports/")
     if removed_dir:
         what += " and the folder"
-    for _ln in _out_wrap(f"removed {what} (the Seeking Alpha / FastGraph / "
-                         f"TradingView exports were removed)",
-                         indent="  ", hang="    "):
-        print(_ln)
+    _say("note", f"removed {what} (the Seeking Alpha / FastGraph / "
+         f"TradingView exports were removed)", indent="  ",
+         file=sys.stdout)
 
 
 def _duplicate_input_files(inputs_dir: Path,
@@ -4940,7 +5026,8 @@ def stage_cross_reports(all_gains: List[Path],
                         *, country: str) -> None:
     if not all_gains:
         return
-    print("==> cross-account reports")
+    _step(f"Writing cross-account reports to "
+          f"{_out_relpath(reports_dir, reports_dir.parent)}/")
     run_to_file(_cmd("taxjson-ccd-gains") + [str(p) for p in all_gains],
                 reports_dir / "ccd.rpt", capture_diag=False)
     run_to_file(_cmd("taxjson-leaps-gains") + [str(p) for p in all_gains],
@@ -5002,7 +5089,6 @@ def stage_cross_reports(all_gains: List[Path],
         if ticker_map:
             cmd += ["--map", str(ticker_map)]
         run_to_file(cmd, reports_dir / "crosslistings.rpt", capture_diag=False)
-    _wrote(reports_dir, reports_dir.parent)
 
 
 def stage_fees(cache: Path, settings: Dict[str, Any], rates: Path,
@@ -5010,7 +5096,7 @@ def stage_fees(cache: Path, settings: Dict[str, Any], rates: Path,
     """Trading-fee report by brokerage, converted to the base currency for a
     cross-broker comparison. Reads the parsed per-broker JSONs in the cache
     (the only place the brokerage tag survives), year-scoped to the tax year."""
-    print("==> fees report")
+    _wrote(reports_dir / "fees.rpt", reports_dir.parent, "fees report")
     # capture_diag=True: taxjson-fees-sum emits FX default-rate fallback and
     # skipped-file warnings on stderr; persist them to the .diag so a silently
     # wrong rate can't slip through (the report body carries them too).
@@ -5021,7 +5107,6 @@ def stage_fees(cache: Path, settings: Dict[str, Any], rates: Path,
         "--to", settings["base_currency"], "--rates", str(rates),
     ] + (["--ticker-map", str(_tm)] if _tm.exists() else []),
         reports_dir / "fees.rpt")
-    _wrote(reports_dir / "fees.rpt", reports_dir.parent)
 
 
 # ---------------------------------------------------------------- entry points
@@ -5227,12 +5312,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     if not args.force:
         _old_fp = (_read_work_stamp(_code_stamp) or "").strip()
         if _old_fp != _code_fp:
-            print("==> rebuilding everything: taxjson's code changed since "
-                  "the cached stages were built")
-            for _ln in _out_wrap("(or no complete run recorded it); "
-                                 "--fast applies from the next run",
-                                 indent="  "):
-                print(_ln)
+            _step("Rebuilding everything: taxjson's code changed since the "
+                  "cached stages were built (or no complete run recorded "
+                  "it); --fast applies from the next run")
             args.force = True
     _drop_work_file(_code_stamp)
     # A project map that exists as a NAME but cannot be opened (a
@@ -5311,14 +5393,14 @@ def cmd_run(args: argparse.Namespace) -> None:
     _ph_marker = cache / ".missing_history_applied"
     _ph_marker_old = cache / ".phantoms_applied"
     if mh_arg:
-        print(f"==> missing-history openings: {mh_file.name}")
-        print("  (sales with no purchase in the files)")
+        _step(f"Reading {mh_file.name} (openings for sales with no "
+              f"purchase in the files)")
         cache.mkdir(parents=True, exist_ok=True, mode=0o700)
         _ph_marker.write_text(str(mh_file))
         _ph_marker_old.unlink(missing_ok=True)
     elif _ph_marker.exists() or _ph_marker_old.exists():
-        print("==> missing_history.json removed — invalidating cached "
-              "gains built with it")
+        _step("missing_history.json removed: rebuilding the gains built "
+              "with it")
         _ph_marker.unlink(missing_ok=True)
         _ph_marker_old.unlink(missing_ok=True)
         import os as _os
@@ -5347,8 +5429,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     _maps_before = (_read_work_stamp(_maps_marker) or "").split()
     _maps_removed = sorted(set(_maps_before) - set(_maps_now))
     if _maps_removed:
-        print(f"==> {', '.join(_maps_removed)} removed — invalidating "
-              f"cached books built with it")
+        _step(f"{', '.join(_maps_removed)} removed: rebuilding the books "
+              f"built with it")
         import os as _os
         for _f in cache.glob("*_sources.list"):
             if not _f.name.startswith("."):
@@ -5369,10 +5451,10 @@ def cmd_run(args: argparse.Namespace) -> None:
              indent="  ")
     if _dup_inputs and getattr(args, "strict", False):
         _die("--strict: the same export file is in two accounts "
-             "(ATTENTION above)", "Its rows would be booked twice — "
+             "(warning above)", "Its rows would be booked twice — "
              "nothing was built.")
 
-    print("==> currency rates")
+    _step("Loading currency rates")
     rates = stage_currency_rates(settings, cache)
 
     sheltered_items = [(n, c) for n, c in accounts.items()
@@ -5515,14 +5597,12 @@ def cmd_run(args: argparse.Namespace) -> None:
         _sheltered_merge_inputs = (
             [o["base"] for _, o in sheltered_outputs]
             + [p for p in _others if p.exists()])
-        print("==> rebuilding sheltered_base.json")
-        for _ln in _out_wrap(
-                f"from this run's {args.account} book plus the other "
-                f"sheltered accounts' last-built books"
-                + (f" (no book for {', '.join(_missing)}: no inputs, or "
-                   f"deferred on elections)" if _missing else ""),
-                indent="  "):
-            print(_ln)
+        _step("Combining sheltered accounts")
+        _say("note", f"from this run's {args.account} book plus the other "
+             f"sheltered accounts' last-built books"
+             + (f" (no book for {', '.join(_missing)}: no inputs, or "
+                f"deferred on elections)" if _missing else ""),
+             indent="  ", file=sys.stdout)
     _pending_sheltered = {pe.account for pe in pending_accounts}
     if (not _sheltered_merge_inputs and not args.account
             and not _pending_sheltered):
@@ -5535,10 +5615,12 @@ def cmd_run(args: argparse.Namespace) -> None:
                        cache / "sheltered_base.json.diag"):
             if _ghost.exists():
                 _ghost.unlink()
-                print(f"  removed stale {_ghost.name} (no sheltered "
-                      f"account has books)")
+                _say("note", f"removed stale work/{_ghost.name} (no "
+                     f"sheltered account has books)", indent="  ",
+                     file=sys.stdout)
     if _sheltered_merge_inputs:
-        print("==> merge sheltered accounts → sheltered_base.json")
+        if not args.account:
+            _step("Combining sheltered accounts")
         sheltered_base = cache / "sheltered_base.json"
         run_to_file(_cmd("taxjson-merge")
                     + [str(p) for p in _sheltered_merge_inputs],
@@ -5695,8 +5777,9 @@ def cmd_run(args: argparse.Namespace) -> None:
                            reports_dir / f"{_n}_wash.sum"):
                 if _stale.exists():
                     _stale.unlink()
-                    print(f"  removed stale {_stale.name} ({_n} is "
-                          f"sheltered: no wash pass)")
+                    _say("note", f"removed stale {_stale.name} ({_n} is "
+                         f"sheltered: no wash pass)", indent="  ",
+                         file=sys.stdout)
 
     if pending_accounts:
         # Some account(s) stopped at unresolved corp-action elections.
@@ -5739,7 +5822,8 @@ def cmd_run(args: argparse.Namespace) -> None:
                                                              []))
                 _sets.append(f"  taxjson elect {pe.account} --set "
                              f"{ev['event_id']}=<{opts}>")
-        print(file=sys.stderr)
+        if _out.width(sys.stderr) <= 0:
+            print(file=sys.stderr)
         for ln in _out.message(
                 "error", f"{_n} account{'s' if _n != 1 else ''} "
                 f"need{'' if _n != 1 else 's'} corp-action elections "
@@ -5815,7 +5899,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         if _shared_brokers and getattr(args, "strict", False):
             # Every row of that broker account is booked twice (A2-0366).
             _die("--strict: one broker account feeds two taxjson "
-                 "accounts (ATTENTION above) — aborting.")
+                 "accounts (warning above) — aborting.")
         if _crypto_blend:
             _warn_cross_taxable_overlap(
                 [(n, o["base"]) for n, o, c in taxable_outputs if c],
@@ -5838,14 +5922,16 @@ def cmd_run(args: argparse.Namespace) -> None:
             # declaring the wash pass skipped was a false all-clear
             # that the next full run contradicted with DRIFTED
             # (2026-09 audit). Say so instead of checking.
-            print("==> filed-year drift check")
+            _step("Checking the filed years")
             for _year, _ in _snaps:
-                print(f"  filed {_year}: not checked (single-account "
-                      f"run — wash pass skipped; run without --account)")
+                _say("note", f"filed {_year}: not checked (a single-account "
+                     f"run skips the wash pass; run without --account)",
+                     indent="  ", file=sys.stdout)
         elif _snaps:
-            print("==> filed-year drift check")
+            _step("Checking the filed years")
             _check_filed_years(root, cache, settings,
-                               strict=getattr(args, "strict", False))
+                               strict=getattr(args, "strict", False),
+                               console=True)
     except SystemExit:
         raise
     except Exception as _e:              # advisory guard, never a crash
@@ -5910,19 +5996,23 @@ def cmd_run(args: argparse.Namespace) -> None:
             _say("warning", f"FILING REQUIRED for {len(_obligations)} "
                  f"election(s) — the deferral is only valid with the "
                  f"paperwork", prog=_PROG)
+            from taxjson.lib.out import width as _ow
+            _shown = _ow(sys.stderr) > 0
             for _what, _todo in _obligations:
-                for _ln in _out_wrap(_what, indent="  - ", hang="    ",
-                                     file=sys.stderr):
+                # Shown to a person: continuation lines, two spaces in.
+                for _ln in _out_wrap(_what, indent="  " if _shown else
+                                     "  - ", hang="  " if _shown else
+                                     "    ", file=sys.stderr):
                     print(_ln, file=sys.stderr)
-                for _ln in _out_wrap(_todo, indent="    ",
-                                     file=sys.stderr):
+                for _ln in _out_wrap(_todo, indent="  " if _shown else
+                                     "    ", file=sys.stderr):
                     print(_ln, file=sys.stderr)
     except Exception:
         pass                          # reminder must never break a run
 
     if not args.account:
         _code_stamp.write_text(_code_fp + "\n", encoding="utf-8")
-    print(f"\nDone. Reports in {_out_relpath(reports_dir, root)}/")
+    _step(f"Done. Reports are in {_out_relpath(reports_dir, root)}/")
 
     # Broker-positions cross-check, when taxjson.toml declares any
     # account's `holdings` files. A WARNING, never a failing exit:
@@ -5933,7 +6023,10 @@ def cmd_run(args: argparse.Namespace) -> None:
     # by a split, an option class split).
     if not args.account and any((_a or {}).get("holdings")
                                 for _a in cfg.get("accounts", {}).values()):
-        print("\n==> holdings sanity (taxjson.toml `holdings`)")
+        from taxjson.lib.out import width as _ow
+        if _ow(sys.stdout) <= 0:
+            print()
+        _step("Checking positions against the broker's holdings files")
         _san_notes = _sanity_items_from_config(cfg.get("accounts", {}),
                                                root)[1]
         for _n in _san_notes:
@@ -5943,9 +6036,14 @@ def cmd_run(args: argparse.Namespace) -> None:
             _say("warning", *_split_msg(f"holdings check incomplete: {_n}"),
                  indent="  ")
         try:
-            cmd_sanity(argparse.Namespace(dir=str(root), items=[],
-                                          tolerance=None, json=False,
-                                          brief_extras=True))
+            if _ow(sys.stdout) > 0:
+                # Shown to a person: what differs, in a few lines
+                # (`taxjson sanity` has the tables).
+                _sanity_console(root)
+            else:
+                cmd_sanity(argparse.Namespace(dir=str(root), items=[],
+                                              tolerance=None, json=False,
+                                              brief_extras=True))
         except SystemExit as _e:
             if isinstance(_e.code, str):
                 # A message exit is a CONFIG problem (missing holdings
@@ -5953,7 +6051,8 @@ def cmd_run(args: argparse.Namespace) -> None:
                 # position difference (2026-09 CLI audit B13).
                 _say("warning", "holdings check could not run",
                      *str(_e.code).splitlines(), indent="  ")
-            elif _e.code:
+            elif _e.code and _ow(sys.stdout) <= 0:
+                # (shown to a person, _sanity_console said it)
                 _say("warning", "positions differ from the broker "
                      "holdings files",
                      "On a first project the likely cause is missing "
@@ -5982,6 +6081,81 @@ def cmd_run(args: argparse.Namespace) -> None:
              f"were skipped",
              "They keep the last full run's contents. Run `taxjson run` "
              "with no --account before filing.", prog=f"{_PROG} run")
+
+
+# Discrepancies the run's console names before `+N more`.
+_SANITY_SHOWN = 8
+
+
+def _sanity_console(root: Path) -> None:
+    """The run's holdings check as a person reads it on the console:
+    one message per finding with its few lines (`taxjson sanity` lists
+    every row). Exits as cmd_sanity does (1 on a quantity difference,
+    a message on a config problem)."""
+    import contextlib
+    import io
+    import json as _json
+    buf = io.StringIO()
+    code: Any = 0
+    try:
+        with contextlib.redirect_stdout(buf):
+            cmd_sanity(argparse.Namespace(dir=str(root), items=[],
+                                          tolerance=None, json=True,
+                                          brief_extras=True))
+    except SystemExit as e:
+        code = e.code
+    if isinstance(code, str):
+        raise SystemExit(code)
+    try:
+        doc = _json.loads(buf.getvalue())
+    except ValueError:
+        raise SystemExit(f"holdings check returned no result "
+                         f"({buf.getvalue()[:200]!r})")
+    rows = doc.get("discrepancies") or []
+
+    def _n(k: int, one: str, many: str) -> str:
+        return f"{k} {one if k == 1 else many}"
+    if rows:
+        first = rows if len(rows) <= _SANITY_SHOWN else rows[:5]
+        shown = [f"{'+'.join(r.get('accounts') or [])} {r['symbol']}: "
+                 f"taxjson {r['taxjson_qty']:g}, broker "
+                 f"{r['holdings_qty']:g}" for r in first]
+        if len(first) < len(rows):
+            per: Dict[str, int] = {}
+            for r in rows:
+                a = "+".join(r.get("accounts") or [])
+                per[a] = per.get(a, 0) + 1
+            shown.append(f"+{len(rows) - len(first)} more"
+                         + (" (by account: " + ", ".join(
+                             f"{a} {k}" for a, k in sorted(per.items()))
+                            + ")" if len(per) > 1 else ""))
+        _say("warning", f"{_n(len(rows), 'position differs', 'positions differ')}"
+             f" from the broker's holdings files", *shown,
+             "`taxjson sanity` lists them. Fewer shares in taxjson than at "
+             "the broker usually means missing history (purchases before "
+             "your download starts, or shares transferred in: `taxjson "
+             "find-missing-history`, docs/getting-started.md step 5); a "
+             "trade after your last export is the other usual cause.",
+             file=sys.stdout)
+    else:
+        _say("note", "positions match the broker's holdings files"
+             + (" (every checked account)" if doc.get("notes") else ""),
+             file=sys.stdout)
+    diffs = doc.get("cost_differences") or []
+    if diffs:
+        unexpl = sum(1 for d in diffs if d.get("reasons") == ["unexplained"])
+        _say("note", f"{len(diffs)} of "
+             f"{_n((doc.get('cost') or {}).get('compared', 0), 'position', 'positions')}"
+             f" differ from the reports' cost ({unexpl} unexplained)",
+             "`taxjson sanity` lists them with their reasons (a broker's "
+             "book value is not always your ACB).", file=sys.stdout)
+    inc = doc.get("income_share_mismatches") or []
+    if inc:
+        _say("note", f"{_n(len(inc), 'dividend row states', 'dividend rows state')}"
+             f" a share count the books did not hold",
+             "`taxjson sanity` lists them.", file=sys.stdout)
+    if rows:
+        raise SystemExit(1)
 
 
 def _short_positions_note(base_json: Path, account: str,
@@ -6086,10 +6260,8 @@ def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
         pass
     lines = FR.render(doc, mh_name=(mh_file.name if mh_file
                                     else "missing_history.json"))
-    if lines:
-        print()
-        for ln in lines:
-            print(ln)
+    for ln in lines:
+        print(ln)
 
 
 # The taxjson.toml template — every key, documented, per country — and
@@ -13055,7 +13227,7 @@ def _check_renamed_late(root: Path, *, strict: bool) -> None:
     if rows and strict:
         _die(f"--strict: {len(rows)} trade(s) in a renamed ticker after "
              f"its rename are not declared in ticker.map — aborting",
-             "See the ATTENTION lines above and `taxjson renames`.")
+             "See the warnings above and `taxjson renames`.")
 
 
 def cmd_check_dates(args: argparse.Namespace) -> None:
@@ -16259,7 +16431,8 @@ def _child_error_line(e: BaseException) -> str:
 def _check_filed_years(root: Path, cache: Path,
                        settings: Dict[str, Any], *,
                        strict: bool,
-                       counts: Optional[Dict[str, int]] = None) -> int:
+                       counts: Optional[Dict[str, int]] = None,
+                       console: bool = False) -> int:
     """Drift check for every filed/<year>.json. Returns the number of
     years that drifted or could not be checked; prints per-year
     OK/DRIFT lines. `counts` (when given) receives them split:
@@ -16273,6 +16446,16 @@ def _check_filed_years(root: Path, cache: Path,
     def _line(text: str) -> None:
         # A per-year line: wrapped, its continuation indented under it
         # (a `note: ` line shown with its label, lib/out.labelled).
+        # On the run's console (`console`), shown to a person: a message
+        # of its own, the label at column 0 (`Info: Filed 2024: OK ...`),
+        # continuations two spaces in.
+        if console and _out.width(sys.stdout) > 0:
+            _t = _out.labelled(text)
+            if not _t.startswith(("Info: ", "Warning: ", "Error: ")):
+                _t = "Info: " + _t[:1].upper() + _t[1:]
+            for _ln in _out.wrap(_t, None, "", "  "):
+                print(_ln)
+            return
         for _ln in _out.wrap(_out.labelled(text), None, "  ", "    "):
             print(_ln)
 
@@ -16479,11 +16662,11 @@ def _fx_cash_after_run(root: Path, cache: Path,
     from taxjson.bin import taxjson_fx_cash as FX
     if not _soft_settings(root).get("fx_cash_gains"):
         return
-    print("==> fx gains on cash (fx_cash_gains = true)")
+    _step("Calculating FX gains on cash (fx_cash_gains = true)")
     try:
         ledger, verdict, base, year, country = _fx_cash_doc(root, cache)
     except SystemExit as e:
-        print(f"  skipped: {e}", file=sys.stderr)
+        _say("warning", f"FX gains on cash skipped: {e}", indent="  ")
         return
     # A file, like the captured stage reports: never wrapped.
     text = FX.render_report(ledger, base, year, country, verdict,
@@ -16491,8 +16674,9 @@ def _fx_cash_after_run(root: Path, cache: Path,
     rpt = reports_dir / "fx_cash.rpt"
     from taxjson.lib.safe_write import write_atomic
     write_atomic(rpt, text + "\n")
-    print(f"  net {ledger['net_gain']:,.2f} {base}, reportable "
-          f"{verdict['reportable']:,.2f} {base} -> {rpt}")
+    _say("note", f"FX gains on cash: net {ledger['net_gain']:,.2f} "
+         f"{base}, reportable {verdict['reportable']:,.2f} {base} -> "
+         f"{_out_relpath(rpt, root)}", indent="  ", file=sys.stdout)
 
 
 def cmd_check_filed(args: argparse.Namespace) -> None:

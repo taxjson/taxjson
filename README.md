@@ -84,16 +84,19 @@ File names do not decide which parser reads a CSV. For every CSV in
    header matched and the name suggests another broker, the content wins
    and a note says so.
 
-The run prints one line per file under its account, with how it was
-detected:
+The run prints one line per file after its account's step, with what
+it was identified as (how — the header it matched, or the file name — is
+in `work/<account>_detect.diag`):
 
 ```
 ==> margin  (taxable)
-  inputs/margin/activity_2025.csv → Interactive Brokers (content: "Statement,Header" preamble)
-  inputs/margin/generic_ws.csv → generic (mapping generic_ws.csv.toml)
+Info: File inputs/margin/activity_2025.csv → identified as Interactive Brokers
+Info: File inputs/margin/generic_ws.csv → identified as generic
 ==> crypto  (taxable, crypto)
-  inputs/crypto/export.csv → Kraken (content: ledger columns txid,refid,time…)
-  inputs/crypto/cb_old.csv → Coinbase (file name "cb_" — no content match)
+Info: File inputs/crypto/export.csv → identified as Kraken
+Info: File inputs/crypto/cb_old.csv → identified as Coinbase
+Info: cb_old.csv: read as Coinbase by its file name ("cb_") only — its header matches no
+  supported export.
 ```
 
 The console names each file as it is on disk (two exports whose default
@@ -471,13 +474,18 @@ check) with a short summary of what the books themselves show is still
 incomplete — silent when there is nothing:
 
 ```
-==> before you trust these numbers (docs/getting-started.md, step 5)
-  1 position(s) sold in 2025 with no purchase in your files, not in missing_history.json — those sales are NOT in `taxjson sum`: SAMPA.TO (margin). Run `taxjson find-missing-history`.
-  1 position(s) at a $0 cost (1 still held): SAMPQ.TO (margin). Run `taxjson find-missing-history`.
-  1 transfer-in(s) from outside your books kept out with no cost: SAMPK.TO (margin). Run `taxjson transfers`.
-  1 account(s) with open positions and no holdings file to check them against: margin (12). Run `taxjson sanity` with the broker's positions.
-  1 security(ies) paid income in 2025 that the books do not hold (a holding with no purchase in your files?): SAMPZ.TO (margin). Run `taxjson sanity`.
-  Then `taxjson checklist`. Every step is in docs/getting-started.md.
+==> Before you trust these numbers (docs/getting-started.md, step 5)
+Warning: 1 position sold in 2025 with no purchase in your files, not in missing_history.json:
+  SAMPA.TO (margin). Those sales are NOT in `taxjson sum`; run `taxjson find-missing-history`.
+Warning: 1 position at a $0 cost (1 still held): SAMPQ.TO (margin). Run
+  `taxjson find-missing-history`.
+Warning: 1 transfer-in from outside your books kept out with no cost: SAMPK.TO (margin). Run
+  `taxjson transfers`.
+Info: 1 account with open positions and no holdings file to check them against: margin (12). Run
+  `taxjson sanity` with the broker's positions.
+Warning: 1 security paid income in 2025 that the books do not hold (a holding with no purchase in
+  your files?): SAMPZ.TO (margin). Run `taxjson sanity`.
+Info: Then run `taxjson checklist`. Every step is in docs/getting-started.md.
 ```
 
 The same counts are written to `reports/run_summary.json`. A taxable
@@ -2046,7 +2054,7 @@ fees report uses too:
   depend on the order the files are listed in;
 - anything else (the files share only that one row, the files disagree on
   the dates they both cover, or a `.tt` line equals an exported row) is booked
-  once, and `taxjson run` prints `Warning: ATTENTION: dedup: ...` with both
+  once, and `taxjson run` prints `Warning: Duplicates: ...` with both
   file names. When the files disagree, the line also names the rows only one
   of them holds: a newer statement that restated a row (a commission refund
   folded into the trade, a cancelled trade) leaves the older version booked
@@ -2055,7 +2063,7 @@ fees report uses too:
   delete one copy;
 - a `.tt` line that repeats an exported row by hand never has the row's id
   (the export's description and settle date differ), so both are booked:
-  `taxjson run` prints `Warning: ATTENTION: dedup: <file>.tt line ...
+  `taxjson run` prints `Warning: Duplicates: <file>.tt line ...
   repeats the exported row ...` when the symbol, quantity, money and trade
   or settle date match. Delete the `.tt` line if it is that trade;
 - one broker account's export placed under two `inputs/<account>/` folders
@@ -2096,7 +2104,7 @@ OPENING 2023-12-29 SAMPU.US 10 USD 1000.00
 - **The snapshot replaces the history before it**, per account and symbol:
   the account's trades, transfers, renames and cost adjustments of a
   snapshot symbol dated on or before the snapshot day are left out of the
-  books (`taxjson run` says so: `Warning: ATTENTION: opening: ...`), so a
+  books (`taxjson run` says so: `Warning: Opening snapshot: ...`), so a
   statement that overlaps your download never counts a share twice.
   Dividends and other income rows stay. A left-out **sale of the tax year**
   stops the run: date the snapshot before the year's first sale.

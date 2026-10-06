@@ -108,25 +108,36 @@ to check next, each with the command that shows it:
 
 ```
 ==> margin  (taxable)
-  parse questrade: 1 file(s)
-  activity.csv: 6 tax objects
+Info: File inputs/margin/activity.csv → identified as Questrade
+==> Reading 1 file
+Info: activity.csv: 6 tax objects
+==> Processing corporate actions
+==> Sorting, de-duplicating, mapping tickers, converting currency
+==> Calculating capital gains
+==> Writing holdings reports/margin_holdings.toml
+==> Writing summary reports/margin.sum
 ...
-Done. Reports in ~/taxes/2025/reports/
-
-==> before you trust these numbers (docs/getting-started.md, step 5)
-  2 position(s) sold in 2025 with no purchase in your files, not in missing_history.json — those sales are NOT in `taxjson sum`: SAMPA.TO (margin), SAMPK.TO (margin). Run `taxjson find-missing-history`.
-  1 transfer-in(s) from outside your books kept out with no cost: SAMPK.TO (margin). Run `taxjson transfers`.
-  1 account(s) with open positions and no holdings file to check them against: margin (4). Run `taxjson sanity` with the broker's positions.
-  Then `taxjson checklist`. Every step is in docs/getting-started.md.
+==> Done. Reports are in reports/
+==> Before you trust these numbers (docs/getting-started.md, step 5)
+Warning: 2 positions sold in 2025 with no purchase in your files, not in missing_history.json:
+  SAMPA.TO (margin), SAMPK.TO (margin). Those sales are NOT in `taxjson sum`; run
+  `taxjson find-missing-history`.
+Warning: 1 transfer-in from outside your books kept out with no cost: SAMPK.TO (margin). Run
+  `taxjson transfers`.
+Info: 1 account with open positions and no holdings file to check them against: margin (4). Run
+  `taxjson sanity` with the broker's positions.
+Info: Then run `taxjson checklist`. Every step is in docs/getting-started.md.
 ```
+
+Every line starts with `==> ` (a step the run is doing), `Info:`,
+`Warning:` or `Error:`, or two spaces (the line above continues).
 
 The list can also name positions at a $0 cost (sold this year or still
 held) and stocks that paid you income the books do not hold. A run with
 nothing to report ends at `Done.`; the same counts are always written to
 `reports/run_summary.json`.
 
-Read every line that starts with `Warning:` (the `Warning: ATTENTION:`
-lines first) and every `Info:` line. A warning that an account folder is
+Read every line that starts with `Warning:` and every `Info:` line. A warning that an account folder is
 empty is expected for an account you have no files for yet.
 
 Exit codes: `0` done, `1` failed (the message names the file or row),
@@ -281,7 +292,7 @@ from **outside your books**, and `IN_BOOKS` says what the books did:
   that value on the transfer date, and every run says so:
 
   ```
-  Warning: ATTENTION: transfer-in: margin: 1 transfer-in(s) from outside your books booked at the ACB the broker states on the row (Questrade: 20 SAMPJ.TO (2024-06-03)). A broker's book value is its own record, not always your ACB: check it. To use your own figure instead, add the original purchase as a .tt BUYSELL line dated on or before the transfer: the book value is then no longer used and this line stops.
+  Warning: Transfer-in: margin: 1 transfer-in(s) from outside your books booked at the ACB the broker states on the row (Questrade: 20 SAMPJ.TO (2024-06-03)). A broker's book value is its own record, not always your ACB: check it. To use your own figure instead, add the original purchase as a .tt BUYSELL line dated on or before the transfer: the book value is then no longer used and this line stops.
   ```
 
   (US projects: the line adds that the lot's holding period starts on
@@ -410,7 +421,7 @@ OPENING 2023-12-29 SAMPD.TO 10 CAD 504.95
   opening replaces everything before it** for its stocks: rows of those
   stocks in this account dated on or before that day are left out of
   the books, so a statement that overlaps your download counts nothing
-  twice. `tjs run` says so in a `Warning: ATTENTION: opening:` line.
+  twice. `tjs run` says so in a `Warning: Opening snapshot:` line.
   Dividends stay.
 - Use a report from **before the tax year's first sale** of each stock:
   a sale left out that way would drop out of the year's gains, so the
@@ -638,9 +649,8 @@ something still missing. Once `holdings = [...]` is set (a `.toml` or a
 broker's report), every run ends with the same check:
 
 ```
-==> holdings sanity (taxjson.toml `holdings`)
-...
-OK: tickers and quantities agree in every group.
+==> Checking positions against the broker's holdings files
+Info: positions match the broker's holdings files
 ```
 
 When it differs, the run says so: on a first project, missing history

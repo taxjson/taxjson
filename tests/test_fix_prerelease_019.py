@@ -88,7 +88,7 @@ class TestPrintable(unittest.TestCase):
         from taxjson.lib import stage_msg
         line = f"warning: ATTENTION: {SYM}: a sale with\rno purchase"
         self.assertEqual(stage_msg.console_lines(line, "  ", width_=100),
-                         [f"  Warning: ATTENTION: {SHOWN}: a sale with"
+                         [f"  Warning: {SHOWN}: a sale with"
                           f"\\x0dno purchase"])
         self.assertEqual(stage_msg.console_lines(line, "  ", width_=0),
                          ["  " + line])

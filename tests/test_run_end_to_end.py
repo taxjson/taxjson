@@ -143,7 +143,8 @@ class TestRunEndToEnd(unittest.TestCase):
                 _CONFIG + 'holdings = ["ext/rrsp_pos.toml"]\n')
             r = _run_cli(root, "run")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
-            self.assertIn("==> holdings sanity", r.stdout)
+            self.assertIn("==> Checking positions against the broker's "
+                          "holdings files", r.stdout)
             self.assertRegex(r.stdout, r"accounts: +rrsp")
             self.assertIn("OK: tickers and quantities agree", r.stdout)
             self.assertNotIn("positions differ", r.stderr)
@@ -160,7 +161,7 @@ class TestRunEndToEnd(unittest.TestCase):
             (root / "taxjson.toml").write_text(_CONFIG)
             r = _run_cli(root, "run")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
-            self.assertNotIn("holdings sanity", r.stdout)
+            self.assertNotIn("holdings files", r.stdout)
 
     def test_second_run_rebuilds_by_default_and_is_idempotent(self):
         # Full rebuild is the DEFAULT (2026-07 flip): a plain re-run
@@ -173,7 +174,7 @@ class TestRunEndToEnd(unittest.TestCase):
             gains_before = (root / "work" / "margin_gains.json").read_text()
             second = _run_cli(root, "run")
             self.assertEqual(second.returncode, 0, second.stderr)
-            self.assertIn("parse questrade", second.stdout)   # rebuilt
+            self.assertIn("==> Reading 1 file", second.stdout)  # rebuilt
             # Idempotent: a no-change rebuild must not drift.
             self.assertEqual(
                 gains_before,
@@ -189,7 +190,7 @@ class TestRunEndToEnd(unittest.TestCase):
             gains_before = (root / "work" / "margin_gains.json").read_text()
             second = _run_cli(root, "run", "--fast")
             self.assertEqual(second.returncode, 0, second.stderr)
-            self.assertNotIn("parse questrade", second.stdout)  # cached
+            self.assertNotIn("==> Reading 1 file", second.stdout)  # cached
             self.assertEqual(
                 gains_before,
                 (root / "work" / "margin_gains.json").read_text())

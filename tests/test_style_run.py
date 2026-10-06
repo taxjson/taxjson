@@ -86,15 +86,17 @@ class TestStageMessages(_Width):
 
     def test_console_lines_keep_the_marker_first_line(self):
         from taxjson.lib.stage_msg import console_lines
-        lines = console_lines(self.LONG, "  ", width_=100)
-        # Shown: the label first; the marker words follow it unchanged.
-        self.assertEqual(lines[0], "  Warning: ATTENTION: x.csv: the "
+        lines = console_lines(self.LONG, "", width_=100)
+        # Shown: the label first (the ATTENTION word is the captured
+        # form's); the message words follow it unchanged.
+        self.assertEqual(lines[0], "Warning: x.csv: the "
                                    "statement has no Cash Report")
-        self.assertTrue(lines[1].startswith("    Parsed money is NOT"))
-        self.assertEqual(out.lint("\n".join(lines)), [])
+        self.assertTrue(lines[1].startswith("  Parsed money is NOT"))
+        self.assertEqual(out.console_lint("\n".join(lines)), [])
         self.assertEqual(_flat(" ".join(lines)).replace("Parsed", "parsed"),
                          _flat(self.LONG.replace(" —", "")
-                               .replace("warning:", "Warning:", 1)))
+                               .replace("warning: ATTENTION:", "Warning:",
+                                        1)))
         # Nothing wraps (captured, or TAXJSON_WIDTH=0): the one line.
         self.assertEqual(console_lines(self.LONG, "  ", width_=0),
                          ["  " + self.LONG])
@@ -121,7 +123,7 @@ class TestFirstRunSummaryCount(_Width):
         # The line said "5 account(s)" and named four (display cut).
         from taxjson.lib.first_run import render
         text = _flat("\n".join(render(self._doc(5), width_=100)))
-        self.assertIn("5 account(s) with open positions", text)
+        self.assertIn("5 accounts with open positions", text)
         for i in range(5):
             self.assertIn(f"acct{i} ({i + 1})", text)
         self.assertNotIn("more", text)
@@ -129,15 +131,16 @@ class TestFirstRunSummaryCount(_Width):
     def test_a_long_list_says_how_many_more(self):
         from taxjson.lib.first_run import render
         text = _flat("\n".join(render(self._doc(9), width_=100)))
-        self.assertIn("9 account(s)", text)
+        self.assertIn("9 accounts", text)
         self.assertIn("acct5 (6) +3 more", text)
         self.assertNotIn("acct6", text)
 
     def test_layout(self):
         from taxjson.lib.first_run import render
         lines = render(self._doc(9), width_=100)
-        self.assertTrue(lines[0].startswith("==> before you trust"))
-        self.assertTrue(lines[1].startswith("  - 9 account(s)"))
+        self.assertTrue(lines[0].startswith("==> Before you trust"))
+        self.assertTrue(lines[1].startswith("Info: 9 accounts"))
+        self.assertEqual(out.console_lint("\n".join(lines)), [])
         self.assertEqual(out.lint("\n".join(lines)), [])
         # Unwrapped: one line per finding.
         self.assertEqual(len(render(self._doc(9), width_=0)), 3)
@@ -197,12 +200,15 @@ class TestRunStyle(unittest.TestCase):
                 assert_styled(self, r.stdout)
                 assert_styled(self, r.stderr)
                 # Files the run wrote are named relative to the project.
-                self.assertIn("  wrote reports/margin.sum", r.stdout)
+                self.assertIn("\n==> Writing summary reports/margin.sum\n",
+                              r.stdout)
                 self.assertNotIn(str(p.root), r.stdout)
-                self.assertIn("\nDone. Reports in reports/\n", r.stdout)
-                # An ATTENTION line keeps its marker words, the label
-                # first; no line starts with a captured lower-case label.
-                self.assertRegex(r.stdout, r"\n  Warning: ATTENTION: \S")
+                self.assertIn("\n==> Done. Reports are in reports/\n",
+                              r.stdout)
+                # An ATTENTION line is a Warning at column 0; no line
+                # starts with a captured lower-case label.
+                self.assertRegex(r.stdout, r"\nWarning: \S")
+                self.assertNotIn("ATTENTION", r.stdout + r.stderr)
                 self.assertNotRegex(r.stdout + r.stderr,
                                     r"(?m)^\s*(note|warning|error):")
 
@@ -225,7 +231,7 @@ class TestRunStyle(unittest.TestCase):
                 if ln.startswith("warning: ATTENTION:") and len(ln) > 100]
         self.assertTrue(long, diag)
         self.assertIn("Warning: " + long[0].split(" — ")[0][
-            len("warning: "):], r.stdout)
+            len("warning: ATTENTION: "):], r.stdout)
         # The work/ .diag keeps the captured (lower-case) label.
         self.assertTrue(long[0].startswith("warning: ATTENTION: "))
 

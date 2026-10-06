@@ -4,7 +4,8 @@ One home for how taxjson prints to people: the wrap width, prose
 paragraphs and `- ` lists with a hanging indent, aligned `label:  value`
 blocks, tables that fit the width, and the message labels with a
 one-line headline and indented detail lines: shown to a person,
-`Info:` / `Warning:` / `Warning: ATTENTION:` / `Error:` start the line;
+`Info:` / `Warning:` / `Error:` start the line (the must-act ATTENTION
+lines are shown as `Warning:`, their topic capitalised);
 captured for a program (width 0), the GNU `<prog>: note:` /
 `warning:` / `error:` bytes programs read are kept (label(), relabel()).
 
@@ -35,7 +36,7 @@ __all__ = [
     "attention", "error", "fail", "fit_table", "records", "kv_lines",
     "relpath", "Doc", "lint", "Verbatim", "unwrapped", "fmt_money", "fmt_qty",
     "printable", "shown", "label", "relabel", "labelled", "exit_text",
-    "LABELS",
+    "LABELS", "console_lint", "CONSOLE_LINE_RE",
 ]
 
 # Prose wraps here when stdout is not a terminal (a pipe, a file, a test)
@@ -208,15 +209,51 @@ _KINDS = {
 LABELS = {
     "note": "Info: ",
     "warning": "Warning: ",
-    "attention": "Warning: ATTENTION: ",
+    # The must-act channel is a Warning to a person: the ATTENTION word
+    # stays in the captured bytes (`warning: ATTENTION: <topic>: ...`,
+    # what the run and the .sum read back), the topic is shown
+    # capitalised (shown_topic).
+    "attention": "Warning: ",
     "error": "Error: ",
 }
+
+# The ATTENTION topics as a person is shown them (after `Warning: `):
+# the captured topic word is lower case and reads like a second label
+# (`Warning: short: ...`). Display only; a topic not listed keeps its
+# spelling.
+ATTENTION_TOPICS = {
+    "short": "Short position",
+    "income year": "Income year",
+    "opening": "Opening snapshot",
+    "crypto id": "Crypto id",
+    "split": "Split",
+    "own-account move": "Move between your accounts",
+    "generic importer": "Generic importer",
+    "schema": "Row check",
+    "dedup": "Duplicates",
+    "transfer-in": "Transfer-in",
+    "unapplied basis adjustment": "Unapplied basis adjustment",
+    "wash sale reaches a filed year": "Wash sale reaches a filed year",
+}
+_TOPIC_RE = re.compile(r"(?P<topic>[a-z][a-z -]*?): ")
+
+
+def shown_topic(text: str) -> str:
+    """An ATTENTION message's text as a person is shown it, after its
+    `Warning: ` label: the `ATTENTION: ` word dropped, a known topic
+    capitalised (ATTENTION_TOPICS). Display only."""
+    if text.startswith("ATTENTION: "):
+        text = text[len("ATTENTION: "):]
+    m = _TOPIC_RE.match(text)
+    if m and m.group("topic") in ATTENTION_TOPICS:
+        text = ATTENTION_TOPICS[m.group("topic")] + text[m.end() - 2:]
+    return text
 
 
 def label(kind: str, width_: Optional[int] = None, stream=None) -> str:
     """The label that starts a `kind` message (note | warning | attention
     | error) printed to `stream` (stderr by default): `Info: ` /
-    `Warning: ` / `Warning: ATTENTION: ` / `Error: ` shown to a person
+    `Warning: ` (an ATTENTION one too) / `Error: ` shown to a person
     (width > 0), the captured `note: ` / `warning: ` / ... at width 0."""
     if kind not in _KINDS:
         raise ValueError(f"unknown message kind {kind!r}")
@@ -250,11 +287,16 @@ def relabel(line: str, *, source: bool = True) -> str:
     m = _CAPTURED_RE.match(line)
     if not m:
         return line
-    head = LABELS[_KIND_OF[m.group("kind").lower()]]
+    kind = _KIND_OF[m.group("kind").lower()]
+    head = LABELS[kind]
     prog = m.group("prog")
+    rest = line[m.end():]
+    if kind == "warning" and rest.startswith("ATTENTION: "):
+        # The must-act channel is a Warning to a person (LABELS).
+        rest = shown_topic(rest)
     return (m.group("lead") + head
             + (f"{prog}: " if prog and source else "")
-            + line[m.end():])
+            + rest)
 
 
 def labelled(text: str, stream=None, *, source: bool = False) -> str:
@@ -281,7 +323,8 @@ def message(kind: str, text: str, *, prog: Optional[str] = None,
     ATTENTION channel) | error.
 
     Shown to a person (width > 0) the line starts with the label —
-    `Info: ` / `Warning: ` / `Warning: ATTENTION: ` / `Error: ` — and
+    `Info: ` / `Warning: ` (ATTENTION too, its topic capitalised) /
+    `Error: ` — every later line is indented exactly two spaces, and
     `prog` is not shown (it is the command the person ran). Captured for
     a program (width 0) it is `[<prog>: ]<kind>: <headline>`, lower
     case, the bytes the run and the checklist read (label()).
@@ -295,18 +338,28 @@ def message(kind: str, text: str, *, prog: Optional[str] = None,
     w = width(stream) if width_ is None else width_
     head = LABELS[kind] if w > 0 else \
         (f"{prog}: " if prog else "") + _KINDS[kind]
-    out = wrap(head + str(text).strip(), w, "", DETAIL_INDENT, stream)
+    text = str(text).strip()
+    if w > 0 and kind == "attention":
+        text = shown_topic(text)
+    out = wrap(head + text, w, "", DETAIL_INDENT, stream)
     for d in details:
         if d is None:
             continue
         d = str(d).strip()
-        if w > 0:
-            # A relayed captured line (a stage's `<prog>: error: ...`)
-            # shown with its label first, its program as the source.
-            d = "\n".join(relabel(x) for x in d.split("\n"))
-        # A `- ` item hangs under its text, not under the dash.
-        hang = DETAIL_INDENT + ("  " if d.startswith("- ") else "")
-        out.extend(wrap(d, w, DETAIL_INDENT, hang, stream))
+        if w <= 0:
+            # Captured: the bytes programs read, as they always were (a
+            # `- ` item hangs under its text).
+            hang = DETAIL_INDENT + ("  " if d.startswith("- ") else "")
+            out.extend(wrap(d, w, DETAIL_INDENT, hang, stream))
+            continue
+        # Shown to a person: every line after the headline is a
+        # continuation, indented exactly two spaces (a `- ` item and its
+        # wrapped lines too); a relayed captured line (a stage's
+        # `<prog>: error: ...`) is shown with its label first.
+        for x in d.split("\n"):
+            x = relabel(x).strip()
+            if x:
+                out.extend(wrap(x, w, DETAIL_INDENT, DETAIL_INDENT, stream))
     return out
 
 
@@ -634,4 +687,30 @@ def lint(text: str, width_: int = WIDTH,
             probs.append(f"line {i}: two blank lines in a row")
         if _RETIRED_PREFIXES.match(ln):
             probs.append(f"line {i}: retired prefix: {ln[:40]}")
+    return probs
+
+
+# A line of a console a person reads (`taxjson run`): a step (`==> `), a
+# message label, or a two-space continuation of the line above.
+CONSOLE_LINE_RE = re.compile(r"(?:==> |Info: |Warning: |Error: |  \S)")
+
+
+def console_lint(text: str, width_: int = WIDTH,
+                 allow: Iterable[str] = ()) -> List[str]:
+    """lint() plus the console rule (docs/output-style.md, The run's
+    console): every line starts with `==> `, `Info: `, `Warning: `,
+    `Error: ` or two spaces and a non-space; no blank line; no
+    `ATTENTION:` word and no `(content: ...)` detection detail. []
+    when clean."""
+    probs = lint(text, width_, allow)
+    for i, ln in enumerate(text.split("\n"), 1):
+        if ln == "" and i == len(text.split("\n")):
+            continue
+        if not CONSOLE_LINE_RE.match(ln):
+            probs.append(f"line {i}: not a step, label or continuation: "
+                         f"{ln[:60]!r}")
+        if "ATTENTION:" in ln:
+            probs.append(f"line {i}: ATTENTION word shown: {ln[:60]}")
+        if "(content: " in ln:
+            probs.append(f"line {i}: detection detail shown: {ln[:60]}")
     return probs

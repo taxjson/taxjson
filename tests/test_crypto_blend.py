@@ -55,7 +55,8 @@ class TestCryptoBlend(unittest.TestCase):
             root = _project(td, {"kr1": KR1, "kr2": KR2})
             r = _cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("blended taxable crypto pass (kr1, kr2)", r.stdout)
+            self.assertIn("==> Pooling cost and checking superficial losses "
+                          "across crypto accounts (kr1, kr2)", r.stdout)
             self.assertTrue((root / "work" / "kr1_gains_wash.json").exists())
             # Crypto-only project: no options, no grant-since nag.
             self.assertNotIn("option_grant_timing_since", r.stderr)

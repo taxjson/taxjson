@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from _style import assert_labelled, assert_styled, project
+from _style import assert_console, assert_labelled, assert_styled, project
 
 from taxjson.lib import out
 
@@ -69,6 +69,10 @@ class TestConvertedCommands(unittest.TestCase):
                     self.assertEqual(r.returncode, 0, r.stderr)
                     assert_styled(self, r.stdout)
                     assert_labelled(self, r.stdout + r.stderr)
+                    # Messages on stderr: a label at column 0, every
+                    # other line a two-space continuation.
+                    if r.stderr:
+                        assert_console(self, r.stderr)
 
     def test_pending_election_listing(self):
         for country in ("canada", "usa"):

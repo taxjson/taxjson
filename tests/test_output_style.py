@@ -99,8 +99,10 @@ class TestWrapAndMessages(_NoWidthEnv):
         self.assertTrue(all(len(ln) <= 60 for ln in lines))
         item = [ln for ln in lines if ln.startswith("  - ")]
         self.assertEqual(len(item), 1)
+        # Every line after the headline is a continuation, exactly two
+        # spaces in (an item's wrapped lines too: the run's console rule).
         cont = lines[lines.index(item[0]) + 1]
-        self.assertTrue(cont.startswith("    ") and cont[4] != " ", cont)
+        self.assertTrue(cont.startswith("  ") and cont[2] != " ", cont)
 
     def test_captured_message_keeps_the_gnu_bytes(self):
         # Width 0 (a .diag, the checklist's read): `<prog>: <kind>:`.
@@ -115,15 +117,17 @@ class TestWrapAndMessages(_NoWidthEnv):
 
     def test_person_labels(self):
         for kind, want in (("note", "Info: h"), ("warning", "Warning: h"),
-                           ("attention", "Warning: ATTENTION: h"),
+                           ("attention", "Warning: h"),
                            ("error", "Error: h")):
             self.assertEqual(out.message(kind, "h", prog="taxjson-x",
                                          width_=100), [want])
             self.assertEqual(out.label(kind, 100) + "h", want)
 
     def test_attention_keeps_the_run_marker(self):
+        # Shown: a Warning, the topic capitalised; the ATTENTION word is
+        # the captured form's.
         line = out.message("attention", "short: ABC.TO goes short")[0]
-        self.assertTrue(line.startswith("Warning: ATTENTION: short: "))
+        self.assertEqual(line, "Warning: Short position: ABC.TO goes short")
         with out.unwrapped():
             line = out.message("attention", "short: ABC.TO goes short")[0]
         self.assertTrue(line.startswith("warning: ATTENTION: short: "))
@@ -131,7 +135,9 @@ class TestWrapAndMessages(_NoWidthEnv):
     def test_relabel(self):
         R = out.relabel
         self.assertEqual(R("warning: ATTENTION: short: X"),
-                         "Warning: ATTENTION: short: X")
+                         "Warning: Short position: X")
+        self.assertEqual(R("warning: ATTENTION: x.csv: no Cash Report"),
+                         "Warning: x.csv: no Cash Report")
         self.assertEqual(R("  note: x"), "  Info: x")
         self.assertEqual(R("NOTE: x"), "Info: x")
         self.assertEqual(R("taxjson-gains: error: x"),

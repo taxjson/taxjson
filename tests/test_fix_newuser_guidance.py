@@ -91,15 +91,15 @@ class TestFirstRunSummary(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             out = r.stdout
             tail = out[out.index("Done. Reports"):]
-            self.assertIn("before you trust these numbers", tail)
-            self.assertIn("1 position(s) sold in 2025 with no purchase in "
+            self.assertIn("Before you trust these numbers", tail)
+            self.assertIn("1 position sold in 2025 with no purchase in "
                           "your files, not in missing_history.json", tail)
             self.assertIn("SMA.TO (margin)", tail)
             self.assertIn("`taxjson find-missing-history`", tail)
             # $0 cost: still held, which the detector used to ignore.
-            self.assertIn("1 position(s) at a $0 cost (1 still held): "
+            self.assertIn("1 position at a $0 cost (1 still held): "
                           "ZRO.TO (margin)", tail)
-            self.assertIn("1 transfer-in(s) from outside your books kept "
+            self.assertIn("1 transfer-in from outside your books kept "
                           "out with no cost: QRS.TO (margin)", tail)
             self.assertIn("`taxjson transfers`", tail)
             self.assertIn("no holdings file to check them against: "
@@ -110,7 +110,7 @@ class TestFirstRunSummary(unittest.TestCase):
             self.assertIn("`taxjson checklist`", tail)
             self.assertIn("docs/getting-started.md", tail)
             # Short: a heading, one line per finding, one closing line.
-            block = tail[tail.index("==> before"):].strip().splitlines()
+            block = tail[tail.index("==> Before"):].strip().splitlines()
             self.assertLessEqual(len(block), 8, block)
             doc = json.loads((root / "reports" / "run_summary.json")
                              .read_text())
