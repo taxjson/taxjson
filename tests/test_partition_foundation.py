@@ -13,6 +13,7 @@ import json
 import subprocess
 import sys
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
@@ -676,8 +677,8 @@ class TestIncomeDating(unittest.TestCase):
         row = ("2026-01-15 09:30:00 AM,2026-01-15 12:00:00 AM,DIV,XEI.TO,"
                "ISHARES S&P/TSX RETURN OF CAPITAL ON 500 SHS REC 12/31/25,"
                "0,0.00,0.00,0.00,42.50,CAD\n")
-        with tempfile.NamedTemporaryFile("w", suffix=".csv",
-                                         delete=False) as f:
+        with private_tmpfile("w", suffix=".csv",
+                             delete=False) as f:
             f.write(hdr + row)
         try:
             (t,) = QuestradeBrokerage().parse_file(Path(f.name))

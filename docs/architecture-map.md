@@ -505,6 +505,8 @@ Style tests build small synthetic projects and check every line printed.
 
 - `tests/tax_rules/dual.py` — `gains_both`, `projects_both`, `cli_both`, `settings_for`, `tx`: one book or project run under both countries.
 - `tests/_style.py` — `project`, `Project`, `assert_styled`, `assert_console`, `assert_labelled`: synthetic projects and output-style asserts.
+- `tests/_tmpfiles.py` — `private_tmpfile`, `private_dir`: temp files each alone in a private folder, so a parser's sibling discovery never reads another test's or run's file.
+- `tests/test_temp_isolation.py` — `TestNoSharedTempRoot`, `TestStrayLedgersInTheTempRoot`: no test writes into the shared temp root; stray Kraken ledgers in TMPDIR break nothing.
 - `tests/test_engine_invariants.py` — `TestConservationFuzz`, `TestOrderInvariance`, `TestCraGoldenExamples`, `make_book`: engine fuzzing and golden examples.
 - `tests/test_conservation.py` — `TestShareCountChecker`, `TestStrandedBasisChecker`: share and cost conservation checks.
 - `tests/test_transfer_fuzz.py` — `make_transfer_book`: transfer fuzzing.

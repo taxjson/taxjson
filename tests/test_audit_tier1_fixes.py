@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -121,8 +122,8 @@ class TestIbReversalSigns(unittest.TestCase):
 
     def _parse(self):
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
-        with tempfile.NamedTemporaryFile("w", suffix=".csv",
-                                         delete=False) as f:
+        with private_tmpfile("w", suffix=".csv",
+                             delete=False) as f:
             f.write(self._CSV)
             name = f.name
         try:

@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+from _tmpfiles import private_tmpfile
 import os
 import sys
 from pathlib import Path
@@ -19,11 +20,11 @@ class TestTickerMap(unittest.TestCase):
         
         map_content = "GLOBAL QAM.US QAM.TO\nGLOBAL AAPL.US AAPL.NEO\n"
         
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.json', delete=False) as f:
             f.write(json.dumps(tx_content))
             fname = f.name
             
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.map', delete=False) as fm:
+        with private_tmpfile(mode='w', suffix='.map', delete=False) as fm:
             fr_name = fm.name
             fm.write(map_content)
             

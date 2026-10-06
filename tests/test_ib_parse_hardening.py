@@ -10,6 +10,7 @@ import contextlib
 import io
 import os
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -35,8 +36,8 @@ CASH_H = 'Cash Report,Header,Currency Summary,Currency,Total,\n'
 
 
 def _parse(text):
-    with tempfile.NamedTemporaryFile('w', suffix='.csv', delete=False,
-                                     encoding='utf-8') as f:
+    with private_tmpfile('w', suffix='.csv', delete=False,
+                         encoding='utf-8') as f:
         f.write(text)
         name = f.name
     parser = IbBrokerage()

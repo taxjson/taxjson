@@ -6,6 +6,7 @@ have corrupted the document. The new pass walks string literals first
 so `#`-as-data is preserved while `#`-as-comment is dropped."""
 import json
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -39,7 +40,7 @@ class TestStripJsonComments(unittest.TestCase):
                 "description": "Lot #1 covered by #ASN",
             }],
         }
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json',
+        with private_tmpfile(mode='w', suffix='.json',
                                           delete=False) as f:
             json.dump(payload, f)
             fname = f.name

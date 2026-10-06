@@ -23,6 +23,7 @@ Activity matrix (where applicable per broker):
 """
 import os
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -43,7 +44,7 @@ def setUpModule():
 
 def _parse_csv(parser_cls, content):
     """Run a parser against an in-memory CSV string."""
-    f = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+    f = private_tmpfile(mode='w', suffix='.csv', delete=False)
     f.write(content)
     f.close()
     try:
@@ -443,7 +444,7 @@ class TestIbActivities(unittest.TestCase):
         )
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
         import os, tempfile
-        f = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+        f = private_tmpfile(mode='w', suffix='.csv', delete=False)
         f.write(csv); f.close()
         try:
             txs = IbBrokerage().parse_file(Path(f.name))
@@ -471,7 +472,7 @@ class TestIbActivities(unittest.TestCase):
         )
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
         import os, tempfile
-        f = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+        f = private_tmpfile(mode='w', suffix='.csv', delete=False)
         f.write(csv); f.close()
         try:
             txs = IbBrokerage().parse_file(Path(f.name))
@@ -500,7 +501,7 @@ class TestIbActivities(unittest.TestCase):
         )
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
         import os, tempfile
-        f = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+        f = private_tmpfile(mode='w', suffix='.csv', delete=False)
         f.write(csv); f.close()
         try:
             txs = IbBrokerage().parse_file(Path(f.name))
@@ -532,7 +533,7 @@ class TestIbActivities(unittest.TestCase):
         )
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
         import os, tempfile
-        f = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+        f = private_tmpfile(mode='w', suffix='.csv', delete=False)
         f.write(csv); f.close()
         try:
             txs = IbBrokerage().parse_file(Path(f.name))
@@ -565,7 +566,7 @@ class TestIbActivities(unittest.TestCase):
         from taxjson.lib.brokerages.base import BrokerageParseError
         import os, tempfile, io, sys as _sys
         from unittest.mock import patch
-        f = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+        f = private_tmpfile(mode='w', suffix='.csv', delete=False)
         f.write(csv_content); f.close()
         buf = io.StringIO()
         try:
@@ -708,8 +709,8 @@ class TestCoinbaseActivities(unittest.TestCase):
         for cash, asset in ((True, 'BTC'), (False, 'USDC')):
             csv = COINBASE_HEADER + (
                 f'2025-06-02 10:00:00 UTC,Deposit,{asset},100,USD,1,0,100\n')
-            f = tempfile.NamedTemporaryFile(mode='w', suffix='.csv',
-                                            delete=False)
+            f = private_tmpfile(mode='w', suffix='.csv',
+                                delete=False)
             f.write(csv)
             f.close()
             try:
@@ -870,7 +871,7 @@ class TestKrakenActivities(unittest.TestCase):
         import io, contextlib, tempfile, os
         from pathlib import Path as _P
         err = io.StringIO()
-        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, prefix="kr_ledgers_") as f:
+        with private_tmpfile("w", suffix=".csv", delete=False, prefix="kr_ledgers_") as f:
             f.write(csv); name = f.name
         try:
             with contextlib.redirect_stderr(err):

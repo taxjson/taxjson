@@ -21,6 +21,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 from tax_rules import rule
@@ -68,8 +69,8 @@ class TestDetectBrokerage(unittest.TestCase):
                    'Type Code,Quantity,Price,Proceeds\n'
                    'USD,15-01-2024,BUY,RBC,RBC BEARINGS CORP,EQ,1,10,'
                    '"(10.00)"\n')
-        with tempfile.NamedTemporaryFile("w", suffix=".csv",
-                                         delete=False) as f:
+        with private_tmpfile("w", suffix=".csv",
+                             delete=False) as f:
             f.write(content)
             name = f.name
         try:
@@ -83,8 +84,8 @@ class TestDetectBrokerage(unittest.TestCase):
                    '"Account: 12345678 - Margin"\n\n'
                    '"Date","Activity","Symbol","Quantity","Price",'
                    '"Settlement Date","Currency","Value","Description"\n')
-        with tempfile.NamedTemporaryFile("w", suffix=".csv",
-                                         delete=False) as f:
+        with private_tmpfile("w", suffix=".csv",
+                             delete=False) as f:
             f.write(content)
             name = f.name
         try:
@@ -96,8 +97,8 @@ class TestDetectBrokerage(unittest.TestCase):
 class TestFxFirstRowWins(unittest.TestCase):
     def test_intraday_spot_does_not_override_noon(self):
         from taxjson.bin.taxjson_convert_currency import load_exchange_rates
-        with tempfile.NamedTemporaryFile("w", suffix=".csv",
-                                         delete=False) as f:
+        with private_tmpfile("w", suffix=".csv",
+                             delete=False) as f:
             f.write("2026-07-03 12:00:00 USD CAD 1.3500\n"
                     "2026-07-03 14:23:11 USD CAD 1.4200\n")
             name = f.name

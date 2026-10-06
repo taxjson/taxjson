@@ -8,6 +8,7 @@ trace back to a malformed-row warning. The current behavior raises so
 the failure is visible at ingest time, not at filing time."""
 import json
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -27,7 +28,7 @@ class TestLoadTransactionsStrict(unittest.TestCase):
                 "this row is malformed",
             ],
         }
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json',
+        with private_tmpfile(mode='w', suffix='.json',
                                           delete=False) as f:
             json.dump(payload, f)
             fname = f.name
@@ -42,7 +43,7 @@ class TestLoadTransactionsStrict(unittest.TestCase):
 
     def test_integer_entry_raises(self):
         payload = {"transactions": [42]}
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json',
+        with private_tmpfile(mode='w', suffix='.json',
                                           delete=False) as f:
             json.dump(payload, f)
             fname = f.name
@@ -66,7 +67,7 @@ class TestLoadTransactionsStrict(unittest.TestCase):
                  "currency": "USD", "account": "M"},
             ],
         }
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json',
+        with private_tmpfile(mode='w', suffix='.json',
                                           delete=False) as f:
             json.dump(payload, f)
             fname = f.name

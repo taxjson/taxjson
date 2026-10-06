@@ -9,6 +9,7 @@ and the rendering hook so refactors don't quietly change output shape.
 import json
 import sys
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from io import StringIO
 from pathlib import Path
@@ -135,7 +136,7 @@ class TestExplainEndToEnd(unittest.TestCase):
     block contains the expected substrings."""
 
     def _write_input(self, transactions):
-        fh = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        fh = private_tmpfile(mode='w', suffix='.json', delete=False)
         json.dump({'transactions': transactions}, fh)
         fh.close()
         return fh.name

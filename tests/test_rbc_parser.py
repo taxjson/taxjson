@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+from _tmpfiles import private_tmpfile
 import os
 from pathlib import Path
 from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
@@ -10,7 +11,7 @@ class TestRbcParser(unittest.TestCase):
 \"January 30, 2025\",\"Sell\",\"8ABCDE1\",\"\",\"-25\",\"1.10\",\"January 31, 2025\",\"12345678\",\"2739.05\",\"CAD\",\"CALL .QQZ   09/12/25    30 QQZ HOLDINGS INC UNSOLICITED PROSPECTUS ENCLOSED CA CLOSE CONTRACT\"
 \"January 15, 2025\",\"Buy\",\"8ABCDE1\",\"\",\"20\",\"0.35\",\"January 16, 2025\",\"12345678\",\"-710.95\",\"CAD\",\"CALL .QQZ   09/12/25    30 QQZ HOLDINGS INC UNSOLICITED PROSPECTUS ENCLOSED DA OPEN CONTRACT\"
 """
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.csv', delete=False) as f:
             f.write(content)
             fname = f.name
             
@@ -38,7 +39,7 @@ class TestRbcParser(unittest.TestCase):
         content = """\"Date\",\"Activity\",\"Symbol\",\"Symbol Description\",\"Quantity\",\"Price\",\"Settlement Date\",\"Account\",\"Value\",\"Currency\",\"Description\"
 \"March 17, 2025\",\"Reorganization\",\"8XXXXX3\",\"\",\"-12\",\"\",\"March 17, 2025\",\"12345678\",\"0\",\"CAD\",\"EXP - CALL .ZBQ   03/14/25    74 ZBQ BANK CORP OPTION EXPIRATION - EXPIRED\"
 """
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.csv', delete=False) as f:
             f.write(content)
             fname = f.name
         try:
@@ -69,7 +70,7 @@ class TestRbcParser(unittest.TestCase):
 \"June 13, 2025\",\"Sell\",\"KVX\",\"KVX GLOBAL INC CLASS A\",\"-100\",\"142.5\",\"June 17, 2025\",\"12345678\",\"14207\",\"USD\",\"KVX GLOBAL INC ASSIGNMENT OF OPTION AS OF 06/13/25\"
 \"June 3, 2025\",\"Sell\",\"9XXXXX4\",\"\",\"-1\",\"6.4\",\"June 4, 2025\",\"12345678\",\"631.77\",\"USD\",\"CALL KVX   06/13/25   142.50 KVX GLOBAL INC UNSOLICITED CA OPEN CONTRACT\"
 """
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.csv', delete=False) as f:
             f.write(content)
             fname = f.name
 
@@ -104,7 +105,7 @@ class TestRbcParser(unittest.TestCase):
             "09/10/2024,Sell,RY.TO,ROYAL BANK OF CANADA - Sell,100,165.00,"
             "09/12/2024,CAD,16500.00,16490.05\n"
         )
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv',
+        with private_tmpfile(mode='w', suffix='.csv',
                                           delete=False) as f:
             f.write(content)
             fname = f.name
@@ -131,7 +132,7 @@ class TestRbcParser(unittest.TestCase):
             '"January 30, 2025","Sell","SHOP","SHOPIFY INC","-100",'
             '"50.00","January 31, 2025","12345","5000.00","CAD","Sell"\n'
         )
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv',
+        with private_tmpfile(mode='w', suffix='.csv',
                                           delete=False) as f:
             f.write(content)
             fname = f.name
@@ -190,8 +191,8 @@ class TestRbcDividendClassifier(unittest.TestCase):
                 '"June 2, 2025","Other","QZL","QZL CORP","","","June 2, 2025",'
                 '"500.00","CAD","DIV - QZL CORP CASH DIV ON 500 SHS"\n')
         import contextlib, io
-        with tempfile.NamedTemporaryFile('w', suffix='.csv',
-                                         delete=False) as f:
+        with private_tmpfile('w', suffix='.csv',
+                             delete=False) as f:
             f.write(body)
         err = io.StringIO()
         try:
@@ -231,8 +232,8 @@ class TestRbcRowDates(unittest.TestCase):
         from taxjson.lib.brokerages.rbc_direct import read_rbc_rows
         body = self.HDR + (f'"{date}","Buy","QZL","QZL CORP","10","5",'
                            f'"{settle}","-59.95","CAD","QZL CORP"\n')
-        with tempfile.NamedTemporaryFile('w', suffix='.csv',
-                                         delete=False) as f:
+        with private_tmpfile('w', suffix='.csv',
+                             delete=False) as f:
             f.write(body)
         try:
             return read_rbc_rows(Path(f.name))
@@ -269,7 +270,7 @@ class TestRbcIsoDatetimeDates(unittest.TestCase):
             '"2026-02-25 00:00:00","Buy","SHOP","SHOPIFY INC","100","50.00",'
             '"2026-02-27 00:00:00","12345","-5000.00","CAD","Buy"\n'
         )
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv',
+        with private_tmpfile(mode='w', suffix='.csv',
                                           delete=False) as f:
             f.write(content)
             fname = f.name
@@ -294,7 +295,7 @@ class TestRbcBomTolerance(unittest.TestCase):
                   '"January 30, 2025","Sell","SHOP","SHOPIFY INC",' \
                   '"-100","50.00","January 31, 2025","12345","5000.00",' \
                   '"CAD","Sell"\n'
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv',
+        with private_tmpfile(mode='w', suffix='.csv',
                                           encoding='utf-8', delete=False) as f:
             f.write(content)
             fname = f.name
@@ -318,7 +319,7 @@ class TestRbcTransfers(unittest.TestCase):
             '"Settlement Date","Account","Value","Currency","Description"\n')
 
     def _parse(self, body):
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.csv', delete=False) as f:
             f.write(self._HDR + body)
             fname = f.name
         try:

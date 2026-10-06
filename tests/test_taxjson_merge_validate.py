@@ -8,6 +8,7 @@ before bad data hits the gains engine.
 import json
 import sys
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from io import StringIO
 from pathlib import Path
@@ -16,7 +17,7 @@ from unittest.mock import patch
 
 class TestTaxjsonMerge(unittest.TestCase):
     def _write(self, transactions, metadata=None):
-        fh = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        fh = private_tmpfile(mode='w', suffix='.json', delete=False)
         doc = {'transactions': transactions}
         if metadata:
             doc['metadata'] = metadata

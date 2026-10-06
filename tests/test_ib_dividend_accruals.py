@@ -17,6 +17,7 @@ import io
 import os
 import sys
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -71,7 +72,7 @@ _FUTURE_DATED_ACCRUAL = _HEADER + _ACCRUAL_HEADER + (
 
 
 def _run(content):
-    f = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+    f = private_tmpfile(mode='w', suffix='.csv', delete=False)
     f.write(content)
     f.close()
     buf = io.StringIO()

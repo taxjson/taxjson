@@ -21,6 +21,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -80,8 +81,8 @@ class TestWebullSettlement(unittest.TestCase):
 
     def _parse(self, rows):
         from taxjson.lib.brokerages.webull import WebullBrokerage
-        with tempfile.NamedTemporaryFile("w", suffix=".csv",
-                                         delete=False) as f:
+        with private_tmpfile("w", suffix=".csv",
+                             delete=False) as f:
             f.write(self._HDR + rows)
             name = f.name
         try:

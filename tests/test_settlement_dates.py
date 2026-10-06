@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+from _tmpfiles import private_tmpfile
 import os
 from pathlib import Path
 from taxjson.lib.brokerages.questrade import QuestradeBrokerage
@@ -13,7 +14,7 @@ class TestSettlementDates(unittest.TestCase):
 \"Date\",\"Activity\",\"Symbol\",\"Symbol Description\",\"Quantity\",\"Price\",\"Settlement Date\",\"Account\",\"Value\",\"Currency\",\"Description\"
 \"December 29, 2025\",\"Buy\",\"AAPL\",\"APPLE\",\"10\",\"100.00\",\"December 30, 2025\",\"12345678\",\"-1000\",\"USD\",\"BUY AAPL\"
 """
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.csv', delete=False) as f:
             f.write(content)
             fname = f.name
             
@@ -29,7 +30,7 @@ class TestSettlementDates(unittest.TestCase):
         content = """Transaction Date,Settlement Date,Action,Symbol,Description,Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Account #,Activity Type,Account Type
 2026-03-23 12:00:00 AM,2026-03-24 12:00:00 AM,Buy,AAPL,APPLE INC,10.0,100.0,1000.0,0.0,-1000.0,USD,12345,Trades,Individual LIRA
 """
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.csv', delete=False) as f:
             f.write(content)
             fname = f.name
             

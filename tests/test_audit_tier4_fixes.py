@@ -25,6 +25,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 from tax_rules import rule
@@ -43,7 +44,7 @@ _RBC_HEADER = ('"Date","Activity","Symbol","Symbol Description","Quantity","Pric
 
 
 def _write(content):
-    f = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+    f = private_tmpfile(mode='w', suffix='.csv', delete=False)
     f.write(content)
     f.close()
     return Path(f.name)
@@ -277,7 +278,7 @@ _IB_HEAD = ('Statement,Header,Field Name,Field Value\n'
 
 def _parse_ib(csv_text):
     from taxjson.lib.brokerages.ib_extractor import IbBrokerage
-    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
+    with private_tmpfile("w", suffix=".csv", delete=False) as f:
         f.write(_IB_HEAD + csv_text)
         name = f.name
     try:
@@ -365,8 +366,8 @@ class TestKrakenIgnoredRowsWarn(unittest.TestCase):
             '"T1","R1","2026-01-05 10:00:00","deposit","","currency","XXBT","spot","0.5","0","0.5"\n'
             '"T2","R2","2026-01-06 10:00:00","withdrawal","","currency","XXBT","spot","-0.2","0.0002","0.3"\n'
         )
-        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False,
-                                         prefix="kr_ledgers_") as f:
+        with private_tmpfile("w", suffix=".csv", delete=False,
+                             prefix="kr_ledgers_") as f:
             f.write(csv_text)
             name = f.name
         err = io.StringIO()

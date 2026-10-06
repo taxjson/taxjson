@@ -16,6 +16,7 @@ column.
 import io
 import sys
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
@@ -25,7 +26,7 @@ from taxjson.lib.brokerages.ib_extractor import IbBrokerage
 
 
 def _parse(content: str):
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+    with private_tmpfile(mode='w', suffix='.csv', delete=False) as f:
         f.write(content)
         fname = f.name
     err = io.StringIO()
