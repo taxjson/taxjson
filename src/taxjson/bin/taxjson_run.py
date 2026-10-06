@@ -1051,8 +1051,9 @@ class _CappedHelpFormatter(argparse.HelpFormatter):
     """Help wrapped at the house width (lib/out.width, docs/output-
     style.md): argparse wraps to the FULL terminal width, so on a wide
     monitor the option descriptions sprawl into hard-to-scan lines; the
-    house width caps it at 100 columns and still shrinks with a narrow
-    terminal (TAXJSON_WIDTH=N sets it; 0 keeps the house width)."""
+    house width caps it at 160 columns on a terminal (120 piped) and
+    still shrinks with a narrow terminal (TAXJSON_WIDTH=N sets it; 0
+    keeps the piped house width)."""
 
     def __init__(self, prog, **kw):
         from taxjson.lib.out import WIDTH, width
