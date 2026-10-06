@@ -11,12 +11,14 @@ forms:
   * captured (width 0): `legacy`, the exact one-line text the .diag has
     always held;
   * shown to a person (width > 0: a stage run by hand, the in-process
-    pipeline of `wash-sales`, `harvest` ...): `<kind>: <headline>` and
-    indented detail lines, wrapped at the house width.
+    pipeline of `wash-sales`, `harvest` ...): `<Label>: <headline>`
+    (`Info:` / `Warning:` / `Error:`, lib/out.label) and indented detail
+    lines, wrapped at the house width.
 
 `console_lines` is the other direction: a captured line the run echoes
-to the console (an ATTENTION or UNBOOKED line from a .diag) wrapped for
-the person at display time, its marker first line unchanged.
+to the console (an ATTENTION or UNBOOKED line from a .diag) shown to the
+person at display time — its label first (`Warning: ATTENTION: ...`,
+lib/out.relabel) and wrapped; the .diag keeps the captured line.
 """
 
 import sys
@@ -104,33 +106,27 @@ def split_message(text: str):
     return head, rest
 
 
-_RETIRED = (("NOTE: ", "note: "), ("Note: ", "note: "),
-            ("WARNING: ", "warning: "), ("Warning: ", "warning: "))
-
-
 def console_lines(line: str, indent: str = "  ", stream=None,
-                  width_: Optional[int] = None) -> List[str]:
+                  width_: Optional[int] = None,
+                  source: bool = True) -> List[str]:
     """A captured stage line as the run shows it under `indent`: as is
-    when it fits (or nothing wraps); else a marker line (`warning:
-    ATTENTION: <topic>: ...`) becomes its headline and an indented
-    detail paragraph, an indented continuation line wraps under its own
-    indentation; a retired `NOTE:` / `WARNING:` prefix is shown lower
-    case. Display only — the .diag keeps the one line."""
+    when nothing wraps (width 0); else with its label first
+    (lib/out.relabel: `warning: ATTENTION: ...` -> `Warning: ATTENTION:
+    ...`, an old `NOTE:` -> `Info:`; `source` keeps the program name a
+    line carried after the label, False drops it), unchanged when it
+    fits, else a marker line becomes its headline and an indented detail
+    paragraph, and an indented continuation line wraps under its own
+    indentation. Display only — the .diag keeps the one line."""
     w = out.width(stream if stream is not None else sys.stdout) \
         if width_ is None else width_
     if w <= 0:
         return [indent + line]
     # Shown to a person: a control character from broker data (an ESC
-    # sequence) is shown escaped, never sent to the terminal.
-    line = out.printable(line)
-    # A retired prefix (`NOTE:`, `WARNING:`) the captured text keeps is
-    # shown in the house's lower case.
+    # sequence) is shown escaped, never sent to the terminal; the label
+    # starts the line.
+    line = out.relabel(out.printable(line), source=source)
     body = line.lstrip()
     own = line[:len(line) - len(body)]
-    for old, new in _RETIRED:
-        if body.startswith(old):
-            line = own + new + body[len(old):]
-            break
     shown = indent + line
     if len(shown) <= w:
         return [shown]
@@ -146,14 +142,16 @@ def console_lines(line: str, indent: str = "  ", stream=None,
 
 
 def emit_line(text: str, *, file=None, indent: str = "") -> None:
-    """Print a stage's one-line message (`warning: ...`, `note: ...`):
-    as is when captured (_captured — the .diag keeps its bytes), else as
-    console_lines shows it: the marker headline and an indented detail,
-    wrapped. Each line of a multi-line `text` is shown so."""
+    """Print a program's own one-line message (`warning: ...`, `note:
+    ...`, `<prog>: error: ...`): as is when captured (_captured — the
+    .diag keeps its bytes), else as console_lines shows it: the label
+    first (`Warning: ...`, `Info: ...`; the program's own name dropped),
+    the headline and an indented detail, wrapped. Each line of a
+    multi-line `text` is shown so."""
     file = sys.stderr if file is None else file
     if _captured(file):
         print(text, file=file)
         return
     for part in str(text).split("\n"):
-        for ln in console_lines(part, indent, stream=file):
+        for ln in console_lines(part, indent, stream=file, source=False):
             print(ln, file=file)

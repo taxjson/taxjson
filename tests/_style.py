@@ -24,6 +24,7 @@ import atexit
 import datetime
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -140,9 +141,29 @@ def project(country: str = "canada", pending: bool = False) -> Project:
 def assert_styled(tc, text: str, width: int = 100, allow=()) -> None:
     """Fail `tc` with the out.lint problems of `text` (lines over
     `width` that are not table rows or contain an `allow` substring,
-    blank-line runs, a leading/trailing blank line, retired prefixes)."""
+    blank-line runs, a leading/trailing blank line, retired prefixes — a
+    captured lower-case `note:` / `warning:` / `error:` label at the
+    start of a line included)."""
     from taxjson.lib.out import lint
     probs = lint(text, width, allow)
     if probs:
         tc.fail("output style:\n  " + "\n  ".join(probs[:20])
                 + "\n--- output ---\n" + text[:4000])
+
+
+# A message label in its captured (width 0) form at the start of a line:
+# shown to a person it is `Info:` / `Warning:` / `Error:` (lib/out).
+_CAPTURED_LABEL = re.compile(
+    r"(?m)^[ \t]*(?:(?:taxjson|tjs)[\w -]*: )?"
+    r"(?:note|warning|error|NOTE|WARNING|ERROR|Note):")
+
+
+def assert_labelled(tc, text: str) -> None:
+    """Fail `tc` when a line of `text` (a person's stdout or stderr)
+    starts with a captured message label instead of `Info:` /
+    `Warning:` / `Error:` — wherever the line is, however long."""
+    bad = [m.group(0).strip() + " ..." for m in
+           re.finditer(_CAPTURED_LABEL.pattern + r".*", text)]
+    if bad:
+        tc.fail("captured labels shown to a person:\n  "
+                + "\n  ".join(bad[:20]) + "\n--- output ---\n" + text[:4000])

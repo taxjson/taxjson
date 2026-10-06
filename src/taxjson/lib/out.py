@@ -2,9 +2,11 @@
 
 One home for how taxjson prints to people: the wrap width, prose
 paragraphs and `- ` lists with a hanging indent, aligned `label:  value`
-blocks, tables that fit the width, and the diagnostic prefixes
-(`note:` / `warning:` / `warning: ATTENTION:` / `error:`) with a
-one-line headline and indented detail lines.
+blocks, tables that fit the width, and the message labels with a
+one-line headline and indented detail lines: shown to a person,
+`Info:` / `Warning:` / `Warning: ATTENTION:` / `Error:` start the line;
+captured for a program (width 0), the GNU `<prog>: note:` /
+`warning:` / `error:` bytes programs read are kept (label(), relabel()).
 
 It builds on the two older helpers instead of replacing them:
 
@@ -32,7 +34,8 @@ __all__ = [
     "WIDTH", "width", "wrap", "fill", "message", "emit", "note", "warn",
     "attention", "error", "fail", "fit_table", "records", "kv_lines",
     "relpath", "Doc", "lint", "Verbatim", "unwrapped", "fmt_money", "fmt_qty",
-    "printable", "shown",
+    "printable", "shown", "label", "relabel", "labelled", "exit_text",
+    "LABELS",
 ]
 
 # Prose wraps here when stdout is not a terminal (a pipe, a file, a test)
@@ -169,21 +172,96 @@ def fill(text: str, width_: Optional[int] = None, indent: str = "",
 
 
 # ------------------------------------------------------------ messages
+# The label of each message kind, in its two forms. This is the one place
+# the choice is made (docs/output-style.md, Messages):
+#   * captured for a program (width 0: a work/ or reports/ file, a .diag
+#     the .sum DIAGNOSTICS fold in, the text `taxjson checklist` and the
+#     run read back): the GNU `[<prog>: ]<kind>: ` form, lower case —
+#     those bytes never change;
+#   * shown to a person (width > 0): the capitalised label starts the
+#     line, with no program name in front of it.
 _KINDS = {
     "note": "note: ",
     "warning": "warning: ",
     "attention": "warning: ATTENTION: ",
     "error": "error: ",
 }
+LABELS = {
+    "note": "Info: ",
+    "warning": "Warning: ",
+    "attention": "Warning: ATTENTION: ",
+    "error": "Error: ",
+}
+
+
+def label(kind: str, width_: Optional[int] = None, stream=None) -> str:
+    """The label that starts a `kind` message (note | warning | attention
+    | error) printed to `stream` (stderr by default): `Info: ` /
+    `Warning: ` / `Warning: ATTENTION: ` / `Error: ` shown to a person
+    (width > 0), the captured `note: ` / `warning: ` / ... at width 0."""
+    if kind not in _KINDS:
+        raise ValueError(f"unknown message kind {kind!r}")
+    w = width(sys.stderr if stream is None else stream) \
+        if width_ is None else width_
+    return (LABELS if w > 0 else _KINDS)[kind]
+
+
+# A captured message line: optional indentation, an optional program
+# name (`taxjson-gains`, `taxjson run`, `tjs sum`), then a kind word in
+# any of its old spellings (`note:`, `NOTE:`, `Note:`, `warning:`,
+# `WARNING:`, `error:`, `ERROR:`) — or an already person-shaped label.
+_CAPTURED_RE = re.compile(
+    r"(?P<lead>[ \t]*)"
+    r"(?:(?P<prog>(?:taxjson|tjs)(?:-[a-z0-9][\w-]*)?(?: [a-z][\w-]*)?): )?"
+    r"(?P<kind>note|Note|NOTE|info|Info|INFO|warning|Warning|WARNING"
+    r"|error|Error|ERROR): ")
+_KIND_OF = {"note": "note", "info": "note", "warning": "warning",
+            "error": "error"}
+
+
+def relabel(line: str, *, source: bool = True) -> str:
+    """A captured message line (`[<prog>: ]warning: ...`, an old `NOTE:`
+    ...) as a person is shown it: the label first (`Warning: ...`,
+    `Info: ...`), its indentation kept. `source`: a program name the
+    line carried follows the label (`Error: taxjson-gains: ...`) — the
+    line came from another program than the one the person ran (a
+    stage's stderr the run echoes); False drops it (a program's own
+    line). Any other line is returned as is. Display only: the captured
+    text itself is never rewritten."""
+    m = _CAPTURED_RE.match(line)
+    if not m:
+        return line
+    head = LABELS[_KIND_OF[m.group("kind").lower()]]
+    prog = m.group("prog")
+    return (m.group("lead") + head
+            + (f"{prog}: " if prog and source else "")
+            + line[m.end():])
+
+
+def labelled(text: str, stream=None, *, source: bool = False) -> str:
+    """`text` as printed to `stream` (stdout by default): each line
+    relabel()ed when shown to a person (width > 0), as is when captured
+    (width 0). For a message line built as text (`note: ...`) that is
+    also written where a program reads it."""
+    if width(sys.stdout if stream is None else stream) <= 0:
+        return str(text)
+    return "\n".join(relabel(ln, source=source)
+                     for ln in str(text).split("\n"))
 
 
 def message(kind: str, text: str, *, prog: Optional[str] = None,
             details: Iterable[str] = (), width_: Optional[int] = None,
             stream=None) -> List[str]:
-    """A diagnostic as lines: `[<prog>: ]<kind>: <headline>` (wrapped with
-    a two-space hanging indent) and each detail as its own indented
-    paragraph. `kind`: note | warning | attention (the run's ATTENTION
-    channel: `warning: ATTENTION: ...`) | error.
+    """A diagnostic as lines: the label and a one-line headline (wrapped
+    with a two-space hanging indent), then each detail as its own
+    indented paragraph. `kind`: note | warning | attention (the run's
+    ATTENTION channel) | error.
+
+    Shown to a person (width > 0) the line starts with the label —
+    `Info: ` / `Warning: ` / `Warning: ATTENTION: ` / `Error: ` — and
+    `prog` is not shown (it is the command the person ran). Captured for
+    a program (width 0) it is `[<prog>: ]<kind>: <headline>`, lower
+    case, the bytes the run and the checklist read (label()).
 
     Keep the headline short and complete — what happened, to what — and
     put the why and the fix in `details`: a reader (and a grep for the
@@ -191,15 +269,21 @@ def message(kind: str, text: str, *, prog: Optional[str] = None,
     if kind not in _KINDS:
         raise ValueError(f"unknown message kind {kind!r}")
     stream = sys.stderr if stream is None else stream
-    head = (f"{prog}: " if prog else "") + _KINDS[kind]
-    out = wrap(head + str(text).strip(), width_, "", DETAIL_INDENT, stream)
+    w = width(stream) if width_ is None else width_
+    head = LABELS[kind] if w > 0 else \
+        (f"{prog}: " if prog else "") + _KINDS[kind]
+    out = wrap(head + str(text).strip(), w, "", DETAIL_INDENT, stream)
     for d in details:
         if d is None:
             continue
         d = str(d).strip()
+        if w > 0:
+            # A relayed captured line (a stage's `<prog>: error: ...`)
+            # shown with its label first, its program as the source.
+            d = "\n".join(relabel(x) for x in d.split("\n"))
         # A `- ` item hangs under its text, not under the dash.
         hang = DETAIL_INDENT + ("  " if d.startswith("- ") else "")
-        out.extend(wrap(d, width_, DETAIL_INDENT, hang, stream))
+        out.extend(wrap(d, w, DETAIL_INDENT, hang, stream))
     return out
 
 
@@ -229,6 +313,34 @@ def attention(text: str, *, prog: Optional[str] = None,
 def error(text: str, *, prog: Optional[str] = None,
           details: Iterable[str] = (), file=None) -> None:
     emit("error", text, prog=prog, details=details, file=file)
+
+
+# The program name in front of a refusal written the old way.
+_PROG_RE = re.compile(
+    r"(?:taxjson|tjs)(?:-[a-z0-9][\w-]*)?(?: [a-z][\w-]*)?"
+    r"(?: --[a-z][\w-]*)?: ")
+
+
+def exit_text(text: str, stream=None) -> str:
+    """The text for `sys.exit(...)` of a refusal written the old way —
+    `<prog>: <what>` or `<prog>: error: <what>`: as is when captured
+    (width 0 — `taxjson checklist` shows a failed command's last line,
+    the run relays a stage's), else as message() lays out an error for
+    the person: `Error: <what>`, the program name dropped, wrapped."""
+    text = str(text)
+    stream = sys.stderr if stream is None else stream
+    w = width(stream)
+    if w <= 0:
+        return text
+    m = _PROG_RE.match(text)
+    rest = text[m.end():] if m else text
+    k = _CAPTURED_RE.match(rest)
+    if k and not k.group("lead") and not k.group("prog"):
+        kind = _KIND_OF[k.group("kind").lower()]
+        rest = rest[k.end():]
+    else:
+        kind = "error"
+    return "\n".join(message(kind, rest, width_=w, stream=stream))
 
 
 def fail(text: str, *, prog: Optional[str] = None,
@@ -452,8 +564,15 @@ class Doc:
 
 
 # ---------------------------------------------------------------- lint
+# Retired at the start of a line shown to a person: the captured,
+# lower-case labels (`note:`, `warning:`, `error:`) and their old
+# spellings, with or without a program name in front, and the old
+# bullets; a person label (`Info:` / `Warning:` / `Error:`) behind a
+# program name (`taxjson-x: Warning:`) — the label starts the line.
 _RETIRED_PREFIXES = re.compile(
-    r"^\s*(?:[\w./-]+:\s+)?(NOTE:|Note:|WARNING:|Warning:|!!|→ |-> |\*\*\* )")
+    r"^\s*(?:(?:(?:taxjson|tjs)[\w -]*:\s+|[\w./-]+:\s+)?(?:note:|NOTE:|Note:|warning:|WARNING:"
+    r"|error:|ERROR:|!!|→ |-> |\*\*\* )"
+    r"|(?:taxjson|tjs)[\w -]*:\s+(?:Info|Warning|Error):)")
 
 
 def _looks_like_table_row(line: str) -> bool:
@@ -468,8 +587,10 @@ def lint(text: str, width_: int = WIDTH,
     """Style problems in rendered output, for tests: a prose line longer
     than `width_` (a table row, or a line containing one of the `allow`
     substrings — a command to copy — is exempt), two blank lines in a
-    row, a leading or trailing blank line, a retired prefix (NOTE:,
-    WARNING:, !!, →, ***). [] when clean."""
+    row, a leading or trailing blank line, a retired prefix (a
+    lower-case `note:` / `warning:` / `error:` or NOTE: / WARNING: at
+    the start of a line, a label behind a program name, !!, →, ***).
+    [] when clean."""
     allow = tuple(allow)
     probs: List[str] = []
     lines = text.split("\n")

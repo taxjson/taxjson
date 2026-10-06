@@ -1,11 +1,15 @@
-"""GNU-style CLI diagnostics for taxjson bin tools.
+"""CLI diagnostics for taxjson bin tools.
 
-Convention (AUDIT-2026-07-ui §1C): diagnostics go to stderr as
-``<prog>: warning: ...`` / ``<prog>: error: ...`` / ``<prog>: note: ...``
-with a lowercase severity word, where ``<prog>`` is the installed
-console-script name (e.g. ``taxjson-merge``). Report content stays on
-stdout. Exit codes: 0 = success (including "no data"), 1 = the tool's
-finding (mismatch/violation/lint problem), 2 = usage/environment error.
+Convention (docs/output-style.md, Messages): diagnostics go to stderr.
+Shown to a person they start with their label — ``Warning: ...`` /
+``Error: ...`` / ``Info: ...``; captured for a program (width 0: a
+stage under ``taxjson run``, a command the checklist reads) they keep
+the GNU ``<prog>: warning: ...`` / ``<prog>: error: ...`` /
+``<prog>: note: ...`` bytes, where ``<prog>`` is the installed
+console-script name (e.g. ``taxjson-merge``). lib/out.message makes the
+choice. Report content stays on stdout. Exit codes: 0 = success
+(including "no data"), 1 = the tool's finding (mismatch/violation/lint
+problem), 2 = usage/environment error.
 
 These helpers cover only bin/ CLI diagnostics. Parser-layer warnings in
 lib/brokerages/ keep their bare ``warning:`` shape — they feed the
@@ -17,8 +21,9 @@ import sys
 
 
 def warn(prog: str, msg: str, details=()) -> None:
-    """`<prog>: warning: <msg>` (+ indented `details`), wrapped to the
-    house width by lib/out (unwrapped when a program captures it)."""
+    """`Warning: <msg>` (+ indented `details`), wrapped to the house
+    width by lib/out; captured by a program (width 0), the unwrapped
+    `<prog>: warning: <msg>`."""
     from taxjson.lib.out import emit
     emit("warning", msg, prog=prog, details=details, file=sys.stderr)
 
@@ -181,14 +186,35 @@ def _flush_stdout() -> None:
         pass
 
 
+def _argparse_error(self, message: str) -> None:
+    """argparse's usage error in the house style: the usage line, then
+    the message as lib/out lays out an error — `Error: <message>` shown
+    to a person, argparse's own `<prog>: error: <message>` bytes when
+    captured (width 0) — exit 2."""
+    from taxjson.lib.out import message as _message
+    self.print_usage(sys.stderr)
+    self.exit(2, "\n".join(_message("error", message, prog=self.prog,
+                                    stream=sys.stderr)) + "\n")
+
+
+def labelled_usage_errors() -> None:
+    """Make every argparse parser of this process report a usage error
+    with the house label (_argparse_error). Called at the top of the
+    process only (run_top_level)."""
+    import argparse
+    argparse.ArgumentParser.error = _argparse_error
+
+
 def run_top_level(prog, fn, *a, interrupt_note="", **kw):
     """Run a command's main at the top of the process (the `taxjson`
     entry point and every `taxjson-*` console script): Ctrl-C is one
     `<prog>: interrupted` line with exit 130 (re-audit A2-0782 /
     A2-1425: a 25-50 line KeyboardInterrupt traceback), and a closed
-    stdout pipe exits 141 quietly (A2-0785). Never used around a tool
+    stdout pipe exits 141 quietly (A2-0785), and a usage error carries
+    the house label (labelled_usage_errors). Never used around a tool
     run in-process by another: its Ctrl-C must stop the whole run."""
     tolerant_stdout()
+    labelled_usage_errors()
     try:
         r = fn(*a, **kw)
         _flush_stdout()

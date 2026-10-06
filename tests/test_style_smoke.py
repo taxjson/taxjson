@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from _style import assert_styled, project
+from _style import assert_labelled, assert_styled, project
 
 from taxjson.lib import out
 
@@ -68,6 +68,7 @@ class TestConvertedCommands(unittest.TestCase):
                     r = p.run(*args)
                     self.assertEqual(r.returncode, 0, r.stderr)
                     assert_styled(self, r.stdout)
+                    assert_labelled(self, r.stdout + r.stderr)
 
     def test_pending_election_listing(self):
         for country in ("canada", "usa"):
@@ -98,7 +99,7 @@ class TestDie(_Width100):
                    * 12)
         text = str(cm.exception)
         self.assertTrue(text.startswith(
-            f"{R._PROG} sum: error: no gains files in work/\n  Run "), text)
+            "Error: no gains files in work/\n  Run "), text)
         self.assertEqual(out.lint(text), [])
 
     def test_die_input_exits_2_on_stderr(self):
@@ -109,6 +110,13 @@ class TestDie(_Width100):
                 self.assertRaises(SystemExit) as cm:
             R._die_input("no such file: x.toml")
         self.assertEqual(cm.exception.code, 2)
+        self.assertEqual(err.getvalue(), "Error: no such file: x.toml\n")
+        # Captured (width 0): the GNU bytes the checklist reads.
+        err = io.StringIO()
+        with mock.patch.object(R, "_CURRENT_CMD", "opening"), \
+                out.unwrapped(), contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit):
+            R._die_input("no such file: x.toml")
         self.assertEqual(err.getvalue(),
                          f"{R._PROG} opening: error: no such file: x.toml\n")
 
@@ -119,9 +127,9 @@ class TestDie(_Width100):
             cli_diag.warn("taxjson-x", "word " * 40)
             cli_diag.note("taxjson-x", "short")
         lines = err.getvalue().splitlines()
-        self.assertTrue(lines[0].startswith("taxjson-x: warning: word"))
+        self.assertTrue(lines[0].startswith("Warning: word"))
         self.assertTrue(lines[1].startswith("  word"))
-        self.assertEqual(lines[-1], "taxjson-x: note: short")
+        self.assertEqual(lines[-1], "Info: short")
         self.assertEqual(out.lint(err.getvalue()), [])
 
 

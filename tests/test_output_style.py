@@ -93,7 +93,8 @@ class TestWrapAndMessages(_NoWidthEnv):
         lines = out.message("warning", "short headline", prog="taxjson x",
                             details=["why " * 40, "- an item " * 12],
                             width_=60)
-        self.assertEqual(lines[0], "taxjson x: warning: short headline")
+        # Shown to a person: the label starts the line, no program name.
+        self.assertEqual(lines[0], "Warning: short headline")
         self.assertTrue(all(ln.startswith("  ") for ln in lines[1:]))
         self.assertTrue(all(len(ln) <= 60 for ln in lines))
         item = [ln for ln in lines if ln.startswith("  - ")]
@@ -101,12 +102,73 @@ class TestWrapAndMessages(_NoWidthEnv):
         cont = lines[lines.index(item[0]) + 1]
         self.assertTrue(cont.startswith("    ") and cont[4] != " ", cont)
 
+    def test_captured_message_keeps_the_gnu_bytes(self):
+        # Width 0 (a .diag, the checklist's read): `<prog>: <kind>:`.
+        for kind, want in (("note", "taxjson x: note: h"),
+                           ("warning", "taxjson x: warning: h"),
+                           ("attention", "taxjson x: warning: ATTENTION: h"),
+                           ("error", "taxjson x: error: h")):
+            self.assertEqual(out.message(kind, "h", prog="taxjson x",
+                                         width_=0), [want])
+        with out.unwrapped():
+            self.assertEqual(out.message("note", "h")[0], "note: h")
+
+    def test_person_labels(self):
+        for kind, want in (("note", "Info: h"), ("warning", "Warning: h"),
+                           ("attention", "Warning: ATTENTION: h"),
+                           ("error", "Error: h")):
+            self.assertEqual(out.message(kind, "h", prog="taxjson-x",
+                                         width_=100), [want])
+            self.assertEqual(out.label(kind, 100) + "h", want)
+
     def test_attention_keeps_the_run_marker(self):
         line = out.message("attention", "short: ABC.TO goes short")[0]
+        self.assertTrue(line.startswith("Warning: ATTENTION: short: "))
+        with out.unwrapped():
+            line = out.message("attention", "short: ABC.TO goes short")[0]
         self.assertTrue(line.startswith("warning: ATTENTION: short: "))
+
+    def test_relabel(self):
+        R = out.relabel
+        self.assertEqual(R("warning: ATTENTION: short: X"),
+                         "Warning: ATTENTION: short: X")
+        self.assertEqual(R("  note: x"), "  Info: x")
+        self.assertEqual(R("NOTE: x"), "Info: x")
+        self.assertEqual(R("taxjson-gains: error: x"),
+                         "Error: taxjson-gains: x")
+        self.assertEqual(R("taxjson-gains: error: x", source=False),
+                         "Error: x")
+        self.assertEqual(R("taxjson run: warning: x", source=False),
+                         "Warning: x")
+        for same in ("margin: note: x", "taxjson.toml: warning: x",
+                     "Warning: ok", "no label here"):
+            self.assertEqual(R(same), same)
+
+    def test_lint_flags_captured_labels_in_person_output(self):
+        for bad in ("note: x", "  warning: x", "error: x", "NOTE: x",
+                    "taxjson x: warning: x", "taxjson-x: Error: x"):
+            self.assertTrue(out.lint(bad), bad)
+        for ok in ("Info: x", "  Warning: ATTENTION: short: x",
+                   "Error: taxjson-gains: x"):
+            self.assertEqual(out.lint(ok), [], ok)
+
+    def test_exit_text(self):
+        with out.unwrapped():
+            self.assertEqual(out.exit_text("taxjson sum: no gains"),
+                             "taxjson sum: no gains")
+        self.assertEqual(out.exit_text("taxjson sum: no gains"),
+                         "Error: no gains")
+        self.assertEqual(out.exit_text("taxjson-x: error: bad"),
+                         "Error: bad")
+        self.assertEqual(out.exit_text(
+            "taxjson run --strict: 1 year drifted"),
+            "Error: 1 year drifted")
 
     def test_fail_exit_1_carries_the_text(self):
         with self.assertRaises(SystemExit) as cm:
+            out.fail("it broke", prog="taxjson x", details=["fix it"])
+        self.assertEqual(str(cm.exception), "Error: it broke\n  fix it")
+        with out.unwrapped(), self.assertRaises(SystemExit) as cm:
             out.fail("it broke", prog="taxjson x", details=["fix it"])
         self.assertEqual(str(cm.exception),
                          "taxjson x: error: it broke\n  fix it")
@@ -274,7 +336,7 @@ class TestElectStyle(_NoWidthEnv):
                 _elect(root, account="margin",
                        set=[f"{_EV}=rollover_s_86_1"])
         msg = str(cm.exception)
-        self.assertTrue(msg.startswith("taxjson elect: error: "
+        self.assertTrue(msg.startswith("Error: "
                                        "rollover_s_86_1 needs "
                                        "allocated_acb_cad\n  "), msg)
         self.assertEqual(out.lint(msg), [], msg)
@@ -288,7 +350,7 @@ class TestElectStyle(_NoWidthEnv):
         self.assertEqual(o.splitlines()[0],
                          f"Election saved: {_EV} = rollover_s_86_1")
         self.assertIn("  file:   inputs/margin/manifest.json", o)
-        self.assertTrue(e.startswith("taxjson elect: warning: "
+        self.assertTrue(e.startswith("Warning: "
                                      "allocated_acb_cad=0 moves NO cost"))
         self.assertEqual(out.lint(o), [])
         self.assertEqual(out.lint(e), [])
