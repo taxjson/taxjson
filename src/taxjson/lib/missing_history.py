@@ -798,6 +798,28 @@ class MissingHistoryRow:
     in_year_dispositions: int   # count of those in-year sales drawing on it
     in_year_proceeds: float     # their summed proceeds (dollar-impact gauge)
     last_in_year_date: str
+    # Any row of the pair (a trade, a transfer, income) dated in the year,
+    # whether or not it draws on the missing basis — `taxjson run` lists
+    # such a pair on its console (year_listed).
+    in_year_activity: bool = False
+    # The position is still short in the books at the year's start (its
+    # missing purchase changes no gain of the year unless a row of the
+    # year draws on it).
+    short_at_year_start: bool = False
+    # Canada: other taxable accounts with a row of the symbol dated in
+    # the year — one ACB pool across them (s.47, pool_activity), so this
+    # pair's short moves their gain.
+    pooled_with: Tuple[str, ...] = ()
+
+    @property
+    def year_listed(self) -> bool:
+        """The pair bears on the year: a row of the year draws on the
+        missing basis (affects_year), touches the pair at all, or (Canada)
+        trades the symbol in another taxable account of its ACB pool.
+        What `taxjson run` lists one by one; the rest are the 'NOT
+        relevant' pairs it counts in one line."""
+        return bool(self.affects_year or self.in_year_activity
+                    or self.pooled_with)
 
 
 def _basis_date(tx, date_basis: str) -> str:
@@ -813,6 +835,7 @@ def assess_tax_year_relevance(
     *,
     date_basis: str = 'settle',
     journal_symbols: Optional[Set[str]] = None,
+    pool: Optional[Dict[Tuple[str, str], Set[str]]] = None,
 ) -> List[MissingHistoryRow]:
     """For each missing-history candidate, decide whether its missing history actually
     bears on tax year `year`.
@@ -834,18 +857,31 @@ def assess_tax_year_relevance(
     year — or 'trade'), so a Dec-31 trade settling in January belongs to
     January's year (S075-16).
 
+    Each row also says whether ANY row of the pair falls in the year
+    (in_year_activity), whether the books hold the pair short at the
+    year's start (short_at_year_start), and — `pool`, from pooled_with —
+    which other accounts of its cost pool trade the symbol in the year:
+    MissingHistoryRow.year_listed, the one test `taxjson run`'s console
+    and find-missing-history share.
+
     `year` may be int or str (matched against the date prefix); None means "no
     year scope" — every candidate is reported as relevant, with the totals of
     its sales drawing on the missing history across all years. Returns one row per candidate, in the
     candidates' order."""
     year_str = str(year) if year is not None else None
+    year_start = f"{year_str}-01-01" if year_str is not None else None
     run: Dict[Tuple[str, str], float] = {}
     stats: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    # Any row of the pair dated in the year, and the running position
+    # just before the year (in_year_activity / short_at_year_start).
+    active: Set[Tuple[str, str]] = set()
+    before: Dict[Tuple[str, str], float] = {}
 
     for tx in _drop_duplicate_splits(
             sorted(transactions,
                    key=lambda t: _walk_key(t, journal_symbols))):
         key = (tx.symbol, tx.account)
+        d = _basis_date(tx, date_basis)
         if tx.action == 'SPLIT':
             ratio = float(tx.quantity or 0.0)
             new_sym = normalize_symbol_new(tx.symbol,
@@ -853,20 +889,28 @@ def assess_tax_year_relevance(
             if new_sym:
                 nk = (new_sym, tx.account)
                 run[nk] = run.get(nk, 0.0) + run.pop(key, 0.0) * ratio
+                if year_start is not None and d < year_start:
+                    before[nk] = run[nk]
+                    before[key] = 0.0
             elif key in run:
                 run[key] *= ratio
+                if year_start is not None and d < year_start:
+                    before[key] = run[key]
             continue
+        if year_str is not None and d.startswith(year_str):
+            active.add(key)
         if tx.action not in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE', 'TRANSFER'):
             continue
         prev = run.get(key, 0.0)
         cur = prev + tx.quantity
         run[key] = cur
+        if year_start is not None and d < year_start:
+            before[key] = cur
         draws = ((tx.quantity < 0 and (prev < -1e-9 or cur < -1e-9))
                  or (tx.quantity > 0 and prev < -1e-9
                      and tx.action in ('BUYSELL', 'ASSIGN')))
         if not draws:
             continue
-        d = _basis_date(tx, date_basis)
         if year_str is not None and not d.startswith(year_str):
             continue
         st = stats.setdefault(key, {'n': 0, 'proceeds': 0.0, 'last': ''})
@@ -885,9 +929,134 @@ def assess_tax_year_relevance(
             in_year_dispositions=st['n'],
             in_year_proceeds=round(st['proceeds'], 2),
             last_in_year_date=st['last'],
+            in_year_activity=(year_str is None
+                              or (c.symbol, c.account) in active),
+            short_at_year_start=(year_str is not None and before.get(
+                (c.symbol, c.account), 0.0) < -1e-9),
+            pooled_with=tuple(sorted(
+                (pool or {}).get((c.symbol, c.account), ()))),
         ))
     return out
 
+
+def pool_activity(transactions: Iterable[TaxTransaction], year: Any, *,
+                  pooled_accounts: Iterable[str],
+                  date_basis: str = 'settle'
+                  ) -> Dict[str, Set[str]]:
+    """{symbol: {account}} — the accounts of one cost pool
+    (`pooled_accounts`) with a row of the symbol dated in `year`. In a
+    Canadian project every taxable account's identical shares are one
+    ACB pool (s.47; lib/country.basis_pooled_across_accounts): a short
+    one account's missing purchase leaves in that pool moves another
+    account's gain of the year. {} without a year."""
+    if year is None:
+        return {}
+    ys = str(year)
+    pooled = set(pooled_accounts)
+    out: Dict[str, Set[str]] = {}
+    for tx in transactions:
+        if tx.account in pooled and _basis_date(tx, date_basis) \
+                .startswith(ys) and tx.action != 'SPLIT':
+            out.setdefault(tx.symbol, set()).add(tx.account)
+    return out
+
+
+def pooled_with(candidates: Iterable[MissingHistoryCandidate],
+                activity: Dict[str, Set[str]],
+                pooled_accounts: Iterable[str]
+                ) -> Dict[Tuple[str, str], Set[str]]:
+    """{(symbol, account): other accounts of its pool active in the
+    year} for the candidates in a pooled account (pool_activity)."""
+    pooled = set(pooled_accounts)
+    out: Dict[Tuple[str, str], Set[str]] = {}
+    for c in candidates:
+        if c.account not in pooled:
+            continue
+        others = activity.get(c.symbol, set()) - {c.account}
+        if others:
+            out[(c.symbol, c.account)] = others
+    return out
+
+
+
+def year_pool(transactions: Iterable[TaxTransaction],
+              candidates: Iterable[MissingHistoryCandidate], year: Any, *,
+              country: Optional[str], registered: Optional[Dict[str, bool]],
+              date_basis: str = 'settle'
+              ) -> Dict[Tuple[str, str], Set[str]]:
+    """The `pool=` of assess_tax_year_relevance for a project: in a
+    country whose cost basis pools identical property across taxable
+    accounts (Canada, s.47 — lib/country.basis_pooled_across_accounts),
+    the other taxable accounts that trade each candidate's symbol in the
+    year. {} for the US (basis per account), outside a project (no
+    country or no account types) and without a year."""
+    from taxjson.lib.country import basis_pooled_across_accounts
+    if (year is None or not country or not registered
+            or not basis_pooled_across_accounts(country)):
+        return {}
+    txs = list(transactions)
+    accounts = {t.account for t in txs if t.account}
+    pooled = {a for a in accounts if registered.get(a) is False}
+    return pooled_with(candidates,
+                       pool_activity(txs, year, pooled_accounts=pooled,
+                                     date_basis=date_basis), pooled)
+
+
+def classify_year_shorts(transactions: Iterable[TaxTransaction], year: Any,
+                         *, country: Optional[str],
+                         registered: Optional[Dict[str, bool]],
+                         date_basis: str = 'settle',
+                         journal_symbols: Optional[Set[str]] = None
+                         ) -> Dict[Tuple[str, str], MissingHistoryRow]:
+    """{(symbol, account): MissingHistoryRow} for every pair that goes
+    short in a project's books (options and broker-marked shorts
+    included), judged against `year` the way find-missing-history
+    judges it (assess_tax_year_relevance with the project's pool):
+    `taxjson run` lists a pair whose row is `year_listed` and counts the
+    rest in one line; `--write-missing-history --outside-year` writes
+    only the rest."""
+    txs = list(transactions)
+    cands = detect_missing_history(txs, include_options=True,
+                                   include_broker_shorts=True,
+                                   registered_accounts=registered or None,
+                                   country=country,
+                                   journal_symbols=journal_symbols)
+    pool = year_pool(txs, cands, year, country=country,
+                     registered=registered, date_basis=date_basis)
+    return {(r.candidate.symbol, r.candidate.account): r
+            for r in assess_tax_year_relevance(
+                txs, cands, year, date_basis=date_basis,
+                journal_symbols=journal_symbols, pool=pool)}
+
+
+def missing_history_suspect(c: MissingHistoryCandidate) -> bool:
+    """A pair that goes short because a sale had nothing to close — a
+    purchase missing from the files, not a short: no broker short-sale
+    marker, and a share or coin (an option or a future sold to open is
+    an ordinary short) unless the broker coded the sale CLOSING (IB code
+    C) or the account is registered. The pairs find-missing-history
+    reports as TRUNCATED HISTORY, `taxjson run` warns about and `taxjson
+    list` marks `missing history?`."""
+    if c.broker_marked_short:
+        return False
+    if c.broker_says_closing or c.registered:
+        return True
+    return not _derivative_symbol(c.symbol)
+
+
+def missing_history_suspects(transactions: Iterable[TaxTransaction], *,
+                             registered: Optional[Dict[str, bool]] = None,
+                             country: Optional[str] = None,
+                             journal_symbols: Optional[Set[str]] = None
+                             ) -> Set[Tuple[str, str]]:
+    """{(symbol, account)} of every missing_history_suspect pair in the
+    books."""
+    return {(c.symbol, c.account) for c in detect_missing_history(
+                transactions, include_options=True,
+                include_broker_shorts=True,
+                registered_accounts=registered or None, country=country,
+                journal_symbols=journal_symbols)
+            if missing_history_suspect(c)}
 
 # Description keywords that mark a broker row as a corporate action — used
 # only to annotate WHY a $0-cost acquisition happened, not to gate detection.

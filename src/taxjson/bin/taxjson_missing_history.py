@@ -146,7 +146,7 @@ def _money(v) -> str:
     return fmt_money(v)
 
 
-def _print_section(title, rows, *, show_year_cols):
+def _print_section(title, rows, *, show_year_cols, year=None):
     if not rows:
         return
     _P.heading(title)
@@ -180,6 +180,15 @@ def _print_section(title, rows, *, show_year_cols):
                         "figure for you to review."
                         if c.broker_basis and not c.symbol.startswith(
                             ('F:', '/', '\\')) else ""))
+        if year and r.pooled_with and not r.affects_year:
+            d.append(f"{c.symbol} trades in {year} in "
+                     f"{', '.join(r.pooled_with)}: one ACB pool across "
+                     f"your taxable accounts (s.47), so this short "
+                     f"changes that account's {year} gain.")
+        if year and r.short_at_year_start and not r.in_year_activity:
+            d.append(f"still short at the start of {year}, with no {year} "
+                     f"activity: no {year} gain depends on it; the "
+                     f"purchase matters when the position next trades.")
         details.append(d)
     _table(hdr, body, details)
 
@@ -652,9 +661,16 @@ def main(argv=None):
     # vanished behind one).
     broker_shorts = [c for c in candidates if c.broker_marked_short]
     candidates = [c for c in candidates if not c.broker_marked_short]
+    # Canada: the other taxable accounts of a symbol's ACB pool that
+    # trade it in the year (lib/missing_history.year_pool) — the same
+    # test `taxjson run` lists a short on its console by.
+    from taxjson.lib.missing_history import year_pool
+    _pool = year_pool(txs, candidates, args.year, country=country,
+                      registered=types, date_basis=basis)
     short_rows = [r for r in assess_tax_year_relevance(txs, candidates, args.year,
                                                        date_basis=basis,
-                                                       journal_symbols=journal)
+                                                       journal_symbols=journal,
+                                                       pool=_pool)
                   if (r.candidate.symbol, r.candidate.account) not in linked_old]
 
     # --- 1b. Broker-marked covers no short in the data backs (RBC
@@ -845,20 +861,35 @@ def main(argv=None):
         _P.heading(f"TRUNCATED HISTORY — positions go short (missing a "
                    f"buy): {len(short_rows)} pair(s)")
         if yr:
-            affects = [r for r in short_rows if r.affects_year
+            # A pair whose symbol another taxable account of its ACB pool
+            # trades in the year (Canada, s.47) distorts that account's
+            # gain: it affects the year too (pooled_with).
+            def _aff(r):
+                return r.affects_year or bool(r.pooled_with)
+            affects = [r for r in short_rows if _aff(r)
                        and not r.candidate.registered and not _covered(r)]
-            covered = [r for r in short_rows if r.affects_year
+            covered = [r for r in short_rows if _aff(r)
                        and not r.candidate.registered and _covered(r)]
             sheltered = [r for r in short_rows if r.affects_year
                          and r.candidate.registered]
-            ignorable = [r for r in short_rows if not r.affects_year]
+            # Touched in the year (a trade, a transfer, income) with no
+            # row drawing on the missing basis: `taxjson run` lists
+            # these one by one too (MissingHistoryRow.year_listed).
+            active = [r for r in short_rows if r.year_listed
+                      and r not in affects and r not in covered
+                      and r not in sheltered]
+            ignorable = [r for r in short_rows if not r.year_listed]
             _P.para(f"{len(affects) + len(covered)} affect tax year {yr}"
                     + (f" ({len(covered)} covered by {mh_name})"
                        if covered else "")
                     + f"; {len(sheltered)} are in registered accounts; "
-                      f"{len(ignorable)} do not.")
+                    + (f"{len(active)} are active in {yr} without a "
+                       f"sale drawing on the missing basis; "
+                       if active else "")
+                    + f"{len(ignorable)} do not.")
             _print_section(f"AFFECTS {yr} - missing basis distorts this year's "
-                           "gain; fix before filing:", affects, show_year_cols=True)
+                           "gain; fix before filing:", affects, show_year_cols=True,
+                           year=yr)
             # Pairs the missing-history file already covers (the run
             # applies them) are not work still to do (R1-339).
             _print_section(f"COVERED by {mh_name} - the run applies these "
@@ -872,9 +903,17 @@ def main(argv=None):
             # cross-account loss rule, so they are listed apart.
             _print_section(_sheltered_title(yr, country), sheltered,
                            show_year_cols=True)
+            _print_section(f"ACTIVE IN {yr} - no {yr} sale draws on the "
+                           f"missing basis, but the position trades, moves "
+                           f"or pays income in {yr} (`taxjson run` lists "
+                           f"these):", active, show_year_cols=True,
+                           year=yr)
             _print_section(f"NOT relevant to {yr} - short only from other-year "
-                           "sales (or since drained); safe to ignore:",
-                           ignorable, show_year_cols=True)
+                           f"sales (or since drained), no {yr} activity; "
+                           f"safe to ignore (`taxjson find-missing-history "
+                           f"--write-missing-history --outside-year` records "
+                           f"them so the run stops listing them):",
+                           ignorable, show_year_cols=True, year=yr)
         else:
             _print_section("Short positions (all history):", short_rows,
                            show_year_cols=False)
@@ -921,13 +960,13 @@ def main(argv=None):
                 + ". Enter a missing buy under the broker's symbol and "
                   "currency, as the account labels it.")
 
-    if (yr and (any(r.affects_year and not _covered(r)
+    if (yr and (any((r.affects_year or r.pooled_with) and not _covered(r)
                     for r in short_rows)
                 or any(r.affects_year for r in zero_rows) or zero_held)):
         # (registered rows included: their openings still feed the
         # cross-account loss walk)
-        _short_open = any(r.affects_year and not _covered(r)
-                          for r in short_rows)
+        _short_open = any((r.affects_year or r.pooled_with)
+                          and not _covered(r) for r in short_rows)
         _zero_open = (any(r.affects_year for r in zero_rows)
                       or bool(zero_held))
         if _short_open:

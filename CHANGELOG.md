@@ -60,6 +60,26 @@
   `DISTINCT` line for the pair, wins; anything less certain stays a
   suggestion. Every equity
   account is now read in the run's first pass when there are two or more.
+- **`taxjson run` lists only the short positions that bear on the tax year.** A position that
+  went short with no purchase in your files is listed one by one when a row of the tax year draws
+  on it or touches it (Canada: or another taxable account trades the symbol that year, one ACB
+  pool); the others are one `Info:` line under the new step `==> Checking for missing purchase
+  history`, after every account's books. `find-missing-history` sorts by the same test (new
+  ACTIVE section; a position still short at the year's start says so), and
+  `find-missing-history --write-missing-history --outside-year` adds the others to
+  missing_history.json so the run stops listing them, without changing the year's numbers. The
+  .diag files and the .sum DIAGNOSTICS keep every line.
+- **`taxjson list` tells a missing purchase from a real short.** A short that is a sale with
+  nothing to close (no short-sale marker, a sale the broker coded closing, or any short in a
+  registered account) is marked `missing history?` (JSON: `missing_history_suspect`), and
+  `list --negative` lists **Short positions** and **Missing history** apart, ending with the
+  command that records them — the pairs `find-missing-history` reports.
+- **Each engine message once per run.** A short-position warning said by an account's gains and
+  again by the blended pass (or a failed stage's echo, or a registered account's short read as
+  context by a taxable pass) is shown once.
+- **The run's console in order.** Lines no longer interleave through a pipe (`2>&1 | tee`); the
+  checks before the first stage are under `==> Checking the project`; a failed stage's last line
+  repeats its error; the resolved Questrade codes note shows one code per line.
 - **taxjson.toml descriptions use the full 100-column width.** `taxjson init` and
   `taxjson format` wrapped `## ` prose at 79 columns; they now wrap at 100, the house width.
   `taxjson format` reflows an existing file's template text.
