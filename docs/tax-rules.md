@@ -72,13 +72,21 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Code:** `src/taxjson/lib/core.py` — `CanadaTaxRules`, `permanently_disallowed`, `_holder_rank`.
 - **Edge cases and limits:** an RESP is treated as affiliated (the conservative choice; whether an RESP subscriber is affiliated is not settled — KNOWN_ISSUES "RESP accounts are treated as affiliated").
 
-## Registered-account transfers and in-kind contributions
+## Registered-account transfers
 
-- **Rule:** a registered account's transfer in or out is a move between accounts, not an acquisition or disposition: its shares count as held at day 30, but it never replaces a loss. One warning per run lists each transfer-in inside a taxable loss's window and each netted move with a leg inside it (`transfers_as_acquisitions = false`, the default). With `true` every such transfer is booked as an acquisition or disposition on its date, and a transfer-in inside a loss's window stops the run until declared. The law deems a loss on a transfer TO a registered plan nil; taxjson does not book the taxable side of such a move itself (see the limits).
-- **Source:** s.40(2)(g)(iv) (transfers to a registered plan at a loss). For the move-between-accounts reading, `REFERENCES.md` has no row: see `taxjson tax-logic` rules `CA-SL-16` and `CA-SL-17`.
+- **Rule:** a registered account's transfer in or out is a move between accounts, not an acquisition or disposition: its shares count as held at day 30, but it never replaces a loss. One warning per run lists each transfer-in inside a taxable loss's window and each netted move with a leg inside it (`transfers_as_acquisitions = false`, the default). With `true` every such transfer is booked as an acquisition or disposition on its date, and a transfer-in inside a loss's window stops the run until declared. A transfer that is one leg of an in-kind contribution or withdrawal (a taxable account on the other side) is not a move between accounts: see the next entry.
+- **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rules `CA-SL-16` and `CA-SL-17`.
 - **Rule ids:** `CA-SL-16`, `CA-SL-17` *(setting: `transfers_as_acquisitions = true`)*.
 - **Code:** `src/taxjson/lib/pipeline.py` — `_handle_transfers`, `_drop_self_cancelling_transfers`, `transfers_in_loss_windows`, `transfers_as_acquisitions`; `src/taxjson/bin/taxjson_run.py` — `_say_transfer_windows`.
-- **Edge cases and limits:** a taxable account's transfer row stays out of the books, so an in-kind contribution from a taxable account is not booked as a disposition: record it as a `.tt` BUYSELL sale at the day's fair market value in the taxable account; a loss on it is nil under s.40(2)(g)(iv) (KNOWN_ISSUES "An in-kind contribution from a taxable account is not booked as a disposition" and "Transfers TO a registered plan at a loss").
+- **Edge cases and limits:** a transfer from outside your books (another person, a broker not in the project) stays a move; record a genuine purchase as a `.tt` BUYSELL.
+
+## In-kind contributions and withdrawals (taxable ↔ registered)
+
+- **Rule:** a taxable account's transfer-out paired with a registered account's transfer-in of the same security and quantity within 10 days (or the reverse; across brokers; the closest date first, a move between two taxable or two registered accounts staying a move of your own) is an in-kind move. A contribution is booked in the taxable account as a sale at fair market value on the transfer date: a gain is taxed, a loss is nil for good — not a superficial loss, never added to an ACB, shown on its own line by `sum` and form-export ("Denied: contribution to a registered plan", `denied_contribution`), not in DENIED (an RESP or PRPP is not named by s.40(2)(g)(iv): its loss is an ordinary one; an account whose plan is not named is taken as one that is). The plan's acquisition is a purchase for s.54 on its own date whatever `transfers_as_acquisitions` says, so a taxable loss on the same security within 30 days, the plan holding at day 30, is lost for good. A withdrawal is a purchase at fair market value (its ACB); its value is RRSP/RRIF income on the T4RSP/T4RIF (noted, not booked) and is not taxed from a TFSA. The value: a `.tt` `INKIND` line, else the market value the broker states on the transfer row (IB), else Yahoo's close on the date (ESTIMATED), converted at the Bank of Canada rate of the date; with `TAXJSON_OFFLINE` and no cached close the run stops and names the line to add. One warning per run lists every move.
+- **Source:** s.40(2)(g)(iv) (a loss on a disposition to an RRSP, RRIF, TFSA, FHSA or RDSP trust is nil); s.54 "superficial loss" with s.40(2)(g)(i) for the plan's acquisition; CRA guides T4040 and RC4466 (a contribution in kind is a disposition at fair market value). `REFERENCES.md` has no row for the pairing and the value order: see `taxjson tax-logic` rules `CA-INKIND-01` and `CA-INKIND-06`.
+- **Rule ids:** `CA-INKIND-01` … `CA-INKIND-06`.
+- **Code:** `src/taxjson/lib/in_kind.py` — `pair`, `apply_lines`, `value`, `booked_rows`, `mark_sheltered`, `message`; `src/taxjson/bin/taxjson_run.py` — `in_kind_state`, `stage_in_kind_context`, `_say_in_kind`, `stage_transfer_arrivals`; `src/taxjson/lib/core.py` — `CanadaTaxRules`, `IN_KIND_CONTRIBUTION_TYPE`; `src/taxjson/lib/price_chain.py` — `close_on`; `src/taxjson/bin/taxjson_convert_tt.py` — `parse_inkind_line`; `src/taxjson/bin/taxjson_form_export.py` — `build_schedule3`.
+- **Edge cases and limits:** only equal quantities pair: a delivery received in two parts is not paired (an `INKIND` line declares the taxable side). Yahoo's close is split-adjusted: a split after the date makes it wrong (use an `INKIND` line). A move whose value cannot be found is listed NOT booked (`run --strict` stops) and the taxable books keep the shares. The income of a withdrawal is not booked.
 
 ## Options: premium timing (s.49)
 
@@ -327,6 +335,14 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rules `US-WASH-23` and `US-WASH-24`.
 - **Rule ids:** `US-WASH-23`, `US-WASH-24` *(setting: `transfers_as_acquisitions = true`)*.
 - **Code:** `src/taxjson/lib/pipeline.py` — `_handle_transfers`, `transfers_in_loss_windows`.
+
+## In-kind moves to and from retirement accounts
+
+- **Rule:** a taxable account's transfer-out paired with a retirement account's transfer-in of the same security and quantity within 10 days (across brokers) is a contribution in kind, which an IRA, Roth IRA, 401(k), HSA or 529 does not take (cash only): it is warned about as a likely error and NOT booked — the shares stay in the taxable books (`run --strict` stops). A distribution in kind (the reverse pair) is a purchase by the taxable account at fair market value on the distribution date: its basis, its holding period starting then, a §1091 replacement like any purchase; the taxable amount is on Form 1099-R (noted, not booked). The value: a `.tt` `INKIND` line, else the market value the broker states on the transfer row (IB), else Yahoo's close on the date (ESTIMATED); with `TAXJSON_OFFLINE` and no cached close the run stops and names the line to add.
+- **Source:** IRC §219 and §408(a)(1) (IRA contributions in cash); a distribution of property takes its fair market value as basis (Form 1099-R instructions, box 1). `REFERENCES.md` has no row: see `taxjson tax-logic` rules `US-INKIND-01` … `US-INKIND-03`.
+- **Rule ids:** `US-INKIND-01` … `US-INKIND-03`.
+- **Code:** `src/taxjson/lib/in_kind.py` — `pair`, `decide`, `value`, `booked_rows`, `message`; `src/taxjson/lib/country.py` — `in_kind_contribution_booked`; `src/taxjson/bin/taxjson_run.py` — `in_kind_state`, `_say_in_kind`.
+- **Edge cases and limits:** a rollover between two retirement accounts is a move of your own (`US-WASH-23`). Only equal quantities pair. The income of a distribution is not booked.
 
 ## Options (§1234), exercise, assignment and warrants
 

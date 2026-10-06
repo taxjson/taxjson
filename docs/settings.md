@@ -507,7 +507,7 @@ The lists taxjson cannot read from an export ship in `src/taxjson/data/markets.t
 
 ## .tt files
 
-Hand-entered rows, any `*.tt` file in `inputs/<account>/`. One space-separated line per row; `#` starts a comment; numbers take a decimal point (a thousands comma is fine, a decimal comma is refused); symbols are upper-cased and carry their listing suffix (`.TO`, `.US`; options in OCC form). A line has one date, used as both trade and settle date: write the date that matches `tax_date`. Rows at one date and time are taken in file order. Validate a file with `taxjson-convert-tt --account margin inputs/margin/x.tt`. The parser is `src/taxjson/bin/taxjson_convert_tt.py` — `parse_tt_line`, `parse_opening_line`, `expand_acquired`, `_VALID_ACTIONS`, `_SUGAR_ACTIONS`.
+Hand-entered rows, any `*.tt` file in `inputs/<account>/`. One space-separated line per row; `#` starts a comment; numbers take a decimal point (a thousands comma is fine, a decimal comma is refused); symbols are upper-cased and carry their listing suffix (`.TO`, `.US`; options in OCC form). A line has one date, used as both trade and settle date: write the date that matches `tax_date`. Rows at one date and time are taken in file order. Validate a file with `taxjson-convert-tt --account margin inputs/margin/x.tt`. The parser is `src/taxjson/bin/taxjson_convert_tt.py` — `parse_tt_line`, `parse_opening_line`, `parse_inkind_line`, `expand_acquired`, `_VALID_ACTIONS`, `_SUGAR_ACTIONS`.
 
 #### `BUYSELL`
 - **Form:** `BUYSELL DATE TIME SYMBOL QTY CUR PRICE TOTAL [FEE] [xSIZE]`
@@ -533,6 +533,11 @@ Hand-entered rows, any `*.tt` file in `inputs/<account>/`. One space-separated l
 - **Form:** `OPENING SNAPSHOT-DATE SYMBOL QTY CUR TOTAL-COST [LOT-DATE]` (no time column)
 - **Meaning:** an opening balance from a positions report: sets the position and its book cost on the snapshot day, is not a purchase, and replaces the account's earlier rows of that symbol. Long positions only. A US line needs its lot date and a USD cost. `taxjson opening` writes these lines.
 - **Example:** `OPENING 2023-12-29 ZZB.TO 20 CAD 204.95`
+
+#### `INKIND`
+- **Form:** `INKIND DATE SYMBOL QTY CUR PRICE [TOTAL] [plan=KIND]` (no time column), in a taxable account's folder.
+- **Meaning:** the fair market value of an in-kind move between this taxable account and a registered plan (an RRSP or TFSA contribution, a withdrawal; US: an IRA distribution). QTY is signed as the shares move in this account: negative = out to the plan, positive = back from it. PRICE is the value per share in CUR; give `0` and a TOTAL to state the whole value. The line values the move the run pairs from the two accounts' transfer rows within 10 days of DATE (and dates it DATE); with no such pair it declares one for this account's transfer row whose plan is outside the project — `plan=` names that plan (`rrsp`, `tfsa`, `ira` ...). It is never a row of the books; a line matching no transfer row is listed in the run's in-kind warning. The parser is `parse_inkind_line`.
+- **Example:** `INKIND 2025-03-14 ZZQ.TO -100 CAD 15.00` (100 shares contributed at 15.00 each)
 
 #### `SPLIT`
 - **Form:** `SPLIT DATE TIME OLD NEW RATIO`
