@@ -13,7 +13,7 @@ so this test fails when:
 - a `tjs COMMAND` / `taxjson COMMAND` it quotes is not a command;
 - a troubleshooting entry lacks Check / Cause / Fix / Fixed in / Code, or its
   "Fixed in" is not a released version heading in CHANGELOG.md;
-- the pack holds personal data: an e-mail address, an account-number shape
+- the pack (or the bug-report template) holds personal data: an e-mail address, an account-number shape
   (an IB U-number or an 8+ digit run that is not a synthetic id or a date),
   a money amount of 1,000 or more with cents, or anything
   scripts/check-pii.sh refuses (its private denylist and figure list apply
@@ -56,6 +56,14 @@ def _read(rel):
 
 def _pack_files():
     return [p for p in REQUIRED + OPTIONAL if (ROOT / p).is_file()]
+
+
+# Public files the pack points people to: scanned for personal data too.
+TEMPLATES = (".github/ISSUE_TEMPLATE/bug_report.md",)
+
+
+def _public_files():
+    return _pack_files() + [p for p in TEMPLATES if (ROOT / p).is_file()]
 
 
 def _is_repo_path(tok):
@@ -144,6 +152,11 @@ class TestPackFilesExist(unittest.TestCase):
         self.assertLessEqual(n, 110, f"AGENTS.md is loaded into every session: keep it short ({n} lines)")
         for p in REQUIRED[1:] + OPTIONAL:
             self.assertIn(p, text, f"AGENTS.md does not point at {p}")
+
+    def test_bug_template_is_the_one_agents_md_names(self):
+        self.assertTrue((ROOT / TEMPLATES[0]).is_file())
+        # One bug template: a .yml form beside it shows two in the chooser.
+        self.assertFalse((ROOT / ".github/ISSUE_TEMPLATE/bug_report.yml").exists())
 
     def test_no_claude_md_beside_it(self):
         # Claude Code reads AGENTS.md itself; a CLAUDE.md would shadow it.
@@ -272,13 +285,13 @@ class TestPersonalData(unittest.TestCase):
         self.assertFalse(hits("a synthetic 12" + ",345.67 <!-- pii-ok -->"))
 
     def test_pack_has_no_personal_data(self):
-        bad = [f"{p}:{n}: {what}" for p in _pack_files()
+        bad = [f"{p}:{n}: {what}" for p in _public_files()
                for n, what in personal_data(_read(p))]
         self.assertEqual(bad, [])
 
     @unittest.skipUnless(shutil.which("bash"), "bash required")
     def test_check_pii_passes_on_the_pack(self):
-        r = subprocess.run(["bash", str(ROOT / "scripts" / "check-pii.sh"), *_pack_files()],
+        r = subprocess.run(["bash", str(ROOT / "scripts" / "check-pii.sh"), *_public_files()],
                            cwd=ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 

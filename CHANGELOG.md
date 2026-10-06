@@ -19,6 +19,12 @@
   `tests/test_knowledge_pack.py` keeps them true: every file, symbol and
   command they name must exist, every "Fixed in" must be a release, and they
   must hold no personal data.
+- **Bug reports: one Markdown template, `.github/ISSUE_TEMPLATE/bug_report.md`,
+  replaces the `bug_report.yml` form.** It asks for the version, Python, OS,
+  the console's messages and the checklist and sanity summaries, never for
+  amounts, account numbers or names, and for a made-up input built from the
+  `examples/*_demo.csv` files instead of a real export. AGENTS.md tells an AI
+  assistant to build the report the same way and show it before filing.
 
 
 ## v0.22.0 (2026-10-06)

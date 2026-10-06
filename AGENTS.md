@@ -34,6 +34,19 @@ user's `inputs/`. Never put their amounts, account numbers or names anywhere
 it computed and which rule it applied; for what to file, point to the CRA or
 IRS guidance and a tax professional.
 
+**Reporting a bug** (`.github/ISSUE_TEMPLATE/bug_report.md`):
+- Include: `tjs --version`, the Python version, the OS, the command and its
+  console `Error:` / `Warning:` lines, and the `tjs checklist` and
+  `tjs sanity` summaries.
+- Never include amounts, account or slip numbers, names, the raw CSVs or
+  anything copied from them.
+- Reproduce it on a made-up CSV: copy the broker's `examples/*_demo.csv`,
+  edit rows to the same shape (same columns, actions and wording pattern;
+  made-up values and ids), run taxjson on it to confirm it fails the same
+  way, and attach that file. `tjs redact` output is a fallback, after review.
+- Show the person the full report first; then file it with
+  `gh issue create --repo taxjson/taxjson`, or give them the text.
+
 ## Changing the code
 
 - **Set up:** `scripts/dev-setup.sh` (venv, editable install, ruff, the
