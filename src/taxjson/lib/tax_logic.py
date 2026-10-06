@@ -814,7 +814,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "the `DISTINCT X Y` ticker.map line that undoes it. A "
                  "ticker.map rule renaming either listing, or a DISTINCT "
                  "line for the pair, always wins; anything less certain "
-                 "stays a suggestion (`taxjson ticker-map --suggest`)."),
+                 "stays a suggestion (`taxjson ticker-map --suggest`) — "
+                 "but two listings whose names name different companies "
+                 "(no leading company word in common) are never joined "
+                 "nor suggested, and one symbol whose exports name two "
+                 "different companies is a symbol collision: a Warning "
+                 "and the EXTRACT line that gives the odd rows their own "
+                 "symbol, never a join through it."),
             Rule("CA-ACB-11",
                  "Shares sold with no purchase in your files (bought "
                  "before the data starts) go in missing_history.json "
@@ -1923,7 +1929,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "the `DISTINCT X Y` ticker.map line that undoes it. A "
                  "ticker.map rule renaming either listing, or a DISTINCT "
                  "line for the pair, always wins; anything less certain "
-                 "stays a suggestion (`taxjson ticker-map --suggest`)."),
+                 "stays a suggestion (`taxjson ticker-map --suggest`) — "
+                 "but two listings whose names name different companies "
+                 "(no leading company word in common) are never joined "
+                 "nor suggested, and one symbol whose exports name two "
+                 "different companies is a symbol collision: a Warning "
+                 "and the EXTRACT line that gives the odd rows their own "
+                 "symbol, never a join through it."),
             Rule("US-BASIS-07",
                  "Accounts typed \"sheltered\" (an IRA, Roth IRA, "
                  "401(k)...) are tracked but kept out of the filing "

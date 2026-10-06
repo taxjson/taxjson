@@ -169,5 +169,217 @@ class TestIbTickerChangeIsADatedRename(unittest.TestCase):
             self.assertIn('renames', skipped[0][1])
 
 
+
+# ---------------------------------------------------- symbol collisions
+from taxjson.lib import cross_listings as XL               # noqa: E402
+from taxjson.lib.brokerages.base import extract_words_match  # noqa: E402
+from taxjson.lib.symbol_codes import exact_name            # noqa: E402
+
+# A synthetic TSX currency fund with the shapes the brokers write: an
+# older RBC export under the fund's former brand ("U S DLR"), Questrade
+# under the new one ("US DLR ... CL A"), the journal in-leg with RBC's
+# transfer wording.
+RBC_OLD = 'QZOLDBRAND U S DLR CURRENCY ETF UNIT UNSOLICITED DA'
+RBC_OUT = 'TFR - QZOLDBRAND U S DLR CURRENCY ETF UNIT TRANSFER TO C$ J~1'
+RBC_IN = 'TFR - QZOLDBRAND U S DLR CURRENCY ETF UNIT TRANSFER FROM U$ J~1'
+QT_CODE = 'SAMPLEX US DLR CURRENCY ETF UNIT CL A WE ACTED AS AGENT'
+QT_UNIT = 'SAMPLEX US DLR CURRENCY ETF UNIT CL A JOURNAL POSITION FROM CAD'
+QT_OTHER = 'SAMPLEX US EQUITY ETF UNIT CL A WE ACTED AS AGENT'
+IB_NAME = 'QZREALTY TRUST INC'
+
+
+def _row(acct, broker, sym, cur, desc, name=None):
+    return XL.Row(acct, broker, sym, cur, desc, exact_name(name or desc))
+
+
+def _book():
+    rows = [_row('margin', 'rbc_direct', 'QZD.US', 'USD', RBC_OLD),
+            _row('margin', 'rbc_direct', 'QZD.US', 'USD', RBC_OUT),
+            _row('margin', 'rbc_direct', 'QZD.TO', 'CAD', RBC_IN),
+            _row('tfsa', 'questrade', 'G012345', 'USD', QT_CODE),
+            _row('tfsa', 'questrade', 'QZD.U.TO', 'USD', QT_UNIT),
+            _row('tfsa', 'questrade', 'QZE.TO', 'CAD', QT_OTHER),
+            _row('rrsp', 'ib', 'QZD.US', 'USD', 'QZD', IB_NAME),
+            _row('rrsp', 'ib', 'QZD.US', 'USD', 'QZD', IB_NAME)]
+    names, shown = {}, {}
+    for r in rows:
+        if r.symbol == 'G012345':
+            continue
+        names.setdefault(r.symbol, set()).add(r.key)
+        shown.setdefault(r.key, r.description)
+    legs = [XL.Leg('margin', 'rbc_direct', 'QZD.US', '2025-03-05', -500),
+            XL.Leg('margin', 'rbc_direct', 'QZD.TO', '2025-03-05', 500)]
+    return rows, names, shown, legs
+
+
+class TestSymbolCollision(unittest.TestCase):
+    """One book symbol, two companies: never a TOBASE suggestion; the
+    EXTRACT line that separates them, its words read from every row of
+    the moved security (any broker) and none of another's."""
+
+    def test_companies_differ(self):
+        k = exact_name
+        self.assertTrue(XL.companies_differ(k(IB_NAME), k(RBC_OLD)))
+        # A rebranded fund shares its other words: inconclusive.
+        self.assertFalse(XL.companies_differ(k(RBC_OLD), k(QT_UNIT)))
+        self.assertFalse(XL.companies_differ(k('QZCO CORP'),
+                                             k('QZCO CORP CL B')))
+
+    @rule("CA-XLIST-01")
+    def test_extract_and_journal_are_suggested(self):
+        rows, names, shown, legs = _book()
+        cs = XL.collisions(rows, names, shown, legs, base_currency='CAD')
+        self.assertEqual(len(cs), 1)
+        c = cs[0]
+        self.assertEqual(c.symbol, 'QZD.US')
+        self.assertFalse(c.template)
+        self.assertEqual(c.extract, 'EXTRACT DLR CURRENCY ETF | USD | '
+                                    'QZD.U.TO')
+        self.assertEqual(c.journal, 'JOURNAL QZD.U.TO QZD.TO')
+        words = c.extract.split('|')[0][len('EXTRACT '):].strip()
+        for d in (RBC_OLD, RBC_OUT, RBC_IN, QT_CODE, QT_UNIT):
+            self.assertTrue(extract_words_match(words, d), d)
+        for d in (QT_OTHER, 'QZD', IB_NAME):
+            self.assertFalse(extract_words_match(words, d), d)
+        # The pair is left to the EXTRACT line: no TOBASE suggestion.
+        r = XL.analyze(legs, names, shown, base_currency='CAD',
+                       collided=[c.symbol])
+        self.assertEqual(r, {'joined': [], 'suggested': []})
+        head, det = XL.collision_note(c)
+        self.assertTrue(head.startswith('QZD.US names two securities: '))
+        self.assertTrue(head.endswith('— add the EXTRACT line '
+                                      '(`taxjson ticker-map --suggest`)'))
+        self.assertIn('  EXTRACT DLR CURRENCY ETF | USD | QZD.U.TO', det)
+
+    @rule("US-XLIST-01")
+    def test_usa_collided_symbol_is_never_joined_or_suggested(self):
+        rows, names, shown, legs = _book()
+        cs = XL.collisions(rows, names, shown, legs, base_currency='USD')
+        self.assertEqual([c.symbol for c in cs], ['QZD.US'])
+        # A US base currency: the CAD line maps onto the USD unit.
+        self.assertEqual(cs[0].journal, 'JOURNAL QZD.TO QZD.U.TO')
+        r = XL.analyze(legs, names, shown, base_currency='USD',
+                       collided=['QZD.US'])
+        self.assertEqual(r, {'joined': [], 'suggested': []})
+
+    def test_a_listing_that_cannot_be_derived_is_a_template(self):
+        rows = [_row('margin', 'rbc_direct', 'QZK.US', 'USD',
+                     'QZKAPPA MINING CORP UNSOLICITED DA'),
+                _row('rrsp', 'ib', 'QZK.US', 'USD', 'QZK', IB_NAME),
+                _row('rrsp', 'ib', 'QZK.US', 'USD', 'QZK', IB_NAME)]
+        names = {'QZK.US': {r.key for r in rows}}
+        shown = {r.key: r.description for r in rows}
+        c, = XL.collisions(rows, names, shown, [])
+        self.assertTrue(c.template)
+        self.assertEqual(c.extract, 'EXTRACT QZKAPPA MINING CORP | USD | '
+                                    '<LISTING>')
+        self.assertEqual(c.journal, '')
+        self.assertIn('replace <LISTING>', c.why)
+
+    def test_suggest_lists_collision_lines_and_never_writes_a_template(self):
+        from taxjson.lib import ticker_map_suggest as TS
+        rows, names, shown, legs = _book()
+        cs = XL.collisions(rows, names, shown, legs, base_currency='CAD')
+        tmpl = XL.Collision('QZK.US', ['A CORP', 'B MINING'], ['x', 'y'],
+                            'B MINING', 'EXTRACT B MINING | USD | <LISTING>',
+                            True, '', 'replace <LISTING>')
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / 'work').mkdir()
+            (root / 'work' / XL.STATE).write_text(XL.state_text(
+                {'joined': [], 'suggested': [], 'collisions': cs + [tmpl]}))
+            # RBC's own hint for the same rows: one EXTRACT per listing.
+            (root / 'work' / 'margin_rbc.json.diag').write_text(
+                "warning: ATTENTION: rbc.csv: QZD reads as the US-dollar "
+                "class of a TSX-listed fund. If it trades on the TSX, add "
+                "to ticker.map:  EXTRACT QZOLDBRAND U S DLR CURRENCY ETF "
+                "| USD | QZD.U.TO\n")
+            offer, skipped = TS.pending(root)
+            self.assertEqual(
+                [(s.line, s.template) for s in offer],
+                [('EXTRACT DLR CURRENCY ETF | USD | QZD.U.TO', False),
+                 ('JOURNAL QZD.U.TO QZD.TO', False),
+                 ('EXTRACT B MINING | USD | <LISTING>', True)])
+            self.assertEqual(len(skipped), 1)
+            (root / 'ticker.map').write_text(
+                'EXTRACT DLR CURRENCY ETF | USD | QZD.U.TO\n'
+                'JOURNAL QZD.U.TO QZD.TO\n')
+            offer, _ = TS.pending(root)
+            self.assertEqual([s.line for s in offer],
+                             ['EXTRACT B MINING | USD | <LISTING>'])
+            from taxjson.lib.tax_logic import rule_country  # noqa: F401
+            from tax_rules.dual import cli
+            (root / 'taxjson.toml').write_text(
+                '[settings]\nyear = 2025\ncountry = "canada"\n')
+            r = cli(root, 'ticker-map', '--suggest', '--write', '--all')
+            self.assertIn('Not added (a template', r.stdout + r.stderr)
+            self.assertNotIn('<LISTING>', (root / 'ticker.map').read_text())
+
+
+class TestCollisionRun(unittest.TestCase):
+    """End to end: an RBC currency-fund journal whose USD leg is booked
+    .US, and an IB NYSE stock of the same root (another company)."""
+
+    def _project(self, td, tmap=None):
+        from test_fix_rbc import HDR, row
+        from tax_rules.dual import projects_both
+        n = 'QZOLDBRAND U S DLR CURRENCY ETF UNIT'
+        rbc = ('"Activity Export as of Jan 5, 2026 at 8:59:00 am ET"\n\n'
+               + HDR
+               + row("March 3, 2025", "Buy", "QZD", n, "500", "10", "-5000",
+                     "USD", n + " UNSOLICITED DA")
+               + row("March 5, 2025", "Transfers", "QZD", n, "-500", "",
+                     "0", "USD", "TFR - " + n + " TRANSFER TO C$  J~1")
+               + row("March 5, 2025", "Transfers", "QZD", n, "500", "", "0",
+                     "CAD", "TFR - " + n + " TRANSFER FROM U$  J~1")
+               + row("March 6, 2025", "Sell", "QZD", n, "-500", "14",
+                     "7000", "CAD", n + " UNSOLICITED CA JNL"))
+        ib = (HEAD + 'Statement,Data,Period,"January 1, 2025 - December '
+              '31, 2025"\n' + TRADES_H
+              + _trade('QZD', '2025-02-03, 10:00:00', 10, 180, -1800)
+              + _trade('QZD', '2025-08-04, 10:00:00', -10, 190, 1900,
+                       code='C')
+              + FII_H + _fii('QZD', '990000901', 'US9990009011',
+                             name=IB_NAME))
+        files = {"inputs/margin/rbc.csv": rbc, "inputs/rrsp/ib.csv": ib}
+        if tmap:
+            files["ticker.map"] = tmap
+        return projects_both(
+            Path(td), files=files,
+            accounts=('[accounts.margin]\ntype = "taxable"\n'
+                      '[accounts.rrsp]\ntype = "sheltered"\n'),
+            canada={"source_currencies": []},
+            usa={"source_currencies": []})["canada"]
+
+    @rule("CA-XLIST-01")
+    def test_collision_is_a_warning_and_an_extract_suggestion(self):
+        from tax_rules.dual import cli
+        with tempfile.TemporaryDirectory() as td:
+            root = self._project(td)
+            r = cli(root, 'run', '--no-input')     # no rates offline
+            out = ' '.join((r.stdout + r.stderr).split())
+            self.assertIn("QZD.US names two securities: ", out)
+            self.assertIn("'QZREALTY TRUST INC' in rrsp at Interactive "
+                          "Brokers", out)
+            self.assertIn("add the EXTRACT line (`taxjson ticker-map "
+                          "--suggest`)", out)
+            st = XL.read_state(root / 'work' / XL.STATE)
+            self.assertEqual(st['suggested'], [])
+            js = json.loads(cli(root, 'ticker-map', '--suggest',
+                                '--json').stdout)
+            lines = [s['line'] for s in js['suggestions']]
+            self.assertEqual(lines, [
+                'EXTRACT DLR CURRENCY ETF | USD | QZD.U.TO',
+                'JOURNAL QZD.U.TO QZD.TO'])
+            self.assertFalse(any(x.startswith('TOBASE') for x in lines))
+        with tempfile.TemporaryDirectory() as td:
+            root = self._project(td, 'EXTRACT DLR CURRENCY ETF | USD | '
+                                     'QZD.U.TO\nJOURNAL QZD.U.TO QZD.TO\n')
+            r = cli(root, 'run', '--no-input')
+            self.assertNotIn('names two securities', r.stdout + r.stderr)
+            st = XL.read_state(root / 'work' / XL.STATE)
+            self.assertEqual(st['collisions'], [])
+
+
 if __name__ == '__main__':
     unittest.main()

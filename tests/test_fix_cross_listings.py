@@ -172,13 +172,32 @@ class TestAnalyze(unittest.TestCase):
                  "the names are not equal word for word ('SAMPQ ENERGY "
                  "INC PREFERRED SERIES 2' vs 'SAMPQ ENERGY INC')"),
                 (_names(SAMPQ_US="SAMPQ ENERGY INC",
-                        SAMPQ_TO="QZWV MINING LTD"),
+                        SAMPQ_TO="SAMPQ ENERGY HOLDINGS LTD"),
                  "the names are not equal word for word ('SAMPQ ENERGY "
-                 "INC' vs 'QZWV MINING LTD')")):
+                 "INC' vs 'SAMPQ ENERGY HOLDINGS LTD')")):
             with self.subTest(why=why, names=names):
                 r = self._run(legs, names)
                 self.assertEqual(r["joined"], [])
                 self.assertEqual([p.reason for p in r["suggested"]], [why])
+
+    @rule("CA-XLIST-01")
+    def test_names_of_different_companies_are_never_suggested(self):
+        # A TOBASE line between two companies would merge their pools:
+        # not even a suggestion (the user's new-user run offered one).
+        legs = [_leg("SAMPQ.US", "2025-03-03", -100),
+                _leg("SAMPQ.TO", "2025-03-04", 100)]
+        for a, b in (("SAMPQ ENERGY INC", "QZWV MINING LTD"),
+                     ("QZREALTY TRUST INC",
+                      "SAMPLEX U S DLR CURRENCY ETF UNIT")):
+            with self.subTest(a=a, b=b):
+                r = self._run(legs, _names(SAMPQ_US=a, SAMPQ_TO=b))
+                self.assertEqual(r, {"joined": [], "suggested": []})
+        # Ambiguous pairing too: still two companies.
+        r = self._run(legs + [_leg("SAMPR.TO", "2025-03-04", 100)],
+                      _names(SAMPQ_US="SAMPQ ENERGY INC",
+                             SAMPQ_TO="QZWV MINING LTD",
+                             SAMPR_TO="QZWV MINING LTD"))
+        self.assertEqual(r, {"joined": [], "suggested": []})
 
     @rule("CA-XLIST-01")
     def test_same_symbol_legs_cancel_first(self):
@@ -301,7 +320,8 @@ class TestRun(unittest.TestCase):
     def test_canada_distinct_wins(self):
         st = self._check_not_joined(
             "canada", tail="DISTINCT SAMPQ.TO SAMPR.TO\n")
-        self.assertEqual(st, {"joined": [], "suggested": []})
+        self.assertEqual(st, {"joined": [], "suggested": [],
+                              "collisions": []})
 
     @rule("US-XLIST-01")
     def test_usa_distinct_wins(self):

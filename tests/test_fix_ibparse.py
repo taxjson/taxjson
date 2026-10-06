@@ -716,7 +716,8 @@ class TestIbStockSymbolAliases(unittest.TestCase):
              + FII_H + _fii_stock('QZNW', 'US9990001001', conid='990000031'))
         _, err = _parse_account({'a.csv': a, 'b.csv': b})
         self.assertIn('warning: ATTENTION:', err)
-        self.assertIn('GLOBAL', err)
+        # The dated form since renames are events (QZNW's first row).
+        self.assertIn('`RENAME QZOL.US QZNW.US 2026-03-10`', err)
 
 
 # ------------------------------------------------ settlement pairing

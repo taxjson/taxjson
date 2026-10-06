@@ -15,6 +15,21 @@
   first, the date the first row of the one that continues), not an undated
   `GLOBAL` line, and never toward a temporary symbol. `taxjson ticker-map
   --suggest` reads it, and a dated RENAME of the pair in ticker.map answers it.
+- **No TOBASE / JOURNAL suggestion between two different companies.** A
+  transfer journal between two listings whose security names share no leading
+  company word is neither joined nor suggested.
+- **Symbol collisions are detected.** One book symbol whose exports name two
+  different companies (a TSX currency fund's US-dollar unit booked `.US`
+  beside an NYSE stock of the same root at another broker) is now a `Warning:`
+  on the run's console, and `taxjson ticker-map --suggest` offers the
+  `EXTRACT words | USD | ROOT.U.TO` line that separates the fund's rows (its
+  words the shortest run common to every description of the fund in the
+  project and in no other row's), plus the `JOURNAL` pairing the unit with its
+  Canadian-dollar line. Where the listing cannot be read from the rows, the
+  line is a template with a placeholder: listed, never written by `--write`.
+  The suggestions now include `EXTRACT` lines, such as RBC's US-dollar unit
+  hint. The TSX unit-class spelling (`ROOT.U.TO`) is a convention in
+  `markets.toml`.
 
 ### Changed
 

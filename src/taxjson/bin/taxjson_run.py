@@ -2198,11 +2198,18 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
                 for _dr in _tm.dated:
                     named.update((_dr.old, _dr.new))
                 apart = set(_tm.distinct)
-        legs, names, shown = XL.gather(cache, accounts or [name])
+        _rows: list = []
+        legs, names, shown = XL.gather(cache, accounts or [name], _rows)
+        _base = str(settings.get("base_currency") or "").upper() or None
+        # One symbol naming two companies (a TSX fund's US-dollar unit
+        # booked .US beside an NYSE stock of the root): never a join or
+        # a TOBASE suggestion — the EXTRACT line that separates them.
+        _coll = XL.collisions(_rows, names, shown, legs,
+                              base_currency=_base)
         result = XL.analyze(legs, names, shown, map_named=named,
-                            map_distinct=apart,
-                            base_currency=str(settings.get(
-                                "base_currency") or "").upper() or None)
+                            map_distinct=apart, base_currency=_base,
+                            collided=[c.symbol for c in _coll])
+        result["collisions"] = _coll
         state = cache / XL.STATE
         text = XL.state_text(result)
         if _read_work_stamp(state) != text:
@@ -2225,6 +2232,10 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
             path = ticker_map
         _XLIST_THIS_RUN[key] = (path, result)
     path, result = _XLIST_THIS_RUN[key]
+    for _c in result.get("collisions") or []:
+        _h, _d = XL.collision_note(_c)
+        _say_once(("xcollide", _c.symbol), "warning", _h, *_d,
+                  indent="  ", file=sys.stdout)
     msg = XL.joined_note(name, result["joined"])
     if msg:
         # A Warning: the join changes the books (pre-release review H1).
@@ -13630,7 +13641,8 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
         if offer:
             d.blank()
             for s in offer:
-                d.line(s.line)
+                d.line(s.line + ("   (a template: edit, then add it by "
+                                 "hand)" if s.template else ""))
                 d.para(s.reason, indent="  ")
         if skipped:
             d.section(f"Already answered by ticker.map ({len(skipped)})")
@@ -13651,6 +13663,12 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
                    "terminal to choose one by one.")
     chosen = []
     for s in offer:
+        if s.template:
+            # A placeholder (<LISTING>, <words ...>) would rename rows to
+            # a symbol that is not one: never written.
+            print(f"Not added (a template — edit it, then add it by hand): "
+                  f"{s.line}")
+            continue
         if interactive:
             print(s.line)
             for ln in _out_wrap(s.reason, indent="  ", hang="  "):

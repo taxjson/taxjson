@@ -71,6 +71,14 @@ GB = "L"
 IE = "L"
 AU = "AX"
 
+# A Canadian-listed fund's US-dollar unit class: the TSX lists it as the
+# fund's root with a `.U` class (book symbol ROOT.U.TO). A market
+# convention, not a list of funds: taxjson suggests this spelling for a
+# USD row that names a fund's US-dollar units (ticker-map --suggest).
+[usd_unit_class]
+class = "U"
+suffix = "TO"
+
 # Interactive Brokers "Listing Exch" codes (Financial Instrument
 # Information) → listing suffix. A USD `.U` unit on a Canadian venue is
 # a Canadian listing (SYMBOL.U.TO); a line on an LSE venue is `.L`
