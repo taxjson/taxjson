@@ -2195,17 +2195,26 @@ accounts first and infers the ticker from them, in this order:
 1. **the transfer it arrived by** — an outgoing transfer of the same
    quantity in another broker's export of the project (any account: IB's
    Transfers section, an RBC transfer-out), dated up to 10 days before the
-   arrival (or 3 after), whose security name matches the Questrade
+   arrival (or 3 after), whose security name agrees with the Questrade
    description (corporate-form and generic words such as INC, CORP, COMMON
-   STOCK are ignored, but never the share designators: the class letter,
-   voting / subordinate voting, ADR vs ordinary, preferred, units, NEW);
-   exactly one candidate, and no transfer of another class of the same
-   company in the same window;
+   STOCK are ignored, common abbreviations are read as the word —
+   `QZX RES INC` is `QZX RESOURCES INC`, MFG, INTL, HLDGS, GRP, TECH, SYS,
+   `N V` is `NV`, `&` is AND — and broker boilerplate is cut: `REPSTG 5
+   COM ...`, `TRANSFER IN INTERACTIVE BROKER...`, IB's `/CAYMAN ISL`; never
+   ignored are the share designators: the class letter, voting /
+   subordinate voting, ADR vs ordinary, preferred, units, NEW — a class
+   letter or ORDINARY / ADR that only ONE broker states is not a
+   conflict here, two different ones are); exactly one candidate, and no
+   transfer of another class of the same company in the same window;
 2. else, for a code with no transfer-in, **the name**: exactly one listing
    elsewhere in your books whose name is equal to it once case,
-   punctuation, generic share words and corporate-form words are set aside
-   (`QZX INC` is `QZX CORP`; `QZX INC CL A` is not `QZX INC CL C`, and
-   `NEW QZX INC` is not `QZX CORP`).
+   punctuation, generic share words, corporate-form words and
+   abbreviations are set aside (`QZX INC` is `QZX CORP`; `QZX INC CL A` is
+   not `QZX INC CL C`, `QZX INC ORDINARY SHARES` is not `QZX INC`, and
+   `NEW QZX INC` is not `QZX CORP`); or, when Questrade cut the code's
+   description off (a dividend row), exactly one listing whose Questrade
+   description in another account starts with it (three strong words
+   before the cut, no designator in the part cut off).
 
 Every row of the code is then booked under that ticker, and the parse says
 so in ONE note per account — `note: Questrade internal symbol codes
