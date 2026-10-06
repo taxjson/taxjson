@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- **taxjson.toml descriptions use the full 100-column width.** `taxjson init` and
+  `taxjson format` wrapped `## ` prose at 79 columns; they now wrap at 100, the house width.
+  `taxjson format` reflows an existing file's template text.
+
 
 ## v0.21.0 (2026-10-06)
 

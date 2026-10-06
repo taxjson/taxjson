@@ -98,8 +98,9 @@ from taxjson.lib.tomlcompat import tomllib
 # value, so it cannot be mistaken for a commented-out line.
 PROSE = "## "
 
-# Descriptions are wrapped to this many characters after the PROSE mark.
-DOC_WIDTH = 76
+# Descriptions are wrapped to this many characters after the PROSE mark
+# (the line is then at most LINE_WIDTH = 100 long, the house width).
+DOC_WIDTH = 97
 # An inline (end-of-line) comment starts at most at this column, and its
 # line is at most LINE_WIDTH long; a key whose value is longer gets it on
 # the line above instead.
@@ -171,15 +172,14 @@ def _bases() -> str:
 _FILE_HEADER = (
     "## taxjson configuration — https://github.com/taxjson/taxjson",
     "##",
-    "## Every key taxjson reads is listed here: [settings] in groups, the",
-    "## other tables' keys alphabetically (an account's `type` first), one",
-    "## `=` column per table, so year-over-year projects diff cleanly:",
+    "## Every key taxjson reads is listed here: [settings] in groups, the other tables' keys",
+    "## alphabetically (an account's `type` first), one `=` column per table, so year-over-year projects",
+    "## diff cleanly:",
     "##   diff ~/taxes/{prev_year}/taxjson.toml ~/taxes/{year}/taxjson.toml",
-    "## Each key's description is on the `## ` lines above it, the values it",
-    "## takes after it. A commented-out key (`# key = value`) shows its",
-    "## default (or an example where it has none): delete the `# ` to change",
-    "## it. `taxjson format` puts an edited file back into this layout,",
-    "## keeping your values and comments.",
+    "## Each key's description is on the `## ` lines above it, the values it takes after it. A",
+    "## commented-out key (`# key = value`) shows its default (or an example where it has none): delete",
+    "## the `# ` to change it. `taxjson format` puts an edited file back into this layout, keeping your",
+    "## values and comments.",
 )
 
 # [settings]. A key the project's country does not own is left out
@@ -694,6 +694,10 @@ ea7321a84bbc15e7 ef63ed5daa1137fd f0e9983114ddefcf f6be3e07a2788417
 # (a Canadian `# tax_date = "trade"`) is the user's own.
 _LEGACY_TEMPLATE_HASHES_BY_COUNTRY = {
     C.CANADA: frozenset("""
+018a0bafa8c7de51 18a637d503929bc1 29205fde60149a2a 2a5d7d4cf458bfa6
+2b8de275534aef75 45a10d8ab7062a5b 524adf3f7c0843a6 688c30e0cd5d8678
+696be5069582f583 76cb5e29b150d512 a8ade4a26f32ebf6 c9bcd72c68a5c32c
+daa15a61f5c9f169 eb5a968903240ffc fe1171a0a60225fa
 008fbf0b21d4331d 027a359640c237cb 02fba5aeba703bc1 03b4cf3233f53254
 055ae0c64ce8dc17 0953110efdc50d00 0a4d4b3ad56b1057 10ffbd73d54fbb8d
 11e39a893bca603b 13b4cf05d84f74da 144d083f264e4c62 151b60b311d50294
@@ -727,6 +731,9 @@ f23db548a616307f f38d3a0d89440041 f3c1344f0c0ee752 f4ecea16fb3371c2
 f61eb9e3a92dc3ff f9e5646a07e6763c fc47e25e6fd818f4
 """.split()),
     C.USA: frozenset("""
+2a5d7d4cf458bfa6 2b8de275534aef75 524adf3f7c0843a6 688c30e0cd5d8678
+696be5069582f583 6d10e976ac83dd79 76cb5e29b150d512 a241c1d56a25e7df
+c9bcd72c68a5c32c daa15a61f5c9f169 eb5a968903240ffc fe1171a0a60225fa
 008fbf0b21d4331d 027a359640c237cb 02fba5aeba703bc1 03b4cf3233f53254
 0953110efdc50d00 0d372c5493fdb858 13b4cf05d84f74da 144d083f264e4c62
 18781edfcb7b641b 1b89f76d9519498f 229feb6263f7d173 24bf06ace63daccc
