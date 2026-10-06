@@ -59,6 +59,31 @@
 
 ### Fixed
 
+- **A Questrade internal code is never booked under another share of the
+  same company.** The name match behind the new internal-code inference
+  ignored the share class and similar words, so a code whose description
+  named class A shares could be booked under the class C listing (and
+  class B subordinate voting under class A voting, ordinary shares under
+  the ADR, "NEW X INC" under "X CORP"). The class letter, voting rights,
+  ADR / ordinary, preferred, units, warrants, rights and NEW now always
+  count; only corporate-form words such as INC or CORP are set aside. A
+  match by name alone must be exact and name one listing, and is used
+  only for a code that arrived by no transfer; anything less is not
+  applied, and the code's ATTENTION line names the likely listing with
+  the ticker.map GLOBAL line to add if it is right. A transfer of another
+  class of the company in the same window makes the pairing ambiguous,
+  and a one-word name pairs only with itself.
+- **Any ticker.map rule for a Questrade internal code wins over the
+  inference.** A DELETE, DISTINCT or dated RENAME line naming the code was
+  overridden: the code's rows were rebooked under the inferred ticker
+  (past the DELETE), and `taxjson transfers` showed the inference instead
+  of the rule. The run and the parser now use one test (does any rule
+  name this symbol), and the transfers view says the code is booked by
+  its ticker.map rule.
+- **A damaged work/ record of the inferred codes is ignored with one
+  warning** instead of a traceback or a wrong booking (a wrong shape, a
+  symbol that is not a plain listing, a control character, or JSON nested
+  too deep).
 - **A file name holding a newline or another control character stays one
   line.** The run console now names files as they are on disk; such a
   name could start a line of its own there and in the saved `.diag`

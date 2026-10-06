@@ -247,6 +247,8 @@ class BrokerageParseError(ValueError):
 # (run passes it): (fixed-point renames incl. TOBASE/JOURNAL, the dated
 # RENAME pairs). None = no map given — every identity hint prints.
 _TICKER_JOINS: Optional[Tuple[Dict[str, str], frozenset]] = None
+# Every symbol a rule of that map names (taxjson_ticker_map.named_symbols).
+_TICKER_NAMED: frozenset = frozenset()
 
 
 def set_ticker_map(path) -> None:
@@ -254,13 +256,16 @@ def set_ticker_map(path) -> None:
     moot (re-audit A2-1056): a ticker-change or listing hint for a pair
     the map already pools is not printed. None clears it. A map that
     does not parse is ignored here (`taxjson run` refuses it up front)."""
-    global _TICKER_JOINS
+    global _TICKER_JOINS, _TICKER_NAMED
     if path is None:
         _TICKER_JOINS = None
+        _TICKER_NAMED = frozenset()
         return
     from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
-                                                merge_renames)
+                                                merge_renames,
+                                                named_symbols)
     tmap = _parse_map_file(Path(path))[0]
+    _TICKER_NAMED = named_symbols(tmap)
     try:
         ren = merge_renames(tmap, True)
     except ValueError:
@@ -281,6 +286,13 @@ def ticker_map_renames(sym: str) -> bool:
     ren, dated = _TICKER_JOINS
     s = sym.upper()
     return map_symbol(s, ren) != s or any(old == s for old, _n in dated)
+
+
+def ticker_map_names(sym: str) -> bool:
+    """True when a rule of the loaded ticker.map names listing `sym` in
+    any way (a rename either side, DELETE, DISTINCT, a dated RENAME):
+    the user's rule wins over any inference (lib/symbol_codes)."""
+    return bool(sym) and sym.upper() in _TICKER_NAMED
 
 
 def ticker_map_joins(a: str, b: str) -> bool:

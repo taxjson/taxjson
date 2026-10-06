@@ -2177,10 +2177,16 @@ accounts first and infers the ticker from them, in this order:
    quantity in another broker's export of the project (any account: IB's
    Transfers section, an RBC transfer-out), dated up to 10 days before the
    arrival (or 3 after), whose security name matches the Questrade
-   description (corporate-form and share-class words such as INC, CORP,
-   CLASS A, COMMON STOCK, ADR are ignored); exactly one candidate;
-2. else **the name**: exactly one listing elsewhere in your books whose name
-   matches word for word.
+   description (corporate-form and generic words such as INC, CORP, COMMON
+   STOCK are ignored, but never the share designators: the class letter,
+   voting / subordinate voting, ADR vs ordinary, preferred, units, NEW);
+   exactly one candidate, and no transfer of another class of the same
+   company in the same window;
+2. else, for a code with no transfer-in, **the name**: exactly one listing
+   elsewhere in your books whose name is equal to it once case,
+   punctuation, generic share words and corporate-form words are set aside
+   (`QZX INC` is `QZX CORP`; `QZX INC CL A` is not `QZX INC CL C`, and
+   `NEW QZX INC` is not `QZX CORP`).
 
 Every row of the code is then booked under that ticker, and the parse says
 so in ONE note per account — `note: Questrade internal symbol codes
@@ -2188,9 +2194,13 @@ resolved (1): X000123 → ZZQ.US (paired with the Interactive Brokers transfer
 out of 24 on 2026-09-01, account margin)` — kept whole in the `.sum`;
 `taxjson transfers` lists the codes too. A code nothing identifies keeps
 the ATTENTION line (once per code), naming a near miss when there is one
-(a transfer of the same quantity and date whose name differs, or two
-candidates); add `GLOBAL X000123.US ZZQ.US` to ticker.map. A ticker.map
-line for the code always wins over the inference. Tax-logic:
+(a transfer of the same quantity and date whose name differs, two
+candidates, or a listing whose name is close but not equal — then with the
+line to add if it is right: `looks like ZZQ.US by name ... add GLOBAL
+X000123.US ZZQ.US`); add `GLOBAL X000123.US ZZQ.US` to ticker.map. Any
+ticker.map rule that names the code (GLOBAL, DELETE, DISTINCT, a dated
+RENAME ...) always wins over the inference; `taxjson transfers` then shows
+the code as booked by the ticker.map rule. Tax-logic:
 `CA-ACB-CODES`, `US-BASIS-CODES`.
 
 ### When you can't get the real cost basis

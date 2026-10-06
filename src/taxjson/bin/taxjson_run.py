@@ -4163,26 +4163,44 @@ def stage_symbol_codes(name: str, csvs: List[Path], root: Path,
                     if isinstance(c, dict) and not c.get("crypto")]
         outs, names = SC.project_evidence(
             cache, accounts or [name], receiving=(name, "questrade"))
-        key = _transfer_key(root)
+        named = _ticker_map_named(root)
         helper = QuestradeBrokerage()
 
         def listing_ok(listing: str, cur: str) -> bool:
             return helper.apply_currency_suffix(listing, cur) == listing
 
         def mapped(code: str) -> bool:
-            for cur in sorted({"USD", "CAD"}
-                              | {c for u in uses if u.code == code
-                                 for c in u.currencies}):
-                lst = helper.apply_currency_suffix(code, cur)
-                if key(lst) != lst.upper():
-                    return True
-            return False
+            # ANY ticker.map rule naming the code (a rename, DELETE,
+            # DISTINCT, a dated RENAME) wins — the test the parser
+            # applies too (base.ticker_map_names), so the record, the
+            # books and `taxjson transfers` agree.
+            return any(helper.apply_currency_suffix(code, cur) in named
+                       for cur in sorted({"USD", "CAD"}
+                                         | {c for u in uses
+                                            if u.code == code
+                                            for c in u.currencies}))
         result = SC.resolve(uses, outs, names, listing_ok=listing_ok,
-                            mapped=mapped)
+                            mapped=mapped,
+                            code_listing=helper.apply_currency_suffix)
     text = SC.state_text(name, result)
     if _read_work_stamp(out) != text:
         _write_work_stamp(out, text)
     return out
+
+
+def _ticker_map_named(root: Path) -> frozenset:
+    """Every symbol a rule of the project's ticker.map names
+    (taxjson_ticker_map.named_symbols); empty without a map. A map that
+    does not parse is refused by `taxjson run` up front."""
+    tm = root / "ticker.map"
+    if not tm.is_file():
+        return frozenset()
+    from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+                                                named_symbols)
+    try:
+        return named_symbols(_parse_map_file(tm)[0])
+    except (OSError, ValueError):
+        return frozenset()
 
 
 def _accounts_with_symbol_codes(inputs_dir: Path,
@@ -7601,6 +7619,13 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                           "evidence": r.get("detail") or
                           "no transfer or name in the project identifies "
                           "it"})
+        # A code a ticker.map rule names: booked by that rule, never
+        # inferred (lib/symbol_codes).
+        for code, r in sorted((st.get("mapped") or {}).items()):
+            codes.append({"account": name, "code": code, "symbol": "",
+                          "how": "ticker.map",
+                          "evidence": "a ticker.map rule names it; booked "
+                                      "as that rule says"})
     if getattr(args, "json", False):
         _json_out({"transfers": rows, "count": len(rows),
                    "symbol_codes": codes})
@@ -7616,7 +7641,9 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                  "overrides it); an unresolved code stays its own "
                  "security until ticker.map maps it.")
         doc.items([f"{c['account']}: {c['code']} → {c['symbol']} "
-                   f"({c['evidence']})" if c["how"] != "unresolved" else
+                   f"({c['evidence']})" if c["symbol"] else
+                   f"{c['account']}: {c['code']} → ticker.map rule"
+                   if c["how"] == "ticker.map" else
                    f"{c['account']}: {c['code']} UNRESOLVED "
                    f"({c['evidence']})" for c in codes])
     doc = Doc("CUSTODY TRANSFERS — evidence, not tax events")

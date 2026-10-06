@@ -282,6 +282,23 @@ def raw_renames(tmap: "TickerMap", to_base: bool) -> Dict[str, str]:
     return renames
 
 
+def named_symbols(tmap: "TickerMap") -> frozenset:
+    """Every symbol a rule of the map names, on either side: GLOBAL /
+    TOBASE / JOURNAL / undated RENAME, DELETE, DISTINCT and dated RENAME
+    lines. A symbol the user wrote a rule for is the user's call: an
+    inference (lib/symbol_codes) never overrides it — a DELETEd code
+    stays deleted, a dated rename keeps its date."""
+    out = set(tmap.delete)
+    for d in (tmap.glob, tmap.tobase, tmap.journal):
+        out.update(d)
+        out.update(d.values())
+    for pair in tmap.distinct:
+        out.update(pair)
+    for dr in tmap.dated:
+        out.update((dr.old, dr.new))
+    return frozenset(s.upper() for s in out)
+
+
 def map_file_problems(file_path: Path) -> List[str]:
     """The ticker-map lines that cannot be parsed (their rules would be
     dropped), each as `<file>:<lineno>: <message>`. `taxjson run`

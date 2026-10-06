@@ -114,16 +114,19 @@ def out(sym, date, qty, name, acct='ibm', broker='ib', cur='CAD'):
 @rule("CA-ACB-CODES")
 @rule("US-BASIS-CODES")
 class TestNames(unittest.TestCase):
-    def test_noise_words_and_class_letters_drop(self):
+    def test_noise_words_drop_and_the_class_letter_stays(self):
+        # The class letter is a designator (prerelease review M1): class
+        # A is not class C. Corporate-form and generic words drop.
         self.assertEqual(SC.name_tokens('QZM PLATFORMS INC-CLASS A'),
-                         ('QZM', 'PLATFORMS'))
+                         ('QZM', 'PLATFORMS', '~A'))
         self.assertEqual(SC.name_tokens('QZM PLATFORMS INC CL A COMMON '
-                                        'STOCK'), ('QZM', 'PLATFORMS'))
+                                        'STOCK'), ('QZM', 'PLATFORMS', '~A'))
 
     def test_match_rules(self):
         t = SC.name_tokens
-        self.assertTrue(SC.names_match(t('QZALPHA INC CL C CAPITAL'),
-                                       t('QZALPHA INC-CL C')))
+        self.assertTrue(SC.names_match(t('QZALPHA NETWORKS INC CL C '
+                                         'CAPITAL'),
+                                       t('QZALPHA NETWORKS INC-CL C')))
         self.assertFalse(SC.names_match(t('OTHERCO INC'),
                                         t('QZN NETWORKS INC')))
         # A shared later word is not enough: the first words differ.
@@ -194,7 +197,9 @@ class TestResolve(unittest.TestCase):
                           [('2026-09-06', 7.0)])],
                      [out('QZD.TO', '2026-09-02', 7, 'QZD DATA CORP')],
                      mapped=lambda c: c == 'X000005')
-        self.assertEqual(r, {'resolved': {}, 'unresolved': {}})
+        self.assertEqual(r['resolved'], {})
+        self.assertEqual(r['unresolved'], {})
+        self.assertEqual(r['mapped']['X000005']['how'], 'ticker.map')
 
     def test_note_is_one_parseable_line(self):
         line = SC.codes_note({
@@ -383,8 +388,10 @@ class TestRun(unittest.TestCase):
         self.assertNotIn('55500001', diag)  # pii-ok
         summ = (self.root / "reports" / "qt.sum").read_text()
         self.assertIn(notes[0], summ)
-        # ... and the console shows the note.
-        self.assertIn(SC.NOTE_HEAD, self.r.stdout)
+        # ... and the console shows the note (labelled `Info:` on a
+        # terminal, `note:` when captured with TAXJSON_WIDTH=0).
+        self.assertRegex(self.r.stdout, r"(Info|note): Questrade internal "
+                                        r"symbol codes resolved")
 
     def test_console_names_files_as_on_disk_and_the_diag_masks(self):
         out = self.r.stdout
@@ -405,7 +412,9 @@ class TestRun(unittest.TestCase):
         self.assertEqual(codes['X000001']['symbol'], 'QZM.TO')
         self.assertEqual(codes['X000004']['how'], 'name')
         self.assertEqual(codes['X000003']['how'], 'unresolved')
-        self.assertNotIn('X000005', codes)
+        # Booked by its ticker.map rule, and said so.
+        self.assertEqual(codes['X000005']['how'], 'ticker.map')
+        self.assertEqual(codes['X000005']['symbol'], '')
 
     def test_the_paired_arrival_is_an_own_move(self):
         r = _run(self.root, "transfers", "--json")

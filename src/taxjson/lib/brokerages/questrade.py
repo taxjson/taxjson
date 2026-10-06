@@ -11,6 +11,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          ticker_map_joins,
+                                         ticker_map_names,
                                          ticker_map_renames,
                                          combined_accounts_note,
                                          combined_accounts_refusal,
@@ -710,8 +711,10 @@ class QuestradeBrokerage(BaseBrokerage):
             for code, r in sorted((st.get('resolved') or {}).items()):
                 if not isinstance(r, dict) or not r.get('symbol'):
                     continue
-                # A ticker.map rule for the code wins over the inference.
-                if any(ticker_map_renames(cls().apply_currency_suffix(
+                # A ticker.map rule naming the code (any rule: a rename,
+                # DELETE, DISTINCT, a dated RENAME) wins over the
+                # inference — the same test `taxjson run` records.
+                if any(ticker_map_names(cls().apply_currency_suffix(
                         code, c)) for c in ('USD', 'CAD',
                                             r.get('currency') or 'USD')):
                     continue
@@ -918,6 +921,8 @@ class QuestradeBrokerage(BaseBrokerage):
         elif (_INTERNAL_CODE_RE.match(sym)
               and sym not in self._ctx.code_warned
               and not ticker_map_renames(
+                  self.apply_currency_suffix(sym, currency))
+              and not ticker_map_names(
                   self.apply_currency_suffix(sym, currency))):
             # A row booked under Questrade's internal code that no trade
             # or transfer in any export of the account resolves: the
