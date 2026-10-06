@@ -123,9 +123,9 @@ held) and stocks that paid you income the books do not hold. A run with
 nothing to report ends at `Done.`; the same counts are always written to
 `reports/run_summary.json`.
 
-Read every line that starts with `warning:`, `ATTENTION` or `NOTE`. A
-warning that an account folder is empty is expected for an account you
-have no files for yet.
+Read every line that starts with `Warning:` (the `Warning: ATTENTION:`
+lines first) and every `Info:` line. A warning that an account folder is
+empty is expected for an account you have no files for yet.
 
 Exit codes: `0` done, `1` failed (the message names the file or row),
 `3` a merger or spin-off needs your decision (`tjs elect --pending` shows
@@ -181,7 +181,7 @@ Every row marked **AFFECTS 2025** is a sale that is not in `tjs sum` yet.
 it builds the account and in its closing list, and `tjs sum` warns:
 
 ```
-taxjson sum: warning: 2 position(s) sold in 2025 with no purchase in your files, not in missing_history.json: their gain is NOT in these totals (SAMPA.TO (margin), SAMPK.TO (margin)). `taxjson find-missing-history` lists them and the fixes (docs/getting-started.md, step 5).
+Warning: 2 position(s) sold in 2025 with no purchase in your files, not in missing_history.json: their gain is NOT in these totals (SAMPA.TO (margin), SAMPK.TO (margin)). `taxjson find-missing-history` lists them and the fixes (docs/getting-started.md, step 5).
 ```
 
 The command ends with what to do next, in the order of 5b below. For an Interactive
@@ -279,7 +279,7 @@ from **outside your books**, and `IN_BOOKS` says what the books did:
   that value on the transfer date, and every run says so:
 
   ```
-  warning: ATTENTION: transfer-in: margin: 1 transfer-in(s) from outside your books booked at the ACB the broker states on the row (Questrade: 20 SAMPJ.TO (2024-06-03)). A broker's book value is its own record, not always your ACB: check it. To use your own figure instead, add the original purchase as a .tt BUYSELL line dated on or before the transfer: the book value is then no longer used and this line stops.
+  Warning: ATTENTION: transfer-in: margin: 1 transfer-in(s) from outside your books booked at the ACB the broker states on the row (Questrade: 20 SAMPJ.TO (2024-06-03)). A broker's book value is its own record, not always your ACB: check it. To use your own figure instead, add the original purchase as a .tt BUYSELL line dated on or before the transfer: the book value is then no longer used and this line stops.
   ```
 
   (US projects: the line adds that the lot's holding period starts on
@@ -295,7 +295,7 @@ from **outside your books**, and `IN_BOOKS` says what the books did:
   account (5b, step 4): its cost stays unknown and its sales are
   reported by hand, as you declared; the book value is not used.
 
-Webull ACATS rows are not booked at all: the run prints `warning:
+Webull ACATS rows are not booked at all: the run prints `Warning:
 UNBOOKED: ... Webull ACATS row ...`.
 
 Once you sell `NO_COST` shares, the sale shows up in `find-missing-history`
@@ -408,7 +408,7 @@ OPENING 2023-12-29 SAMPD.TO 10 CAD 504.95
   opening replaces everything before it** for its stocks: rows of those
   stocks in this account dated on or before that day are left out of
   the books, so a statement that overlaps your download counts nothing
-  twice. `tjs run` says so in a `warning: ATTENTION: opening:` line.
+  twice. `tjs run` says so in a `Warning: ATTENTION: opening:` line.
   Dividends stay.
 - Use a report from **before the tax year's first sale** of each stock:
   a sale left out that way would drop out of the year's gains, so the
@@ -509,7 +509,7 @@ tjs sum
 ```
 
 ```
-taxjson sum: warning: 1 disposition(s) with an unknown cost (no purchase in your files) were routed to manual reporting — these totals EXCLUDE them (`taxjson form-export` lists them in its MANUAL REPORTING section; report them by hand).
+Warning: 1 disposition(s) with an unknown cost (no purchase in your files) were routed to manual reporting — these totals EXCLUDE them (`taxjson form-export` lists them in its MANUAL REPORTING section; report them by hand).
 ```
 
 The sale stays out of the totals, and `tjs form-export` lists it for

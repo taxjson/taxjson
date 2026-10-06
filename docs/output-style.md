@@ -56,24 +56,53 @@ Captured output (width 0) keeps its bytes.
 
 ## Messages
 
-Diagnostics go to stderr; report content goes to stdout. One set of
-prefixes, lower case, GNU style (`<prog>: <kind>: ...`, lib/cli_diag):
+Diagnostics go to stderr; report content goes to stdout. Every message
+a person sees **starts with its label**, capitalised:
 
-| prefix | meaning |
+| label | meaning |
 | --- | --- |
-| `error:` | the command could not do what was asked (non-zero exit) |
-| `warning:` | the result may be wrong or incomplete; act on it |
-| `warning: ATTENTION: <topic>:` | the run's must-act channel (see below) |
-| `note:` | information; nothing to do |
+| `Error:` | the command could not do what was asked (non-zero exit) |
+| `Warning:` | the result may be wrong or incomplete; act on it |
+| `Warning: ATTENTION: <topic>:` | the run's must-act channel (see below) |
+| `Info:` | information; nothing to do |
+
+```
+Warning: ATTENTION: short: ABC.TO (margin) goes short on 2025-03-04
+  The books sell 10 more than they hold. ...
+Error: no gains files in work/
+  Run `taxjson run` first.
+```
+
+**The source.** A message never starts with a program name. The
+command the person typed is not named at all (`Warning: ...`, not
+`taxjson sum: warning: ...`). A line captured from *another* program
+and shown by the command that ran it — a stage's stderr the run echoes,
+a child's error relayed in a detail line — keeps that program's name
+right after the label, as its source: `Error: taxjson-corp-actions: 1
+corp-action event(s) need an election ...`. Messages from a parser or
+the engine name their file or account in the text, and the run shows
+them under the account's heading. That is the one rule.
+
+**Shown vs captured.** The label is chosen in one place,
+`lib/out.label` / `out.message` (and `out.relabel` for a captured line
+shown later), keyed on the width: shown to a person (width > 0) the
+label starts the line; captured for a program (width 0: a work/ or
+reports/ file, a `.diag`, the text the run and `taxjson checklist`
+read back, every subprocess under `TAXJSON_WIDTH=0`) the message keeps
+its GNU bytes, `[<prog>: ]note: / warning: / warning: ATTENTION: /
+error: ...` lower case — never changed by a style pass (see below).
 
 A long message is a **one-line headline** (what happened, to what) and
 **indented detail lines** (why, and the fix) — not a 400-column line.
 The headline carries the words a reader (or a grep for the marker) needs:
 the detail lines are its continuation, indented two spaces.
 
-Retired: `NOTE:`, `Note:`, `WARNING:`, `Warning:`, `!!`, `→`/`->` bullets,
-`*** ... ***`. Upper-case words stay where they are **values** — a status
-column (`WARN`, `ERROR`, `OK`), a checklist mark (`[x]`, `[!]`).
+Retired at the start of a line a person sees: the lower-case `note:`,
+`warning:`, `error:` (the captured form), `NOTE:`, `Note:`, `WARNING:`,
+`ERROR:`, a label behind a program name (`taxjson-x: Warning:`), `!!`,
+`→`/`->` bullets, `*** ... ***`. Upper-case words stay where they are
+**values** — a status column (`WARN`, `ERROR`, `OK`), a checklist mark
+(`[x]`, `[!]`), `FAILED:` / `CAVEAT:` in an audit list.
 
 ```python
 from taxjson.lib import out
@@ -84,24 +113,32 @@ out.fail("'X' matches no pending event — nothing was saved",
          prog="taxjson elect", details=["Check the id with ..."])
 ```
 
-`out.fail(..., code=1)` raises `SystemExit(<text>)` as `sys.exit(msg)`
-does (in-process callers read the text from the exception); `code=2` (a
+`prog=` names the program in the captured form only. `out.fail(...,
+code=1)` raises `SystemExit(<text>)` as `sys.exit(msg)` does
+(in-process callers read the text from the exception); `code=2` (a
 usage or input error) prints and exits 2.
 
-The shared helpers already speak it:
+The shared helpers speak it:
 
 - `taxjson_run._die(headline, *details)` (exit 1) and
-  `_die_input(headline, *details)` (exit 2) print `taxjson <cmd>: error:
-  <headline>` and the details indented. An old one-string call still
-  works (the string wraps under its prefix); when you touch one, split it
-  into a short headline and details.
+  `_die_input(headline, *details)` (exit 2) print `Error: <headline>`
+  and the details indented (`taxjson <cmd>: error: <headline>`
+  captured). An old one-string call still works (the string wraps under
+  its label); when you touch one, split it into a short headline and
+  details.
 - `lib/cli_diag.warn / note / error(prog, msg, details=())` print
-  `<prog>: warning: ...` the same way.
+  `Warning: ...` / `Info: ...` / `Error: ...` the same way.
+- `lib/stage_msg.say(kind, headline, details, legacy=...)` and
+  `emit_line(text)`: a stage's message, its captured `legacy` one-line
+  text kept byte for byte in the `.diag`, the label first when shown.
+- A message written as text the old way: `emit_line("warning: ...")`
+  for a line on stderr, `out.labelled(text)` for one in a report body,
+  `out.label(kind, width)` to build one, `sys.exit(out.exit_text(
+  "<prog>: <what>"))` for a refusal — each the captured bytes at width
+  0, the label first when shown.
+- An argparse usage error (`run_top_level`, every entry point) is
+  `Error: <message>` under the usage line.
 - `_wrap_note` wraps at the house width (it was 78).
-
-Not yet converted, and each group's to do: the direct `sys.exit(f"taxjson
-<cmd>: ...")` calls, bare `print(f"warning: ...")` lines, and the
-`NOTE:` prints.
 
 ## Numbers, dates
 
@@ -135,6 +172,9 @@ bytes alone:
   and years), `*_holdings.toml` (read by `sanity` and the holdings diff),
   `wash_radar_*.json`, `run_summary.json`; `filed/<year>.json`;
 - exit codes;
+- the captured form of every message (width 0): `[<prog>: ]note:` /
+  `warning:` / `error:`, lower case — the person's `Info:` / `Warning:`
+  / `Error:` labels are display only;
 - the marker lines the run reads back from its stages' stderr, with their
   exact first-line prefix: `warning: ATTENTION:` (and the topics
   `short:`, `opening:`, `crypto id:`, ...), `warning: UNBOOKED:`,

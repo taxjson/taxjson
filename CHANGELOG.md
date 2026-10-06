@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Changed
+
+- **Messages start with their label: `Info:`, `Warning:`, `Error:`.**
+  Every informational line, warning and error a person sees now begins
+  with its capitalised label (`Warning: ATTENTION: <topic>: ...` for the
+  lines that need action), with the detail lines indented under it as
+  before. The command you typed is no longer named in front of each
+  message; a line relayed from another program (a stage's error the run
+  echoes, a child command's warning) names that program right after the
+  label. The old `note:` and `NOTE:` lines are `Info:` lines. A usage
+  error is `Error: ...` under the usage line. What a program reads is
+  unchanged: with the output captured (`TAXJSON_WIDTH=0`, a stage's
+  work/ and reports/ files, the `.diag` behind the `.sum` DIAGNOSTICS,
+  what the checklist reads) messages keep the lower-case
+  `taxjson <command>: warning: ...` form, and `--json` and exit codes do
+  not change. docs/output-style.md states the rule.
+
 
 ## v0.19.0 (2026-10-05)
 
