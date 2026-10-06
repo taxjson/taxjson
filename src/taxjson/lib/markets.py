@@ -322,6 +322,21 @@ def currency_suffix(currency: str) -> Optional[str]:
     return data()["currency_suffix"].get(str(currency or "").upper())
 
 
+def ca_usd_class(listing: str) -> Optional[str]:
+    """The US-dollar class of a Canadian listing by the market's
+    convention (markets.toml [conventions] ca_usd_class_series): ZZD.TO
+    -> ZZD.U.TO; a listing already in that series is returned as is.
+    None when `listing` is not a Canadian listing."""
+    s = str(listing or "").strip().upper()
+    if not is_canadian_listing(s):
+        return None
+    series = str(data()["conventions"]["ca_usd_class_series"]).upper()
+    root, sfx = s.rsplit(".", 1)
+    if root.endswith(f".{series}"):
+        return s
+    return f"{root}.{series}.{sfx}"
+
+
 def isin_country_suffix(cc: str) -> Optional[str]:
     return data()["isin_country_suffix"].get(str(cc or "").upper())
 

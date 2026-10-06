@@ -259,7 +259,7 @@ class TestQtRowShapes(unittest.TestCase):
         txs, _, _ = qt_parse(self.BRW)
         mapped = [TaxTransaction(**{k: v for k, v in {
             **t, 'symbol': 'DLR.TO'}.items()
-            if k not in ('book_value', 'broker_account')})
+            if k not in ('book_value', 'broker_account', 'journal_pair')})
             for t in txs]
         kept, dropped = _drop_self_cancelling_transfers(mapped)
         self.assertEqual(kept, [])

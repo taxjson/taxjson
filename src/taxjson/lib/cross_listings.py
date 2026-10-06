@@ -39,6 +39,16 @@ A join changes the books, so the run says each one as a Warning naming
 the pair and the ticker.map line that undoes it (`DISTINCT X Y`).
 No security data is kept here: names, symbols and dates come from the
 user's own exports.
+
+A broker's CURRENCY journal (Questrade's BRW "JOURNAL POSITION TO USD" /
+"FROM CAD" pair, which the parser pairs within one account and marks
+with a `journal_pair` id) moves units between the CAD and USD lines of
+one security. In a Canadian project (tax-logic CA-XLIST-02) the two
+lines are joined as a ticker.map `JOURNAL FROM TO` line would — one
+security for the cost and the loss rules, netted in the holdings view —
+on the parser's pairing alone (the legs share one description). The
+user's map still wins, and a listing joined to two others is only
+suggested. In a US project those legs are ordinary transfer legs.
 """
 from __future__ import annotations
 
@@ -69,20 +79,26 @@ class Leg:
     date: str
     quantity: float                 # signed: + in, - out
     used: bool = False
+    pair: str = ""                  # a currency journal's id (parser)
+    currency: str = ""              # the row's currency
 
 
 @dataclass
 class Pair:
     out: Leg
     into: Leg
-    frm: str = ""                   # TOBASE FROM
-    to: str = ""                    # TOBASE TO
+    frm: str = ""                   # TOBASE / JOURNAL FROM
+    to: str = ""                    # TOBASE / JOURNAL TO
     reason: str = ""                # why not joined ("" when joined)
     names: Tuple[str, str] = ("", "")
     extra: Dict[str, Any] = field(default_factory=dict)
+    # The ticker.map keyword the join stands for: TOBASE (a transfer
+    # journal between two listings) or JOURNAL (a currency journal).
+    kind: str = "TOBASE"
 
     def record(self) -> Dict[str, Any]:
         return {"from": self.frm, "to": self.to,
+                **({"kind": self.kind} if self.kind != "TOBASE" else {}),
                 "out": {"account": self.out.account,
                         "broker": self.out.broker,
                         "symbol": self.out.symbol, "date": self.out.date,
@@ -171,7 +187,10 @@ def gather(cache: Path, accounts: Iterable[str]
                 if abs(q) <= _EPS or _d(t.get("date")) is None:
                     continue
                 legs.append(Leg(acct, broker, sym,
-                                str(t.get("date"))[:10], q))
+                                str(t.get("date"))[:10], q,
+                                pair=str(t.get("journal_pair") or ""),
+                                currency=str(t.get("currency") or "")
+                                .upper()))
     legs.sort(key=lambda g: (g.date, g.account, g.broker, g.symbol,
                              g.quantity))
     return legs, names, shown
@@ -232,11 +251,51 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             map_named: Iterable[str] = (),
             map_distinct: Iterable[Iterable[str]] = (),
             base_currency: Optional[str] = None,
-            days: int = PAIR_DAYS) -> Dict[str, List[Pair]]:
+            days: int = PAIR_DAYS,
+            currency_journals: bool = False) -> Dict[str, List[Pair]]:
     """{"joined": [...], "suggested": [...]}: the cross-listing journals
-    the legs show (module docstring)."""
+    the legs show (module docstring). `currency_journals`: join the
+    parser-paired currency journals as JOURNAL lines (Canada,
+    CA-XLIST-02; the caller gates the country)."""
     named = {s.upper() for s in map_named}
     apart = {frozenset(x.upper() for x in pair) for pair in map_distinct}
+    joined: List[Pair] = []
+    suggested: List[Pair] = []
+    # 0. A currency journal the parser paired (one account, one day, one
+    #    description): its two lines are one security.
+    if currency_journals:
+        groups: Dict[Tuple[str, str, str], List[Leg]] = {}
+        for g in legs:
+            if g.pair:
+                groups.setdefault((g.account, g.broker, g.pair),
+                                  []).append(g)
+        for _k, gl in sorted(groups.items()):
+            o = [g for g in gl if g.quantity < 0]
+            i = [g for g in gl if g.quantity > 0]
+            if (len(o) != 1 or len(i) != 1 or o[0].symbol == i[0].symbol
+                    or not _same_qty(o[0], i[0])):
+                continue
+            o[0].used = i[0].used = True
+            if (o[0].symbol in named or i[0].symbol in named
+                    or frozenset((o[0].symbol, i[0].symbol)) in apart):
+                continue                # the user's map decides
+            # The line in the other currency maps onto the base one
+            # (the legs' own currencies; an EXTRACT symbol may not spell
+            # its currency).
+            cur = {o[0].currency, i[0].currency}
+            if base_currency in cur and len(cur) == 2:
+                frm, to = ((o[0].symbol, i[0].symbol)
+                           if i[0].currency == base_currency
+                           else (i[0].symbol, o[0].symbol))
+            else:
+                frm, to = tobase_direction(o[0].symbol, i[0].symbol,
+                                           base_currency)
+            nx = names.get(o[0].symbol, set())
+            ny = names.get(i[0].symbol, set())
+            joined.append(Pair(o[0], i[0], frm, to, kind="JOURNAL",
+                               names=(shown.get(min(nx), "") if nx else "",
+                                      shown.get(min(ny), "") if ny
+                                      else "")))
     ins = [g for g in legs if g.quantity > 0]
     outs = [g for g in legs if g.quantity < 0]
     # 1. The same symbol's legs cancel (a custody move, a broker switch):
@@ -260,8 +319,6 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
                 continue
             links.setdefault(n, []).append(m)
             back.setdefault(m, []).append(n)
-    joined: List[Pair] = []
-    suggested: List[Pair] = []
     for n, ms in sorted(links.items()):
         for m in ms:
             o, i = outs[n], ins[m]
@@ -294,15 +351,16 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
 
 
 def map_lines(joined: Iterable[Pair]) -> List[str]:
-    """The TOBASE lines of the joins, one per pair of listings, each with
-    its evidence as a comment."""
+    """The TOBASE (or JOURNAL) lines of the joins, one per pair of
+    listings, each with its evidence as a comment."""
     seen: Set[Tuple[str, str]] = set()
     out: List[str] = []
     for p in sorted(joined, key=lambda p: (p.frm, p.to, p.out.date)):
         if (p.frm, p.to) in seen:
             continue
         seen.add((p.frm, p.to))
-        out.append(f"TOBASE {p.frm} {p.to}  # transfer {p.out.symbol} -> "
+        what = "currency journal" if p.kind == "JOURNAL" else "transfer"
+        out.append(f"{p.kind} {p.frm} {p.to}  # {what} {p.out.symbol} -> "
                    f"{p.into.symbol} {p.out.date} ({p.out.account})")
     return out
 
@@ -354,6 +412,7 @@ def joined_note(account: str, joined: Iterable[Pair]
     items: List[str] = []
     undo: List[str] = []
     seen = set()
+    kinds: Set[str] = set()
     for p in sorted(joined, key=lambda p: (p.out.date, p.frm)):
         if account not in (p.out.account, p.into.account):
             continue
@@ -361,6 +420,19 @@ def joined_note(account: str, joined: Iterable[Pair]
         if k in seen:
             continue
         seen.add(k)
+        kinds.add(p.kind)
+        if p.kind == "JOURNAL":
+            items.append(f"{p.out.symbol} ↔ {p.into.symbol} (currency "
+                         f"journal {p.out.date})")
+            undo.append(f"- {p.out.symbol} ↔ {p.into.symbol}: the broker "
+                        f"journaled the units between the CAD and USD "
+                        f"lines of one security "
+                        f"({p.names[0] or p.names[1]!r}), booked as a "
+                        f"ticker.map JOURNAL line would (netted in the "
+                        f"holdings view); if they are not one security, "
+                        f"add `DISTINCT {p.out.symbol} {p.into.symbol}` "
+                        f"to ticker.map")
+            continue
         items.append(f"{p.out.symbol} ↔ {p.into.symbol} (transfer "
                      f"{p.out.date})")
         undo.append(f"- {p.out.symbol} ↔ {p.into.symbol}: their names are "
@@ -373,5 +445,6 @@ def joined_note(account: str, joined: Iterable[Pair]
     return (f"{account}: joined as one security by their transfer journal: "
             + ", ".join(items),
             ["Booked as one security (one cost pool, one security for the "
-             "loss rules), as a ticker.map TOBASE line would — this "
+             "loss rules), as a ticker.map "
+             + " / ".join(sorted(kinds)) + " line would — this "
              "changes your books."] + undo)
