@@ -8,6 +8,18 @@
   separates `[settings]` from its first group**, so the table line stands apart
   from the data. `taxjson format` applies it to an existing file.
 
+### Added
+
+- **AGENTS.md and a knowledge pack for AI assistants.** AGENTS.md says how to
+  help someone run taxjson (the checks to run first, privacy, no tax advice)
+  and how to change the code (the gate, releases, the conventions the tests
+  enforce). `docs/troubleshooting.md` gives each known problem as the message
+  a user sees, how to check it, the cause, the fix and the code;
+  `docs/architecture-map.md` gives each feature's files and functions.
+  `tests/test_knowledge_pack.py` keeps them true: every file, symbol and
+  command they name must exist, every "Fixed in" must be a release, and they
+  must hold no personal data.
+
 
 ## v0.22.0 (2026-10-06)
 
