@@ -206,7 +206,7 @@ One table per folder under `inputs/` (the folder name is the account name). Name
 - **Meaning:** `true` keeps the broker's TRANSFER rows (contributions, withdrawals) in the books; `false` keeps them aside as custody evidence (`taxjson transfers`).
 - **Default:** `false`.
 - **Country:** both.
-- **Change it when:** a registered account's contributions and withdrawals move shares in and out (the usual setting for an RRSP or TFSA). In a US project `false` also pairs moves between your own taxable accounts so the lots travel with their dates.
+- **Change it when:** a registered account's contributions and withdrawals move shares in and out (the usual setting for an RRSP or TFSA). Keep `false` on a taxable account: a taxable book's TRANSFER rows that do not cancel out are refused (replace them with the purchase history). In a US project `false` also pairs moves between your own taxable accounts so the lots travel with their dates.
 - **Example:** `transfers = true`
 
 #### `holdings`
