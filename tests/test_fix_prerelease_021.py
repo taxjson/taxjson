@@ -107,5 +107,56 @@ class TestSanityConsoleUnchecked(unittest.TestCase):
         self.assertIn("positions match the broker's holdings files", got)
         self.assertNotIn("unchecked", got)
 
+
+class TestTomlStrEscapesControls(unittest.TestCase):
+    """Pre-existing (review info): the holdings TOML writer escaped only
+    newline, carriage return and tab, so a symbol holding another control
+    character (an ESC from broker data) wrote a file TOML refuses."""
+
+    def test_round_trip(self):
+        import tomllib
+        from taxjson.bin.taxjson_export import _toml_str
+        for raw in ("AB\x1bC", "X\x00Y\x7fZ", 'q"\\b\n\r\t\x08\x0c',
+                    "".join(chr(c) for c in range(0x20)) + "\x7f"):
+            with self.subTest(raw=raw):
+                text = f"s = {_toml_str(raw)}\n"
+                self.assertEqual(tomllib.loads(text)["s"], raw)
+                self.assertFalse(any(ord(c) < 0x20 or ord(c) == 0x7f
+                                     for c in text[:-1]), text)
+
+
+class TestSkipSummaryShownName(unittest.TestCase):
+    """Pre-existing (review info): parsers passed `path.name` to
+    emit_skip_summary, so a file name with an account-id-shaped token or
+    a control character reached the captured .sum/.diag unmasked."""
+
+    def test_parsers_pass_shown_name(self):
+        from pathlib import Path
+        src = Path(__file__).resolve().parents[1] / "src" / "taxjson"
+        hits = [str(p.relative_to(src)) for p in src.rglob("*.py")
+                if "emit_skip_summary(path.name)" in p.read_text()]
+        self.assertEqual(hits, [])
+
+    def test_kraken_summary_masks_the_name(self):
+        import tempfile
+        from pathlib import Path
+        from taxjson.lib.brokerages.kraken import KrakenBrokerage
+        h = ("txid,refid,time,type,subtype,aclass,subclass,asset,wallet,"
+             "amount,fee,balance\n")
+        row = ("T1,R1,2026-01-05 12:00:00,earn,allocation,currency,crypto,"
+               "SOL,spot / main,-1,0,0\n")
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "kr_ledgers_55500001\x1b.csv"  # pii-ok
+            p.write_text(h + row)
+            buf = io.StringIO()
+            from unittest import mock
+            with redirect_stderr(buf), mock.patch.dict(
+                    os.environ, {"TAXJSON_LOCAL_TZ": "America/Toronto"}):
+                KrakenBrokerage().parse_file(p)
+        err = buf.getvalue()
+        self.assertIn("recognized non-event", err)
+        self.assertNotIn("55500001", err)  # pii-ok
+        self.assertNotIn("\x1b", err.replace("\\x1b", ""))
+
 if __name__ == "__main__":
     unittest.main()

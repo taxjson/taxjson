@@ -1088,7 +1088,7 @@ class GenericBrokerage(BaseBrokerage):
                 part.reverse()
             out.extend(part)
         transactions[:] = out
-        self.emit_skip_summary(path.name)
+        self.emit_skip_summary(shown_name(path))
         return transactions
 
     @staticmethod

@@ -530,11 +530,19 @@ def _resolve_underlying(root_sym: str, held_stock) -> str:
     return hits[0] if len(hits) == 1 else root_sym
 
 
+_TOML_ESCAPES = {'\\': '\\\\', '"': '\\"', '\n': '\\n', '\r': '\\r',
+                 '\t': '\\t', '\b': '\\b', '\f': '\\f'}
+
+
 def _toml_str(value: Any) -> str:
-    """Render a value as a TOML basic (quoted) string."""
-    s = str(value).replace('\\', '\\\\').replace('"', '\\"')
-    s = s.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
-    return f'"{s}"'
+    """Render a value as a TOML basic (quoted) string. Every control
+    character is escaped (named, else \\uXXXX): TOML refuses a raw one,
+    so a symbol carrying an ESC from broker data would otherwise write
+    a holdings file nothing can read back."""
+    return '"' + ''.join(
+        _TOML_ESCAPES.get(c) or (f'\\u{ord(c):04X}'
+                                 if ord(c) < 0x20 or ord(c) == 0x7f else c)
+        for c in str(value)) + '"'
 
 
 def _load_trade_events(paths, mapping=None, drops=None,

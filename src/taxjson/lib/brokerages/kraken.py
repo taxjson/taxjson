@@ -993,7 +993,7 @@ class KrakenBrokerage(BaseBrokerage):
                   f"coins given, with no quote-currency fee; those fees "
                   f"are therefore NOT in the fee reports (fees.rpt, "
                   f"fees-sum, the .sum FEES line).")
-        self.emit_skip_summary(path.name)
+        self.emit_skip_summary(shown_name(path))
         return transactions
 
     # --------------------------------------------------------------- ledgers
@@ -1331,7 +1331,7 @@ class KrakenBrokerage(BaseBrokerage):
             self.zero_tx_reason = (
                 f"its {nonevents + sum(ignored_types.values())} row(s) "
                 f"are recognized non-events")
-        self.emit_skip_summary(path.name)
+        self.emit_skip_summary(shown_name(path))
         return transactions
 
     def _fee_coin_sale(self, row, ctx, fee, fee_ccy, type_raw, date, time,

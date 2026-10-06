@@ -659,7 +659,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                    f"via a .tt file.")
             emit_line(f"warning: UNBOOKED: {msg}")
             self.lint_findings.append(msg)
-        self.emit_skip_summary(path.name)
+        self.emit_skip_summary(shown_name(path))
         return transactions
 
     def _content_stem(self, row) -> str:

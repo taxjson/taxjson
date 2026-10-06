@@ -65,6 +65,14 @@
   have no holdings file, the run says `positions match the broker's
   holdings files (checked accounts only; N unchecked: ...)` and names
   them.
+- **A holdings file stays readable whatever a symbol holds.** Every
+  control character in a written string is escaped, so a symbol carrying
+  one (an escape character from broker data) no longer writes a TOML
+  file that cannot be read back.
+- **A parser's skipped-rows note names the file as every other message
+  does**, with an account-number-shaped part of the name masked and
+  control characters escaped (Kraken, Coinbase, Questrade, RBC and
+  generic CSV files).
 
 
 ## v0.20.0 (2026-10-06)

@@ -1710,7 +1710,7 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"TRANSFER legs; a ticker.map JOURNAL rule (e.g. "
                   f"JOURNAL SAMPLF.U.TO SAMPLF.TO) makes the lines one pool so "
                   f"the pair nets out.")
-        self.emit_skip_summary(path.name)
+        self.emit_skip_summary(shown_name(path))
         return transactions
 
     def statement_accounts(self) -> set:

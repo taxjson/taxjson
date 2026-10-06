@@ -1703,7 +1703,7 @@ class RbcBrokerage(BaseBrokerage):
         # Parser-level disambiguation so a downstream `taxjson-sort
         # --dedup` can't collapse byte-identical split-fill rows.
         self.disambiguate_split_fills(transactions)
-        self.emit_skip_summary(path.name)
+        self.emit_skip_summary(shown_name(path))
         return transactions
 
     def statement_accounts(self) -> set:
