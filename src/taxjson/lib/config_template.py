@@ -12,17 +12,22 @@ adding one more); then [estimate], [carryover],
 [[distributions]], and for Canada [[capital_gains_dividends]] and
 [instalments]. Arrays of tables keep their entries' order. [settings]
 comes in groups (SETTINGS_GROUPS: Project, Currencies, Options, Income,
-Futures), each under a `# --- Name ---` heading line, a blank line between
+Futures), each under a `## --- Name ---` heading line, a blank line between
 groups, the keys alphabetical within a group; every other table's keys
 are alphabetical, except that an account table's `type` (the required
 key) comes first. Active and commented-out keys are interleaved in one
 sequence, and every key line of a table (`key` or `# key`) is padded to
 the table's widest so the `=` signs form one column. A key's description
-is on the line(s) just above it (plain `# text`, wrapped), with no blank
-line between keys. The one end-of-line comment is a key's `inline` text
-(the values it takes, `# settle | trade`, or what `true` means for a
-switch), at one column per group or table (at most INLINE_MAX_COLUMN; a
-longer or multi-line value gets it on the line above instead). An
+is on the line(s) just above it (`## text`, wrapped), with no blank
+line between keys. Comment lines that are prose (the file header,
+headings, descriptions, notes) start with `## ` (PROSE); a commented-out
+key or table, and each line of a commented-out multi-line value, with a
+single `# `, so deleting the `# ` switches it on. The one end-of-line
+comment is a key's `inline` text (the values it takes, `# settle |
+trade`, or what `true` means for a switch; a single `#`: after a value
+it cannot be mistaken for a commented-out line), at one column per group
+or table (at most INLINE_MAX_COLUMN; a longer or multi-line value gets
+it on the line above instead). An
 [accounts.NAME] table is compact: key lines only, since the reference
 block documents every account key once. A key that is set is written
 active with its value; a key that is not set is written commented out,
@@ -44,8 +49,14 @@ no entry here.
 - keys the template does not know, at the end of their table under a
   "Not in the template" line, alphabetically (a top-level key at the top,
   a table at the end of the file);
-- comments: a trailing comment on a key or table line moves to its own
-  line just above that line (after the key's description), with the
+- comments, each of the user's comment lines written in the file's
+  convention (comment_line): one whose text is TOML — a key and value
+  (known or not), a table line, a line of a commented-out multi-line
+  value — as `# text`, any other as `## text` (the leading '#'s and one
+  blank replaced, the text kept; a commented-out multi-line value that
+  holds a line of the user's is kept whole). A trailing comment on a
+  key or table line moves to its own line just above that line (after
+  the key's description; written in the convention too), with the
   comment lines directly under it that continue it (indented past the
   line's start, padded with a second `#`, or padded out to its column —
   the old aligned layout's wrapping; `_continuation`), padding dropped;
@@ -80,7 +91,14 @@ from taxjson.lib.config_check import (ACCOUNT_KEYS, CARRYOVER_KEYS, CGD_KEYS,
                                       INSTALMENTS_KEYS, RETIRED_SETTINGS)
 from taxjson.lib.tomlcompat import tomllib
 
-# Descriptions are wrapped to this many characters after the "# ".
+# Comment lines that are prose (the file header, headings, descriptions,
+# notes) start with PROSE, `## `; a commented-out key or table (what a
+# user switches on by deleting the `# `) with a single `# `. An
+# end-of-line comment after a value keeps a single `#`: it follows a
+# value, so it cannot be mistaken for a commented-out line.
+PROSE = "## "
+
+# Descriptions are wrapped to this many characters after the PROSE mark.
 DOC_WIDTH = 76
 # An inline (end-of-line) comment starts at most at this column, and its
 # line is at most LINE_WIDTH long; a key whose value is longer gets it on
@@ -88,13 +106,13 @@ DOC_WIDTH = 76
 INLINE_MAX_COLUMN = 50
 LINE_WIDTH = 100
 
-NOTES_HEADING = ("# Your notes (kept by tjs format) — comments it could "
+NOTES_HEADING = ("## Your notes (kept by tjs format) — comments it could "
                  "not attach to a setting:")
-_UNKNOWN_KEYS_LINE = ("# Not in the template (kept by tjs format; taxjson "
+_UNKNOWN_KEYS_LINE = ("## Not in the template (kept by tjs format; taxjson "
                       "does not read these — check the spelling):")
-_UNKNOWN_TOP_LINE = ("# Not in the template (kept by tjs format): "
+_UNKNOWN_TOP_LINE = ("## Not in the template (kept by tjs format): "
                      "top-level keys taxjson does not read.")
-_UNKNOWN_TABLES_LINE = ("# Not in the template (kept by tjs format): "
+_UNKNOWN_TABLES_LINE = ("## Not in the template (kept by tjs format): "
                         "tables taxjson does not read.")
 
 
@@ -151,16 +169,17 @@ def _bases() -> str:
 
 
 _FILE_HEADER = (
-    "# taxjson configuration — https://github.com/taxjson/taxjson",
-    "#",
-    "# Every key taxjson reads is listed here: [settings] in groups, the",
-    "# other tables' keys alphabetically (an account's `type` first), one",
-    "# `=` column per table, so year-over-year projects diff cleanly:",
-    "#   diff ~/taxes/{prev_year}/taxjson.toml ~/taxes/{year}/taxjson.toml",
-    "# Each key's description is on the lines above it, the values it takes",
-    "# after it. A commented key shows its default (or an example where it",
-    "# has none); uncomment it to change it. `taxjson format` puts an edited",
-    "# file back into this layout, keeping your values and comments.",
+    "## taxjson configuration — https://github.com/taxjson/taxjson",
+    "##",
+    "## Every key taxjson reads is listed here: [settings] in groups, the",
+    "## other tables' keys alphabetically (an account's `type` first), one",
+    "## `=` column per table, so year-over-year projects diff cleanly:",
+    "##   diff ~/taxes/{prev_year}/taxjson.toml ~/taxes/{year}/taxjson.toml",
+    "## Each key's description is on the `## ` lines above it, the values it",
+    "## takes after it. A commented-out key (`# key = value`) shows its",
+    "## default (or an example where it has none): delete the `# ` to change",
+    "## it. `taxjson format` puts an edited file back into this layout,",
+    "## keeping your values and comments.",
 )
 
 # [settings]. A key the project's country does not own is left out
@@ -284,7 +303,7 @@ SETTINGS_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
 
 def group_heading(name: str) -> str:
     """The comment line above a [settings] group."""
-    return f"# --- {name} ---"
+    return f"{PROSE}--- {name} ---"
 
 
 def _account_order(keys: Iterable[Key]) -> List[Key]:
@@ -581,11 +600,16 @@ def _hash(norm: str) -> str:
 # Comment lines (and trailing comments) earlier `taxjson init` versions
 # wrote, as hashes of their _norm text (sha256, first 16 hex digits; the
 # text of every '#' onward of every line each earlier template rendered,
-# both countries; the second block is the grouped, end-of-line-comment
-# layout before the alphabetical one): `taxjson format` regenerates them
-# as template text instead of keeping them as the user's notes. Hashes, not text: the old
+# both countries). Blocks: the file header's lines before the `## ` prose
+# mark (_norm drops the leading '#'s, so every other single-'#' line of
+# that layout matches the current template's `## ` text as it is);
+# earlier layouts'; the grouped, end-of-line-comment layout before the
+# alphabetical one. `taxjson format` regenerates them as template text
+# instead of keeping them as the user's notes. Hashes, not text: the old
 # examples are not carried in the source.
 _LEGACY_TEMPLATE_HASHES = frozenset("""
+499e05694c9cbf88 3c4a9d5a9343f70d 8c9c495fe21b9448 f39a876969ce501c
+
 00155ff5fe04a837 b466672d86933a32 cc383b0ee44d380c ccf1f0fb14c5c312
 e7866667d98a969c 8210ac89894ed17f
 001abf630b6115d0 002632fa29f5bc3d 00b37cf395b3dd0b 02add596de115d47
@@ -737,10 +761,10 @@ def _comment_suffixes(line: str) -> Iterable[str]:
 
 
 def _doc_lines(text: str) -> List[str]:
-    """A description as `# ` comment lines, wrapped."""
+    """A description as `## ` comment lines, wrapped."""
     if not text:
         return []
-    return ["# " + ln for ln in textwrap.wrap(
+    return [PROSE + ln for ln in textwrap.wrap(
         text, DOC_WIDTH, break_long_words=False, break_on_hyphens=False)]
 
 
@@ -915,7 +939,7 @@ class _Renderer:
                   if e.slot and not e.commented else None)
             inline = e.inline and fits(e)
             if e.inline and not inline:
-                doc.append(f"# {e.inline}")
+                doc.append(PROSE + e.inline)
             for ln in doc:
                 self.emit(ln)
             if e.slot:
@@ -1064,7 +1088,7 @@ class _Renderer:
             self.end(T)
         self.blank()
         for ln in textwrap.wrap(_MORE_ACCOUNTS_NOTE, 76):
-            self.emit(f"# {ln}")
+            self.emit(PROSE + ln)
 
     def plain_table(self, t: Table, values: Any, present: bool) -> None:
         c = self.country
@@ -1476,6 +1500,109 @@ def _commented_header(st: str) -> Optional[Tuple[Tuple[str, ...], bool]]:
     return path, aot
 
 
+# A comment's text that starts like `key =` (a commented-out key, maybe
+# one whose value goes on over the next comment lines).
+_KEYISH = re.compile(r"""[A-Za-z0-9_\-"'. \t]+=""")
+# How many comment lines a commented-out multi-line value may span.
+_MAX_COMMENTED_VALUE_LINES = 60
+
+
+def _body(line: str) -> str:
+    """A comment line's text: what follows its leading '#'s."""
+    return line.lstrip("#")
+
+
+def _toml_code(text: str) -> bool:
+    """`text` (comment text, '#'s dropped) is TOML: a key/value line or a
+    table line (`[table]`, `[[table]]`), known key or not — or a line of
+    a multi-line value on its own (an element `{ ... },` / `[ ... ],`, a
+    closing `]`)."""
+    b = text.strip()
+    if not b or b.startswith("#"):
+        return False
+    if re.fullmatch(r"[\]}],?", b):
+        return True
+    if not (b.startswith(("[", "{")) or _KEYISH.match(b)):
+        return False
+    try:
+        if tomllib.loads(text if "\n" in text else b):
+            return True
+    except Exception:  # noqa: BLE001 — any parse failure: not a line
+        pass
+    if "\n" in text or not b.startswith(("[", "{")):
+        return False
+    try:
+        tomllib.loads(f"x = [\n{b}\n]")
+    except Exception:  # noqa: BLE001 — not an element either: prose
+        return False
+    return True
+
+
+def comment_line(line: str, code: bool) -> str:
+    """A comment line in the file's convention: `# text` for commented-out
+    TOML (`code`), `## text` (PROSE) for prose. The text is kept as it
+    is: only the leading '#'s and one blank after them are replaced."""
+    rest = _body(line)
+    if rest.startswith(" "):
+        rest = rest[1:]
+    if not rest:
+        return PROSE.rstrip()
+    return ("# " if code else PROSE) + rest
+
+
+def _comment_line1(line: str) -> str:
+    """comment_line of a comment on its own (a trailing comment moved
+    above its line, a comment inside a value): code when its text alone
+    is TOML."""
+    return comment_line(line, _toml_code(_body(line)))
+
+
+def _code_lines(items: List[_Item], is_template
+                ) -> Tuple[Set[int], Set[int]]:
+    """(code, keep): the line numbers of the comment lines that are
+    commented-out TOML — a line whose text is a key/value or a table
+    line, or the lines of a commented-out multi-line value (`# paid = [`
+    ... `# ]`: the text of the consecutive lines parses together); and
+    of the lines of such a multi-line value holding a line of the
+    user's, kept whole as the user's (the template's lines among them
+    too) so the value is never split."""
+    code: Set[int] = set()
+    keep: Set[int] = set()
+    n = len(items)
+    i = 0
+    while i < n:
+        it = items[i]
+        if it.kind != "comment":
+            i += 1
+            continue
+        body = _body(it.text)
+        if _toml_code(body):
+            code.add(it.line)
+            i += 1
+            continue
+        if _KEYISH.match(body.strip()):
+            buf = [body]
+            j = i + 1
+            found = False
+            while (j < n and j - i < _MAX_COMMENTED_VALUE_LINES
+                   and items[j].kind == "comment"
+                   and items[j].line == items[j - 1].line + 1):
+                buf.append(_body(items[j].text))
+                if _toml_code("\n".join(buf)):
+                    found = True
+                    break
+                j += 1
+            if found:
+                group = [x.line for x in items[i:j + 1]]
+                code.update(group)
+                if not all(is_template(x.text) for x in items[i:j + 1]):
+                    keep.update(group)
+                i = j + 1
+                continue
+        i += 1
+    return code, keep
+
+
 def _continuation(it: _Item, owner: _Item, is_template
                   ) -> Optional[str]:
     """The comment line `it`, directly under `owner` (a key or table line
@@ -1492,12 +1619,15 @@ def _continuation(it: _Item, owner: _Item, is_template
     so a continuation is a comment line indented past `owner`'s own
     start, one with a second '#' as padding (`#   #   text`), or one
     whose text is padded out to (about) the column of the comment it
-    continues. A plain `# text` at `owner`'s indent stays a comment line
-    of its own (the next key's)."""
+    continues. A plain `# text` or `## text` at `owner`'s indent stays a
+    comment line of its own (the next key's)."""
     st = it.text
-    # The padding: the leading '#', blanks, and any further '#' that is
-    # followed by a blank (`#   #   text`; `#123` is text).
-    i, n, double = 1, len(st), False
+    # The padding: the leading '#'s, blanks, and any further '#' after a
+    # blank that is followed by a blank (`#   #   text`; `#123` is text;
+    # `## text` is the prose mark, not padding).
+    n = len(st)
+    h = len(st) - len(st.lstrip("#"))
+    i, double = h, False
     while True:
         while i < n and st[i] in " \t":
             i += 1
@@ -1510,7 +1640,7 @@ def _continuation(it: _Item, owner: _Item, is_template
                             or _commented_header(st) is not None):
         return None      # the template's commented-out key or table
     if (it.col > owner.col or double
-            or (i >= 3 and it.col + i >= owner.tcol - 2)):
+            or (i - h >= 2 and it.col + i >= owner.tcol - 2)):
         return text
     return None
 
@@ -1616,6 +1746,9 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
     (see the module doc)."""
     x = Extras()
     kept: List[str] = []
+    # Each of the user's comment lines is written in the convention:
+    # commented-out TOML `# ...`, prose `## ...` (comment_line).
+    code, keep_whole = _code_lines(items, is_template)
     tables = probe.tables
     slots = probe.slots
 
@@ -1764,22 +1897,24 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
             continue
         if it.kind == "comment":
             st = it.text
+            tmpl = is_template(st) and it.line not in keep_whole
+            own = comment_line(st, it.line in code)
             more = (_continuation(it, cont, is_template)
                     if cont is not None else None)
             if more is None:
                 cont = None
-            elif not is_template(st):
-                add_cont("# " + more)
+            elif not tmpl:
+                add_cont(_comment_line1("# " + more))
                 continue
             # (else the template's own continuation, or a bare '#':
             # regenerated, or dropped)
-            if not in_notes and not is_template(st):
+            if not in_notes and not tmpl:
                 # The user's own line, whatever it looks like (a
                 # commented-out table too): it travels with the next
                 # line that has a place in the template — or, when it is
                 # a commented-out key of this table, with that key.
-                add_user(st)
-                m = _COMMENTED_KEY.match(st)
+                add_user(own)
+                m = _COMMENTED_KEY.match("#" + _body(st))
                 if m and target is None:
                     ctx = (commented_ctx if commented_ctx is not None
                            else active)
@@ -1800,8 +1935,8 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
                 gap = False
                 continue
             if in_notes:
-                if not is_template(st):
-                    add_user(st)
+                if not tmpl:
+                    add_user(own)
                 continue
             # The template's own line: regenerated, not kept — but a
             # commented-out table or key marks the place the comments
@@ -1846,9 +1981,10 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
             lines = None
             if it.trailing and not is_template(it.trailing):
                 if slot is None:
-                    add_user(it.trailing)
+                    add_user(_comment_line1(it.trailing))
                 else:
-                    lines = set_trailing(slot, it.trailing)
+                    lines = set_trailing(slot,
+                                         _comment_line1(it.trailing))
             start_cont(it, slot, lines)
             continue
         # kv
@@ -1867,12 +2003,12 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
             # written.
             x.verbatim[slot] = it.value
         elif it.inner:
-            run = Run([c for c in it.inner_comments])
+            run = Run([_comment_line1(c) for c in it.inner_comments])
             kept.extend(run.lines)
             x.runs.setdefault(slot, []).append(run)
         lines = None
         if it.trailing and not is_template(it.trailing):
-            lines = set_trailing(slot, it.trailing)
+            lines = set_trailing(slot, _comment_line1(it.trailing))
         start_cont(it, slot, lines)
     flush_target()
     flush_end()

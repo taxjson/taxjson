@@ -41,7 +41,9 @@ under `inputs/`: `margin`, `tfsa`, `rrsp` and `crypto` for Canada
 (`margin`, `roth`, `401k`, `crypto` for the US). Each folder's
 `README.txt` says which export to download from each broker.
 
-Open `taxjson.toml` and make the accounts match yours:
+Open `taxjson.toml` and make the accounts match yours. A line starting
+`## ` is a description; a line starting with a single `# ` is a setting
+switched off (`# province = "ON"`): delete the `# ` to switch it on.
 
 - Keep one `[accounts.NAME]` section per account you have, and delete the
   ones you don't. The folder `inputs/NAME/` belongs to that section.

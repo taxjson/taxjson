@@ -336,19 +336,21 @@ class TestFormatConfig(unittest.TestCase):
                                  "[estimate] long_term_losses",
                                  "[other_table]"]))
         # Every comment kept, next to what it was about.
-        for c in ("# my notes about this year — top of file",
-                  "# the main account", "# first", "# second",
-                  '# province = "BC"', "# my reason",
-                  "# a note at the end of settings", "# second one",
-                  "# the very last note"):
+        # (prose as `## text`, a commented-out key as `# key = value`;
+        # the comments inside a multi-line value as written)
+        for c in ("## my notes about this year — top of file",
+                  "## the main account", "# first", "# second",
+                  "## my reason", "## a note at the end of settings",
+                  "## second one", "## the very last note"):
             self.assertIn(c, out)
+        self.assertRegex(out, r'(?m)^# province = "BC"$')
         # A commented-out key of the user's goes to that key (above the
         # template's own commented line), after its description.
-        self.assertRegex(out, r'# The province .*\n# province = "BC"\n'
+        self.assertRegex(out, r'## The province .*\n# province = "BC"\n'
                               r'# province\s+= "ON" +# ON \| BC')
         # A trailing comment moves onto its own line above its line.
-        self.assertRegex(out, r"# the main account\n\[accounts\.margin\]\n")
-        self.assertRegex(out, r'# my reason\ntax_date\s+= "settle" +# settle')
+        self.assertRegex(out, r"\n## the main account\n\[accounts\.margin\]\n")
+        self.assertRegex(out, r'\n## my reason\ntax_date\s+= "settle" +# settle')
         # The verbatim multi-line value keeps its inner comment.
         self.assertRegex(out, r'holdings\s+= \["~/a\.toml",  # first')
         # Canonical values: quoted string, a date as a date.
@@ -374,7 +376,7 @@ class TestFormatConfig(unittest.TestCase):
         self.assertIn("[settings] province", r.unrecognised)
         self.assertIn("[estimate] deductions", r.unrecognised)
         self.assertIn("[capital_gains_dividends]", r.unrecognised)
-        self.assertIn("# fetch it\nbrokerage", r.text)
+        self.assertIn("\n## fetch it\nbrokerage", r.text)
         # The US template itself never documents a Canadian key.
         doc_part = r.text.split(CT._UNKNOWN_KEYS_LINE)[0]
         self.assertNotIn("option_premium_timing", doc_part)
@@ -417,7 +419,7 @@ class TestFormatConfig(unittest.TestCase):
         text += "\n" + CT.NOTES_HEADING + "\n# kept for later\n"
         r = self._check(text)
         self.assertEqual(r.notes_lines, 1)
-        self.assertTrue(r.text.rstrip().endswith("# kept for later"))
+        self.assertTrue(r.text.rstrip().endswith("\n## kept for later"))
 
 
 _TABLE_LINE = re.compile(r"^(?:# )?\[\[?[^\]]+\]\]?$")
@@ -584,7 +586,7 @@ class TestLayout(unittest.TestCase):
                                 cols.add(m.start(3) - 2)
                             else:
                                 # Pushed to the line above (a long value).
-                                self.assertIn(f"# {inl[key]}",
+                                self.assertIn(f"## {inl[key]}",
                                               lines[:i][-6:])
                     with self.subTest(country=country, table=table):
                         self.assertLessEqual(len(cols), 1, cols)
@@ -605,7 +607,7 @@ class TestLayout(unittest.TestCase):
         doc = {"settings": {"country": "canada", "year": 2025,
                             "province": "ON" * 30}}
         text = CT.render_document(doc, "canada", 2025)
-        self.assertRegex(text, r"\n# ON \| BC \| AB\nprovince += \"(ON)+\"\n")
+        self.assertRegex(text, r"\n## ON \| BC \| AB\nprovince += \"(ON)+\"\n")
         # ... and the other keys of the group keep their column.
         self.assertRegex(text, r'(?m)^country +=.*  # canada')
         r = CT.format_config(text)
@@ -624,7 +626,7 @@ class TestLayout(unittest.TestCase):
                 for g in groups:
                     for n, (i, key, _c, _col) in enumerate(g):
                         j = i
-                        while j > 0 and lines[j - 1].startswith("# ") \
+                        while j > 0 and lines[j - 1].startswith("## ") \
                                 and not _KEY_LINE.match(lines[j - 1]) \
                                 and not _TABLE_LINE.match(lines[j - 1]) \
                                 and lines[j - 1] not in heads \
@@ -665,7 +667,7 @@ class TestLayout(unittest.TestCase):
                     # After a key: what follows is a new group, a new
                     # table (its heading or table line) or a note.
                     self.assertFalse(_KEY_LINE.match(nxt), nxt)
-                    if nxt.startswith("# ") and not (
+                    if nxt.startswith("## ") and not (
                             nxt in _GROUP_LINES or _TABLE_LINE.match(nxt)
                             or nxt in (CT._UNKNOWN_KEYS_LINE,
                                        CT._UNKNOWN_TOP_LINE,
@@ -673,13 +675,13 @@ class TestLayout(unittest.TestCase):
                         # A table heading (description) is followed, within
                         # its paragraph, by its table line.
                         k = i + 1
-                        while lines[k].startswith("# ") \
+                        while lines[k].startswith("## ") \
                                 and not _TABLE_LINE.match(lines[k]):
                             k += 1
                         self.assertTrue(
                             _TABLE_LINE.match(lines[k])
                             or lines[k] == "" and
-                            lines[k - 1].startswith("# More accounts")
+                            lines[k - 1].startswith("## More accounts")
                             or lines[k] == "" and
                             lines[k - 1].endswith("folder for it."),
                             lines[i + 1:k + 1])
@@ -776,15 +778,15 @@ class TestLayout(unittest.TestCase):
     def test_long_descriptions_wrap(self):
         for country, text in _renders():
             for ln in text.splitlines():
-                if ln.startswith("# ") and not _KEY_LINE.match(ln) \
+                if ln.startswith("## ") \
                         and ln not in (CT._UNKNOWN_KEYS_LINE,
                                        CT._UNKNOWN_TOP_LINE,
                                        CT._UNKNOWN_TABLES_LINE,
                                        CT.NOTES_HEADING):
-                    self.assertLessEqual(len(ln), CT.DOC_WIDTH + 2, ln)
+                    self.assertLessEqual(len(ln), CT.DOC_WIDTH + 3, ln)
         lines = CT._doc_lines("word " * 60)
         self.assertGreater(len(lines), 2)
-        self.assertTrue(all(ln.startswith("# ") for ln in lines))
+        self.assertTrue(all(ln.startswith("## ") for ln in lines))
 
     def test_long_values_stay_whole(self):
         text = CT.render_document(_full("canada"), "canada", 2025)
@@ -901,12 +903,12 @@ class TestFormatToCanonicalLayout(unittest.TestCase):
         self.assertEqual(r.notes_lines, 0)
         # The user's two trailing comments, each on its own line just
         # above its key (after the key's description) ...
-        self.assertRegex(r.text, r"\n# longer LEAPS for me\n"
+        self.assertRegex(r.text, r"\n## longer LEAPS for me\n"
                                  r"leaps_months +=")
-        self.assertRegex(r.text, r"\n# Ontario\nprovince +=")
+        self.assertRegex(r.text, r"\n## Ontario\nprovince +=")
         # ... and otherwise exactly the template filled with the values:
         # the old descriptions and group headings are regenerated.
-        mine = {"# longer LEAPS for me", "# Ontario"}
+        mine = {"## longer LEAPS for me", "## Ontario"}
         self.assertEqual(
             "\n".join(ln for ln in r.text.split("\n") if ln not in mine),
             CT.render_document(doc, "canada"))
@@ -958,11 +960,13 @@ class TestFormatToCanonicalLayout(unittest.TestCase):
         r = CT.format_config(text)
         self.assertEqual((r.notes_lines, r.kept_comments), (0, len(mine)))
         self.assertEqual(tomllib.loads(r.text), tomllib.loads(old))
+        # (each now a `## ` prose line)
+        mine = ["#" + m for m in mine]
         self.assertRegex(r.text, rf"\n{mine[0]}\nleaps_months +=")
         self.assertRegex(r.text, rf"\n{mine[1]}\nyear +=")
         self.assertRegex(r.text, rf"\n{mine[3]}\n\[accounts\.zeta\]\n")
         self.assertRegex(r.text, rf"futures_settle += .*\n\n{mine[2]}\n\n"
-                                 r"# One \[accounts\.NAME\]")
+                                 r"## One \[accounts\.NAME\]")
         again = CT.format_config(r.text)
         self.assertFalse(again.changed, "not idempotent")
         self.assertEqual(again.kept_comments, len(mine))
@@ -979,8 +983,8 @@ class TestFormatToCanonicalLayout(unittest.TestCase):
         text = ('[settings]\ncountry = "ca"  # mine\nyear = 2025\n'
                 '[accounts.margin]   # main\ntype = "taxable"\n')
         r = CT.format_config(text)
-        self.assertRegex(r.text, r"\n# mine\ncountry +=")
-        self.assertRegex(r.text, r"\n# main\n\[accounts\.margin\]\n")
+        self.assertRegex(r.text, r"\n## mine\ncountry +=")
+        self.assertRegex(r.text, r"\n## main\n\[accounts\.margin\]\n")
         self.assertFalse(CT.format_config(r.text).changed)
         for ln in r.text.splitlines():
             if not ln.startswith("#"):
@@ -998,7 +1002,8 @@ class TestFormatToCanonicalLayout(unittest.TestCase):
         bases = [CT.render_document(_full(c), c, 2025)
                  for c in C.COUNTRIES] + [_PREVIOUS_LAYOUT, _MESSY_CA]
         extra = ['# note', '', '# province = "BC"', '# leaps_months = 4',
-                 '# type = "x"', '# [accounts.old]']
+                 '# type = "x"', '# [accounts.old]', '## note', '### note',
+                 '## leaps_months = 5', '#note = not a value']
         for n in range(160):
             lines = rnd.choice(bases).split("\n")
             for _ in range(rnd.randint(1, 6)):
@@ -1027,7 +1032,7 @@ class TestFormatToCanonicalLayout(unittest.TestCase):
                 '# leaps_months = 6\n\nyear = 2025\n# tax_date = "trade"\n'
                 'leaps_months = 3\n')
         r = CT.format_config(text)
-        self.assertRegex(r.text, r'\n# was:\n# leaps_months = 6\n'
+        self.assertRegex(r.text, r'\n## was:\n# leaps_months = 6\n'
                                  r'leaps_months +=')
         self.assertRegex(r.text, r'\n# tax_date = "trade"\n'
                                  r'# tax_date +=')
@@ -1069,8 +1074,8 @@ class TestTrailingCommentContinuation(unittest.TestCase):
             " — still this key\n"
             'option_buyback_loss_superficial = false\n')
         self.assertEqual(self._above(r.text, "option_grant_timing_since")[-2:],
-                         ["# first part of a note that goes on",
-                          "# onto the next line — still this key"])
+                         ["## first part of a note that goes on",
+                          "## onto the next line — still this key"])
         self.assertNotIn("onto the next line",
                          "\n".join(self._above(
                              r.text, "option_buyback_loss_superficial")))
@@ -1088,7 +1093,7 @@ class TestTrailingCommentContinuation(unittest.TestCase):
             "#                            #   four\n"
             "fx_cash_gains = true\n")
         self.assertEqual(self._above(r.text, "leaps_months")[-4:],
-                         ["# one", "# two", "# three", "# four"])
+                         ["## one", "## two", "## three", "## four"])
         self.assertEqual(r.kept_comments, 4)
 
     def test_continuation_of_the_templates_own_comment(self):
@@ -1102,7 +1107,7 @@ class TestTrailingCommentContinuation(unittest.TestCase):
             "#                                   #   my own reason\n"
             "leaps_months = 13\n")
         self.assertEqual(self._above(r.text, "tax_date")[-1:],
-                         ["# my own reason"])
+                         ["## my own reason"])
         self.assertRegex(r.text, r'\ntax_date += "settle" +# settle \| '
                                  r'trade\n')
         self.assertEqual(r.kept_comments, 1)
@@ -1114,7 +1119,7 @@ class TestTrailingCommentContinuation(unittest.TestCase):
             '[accounts.margin]   # the main account,\n'
             '#                   #   opened long ago\n'
             'type = "taxable"\n')
-        self.assertRegex(r.text, r"# the main account,\n# opened long ago\n"
+        self.assertRegex(r.text, r"## the main account,\n## opened long ago\n"
                                  r"\[accounts\.margin\]\n")
 
     def test_comments_of_their_own_are_not_continuations(self):
@@ -1149,8 +1154,242 @@ class TestTrailingCommentContinuation(unittest.TestCase):
             '  type = "taxable"   # mine\n'
             "  # about the plan\n"
             '  plan = "RRSP"\n')
-        self.assertRegex(r.text, r"# about the plan\nplan +=")
-        self.assertRegex(r.text, r"# mine\ntype +=")
+        self.assertRegex(r.text, r"\n## about the plan\nplan +=")
+        self.assertRegex(r.text, r"\n## mine\ntype +=")
+
+
+# A line the old single-'#' layout wrote: its file header, before the
+# `## ` prose mark (the rest of that layout is the current template's
+# text with one '#').
+_SINGLE_HASH_HEADER = (
+    "# Each key's description is on the lines above it, the values it takes",
+    "# after it. A commented key shows its default (or an example where it",
+    "# has none); uncomment it to change it. `taxjson format` puts an edited",
+    "# file back into this layout, keeping your values and comments.",
+)
+
+
+def _single_hash(text):
+    """`text` as the layout before the `## ` prose mark wrote it."""
+    new = [ln for ln in CT._FILE_HEADER if ln.startswith("## Each key")]
+    i = CT._FILE_HEADER.index(new[0])
+    head = "\n".join(CT._FILE_HEADER[i:]) + "\n"
+    assert head in text
+    text = text.replace(head, "\n".join("#" + ln for ln in
+                                        _SINGLE_HASH_HEADER) + "\n")
+    return "\n".join(ln[1:] if ln.startswith("##") else ln
+                     for ln in text.split("\n"))
+
+
+class TestProseMark(unittest.TestCase):
+    """Prose comment lines start `## `, commented-out keys and tables a
+    single `# ` (what you delete to switch one on); a value's end-of-line
+    comment keeps a single `#`. `taxjson format` writes the user's own
+    lines the same way. Synthetic values."""
+
+    _KEYISH = re.compile(r"^##+\s*[A-Za-z0-9_\"-]+\s*=")
+
+    def test_template_prose_is_double_hash_and_keys_single(self):
+        for country, text in _renders():
+            lines = text.split("\n")
+            block = []
+            blocks = []
+            for ln in lines + [""]:
+                if ln.startswith("#") and not ln.startswith("##"):
+                    block.append(ln)
+                    continue
+                if block:
+                    blocks.append(block)
+                    block = []
+                if ln.startswith("#"):
+                    with self.subTest(country=country, line=ln):
+                        # Prose: `## text` (or a bare `##`), never a
+                        # commented-out key or table.
+                        self.assertTrue(ln == "##" or ln.startswith("## "),
+                                        ln)
+                        self.assertNotRegex(ln, self._KEYISH)
+                        self.assertFalse(CT._toml_code(ln[2:]), ln)
+            self.assertTrue(blocks)
+            for b in blocks:
+                with self.subTest(country=country, block=b[0]):
+                    # A run of single-'#' lines is commented-out TOML:
+                    # `# key = value` / `# [table]` (and a multi-line
+                    # value's lines), whole once the `# ` is deleted.
+                    self.assertRegex(b[0], r"^# (\[|[A-Za-z0-9_-]+ *= )")
+                    for ln in b:
+                        self.assertTrue(ln.startswith("# "), ln)
+                    self.assertTrue(tomllib.loads(
+                        "\n".join(ln[2:] for ln in b)))
+
+    def test_deleting_the_hash_switches_every_key_on(self):
+        # The all-commented render: deleting `# ` from every single-'#'
+        # line gives a file that sets every key; the `## ` prose stays.
+        for country in C.COUNTRIES:
+            bare = CT.render_document({"settings": {"country": country}},
+                                      country, 2025)
+            on = "\n".join(ln[2:] if ln.startswith("# ") else ln
+                           for ln in bare.split("\n"))
+            doc = tomllib.loads(on)
+            with self.subTest(country=country):
+                self.assertEqual(
+                    set(doc["settings"]),
+                    {k.name for k in CT.SETTINGS_SPEC
+                     if CT.owned(country, "settings", k.name)})
+                self.assertEqual(set(doc["accounts"]["NAME"]),
+                                 {k.name for k in CT.ACCOUNT_SPEC})
+                for t in CT.TABLES:
+                    if CT.owned(country, t.name):
+                        self.assertIn(t.name, doc)
+
+    def test_end_of_line_comments_keep_a_single_hash(self):
+        ca, _ = CT.render_init("canada", 2025)
+        self.assertRegex(ca, r'(?m)^tax_date += "settle"  # settle \| trade$')
+        self.assertNotRegex(ca, r"(?m)^[^#\n][^\n]*##")
+
+    def test_comment_line_keeps_the_text(self):
+        for line, code, want in (
+                ("# a note", False, "## a note"),
+                ("#a note", False, "## a note"),
+                ("### a note", False, "## a note"),
+                ("##   indented", False, "##   indented"),
+                ("## x = 1", True, "# x = 1"),
+                ("#x = 1", True, "# x = 1"),
+                ("#", False, "##")):
+            got = CT.comment_line(line, code)
+            self.assertEqual(got, want, line)
+            strip = lambda t: re.sub(r"^#+ ?", "", t)   # noqa: E731
+            self.assertEqual(strip(got), strip(line))
+
+    _USER = (
+        '[settings]\ncountry = "ca"\nyear = 2025\n'
+        "# a note about the year\n"
+        "### a heading of mine\n"
+        "#no blank after the hash\n"
+        "## already double\n"
+        "# note = see the folder (not a value)\n"
+        '# province = "BC"\n'
+        "\n"
+        "## leaps_months = 4\n"
+        "# my_own_key = 7\n"
+        "\n"
+        "# [accounts.old]\n"
+        "###[[my_table]]\n"
+        'fx_cash_gains = true  # trailing, mine\n'
+        "[instalments]\n"
+        'basis = "prior_year"\n'
+        "# paid = [\n"
+        '#   { date = 2025-03-15, amount = 100 },\n'
+        "# ]\n"
+        "withheld = 0\n")
+
+    def _user_lines(self, text):
+        return [ln for ln in text.split("\n") if ln.startswith("#")]
+
+    def test_format_writes_user_prose_double_and_code_single(self):
+        r = CT.format_config(self._USER)
+        out = r.text
+        lines = set(out.split("\n"))
+        for prose in ("## a note about the year", "## a heading of mine",
+                      "## no blank after the hash", "## already double",
+                      "## note = see the folder (not a value)",
+                      "## trailing, mine"):
+            self.assertIn(prose, lines, out)
+        for code in ('# province = "BC"', "# leaps_months = 4",
+                     "# my_own_key = 7", "# [accounts.old]",
+                     "# [[my_table]]", "# paid = [",
+                     "#   { date = 2025-03-15, amount = 100 },", "# ]"):
+            self.assertIn(code, lines, out)
+        # Never a `## ` line that is TOML (`## key = value`); never `###`.
+        for ln in out.split("\n"):
+            if ln.startswith("##"):
+                self.assertFalse(CT._toml_code(ln.lstrip("#")), ln)
+        self.assertNotRegex(out, r"(?m)^###")
+        # The user's commented multi-line value stays whole, above the
+        # template's own commented `paid` (after its description).
+        self.assertIn("## Instalments paid. No default.\n"
+                      "# paid = [\n#   { date = 2025-03-15, amount = 100 },"
+                      "\n# ]\n# paid                 = [", out)
+        # A commented-out key (a double-'#' one too) joins its key, with
+        # the lines of its block.
+        self.assertRegex(out, r'## already double\n'
+                              r'## note = see the folder \(not a value\)\n'
+                              r'# province = "BC"\n# province +=')
+        self.assertRegex(out, r"\n# leaps_months = 4\n# my_own_key = 7\n"
+                              r"# leaps_months +=")
+        self.assertEqual(r.notes_lines, 0)
+        self.assertEqual(tomllib.loads(out), tomllib.loads(self._USER))
+        # Every comment line of the user's kept, its text unchanged.
+        mine = [ln for ln in self._USER.split("\n") if "#" in ln]
+        self.assertEqual(r.kept_comments, len(mine))
+        again = CT.format_config(out)
+        self.assertFalse(again.changed, "not idempotent")
+        self.assertEqual(again.kept_comments, r.kept_comments)
+
+    def test_a_lone_line_of_a_commented_value_stays_code(self):
+        # A value's element or closing bracket left on its own (an edit
+        # that kept one line of a commented-out list): commented-out
+        # TOML, not prose.
+        text = ('[settings]\ncountry = "ca"\nyear = 2025\n'
+                "[instalments]\nwithheld = 0\n"
+                '#   { date = 2025-01-02, amount = 5, note = "x" },\n'
+                "##   [1, 2],\n"
+                "# [1] a footnote, prose\n"
+                '# "quoted" prose\n')
+        r = CT.format_config(text)
+        for code in ('#   { date = 2025-01-02, amount = 5, note = "x" },',
+                     "#   [1, 2],"):
+            self.assertIn("\n" + code + "\n", r.text)
+        for prose in ("## [1] a footnote, prose", '## "quoted" prose'):
+            self.assertIn("\n" + prose + "\n", r.text)
+        self.assertEqual(r.kept_comments, 4)
+        self.assertFalse(CT.format_config(r.text).changed)
+        self.assertTrue(CT._toml_code(" ]") and CT._toml_code("},"))
+
+    def test_double_hash_prose_under_a_trailing_comment_is_its_own(self):
+        # `## text` is the prose mark, not a continuation's padding.
+        for body in ('[settings]\ncountry = "ca"\nyear = 2025\n'
+                     "leaps_months = 13   # mine\n## about the fee\n"
+                     "fx_cash_gains = true\n",
+                     '[settings]\ncountry = "ca"\nyear = 2025\n'
+                     "[accounts.a]  # mine\n## about the fee\n"
+                     'type = "taxable"\n'):
+            r = CT.format_config(body)
+            self.assertRegex(r.text, r"\n## about the fee\n"
+                                     r"(fx_cash_gains|type) +=")
+            self.assertFalse(CT.format_config(r.text).changed)
+
+    def test_single_hash_layout_regenerates_without_notes(self):
+        # The layout before the prose mark (every prose line `# text`):
+        # recognised as template text and rewritten, nothing kept.
+        for country in C.COUNTRIES:
+            for doc_text in (CT.render_init(country, 2025,
+                                            tz="America/Toronto")[0],
+                             CT.render_document(_full(country), country,
+                                                2025)):
+                old = _single_hash(doc_text)
+                self.assertNotRegex(old, r"(?m)^##")
+                self.assertIn(_SINGLE_HASH_HEADER[1], old)
+                r = CT.format_config(old)
+                with self.subTest(country=country):
+                    self.assertEqual((r.notes_lines, r.kept_comments),
+                                     (0, 0), r.text)
+                    self.assertEqual(r.text, doc_text)
+
+    def test_template_multi_line_value_with_a_user_line_stays_whole(self):
+        # A commented `paid` the user edited one line of: kept whole as
+        # the user's (the template's lines in it too), not split.
+        text = CT.render_init("canada", 2025)[0].replace(
+            '#   { date = "2025-05-20", amount = 12000, '
+            'note = "refund transferred" },',
+            '#   { date = "2025-05-21", amount = 99 },')
+        r = CT.format_config(text)
+        self.assertEqual(r.kept_comments, 4)
+        self.assertIn('## Instalments paid. No default.\n'
+                      '# paid                 = [\n'
+                      '#   { date = "2025-03-16", amount = 15000 },\n'
+                      '#   { date = "2025-05-21", amount = 99 },\n'
+                      '# ]\n# paid                 = [\n', r.text)
+        self.assertFalse(CT.format_config(r.text).changed)
 
 
 def _cli(root, *args):
