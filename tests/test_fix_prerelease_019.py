@@ -8,6 +8,8 @@ L5  Text shown to a person (width > 0) never carries a control character
     person (stage_msg.console_lines / emit_line, the run's echo, the
     first-run list). Captured output (width 0: work/, reports/, a .diag)
     keeps its bytes.
+I3  stage_msg.split_message is linear on an unclosed backtick followed
+    by many clause breaks.
 
 (M2 / L1-L3, the installer: test_installer_fetch. L4, the contract-size
 roll-up: test_style_group_d.) Synthetic data only; no network.
@@ -158,6 +160,20 @@ class TestRunConsole(unittest.TestCase):
         for name, data in (("diag", diag), ("sum", summ)):
             self.assertIn(b"\x1b[31", data, name)
             self.assertNotIn(b"\\x1b", data, name)
+
+
+class TestSplitMessageLinear(unittest.TestCase):
+    def test_unclosed_backtick_with_many_breaks(self):
+        from taxjson.lib.stage_msg import split_message
+        text = "x" * 50 + " `" + "a. b" * 100_000
+        t0 = time.perf_counter()
+        self.assertEqual(split_message(text), (text, ""))
+        self.assertLess(time.perf_counter() - t0, 2.0)
+        # Unchanged where it splits: a break past a closed span.
+        msg = ("warning: " + "y" * 40 + " `a. b` closed. Then the fix")
+        self.assertEqual(split_message(msg),
+                         ("warning: " + "y" * 40 + " `a. b` closed.",
+                          "Then the fix"))
 
 
 if __name__ == "__main__":

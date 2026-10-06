@@ -20,6 +20,7 @@ the person at display time, its marker first line unchanged.
 """
 
 import sys
+from bisect import bisect_left
 from typing import Iterable, List, Optional
 
 from taxjson.lib import out
@@ -80,10 +81,13 @@ _MIN_HEAD = 40
 def split_message(text: str):
     """(headline, rest) of a captured one-line message, or (text, '')."""
     best = None
+    # A break inside a `code span` is no break: one past an odd number of
+    # backticks. Their positions, once (linear in the text, however many
+    # breaks an unclosed span holds).
+    ticks = [j for j, c in enumerate(text) if c == "`"]
     for brk in _BREAKS:
         i = text.find(brk, _MIN_HEAD)
-        # A break inside a `code span` is no break.
-        while i >= 0 and text[:i].count("`") % 2:
+        while i >= 0 and bisect_left(ticks, i) % 2:
             i = text.find(brk, i + 1)
         if i >= 0 and (best is None or i < best[0]):
             best = (i, brk)
