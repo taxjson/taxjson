@@ -594,12 +594,13 @@ def corrections_note(account: str, cache: Path,
              "this changes your books."] + details)
 
 
-def suggestions(cache: Path) -> List[Tuple[str, str]]:
-    """[(ticker.map line, reason)]: the explicit lines equal to each
-    correction (a GLOBAL line, plus the TOBASE line of its transfer
-    journal), and the TOBASE line of each listing kept because one pool
-    cannot hold both currencies."""
-    out: List[Tuple[str, str]] = []
+def suggestions(cache: Path) -> List[Tuple[str, str, bool]]:
+    """[(ticker.map line, reason, conditional)]: the explicit lines equal
+    to each correction (a GLOBAL line, plus the TOBASE line of its
+    transfer journal), and the TOBASE line of each listing kept because
+    one pool cannot hold both currencies — conditional: right only if
+    the two are one security."""
+    out: List[Tuple[str, str, bool]] = []
     for p in sorted(Path(cache).glob(f"*{SUFFIX}")):
         st = read_state(p)
         acct = st.get("account") or p.name[:-len(SUFFIX)]
@@ -610,7 +611,7 @@ def suggestions(cache: Path) -> List[Tuple[str, str]]:
             out.append((f"GLOBAL {frm} {to}",
                         f"{acct}: {why(frm, r)} ({r.get('evidence')}); "
                         f"`taxjson run` already books it so — the line "
-                        f"only makes it explicit"))
+                        f"only makes it explicit", False))
             pr = r.get("pair") or {}
             o = str(pr.get("symbol") or "").upper()
             j = r.get("join")
@@ -620,11 +621,11 @@ def suggestions(cache: Path) -> List[Tuple[str, str]]:
                             f"{acct}: the transfer journal {o} -> {to} "
                             f"({pr.get('date')}) joins the two listings; "
                             f"with the GLOBAL line above in the map, "
-                            f"write this one too"))
+                            f"write this one too", False))
         for frm, r in sorted(st["kept"].items()):
             line = str(r.get("line") or "")
             if line:
                 out.append((line, f"{acct}: {frm} reads as "
                             f"{r.get('symbol')} — {r.get('reason')}; add "
-                            f"it only if they are one security"))
+                            f"it only if they are one security", True))
     return out

@@ -368,6 +368,11 @@ class TestL2TickerMapWriteKeepsTheLink(unittest.TestCase):
             'year = 2025\n\n[accounts.margin]\ntype = "taxable"\n')
         (root / "work" / "margin_questrade.json.diag").write_text(
             _SUGGEST_DIAG)
+        # The parse the hint came from: a conditional hint ("if they are
+        # one security") is offered only when the books hold both symbols.
+        (root / "work" / "margin_questrade.json").write_text(json.dumps(
+            {"metadata": {}, "transactions": [
+                {"symbol": "SAMPA.TO"}, {"symbol": "SAMPB.TO"}]}))
         return root
 
     def _write(self, root):
