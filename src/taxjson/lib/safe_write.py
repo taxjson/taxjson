@@ -171,3 +171,34 @@ def backup_copy(path: Union[str, Path]) -> Path:
     if not os.path.lexists(str(bak)):
         write_atomic(bak, data, keep_mode=False)
     return bak
+
+
+class OutsideLinkError(ValueError):
+    """A user file to rewrite is a symlink leaving the project."""
+
+
+def write_user_file(path: Union[str, Path], data: Union[str, bytes],
+                    root: Union[str, Path], *, suffix: str = ".part",
+                    backup: bool = True) -> Optional[Path]:
+    """Rewrite a file the user maintains (ticker.map, missing_history.json)
+    the way migrate and format do: a symlink leaving `root` is refused
+    (OutsideLinkError, nothing written); a link inside it is followed —
+    the link stays and its target is replaced; the previous contents are
+    kept by backup_copy (when `backup` and there were any); the new file
+    keeps the replaced file's permission bits (keep_mode). Returns the
+    backup's path, or None."""
+    path = Path(path)
+    target = link_outside(path, root)
+    if target is not None:
+        raise OutsideLinkError(
+            f"{path.name} is a symlink to {target}, outside the project — "
+            f"never written through: replace the link with a copy, or "
+            f"run in the folder that holds the real file")
+    if path.is_symlink():
+        path = path.resolve()
+    bak = None
+    if backup and path.is_file():
+        bak = backup_copy(path)
+    write_atomic(path, data, suffix=suffix, keep_mode=True)
+    return bak
+

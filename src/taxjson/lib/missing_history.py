@@ -851,7 +851,10 @@ def assess_tax_year_relevance(
     known) does NOT count.
 
     The walk follows rename-SPLITs (shares move to the new symbol, as in
-    detect_missing_history — audit S075-13) and orders same-moment rows buys
+    detect_missing_history — audit S075-13); a short carried into the new
+    symbol keeps its pair: the new symbol's rows of the year (a cover, a
+    sale, any activity) count for the old pair too, down a chain of
+    renames (pre-release review M5). It orders same-moment rows buys
     first (the missing_history_walk profile — S075-12). The YEAR of a row is its
     date on `date_basis` ('settle' — the CRA default and the engine's
     year — or 'trade'), so a Dec-31 trade settling in January belongs to
@@ -876,6 +879,15 @@ def assess_tax_year_relevance(
     # just before the year (in_year_activity / short_at_year_start).
     active: Set[Tuple[str, str]] = set()
     before: Dict[Tuple[str, str], float] = {}
+    # A short carried through a rename (a SPLIT with symbol_new — a
+    # broker's, a .tt line's or a dated ticker.map RENAME's): the new
+    # symbol's rows draw on the OLD pair's missing history, so its
+    # activity and draws count for the old pair too (pre-release review
+    # M5). key -> the predecessor pairs whose short it carries.
+    origins: Dict[Tuple[str, str], Set[Tuple[str, str]]] = {}
+
+    def _with_origins(k: Tuple[str, str]) -> Set[Tuple[str, str]]:
+        return {k} | origins.get(k, set())
 
     for tx in _drop_duplicate_splits(
             sorted(transactions,
@@ -888,7 +900,11 @@ def assess_tax_year_relevance(
                                            getattr(tx, 'symbol_new', ''))
             if new_sym:
                 nk = (new_sym, tx.account)
-                run[nk] = run.get(nk, 0.0) + run.pop(key, 0.0) * ratio
+                moved = run.pop(key, 0.0) * ratio
+                if moved < -1e-9 and nk != key:
+                    origins.setdefault(nk, set()).update(
+                        _with_origins(key))
+                run[nk] = run.get(nk, 0.0) + moved
                 if year_start is not None and d < year_start:
                     before[nk] = run[nk]
                     before[key] = 0.0
@@ -898,7 +914,7 @@ def assess_tax_year_relevance(
                     before[key] = run[key]
             continue
         if year_str is not None and d.startswith(year_str):
-            active.add(key)
+            active.update(_with_origins(key))
         if tx.action not in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE', 'TRANSFER'):
             continue
         prev = run.get(key, 0.0)
@@ -913,11 +929,16 @@ def assess_tax_year_relevance(
             continue
         if year_str is not None and not d.startswith(year_str):
             continue
-        st = stats.setdefault(key, {'n': 0, 'proceeds': 0.0, 'last': ''})
-        st['n'] += 1
-        st['proceeds'] += abs(getattr(tx, 'net_amount', 0.0) or 0.0)
-        if d > st['last']:
-            st['last'] = d
+        for k in _with_origins(key):
+            st = stats.setdefault(k, {'n': 0, 'proceeds': 0.0, 'last': ''})
+            st['n'] += 1
+            st['proceeds'] += abs(getattr(tx, 'net_amount', 0.0) or 0.0)
+            if d > st['last']:
+                st['last'] = d
+
+    def _carriers(ck: Tuple[str, str]) -> List[Tuple[str, str]]:
+        """The pair and every later pair carrying its short."""
+        return [ck] + [k for k, o in origins.items() if ck in o]
 
     out: List[MissingHistoryRow] = []
     for c in candidates:
@@ -931,8 +952,9 @@ def assess_tax_year_relevance(
             last_in_year_date=st['last'],
             in_year_activity=(year_str is None
                               or (c.symbol, c.account) in active),
-            short_at_year_start=(year_str is not None and before.get(
-                (c.symbol, c.account), 0.0) < -1e-9),
+            short_at_year_start=(year_str is not None and any(
+                before.get(k, 0.0) < -1e-9
+                for k in _carriers((c.symbol, c.account)))),
             pooled_with=tuple(sorted(
                 (pool or {}).get((c.symbol, c.account), ()))),
         ))
@@ -963,18 +985,52 @@ def pool_activity(transactions: Iterable[TaxTransaction], year: Any, *,
 
 def pooled_with(candidates: Iterable[MissingHistoryCandidate],
                 activity: Dict[str, Set[str]],
-                pooled_accounts: Iterable[str]
-                ) -> Dict[Tuple[str, str], Set[str]]:
+                pooled_accounts: Iterable[str],
+                successors: Optional[Dict[Tuple[str, str], Set[str]]]
+                = None) -> Dict[Tuple[str, str], Set[str]]:
     """{(symbol, account): other accounts of its pool active in the
-    year} for the candidates in a pooled account (pool_activity)."""
+    year} for the candidates in a pooled account (pool_activity); a
+    candidate renamed since (`successors`, rename_successors) counts its
+    new symbols' activity too."""
     pooled = set(pooled_accounts)
     out: Dict[Tuple[str, str], Set[str]] = {}
     for c in candidates:
         if c.account not in pooled:
             continue
-        others = activity.get(c.symbol, set()) - {c.account}
+        others: Set[str] = set()
+        for sym in {c.symbol} | set((successors or {}).get(
+                (c.symbol, c.account), ())):
+            others |= activity.get(sym, set())
+        others -= {c.account}
         if others:
             out[(c.symbol, c.account)] = others
+    return out
+
+
+def rename_successors(transactions: Iterable[TaxTransaction]
+                      ) -> Dict[Tuple[str, str], Set[str]]:
+    """{(symbol, account): every symbol it was renamed to, directly or
+    down a chain} from the books' rename SPLIT rows (symbol_new: a
+    broker's event, a .tt line, a dated ticker.map RENAME). An undated
+    ticker.map rename has already rewritten the rows to the new symbol."""
+    direct: Dict[Tuple[str, str], Set[str]] = {}
+    for t in transactions:
+        if t.action != 'SPLIT':
+            continue
+        new = normalize_symbol_new(t.symbol, getattr(t, 'symbol_new', ''))
+        if new and new != t.symbol:
+            direct.setdefault((t.symbol, t.account), set()).add(new)
+    out: Dict[Tuple[str, str], Set[str]] = {}
+    for (sym, acct) in direct:
+        seen: Set[str] = set()
+        todo = list(direct[(sym, acct)])
+        while todo:
+            n = todo.pop()
+            if n in seen or n == sym:
+                continue
+            seen.add(n)
+            todo.extend(direct.get((n, acct), ()))
+        out[(sym, acct)] = seen
     return out
 
 
@@ -999,7 +1055,8 @@ def year_pool(transactions: Iterable[TaxTransaction],
     pooled = {a for a in accounts if registered.get(a) is False}
     return pooled_with(candidates,
                        pool_activity(txs, year, pooled_accounts=pooled,
-                                     date_basis=date_basis), pooled)
+                                     date_basis=date_basis), pooled,
+                       successors=rename_successors(txs))
 
 
 def classify_year_shorts(transactions: Iterable[TaxTransaction], year: Any,

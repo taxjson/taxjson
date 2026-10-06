@@ -71,6 +71,23 @@
   it now uses the project's policy (default: account moves; strict: a
   sheltered transfer-in counts as an acquisition), and `taxjson run` passes it.
 
+- **A short carried through a rename is judged with its new symbol.** A
+  position that went short under an old ticker and was renamed (a broker's
+  rename, a `.tt` line, a dated ticker.map RENAME) was listed as having no
+  effect on the year even when the new ticker traded in it, so
+  `find-missing-history --write-missing-history --outside-year` could record it
+  and move the year's gain. The new symbol's activity now counts for the old
+  pair.
+
+- **`--outside-year` reports and writes safely.** It counts only the entries
+  this run adds, refuses a `missing_history.json` entry that is not an object
+  before writing anything, and keeps a symlinked file a link (its target
+  rewritten, a backup kept; a link leaving the project is refused).
+
+- **`taxjson ticker-map --write` keeps a symlinked ticker.map a link** (its
+  target rewritten with its permissions and a backup), and refuses a link
+  leaving the project, as `migrate` and `format` do.
+
 - **A Questrade dividend row's code is matched by the security's name, not the
   event wording.** "<NAME> CASH DIV ON … SHS REC … PAY …" and "<NAME> SUBST PAY ON …
   IN LIEU OF DIVIDEND" are compared as <NAME>, so the same security's plain name

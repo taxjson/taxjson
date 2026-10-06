@@ -13669,7 +13669,14 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
         return
     tm = root / "ticker.map"
     from taxjson.lib.cli_diag import read_text_utf8
-    from taxjson.lib.safe_write import backup_copy, write_atomic
+    from taxjson.lib.safe_write import (OutsideLinkError, link_outside,
+                                        write_user_file)
+    _outside = link_outside(tm, root)
+    if _outside is not None:
+        _die_input(f"ticker-map --write: ticker.map is a symlink to "
+                   f"{_outside}, outside the project — nothing was written",
+                   "Add the lines to the file it points at, or replace the "
+                   "link with a copy.")
     current = read_text_utf8(tm) if tm.is_file() else ""
     text = TS.appended_text(current, chosen)
     # The new map must be one `taxjson run` accepts (no contradiction).
@@ -13683,8 +13690,16 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
         _die("ticker-map --write: the lines would make ticker.map "
              "contradict itself — nothing was written",
              *[f"- {p}" for p in _problems])
-    bak = backup_copy(tm) if tm.is_file() else None
-    write_atomic(tm, text)
+    try:
+        # The user-file guard migrate and format use: a link inside the
+        # project stays a link (its target is replaced), the permission
+        # bits are kept, the old text is kept as ticker.map.bak[N].
+        bak = write_user_file(tm, text, root, suffix=".suggest.part")
+    except OutsideLinkError as e:
+        _die_input(f"ticker-map --write: {e}")
+    except OSError as e:
+        _die_input(f"ticker-map --write: cannot write ticker.map: "
+                   f"{e.strerror or e}")
     print(f"Added {len(chosen)} line(s) to ticker.map"
           + (f" (the old file is {bak.name})" if bak else "")
           + ". Run `taxjson run` to apply them.")
@@ -19471,13 +19486,16 @@ def _missing_history_suspects(root: Path, cache: Path
 
 def _outside_year_rows(root: Path, files: List[Path], year: Any,
                        suggested: List[Dict[str, Any]], out: Path,
-                       mh_file: Path) -> Optional[List[Dict[str, Any]]]:
-    """`--write-missing-history --outside-year`: the file's entries
+                       mh_file: Path
+                       ) -> Optional[Tuple[List[Dict[str, Any]], int]]:
+    """`--write-missing-history --outside-year`: (the file's entries
     (kept as they are) plus each suggested pair that does NOT bear on
     `year` (MissingHistoryRow.year_listed false: no row of the year
     draws on it or touches it, and — Canada — no other taxable account
-    of its ACB pool trades it in the year). None when there is nothing
-    to add (said)."""
+    of its ACB pool trades it in the year), how many of them this run
+    adds). None when there is nothing to add (said). An entry of the
+    file that is not a JSON object stops it before anything is
+    written."""
     import json as _json
     rows_by = _year_short_rows(root, files, year)
     existing: List[Dict[str, Any]] = []
@@ -19493,9 +19511,20 @@ def _outside_year_rows(root: Path, files: List[Path], year: Any,
         if not isinstance(existing, list):
             _die_input(f"--outside-year: {src} is not a JSON array of "
                        f"entries — fix or move it first.")
+        _bad = [n for n, e in enumerate(existing, 1)
+                if not isinstance(e, dict)]
+        if _bad:
+            _die_input(f"--outside-year: {src}: entr"
+                       f"{'y' if len(_bad) == 1 else 'ies'} "
+                       f"{', '.join(map(str, _bad[:5]))} "
+                       f"{'is not a' if len(_bad) == 1 else 'are not'} "
+                       f"JSON object{'' if len(_bad) == 1 else 's'} "
+                       f"(symbol, account, ...) — fix or remove "
+                       f"{'it' if len(_bad) == 1 else 'them'} first; "
+                       f"nothing was written.")
     have = {(str(e.get("symbol") or "").strip().upper(),
              str(e.get("account") or "").strip())
-            for e in existing if isinstance(e, dict)}
+            for e in existing}
     added: List[Dict[str, Any]] = []
     for e in suggested:
         key = (e.get("symbol"), e.get("account"))
@@ -19515,7 +19544,7 @@ def _outside_year_rows(root: Path, files: List[Path], year: Any,
              f"find-missing-history` lists them.",
              prog=f"{_PROG} find-missing-history")
         return None
-    return existing + added
+    return existing + added, len(added)
 
 
 def cmd_find_missing_history(args: argparse.Namespace) -> None:
@@ -19704,21 +19733,33 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
                           file=sys.stderr)
 
         rows = list(merged.values())
+        _n_new = 0
         if outside:
-            rows = _outside_year_rows(root, all_files or files, year, rows,
+            _got = _outside_year_rows(root, all_files or files, year, rows,
                                       out, mh_file)
-            if rows is None:
+            if _got is None:
                 return
-        from taxjson.lib.safe_write import backup_copy, write_atomic
+            rows, _n_new = _got
+        from taxjson.lib.safe_write import OutsideLinkError, write_user_file
         try:
-            if out.is_file() and not out.is_symlink():
-                # The next free .bak/.bakN: an earlier backup is never
-                # overwritten, a symlink there never written through
-                # (security review M1).
-                _bak = backup_copy(out)
+            _parent = out.absolute().parent.resolve()
+            try:
+                _parent.relative_to(root)
+                _guard_root = root
+            except ValueError:
+                _guard_root = _parent
+            # The user-file guard (as migrate / format / ticker-map
+            # --write): a symlink leaving the project is refused, one
+            # inside it stays a link (its target replaced, mode kept);
+            # the next free .bak/.bakN keeps the previous file
+            # (security review M1).
+            _bak = write_user_file(out, json.dumps(rows, indent=2) + "\n",
+                                   _guard_root)
+            if _bak is not None:
                 print(f"  kept the previous {out.name} as {_bak.name}",
                       file=sys.stderr)
-            write_atomic(out, json.dumps(rows, indent=2) + "\n")
+        except OutsideLinkError as e:
+            _die_input(f"{_flag}: {e}")
         except OSError as e:
             # A directory (or unwritable path) argument crashed with a
             # raw traceback AFTER all the per-account work (REVIEW #40).
@@ -19726,7 +19767,6 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
                      f"{_flag} {out}: {e} — pass a FILE path, "
                      f"e.g. {out / MISSING_HISTORY_FILE if out.is_dir() else MISSING_HISTORY_FILE}")
         if outside:
-            _n_new = sum(1 for e in rows if e.get("_outside_year") == year)
             _kept = len(rows) - _n_new
             _say("note", f"added {_n_new} position(s) that went short with "
                  f"no purchase in your files and no {year} activity to "

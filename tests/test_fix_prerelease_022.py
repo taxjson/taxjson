@@ -264,6 +264,63 @@ def _env():
                 TAXJSON_OFFLINE="1", TAXJSON_WIDTH="0")
 
 
+@rule("CA-ACB-11")
+@rule("US-BASIS-04")
+class TestM5RenamedShort(unittest.TestCase):
+    def _book(self, cover_year="2025"):
+        return [tx("BUYSELL", "2024-03-01", "QZOLD.TO", -10, 100),
+                tx("SPLIT", "2024-06-01", "QZOLD.TO", 1, 0,
+                   symbol_new="QZNEW.TO"),
+                tx("BUYSELL", f"{cover_year}-03-01", "QZNEW.TO", 10, 90)]
+
+    def test_successor_cover_bears_on_the_year(self):
+        from taxjson.lib.missing_history import classify_year_shorts
+        for c in ("canada", "usa"):
+            with self.subTest(country=c):
+                rows = classify_year_shorts(
+                    self._book(), 2025, country=c,
+                    registered={"margin": False}, date_basis="trade")
+                r = rows[("QZOLD.TO", "margin")]
+                self.assertTrue(r.affects_year)
+                self.assertTrue(r.in_year_activity)
+                self.assertTrue(r.short_at_year_start)
+                self.assertTrue(r.year_listed)
+                self.assertEqual(r.in_year_dispositions, 1)
+        # Covered in 2024: nothing of 2025 draws on it.
+        rows = classify_year_shorts(
+            self._book("2024"), 2025, country="canada",
+            registered={"margin": False}, date_basis="trade")
+        self.assertFalse(rows[("QZOLD.TO", "margin")].year_listed)
+
+    def test_chain_and_pool(self):
+        from taxjson.lib.missing_history import (classify_year_shorts,
+                                                  rename_successors)
+        book = [tx("BUYSELL", "2024-03-01", "QZA.TO", -10, 100),
+                tx("SPLIT", "2024-05-01", "QZA.TO", 1, 0,
+                   symbol_new="QZB.TO"),
+                tx("SPLIT", "2024-07-01", "QZB.TO", 1, 0,
+                   symbol_new="QZC.TO"),
+                # another taxable account trades the new symbol in 2025
+                tx("BUYSELL", "2025-02-01", "QZC.TO", 5, 50,
+                   account="cash"),
+                tx("BUYSELL", "2025-03-01", "QZC.TO", -5, 60,
+                   account="cash")]
+        self.assertEqual(rename_successors(book)[("QZA.TO", "margin")],
+                         {"QZB.TO", "QZC.TO"})
+        rows = classify_year_shorts(
+            book, 2025, country="canada",
+            registered={"margin": False, "cash": False},
+            date_basis="trade")
+        r = rows[("QZA.TO", "margin")]
+        self.assertEqual(r.pooled_with, ("cash",))
+        self.assertTrue(r.year_listed)
+        rows = classify_year_shorts(
+            book, 2025, country="usa",
+            registered={"margin": False, "cash": False},
+            date_basis="trade")
+        self.assertFalse(rows[("QZA.TO", "margin")].year_listed)
+
+
 class TestL1QuotedDescriptions(unittest.TestCase):
     def test_quoted_rule_is_not_a_suggestion(self):
         from taxjson.lib import ticker_map_suggest as TS
@@ -295,6 +352,146 @@ class TestL1QuotedDescriptions(unittest.TestCase):
                               "to ticker.map if right"}}}))
             got = [s.line for s in TS.from_symbol_codes(cache)]
         self.assertEqual(got, ["GLOBAL X000003.TO QZE.TO"])
+
+
+_SUGGEST_DIAG = ("warning: ATTENTION: q.csv: Questrade symbol SAMPA.TO looks "
+                 "renamed to SAMPB.TO — if they are one security add to "
+                 "ticker.map:  GLOBAL SAMPA.TO SAMPB.TO\n")
+
+
+class TestL2TickerMapWriteKeepsTheLink(unittest.TestCase):
+    def _project(self, tmp):
+        root = Path(tmp) / "p"
+        (root / "work").mkdir(parents=True)
+        (root / "taxjson.toml").write_text(
+            '[settings]\ncountry = "canada"\nbase_currency = "CAD"\n'
+            'year = 2025\n\n[accounts.margin]\ntype = "taxable"\n')
+        (root / "work" / "margin_questrade.json.diag").write_text(
+            _SUGGEST_DIAG)
+        return root
+
+    def _write(self, root):
+        return subprocess.run(
+            [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
+             str(root), "ticker-map", "--suggest", "--write", "--all"],
+            capture_output=True, text=True, env=_env(),
+            stdin=subprocess.DEVNULL, timeout=300)
+
+    def test_link_inside_the_project_stays_a_link(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._project(tmp)
+            (root / "maps").mkdir()
+            real = root / "maps" / "mine.map"
+            real.write_text("DISTINCT QZA.TO QZB.TO\n")
+            os.chmod(real, 0o644)
+            (root / "ticker.map").symlink_to("maps/mine.map")
+            r = self._write(root)
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+            self.assertTrue((root / "ticker.map").is_symlink())
+            self.assertTrue(real.read_text().endswith(
+                "\nGLOBAL SAMPA.TO SAMPB.TO\n"))
+            self.assertEqual(stat.S_IMODE(real.stat().st_mode), 0o644)
+            self.assertEqual(list((root / "maps").glob("mine.map.bak*"))[0]
+                             .read_text(), "DISTINCT QZA.TO QZB.TO\n")
+
+    def test_link_leaving_the_project_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._project(tmp)
+            outside = Path(tmp) / "elsewhere.map"
+            outside.write_text("DISTINCT QZA.TO QZB.TO\n")
+            (root / "ticker.map").symlink_to(outside)
+            r = self._write(root)
+            self.assertEqual(r.returncode, 2, r.stderr + r.stdout)
+            self.assertIn("outside the project", " ".join(r.stderr.split()))
+            self.assertEqual(outside.read_text(), "DISTINCT QZA.TO QZB.TO\n")
+            self.assertTrue((root / "ticker.map").is_symlink())
+
+    def test_regular_file_keeps_its_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._project(tmp)
+            tm = root / "ticker.map"
+            tm.write_text("DISTINCT QZA.TO QZB.TO\n")
+            os.chmod(tm, 0o640)
+            r = self._write(root)
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+            self.assertEqual(stat.S_IMODE(tm.stat().st_mode), 0o640)
+            self.assertTrue((root / "ticker.map.bak").is_file())
+
+
+class TestL4OutsideYearWrites(unittest.TestCase):
+    """The mhscope project: QPAS / QOPN (margin) and QRGL (rrsp) went
+    short in 2024 and never trade again."""
+
+    @classmethod
+    def setUpClass(cls):
+        import test_fix_mhscope as M
+        cls.M = M
+        cls.tmp, cls.base = M._make("canada")
+        r = M._tj(cls.base, "run", "--no-input")
+        assert r.returncode == 0, r.stderr + r.stdout
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, True)
+
+    def _copy(self):
+        d = tempfile.mkdtemp(prefix="taxjson_l4_")
+        self.addCleanup(shutil.rmtree, d, True)
+        root = Path(d) / "canada"
+        shutil.copytree(self.base, root, symlinks=True)
+        return root
+
+    def _outside(self, root):
+        return self.M._tj(root, "find-missing-history",
+                          "--write-missing-history", "--outside-year")
+
+    def test_counts_only_this_runs_entries(self):
+        root = self._copy()
+        prev = [{"symbol": "QPAS.TO", "account": "margin",
+                 "_outside_year": 2025, "_note": "earlier run"}]
+        (root / "missing_history.json").write_text(json.dumps(prev))
+        r = self._outside(root)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        flat = " ".join(r.stderr.split())
+        self.assertIn("added 2 position(s)", flat)
+        self.assertIn("1 entry already there kept", flat)
+
+    def test_non_object_entry_refused_before_writing(self):
+        root = self._copy()
+        text = json.dumps([{"symbol": "QHAND.TO", "account": "margin"},
+                           "QPAS.TO", 7])
+        (root / "missing_history.json").write_text(text)
+        r = self._outside(root)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("are not JSON objects", " ".join(r.stderr.split()))
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertEqual((root / "missing_history.json").read_text(), text)
+        self.assertFalse(list(root.glob("missing_history.json.bak*")))
+
+    def test_symlinked_file_stays_a_link(self):
+        root = self._copy()
+        (root / "data").mkdir()
+        real = root / "data" / "mh.json"
+        real.write_text(json.dumps([{"symbol": "QHAND.TO",
+                                     "account": "margin"}]))
+        os.chmod(real, 0o644)
+        (root / "missing_history.json").symlink_to("data/mh.json")
+        r = self._outside(root)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((root / "missing_history.json").is_symlink())
+        self.assertEqual(len(json.loads(real.read_text())), 4)
+        self.assertEqual(stat.S_IMODE(real.stat().st_mode), 0o644)
+        self.assertTrue(list((root / "data").glob("mh.json.bak*")))
+
+    def test_symlink_leaving_the_project_is_refused(self):
+        root = self._copy()
+        outside = root.parent / "elsewhere.json"
+        outside.write_text("[]")
+        (root / "missing_history.json").symlink_to(outside)
+        r = self._outside(root)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("outside the project", " ".join(r.stderr.split()))
+        self.assertEqual(outside.read_text(), "[]")
 
 
 class TestL5RadarTransferPolicy(unittest.TestCase):
