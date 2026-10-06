@@ -119,6 +119,7 @@ PARTITION_RULES = frozenset({
     "CA-STKDIV-01",    # stock dividend: $0 acquisition (counts for s.54)
     "CA-ACB-12",       # manual missing-history loss check on settle dates
     "CA-OPEN-01",      # opening balance: pooled, not a purchase (US: lot dates)
+    "CA-XLIST-03",     # a broker's CAD/USD currency journal joined (US: transfer legs)
     "CA-OPEN-02",      # opening cost at the snapshot day's BoC rate (US: USD only)
     "CA-CRYPTO-02",    # stablecoins as US-dollar cash
     "CA-DATE-01",      # settle-date tax year by default
@@ -647,7 +648,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-ACB-CODES",
                  "A broker's internal security code (Questrade writes "
                  "one letter + digits, e.g. X000123, on rows of shares "
-                 "transferred in) is the security the account's own "
+                 "transferred in) is the line a currency-journal leg "
+                 "of the same description in the same account and "
+                 "currency names (Questrade's BRW \"... JOURNAL "
+                 "POSITION FROM CAD\": the security's US-dollar line); "
+                 "else the security the account's own "
                  "trades of the same description name; else the security "
                  "of the transfer it arrived by (an outgoing transfer of "
                  "the same quantity in another export of the project, up "
@@ -855,6 +860,29 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "broker's exports of the account takes the listing; "
                  "each correction is a Warning, and `taxjson ticker-map "
                  "--suggest` shows the equivalent explicit lines."),
+            Rule("CA-XLIST-03",
+                 "A broker's currency journal between the Canadian-dollar "
+                 "and US-dollar lines of one security (Questrade's BRW "
+                 "rows \"<NAME> JOURNAL POSITION TO USD\" and \"<NAME> "
+                 "JOURNAL POSITION FROM CAD BOOK VALUE: $X CNV@ r\", or "
+                 "TO CAD / FROM USD: one account, one day, one name, the "
+                 "same quantity) is not a disposition: the two lines are "
+                 "identical property. `taxjson run` joins them as a "
+                 "ticker.map JOURNAL line would — one ACB pool, one "
+                 "security for the superficial-loss rule, netted in the "
+                 "holdings view — with one Warning per account naming "
+                 "the `DISTINCT X Y` line that undoes it; a ticker.map "
+                 "rule naming either line always wins. The US-dollar "
+                 "line is the listing the account's own US-dollar rows "
+                 "of the security use, else the TSX convention "
+                 "SYMBOL.U.TO (taxjson/data/markets.toml; a ticker.map "
+                 "EXTRACT or GLOBAL line overrides it). The journaled "
+                 "units keep the pool's ACB (the Canadian-dollar cost of "
+                 "the units bought); the book value the in-leg states "
+                 "(in the in-leg's currency; the other leg's at the "
+                 "stated CNV@ rate) is carried on the legs only where "
+                 "they do not net. A journal leg with no partner is a "
+                 "transfer leg of its own line, said as ATTENTION."),
             Rule("CA-ACB-11",
                  "Shares sold with no purchase in your files (bought "
                  "before the data starts) go in missing_history.json "
@@ -1937,7 +1965,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-BASIS-CODES",
                  "A broker's internal security code (Questrade writes "
                  "one letter + digits, e.g. X000123, on rows of shares "
-                 "transferred in) is the security the account's own "
+                 "transferred in) is the line a currency-journal leg "
+                 "of the same description in the same account and "
+                 "currency names (Questrade's BRW \"... JOURNAL "
+                 "POSITION FROM CAD\": the security's US-dollar line); "
+                 "else the security the account's own "
                  "trades of the same description name; else the security "
                  "of the transfer it arrived by (an outgoing transfer of "
                  "the same quantity in another export of the project, up "
@@ -2030,7 +2062,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "fund's US-dollar units, is a symbol collision: a "
                  "Warning and the EXTRACT line that gives the fund's "
                  "rows their own symbol (ROOT.U.TO), never a join "
-                 "through it."),
+                 "through it. A "
+                 "Canadian broker's currency journal (Questrade BRW: a "
+                 "security's CAD and US-dollar lines) is not expected "
+                 "in a US project: its legs are read as such a transfer "
+                 "journal, never joined on the broker's pairing alone."),
             Rule("US-XLIST-02",
                  "Each listing's symbol is read from the evidence, not "
                  "the row currency alone: Questrade and RBC write a bare "

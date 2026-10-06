@@ -97,6 +97,10 @@ _DESC_NOISE_RES = [
                re.IGNORECASE),
     re.compile(r'\s+REINV\s*@.*$', re.IGNORECASE),
     re.compile(r'\s+CASH\s+IN\s+LIEU\b.*$', re.IGNORECASE),
+    # A BRW currency journal's legs ("... JOURNAL POSITION TO USD",
+    # "... JOURNAL POSITION FROM CAD BOOK VALUE: $X CNV@ r"): the key is
+    # the security's name, as on its trades.
+    re.compile(r'\s+JOURNAL\s+POSITION\s+(?:TO|FROM)\b.*$', re.IGNORECASE),
     # Dividend-specific suffixes.
     re.compile(r'\s+CASH DIV ON.*$', re.IGNORECASE),
     re.compile(r'\s+RTS DIST ON.*$', re.IGNORECASE),
@@ -157,6 +161,11 @@ _BRW_BOOK_VALUE_RE = re.compile(
 # Every comma captured, judged by desc_number: 'CNV@ 1,3579' read as a
 # rate of 1 (re-audit A2-0278).
 _BRW_CNV_RE = re.compile(r'\bCNV\s*@\s*' + DESC_NUMBER_RE, re.IGNORECASE)
+# A BRW currency journal's direction: the out-leg says where the units
+# go ("JOURNAL POSITION TO USD"), the in-leg where they came from
+# ("JOURNAL POSITION FROM CAD ...").
+_BRW_JOURNAL_RE = re.compile(
+    r'\bJOURNAL\s+POSITION\s+(TO|FROM)\s+([A-Z]{3})\b', re.IGNORECASE)
 # A zero-cash row stating a book-cost change ("... RETURN OF CAPITAL
 # ADJUSTMENT TO BOOK COST $1.16"), the shape RBC exports.
 _QT_BOOK_COST_RE = re.compile(r'\bADJUSTMENT\s+TO\s+BOOK\s+COST\b', re.I)
@@ -305,6 +314,22 @@ class QtAccountContext:
     # Codes already warned about: ONE line per code per account, not
     # per file or row.
     code_warned: set = field(default_factory=set)
+    # BRW currency journals (_plan_qt_journals): (file, line) -> the
+    # leg's listing and its pair id ('' for a lone leg); internal codes
+    # resolved from a journal leg of the same name in the same account:
+    # code -> {symbol, currency, how, evidence} (symbol_codes' record).
+    journal_legs: Dict[Tuple[str, int], Dict[str, Any]] = field(
+        default_factory=dict)
+    journal_codes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+    def add_codes_note(self) -> None:
+        """ONE note per account for every internal code booked under a
+        ticker: those `taxjson run` inferred from the other exports and
+        those a journal leg of the account names (lib/symbol_codes)."""
+        codes = {**self.journal_codes, **self.inferred}
+        if codes:
+            from taxjson.lib.symbol_codes import codes_note
+            self.messages.append(codes_note(codes))
 
     def key_candidates(self, key: str, transfer_row: bool = False) -> set:
         """{(symbol, currency)} for a description key: the exact key;
@@ -413,7 +438,173 @@ def build_qt_account_context(paths, *, helper=None) -> QtAccountContext:
         tl.sort(key=lambda e: (e[0], -e[1]))
     _detect_qt_ticker_changes(ctx, by_name, where)
     _plan_qt_reversals(ctx, helper)
+    _plan_qt_journals(ctx, helper)
     return ctx
+
+
+def _journal_listing(ctx: QtAccountContext, helper, sym: str, cur: str,
+                     partner: str, key: str) -> str:
+    """The listing one leg of a BRW currency journal moves: the
+    security's line in the leg's currency. Questrade's website export
+    names both legs by the bare symbol (QZD); its API export by the
+    listing (QZD.TO / QZD.U.TO).
+
+    - A Canadian listing in the Symbol column is the leg's line.
+    - The CAD line of a bare symbol is its Canadian listing (SYM.TO).
+    - The USD line: the listing this account's own USD rows of the same
+      security (same description) are booked under, when exactly one;
+      else the market's convention for a Canadian listing's US-dollar
+      unit class (markets.usd_unit_listing: SYM.U.TO).
+    A ticker.map EXTRACT line still rewrites the row after the parse."""
+    from taxjson.lib.markets import usd_unit_listing
+    if sym and canonical_ca_listing(sym, cur) is not None:
+        return helper.apply_currency_suffix(sym, cur)
+    base = sym if sym and not _INTERNAL_CODE_RE.match(sym) else partner
+    if cur == 'CAD' and base:
+        return helper.apply_currency_suffix(_journal_root(base), 'CAD')
+    if cur == 'USD' and base:
+        own = sorted({helper.apply_currency_suffix(s, c)
+                      for s, c in ctx.desc_to_ticker.get(key, ())
+                      if c == 'USD'})
+        if len(own) == 1:
+            return own[0]
+        return usd_unit_listing(_journal_root(base))
+    return helper.apply_currency_suffix(sym, cur)
+
+
+def _plan_qt_journals(ctx: QtAccountContext, helper) -> None:
+    """Pair the BRW currency-journal legs of one account (tax-logic
+    CA-XLIST-03): an out-leg "<NAME> JOURNAL POSITION TO USD" (-q, in
+    CAD) and an in-leg "<NAME> JOURNAL POSITION FROM CAD BOOK VALUE: $X
+    CNV@ r" (+q, in USD) — or TO CAD / FROM USD the other way — of the
+    same Account #, day, description and quantity are one journal
+    between the security's CAD and USD lines (Norbert's gambit). Each
+    leg gets its line's listing (_journal_listing) and the pair an id
+    the parsed rows carry (`journal_pair`: `taxjson run` joins the two
+    lines as a ticker.map JOURNAL line would). An internal code whose
+    rows have a journal leg's description in the same account and
+    currency is that leg's listing (journal_codes). A leg with no
+    partner is said as ATTENTION, naming both shapes."""
+    legs: List[Dict[str, Any]] = []
+    for k in ctx.files:
+        for lineno, row in _read_qt_rows(Path(k)):
+            if _canon_action(row.get('Action')) != 'BRW':
+                continue
+            desc = row.get('Description') or ''
+            m = _BRW_JOURNAL_RE.search(desc)
+            if not m:
+                continue
+            try:
+                q = parse_strict_number(row.get('Quantity'),
+                                        field='Quantity', allow_blank=True,
+                                        blank=0.0)
+            except BrokerageParseError:
+                continue                 # parse_file names the row
+            dt = helper.parse_date(
+                (row.get('Transaction Date') or '').strip(), *_DATE_FMTS)
+            if dt is None or abs(q) < 1e-9:
+                continue
+            legs.append({
+                'file': k, 'line': lineno, 'q': q, 'desc': desc,
+                'acct': (row.get('Account #') or '').strip(),
+                'date': dt.strftime('%Y-%m-%d'),
+                'way': m.group(1).upper(), 'to': m.group(2).upper(),
+                'cur': (row.get('Currency') or '').strip().upper(),
+                'sym': (row.get('Symbol') or '').strip().lstrip('.')
+                .upper(),
+                'key': _get_desc_key(desc), 'pair': ''})
+    if not legs:
+        return
+    n = 0
+    for o in legs:
+        if o['q'] > 0 or o['way'] != 'TO' or o['pair']:
+            continue
+        for i in legs:
+            if (i['q'] < 0 or i['way'] != 'FROM' or i['pair']
+                    or (i['acct'], i['date'], i['key'])
+                    != (o['acct'], o['date'], o['key'])
+                    or abs(i['q'] + o['q']) > 1e-6
+                    or i['cur'] != o['to'] or o['cur'] != i['to']
+                    or i['cur'] == o['cur']):
+                continue
+            n += 1
+            o['pair'] = i['pair'] = f"{o['date']}#{n}"
+            o['partner'], i['partner'] = i, o
+            break
+    for g in legs:
+        p = g.get('partner')
+        psym = p['sym'] if p else ''
+        g['listing'] = _journal_listing(
+            ctx, helper, g['sym'], g['cur'],
+            psym if psym and not _INTERNAL_CODE_RE.match(psym) else '',
+            g['key'])
+        ctx.journal_legs[(g['file'], g['line'])] = {
+            'symbol': g['listing'], 'pair': g['pair']}
+    # Codes named by a journal leg's description, account and currency.
+    by_name: Dict[Tuple[str, str, str], int] = {}
+    for n, g in enumerate(legs):
+        if g['pair'] or g['q'] > 0:      # paired legs, and a lone in-leg
+            by_name.setdefault((g['acct'], g['key'], g['cur']), n)
+    seen: Dict[str, set] = {}
+    for k in ctx.files:
+        for _ln, row in _read_qt_rows(Path(k)):
+            sym = (row.get('Symbol') or '').strip().lstrip('.').upper()
+            if not _INTERNAL_CODE_RE.match(sym):
+                continue
+            desc = row.get('Description') or ''
+            if helper.parse_option_from_description(desc):
+                continue
+            cur = (row.get('Currency') or '').strip().upper()
+            if cur == 'CAD' and _FX_SETTLED_RE.search(desc):
+                cur = 'USD'              # listing currency
+            n = by_name.get(((row.get('Account #') or '').strip(),
+                             _get_desc_key(desc), cur))
+            seen.setdefault(sym, set()).add(n)
+    for code, hits in sorted(seen.items()):
+        if len(hits) != 1 or None in hits:
+            continue        # rows the journal does not name decide it
+        g = legs[next(iter(hits))]
+        if any(ticker_map_names(helper.apply_currency_suffix(code, c))
+               for c in ('USD', 'CAD', g['cur'])):
+            continue        # the user's map decides (as for inference)
+        ctx.journal_codes[code] = {
+            'symbol': g['listing'], 'currency': g['cur'], 'how': 'journal',
+            'evidence': (f"journal {'in' if g['q'] > 0 else 'out'}-leg "
+                         f"of {abs(g['q']):g} on {g['date']}, same name "
+                         f"in this account")}
+    for g in legs:
+        if g['pair']:
+            continue
+        # The journal's source and target currencies, from this leg.
+        src, dst = ((g['cur'], g['to']) if g['q'] < 0
+                    else (g['to'], g['cur']))
+        nm = (g['key'] or g['desc'][:60]).strip()
+        ctx.messages.append(
+            f"warning: ATTENTION: {shown_name(Path(g['file']))} line "
+            f"{g['line']}: a BRW journal row ({g['desc'][:90]!r}, "
+            f"{g['q']:+g}) has no partner — a currency journal is TWO "
+            f"rows of one account on one day with the same quantity: "
+            f"'{nm} JOURNAL POSITION TO {dst}' (-units, in {src}) and "
+            f"'{nm} JOURNAL POSITION FROM {src} BOOK VALUE: $X CNV@ r' "
+            f"(+units, in {dst}). Booked as a transfer leg of "
+            f"{g['listing']} on its own, so its units do not move to the "
+            f"other line: check that the export holds both rows "
+            f"(re-export the day), or book the move in a .tt file.")
+
+
+def journal_codes(paths, *, helper=None) -> Dict[str, Dict[str, Any]]:
+    """The internal codes of one account's exports that a BRW journal
+    leg of the same name names (_plan_qt_journals): code -> {symbol,
+    currency, how: "journal", evidence} — `taxjson run` records them
+    with the inferred ones (lib/symbol_codes), so `taxjson transfers`
+    lists them."""
+    paths = [Path(p) for p in paths]
+    if not any(_canon_action(r.get('Action')) == 'BRW'
+               for p in paths for _ln, r in _read_qt_rows(p)):
+        return {}
+    ctx = build_qt_account_context(paths,
+                                   helper=helper or QuestradeBrokerage())
+    return dict(ctx.journal_codes)
 
 
 def scan_code_uses(paths, *, helper=None) -> list:
@@ -443,8 +634,9 @@ def scan_code_uses(paths, *, helper=None) -> list:
             act = (row.get('Activity Type') or '').strip()
             action = _canon_action(row.get('Action'))
             transfer = act == 'Transfers' or action == 'TF6'
-            if ctx.key_candidates(_get_desc_key(desc),
-                                  transfer_row=transfer):
+            if (sym in ctx.journal_codes
+                    or ctx.key_candidates(_get_desc_key(desc),
+                                          transfer_row=transfer)):
                 continue
             cur = (row.get('Currency') or '').strip().upper()
             if cur == 'CAD' and _FX_SETTLED_RE.search(desc):
@@ -708,7 +900,7 @@ class QuestradeBrokerage(BaseBrokerage):
         ONE note."""
         ctx = build_qt_account_context(list(paths), helper=cls())
         if symbol_codes:
-            from taxjson.lib.symbol_codes import codes_note, read_state
+            from taxjson.lib.symbol_codes import read_state
             st = read_state(Path(symbol_codes))
             ctx.unresolved = dict(st.get('unresolved') or {})
             for code, r in sorted((st.get('resolved') or {}).items()):
@@ -722,8 +914,7 @@ class QuestradeBrokerage(BaseBrokerage):
                                             r.get('currency') or 'USD')):
                     continue
                 ctx.inferred[code.upper()] = r
-            if ctx.inferred:
-                ctx.messages.append(codes_note(ctx.inferred))
+        ctx.add_codes_note()
         ctx.emit()
         return ctx
 
@@ -866,6 +1057,13 @@ class QuestradeBrokerage(BaseBrokerage):
             return None
         return str(r['symbol']), str(r.get('currency') or '')
 
+    def _journal_code(self, sym: str) -> Optional[Tuple[str, str]]:
+        """(listing, currency) a BRW journal leg of the account names
+        for internal code `sym` (_plan_qt_journals), or None."""
+        r = self._ctx.journal_codes.get((sym or '').upper()) if self._ctx \
+            else None
+        return (str(r['symbol']), str(r['currency'])) if r else None
+
     def _resolve_symbol(self, row: Dict[str, Any], currency: str,
                         lineno: Optional[int] = None):
         """(symbol, suffix currency) for a non-trade row. Questrade
@@ -904,6 +1102,11 @@ class QuestradeBrokerage(BaseBrokerage):
                           f"one security and ticker.map does not already "
                           f"fold them, add a ticker.map rule.")
             return sym, cur
+        # A code a BRW journal leg of the same name in the same account
+        # names (_plan_qt_journals): that leg's line, in its currency.
+        _jc = self._ctx.journal_codes.get(sym)
+        if _jc is not None:
+            return str(_jc['symbol']), str(_jc['currency'])
         if len(cands) == 1:
             return next(iter(cands))
         inferred = self._inferred_code(sym)
@@ -974,6 +1177,7 @@ class QuestradeBrokerage(BaseBrokerage):
         ctx = self.account_context
         if ctx is None or str(path.resolve()) not in ctx.files:
             ctx = build_qt_account_context([path], helper=self)
+            ctx.add_codes_note()
             ctx.emit()
         self._ctx = ctx
         self._desc_to_ticker = ctx.desc_to_ticker
@@ -1336,12 +1540,20 @@ class QuestradeBrokerage(BaseBrokerage):
                     # to be skipped, leaving the units on SAMPLF.TO.
                     _bv = _BRW_BOOK_VALUE_RE.search(desc)
                     _date = self._date(row, 'Transaction Date', lineno)
+                    # A currency journal's leg (_plan_qt_journals): its
+                    # line's listing — the website export names both
+                    # legs by the bare symbol, and the USD leg is the
+                    # security's US-dollar class (SAMPLF.U.TO), not a
+                    # US listing.
+                    _jl = self._ctx.journal_legs.get(
+                        (str(path.resolve()), lineno)) or {}
                     _jtx = {
                         'action': 'TRANSFER',
                         'date': _date.strftime('%Y-%m-%d'),
                         'time': _date.strftime('%H:%M:%S'),
                         'date_settle': _date.strftime('%Y-%m-%d'),
-                        'symbol': self.apply_currency_suffix(
+                        'symbol': _jl.get('symbol')
+                        or self.apply_currency_suffix(
                             (row.get('Symbol') or '').strip().upper(),
                             currency),
                         'quantity': _q, 'currency': currency,
@@ -1350,6 +1562,11 @@ class QuestradeBrokerage(BaseBrokerage):
                         'account': self.DEFAULT_ACCOUNT,
                         'description': desc,
                     }
+                    if _jl.get('pair'):
+                        # The pair's id: `taxjson run` joins the two lines
+                        # as a ticker.map JOURNAL line would (Canada,
+                        # tax-logic CA-XLIST-03; lib/cross_listings).
+                        _jtx['journal_pair'] = _jl['pair']
                     if _bv:
                         _jtx['book_value'] = parse_strict_number(
                             _bv.group(1), field='BOOK VALUE',
@@ -1563,7 +1780,10 @@ class QuestradeBrokerage(BaseBrokerage):
                 symbol = (row.get('Symbol') or '').strip().upper()
                 # An internal code the run resolved from the project's
                 # other exports (a later sale of transferred-in shares).
-                _inf = (self._inferred_code(symbol.lstrip('.'))
+                # Or one a BRW journal leg of the account names (the
+                # USD class of a security journaled from its CAD line).
+                _inf = (self._journal_code(symbol.lstrip('.'))
+                        or self._inferred_code(symbol.lstrip('.'))
                         if _INTERNAL_CODE_RE.match(symbol.lstrip('.'))
                         else None)
                 if _inf is not None:
@@ -1710,9 +1930,10 @@ class QuestradeBrokerage(BaseBrokerage):
             emit_line(f"note: {shown_name(path)}: {len(journals)} BRW journal row(s) "
                   f"move units between the CAD and USD lines of one "
                   f"security ({', '.join(journals[:6])}) — booked as "
-                  f"TRANSFER legs; a ticker.map JOURNAL rule (e.g. "
-                  f"JOURNAL SAMPLF.U.TO SAMPLF.TO) makes the lines one pool so "
-                  f"the pair nets out.")
+                  f"TRANSFER legs; in a Canadian project `taxjson run` "
+                  f"joins a paired journal's two lines as one security, "
+                  f"as a ticker.map JOURNAL rule (e.g. JOURNAL "
+                  f"SAMPLF.U.TO SAMPLF.TO) would, so the pair nets out.")
         self.emit_skip_summary(shown_name(path))
         return transactions
 
@@ -1740,10 +1961,14 @@ class QuestradeBrokerage(BaseBrokerage):
             # The SAME security's other line only (re-audit A2-1061: two
             # journals on one date swapped their costs): SAMPLF.U.TO and
             # SAMPLF.TO share the root SAMPLF.
+            # A paired currency journal's legs carry its id
+            # (_plan_qt_journals).
             out = next((o for o in legs if o['quantity'] < 0
                         and o['date'] == i['date']
-                        and _journal_root(o['symbol'])
-                        == _journal_root(i['symbol'])
+                        and (o.get('journal_pair') == i['journal_pair']
+                             if i.get('journal_pair') else
+                             _journal_root(o['symbol'])
+                             == _journal_root(i['symbol']))
                         and abs(o['quantity'] + i['quantity']) < 1e-9
                         and not o.get('net_amount')), None)
             if out is None:
