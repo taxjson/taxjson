@@ -174,7 +174,7 @@ class TestScaffoldCoversCurrentFeatures(unittest.TestCase):
         # their values differ, so every [settings] key line, active or
         # commented, has its `=` in the same column.
         t = self._toml("canada")
-        block = t.split("[settings]\n")[1].split("\n# One [accounts")[0]
+        block = t.split("[settings]\n")[1].split("\n## One [accounts")[0]
         cols = {m.start(1) for m in map(
             re.compile(r"(?:# )?[a-z_]+ *( = )").match, block.splitlines())
             if m}
