@@ -74,7 +74,10 @@ IRS guidance and a tax professional.
     user's ticker.map or taxjson.toml, with a clear error naming the line
     to add.
   - Output follows `docs/output-style.md`: `Info:` / `Warning:` / `Error:`
-    labels, `==>` steps; captured `.diag` / `.sum` / work/ bytes stay
+    labels, `==>` steps; a message's later lines flush-left and one blank
+    line after a message of more than one line (print it with
+    `out.show` / `out.emit`, not a loop of `print`); wrap width 120 piped,
+    the terminal's up to 160; captured `.diag` / `.sum` / work/ bytes stay
     stable (`TAXJSON_WIDTH=0`).
   - User files (taxjson.toml, ticker.map, .tt) are written through
     `src/taxjson/lib/safe_write.py`.
