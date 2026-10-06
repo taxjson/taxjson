@@ -212,7 +212,8 @@ def bool_setting_problems(cfg: Dict[str, Any]) -> List[str]:
     if isinstance(settings, dict):
         # fx_cash_gains = "false" switched the FX-on-cash report ON and
         # its banner said "= true" (R1-152, R1-261).
-        for key in ("option_buyback_loss_superficial", "fx_cash_gains"):
+        for key in ("option_buyback_loss_superficial", "fx_cash_gains",
+                    "transfers_as_acquisitions"):
             v = settings.get(key)
             if v is not None and not isinstance(v, bool):
                 out.append(f"[settings] {key} must be true or false, "

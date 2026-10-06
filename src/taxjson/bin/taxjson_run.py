@@ -4236,8 +4236,48 @@ def stage_wash_pass(name: str, settings: Dict[str, Any], cache: Path, reports_di
         cmd += ["--incomplete-history", str(incomplete_history)]
     cmd.append(str(base_json))
     run_to_file(cmd, wash_gains)
+    _LOSS_CONTEXT_GAINS.append(wash_gains)
     _render_wash_outputs(name, settings, cache, reports_dir,
                          wash_gains, base_json)
+
+
+# The gains files of this run's passes WITH the sheltered context (the
+# blended passes, a crypto account's wash pass): their
+# `transfers_in_loss_windows` make the run's one transfer warning.
+_LOSS_CONTEXT_GAINS: List[Path] = []
+
+
+def _say_transfer_windows(settings: Dict[str, Any]) -> None:
+    """ONE warning per run (CA-SL-16 / US-WASH-23): every transfer-in
+    the books keep as a move between accounts, not a purchase, that sits
+    inside a taxable loss's 30-day window — gathered from this run's
+    loss-context passes (lib/pipeline.transfers_in_loss_windows)."""
+    import json as _json
+    from taxjson.lib.pipeline import transfer_window_message
+    items: List[Dict[str, Any]] = []
+    seen = set()
+    for p in _LOSS_CONTEXT_GAINS:
+        try:
+            doc = _json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for x in (doc.get("transfers_in_loss_windows") or []
+                  if isinstance(doc, dict) else []):
+            if not isinstance(x, dict):
+                continue
+            k = (x.get("account"), x.get("symbol"), x.get("date"),
+                 x.get("qty"))
+            if k not in seen:
+                seen.add(k)
+                items.append(x)
+    _LOSS_CONTEXT_GAINS.clear()
+    if not items:
+        return
+    items.sort(key=lambda r: (str(r.get("date")), str(r.get("account")),
+                              str(r.get("symbol"))))
+    head, details, _legacy = transfer_window_message(
+        items, _normalize_country(settings["country"]))
+    _say("warning", head, *details, indent="  ", file=sys.stdout)
 
 
 def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
@@ -4805,6 +4845,8 @@ def stage_blended_wash_pass(names: List[str],
         cmd += ["--incomplete-history", str(incomplete_history)]
     cmd.append(str(combined_base))
     run_to_file(cmd, combined_wash)
+    if sheltered_base is not None and not no_wash:
+        _LOSS_CONTEXT_GAINS.append(combined_wash)
     # A wash-sale basis add that reaches a sale in a filed year (US-WASH-22)
     # is decided only here, across accounts: on the console.
     from taxjson.lib.pipeline import ATTENTION_WASH_LOCKED
@@ -5847,6 +5889,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                                 no_wash=not _crypto_blend,
                                 spot_crypto=not _crypto_blend,
                                 strict=getattr(args, "strict", False))
+    _say_transfer_windows(settings)
     if not args.account and not pending_accounts:
         # A sheltered account never gets a wash pass. One re-typed from
         # taxable kept its old <name>_gains_wash.json / _wash.sum, which

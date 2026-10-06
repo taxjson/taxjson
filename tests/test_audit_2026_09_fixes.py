@@ -138,7 +138,7 @@ class TestPairDropClustering(unittest.TestCase):
 
 @rule("CA-SL-03", "CA-SL-09")
 class TestShelteredContributionIsATrigger(unittest.TestCase):
-    def _run_with_sheltered(self, spelling, shel_date):
+    def _run_with_sheltered(self, spelling, shel_date, strict=False):
         from taxjson.lib.pipeline import prepare_books
         main = [_t(account='margin', date='2024-05-01', quantity=100,
                    net_amount=10000.0),
@@ -147,8 +147,9 @@ class TestShelteredContributionIsATrigger(unittest.TestCase):
         shel = [_t(action=spelling, account='rrsp', date=shel_date,
                    quantity=100, net_amount=8100.0)]
         with redirect_stderr(io.StringIO()):
-            m, sh, af, _ = prepare_books(main, shel, taxable=False,
-                                         phantom_hint=False)
+            m, sh, af, _ = prepare_books(
+                main, shel, taxable=False, phantom_hint=False,
+                transfers_as_acquisitions=strict)
             return get_tax_rules('canada').compute_gains(
                 m, sheltered_transactions=sh,
                 affiliated_transactions=af)
@@ -162,16 +163,18 @@ class TestShelteredContributionIsATrigger(unittest.TestCase):
             float(w.get('disallowed_amount') or 0)
             for w in r.get('wash_sales') or []), 0)
 
+    @rule("CA-SL-17")
     def test_transfer_in_window_demands_a_declaration(self):
-        # A TRANSFER's date is a broker ARRIVAL date; if it lands in a
+        # transfers_as_acquisitions = true (the strict policy): a
+        # TRANSFER's date is a broker ARRIVAL date; if it lands in a
         # trigger window the engine refuses to guess whether it was a
         # contribution (a real acquisition — deny) or a custody move
-        # (not an acquisition — allow). The old strip silently chose
-        # "allow"; silently choosing "deny" would be wrong the other
-        # way. The error names both resolutions.
+        # (not an acquisition — allow). The error names both
+        # resolutions.
         from taxjson.lib.core import AmbiguousTransferDateError
         with self.assertRaises(AmbiguousTransferDateError) as cm:
-            self._run_with_sheltered('TRANSFER', '2024-06-20')
+            self._run_with_sheltered('TRANSFER', '2024-06-20',
+                                     strict=True)
         self.assertIn('ARRIVAL', str(cm.exception))
         self.assertIn('custody', str(cm.exception))
 

@@ -60,6 +60,13 @@ option_grant_timing_since         = 2024
 ## margin); next_day: the clearing premium date.
 # futures_settle                  = "trade"  # trade | next_day
 
+## --- Transfers ---
+## false (the default): a sheltered account's transfer in or out is a move between accounts — its
+## shares count as held, but it is never a purchase for the superficial-loss rule; the run warns
+## once about each transfer-in near a loss. true: every such transfer is a purchase or sale on its
+## date (an arrival date in a loss's window then stops the run).
+# transfers_as_acquisitions       = false
+
 ## One [accounts.NAME] table per folder under inputs/ (the folder name is the account name). Every
 ## key, with its default:
 # [accounts.NAME]

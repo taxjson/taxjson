@@ -99,12 +99,14 @@ class TestPrepareBooks(unittest.TestCase):
                                               phantom_hint=False)
         self.assertEqual(shel_out, [])
 
+    @rule("CA-SL-17")
     def test_sheltered_custody_pair_near_loss_survives(self):
-        # 2026-09 audit finding 4: a same-account contribution+
-        # withdrawal pair INSIDE a main-book loss window is
-        # byte-identical to a custody move but must NOT be netted —
-        # the legs survive (as transfer_rewrite BUYSELLs) so the
-        # engine's AmbiguousTransferDateError can force a declaration.
+        # transfers_as_acquisitions = true: 2026-09 audit finding 4 — a
+        # same-account contribution+withdrawal pair INSIDE a main-book
+        # loss window is byte-identical to a custody move but must NOT
+        # be netted — the legs survive (as transfer_rewrite BUYSELLs) so
+        # the engine's AmbiguousTransferDateError can force a
+        # declaration.
         main = [self._t(qty=100, net=10000.0, date="2025-02-01"),
                 self._t(qty=-100, net=8000.0, date="2025-03-02")]
         shel = [self._t(action="TRANSFER", qty=50, net=4000.0,
@@ -112,10 +114,28 @@ class TestPrepareBooks(unittest.TestCase):
                 self._t(action="TRANSFER", qty=-50, net=4000.0,
                         account="rrsp", date="2025-03-10")]
         with redirect_stderr(io.StringIO()):
-            _, shel_out, _, _ = prepare_books(main, shel, taxable=False,
-                                              phantom_hint=False)
+            _, shel_out, _, _ = prepare_books(
+                main, shel, taxable=False, phantom_hint=False,
+                transfers_as_acquisitions=True)
         self.assertEqual([(t.action, t.type) for t in shel_out],
                          [("BUYSELL", "transfer_rewrite")] * 2)
+
+    @rule("CA-SL-16")
+    def test_sheltered_custody_pair_near_loss_nets_by_default(self):
+        # The default policy: the same pair is a custody move whatever
+        # trades sit near it — netted, nothing for the loss walk.
+        main = [self._t(qty=100, net=10000.0, date="2025-02-01"),
+                self._t(qty=-100, net=8000.0, date="2025-03-02")]
+        shel = [self._t(action="TRANSFER", qty=50, net=4000.0,
+                        account="rrsp", date="2025-03-06"),
+                self._t(action="TRANSFER", qty=-50, net=4000.0,
+                        account="rrsp", date="2025-03-10")]
+        err = io.StringIO()
+        with redirect_stderr(err):
+            _, shel_out, _, _ = prepare_books(main, shel, taxable=False,
+                                              phantom_hint=False)
+        self.assertEqual(shel_out, [])
+        self.assertNotIn("NOT netted", err.getvalue())
 
     def test_sheltered_cross_account_move_netted(self):
         # rrsp -> rrsp2: moving your own shares between registered

@@ -334,21 +334,34 @@ does not reach them and losses are allowed in full (`taxjson run` passes
 `--no-wash` automatically and prints a note). In a Canada project crypto stays
 superficial-loss-checked: s.54 covers any identical property.
 
-**Sheltered transfers and ambiguous arrival dates.** With `transfers = true`
-on a sheltered account, TRANSFER rows count as in-kind contributions /
-withdrawals for the superficial-loss walk. But a broker TRANSFER date is an
-**arrival** date, not necessarily an acquisition date — a custody move (broker
-switch, cross-listing journal, account restatement) lands rows whose dates
-mean nothing for s.54. The pipeline nets out the obvious custody churn
-(zero-net clusters of the same symbol within days), but **refuses to guess**
-whenever the answer could change a tax number: a transfer whose date falls
-inside the ±30-day window of a taxable loss sale stops the run with
-`AmbiguousTransferDateError` and instructions. You resolve it by *declaring*
-what happened in a hand-written `.tt` file in the same account's `inputs/`
-directory. A TRANSFER line ending in the token **`DECLARED`** is a deliberate
-user statement and satisfies the guard — the token is opt-in precisely so
-ordinary `.tt` TRANSFER rows (and json→tt round trips of broker rows) never
-gain that authority by accident:
+**Sheltered transfers are account moves.** With `transfers = true` on a
+sheltered account (RRSP/TFSA, IRA), its TRANSFER rows stay in the books, and a
+transfer in or out is a **move between accounts** by default: the shares count
+as held (Canada's day-30 still-held test), but a transfer-in is never a
+purchase for the superficial-loss / wash-sale window, whatever trades sit near
+it — a broker TRANSFER date is an *arrival* date, not an acquisition date.
+Custody churn that nets to zero, and moves between your own sheltered accounts,
+are netted out. Instead of stopping, the run prints **one warning** listing
+every transfer-in (account, symbol, quantity, date) that sits inside the
+±30-day window of a taxable loss sale:
+
+```
+Warning: 1 transfer-in in a taxable loss's 30-day window counted as an account move, not a purchase
+  - rrsp: SAMPLE.TO +80 on 2025-05-09 (loss sale 2025-04-15 in margin)
+  If one was an in-kind contribution or a purchase rather than an account move, ...
+```
+
+If one of them *was* an in-kind contribution or a purchase, record it as a
+BUYSELL dated the day it was acquired (in a `.tt` file in that account's
+`inputs/` directory): a BUYSELL is counted, and in a registered account the
+denied loss is gone for good.
+
+`[settings] transfers_as_acquisitions = true` restores the strict treatment:
+every unmatched sheltered TRANSFER is an acquisition or disposition on its
+date, and one dated inside a taxable loss's window stops the run until you
+*declare* what happened in a hand-written `.tt` file. A TRANSFER line ending in
+the token **`DECLARED`** is a deliberate user statement (opt-in, so ordinary
+`.tt` TRANSFER rows never gain that authority by accident):
 
 - **Custody move, history lost** — one line:
   `ACQUIRED 2024-09-16 09:30:00 SAMPLE.US 500 CAD <price> <total> ARRIVED
@@ -356,15 +369,12 @@ gain that authority by accident:
   cost) plus a DECLARED counter-TRANSFER netting the broker's arrival leg.
   (The two expanded rows remain legal to write by hand.)
 - **Broker restatement churn that already nets to zero** but sits too close
-  to a taxable trade — usually needs nothing: when three or more symbols in
-  the SAME account share zero-net clusters over a common few-day envelope,
-  the pipeline detects the account-wide restatement itself and nets the
-  whole event (one NOTE names it). Only a one-or-two-symbol churn needs a
-  manual attestation — a declared zero-net pair
+  to a taxable trade — when three or more symbols in the SAME account share
+  zero-net clusters over a common few-day envelope, the pipeline nets the
+  whole event itself; a one-or-two-symbol churn needs a declared zero-net pair
   (`TRANSFER <date> <time> <sym> N <cur> 0.0 0.0 DECLARED` + the same line
-  with `-N`); the run prints this exact form when it refuses such a cluster.
-- **Genuine in-kind contribution** — record it as a BUYSELL dated the
-  contribution day (that *is* an acquisition by an affiliated person).
+  with `-N`), whose exact form the strict run prints.
+- **Genuine in-kind contribution** — a BUYSELL dated the contribution day.
 
 ## Install
 

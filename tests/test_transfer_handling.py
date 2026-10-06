@@ -297,10 +297,12 @@ class TestNettingRefusalBypasses(unittest.TestCase):
             shel, main_transactions=main)
         self.assertEqual(len(out), 3, "all hops must survive the dropper")
 
+    @rule("CA-SL-17")
     def test_surviving_pair_reaches_engine_guard(self):
-        """End-to-end: the surviving sheltered pair is rewritten to
-        type='transfer_rewrite' BUYSELLs and the engine refuses to
-        guess whether the in-window leg was an acquisition."""
+        """transfers_as_acquisitions = true, end-to-end: the surviving
+        sheltered pair is rewritten to type='transfer_rewrite' BUYSELLs
+        and the engine refuses to guess whether the in-window leg was
+        an acquisition."""
         from taxjson.lib.core import AmbiguousTransferDateError, \
             get_tax_rules
         main = [_tx('BUYSELL', '2026-05-01', 'Q.TO', +100, net=10000.0,
@@ -312,7 +314,8 @@ class TestNettingRefusalBypasses(unittest.TestCase):
                     account='RRSP', currency='CAD'),
                 _tx('TRANSFER', '2026-06-20', 'Q.TO', -100, net=8000.0,
                     account='RRSP', currency='CAD')]
-        m, sh = _handle_transfers(main, shel, taxable=False)
+        m, sh = _handle_transfers(main, shel, taxable=False,
+                                  transfers_as_acquisitions=True)
         self.assertEqual([(t.action, t.type) for t in sh],
                          [('BUYSELL', 'transfer_rewrite')] * 2)
         with self.assertRaises(AmbiguousTransferDateError):

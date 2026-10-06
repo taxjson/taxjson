@@ -4,6 +4,15 @@
 
 ### Changed
 
+- **A sheltered account's transfer is an account move, not a purchase.** A
+  TRANSFER-in to an RRSP/TFSA (IRA) dated inside a taxable loss's 30-day window
+  no longer stops `taxjson run` with an "arrival date" error, and zero-net
+  transfer clusters near a trade are netted without asking for a DECLARED
+  attestation. The shares still count as held; the run prints one warning
+  listing each transfer-in inside a loss's window, so an in-kind contribution
+  can be recorded as a BUYSELL. `[settings] transfers_as_acquisitions = true`
+  restores the old strict treatment (tax-logic CA-SL-16/17, US-WASH-23/24).
+
 - **taxjson.toml descriptions use the full 100-column width.** `taxjson init` and
   `taxjson format` wrapped `## ` prose at 79 columns; they now wrap at 100, the house width.
   `taxjson format` reflows an existing file's template text.

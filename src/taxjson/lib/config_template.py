@@ -251,6 +251,21 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
         "true: the strict s.54 reading — a loss on buying back a written "
         "option is superficial when identical options are bought within "
         "30 days and still held."),
+    Key("transfers_as_acquisitions", "false",
+        {"canada": "false (the default): a sheltered account's transfer "
+                   "in or out is a move between accounts — its shares "
+                   "count as held, but it is never a purchase for the "
+                   "superficial-loss rule; the run warns once about each "
+                   "transfer-in near a loss. true: every such transfer "
+                   "is a purchase or sale on its date (an arrival date "
+                   "in a loss's window then stops the run).",
+         "usa": "false (the default): a retirement account's transfer "
+                "in or out is a move between accounts, never a "
+                "replacement purchase for the wash-sale rule; the run "
+                "warns once about each transfer-in near a loss. true: "
+                "every such transfer is a purchase or sale on its date "
+                "(an arrival date in a loss's window then stops the "
+                "run)."}),
 )
 
 ACCOUNT_SPEC: Tuple[Key, ...] = (
@@ -298,6 +313,7 @@ SETTINGS_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Income", ("corporate_distributions", "foreign_return_of_capital",
                 "ric_january_dividends")),
     ("Futures", ("futures_settle",)),
+    ("Transfers", ("transfers_as_acquisitions",)),
 )
 
 

@@ -812,6 +812,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                         metavar="YEAR",
                         help="With grant timing: contracts written before "
                              "YEAR keep close timing.")
+    parser.add_argument("--transfers-as-acquisitions", action="store_true",
+                        help="Count a sheltered account's unmatched TRANSFER rows as "
+                             "acquisitions/disposals for the superficial-loss / wash-sale "
+                             "window (strict; [settings] transfers_as_acquisitions = true). "
+                             "Default: a custody move, held but never a purchase.")
     parser.add_argument("--option-buyback-wash", action="store_true",
                         help="Canada, grant timing: buy-back loss of a "
                              "written option can be superficial.")
@@ -929,6 +934,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     _opt = dict(option_premium_timing=args.option_premium_timing,
                 option_grant_since=args.option_grant_since,
                 option_buyback_loss_superficial=args.option_buyback_wash,
+                transfers_as_acquisitions=args.transfers_as_acquisitions,
                 # The project's income dating, as every filing run uses
                 # it: a listed corporation's ROC on its pay date
                 # (CA-INC-DATE-ROC; audit A2-0123, A2-0339, A2-0341).

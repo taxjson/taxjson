@@ -962,6 +962,11 @@ def parse_args(argv=None):
                    default=None, help="Canada only (default: close)")
     p.add_argument("--option-grant-since", type=tax_year, default=None)
     p.add_argument("--option-buyback-wash", action="store_true")
+    p.add_argument("--transfers-as-acquisitions", action="store_true",
+                   help="Count a sheltered account's unmatched TRANSFER rows as "
+                        "acquisitions/disposals for the superficial-loss / wash-sale "
+                        "window (strict; [settings] transfers_as_acquisitions = true). "
+                        "Default: a custody move, held but never a purchase.")
     p.add_argument("--no-wash", action="store_true",
                    help="Disable wash detection (US crypto: digital "
                         "assets are property, not securities — §1091 "
@@ -1099,7 +1104,8 @@ def main(argv=None) -> int:
         transactions, sheltered, affiliated, taxable=False,
         incomplete_history=(Path(args.incomplete_history)
                             if args.incomplete_history else None),
-        phantom_hint=False, country=country)
+        phantom_hint=False, country=country,
+        transfers_as_acquisitions=args.transfers_as_acquisitions)
 
     # The engine options and the income re-dating run_gains applies
     # (lib/pipeline: one builder): the trust ROC record date

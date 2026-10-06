@@ -271,6 +271,10 @@ SETTING_COUNTRY: Dict[str, str] = {
     "prior_year_record": BOTH,
     "local_timezone": BOTH,         # the zone crypto UTC stamps are dated in
     "leaps_months": BOTH,           # the LEAPS views' cut-off (no tax effect)
+    # s.54 superficial loss in Canada, §1091 in the US: a sheltered
+    # account's transfer is a custody move unless set (CA-SL-16/17,
+    # US-WASH-23/24).
+    "transfers_as_acquisitions": BOTH,
     "province": CANADA,
     "option_premium_timing": CANADA,
     "option_grant_timing_since": CANADA,

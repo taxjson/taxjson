@@ -101,6 +101,12 @@ def _parse_args():
              "option as a superficial loss when identical options are acquired "
              "within 30 days and held (strict reading; default off — a "
              "closing purchase is not a disposition s.54 reaches).")
+    parser.add_argument(
+        "--transfers-as-acquisitions", action="store_true",
+        help="Count a sheltered account's unmatched TRANSFER rows as "
+             "acquisitions/disposals for the superficial-loss / wash-sale "
+             "window (strict; [settings] transfers_as_acquisitions = true). "
+             "Default: a custody move, held but never a purchase.")
     add_income_dating_args(parser)
     parser.add_argument(
         "--spot-crypto", action="store_true",
@@ -342,6 +348,7 @@ def _request(args) -> GainsRequest:
         ric_january_dividends=tuple(args.ric_january_dividend or ()),
         spot_crypto=args.spot_crypto,
         locked_years=tuple(args.locked_year or ()),
+        transfers_as_acquisitions=args.transfers_as_acquisitions,
     )
 
 

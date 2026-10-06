@@ -333,6 +333,11 @@ def main():
                              "of capital keeps its pay date; a Canadian "
                              "trust's moves to its record date, as in "
                              "the engine — CA-INC-DATE-ROC-TRUST)")
+    parser.add_argument("--transfers-as-acquisitions", action="store_true",
+                        help="Count a sheltered account's unmatched TRANSFER rows as "
+                             "acquisitions/disposals for the superficial-loss / wash-sale "
+                             "window (strict; [settings] transfers_as_acquisitions = true). "
+                             "Default: a custody move, held but never a purchase.")
     parser.add_argument("--option-buyback-wash", action="store_true",
                         help="Canada: [settings] "
                              "option_buyback_loss_superficial = true — a "

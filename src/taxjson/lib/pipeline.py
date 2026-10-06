@@ -180,7 +180,8 @@ def _main_trade_dates(main_transactions):
 
 
 def _drop_self_cancelling_transfers(transactions, main_transactions=None,
-                                    base_currency=None):
+                                    base_currency=None,
+                                    near_trade_guard=True):
     """Drop TRANSFER groups that net to zero WITHIN ONE TIME CLUSTER and
     have no intervening trade or split.
 
@@ -236,14 +237,22 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
     mid-trading), and the taxable book's transfers are guarded by the
     TransferValidationError hard-error path instead.
 
+    `near_trade_guard=False` (the default transfer policy, CA-SL-16 /
+    US-WASH-23: a sheltered TRANSFER is a custody move, never an
+    acquisition for the loss rule) drops the near-trade refusal, the
+    restatement pre-pass and their notes: a zero-net cluster nets
+    whatever trades sit near it, as a custody move would. The SPLIT
+    blocks and the journal-candidate post-pass stay.
+
     Returns the filtered list plus a list of (symbol, account, count)
     tuples for the caller to log.
     """
     epsilon = 1e-9
     from collections import defaultdict
     from datetime import datetime as _dt, timedelta as _td
+    _guarded = main_transactions is not None and near_trade_guard
     main_trades = (_main_trade_dates(main_transactions)
-                   if main_transactions is not None else {})
+                   if _guarded else {})
     groups: Dict[tuple, list] = defaultdict(list)
     for idx, t in enumerate(transactions):
         if t.action == 'TRANSFER':
@@ -282,7 +291,7 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
     # blind to the cross-symbol correlation, demanding one DECLARED
     # attestation per symbol for a single event.
     restatement_rows: set = set()
-    if main_transactions is not None:
+    if _guarded:
         _by_acct: Dict[str, list] = defaultdict(list)
         for (symbol, account), segs in seg_by_key.items():
             for seg in segs:
@@ -413,7 +422,7 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
             if blocked:
                 continue
             blessed_seg = seg
-            if main_transactions is not None and pdates:
+            if _guarded and pdates:
                 lo, hi = min(pdates), max(pdates)
                 _pad = _td(days=_TRANSFER_NEAR_TRADE_PAD_DAYS)
                 near = any(lo - _pad <= td_ <= hi + _pad
@@ -527,12 +536,14 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
                                 f"declared pair next to the rows it "
                                 f"attests.")
                             continue
-                # Main-book SPLIT inside the span: splits are
-                # corporate-wide, so the legs are in different terms.
-                if any(t.action == 'SPLIT' and t.symbol == symbol
-                       and t.date and date_lo <= t.date <= date_hi
-                       for t in main_transactions):
-                    continue
+            # Main-book SPLIT inside the span: splits are
+            # corporate-wide, so the legs are in different terms
+            # (whatever the transfer policy).
+            if main_transactions is not None and any(
+                    t.action == 'SPLIT' and t.symbol == symbol
+                    and t.date and date_lo <= t.date <= date_hi
+                    for t in main_transactions):
+                continue
             for idx, _ in blessed_seg:
                 drop_idx.add(idx)
             n_dropped += len(blessed_seg)
@@ -756,7 +767,8 @@ def _book_words(country: Optional[str]) -> Dict[str, str]:
 
 
 def _handle_transfers(transactions, sheltered_transactions, *, taxable,
-                      base_currency=None, country=None):
+                      base_currency=None, country=None,
+                      transfers_as_acquisitions=False):
     """Pre-process TRANSFER rows before they reach the gains engine.
 
     The --sheltered file is for cross-account wash-sale context only. Its
@@ -775,6 +787,17 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
                  the return — the rewrite exists so the sheltered run
                  still tracks the position in inventory_long/short for
                  the holdings.toml / inventory report.
+
+    The sheltered CONTEXT's unmatched TRANSFER rows (the default policy,
+    CA-SL-16 / US-WASH-23): a custody move between accounts — their
+    shares count as held, but a transfer-in is never an acquisition for
+    the superficial-loss / wash-sale window (core.TRANSFER_CUSTODY_TYPE);
+    run_gains warns once about each one inside a taxable loss's window.
+    `transfers_as_acquisitions=True` ([settings] transfers_as_acquisitions
+    = true, CA-SL-17 / US-WASH-24) restores the strict treatment below:
+    near-trade refusals, and the survivors booked as acquisitions /
+    disposals whose arrival date the engine refuses to guess
+    (AmbiguousTransferDateError).
     """
     # The --sheltered context file's TRANSFER rows need three-way
     # handling, not the old unconditional strip. Stripping everything
@@ -804,7 +827,8 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
                                 and t.type == LOT_MOVE_TYPE)]
         transactions, sheltered_transactions = _handle_transfers(
             transactions, sheltered_transactions, taxable=taxable,
-            base_currency=base_currency, country=country)
+            base_currency=base_currency, country=country,
+            transfers_as_acquisitions=transfers_as_acquisitions)
         return transactions + _lot_moves, sheltered_transactions
     n_sh_before = sum(1 for t in sheltered_transactions
                       if t.action == 'TRANSFER')
@@ -815,23 +839,32 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
     # The main-book invocation below stays unguarded on purpose (taxable
     # custody moves near own-sales are normal; the taxable book has the
     # TransferValidationError hard-error path instead).
+    # Default policy (CA-SL-16 / US-WASH-23): no near-trade refusal —
+    # a transfer is a custody move whatever trades sit near it.
     sheltered_transactions, _sh_pairs = _drop_self_cancelling_transfers(
         sheltered_transactions, main_transactions=transactions,
-        base_currency=base_currency)
+        base_currency=base_currency,
+        near_trade_guard=transfers_as_acquisitions)
     _own_moves: list = []
     sheltered_transactions = _net_cross_account_transfers(
-        sheltered_transactions, main_transactions=transactions,
+        sheltered_transactions,
+        main_transactions=(transactions if transfers_as_acquisitions
+                           else ()),
         netted_out=_own_moves)
+    from taxjson.lib.core import TRANSFER_CUSTODY_TYPE
+    # type='transfer_rewrite' (strict): the engine refuses to use the
+    # row as a wash TRIGGER (its date may be a custody-arrival date,
+    # not an acquisition date) while still counting it in still-held
+    # balances, which are date-insensitive. TRANSFER_CUSTODY_TYPE
+    # (default): held, never a trigger (core.not_a_purchase).
+    _sh_type = ('transfer_rewrite' if transfers_as_acquisitions
+                else TRANSFER_CUSTODY_TYPE)
     n_sh_rewritten = 0
     _sh_out = []
     for t in sheltered_transactions:
         if t.action == 'TRANSFER':
-            # type='transfer_rewrite': the engine refuses to use this
-            # row as a wash TRIGGER (its date may be a custody-arrival
-            # date, not an acquisition date) while still counting it
-            # in still-held balances, which are date-insensitive.
             t = TaxTransaction(**{**t.to_dict(), 'action': 'BUYSELL',
-                                  'type': 'transfer_rewrite'})
+                                  'type': _sh_type})
             n_sh_rewritten += 1
         _sh_out.append(t)
     # Netted own-account moves stay as balance-only TRANSFER rows: the
@@ -860,7 +893,18 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
 
     n_main = sum(1 for t in transactions if t.action == 'TRANSFER')
 
-    if n_sh_rewritten:
+    if n_sh_rewritten and not transfers_as_acquisitions:
+        say("note", f"{n_sh_rewritten} unmatched TRANSFER row(s) in the "
+            f"sheltered context kept as custody moves",
+            [f"Their shares count as held; none is a purchase or a sale "
+             f"for the {_book_words(country)['walk']} "
+             f"(transfers_as_acquisitions = false)."],
+            legacy=f"NOTE: {n_sh_rewritten} unmatched TRANSFER row(s) in "
+            f"the --sheltered context kept as custody moves: their shares "
+            f"count as held; none is a purchase or a sale for the "
+            f"{_book_words(country)['walk']} "
+            f"(transfers_as_acquisitions = false).")
+    elif n_sh_rewritten:
         say("note", f"{n_sh_rewritten} unmatched TRANSFER row(s) in the "
             f"sheltered context booked as acquisitions/disposals",
             [f"They count as sheltered acquisitions/disposals for the "
@@ -946,7 +990,8 @@ def prepare_books(transactions, sheltered_transactions=(),
                   phantom_hint: bool = True,
                   base_currency: Optional[str] = None,
                   spot_crypto: bool = False,
-                  country: Optional[str] = None):
+                  country: Optional[str] = None,
+                  transfers_as_acquisitions: bool = False):
     """The load-side preprocessing every gains consumer must share:
     TRANSFER handling (strip/drop/rewrite/reject) then missing-history
     opening synthesis. Returns (transactions, sheltered, affiliated,
@@ -970,6 +1015,7 @@ def prepare_books(transactions, sheltered_transactions=(),
     transactions, sheltered_transactions = _handle_transfers(
         transactions, sheltered_transactions, taxable=taxable,
         base_currency=base_currency, country=country,
+        transfers_as_acquisitions=transfers_as_acquisitions,
     )
 
     missing_history_log: list = []
@@ -1170,6 +1216,11 @@ class GainsRequest:
     # that sale: the basis add is booked in the loss's year instead,
     # said as ATTENTION (tax-logic US-WASH-22).
     locked_years: Tuple[int, ...] = ()
+    # A sheltered account's unmatched TRANSFER row: a custody move by
+    # default (held, never an acquisition for the loss rule — CA-SL-16 /
+    # US-WASH-23); True ([settings] transfers_as_acquisitions = true)
+    # books it as an acquisition/disposal (CA-SL-17 / US-WASH-24).
+    transfers_as_acquisitions: bool = False
 
     def __post_init__(self):
         from taxjson.lib.country import canonical_country
@@ -1474,7 +1525,8 @@ def run_gains(transactions, sheltered_transactions=(),
             taxable=req.taxable, incomplete_history=req.incomplete_history,
             phantom_hint=req.phantom_hint, spot_crypto=req.spot_crypto,
             base_currency=HOME_CURRENCY.get(req.country),
-            country=req.country)
+            country=req.country,
+            transfers_as_acquisitions=req.transfers_as_acquisitions)
 
     rules = get_tax_rules(req.country)
     income_rules = req.income_rules()
@@ -1623,6 +1675,8 @@ def run_gains(transactions, sheltered_transactions=(),
                 if (w.get('loss_date') or '').startswith(year_str)]
         results['summary']['year'] = year_str
         results['summary']['tax_date_basis'] = tax_date
+        if req.transfers_as_acquisitions:
+            results['summary']['transfers_as_acquisitions'] = True
         if req.country == 'canada':
             results['summary']['option_premium_timing'] = req.option_premium_timing or 'close'
             results['summary']['option_grant_since'] = req.option_grant_since
@@ -1863,6 +1917,20 @@ def run_gains(transactions, sheltered_transactions=(),
         if _pt_warns:
             results.setdefault('superficial_loss_warnings', []).extend(_pt_warns)
 
+    # Transfer-ins the books keep as custody moves (CA-SL-16 /
+    # US-WASH-23; a taxable arrival at the broker's book value too,
+    # CA-ACB-TRANSFER-BV) that sit inside a loss's window: never a
+    # replacement, so said once — the user decides whether one was an
+    # in-kind contribution or a purchase after all.
+    if _loss_rule:
+        _xw = transfers_in_loss_windows(
+            clean_txs, list(transactions) + list(sheltered_transactions)
+            + list(affiliated_transactions or []), req.country)
+        if _xw:
+            results['transfers_in_loss_windows'] = _xw
+            _h, _det, _leg = transfer_window_message(_xw, req.country)
+            say("warning", _h, _det, legacy=_leg)
+
     # Say it where the user reads it (audit R1-325): the warnings only
     # lived in the gains JSON, and the per-account split dropped them.
     # A `warning:` line reaches the .diag and the DIAGNOSTICS banner.
@@ -1893,6 +1961,105 @@ def run_gains(transactions, sheltered_transactions=(),
         w.pop('trace', None)
 
     return round_floats(results)
+
+
+# The captured head of the run's one transfer-window warning (the run
+# reads the gains JSON's `transfers_in_loss_windows`, not this text).
+TRANSFER_WINDOW_HEAD = "warning: transfer-in inside a loss window: "
+
+
+def transfers_in_loss_windows(losses, rows, country: str,
+                              window_days: int = 30) -> List[Dict[str, Any]]:
+    """Each transfer-in the books hold but never count as a purchase
+    (core.TRANSFER_CUSTODY_TYPE: a sheltered account's custody move;
+    core.TRANSFER_BOOK_VALUE_TYPE: a taxable arrival at the broker's
+    book value) dated inside the ±`window_days` window of a loss in
+    `losses` (gain rows; the raw loss before any denial) on the same
+    symbol, measured on the country's window dates (settle in Canada,
+    trade in the US). One record per transfer row, naming the nearest
+    loss: {account, symbol, qty, date, loss_date, loss_account}."""
+    from datetime import datetime as _dt
+    from taxjson.lib.core import (TRANSFER_BOOK_VALUE_TYPE,
+                                  TRANSFER_CUSTODY_TYPE)
+    from taxjson.lib.missing_history import loss_window_date
+
+    def _day(v):
+        try:
+            return _dt.strptime(str(v or '')[:10], '%Y-%m-%d')
+        except ValueError:
+            return None
+    by_sym: Dict[str, list] = {}
+    for e in losses or ():
+        if e.get('action') in ('DIVIDEND', 'DIVIDEND_IN_LIEU'):
+            continue
+        raw = e.get('raw_gain', e.get('gain'))
+        try:
+            raw = float(raw or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if raw >= -0.005 or e.get('deemed'):
+            continue
+        d = _day(loss_window_date(e, country))
+        if d is not None and e.get('symbol'):
+            by_sym.setdefault(e['symbol'], []).append((d, e))
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for t in rows or ():
+        if (getattr(t, 'action', '') != 'BUYSELL'
+                or float(getattr(t, 'quantity', 0) or 0) <= 0
+                or (getattr(t, 'type', '') or '') not in (
+                    TRANSFER_CUSTODY_TYPE, TRANSFER_BOOK_VALUE_TYPE)):
+            continue
+        cands = by_sym.get(t.symbol)
+        if not cands:
+            continue
+        td = _day(loss_window_date({'date': t.date,
+                                    'date_settle': t.date_settle}, country))
+        if td is None:
+            continue
+        near = [(abs((td - d).days), d, e) for d, e in cands
+                if abs((td - d).days) <= window_days]
+        if not near:
+            continue
+        _gap, _d, e = min(near, key=lambda x: (x[0], x[1]))
+        key = (t.account, t.symbol, t.date, float(t.quantity))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({'account': t.account, 'symbol': t.symbol,
+                    'qty': float(t.quantity), 'date': t.date,
+                    'loss_date': e.get('date'),
+                    'loss_account': e.get('account')})
+    out.sort(key=lambda r: (r['date'], r['account'], r['symbol']))
+    return out
+
+
+def transfer_window_message(items, country: Optional[str]
+                            ) -> Tuple[str, List[str], str]:
+    """(headline, details, captured text) of the one warning for
+    transfers_in_loss_windows `items`: captured as a `warning:` marker
+    line and indented detail lines (the .diag and the .sum DIAGNOSTICS
+    keep them), shown as `Warning:` with two-space continuations."""
+    n = len(items)
+    rule = ("the loss may be superficial (s.54)" if country == 'canada'
+            else "the loss may be a wash sale (§1091)" if country == 'usa'
+            else "the loss may be denied")
+    head = (f"{n} transfer-in in a taxable loss's 30-day window counted "
+            f"as an account move, not a purchase" if n == 1 else
+            f"{n} transfer-ins in a taxable loss's 30-day window counted "
+            f"as account moves, not purchases")
+    rows = [f"- {x['account']}: {x['symbol']} +{x['qty']:g} on "
+            f"{x['date']} (loss sale {x['loss_date']}"
+            + (f" in {x['loss_account']}" if x.get('loss_account') else '')
+            + ")" for x in items]
+    tail = (f"If one was an in-kind contribution or a purchase rather "
+            f"than an account move, {rule}: record it as a BUYSELL dated "
+            f"the day it was acquired to have it counted "
+            f"([settings] transfers_as_acquisitions = true counts every "
+            f"transfer).")
+    legacy = "\n".join([TRANSFER_WINDOW_HEAD + head]
+                       + ["  " + r for r in rows] + ["  " + tail])
+    return head, rows + [tail], legacy
 
 
 def tt_json_path(cache: Path, account: str, tt_name: str) -> Path:
@@ -1945,15 +2112,33 @@ def income_dating_flags(settings: Dict[str, Any]) -> List[str]:
     return IncomeRules.from_settings(settings).cli_flags()
 
 
+def transfers_as_acquisitions(settings: Dict[str, Any]) -> bool:
+    """`[settings] transfers_as_acquisitions` (both countries; default
+    false: a sheltered account's unmatched transfer is a custody move,
+    CA-SL-16 / US-WASH-23). A quoted or non-boolean value is refused
+    (bool("false") is True)."""
+    v = settings.get("transfers_as_acquisitions", False)
+    if v is None:
+        return False
+    if not isinstance(v, bool):
+        raise ValueError(
+            f"[settings] transfers_as_acquisitions must be true or false, "
+            f"unquoted (got {v!r})")
+    return v
+
+
 def option_timing_flags(settings: Dict[str, Any]) -> List[str]:
     """The same choice as CLI flags for the taxjson-gains / audit / explain
-    subprocesses."""
+    subprocesses — plus the transfer policy (`--transfers-as-acquisitions`,
+    both countries), which every engine CLI given these flags reads."""
+    fl: List[str] = []
     kw = option_timing_from_settings(settings)
-    if not kw:
-        return []
-    fl = ["--option-premium-timing", kw["option_premium_timing"]]
-    if kw.get("option_grant_since") is not None:
-        fl += ["--option-grant-since", str(kw["option_grant_since"])]
-    if kw.get("option_buyback_loss_superficial", False):
-        fl.append("--option-buyback-wash")
+    if kw:
+        fl += ["--option-premium-timing", kw["option_premium_timing"]]
+        if kw.get("option_grant_since") is not None:
+            fl += ["--option-grant-since", str(kw["option_grant_since"])]
+        if kw.get("option_buyback_loss_superficial", False):
+            fl.append("--option-buyback-wash")
+    if transfers_as_acquisitions(settings):
+        fl.append("--transfers-as-acquisitions")
     return fl

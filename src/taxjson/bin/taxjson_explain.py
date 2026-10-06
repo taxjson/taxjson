@@ -131,6 +131,11 @@ def parse_args():
     parser.add_argument("--option-grant-since", type=tax_year, default=None,
                         metavar="YEAR")
     parser.add_argument("--option-buyback-wash", action="store_true")
+    parser.add_argument("--transfers-as-acquisitions", action="store_true",
+                        help="Count a sheltered account's unmatched TRANSFER rows as "
+                             "acquisitions/disposals for the superficial-loss / wash-sale "
+                             "window (strict; [settings] transfers_as_acquisitions = true). "
+                             "Default: a custody move, held but never a purchase.")
     parser.add_argument(
         "--corporate-distribution", action="append", default=None,
         metavar="SYMBOL",
@@ -317,7 +322,9 @@ def main():
         incomplete_history=(Path(args.incomplete_history)
                             if getattr(args, 'incomplete_history', None)
                             else None),
-        phantom_hint=False, country=args.country)
+        phantom_hint=False, country=args.country,
+        transfers_as_acquisitions=getattr(
+            args, 'transfers_as_acquisitions', False))
 
     # The income re-dating and engine options run_gains applies (one
     # builder in lib/pipeline): the trust ROC record date

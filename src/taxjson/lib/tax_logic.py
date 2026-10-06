@@ -77,10 +77,12 @@ VARIANT_AXES: Dict[str, Dict[str, Tuple[Any, ...]]] = {
         "option_buyback_loss_superficial": (False, True),
         "futures_settle": ("trade", "next_day"),
         "foreign_return_of_capital": ("dividend", "acb"),
+        "transfers_as_acquisitions": (False, True),
     },
     _C.USA: {
         "tax_date": ("trade", "settle"),
         "futures_settle": ("trade", "next_day"),
+        "transfers_as_acquisitions": (False, True),
     },
 }
 
@@ -210,6 +212,15 @@ def _options(country: str, settings: Dict[str, Any]) -> Dict[str, Any]:
     return option_timing_from_settings(dict(settings, country=country))
 
 
+def _transfers_as_acquisitions(settings: Dict[str, Any]) -> bool:
+    """[settings] transfers_as_acquisitions, as the engine reads it."""
+    from taxjson.lib.pipeline import transfers_as_acquisitions
+    try:
+        return transfers_as_acquisitions(settings)
+    except ValueError:
+        return False
+
+
 def _ownership(country: str) -> List[Rule]:
     """What a project of this country refuses: built from the
     lib/country tables, so the statement cannot drift from them."""
@@ -302,6 +313,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
     fut = _C.futures_settle_mode(s)
     froc = _C.foreign_roc_mode(dict(s, country=c))
     buyback = kw["option_buyback_loss_superficial"]
+    xfer_acq = _transfers_as_acquisitions(s)
 
     if basis == "settle":
         year_rule = Rule(
@@ -952,6 +964,27 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-SL-13",
                  "Crypto follows the same rule, pooled across exchanges "
                  "when two or more crypto accounts are configured."),
+            (Rule("CA-SL-17",
+                  "A registered account's transfer in or out (one no "
+                  "move between your own registered accounts and no "
+                  "zero-net journal pairs) is booked as an acquisition or "
+                  "disposition on its date. A transfer-in inside a loss's "
+                  "window stops the run until it is declared: a DECLARED "
+                  "counter-TRANSFER .tt pair for a custody move, a "
+                  "BUYSELL dated the true day for an in-kind contribution "
+                  "(transfers_as_acquisitions = true).",
+                  keys=("transfers_as_acquisitions",))
+             if xfer_acq else
+             Rule("CA-SL-16",
+                  "A registered account's transfer in or out is a move "
+                  "between accounts, not an acquisition or disposition: "
+                  "its shares count as held at day 30, but it never "
+                  "replaces a loss, whatever trades sit near it. One "
+                  "warning per run lists each transfer-in inside a "
+                  "taxable loss's window; an in-kind contribution or a "
+                  "purchase recorded as a BUYSELL is counted "
+                  "(transfers_as_acquisitions = false).",
+                  keys=("transfers_as_acquisitions",))),
         ]),
         ("Options (s.49)", prem + [
             Rule("CA-OPT-06",
@@ -1537,6 +1570,7 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
     c = _C.USA
     basis = _C.resolve_tax_date(c, s.get("tax_date"))
     fut = _C.futures_settle_mode(s)
+    xfer_acq = _transfers_as_acquisitions(s)
     return [
         ("Tax year and dates", [
             (Rule("US-DATE-01",
@@ -2054,6 +2088,26 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-WASH-13",
                  "Accounts marked crypto are not subject to the wash-sale "
                  "rule."),
+            (Rule("US-WASH-24",
+                  "A retirement account's transfer in or out (one no "
+                  "move between your own retirement accounts and no "
+                  "zero-net journal pairs) is booked as a purchase or "
+                  "sale on its date. A transfer-in inside a loss's window "
+                  "stops the run until it is declared: a DECLARED "
+                  "counter-TRANSFER .tt pair for a custody move, a "
+                  "BUYSELL dated the true day for a purchase "
+                  "(transfers_as_acquisitions = true).",
+                  keys=("transfers_as_acquisitions",))
+             if xfer_acq else
+             Rule("US-WASH-23",
+                  "A retirement account's transfer in or out (a rollover, "
+                  "a custody move) is a move between accounts, not a "
+                  "purchase or sale: it never replaces a loss, whatever "
+                  "trades sit near it. One warning per run lists each "
+                  "transfer-in inside a taxable loss's window; a purchase "
+                  "recorded as a BUYSELL is counted "
+                  "(transfers_as_acquisitions = false).",
+                  keys=("transfers_as_acquisitions",))),
         ]),
         ("Corporate actions (elections in the account manifest)", [
             Rule("US-CORP-01",

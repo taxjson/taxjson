@@ -2151,19 +2151,28 @@ def is_opening_row(tx) -> bool:
 # never a purchase for the superficial-loss / wash-sale window: the
 # arrival is not when they were acquired.
 TRANSFER_BOOK_VALUE_TYPE = 'transfer_book_value'
+# A sheltered account's unmatched TRANSFER row kept in the loss-rule
+# context as a custody move (lib/pipeline._handle_transfers, the default
+# policy — CA-SL-16 / US-WASH-23): its shares count as held, but the row
+# is never an acquisition (nor a disposition) for the superficial-loss /
+# wash-sale window. `[settings] transfers_as_acquisitions = true` books
+# such rows as 'transfer_rewrite' instead (CA-SL-17 / US-WASH-24).
+TRANSFER_CUSTODY_TYPE = 'transfer_custody'
 
 
 def not_a_purchase(tx) -> bool:
     """Shares that are held but were not ACQUIRED on the row's date: an
-    opening balance (CA-OPEN-01 / US-OPEN-01) or a transfer-in booked at
+    opening balance (CA-OPEN-01 / US-OPEN-01), a transfer-in booked at
     the broker's book value on its arrival (CA-ACB-TRANSFER-BV /
-    US-BASIS-TRANSFER-BV). Never a superficial-loss / wash-sale
-    replacement nor a recent buy; they count as held. Dict or
+    US-BASIS-TRANSFER-BV) or a sheltered account's transfer kept as a
+    custody move (CA-SL-16 / US-WASH-23). Never a superficial-loss /
+    wash-sale replacement nor a recent buy; they count as held. Dict or
     TaxTransaction."""
     t = tx.get('type') if isinstance(tx, dict) else getattr(tx, 'type', '')
     a = tx.get('action') if isinstance(tx, dict) else getattr(tx, 'action', '')
     return a == 'BUYSELL' and (t or '') in (OPENING_TYPE,
-                                             TRANSFER_BOOK_VALUE_TYPE)
+                                             TRANSFER_BOOK_VALUE_TYPE,
+                                             TRANSFER_CUSTODY_TYPE)
 
 
 def is_stock_dividend(tx) -> bool:

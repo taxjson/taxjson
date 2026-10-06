@@ -1349,6 +1349,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                         metavar="YEAR",
                         help="With grant timing: contracts written before "
                              "YEAR keep close timing")
+    parser.add_argument("--transfers-as-acquisitions", action="store_true",
+                        help="Count a sheltered account's unmatched TRANSFER rows as "
+                             "acquisitions/disposals for the superficial-loss / wash-sale "
+                             "window (strict; [settings] transfers_as_acquisitions = true). "
+                             "Default: a custody move, held but never a purchase.")
     parser.add_argument("--option-buyback-wash", action="store_true",
                         help="Grant timing: a written option's buy-back "
                              "loss can be superficial")
@@ -1411,7 +1416,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                                    args.option_premium_timing),
                                option_grant_since=args.option_grant_since,
                                option_buyback_loss_superficial=(
-                                   args.option_buyback_wash)),
+                                   args.option_buyback_wash),
+                               transfers_as_acquisitions=(
+                                   args.transfers_as_acquisitions)),
                            full_history=not args.year_wash_only,
                            income_rules=dict(corporate_distributions=tuple(
                                args.corporate_distribution or ())))
