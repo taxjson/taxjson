@@ -10,6 +10,7 @@ anything else is off with a one-time warning naming the accepted
 values.
 """
 
+from taxjson.lib.stage_msg import emit_line
 import os
 import sys
 from typing import Mapping, Optional
@@ -30,7 +31,7 @@ def offline_enabled(env: Optional[Mapping[str, str]] = None) -> bool:
         return True
     if val not in _OFF and val not in _warned:
         _warned.add(val)
-        print(f"taxjson: warning: {ENV_VAR}={raw!r} is not recognised "
-              f"(use 1/true/yes/on to forbid downloads, 0/false/no/off "
-              f"to allow them); treating it as OFF.", file=sys.stderr)
+        emit_line(f"taxjson: warning: {ENV_VAR}={raw!r} is not recognised "
+                  f"(use 1/true/yes/on to forbid downloads, 0/false/no/off "
+                  f"to allow them); treating it as OFF.", file=sys.stderr)
     return False

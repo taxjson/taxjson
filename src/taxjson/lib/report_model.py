@@ -369,11 +369,12 @@ def resolve_gains_files(cache, account: Optional[str] = None, *,
             # are a legitimate iteration loop.
             newer = stale_wash_inputs(wash)
             if newer:
-                print(f"warning: {wash.name} is OLDER than "
-                      f"{', '.join(newer)} — wash-adjusted numbers are "
-                      f"stale (run a full `taxjson run` before "
-                      f"filing from this output).",
-                      file=_sys.stderr)
+                from taxjson.lib.stage_msg import emit_line
+                emit_line(f"warning: {wash.name} is OLDER than "
+                          f"{', '.join(newer)} — wash-adjusted numbers are "
+                          f"stale (run a full `taxjson run` before "
+                          f"filing from this output).",
+                          file=_sys.stderr)
             out[name] = wash
         elif main.exists():
             out[name] = main

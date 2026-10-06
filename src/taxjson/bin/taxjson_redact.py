@@ -67,6 +67,7 @@ and exits 1 when it finds anything to redact.
 """
 from __future__ import annotations
 
+from taxjson.lib.out import exit_text
 import argparse
 import csv
 import io
@@ -1446,7 +1447,7 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
         return None, rep
     dst_dir = out_dir or src.parent
     if dst_dir.exists() and not dst_dir.is_dir():
-        raise SystemExit(f"taxjson redact: --out {dst_dir} is not a directory")
+        raise SystemExit(exit_text(f"taxjson redact: --out {dst_dir} is not a directory"))
     dst_dir.mkdir(parents=True, exist_ok=True)
     dst = dst_dir / redacted_name(src, rep.accounts, rep.name_patterns,
                                   rep.known_ids)
@@ -1456,11 +1457,11 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
             f"run from another input — nothing written. Redact the two "
             f"files into different --out folders (or rename one).")
     if dst.resolve() == src.resolve():
-        raise SystemExit(f"taxjson redact: refusing to overwrite {src}")
+        raise SystemExit(exit_text(f"taxjson redact: refusing to overwrite {src}"))
     if dst.is_symlink():
-        raise SystemExit(f"taxjson redact: {dst} is a symlink — refusing to write through it")
+        raise SystemExit(exit_text(f"taxjson redact: {dst} is a symlink — refusing to write through it"))
     if dst.exists() and not force:
-        raise SystemExit(f"taxjson redact: {dst} exists (use --force to overwrite)")
+        raise SystemExit(exit_text(f"taxjson redact: {dst} exists (use --force to overwrite)"))
     with open(dst, "w", encoding="utf-8", newline="") as fh:
         if bom:
             fh.write("﻿")
@@ -1516,10 +1517,12 @@ def print_report(src: Path, dst: Optional[Path], rep: Report) -> None:
                      ("denylist / --also matches", rep.patterns)):
         if n:
             say(f"{label}: {n}")
+    from taxjson.lib.out import label as _label
+    _info = _label("note", stream=sys.stdout)   # `Info: ` shown to a person
     for n in rep.notes:
-        say(f"note: {n}")
+        say(f"{_info}{n}")
     if rep.description_columns:
-        say(f"note: free-text Description columns "
+        say(f"{_info}free-text Description columns "
             f"({', '.join(rep.description_columns)}) may still name people "
             f"— read them once before sharing.")
     if rep.review:

@@ -26,6 +26,7 @@ Examples:
     taxjson-diff --ignore id,description --limit 20 a.json b.json
 """
 
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import json
 import os
@@ -217,9 +218,9 @@ def main():
             present.update(r.keys())
     unknown = [f for f in match_fields if f not in present]
     if explicit_by and unknown and (old_recs or new_recs):
-        print(f"taxjson-diff: error: --by field(s) {', '.join(unknown)} "
-              f"appear in no record of either file (fields present: "
-              f"{', '.join(sorted(present))})", file=sys.stderr)
+        emit_line(f"taxjson-diff: error: --by field(s) {', '.join(unknown)} "
+                  f"appear in no record of either file (fields present: "
+                  f"{', '.join(sorted(present))})", file=sys.stderr)
         sys.exit(2)
 
     # Bucket records by composite key (lists, to handle true duplicates).

@@ -28,6 +28,7 @@ Backward conversions use the reciprocal, guarded so a zero product falls
 back to 1.0 (preserving both engines' `if f else` guards).
 """
 
+from taxjson.lib.stage_msg import emit_line
 from enum import IntEnum
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -422,10 +423,10 @@ def note_split_ratio_conflict(symbol: str, kept: str, dropped: str,
     _SPLIT_DATE_NOTES.add(k)
     when = (f"on {kept}" if kept == dropped
             else f"on {min(kept, dropped)} and {max(kept, dropped)}")
-    print(f"note: split {symbol} is booked twice {when} with ratios "
-          f"{kept_ratio:.9g} and {dropped_ratio:.9g} (one rounded) — one "
-          f"corporate event; applied ONCE, x{kept_ratio:.9g} on {kept}.",
-          file=stream or sys.stderr)
+    emit_line(f"note: split {symbol} is booked twice {when} with ratios "
+              f"{kept_ratio:.9g} and {dropped_ratio:.9g} (one rounded) — one "
+              f"corporate event; applied ONCE, x{kept_ratio:.9g} on {kept}.",
+              file=stream or sys.stderr)
 
 
 def note_split_date_conflict(symbol: str, kept: str, dropped: str,
@@ -440,10 +441,10 @@ def note_split_date_conflict(symbol: str, kept: str, dropped: str,
     if k in _SPLIT_DATE_NOTES:
         return
     _SPLIT_DATE_NOTES.add(k)
-    print(f"note: split {symbol} x{float(ratio or 0):g} is booked on two "
-          f"dates ({min(kept, dropped)} and {max(kept, dropped)}) — one "
-          f"corporate event reported by two sources; applied ONCE, on "
-          f"{kept}.", file=stream or sys.stderr)
+    emit_line(f"note: split {symbol} x{float(ratio or 0):g} is booked on two "
+              f"dates ({min(kept, dropped)} and {max(kept, dropped)}) — one "
+              f"corporate event reported by two sources; applied ONCE, on "
+              f"{kept}.", file=stream or sys.stderr)
 
 
 def cumulative_factor(events: List[Tuple[str, float]],

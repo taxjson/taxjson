@@ -32,6 +32,8 @@ event gives the date.
 """
 from __future__ import annotations
 
+from taxjson.lib.stage_msg import emit_line
+
 import json
 import re
 import sys
@@ -294,10 +296,10 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
                              f"carried)"),
                 source=TICKER_MAP_SOURCE))
         if added:
-            print(f"note: {dr.where}: RENAME {dr.old} -> {dr.new} on "
-                  f"{dr.date} booked in {len(added)} account(s) "
-                  f"({', '.join(t.account for t in added)}).",
-                  file=stream)
+            emit_line(f"note: {dr.where}: RENAME {dr.old} -> {dr.new} on "
+                      f"{dr.date} booked in {len(added)} account(s) "
+                      f"({', '.join(t.account for t in added)}).",
+                      file=stream)
             # Placed before the first row dated on or after the rename
             # (the rows are already in the pipeline's order).
             at = next((i for i, t in enumerate(out)
@@ -312,9 +314,9 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
                     t.symbol = map_symbol(t.symbol, m)
                     moved += 1
             if moved:
-                print(f"note: {dr.where}: {moved} {dr.old} row(s) on or "
-                      f"after {dr.date} booked as {dr.new} (late=fold).",
-                      file=stream)
+                emit_line(f"note: {dr.where}: {moved} {dr.old} row(s) on or "
+                          f"after {dr.date} booked as {dr.new} (late=fold).",
+                          file=stream)
     return out
 
 

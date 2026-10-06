@@ -46,6 +46,7 @@ Usage:
 Or through the project wrapper: `taxjson carryover`.
 """
 
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import json
 import re
@@ -532,6 +533,8 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
     then the notes. `--json` is the machine form."""
     from taxjson.lib import out as _out
     lines: List[str] = []
+    # `Warning: ` shown to a person, `warning: ` captured (lib/out.label).
+    _W = _out.label("warning", stream=sys.stdout)
 
     def para(text: str, indent: str = "", hang: Optional[str] = None):
         lines.extend(_out.wrap(text, None, indent,
@@ -584,11 +587,11 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
         para(f"Net-capital-loss carryforward after {_final_year}: "
              f"{_money(ledger['final_carryforward'])}")
         if ledger.get('unmatched_claims'):
-            para(f"warning: {_money(ledger['unmatched_claims'])} "
+            para(f"{_W}{_money(ledger['unmatched_claims'])} "
                  f"of --claimed amounts exceed the losses this "
                  f"history supports — check the claimed file.", "", "  ")
         for _y, _amt in (ledger.get('expired_claims') or {}).items():
-            para(f"warning: {_money(_amt)} claimed for {_y} "
+            para(f"{_W}{_money(_amt)} claimed for {_y} "
                  f"was never met by a loss of {_y} or earlier "
                  f"in these books, and a later loss can reach "
                  f"back only 3 years (ITA 111(1)(b)) — it came "
@@ -629,7 +632,7 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
         # start with one)
         item(ledger['scope_note'].replace(" -> ", " to "))
     if ledger.get('claimed_ignored'):
-        item(f"warning: {len(ledger['claimed_ignored'])} "
+        item(f"{_W}{len(ledger['claimed_ignored'])} "
              f"claimed line(s) could not be read and are NOT "
              f"applied, so the carryforward shown is overstated "
              f"by them: "
@@ -638,7 +641,7 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
                 else ""))
     after = [r['year'] for r in rows if r.get('after_project_year')]
     if after:
-        item(f"warning: the rows after {ledger.get('project_year')}"
+        item(f"{_W}the rows after {ledger.get('project_year')}"
              f" ({', '.join(str(y) for y in after)}) are partial —"
              f" only the trades of that year this project's inputs"
              f" happen to hold. They offer no T1A carry-back and the"
@@ -673,7 +676,7 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
     prior = [r['year'] for r in rows if r.get('prior_year')]
     if prior:
         py = ledger.get('project_year')
-        item(f"warning: the rows before {py} "
+        item(f"{_W}the rows before {py} "
              f"({', '.join(str(y) for y in prior)}) are rebuilt "
              f"from this project's books — opening *_start.tt "
              f"lots plus whatever prior-year exports are in "
@@ -688,7 +691,7 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
             and not any(r.get('balance_from_lock')
                         and r['year'] >= first_tx_year - 1
                         for r in rows)):
-        item(f"warning: this history starts in {first_tx_year} — "
+        item(f"{_W}this history starts in {first_tx_year} — "
              f"if you traded before then, earlier gains/losses (and "
              f"any pre-{first_tx_year} carryforward) are NOT "
              f"reflected. Reconcile the opening balance against "
@@ -825,19 +828,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     # currency (audit A2-0351; t1135 refuses the same).
     _bp = base_currency_problem(args.country, args.base_currency)
     if _bp:
-        print(f"taxjson-carryover: error: --base-currency "
-              f"{args.base_currency}: "
-              + _bp.replace("[settings] base_currency is", "the books are")
+        emit_line(f"taxjson-carryover: error: --base-currency "
+                  f"{args.base_currency}: "
+                  + _bp.replace("[settings] base_currency is", "the books are")
                    .replace('set base_currency', 'pass books converted to')
-              , file=sys.stderr)
+                  , file=sys.stderr)
         return 2
 
     if not args.files and not args.crypto:
         # A crypto-only project gives its books as --crypto only: fed
         # positionally they lost the US no-wash pass (US-WASH-13; audit
         # A2-0146, A2-0411, A2-0412).
-        print("taxjson-carryover: error: give at least one base book "
-              "(FILE or --crypto FILE)", file=sys.stderr)
+        emit_line("taxjson-carryover: error: give at least one base book "
+                  "(FILE or --crypto FILE)", file=sys.stderr)
         return 2
     for p in args.files + args.crypto + args.sheltered:
         if not p.exists():
@@ -905,7 +908,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             transactions.extend(_load_base(p))
         crypto_loaded = [_load_base(cp) for cp in args.crypto]
     except ValueError as exc:
-        print(f"taxjson-carryover: error: {exc}", file=sys.stderr)
+        emit_line(f"taxjson-carryover: error: {exc}", file=sys.stderr)
         return 2
     sheltered = []
     for p in args.sheltered:
@@ -941,7 +944,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         results = run_gains(transactions, sheltered, (), req)
     except (TransferValidationError, _AmbiguousXferErr) as exc:
-        print(f"taxjson-carryover: error: {exc}", file=sys.stderr)
+        emit_line(f"taxjson-carryover: error: {exc}", file=sys.stderr)
         return 1
     nets = yearly_nets(results, req.effective_tax_date())
     if crypto_txs:                       # USA crypto: no-wash pass
@@ -953,7 +956,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             res_c = run_gains(crypto_txs, sheltered, (), req_c)
         except (TransferValidationError, _AmbiguousXferErr) as exc:
-            print(f"taxjson-carryover: error: {exc}", file=sys.stderr)
+            emit_line(f"taxjson-carryover: error: {exc}", file=sys.stderr)
             return 1
         for yr, vals in yearly_nets(
                 res_c, req_c.effective_tax_date()).items():

@@ -61,7 +61,7 @@ class TestStageMessages(_Width):
             say("note", "3 rows rewritten", ["detail " * 30],
                 legacy="NOTE: one line")
         lines = err.getvalue().splitlines()
-        self.assertEqual(lines[0], "note: 3 rows rewritten")
+        self.assertEqual(lines[0], "Info: 3 rows rewritten")
         self.assertTrue(all(ln.startswith("  ") for ln in lines[1:]))
         self.assertEqual(out.lint(err.getvalue()), [])
 
@@ -87,18 +87,28 @@ class TestStageMessages(_Width):
     def test_console_lines_keep_the_marker_first_line(self):
         from taxjson.lib.stage_msg import console_lines
         lines = console_lines(self.LONG, "  ", width_=100)
-        self.assertEqual(lines[0], "  warning: ATTENTION: x.csv: the "
+        # Shown: the label first; the marker words follow it unchanged.
+        self.assertEqual(lines[0], "  Warning: ATTENTION: x.csv: the "
                                    "statement has no Cash Report")
         self.assertTrue(lines[1].startswith("    Parsed money is NOT"))
         self.assertEqual(out.lint("\n".join(lines)), [])
         self.assertEqual(_flat(" ".join(lines)).replace("Parsed", "parsed"),
-                         _flat(self.LONG.replace(" —", "")))
+                         _flat(self.LONG.replace(" —", "")
+                               .replace("warning:", "Warning:", 1)))
         # Nothing wraps (captured, or TAXJSON_WIDTH=0): the one line.
         self.assertEqual(console_lines(self.LONG, "  ", width_=0),
                          ["  " + self.LONG])
-        # A retired prefix the captured text keeps is shown lower case.
+        # A retired prefix the captured text keeps is shown as its label.
         self.assertEqual(console_lines("NOTE: x", "", width_=100),
-                         ["note: x"])
+                         ["Info: x"])
+        # A captured line from another program keeps it as the source;
+        # a program's own line (emit_line) drops it.
+        self.assertEqual(console_lines("taxjson-gains: error: x", "",
+                                       width_=100),
+                         ["Error: taxjson-gains: x"])
+        self.assertEqual(console_lines("taxjson-gains: error: x", "",
+                                       width_=100, source=False),
+                         ["Error: x"])
 
 
 # ------------------------------------------- the run's closing summary
@@ -148,7 +158,7 @@ class TestBookStateWarnings(_Width):
                                   return_value={"margin": 2023}):
             text = self._err(lambda: R._warn_artifact_year({}, 2024))
         self.assertTrue(_flat(text).startswith(
-            "taxjson sum: warning: [settings].year is 2024 but the work/ "
+            "Warning: [settings].year is 2024 but the work/ "
             "books were built for another tax year: margin (2023)"), text)
         self.assertEqual(out.lint(text), [])
         with mock.patch.object(R, "_CURRENT_CMD", "sum"), \
@@ -158,7 +168,7 @@ class TestBookStateWarnings(_Width):
                                                 "default FX " * 12]):
             text = self._err(lambda: R._warn_run_state(Path("."), {}))
         lines = text.splitlines()
-        self.assertEqual(lines[0], "taxjson sum: warning: these books are "
+        self.assertEqual(lines[0], "Warning: these books are "
                                    "not the clean result of the current "
                                    "inputs")
         self.assertEqual(lines[1], "  - a stale wash pass")
@@ -190,8 +200,11 @@ class TestRunStyle(unittest.TestCase):
                 self.assertIn("  wrote reports/margin.sum", r.stdout)
                 self.assertNotIn(str(p.root), r.stdout)
                 self.assertIn("\nDone. Reports in reports/\n", r.stdout)
-                # An ATTENTION line keeps its marker first line.
-                self.assertRegex(r.stdout, r"\n  warning: ATTENTION: \S")
+                # An ATTENTION line keeps its marker words, the label
+                # first; no line starts with a captured lower-case label.
+                self.assertRegex(r.stdout, r"\n  Warning: ATTENTION: \S")
+                self.assertNotRegex(r.stdout + r.stderr,
+                                    r"(?m)^\s*(note|warning|error):")
 
     def test_pending_run(self):
         for country in ("canada", "usa"):
@@ -211,7 +224,10 @@ class TestRunStyle(unittest.TestCase):
         long = [ln for ln in diag.splitlines()
                 if ln.startswith("warning: ATTENTION:") and len(ln) > 100]
         self.assertTrue(long, diag)
-        self.assertIn(long[0].split(" — ")[0], r.stdout)
+        self.assertIn("Warning: " + long[0].split(" — ")[0][
+            len("warning: "):], r.stdout)
+        # The work/ .diag keeps the captured (lower-case) label.
+        self.assertTrue(long[0].startswith("warning: ATTENTION: "))
 
     def test_init(self):
         for country in ("canada", "usa"):
@@ -228,7 +244,7 @@ class TestRunStyle(unittest.TestCase):
                 self.assertIn("  3. Run:\n       taxjson -C ", r.stdout)
                 if country == "usa":
                     self.assertTrue(r.stderr.lstrip().startswith(
-                        "taxjson init: note: the US engine is "
+                        "Info: the US engine is "
                         "EXPERIMENTAL"), r.stderr)
 
     def test_fetch_list(self):
@@ -237,7 +253,7 @@ class TestRunStyle(unittest.TestCase):
             # No fetcher plugin installed here: one error, one message.
             # (the install hint's wording belongs to lib/fetchers)
             self.assertTrue(r.stderr.startswith(
-                "taxjson fetch: error: no fetcher is installed"), r.stderr)
+                "Error: no fetcher is installed"), r.stderr)
             return
         self.assertEqual(r.returncode, 0, r.stderr)
         assert_styled(self, r.stdout)

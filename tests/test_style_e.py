@@ -83,7 +83,7 @@ class TestStyledNonZeroExits(unittest.TestCase):
                                      "questrade_demo.csv"))
         self.assertEqual(r.returncode, 1, r.stderr)
         assert_styled(self, r.stdout)
-        self.assertIn("  note: free-text Description columns", r.stdout)
+        self.assertIn("  Info: free-text Description columns", r.stdout)
         self.assertNotIn("NOTE:", r.stdout)
 
     def test_opening_dry_run(self):
@@ -91,7 +91,7 @@ class TestStyledNonZeroExits(unittest.TestCase):
                                "--dry-run")
         self.assertEqual(r.returncode, 1)
         self.assertTrue(r.stderr.startswith(
-            "taxjson opening: error: holdings.toml does not say which "
+            "Error: holdings.toml does not say which "
             "day"), r.stderr)
         assert_styled(self, r.stderr)
 

@@ -17,6 +17,7 @@ same definition of "a gains run" and cannot drift from this CLI.
 Output is a JSON object with per-security and aggregate totals.
 """
 
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import json
 import sys
@@ -222,9 +223,9 @@ def _parse_args():
     )
     args = parser.parse_args()
     if args.suggest_phantoms_old:
-        print("taxjson-gains: note: --suggest-phantoms is now "
-              "--suggest-missing-history (the old flag still works).",
-              file=sys.stderr)
+        emit_line("taxjson-gains: note: --suggest-phantoms is now "
+                  "--suggest-missing-history (the old flag still works).",
+                  file=sys.stderr)
         if not args.suggest_missing_history:
             args.suggest_missing_history = args.suggest_phantoms_old
     # --country is required (partition audit R1: a missing country was
@@ -287,10 +288,10 @@ def _suggest_missing_history_and_exit(args, transactions,
     # `find-missing-history --write-missing-history` wrapper's temp file)
     # is ours.
     if _out.is_file() and _out.stat().st_size > 0:
-        print(f"taxjson-gains: error: --suggest-missing-history {_out} "
-              f"already exists — not overwritten (it may be a reviewed "
-              f"missing_history.json). Write to a new file and merge by hand, or "
-              f"delete it first.", file=sys.stderr)
+        emit_line(f"taxjson-gains: error: --suggest-missing-history {_out} "
+                  f"already exists — not overwritten (it may be a reviewed "
+                  f"missing_history.json). Write to a new file and merge by hand, or "
+                  f"delete it first.", file=sys.stderr)
         raise SystemExit(2)
     # 'cannot write <path>: ...' for a directory or a missing folder,
     # not 'cannot read' / 'no such file' (re-audit A2-1432).
@@ -313,11 +314,11 @@ def _timing_default_note(args, prog):
     year: say so instead of silently disagreeing with the .sum (audit
     R1-177)."""
     if args.option_premium_timing is None and args.country == 'canada':
-        print(f"{prog}: note: --option-premium-timing not given — using "
-              f"close timing. `taxjson run` on a Canada project uses "
-              f"grant timing from the project year; pass "
-              f"--option-premium-timing grant --option-grant-since YEAR "
-              f"to match it.", file=sys.stderr)
+        emit_line(f"{prog}: note: --option-premium-timing not given — using "
+                  f"close timing. `taxjson run` on a Canada project uses "
+                  f"grant timing from the project year; pass "
+                  f"--option-premium-timing grant --option-grant-since YEAR "
+                  f"to match it.", file=sys.stderr)
     if args.option_premium_timing is None:
         args.option_premium_timing = 'close'
 
@@ -350,7 +351,7 @@ def main():
     try:
         _main()
     except (TransferValidationError, AmbiguousTransferDateError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        emit_line(f"error: {exc}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -361,13 +362,13 @@ def _main():
 
     # Argparse can't enforce flag dependencies; surface obvious mistakes early.
     if args.include_options_in_suggestions and not args.suggest_missing_history:
-        print(
+        emit_line(
             "warning: --include-options-in-suggestions has no effect without "
             "--suggest-missing-history; ignoring.",
             file=sys.stderr,
         )
     if args.all_history and not args.suggest_missing_history:
-        print(
+        emit_line(
             "warning: --all-history has no effect without "
             "--suggest-missing-history; ignoring.",
             file=sys.stderr,
@@ -423,13 +424,13 @@ def _main():
         require_trade_fields(transactions + sheltered_transactions
                              + affiliated_transactions)
     except ValueError as e:
-        print(f"taxjson-gains: error: {e}", file=sys.stderr)
+        emit_line(f"taxjson-gains: error: {e}", file=sys.stderr)
         raise SystemExit(2)
 
     try:
         req = _request(args)
     except ValueError as e:
-        print(f"taxjson-gains: error: {e}", file=sys.stderr)
+        emit_line(f"taxjson-gains: error: {e}", file=sys.stderr)
         raise SystemExit(2)
 
     if args.suggest_missing_history:
@@ -462,7 +463,7 @@ def _main():
             trace_sink=trace_sink if args.full_traces else None,
         )
     except ValueError as e:
-        print(f"taxjson-gains: error: {e}", file=sys.stderr)
+        emit_line(f"taxjson-gains: error: {e}", file=sys.stderr)
         raise SystemExit(2)
 
     # Output

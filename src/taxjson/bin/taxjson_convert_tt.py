@@ -16,6 +16,7 @@ each action is in parse_tt_line / tx_to_tt_line below (and the README's
 `.tt` field table, under "find-missing-history").
 """
 
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import difflib
 import hashlib
@@ -279,7 +280,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
                 if (_q < 0 and _expected < 0 and tx['price'] > 0
                         and abs(tx['net_amount']) < 0.005
                         and (not _is_fut or tx.get('multiplier'))):
-                    print(
+                    emit_line(
                         f"warning: {_where(source)}.tt sell total 0 on a "
                         f"sale whose commission {_fee:.2f} exceeds its "
                         f"gross {abs(_q) * tx['price'] * _mult:.2f}: the "
@@ -293,7 +294,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
                         and (not _is_fut or tx.get('multiplier'))
                         and abs(_total - _expected) >
                         max(0.05, 0.01 * max(abs(_expected), 1.0))):
-                    print(
+                    emit_line(
                         f"warning: {_where(source)}.tt line total "
                         f"{_total:.2f} differs from "
                         f"qty*price{f'*{_mult:g}' if _mult != 1 else ''}"
@@ -583,11 +584,11 @@ def _warn_unknown_suffix(tx: dict, line: str, source: str) -> None:
             continue
         ext = sym.rsplit('.', 1)[1]
         if ext not in KNOWN_SUFFIXES:
-            print(f"warning: {_where(source)}symbol {sym} ends in .{ext}, "
-                  f"which is not a known market suffix "
-                  f"({', '.join(sorted(KNOWN_SUFFIXES))}) — a typo here is "
-                  f"its own cost-basis pool, and the broker's rows for the real "
-                  f"listing go short: {line.strip()!r}", file=sys.stderr)
+            emit_line(f"warning: {_where(source)}symbol {sym} ends in .{ext}, "
+                      f"which is not a known market suffix "
+                      f"({', '.join(sorted(KNOWN_SUFFIXES))}) — a typo here is "
+                      f"its own cost-basis pool, and the broker's rows for the real "
+                      f"listing go short: {line.strip()!r}", file=sys.stderr)
 
 
 def compute_tt_id(tx: dict) -> str:
@@ -816,11 +817,11 @@ def _warn_bare_equity_symbol(tx: dict, line: str, source: str) -> None:
         if (not sym or '.' in sym or sym == 'CASH' or is_option_symbol(sym)
                 or sym.startswith(_FUTURES_PREFIXES)):
             continue
-        print(f"warning: {_where(source)}symbol {sym} has no market suffix "
-              f"(e.g. {sym}.US, {sym}.TO) in an account that is not "
-              f"crypto = true — it is its own ACB pool, and the broker's "
-              f"rows for the real listing go short: {line.strip()!r}",
-              file=sys.stderr)
+        emit_line(f"warning: {_where(source)}symbol {sym} has no market suffix "
+                  f"(e.g. {sym}.US, {sym}.TO) in an account that is not "
+                  f"crypto = true — it is its own ACB pool, and the broker's "
+                  f"rows for the real listing go short: {line.strip()!r}",
+                  file=sys.stderr)
 
 
 def tt_to_json(input_path: Path, account_name: str) -> dict:
@@ -838,9 +839,9 @@ def tt_to_json(input_path: Path, account_name: str) -> dict:
     if _text and not _text.endswith(('\n', '\r')):
         _last = strip_tt_comment(_text.splitlines()[-1]).strip()
         if _last:
-            print(f"warning: {shown_name(input_path)}: the last line has no line "
-                  f"end — if the file was cut short, its last number may "
-                  f"be truncated; check it: {_last!r}", file=sys.stderr)
+            emit_line(f"warning: {shown_name(input_path)}: the last line has no line "
+                      f"end — if the file was cut short, its last number may "
+                      f"be truncated; check it: {_last!r}", file=sys.stderr)
     with io.StringIO(_text) as f:
         for lineno, line in enumerate(f, 1):
             source = f"{shown_name(input_path)}:{lineno}"
@@ -937,13 +938,13 @@ def json_to_tt_lines(input_path: Path, date_basis: str = 'settle'):
             mults.append(f"{tx.get('symbol')} x{m!r}")
         yield line
     if skipped:
-        print(
+        emit_line(
             f"note: skipped {skipped} transaction(s) with no .tt representation",
             file=sys.stderr,
         )
     if two_dates:
         which = ("SETTLEMENT" if date_basis == 'settle' else "TRADE")
-        print(
+        emit_line(
             f"note: {two_dates} row(s) have a trade date and a later "
             f"settlement date; a .tt line carries one date, so each was "
             f"written with its {which} date (--date-basis "
@@ -952,7 +953,7 @@ def json_to_tt_lines(input_path: Path, date_basis: str = 'settle'):
             file=sys.stderr,
         )
     if mults:
-        print(
+        emit_line(
             f"warning: {len(mults)} row(s) carry a contract multiplier the "
             f".tt format cannot hold ({', '.join(mults[:5])}"
             f"{' ...' if len(mults) > 5 else ''}); the total is kept, but "
@@ -976,7 +977,7 @@ def main():
         # Malformed .tt lines raise deliberately-loud ValueErrors;
         # surface them as clean CLI errors, not tracebacks
         # (2026-09 audit).
-        print(f"taxjson-convert-tt: error: {exc}", file=sys.stderr)
+        emit_line(f"taxjson-convert-tt: error: {exc}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -1016,8 +1017,8 @@ def _main():
 
     input_path = Path(args.input)
     if not input_path.exists():
-        print(f"taxjson-convert-tt: error: input file not found: {input_path}",
-              file=sys.stderr)
+        emit_line(f"taxjson-convert-tt: error: input file not found: {input_path}",
+                  file=sys.stderr)
         sys.exit(2)                 # a missing input (A2-0164)
 
     suffix = input_path.suffix.lower()
@@ -1033,8 +1034,8 @@ def _main():
             try:
                 date_basis = tax_date_near(input_path)
             except CountryError as e:
-                print(f"taxjson-convert-tt: error: taxjson.toml: {e}",
-                      file=sys.stderr)
+                emit_line(f"taxjson-convert-tt: error: taxjson.toml: {e}",
+                          file=sys.stderr)
                 sys.exit(2)
         if date_basis is None:
             data = json.loads(input_path.read_text(encoding='utf-8'))
@@ -1043,12 +1044,12 @@ def _main():
             if any(isinstance(t, dict) and t.get('date_settle')
                    and t.get('date') and t['date_settle'] != t['date']
                    for t in rows or []):
-                print("taxjson-convert-tt: error: rows have a trade date "
-                      "and a different settlement date, and a .tt line "
-                      "keeps one: pass --date-basis settle (Canada, CRA) "
-                      "or --date-basis trade (US, IRS) — no taxjson.toml "
-                      "beside the input to read tax_date from.",
-                      file=sys.stderr)
+                emit_line("taxjson-convert-tt: error: rows have a trade date "
+                          "and a different settlement date, and a .tt line "
+                          "keeps one: pass --date-basis settle (Canada, CRA) "
+                          "or --date-basis trade (US, IRS) — no taxjson.toml "
+                          "beside the input to read tax_date from.",
+                          file=sys.stderr)
                 sys.exit(2)
             date_basis = 'settle'       # every row has one date: moot
         # Every line first, then one write: a row that fails half-way

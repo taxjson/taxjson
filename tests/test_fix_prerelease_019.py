@@ -49,7 +49,7 @@ class TestPrintable(unittest.TestCase):
         self.assertEqual(out.wrap(f"sold {SYM}", 0), [f"sold {SYM}"])
         self.assertEqual(out.message("note", SYM, details=[SYM],
                                      width_=100),
-                         [f"note: {SHOWN}", f"  {SHOWN}"])
+                         [f"Info: {SHOWN}", f"  {SHOWN}"])
         self.assertEqual(out.message("note", SYM, width_=0),
                          [f"note: {SYM}"])
         for width, want in (("100", SHOWN), ("0", SYM)):
@@ -88,7 +88,7 @@ class TestPrintable(unittest.TestCase):
         from taxjson.lib import stage_msg
         line = f"warning: ATTENTION: {SYM}: a sale with\rno purchase"
         self.assertEqual(stage_msg.console_lines(line, "  ", width_=100),
-                         [f"  warning: ATTENTION: {SHOWN}: a sale with"
+                         [f"  Warning: ATTENTION: {SHOWN}: a sale with"
                           f"\\x0dno purchase"])
         self.assertEqual(stage_msg.console_lines(line, "  ", width_=0),
                          ["  " + line])

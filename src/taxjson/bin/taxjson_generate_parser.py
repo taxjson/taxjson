@@ -29,6 +29,7 @@ Usage:
     taxjson-generate-parser <sample.csv> -o <out.py> --provider gemini
 """
 
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import os
 import re
@@ -199,12 +200,12 @@ def _default_class_name(brokerage_name: str) -> str:
 def _call_claude(system_text: str, user_text: str, model_id: str) -> str:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        print("taxjson-generate-parser: error: ANTHROPIC_API_KEY is not set", file=sys.stderr)
+        emit_line("taxjson-generate-parser: error: ANTHROPIC_API_KEY is not set", file=sys.stderr)
         sys.exit(1)
     try:
         import anthropic
     except ImportError:
-        print(
+        emit_line(
             "taxjson-generate-parser: error: anthropic SDK not installed. Run:\n"
             "    pip install '.[generate-parser]'",
             file=sys.stderr,
@@ -224,7 +225,7 @@ def _call_claude(system_text: str, user_text: str, model_id: str) -> str:
             messages=[{"role": "user", "content": user_text}],
         )
     except anthropic.APIStatusError as e:
-        print(f"taxjson-generate-parser: error: Claude API error ({e.status_code}): {e.message}", file=sys.stderr)
+        emit_line(f"taxjson-generate-parser: error: Claude API error ({e.status_code}): {e.message}", file=sys.stderr)
         sys.exit(1)
 
     usage = response.usage
@@ -242,14 +243,14 @@ def _call_claude(system_text: str, user_text: str, model_id: str) -> str:
 def _call_gemini(system_text: str, user_text: str, model_id: str) -> str:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        print("taxjson-generate-parser: error: GEMINI_API_KEY is not set", file=sys.stderr)
+        emit_line("taxjson-generate-parser: error: GEMINI_API_KEY is not set", file=sys.stderr)
         sys.exit(1)
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=FutureWarning)
             import google.generativeai as genai
     except ImportError:
-        print(
+        emit_line(
             "taxjson-generate-parser: error: google-generativeai not installed. Run:\n"
             "    pip install '.[generate-parser]'",
             file=sys.stderr,
@@ -332,19 +333,19 @@ def main():
     output_path = Path(args.output)
     if not input_path.exists():
         # Exit 2: a missing input is a usage error (A2-1435).
-        print(f"taxjson-generate-parser: error: file not found: {shown_name(input_path)}", file=sys.stderr)
+        emit_line(f"taxjson-generate-parser: error: file not found: {shown_name(input_path)}", file=sys.stderr)
         sys.exit(2)
     if not base_path.exists() or not example_path.exists():
-        print(f"taxjson-generate-parser: error: base.py or questrade.py not found in {here / 'lib' / 'brokerages'}",
-              file=sys.stderr)
+        emit_line(f"taxjson-generate-parser: error: base.py or questrade.py not found in {here / 'lib' / 'brokerages'}",
+                  file=sys.stderr)
         sys.exit(1)
 
     brokerage_name = args.brokerage_name or _safe_default_name(input_path.stem)
     if not args.brokerage_name and brokerage_name != input_path.stem:
-        print("note: the file name carries an account id or a denylisted "
-              "word; the default brokerage name uses a placeholder "
-              f"({brokerage_name}) — pass --brokerage-name to choose one",
-              file=sys.stderr)
+        emit_line("note: the file name carries an account id or a denylisted "
+                  "word; the default brokerage name uses a placeholder "
+                  f"({brokerage_name}) — pass --brokerage-name to choose one",
+                  file=sys.stderr)
     class_name = args.class_name or _default_class_name(brokerage_name)
     default_account = args.default_account or brokerage_name
     model_id = args.model or _DEFAULT_MODELS[args.provider]
@@ -353,10 +354,10 @@ def main():
     try:
         sample = _read_sample(input_path, args.sample_lines)
     except BrokerageParseError as e:
-        print(f"taxjson-generate-parser: error: {e}", file=sys.stderr)
+        emit_line(f"taxjson-generate-parser: error: {e}", file=sys.stderr)
         sys.exit(1)
     if not sample:
-        print(f"taxjson-generate-parser: error: {shown_name(input_path)} is empty", file=sys.stderr)
+        emit_line(f"taxjson-generate-parser: error: {shown_name(input_path)} is empty", file=sys.stderr)
         sys.exit(1)
     # The sample goes to a third-party API, and broker exports keep the
     # holder's name, account id and address in their first lines: scan it
@@ -364,16 +365,16 @@ def main():
     # unless told otherwise (R1-342).
     found = identity_findings(sample)
     if found and not args.allow_unredacted:
-        print(f"taxjson-generate-parser: error: the first {args.sample_lines} "
-              f"line(s) of {shown_name(input_path)} still carry personal data "
-              f"({', '.join(found)}) and would be sent to {args.provider}. "
-              f"Run `taxjson redact {shown_name(input_path)}` and use its output, "
-              f"or pass --allow-unredacted to send it anyway.",
-              file=sys.stderr)
+        emit_line(f"taxjson-generate-parser: error: the first {args.sample_lines} "
+                  f"line(s) of {shown_name(input_path)} still carry personal data "
+                  f"({', '.join(found)}) and would be sent to {args.provider}. "
+                  f"Run `taxjson redact {shown_name(input_path)}` and use its output, "
+                  f"or pass --allow-unredacted to send it anyway.",
+                  file=sys.stderr)
         sys.exit(1)
     if found:
-        print(f"warning: sending a sample that carries personal data "
-              f"({', '.join(found)}) — --allow-unredacted", file=sys.stderr)
+        emit_line(f"warning: sending a sample that carries personal data "
+                  f"({', '.join(found)}) — --allow-unredacted", file=sys.stderr)
 
     system_text = _SYSTEM_TEMPLATE.format(schema_block=render_schema_prompt(), 
         base_source=_load_text(base_path),
@@ -401,7 +402,7 @@ def main():
     try:
         compile(code, str(output_path), 'exec')
     except SyntaxError as e:
-        print(
+        emit_line(
             f"taxjson-generate-parser: error: generated code has syntax errors: {e}\n"
             "Writing it to <output>.bad for inspection.",
             file=sys.stderr,

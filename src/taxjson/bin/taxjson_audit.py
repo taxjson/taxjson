@@ -40,6 +40,8 @@ project-level front door is `taxjson audit`, which resolves every
 path below from the project.
 """
 
+from taxjson.lib.out import exit_text
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import json
 import sys
@@ -78,7 +80,7 @@ def _load_doc(path: Path) -> Dict[str, Any]:
     try:
         return read_work_doc(path)
     except (OSError, ValueError) as e:
-        sys.exit(f"taxjson-audit: cannot read {path}: {e}")
+        sys.exit(exit_text(f"taxjson-audit: cannot read {path}: {e}"))
 
 
 def _source_label(path: Path, meta: Dict[str, Any]) -> str:
@@ -162,8 +164,8 @@ def build_check_index(paths: List[Path]) -> Tuple[
         except OSError:
             key = Path(p)
         if key in seen:
-            print(f"taxjson-audit: warning: --check {p} given more than "
-                  f"once — read once.", file=sys.stderr)
+            emit_line(f"taxjson-audit: warning: --check {p} given more than "
+                      f"once — read once.", file=sys.stderr)
             continue
         seen.add(key)
         doc = _load_doc(p)
@@ -808,9 +810,10 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
              f"disallowed {_fmt(tie['pipeline_disallowed'])}  "
              + (OK if tie["ties"] else BAD))
 
-    from taxjson.lib.out import wrap as _wrap
+    from taxjson.lib.out import label as _label, wrap as _wrap
     for w in ev.get("warnings") or []:
-        for _ln in _wrap(f"warning: {w}", None, "  ", "    "):
+        for _ln in _wrap(_label("warning", stream=sys.stdout) + str(w),
+                         None, "  ", "    "):
             out.append(paint(_ln, "warn"))
     for f in ev.get("failures") or []:
         for _ln in _wrap(f"FAILED: {f}", None, "  ", "    "):
@@ -1081,9 +1084,9 @@ def main(argv=None) -> int:
             from taxjson.bin.taxjson_ticker_map import load_map_file
             tmap = load_map_file(Path(args.ticker_map))
         except Exception as e:
-            print(f"taxjson-audit: warning: could not read ticker.map "
-                  f"({e}) — rename rules will not be named.",
-                  file=sys.stderr)
+            emit_line(f"taxjson-audit: warning: could not read ticker.map "
+                      f"({e}) — rename rules will not be named.",
+                      file=sys.stderr)
 
     source_index = build_source_index([Path(s) for s in args.source])
     check_index, check_labels = build_check_index(
@@ -1124,7 +1127,7 @@ def main(argv=None) -> int:
     try:
         results = rules.compute_gains(transactions, **kwargs)
     except AmbiguousTransferDateError as e:
-        sys.exit(f"taxjson-audit: {e}")
+        sys.exit(exit_text(f"taxjson-audit: {e}"))
 
     date_key = "date_settle" if args.tax_date == "settle" else "date"
 
@@ -1320,10 +1323,10 @@ def main(argv=None) -> int:
         return args.no_match_rc
     if args.date and events:
         _by_trade = sum(1 for e in events if e.get("date") == args.date)
-        print(f"taxjson-audit: note: --date {args.date} matched "
-              f"{len(events)} disposition(s) — {_by_trade} by trade "
-              f"date, {len(events) - _by_trade} by settlement date "
-              f"only.", file=sys.stderr)
+        emit_line(f"taxjson-audit: note: --date {args.date} matched "
+                  f"{len(events)} disposition(s) — {_by_trade} by trade "
+                  f"date, {len(events) - _by_trade} by settlement date "
+                  f"only.", file=sys.stderr)
 
     if args.json:
         slim = []

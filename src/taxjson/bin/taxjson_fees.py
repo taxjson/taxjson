@@ -33,6 +33,7 @@ Usage:
     taxjson-fees-sum --cache work --year 2026 --to CAD --rates work/to_base.csv --json
 """
 
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import glob
 import json
@@ -604,7 +605,7 @@ def main():
         print(f"\n({info['dups']} duplicate row(s) collapsed: the same "
               f"row in overlapping exports.)", file=sys.stderr)
     for line in info.get("attention") or ():
-        print(f"warning: ATTENTION: {line}", file=sys.stderr)
+        emit_line(f"warning: ATTENTION: {line}", file=sys.stderr)
     return 0
 
 

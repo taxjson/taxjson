@@ -23,6 +23,7 @@ old function and class names are aliases at the end of this file.
 """
 from __future__ import annotations
 
+from taxjson.lib.stage_msg import emit_line
 import json
 import os
 import re
@@ -73,10 +74,10 @@ def legacy_rename_note(path: Path) -> None:
     if os.environ.get(_LEGACY_NOTE_ENV):
         return
     os.environ[_LEGACY_NOTE_ENV] = "1"
-    print(f"NOTE: {path} uses the old name of {MISSING_HISTORY_FILE} — it "
-          f"is still read, but please rename it: `mv "
-          f"{LEGACY_MISSING_HISTORY_FILE} {MISSING_HISTORY_FILE}` in "
-          f"{path.parent}", file=sys.stderr)
+    emit_line(f"NOTE: {path} uses the old name of {MISSING_HISTORY_FILE} — it "
+              f"is still read, but please rename it: `mv "
+              f"{LEGACY_MISSING_HISTORY_FILE} {MISSING_HISTORY_FILE}` in "
+              f"{path.parent}", file=sys.stderr)
 
 
 def missing_history_conflict(root) -> Optional[str]:
@@ -1245,15 +1246,15 @@ def report_missing_history_log(logs: List[List[Dict[str, Any]]],
         if any(n.startswith('no opening needed') for n in notes):
             complete.append((symbol, account))
         elif notes and all(n.startswith('no rows') for n in notes):
-            print(f"warning: {file_name} lists {symbol} / {account}, but "
-                  f"no row in the data has that symbol and account — "
-                  f"nothing was applied. Check the spelling.",
-                  file=sys.stderr)
+            emit_line(f"warning: {file_name} lists {symbol} / {account}, but "
+                      f"no row in the data has that symbol and account — "
+                      f"nothing was applied. Check the spelling.",
+                      file=sys.stderr)
     if complete:
         # ATTENTION (the run echoes it): the usual cause is the fix
         # itself — the purchase was added (an older export, a .tt line)
         # and the entry is now stale (new-user study). One line.
-        print("warning: ATTENTION: " + complete_entry_message(
+        emit_line("warning: ATTENTION: " + complete_entry_message(
             *complete[0], file_name, more=complete[1:]), file=sys.stderr)
 
 
@@ -1584,10 +1585,10 @@ def synthesize_openings(
             # here by design. pipeline.prepare_books reports the
             # project-level result once (report_missing_history_log).
             if warn:
-                print(f"warning: {label} lists {symbol} / {account}, "
-                      f"but no row in the data has that symbol and "
-                      f"account — nothing was applied. Check the "
-                      f"spelling.", file=sys.stderr)
+                emit_line(f"warning: {label} lists {symbol} / {account}, "
+                          f"but no row in the data has that symbol and "
+                          f"account — nothing was applied. Check the "
+                          f"spelling.", file=sys.stderr)
             applied.append(entry)
             continue
         if min_pos >= -1e-6:
@@ -1643,8 +1644,8 @@ def synthesize_openings(
                 continue
             entry['stale'] = st.reason
             if flag_stale:
-                print(f"warning: ATTENTION: {stale_entry_message(st)}",
-                      file=sys.stderr)
+                emit_line(f"warning: ATTENTION: {stale_entry_message(st)}",
+                          file=sys.stderr)
     return out, applied
 
 

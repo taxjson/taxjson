@@ -35,6 +35,7 @@ option year boundary (premiums are taxed at the close, §1234).
 """
 from __future__ import annotations
 
+from taxjson.lib.stage_msg import emit_line
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -982,8 +983,8 @@ def analyze(root: Path, cfg: Dict[str, Any], *, margin: int = 3,
         from taxjson.lib.option_boundary import filed_locks
         filed, filed_timing = filed_locks(
             root, settings,
-            warn=lambda m: print(f"taxjson edge-cases: warning: {m}",
-                                 file=_sys.stderr))
+            warn=lambda m: emit_line(f"taxjson edge-cases: warning: {m}",
+                                     file=_sys.stderr))
     # Written options across a year end are an s.49(1) grant-timing
     # boundary (option-boundary is Canada-only); a US premium is taxed
     # at the close (§1234), so there is nothing to place.

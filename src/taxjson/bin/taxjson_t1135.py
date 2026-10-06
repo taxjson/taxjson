@@ -63,6 +63,8 @@ Usage:
 Or through the project wrapper (recommended):  `taxjson t1135`
 """
 
+from taxjson.lib.out import unwrapped as _unwrapped
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import contextlib
 import io
@@ -326,11 +328,12 @@ def _assign_underlying_resolver(transactions: List[Dict[str, Any]]):
 
     def resolve(tx: Dict[str, Any]) -> Optional[str]:
         buf = io.StringIO()
-        with contextlib.redirect_stderr(buf):
+        # Read back line by line: captured (unwrapped), the GNU bytes.
+        with contextlib.redirect_stderr(buf), _unwrapped():
             out = resolver(_ns(tx))
         for ln in buf.getvalue().splitlines():
             if ln.startswith("warning:"):
-                print(f"taxjson-t1135: {ln}", file=sys.stderr)
+                emit_line(f"taxjson-t1135: {ln}", file=sys.stderr)
         return out
 
     return resolve
@@ -792,11 +795,11 @@ def full_history_wash_sales(base_paths: List[Path],
     # here); this pass only reads where each denial's addition lands. A
     # solver that did not converge is still said.
     err = io.StringIO()
-    with contextlib.redirect_stderr(err):
+    with contextlib.redirect_stderr(err), _unwrapped():
         res = run_gains(txs, sheltered, (), req)
     for line in err.getvalue().splitlines():
         if "did not converge" in line:
-            print(line, file=sys.stderr)
+            emit_line(line, file=sys.stderr)
     return list(res.get("wash_sales") or [])
 
 
@@ -1184,7 +1187,7 @@ def render_report(rep: Dict[str, Any]) -> str:
                          f"'no T1135 required' verdict is NOT reliable; "
                          f"work the cost out by hand.")
     for w in warns:
-        para("warning: " + w, "  ", "    ")
+        para(_out.label("warning", stream=sys.stdout) + w, "  ", "    ")
     lines.append("")
 
     rows = rep["properties"]
@@ -1378,11 +1381,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         # The T1135 test is Canadian; a Canada project's run uses grant
         # timing from the project year — say so instead of silently
         # disagreeing with it, as taxjson-gains does (re-audit A2-1361).
-        print("taxjson-t1135: note: --option-premium-timing not given — "
-              "using close timing. `taxjson run` on a Canada project uses "
-              "grant timing from the project year; pass "
-              "--option-premium-timing grant --option-grant-since YEAR "
-              "to match it.", file=sys.stderr)
+        emit_line("taxjson-t1135: note: --option-premium-timing not given — "
+                  "using close timing. `taxjson run` on a Canada project uses "
+                  "grant timing from the project year; pass "
+                  "--option-premium-timing grant --option-grant-since YEAR "
+                  "to match it.", file=sys.stderr)
         args.option_premium_timing = "close"
     if args.base_currency.upper() != "CAD":
         # The thresholds are CAD amounts (ITA s.233.3): a USD book

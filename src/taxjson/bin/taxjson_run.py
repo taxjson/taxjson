@@ -33,6 +33,8 @@ Subcommands:
     taxjson help [COMMAND]            # every other subcommand
 """
 
+from taxjson.lib.out import exit_text
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import hashlib
 import re
@@ -279,15 +281,17 @@ def _echo_stage_stderr(text: str) -> None:
         _echo_captured(line, indent="", file=sys.stderr)
 
 
-def _echo_captured(line: str, indent: str = "  ", file=None) -> None:
+def _echo_captured(line: str, indent: str = "  ", file=None,
+                   source: bool = True) -> None:
     """Show one captured stage line (a .diag's ATTENTION / UNBOOKED line
     or its continuation) on the run's console, wrapped for the person:
     the marker first line keeps its prefix, the rest is an indented
     headline + detail (lib/stage_msg.console_lines). The .diag and the
-    .sum DIAGNOSTICS keep the one line."""
+    .sum DIAGNOSTICS keep the one line. `source=False`: the run's own
+    line (its program name is not shown)."""
     from taxjson.lib.stage_msg import console_lines
     file = sys.stdout if file is None else file
-    for ln in console_lines(line, indent, stream=file):
+    for ln in console_lines(line, indent, stream=file, source=source):
         print(ln, file=file)
 
 
@@ -860,7 +864,7 @@ def _warn_config_tables(root: Path) -> None:
             continue
         _CONFIG_WARNED.add(msg)
         _pfx = f"taxjson {_CURRENT_CMD}" if _CURRENT_CMD else "taxjson"
-        print(f"{_pfx}: warning: taxjson.toml: {msg}", file=sys.stderr)
+        emit_line(f"{_pfx}: warning: taxjson.toml: {msg}", file=sys.stderr)
 
 
 def _nonneg_money(value: Any, what: str) -> float:
@@ -2006,8 +2010,9 @@ def _report_detection(name: str, found, cache: Path) -> None:
         for ln in lines:
             for _w in _out_wrap(ln, indent="  ", hang="      "):
                 print(_w)
+        from taxjson.lib.out import labelled as _labelled
         for n in notes:
-            for _w in _out_wrap(n, indent="    ", hang="      "):
+            for _w in _out_wrap(_labelled(n), indent="    ", hang="      "):
                 print(_w)
     _txt = "".join(f"{x}\n" for x in lines + notes)
     _diag = cache / f"{name}_detect.diag"
@@ -2866,8 +2871,9 @@ def cmd_migrate(args: argparse.Namespace) -> None:
         return
     dry = bool(getattr(args, "dry_run", False))
     print(f"taxjson migrate{' --dry-run' if dry else ''}: {root}")
+    from taxjson.lib.out import labelled as _labelled
     for ln in pl.summary(dry):
-        for _ln in _out_wrap(ln, indent="  ", hang="    "):
+        for _ln in _out_wrap(_labelled(ln), indent="  ", hang="    "):
             print(_ln)
     if dry:
         if pl.map_append:
@@ -3616,8 +3622,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     if _dres.stderr:
                         sys.stderr.write(_dres.stderr)
                     if _dres.returncode != 0:
-                        sys.exit(f"taxjson run: apply-distributions "
-                                 f"failed for {name} (see above).")
+                        sys.exit(exit_text(f"taxjson run: apply-distributions "
+                                           f"failed for {name} (see above)."))
                     _stage.replace(base_json)
                     # Publish the stage's diagnostics under the name
                     # every reader uses — the --strict gate and the
@@ -4519,7 +4525,7 @@ def stage_blended_wash_pass(names: List[str],
                              .read_text(encoding="utf-8"))
                  for name in names]):
             _echo_captured(f"{_PROG}: warning: {_msg}", indent="",
-                           file=sys.stderr)
+                           file=sys.stderr, source=False)
     except (OSError, ValueError, AttributeError):
         pass
 
@@ -5888,8 +5894,8 @@ def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
                          arrivals=transfer_arrivals(root, cache,
                                                     cfg.get("accounts")))
     except Exception as e:                          # noqa: BLE001
-        print(f"taxjson: warning: the closing summary could not be built "
-              f"({type(e).__name__}: {e}).", file=sys.stderr)
+        emit_line(f"taxjson: warning: the closing summary could not be built "
+                  f"({type(e).__name__}: {e}).", file=sys.stderr)
         return
     import json as _json
     try:
@@ -7753,7 +7759,7 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
                     f".tt if {_disposing_word(report['country'])}"
                 pairs.append((lead, Verbatim(e["tt"])))
             if e["note"]:
-                pairs.append(("note", e["note"]))
+                pairs.append(("your note", e["note"]))
             if e.get("refused"):
                 pairs.append(("REFUSED", e["refused"]))
             doc.kv(pairs, indent="    ")
@@ -9021,10 +9027,10 @@ def _dist_adjust_rows(cache: Path, accounts, keep) -> List[Tuple[str, dict]]:
     if missing and not warned_missing_base_once(missing):
         # The map's adjustments live only in the base books: without
         # one they vanished from roc / roc-sum with rc 0 (A2-1128).
-        print(f"taxjson: warning: taxjson.toml has [[distributions]] but "
-              f"{', '.join(missing)} is missing in {cache} (the last "
-              f"`taxjson run` did not build it) — that account's map "
-              f"ACB adjustments are NOT in this report.", file=sys.stderr)
+        emit_line(f"taxjson: warning: taxjson.toml has [[distributions]] but "
+                  f"{', '.join(missing)} is missing in {cache} (the last "
+                  f"`taxjson run` did not build it) — that account's map "
+                  f"ACB adjustments are NOT in this report.", file=sys.stderr)
     return out
 
 
@@ -11527,11 +11533,13 @@ def _relay_child_stderr(text: str) -> None:
     to the person: each message line wrapped at the house width with its
     continuation indented, each indented detail line wrapped under
     itself (docs/output-style.md: whoever shows captured text wraps
-    it)."""
-    from taxjson.lib.out import wrap
+    it), the label first and the child named as the source
+    (`Warning: taxjson estimate: ...`, lib/out.labelled)."""
+    from taxjson.lib.out import labelled, wrap
     for ln in (text or "").splitlines():
         if not ln.strip():
             continue
+        ln = labelled(ln, sys.stderr, source=True)
         lead = ln[:len(ln) - len(ln.lstrip())]
         for w in wrap(ln.strip(), None, lead, lead or "  ",
                       stream=sys.stderr):
@@ -11808,10 +11816,10 @@ def _actual_withholding(cache: Path, taxable_accounts, year,
             # fallback while its foreign dividends were still taxed
             # (R1-223): fall back for it, and say so.
             if foreign_by_account.get(acct):
-                print(f"taxjson: warning: could not read {p.name} "
-                      f"({e}) — assuming {CA_FOREIGN_WITHHOLDING:.0%} "
-                      f"withholding on {acct}'s foreign dividends; "
-                      f"re-run `taxjson run`.", file=sys.stderr)
+                emit_line(f"taxjson: warning: could not read {p.name} "
+                          f"({e}) — assuming {CA_FOREIGN_WITHHOLDING:.0%} "
+                          f"withholding on {acct}'s foreign dividends; "
+                          f"re-run `taxjson run`.", file=sys.stderr)
             data = {}
         acct_parts: List[float] = []
         acct_seen = False
@@ -13045,7 +13053,8 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
         _para("No filed-year locks (run `taxjson close-year` after "
               "filing).")
     for _py in sorted(partial_locks):
-        _para(f"note: {partial_locks[_py]}", "", "  ")
+        _para(_out.label("note", stream=sys.stdout) + partial_locks[_py],
+              "", "  ")
     print()
     if not rows:
         _para("No written option straddles a year boundary and none is "
@@ -14647,9 +14656,9 @@ def _books_horizon(cache: Path, accounts: List[str]) -> Optional[str]:
         except FileNotFoundError:
             continue
         except (OSError, ValueError, AttributeError) as e:
-            print(f"taxjson: warning: work/{p.name} cannot be read "
-                  f"({str(e)[:120]}) — the 'as of' date leaves account "
-                  f"{a} out; re-run `taxjson run`.", file=sys.stderr)
+            emit_line(f"taxjson: warning: work/{p.name} cannot be read "
+                      f"({str(e)[:120]}) — the 'as of' date leaves account "
+                      f"{a} out; re-run `taxjson run`.", file=sys.stderr)
             continue
         for t in txs:
             if not isinstance(t, dict):
@@ -14723,9 +14732,9 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
         if getattr(args, "json", False):
             # The trace is prose from taxjson-explain — silently
             # printing text under --json broke machine consumers.
-            sys.exit("taxjson wash-sales: --explain has no JSON form; "
-                     "drop --json (or drop --explain for the "
-                     "machine-readable table).")
+            sys.exit(exit_text("taxjson wash-sales: --explain has no JSON form; "
+                               "drop --json (or drop --explain for the "
+                               "machine-readable table)."))
         _explain_wash_sales(root, cache, args.account)
         return                                          # (raises SystemExit)
 
@@ -14734,11 +14743,11 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     resolved = resolve_gains_files(cache, args.account or None)
     if not resolved:
         if args.account:
-            sys.exit(f"taxjson wash-sales: no gains for account "
-                     f"{args.account!r} in {cache} (run `taxjson run` first, "
-                     f"or check the name).")
-        sys.exit(f"taxjson wash-sales: no gains files in {cache} "
-                 f"(run `taxjson run` first).")
+            sys.exit(exit_text(f"taxjson wash-sales: no gains for account "
+                               f"{args.account!r} in {cache} (run `taxjson run` first, "
+                               f"or check the name)."))
+        sys.exit(exit_text(f"taxjson wash-sales: no gains files in {cache} "
+                           f"(run `taxjson run` first)."))
     if not args.account:
         _warn_accounts_without_books(root, resolved, "wash-sales",
                                      "gains file")
@@ -15836,7 +15845,8 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any]
         argv += ["--federal-only"]
         federal_only = True
         from taxjson.lib.out import fill as _fill
-        print(_fill("note: "
+        from taxjson.lib.out import label as _label
+        print(_fill(_label("note", stream=sys.stdout)
                     + (f"province {prov} is not modelled" if prov else
                        "no [settings] province")
                     + " — the carry-forwards are computed federal-only "
@@ -15863,7 +15873,7 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any]
 
 def _carryforwards_summary(cf: Dict[str, Any], year: int) -> List[str]:
     """close-year's lines on what the lock carries into year + 1."""
-    from taxjson.lib.out import kv_lines, wrap
+    from taxjson.lib.out import kv_lines, labelled, wrap
     kv: List[Tuple[str, str]] = []
     notes: List[str] = []
     ncl = cf.get("net_capital_loss")
@@ -15893,7 +15903,7 @@ def _carryforwards_summary(cf: Dict[str, Any], year: int) -> List[str]:
         return []
     out = ["", f"CARRIED INTO {year + 1}"] + kv_lines(kv, indent="  ")
     for n in notes:
-        out += wrap(n, None, "  ", "    ")
+        out += wrap(labelled(n), None, "  ", "    ")
     out += wrap(f"The {year + 1} project's estimate, carryover and amt "
                 f"read these; its handoff checks its inputs against "
                 f"them.", None, "  ", "  ")
@@ -16039,8 +16049,9 @@ def _check_filed_years(root: Path, cache: Path,
     _prog = _cmd_prog()
 
     def _line(text: str) -> None:
-        # A per-year line: wrapped, its continuation indented under it.
-        for _ln in _out.wrap(text, None, "  ", "    "):
+        # A per-year line: wrapped, its continuation indented under it
+        # (a `note: ` line shown with its label, lib/out.labelled).
+        for _ln in _out.wrap(_out.labelled(text), None, "  ", "    "):
             print(_ln)
 
     snaps = taxjson_filed.list_snapshots(root)
@@ -16225,15 +16236,15 @@ def _check_filed_years(root: Path, cache: Path,
                       input=input_failed)
     unreadable += input_failed
     if (unreadable or mismatched) and strict:
-        sys.exit(f"taxjson run --strict: {unreadable + mismatched} "
-                 f"filed-year lock(s) could not be checked"
-                 + (f" ({mismatched} closed under another country)"
+        sys.exit(exit_text(f"taxjson run --strict: {unreadable + mismatched} "
+                           f"filed-year lock(s) could not be checked"
+                           + (f" ({mismatched} closed under another country)"
                     if mismatched else "")
-                 + (f" and {drifting} drifted" if drifting else "")
-                 + " — aborting.")
+                           + (f" and {drifting} drifted" if drifting else "")
+                           + " — aborting."))
     if drifting and strict:
-        sys.exit(f"taxjson run --strict: {drifting} filed year(s) "
-                 f"drifted — aborting.")
+        sys.exit(exit_text(f"taxjson run --strict: {drifting} filed year(s) "
+                           f"drifted — aborting."))
     return drifting + unreadable + mismatched
 
 
@@ -16355,8 +16366,8 @@ def _explain_wash_sales(root: Path, cache: Path,
     if account:
         base = cache / f"{account}_base.json"
         if not base.exists():
-            sys.exit(f"taxjson wash-sales: no {base.name} in {cache} "
-                     f"(run `taxjson run` first, or check the name).")
+            sys.exit(exit_text(f"taxjson wash-sales: no {base.name} in {cache} "
+                               f"(run `taxjson run` first, or check the name)."))
         _refuse_us_crypto_account(root, account, "taxjson wash-sales")
         bases = [base]
     else:
@@ -16372,8 +16383,8 @@ def _explain_wash_sales(root: Path, cache: Path,
                      and p.name != "sheltered_base.json"
                      and not p.name.startswith(".")]
         if not bases:
-            sys.exit(f"taxjson wash-sales: no base files in {cache} "
-                     f"(run `taxjson run` first).")
+            sys.exit(exit_text(f"taxjson wash-sales: no base files in {cache} "
+                               f"(run `taxjson run` first)."))
 
     settings = _soft_settings(root)
     common: List[str] = ["--wash-sales", "--layout", "report"]
@@ -16454,9 +16465,9 @@ def _explain_wash_sales(root: Path, cache: Path,
                            capture_output=True)
             if res.returncode != 0:
                 tmp.unlink(missing_ok=True)
-                sys.exit(f"taxjson wash-sales: could not merge the "
-                         f"taxable base books: "
-                         f"{_child_error(res.stderr)}")
+                sys.exit(exit_text(f"taxjson wash-sales: could not merge the "
+                                   f"taxable base books: "
+                                   f"{_child_error(res.stderr)}"))
             tmp.write_text(res.stdout, encoding="utf-8")
             target = tmp
         try:
@@ -16934,8 +16945,11 @@ def cmd_fetch(args: argparse.Namespace) -> None:
 
     def say(msg: str) -> None:
         # Progress lines move to stderr under --json so stdout stays
-        # a single machine-readable document.
-        print(msg, file=sys.stderr if json_mode else sys.stdout)
+        # a single machine-readable document. A plugin's `note:` line is
+        # shown with its label first (`Info:`, lib/out.labelled).
+        from taxjson.lib.out import labelled
+        stream = sys.stderr if json_mode else sys.stdout
+        print(labelled(msg, stream), file=stream)
 
     results: Dict[str, Any] = {}
     for f in chosen:
@@ -16966,8 +16980,8 @@ def _fx_cash_doc(root: Path, cache: Path):
     base = str(_base(settings)).upper()
     year = settings.get("year")
     if not year:
-        sys.exit("taxjson fx-cash: needs [settings] year in "
-                 "taxjson.toml.")
+        sys.exit(exit_text("taxjson fx-cash: needs [settings] year in "
+                           "taxjson.toml."))
     country = _country(settings)
     txs: List[Dict[str, Any]] = []
     found = False
@@ -16980,33 +16994,33 @@ def _fx_cash_doc(root: Path, cache: Path):
             if _has_inputs(root, name):
                 # A partial ledger flipped the line-15300 figure's sign
                 # with rc 0 (S005-04, S046-19).
-                sys.exit(f"taxjson fx-cash: no native transaction file "
-                         f"for taxable account {name!r} — run `taxjson "
-                         f"run` first; a ledger without it would be "
-                         f"partial.")
+                sys.exit(exit_text(f"taxjson fx-cash: no native transaction file "
+                                   f"for taxable account {name!r} — run `taxjson "
+                                   f"run` first; a ledger without it would be "
+                                   f"partial."))
             continue
         try:
             doc = _read_work_doc(f)
         except (OSError, ValueError) as e:
             _m = str(e)                 # (named once: A2-1413)
-            sys.exit(f"taxjson fx-cash: "
-                     f"{_m if str(f) in _m else f'could not read {f}: {_m}'}"
-                     + ("" if "taxjson run" in _m else
+            sys.exit(exit_text(f"taxjson fx-cash: "
+                               f"{_m if str(f) in _m else f'could not read {f}: {_m}'}"
+                               + ("" if "taxjson run" in _m else
                         " — re-run `taxjson run` to rebuild it")
-                     + f"; a ledger without account {name!r} would be "
-                       f"partial.")
+                               + f"; a ledger without account {name!r} would be "
+                       f"partial."))
         found = True
         for t in doc.get("transactions", []):
             t.setdefault("account", name)
             txs.append(t)
     if not found:
-        sys.exit(f"taxjson fx-cash: no native transaction files in "
-                 f"{cache} (run `taxjson run` first).")
+        sys.exit(exit_text(f"taxjson fx-cash: no native transaction files in "
+                           f"{cache} (run `taxjson run` first)."))
     try:      # an unreadable rates file, a futures refusal (A2-1424/1434)
         fx = load_fx_history(cache / "to_base.csv", base)
         ledger = FX.build_ledger(txs, base, fx, int(year), country=country)
     except (OSError, ValueError) as e:
-        sys.exit(f"taxjson fx-cash: error: {e}")
+        sys.exit(exit_text(f"taxjson fx-cash: error: {e}"))
     verdict = FX.apply_jurisdiction(ledger["net_gain"], country)
     return ledger, verdict, base, int(year), country
 
@@ -17565,7 +17579,7 @@ def _print_check_results(results: List[Dict[str, Any]],
                          country: str) -> None:
     """buy-check / sell-check text: per symbol a `SYMBOL: VERDICT` line
     and its detail lines as `- ` items (a radar note quoted in one as
-    its own `note:` item), a blank line between symbols, then the scope
+    its own `Info:` item), a blank line between symbols, then the scope
     paragraph (lib/wash_scope). The --json document carries the same
     results."""
     from taxjson.lib import out
@@ -18446,9 +18460,9 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
     if getattr(args, "write_missing_history", None) is None:
         args.write_missing_history = None
     if getattr(args, "gen_phantoms", None):
-        print("taxjson find-missing-history: note: --gen-phantoms is now "
-              "--write-missing-history (the old flag still works).",
-              file=sys.stderr)
+        emit_line("taxjson find-missing-history: note: --gen-phantoms is now "
+                  "--write-missing-history (the old flag still works).",
+                  file=sys.stderr)
         if args.write_missing_history is None:
             args.write_missing_history = args.gen_phantoms
     if (getattr(args, "write_purchases", None) is not None
@@ -18461,8 +18475,8 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
     if args.account:
         f = cache / f"{args.account}_base.json"
         if not f.exists():
-            sys.exit(f"taxjson find-missing-history: no {f.name} in {cache} "
-                     f"(run `taxjson run` first, or check the name).")
+            sys.exit(exit_text(f"taxjson find-missing-history: no {f.name} in {cache} "
+                               f"(run `taxjson run` first, or check the name)."))
         files = [f]
     else:
         # Per-account full-history base files only — skip the raw/native
@@ -18473,8 +18487,8 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
                        and p.name != "sheltered_base.json"
                        and not p.name.startswith("."))
         if not files:
-            sys.exit(f"taxjson find-missing-history: no base files in {cache} "
-                     f"(run `taxjson run` first).")
+            sys.exit(exit_text(f"taxjson find-missing-history: no base files in {cache} "
+                               f"(run `taxjson run` first)."))
 
     year = args.year
     if year is None:
@@ -18516,13 +18530,13 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         # --force, which keeps a .bak like `init --force`.
         if out.exists() and not out.is_dir():
             if not getattr(args, "force", False):
-                sys.exit(f"taxjson find-missing-history {_flag}: "
-                         f"{out} already exists — not overwritten (a "
-                         f"reviewed file keeps your prunes and hand-added "
-                         f"pairs). Write the candidates to a new file "
-                         f"(e.g. missing_history.new.json) and merge by "
-                         f"hand, or pass --force to replace it (a .bak "
-                         f"copy is kept).")
+                sys.exit(exit_text(f"taxjson find-missing-history {_flag}: "
+                                   f"{out} already exists — not overwritten (a "
+                                   f"reviewed file keeps your prunes and hand-added "
+                                   f"pairs). Write the candidates to a new file "
+                                   f"(e.g. missing_history.new.json) and merge by "
+                                   f"hand, or pass --force to replace it (a .bak "
+                                   f"copy is kept)."))
 
         merged: Dict[Tuple[str, str], dict] = {}
         for f in files:
@@ -18564,9 +18578,9 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
                 if line.strip():
                     print(f"  [{f.name}] {line}", file=sys.stderr)
             if proc.returncode != 0:
-                sys.exit(f"taxjson find-missing-history {_flag}: "
-                         f"taxjson-gains failed on {f.name} "
-                         f"(exit {proc.returncode}).")
+                sys.exit(exit_text(f"taxjson find-missing-history {_flag}: "
+                                   f"taxjson-gains failed on {f.name} "
+                                   f"(exit {proc.returncode})."))
             try:
                 entries = json.loads(Path(tmp_path).read_text(encoding="utf-8"))
             except (OSError, ValueError):
@@ -18666,9 +18680,9 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         _quiet = _accounts_skipped_for_no_inputs(root)
         for _n in sorted((_soft_config(root).get("accounts") or {})):
             if _n not in _have and _n not in _quiet:
-                print(f"taxjson find-missing-history: note: account {_n} "
-                      f"has no work/{_n}_base.json — not checked (run "
-                      f"`taxjson run`).", file=sys.stderr)
+                emit_line(f"taxjson find-missing-history: note: account {_n} "
+                          f"has no work/{_n}_base.json — not checked (run "
+                          f"`taxjson run`).", file=sys.stderr)
                 cmd += ["--unchecked-account", _n]
     if year:
         cmd += ["--year", str(year)]
@@ -18927,9 +18941,10 @@ def cmd_init(args: argparse.Namespace) -> None:
                       if d.is_dir() and d.name not in account_names
                       and d.name != "slips") if _inputs.is_dir() else []
     if _orphans:
-        for _ln in _out_wrap(
+        from taxjson.lib.out import labelled as _labelled
+        for _ln in _out_wrap(_labelled(
                 f"note: inputs/ has folder(s) with no [accounts.*] "
-                f"section in the new config: {', '.join(_orphans)}",
+                f"section in the new config: {', '.join(_orphans)}"),
                 indent="  ", hang="    "):
             print(_ln)
         for _ln in _out_wrap(f"Re-add their sections (see {bak_name}) or "
@@ -20404,12 +20419,12 @@ def _main() -> None:
         for a, b in zip(segments, segments[1:]):
             boundary = next((t for t in b if t in commands), None)
             if boundary and _parses_ok(p, a + [boundary]):
-                print(f"taxjson: note: {boundary!r} starts a new "
-                      f"chained command; the previous command "
-                      f"({next(t for t in a if t in commands)!r}) "
-                      f"could also have taken it as an argument — "
-                      f"run the commands separately if that was the "
-                      f"intent.", file=sys.stderr)
+                emit_line(f"taxjson: note: {boundary!r} starts a new "
+                          f"chained command; the previous command "
+                          f"({next(t for t in a if t in commands)!r}) "
+                          f"could also have taken it as an argument — "
+                          f"run the commands separately if that was the "
+                          f"intent.", file=sys.stderr)
     global _CURRENT_CMD
     from taxjson.lib.corp_actions import ManifestError
     for seg in segments:
@@ -20446,14 +20461,14 @@ def _main() -> None:
         except ManifestError as e:
             # A hand-edited elections manifest that does not load: one
             # line naming the file, never a traceback (audit S072-05).
-            sys.exit(f"taxjson {args.cmd}: error: {e}")
+            sys.exit(exit_text(f"taxjson {args.cmd}: error: {e}"))
         except subprocess.CalledProcessError as e:
             # A pipeline stage failed. The child's own stderr already
             # explained WHY (run_to_file echoes it) — re-raising the
             # CalledProcessError just buried that explanation under a
             # second traceback (2026-09 audit).
-            sys.exit(f"taxjson: stage failed: {_stage_description(e.cmd)} "
-                     f"(exit {e.returncode}) — see the error above.")
+            sys.exit(exit_text(f"taxjson: stage failed: {_stage_description(e.cmd)} "
+                               f"(exit {e.returncode}) — see the error above."))
     return
 
 

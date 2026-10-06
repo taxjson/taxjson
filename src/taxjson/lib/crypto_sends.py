@@ -35,6 +35,7 @@ line selling the shortfall at fair value (audit R1-26).
 """
 from __future__ import annotations
 
+from taxjson.lib.stage_msg import emit_line
 import csv
 import json
 import math
@@ -651,9 +652,9 @@ def load_rates(path: Path) -> Dict[str, Dict[str, Tuple[float, str]]]:
         out.setdefault(parts[2].upper(), {}).setdefault(parts[0], (
             rate, parts[5].lower() if len(parts) > 5 else ""))
     if bad:
-        print(f"taxjson crypto-sends: warning: {path.name}: skipped "
-              f"{len(bad)} line(s) with an unreadable rate (e.g. "
-              f"{bad[0]}).", file=sys.stderr)
+        emit_line(f"taxjson crypto-sends: warning: {path.name}: skipped "
+                  f"{len(bad)} line(s) with an unreadable rate (e.g. "
+                  f"{bad[0]}).", file=sys.stderr)
     return out
 
 

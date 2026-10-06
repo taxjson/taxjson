@@ -437,9 +437,9 @@ def deduplicate(transactions: List[TaxTransaction], return_dropped: bool = False
     dropped = [transactions[i] for i in plan.drop]
     if report is not None:
         for line in plan.attention:
-            print(f"warning: ATTENTION: {line}", file=report)
+            emit_line(f"warning: ATTENTION: {line}", file=report)
         for line in plan.notes:
-            print(f"note: {line}", file=report)
+            emit_line(f"note: {line}", file=report)
 
     if return_dropped:
         return kept, dropped
@@ -519,12 +519,12 @@ def main():
                 emit_line(f"{PROG}: {level}: validation: {err}")
             if args.strict:
                 emit_line(f"{PROG}: error: aborting due to {len(errors)} "
-                      f"validation error(s) (--strict)")
+                          f"validation error(s) (--strict)")
                 sys.exit(1)
             emit_line(f"{PROG}: warning: {len(errors)} validation error(s) "
-                  f"above; every row was KEPT (no row is dropped by "
-                  f"validation) — fix the input or run with --strict "
-                  f"to abort.")
+                      f"above; every row was KEPT (no row is dropped by "
+                      f"validation) — fix the input or run with --strict "
+                      f"to abort.")
     
     # Sort first, then dedup. Dedup keeps the *first* occurrence of each
     # UID — if it ran before sort, the survivor depended on input-file

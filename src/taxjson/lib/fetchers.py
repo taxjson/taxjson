@@ -43,6 +43,7 @@ fetcher's brokerages), the parsed arguments, a `say` progress printer
 """
 from __future__ import annotations
 
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import sys
 from dataclasses import dataclass
@@ -192,9 +193,9 @@ def add_fetcher_arguments(parser: argparse.ArgumentParser) -> None:
         try:
             add(parser)
         except Exception as e:
-            print(f"taxjson fetch: warning: fetcher {f.name!r} could not "
-                  f"add its options ({type(e).__name__}: {e})",
-                  file=sys.stderr)
+            emit_line(f"taxjson fetch: warning: fetcher {f.name!r} could not "
+                      f"add its options ({type(e).__name__}: {e})",
+                      file=sys.stderr)
 
 
 def listing() -> List[Dict[str, Any]]:

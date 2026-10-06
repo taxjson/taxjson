@@ -9,6 +9,7 @@ Usage:
     taxjson-validate input1.json [input2.json ...]
 """
 
+from taxjson.lib.out import labelled
 import argparse
 import json
 import re
@@ -296,10 +297,10 @@ def main():
                     # per AUDIT-2026-07-ui §1C3 the per-record detail IS the
                     # tool's report.
                     for err in issues.get(ctx, []):
-                        print(f"  ERROR: {err}")
+                        print(labelled(f"  ERROR: {err}"))
                     if args.warnings:
                         for warn in warnings.get(ctx, []):
-                            print(f"  WARNING: {warn}")
+                            print(labelled(f"  WARNING: {warn}"))
                     print()
 
     if global_total_issues == 0:

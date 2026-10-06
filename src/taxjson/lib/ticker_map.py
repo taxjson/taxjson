@@ -1,3 +1,4 @@
+from taxjson.lib.stage_msg import emit_line
 import re
 from datetime import datetime
 
@@ -438,6 +439,6 @@ def side_rules_in(dirs) -> "SideRules":
         return SideRules()
     rules = read_side_rules(p)
     for msg in rules.problems:
-        print(f"warning: ticker.map problem: {msg} (`taxjson run` refuses "
-              f"this map)", file=sys.stderr)
+        emit_line(f"warning: ticker.map problem: {msg} (`taxjson run` refuses "
+                  f"this map)", file=sys.stderr)
     return rules

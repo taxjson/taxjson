@@ -138,7 +138,7 @@ class TestHarvestStyle(unittest.TestCase):
                             "ADVISORY"):
                     self.assertIn(col, hdrs)
                 # The progress line is a note on stderr.
-                self.assertIn("note: pricing ", r.stderr)
+                self.assertIn("Info: pricing ", r.stderr)
 
     def test_unwrapped_keeps_every_column(self):
         p = _copy("usa")
@@ -231,7 +231,7 @@ class TestWatchStyle(unittest.TestCase):
             "2026-10-01", since="2026-09-01", scope="Scope: x " * 30,
             width_=100)
         self.assertEqual(out.lint(text), [])
-        self.assertIn("- note: a long call", text)
+        self.assertIn("- Info: a long call", text)
         self.assertNotIn("NOTE:", text)
         with out.unwrapped():
             one = render_report([{"line": "AAA.TO: " + "word " * 40}],
@@ -291,7 +291,10 @@ class TestWashScopeHelpers(unittest.TestCase):
         lines = advisory_lines("x " * 80 + "NOTE: y", 100, "- ", "  ")
         self.assertTrue(lines[0].startswith("- x"))
         self.assertTrue(lines[1].startswith("  x"))
-        self.assertEqual(lines[-1], "- note: y")
+        self.assertEqual(lines[-1], "- Info: y")
+        # Nothing wraps (captured): the lower-case captured label.
+        self.assertEqual(advisory_lines("x NOTE: y", 0, "- ", "  ")[-1],
+                         "- note: y")
 
 
 class TestHarvestOfflineRefusal(unittest.TestCase):
@@ -304,7 +307,7 @@ class TestHarvestOfflineRefusal(unittest.TestCase):
                                      cache_path=Path(td) / "c.json",
                                      use_ibkr=False, offline=True)
         text = str(cm.exception)
-        self.assertTrue(text.startswith("taxjson: error: TAXJSON_OFFLINE "
+        self.assertTrue(text.startswith("Error: TAXJSON_OFFLINE "
                                         "is set"), text)
         self.assertEqual(out.lint(text), [])
 

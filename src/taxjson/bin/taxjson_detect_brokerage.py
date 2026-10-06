@@ -8,6 +8,7 @@ detected (generic mapping, content signature, or file name fallback).
 The rules live in taxjson.lib.brokerages.detect.
 """
 
+from taxjson.lib.stage_msg import emit_line
 import sys
 from pathlib import Path
 from typing import Optional
@@ -78,8 +79,8 @@ def main():
 
     file_path = args.csv
     if not file_path.exists():
-        print(f"taxjson-detect-brokerage: error: no such file: "
-              f"{file_path}", file=sys.stderr)
+        emit_line(f"taxjson-detect-brokerage: error: no such file: "
+                  f"{file_path}", file=sys.stderr)
         sys.exit(2)                 # a missing input (A2-0164)
 
     try:
@@ -98,7 +99,7 @@ def main():
         print(det.broker)
         print(det.line(), file=sys.stderr)
         if det.note:
-            print(f"note: {det.note}", file=sys.stderr)
+            emit_line(f"note: {det.note}", file=sys.stderr)
     else:
         print("unknown", file=sys.stderr)
         if not det.error:

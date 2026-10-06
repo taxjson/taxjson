@@ -81,7 +81,7 @@ class TestCanadaOnlyViews(unittest.TestCase):
         r = p.run("instalments")
         self.assertEqual(r.returncode, 1)
         self.assertTrue(r.stderr.startswith(
-            "taxjson instalments: error: no [instalments] section"))
+            "Error: no [instalments] section"))
         assert_styled(self, r.stderr)
 
 
@@ -99,7 +99,7 @@ class TestBothCountries(unittest.TestCase):
     def test_sum_warning_is_a_headline_with_details(self):
         r = project("canada").run("sum")
         lines = r.stderr.splitlines()
-        self.assertTrue(lines[0].startswith("taxjson sum: warning: 2 "
+        self.assertTrue(lines[0].startswith("Warning: 2 "
                                             "position(s) sold"), r.stderr)
         self.assertTrue(all(ln.startswith("  ") for ln in lines[1:]))
         assert_styled(self, r.stderr)
@@ -155,9 +155,14 @@ class TestBothCountries(unittest.TestCase):
                 d = p.run("check-filed")
                 self.assertEqual(d.returncode, 1)
                 first = d.stderr.splitlines()[0]
-                self.assertEqual(first, "taxjson check-filed: warning: "
+                self.assertEqual(first, "Warning: "
                                         "filed 2024 DRIFTED vs 2024.json")
                 assert_styled(self, d.stderr)
+                # As the checklist reads it (width 0): the GNU bytes.
+                d = p.run("check-filed", TAXJSON_WIDTH=0)
+                self.assertEqual(d.stderr.splitlines()[0],
+                                 "taxjson check-filed: warning: "
+                                 "filed 2024 DRIFTED vs 2024.json")
 
 
 if __name__ == "__main__":

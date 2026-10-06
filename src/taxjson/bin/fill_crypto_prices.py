@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from taxjson.lib.out import exit_text
 import sys
 import re
 import argparse
@@ -134,11 +135,11 @@ def get_crypto_price(symbol, date_str):
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{_seg}?period1={dt}&period2={dt+86400}&interval=1d"
         if offline_enabled():
             raise SystemExit(
-                f"taxjson-fill-crypto: TAXJSON_OFFLINE is set but a "
-                f"crypto price for {symbol} on {date_str} is not in "
-                f"the cache and would be fetched from Yahoo Finance. "
-                f"Unset it to allow the lookup, or add the price to "
-                f"the cache / the row.")
+                exit_text(f"taxjson-fill-crypto: TAXJSON_OFFLINE is set but a "
+                          f"crypto price for {symbol} on {date_str} is not in "
+                          f"the cache and would be fetched from Yahoo Finance. "
+                          f"Unset it to allow the lookup, or add the price to "
+                          f"the cache / the row."))
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'})
         # Bounded timeout — Yahoo's unofficial endpoint occasionally hangs;
         # without this the whole pipeline freezes on a single bad symbol.

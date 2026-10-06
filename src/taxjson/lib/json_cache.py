@@ -15,6 +15,7 @@ the prices another run just saved.
 """
 from __future__ import annotations
 
+from taxjson.lib.stage_msg import emit_line
 import json
 import os
 import sys
@@ -59,8 +60,8 @@ def save_json_cache(path, data: Dict[str, Any], *, merge: bool = False,
             tmp = None
         return True
     except (OSError, ValueError, TypeError) as exc:
-        print(f"{prog}: warning: could not write {label}{path}: {exc}",
-              file=sys.stderr)
+        emit_line(f"{prog}: warning: could not write {label}{path}: {exc}",
+                  file=sys.stderr)
         return False
     finally:
         if tmp is not None:

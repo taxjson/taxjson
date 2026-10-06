@@ -33,6 +33,7 @@ Usage:
         [--map ticker.map] [--strict]
 """
 
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import re
 import sys
@@ -69,8 +70,8 @@ def _load_txs(paths: List[str]) -> List[Dict[str, Any]]:
                     {k: v for k, v in t.items()
                      if not str(k).startswith('_')}, n, str(p))
             except ValueError as e:
-                print(f"taxjson-lint-crosslistings: error: {e}",
-                      file=sys.stderr)
+                emit_line(f"taxjson-lint-crosslistings: error: {e}",
+                          file=sys.stderr)
                 sys.exit(2)
             out.append(dict(t, _src=i) if isinstance(t, dict) else t)
     return out
@@ -92,8 +93,8 @@ def _load_map(path):
     except (OSError, UnicodeDecodeError) as e:
         # Exit 2 (an unreadable input), not 1 (a lint finding), so a
         # caller can tell the two apart (re-audit A2-1421 / A2-1435).
-        print(f"taxjson-lint-crosslistings: error: cannot read map "
-              f"{path}: {e}", file=sys.stderr)
+        emit_line(f"taxjson-lint-crosslistings: error: cannot read map "
+                  f"{path}: {e}", file=sys.stderr)
         sys.exit(2)
     tobase = {frozenset((a, b)) for a, b in tmap.tobase.items()}
     journal = {frozenset((a, b)) for a, b in tmap.journal.items()}

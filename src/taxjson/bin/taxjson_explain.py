@@ -30,6 +30,8 @@ Examples:
     taxjson-explain --country canada --wash-sales txs.json
 """
 
+from taxjson.lib.out import exit_text
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import os
 import sys
@@ -171,7 +173,7 @@ def load_input(args):
     try:
         return load_stdin_transactions()
     except (ValueError, TypeError, AttributeError) as e:
-        sys.exit(f"taxjson-explain: error: <stdin>: {e}")
+        sys.exit(exit_text(f"taxjson-explain: error: <stdin>: {e}"))
 
 
 def gain_matches(g, args) -> bool:
@@ -274,11 +276,11 @@ def _timing_default_note(args, prog):
     year: say so instead of silently disagreeing with the .sum (audit
     R1-177)."""
     if args.option_premium_timing is None and args.country == 'canada':
-        print(f"{prog}: note: --option-premium-timing not given — using "
-              f"close timing. `taxjson run` on a Canada project uses "
-              f"grant timing from the project year; pass "
-              f"--option-premium-timing grant --option-grant-since YEAR "
-              f"to match it.", file=sys.stderr)
+        emit_line(f"{prog}: note: --option-premium-timing not given — using "
+                  f"close timing. `taxjson run` on a Canada project uses "
+                  f"grant timing from the project year; pass "
+                  f"--option-premium-timing grant --option-grant-since YEAR "
+                  f"to match it.", file=sys.stderr)
     if args.option_premium_timing is None:
         args.option_premium_timing = 'close'
 
@@ -334,7 +336,7 @@ def main():
                 args.corporate_distribution or ()),
             ric_january_dividends=tuple(args.ric_january_dividend or ()))
     except ValueError as e:
-        sys.exit(f"taxjson-explain: error: {e}")
+        sys.exit(exit_text(f"taxjson-explain: error: {e}"))
     apply_roc_record_dates(transactions, req)
     rules = get_tax_rules(args.country)
     from taxjson.lib.core import AmbiguousTransferDateError
@@ -349,7 +351,7 @@ def main():
             **_kw,
         )
     except AmbiguousTransferDateError as e:
-        sys.exit(f"taxjson-explain: {e}")
+        sys.exit(exit_text(f"taxjson-explain: {e}"))
 
     # Color is opt-in (--color); plain text everywhere else.
     use_color = (
@@ -363,7 +365,7 @@ def main():
     if not matches:
         # "No data" is a success (exit 0) — consistent with gains/fees/
         # list/wash-sales; the note keeps stdout clean for report content.
-        print("taxjson-explain: note: no matching gains found", file=sys.stderr)
+        emit_line("taxjson-explain: note: no matching gains found", file=sys.stderr)
         return
 
     if args.list:
@@ -376,8 +378,8 @@ def main():
         for i, g in enumerate(matches):
             block = render_report_block(g, manual=bool(g.get('tainted')))
             if not block:
-                print(f"taxjson-explain: note: no trace produced for "
-                      f"{g.get('id', '?')}", file=sys.stderr)
+                emit_line(f"taxjson-explain: note: no trace produced for "
+                          f"{g.get('id', '?')}", file=sys.stderr)
                 continue
             if i:
                 print()

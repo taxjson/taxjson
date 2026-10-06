@@ -1240,8 +1240,10 @@ def main(argv: Optional[List[str]] = None,
                  "engine only warns; the loss is counted as "
                  "claimable):")
         for sym, n in dict.fromkeys(_flagged):
-            body, more = advisory_parts(f"{sym}: {n}")
-            for t in [body] + [f"note: {m}" for m in more]:
+            body, more = advisory_parts(f"{sym}: {n}",
+                                        out.label("note", doc.w))
+            for t in [body] + [out.label("note", doc.w) + str(m)
+                               for m in more]:
                 doc.item(t, indent="  ")
     # CA-PLAN-04 / US-PLAN-04 (audit S054-22).
     doc.blank()

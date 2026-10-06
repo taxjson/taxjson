@@ -19,6 +19,7 @@ scripting; the default stays 0 so `taxjson run watch` chains never
 break on a mere change report. The first run records a baseline and
 says so. State updates on every run (atomic write).
 """
+from taxjson.lib.out import exit_text
 import json
 import sys
 from pathlib import Path
@@ -252,7 +253,7 @@ def render_report(changes: List[Dict[str, Any]], as_of: str,
                   scope: Optional[str] = None,
                   width_: Optional[int] = None) -> str:
     """The change report: a title, each change as a `- ` item (a radar
-    note it quotes as its own `note:` item), then `scope`
+    note it quotes as its own `Info:` item), then `scope`
     (lib/wash_scope.scope_note) as a paragraph: a CLEAR is "safe as far
     as this project's accounts show" (tax-logic CA-PLAN-04 /
     US-PLAN-04, re-audit A2-0909). Wrapped at the house width."""
@@ -271,5 +272,6 @@ def render_report(changes: List[Dict[str, Any]], as_of: str,
 
 
 if __name__ == "__main__":                       # pragma: no cover
-    sys.exit("taxjson-watch is not a standalone tool — use "
-             "`taxjson watch` (it needs the project's radar inputs).")
+    sys.exit(exit_text("taxjson-watch is not a standalone tool — use "
+                       "`taxjson watch` (it needs the project's radar "
+                       "inputs)."))

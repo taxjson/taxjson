@@ -44,18 +44,19 @@ def scope_lines(country: str, width_=None, indent: str = "") -> list:
 
 # A warn-only flag the radar appends to an advisory ("... NOTE: a long
 # call on these shares was bought ..."). The JSON documents keep the
-# text as is; a person sees each one as its own `note:` paragraph.
+# text as is; a person sees each one as its own `Info:` paragraph.
 _NOTE_RE = re.compile(r"(?:^|\s)NOTE:\s+")
 
 
-def advisory_parts(text: str):
+def advisory_parts(text: str, label: str = "note: "):
     """(body, [note, ...]): `text` with its appended `NOTE:` sentences
-    split off (a body that is only a `TICKER:` lead keeps the first)."""
+    split off (a body that is only a `TICKER:` lead keeps the first,
+    after `label` — lib/out.label("note") for the width shown at)."""
     parts = _NOTE_RE.split(str(text or ""))
     body = parts[0].strip()
     notes = [p.strip() for p in parts[1:] if p.strip()]
     if notes and (not body or body.endswith(":")):
-        body = f"{body} note: {notes.pop(0)}".strip()
+        body = f"{body} {label}{notes.pop(0)}".strip()
     return body, notes
 
 
@@ -63,11 +64,14 @@ def advisory_lines(text: str, width_=None, indent: str = "",
                    hang=None) -> list:
     """An advisory (or a line quoting one) as wrapped report lines: the
     body from `indent` (continuation lines at `hang`, default `indent`),
-    then each appended note as a `note:` paragraph at `indent`."""
+    then each appended note as an `Info:` paragraph at `indent` (`note:`
+    when nothing wraps — lib/out.label)."""
+    import sys
     from taxjson.lib import out
     hang = indent if hang is None else hang
-    body, notes = advisory_parts(text)
+    lbl = out.label("note", width_, stream=sys.stdout)
+    body, notes = advisory_parts(text, lbl)
     lines = out.wrap(body, width_, indent, hang) if body else []
     for n in notes:
-        lines += out.wrap(f"note: {n}", width_, indent, indent + "  ")
+        lines += out.wrap(lbl + n, width_, indent, indent + "  ")
     return lines

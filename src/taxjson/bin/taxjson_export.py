@@ -11,6 +11,7 @@ taxjson holdings TOML snapshot (a `.toml` file of `[[holding]]`
 tables, as written by `--holdings-toml`).
 """
 
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import json
 import re
@@ -245,9 +246,9 @@ def _apply_transfer_evidence(agg: Dict[str, Dict[str, Any]],
                 src[1] -= move
                 dst[1] -= move
                 applied.append((src[0], dst[0], move))
-                print(f"note: applied evidenced depot flip: {move:g} "
-                      f"{src[0]} -> {dst[0]} (transfer sidecar).",
-                      file=sys.stderr)
+                emit_line(f"note: applied evidenced depot flip: {move:g} "
+                          f"{src[0]} -> {dst[0]} (transfer sidecar).",
+                          file=sys.stderr)
             if b is not None and abs(b.get("qty", 0.0)) <= 1e-9 \
                     and abs(b.get("total_cost", 0.0)) <= 0.005:
                 agg.pop(src[0], None)
@@ -362,7 +363,7 @@ def process_data_report(data, args, agg: Dict[str, Dict[str, Any]],
         cur = item.get('currency') or ''
         if cur and bucket['currency'] and cur != bucket['currency']:
             bucket['mixed_currency'] = True
-            print(
+            emit_line(
                 f"warning: {sym} appears in multiple inputs with mismatched currencies "
                 f"({bucket['currency']} vs {cur}); native total_cost is "
                 f"omitted for it (per-currency figures kept; "

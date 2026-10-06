@@ -21,6 +21,7 @@ from instead of implying freshness.
 """
 
 import math
+from taxjson.lib.stage_msg import emit_line
 import json
 import os
 import sys
@@ -686,8 +687,8 @@ def fetch_prices(pairs: Dict[str, str], *,
             price, cur, problem = clean_quote_currency(
                 price, hit[2] if len(hit) > 2 else None)
             if problem:
-                print(f"warning: price-chain: {source} quote for {sym}: "
-                      f"{problem} — ignored", file=sys.stderr)
+                emit_line(f"warning: price-chain: {source} quote for {sym}: "
+                          f"{problem} — ignored", file=sys.stderr)
             if cur is None and minor_unit_listing(pairs.get(sym) or sym):
                 # Pence or pounds? A unit-less quote for an LSE line is
                 # left for the next tier (Yahoo names the unit) and
@@ -708,9 +709,9 @@ def fetch_prices(pairs: Dict[str, str], *,
                 continue
             price = _cached_price(rec)
             if price is None:
-                print(f"warning: price cache entry for {sym} has no "
-                      f"usable price ({rec.get('price')!r}) — ignored",
-                      file=sys.stderr)
+                emit_line(f"warning: price cache entry for {sym} has no "
+                          f"usable price ({rec.get('price')!r}) — ignored",
+                          file=sys.stderr)
                 continue
             asof = str(rec.get("asof") or "")
             try:
@@ -721,8 +722,8 @@ def fetch_prices(pairs: Dict[str, str], *,
             price, cur, problem = clean_quote_currency(
                 price, rec.get("currency"))
             if problem:
-                print(f"warning: price cache entry for {sym}: {problem} "
-                      f"— its currency is ignored", file=sys.stderr)
+                emit_line(f"warning: price cache entry for {sym}: {problem} "
+                          f"— its currency is ignored", file=sys.stderr)
             quotes[sym] = PriceQuote(price=price,
                                      source=f"cache:{age}d", asof=asof,
                                      currency=cur)
@@ -730,16 +731,16 @@ def fetch_prices(pairs: Dict[str, str], *,
             if age > max_cache_age_days:
                 stale.append(f"{sym} ({age}d)")
         if stale:
-            print(f"warning: price cache older than {max_cache_age_days}d "
-                  f"for: {', '.join(stale)} — connect IBKR or the network "
-                  f"to refresh.", file=sys.stderr)
+            emit_line(f"warning: price cache older than {max_cache_age_days}d "
+                      f"for: {', '.join(stale)} — connect IBKR or the network "
+                      f"to refresh.", file=sys.stderr)
 
     for sym in unit_less:
         if sym not in quotes:
-            print(f"warning: price-chain: the quote for {sym} did not say "
-                  f"its unit — that market quotes in pence/cents as well "
-                  f"as pounds, so it was not used (a source that names "
-                  f"the unit, e.g. Yahoo, prices it).", file=sys.stderr)
+            emit_line(f"warning: price-chain: the quote for {sym} did not say "
+                      f"its unit — that market quotes in pence/cents as well "
+                      f"as pounds, so it was not used (a source that names "
+                      f"the unit, e.g. Yahoo, prices it).", file=sys.stderr)
 
     # Write back every fresh (non-cache) quote.
     dirty = False

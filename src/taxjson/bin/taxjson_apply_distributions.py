@@ -48,6 +48,8 @@ missing-history openings the gains stage will synthesize, so a position
 bought before the data gets the right share count.
 """
 
+from taxjson.lib.out import exit_text
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import datetime as _dt
 import json
@@ -76,12 +78,12 @@ def load_rows(config_path: Path) -> List[Tuple[str, str, float]]:
     try:
         cfg = tomllib.loads(cli_diag.read_text_utf8(config_path))
     except (ValueError, TypeError) as e:
-        sys.exit(f"{PROG}: {config_path} is not valid TOML: {e}")
+        sys.exit(exit_text(f"{PROG}: {config_path} is not valid TOML: {e}"))
     rows, problems, warnings = distribution_rows(cfg)
     if problems:
-        sys.exit(f"{PROG}: {config_path}: " + "; ".join(problems))
+        sys.exit(exit_text(f"{PROG}: {config_path}: " + "; ".join(problems)))
     for w in warnings:
-        print(f"{PROG}: warning: {config_path.name} {w}", file=sys.stderr)
+        emit_line(f"{PROG}: warning: {config_path.name} {w}", file=sys.stderr)
     return rows
 
 
@@ -310,15 +312,15 @@ def _warn_roc_overlaps(txs: List[dict], symbol: str, key: str,
             continue
         dates = {str(t.get("date") or ""), str(t.get("record_date") or "")}
         if date in dates:
-            print(f"{PROG}: warning: [[distributions]] {key} {date}: the "
-                  f"book already has a return-of-capital ADJUST of "
-                  f"{float(t.get('net_amount') or 0.0):.2f} on {symbol} "
-                  f"(dated {t.get('date')}"
-                  + (f", record date {t.get('record_date')}"
+            emit_line(f"{PROG}: warning: [[distributions]] {key} {date}: the "
+                      f"book already has a return-of-capital ADJUST of "
+                      f"{float(t.get('net_amount') or 0.0):.2f} on {symbol} "
+                      f"(dated {t.get('date')}"
+                      + (f", record date {t.get('record_date')}"
                      if t.get("record_date") else "")
-                  + ") — if both are the same distribution the cost is "
-                  f"reduced TWICE. Delete the [[distributions]] entry "
-                  f"(or the .tt ADJUST).", file=sys.stderr)
+                      + ") — if both are the same distribution the cost is "
+                      f"reduced TWICE. Delete the [[distributions]] entry "
+                      f"(or the .tt ADJUST).", file=sys.stderr)
     try:
         lo = _dt.date.fromisoformat(date)
     except ValueError:
@@ -331,12 +333,12 @@ def _warn_roc_overlaps(txs: List[dict], symbol: str, key: str,
             else "Form 1099-DIV box 3")
     if divs:
         d = min(divs, key=lambda t: str(t.get("date") or ""))
-        print(f"{PROG}: warning: [[distributions]] {key} {date}: the "
-              f"return of capital ({amount:+.2f}) lowers the cost, but the "
-              f"cash of the distribution paid {d.get('date')} is booked as "
-              f"a DIVIDEND row and still counted IN FULL as income by "
-              f"taxjson (divs-sum, the estimate). Report income from the "
-              f"slip ({slip} part is not income).", file=sys.stderr)
+        emit_line(f"{PROG}: warning: [[distributions]] {key} {date}: the "
+                  f"return of capital ({amount:+.2f}) lowers the cost, but the "
+                  f"cash of the distribution paid {d.get('date')} is booked as "
+                  f"a DIVIDEND row and still counted IN FULL as income by "
+                  f"taxjson (divs-sum, the estimate). Report income from the "
+                  f"slip ({slip} part is not income).", file=sys.stderr)
 
 
 def _missing_history_openings(txs: List[dict], phantoms) -> List[dict]:
@@ -390,10 +392,10 @@ def apply_distributions(doc: dict, map_rows, account: str,
             # a distribution: it used to be reported as an applied
             # "return of capital" and a $0 ADJUST that the checklist's
             # roc-entered step counted (audit S025-23).
-            print(f"NOTE: [[distributions]]: {key} {date} has per-share "
-                  f"amount 0 — a placeholder, NOT applied. Enter the "
-                  f"fund's declared amount once it is published.",
-                  file=sys.stderr)
+            emit_line(f"NOTE: [[distributions]]: {key} {date} has per-share "
+                      f"amount 0 — a placeholder, NOT applied. Enter the "
+                      f"fund's declared amount once it is published.",
+                      file=sys.stderr)
             continue
         sym = key
         if renames:
@@ -411,9 +413,9 @@ def apply_distributions(doc: dict, map_rows, account: str,
         via = f" (as {sym})" if sym != key else ""
         bal = balance_on(sizing, sym, date, date_basis)
         if bal <= 1e-9:
-            print(f"NOTE: [[distributions]]: no {key}{via} shares held "
-                  f"on {date} in this book — row skipped.",
-                  file=sys.stderr)
+            emit_line(f"NOTE: [[distributions]]: no {key}{via} shares held "
+                      f"on {date} in this book — row skipped.",
+                      file=sys.stderr)
             continue
         amount = round(bal * per_share, 6)
         # Neutral without a country: the row is saved into the book,
@@ -457,9 +459,9 @@ def apply_distributions(doc: dict, map_rows, account: str,
                                country)
         ccy = doc.get("metadata", {}).get("target_currency", "")
         unit = f" {ccy}" if ccy else ""
-        print(f"NOTE: {key}{via} {date}: {kind} — {bal:g} sh x "
-              f"{per_share:g}{unit} = {amount:+.2f} "
-              f"{_cost} adjustment.{income}", file=sys.stderr)
+        emit_line(f"NOTE: {key}{via} {date}: {kind} — {bal:g} sh x "
+                  f"{per_share:g}{unit} = {amount:+.2f} "
+                  f"{_cost} adjustment.{income}", file=sys.stderr)
         applied += 1
     doc["transactions"] = txs
     return doc, applied

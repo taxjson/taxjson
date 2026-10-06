@@ -53,6 +53,8 @@ Usage:
 Or through the project wrapper: `taxjson reconcile-slips t5008.csv`.
 """
 
+from taxjson.lib.out import exit_text
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import csv
 import json
@@ -339,15 +341,15 @@ def load_slip(path: Path, renames: Optional[Dict[str, str]] = None,
     with io.StringIO(text, newline="") as f:
         reader = csv.DictReader(f)
         if not reader.fieldnames:
-            raise SystemExit(f"taxjson-reconcile-slips: {path} is empty")
+            raise SystemExit(exit_text(f"taxjson-reconcile-slips: {path} is empty"))
         cols = _map_headers(list(reader.fieldnames), path)
         for required in ("symbol", "proceeds"):
             if required not in cols:
                 raise SystemExit(
-                    f"taxjson-reconcile-slips: {path} has no recognizable "
-                    f"{required!r} column (headers: "
-                    f"{', '.join(reader.fieldnames)}). See --help for "
-                    f"accepted spellings.")
+                    exit_text(f"taxjson-reconcile-slips: {path} has no recognizable "
+                              f"{required!r} column (headers: "
+                              f"{', '.join(reader.fieldnames)}). See --help for "
+                              f"accepted spellings."))
         out: Dict[str, Dict[str, Any]] = {}
         dropped = 0
         foreign: Dict[str, int] = {}
@@ -947,7 +949,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         computed = load_computed(args.gains, args.year, args.date_basis)
     except InputFileError as e:
         # One line naming the gains file, not a traceback (S079-11).
-        print(f"taxjson-reconcile-slips: error: {e}", file=sys.stderr)
+        emit_line(f"taxjson-reconcile-slips: error: {e}", file=sys.stderr)
         return 2
     rep = reconcile(slip, computed, args.tolerance, args.country)
     if dropped_rows:

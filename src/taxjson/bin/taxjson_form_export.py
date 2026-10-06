@@ -82,6 +82,7 @@ Or through the project wrapper: `taxjson form-export` (form defaults from
 the project's country).
 """
 
+from taxjson.lib.out import exit_text
 import argparse
 import csv
 import json
@@ -251,10 +252,10 @@ def build_8949(entries: List[Dict[str, Any]],
         term = e.get("term")
         if term not in ("SHORT_TERM", "LONG_TERM"):
             raise SystemExit(
-                "taxjson-form-export: entry for "
-                f"{e.get('symbol')!r} on {e.get('date')!r} has no ST/LT "
-                "term — Form 8949 needs a country=usa gains file "
-                "(Canada has no term concept; use --form schedule3).")
+                exit_text("taxjson-form-export: entry for "
+                          f"{e.get('symbol')!r} on {e.get('date')!r} has no ST/LT "
+                          "term — Form 8949 needs a country=usa gains file "
+                          "(Canada has no term concept; use --form schedule3)."))
         _kind = section_1256_kind(str(e.get("symbol") or ""))
         if _kind:
             # A §1256 contract (a future, an option on one, a broad-
@@ -1462,10 +1463,10 @@ def _main(args) -> int:
         # Schedule 3 from US-computed gains (FIFO, §1091) would put US
         # numbers on a Canadian return.
         raise SystemExit(
-            "taxjson-form-export: these gains files carry short/long-term "
-            "terms — they were computed by the US engine; Schedule 3 needs "
-            "a country=canada gains file (re-run `taxjson run` in the "
-            "Canadian project).")
+            exit_text("taxjson-form-export: these gains files carry short/long-term "
+                      "terms — they were computed by the US engine; Schedule 3 needs "
+                      "a country=canada gains file (re-run `taxjson run` in the "
+                      "Canadian project)."))
     # Each file once: the wrapper passes a crypto account's gains file
     # positionally AND as --crypto, which listed every crypto unknown-
     # cost disposition twice under MANUAL REPORTING (A2-0113).
@@ -1532,8 +1533,8 @@ def _main(args) -> int:
             try:
                 write_atomic(args.out, doc, encoding="ascii")
             except (OSError, UnicodeEncodeError) as e:
-                sys.exit(f"taxjson-form-export: cannot write --out "
-                         f"{args.out}: {e}")
+                sys.exit(exit_text(f"taxjson-form-export: cannot write --out "
+                                   f"{args.out}: {e}"))
             n = sum(1 for p in ("I", "II") for r in rep[f"part_{p}"]
                     if not r.get("digital_asset"))
             print(f"wrote {n} TXF record(s) (box {args.box}) to "
@@ -1569,8 +1570,8 @@ def _main(args) -> int:
             # fail with a clean message and nonzero exit.
             if not args.json:
                 print(text)
-            sys.exit(f"taxjson-form-export: cannot write --csv "
-                     f"{args.csv}: {e}")
+            sys.exit(exit_text(f"taxjson-form-export: cannot write --csv "
+                               f"{args.csv}: {e}"))
         print(f"wrote {args.csv}", file=sys.stderr)
     if args.json:
         json.dump(rep, sys.stdout, indent=2, sort_keys=True)

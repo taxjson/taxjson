@@ -30,6 +30,7 @@ go into the manifest, so future runs skip them silently.
 """
 from __future__ import annotations
 
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import json
 import sys
@@ -223,7 +224,7 @@ def _load_manifest_or_die(path: Path) -> Manifest:
     try:
         return Manifest.load(path)
     except ValueError as e:
-        print(f"taxjson-corp-actions: error: {e}", file=sys.stderr)
+        emit_line(f"taxjson-corp-actions: error: {e}", file=sys.stderr)
         raise SystemExit(2)
 
 
@@ -414,14 +415,14 @@ def main():
     missing = [p for p in csv_paths if not p.exists()]
     if missing:
         for p in missing:
-            print(f"taxjson-corp-actions: error: input CSV not found: {p}",
-                  file=sys.stderr)
+            emit_line(f"taxjson-corp-actions: error: input CSV not found: {p}",
+                      file=sys.stderr)
         raise SystemExit(2)
     if args.ticker_map and not Path(args.ticker_map).exists():
         # A named --ticker-map that does not exist is refused, not
         # silently skipped (re-audit A2-1436).
-        print(f"taxjson-corp-actions: error: no such file: --ticker-map "
-              f"{args.ticker_map}", file=sys.stderr)
+        emit_line(f"taxjson-corp-actions: error: no such file: --ticker-map "
+                  f"{args.ticker_map}", file=sys.stderr)
         raise SystemExit(2)
 
     if args.manifest:
@@ -431,7 +432,7 @@ def main():
     else:
         # The hidden `.<csv>.elections` default would silently bind to
         # one of N files; we'd rather force an explicit choice than guess.
-        print(
+        emit_line(
             "taxjson-corp-actions: error: --manifest is required when multiple input files are given "
             "(the default hidden manifest is per-file and can't safely cover "
             "multiple CSVs).",
@@ -453,14 +454,14 @@ def main():
             renames = merge_renames(_parse_map_file(
                 Path(args.ticker_map))[0], to_base=True)
         except (OSError, ValueError) as e:
-            print(f"taxjson-corp-actions: error: {args.ticker_map}: {e}",
-                  file=sys.stderr)
+            emit_line(f"taxjson-corp-actions: error: {args.ticker_map}: {e}",
+                      file=sys.stderr)
             raise SystemExit(2)
     try:
         events = extract_events(extractor, csv_paths, args.account_name,
                                 renames=renames)
     except BrokerageParseError as e:
-        print(f"taxjson-corp-actions: error: {e}", file=sys.stderr)
+        emit_line(f"taxjson-corp-actions: error: {e}", file=sys.stderr)
         raise SystemExit(2)
     # One event per id across the account's broker accounts (overlapping
     # statements kept once; a second broker account's holding added).
@@ -490,7 +491,7 @@ def main():
     if manifest.migrate_legacy(events):
         manifest.save(manifest_path)
     for _note in manifest.migration_notes:
-        print(f"note: {_note}.", file=sys.stderr)
+        emit_line(f"note: {_note}.", file=sys.stderr)
 
     # Auto-defaults first: event types with exactly one sane treatment
     # (name changes) are elected without prompting — the manifest record
@@ -500,9 +501,9 @@ def main():
     if auto_applied:
         manifest.save(manifest_path)
         for ev in auto_applied:
-            print(f"note: auto-elected {ev.event_id} ({ev.summary()}) — "
-                  f"no decision required; `taxjson elect --redo` to "
-                  f"override.", file=sys.stderr)
+            emit_line(f"note: auto-elected {ev.event_id} ({ev.summary()}) — "
+                      f"no decision required; `taxjson elect --redo` to "
+                      f"override.", file=sys.stderr)
 
     missing = _unresolved(events, manifest)
 
@@ -525,8 +526,8 @@ def main():
                 Path(args.pending_json).write_text(
                     json.dumps(doc, indent=2, sort_keys=True),
                     encoding="utf-8")
-                print(f"taxjson-corp-actions: note: pending elections "
-                      f"written to {args.pending_json}", file=sys.stderr)
+                emit_line(f"taxjson-corp-actions: note: pending elections "
+                          f"written to {args.pending_json}", file=sys.stderr)
             raise SystemExit(EXIT_ELECTIONS_REQUIRED)
 
         print(
@@ -556,10 +557,10 @@ def main():
         try:
             fx = rates_converter(Path(args.rates), args.base_currency)
         except (OSError, ValueError) as e:
-            print(f"taxjson-corp-actions: warning: rates file "
-                  f"{args.rates} unusable ({e}); cross-currency "
-                  f"exchanges are booked in the consideration's "
-                  f"currency.", file=sys.stderr)
+            emit_line(f"taxjson-corp-actions: warning: rates file "
+                      f"{args.rates} unusable ({e}); cross-currency "
+                      f"exchanges are booked in the consideration's "
+                      f"currency.", file=sys.stderr)
     try:
         out = _emit_resolved(events, manifest, args.country, fx=fx)
     except (KeyError, ValueError) as e:
@@ -567,8 +568,8 @@ def main():
         # key, a misspelled or missing hint): refuse by name instead of
         # a traceback — or, worse, silently $0 rows (audit S072-07).
         msg = e.args[0] if e.args else str(e)
-        print(f"taxjson-corp-actions: error: {msg} (manifest "
-              f"{manifest_path})", file=sys.stderr)
+        emit_line(f"taxjson-corp-actions: error: {msg} (manifest "
+                  f"{manifest_path})", file=sys.stderr)
         raise SystemExit(2)
     json.dump(out, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")

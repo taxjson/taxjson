@@ -8,6 +8,7 @@ Usage:
     python -m taxjson.bin.taxjson_convert_currency input.json --to CAD [--rates rates.txt]
 """
 
+from taxjson.lib.stage_msg import emit_line
 import argparse
 import json
 import re
@@ -198,14 +199,14 @@ def load_exchange_rates(rates_file: Path, target_curr: str = None) -> Dict[str, 
             # noon rate deterministically.
             history[from_curr].setdefault(date_str, rate)
     if skipped_to_mismatches > 0:
-        print(
+        emit_line(
             f"warning: skipped {skipped_to_mismatches} FX rate row(s) where the TO "
             f"column did not match --to {target_curr}. Pass --to that matches your "
             f"rate file's TO column, or split the rate file by direction.",
             file=sys.stderr,
         )
     if skipped_malformed > 0:
-        print(
+        emit_line(
             f"warning: skipped {skipped_malformed} malformed FX rate "
             f"line(s) in {rates_file} (expected `DATE TIME FROM TO RATE`, "
             f"YYYY-MM-DD date, numeric rate) — e.g. "
@@ -360,7 +361,7 @@ def convert_transaction(
             except Exception as exc:
                 # Stay loud — a silent skip here was the original bug.
                 any_failure = True
-                print(
+                emit_line(
                     f"warning: failed to convert {field}={value!r} on "
                     f"{tx.action} {tx.symbol} {tx.date} "
                     f"({tx.currency}→{target_curr}): {exc}",
@@ -448,7 +449,7 @@ def abort_if_currency_uncovered(*, rates_given: bool,
     if not missing:
         return False
     detail = ", ".join(f"{cur} ({n} row(s))" for cur, n in missing)
-    print(
+    emit_line(
         f"error: the rates file has no rates at all for {detail}; refusing "
         f"to convert those rows at the implicit default rate. Add the "
         f"currency to the rates file (in a `taxjson run` project: list it "
@@ -548,7 +549,7 @@ def emit_source_summary(sources: Dict[str, Dict[str, str]], *,
                         stream=None) -> None:
     text = rate_source_summary(sources)
     if text:
-        print(f"note: {text}", file=(stream or sys.stderr))
+        emit_line(f"note: {text}", file=(stream or sys.stderr))
 
 
 def emit_fallback_summary(default_rate, *, stream=None) -> None:
@@ -565,7 +566,7 @@ def emit_fallback_summary(default_rate, *, stream=None) -> None:
         f"{count}× {currency} ({reason})"
         for (currency, reason), count in sorted(_DEFAULT_RATE_FALLBACKS.items())
     )
-    print(
+    emit_line(
         f"warning: applied --default-rate ({describe_default_rate(default_rate)}) "
         f"to {total} row(s) that had no rate match: {breakdown}",
         file=(stream or sys.stderr),
@@ -606,14 +607,14 @@ def main():
             from taxjson.lib.pipeline import load_stdin_transactions
             transactions = load_stdin_transactions()
     except ValueError as e:
-        print(f"error: {e}", file=sys.stderr)
+        emit_line(f"error: {e}", file=sys.stderr)
         sys.exit(1)
 
     target_curr = norm_currency(args.to)
     if not args.rates and args.default_rate is not None:
         # Without --rates every cross-currency row takes the explicit
         # --default-rate (without either it has no rate and stops).
-        print(
+        emit_line(
             f"warning: no --rates file given; every cross-currency row will "
             f"be converted with --default-rate {args.default_rate}. Pass "
             f"--rates rates.csv to use real historical rates.",
@@ -626,9 +627,9 @@ def main():
         # A named --rates file that does not exist was ignored: every row
         # then took --default-rate, or the error blamed the file's
         # content (re-audit A2-1437).
-        print(f"taxjson-convert-currency: error: no such file: --rates "
-              f"{args.rates}",
-              file=sys.stderr)
+        emit_line(f"taxjson-convert-currency: error: no such file: --rates "
+                  f"{args.rates}",
+                  file=sys.stderr)
         sys.exit(2)
     try:
         history = load_exchange_rates(
@@ -636,7 +637,7 @@ def main():
             target_curr=target_curr,
         )
     except ValueError as e:
-        print(f"error: {e}", file=sys.stderr)
+        emit_line(f"error: {e}", file=sys.stderr)
         sys.exit(1)
     default_rate = resolve_default_rate(args.default_rate)
 
@@ -645,7 +646,7 @@ def main():
             transactions, target_curr, history, default_rate,
             country=args.country)
     except ValueError as e:
-        print(f"error: {e}", file=sys.stderr)
+        emit_line(f"error: {e}", file=sys.stderr)
         sys.exit(1)
 
     emit_fallback_summary(default_rate)

@@ -36,6 +36,7 @@ Nothing here changes the capital-gains engine, Schedule 3 / 8949
 exports, or `taxjson sum` totals — the output is a standalone report
 of the s.39(1.1) number and where to file it.
 """
+from taxjson.lib.out import exit_text
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -354,6 +355,7 @@ def render_report(doc: Dict[str, Any], base: str, year: int,
     lines += out.wrap(f"All amounts {base}. {verdict['note']}", w)
     # What to check, one paragraph each (continuation lines indented).
     warn: List[str] = []
+    _W = out.label("warning", w)     # `Warning: ` shown, `warning: ` at 0
     ye = doc.get("pools_year_end") or {}
     if ye:
         bal = ", ".join(f"{c} {fmt_money(v['units'])}"
@@ -365,7 +367,7 @@ def render_report(doc: Dict[str, Any], base: str, year: int,
     if doc["overdrafts"]:
         counts = ", ".join(f"{c} {n}" for c, n
                            in sorted(doc["overdrafts"].items()))
-        warn.append(f"warning: disposals exceeded the ledgered "
+        warn.append(f"{_W}disposals exceeded the ledgered "
                     f"balance ({counts}; full history) — cash "
                     f"conversions/deposits the broker CSVs don't "
                     f"carry. The excess moves at the day's rate with "
@@ -382,7 +384,7 @@ def render_report(doc: Dict[str, Any], base: str, year: int,
     if doc["unrated"]:
         counts = ", ".join(f"{c} {n}" for c, n
                            in sorted(doc["unrated"].items()))
-        warn.append(f"warning: cash events skipped with no FX rate on "
+        warn.append(f"{_W}cash events skipped with no FX rate on "
                     f"file ({counts}) — run `taxjson run` to refresh "
                     f"rates.")
     lines.append("")
@@ -405,6 +407,6 @@ def render_events(events: List[Dict[str, Any]],
 
 
 if __name__ == "__main__":                       # pragma: no cover
-    sys.exit("taxjson-fx-cash is not a standalone tool — use "
-             "`taxjson fx-cash` (it needs the project's native books "
-             "and FX history).")
+    sys.exit(exit_text("taxjson-fx-cash is not a standalone tool — use "
+                       "`taxjson fx-cash` (it needs the project's native "
+                       "books and FX history)."))

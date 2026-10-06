@@ -29,36 +29,40 @@ class TestDiagnostics(unittest.TestCase):
                     assert_styled(self, r.stderr)
                     for ln in r.stderr.splitlines():
                         if ln and not ln.startswith(" "):
+                            # The label starts the line, no program name.
                             self.assertRegex(
-                                ln, r"^(taxjson [\w-]+: )?(note|warning|"
-                                    r"error): ", ln)
+                                ln, r"^(Info|Warning|Error): ", ln)
 
     def test_note_is_a_headline_with_detail(self):
         r = project("canada").run("gains")
         self.assertEqual(r.returncode, 0, r.stderr)
         lines = r.stderr.splitlines()
         i = next(i for i, ln in enumerate(lines)
-                 if ln.startswith("taxjson gains: note: crypto account"))
+                 if ln.startswith("Info: crypto account"))
         self.assertTrue(lines[i + 1].startswith("  Its gains are in "))
 
-    def test_errors_name_the_command(self):
+    def test_errors_start_with_the_label(self):
         p = project("usa")
         r = p.run("list", "--date", "2024-13-01")
         self.assertEqual(r.returncode, 1)
+        self.assertIn("Error: --date 2024-13-01 is not a "
+                      "real calendar date", r.stderr)
+        # Captured (width 0, as the checklist reads it): the GNU bytes.
+        r = p.run("list", "--date", "2024-13-01", TAXJSON_WIDTH=0)
         self.assertIn("taxjson list: error: --date 2024-13-01 is not a "
                       "real calendar date", r.stderr)
         r = p.run("fees-sum", "nosuch")
         self.assertEqual(r.returncode, 1)
         lines = r.stderr.strip().splitlines()
         self.assertTrue(lines[0].startswith(
-            "taxjson fees-sum: error: no files for account 'nosuch' in "
+            "Error: no files for account 'nosuch' in "
             "work/ — run"), lines)
         self.assertTrue(all(ln.startswith("  ") for ln in lines[1:]), lines)
         self.assertIn("run `taxjson run` first, or check the name",
                       " ".join(r.stderr.split()))
         r = p.run("winners", "--top", "0")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("taxjson winners: error: --top must be >= 1", r.stderr)
+        self.assertIn("Error: --top must be >= 1", r.stderr)
 
 
 class TestFitted(unittest.TestCase):
@@ -156,8 +160,8 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
 
     def test_one_note_for_a_person(self):
         text = self._emit(100)
-        self.assertEqual(text.count("note:"), 1, text)
-        self.assertTrue(text.startswith("note: 2 option root(s) whose "
+        self.assertEqual(text.count("Info:"), 1, text)
+        self.assertTrue(text.startswith("Info: 2 option root(s) whose "
                                         "export does not state"), text)
         self.assertIn("\n  QZA, QZB.\n", text)
         self.assertIn("`MULT <ROOT> N`", text)
@@ -198,7 +202,7 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
             reg.assert_not_called()
             markets.reset_notes()
         text = buf.getvalue()
-        self.assertEqual(text.count("note:"), 2, text)
+        self.assertEqual(text.count("Info:"), 2, text)
         self.assertIn("QZB options: the export does not state", text)
         self.assertIn("`MULT QZA N`", text)
 
@@ -232,8 +236,8 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
             markets.reset_notes()
         reg.assert_called_once_with(markets.flush_notes)
         text = err.getvalue()
-        self.assertEqual(text.count("note: 2 option root(s)"), 2, text)
-        self.assertEqual(text.count("note:"), 2, text)
+        self.assertEqual(text.count("Info: 2 option root(s)"), 2, text)
+        self.assertEqual(text.count("Info:"), 2, text)
 
 
 if __name__ == "__main__":

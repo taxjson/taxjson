@@ -1366,7 +1366,8 @@ def render(rep: Dict[str, Any], record_path: str) -> List[str]:
     """The console report in the house style (docs/output-style.md): a
     section per check — its findings as `- ` items, each with its why
     indented under it — then the notes and a one-line verdict."""
-    from taxjson.lib.out import wrap
+    import sys
+    from taxjson.lib.out import label, wrap
     y = rep["year"]
     L = [f"HAND-OFF CHECK — {y} (closed) into {y + 1} (this project)"]
     L += wrap(f"Record: {record_path}")
@@ -1413,7 +1414,7 @@ def render(rep: Dict[str, Any], record_path: str) -> List[str]:
                    + (f"   {y} record: {i['record']:,.2f}"
                       if isinstance(i['record'], (int, float)) else "")))
     for n in rep["notes"]:
-        L.extend(wrap("note: " + n, None, "", "  "))
+        L.extend(wrap(label("note", stream=sys.stdout) + n, None, "", "  "))
     if rep["notes"]:
         L.append("")
     L.append(f"{rep['problems']} problem(s)." if rep["problems"] else
