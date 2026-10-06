@@ -2,20 +2,30 @@
 
 ## Unreleased
 
+### Added
+
+- **`taxjson redact` with no file copies the project's inputs and redacts the copy.** Run in a
+  project (or with `-C DIR`), it copies the whole `inputs/` folder to `inputs_redact/` (or `--out
+  DIR`), keeping every folder and text file (exports, `.tt` files, sidecars, READMEs), and redacts
+  the copy: you get two folders, the originals untouched and a redacted inputs tree that `taxjson
+  run` still parses. An id gets the same placeholder in every file, and a file or folder name that
+  holds an account number is renamed to a unique placeholder; the old and new names are printed on
+  the console only. Binary files are not copied (each is named in a warning). An existing copy is
+  replaced only with `--force`, never through a symlink; `--check` reports what it would replace
+  and writes nothing. `taxjson run` never reads `inputs_redact/`, and the `.gitignore` that
+  `taxjson init` writes lists it. `taxjson redact FILE ...` works as before.
+
 ### Fixed
 
-- **Questrade internal symbol codes pair with more transfers.** The names
-  of the two legs of a transfer are now compared with common abbreviations
-  read as the word (RES / RESOURCES, MFG, HLDGS, INTL, `N V` / NV, `&` /
-  AND ...) and broker boilerplate cut (a depositary's `REPSTG 5 COM ...`,
-  `TRANSFER IN INTERACTIVE BROKER...`, IB's `/CAYMAN ISL` domicile); a
-  class letter or ORDINARY / ADR stated by one broker only no longer
-  refuses a transfer that pairs by quantity and date (two different ones
-  still do). A code named only by a description Questrade cut off matches
-  the one listing whose Questrade description in another account starts
-  with it. Another share class or company is still never joined, and a
-  near miss names the `GLOBAL` line to add. `symbol_codes.names_agree` is
-  the one test, for reuse.
+- **Questrade internal symbol codes pair with more transfers.** The names of the two legs of a
+  transfer are now compared with common abbreviations read as the word (RES / RESOURCES, MFG, HLDGS,
+  INTL, `N V` / NV, `&` / AND ...) and broker boilerplate cut (a depositary's `REPSTG 5 COM ...`,
+  `TRANSFER IN INTERACTIVE BROKER...`, IB's `/CAYMAN ISL` domicile); a class letter or ORDINARY /
+  ADR stated by one broker only no longer refuses a transfer that pairs by quantity and date (two
+  different ones still do). A code named only by a description Questrade cut off matches the one
+  listing whose Questrade description in another account starts with it. Another share class or
+  company is still never joined, and a near miss names the `GLOBAL` line to add.
+  `symbol_codes.names_agree` is the one test, for reuse.
 
 ### Changed
 
