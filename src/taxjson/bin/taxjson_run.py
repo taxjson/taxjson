@@ -4948,6 +4948,15 @@ def stage_in_kind_context(root: Path, cache: Path, settings: Dict[str, Any],
     if not n:
         return sheltered_base
     write_text_atomic(p, _json.dumps(doc, indent=2, sort_keys=True))
+    from taxjson.lib.dispatch import run_cmd as _run_cmd
+    vres = _run_cmd(_cmd("taxjson-validate") + [str(p)],
+                    capture_output=True)
+    if vres.returncode != 0:
+        _echo_stage_stderr((vres.stdout or "") + (vres.stderr or ""))
+        _die("the sheltered book with the in-kind contributions marked "
+             "failed validation (details above)",
+             "Check the transfer rows `taxjson transfers` labels "
+             "in-kind, or value them with a .tt INKIND line.")
     return p
 
 
@@ -6210,12 +6219,6 @@ def cmd_run(args: argparse.Namespace) -> None:
         run_to_file(_cmd("taxjson-merge")
                     + [str(p) for p in _sheltered_merge_inputs],
                     sheltered_base)
-    # An in-kind contribution's plan acquisition is a purchase for the
-    # loss rule (CA-INKIND-04): marked in the combined book (or the
-    # book written for it) before it is validated.
-    if not args.account or _sheltered_merge_inputs:
-        sheltered_base = stage_in_kind_context(root, cache, settings,
-                                               sheltered_base)
     if sheltered_base is not None:
         # Sanity-check the combined sheltered file before the wash-radar
         # pass consumes it. Quiet on success; surface and halt on failure.
@@ -6328,6 +6331,13 @@ def cmd_run(args: argparse.Namespace) -> None:
                            reports_dir / f"{name}_wash.sum"):
                 _stale.unlink(missing_ok=True)
 
+    # An in-kind contribution's plan acquisition is a purchase for the
+    # loss rule (CA-INKIND-04): marked in the combined book (or the book
+    # written for it) once every taxable account's transfer evidence is
+    # read, before the cross-account passes use it.
+    if not args.account or _sheltered_merge_inputs:
+        sheltered_base = stage_in_kind_context(root, cache, settings,
+                                               sheltered_base)
     _record_skipped_accounts(cache, _skipped_no_input,
                              only=args.account or None)
     if (not args.account and not pending_accounts

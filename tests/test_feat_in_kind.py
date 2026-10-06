@@ -226,6 +226,33 @@ class TestCanadaContribution(unittest.TestCase):
             self.assertFalse((root / "work" / "in_kind.json").exists())
 
 
+class TestCanadaDeclaredMove(unittest.TestCase):
+
+    @rule("CA-INKIND-01", "CA-INKIND-04")
+    def test_a_plan_outside_the_project_is_declared_by_its_line(self):
+        with tempfile.TemporaryDirectory() as td:
+            # One taxable account; its 03-14 transfer-out went to a TFSA
+            # at another broker, declared by the INKIND line. The plan's
+            # purchase still makes the 03-04 loss superficial.
+            files = {"inputs/margin/ib.csv": _ib(
+                        [("2025-01-10", 200, 10.0),
+                         ("2025-03-04", -100, 6.0)],
+                        [("2025-03-14", -100, 600)]),
+                     "inputs/margin/inkind.tt":
+                        "INKIND 2025-03-14 QZK.TO -100 CAD 6 plan=tfsa\n"}
+            root = _project(td, files,
+                            accounts='[accounts.margin]\ntype = "taxable"\n')
+            r = _run(self, root)
+            self.assertIn("contribution margin → a TFSA plan outside the "
+                          "project: 100 QZK.TO on 2025-03-14 at 600.00 CAD "
+                          "(INKIND line inkind.tt:1): loss 400.00 CAD "
+                          "DENIED for good", _flat(r))
+            t = _filing(root)
+            self.assertEqual((t["gain"], t["permanently_denied"],
+                              t["denied_contribution"]),
+                             (0.0, 400.0, 400.0))
+
+
 class TestCanadaWithdrawal(unittest.TestCase):
 
     def _root(self, td, plan):
