@@ -229,12 +229,13 @@ def print_holdings_diff(prev: Dict[str, Tuple[float, float]],
     if changes:
         from taxjson.lib.out import width as _w
         if _w(sys.stdout) > 0:
-            # The run's console: a message and its two-space continuation
-            # lines (docs/output-style.md, The run's console).
-            print(f"Info: holdings changed since the last run "
-                  f"({len(changes)}):")
-            for line in changes:
-                print("  " + line.strip())
+            # The run's console: a message and its flush-left
+            # continuation lines (docs/output-style.md, The run's
+            # console).
+            from taxjson.lib.out import show
+            show([f"Info: holdings changed since the last run "
+                  f"({len(changes)}):"]
+                 + [line.strip() for line in changes], sys.stdout)
             return
         print(f"  holdings changes vs prior run ({len(changes)}):")
         for line in changes:
@@ -369,10 +370,11 @@ def _echo_captured(line: str, indent: str = "  ", file=None,
     .sum DIAGNOSTICS keep the one line. `source=False`: the run's own
     line (its program name is not shown). Shown to a person, the run's
     console rule applies whatever `indent` and `source` say: the label
-    at column 0, continuations two spaces in, no stage program name
+    at column 0, continuations flush-left, one blank line after a
+    message of more than one line, no stage program name
     (docs/output-style.md, The run's console)."""
-    from taxjson.lib.stage_msg import console_lines
-    from taxjson.lib.out import width as _w
+    from taxjson.lib.stage_msg import console_lines, is_continuation
+    from taxjson.lib.out import show, width as _w
     file = sys.stdout if file is None else file
     if once:
         # An engine message is shown once per run (owner request): the
@@ -392,8 +394,8 @@ def _echo_captured(line: str, indent: str = "  ", file=None,
             _ECHO_SKIP[0] = False
     if _w(file) > 0:
         indent, source = "", False
-    for ln in console_lines(line, indent, stream=file, source=source):
-        print(ln, file=file)
+    show(console_lines(line, indent, stream=file, source=source), file,
+         cont=is_continuation(line))
 
 
 def _out_wrap(text: str, indent: str = "", hang: Optional[str] = None,
@@ -436,10 +438,12 @@ def _step(text: str, file=None) -> None:
     """`==> <text>`: a step the run is doing, on its console
     (docs/output-style.md, The run's console: short, plain, one verb
     form — the table there lists every step)."""
-    from taxjson.lib.out import wrap
+    from taxjson.lib.out import show, width, wrap
     file = sys.stdout if file is None else file
-    for ln in wrap("==> " + text, None, "", "  ", stream=file):
-        print(ln, file=file)
+    # Shown to a person, a wrapped step continues flush-left (a blank
+    # line after it, lib/out.show); captured, two spaces in.
+    show(wrap("==> " + text, None, "", "  " if width(file) <= 0 else "",
+              stream=file), file)
 
 
 def _wrote(path: Path, root: Path, what: str = "summary") -> None:
@@ -455,16 +459,16 @@ def _say(kind: str, text: str, *details: str, prog: Optional[str] = None,
     """A run-console message in the house style: `[<prog>: ]<kind>:
     <headline>` and indented `details` (stderr by default). kind: note |
     warning | attention | error. `indent` nests the captured form
-    (width 0) only: shown to a person the label starts the line and
-    its continuations are two spaces in (The run's console)."""
+    (width 0) only: shown to a person the label starts the line, its
+    continuations are flush-left and a message of more than one line is
+    followed by one blank line (The run's console)."""
     from taxjson.lib.stage_msg import message_lines
-    from taxjson.lib.out import width as _w
+    from taxjson.lib.out import show, width as _w
     file = sys.stderr if file is None else file
     if _w(file) > 0:
         indent = ""
-    for ln in message_lines(kind, text, details, prog=prog, indent=indent,
-                            stream=file):
-        print(ln, file=file)
+    show(message_lines(kind, text, details, prog=prog, indent=indent,
+                       stream=file), file)
 
 
 # Parser warning prefix for rows that are known tax events the parser
@@ -2298,7 +2302,7 @@ def _report_detection(name: str, found, cache: Path) -> None:
             real = (det.note.replace(masked, on_disk, 1)
                     if det.note.startswith(masked) else det.note)
             console.append(("    ", f"note: {real}"))
-    from taxjson.lib.out import width as _width
+    from taxjson.lib.out import show as _show, width as _width
     if name not in _DETECTION_SHOWN and _width(sys.stdout) > 0:
         _DETECTION_SHOWN.add(name)
         # Shown to a person (The run's console): one `Info:` line per
@@ -2316,12 +2320,10 @@ def _report_detection(name: str, found, cache: Path) -> None:
             else:
                 text = (f"Warning: File {where} → not identified"
                         + (f" ({det.reason})" if det.reason else ""))
-            for _w in _out_wrap(text, hang="  "):
-                print(_w)
+            _show(_out_wrap(text, hang=""), sys.stdout)
         for ind, ln in console:
             if ind != "  ":
-                for _w in _out_wrap(_labelled_note(ln), hang="  "):
-                    print(_w)
+                _show(_out_wrap(_labelled_note(ln), hang=""), sys.stdout)
     elif name not in _DETECTION_SHOWN:
         _DETECTION_SHOWN.add(name)
         # Lines first, then the notes, as the .diag keeps them (a note
@@ -4878,12 +4880,17 @@ def stage_own_account_moves(root: Path, cfg: Dict[str, Any],
         if not same:
             cache.mkdir(parents=True, exist_ok=True)
             p.write_text(text, encoding="utf-8")
+    from taxjson.lib.out import show as _show, width as _ow
     for m in moves:
-        for _ln in _out_wrap(
-                f"own-account move: {m['symbol']} {m['qty']:g} "
-                f"{m['from']} -> {m['to']} ({m['date']}): not a sale — "
-                f"the lots' basis and purchase dates go to {m['to']}.",
-                indent="  ", hang="    "):
+        _mv = (f"own-account move: {m['symbol']} {m['qty']:g} "
+               f"{m['from']} -> {m['to']} ({m['date']}): not a sale — "
+               f"the lots' basis and purchase dates go to {m['to']}.")
+        if _ow(sys.stdout) > 0:
+            # The run's console: a message, flush-left.
+            _show(_out_wrap("Info: " + _mv[:1].upper() + _mv[1:], hang=""),
+                  sys.stdout)
+            continue
+        for _ln in _out_wrap(_mv, indent="  ", hang="    "):
             print(_ln)
     for u in unpaired:
         ins = ", ".join(f"{q:g} into {b} ({d})" for b, q, d in u["ins"])
@@ -6105,25 +6112,26 @@ def cmd_run(args: argparse.Namespace) -> None:
                                                              []))
                 _sets.append(f"  taxjson elect {pe.account} --set "
                              f"{ev['event_id']}=<{opts}>")
-        if _out.width(sys.stderr) <= 0:
+        _shown = _out.width(sys.stderr) > 0
+        if not _shown:
             print(file=sys.stderr)
-        for ln in _out.message(
-                "error", f"{_n} account{'s' if _n != 1 else ''} "
-                f"need{'' if _n != 1 else 's'} corp-action elections "
-                f"before {'their' if _n != 1 else 'its'} books can build",
-                prog=f"{_PROG} run"):
-            print(ln, file=sys.stderr)
-        # The ready lines are commands to copy: never wrapped.
-        for ln in _sets:
-            print(ln, file=sys.stderr)
-        for ln in _out.wrap(
-                "`taxjson elect --pending` shows what each option books "
-                "and the hints it needs (also in "
-                f"{_out.relpath(agg_path, root)}). Set each with `taxjson "
-                "elect ACCOUNT --set` (add --hint KEY=VALUE where "
-                "required), or run `taxjson run` at a terminal to be "
-                "asked; then run again.", indent="  ", stream=sys.stderr):
-            print(ln, file=sys.stderr)
+        _lines = _out.message(
+            "error", f"{_n} account{'s' if _n != 1 else ''} "
+            f"need{'' if _n != 1 else 's'} corp-action elections "
+            f"before {'their' if _n != 1 else 'its'} books can build",
+            prog=f"{_PROG} run")
+        # The ready lines are commands to copy: never wrapped (shown to
+        # a person, flush-left like every continuation).
+        _lines += [ln.strip() if _shown else ln for ln in _sets]
+        _lines += _out.wrap(
+            "`taxjson elect --pending` shows what each option books "
+            "and the hints it needs (also in "
+            f"{_out.relpath(agg_path, root)}). Set each with `taxjson "
+            "elect ACCOUNT --set` (add --hint KEY=VALUE where "
+            "required), or run `taxjson run` at a terminal to be "
+            "asked; then run again.", indent="" if _shown else "  ",
+            stream=sys.stderr)
+        _out.show(_lines, sys.stderr)
         raise SystemExit(3)
     _agg_path = cache / "pending_elections.json"
     if args.account and _agg_path.exists():
@@ -6276,20 +6284,23 @@ def cmd_run(args: argparse.Namespace) -> None:
                 _obligations.append((f"{_name}: {_sum or _rec.event_id}",
                                      _todo))
         if _obligations:
-            _say("warning", f"FILING REQUIRED for {len(_obligations)} "
-                 f"election(s) — the deferral is only valid with the "
-                 f"paperwork", prog=_PROG)
+            _head = (f"FILING REQUIRED for {len(_obligations)} "
+                     f"election(s) — the deferral is only valid with the "
+                     f"paperwork")
             from taxjson.lib.out import width as _ow
-            _shown = _ow(sys.stderr) > 0
-            for _what, _todo in _obligations:
-                # Shown to a person: continuation lines, two spaces in.
-                for _ln in _out_wrap(_what, indent="  " if _shown else
-                                     "  - ", hang="  " if _shown else
-                                     "    ", file=sys.stderr):
-                    print(_ln, file=sys.stderr)
-                for _ln in _out_wrap(_todo, indent="  " if _shown else
-                                     "    ", file=sys.stderr):
-                    print(_ln, file=sys.stderr)
+            if _ow(sys.stderr) > 0:
+                # Shown to a person: one message, its lines flush-left.
+                _say("warning", _head, *[x for _pair in _obligations
+                                         for x in _pair], prog=_PROG)
+            else:
+                _say("warning", _head, prog=_PROG)
+                for _what, _todo in _obligations:
+                    for _ln in _out_wrap(_what, indent="  - ",
+                                         hang="    ", file=sys.stderr):
+                        print(_ln, file=sys.stderr)
+                    for _ln in _out_wrap(_todo, indent="    ",
+                                         file=sys.stderr):
+                        print(_ln, file=sys.stderr)
     except Exception:
         pass                          # reminder must never break a run
 
@@ -6652,10 +6663,10 @@ def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
                           _json.dumps(doc, indent=2, sort_keys=True) + "\n")
     except OSError:
         pass
-    lines = FR.render(doc, mh_name=(mh_file.name if mh_file
-                                    else "missing_history.json"))
-    for ln in lines:
-        print(ln)
+    from taxjson.lib.out import show_blocks
+    show_blocks(FR.render_blocks(doc, mh_name=(mh_file.name if mh_file
+                                               else "missing_history.json")),
+                sys.stdout)
 
 
 # The taxjson.toml template — every key, documented, per country — and
@@ -16787,12 +16798,14 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any]
         federal_only = True
         from taxjson.lib.out import fill as _fill
         from taxjson.lib.out import label as _label
-        print(_fill(_label("note", stream=sys.stdout)
+        from taxjson.lib.out import show as _show, width as _ow
+        _show(_fill(_label("note", stream=sys.stdout)
                     + (f"province {prov} is not modelled" if prov else
                        "no [settings] province")
                     + " — the carry-forwards are computed federal-only "
                     "(no provincial tax or minimum-tax recovery).",
-                    hang="  "))
+                    hang="  " if _ow(sys.stdout) <= 0 else "").split("\n"),
+              sys.stdout)
     res = _run(argv, capture_output=True)
     if res.returncode != 0:
         _die("could not compute the carry-forwards the lock records (the "
@@ -16995,13 +17008,12 @@ def _check_filed_years(root: Path, cache: Path,
         # (a `note: ` line shown with its label, lib/out.labelled).
         # On the run's console (`console`), shown to a person: a message
         # of its own, the label at column 0 (`Info: Filed 2024: OK ...`),
-        # continuations two spaces in.
+        # continuations flush-left, a blank line after it when it wraps.
         if console and _out.width(sys.stdout) > 0:
             _t = _out.labelled(text)
             if not _t.startswith(("Info: ", "Warning: ", "Error: ")):
                 _t = "Info: " + _t[:1].upper() + _t[1:]
-            for _ln in _out.wrap(_t, None, "", "  "):
-                print(_ln)
+            _out.show(_out.wrap(_t, None, "", ""), sys.stdout)
             return
         for _ln in _out.wrap(_out.labelled(text), None, "  ", "    "):
             print(_ln)
