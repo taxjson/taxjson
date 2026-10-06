@@ -1,0 +1,526 @@
+# Troubleshooting
+
+Known problems, as the person running taxjson sees them, with what causes them and what to do.
+Search this file for the exact text you see: a console line (`Error: …`, `Warning: …`, `Info: …`), a
+`tjs checklist` step or a line in a `.sum` file. Variable parts (symbols, accounts, dates, amounts)
+are synthetic examples here.
+Each entry says how to **check** it is this problem: run that first, since several symptoms share
+their wording. Most problems are an input (a missing older export, a transfer in, an election not
+made), not a bug.
+**Fixed in** names the release whose code fixed it: on an older install (`tjs --version`) the fix
+starts with upgrading (re-run the installer). `—` means a setting, an input or the design.
+**Code** names the file and the function or message to search for; `docs/architecture-map.md` maps
+the rest. taxjson computes and shows its work; it gives no tax advice. The rules it applies are in
+`tjs tax-logic` (with `--ids`).
+
+## Setting up a project
+
+### "Error: no taxjson.toml in …/taxes/2025. Run `taxjson init` first."
+- **Check:** `ls taxjson.toml` in the folder you ran from; read-only commands say "no gains files, and no taxjson.toml in … — not a taxjson project".
+- **Cause:** taxjson runs on the project in the current folder (or the one `-C DIR` names), and this folder has no `taxjson.toml`.
+- **Fix:** `cd` into the project folder or pass `-C ~/taxes/2025`; for a new project, `tjs init --country canada --year 2025`.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `load_config`, `no taxjson.toml in`
+
+### "Error: [settings] country is missing — set it to "canada" or "usa"", "Error: missing [settings] year in taxjson.toml" or "Error: [settings] year = 2204 is not a plausible tax year (expected 1900..2027)"
+- **Check:** every command stops at "Checking the project" (exit 1). An invalid country reads "[settings] country must be canada, ca, usa or us, got 'Ontario'".
+- **Cause:** `country` and `year` are required and never guessed. The country decides every tax rule, the base currency and which settings are valid; the year must be a whole number from 1900 to next year (a typo such as 2204 would build empty books).
+- **Fix:** under `[settings]`: `country = "canada"` (or `"usa"`) and `year = 2025` (unquoted). The province goes in `province`, not `country`.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/country.py` — `canonical_country`, `taxjson never guesses the country`; `src/taxjson/lib/config_check.py` — `settings_problems`, `is not a plausible tax`; `src/taxjson/bin/taxjson_run.py` — `missing [settings]`
+
+### "Error: this project still has crypto_ticker.map (now ticker.map CRYPTO lines) — these files are no longer read"
+- **Check:** every command stops (exit 2) with "nothing was run". The same happens for `yf_ticker.map`, `ticker_extraction_overrides.txt`, `t1135.map`, `amt_carryover.txt`, `claimed_losses.txt`, `capital_gains_dividends.map` and `distributions.map`.
+- **Cause:** since v0.17.0 these per-purpose files are `QUOTE` / `CRYPTO` / `EXTRACT` / `T1135` lines in `ticker.map` and tables in `taxjson.toml`. Running past an old file would silently drop its rules.
+- **Fix:** `tjs migrate --dry-run` to preview, then `tjs migrate`: it appends the lines and renames each old file to `<name>.migrated`. Review and commit `ticker.map` / `taxjson.toml`, then `tjs run`.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/migrate.py` — `legacy_message`, `this project still has`; `src/taxjson/bin/taxjson_run.py` — `_refuse_legacy_project_files`
+
+### "Warning: taxjson.toml: unknown [settings] key 'taxdate' is ignored (did you mean 'tax_date'?)"
+- **Check:** the same form names other places: "unknown top-level table [estimates] is ignored (did you mean 'estimate'?)", "unknown [accounts.qt] key 'transfer' is ignored (did you mean 'transfers'?)". `tjs format` lists the keys the template does not know.
+- **Cause:** a misspelled key or table is not read, so its default applies (an `[estimates]` table means 0 other income in `tjs estimate`).
+- **Fix:** correct the spelling as suggested. `tjs format` shows every key the country's projects read, with its description and default.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `validate_config`, `_config_table_warnings`, `unknown top-level`
+
+### "Error: [settings] ric_january_dividends is United States-only (…); this project is country = "canada" — remove it"
+- **Check:** every command stops at "Checking the project" (exit 1). The reverse happens for a Canada-only key such as `province`, `option_premium_timing` or `corporate_distributions` in a US project, and for a `base_currency` that is not the country's.
+- **Cause:** each setting and table belongs to one country (or both); a key of the other country would be silently ignored or applied under the wrong rules, so it is refused.
+- **Fix:** delete the line, or fix `country` if that is what is wrong. `tjs format` shows only the keys this country reads.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/country.py` — `_owner_problem`, `config_country_problems`, `SETTING_COUNTRY`
+
+### "Warning: taxjson.toml: inputs/joint/ contains data but has no [accounts.joint] section"
+- **Check:** the next line says "It will NOT be processed"; no `==> joint` step appears in the run.
+- **Cause:** each folder under `inputs/` is read only when `taxjson.toml` has an `[accounts.<folder name>]` table for it. The folder name is the account name.
+- **Fix:** add `[accounts.joint]` with `type = "taxable"` (or `"sheltered"`; `crypto = true` for Coinbase or Kraken files), or move the files into an existing account's folder. Then `tjs run`.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `validate_config`, `contains data but has`
+
+### "Error: account 'qt' has no crypto flag in taxjson.toml but its inputs contain coinbase files" (or "has crypto = true … contain questrade files")
+- **Check:** the next line names each file and how it was detected, e.g. `inputs/qt/coinbase_demo.csv (coinbase: content: columns Timestamp,Transaction Type,Asset…)`.
+- **Cause:** crypto exchange exports (Coinbase, Kraken) go through the crypto pipeline (price lookups, coin pools) and equity exports through the securities pipeline, chosen by the account's `crypto` flag. A file in an account of the other kind would be booked wrongly, so the run stops.
+- **Fix:** move the file to an account of the matching kind (`crypto = true` under `[accounts.<name>]` for Coinbase and Kraken), or fix the account's `crypto` flag.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `stage_account`, `_CRYPTO_BROKERS`, `in taxjson.toml but its inputs`, `routed through the wrong pipeline`
+
+### "Error: [accounts.crypto] is a crypto account but [settings] has no local_timezone"
+- **Check:** `tjs run` stops at "Checking the project" (exit 1); the message suggests this machine's zone when it can read one. `grep local_timezone taxjson.toml` finds no active line. A name that is not an IANA zone (`"EST5"`) stops instead with "[settings] local_timezone must be an IANA zone name".
+- **Cause:** Coinbase and Kraken stamp every row in UTC, and taxjson dates each row in your own zone. There is no default zone (tax-logic CA-DATE-12): a midnight fill near December 31 could land in the wrong year. The `taxjson init` scaffold has a `[accounts.crypto]` table whether or not you hold coins.
+- **Fix:** add `local_timezone = "America/Toronto"` (your IANA zone) under `[settings]`. If you hold no crypto, delete the `[accounts.crypto]` table instead. `tjs format` and `tjs migrate` still run without the key.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_normalize_settings`, `but [settings] has no local_timezone`; `src/taxjson/lib/brokerages/_crypto_common.py` — `missing_timezone_message`; `src/taxjson/lib/config_check.py` — `must be an IANA zone`
+
+### "Error: 2 ticker.map problem(s)"
+- **Check:** each problem follows as `- ticker.map:<line>: …`, e.g. "CRYPTO needs `CRYPTO SYMBOL YAHOO_ID`" or "line has no ticker.map keyword (GLOBAL/TOBASE/…)". `tjs run` stops (exit 1).
+- **Cause:** a line that cannot be parsed, a line without its keyword (an old `yf_ticker.map` or `crypto_ticker.map` line pasted in), or contradictory rules (a rename cycle, two targets for one symbol). A dropped rule would change ACB pools and gains, so the whole map is refused.
+- **Fix:** fix the named line (`KEYWORD FROM TO`, separated by spaces; notes after `#`), e.g. `CRYPTO QZQC QZQC9999`, or delete it.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `ticker.map problem(s)`; `src/taxjson/lib/ticker_map.py` — `read_side_rules`, `parse_side_line`, `line has no ticker.map keyword`; `src/taxjson/bin/taxjson_ticker_map.py` — `map_file_problems`
+
+### "Warning: [settings] option_grant_timing_since is not set, so grant timing (ITA s.49(1)) starts at the project year (2025)"
+- **Check:** shown by `tjs run` in a Canadian project with a taxable non-crypto account on grant timing (the default `option_premium_timing`).
+- **Cause:** without the key, grant timing starts at `year`, which moves when you bump `year` next spring: last year's year-straddling written options would go back to close timing and their premium would be taxed twice. See `tjs option-boundary` and `tjs tax-logic`.
+- **Fix:** add `option_grant_timing_since = 2025` (the first year you file under grant timing) to `[settings]` once, and keep it unchanged in every later year's project.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_grant_since_warning`, `option_grant_timing_since is not set`
+
+### "Warning: no transaction in any account's books is dated 2021 (the books run 2025-01-10 to 2025-12-31)"
+- **Check:** the next line says "Every 2021 filing total will be 0. Is [settings] year in taxjson.toml right?"; the run itself finishes.
+- **Cause:** `[settings] year` is a plausible year but none of your exports or `.tt` lines fall in it, usually a typo or a project copied from another year without changing `year`.
+- **Fix:** set `year` to the tax year your exports cover (and keep `option_grant_timing_since` as it was; see its entry above), then `tjs run`.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_year_without_activity`, `no transaction in any account's books is dated`
+
+### "Error: the canada estimate needs a province"
+- **Check:** `tjs estimate` stops before printing anything; `tjs amt` says "could not compute the estimate it builds on" with the same line. The next line says "Pass --province ON|BC|AB or set `province` under [settings] in taxjson.toml." A province that is set but not supported gives "Error: unsupported province 'QC' for the estimate".
+- **Cause:** the estimate needs provincial brackets, and taxjson never assumes a province. Only ON, BC and AB are supported.
+- **Fix:** `province = "ON"` (or BC, AB) under `[settings]`, or `tjs estimate --province ON`.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_summary`, `_tax_estimate_result`, `the canada estimate needs a province`
+
+## Reading the broker files
+
+### "Error: cannot detect broker for inputs/qt/99900001.csv. Check the header first: …"
+- **Check:** `taxjson-detect-brokerage inputs/qt/99900001.csv` prints `unknown` and the same advice. `tjs run` prints one `Info: File … → identified as …` line for each file it could route; this file has none.
+- **Cause:** the file's content matches no supported export's header (IB, Questrade, Webull, RBC Direct, Coinbase, Kraken), no generic mapping sits beside it, and its name has no `cb_`/`kr_` fallback. Usually it comes from a broker taxjson has no parser for, or it is not an activity export.
+- **Fix:** download the broker's activity export in its standard CSV layout. For another broker, write a column mapping named `99900001.csv.toml` next to the file (start from `examples/generic_wealthsimple.toml`). Rename a file to `cb_…`/`kr_…` only for a Coinbase or Kraken export whose header is not recognised.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_detect_brokerage.py` — `cannot_detect_message`, `cannot detect broker for`; `src/taxjson/lib/brokerages/detect.py` — `content_matches`; `src/taxjson/bin/taxjson_run.py` — `group_inputs_detailed`
+
+### "Error: cannot detect broker for inputs/qt/activity.csv. Closest: a Questrade header lacking column(s) Account #, Account Type. …"
+- **Check:** the `Closest:` part names the export the file nearly matched and the columns its header lacks (`a Webull header (Action Code) lacking …`, `an RBC activity header lacking …` for those brokers).
+- **Cause:** the header has lost columns. Common reasons: columns deleted or renamed in a spreadsheet, a re-save, or a custom report instead of the standard activity export. Detection needs every column the parser reads.
+- **Fix:** download the export from the broker again and put it in `inputs/<account>/` without opening and saving it in a spreadsheet. If the broker really changed its layout, a generic mapping (`<file>.csv.toml`) reads it in the meantime.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/detect.py` — `a Questrade header lacking column(s)`; `src/taxjson/bin/taxjson_detect_brokerage.py` — `Closest:`
+
+### "Error: both.csv: its content matches 2 broker exports — Questrade (…) and RBC Direct Investing (…); refusing to guess which parser reads it."
+- **Check:** the file holds two exports' header rows, often two downloads pasted into one file.
+- **Cause:** detection reads the content. A file whose content matches two exports could be read wrongly by either parser, so the run stops.
+- **Fix:** keep one export per CSV. A generic mapping beside the file (`both.csv.toml`) also decides it: a mapping always wins over the content.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/detect.py` — `ambiguity_message`, `refusing to guess which parser reads it`
+
+### "Error: …/inputs/qt/99900001.csv is empty — a failed or interrupted download?" or "Error: …/99900001.csv: not UTF-8 text (byte 0xe9 at offset 3) — re-export it, or save it as UTF-8 in your editor"
+- **Check:** the file is 0 bytes or blank lines only, or a spreadsheet or editor saved it in another encoding (Windows-1252 "CSV (Comma delimited)").
+- **Cause:** taxjson reads UTF-8 (with or without BOM) and UTF-16 (with a BOM) only. An empty file is a failed download; renaming either one never helps.
+- **Fix:** download the export again. If you must edit it, save it as "CSV UTF-8".
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `is empty — a failed or interrupted download?`; `src/taxjson/lib/cli_diag.py` — `not_utf8`, `not UTF-8 text`
+
+### "Error: spreadsheet export(s) in inputs/ are NOT read — only .csv and .tt files are, …"
+- **Check:** the lines under it list each spreadsheet, e.g. `inputs/qt/activity.xlsx`.
+- **Cause:** only `.csv` and `.tt` files are read. A `.xlsx`, `.xls`, `.xlsm`, `.ods` or `.numbers` file in an inputs folder would leave every trade in it out of the books. Before v0.17.0 such a file was skipped with no message.
+- **Fix:** convert it (`taxjson-xlsx-to-csv FILE.xlsx -o FILE.csv`, or download the broker's CSV) and move the spreadsheet out of `inputs/`. A spreadsheet next to its own CSV conversion (same name) is only a warning.
+- **Fixed in:** `v0.17.0`
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `SPREADSHEET_SUFFIXES`, `spreadsheet export(s) in inputs/ are NOT read`
+
+### "Warning: qt: inputs/qt/99900001.csv parsed to 0 transactions — NONE of its rows are in the books"
+- **Check:** the line before it, `Warning: 99900001.csv parsed to 0 transactions (155 bytes input, brokerage=questrade)`, names the parser that read the file. `tjs run --strict` stops on it.
+- **Cause:** the header was recognised but no row became a transaction: a header-only export (a date range with no activity), or a file whose rows that parser does not book.
+- **Fix:** check the export's date range and download it again, or remove a header-only file from `inputs/<account>/`.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_brokerage.py` — `parsed to 0 transactions`; `src/taxjson/bin/taxjson_run.py` — `_ZERO_TX_RE`
+
+### Generic importer: "Error: generic_ws.csv: generic importer: no mapping for generic_ws.csv" or "Error: …: generic importer: generic_ws.csv: mapped column(s) not in the CSV header: action -> 'Transaction type'."
+- **Check:** a `generic_*.csv` (or a CSV with a `<file>.csv.toml` sidecar) is in `inputs/<account>/`. The second error lists the file's real header after `Header:`.
+- **Cause:** the generic importer reads only through a mapping: the CSV's own `<file>.csv.toml`, or the folder's shared `generic.toml` for `generic_*` files. Each `[columns]` value must be a header name exactly as the CSV spells it (case aside).
+- **Fix:** copy `examples/generic_wealthsimple.toml` to `inputs/<account>/<file>.csv.toml` and set each `[columns]` entry to your export's header (here `action = "Type"`). Unknown keys, a missing currency and similar mistakes each stop the run with their own message.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/generic.py` — `_load_mapping`, `generic importer: no mapping for`, `not in the CSV header`
+
+### "Warning: UNBOOKED: …", then `tjs run --strict` stops: "Error: --strict: margin: ib input has event(s) the parser could not book — aborting"
+- **Check:** each `Warning: UNBOOKED:` line names the file, the row and what was not booked; `work/<account>_<broker>.json.diag` keeps them. Common ones: IB `1 unhandled Corporate Action row(s) in U1234567.csv for: QZQ.` (a delisting, a rights issue), a generic mapping's `action 'REINVEST' (not in [actions]) carries a quantity/amount`, and a Webull `DIV` row (its own entry below).
+- **Cause:** a row moves shares or cash, but the parser has no booking for it. The position or the income is wrong until it is entered by hand. `run --strict` refuses to publish while any such line is in a parse.
+- **Fix:** book the event by hand in a `.tt` file in the account's folder (BUYSELL, SPLIT or DIVIDEND lines). For a generic mapping, map the action in `[actions]` (or to `"skip"` if it is not an event); that removes the line. A parser's UNBOOKED line stays while the row is in the export, even after the `.tt` booking, so `--strict` keeps stopping on it.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `UNBOOKED_PREFIX`, `unbooked_lines`, `parser could not book — aborting`; `src/taxjson/lib/brokerages/ib_extractor.py` — `unhandled Corporate Action`; `src/taxjson/lib/brokerages/generic.py` — `carries a quantity/amount`
+
+### "Warning: the same broker account (#ab12cd) feeds two taxjson accounts, qt and rrsp" or "Warning: the same export file sits in two accounts: inputs/margin/a.csv, inputs/tfsa/a.csv (identical content)"
+- **Check:** look at which `inputs/<account>/` folders hold that broker account's exports (the first message hashes the broker account; the second names both copies).
+- **Cause:** one broker account's exports, or one downloaded file, sit in two taxjson accounts, so every row is booked in both.
+- **Fix:** keep each broker account's exports under ONE `inputs/<account>/` folder; delete the copy in the wrong folder. `tjs run --strict` stops on either.
+- **Fixed in:** `v0.17.0`
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_shared_broker_accounts`, `_duplicate_input_files`, `the same export file sits in two accounts`
+
+### "Warning: Duplicates: a.csv and b.csv both hold 1 identical row(s)" … "Booked ONCE (read as the same row exported twice)", or "Warning: Duplicates: margin_extra.tt line (…) repeats the exported row in ib_2025.csv" … "so BOTH are booked"
+- **Check:** the warning names both files and the row; `tjs trades` for that day shows what was booked.
+- **Cause:** exports carry no row id. An identical row in two overlapping exports of one account is read as the same trade exported twice, and the run says so when the files' overlap cannot prove it (they share only that row). A hand-kept `.tt` line that repeats an exported trade has no matching id, so both are booked.
+- **Fix:** if the two export rows were really two trades, enter the second as a `.tt` line. If the `.tt` line is the exported trade, delete it. Overlapping downloads are otherwise fine to keep.
+- **Fixed in:** `v0.17.0`
+- **Code:** `src/taxjson/bin/taxjson_sort.py` — `plan_dedup`, `_tt_near_duplicates`, `Booked ONCE (read as the same row exported twice)`
+
+## Missing purchase history and transfers
+
+### "Warning: 2 positions sold in 2025 with no purchase in your files, not in missing_history.json" (or "Info: 1 position(s) go short in margin's data (QZQ.TO)")
+- **Check:** `tjs find-missing-history` lists each pair under "AFFECTS 2025" with its first negative date and the sales it touches.
+- **Cause:** the exports start after the shares were bought (or the shares were transferred in), so the sale has nothing to close. It is booked as a short and its gain is in no total.
+- **Fix:** in this order: add an older export that holds the purchase to `inputs/<account>/`; or enter the purchase as a `.tt` BUYSELL line with its real date and cost (`tjs find-missing-history --write-purchases` drafts these from IB's Basis or a transfer's stated book value); only when the history cannot be recovered, `tjs find-missing-history --write-missing-history` writes missing_history.json, and those sales must then be reported by hand. docs/getting-started.md step 5 walks through it.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/first_run.py` — `render`, `with no purchase in your files, not in `; `src/taxjson/bin/taxjson_run.py` — `_short_positions_note`; `src/taxjson/lib/missing_history.py` — `detect_missing_history`
+
+### "Warning: Short position: QZQ.US (margin): the broker codes the sale on 2025-04-01 CLOSING (IB code C, IB Basis …), but the data holds no position to close"
+- **Check:** `tjs find-missing-history` shows the pair with "broker says closing (IB code C)" and IB's Basis for the shares sold.
+- **Cause:** IB marks the sale as closing a position, so it is not a short sale: the purchase predates the statements in `inputs/`.
+- **Fix:** add the older statement, or `tjs find-missing-history --write-purchases` to draft the purchase line from IB's Basis; fill in the real purchase date and check the cost (IB's Basis is FIFO over IB's lots, not your ACB).
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/pipeline.py` — `broker_says_closing`, `CLOSING (IB code C`
+
+### "Warning: Short position: QZQ.TO (tfsa): a registered account (TFSA/RRSP) cannot be short" (or "spot crypto cannot be short")
+- **Check:** `tjs find-missing-history`; the pair is listed as in a registered account, or the account is a crypto account.
+- **Cause:** a registered account or a coin balance cannot go negative, so the books are missing an acquisition (a transfer in, a deposit, a purchase before the exports). Until it is supplied, later purchases cover the phantom short, so a superficial-loss denial they cause is missed; for crypto no gain is booked.
+- **Fix:** add the transfer or purchase rows (an older export, or a `.tt` line), or list the pair with `tjs find-missing-history --write-missing-history`. `tjs run --strict` stops on this.
+- **Fixed in:** `v0.17.0`
+- **Code:** `src/taxjson/lib/pipeline.py` — `spot crypto cannot be short`, `_book_words`; `src/taxjson/bin/taxjson_run.py` — `go short where`
+
+### "Warning: Transfer-in: margin: 1 transfer-in(s) from outside your books have NO cost in the books (30 QZQ.US (2025-05-01))"
+- **Check:** `tjs transfers` lists the row with IN_BOOKS `NO_COST`.
+- **Cause:** shares arrived from another broker and the row states no book value (IB's value column is the market value, never your ACB), so they are kept out of the books and a later sale reads as a short.
+- **Fix:** add the original purchase as a `.tt` BUYSELL line (date and ACB from the sending broker) dated on or before the transfer; the warning then stops. docs/getting-started.md step 5c.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/transfer_in.py` — `outside your books have NO cost in the books`; `src/taxjson/bin/taxjson_run.py` — `cmd_transfers_view`
+
+### "Warning: Transfer-in: margin: 1 transfer-in(s) from outside your books booked at the ACB the broker states on the row"
+- **Check:** `tjs transfers` shows the row with IN_BOOKS `book_value`.
+- **Cause:** a Questrade "TRANSFER BOOK VALUE" or RBC "BOOK VALUE" row is booked as an acquisition on its arrival date at that value. It is the sending broker's record, which is not always your ACB (an earlier superficial-loss denial, a return of capital, the same stock in another account). Tax-logic CA-ACB-TRANSFER-BV / US-BASIS-TRANSFER-BV.
+- **Fix:** if the figure is right, nothing; it is said every run. To use your own figure, add the original purchase as a `.tt` BUYSELL dated on or before the transfer; the book value is then no longer used. In a US project the holding period starts at arrival unless you enter the original lots.
+- **Fixed in:** `v0.18.0`
+- **Code:** `src/taxjson/lib/transfer_in.py` — `the broker `, `states on the row`
+
+### "Warning: 1 transfer in a taxable loss's 30-day window counted as an account move, not a purchase"
+- **Check:** the detail lines name each transfer, its date and the loss sale; `tjs transfers` lists the rows.
+- **Cause:** a transfer between your accounts moves shares; it is not an acquisition, so it does not deny the loss (CA-SL-16 / US-WASH-23). If one leg was really a contribution to a registered plan or a purchase, the loss may be superficial (or a wash sale).
+- **Fix:** if it was an account move, nothing. If it was an in-kind contribution or a purchase, record it as a BUYSELL dated the day it was acquired; `[settings] transfers_as_acquisitions = true` counts every transfer.
+- **Fixed in:** `v0.22.0`
+- **Code:** `src/taxjson/lib/pipeline.py` — `transfer_window_message`, `transfers_as_acquisitions`; `src/taxjson/bin/taxjson_run.py` — `_say_transfer_windows`
+
+### "Warning: 2 positions at a $0 cost (1 sold in 2025, 1 still held)"
+- **Check:** `tjs find-missing-history` lists them under "$0-cost corp-action shares".
+- **Cause:** a corporate action (a spin-off, a stock dividend, a merger) put shares in the books at no cost, so their sale overstates the gain.
+- **Fix:** give the event its value: `tjs elect ACCOUNT --set EVENT_ID=ELECTION --hint fmv_per_share=<value>` for a spin-off or merger, or a `[[distributions]]` entry / `.tt` ADJUST for a stock dividend. docs/getting-started.md step 5d.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/first_run.py` — `zero_cost_sold`, `zero_cost_held`; `src/taxjson/lib/missing_history.py` — `detect_missing_history`
+
+### "Warning: 1 security paid income in 2025 that the books do not hold (a holding with no purchase in your files?)"
+- **Check:** `tjs sanity` (and `tjs divs` for the symbol) shows dividends on a symbol with no position.
+- **Cause:** the shares were bought before the exports start, or arrived by transfer, and were never sold this year, so nothing goes short; only the income shows they are held.
+- **Fix:** add the purchase history as for a missing purchase (an older export or a `.tt` BUYSELL line), or check the dividend's symbol against `ticker.map`.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/first_run.py` — `income_not_held`, `that the books do not hold`
+
+## Holdings
+
+### "Info: 5 accounts with open positions and no holdings file to check them against" (or `tjs sanity`: "Error: no arguments, and no account in taxjson.toml declares `holdings = [...]`")
+- **Check:** `tjs checklist` shows step `sanity` as `[m]`.
+- **Cause:** nothing compares the books' positions with the broker's own positions report yet.
+- **Fix:** export the broker's positions (or write a holdings TOML) and add `holdings = ["~/holdings/margin.toml"]` under `[accounts.margin]`; then `tjs sanity` and `tjs run` check it every time. One-off: `tjs sanity margin=/full/path/positions.toml`.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/first_run.py` — `unchecked_accounts`; `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `no arguments, and no account in `
+
+### "Warning: 3 positions differ from the broker's holdings files"
+- **Check:** `tjs sanity` lists each symbol with TAXJSON and HOLDINGS quantities and an ISSUE: `QTY_MISMATCH`, `MISSING_IN_TAXJSON` (the broker holds it, the books do not), `MISSING_IN_HOLDINGS`.
+- **Cause:** fewer shares in taxjson than at the broker usually means missing history (purchases before the exports start, or shares transferred in). A trade after the last export, a symbol spelled differently (`QZQ.TO` vs `QZQ.US`) or a holdings file of another date are the other usual causes.
+- **Fix:** `tjs find-missing-history` and `tjs transfers` for missing history; a `ticker.map` line for a spelling difference; re-export when the holdings file is newer than the activity.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_sanity_console`, `MISSING_IN_TAXJSON`; `src/taxjson/lib/positions_check.py`
+
+## Corporate actions and income
+
+### "Error: 1 corp-action event(s) need an election but --no-input" (or "… but stdin is not a TTY"), and `tjs run` exits 3
+- **Check:** `tjs elect --pending` lists each event with what each election books and the hints it needs (also in `work/pending_elections.json`).
+- **Cause:** a spin-off or merger has more than one tax treatment and only you can choose. The run defers the account until it is chosen; run from a script or an AI assistant, stdin is not a terminal, so it cannot ask.
+- **Fix:** `tjs elect margin --set EVENT_ID=ELECTION` (add `--hint KEY=VALUE` where required), or run `tjs run` at a terminal to be asked; then run again.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_corp_actions.py` — `corp-action event(s) need an election `; `src/taxjson/bin/taxjson_run.py` — `cmd_elect`
+
+### "Warning: margin: spin-off SPNC.US on 2025-06-03 (event …) is booked at $0"
+- **Check:** `tjs spinoffs` shows the election, the value used and the cost booked.
+- **Cause:** the election was saved with `fmv_per_share=0`: no dividend income is booked and the new shares cost $0, so a later sale overstates the gain. The same warning exists for a merger booked at $0 and a spin-off with $0 allocated cost.
+- **Fix:** set the value: `tjs elect margin --set EVENT_ID=ELECTION --hint fmv_per_share=<value>` (the line printed with the warning), then `tjs run`.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_zero_value_spinoffs`
+
+### "Warning: QZA.US: stock dividend of 2 share(s) on 2025-07-03 entered at $0 cost"
+- **Check:** before it, the parser's line `QZA.US: stock dividend of 2 share(s) on 2025-07-03 (IB Value 80.00 USD) booked as a stock-dividend event` (RBC and Questrade say the same without the IB Value).
+- **Cause:** no export carries the declared amount. In Canada the new shares enter the pool at $0 and count as an acquisition (tax-logic CA-STKDIV-01). An IB stock dividend paid in ANOTHER security (another share class) is not booked at all: `Warning: UNBOOKED: … stock dividend on QZA paid 2 share(s) of ANOTHER security, QZC …`.
+- **Fix:** add the declared per-share amount as a `[[distributions]]` table in taxjson.toml (`symbol`, `record_date`, `per_share` in the base currency); `tjs run` books it as an ACB increase. That books the cost only: the dividend itself is reported from the T5/T3 slip and is not in taxjson's income totals. For another class, enter the new shares and their cost as a `.tt` BUYSELL.
+- **Fixed in:** `v0.17.0`
+- **Code:** `src/taxjson/lib/pipeline.py` — `run_gains`, `entered at $0 cost — in Canada it is a dividend at its `; `src/taxjson/lib/brokerages/ib_extractor.py` — `booked as a stock-dividend`, `ANOTHER security`
+
+### "Warning: 2 trade(s) in OLDQZ after its rename to NEWQZ on 2025-03-03"
+- **Check:** `tjs renames` lists the dated rename, the position it carried and the late trades as UNRESOLVED.
+- **Cause:** after a rename the old ticker is not automatically the same security: the broker may still book the renamed shares under it, or another company may now use the ticker. Until you say which, the rows are a separate security and `tjs run --strict` stops.
+- **Fix:** add one line to ticker.map: `RENAME OLDQZ NEWQZ 2025-03-03 late=fold` (the broker's late rows are the renamed shares) or `… late=separate` (another security).
+- **Fixed in:** `v0.17.0`
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_check_renamed_late`; `src/taxjson/lib/renames.py` — `unresolved_late`, `LATE_FOLD`
+
+### "Warning: Income year: XYZQ.TO: distribution 12.50 CAD paid 2026-01-15 with record date 2025-12-31 is income of 2025"
+- **Check:** `tjs divs` for the symbol; compare with the T3.
+- **Cause:** a Canadian trust's distribution is income of its record-date year (s.104(13); CA-INC-DATE-TRUST), so a December-record distribution paid in January belongs to the earlier return.
+- **Fix:** make sure the earlier year's return carries it (that project counts it only if its exports reach the pay date). If the payer is a corporation, add it to `[settings] corporate_distributions` so it is dated when paid.
+- **Fixed in:** `v0.17.0`
+- **Code:** `src/taxjson/lib/income_dating.py` — `ATTENTION_INCOME_YEAR`, `_ca_year_warnings`
+
+### "Warning: [[distributions]] SAMPA.TO 2025-06-28: the book already has a return-of-capital ADJUST of -25.00 on SAMPA.TO (dated 2025-06-28)"
+- **Check:** the next line says "If both are the same distribution the cost is reduced TWICE." `tjs roc-sum` warns "has an ADJUST in the books AND a [[distributions]] entry".
+- **Cause:** the broker export (or a `.tt` ADJUST line) already books the return of capital, and a `[[distributions]]` table in `taxjson.toml` books it again on the same date.
+- **Fix:** keep one: delete the `[[distributions]]` entry (or the `.tt` ADJUST), then `tjs run`.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_apply_distributions.py` — `_warn_roc_overlaps`, `reduced TWICE`; `src/taxjson/bin/taxjson_run.py` — `_warn_dist_double_entry`
+
+## Interactive Brokers
+
+### IB: "Warning: U1234567.csv: the statement has no Cash Report" or "Error: U1***.csv: parsed rows do not reconcile with IB's own Cash Report"
+- **Check:** the file has no `Cash Report,Header,…` lines (a Flex query or a customised statement). For the error, the next line names the currency and the line, e.g. `USD Dividends: parsed 2.50 vs Cash Report 3.50 (diff -1.00)`.
+- **Cause:** taxjson checks the money it parsed against IB's own Cash Report totals, per currency: dividends, payments in lieu, withholding, interest, other fees, commissions and trades. Without the section the check is off, and the run says so. A mismatch means a row was dropped, doubled or mis-signed (often an edited statement), and the parse stops.
+- **Fix:** export the Activity Statement with the Cash Report section (Flex: add it to the query). On the error, download the statement again and put it in `inputs/<account>/` unedited.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `no Cash Report — parsed money is NOT reconciled`, `parsed rows do not reconcile with IB's own`
+
+### IB: "Warning: U1234567.csv: the account's IB statements end 2025-12-15, before the end of 2025" or "Warning: IB statements leave 2025-12-16 .. 2025-12-19 uncovered (between … and …)"
+- **Check:** the `Statement,Data,Period,…` line of each IB file in `inputs/<account>/`.
+- **Cause:** an IB statement holds only its Period. taxjson joins the periods of every statement of one IB account and names the days that none covers. Trades and income on those days are missing from the books.
+- **Fix:** download the statement for the missing days (or one Activity Statement for the whole year) and add it. Overlapping statements of one IB account are de-duplicated, so keeping both is fine.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `_warn_coverage_gaps`, `Download the statement that covers the rest of`
+
+### "Warning: U1234567.csv: IB statement spans 2 accounts (U1***, U1***)" or "Warning: 99900001.csv: the export holds rows of 2 Questrade accounts (…)"
+- **Check:** the IB file's `Account Information` names more than one account (a consolidated statement); the Questrade file has more than one value in `Account #`.
+- **Cause:** every row of a file is booked to the one taxjson account whose folder holds it. That is right only when all the broker accounts are one tax entity (two taxable margin accounts); a TFSA or RRSP in the same file would land in those books. Questrade refuses a file that mixes a registered plan into a taxable account, or the reverse.
+- **Fix:** export each registered account on its own into its own `inputs/<account>/`. When every account in the file is yours and taxable together, add `combined_broker_accounts = true` under `[accounts.<name>]`: the warning becomes a one-line note. On a sheltered account the setting holds only when every account is the same plan; an IB statement never says which plan, so there it is refused.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `IB statement spans`, `combined_broker_accounts`; `src/taxjson/lib/brokerages/questrade.py` — `the export holds rows of`; `src/taxjson/lib/brokerages/base.py` — `combined_accounts_note`, `combined_accounts_refusal`
+
+### IB: "Warning: 1 dividend(s) in U1234567.csv are accrued but not yet booked as posted dividends (QZQ pay:2025-12-30 ~2.25 USD)."
+- **Check:** the statement's `Change in Dividend Accruals` section has a `Po` row whose pay date is inside the statement period, with no `Re` row and no posted `Dividends` row for it.
+- **Cause:** IB posts dividend cash with a lag. Accruals are estimates and are not counted as income, so a statement downloaded before the cash posted lacks that dividend.
+- **Fix:** download the statement again once IB has posted the payment, and replace the old file.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `accrued but not yet booked as posted dividends`
+
+### IB: "Warning: IB corporate action taxjson cannot book: 'OLDX(US…) Merged(Acquisition) WITH US… 1 for 2 AND USD 5.00 (…)' on 2025-06-03", then the run stops (exit 3)
+- **Check:** the run lists the event as `2025-06-03 UNSUPPORTED corporate action: OLDX.US -> … — taxjson cannot book it` with the `taxjson elect margin --set <event id>=<ignore>` line.
+- **Cause:** a merger paying shares and cash, or a merger row of a shape taxjson does not know. Neither the old shares' disposal nor the new position is booked. Before v0.17.0 such a row was skipped with only a `.sum` note, leaving the old shares in the books.
+- **Fix:** record the exchange by hand in a `.tt` file (the disposal of the old shares and the purchase of the new ones), then `tjs elect margin --set <event id>=ignore` and run again.
+- **Fixed in:** `v0.17.0`
+- **Code:** `src/taxjson/lib/corp_actions.py` — `_ib_unsupported_events`, `IB corporate action taxjson cannot book`, `UNSUPPORTED corporate action`
+
+## Questrade, RBC Direct and Webull
+
+### Questrade: "Warning: 99900001.csv line 2: DIV row keeps internal symbol code 'X000123' (…)"
+- **Check:** the export lists the security under a code (one letter and digits) instead of a ticker, usually for shares transferred in from another broker. The next line gives the ticker.map line to add.
+- **Cause:** taxjson resolves a code from the account's own trades and transfers, a matching transfer-out at another broker in the project, or an exact name match (tax-logic CA-ACB-CODES). Nothing resolved this one, so its rows form a pool of their own: a return of capital on it becomes a gain, and the sale of the real ticker goes short.
+- **Fix:** add `GLOBAL X000123.TO SAMPH.TO` (the code's listing, then the real ticker) to `ticker.map`; the warning stops.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/questrade.py` — `_resolve_symbol`, `row keeps internal symbol code`; `src/taxjson/lib/symbol_codes.py` — `codes_note`
+
+### "Warning: 99900001.csv: Questrade symbol QZOLD.US looks renamed to QZNEW.US" or "Warning: 99900001.csv: RBC symbol QZOLD (USD) looks renamed to QZNEW"
+- **Check:** the next lines say the old symbol stops with shares still open and the new one (same description) starts with a sale or goes short. IB says `IB lists one stock (contract id …) under several symbols`; Webull says `… goes short with a SALE on … — likely a ticker change Webull reported without a reorganization row`. `tjs shares` shows the old symbol open and the new one short.
+- **Cause:** the broker changed the ticker without a reorganization row. As exported, the old pool is stranded and the new symbol's sale reads as a short, so its gain is in no total.
+- **Fix:** if they are one security, add the line the warning gives to `ticker.map` (`GLOBAL QZOLD.US QZNEW.US`; Webull suggests a dated `RENAME QZOLD.US QZNEW.US 2025-05-10`, see `tjs renames`). The hint stops once the map joins them.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/questrade.py` — `looks renamed to`; `src/taxjson/lib/brokerages/rbc_direct.py` — `looks renamed to`; `src/taxjson/lib/brokerages/ib_extractor.py` — `under several symbols`; `src/taxjson/lib/brokerages/webull.py` — `ticker change Webull reported without a`
+
+### `tjs ticker-map --suggest`: "TOBASE QZQ.US QZQ.TO … transfer journal … not joined automatically: the names are not equal word for word (…)"
+- **Check:** `tjs ticker-map --suggest` lists the line with its reason; the transfer journal moves one listing of the security out and the other in (a USD line to its CAD line, say).
+- **Cause:** taxjson joins two listings of one security on its own only when their security names agree word for word, corporate form and share designators included (tax-logic CA-XLIST-01 / US-XLIST-01); anything less stays a suggestion, so two share classes are never merged. On v0.22.0 and earlier an RBC trade row's confirmation wording ("UNSOLICITED WE ACTED AS PRINCIPAL AVG PRICE …") stayed in the name and "AS" read as a corporate form, so a real pair was only suggested; the next release cuts that wording.
+- **Fix:** if both listings are one security, `tjs ticker-map --suggest --write` adds the line (or add it to `ticker.map` by hand), then `tjs run`. If they are different classes or companies, leave it out.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/cross_listings.py` — `_names_verdict`, `the names are not equal word for word `; `src/taxjson/lib/symbol_codes.py` — `_CONFIRM_RE`, `rbc_name`, `questrade_name`; `src/taxjson/lib/ticker_map_suggest.py` — `from_cross_listings`, `not joined `
+
+### Questrade: "Warning: 99900001.csv: 1 dividend(s) marked NON-RES TAX WITHHELD are booked at the NET amount"
+- **Check:** the next line lists each dividend (`QZQ.US 2025-03-15 8.50`); `tjs divs` shows it at the net amount with no TAX row. On RBC the same wording is grossed up instead: `tjs events` shows a TAX row described `(Implied Tax)` at 15% of the gross.
+- **Cause:** Questrade's export gives neither the gross nor the tax of such a dividend, so it is booked at the net: income understated, foreign tax missing. RBC's export also gives only the net; its parser assumes the 15% US treaty rate (`gross = net / 0.85`) whatever the issuer's country.
+- **Fix:** take the gross and the withholding from the T5/NR4 slip. For RBC, compare the implied tax with the slip when the issuer is not American.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/questrade.py` — `net_of_tax`, `marked NON-RES TAX WITHHELD are booked at the NET`; `src/taxjson/lib/brokerages/rbc_direct.py` — `_build_dividend`, `(Implied Tax)`
+
+### RBC: "Warning: 99900001.csv: the account's latest RBC export was taken as of 2025-12-05", or in `reports/<account>.sum` "note: the account's RBC exports that hold 2025 rows were taken by 2026-02-05; RBC posts 2025's year-end book-cost adjustments …"
+- **Check:** the export's `Activity Export as of …` line (a file without one is not judged).
+- **Cause:** an RBC export holds only what was posted when it was taken. Taken before Dec 31, it lacks the rest of December. RBC posts the year's Dec-31 book-cost adjustments (notional distributions, a year-end return of capital) only the next spring, so an export taken before then, and next year's export starting Jan 1, both lack them.
+- **Fix:** export the year again after Jan 31 for the trades, and after the account's posting day for the book-cost rows (`year_end_posting = "06-30"` under `[accounts.<name>]` by default). Keep both files: overlapping downloads of one RBC account are de-duplicated row by row.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/rbc_direct.py` — `rbc_coverage_messages`, `latest RBC export was`, `DEFAULT_YEAR_END_POSTING`, `year-end book-cost adjustments`
+
+### RBC: "Warning: 99900001.csv: line 7: notional distribution 12.34 CAD on XQF.TO raises its ACB"
+- **Check:** the RBC row reads `… NOTIONAL DISTRIBUTION ADJUSTMENT TO BOOK COST $12.34`.
+- **Cause:** RBC's row carries only the book-cost side. taxjson raises the ACB by the amount (tax-logic CA-DIST-02), but the distribution itself is income on the fund's T3 (usually box 21) and is not in taxjson's income totals.
+- **Fix:** take the distribution's income from the T3 slip. The ACB increase needs no action.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/rbc_direct.py` — `_build_book_adjust`, `notional distribution`
+
+### RBC: "Warning: 99900001.csv: reorganization on 2025-11-08: the removal is booked under RBC temporary code A012345 (…) … so it is ASSUMED to be the receipt's ARCN.TO." or "Warning: 99900001.csv: QZT: roc row(s) but no trade rows for QZT in any RBC file of this account"
+- **Check:** the project holds only this year's RBC export, and the earlier years come in through a hand-written `.tt` start file.
+- **Cause:** the RBC parser learns a security's listing and a temporary code's company from all of the account's RBC exports in the project. Without the earlier exports it guesses: a removal under a temporary code is taken as the receipt's ticker, and income on a symbol no file trades takes the payment currency's listing. A USD return of capital then lands on an empty `.US` pool and becomes a gain.
+- **Fix:** keep the earlier years' RBC exports in `inputs/<account>/`, or add the line the warning gives to `ticker.map` (`GLOBAL <old ticker>.TO ARCN.TO`, `TOBASE QZT.US QZT.TO`).
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/rbc_direct.py` — `_emit_stock_reorg`, `booked under RBC temporary code`, `_report_untraded_income`, `in any RBC file of this account`
+
+### Webull: "Warning: UNBOOKED: webull_2025.csv line 8: Webull DIV row QZQ (…) is not booked"
+- **Check:** the Webull Trading Summary has a row whose Action Code is not BUY or SELL (DIV, a transfer). `reports/<account>.sum` also says `Webull parser books only BUY/SELL rows — skipped 1 row(s) with other action codes (1× DIV)`.
+- **Cause:** the Webull parser books only BUY/SELL rows (option expiries and exercises included). Webull exports no income file, so dividends and interest (the T5 slip) are in no Webull input.
+- **Fix:** enter the income from the T5 as `.tt` lines in the account's folder, e.g. `DIVIDEND 2025-03-15 16:00:00 QZQ.US 50 USD 0.24 12.00` and `INTEREST 2025-12-31 16:00:00 USD 12.34`. Enter shares transferred in as a BUYSELL dated on the original purchase, at its cost (a `.tt` TRANSFER is refused in a taxable account). The UNBOOKED line stays while the row is in the export.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/webull.py` — `Webull parser books only BUY/SELL rows`, `is not booked — if it`
+
+### Webull: in `reports/<account>.sum`, "warning: Webull webull_2025.csv: QZQ250620C00020000.US closed at $0 on … — no exercise/assignment charge is configured for this account ([accounts.<name>] exercise_fee), so exercise/assignment was NOT inferred"
+- **Check:** the Trading Summary shows the option closed at $0 and a 100-share trade at the strike that settles near the close.
+- **Cause:** Webull's export has no exercise or assignment code. The parser pairs the two legs only when the stock trade carries the account's stated exercise/assignment charge. Since v0.18.0 nothing is assumed, so with no `exercise_fee` every candidate is booked as an expiry plus a separate trade, and the premium stays out of the shares' cost or proceeds.
+- **Fix:** add `exercise_fee = 1.00` (your broker's charge) under `[accounts.<name>]`. The `.sum` then says `inferred an exercise/assignment …`; check it against the statement. A pair whose quantities differ is still named and must be booked by hand.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/webull.py` — `_mark_assignments`, `exercise_fee`, `no exercise/assignment charge is configured for`
+
+## Crypto
+
+### "Info: 1 crypto send(s) not yet classified as self / gift / payment"
+- **Check:** `tjs crypto-sends crypto` lists the send as PENDING, with its fair value and the ready `.tt` line. `tjs run --strict` stops on it ("--strict: crypto: 1 crypto send(s) not yet classified").
+- **Cause:** a Coinbase Send or Kraken withdrawal did not arrive in another of your crypto accounts. Only you know whether it went to your own wallet (no tax event) or was a gift or payment (a disposition at fair value).
+- **Fix:** `tjs crypto-sends crypto --set ID=self|gift|payment [--note TEXT]` (the ID is in the listing; `--price P` when no price can be found), then `tjs run` (or `--write`) regenerates `inputs/crypto/crypto_sends.tt`. Commit `sends.json`.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_stage_crypto_sends`, `crypto send(s) not yet`; `src/taxjson/lib/crypto_sends.py` — `match_transfers`, `DECISIONS`
+
+### `reports/crypto.sum`: "warning: Kraken trades kraken_demo.csv: the fee currency of 5 fill(s) can't be verified"
+- **Check:** the line is in the DIAGNOSTICS block of `reports/crypto.sum` (not on the console). It ends "no Kraken ledgers export (kr_ledgers*.csv) is in the same folder".
+- **Cause:** Kraken's trades CSV states every fee in the quote currency, even when Kraken took it in the coin. Only the ledgers export shows which. Without it, a coin fee is booked as coins you never received.
+- **Fix:** export the Kraken ledgers for the same dates and put the file (`kr_ledgers*.csv`) in the same `inputs/<account>/` folder as the trades file, then `tjs run`.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/kraken.py` — `_parse_trades`, `can't be verified`
+
+### "Warning: Crypto id: ETH priced from Yahoo ETH-USD at 30 USD on 2025-04-23, but your own ETH rows are priced at …" or "Warning: Crypto id: QZQC has no CRYPTO line in ticker.map, so it is priced as Yahoo QZQC-USD"
+- **Check:** the first says "Yahoo ETH-USD looks like another asset"; the second names a numbered id (`QZQC9999-USD`) the price cache holds from earlier runs, and the exact `CRYPTO` line to add. Both are also in the account's `.sum`.
+- **Cause:** taxjson carries no built-in coin ids (removed in v0.18.0): a coin is quoted as Yahoo `SYMBOL-USD` unless `ticker.map` maps it. Yahoo gives a ticker that two assets share a number (`SYMBOL<number>-USD`), so the plain id can be a different coin. A project that relied on the old built-in table now needs the line.
+- **Fix:** find your coin's id on finance.yahoo.com and add `CRYPTO QZQC QZQC9999` to `ticker.map` (the full pair `QZQC9999-USD` is accepted too); a `CRYPTO` line that names the wrong id is corrected the same way. Then `tjs run`.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/fill_crypto_prices.py` — `ids_seen_in_cache`, `_implausible_yahoo_prices`, `has no CRYPTO line in ticker.map`, `looks like another asset`
+
+### "Error: Unpriced DIVIDEND ETH 2025-04-23: quantity 0.0025 at price 0 and net 0"
+- **Check:** the run also prints "Warning: crypto: validation ERROR(s) in the crypto books — numbers may be wrong". `work/crypto_filled.json.diag` (and the `.sum` DIAGNOSTICS) hold "failed to fetch crypto price for ETH …" and "… row(s) left UNPRICED". `tjs run --strict` stops instead.
+- **Cause:** online, the Yahoo lookup for the row's coin and date failed (an error, a rate limit, no usable close, or a coin Yahoo lists under another id). The row stays at price 0, which would book $0 income, cost or proceeds. A failed price is never cached.
+- **Fix:** re-run `tjs run` when Yahoo is reachable; or add the price to the row; or, when the coin's id is wrong, add a `CRYPTO SYMBOL YAHOO_ID` line to `ticker.map` (the "Crypto id" entry). Before v0.17.0 these rows were booked at $0 with "Validation passed".
+- **Fixed in:** `v0.17.0`
+- **Code:** `src/taxjson/bin/taxjson_validate.py` — `price lookup failed, so this books`; `src/taxjson/bin/fill_crypto_prices.py` — `left UNPRICED`; `src/taxjson/bin/taxjson_run.py` — `validation ERROR(s) in the crypto`
+
+### "taxjson-fill-crypto: TAXJSON_OFFLINE is set but a crypto price for ETH on 2025-04-23 is not in the cache and would be fetched from Yahoo Finance."
+- **Check:** the run stops with "Error: stopped at filling in crypto prices (crypto_sorted.json) (exit 1)". The row is one the export did not price: a Coinbase row with blank price and total, or a Kraken staking reward from an older ledger export without the `amountusd` column.
+- **Cause:** an unpriced crypto row takes its fair value from the Yahoo daily close, cached in `~/.crypto_price_cache.json`. `TAXJSON_OFFLINE=1` forbids the download, and that coin and date are not cached.
+- **Fix:** run `tjs run` once online (unset `TAXJSON_OFFLINE`); a successful price is cached for later offline runs. Or put the price in the row (a `.tt` line).
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/fill_crypto_prices.py` — `get_crypto_price`, `TAXJSON_OFFLINE is set but a`
+
+### "Warning: UNBOOKED: Coinbase coinbase_demo.csv: 1 row(s) of type(s) the parser does not book (Airdrop x1; 2025-05-02..2025-05-02; assets QZQC) move coins"
+- **Check:** the next line says "They are NOT in the books: enter each via a .tt file." `tjs run --strict` stops on it.
+- **Cause:** the row's Transaction Type is one the Coinbase parser does not know (an airdrop, a new reward label). taxjson does not guess what it means for tax, but the coins moved.
+- **Fix:** enter each row as a `.tt` line in the account folder (an airdrop or reward: income and a purchase at fair value; a payment: a sale).
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/brokerages/coinbase.py` — `the parser does not book`
+
+### "Error: kr_ledgers.csv: Kraken ledger kr_ledgers.csv: refid RZ*** (2025-03-02)" — the leg "is under the books' zero (1e-09 units) but not negligible"
+- **Check:** the paragraph names the coin, its tiny amount and its USD value (more than 0.01 USD); the crypto account's files are not booked (exit 1). A dust leg that is worth nothing gives only a note ("dust sweep" / "instant trade … not booked").
+- **Cause:** Kraken writes amounts to ten decimals, so a sweep or trade can spend less than 1e-09 of a coin. Such a leg is left out only when it and its share of the other side are each worth at most 0.01 USD (tax-logic CA-CRYPTO-11); one that carries value would be a real sale or purchase lost. Before v0.21.0 any such leg became a 0-unit trade and stopped the account.
+- **Fix:** correct the rows in the export, or enter the trade as `.tt` lines and remove its rows from the export.
+- **Fixed in:** `v0.21.0`
+- **Code:** `src/taxjson/lib/brokerages/kraken.py` — `_check_dust`, `_drop_dust`, `under the books' zero`
+
+## Currency rates
+
+### "Error: no exchange rate for 1 row(s): USD->CAD on 2025-09-25 (BUYSELL QZQ.US; no rates for currency)." (often after "Warning: download failed — Bank of Canada FXUSDCAD …")
+- **Check:** before it the run printed "Info: TAXJSON_OFFLINE is set — using cached rates only (no download)", or a "download failed" warning ("Bank of Canada FXUSDCAD", "Bank of Canada noon USDCAD" or "Yahoo Finance USDCAD=X") followed by "Dates it would have covered have no rate this run.", and "Info: FX USD→CAD: Bank of Canada Valet for 0 dates". The run stops at "merging and converting the account's books" (exit 1).
+- **Cause:** taxjson converts each row at the rate of its date, or the latest rate of the 5 days before it, and never uses a built-in rate. Offline (`TAXJSON_OFFLINE=1`) with an empty or old rate cache (`~/.currency_price_cache.json`), or with the Bank of Canada Valet API (or the Yahoo fallback before 2017) unreachable (no network, a firewall or proxy, an outage), there is no rate; a failed download is never replaced by another source's rate. The same message for another currency (`EUR->CAD`) means that currency is not in `[settings] source_currencies`, so its rates were never fetched.
+- **Fix:** run `tjs run` once online (unset `TAXJSON_OFFLINE`); the rates are cached and later offline runs use them. For a new currency, add it: `source_currencies = ["USD", "EUR"]`. If no source has a rate for that date, enter the row in CAD at that date's rate as a `.tt` line.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_convert_currency.py` — `missing_rate_message`, `no exchange rate for`; `src/taxjson/bin/to_base_curr.py` — `resolve_rows`, `refresh_boc`, `using cached rates only`, `download failed —`; `src/taxjson/bin/taxjson_run.py` — `stage_currency_rates`
+
+## Options
+
+### "Warning: margin: QZQ250117C00040000.US expired 2025-01-17 but the books still hold 1 (long)"
+- **Check:** `tjs list margin` shows the contract still open after its expiry.
+- **Cause:** the export is missing the expiry, assignment or exercise row. Variants of the warning say the contract was booked under another root (a ticker.map `GLOBAL` line joins them), or that the broker coded the opening trade CLOSING (a missing write or purchase from before the data).
+- **Fix:** add the missing row (an expiry is a `.tt` BUYSELL closing the position at 0 on the expiry date), or the ticker.map line the warning prints, and re-run.
+- **Fixed in:** `v0.17.0`
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_expired_open_options`, `the export is missing its expiry, `
+
+## Before you file
+
+### "Warning: these books are not the clean result of the current inputs"
+- **Check:** `tjs checklist` step `run-clean` names the problem: validation errors in the last run, an account deferred on elections, inputs newer than the books, or a run that did not finish.
+- **Cause:** a report command (sum, list, form-export, …) reads the books in `work/`, and those no longer match `inputs/` and taxjson.toml.
+- **Fix:** fix what it names and re-run `tjs run` before using any figure.
+- **Fixed in:** `v0.17.0`
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_run_state`, `_run_state_problems`
+
+### "Warning: margin: 2 validation ERROR(s) in the merged books — numbers may be wrong"
+- **Check:** the DIAGNOSTICS block of `reports/margin.sum`, or `work/margin_validate.diag`, names each row.
+- **Cause:** rows the engine cannot book as they are (a negative trade amount, a zero split ratio, an unpriced crypto row). The figures are written anyway.
+- **Fix:** fix the named rows (the source file, a `.tt` line, a ticker.map line) and re-run; `tjs run --strict` makes these fatal.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `ERROR(s) in the merged books — numbers may be `; `src/taxjson/bin/taxjson_validate.py`
+
+### "Info: QZQ.TO traded in more than one TAXABLE account": which file do I file from, margin.sum or margin_wash.sum?
+- **Check:** `tjs sum` (its FOR THE RETURN block) and `tjs form-export` give the filing figures.
+- **Cause:** by design. `<account>.sum` is each account alone; `<account>_wash.sum` is the blended pass (ACB pooled across taxable accounts, s.47, and superficial losses checked against the registered accounts). The pair shows what blending changed.
+- **Fix:** file from `<account>_wash.sum`, `tjs sum` or `tjs form-export`, never from `<account>.sum`. Its TOTAL PROCEEDS / TOTAL COST lines are signed engine figures, not Schedule 3 proceeds.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_cross_taxable_overlap`, `stage_wash_pass`
+
+### `tjs wash-sales` shows a loss "permanently denied"
+- **Check:** `tjs wash-sales` lists each denied loss, its trigger and DENIED vs ALLOWED; `tjs audit` traces the sale.
+- **Cause:** identical property was bought within 30 days of the loss and still held at day 30 in a registered account (or by an affiliated person), so the loss is gone from your return (s.54, s.40(2)(g)(i)). A denial against a taxable repurchase is added to that ACB instead (s.53(1)(f)).
+- **Fix:** check each trigger is real (the right account, the same security); a mis-assigned account type or ticker is the usual mistake. The rule ids are in `tjs tax-logic --ids` (CA-SL-*).
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_wash_sales`; `src/taxjson/lib/core.py`
+
+### `tjs checklist`: "[!] inputs-frozen … latest activity 2025-12-31 — January 2026 is not in the books yet"
+- **Check:** the step's detail names the latest activity date (IB statements are checked per account).
+- **Cause:** a December sale settles in January, and a superficial-loss window runs 30 days past it; both need January of the next year in the exports.
+- **Fix:** re-export each account through the end of January of the next year (keep the overlapping files: duplicates are dropped row by row), then `tjs run`.
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/checklist.py` — `is not in the books yet`
+
+### `tjs check-dates`: "1 date(s) cannot be right; fix the source file or the parser."
+- **Check:** `tjs check-dates` lists each ERROR row (a settlement on a weekend, before the trade, on a closed market day).
+- **Cause:** an impossible date moves a sale to the wrong day's rate or the wrong year; usually a hand-typed `.tt` line or an unusual export row.
+- **Fix:** correct the date in the `.tt` file; for a broker export row, report it with `tjs redact` output so the parser can be fixed.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_check_dates`; `src/taxjson/lib/check_dates.py`
+
+### `tjs reconcile-slips`: `MISMATCH` or `MISSING_FROM_SLIP` against the T5008 / 1099-B
+- **Check:** `tjs reconcile-slips inputs/slips/t5008.csv` lists each symbol with the proceeds and cost difference.
+- **Cause:** often legitimate: a broker's book value is not the blended ACB, a corporate action has no slip row, an option written this year and still open is reported without a slip (`NO_SLIP_EXPECTED`). Otherwise a missing export or a symbol mismatch.
+- **Fix:** explain each difference (the CRA matches Schedule 3 proceeds to the slips); fix real gaps in the inputs. IB's per-type-code T5008 ("Various") cannot be compared: transcribe a per-security CSV.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_reconcile_slips.py`; `src/taxjson/bin/taxjson_run.py` — `cmd_reconcile_slips`
+
+### `tjs handoff`: "Error: no prior-year record at filed/2024.json"
+- **Check:** `tjs checklist` step `handoff` says "no 2024 record".
+- **Cause:** handoff compares this year's opening positions with last year's lock, and there is none (first year with taxjson, or `close-year` was never run there).
+- **Fix:** run `tjs close-year` in last year's project, then set `[settings] prior_year_record` to that `filed/<year>.json`. In a first year, mark the step done: `tjs checklist --done handoff`.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_handoff`; `src/taxjson/lib/handoff.py`
+
+### "Warning: filed 2024 DRIFTED vs 2024.json"
+- **Check:** `tjs check-filed` lists each figure that moved, from the filed value to the new one.
+- **Cause:** a code or input change moved a year you already filed (`filed/<year>.json` is the lock `tjs close-year` wrote).
+- **Fix:** review the change. Either amend that return, or, if the old figure was wrong and the new one is what you filed, refresh the lock with `tjs close-year --force` in that year's project. `tjs run --strict` stops on drift.
+- **Fixed in:** —
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_check_filed_years`, `DRIFTED vs `; `src/taxjson/bin/taxjson_filed.py`
