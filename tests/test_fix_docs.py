@@ -223,10 +223,11 @@ class TestChangelogUnreleased(unittest.TestCase):
     def test_grouped_by_area(self):
         entry = _unreleased()
         heads = re.findall(r"^### (.+)$", entry, re.M)
-        # A released entry spans many areas; a fresh Unreleased section
-        # may hold a single one, but its bullets still sit under a head.
-        self.assertGreaterEqual(
-            len(heads), 1 if entry.startswith("## Unreleased") else 5)
+        # Every bullet sits under a heading; a large entry (more than 40
+        # bullets, like a big release) is split into at least 5 areas, a
+        # small one may need only one or two.
+        big = len(_bullets(entry)) > 40
+        self.assertGreaterEqual(len(heads), 5 if big else 1)
         self.assertEqual(len(heads), len(set(heads)))
 
 
