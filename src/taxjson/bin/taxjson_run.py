@@ -6141,8 +6141,14 @@ def _sanity_console(root: Path) -> None:
              "trade after your last export is the other usual cause.",
              file=sys.stdout)
     else:
+        # An account with open positions and no holdings file was never
+        # compared: not an all-clear for it (pre-release review L4).
+        _unchk = doc.get("uncovered_accounts") or []
         _say("note", "positions match the broker's holdings files"
-             + (" (every checked account)" if doc.get("notes") else ""),
+             + (f" (checked accounts only; {len(_unchk)} unchecked: "
+                f"{', '.join(_unchk)})" if _unchk
+                else " (every checked account)" if doc.get("notes")
+                else ""),
              file=sys.stdout)
     diffs = doc.get("cost_differences") or []
     if diffs:

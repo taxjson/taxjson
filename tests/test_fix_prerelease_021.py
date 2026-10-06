@@ -72,5 +72,40 @@ class TestOfflineRatesStep(unittest.TestCase):
                       self._steps(offline=False))
 
 
+
+class TestSanityConsoleUnchecked(unittest.TestCase):
+    """L4: the run's holdings check said "positions match the broker's
+    holdings files" while some accounts with open positions had no
+    holdings file at all (their positions were never compared)."""
+
+    def _shown(self, doc):
+        import json
+        from unittest import mock
+        from contextlib import redirect_stdout
+        from taxjson.bin import taxjson_run as tr
+
+        def fake(_args):
+            print(json.dumps(doc))
+            raise SystemExit(0)
+        out = io.StringIO()
+        with mock.patch.object(tr, "cmd_sanity", fake), \
+                mock.patch.dict(os.environ, {"TAXJSON_WIDTH": "0"}), \
+                redirect_stdout(out):
+            tr._sanity_console(__import__("pathlib").Path("."))
+        return " ".join(out.getvalue().split())
+
+    def test_unchecked_accounts_named(self):
+        got = self._shown({"discrepancies": [], "notes": [],
+                           "uncovered_accounts": ["crypto", "tfsa"]})
+        self.assertIn("positions match the broker's holdings files "
+                      "(checked accounts only; 2 unchecked: crypto, tfsa)",
+                      got)
+
+    def test_all_checked_is_plain(self):
+        got = self._shown({"discrepancies": [], "notes": [],
+                           "uncovered_accounts": []})
+        self.assertIn("positions match the broker's holdings files", got)
+        self.assertNotIn("unchecked", got)
+
 if __name__ == "__main__":
     unittest.main()

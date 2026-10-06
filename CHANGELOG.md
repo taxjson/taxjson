@@ -60,6 +60,11 @@
 - **An offline run no longer says it is downloading rates.** With
   `TAXJSON_OFFLINE=1` the rate step reads `Loading cached USD → CAD
   rates`, which is what it does.
+- **The run's holdings check no longer reads as an all-clear for
+  accounts it did not check.** When some accounts with open positions
+  have no holdings file, the run says `positions match the broker's
+  holdings files (checked accounts only; N unchecked: ...)` and names
+  them.
 
 
 ## v0.20.0 (2026-10-06)

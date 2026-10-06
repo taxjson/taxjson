@@ -653,6 +653,8 @@ broker's report), every run ends with the same check:
 Info: positions match the broker's holdings files
 ```
 
+An account with open positions and no `holdings` file is not checked;
+the line then ends `(checked accounts only; 1 unchecked: crypto)`.
 When it differs, the run says so: on a first project, missing history
 is the likely cause (go back to step 5); later, same-day trades not yet
 in the CSVs are the usual one.
