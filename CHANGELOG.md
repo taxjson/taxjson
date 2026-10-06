@@ -20,11 +20,11 @@
   position: ...`); the word ATTENTION, the stage program names and the
   `(content: ...)` detail stay in the captured text only. Frequent parser
   notes are shown shorter (Kraken's matched trade rows, ignored cash
-  rows and fees paid in the coin, rows skipped as not tax events, the
-  crypto-sends hint). Every other command's messages follow the same
-  line rule: a detail or list item continues two spaces in. The captured
-  text — work/*.diag, the `.sum` DIAGNOSTICS, reports/, `--json`, exit
-  codes — is byte for byte unchanged.
+  rows, fees paid in the coin and dust sweeps, rows skipped as not tax
+  events, the crypto-sends hint). Every other command's messages follow
+  the same line rule: a detail or list item continues two spaces in. The
+  captured text — work/*.diag, the `.sum` DIAGNOSTICS, reports/,
+  `--json`, exit codes — is byte for byte unchanged.
 
 ### Fixed
 

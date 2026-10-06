@@ -168,6 +168,18 @@ _REWORD = [
                 r"paid their fee with Kraken fee credits \(KFEE\) — .*"),
      lambda m: [f"note: Kraken {m['f']}: {_plural(m['n'], 'fill')} paid "
                 f"with fee credits (KFEE), booked with no fee"]),
+    (re.compile(r"note: Kraken ledger refid (?P<r>\S+) \((?P<d>[^)]*)\): "
+                r"(?P<names>.+) — (?:a leg|(?P<n>\d+) legs) under the "
+                r"books' zero \((?P<z>[^)]*)\), not booked: a disposition "
+                r"of a negligible amount; the coins stay in the holdings as "
+                r"a residue\.(?P<split> The receipt is split over the other "
+                r"legs\.)?"),
+     lambda m: [f"note: Kraken: dust sweep {m['r']} ({m['d']}): "
+                f"{_plural(m['n'] or 1, 'leg')} under {m['z']} not booked",
+                f"{m['names']}. A negligible disposition; the coins stay in "
+                f"the holdings as a residue."
+                + (" The receipt is split over the other legs."
+                   if m["split"] else "")]),
     # lib/brokerages/base.py emit_skip_summary (every parser)
     (re.compile(r"note: (?P<f>[^:]+): (?P<n>\d+) recognized non-event "
                 r"row\(s\) not translated — (?P<l>.*?)\.?"),

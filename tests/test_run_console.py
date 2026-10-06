@@ -273,6 +273,18 @@ class TestReword(_Width):
                  "events; `taxjson transfers` lists them)"],
             "  kr_l.csv: 251 tax objects":
                 ["Info: kr_l.csv: 251 tax objects"],
+            "note: Kraken ledger refid DS*** (2026-10-01): AVAX "
+            "0.0000000003 (0.00 USD); SOL 0.0000000002 (0.00 USD) — 2 legs "
+            "under the books' zero (1e-09 units), not booked: a "
+            "disposition of a negligible amount; the coins stay in the "
+            "holdings as a residue. The receipt is split over the other "
+            "legs.":
+                ["Info: Kraken: dust sweep DS*** (2026-10-01): 2 legs under "
+                 "1e-09 units not booked",
+                 "  AVAX 0.0000000003 (0.00 USD); SOL 0.0000000002 (0.00 "
+                 "USD). A negligible disposition; the coins",
+                 "  stay in the holdings as a residue. The receipt is split "
+                 "over the other legs."],
         }
         for line, want in cases.items():
             with self.subTest(line=line[:40]):
