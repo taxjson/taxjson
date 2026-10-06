@@ -630,6 +630,22 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "and .tt lines alike. Two other listings are one "
                  "security only when ticker.map joins them. Renames and "
                  "splits carry the pool forward (CA-ACB-RENAME)."),
+            Rule("CA-ACB-CODES",
+                 "A broker's internal security code (Questrade writes "
+                 "one letter + digits, e.g. X000123, on rows of shares "
+                 "transferred in) is the security the account's own "
+                 "trades of the same description name; else the security "
+                 "of the transfer it arrived by (an outgoing transfer of "
+                 "the same quantity in another export of the project, up "
+                 "to 10 days before the arrival and 3 after, whose "
+                 "security name matches — one candidate only); else the "
+                 "one listing in the project's books whose name matches "
+                 "it word for word. Inferred codes are listed in one "
+                 "note per account and by `taxjson transfers`; a "
+                 "ticker.map line for the code wins; a code nothing "
+                 "identifies stays a security of its own (ATTENTION, "
+                 "once per code). Identification only: no tax rule "
+                 "changes.", cont=True),
             Rule("CA-ACB-RENAME",
                  "A ticker change is a dated event (a broker corporate-"
                  "action row, a .tt SPLIT line, or a ticker.map line "
@@ -1710,6 +1726,22 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "exports and .tt lines alike; two other listings are one "
                  "security only when ticker.map joins them; renames are "
                  "dated events (US-BASIS-RENAME)."),
+            Rule("US-BASIS-CODES",
+                 "A broker's internal security code (Questrade writes "
+                 "one letter + digits, e.g. X000123, on rows of shares "
+                 "transferred in) is the security the account's own "
+                 "trades of the same description name; else the security "
+                 "of the transfer it arrived by (an outgoing transfer of "
+                 "the same quantity in another export of the project, up "
+                 "to 10 days before the arrival and 3 after, whose "
+                 "security name matches — one candidate only); else the "
+                 "one listing in the project's books whose name matches "
+                 "it word for word. Inferred codes are listed in one "
+                 "note per account and by `taxjson transfers`; a "
+                 "ticker.map line for the code wins; a code nothing "
+                 "identifies stays a security of its own (ATTENTION, "
+                 "once per code). Identification only: no tax rule "
+                 "changes.", cont=True),
             Rule("US-BASIS-RENAME",
                  "A ticker change is a dated event (a broker corporate-"
                  "action row, a .tt SPLIT line, or a ticker.map line "

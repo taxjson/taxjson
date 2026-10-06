@@ -762,7 +762,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson leaps` | Per-transaction view over a look-back window (see below): closed LEAPS positions. |
 | `taxjson roc` | Per-transaction view over a look-back window (see below): return-of-capital / ACB-adjustment (ADJUST) rows. |
 | `taxjson trades` | Per-transaction view over a look-back window (see below): buys, sells and assignments. |
-| `taxjson transfers [ACCOUNT]` | Custody-transfer **evidence** view: depot flips, listing journals, broker migrations, and crypto withdrawals/sends (a send that arrived in another of your crypto accounts is a self-custody move; the rest are gift/payment candidates — see `taxjson crypto-sends`) — the TRANSFER rows the books deliberately exclude (basis comes from buy/sell history). Reads the parse-stage sidecars (`work/<acct>_<broker>_transfers.json`) plus in-book TRANSFERs from `transfers = true` accounts, with the broker's transfer type (InterDepot / Internal / ATON). `--json` for machines. |
+| `taxjson transfers [ACCOUNT]` | Custody-transfer **evidence** view: depot flips, listing journals, broker migrations, and crypto withdrawals/sends (a send that arrived in another of your crypto accounts is a self-custody move; the rest are gift/payment candidates — see `taxjson crypto-sends`) — the TRANSFER rows the books deliberately exclude (basis comes from buy/sell history). Reads the parse-stage sidecars (`work/<acct>_<broker>_transfers.json`) plus in-book TRANSFERs from `transfers = true` accounts, with the broker's transfer type (InterDepot / Internal / ATON). A SYMBOL CODES section lists the Questrade internal codes the run booked under an inferred ticker, with the evidence, and those it could not identify (see **Questrade internal symbol codes** under "Transfers into a taxable account"). `--json` for machines (`symbol_codes`). |
 
 #### Totals by type
 
@@ -2150,6 +2150,34 @@ value never silently replaces that declaration.
 The arrival is never the purchase that makes a loss superficial (or a wash
 sale): it is dated by the custody move. Tax-logic: `CA-ACB-TRANSFER-BV`,
 `US-BASIS-TRANSFER-BV`.
+
+**Questrade internal symbol codes.** Questrade's website export writes the
+rows of shares transferred in from another broker under an internal code
+(one letter + digits, `X000123`) instead of the ticker — the transfer-in,
+its dividends, sometimes a later sale (`taxjson fetch`'s API export carries
+the real ticker). A code the account's own trades of the same description
+name is resolved as before. For the rest, `taxjson run` parses your other
+accounts first and infers the ticker from them, in this order:
+
+1. **the transfer it arrived by** — an outgoing transfer of the same
+   quantity in another broker's export of the project (any account: IB's
+   Transfers section, an RBC transfer-out), dated up to 10 days before the
+   arrival (or 3 after), whose security name matches the Questrade
+   description (corporate-form and share-class words such as INC, CORP,
+   CLASS A, COMMON STOCK, ADR are ignored); exactly one candidate;
+2. else **the name**: exactly one listing elsewhere in your books whose name
+   matches word for word.
+
+Every row of the code is then booked under that ticker, and the parse says
+so in ONE note per account — `note: Questrade internal symbol codes
+resolved (1): X000123 → ZZQ.US (paired with the Interactive Brokers transfer
+out of 24 on 2026-09-01, account margin)` — kept whole in the `.sum`;
+`taxjson transfers` lists the codes too. A code nothing identifies keeps
+the ATTENTION line (once per code), naming a near miss when there is one
+(a transfer of the same quantity and date whose name differs, or two
+candidates); add `GLOBAL X000123.US ZZQ.US` to ticker.map. A ticker.map
+line for the code always wins over the inference. Tax-logic:
+`CA-ACB-CODES`, `US-BASIS-CODES`.
 
 ### When you can't get the real cost basis
 
