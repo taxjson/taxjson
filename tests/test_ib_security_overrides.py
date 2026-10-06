@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 import json
 from pathlib import Path
@@ -39,7 +40,7 @@ class TestIbTradesDescriptionForOverrides(unittest.TestCase):
         security-overrides (which match on description substring)
         can fire on IB rows."""
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv',
+        with private_tmpfile(mode='w', suffix='.csv',
                                           delete=False) as f:
             f.write(_IB_TRADES_CSV)
             fname = f.name

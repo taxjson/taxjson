@@ -8,6 +8,7 @@ return.
 """
 
 import unittest
+from _tmpfiles import private_tmpfile
 from decimal import Decimal
 
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
@@ -419,7 +420,7 @@ class TestFxRateLoaderHonorsToColumn(unittest.TestCase):
             "2025-01-04 12:00:00 USD EUR 0.93\n"   # wrong direction — must be filtered
             "2025-01-05 12:00:00 USD CAD 1.36\n"
         )
-        fh = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+        fh = private_tmpfile(mode='w', suffix='.txt', delete=False)
         fh.write(content); fh.close()
         try:
             history = load_exchange_rates(Path(fh.name), target_curr='CAD')
@@ -442,7 +443,7 @@ class TestFxRateLoaderHonorsToColumn(unittest.TestCase):
             "2025-01-04 12:00:00 USD CAD 1.35\n"
             "2025-01-04 12:00:00 USD EUR 0.93\n"
         )
-        fh = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+        fh = private_tmpfile(mode='w', suffix='.txt', delete=False)
         fh.write(content); fh.close()
         try:
             history = load_exchange_rates(Path(fh.name))  # no target_curr

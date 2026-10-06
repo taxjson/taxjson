@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+from _tmpfiles import private_tmpfile
 import os
 import sys
 from pathlib import Path
@@ -18,7 +19,7 @@ def setUpModule():
 class TestCryptoParsers(unittest.TestCase):
     def test_kraken_trades(self):
         content = """txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,margin,misc,ledgers\nT1,O1,BTC/USD,2025-01-15 10:00:00.1234,buy,limit,60000,6000,1,0.1,,,"""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.csv', delete=False) as f:
             f.write(content)
             fname = f.name
             
@@ -35,7 +36,7 @@ class TestCryptoParsers(unittest.TestCase):
 
     def test_kraken_ledgers(self):
         content = """txid,refid,time,type,subtype,aclass,asset,wallet,amount,fee,balance\nL1,,2025-01-15 10:00:00,earn,reward,currency,ADA,,100,0,1000\nL2,REF1,2025-01-15 10:05:00,spend,,currency,ZUSD,,-100,1,0\nL3,REF1,2025-01-15 10:05:00,receive,,currency,XXBT,,0.001,0,0"""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.csv', delete=False) as f:
             f.write(content)
             fname = f.name
             

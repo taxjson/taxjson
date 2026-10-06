@@ -14,6 +14,7 @@ Cases pinned here (synthetic tickers of the shapes IB produces):
 """
 import os
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -41,7 +42,7 @@ def _tax(cur, desc, amt):
 
 def _parse(csv_text):
     from taxjson.lib.brokerages.ib_extractor import IbBrokerage
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+    with private_tmpfile(mode='w', suffix='.csv', delete=False) as f:
         f.write('Statement,Header,Field Name,Field Value\n'
                 'Statement,Data,BrokerName,Interactive Brokers\n')
         f.write(csv_text)

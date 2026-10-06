@@ -6,6 +6,7 @@ description matcher and the IB held-listing rebind for ROC ADJUSTs.
 
 import os
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -16,8 +17,8 @@ from tax_rules import rule
 
 
 def _parse_with(parser, content):
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv',
-                                     delete=False) as f:
+    with private_tmpfile(mode='w', suffix='.csv',
+                         delete=False) as f:
         f.write(content)
         fname = f.name
     try:
@@ -113,8 +114,8 @@ class TestIbRoc(unittest.TestCase):
 
     def _parse(self, body, foreign_roc=None):
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv',
-                                         delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.csv',
+                             delete=False) as f:
             f.write(self.STMT + body)
             fname = f.name
         try:

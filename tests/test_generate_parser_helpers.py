@@ -6,6 +6,7 @@ class-name derivation, and sample-CSV reading.
 """
 import os
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -72,7 +73,7 @@ class TestDefaultClassName(unittest.TestCase):
 
 class TestReadSample(unittest.TestCase):
     def _write(self, content):
-        f = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+        f = private_tmpfile(mode='w', suffix='.csv', delete=False)
         f.write(content)
         f.close()
         return Path(f.name)

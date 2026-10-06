@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -158,8 +159,8 @@ class TestRbcTaxRowSuffix(unittest.TestCase):
             '"March 20, 2025","12345678","-4.50","USD",'
             '"BANK OF NOVA SCOTIA NON-RES TAX WITHHELD"\n'
         )
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv",
-                                         delete=False) as f:
+        with private_tmpfile(mode="w", suffix=".csv",
+                             delete=False) as f:
             f.write(content)
             fname = f.name
         try:

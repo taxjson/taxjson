@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -181,7 +182,7 @@ def _corp_rows(root, broker):
 
 
 def _tmp_csv(text):
-    f = tempfile.NamedTemporaryFile('w', suffix='.csv', delete=False)
+    f = private_tmpfile('w', suffix='.csv', delete=False)
     f.write(text)
     f.close()
     return Path(f.name)

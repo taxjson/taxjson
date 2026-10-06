@@ -73,14 +73,13 @@ class TestQuestradeCsv(unittest.TestCase):
         import os
         from taxjson.lib.brokerages.questrade import QuestradeBrokerage
         text = qt_to_csv([dict(_ACT)], "12345678")
-        with tempfile.NamedTemporaryFile("w", suffix=".csv",
-                                         delete=False) as f:
-            f.write(text)
-            name = f.name
-        try:
+        # Its own folder, never the shared temp root: a parser reads
+        # the broker CSVs beside the file (tests/_tmpfiles.py).
+        with tempfile.TemporaryDirectory() as d:
+            name = os.path.join(d, "activity.csv")
+            with open(name, "w") as f:
+                f.write(text)
             txs = QuestradeBrokerage().parse_file(Path(name))
-        finally:
-            os.remove(name)
         t = next(t for t in txs if t["action"] == "BUYSELL")
         self.assertEqual(t["symbol"], "XEI.TO")
         self.assertEqual(t["quantity"], 100)

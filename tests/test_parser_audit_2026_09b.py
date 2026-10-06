@@ -16,6 +16,7 @@ import contextlib
 import io
 import os
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -36,9 +37,9 @@ def setUpModule():
 
 
 def _parse(parser, content, suffix='.csv', prefix='tmp'):
-    with tempfile.NamedTemporaryFile('w', suffix=suffix, prefix=prefix,
-                                     delete=False,
-                                     encoding='utf-8') as f:
+    with private_tmpfile('w', suffix=suffix, prefix=prefix,
+                         delete=False,
+                         encoding='utf-8') as f:
         f.write(content)
         name = f.name
     err = io.StringIO()

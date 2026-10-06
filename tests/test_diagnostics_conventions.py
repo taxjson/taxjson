@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
@@ -159,7 +160,7 @@ class TestBrokerageExitCodes(unittest.TestCase):
             def parse_file(self, path):
                 return []
 
-        with tempfile.NamedTemporaryFile(suffix='.csv') as f:
+        with private_tmpfile(suffix='.csv') as f:
             code, err = self._main_exit(
                 ['taxjson-brokerage', '--brokerage', 'kraken', '--strict',
                  f.name],
@@ -180,7 +181,7 @@ class TestBrokerageExitCodes(unittest.TestCase):
             def parse_file(self, path):
                 return []
 
-        with tempfile.NamedTemporaryFile(suffix='.csv') as f:
+        with private_tmpfile(suffix='.csv') as f:
             code, err = self._main_exit(
                 ['taxjson-brokerage', '--brokerage', 'kraken', '--lint',
                  f.name],

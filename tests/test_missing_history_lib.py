@@ -15,6 +15,7 @@ the case for traceability.
 import json
 import os
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -141,7 +142,7 @@ class TestRegisteredAccount(unittest.TestCase):
 
 class TestLoaderAndSuggestions(unittest.TestCase):
     def test_load_missing_history_strips_underscore_metadata(self):
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.json', delete=False) as f:
             json.dump([
                 {
                     "symbol": "AAPL.US", "account": "LIRA",
@@ -158,7 +159,7 @@ class TestLoaderAndSuggestions(unittest.TestCase):
             os.remove(fname)
 
     def test_load_missing_history_requires_symbol_and_account(self):
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.json', delete=False) as f:
             json.dump([{"symbol": "AAPL.US"}], f)
             fname = f.name
         try:
@@ -168,7 +169,7 @@ class TestLoaderAndSuggestions(unittest.TestCase):
             os.remove(fname)
 
     def test_load_missing_history_rejects_non_array_root(self):
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.json', delete=False) as f:
             json.dump({"phantoms": [{"symbol": "AAPL.US", "account": "LIRA"}]}, f)
             fname = f.name
         try:
@@ -178,7 +179,7 @@ class TestLoaderAndSuggestions(unittest.TestCase):
             os.remove(fname)
 
     def test_load_missing_history_rejects_non_object_entries(self):
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.json', delete=False) as f:
             json.dump(["AAPL.US"], f)
             fname = f.name
         try:
@@ -188,7 +189,7 @@ class TestLoaderAndSuggestions(unittest.TestCase):
             os.remove(fname)
 
     def test_load_missing_history_empty_array_ok(self):
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.json', delete=False) as f:
             json.dump([], f)
             fname = f.name
         try:
@@ -197,7 +198,7 @@ class TestLoaderAndSuggestions(unittest.TestCase):
             os.remove(fname)
 
     def test_load_missing_history_rejects_empty_symbol_or_account(self):
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.json', delete=False) as f:
             json.dump([{"symbol": "", "account": "LIRA"}], f)
             fname = f.name
         try:

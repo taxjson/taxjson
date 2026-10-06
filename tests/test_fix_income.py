@@ -22,6 +22,7 @@ All data is synthetic (fake account ids, invented tickers).
 import json
 import os
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -169,8 +170,8 @@ class TestPaymentInLieu(unittest.TestCase):
             stmt = ('Statement,Header,Field Name,Field Value\n'
                     + (f'Statement,Data,BrokerName,"{broker}"\n'
                        if broker else ''))
-            with tempfile.NamedTemporaryFile("w", suffix=".csv",
-                                             delete=False) as f:
+            with private_tmpfile("w", suffix=".csv",
+                                 delete=False) as f:
                 f.write(stmt + body)
             try:
                 import contextlib
@@ -489,8 +490,8 @@ class TestUsJanuaryFundDividends(unittest.TestCase):
                 'Change in Dividend Accruals,Data,Stocks,USD,U5550001,SPY,'  # pii-ok
                 '2025-01-31,2024-12-20,2025-01-31,100,0,0,1.966,-196.60,'
                 '-196.60,Re\n')
-        with tempfile.NamedTemporaryFile("w", suffix=".csv",
-                                         delete=False) as f:
+        with private_tmpfile("w", suffix=".csv",
+                             delete=False) as f:
             f.write(body)
         try:
             with contextlib.redirect_stderr(io.StringIO()):

@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -32,8 +33,8 @@ def row(date, activity, symbol, symdesc, qty, price, value, cur, desc,
 
 
 def _write(text):
-    f = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False,
-                                    encoding='utf-8')
+    f = private_tmpfile(mode='w', suffix='.csv', delete=False,
+                        encoding='utf-8')
     f.write(text)
     f.close()
     return Path(f.name)

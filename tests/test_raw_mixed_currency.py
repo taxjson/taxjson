@@ -10,6 +10,7 @@ the converted, tax-authoritative books build normally.
 """
 import json
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -25,7 +26,7 @@ def _tx(action, sym, cur, **kw):
 
 
 def _write(txs):
-    f = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+    f = private_tmpfile("w", suffix=".json", delete=False)
     json.dump({"transactions": txs}, f)
     f.close()
     return Path(f.name)
@@ -80,8 +81,8 @@ class TestRawMixedCurrencyDetector(unittest.TestCase):
         self.assertEqual(_raw_mixed_currency_symbols(p), [])
 
     def test_unreadable_file_returns_empty(self):
-        f = tempfile.NamedTemporaryFile("w", suffix=".json",
-                                        delete=False)
+        f = private_tmpfile("w", suffix=".json",
+                            delete=False)
         f.write("{oops")
         f.close()
         self.assertEqual(_raw_mixed_currency_symbols(Path(f.name)), [])

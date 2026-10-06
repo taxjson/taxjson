@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -34,8 +35,8 @@ def row(td='2026-02-02 12:00:00 AM', sd='2026-02-03 12:00:00 AM',
 
 
 def _parse(text, taxable=None, encoding='utf-8'):
-    with tempfile.NamedTemporaryFile('w', suffix='.csv', delete=False,
-                                     encoding=encoding) as f:
+    with private_tmpfile('w', suffix='.csv', delete=False,
+                         encoding=encoding) as f:
         f.write(text)
         name = f.name
     p = QuestradeBrokerage()

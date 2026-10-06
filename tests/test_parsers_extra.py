@@ -9,6 +9,7 @@ account-name override threading through tx-id hashing.
 
 import os
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -87,7 +88,7 @@ class TestWebullParser(unittest.TestCase):
     option trade's fee silently went missing."""
 
     def _parse(self, content):
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.csv', delete=False) as f:
             f.write(content)
             fname = f.name
         try:
@@ -194,7 +195,7 @@ class TestQuestradeParser(unittest.TestCase):
     rows simply leave those trailing cells empty)."""
 
     def _parse(self, content):
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.csv', delete=False) as f:
             f.write(content)
             fname = f.name
         try:

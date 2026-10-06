@@ -23,6 +23,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
@@ -47,8 +48,8 @@ NE = IbBrokerage.KNOWN_NONEVENT_PREFIX
 
 def _parse(parser_cls, text, prefix="x_"):
     """(parser, transactions, stderr) for an in-memory CSV."""
-    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False,
-                                     prefix=prefix) as f:
+    with private_tmpfile("w", suffix=".csv", delete=False,
+                         prefix=prefix) as f:
         f.write(text)
         name = f.name
     parser = parser_cls()

@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+from _tmpfiles import private_tmpfile
 import os
 import sys
 from pathlib import Path
@@ -9,12 +10,12 @@ import json
 class TestFxFallbackLogic(unittest.TestCase):
     def run_converter(self, tx_content, rates_content):
         # Create rates file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as fr:
+        with private_tmpfile(mode='w', suffix='.txt', delete=False) as fr:
             fr.write(rates_content)
             rates_name = fr.name
             
         # Create input json
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with private_tmpfile(mode='w', suffix='.json', delete=False) as f:
             f.write(json.dumps({"transactions": tx_content}))
             fname = f.name
         

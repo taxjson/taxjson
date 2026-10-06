@@ -82,6 +82,9 @@ IRS guidance and a tax professional.
   - User files (taxjson.toml, ticker.map, .tt) are written through
     `src/taxjson/lib/safe_write.py`.
   - Synthetic test data only (ids like `U1234567` or `99900001`, made-up tickers).
+  - A test's temp file goes in a folder of its own
+    (`tests/_tmpfiles.py` `private_tmpfile`, or `tempfile.TemporaryDirectory()`),
+    never the shared temp root: parsers read the broker CSVs beside a file.
 
 ## The knowledge pack
 
