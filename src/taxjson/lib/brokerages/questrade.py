@@ -423,7 +423,7 @@ def scan_code_uses(paths, *, helper=None) -> list:
     key, the row currencies (listing currency for an EXCHANGE RATE row)
     and each transfer-in's (date, quantity) — what `taxjson run` needs
     to infer the ticker from the project's other exports."""
-    from taxjson.lib.symbol_codes import CodeUse
+    from taxjson.lib.symbol_codes import CodeUse, desc_cut
     helper = helper or QuestradeBrokerage()
     paths = [Path(p) for p in paths]
     if not any(_INTERNAL_CODE_RE.match(
@@ -456,6 +456,7 @@ def scan_code_uses(paths, *, helper=None) -> list:
             key = _get_desc_key(desc)
             if transfer and key and not u.name:
                 u.name = key
+                u.name_cut = desc_cut(desc, key)
             if cur and cur not in u.currencies:
                 u.currencies.append(cur)
             if not transfer:
@@ -474,7 +475,9 @@ def scan_code_uses(paths, *, helper=None) -> list:
         for _ln, row in _read_qt_rows(Path(k)):
             sym = (row.get('Symbol') or '').strip().lstrip('.').upper()
             if sym in uses and not uses[sym].name:
-                uses[sym].name = _get_desc_key(row.get('Description') or '')
+                desc = row.get('Description') or ''
+                uses[sym].name = _get_desc_key(desc)
+                uses[sym].name_cut = desc_cut(desc, uses[sym].name)
     return [uses[c] for c in sorted(uses)]
 
 
@@ -913,7 +916,7 @@ class QuestradeBrokerage(BaseBrokerage):
             if key not in self._ambiguous_warned:
                 self._ambiguous_warned.add(key)
                 emit_line(f"warning: {self._qt_name}: {sym or '(blank)'!r} "
-                      f"({(row.get('Description') or '')[:60]!r}) matches "
+                      f"({(row.get('Description') or '')[:160]!r}) matches "
                       f"several traded symbols "
                       f"({', '.join(s for s, _ in sorted(cands))}) — not "
                       f"rebound; map it with a ticker.map rule (moot if "
@@ -940,7 +943,7 @@ class QuestradeBrokerage(BaseBrokerage):
             _why = (f" ({_un['detail']})" if _un.get('detail') else "")
             msg = (f"{where}: {(row.get('Action') or '').strip() or '?'} "
                    f"row keeps internal symbol code {sym!r} "
-                   f"({(row.get('Description') or '')[:60]!r}) — no trade "
+                   f"({(row.get('Description') or '')[:160]!r}) — no trade "
                    f"or transfer in this account's exports resolves it, "
                    f"and no transfer or name elsewhere in the project "
                    f"identifies it{_why}. "
