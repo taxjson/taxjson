@@ -33,14 +33,22 @@
   decimals, so a "convert small balances" sweep can spend a few
   ten-billionths of a coin; that leg became a trade of 0 units, the
   check refused it and the whole account's files went unbooked. A coin
-  leg under 1e-09 units is now left out (a disposition of a negligible
-  amount): the receipt is split over the sweep's other legs by their USD
-  value, the coins stay in the holdings as a residue, and one note per
-  sweep names each such leg with its amount and USD value. A sweep made
-  only of such legs books no sale; a fiat leg (CAD) stays cash; a
-  US-dollar leg with no USD value counts at its own amount. A Kraken
-  coin fee or reward that small is not booked either. A sweep with no
-  such leg books as before.
+  leg under 1e-09 units is now left out when it is worth nothing too —
+  its own USD value and the share of the other side it would take are
+  each at most 0.01 USD (in a one-for-one trade, both sides): the
+  receipt is split over the sweep's other legs by their USD value, spent
+  coins stay in the holdings as a residue, and one note per trade names
+  each such leg with its amount (a received leg net of its fee) and USD
+  value, calling it a dust sweep only when it is one and a purchase an
+  acquisition. A sweep made only of such legs books no sale; a fiat leg
+  (CAD) stays cash; a US-dollar leg with no USD value counts at its own
+  amount. A leg that small which carries real value (or whose value is
+  unknown), and a spend or receive row of amount 0, stop the account
+  with a message naming the file, the masked refid, the coin and the
+  date — a real sale, purchase or receipt is never dropped. A Kraken
+  coin fee or reward that small is left out only when its USD value is
+  missing or at most 0.01 USD, otherwise refused the same way. A sweep
+  with no such leg books as before.
 - **A zero-unit trade names its file and row.** Should one still reach
   the check, the error names the source file, the row id (masked), the
   coin and the date, says that the account's files are not booked until

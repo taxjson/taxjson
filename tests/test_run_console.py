@@ -273,18 +273,29 @@ class TestReword(_Width):
                  "events; `taxjson transfers` lists them)"],
             "  kr_l.csv: 251 tax objects":
                 ["Info: kr_l.csv: 251 tax objects"],
-            "note: Kraken ledger refid DS*** (2026-10-01): AVAX "
-            "0.0000000003 (0.00 USD); SOL 0.0000000002 (0.00 USD) — 2 legs "
-            "under the books' zero (1e-09 units), not booked: a "
-            "disposition of a negligible amount; the coins stay in the "
-            "holdings as a residue. The receipt is split over the other "
-            "legs.":
+            "note: Kraken ledger refid DS*** (2026-10-01): dust sweep: "
+            "AVAX 0.0000000003 (0.00 USD); SOL 0.0000000002 (0.00 USD) — 2 "
+            "legs under the books' zero (1e-09 units) and worth at most "
+            "0.01 USD, not booked: a disposition of a negligible amount; "
+            "the coins stay in the holdings as a residue. The receipt is "
+            "split over the other legs.":
                 ["Info: Kraken: dust sweep DS*** (2026-10-01): 2 legs under "
                  "1e-09 units not booked",
                  "  AVAX 0.0000000003 (0.00 USD); SOL 0.0000000002 (0.00 "
-                 "USD). A negligible disposition; the coins",
-                 "  stay in the holdings as a residue. The receipt is split "
-                 "over the other legs."],
+                 "USD): worth at most 0.01 USD. A disposition",
+                 "  of a negligible amount; the coins stay in the holdings "
+                 "as a residue. The receipt is split over the",
+                 "  other legs."],
+            "note: Kraken ledger refid XA*** (2026-03-12): instant trade: "
+            "BTC 0.0000000006 received (0.00 USD) — a leg under the books' "
+            "zero (1e-09 units) and worth at most 0.01 USD, not booked: an "
+            "acquisition of a negligible amount; the coins are not added "
+            "to the holdings.":
+                ["Info: Kraken: instant trade XA*** (2026-03-12): 1 leg under "
+                 "1e-09 units not booked",
+                 "  BTC 0.0000000006 received (0.00 USD): worth at most 0.01 "
+                 "USD. An acquisition of a negligible",
+                 "  amount; the coins are not added to the holdings."],
         }
         for line, want in cases.items():
             with self.subTest(line=line[:40]):

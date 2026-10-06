@@ -169,15 +169,15 @@ _REWORD = [
      lambda m: [f"note: Kraken {m['f']}: {_plural(m['n'], 'fill')} paid "
                 f"with fee credits (KFEE), booked with no fee"]),
     (re.compile(r"note: Kraken ledger refid (?P<r>\S+) \((?P<d>[^)]*)\): "
-                r"(?P<names>.+) — (?:a leg|(?P<n>\d+) legs) under the "
-                r"books' zero \((?P<z>[^)]*)\), not booked: a disposition "
-                r"of a negligible amount; the coins stay in the holdings as "
-                r"a residue\.(?P<split> The receipt is split over the other "
-                r"legs\.)?"),
-     lambda m: [f"note: Kraken: dust sweep {m['r']} ({m['d']}): "
+                r"(?P<k>dust sweep|instant trade): (?P<names>.+) — "
+                r"(?:a leg|(?P<n>\d+) legs) under the books' zero "
+                r"\((?P<z>[^)]*)\) and worth at most (?P<v>[\d.]+ USD), "
+                r"not booked: (?P<what>[^.]+)\.(?P<split> The receipt is "
+                r"split over the other legs\.)?"),
+     lambda m: [f"note: Kraken: {m['k']} {m['r']} ({m['d']}): "
                 f"{_plural(m['n'] or 1, 'leg')} under {m['z']} not booked",
-                f"{m['names']}. A negligible disposition; the coins stay in "
-                f"the holdings as a residue."
+                f"{m['names']}: worth at most {m['v']}. "
+                f"{m['what'][:1].upper()}{m['what'][1:]}."
                 + (" The receipt is split over the other legs."
                    if m["split"] else "")]),
     # lib/brokerages/base.py emit_skip_summary (every parser)

@@ -66,10 +66,11 @@ ONE_DUST = _sweep("DSB", "2026-09-30 12:00:00",
 ALL_DUST = _sweep("DSC", "2026-10-01 12:00:00",
                   [("AVAX", "-0.0000000003", "0"),
                    ("SOL", "-0.0000000002", "0")], ("USD", "0.0001", "0.0001"))
-# A dust leg with no amountusd, a material leg with one.
+# A dust leg with no amountusd, a material leg with one, and a receipt
+# small enough that any share of it is negligible.
 NO_USD = _sweep("DSD", "2026-10-02 12:00:00",
-                [("ADA", "-2.0", "-0.5"), ("AVAX", "-0.0000000001", "")],
-                ("USD", "0.5", "0.5"))
+                [("ADA", "-2.0", "-0.005"), ("AVAX", "-0.0000000001", "")],
+                ("USD", "0.005", "0.005"))
 
 
 def _parse(text, cash=True):
@@ -125,7 +126,7 @@ class TestDustLegParse(unittest.TestCase):
         # the whole receipt.
         d = _sales(txs, "DSD")
         self.assertEqual(sorted(d), ["ADA"])
-        self.assertAlmostEqual(d["ADA"]["net_amount"], 0.5, 6)
+        self.assertAlmostEqual(d["ADA"]["net_amount"], 0.005, 6)
 
         # One note per sweep naming the dust (asset, amount, USD value).
         notes = [ln for ln in err.splitlines() if "under the books' zero" in ln]
@@ -177,6 +178,193 @@ class TestDustSiblings(unittest.TestCase):
         self.assertFalse([t for t in txs if str(t.get("id", ""))
                           .startswith("RW9")])
         self.assertIn("AVAX 0.0000000005", err)
+
+
+def _pair(refid, when, spend, receive):
+    """One spend leg and one receive leg: (asset, amount, amountusd)."""
+    out = ""
+    for typ, (asset, amount, usd) in (("spend", spend),
+                                      ("receive", receive)):
+        cls = "fiat" if asset in ("CAD", "USD") else "crypto"
+        out += _row(f"{refid}{typ[0].upper()}", refid, when, typ, "",
+                    asset, amount, usd, cls=cls)
+    return out
+
+
+class TestDustOnlyWhenNegligible(unittest.TestCase):
+    """Pre-release review H1 (v0.21.0): a coin leg under the books' zero
+    is left out only when its VALUE is negligible too (its own amountusd
+    and the share of the counter-leg it would take, each at most 0.01
+    USD). A tiny quantity carrying real value is refused with a readable
+    message, never dropped: a disposal, a purchase or a reward would
+    vanish (or a receipt be booked with a basis from nothing)."""
+
+    def _refused(self, text, *parts):
+        with self.assertRaises(ValueError) as cm:
+            _parse(text)
+        msg = str(cm.exception)
+        for part in ("kr_ledgers.csv",) + parts:
+            self.assertIn(part, msg)
+        self.assertNotIn("tx[", msg)
+        return msg
+
+    @rule("CA-CRYPTO-11")
+    def test_dust_btc_spend_worth_a_lot(self):
+        msg = self._refused(_pair("XAA1", "2026-03-02 12:00:00",
+                                  ("BTC", "-0.0000000005", "-50000"),
+                                  ("USD", "50000", "50000")),
+                            "BTC", "2026-03-02", "XA***", ".tt")
+        self.assertNotIn("XAA1", msg)
+
+    @rule("US-CRYPTO-07")
+    def test_dust_btc_spend_for_real_eth(self):
+        self._refused(_pair("XAB1", "2026-03-03 12:00:00",
+                            ("BTC", "-0.0000000005", ""),
+                            ("ETH", "10", "30000")),
+                      "BTC", "2026-03-03")
+
+    @rule("CA-CRYPTO-11")
+    def test_explicit_zero_spend(self):
+        # v0.20 refused it (a 0-unit trade); it must not become a
+        # silently dropped "dust" leg.
+        msg = self._refused(_pair("XAC1", "2026-03-04 12:00:00",
+                                  ("BTC", "0", "-50000"),
+                                  ("USD", "50000", "50000")),
+                            "BTC", "2026-03-04", "amount 0")
+        self.assertNotIn("XAC1", msg)
+
+    @rule("CA-CRYPTO-11")
+    def test_explicit_zero_receive(self):
+        self._refused(_pair("XAD1", "2026-03-05 12:00:00",
+                            ("USD", "-100", "-100"),
+                            ("ETH", "0.0000000000", "100")),
+                      "ETH", "2026-03-05", "amount 0")
+
+    @rule("CA-CRYPTO-11")
+    def test_dust_spend_paying_two_receipts(self):
+        text = (_row("XAE1S", "XAE1", "2026-03-06 12:00:00", "spend", "",
+                     "BTC", "-0.0000000005", "0")
+                + _row("XAE1R1", "XAE1", "2026-03-06 12:00:00", "receive",
+                       "", "ETH", "1", "3000")
+                + _row("XAE1R2", "XAE1", "2026-03-06 12:00:00", "receive",
+                       "", "SOL", "10", "1500"))
+        self._refused(text, "BTC", "2026-03-06")
+
+    @rule("US-CRYPTO-07")
+    def test_usd_spend_for_dust_btc(self):
+        # A purchase: 50000 USD out, a few ten-billionths of a BTC in.
+        self._refused(_pair("XAF1", "2026-03-07 12:00:00",
+                            ("USD", "-50000", "-50000"),
+                            ("BTC", "0.0000000005", "")),
+                      "BTC", "2026-03-07")
+
+    @rule("CA-CRYPTO-11")
+    @rule("US-CRYPTO-07")
+    def test_dust_reward_with_real_value(self):
+        for cash in (True, False):
+            with self.subTest(cash=cash), self.assertRaises(ValueError) as cm:
+                _parse(_reward("XAG1", "2026-03-08 12:00:00", "ETH",
+                               "0.0000000005", "10000"), cash=cash)
+            msg = str(cm.exception)
+            for part in ("kr_ledgers.csv", "ETH", "2026-03-08", "XA***",
+                         "10000.00 USD", ".tt"):
+                self.assertIn(part, msg)
+
+    @rule("CA-CRYPTO-11")
+    def test_dust_reward_negligible_or_unvalued_is_skipped(self):
+        for usd in ("0.004", ""):
+            with self.subTest(usd=usd):
+                txs, err = _parse(_reward("XAH1", "2026-03-09 12:00:00",
+                                          "ETH", "0.0000000005", usd))
+                self.assertEqual(txs, [])
+                self.assertIn("under the books' zero", err)
+
+    @rule("CA-CRYPTO-11")
+    def test_dust_fee_with_real_value(self):
+        text = (REWARDS
+                + _row("XAI1", "FX1", "2026-03-10 13:00:00", "withdrawal",
+                       "", "SOL", "-0.5", "-50", fee="0.0000000002")
+                .replace(",0,0,\n", ",25.00,0,\n", 1))
+        with self.assertRaises(ValueError) as cm:
+            _parse(text)
+        self.assertIn("SOL", str(cm.exception))
+        self.assertIn("25.00 USD", str(cm.exception))
+
+    @rule("CA-CRYPTO-11")
+    def test_one_to_one_both_negligible(self):
+        # Both sides negligible: the dust leg is left out, described as
+        # what it is (a sale or a purchase), not as a "dust sweep".
+        txs, err = _parse(
+            _pair("XAJ1", "2026-03-11 12:00:00",
+                  ("AVAX", "-0.0000000004", "0"), ("USD", "0.001", "0.001"))
+            + _pair("XAK1", "2026-03-12 12:00:00",
+                    ("USD", "-0.002", "-0.002"),
+                    ("BTC", "0.0000000006", "0.002")))
+        self.assertEqual([t for t in txs if t["action"] == "BUYSELL"], [])
+        notes = [ln for ln in err.splitlines() if "books' zero" in ln]
+        self.assertEqual(len(notes), 2, err)
+        self.assertFalse(any("dust sweep" in n for n in notes), notes)
+        sale = next(n for n in notes if "AVAX" in n)
+        buy = next(n for n in notes if "BTC" in n)
+        self.assertIn("instant trade", sale)
+        self.assertIn("disposition of a negligible amount", sale)
+        self.assertIn("acquisition of a negligible amount", buy)
+        self.assertNotIn("disposition", buy)
+        self.assertIn("BTC 0.0000000006 received", buy)
+        # The run console's short form recognizes every such note.
+        from taxjson.lib.stage_msg import reword
+        for n in notes:
+            self.assertEqual(len(reword(n)), 2, n)
+            self.assertIn("instant trade", reword(n)[0])
+
+    @rule("CA-CRYPTO-11")
+    def test_receive_leg_shows_net_amount(self):
+        # 0.0000000009 received with a 0.0000000004 fee: 0.0000000005 net.
+        text = (_row("XALS", "XAL1", "2026-03-13 12:00:00", "spend", "",
+                     "USD", "-0.003", "-0.003", cls="fiat")
+                + _row("XALR", "XAL1", "2026-03-13 12:00:00", "receive", "",
+                       "BTC", "0.0000000009", "0.003",
+                       fee="0.0000000004"))
+        txs, err = _parse(text)
+        self.assertIn("BTC 0.0000000005 received", err)
+
+    @rule("CA-CRYPTO-11")
+    def test_sweep_note_says_dust_sweep(self):
+        _txs, err = _parse(REWARDS + ONE_DUST)
+        notes = [ln for ln in err.splitlines() if "books' zero" in ln]
+        self.assertEqual(len(notes), 1, err)
+        self.assertIn("dust sweep", notes[0])
+        from taxjson.lib.stage_msg import reword
+        self.assertIn("dust sweep", reword(notes[0])[0])
+
+
+class TestDustRefusalStopsRun(unittest.TestCase):
+    """A refused dust leg is not a note the run passes over: the run
+    fails and says why."""
+
+    @rule("CA-CRYPTO-11")
+    def test_run_fails_loudly(self):
+        from tax_rules.dual import cli, projects_both
+        acct = '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n'
+        with tempfile.TemporaryDirectory() as td:
+            ps = projects_both(
+                td, year=2026, accounts=acct,
+                files={"inputs/crypto/kr_ledgers_2026.csv":
+                       H16 + REWARDS
+                       + _pair("XAM1", "2026-03-02 12:00:00",
+                               ("SOL", "-0.0000000005", "-50000"),
+                               ("USD", "50000", "50000"))},
+                canada={"source_currencies": ["USD"]})
+            root = ps["canada"]
+            lines = "".join(f"2026-{m:02d}-{d:02d} 12:00:00 USD CAD 1.40 "
+                            f"yahoo\n" for m in range(1, 13)
+                            for d in range(1, 29))
+            (root / "work").mkdir(exist_ok=True)
+            (root / "work" / "to_base.csv").write_text(lines)
+            r = cli(root, "run", "--no-input")
+            out = r.stdout + r.stderr
+            self.assertNotEqual(r.returncode, 0, out)
+            self.assertIn("books' zero", out)
 
 
 class TestZeroQuantityMessage(unittest.TestCase):

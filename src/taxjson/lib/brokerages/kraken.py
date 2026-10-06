@@ -285,6 +285,20 @@ def _units(q: float) -> str:
     return f"{q:.12f}".rstrip('0').rstrip('.') or '0'
 
 
+# A coin leg, fee or reward under the books' zero (schema.QTY_ZERO) is
+# left out only when its VALUE is negligible too: worth at most this many
+# US dollars (its own amountusd, and for a trade leg the share of the
+# other side it would take). Above it the row is refused, never dropped:
+# a tiny quantity carrying real value is a disposal, a purchase or income
+# the books would lose (tax-logic CA-CRYPTO-11 / US-CRYPTO-07; pre-release
+# review H1).
+_DUST_USD = 0.01
+
+
+def _usd_text(v) -> str:
+    return "no USD value in the export" if v is None else f"{v:.2f} USD"
+
+
 def _mask(ref: Any) -> str:
     """A Kraken txid/refid as shown in a message: first 2 characters +
     *** (the privacy rule for ids, A2-0756/A2-1381). The raw id stays
@@ -1160,6 +1174,20 @@ class KrakenBrokerage(BaseBrokerage):
                             f"leg in {asset_name} with its fee in "
                             f"{fee_ccy} (feecurrency) — not supported; "
                             f"enter this trade via a .tt file{_TT_REMOVE}.")
+                    if amount == 0:
+                        # A leg that moves nothing has no direction: a
+                        # 0-unit trade the books cannot hold, and never
+                        # a "dust" leg to leave out (pre-release review
+                        # H1; v0.20 refused it at the schema check).
+                        raise ValueError(
+                            f"Kraken {ctx}: a {type_raw} row of "
+                            f"{asset_name} on {date} with amount 0 — an "
+                            f"instant-trade leg that moves no coins has no "
+                            f"direction and cannot be booked, and leaving "
+                            f"it out could lose a real trade. This "
+                            f"account's files are not booked until it is "
+                            f"fixed: correct the row in the export, or "
+                            f"enter the trade via a .tt file{_TT_REMOVE}.")
                     if ((type_raw == 'spend' and amount > 0)
                             or (type_raw == 'receive' and amount < 0)):
                         # The leg's sign contradicts its type: the amount
@@ -1203,6 +1231,8 @@ class KrakenBrokerage(BaseBrokerage):
                             'date': date, 'time': time, 'asset': asset,
                             'amount': abs(amount), 'fee': abs(fee),
                             'usd': usd_v,
+                            # The file as messages name it.
+                            'src': shown_name(path),
                             # The unfolded name (USDC, not USD): the
                             # fiat-for-fiat branch names the stablecoin
                             # and checks its peg (re-audit A2-1284).
@@ -1321,13 +1351,39 @@ class KrakenBrokerage(BaseBrokerage):
         fee_sym = self._norm(fee_ccy)
         if not fee or fee_sym in self._fiat:
             return []
+        _fusd = row.get('feeusd')
+        if fee_sym in _STABLECOINS:
+            _v = abs(fee)
+        elif fee_usd is not None:
+            _v = abs(fee_usd)
+        else:
+            _v = (abs(strict_money(_fusd, 'feeusd', ctx))
+                  if _fusd not in (None, '') else 0.0)
+        _valued = (fee_sym in _STABLECOINS or fee_usd is not None
+                   or _fusd not in (None, ''))
         if abs(fee) < QTY_ZERO:
-            # Under the books' zero: no row (a 0-unit sale has no
-            # direction and the schema refuses it); the coins stay as a
-            # residue, as a dust-sweep leg's do (CA-CRYPTO-11).
+            if _v > _DUST_USD:
+                # A tiny quantity worth real money: a sale the books
+                # would lose — refused, never dropped (H1).
+                raise ValueError(
+                    f"Kraken {ctx} ({date}): a {type_raw} fee of "
+                    f"{_units(abs(fee))} {fee_ccy} is under the books' zero "
+                    f"({QTY_ZERO:g} units) but its feeusd is "
+                    f"{_usd_text(_v)} — a sale of 0 units cannot be "
+                    f"booked, and leaving it out would lose a real "
+                    f"disposition (a fee that small is left out only when "
+                    f"worth at most {_DUST_USD:.2f} USD). This account's "
+                    f"files are not booked until it is fixed: correct the "
+                    f"row in the export, or enter the fee's sale via a .tt "
+                    f"file{_TT_REMOVE}.")
+            # Under the books' zero and worth nothing: no row (a 0-unit
+            # sale has no direction and the schema refuses it); the
+            # coins stay as a residue (CA-CRYPTO-11).
             emit_line(f"note: Kraken {ctx}: a {type_raw} fee of "
-                      f"{_units(abs(fee))} {fee_ccy} is under the books' zero "
-                      f"({QTY_ZERO:g} units) — not booked as a sale.")
+                      f"{_units(abs(fee))} {fee_ccy} "
+                      f"({_usd_text(_v if _valued else None)}) "
+                      f"is under the books' zero ({QTY_ZERO:g} units) — not "
+                      f"booked as a sale.")
             self.count_nonevent(f"Kraken dust leg under {QTY_ZERO:g} "
                                 f"units (not booked)")
             return []
@@ -1343,14 +1399,6 @@ class KrakenBrokerage(BaseBrokerage):
             'description': (f"Kraken {type_raw} fee paid in {fee_ccy} "
                             f"(disposed at FMV)"),
         }
-        if fee_sym in _STABLECOINS:
-            _v = abs(fee)
-        elif fee_usd is not None:
-            _v = abs(fee_usd)
-        else:
-            _fusd = row.get('feeusd')
-            _v = (abs(strict_money(_fusd, 'feeusd', ctx))
-                  if _fusd not in (None, '') else 0.0)
         if _v > 0:
             fee_tx['price'] = round(_v / abs(fee), 8)
             fee_tx['net_amount'] = round(_v, 8)
@@ -1451,13 +1499,10 @@ class KrakenBrokerage(BaseBrokerage):
                 return []
             if net_qty < QTY_ZERO and asset_name not in self._fiat:
                 # Under the books' zero: its acquisition cannot be a
-                # BUYSELL (0 units, refused by the schema) and its
-                # income is nil at that size (CA-CRYPTO-11).
-                emit_line(f"note: Kraken {ctx}: a {asset_name} reward of "
-                          f"{_units(net_qty)} is under the books' zero "
-                          f"({QTY_ZERO:g} units) — not booked.")
-                self.count_nonevent(f"Kraken dust leg under {QTY_ZERO:g} "
-                                    f"units (not booked)")
+                # BUYSELL (0 units, refused by the schema); left out
+                # only when its income is nil too (CA-CRYPTO-11).
+                self._dust_reward(ctx, date, asset_name, net_qty,
+                                  usd_value)
                 return []
             net_usd = None
             if usd_value:
@@ -1480,13 +1525,10 @@ class KrakenBrokerage(BaseBrokerage):
                 f"no amountusd/feeusd to value it — refusing to guess the "
                 f"net income. Enter this reward via a .tt file{_TT_REMOVE}.")
         if gross_qty < QTY_ZERO and asset_name not in self._fiat:
-            # A reward under the books' zero is not booked (see the
-            # same-currency case); a coin fee on it still left.
-            emit_line(f"note: Kraken {ctx}: a {asset_name} reward of "
-                      f"{_units(gross_qty)} is under the books' zero "
-                      f"({QTY_ZERO:g} units) — not booked.")
-            self.count_nonevent(f"Kraken dust leg under {QTY_ZERO:g} "
-                                f"units (not booked)")
+            # A reward under the books' zero is not booked when worth
+            # nothing (see the same-currency case); a coin fee on it
+            # still left.
+            self._dust_reward(ctx, date, asset_name, gross_qty, usd_value)
             return self._fee_coin_sale(row, ctx, fee_qty, fee_ccy, 'reward',
                                        date, time, txid, fee_usd=fee_usd)
         # The commission reduces the income, and the fee COINS left the
@@ -1498,6 +1540,26 @@ class KrakenBrokerage(BaseBrokerage):
             fee_note=f"{fee_qty:.10g} {fee_ccy}") + self._fee_coin_sale(
                 row, ctx, fee_qty, fee_ccy, 'reward', date, time, txid,
                 fee_usd=fee_usd)
+
+    def _dust_reward(self, ctx, date, asset, qty, usd_value):
+        """A reward under the books' zero: a note when its amountusd is
+        missing or at most _DUST_USD (nil income at that size), else
+        refused — the income would vanish (pre-release review H1)."""
+        if usd_value is not None and usd_value > _DUST_USD:
+            raise ValueError(
+                f"Kraken {ctx} ({date}): a {asset} reward of {_units(qty)} "
+                f"is under the books' zero ({QTY_ZERO:g} units) but its "
+                f"amountusd is {_usd_text(usd_value)} — it cannot be booked "
+                f"as 0 units, and leaving it out would drop that income (a "
+                f"reward that small is left out only when worth at most "
+                f"{_DUST_USD:.2f} USD). This account's files are not booked "
+                f"until it is fixed: correct the row in the export, or "
+                f"enter the reward via a .tt file{_TT_REMOVE}.")
+        emit_line(f"note: Kraken {ctx}: a {asset} reward of {_units(qty)} "
+                  f"({_usd_text(usd_value)}) is under the books' zero "
+                  f"({QTY_ZERO:g} units) — not booked.")
+        self.count_nonevent(f"Kraken dust leg under {QTY_ZERO:g} "
+                            f"units (not booked)")
 
     def _build_staking_reward(self, asset, date, time, qty, txid='',
                               usd_value=None, gross_qty=None, fee_qty=0.0,
@@ -1590,16 +1652,20 @@ class KrakenBrokerage(BaseBrokerage):
 
         A coin leg under the books' zero (schema.QTY_ZERO: Kraken writes
         a swept coin's amount to ten decimals, so a leg can be a few
-        ten-billionths of a coin) is not booked: a BUYSELL of 0 units
-        has no direction and the schema refuses it, which stopped the
-        whole account. The leg is a disposition of a negligible amount;
-        the receipt is split over the other legs and the coins stay in
-        the holdings as a residue (tax-logic CA-CRYPTO-11 /
-        US-CRYPTO-07). One note per refid names the dropped legs."""
-        self._dust_legs: List[Dict[str, Any]] = []
+        ten-billionths of a coin) cannot be a BUYSELL (0 units has no
+        direction; the schema refuses it). It is left out only when its
+        VALUE is negligible too (_check_dust: its own amountusd and the
+        share of the other side it would take, each at most _DUST_USD);
+        the receipt is then split over the other legs and spent coins
+        stay in the holdings as a residue (tax-logic CA-CRYPTO-11 /
+        US-CRYPTO-07). One note per refid names the legs left out.
+        Otherwise the refid is refused (pre-release review H1)."""
+        self._dust_ok: List[Any] = []       # [(leg, received)]
         self._dust_split = False
+        self._dust_multi = (len(sides['spend']) > 1
+                            or len(sides['receive']) > 1)
         out = self._instant_trades(sides, refid)
-        if self._dust_legs:
+        if self._dust_ok:
             self._note_dust(refid)
         return out
 
@@ -1618,36 +1684,122 @@ class KrakenBrokerage(BaseBrokerage):
         return (leg['asset'] not in self._fiat
                 and abs(self._leg_coins(leg, received)) < QTY_ZERO)
 
-    def _drop_dust(self, pairs):
-        """[(tx, leg)] -> the txs at or above the books' zero; a leg
-        under it is recorded for the refid's note, not booked."""
+    def _counter_share(self, leg, legs, others):
+        """The USD value of the other side that `leg` (one of `legs`, its
+        own side) would take were it booked, or None when unknown: a
+        lone leg takes the whole other side; one of several takes the
+        other side's single leg split as _instant_trades splits it (by
+        amountusd, else equally)."""
+        if len(legs) == 1:
+            vals = [self._leg_usd(o) for o in others]
+            return None if any(v is None for v in vals) else sum(vals)
+        one_v = self._leg_usd(others[0])
+        if one_v is None:
+            return None
+        weights = [self._leg_usd(lg) for lg in legs]
+        if all(w is not None for w in weights) and sum(weights) > 0:
+            return one_v * self._leg_usd(leg) / sum(weights)
+        return one_v / len(legs)
+
+    def _check_dust(self, spends, recvs, refid):
+        """Every coin leg under the books' zero: left out (recorded in
+        _dust_ok) when negligible — its own amountusd (when the export
+        has one) and the share of the other side it would take are each
+        at most _DUST_USD — else the refid is refused with a readable
+        message. A 1:1 trade's dust leg is thus left out only when BOTH
+        sides are negligible. A tiny quantity carrying real value is a
+        disposal, a purchase or a receipt with a basis from nothing:
+        never dropped (pre-release review H1)."""
+        for side, legs, others in (('spend', spends, recvs),
+                                   ('receive', recvs, spends)):
+            received = side == 'receive'
+            for leg in legs:
+                if not self._is_dust(leg, received):
+                    continue
+                own = leg['usd']
+                share = self._counter_share(leg, legs, others)
+                if ((own is None or own <= _DUST_USD)
+                        and share is not None and share <= _DUST_USD):
+                    self._dust_ok.append((leg, received))
+                    continue
+                coin = leg.get('raw') or leg['asset']
+                what = ('acquisition' if received else 'disposition')
+                other = ", ".join(f"{o.get('raw') or o['asset']} "
+                                  f"{_units(self._leg_coins(o, not received))}"
+                                  for o in others)
+                share_txt = ("no USD value to show it is negligible"
+                             if share is None else
+                             f"{share:.2f} USD")
+                raise ValueError(
+                    f"Kraken ledger {leg.get('src', '')}: refid "
+                    f"{_mask(refid)} ({leg['date']}): the {side} leg of "
+                    f"{coin} {_units(self._leg_coins(leg, received))} is "
+                    f"under the books' zero ({QTY_ZERO:g} units) but not "
+                    f"negligible — its amountusd: {_usd_text(own)}; its "
+                    f"share of the other side ({other}): {share_txt}. A "
+                    f"trade of 0 units cannot be booked, and leaving the "
+                    f"leg out would lose a real {what} (a leg that small "
+                    f"is left out only when it and its share of the other "
+                    f"side are each worth at most {_DUST_USD:.2f} USD). "
+                    f"This account's files are not booked until it is "
+                    f"fixed: correct the rows in the export, or enter this "
+                    f"trade via a .tt file{_TT_REMOVE}.")
+
+    def _drop_dust(self, pairs, refid=''):
+        """[(tx, leg)] -> the txs at or above the books' zero. A tx under
+        it is left out only when its leg (or the leg a split part came
+        from) passed _check_dust; any other is refused, never dropped."""
         out = []
         for tx, leg in pairs:
             if abs(tx['quantity']) < QTY_ZERO:
-                dust = self.__dict__.setdefault('_dust_legs', [])
-                if not any(d is leg for d in dust):
-                    dust.append(leg)
-                continue
+                origin = leg.get('_origin', leg)
+                if any(d is origin for d, _r in
+                       getattr(self, '_dust_ok', ())):
+                    continue
+                raise ValueError(
+                    f"Kraken ledger {leg.get('src', '')}: refid "
+                    f"{_mask(refid)} "
+                    f"({tx['date']}): its {tx['symbol']} side comes to "
+                    f"{_units(abs(tx['quantity']))} units, under the books' "
+                    f"zero ({QTY_ZERO:g} units) — a trade of 0 units cannot "
+                    f"be booked and leaving it out could lose a real trade. "
+                    f"This account's files are not booked until it is "
+                    f"fixed: enter this trade via a .tt file{_TT_REMOVE}.")
             out.append(tx)
         return out
 
     def _note_dust(self, refid):
-        def _usd(leg):
-            if leg.get('usd') is None:
-                return "no USD value in the export"
-            return f"{leg['usd']:.2f} USD"
-        names = "; ".join(
-            f"{leg.get('raw') or leg['asset']} {_units(leg['amount'])} "
-            f"({_usd(leg)})" for leg in self._dust_legs)
-        n = len(self._dust_legs)
+        """One note per refid naming each leg left out: the coins moved
+        (a receive leg net of its fee) and the USD value. "Dust sweep"
+        only for a real multi-leg sweep; a 1:1 trade is an instant trade,
+        and a received leg is an acquisition, not a disposition."""
+        def _name(leg, received):
+            coins = _units(self._leg_coins(leg, received))
+            rcv = " received" if received else ""
+            return (f"{leg.get('raw') or leg['asset']} {coins}{rcv} "
+                    f"({_usd_text(leg.get('usd'))})")
+        dust = self._dust_ok
+        names = "; ".join(_name(lg, r) for lg, r in dust)
+        n = len(dust)
+        sides = {r for _lg, r in dust}
+        if sides == {False}:
+            what = ("a disposition of a negligible amount; the coins stay "
+                    "in the holdings as a residue")
+        elif sides == {True}:
+            what = ("an acquisition of a negligible amount; the coins are "
+                    "not added to the holdings")
+        else:
+            what = ("a trade of negligible amounts; the coins spent stay "
+                    "in the holdings as a residue, the coins received are "
+                    "not added")
+        kind = "dust sweep" if self._dust_multi else "instant trade"
         split = (" The receipt is split over the other legs."
                  if self._dust_split else "")
         emit_line(f"note: Kraken ledger refid {_mask(refid)} "
-                  f"({self._dust_legs[0]['date']}): {names} — "
+                  f"({dust[0][0]['date']}): {kind}: {names} — "
                   f"{'a leg' if n == 1 else f'{n} legs'} under the books' "
-                  f"zero ({QTY_ZERO:g} units), not booked: a disposition "
-                  f"of a negligible amount; the coins stay in the "
-                  f"holdings as a residue.{split}")
+                  f"zero ({QTY_ZERO:g} units) and worth at most "
+                  f"{_DUST_USD:.2f} USD, not booked: {what}.{split}")
         for _ in range(n):
             self.count_nonevent(f"Kraken dust leg under {QTY_ZERO:g} "
                                 f"units (not booked)")
@@ -1671,26 +1823,26 @@ class KrakenBrokerage(BaseBrokerage):
                           f"trade manually via a .tt file.")
                     self.count_skip(f"orphan {leg_type} (refid {_mask(refid)})")
             return []
-        if len(spends) == 1 and len(recvs) == 1:
-            return self._build_instant_trade(
-                {'spend': spends[0], 'receive': recvs[0]}, refid)
         if len(spends) > 1 and len(recvs) > 1:
             raise ValueError(
                 f"Kraken ledger refid {_mask(refid)}: {len(spends)} spend and "
                 f"{len(recvs)} receive legs — no defensible way to pair "
                 f"them. Enter this conversion via a .tt file{_TT_REMOVE}.")
+        self._check_dust(spends, recvs, refid)
+        if len(spends) == 1 and len(recvs) == 1:
+            return self._build_instant_trade(
+                {'spend': spends[0], 'receive': recvs[0]}, refid)
         many, one, many_side = ((spends, recvs[0], 'spend')
                                 if len(spends) > 1
                                 else (recvs, spends[0], 'receive'))
-        # A leg under the books' zero takes no share: the receipt goes
-        # to the other legs (by amountusd), its own share (nil at that
-        # size) with it. All legs dust: the counter-leg still pairs with
-        # one of them, so a coin receipt is still acquired; that dust
-        # leg's own zero-unit row is left out by _drop_dust.
+        # A negligible leg under the books' zero (_check_dust) takes no
+        # share: the receipt goes to the other legs (by amountusd), its
+        # own share (at most _DUST_USD) with it. All legs dust: the
+        # counter-leg still pairs with one of them, so a coin receipt is
+        # still acquired; that dust leg's own zero-unit row is left out
+        # by _drop_dust.
         received = many_side == 'receive'
         kept = [leg for leg in many if not self._is_dust(leg, received)]
-        self._dust_legs.extend(leg for leg in many
-                               if self._is_dust(leg, received))
         self._dust_split = bool(kept) and len(kept) < len(many)
         if not kept:
             kept = [many[0]]
@@ -1733,6 +1885,7 @@ class KrakenBrokerage(BaseBrokerage):
         for leg, share in zip(many, shares):
             part = dict(one, amount=one['amount'] * share,
                         fee=one['fee'] * share,
+                        _origin=one.get('_origin', one),
                         usd=(one['usd'] * share
                              if one['usd'] is not None else None))
             pair = ({'spend': leg, 'receive': part} if many_side == 'spend'
@@ -1917,7 +2070,8 @@ class KrakenBrokerage(BaseBrokerage):
             if refid:
                 sell_leg['id'] = f'{refid}-sell'
                 buy_leg['id'] = f'{refid}-buy'
-            return self._drop_dust([(sell_leg, spend), (buy_leg, recv)])
+            return self._drop_dust([(sell_leg, spend), (buy_leg, recv)],
+                                   refid)
 
         price = (round(quote_amt / base_amt, 8)
                  if base_amt > 0 else 0.0)
@@ -1946,4 +2100,5 @@ class KrakenBrokerage(BaseBrokerage):
         }
         if refid:
             tx['id'] = refid
-        return self._drop_dust([(tx, recv if is_buy else spend)])
+        return self._drop_dust([(tx, recv if is_buy else spend)],
+                               refid)
