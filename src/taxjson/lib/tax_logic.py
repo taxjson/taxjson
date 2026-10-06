@@ -770,6 +770,21 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "it instead (no book value, no ATTENTION). The arrival "
                  "is not an acquisition for the superficial-loss "
                  "window."),
+            Rule("CA-XLIST-01",
+                 "Two listings of one company's same class of shares (a "
+                 "TSX line and its NYSE line, a US-dollar and a "
+                 "Canadian-dollar line) are identical property: one ACB "
+                 "pool, one security for the superficial-loss rule. "
+                 "`taxjson run` joins them itself, as a ticker.map TOBASE "
+                 "line would, when a transfer journal pairs them uniquely "
+                 "(an out-leg of one and an in-leg of the other in your "
+                 "accounts, the same quantity, within 5 days) and the "
+                 "exports' security names agree on the company and the "
+                 "share (class, voting, ADR, preferred, unit); one Info "
+                 "line per account names the pairs. A ticker.map rule "
+                 "naming either listing (DISTINCT included) always wins; "
+                 "anything less certain stays a suggestion (`taxjson "
+                 "ticker-map --suggest`)."),
             Rule("CA-ACB-11",
                  "Shares sold with no purchase in your files (bought "
                  "before the data starts) go in missing_history.json "
@@ -1830,6 +1845,23 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "stop `run --strict` until declared. An undated rename "
                  "(GLOBAL, or RENAME without a date) applies to every row "
                  "of OLD.", cont=True),
+            Rule("US-XLIST-01",
+                 "Two listings of one company's same class of shares (a "
+                 "US line and its Canadian line, two currency lines of "
+                 "one share) are one security: one set of lots, "
+                 "identical for the wash-sale rule. An ADR and the "
+                 "ordinary shares it represents are never joined "
+                 "automatically. `taxjson run` joins two listings itself, "
+                 "as a ticker.map TOBASE line would, when a transfer "
+                 "journal pairs them uniquely (an out-leg of one and an "
+                 "in-leg of the other in your accounts, the same "
+                 "quantity, within 5 days) and the exports' security "
+                 "names agree on the company and the share (class, "
+                 "voting, ADR, preferred, unit); one Info line per "
+                 "account names the pairs. A ticker.map rule naming "
+                 "either listing (DISTINCT included) always wins; "
+                 "anything less certain stays a suggestion (`taxjson "
+                 "ticker-map --suggest`)."),
             Rule("US-BASIS-07",
                  "Accounts typed \"sheltered\" (an IRA, Roth IRA, "
                  "401(k)...) are tracked but kept out of the filing "

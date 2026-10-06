@@ -2088,6 +2088,72 @@ def _say_once(key: Any, kind: str, text: str, *details: str,
     _say(kind, text, *details, **kw)
 
 
+# The cross-listing joins this run computed: {work dir: (map path or
+# None, analysis)} — once per run (lib/cross_listings).
+_XLIST_THIS_RUN: Dict[Path, Tuple[Optional[Path], Dict[str, Any]]] = {}
+
+
+def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
+                         ticker_map: Optional[Path]) -> Optional[Path]:
+    """Two listings of one security joined by their transfer journal
+    (lib/cross_listings, tax-logic CA-XLIST-01 / US-XLIST-01): computed
+    once per run from every equity account's parsed exports (the first
+    pass parses them all before any account's books are merged), written
+    to work/cross_listings.state, and — when any pair is joined — the map
+    the merge stages read becomes work/ticker.map.effective (the
+    project's ticker.map plus a TOBASE line per pair). Returns the map
+    path the account's merge stages use. One `Info:` line per account
+    names the pairs joined through its legs."""
+    from taxjson.lib import cross_listings as XL
+    key = cache.resolve()
+    if key not in _XLIST_THIS_RUN:
+        cfg = _soft_config(cache.parent)
+        accounts = [n for n, c in ((cfg.get("accounts") or {}).items())
+                    if not (c or {}).get("crypto")]
+        named: frozenset = frozenset()
+        if ticker_map is not None and ticker_map.is_file():
+            from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+                                                        named_symbols)
+            try:
+                named = named_symbols(_parse_map_file(ticker_map)[0])
+            except (OSError, ValueError):
+                named = frozenset()
+        legs, names, shown = XL.gather(cache, accounts or [name])
+        result = XL.analyze(legs, names, shown, map_named=named,
+                            base_currency=str(settings.get(
+                                "base_currency") or "").upper() or None)
+        state = cache / XL.STATE
+        text = XL.state_text(result)
+        if _read_work_stamp(state) != text:
+            _write_work_stamp(state, text)
+        eff = cache / XL.EFFECTIVE_MAP
+        if result["joined"]:
+            body = XL.effective_map_text(ticker_map, result["joined"])
+            if _read_work_stamp(eff) != body:
+                _write_work_stamp(eff, body)
+            path: Optional[Path] = eff
+        else:
+            if eff.exists():
+                # The joins are gone: the books merged with them must
+                # rebuild (a sources manifest is every merge's dep).
+                eff.unlink()
+                import os as _os
+                for _f in cache.glob("*_sources.list"):
+                    if not _f.name.startswith("."):
+                        _os.utime(_f)
+            path = ticker_map
+        _XLIST_THIS_RUN[key] = (path, result)
+    path, result = _XLIST_THIS_RUN[key]
+    line = XL.joined_note(name, result["joined"])
+    if line:
+        _say_once(("xlist", name), "note", line,
+                  "Their transfer journal pairs them and their names "
+                  "agree: booked as one security (a ticker.map rule naming "
+                  "either listing wins; `DISTINCT A B` keeps them apart).",
+                  indent="  ", file=sys.stdout)
+    return path
+
+
 def _parse_reads(cmd: List[str], acct_dir: Path, reads: List[Path]
                  ) -> Tuple[Any, ...]:
     """What a broker parse reads: its command, and the name, size and
@@ -3464,6 +3530,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 _say("note", f"removed stale work/{_side.name} (its input "
                      f"files are gone)", indent="  ", file=sys.stdout)
         return None
+
+    # 1a. Two listings of one security joined by their transfer journal
+    # (CA-XLIST-01 / US-XLIST-01): from here on the account's stages
+    # read the effective map (ticker.map plus the joins' TOBASE lines).
+    if not is_crypto:
+        ticker_map = stage_cross_listings(name, settings, cache, ticker_map)
 
     # 1b. crypto sends: an outgoing transfer that never arrived on
     # another exchange is a gift, a payment, or a move to your own
@@ -5355,6 +5427,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     _DETECTION_SHOWN.clear()            # each run lists its inputs once
     _PARSED_THIS_RUN.clear()
     _SHOWN_THIS_RUN.clear()
+    _LOSS_CONTEXT_GAINS.clear()
+    _XLIST_THIS_RUN.clear()
     root = Path(args.dir).resolve()
     cfg = load_config(root)
     # Register the config path globally so every `needs_rebuild` call
@@ -5633,10 +5707,12 @@ def cmd_run(args: argparse.Namespace) -> None:
     # another of your taxable accounts is not an arrival from outside
     # the books (lib/transfer_in) — every account's evidence must be
     # current before any account's books are merged.
+    # Every equity account, sheltered ones too: two listings joined by
+    # a transfer journal (lib/cross_listings) are one security in EVERY
+    # account's books, so all transfer evidence is read before any
+    # account is merged.
     _equity_first = [(n, c) for n, c in accounts.items()
-                     if (c or {}).get("type") == "taxable"
-                     and not (c or {}).get("crypto")
-                     and not (c or {}).get("transfers")]
+                     if not (c or {}).get("crypto")]
     if len(_equity_first) < 2:
         _equity_first = []
     # Questrade internal symbol codes are resolved from the OTHER

@@ -582,22 +582,12 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
                 if key in _warned:
                     continue
                 _warned.add(key)
-                # Suggest the conventional direction: the listing in
-                # another currency maps onto the base-currency one. The
-                # listing's currency comes from its spelling (SAMPLF.U.TO
-                # is the USD unit — audit S076-18: an ".US"-only test
-                # suggested folding SAMPLF.TO into SAMPLF.U.TO); without a
-                # known base, the .US leg is taken as the foreign one.
-                from taxjson.lib.price_chain import quote_currency
-                _ca, _cb = quote_currency(a.symbol), quote_currency(b.symbol)
-                if base_currency and _ca != _cb and base_currency in (_ca, _cb):
-                    _frm, _to = ((b.symbol, a.symbol)
-                                 if _ca == base_currency
-                                 else (a.symbol, b.symbol))
-                else:
-                    _frm, _to = ((b.symbol, a.symbol)
-                                 if b.symbol.endswith('.US')
-                                 else (a.symbol, b.symbol))
+                # The conventional direction: the listing in another
+                # currency maps onto the base-currency one (audit
+                # S076-18; lib/cross_listings.tobase_direction).
+                from taxjson.lib.cross_listings import tobase_direction
+                _frm, _to = tobase_direction(a.symbol, b.symbol,
+                                             base_currency)
                 say("note", f"possible unmapped cross-listing journal in "
                     f"{a.account}: {a.symbol} out {a.quantity:g} "
                     f"({a.date}) pairs with {b.symbol} in "

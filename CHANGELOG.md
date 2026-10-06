@@ -12,6 +12,15 @@
   listing each transfer-in inside a loss's window, so an in-kind contribution
   can be recorded as a BUYSELL. `[settings] transfers_as_acquisitions = true`
   restores the old strict treatment (tax-logic CA-SL-16/17, US-WASH-23/24).
+- **Two listings moved by a transfer journal are joined automatically.** When a
+  broker journals a position from one listing to another (an out-leg of one
+  symbol and an in-leg of another, the same quantity, within 5 days, in your
+  accounts), the pair is unique and the exports' security names agree on the
+  company and the share class, `taxjson run` books the two listings as one
+  security, as a ticker.map `TOBASE` line would, and says so in one `Info:`
+  line per account. A ticker.map rule naming either listing (`DISTINCT`
+  included) wins; anything less certain stays a suggestion. Every equity
+  account is now read in the run's first pass when there are two or more.
 
 - **taxjson.toml descriptions use the full 100-column width.** `taxjson init` and
   `taxjson format` wrapped `## ` prose at 79 columns; they now wrap at 100, the house width.

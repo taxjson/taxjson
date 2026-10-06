@@ -96,11 +96,17 @@ class TestSteps(_Runs):
     def test_account_steps(self):
         p, r = self.run_of("canada")
         steps = STEP.findall(r.stdout)
+        # Every equity account is read in the first pass (its transfer
+        # journals join two listings for every account's books —
+        # lib/cross_listings); its own steps follow later.
+        f = steps.index("tfsa  (sheltered, first pass: transfers between "
+                        "your accounts)")
+        self.assertEqual(steps[f + 1], "Reading 1 file")
         i = steps.index("tfsa  (sheltered)")
+        self.assertGreater(i, f)
         # One account's steps, in order, in the table's words.
-        self.assertEqual(steps[i:i + 8], [
+        self.assertEqual(steps[i:i + 7], [
             "tfsa  (sheltered)",
-            "Reading 1 file",
             "Processing corporate actions",
             "Reading tfsa_extra.tt",
             "Sorting, de-duplicating, mapping tickers, converting currency",
