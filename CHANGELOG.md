@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+
+- **`taxjson redact` with no file copies the project's inputs and redacts the copy.** Run in a
+  project (or with `-C DIR`), it copies the whole `inputs/` folder to `inputs_redact/` (or `--out
+  DIR`), keeping every folder and text file (exports, `.tt` files, sidecars, READMEs), and redacts
+  the copy: you get two folders, the originals untouched and a redacted inputs tree that `taxjson
+  run` still parses. An id gets the same placeholder in every file, and a file or folder name that
+  holds an account number is renamed to a unique placeholder; the old and new names are printed on
+  the console only. Binary files are not copied (each is named in a warning). An existing copy is
+  replaced only with `--force`, never through a symlink; `--check` reports what it would replace
+  and writes nothing. `taxjson run` never reads `inputs_redact/`, and the `.gitignore` that
+  `taxjson init` writes lists it. `taxjson redact FILE ...` works as before.
+
 ### Changed
 
 - **`taxjson run` lists only the short positions that bear on the tax year.** A position that

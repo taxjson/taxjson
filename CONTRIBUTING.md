@@ -27,12 +27,18 @@ Desjardins…) or a US account for the experimental US engine. Run
 
 ```bash
 taxjson redact ~/Downloads/activity.csv        # writes activity.redacted.csv
+taxjson redact                                 # in a project: inputs/ -> inputs_redact/
 ```
 
 It replaces every account number with a same-length placeholder (so the
 file still parses), removes name/alias/address rows and e-mail addresses,
 and prints a report. Read the free-text description column once for
 names, then attach the `.redacted.csv` to an issue or pull request.
+Run with no file in a project, it copies the whole `inputs/` folder to
+`inputs_redact/` and redacts the copy (file names that hold an account
+number included; the old → new names are printed, never written into the
+copy). `inputs/` is left as it was. Binary files (`.xlsx`, `.pdf`) are
+not copied. Review the folder, then zip and attach it.
 Quantities, prices, dates and symbols are kept — that is what a parser
 needs. Never attach an un-redacted statement.
 

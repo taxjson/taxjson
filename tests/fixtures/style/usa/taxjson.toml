@@ -1,19 +1,113 @@
+## taxjson configuration — https://github.com/taxjson/taxjson
+##
+## Every key taxjson reads is listed here: [settings] in groups, the other tables' keys
+## alphabetically (an account's `type` first), one `=` column per table, so year-over-year projects
+## diff cleanly:
+##   diff ~/taxes/2023/taxjson.toml ~/taxes/2024/taxjson.toml
+## Each key's description is on the `## ` lines above it, the values it takes after it. A
+## commented-out key (`# key = value`) shows its default (or an example where it has none): delete
+## the `# ` to change it. `taxjson format` puts an edited file back into this layout, keeping your
+## values and comments.
+
 [settings]
-base_currency  = "USD"
-country        = "usa"
-local_timezone = "America/New_York"
-source_currencies = []
-tax_date       = "trade"
-year           = 2024
+## --- Project ---
+country                 = "usa"    # canada | ca | usa | us (required)
+## The zone crypto UTC times are dated in (an IANA name). No default: required with a crypto
+## account.
+local_timezone          = "America/New_York"
+## Last year's close-year record (`taxjson handoff`). No default.
+# prior_year_record     = "../2023/filed/2023.json"
+## Default trade: the IRS dates a sale by trade date.
+tax_date                = "trade"  # trade | settle
+## The tax year the pipeline reports on (required).
+year                    = 2024
+
+## --- Currencies ---
+## Report currency: USD.
+base_currency           = "USD"
+## true: an end-of-run FX-on-cash report (§988, ordinary income).
+# fx_cash_gains         = false
+## Currencies you hold besides USD (their FX rates are fetched). Default none: an all-USD project
+## needs nothing here; uncomment it only for an account or trade in another currency.
+source_currencies       = []
+
+## --- Options ---
+## Options bought more than this many months before expiry count as LEAPS (the leaps and leaps-sum
+## views only; no tax figure). Default 9.
+# leaps_months          = 9
+
+## --- Income ---
+## January fund/REIT dividends taxed as received Dec 31 (IRC §852(b)(7) / §857(b)(9)): "SYMBOL"
+## (every January one) or "SYMBOL YYYY-01-DD" (that payment). No default.
+# ric_january_dividends = ["XYZQ.US 2025-01-30"]
+
+## --- Futures ---
+## trade (the default): futures and futures options settle on the TRADE date (daily variation
+## margin); next_day: the clearing premium date.
+# futures_settle        = "trade"  # trade | next_day
+
+## One [accounts.NAME] table per folder under inputs/ (the folder name is the account name). Every
+## key, with its default:
+# [accounts.NAME]
+# type                     = "taxable"  # taxable | sheltered (required)
+## The broker account id `taxjson fetch` downloads (if its source needs one).
+# account                  = "ACCOUNT_ID"
+## The `taxjson fetch` source of this account (a fetcher plugin's name; `taxjson fetch --list` names
+## the installed ones). No default.
+# brokerage                = "SOURCE"
+## true: every broker account in these statements is yours, taxable together.
+# combined_broker_accounts = false
+# crypto                   = false      # true: a Coinbase / Kraken account
+## Webull: the exercise/assignment charge on the stock leg. No default: without it no
+## exercise/assignment is inferred (each candidate is named).
+# exercise_fee             = 1.00
+## Positions files `taxjson sanity` reconciles against. Default: none.
+# holdings                 = ["~/broker/NAME_holdings.toml"]
+## The plan when the name doesn't say (default: from the name): ira | roth | 401k | 403b | 457b |
+## sep | hsa | 529.
+# plan                     = "ira"
+## The report (query) id `taxjson fetch` runs (if its source needs one).
+# query_id                 = "QUERY_ID"
+# transfers                = false      # true: keep TRANSFER rows (contributions/withdrawals)
+## RBC: the day next year by which year-end book-cost rows are posted. Default 06-30.
+# year_end_posting         = "06-30"
 
 [accounts.margin]
 type = "taxable"
 
 [accounts.roth]
+type      = "sheltered"
 plan      = "roth"
 transfers = true
-type      = "sheltered"
 
 [accounts.crypto]
-crypto = true
 type   = "taxable"
+crypto = true
+
+## More accounts: add an [accounts.NAME] table (keys above) and an inputs/NAME
+## folder for it.
+
+## Estimate inputs (`taxjson estimate`), used when the command-line flags aren't given:
+# [estimate]
+## The long-term capital loss carryover (Schedule D line 14).
+# long_term_losses = 0
+## Income besides these books (employment, interest ...).
+# other_income     = 0
+## The SHORT-term capital loss carryover applied.
+# other_losses     = 0
+
+## Losses actually applied on filed returns (`taxjson carryover`), by year:
+# [carryover]
+## Net capital losses applied on each filed return. No default.
+# claimed = { 2023 = 4000.00 }
+
+## Non-cash fund distributions (a reinvested capital-gains distribution, a late return-of-capital
+## factor): `taxjson run` books each as a cost adjustment on the shares held on the record date. One
+## table each:
+# [[distributions]]
+## Per share, in the base currency; negative = return of capital.
+# per_share   = 0.25
+## The record date.
+# record_date = 2024-12-29
+## The books' symbol.
+# symbol      = "XYZQ.US"

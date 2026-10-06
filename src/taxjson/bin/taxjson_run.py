@@ -6625,6 +6625,8 @@ _TEMPLATE_GITIGNORE = """\
 work/
 reports/
 export/
+# The redacted copy `taxjson redact` makes to share (review it first).
+inputs_redact/
 .DS_Store
 """
 
@@ -13269,9 +13271,10 @@ def cmd_deploy(args: argparse.Namespace) -> None:
 
 def cmd_redact(args: argparse.Namespace) -> None:
     """`taxjson redact FILE...`: strip account numbers and identity from
-    broker exports (row shapes kept) — see taxjson_redact."""
+    broker exports (row shapes kept); with no FILE, copy the project's
+    inputs/ to inputs_redact/, redacted — see taxjson_redact."""
     from taxjson.bin.taxjson_redact import main as redact_main
-    argv: List[str] = []
+    argv: List[str] = [f"--dir={args.dir}"]
     if args.out:
         argv += ["--out", args.out]
     for a in args.also or []:
@@ -20415,11 +20418,17 @@ def _build_parser(prog: str = "taxjson"
         description="Strip the account numbers, names and contact "
              "details it recognises from broker exports (row shapes "
              "kept) so a statement can be shared as a parser sample or "
-             "bug report — review the output before sharing.")
-    p_red.add_argument("files", nargs="+", metavar="FILE")
+             "bug report — review the output before sharing. With no "
+             "FILE, copy the project's inputs/ to inputs_redact/ and "
+             "redact the copy (inputs/ is never changed).")
+    p_red.add_argument("files", nargs="*", metavar="FILE",
+                       help="Exports to redact (each copied as "
+                            "NAME.redacted.EXT). None: copy the project's "
+                            "inputs/ to inputs_redact/ and redact the copy")
     p_red.add_argument("--out", metavar="DIR",
                        help="Write redacted copies here (default: beside "
-                            "each input as NAME.redacted.EXT)")
+                            "each input as NAME.redacted.EXT; with no FILE, "
+                            "the redacted inputs tree: inputs_redact/)")
     p_red.add_argument("--also", action="append", default=[],
                        metavar="REGEX",
                        help="Extra pattern to replace with REDACTED "
@@ -20427,7 +20436,8 @@ def _build_parser(prog: str = "taxjson"
     p_red.add_argument("--no-denylist", action="store_true",
                        help="Ignore ~/.config/taxjson/pii-denylist")
     p_red.add_argument("--force", action="store_true",
-                       help="Overwrite an existing redacted copy")
+                       help="Overwrite an existing redacted copy (with no "
+                            "FILE: replace inputs_redact/)")
     p_red.add_argument("--check", action="store_true",
                        help="Report only; write nothing; exit 1 if "
                             "anything would be redacted")
@@ -21571,7 +21581,13 @@ def _split_command_segments(parser: argparse.ArgumentParser,
     i += 1
     while i < len(argv):
         tok = argv[i]
-        if tok == "--" and cur and _parses_ok(parser, prefix + cur):
+        if cur and cur[0] == "redact":
+            # Every later token is redact's: its FILEs are optional (no
+            # FILE = the project's inputs/), so `redact` alone parses and
+            # `taxjson redact -- --check` (a file named --check) or a
+            # file named like a command would otherwise start a chain.
+            cur.append(tok)
+        elif tok == "--" and cur and _parses_ok(parser, prefix + cur):
             segments.append(cur)
             cur = []
         elif (tok in commands
