@@ -410,7 +410,10 @@ class TestRunConsoleLines(unittest.TestCase):
         self.assertEqual(lines[0], "==> Checking the project")
         w = next(i for i, ln in enumerate(lines)
                  if "ib_empty.csv parsed to 0 transactions — NONE" in ln)
-        m = lines.index("==> margin  (taxable)")
+        # (the account's parse is under its first-pass step when every
+        # equity account is read first — lib/cross_listings)
+        m = next(i for i, ln in enumerate(lines)
+                 if ln.startswith("==> margin  (taxable"))
         self.assertGreater(w, m, r.stdout)
         from taxjson.lib import out
         self.assertEqual(out.console_lint(r.stdout, 100), [], r.stdout)
