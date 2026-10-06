@@ -57,6 +57,9 @@
   the patterns that shorten frequent notes took time growing with the
   square of a line's leading spaces; they now match in one pass, and a
   line over 2000 characters is shown as is.
+- **An offline run no longer says it is downloading rates.** With
+  `TAXJSON_OFFLINE=1` the rate step reads `Loading cached USD → CAD
+  rates`, which is what it does.
 
 
 ## v0.20.0 (2026-10-06)

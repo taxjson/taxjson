@@ -2380,9 +2380,12 @@ def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
         return rates_path
     had_previous = rates_path.exists() and rates_path.stat().st_size > 0
     parts: List[bytes] = []
+    from taxjson.lib.offline import offline_enabled
+    # Offline the helper reads its cache only: no download to announce.
+    _fetch = ("Loading cached" if offline_enabled() else "Downloading")
     try:
         for src in sources:
-            _step(f"Downloading {src} → {base} rates")
+            _step(f"{_fetch} {src} → {base} rates")
             parts.append(run_capture(_cmd("taxjson-to-base-curr") + [src, base]))
     except Exception as exc:
         # A refresh attempt (e.g. offline, yfinance hiccup) must not turn a

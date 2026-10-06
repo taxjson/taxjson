@@ -188,7 +188,7 @@ whose stage is cached under `--fast` is not shown):
 | `==> Rebuilding everything: taxjson's code changed ...` | `--fast` after an upgrade |
 | `==> Reading missing_history.json (openings for sales with no purchase in the files)` | the project has one |
 | `==> Loading currency rates` | always |
-| `==> Downloading USD → CAD rates` | a rate refresh |
+| `==> Downloading USD → CAD rates` | a rate refresh (`Loading cached USD → CAD rates` with TAXJSON_OFFLINE=1: the cache only) |
 | `==> margin  (taxable, first pass: transfers between your accounts)` | accounts read first so transfers (crypto: sends) pair across them |
 | `==> tfsa  (sheltered)` / `==> margin  (taxable)` / `==> crypto  (taxable, crypto)` | an account's books |
 | `Info: File inputs/tfsa/x.csv → identified as Interactive Brokers` | one per input file (a message, not a step) |

@@ -39,5 +39,38 @@ class TestRewordIsLinear(unittest.TestCase):
              "`taxjson transfers` lists them)"])
 
 
+class TestOfflineRatesStep(unittest.TestCase):
+    """L2: with TAXJSON_OFFLINE=1 the rates helper reads its cache only;
+    the run's step said `Downloading USD → CAD rates` all the same."""
+
+    def _steps(self, offline):
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        from contextlib import redirect_stdout
+        from taxjson.bin import taxjson_run as tr
+        out = io.StringIO()
+        env = {"TAXJSON_OFFLINE": "1" if offline else "0"}
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.dict(os.environ, env), \
+                mock.patch.object(tr, "run_capture",
+                                  return_value=b"2026-01-02 12:00:00 USD "
+                                               b"CAD 1.40 boc\n"), \
+                redirect_stdout(out):
+            tr.stage_currency_rates({"base_currency": "CAD",
+                                     "source_currencies": ["USD"]},
+                                    Path(td))
+        return out.getvalue()
+
+    def test_offline_says_cached(self):
+        got = self._steps(offline=True)
+        self.assertIn("Loading cached USD → CAD rates", got)
+        self.assertNotIn("Downloading", got)
+
+    def test_online_says_downloading(self):
+        self.assertIn("Downloading USD → CAD rates",
+                      self._steps(offline=False))
+
+
 if __name__ == "__main__":
     unittest.main()
