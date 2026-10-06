@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.21.0 (2026-10-06)
+
 ### Changed
 
 - **`taxjson run` reads as a short list of steps and messages.** Every
