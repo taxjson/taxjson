@@ -1,0 +1,511 @@
+# Architecture map
+
+Where the code for each part of taxjson lives, so a diagnosis or a change can
+go straight to the right file. taxjson is a Python package: a Canadian
+capital-gains toolkit (ACB, superficial loss, income, filing forms) built from
+broker CSV exports, with an experimental US engine. The command is `taxjson`,
+or `tjs` for short.
+
+Several files are very large. `src/taxjson/bin/taxjson_run.py` (about 22k
+lines) holds the whole CLI: every `cmd_*` handler, the `stage_*` functions of
+`taxjson run`, and the argument parser. `src/taxjson/lib/core.py` (about 7.6k)
+holds both gains engines. `src/taxjson/lib/brokerages/ib_extractor.py` (about
+5k), `src/taxjson/lib/corp_actions.py` (about 4.4k), `src/taxjson/lib/tax_logic.py`,
+`src/taxjson/lib/brokerages/rbc_direct.py`, `src/taxjson/lib/missing_history.py`
+and `src/taxjson/lib/checklist.py` are 2k to 3k lines each. Do not read them
+top to bottom: search them for the function name listed below ("def name("),
+then read around the hit.
+
+Conventions used here:
+
+- `src/taxjson/bin/taxjson_run.py` — `cmd_run`, `stage_account`: a command `foo-bar` is handled by `cmd_foo_bar` in this file, with a few older names (`events` is `cmd_transactions`, `trades` is `cmd_buysell`, `list` is `cmd_positions`, `sum` is `cmd_summary`); `_build_parser` maps each name with `set_defaults(func=...)`.
+- Each stand-alone tool `taxjson-<tool>` is `src/taxjson/bin/taxjson_<tool>.py` with a `main()`; `taxjson run` calls them through `_cmd("taxjson-<tool>")`, usually in the same process.
+- The logic is in `src/taxjson/lib/`; commands and tools are in `src/taxjson/bin/`. A view in `taxjson_run.py` usually reads the files `taxjson run` left in the project's `work/` and `reports/` folders.
+- Rule ids such as CA-SL-02 or US-WASH-22 are the statements `taxjson tax-logic` prints (`src/taxjson/lib/tax_logic.py`); code comments and tests cite them. Search the id to find the code that implements a rule.
+- Tests live in `tests/`, mostly one file per fix round or feature; search a function name there to find what pins it.
+- The playbook of known problems is `docs/troubleshooting.md`; the house style for everything printed is `docs/output-style.md`.
+- On each bullet, the names after the path are literal strings in that file: functions, classes, constants, or a distinctive message or shell word.
+
+## The CLI and command dispatch
+
+`main` builds one argparse parser with a sub-parser per command and runs the
+chosen handler. The help page groups commands under `_COMMAND_GROUPS`
+headings. Before a handler runs, `_main` applies the project guards: `-C DIR`,
+unknown or path-shaped account names, and the country check (a command the
+other country owns is refused). Several commands on one line (`taxjson run sum`)
+are split into segments and run in order.
+
+- `src/taxjson/bin/taxjson_run.py` — `main`, `_main`, `_build_parser`, `_COMMAND_GROUPS`, `_GroupedHelpParser`, `_enforce_command_country`, `_refuse_unknown_account`, `_split_command_segments`, `_help_country`, `_failure_headline`, `_die`: the entry point, the parser and the grouped help page (the other country's commands hidden); the checks applied before every command; command chaining (`taxjson run sum`); how a failed stage or bad input becomes one short message.
+- `src/taxjson/lib/cli_diag.py` — `guard_main`, `run_top_level`, `labelled_usage_errors`, `describe_input_error`, `tolerant_stdout`: the top-level wrapper every tool runs under (broken pipes, unreadable input, usage errors).
+- `src/taxjson/lib/country.py` — `COMMAND_COUNTRY`, `command_country_problem`, `flag_country_problems`, `given_flags`: which commands and flags belong to one country.
+
+## Stand-alone tools and in-process dispatch
+
+Each pipeline stage is also a console script (`[project.scripts]` in
+pyproject.toml). The scripts go through a trampoline that sets an owner-only
+umask. `taxjson run` builds the same command lines, but `run_cmd` runs a
+known tool in this process unless a TTY is needed or `TAXJSON_DISPATCH=subprocess`.
+
+- `pyproject.toml` — `project.scripts`, `taxjson-merge2`, `taxjson-gains`, `taxjson-corp-actions`: the list of console scripts and the module each one runs.
+- `src/taxjson/bin/_entry.py` — `private_umask`, `__getattr__`: the trampoline from `taxjson-<tool>` to the module's `main()`.
+- `src/taxjson/lib/dispatch.py` — `run_cmd`, `tool_module`, `_use_subprocess`, `TAXJSON_DISPATCH`: in-process execution of a tool, with the subprocess fallback.
+- `src/taxjson/bin/taxjson_run.py` — `_cmd`, `run_to_file`, `run_capture`, `_exec_tool`, `_run_cmd`: how the orchestrator calls a tool and captures its stdout and `.diag` stderr.
+
+## The taxjson run orchestrator
+
+`cmd_run` reads and checks taxjson.toml, takes the project lock, builds the FX
+rate file, then runs every account's stages. It parses all accounts first
+(crypto sends, own-account moves, cross-listings and Questrade codes need
+every account's evidence), then builds each account's books and gains, then
+the cross-account wash passes, the cross-account reports, the filed-year
+drift check and the end-of-run summary. A full rebuild is the default;
+`--fast` reuses cached stages only when this same code built them.
+
+- `src/taxjson/bin/taxjson_run.py` — `cmd_run`, `_acquire_run_lock`, `needs_rebuild`, `_package_fingerprint`, `stage_account`, `stage_wash_pass`, `stage_blended_wash_pass`, `stage_cross_reports`, `stage_fees`, `collect_diagnostics`, `echo_attention_lines`, `_first_run_summary`: the run, its one-run-per-project lock and the `--fast` cache rules; `stage_account` is the per-account chain (parse, corp actions, .tt files, transfer arrivals, merge, gains, raw holdings, the `.sum` report); then the passes across accounts; what each stage printed, folded into the console and the `.sum` DIAGNOSTICS section; the closing summary.
+- `src/taxjson/lib/first_run.py` — `collect`, `render`, `uncovered_short_sales`, `zero_cost_positions`, `income_without_position`, `SUMMARY_FILE`: the "what to check next" counts at the end of a run.
+
+## Input discovery and broker detection
+
+Each account's folder under `inputs/` is scanned; every CSV is routed to a
+parser by its content (header signature), then by its name prefix, never by
+guessing. A file that matches two parsers or none stops the run with a
+message naming the file.
+
+- `src/taxjson/bin/taxjson_run.py` — `input_files`, `group_inputs_detailed`, `detect_broker`, `_report_detection`, `spreadsheet_inputs`, `_duplicate_input_files`, `_sweep_retired_exports`, `_warn_shared_broker_accounts`: the folder scan, the one line per file saying how it was read, and checks on duplicate, retired or shared exports.
+- `src/taxjson/lib/brokerages/detect.py` — `detect`, `detect_broker`, `DETECTORS`, `Detection`, `AmbiguousBroker`, `content_matches`, `name_hint`, `looks_like_ib_text`, `same_broker_siblings`: content-first detection (each parser's header signature is in `DETECTORS`), then the file-name hint; IB statement sniffing and sibling files.
+- `src/taxjson/bin/taxjson_detect_brokerage.py` — `detect_brokerage`, `cannot_detect_message`, `main`: the `taxjson-detect-brokerage` tool, the same decision for one file.
+- `src/taxjson/bin/xlsx_to_csv.py` — `convert_xlsx_to_csv`, `read_sheet`, `_clean_numeric_commas`: turns an .xlsx export into CSV before parsing.
+
+## The parse stage
+
+`taxjson-brokerage` loads one registered parser, runs it over the account's
+files and writes normalized transaction JSON. Every row is checked against
+the schema. ticker.map EXTRACT lines (security overrides) are applied here,
+and broker account numbers are hashed before they reach the output.
+
+- `src/taxjson/bin/taxjson_brokerage.py` — `main`, `register_brokerage`, `load_security_overrides`, `apply_security_override`, `stamp_source_accounts`, `hash_broker_account`, `final_record_cut`, `_dedup_evidence`, `_only_nonevents`, `_refusal`: the parse tool and the parser registry calls; trimming, evidence dedup and refusing an export that yields nothing usable.
+- `src/taxjson/lib/core.py` — `register_brokerage`, `load_brokerage`, `_BROKERAGES`: the id-to-class registry the parse tool fills.
+- `src/taxjson/bin/taxjson_extractors.py` — `main`: lists the registered parser ids and classes.
+- `src/taxjson/bin/taxjson_run.py` — `_parse_reads`, `_parse_outputs`, `_reused_parse`, `_split_generic_groups`: how `stage_account` calls the parse per broker group and reuses a cached parse.
+
+## Broker parsers: shared base and schema
+
+Every parser subclasses `BaseBrokerage` and implements `parse_file`. The base
+class holds the shared helpers: OCC option symbols, currency suffixes, strict
+number parsing, settlement dates and skip accounting. The schema module is the
+one table of what a normalized row must look like.
+
+- `src/taxjson/lib/brokerages/base.py` — `BaseBrokerage`, `parse_file`, `BrokerageParseError`, `count_skip`, `emit_skip_summary`, `format_occ_symbol`, `apply_currency_suffix`, `canonical_ca_listing`, `parse_strict_number`, `read_broker_text`, `equity_settlement_date`, `income_facts_from_description`, `set_ticker_map`, `source_identity`: the base class and its row-accounting contract; option and listing symbols; strict number and text reading; settlement dates and income facts; what a parser knows of ticker.map and of which account a file belongs to.
+- `src/taxjson/lib/brokerages/schema.py` — `SCHEMA`, `KNOWN_ACTIONS`, `validate_transactions`, `render_schema_prompt`: the normalized-row schema and its validator.
+
+## Equity broker parsers
+
+One parser per broker export. Each reads the broker's activity CSV and emits
+BUY, SELL, DIVIDEND, TAX, ROC, SPLIT, TRANSFER and the other actions in the
+schema. Account-level context (positions over time, reversals, ticker
+changes) is built across all of an account's files before rows are emitted.
+
+- `src/taxjson/lib/brokerages/questrade.py` — `QuestradeBrokerage`, `QtAccountContext`, `build_qt_account_context`, `_plan_qt_reversals`, `_detect_qt_ticker_changes`, `scan_code_uses`: Questrade activity exports, including internal security codes.
+- `src/taxjson/lib/brokerages/rbc_direct.py` — `RbcBrokerage`, `read_rbc_rows`, `classify_rbc_row`, `RbcAccountContext`, `build_rbc_account_context`, `_plan_reinvest_reversals`, `rbc_coverage_messages`, `is_holdings_export`, `RbcFormatError`: RBC Direct Investing; every row is classified by its activity label and event code; date coverage, holdings files and format refusals.
+- `src/taxjson/lib/brokerages/ib_extractor.py` — `IbBrokerage`, `parse_file`, `prepare_files`, `reconcile_files`, `resolve_unmatched_ca`, `ib_year_coverage`, `get_ib_settlement`, `_ib_market_trade_date`, `_ib_xfer_cancels`, `_ib_fold_refund`: Interactive Brokers activity statements (every section of one CSV); coverage gaps, settlement and trade dates, cancellations and fee refunds.
+- `src/taxjson/lib/brokerages/webull.py` — `WebullBrokerage`, `label_hits`, `_WEBULL_OPTION_RE`, `_deliverable_size`: Webull exports (both column layouts, matched by header label).
+- `src/taxjson/lib/trade_cancel.py` — `pair_cancellations`, `is_trade_cancel`, `TRADE_CANCEL_TYPE`: an IB `Ca` cancellation netted against its original.
+- `src/taxjson/lib/futures.py` — `settle_futures`, `is_plain_future`, `method_for`, `section_1256_kind`: plain futures booked on a settlement basis.
+
+## Crypto parsers
+
+Kraken and Coinbase exports are read strictly: amounts must parse exactly, and
+local times need a time zone. Withdrawals and deposits are kept as TRANSFER
+custody evidence for the crypto sends step.
+
+- `src/taxjson/lib/brokerages/kraken.py` — `KrakenBrokerage`, `header_kind`, `REQUIRED_BY_KIND`, `known_assets_of`, `_ledger_identity`: Kraken trades and ledger exports.
+- `src/taxjson/lib/brokerages/coinbase.py` — `CoinbaseBrokerage`, `resolve_header`, `is_header_row`, `_cb_symbol`, `_HEADER_SYNONYMS`: Coinbase transaction exports.
+- `src/taxjson/lib/brokerages/_crypto_common.py` — `strict_money`, `utc_to_local`, `LocalTimezoneMissing`, `usd_value`, `warn_depeg`: helpers both crypto parsers share.
+- `src/taxjson/bin/fill_crypto_prices.py` — `main`, `get_crypto_price`, `load_cache`, `yahoo_id`, `_implausible_yahoo_prices`: the `taxjson-fill-crypto` stage that prices crypto rows with no fiat value.
+
+## Generic CSV, hand entry (.tt) and adding a parser
+
+A broker with no parser can be read through a column mapping (`generic_*.csv`
+plus its mapping). Hand-entered rows go in `.tt` text files (one transaction
+per line), which `taxjson run` converts to JSON. A new parser registers in
+`taxjson_brokerage.py`, adds a detector, and passes the conformance harness
+against a synthetic fixture.
+
+- `src/taxjson/lib/brokerages/generic.py` — `GenericBrokerage`, `mapping_path`, `_load_mapping`, `_check_keys`, `_check_trade_row`: the column-mapped importer.
+- `src/taxjson/bin/taxjson_convert_tt.py` — `tt_to_json`, `parse_tt_line`, `parse_opening_line`, `json_to_tt_lines`, `compute_tt_id`, `main`: the .tt format in both directions.
+- `src/taxjson/bin/taxjson_run.py` — `stage_account`, `_refuse_crypto_openings`: where an account's `.tt` files are converted; an OPENING line in a crypto account is refused.
+- `src/taxjson/bin/taxjson_generate_parser.py` — `main`, `identity_findings`, `_call_claude`, `_call_gemini`: maintainer tool that drafts a parser from a sample CSV.
+- `tests/parser_conformance.py` — `ParserConformance`, `FIXTURES`, `validate_transactions`: the harness every parser test subclasses (schema, golden output, determinism, row accounting).
+- `tests/test_parser_conformance.py` — `TestQuestradeConformance`, `TestIbConformance`, `TestKrakenConformance`, `UPDATE_GOLDEN`: one registration per parser.
+- `tests/fixtures/ib/expected.json` — `action`, `date_settle`: an example golden; each broker folder under tests/fixtures has a synthetic `sample.csv` and its `expected.json`.
+
+## Merge, sort, dedup and validate
+
+An account's parsed files are merged, sorted and deduplicated across files,
+ticker.map is applied, amounts are converted to the base currency, fund
+distributions are added, and the result is validated: the account's
+`work/<name>_base.json`. `taxjson-merge2` does these steps in one call.
+
+- `src/taxjson/bin/taxjson_merge2.py` — `main`, `cancel_trade_pairs`, `reconcile_dividend_tax`, `canonicalize_split_ratios`, `warn_duplicate_splits`: the combined merge tool.
+- `src/taxjson/bin/taxjson_merge.py` — `main`: concatenates transaction files.
+- `src/taxjson/bin/taxjson_sort.py` — `plan_dedup`, `DedupPlan`, `deduplicate`, `sort_transactions`, `_tt_near_duplicates`: sorting and cross-file dedup; ambiguous duplicates are reported, not dropped.
+- `src/taxjson/bin/taxjson_validate.py` — `validate_transactions`, `main`: the final shape check on a book.
+- `src/taxjson/lib/json_input.py` — `read_json_doc`, `load_json_doc_or_exit`, `check_row_types`, `require_gains_doc`, `read_work_doc`: how every tool reads a JSON input.
+- `src/taxjson/bin/taxjson_diff.py` — `main`, `extract_records`, `make_key`, `field_diffs`: compares two transaction or gains files (ADDED / REMOVED / MODIFIED).
+
+## ticker.map, renames, cross-listings and symbol codes
+
+ticker.map is one keyword-prefixed rules file at the project root: renames,
+consolidations of two listings (TOBASE), journal pairs, deletions, EXTRACT
+fixes, T1135 countries. A rename is a dated event: the position and its cost
+carry to the new ticker on that date. Two listings joined by a transfer
+journal become one security, and Questrade internal codes are resolved to real
+tickers from the other accounts' evidence.
+
+- `src/taxjson/lib/ticker_map.py` — `find_ticker_map`, `read_side_rules`, `parse_side_line`, `SideRules`, `map_ticker`, `refuse_legacy_map_file`: reading ticker.map and mapping one symbol.
+- `src/taxjson/bin/taxjson_ticker_map.py` — `apply_mapping`, `load_map_file`, `map_file_problems`, `merge_renames`, `bare_target_warnings`, `guard_option_listing_collisions`: the `taxjson-ticker-map` stage applied to a book.
+- `src/taxjson/lib/renames.py` — `DatedRename`, `rename_events`, `apply_dated_renames`, `late_rows`, `unresolved_late`, `render`: renames as dated events and `taxjson renames`.
+- `src/taxjson/lib/cross_listings.py` — `gather`, `analyze`, `map_lines`, `effective_map_text`, `joined_note`: two listings joined by their transfer journal.
+- `src/taxjson/lib/symbol_codes.py` — `resolve`, `project_evidence`, `names_agree`, `is_code`, `read_state`, `codes_note`, `exact_name`, `questrade_name`, `rbc_name`, `_CONFIRM_RE`: Questrade internal codes resolved to tickers; the security names (dealer confirmation wording cut) that codes and cross-listings compare.
+- `src/taxjson/bin/taxjson_run.py` — `stage_cross_listings`, `stage_symbol_codes`, `cmd_ticker_map`, `cmd_renames`, `_check_renamed_late`: where the run and the commands use them.
+- `src/taxjson/lib/ticker_map_suggest.py` — `gather`, `Suggestion`, `from_diag`, `from_cross_listings`, `from_symbol_codes`, `appended_text`: `taxjson ticker-map --suggest` and `--write`.
+- `src/taxjson/lib/t1135_country.py` — `parse_country`, `override_value`, `NOT_FOREIGN`: the country word of a T1135 line in ticker.map.
+
+## Corporate actions and elections
+
+Mergers, spin-offs, tenders and reorganizations are read from each broker's
+corporate-action rows into `CorporateAction` events. Each event needs an
+election (taxable or a rollover, by country); the choice is saved in a
+manifest and turned into transaction rows. Undecided events stop the run with
+an election list; `taxjson elect` records the choices. Splits and renames use
+one shared timeline so their arithmetic is the same everywhere.
+
+- `src/taxjson/lib/corp_actions.py` — `CorporateAction`, `parse_ib_corporate_actions`, `parse_questrade_corporate_actions`, `parse_rbc_corporate_actions`, `RULES_BY_COUNTRY`, `RuleSpec`, `resolve_event`, `options_for`, `apply_auto_defaults`, `IGNORE_ELECTION`, `Manifest`, `ElectionRecord`, `combine_broker_copies`: the broker extractors; the election rules per country; the saved elections (the manifest) and dedup of one event seen by two brokers.
+- `src/taxjson/bin/taxjson_corp_actions.py` — `main`, `EXTRACTORS`, `extract_events`, `_prompt_election`, `_pending_doc`, `EXIT_ELECTIONS_REQUIRED`: the `taxjson-corp-actions` stage.
+- `src/taxjson/bin/taxjson_run.py` — `cmd_elect`, `_print_pending`, `_print_elections`, `_warn_zero_value_spinoffs`, `_country_has_corp_rules`: `taxjson elect` and the run's election messages.
+- `src/taxjson/lib/corporate_timeline.py` — `SplitTimeline`, `cumulative_factor`, `split_event_key`, `split_seen`, `event_sort_key`, `radar_priority`: split and rename arithmetic and same-day event order.
+- `src/taxjson/lib/corp_views.py` — `spinoffs`, `splits`, `render_spinoffs`, `render_splits`, `wrong_country_elections`: `taxjson spinoffs` and `taxjson splits`.
+
+## Currency conversion and FX rates
+
+Every amount is converted to the home currency (CAD or USD) at the day's
+rate. `stage_currency_rates` builds the project's rates file by calling
+`taxjson-to-base-curr` per source currency (Bank of Canada, with fallbacks);
+the rates are cached in the home folder.
+
+- `src/taxjson/bin/taxjson_run.py` — `stage_currency_rates`, `_rates_coverage_stale`, `_raw_align_adjust_currency`, `_home_currency`: the run's rate file, its freshness, and ADJUST rows restated in the pool's currency for the raw holdings books.
+- `src/taxjson/bin/to_base_curr.py` — `build_rates`, `fetch_boc`, `fetch_boc_noon`, `fetch_yahoo`, `refresh_boc`, `resolve_rows`, `CACHE_FILE`: daily rates for one currency pair.
+- `src/taxjson/bin/taxjson_convert_currency.py` — `main`, `convert_transaction`, `get_rate_for_date`, `load_exchange_rates`, `MissingRateError`, `abort_if_currency_uncovered`, `fallback_rows`, `emit_fallback_summary`, `rate_source_summary`, `default_rate_for`: converting a book; rows priced with a fallback rate, and the summary of rate sources.
+- `src/taxjson/lib/json_cache.py` — `save_json_cache`: atomic, locked saves of the shared price and rate caches.
+- `src/taxjson/lib/offline.py` — `offline_enabled`, `ENV_VAR`: `TAXJSON_OFFLINE`, the switch that forbids network egress.
+- `src/taxjson/lib/core.py` — `convert_currency`: the engine-side currency helper.
+
+## Fund distributions and income dating
+
+Non-cash fund distributions (reinvested capital gains, return of capital) are
+entered in taxjson.toml `[[distributions]]` and added to the books. Which
+tax year an income row belongs to, and what counts as a payment in lieu, is
+decided per country from neutral facts the parsers record.
+
+- `src/taxjson/bin/taxjson_apply_distributions.py` — `apply_distributions`, `main`, `balance_on`, `resolve_live_symbol`, `_warn_roc_overlaps`: the `taxjson-apply-distributions` stage.
+- `src/taxjson/lib/project_tables.py` — `distribution_rows`, `claimed_losses`, `table_problems`, `DIST_TABLE`, `CGD_TABLE`: the hand-entered year tables in taxjson.toml.
+- `src/taxjson/lib/cg_dividends.py` — `parse_map`, `entries_from_config`, `allocate`, `CgDividendMapError`: T5 box 18 capital-gains dividends.
+- `src/taxjson/lib/income_dating.py` — `rules_for`, `IncomeRules`, `parse_ric_entries`, `is_canadian_issuer`, `split_share_roots`: income-year and payment-in-lieu rules.
+- `src/taxjson/lib/pipeline.py` — `apply_roc_record_dates`, `apply_trust_roc_record_dates`, `income_dating_flags`, `add_income_dating_args`: how the gains run applies them.
+
+## Transfers, crypto sends and opening balances
+
+TRANSFER rows are custody evidence, kept out of the books unless something
+decides otherwise. Shares that arrive in a taxable account from outside the
+books are booked at the broker's stated book value, or flagged. In a US
+project a move between two of your own taxable accounts carries its lots. A
+crypto send that never arrives in another of your accounts may be a
+disposition, decided once and saved. Opening balances come from a broker's
+positions report.
+
+- `src/taxjson/lib/transfer_in.py` — `Arrival`, `arrivals`, `sidecar_rows`, `booked_rows`, `mark_covered`, `attention_lines`: shares that arrived by transfer.
+- `src/taxjson/bin/taxjson_run.py` — `stage_transfer_arrivals`, `transfer_arrivals`, `stage_own_account_moves`, `own_account_custody_moves`, `_stage_crypto_sends`, `cmd_crypto_sends`, `cmd_opening`, `_opening_lines`: where the run books arrivals and own-account moves; the crypto sends hook and `taxjson crypto-sends`; `taxjson opening`, which writes OPENING lines from a positions report.
+- `src/taxjson/lib/crypto_sends.py` — `load_transfer_rows`, `match_transfers`, `build_report`, `record_decision`, `prompt_undecided`, `render_tt`, `DECISIONS`: crypto sends, their decisions and the generated crypto_sends.tt.
+- `src/taxjson/lib/opening.py` — `apply_opening_cutoff`, `snapshots`, `OpeningError`, `ATTENTION_OPENING`: OPENING rows and the cutoff they impose on earlier rows.
+- `src/taxjson/lib/pipeline.py` — `_handle_transfers`, `_net_cross_account_transfers`, `TransferValidationError`, `transfers_in_loss_windows`, `transfers_as_acquisitions`: transfer handling before the engine runs.
+
+## Missing purchase history
+
+When the files do not reach back to a purchase, a sale has no cost. These
+sales are detected, listed with suggestions, and can be answered with a
+`missing_history.json` entry (opening lots the gains run synthesizes) or a
+draft of the missing purchases.
+
+- `src/taxjson/lib/missing_history.py` — `detect_missing_history`, `MissingHistoryCandidate`, `classify_year_shorts`, `missing_history_suspects`, `detect_zero_basis_acquisitions`, `load_missing_history`, `synthesize_openings`, `stale_missing_history_entries`, `MISSING_HISTORY_FILE`, `draft_purchases`, `detect_superficial_loss_warnings`: finding sales with no purchase; the project file and the openings synthesized from it; purchase drafts and loss-window warnings.
+- `src/taxjson/bin/taxjson_missing_history.py` — `main`, `_print_section`, `_print_zero_section`, `_write_purchases`: the `taxjson-missing-history` tool.
+- `src/taxjson/bin/taxjson_run.py` — `cmd_find_missing_history`, `_missing_history_suspects`, `_year_short_rows`, `_refuse_unknown_missing_history_accounts`: `taxjson find-missing-history` and the run's use of the file.
+- `src/taxjson/lib/phantom_holdings.py` — `missing_history`: the old module name, kept as an alias.
+- `src/taxjson/lib/option_close_check.py` — `unbacked_option_closes`, `unbacked_option_close_messages`: option rows the broker marks closing that the books cannot back.
+
+## The gains engines
+
+`core.py` holds the transaction model and both engines. The Canadian engine
+pools shares at adjusted cost base per security across taxable accounts and
+applies the superficial-loss rule (with sheltered and affiliated accounts in
+view). The US engine (experimental) keeps FIFO lots, per account when asked,
+and applies the wash-sale rule. Both handle splits, renames, option exercise
+and assignment, and option replacement.
+
+- `src/taxjson/lib/core.py` — `TaxTransaction`, `load_transactions`, `TaxRules`, `CanadaTaxRules`, `USATaxRules`, `get_tax_rules`, `compute_gains`, `find_replacements_in_window`, `make_gain_entry`, `detect_option_replacement_matches`, `_AssignPremiumLedger`, `disposition_groups`, `is_option_symbol`, `held_more_than_one_year`: the transaction model and loading; the two engines (search `class CanadaTaxRules`, then its `compute_gains`); the US lot and wash-sale machinery; option replacement checks, assignment premiums, disposition grouping and option helpers.
+- `src/taxjson/lib/numeric.py` — `D`, `round_half_up`, `round_floats`: decimal arithmetic for money.
+- `src/taxjson/lib/wash_scope.py` — `scope_note`, `scope_lines`, `advisory_lines`: what the planning verdicts can and cannot see, per country.
+
+## The gains run and the wash passes
+
+`pipeline.py` is the one definition of a gains run: load-side preparation
+(transfers, missing-history openings), the country's engine options (option
+premium timing, US per-account lots), then the engine. `taxjson-gains` is its
+command line. After each account has gains, a second pass re-runs them with
+the other accounts in view (cross-account superficial loss); in Canada the
+taxable accounts run as one blended pass and are split back per account.
+
+- `src/taxjson/lib/pipeline.py` — `run_gains`, `GainsRequest`, `prepare_books`, `engine_options`, `option_timing_from_settings`, `option_timing_flags`, `place_retro_wash_adjustments`, `annotate_inventory_multipliers`, `declared_multipliers`, `tt_json_path`: one gains run; US retroactive wash adjustments and contract multipliers.
+- `src/taxjson/bin/taxjson_gains.py` — `main`, `_request`, `_suggest_missing_history_and_exit`, `write_traces_file`: the `taxjson-gains` tool.
+- `src/taxjson/bin/taxjson_split_gains.py` — `split_for_account`, `main`: splits a blended gains run back into per-account files.
+- `src/taxjson/bin/taxjson_run.py` — `stage_wash_pass`, `stage_blended_wash_pass`, `_blend_conservation_gaps`, `_wash_flags`, `_render_wash_outputs`: the wash passes in a run.
+
+## Per-account reports
+
+Each account ends with a `reports/<name>.sum` text report and its JSON twin:
+gains, income, option summaries and holdings. Cross-account reports (covered
+calls, long options, the wash radar, cross-listing lint) and the fee report
+come after.
+
+- `src/taxjson/bin/taxjson_sum_gains.py` — `summarize_gains`, `format_report`, `load_gains_data`, `main`: the gains section of a `.sum`.
+- `src/taxjson/bin/taxjson_sum_income.py` — `summarize_income`, `format_report`, `load_income_data`, `main`: the income section.
+- `src/taxjson/bin/_option_gains_report.py` — `process_data`, `load_inputs`, `main`: shared body of the two option reports.
+- `src/taxjson/bin/taxjson_ccd_gains.py` — `process_data`, `main`: short calls (covered calls) by underlying.
+- `src/taxjson/bin/taxjson_leaps_gains.py` — `process_data`, `main`: long options by underlying.
+- `src/taxjson/bin/taxjson_export.py` — `render_report`, `render_holdings_toml`, `process_data_report`, `main`: holdings as a text report or a TOML snapshot.
+- `src/taxjson/bin/taxjson_fees.py` — `aggregate`, `metrics`, `render_text`, `render_json`, `main`: the fee report by broker (`taxjson-fees-sum`).
+- `src/taxjson/lib/report_model.py` — `build_account_report`, `resolve_gains_files`, `render_table`, `align_columns`, `fmt_money`: shared report pieces and the account report JSON.
+
+## Output style and messages
+
+All human output follows docs/output-style.md: wrapped prose, labelled
+messages (Warning, Note, Error, ATTENTION), aligned tables. Stage messages are
+captured during a run and re-worded for the console.
+
+- `src/taxjson/lib/out.py` — `wrap`, `message`, `warn`, `note`, `attention`, `error`, `fail`, `fit_table`, `Doc`, `lint`, `console_lint`, `WIDTH`: the house style; the style checks tests use, and the wrap width (`TAXJSON_WIDTH`).
+- `src/taxjson/lib/stage_msg.py` — `emit_line`, `say`, `reword`, `console_lines`, `split_message`: stage messages and the run console.
+- `src/taxjson/lib/cli_diag.py` — `warn`, `error`, `note`, `read_text_utf8`, `write_text_atomic`, `InputReadError`: stderr diagnostics and safe reads and writes for tools.
+- `src/taxjson/lib/trace_format.py` — `render_gain_block`, `render_report_trace`, `render_summary_table`, `render_document_header`: the per-gain trace boxes.
+- `src/taxjson/lib/install_hint.py` — `extra_hint`, `INSTALLER`, `NOT_ON_PYPI`: the install lines the CLI prints.
+- `docs/output-style.md` — `Width`, `Messages`, `The run's console`, `Numbers, dates`: the style rules.
+
+## Row listings
+
+The listing commands read the native (before base-currency) per-account files
+and print rows in .tt style, filtered by period, account, symbol and action.
+
+- `src/taxjson/bin/taxjson_run.py` — `_run_tx_view`, `cmd_transactions`, `cmd_dividends`, `cmd_dil`, `cmd_buysell`, `cmd_roc`, `cmd_gains`, `cmd_leaps`, `cmd_fees`, `cmd_transfers_view`, `_view_window`, `_require_books`: `events`, `divs`, `dil`, `trades`, `roc`, `gains`, `leaps`, `fees` and `transfers` (the TRANSFER evidence); the shared period filter and the "run first" check.
+
+## Totals and positions
+
+The `*-sum` commands total one row type per security or per year. `list` and
+`shares` show positions from the canonical books (after ticker.map and
+base-currency conversion, wash-adjusted where built).
+
+- `src/taxjson/bin/taxjson_run.py` — `cmd_divs_sum`, `cmd_dil_sum`, `cmd_roc_sum`, `cmd_trades_sum`, `cmd_fees_sum`, `cmd_ccd_sum`, `cmd_leaps_sum`, `cmd_winners`, `cmd_positions`, `cmd_shares`, `_box18_fractions`: totals by type; option totals and the ranked winners and losers; `list` and `shares`.
+
+## Summaries and estimates
+
+`sum` prints the year's summary across accounts (gains, income, by form
+line). `estimate` and `amt` estimate the tax and the Canadian minimum tax;
+`instalments` schedules Canadian instalments; `fx-cash` computes FX gains on
+foreign cash; `stats` is a trader's win and loss view.
+
+- `src/taxjson/bin/taxjson_run.py` — `cmd_summary`, `_section_1256_gain`, `cmd_estimate`, `cmd_amt`, `_tax_estimate_result`, `_print_tax_estimate`, `cmd_instalments`, `_instalment_config`, `cmd_fx_cash`, `cmd_stats`: `sum`, `estimate`, `amt`, `instalments`, `fx-cash` and `stats`.
+- `src/taxjson/lib/tax_estimate.py` — `estimate_canada`, `estimate_usa`, `_amt_canada`, `ca_amt_carryover`, `apply_vintage`, `CA_FED_BRACKETS`: brackets, credits and the AMT, by rate year.
+- `src/taxjson/lib/amt_report.py` — `build`, `render`, `render_recorded`: the AMT page.
+- `src/taxjson/bin/taxjson_instalments.py` — `build`, `render`, `required_schedule`, `interest_and_penalty`, `PUBLISHED_RATES`: instalment schedule, interest and penalty.
+- `src/taxjson/bin/taxjson_fx_cash.py` — `build_ledger`, `apply_jurisdiction`, `render_report`, `CA_EXEMPTION`: FX gains on foreign-currency cash.
+- `src/taxjson/lib/trade_stats.py` — `compute`, `classify`, `written_option_trades`, `CLASSES`: win and loss statistics.
+
+## Checks before filing
+
+The checklist walks the filing steps (docs/filing.md), each proved by a
+command. `sanity` compares the books against broker positions reports;
+`check-dates` checks every trade time against market hours; `edge-cases`
+lists rows whose treatment turns on a boundary.
+
+- `src/taxjson/lib/checklist.py` — `STEPS`, `US_STEPS`, `DETECTORS`, `evaluate`, `Ctx`, `Result`, `input_fingerprint`, `record_input_fingerprint`, `inputs_changed`, `load_state`, `set_override`: the filing checklist and one detector per step; whether inputs changed since the last run, and saved step overrides.
+- `src/taxjson/bin/taxjson_run.py` — `cmd_checklist`, `_checklist_walk`, `cmd_sanity`, `_sanity_items_from_config`, `_sanity_print_extras`, `cmd_check_dates`, `cmd_edge_cases`, `cmd_spinoffs`, `cmd_splits`: `checklist` (and its interactive walk), `sanity`, `check-dates`, `edge-cases`, `spinoffs` and `splits`.
+- `src/taxjson/lib/positions_reports.py` — `read_positions`, `detect_positions`, `PositionsReport`, `PositionRow`, `positions_only`: broker positions reports (IB, RBC, TOML holdings).
+- `src/taxjson/lib/positions_check.py` — `compare_cost`, `positions_on`, `income_share_mismatches`, `load_inventory`: cost and dated-position checks for `sanity`.
+- `src/taxjson/lib/check_dates.py` — `analyze`, `render`, `check_trade_time`, `asset_class`: `taxjson check-dates`.
+- `src/taxjson/lib/edge_cases.py` — `analyze`, `render_text`, `year_straddles`, `windows_across_year_end`, `calls_in_windows`: `taxjson edge-cases`.
+
+## Audit, wash sales, explain and tax logic
+
+`audit` traces every taxable disposition from the broker row to the reported
+gain. `wash-sales` lists superficial losses or wash sales with the replacement
+that caused each. `taxjson-explain` prints a calculation trace for one gain.
+`tax-logic` prints every rule the code applies, with the project's settings
+filled in; it is the spec the code and tests are checked against.
+
+- `src/taxjson/bin/taxjson_audit.py` — `main`, `build_event`, `render_event`, `render_reconciliation`, `build_source_index`, `merge_lot_records`: the audit.
+- `src/taxjson/bin/taxjson_run.py` — `cmd_audit`, `_audit_source_files`, `_merge_audit_json`, `cmd_wash_sales`, `_explain_wash_sales`, `cmd_tax_logic`: `audit`, `wash-sales` and `tax-logic`.
+- `src/taxjson/bin/taxjson_explain.py` — `main`, `print_trace`, `gain_matches`, `fmt_summary`: the `taxjson-explain` tool.
+- `src/taxjson/lib/tax_logic.py` — `Rule`, `catalog`, `sections`, `render`, `_canada`, `_usa`, `PARTITION_RULES`, `NON_RULE_SETTINGS`: the rule statements with their ids.
+
+## Planning before you trade
+
+These views answer "what happens if I trade now": the wash radar shows each
+holding's superficial-loss or wash-sale status as of a date; buy-check and
+sell-check answer for one symbol; harvest shows unrealized gains at current
+prices; scan checks holdings for tax-efficiency mistakes (for example a
+Canadian dividend payer held through its US listing); watch reports changes
+since the last look (cron-able); option-boundary lists written options that
+straddle a year end.
+
+- `src/taxjson/bin/taxjson_wash_radar.py` — `main`, `_render_text`, `_us_engine_losses`, `_advisory_category`, `_CA_DEFINITIONS`: the wash radar.
+- `src/taxjson/bin/taxjson_run.py` — `cmd_wash_radar`, `_radar_config`, `_radar_engine_args`, `cmd_buy_check`, `cmd_sell_check`, `_wash_class_context`, `cmd_harvest`, `cmd_watch`, `cmd_scan`, `cmd_option_boundary`: `wash-radar`, `buy-check`, `sell-check`, `harvest`, `watch`, `scan` and `option-boundary`.
+- `src/taxjson/bin/taxjson_safe_to_sell.py` — `main`, `_STATUS`: one line per taxable position: may it be sold at a loss today.
+- `src/taxjson/bin/taxjson_harvest.py` — `main`, `load_positions`, `load_radar`, `_recovery_schedule`, `_days_to_long_term`: the harvest view.
+- `src/taxjson/bin/taxjson_watch.py` — `diff_radar`, `diff_harvest`, `flatten_radar`, `load_state`, `render_report`: the change detector.
+- `src/taxjson/lib/option_boundary.py` — `write_lots`, `straddling`, `expired_open`, `filed_locks`, `WriteLot`: written options across a year boundary.
+- `src/taxjson/bin/taxjson_lint_crosslistings.py` — `analyze`, `venue_splits`, `main`: cross-listed holdings the radar would see as two.
+- `src/taxjson/lib/price_chain.py` — `fetch_prices`, `fetch_option_prices`, `PriceQuote`, `yf_symbol_for`, `latest_rate`: current prices (IBKR, then yfinance, then the cache).
+
+## Filing forms and slips
+
+`form-export` renders gains into filing shapes (Schedule 3 lines for Canada,
+Form 8949 and TXF for the US). `t1135` helps with the foreign property form.
+`reconcile-slips` compares the broker's T5008 or 1099-B slips with the
+computed dispositions. `carryover` keeps the loss carry-forward ledger.
+
+- `src/taxjson/bin/taxjson_form_export.py` — `main`, `build_schedule3`, `schedule3_line`, `build_8949`, `build_txf`, `filing_lines`: the form renderers.
+- `src/taxjson/bin/taxjson_t1135.py` — `build_report`, `render_report`, `walk_costs`, `classify_country`, `FILING_THRESHOLD`: T1135 cost amounts by country.
+- `src/taxjson/bin/taxjson_reconcile_slips.py` — `reconcile`, `load_slip`, `load_computed`, `render`, `SlipRefused`: slip reconciliation.
+- `src/taxjson/bin/taxjson_carryover.py` — `build_canada_ledger`, `build_usa_ledger`, `load_claimed`, `lock_figure`, `render`: the carryover ledger.
+- `src/taxjson/lib/carryforward.py` — `resolve_losses`, `resolve_amt`, `record_block`, `lock_block`, `handoff_issues`: carry-forwards from one year to the next.
+- `src/taxjson/bin/taxjson_run.py` — `cmd_form_export`, `cmd_t1135`, `cmd_reconcile_slips`, `cmd_carryover`, `_taxable_gains_argv`: the commands.
+
+## Filed-year lock and year hand-off
+
+`close-year` snapshots a filed year's figures; every later run and
+`check-filed` recompute the year and report drift. `handoff` records what a
+closed year carried forward and checks that the next year's project starts
+from exactly that.
+
+- `src/taxjson/bin/taxjson_filed.py` — `write_snapshot`, `recompute_year`, `diff_snapshot`, `project_locks`, `lock_for_year`, `aggregates_from_gains`: the filed-year lock.
+- `src/taxjson/bin/taxjson_run.py` — `cmd_close_year`, `cmd_check_filed`, `_check_filed_years`, `_carryforwards_for_lock`, `_locked_year_flags`, `cmd_handoff`, `_prior_record_path`, `_handoff_gains_flags`: `close-year`, `check-filed` and `handoff`, and the drift check every run makes of each filed year.
+- `src/taxjson/lib/handoff.py` — `snapshot`, `check`, `render`, `validate_record`, `straddlers`, `load_filed_dispositions`: the year-to-year record and its check.
+
+## Redact
+
+`redact` strips account numbers, names and contact details from a broker
+export while keeping every row's shape, so a file can be shared as a parser
+sample or a bug report. It is a best-effort pattern matcher.
+
+- `src/taxjson/bin/taxjson_redact.py` — `redact_file`, `redact_text`, `redact_tree`, `compile_patterns`, `Pseudonyms`, `load_denylist`: the redactor.
+- `src/taxjson/bin/taxjson_run.py` — `cmd_redact`: `taxjson redact`.
+
+## Configuration: taxjson.toml, init, format and migrate
+
+taxjson.toml holds `[settings]` (country, year, tax date basis ...) and one
+table per account. Every reader goes through the same checks. `init` writes
+a new project from a template; `format` re-renders an existing file into the
+template keeping the user's values; `migrate` folds an old project's separate
+files into ticker.map and taxjson.toml.
+
+- `src/taxjson/bin/taxjson_run.py` — `load_config`, `validate_config`, `_normalize_settings`, `_warn_config_tables`, `_refuse_bad_account_types`, `cmd_init`, `_render_init_config`, `cmd_format`, `_backup_config`, `cmd_migrate`: reading and checking taxjson.toml; `init`, `format` and `migrate`.
+- `src/taxjson/lib/config_check.py` — `settings_problems`, `account_type_problems`, `account_name_problem`, `ACCOUNT_TYPES`, `ACCOUNT_KEYS`, `RETIRED_SETTINGS`: the checks every config reader applies.
+- `src/taxjson/lib/config_template.py` — `SETTINGS_SPEC`, `ACCOUNT_SPEC`, `TABLES`, `render_init`, `format_config`, `scaffold_document`, `Key`: every key taxjson reads, documented per country.
+- `src/taxjson/lib/migrate.py` — `plan`, `apply`, `Plan`, `legacy_files`, `LEGACY_FILES`, `MigrateError`: moving old files into the new places.
+- `src/taxjson/lib/safe_write.py` — `write_user_file`, `write_atomic`, `atomic_open`, `backup_copy`, `OutsideLinkError`: writes that never follow a planted symlink, with a backup.
+- `src/taxjson/lib/tomlcompat.py` — `tomllib`: the tomllib or tomli import.
+
+## The Canada and USA partition
+
+Canadian and US rules never mix. One module resolves a project's country and
+owns the tables saying which settings, config tables, flags, commands and
+project files belong to which country. `scripts/check_tax_rules.py` checks
+that the tables are complete.
+
+- `src/taxjson/lib/country.py` — `settings_country`, `canonical_country`, `CountryError`, `SETTING_COUNTRY`, `CONFIG_COUNTRY`, `FLAG_COUNTRY`, `COMMAND_COUNTRY`, `PROJECT_FILE_COUNTRY`, `config_country_problems`, `check_engine_allowed`, `refuse_foreign_flags`, `default_tax_date`, `basis_pooled_across_accounts`: the one country resolver; the ownership tables (settings, config tables, flags, commands, project files); the checks built on them; per-country defaults.
+- `src/taxjson/bin/taxjson_run.py` — `_country`, `_tax_date`, `_is_us`, `_refuse_other_country_books`: how the CLI reads them.
+
+## Markets, calendars and dates
+
+Venue suffixes, currencies and the security lists taxjson cannot read from an
+export live in one data file, overridable from ticker.map. Settlement dates
+use each market's holiday calendar and the T+3, T+2, T+1 history.
+
+- `src/taxjson/lib/markets.py` — `data`, `overrides`, `suffix_of`, `suffix_currency`, `is_canadian_listing`, `split_share_roots`, `contract_size`: market reference data.
+- `src/taxjson/data/markets.toml` — `venues`, `currency_suffix`, `ib_venues`, `kraken_assets`: the shipped defaults.
+- `src/taxjson/lib/market_calendar.py` — `add_settlement_days`, `is_settlement_day`, `is_trading_day`, `nyse_holidays`, `tsx_holidays`: settlement calendars.
+- `src/taxjson/lib/dates.py` — `settlement_date`, `settlement_lag_days`, `date_to_epoch`, `market_of`, `last_trade_date_settling_by`: date helpers for the radar and planning views.
+
+## The fetch plugin
+
+The core holds no broker API client and reads no broker credential.
+`taxjson fetch` finds installed fetchers through the `taxjson.fetchers` entry
+point; the separate taxjson-fetch package provides Questrade and IBKR Flex
+downloads.
+
+- `src/taxjson/lib/fetchers.py` — `discover`, `Fetcher`, `FetchRequest`, `ENTRY_POINT_GROUP`, `add_fetcher_arguments`, `listing`: the core side of the plugin contract.
+- `src/taxjson/bin/taxjson_run.py` — `cmd_fetch`, `_no_fetcher_exit`, `_fetch_plugin_note`, `_fetch_brokerages`: `taxjson fetch`.
+- `packages/taxjson-fetch/src/taxjson_fetch/plugin.py` — `BrokerFetcher`: the object the core loads.
+- `packages/taxjson-fetch/src/taxjson_fetch/command.py` — `run`, `_merge_csv_text`, `_questrade_token_file`, `_flex_lost_dates`, `_qt_trim_file`: the fetch command (token file, merging a re-fetch into the existing CSV).
+- `packages/taxjson-fetch/src/taxjson_fetch/api.py` — `qt_refresh`, `qt_activities`, `qt_positions`, `flex_fetch`, `positions_to_holdings_toml`, `mask_account_number`: the Questrade and Flex API clients.
+- `packages/taxjson-fetch/pyproject.toml` — `taxjson.fetchers`: the entry-point registration.
+
+## Release channels and install
+
+`main` is the development line; a `vX.Y.Z` tag is a release. channels.json
+names the release each channel (stable, beta) points at. The installer clones
+a channel's release; `release.sh` cuts a tag after the full gate;
+`promote.sh` moves a channel. docs/releasing.md has the steps.
+
+- `install.sh` — `main`, `newest`, `named`, `vernewer`, `--channel`: the one-line installer.
+- `channels.json` — `stable`, `beta`: where each channel points.
+- `scripts/release.sh` — `## Unreleased`, `CHANGELOG.md`, `scripts/ci.sh`: cuts a release (CHANGELOG heading, version bump in both packages, full gate, tag).
+- `scripts/promote.sh` — `die`, `channels.json`: points a channel at a release.
+- `scripts/channels.sh` — `taxjson channels`: the channel page from a checkout.
+- `src/taxjson/lib/channels.py` — `read_channels`, `parse_channels`, `release_tags`, `status`, `render`, `dev_checkout`: `taxjson channels`, and the checkout `promote` and `deploy` use.
+- `src/taxjson/bin/taxjson_run.py` — `cmd_channels`, `cmd_promote`, `cmd_deploy`, `_run_script`, `_RELEASE_CMDS`: the release commands.
+- `scripts/dev-setup.sh` — `venv/bin/pip install`, `pre-push`: developer setup (venv, editable installs, the hook).
+
+## The CI gate and repository checks
+
+`scripts/ci.sh` is the gate: lint, consistency, tax-rules, PII scan, the full
+suite (core and the fetch plugin) and the fuzzers. A push must see its result
+line PASS. The pre-push hook scans what a push would publish.
+
+- `scripts/ci.sh` — `stage`, `fuzz_run`, `--nightly`: the gate's stages.
+- `scripts/check-consistency.sh` — `CHANGELOG`, `channels.json`: versions, CHANGELOG heading and channels agree.
+- `scripts/check-pii.sh` — `main`, `report`, `amount_filter`, `sin_filter`, `--diff`: the personal-data and secret scan (tree, diff, messages).
+- `scripts/hooks/pre-push` — `refuse`, `check-pii.sh`: the pre-push hook.
+- `scripts/check_tax_rules.py` — `main`, `collect`, `ownership_problems`, `read_ids`: every tax-logic rule has a test that cites it, and the country tables are complete.
+- `tests/tax_rules/__init__.py` — `rule`, `rule_absent`: the test markers that cite rule ids.
+- `tests/tax_rules/baseline-unpinned.txt` — `CA-`: the shrink-only list of rules without a test yet.
+- `scripts/style/survey.py` — `main`: runs every command on the synthetic style projects and saves the output.
+- `scripts/style/measure.py` — `measure`, `is_table`: ranks those captures by style problems.
+- `scripts/mutation_audit.py` — `TARGET_FUNCS`, `find_sites`: the mutation harness (mutates engine files in place; run only with `--yes` and restore from git if interrupted).
+- `scripts/mutation_triage.py` — `main`: groups mutation survivors for review.
+- `.github/workflows/tests.yml` — `check-pii.sh`, `check_tax_rules.py`: the same gate on pull requests.
+
+## Tests
+
+Run the suite from `tests/` with `TAXJSON_WIDTH=0`. Engine changes are pinned
+by property fuzzers and by tests that run both countries side by side.
+Style tests build small synthetic projects and check every line printed.
+
+- `tests/tax_rules/dual.py` — `gains_both`, `projects_both`, `cli_both`, `settings_for`, `tx`: one book or project run under both countries.
+- `tests/_style.py` — `project`, `Project`, `assert_styled`, `assert_console`, `assert_labelled`: synthetic projects and output-style asserts.
+- `tests/test_engine_invariants.py` — `TestConservationFuzz`, `TestOrderInvariance`, `TestCraGoldenExamples`, `make_book`: engine fuzzing and golden examples.
+- `tests/test_conservation.py` — `TestShareCountChecker`, `TestStrandedBasisChecker`: share and cost conservation checks.
+- `tests/test_transfer_fuzz.py` — `make_transfer_book`: transfer fuzzing.
+- `tests/test_settle_straddle_fuzz.py` — `build_book`, `conservation_gap`: settlement-straddle fuzzing.
+- `tests/test_partition_foundation.py` — `TestOneCountryResolver`, `TestSettingOwnership`, `TestCommandOwnership`: the country partition.
+- `tests/test_output_style.py` — `TestWidth`, `TestWrapAndMessages`: the output style.
+- `tests/test_check_pii.py` — `TestTreeScan`, `TestDiffAndPush`: the PII scanner.
+- `tests/test_knowledge_pack.py` — `TestArchitectureMap`, `TestReferences`: every path and symbol this map names still exists.
+- `run_tests.sh` — `unittest`: runs the suite with the project venv.
