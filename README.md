@@ -2357,6 +2357,11 @@ Each command takes `--help`. The full pipeline is composable — outputs from on
 - [`REFERENCES.md`](./REFERENCES.md) — the ITA / CRA / IRC source behind every rule, and every deliberate non-feature
 - [`KNOWN_ISSUES.md`](./KNOWN_ISSUES.md) — known limitations and deferred fixes
 - [`docs/filing.md`](./docs/filing.md) — the filing checklist: every step from frozen inputs to the `close-year` lock, with the command that proves it
+- [`docs/tax-rules.md`](./docs/tax-rules.md) — every tax rule taxjson applies (Canada, then the US), with its source, its `taxjson tax-logic` rule ids, the code and its limits
+- [`docs/settings.md`](./docs/settings.md) — every taxjson.toml key and every project file (ticker.map, `.tt`, missing_history.json, mappings, elections) with defaults and examples
+- [`docs/troubleshooting.md`](./docs/troubleshooting.md) — known problems by the message you see: how to check, the cause, the fix, the release that fixed it
+- [`docs/architecture-map.md`](./docs/architecture-map.md) — where each feature's code is: its files and the functions to search for
+- [`AGENTS.md`](./AGENTS.md) — notes for AI assistants helping you run taxjson or change its code
 - [`docs/releasing.md`](./docs/releasing.md) — the dev/release scheme (`main`, `vX.Y.Z` tags, the stable / beta / latest channels) and how a release is cut and promoted
 - [`CHANGELOG.md`](./CHANGELOG.md) — release history
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) — how to run tests and submit changes

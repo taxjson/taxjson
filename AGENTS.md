@@ -91,3 +91,5 @@ each symbol an identifier in that file or a literal fragment of it).
 `tests/test_knowledge_pack.py` fails when the pack names a missing file or
 symbol, a `tjs` command that does not exist, a "Fixed in" that is not a
 CHANGELOG release, or anything that looks like personal data.
+`tests/test_settings_doc.py` fails when a taxjson.toml key, a project-file
+keyword or a tax-logic rule is missing from settings.md or tax-rules.md.
