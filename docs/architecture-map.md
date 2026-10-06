@@ -105,7 +105,7 @@ BUY, SELL, DIVIDEND, TAX, ROC, SPLIT, TRANSFER and the other actions in the
 schema. Account-level context (positions over time, reversals, ticker
 changes) is built across all of an account's files before rows are emitted.
 
-- `src/taxjson/lib/brokerages/questrade.py` — `QuestradeBrokerage`, `QtAccountContext`, `build_qt_account_context`, `_plan_qt_reversals`, `_detect_qt_ticker_changes`, `scan_code_uses`: Questrade activity exports, including internal security codes.
+- `src/taxjson/lib/brokerages/questrade.py` — `QuestradeBrokerage`, `QtAccountContext`, `build_qt_account_context`, `_plan_qt_reversals`, `_detect_qt_ticker_changes`, `scan_code_uses`, `_plan_qt_journals`, `_journal_listing`, `journal_codes`: Questrade activity exports, including internal security codes and BRW currency journals (paired legs, the US-dollar line, codes learned from a journal leg).
 - `src/taxjson/lib/brokerages/rbc_direct.py` — `RbcBrokerage`, `read_rbc_rows`, `classify_rbc_row`, `RbcAccountContext`, `build_rbc_account_context`, `_plan_reinvest_reversals`, `rbc_coverage_messages`, `is_holdings_export`, `RbcFormatError`: RBC Direct Investing; every row is classified by its activity label and event code; date coverage, holdings files and format refusals.
 - `src/taxjson/lib/brokerages/ib_extractor.py` — `IbBrokerage`, `parse_file`, `prepare_files`, `reconcile_files`, `resolve_unmatched_ca`, `ib_year_coverage`, `get_ib_settlement`, `_ib_market_trade_date`, `_ib_xfer_cancels`, `_ib_fold_refund`: Interactive Brokers activity statements (every section of one CSV); coverage gaps, settlement and trade dates, cancellations and fee refunds.
 - `src/taxjson/lib/brokerages/webull.py` — `WebullBrokerage`, `label_hits`, `_WEBULL_OPTION_RE`, `_deliverable_size`: Webull exports (both column layouts, matched by header label).
@@ -165,7 +165,7 @@ tickers from the other accounts' evidence.
 - `src/taxjson/lib/ticker_map.py` — `find_ticker_map`, `read_side_rules`, `parse_side_line`, `SideRules`, `map_ticker`, `refuse_legacy_map_file`: reading ticker.map and mapping one symbol.
 - `src/taxjson/bin/taxjson_ticker_map.py` — `apply_mapping`, `load_map_file`, `map_file_problems`, `merge_renames`, `bare_target_warnings`, `guard_option_listing_collisions`: the `taxjson-ticker-map` stage applied to a book.
 - `src/taxjson/lib/renames.py` — `DatedRename`, `rename_events`, `apply_dated_renames`, `late_rows`, `unresolved_late`, `render`: renames as dated events and `taxjson renames`.
-- `src/taxjson/lib/cross_listings.py` — `gather`, `analyze`, `map_lines`, `effective_map_text`, `joined_note`: two listings joined by their transfer journal.
+- `src/taxjson/lib/cross_listings.py` — `gather`, `analyze`, `map_lines`, `effective_map_text`, `joined_note`: two listings joined by their transfer journal (a TOBASE line), or by a Questrade currency journal the parser paired (a JOURNAL line, Canada only).
 - `src/taxjson/lib/symbol_codes.py` — `resolve`, `project_evidence`, `names_agree`, `is_code`, `read_state`, `codes_note`, `exact_name`, `questrade_name`, `rbc_name`, `_CONFIRM_RE`: Questrade internal codes resolved to tickers; the security names (dealer confirmation wording cut) that codes and cross-listings compare.
 - `src/taxjson/bin/taxjson_run.py` — `stage_cross_listings`, `stage_symbol_codes`, `cmd_ticker_map`, `cmd_renames`, `_check_renamed_late`: where the run and the commands use them.
 - `src/taxjson/lib/ticker_map_suggest.py` — `gather`, `Suggestion`, `from_diag`, `from_cross_listings`, `from_symbol_codes`, `appended_text`: `taxjson ticker-map --suggest` and `--write`.
@@ -438,8 +438,8 @@ Venue suffixes, currencies and the security lists taxjson cannot read from an
 export live in one data file, overridable from ticker.map. Settlement dates
 use each market's holiday calendar and the T+3, T+2, T+1 history.
 
-- `src/taxjson/lib/markets.py` — `data`, `overrides`, `suffix_of`, `suffix_currency`, `is_canadian_listing`, `split_share_roots`, `contract_size`: market reference data.
-- `src/taxjson/data/markets.toml` — `venues`, `currency_suffix`, `ib_venues`, `kraken_assets`: the shipped defaults.
+- `src/taxjson/lib/markets.py` — `data`, `overrides`, `suffix_of`, `suffix_currency`, `is_canadian_listing`, `split_share_roots`, `contract_size`, `ca_usd_class`: market reference data (and the listing convention for a Canadian listing's US-dollar class).
+- `src/taxjson/data/markets.toml` — `venues`, `currency_suffix`, `conventions`, `ib_venues`, `kraken_assets`: the shipped defaults.
 - `src/taxjson/lib/market_calendar.py` — `add_settlement_days`, `is_settlement_day`, `is_trading_day`, `nyse_holidays`, `tsx_holidays`: settlement calendars.
 - `src/taxjson/lib/dates.py` — `settlement_date`, `settlement_lag_days`, `date_to_epoch`, `market_of`, `last_trade_date_settling_by`: date helpers for the radar and planning views.
 
