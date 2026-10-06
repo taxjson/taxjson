@@ -64,6 +64,14 @@ its lines listed for review), and lists
 (by line number only) the free-text lines that still hold name-like
 words or long digit runs it did not redact. `--check` writes nothing
 and exits 1 when it finds anything to redact.
+
+With no FILE (`taxjson redact`, in a project or with -C DIR) the whole
+inputs/ folder is copied to inputs_redact/ (or --out DIR) and the COPY
+is redacted, every text file of it, ids consistent across the tree;
+file and folder names holding an id are renamed, the old -> new map
+printed on the console only. Binary files are not copied (each is
+named in a warning). inputs/ is never written; an existing copy is
+replaced only with --force. See the "project mode" section below.
 """
 from __future__ import annotations
 
@@ -1534,10 +1542,430 @@ def print_report(src: Path, dst: Optional[Path], rep: Report) -> None:
             print(f"    … and {len(rep.review) - _REVIEW_SHOWN} more")
 
 
-def _diag(kind: str, text: str) -> None:
+def _diag(kind: str, text: str, details=(), file=None) -> None:
     """`taxjson redact: <kind>: ...` on stderr (lib/out.message)."""
     from taxjson.lib.out import emit
-    emit(kind, text, prog="taxjson redact")
+    emit(kind, text, prog="taxjson redact", details=details, file=file)
+
+
+# --------------------------------------------------------- project mode
+# `taxjson redact` with no FILE: the whole inputs/ folder of a project is
+# copied to inputs_redact/ (or --out DIR) and every text file in the
+# COPY is redacted; inputs/ is never written. Design (owner request,
+# 2026-10-06):
+#   * Every text file is copied redacted, whatever its kind (CSV, .tt,
+#     .json / .toml sidecars, README.txt), so the copy is a complete
+#     inputs tree `taxjson run` can parse. Binary files (.xlsx, .pdf,
+#     .zip ...) are NOT copied — the redactor cannot read them, so it
+#     cannot vouch for them — and each one is named in a Warning to
+#     review by hand. Hidden files and Office lock files (which the run
+#     never reads) are left out; a symlinked FILE is read through (the
+#     run reads it too) and written as a regular file; a symlinked
+#     FOLDER is not followed.
+#   * Ids are consistent across the whole tree: one placeholder table
+#     for every file (and file name), and a final sweep replaces an id
+#     collected in one file wherever it appears in another (a .tt
+#     comment, a sends.json).
+#   * File and folder NAMES that carry an account id (IB names
+#     downloads after the account) get the same placeholder as the
+#     content; names stay unique (`-2` ...). The old -> new map is
+#     printed on the console only, never written into the copy.
+#   * The copy is built in a fresh temporary sibling folder and renamed
+#     into place. An existing copy is replaced only with --force, and
+#     only when it is a folder this command made (it holds the
+#     `.taxjson-redacted` marker, a fixed text with no ids) — never a
+#     symlink, never a folder that holds or sits inside inputs/. The old
+#     copy is not kept: it is moved aside, the new one renamed in, then
+#     the old one deleted.
+TREE_DEFAULT = "inputs_redact"
+TREE_MARKER = ".taxjson-redacted"
+_MARKER_TEXT = (
+    "This folder is a copy of a taxjson inputs/ folder made by "
+    "`taxjson redact`.\n"
+    "Account numbers, names and contact details it recognised are "
+    "replaced by placeholders.\n"
+    "It is pattern-based, not a guarantee: review every file before "
+    "sharing it.\n")
+# A token a wallet / transaction-id pseudonym is looked up by in the
+# cross-file sweep.
+_SWEEP_TOKEN = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*")
+
+
+class _TreeFile:
+    """One file of inputs/: its path relative to inputs/, and what was
+    done with it (text + report, or why it is skipped)."""
+
+    def __init__(self, rel: Path) -> None:
+        self.rel = rel
+        self.text: Optional[str] = None
+        self.bom = b""
+        self.rep: Optional[Report] = None
+        self.skip: Optional[str] = None
+        self.swept = 0
+
+
+def _walk_inputs(src: Path) -> Tuple[List[Path], List[_TreeFile], int]:
+    """(folders, files, hidden-entry count) of `src`, relative to it,
+    sorted. Hidden entries and Office lock files are left out (the run
+    never reads them); a symlinked folder is listed as a skipped file
+    entry; a dangling link or a special file is skipped."""
+    dirs: List[Path] = []
+    files: List[_TreeFile] = []
+    hidden = 0
+    for dirpath, dirnames, filenames in os.walk(src, followlinks=False):
+        here = Path(dirpath)
+        rel_here = here.relative_to(src)
+        keep = []
+        for n in sorted(dirnames):
+            if n.startswith("."):
+                hidden += 1
+                continue
+            if (here / n).is_symlink():
+                tf = _TreeFile(rel_here / n)
+                tf.skip = "a symlinked folder (not followed)"
+                files.append(tf)
+                continue
+            keep.append(n)
+            dirs.append(rel_here / n)
+        dirnames[:] = keep
+        for n in sorted(filenames):
+            if n.startswith((".", "~$")):
+                hidden += 1
+                continue
+            p = here / n
+            tf = _TreeFile(rel_here / n)
+            if p.is_symlink() and not p.exists():
+                tf.skip = "a symlink to a file that does not exist"
+            elif not p.is_file():
+                tf.skip = "not a regular file"
+            files.append(tf)
+    return dirs, files, hidden
+
+
+def _component_name(name: str, is_file: bool, known_ids: Dict[str, str],
+                    patterns: List[re.Pattern]) -> str:
+    """One path component of the copy: denylist / --also matches become
+    REDACTED, every id of the run's table found in it (and any IB id or
+    8+ digit run that is not a date — an id only the name carries) its
+    placeholder. The extension is kept."""
+    stem, suffix = os.path.splitext(name) if is_file else (name, "")
+    for pat in patterns:
+        stem = pat.sub("REDACTED", stem)
+    subs: Dict[str, str] = {o: ph for o, ph in list(known_ids.items())
+                            if _id_pattern(o).search(stem)}
+    placeholders = {v.upper() for v in known_ids.values()}
+    for tok in name_only_ids(stem, subs):
+        # A placeholder already (a copy's name redacted again) stays.
+        if tok.upper() not in placeholders:
+            subs[tok] = _known_placeholder(known_ids, tok)
+    if subs:
+        bykey = {o.upper(): ph for o, ph in subs.items()}
+        alt = re.compile("|".join(re.escape(o) for o in sorted(
+            subs, key=len, reverse=True)), re.IGNORECASE)
+        stem = alt.sub(lambda m: bykey[m.group(0).upper()], stem)
+    return stem + suffix
+
+
+def _unique(name: str, is_file: bool, used: set) -> str:
+    """`name`, or `<stem>-2<ext>`, `-3` ... — never a name already used
+    in the folder (compared case-insensitively: the copy may be shared
+    to a case-insensitive file system)."""
+    stem, suffix = os.path.splitext(name) if is_file else (name, "")
+    cand, k = name, 2
+    while cand.lower() in used:
+        cand = f"{stem}-{k}{suffix}"
+        k += 1
+    used.add(cand.lower())
+    return cand
+
+
+def _tree_names(dirs: List[Path], files: List[_TreeFile],
+                known_ids: Dict[str, str], patterns: List[re.Pattern]
+                ) -> Dict[Path, Path]:
+    """Original relative path -> the copy's relative path, for every
+    folder and every file that is copied. Names that do not change are
+    placed first, so a renamed entry never takes an existing name."""
+    entries: Dict[Path, List[Tuple[str, bool]]] = {}
+    for d in dirs:
+        entries.setdefault(d.parent, []).append((d.name, False))
+    for f in files:
+        if f.skip is None:
+            entries.setdefault(f.rel.parent, []).append((f.rel.name, True))
+    new_name: Dict[Path, str] = {}
+    for parent, kids in entries.items():
+        used: set = set()
+        wanted = [(n, f, _component_name(n, f, known_ids, patterns))
+                  for n, f in kids]
+        for n, f, w in wanted:
+            if w == n:
+                new_name[parent / n] = _unique(w, f, used)
+        for n, f, w in wanted:
+            if w != n:
+                new_name[parent / n] = _unique(w, f, used)
+    out: Dict[Path, Path] = {}
+    for rel in sorted(new_name, key=lambda p: len(p.parts)):
+        parent = rel.parent
+        out[rel] = (out[parent] if parent != Path(".") else Path(".")) \
+            / new_name[rel]
+    return out
+
+
+def _sweep(files: List[_TreeFile], known_ids: Dict[str, str],
+           pseudonyms: Pseudonyms) -> None:
+    """Replace, in every copied text, any id the run collected anywhere
+    (another file's account column, a file name) and any wallet /
+    transaction id pseudonymised in another file: each file only knew
+    its own ids, so an account number in a .tt comment, or a txid in
+    sends.json, stayed in the copy."""
+    ids = {}
+    for o, ph in known_ids.items():
+        ids.setdefault(o.upper(), (o, ph))
+    ordered = sorted(ids.values(), key=lambda kv: -len(kv[0]))
+    pats = [(_id_pattern(o), ph) for o, ph in ordered]
+    tokens = {k.lower(): v for k, v in pseudonyms.wallets.items()}
+    tokens.update({k.lower(): v for k, v in pseudonyms.txids.items()})
+
+    def tok(m: re.Match) -> str:
+        ph = tokens.get(m.group(0).lower())
+        if ph is None:
+            return m.group(0)
+        f.swept += 1
+        return ph
+    for f in files:
+        if f.text is None:
+            continue
+        text = f.text
+        for pat, ph in pats:
+            text, k = pat.subn(ph, text)
+            f.swept += k
+        if tokens:
+            text = _SWEEP_TOKEN.sub(tok, text)
+        f.text = text
+
+
+def _plural(n: int, one: str, many: str = "") -> str:
+    return f"{n} {one if n == 1 else (many or one + 's')}"
+
+
+def _file_counts(f: _TreeFile) -> str:
+    """What was replaced in one file, counts only (never a value)."""
+    rep = f.rep
+    parts = []
+    if rep.accounts:
+        parts.append(_plural(len(rep.accounts), "account id"))
+    for n, one, many in (
+            (rep.identity_rows, "identity row/cell", "identity rows/cells"),
+            (rep.emails, "e-mail address", "e-mail addresses"),
+            (rep.names, "name in free text", "names in free text"),
+            (rep.phones, "phone number", ""),
+            (rep.postal_codes, "postal code", ""),
+            (rep.addresses, "street address", "street addresses"),
+            (rep.sins, "SIN/SSN-shaped number", ""),
+            (len(rep.wallets), "wallet address", "wallet addresses"),
+            (len(rep.txids), "transaction id", ""),
+            (rep.patterns, "denylist / --also match", "denylist / --also matches"),
+            (f.swept, "id found in another file", "ids found in other files")):
+        if n:
+            parts.append(_plural(n, one, many))
+    return ", ".join(parts) if parts else "nothing to redact"
+
+
+def _line_list(nums: List[int], shown: int = 12) -> str:
+    """`line 4` / `lines 4, 9 and 3 more`."""
+    nums = sorted(set(nums))
+    text = ", ".join(map(str, nums[:shown]))
+    return ("line " if len(nums) == 1 else "lines ") + text + (
+        f" and {len(nums) - shown} more" if len(nums) > shown else "")
+
+
+def _replace_ok(dst: Path, inputs: Path) -> Optional[str]:
+    """Why `dst` cannot receive the redacted tree, or None."""
+    try:
+        d, i = dst.resolve(), inputs.resolve()
+    except (OSError, RuntimeError) as e:
+        return f"{dst} cannot be resolved ({e})"
+    if d == i or i in d.parents or d in i.parents:
+        return (f"{dst} is inputs/ itself, inside it or holds it — the "
+                f"redacted copy goes beside inputs/")
+    return None
+
+
+def _check_dest(dst: Path, inputs: Path, force: bool,
+                shown: str = "") -> Optional[str]:
+    """Why the tree cannot be written to `dst` (checked before any work,
+    and again at the rename); `shown` names it in the message."""
+    why = _replace_ok(dst, inputs)
+    if why:
+        return why
+    shown = shown or str(dst)
+    if dst.is_symlink():
+        return f"{shown} is a symlink — refusing to write through it"
+    if not os.path.lexists(dst):
+        return None
+    if not dst.is_dir():
+        return f"{shown} exists and is not a folder"
+    if not force:
+        return f"{shown} exists (use --force to replace it)"
+    if any(dst.iterdir()) and not (dst / TREE_MARKER).is_file():
+        return (f"{shown} was not made by taxjson redact (it has no "
+                f"{TREE_MARKER} file) — move it away yourself")
+    return None
+
+
+def _write_tree(dst: Path, dirs: List[Path], files: List[_TreeFile],
+                names: Dict[Path, Path], inputs: Path, force: bool) -> None:
+    """Build the copy in a fresh temporary sibling of `dst`, then rename
+    it into place (the old copy, with --force, moved aside first and
+    deleted after). Every file is created new (lib/safe_write.open_new:
+    O_EXCL | O_NOFOLLOW, owner-only) inside folders this run created."""
+    import shutil
+    import tempfile
+    from taxjson.lib import safe_write
+    parent = dst.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix=f".{dst.name}.", suffix=".part",
+                                dir=parent))
+    try:
+        for d in sorted(dirs, key=lambda p: len(p.parts)):
+            os.mkdir(tmp / names[d], 0o700)
+        for f in files:
+            if f.skip is not None:
+                continue
+            with safe_write.open_new(tmp / names[f.rel], encoding="utf-8",
+                                     newline="") as fh:
+                if f.bom:
+                    fh.write("﻿")
+                fh.write(f.text)
+        with safe_write.open_new(tmp / TREE_MARKER, encoding="utf-8") as fh:
+            fh.write(_MARKER_TEXT)
+        why = _check_dest(dst, inputs, force)
+        if why:
+            raise SystemExit(exit_text(f"taxjson redact: {why}"))
+        if os.path.lexists(dst):
+            trash = Path(tempfile.mkdtemp(prefix=f".{dst.name}.",
+                                          suffix=".old", dir=parent))
+            os.rename(dst, trash / "old")
+            try:
+                os.rename(tmp, dst)
+            except OSError:
+                os.rename(trash / "old", dst)
+                raise
+            shutil.rmtree(trash, ignore_errors=True)
+        else:
+            os.rename(tmp, dst)
+    finally:
+        if tmp.exists():
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def redact_tree(root: Path, out: Optional[Path], extra: List[str],
+                check_only: bool, force: bool) -> int:
+    """`taxjson redact` with no FILE: copy `root`/inputs/ to
+    `root`/inputs_redact/ (or `out`), redacted. 0 done (or --check found
+    nothing), 1 --check found something, 2 refused."""
+    from taxjson.lib.out import relpath
+    inputs = root / "inputs"
+    if not inputs.is_dir():
+        _diag("error", f"no inputs/ folder in {root}",
+              ["Run it in a taxjson project (or pass -C DIR), or name the "
+               "files to redact: taxjson redact FILE ..."])
+        return 2
+    dst = out if out is not None else root / TREE_DEFAULT
+    shown_dst = (relpath(dst, root) if out is None else str(dst)).rstrip("/") + "/"
+    if not check_only:
+        why = _check_dest(dst, inputs, force, shown_dst)
+        if why:
+            _diag("error", why, ["Nothing written."])
+            return 2
+
+    def step(text: str) -> None:
+        from taxjson.lib.out import wrap
+        for ln in wrap("==> " + text, None, "", "  ", stream=sys.stdout):
+            print(ln)
+    if check_only:
+        step("Checking inputs/ (nothing is written)")
+    else:
+        step(f"Copying inputs/ to {shown_dst}")
+    dirs, files, hidden = _walk_inputs(inputs)
+    known_ids: Dict[str, str] = {}
+    pseudonyms = Pseudonyms()
+    compiled, _ = compile_patterns(extra)
+    for f in files:
+        if f.skip is not None:
+            continue
+        try:
+            raw = (inputs / f.rel).read_bytes()
+        except OSError as e:
+            f.skip = f"it cannot be read ({e.strerror or e})"
+            continue
+        why = sniff_binary(raw, f.rel.name)
+        if why:
+            f.skip = f"{why}, not text"
+            continue
+        try:
+            text, enc, f.bom = decode_export(raw)
+        except UnicodeDecodeError:
+            f.skip = "a UTF-16 byte-order mark on text that is not UTF-16"
+            continue
+        f.text, f.rep = redact_text(text, extra, known_ids, pseudonyms)
+        f.rep.patterns += sum(len(p.findall(f.rel.stem)) for p in compiled)
+        if enc != "utf-8":
+            f.rep.notes.append(f"The input was {enc}; the copy is UTF-8.")
+    names = _tree_names(dirs, files, known_ids, compiled)
+    _sweep(files, known_ids, pseudonyms)
+    text_files = [f for f in files if f.text is not None]
+    step(f"Redacting {_plural(len(text_files), 'file')}")
+    found = False
+    for f in text_files:
+        shown = names[f.rel].as_posix()
+        details = list(f.rep.notes)
+        if f.rep.unreplaced:
+            lines = [n for n, why in f.rep.review if "could not replace" in why]
+            sys.stdout.flush()
+            _diag("warning", f"{shown}: {_plural(len(f.rep.unreplaced), 'account id')} "
+                  f"not replaced everywhere",
+                  [f"Fix {_line_list(lines)} of the copy by hand "
+                   f"or rerun with --also."])
+        review = [n for n, why in f.rep.review if "could not replace" not in why]
+        if review:
+            details.append(f"Read {_line_list(review)} of the copy: free "
+                           f"text it could not classify.")
+        _diag("note", f"{shown}: {_file_counts(f)}", details, file=sys.stdout)
+        found = found or f.rep.found_anything() or bool(f.swept)
+    sys.stdout.flush()          # the warnings (stderr) after the lines above
+    for f in files:
+        if f.skip is not None:
+            _diag("warning", f"inputs/{f.rel.as_posix()} not copied: {f.skip}",
+                  ["Review it by hand and add it to the copy yourself if it "
+                   "belongs in the sample."])
+    if hidden:
+        _diag("note", f"{_plural(hidden, 'hidden file or folder', 'hidden files or folders')} "
+                      f"not copied (taxjson run does not read them)",
+              file=sys.stdout)
+    renamed = [(rel, new) for rel, new in sorted(names.items())
+               if rel.name != new.name]
+    if renamed:
+        found = True
+        verb = "would be renamed" if check_only else "renamed"
+        _diag("note", f"{_plural(len(renamed), 'name')} held an account id or "
+                      f"a denylisted word; {verb} in the copy",
+              [f"inputs/{r.as_posix()} → {shown_dst}{n.as_posix()}"
+               for r, n in renamed]
+              + ["This map is shown here only, never written into the copy."
+                 + (" Rename a renamed account folder in the taxjson.toml you "
+                    "share too." if any(r in dirs for r, _ in renamed) else "")],
+              file=sys.stdout)
+    if check_only:
+        step(f"Done. Nothing written; run taxjson redact to write "
+             f"{shown_dst}" if found else "Done. Nothing to redact.")
+        return 1 if found else 0
+    try:
+        _write_tree(dst, dirs, files, names, inputs, force)
+    except OSError as e:
+        _diag("error", f"{dst}: {e.strerror or e} — nothing written")
+        return 2
+    step(f"Done. Review {shown_dst} before sharing it.")
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1548,13 +1976,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         description="Strip account numbers, names and contact details it "
                     "recognises from broker exports, keeping row shapes. "
                     "Review the output before sharing.")
-    ap.add_argument("files", nargs="+", metavar="FILE")
-    ap.add_argument("--out", metavar="DIR", help="Write redacted copies here (default: beside each input)")
+    ap.add_argument("files", nargs="*", metavar="FILE",
+                    help="Exports to redact, each copied beside itself as "
+                         "NAME.redacted.EXT. None: copy the project's "
+                         "inputs/ folder to inputs_redact/, redacted")
+    ap.add_argument("-C", "--dir", default=".",
+                    help="Project root, for the no-FILE mode (default: cwd)")
+    ap.add_argument("--out", metavar="DIR", help="Write redacted copies here (default: beside each input; "
+                                                 "with no FILE, the redacted inputs tree: inputs_redact/)")
     ap.add_argument("--also", action="append", default=[], metavar="REGEX",
                     help="Extra pattern to replace with REDACTED (repeatable, case-insensitive)")
     ap.add_argument("--no-denylist", action="store_true",
                     help="Ignore ~/.config/taxjson/pii-denylist")
-    ap.add_argument("--force", action="store_true", help="Overwrite an existing redacted copy")
+    ap.add_argument("--force", action="store_true",
+                    help="Overwrite an existing redacted copy (with no FILE: "
+                         "replace the existing inputs_redact/)")
     ap.add_argument("--check", action="store_true",
                     help="Report only; write nothing; exit 1 if anything would be redacted")
     args = ap.parse_args(argv)
@@ -1580,6 +2016,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         _diag("note", "nothing written.")
         return 2
     extra = list(args.also) + deny
+    if not args.files:
+        return redact_tree(Path(args.dir), Path(args.out) if args.out else None,
+                           extra, args.check, args.force)
     rc = 0
     known_ids: Dict[str, str] = {}
     pseudonyms = Pseudonyms()
