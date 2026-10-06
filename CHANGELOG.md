@@ -32,6 +32,18 @@
   separates `[settings]` from its first group**, so the table line stands apart
   from the data. `taxjson format` applies it to an existing file.
 
+### Added
+
+- **`docs/tax-rules.md` and `docs/settings.md`.** The tax rules page takes each
+  rule taxjson applies (Canada and the United States in separate parts) and
+  gives its source from REFERENCES.md, its `taxjson tax-logic` rule ids, the
+  code that implements it and its known limits. The settings page covers every
+  taxjson.toml key and every project file (ticker.map, `.tt` lines,
+  missing_history.json, the generic importer mapping, holdings TOML, elections,
+  crypto send decisions) with the meaning, default, country, when to change it
+  and an example. `tests/test_settings_doc.py` fails when the validator accepts
+  a key or tax-logic adds a rule that the pages do not cover.
+
 
 ## v0.22.0 (2026-10-06)
 
