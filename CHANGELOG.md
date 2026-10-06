@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Fixed
+
+- **IB temporary symbols are folded onto their ticker.** Around a corporate
+  action IB lists the old contract under a time-stamped symbol (the stamp
+  YYYYMMDDHHMMSS, then the ticker) beside the ticker itself. Its rows are now
+  booked as the ticker, with one Info line naming the fold; the "several
+  symbols" hint no longer suggested mapping the real ticker onto the temporary
+  one.
+- **A ticker change IB shows only through one contract id is suggested as a
+  dated rename** (`RENAME OLD NEW YYYY-MM-DD`: OLD is the symbol whose rows end
+  first, the date the first row of the one that continues), not an undated
+  `GLOBAL` line, and never toward a temporary symbol. `taxjson ticker-map
+  --suggest` reads it, and a dated RENAME of the pair in ticker.map answers it.
+
 ### Changed
 
 - **taxjson.toml: the file header sits on `[settings]`, and a blank line

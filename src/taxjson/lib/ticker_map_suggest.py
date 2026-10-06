@@ -12,7 +12,7 @@ in work/ (nothing is recomputed but the cheap reads):
 * work/<account>_symbol_codes.state — Questrade internal codes the run
   could not resolve, with a "looks like" candidate: `GLOBAL CODE TICKER`;
 * every stage's .diag — a ticker.map line a message names: IB's "one
-  stock under several symbols" (`GLOBAL OLD NEW`), Questrade's and RBC's
+  stock under several symbols" (a dated `RENAME OLD NEW YYYY-MM-DD`), Questrade's and RBC's
   "looks renamed" hints (`add to ticker.map:  GLOBAL OLD NEW`), the
   crypto price checks' `CRYPTO SYMBOL ID` lines, the gains stage's
   unmapped cross-listing journal (`TOBASE FROM TO`).
@@ -221,6 +221,7 @@ class MapState:
     distinct: Set[frozenset]
     crypto: Set[str]
     lines: Set[str]                 # the map's rule lines, normalised
+    dated: Set[frozenset] = frozenset()   # the dated RENAME pairs
 
 
 def map_state(path: Path) -> MapState:
@@ -241,7 +242,9 @@ def map_state(path: Path) -> MapState:
             lines.add(ln)
     return MapState(renamed, set(named_symbols(tm)),
                     {frozenset(p) for p in tm.distinct},
-                    {str(k).upper() for k in side.crypto}, lines)
+                    {str(k).upper() for k in side.crypto}, lines,
+                    {frozenset((dr.old.upper(), dr.new.upper()))
+                     for dr in tm.dated})
 
 
 def already(s: Suggestion, st: MapState) -> Optional[str]:
@@ -257,6 +260,8 @@ def already(s: Suggestion, st: MapState) -> Optional[str]:
         return "ticker.map keeps the two apart (DISTINCT)"
     if kw == "DISTINCT":
         return None
+    if frozenset((a, b)) in st.dated:
+        return "ticker.map already renames the two (a dated RENAME)"
     if a in st.renamed:
         return f"ticker.map already maps {a}"
 

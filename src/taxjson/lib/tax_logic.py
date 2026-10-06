@@ -695,7 +695,15 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "the ticker. Such trades are listed by `taxjson renames` "
                  "and stop `run --strict` until declared. An undated "
                  "rename (GLOBAL, or RENAME without a date) applies to "
-                 "every row of OLD.", cont=True),
+                 "every row of OLD. "
+                 "IB's temporary symbol (a time stamp YYYYMMDDHHMMSS before "
+                 "the ticker, given around a corporate action) listed "
+                 "under the ticker's own contract id is that ticker: "
+                 "its rows are booked as the ticker, no ticker.map line "
+                 "needed; a ticker change IB shows only as one contract "
+                 "id under two symbols is suggested as the dated line "
+                 "(OLD the symbol whose rows end first, the date NEW's "
+                 "first row), never toward a temporary symbol.", cont=True),
             Rule("CA-ACB-05",
                  "Accounts typed \"sheltered\" (RRSP, TFSA, FHSA, LIRA, "
                  "RESP...) are tracked but kept out of the filing totals. "
@@ -1884,7 +1892,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "ticker. Such trades are listed by `taxjson renames` and "
                  "stop `run --strict` until declared. An undated rename "
                  "(GLOBAL, or RENAME without a date) applies to every row "
-                 "of OLD.", cont=True),
+                 "of OLD. "
+                 "IB's temporary symbol (a time stamp YYYYMMDDHHMMSS before "
+                 "the ticker, given around a corporate action) listed "
+                 "under the ticker's own contract id is that ticker: "
+                 "its rows are booked as the ticker, no ticker.map line "
+                 "needed; a ticker change IB shows only as one contract "
+                 "id under two symbols is suggested as the dated line "
+                 "(OLD the symbol whose rows end first, the date NEW's "
+                 "first row), never toward a temporary symbol.", cont=True),
             Rule("US-XLIST-01",
                  "Two listings of one company's same class of shares (a "
                  "US line and its Canadian line, two currency lines of "
