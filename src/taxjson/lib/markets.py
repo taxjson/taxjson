@@ -160,20 +160,26 @@ def note_builtin(kind: str, key: str, message: str, *,
     line on stderr (a stage's DIAGNOSTICS).
 
     `rollup` = (label, ...) rolls the notes of one `kind` up for a
-    person: shown to one (stderr wraps, docs/output-style.md), the
-    process prints ONE note at exit naming every key's `label` instead
-    of a line per key (_ROLLUPS words it). Captured for a program
-    (width 0: a stage's .diag, the .sum DIAGNOSTICS, the checklist) each
-    key keeps its own line, byte for byte as before."""
+    person: shown to one (stderr is the process's own stream and wraps,
+    docs/output-style.md), the process prints ONE note at exit naming
+    every key's `label` instead of a line per key (_ROLLUPS words it).
+    Captured for a program (width 0: a stage's .diag, the .sum
+    DIAGNOSTICS, the checklist) or redirected by an in-process caller
+    (redirect_stderr into a buffer it reads or discards, as wash_radar
+    and t1135 do) each key keeps its own line, written at once to the
+    current stderr, byte for byte as before (the stage_msg._captured
+    rule)."""
     k = (kind, key, ticker_map_path())
     if k in _NOTED:
         return
     _NOTED.add(k)
     from taxjson.lib import out
-    if rollup is not None and kind in _ROLLUPS and out.width(sys.stderr):
-        if not _ROLLED:
+    if rollup is not None and kind in _ROLLUPS and _shown_to_a_person():
+        global _AT_EXIT
+        if not _AT_EXIT:
             import atexit
             atexit.register(flush_notes)
+            _AT_EXIT = True
         _ROLLED.setdefault(kind, []).append(rollup[0])
         return
     # Wrapped at the house width for a person; one line when captured
@@ -191,6 +197,16 @@ _ROLLUPS = {
              "ticker.map."),
 }
 _ROLLED: Dict[str, list] = {}
+# flush_notes is registered with atexit once per process.
+_AT_EXIT = False
+
+
+def _shown_to_a_person() -> bool:
+    """stderr is the process's real stream and wraps (not width 0): the
+    stage_msg._captured rule. A redirected sys.stderr (a buffer an
+    in-process caller reads or discards) is captured."""
+    from taxjson.lib import out
+    return sys.stderr is sys.__stderr__ and out.width(sys.stderr) > 0
 
 
 def flush_notes(file=None) -> None:

@@ -123,10 +123,14 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
     line per root when captured for a program (width 0: a stage's .diag
     and the .sum DIAGNOSTICS keep their bytes)."""
 
-    def _emit(self, width):
+    def _emit(self, width, real_stream=True):
+        """The notes for three contracts on two roots. `real_stream`:
+        the buffer stands in for the process's own stderr (sys.__stderr__
+        too); else it is a redirect_stderr buffer (captured)."""
         import contextlib
         import io
         import os
+        import sys
         from unittest import mock
         from taxjson.lib import core, markets
 
@@ -137,8 +141,11 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
             def __init__(self, sym):
                 self.symbol = sym
         err = io.StringIO()
+        real = (mock.patch.object(sys, "__stderr__", err) if real_stream
+                else contextlib.nullcontext())
         with mock.patch.dict(os.environ, {"TAXJSON_WIDTH": str(width)}), \
-                contextlib.redirect_stderr(err):
+                contextlib.redirect_stderr(err), real, \
+                mock.patch("atexit.register"):
             markets.reset_notes()
             for sym in ("QZB250117C00040000.US", "QZA250117C00040000.US",
                         "QZB250117P00030000.US"):
@@ -163,6 +170,70 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
                                             "does not state the contract "
                                             "size"), lines)
         self.assertIn("`MULT QZA N`", lines[1])
+
+    def test_a_line_per_root_into_a_redirected_stderr(self):
+        # redirect_stderr(StringIO()) (wash_radar, t1135 silence the
+        # engine so) is captured even at a display width: each root's
+        # line lands in that buffer at once, nothing waits for exit.
+        import contextlib
+        import io
+        import os
+        from unittest import mock
+        from taxjson.lib import core, markets
+
+        class _Opt:
+            multiplier = 0.0
+            contract_size_basis = "assumed"
+
+            def __init__(self, sym):
+                self.symbol = sym
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ, {"TAXJSON_WIDTH": "100"}), \
+                mock.patch("atexit.register") as reg:
+            markets.reset_notes()
+            with contextlib.redirect_stderr(buf):
+                for sym in ("QZB250117C00040000.US", "QZA250117C00040000.US"):
+                    core.equity_option_size(_Opt(sym))
+            self.assertEqual(markets._ROLLED, {})
+            reg.assert_not_called()
+            markets.reset_notes()
+        text = buf.getvalue()
+        self.assertEqual(text.count("note:"), 2, text)
+        self.assertIn("QZB options: the export does not state", text)
+        self.assertIn("`MULT QZA N`", text)
+
+    def test_real_stream_rolls_up_once_and_registers_once(self):
+        import io
+        import os
+        import sys
+        from unittest import mock
+        from taxjson.lib import core, markets
+
+        class _Opt:
+            multiplier = 0.0
+            contract_size_basis = "assumed"
+
+            def __init__(self, sym):
+                self.symbol = sym
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"TAXJSON_WIDTH": "100"}), \
+                mock.patch.object(sys, "stderr", err), \
+                mock.patch.object(sys, "__stderr__", err), \
+                mock.patch.object(markets, "_AT_EXIT", False), \
+                mock.patch("atexit.register") as reg:
+            for _round in range(2):
+                markets.reset_notes()
+                before = err.getvalue()
+                for sym in ("QZB250117C00040000.US",
+                            "QZA250117C00040000.US"):
+                    core.equity_option_size(_Opt(sym))
+                self.assertEqual(err.getvalue(), before, "held until exit")
+                markets.flush_notes()
+            markets.reset_notes()
+        reg.assert_called_once_with(markets.flush_notes)
+        text = err.getvalue()
+        self.assertEqual(text.count("note: 2 option root(s)"), 2, text)
+        self.assertEqual(text.count("note:"), 2, text)
 
 
 if __name__ == "__main__":

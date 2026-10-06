@@ -69,7 +69,9 @@
   command shown to a person names every option root it assumed a
   100-share contract for in one note with the single `MULT <ROOT> N`
   advice, instead of a line per root; captured output (a stage's `.diag`,
-  the `.sum` DIAGNOSTICS) keeps its line per root.
+  the `.sum` DIAGNOSTICS) keeps its line per root, and so does a stderr a
+  command redirected in-process (the engine run that `wash-sales`' radar
+  and `t1135` silence stays silent).
 - **The explain-and-check commands in the house output style.**
   `taxjson audit` prints each disposition's pool history in the report
   layout `wash-sales --explain` uses (no `#` column; the trace files keep
