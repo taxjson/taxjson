@@ -188,8 +188,9 @@ QT_OTHER = 'SAMPLEX US EQUITY ETF UNIT CL A WE ACTED AS AGENT'
 IB_NAME = 'QZREALTY TRUST INC'
 
 
-def _row(acct, broker, sym, cur, desc, name=None):
-    return XL.Row(acct, broker, sym, cur, desc, exact_name(name or desc))
+def _row(acct, broker, sym, cur, desc, name=None, action='BUYSELL'):
+    return XL.Row(acct, broker, sym, cur, desc, exact_name(name or desc),
+                  action)
 
 
 def _book():
@@ -262,27 +263,37 @@ class TestSymbolCollision(unittest.TestCase):
                        collided=['QZD.US'])
         self.assertEqual(r, {'joined': [], 'suggested': []})
 
-    def test_a_listing_that_cannot_be_derived_is_a_template(self):
-        rows = [_row('margin', 'rbc_direct', 'QZK.US', 'USD',
-                     'QZKAPPA MINING CORP UNSOLICITED DA'),
-                _row('rrsp', 'ib', 'QZK.US', 'USD', 'QZK', IB_NAME),
-                _row('rrsp', 'ib', 'QZK.US', 'USD', 'QZK', IB_NAME)]
-        names = {'QZK.US': {r.key for r in rows}}
+    def test_names_alone_are_no_collision(self):
+        # A company that renamed itself: two names, one security. Without
+        # a fund's US-dollar units on one side there is no collision.
+        rows = [_row('margin', 'webull', 'QZM.US', 'USD',
+                     'QZMICRO STRATEGIES INC CLASS A'),
+                _row('rrsp', 'ib', 'QZM.US', 'USD', 'QZM', 'QZSTRAT INC')]
+        for r in rows:
+            r.action = 'BUYSELL'
+        names = {'QZM.US': {r.key for r in rows}}
         shown = {r.key: r.description for r in rows}
-        c, = XL.collisions(rows, names, shown, [])
+        self.assertEqual(XL.collisions(rows, names, shown, []), [])
+
+    def test_words_that_cannot_be_derived_are_a_template(self):
+        rows, names, shown, legs = _book()
+        # Another security's row carries the fund's whole name.
+        rows.append(_row('tfsa', 'questrade', 'QZQ.TO', 'CAD',
+                         'SWITCHED VIA QZOLDBRAND U S DLR CURRENCY ETF UNIT '
+                         'UNSOLICITED DA', 'SWITCHED VIA QZOTHER'))
+        c, = XL.collisions(rows, names, shown, legs, base_currency='CAD')
         self.assertTrue(c.template)
-        self.assertEqual(c.extract, 'EXTRACT QZKAPPA MINING CORP | USD | '
-                                    '<LISTING>')
-        self.assertEqual(c.journal, '')
-        self.assertIn('replace <LISTING>', c.why)
+        self.assertEqual(c.extract, 'EXTRACT <words that name it> | USD | '
+                                    'QZD.U.TO')
+        self.assertIn('replace the placeholder', c.why)
 
     def test_suggest_lists_collision_lines_and_never_writes_a_template(self):
         from taxjson.lib import ticker_map_suggest as TS
         rows, names, shown, legs = _book()
         cs = XL.collisions(rows, names, shown, legs, base_currency='CAD')
-        tmpl = XL.Collision('QZK.US', ['A CORP', 'B MINING'], ['x', 'y'],
-                            'B MINING', 'EXTRACT B MINING | USD | <LISTING>',
-                            True, '', 'replace <LISTING>')
+        tmpl = XL.Collision('QZK.US', ['A CORP', 'B FUND'], ['x', 'y'],
+                            'B FUND', 'EXTRACT <words that name it> | USD | '
+                            'QZK.U.TO', True, '', 'replace the placeholder')
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / 'work').mkdir()
@@ -299,21 +310,21 @@ class TestSymbolCollision(unittest.TestCase):
                 [(s.line, s.template) for s in offer],
                 [('EXTRACT DLR CURRENCY ETF | USD | QZD.U.TO', False),
                  ('JOURNAL QZD.U.TO QZD.TO', False),
-                 ('EXTRACT B MINING | USD | <LISTING>', True)])
+                 ('EXTRACT <words that name it> | USD | QZK.U.TO', True)])
             self.assertEqual(len(skipped), 1)
             (root / 'ticker.map').write_text(
                 'EXTRACT DLR CURRENCY ETF | USD | QZD.U.TO\n'
                 'JOURNAL QZD.U.TO QZD.TO\n')
             offer, _ = TS.pending(root)
             self.assertEqual([s.line for s in offer],
-                             ['EXTRACT B MINING | USD | <LISTING>'])
-            from taxjson.lib.tax_logic import rule_country  # noqa: F401
+                             ['EXTRACT <words that name it> | USD | '
+                              'QZK.U.TO'])
             from tax_rules.dual import cli
             (root / 'taxjson.toml').write_text(
                 '[settings]\nyear = 2025\ncountry = "canada"\n')
             r = cli(root, 'ticker-map', '--suggest', '--write', '--all')
             self.assertIn('Not added (a template', r.stdout + r.stderr)
-            self.assertNotIn('<LISTING>', (root / 'ticker.map').read_text())
+            self.assertNotIn('<words', (root / 'ticker.map').read_text())
 
 
 class TestCollisionRun(unittest.TestCase):

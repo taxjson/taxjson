@@ -34,11 +34,12 @@ line would, when the evidence is unambiguous:
 Everything else stays a suggestion (`taxjson ticker-map --suggest`) —
 except two listings whose names name different companies (no leading
 company word in common, companies_differ): never a join, never a TOBASE
-suggestion. One symbol whose exports name two different companies (a TSX
-fund's US-dollar unit booked `.US` beside an NYSE stock of the same root)
-is a SYMBOL COLLISION (`collisions`): a Warning on the run's console and
-the EXTRACT line (plus a JOURNAL) that gives the odd rows their own
-symbol, never a join through that symbol. The
+suggestion. A `.US` symbol whose rows name two different companies, one
+of them a Canadian-listed fund's US-dollar units (a TSX fund's US-dollar
+unit booked `.US` beside an NYSE stock of the same root), is a SYMBOL
+COLLISION (`collisions`): a Warning on the run's console and the EXTRACT
+line (plus a JOURNAL) that gives the fund's rows their own symbol, never
+a join through that symbol. The
 joins are written to work/cross_listings.state (JSON) and appended, as
 TOBASE lines, to the effective map the merge stages read
 (work/ticker.map.effective: the project's ticker.map plus those lines).
@@ -138,6 +139,7 @@ class Row:
     currency: str
     description: str
     key: Tuple[str, ...]            # symbol_codes.exact_name of its name
+    action: str = ""
 
 
 def gather(cache: Path, accounts: Iterable[str],
@@ -182,7 +184,8 @@ def gather(cache: Path, accounts: Iterable[str],
                     rows.append(Row(acct, broker, sym,
                                     str(t.get("currency") or "").upper(),
                                     str(t.get("description") or ""),
-                                    exact_name(_row_name(t, broker))))
+                                    exact_name(_row_name(t, broker)),
+                                    str(t.get("action") or "").upper()))
                 if not _plain_listing(sym) or is_code(sym):
                     continue
                 toks = exact_name(_row_name(t, broker))
@@ -389,9 +392,8 @@ class Collision:
                 "journal": self.journal, "why": self.why}
 
 
-# The placeholders of a template EXTRACT line (the user edits them).
-PLACEHOLDER_WORDS = "<words of its description>"
-PLACEHOLDER_SYMBOL = "<LISTING>"
+# The placeholder of a template EXTRACT line (the user edits it).
+PLACEHOLDER_WORDS = "<words that name it>"
 # The fewest words a suggested EXTRACT names (a shorter phrase, such as
 # one generic word, may match another security's row later).
 _MIN_WORDS = 3
@@ -466,109 +468,89 @@ def collisions(rows: List[Row], names: Dict[str, Set[Tuple[str, ...]]],
                shown: Dict[Tuple[str, ...], str], legs: List[Leg], *,
                base_currency: Optional[str] = None,
                days: int = PAIR_DAYS) -> List[Collision]:
-    """Book symbols whose exports name two clearly different companies
-    (companies_differ between every name of one and every name of the
-    other): one symbol for two securities — a TSX fund's US-dollar unit
-    booked `.US` beside an NYSE stock of the same root, say. For each,
-    the rows to move and the EXTRACT line that moves them:
+    """Book symbols that carry two securities: a `.US` symbol whose trade
+    / transfer rows name two clearly different companies
+    (companies_differ), the rows of one of them reading as a
+    Canadian-listed fund's US-dollar units (markets.USD_UNITS_RE: "... U
+    S DLR CURRENCY ETF", "... USD UNITS") and the other's not — a TSX
+    fund's US-dollar unit booked `.US` beside an NYSE stock of the same
+    root. Names alone never decide it: a company that renamed itself
+    (two names, one security) is common, so without that positive
+    evidence there is no collision. For each:
 
-    * the moved rows: the company whose rows read as a Canadian-listed
-      fund's US-dollar units (markets.USD_UNITS_RE in a description, or a
-      Canadian listing of the same root among the company's rows) on a
-      `.US` symbol in USD — its target is the TSX unit class
-      (markets.usd_unit_listing: ROOT.U.TO); otherwise every company but
-      the one with the most rows, with a placeholder target the user
-      must edit (`template`);
-    * the words: extract_words over the descriptions of every row of that
-      security in the project (any broker, any symbol whose leading
-      company words share two with it), none of another security's;
+    * the rows to move: that fund's; their target the TSX unit class
+      (markets.usd_unit_listing, ROOT.U.TO);
+    * the words: extract_words over the descriptions of every row of the
+      fund in the project (any broker, any symbol whose leading company
+      words share two with it), none of another security's — a template
+      with a placeholder when no run qualifies;
     * a transfer journal pairing the symbol with another listing of the
-      moved company adds `JOURNAL <target> <listing>` (tobase_direction).
+      fund adds `JOURNAL <target> <listing>` (tobase_direction).
     """
-    from taxjson.lib.markets import (USD_UNITS_RE, canadian_suffixes,
-                                     strip_listing_suffix, suffix_of,
+    from taxjson.lib.markets import (USD_UNITS_RE, strip_listing_suffix,
                                      usd_unit_listing)
-    from taxjson.lib.symbol_codes import _broker_name, is_code
+    from taxjson.lib.symbol_codes import _broker_name
     out: List[Collision] = []
-    for sym in sorted(names):
-        groups = _groups(names[sym])
+    for sym in sorted({r.symbol for r in rows}):
+        if not sym.endswith(".US"):
+            continue
+        mine = [r for r in rows if r.symbol == sym and r.key
+                and r.action in ("BUYSELL", "TRANSFER")]
+        groups = _groups(r.key for r in mine)
         if len(groups) < 2:
             continue
-        mine = [r for r in rows if r.symbol == sym]
         root = strip_listing_suffix(sym)
         info = []
         for g in groups:
             lead = frozenset().union(*(lead_words(k) for k in g))
-            g_rows = [r for r in mine if r.key in g]
+            g_rows = [r for r in rows if r.symbol == sym and r.key in g]
             # Every row of this security in the project: its own rows
             # under the symbol, and any listing's or broker code's rows
             # whose leading words share two with it.
             fam = g_rows + [r for r in rows if r.symbol != sym
                             and r.key and len(lead_words(r.key) & lead) >= 2]
-            usd = bool(g_rows) and all(r.currency == "USD" for r in g_rows)
-            canadian = any(
-                not is_code(r.symbol)
-                and strip_listing_suffix(r.symbol).split(".")[0] ==
-                root.split(".")[0]
-                and suffix_of(r.symbol) in canadian_suffixes()
-                for r in fam)
-            units = (sym.endswith(".US") and usd
-                     and (canadian or any(USD_UNITS_RE.search(r.description)
-                                          for r in fam)))
+            units = (all(r.currency == "USD" for r in g_rows)
+                     and any(USD_UNITS_RE.search(r.description)
+                             for r in g_rows))
             info.append((g, g_rows, fam, lead, units))
-        flagged = [x for x in info if x[4]]
-        if flagged and len(flagged) < len(info):
-            odd = flagged
-        else:
-            biggest = max(info, key=lambda x: (len(x[1]),
-                                               sorted(x[0])[0]))
-            odd = [x for x in info if x is not biggest]
-        for g, g_rows, fam, lead, units in odd:
+        odd = [x for x in info if x[4]]
+        if not odd or len(odd) == len(info):
+            continue
+        target = usd_unit_listing(root)
+        sh = [_display(x[0], shown) for x in info]
+        wh = [", ".join(sorted({f"{r.account} at {_broker_name(r.broker)}"
+                                for r in x[1]})) or "?"
+              for x in info]
+        for g, g_rows, fam, lead, _units in odd:
             fam_ids = {id(r) for r in fam}
             others = [r.description for r in rows if id(r) not in fam_ids]
             words = extract_words([r.description for r in fam], others)
-            cur = (sorted({r.currency for r in g_rows})[0]
-                   if len({r.currency for r in g_rows}) == 1 else "*")
-            target = usd_unit_listing(root) if units else PLACEHOLDER_SYMBOL
-            template = words is None or not units
-            why = []
-            if units:
-                why.append(f"its rows read as a Canadian-listed fund's "
-                           f"US-dollar units: {target}")
-            else:
-                why.append(f"which listing its rows are cannot be read "
-                           f"from them: replace {PLACEHOLDER_SYMBOL}")
+            why = (f"its rows read as a Canadian-listed fund's US-dollar "
+                   f"units: {target}")
             if words is None:
-                why.append(f"no run of words is common to its descriptions "
-                           f"and absent from every other row's: replace "
-                           f"the words")
-            line = (f"EXTRACT {words or PLACEHOLDER_WORDS} | {cur} | "
-                    f"{target}")
+                why += ("; no run of words is common to its descriptions "
+                        "and absent from every other row's: replace the "
+                        "placeholder with words that name it")
+            line = f"EXTRACT {words or PLACEHOLDER_WORDS} | USD | {target}"
+            partners = set()
+            for o in legs:
+                for i in legs:
+                    if (o.quantity < 0 < i.quantity and _same_qty(o, i)
+                            and _close(o, i, days)
+                            and sym in (o.symbol, i.symbol)
+                            and o.symbol != i.symbol):
+                        p = i.symbol if o.symbol == sym else o.symbol
+                        if (p != target and any(
+                                len(lead_words(k) & lead) >= 2
+                                for k in names.get(p, ()))):
+                            partners.add(p)
             journal = ""
-            if units:
-                partners = set()
-                for o in legs:
-                    for i in legs:
-                        if (o.quantity < 0 < i.quantity
-                                and _same_qty(o, i) and _close(o, i, days)
-                                and sym in (o.symbol, i.symbol)
-                                and o.symbol != i.symbol):
-                            p = i.symbol if o.symbol == sym else o.symbol
-                            if (p != target and any(
-                                    len(lead_words(k) & lead) >= 2
-                                    for k in names.get(p, ()))):
-                                partners.add(p)
-                if len(partners) == 1:
-                    frm, to = tobase_direction(target, partners.pop(),
-                                               base_currency)
-                    journal = f"JOURNAL {frm} {to}"
-            sh = [_display(x[0], shown) for x in info]
-            wh = [", ".join(sorted({f"{r.account} at "
-                                    f"{_broker_name(r.broker)}"
-                                    for r in x[1]})) or "?"
-                  for x in info]
-            out.append(Collision(sym, sh, wh, _display(g, shown),
-                                 line, template, journal, "; ".join(why)))
+            if len(partners) == 1:
+                frm, to = tobase_direction(target, partners.pop(),
+                                           base_currency)
+                journal = f"JOURNAL {frm} {to}"
+            out.append(Collision(sym, sh, wh, _display(g, shown), line,
+                                 words is None, journal, why))
     return out
 
 
