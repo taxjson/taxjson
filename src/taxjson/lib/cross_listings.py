@@ -570,6 +570,40 @@ def declared_verdict(frm: str, to: str,
             f"differ ({listing_root(frm)}, {listing_root(to)}) and {why}")
 
 
+def _hub_partners_agree(hub: str, pairs: List[Pair],
+                        names: Dict[str, Set[Tuple[str, ...]]],
+                        shown: Dict[Tuple[str, ...], str]) -> bool:
+    """The listings several journals map onto `hub` are one security
+    with each other too (pre-release review M5: "QZCO LP" -> "QZCO" and
+    "QZCO CORP" -> "QZCO" each pass with the hub's name, which states no
+    form, yet the LP is not the CORP). Every two partners agree when
+    each one's join is SOLID — its leg's own name is its hub leg's word
+    for word (a fund renamed between two journals: each partner equal to
+    the hub's name of its day), or a .tt JOURNAL line between two
+    listings of one root — or else when the two partners' own leg names
+    pass _journal_names_verdict against each other."""
+    def side(p: Pair) -> Tuple[Leg, Leg]:
+        return (p.out, p.into) if p.into.symbol == hub else (p.into, p.out)
+
+    def solid(p: Pair) -> bool:
+        mine, theirs = side(p)
+        if p.journal == "tt":
+            return listing_root(mine.symbol) == listing_root(hub)
+        return bool(mine.name and theirs.name
+                    and _journal_key(mine.raw_name)
+                    == _journal_key(theirs.raw_name))
+    for n, a in enumerate(pairs):
+        for b in pairs[n + 1:]:
+            if solid(a) and solid(b):
+                continue
+            la, lb = side(a)[0], side(b)[0]
+            if not (la.name and lb.name) or _journal_names_verdict(
+                    la, lb, names.get(la.symbol, set()),
+                    names.get(lb.symbol, set()), shown):
+                return False
+    return True
+
+
 def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             shown: Dict[Tuple[str, ...], str], *,
             map_named: Iterable[str] = (),
@@ -805,7 +839,10 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
     hubs = {sym for sym, ps in partners.items() if len(ps) > 1
             and all(len(partners[x]) == 1 for x in ps)
             and all(p.journal for p in joined if sym in (p.frm, p.to))
-            and all(p.to == sym for p in joined if sym in (p.frm, p.to))}
+            and all(p.to == sym for p in joined if sym in (p.frm, p.to))
+            and _hub_partners_agree(sym, [p for p in joined
+                                          if sym in (p.frm, p.to)],
+                                    names, shown)}
     keep: List[Pair] = []
     for p in joined:
         if ((len(partners[p.frm]) > 1 or len(partners[p.to]) > 1)

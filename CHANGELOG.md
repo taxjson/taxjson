@@ -127,7 +127,9 @@
   leg"; journal legs unique on their day now pair first, and a reference
   both legs carry (RBC's `J~…`, Questrade's journal pair) is their pair id.
   A listing that several journals map onto (a fund's US-dollar line under
-  two symbols over the years) is joined to each.
+  two symbols over the years) is joined to each — when those listings are
+  one security with each other too (an LP and a CORP that each match a
+  name stating no form are not).
 - **A move between brokers over a weekend pairs.** The transfer pairing
   window is 5 business days instead of 5 calendar days.
 - **`taxjson sanity` folds the listings the run joined.** A broker position

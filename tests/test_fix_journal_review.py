@@ -312,5 +312,45 @@ class TestDeclaredJournalNeedsEvidence(unittest.TestCase):
         self._check("usa")
 
 
+# ------------------------------------------------------------------ M5
+
+class TestHubPartnersAgree(unittest.TestCase):
+    """A listing two journals map onto joins its partners to each other
+    only when they are one security too."""
+
+    def _legs(self, a_name, b_name, hub_name="QZCO"):
+        from test_fix_journal_pairing import _gambit, _names
+        legs = (_gambit("2024-02-15", 100, a_name, frm="QZA.US",
+                        to="QZX.TO")
+                + _gambit("2024-06-12", 50, b_name, frm="QZB.US",
+                          to="QZX.TO"))
+        legs[1].name = legs[3].name = tuple(hub_name.split())
+        legs[1].raw_name = legs[3].raw_name = hub_name
+        names = _names(QZA_US=[a_name], QZB_US=[b_name],
+                       QZX_TO=[hub_name])
+        return legs, names
+
+    def _check(self):
+        from test_fix_journal_pairing import _run
+        # LP -> the hub, CORP -> the hub: each passes with the hub's
+        # name (it states no form), but the LP is not the CORP.
+        r = _run(*self._legs("QZCO LP", "QZCO CORP"))
+        self.assertEqual(r["joined"], [])
+        self.assertEqual({p.reason for p in r["suggested"]},
+                         {"a listing pairs with two other listings"})
+        # Partners that agree with each other: still a hub.
+        r = _run(*self._legs("QZCO LP", "QZCO LP"))
+        self.assertEqual(sorted((p.frm, p.to) for p in r["joined"]),
+                         [("QZA.US", "QZX.TO"), ("QZB.US", "QZX.TO")])
+
+    @rule("CA-XLIST-01")
+    def test_canada_hub_partners_must_agree(self):
+        self._check()
+
+    @rule("US-XLIST-01")
+    def test_usa_hub_partners_must_agree(self):
+        self._check()
+
+
 if __name__ == "__main__":
     unittest.main()
