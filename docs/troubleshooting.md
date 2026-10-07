@@ -120,7 +120,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `head -c 8 inputs/qt/99900001.csv | od -c` shows `357 273 277` (a UTF-8 byte-order mark) twice before the first column name.
 - **Cause:** the file was saved as "CSV UTF-8" by a tool that adds a byte-order mark in front of one the file already had. One mark was always read; the second stayed glued to the first column name, so neither detection nor the parser found the header.
 - **Fix:** upgrade: every leading mark is dropped. On an older install, re-export the file from the broker, or save it once more from a text editor as plain UTF-8.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.23.1`
 - **Code:** `src/taxjson/lib/brokerages/base.py` — `decode_broker_text`; `src/taxjson/lib/brokerages/questrade.py` — `_read_qt_rows`
 
 ### "Error: cannot detect broker for inputs/qt/activity.csv. Closest: a Questrade header lacking column(s) Account #, Account Type. …"

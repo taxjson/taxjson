@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.23.1 (2026-10-06)
+
 ### Fixed
 
 - **A broker export with two byte-order marks is read.** A file saved as
