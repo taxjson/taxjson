@@ -177,6 +177,9 @@ class TestAmbiguousCrossKind(unittest.TestCase):
                           "share> plan=rrsp", flat)
             self.assertIn("INKIND 2025-03-14 QZK.TO -100 plan=own", flat)
             self.assertEqual(_filing(root)["gain"], 0.0)
+            j = json.loads(cli(root, "transfers", "--json").stdout)
+            self.assertIn("in-kind contribution (ambiguous, NOT booked)",
+                          {t["arrival"] for t in j["transfers"]})
             r = cli(root, "run", "--no-input", "--strict")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("in-kind move(s) or INKIND line(s) not booked",
