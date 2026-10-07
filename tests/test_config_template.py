@@ -224,10 +224,10 @@ class TestInitScaffold(unittest.TestCase):
     def test_no_real_security_examples(self):
         # Placeholder tickers only (owner rule: no real security in a
         # template; the ticker.map stub too).
-        from taxjson.bin.taxjson_run import _TEMPLATE_TICKER_MAP
+        from taxjson.lib.ticker_map_format import init_template
         ca, _ = CT.render_init("canada", 2025)
         us, _ = CT.render_init("usa", 2025)
-        for text in (ca, us, _TEMPLATE_TICKER_MAP):
+        for text in (ca, us, init_template()):
             for sym in re.findall(r"\b([A-Z][A-Z0-9.-]*)\.(?:US|TO|V)\b",
                                   text):
                 self.assertRegex(sym, r"^(XYZQ|ABCX|WXYQ|ZZZQ|OLDQ|NEWQ|"

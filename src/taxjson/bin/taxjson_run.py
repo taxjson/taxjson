@@ -872,7 +872,7 @@ def _read_config_text(path: Path) -> str:
 # Commands that never date a crypto row: a crypto project without
 # [settings] local_timezone still runs them (`taxjson format` shows the
 # key to add; `migrate` moves old files).
-_ZONE_FREE_CMDS = ("format", "migrate", "init", "help")
+_ZONE_FREE_CMDS = ("format", "format-map", "migrate", "init", "help")
 
 
 def _normalize_settings(cfg: Dict[str, Any]) -> None:
@@ -1069,8 +1069,8 @@ class _CappedHelpFormatter(argparse.HelpFormatter):
 # sits in exactly one group (tests/test_cli_polish.py); the README's
 # command table uses the same groups in the same order.
 _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Set up", ("init", "format", "migrate", "fetch", "elect",
-                "ticker-map")),
+    ("Set up", ("init", "format", "format-map", "migrate", "fetch",
+                "elect", "ticker-map")),
     ("Build the books", ("run", "crypto-sends", "find-missing-history",
                          "opening")),
     ("Summaries", ("amt", "estimate", "fx-cash", "instalments", "stats",
@@ -7191,85 +7191,9 @@ def _render_init_config(country_canon: str,
 # A commented `ticker.map` stub. The pipeline runs fine without this file, so
 # every rule is left commented — it's here to document the format and the four
 # keywords so a user can populate it without hunting the README.
-_TEMPLATE_TICKER_MAP = """\
-# ticker.map — symbol rules for the taxjson pipeline. OPTIONAL: the pipeline
-# runs without it. Each non-comment line is:  KEYWORD  from  [to]
-#
-#   GLOBAL  from to   Plain rename — the same security under a wrong/old
-#                     ticker. Applied in EVERY stage (main + holdings).
-#   TOBASE  from to   Currency-equivalent cross-listing (e.g. XYZQ.US / XYZQ.TO).
-#                     Consolidated only in the to-base main pipeline; the
-#                     holdings view keeps the two listings separate.
-#   JOURNAL from to   A Norbert's Gambit pair (e.g. ABCX.U.TO / ABCX.TO):
-#                     consolidated for ACB AND netted in the holdings view.
-#   DELETE  from      Nuke that ticker's transactions (a pure artifact).
-#   DISTINCT a b      Declares two look-alike listings are SEPARATE
-#                     securities (a CDR vs its US underlying — WXYQ.TO
-#                     is a fractional CAD-hedged receipt over WXYQ.US,
-#                     never map it). Changes no symbol; silences the
-#                     scan's MAP-GAP nag for the pair.
-#   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
-#                     A ticker change ON THAT DATE (an event: the position
-#                     and cost carry over on the date). A trade in `from`
-#                     after the date is another security unless
-#                     late=fold (the broker kept the old ticker). See
-#                     `taxjson renames`. Without a date it is GLOBAL.
-#
-# Lookups — they change no symbol in the books:
-#   QUOTE   SYMBOL YAHOO_SYMBOL [RATIO]
-#                     The Yahoo Finance spelling price lookups use
-#                     (`taxjson harvest`); RATIO converts the position's
-#                     quantity (a ticker consumed by a merger, quoted as
-#                     the acquirer: OLDCO.TO NEWCO 0.25).
-#   CRYPTO  SYMBOL YAHOO_ID
-#                     A coin whose ticker collides with another asset on
-#                     Yahoo (prices are looked up as YAHOO_ID-USD; with
-#                     no line, as SYMBOL-USD). Yahoo numbers a shared
-#                     ticker (SYMBOL<number>-USD): find the id on
-#                     finance.yahoo.com.
-#   EXTRACT description words | CURRENCY | SYMBOL
-#                     Parser override: a broker row whose description has
-#                     these words and whose currency is CURRENCY ('*' =
-#                     any) gets SYMBOL (a USD unit that trades only on the
-#                     TSX would otherwise become a .US listing).
-#   T1135   SYMBOL COUNTRY
-#                     The T1135 domicile where the listing suffix is wrong
-#                     (an interlisted company): an ISO 3166 alpha-3 code,
-#                     or CA/CAN/CANADA/EXCLUDE for "not foreign property"
-#                     (`taxjson t1135`).
-#
-# Market lists — extend or override taxjson's shipped list (data/markets.toml;
-# the run notes once per symbol when a built-in entry decided something):
-#   STABLE     SYMBOL USD|NO   A US-dollar stablecoin (NO: not one).
-#   SPLITSHARE ROOT [NO]       A Canadian split-share corporation (dividends
-#                              dated when paid, not a trust's distribution).
-#   INDEXOPT   ROOT [NO]       US: a broad-based index option root (§1256).
-#   EVENING    ROOT [NO]       An option root with a Cboe evening session
-#                              (a fill from 20:15 ET is the next trading day).
-#   MULT       SYMBOL N        An option's contract size where the export
-#                              does not give it (SYMBOL: the option or root).
-#   VENUE      IBCODE SUFFIX   An IB listing exchange and its suffix (NO:
-#                              drop a built-in one).
-#   GLOBAL     CODE SYMBOL     Between bare crypto codes: folded by the
-#                              Coinbase/Kraken parsers before reading a row
-#                              (a staked-coin code into its coin).
-#
-# Examples — uncomment and edit:
-# RENAME   OLDQ.US    NEWQ.US   2024-06-10
-# GLOBAL   ABCX-B.US  ABCX.B.US
-# TOBASE   XYZQ.US    XYZQ.TO
-# JOURNAL  ABCX.U.TO  ABCX.TO
-# DELETE   ZZZQ.US
-# DISTINCT WXYQ.US    WXYQ.TO
-# QUOTE    XYZQ.TO    XYZQ.V
-# CRYPTO   ABC        ABC12345
-# EXTRACT  Example US Dollar Unit Fund | USD | ABCX.U.TO
-# T1135    XYZQ.US    CA
-# STABLE   ZZUSD      USD
-# SPLITSHARE ZZQ
-# MULT     ZZQ1       50
-# GLOBAL   ZZC2       ZZC
-"""
+# The ticker.map `taxjson init` writes is lib/ticker_map_format.
+# init_template(): the `taxjson format-map` layout with a commented-out
+# example per group, so format-map on a new project changes nothing.
 
 # Keep generated artifacts out of version control. `taxjson run` rebuilds all
 # of these from inputs/ + taxjson.toml, so none of them need committing.
@@ -20570,6 +20494,86 @@ def cmd_format(args: argparse.Namespace) -> None:
           + (f" (previous version: {bak})" if bak else ""))
 
 
+def cmd_format_map(args: argparse.Namespace) -> None:
+    """`taxjson format-map [--write [--no-backup] | --check]`: lay
+    ticker.map out in keyword groups (lib/ticker_map_format): a short
+    header, then Spellings, Listings of one security, Clean-up, Dated
+    events and Lookups, each under its heading, the user's order kept in
+    a group, a comment directly above a line moved with it, spacing
+    normalised, exact duplicates dropped, a line taxjson cannot use kept
+    as written in an Unrecognized group. The parsed map before and after
+    must be identical and every comment kept, or nothing is written.
+    Default: print a unified diff and the lines per group."""
+    import difflib
+    from taxjson.lib.cli_diag import read_text_utf8
+    from taxjson.lib.ticker_map_format import FormatError, format_map
+    prog = f"{_PROG} format-map"
+    if args.no_backup and not args.write:
+        _die_input("--no-backup applies only with --write")
+    root = Path(args.dir).resolve()
+    tm = root / "ticker.map"
+    if not tm.exists() and not tm.is_symlink():
+        _die_input(f"no ticker.map in {root}",
+                   "`taxjson init` writes one; the run needs none.")
+    if tm.is_dir():
+        _die_input(f"{tm} is a directory, not a file")
+    try:
+        text = read_text_utf8(tm)
+    except OSError as e:
+        _die_input(f"cannot read {tm}: {e.strerror or e}")
+    try:
+        res = format_map(text)
+    except FormatError as e:
+        _die_input(f"ticker.map: {e}", "Nothing was written.")
+    if res.problems:
+        _n_bad = res.counts.get("Unrecognized", 0)
+        _say("warning", f"{len(res.problems)} ticker.map problem(s): "
+             f"`taxjson run` refuses the map until each is fixed",
+             *[f"- {m}" for m in res.problems],
+             *([f"The {_n_bad} line(s) taxjson cannot use are kept as "
+                f"written in the \"Unrecognized\" group."] if _n_bad
+               else []), prog=prog)
+    if res.duplicates:
+        _say("note", f"dropped {len(res.duplicates)} exact duplicate "
+             f"line(s)",
+             *[f"line {n}: {ln}" for n, ln in res.duplicates], prog=prog)
+    if res.retired:
+        _say("note", f"{res.retired} line(s) of a removed feature are in "
+             f"the \"Retired\" group", "taxjson ignores them; delete "
+             "them.", prog=prog)
+    if not res.changed:
+        print("ticker.map is already formatted.")
+        return
+    if args.check:
+        _say("warning", "ticker.map is not formatted",
+             "`taxjson format-map` shows the changes, `taxjson format-map "
+             "--write` applies them.", prog=prog)
+        sys.exit(1)
+    counts = ", ".join(f"{g} {n}" for g, n in res.counts.items()
+                       if n or g not in ("Retired", "Unrecognized"))
+    if not args.write:
+        sys.stdout.writelines(difflib.unified_diff(
+            text.splitlines(keepends=True),
+            res.text.splitlines(keepends=True),
+            fromfile="ticker.map", tofile="ticker.map (formatted)"))
+        _say("note", f"lines per group: {counts}", prog=prog)
+        _say("note", "dry run: nothing written",
+             "`taxjson format-map --write` applies this; the map means "
+             "the same either way.", prog=prog)
+        return
+    from taxjson.lib.safe_write import OutsideLinkError, write_user_file
+    try:
+        bak = write_user_file(tm, res.text, root, suffix=".format.part",
+                              backup=not args.no_backup)
+    except OutsideLinkError as e:
+        _die_input(str(e))
+    except OSError as e:
+        _die_input(f"cannot write ticker.map: {e.strerror or e}")
+    print("formatted ticker.map"
+          + (f" (previous version: {bak.name})" if bak else ""))
+    _say("note", f"lines per group: {counts}", prog=prog)
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     country = _normalize_country(args.country)
     if country not in ("canada", "usa"):
@@ -20647,7 +20651,8 @@ def cmd_init(args: argparse.Namespace) -> None:
         write_atomic(p, content)
         written.append(rel)
 
-    _stub("ticker.map", _TEMPLATE_TICKER_MAP)
+    from taxjson.lib.ticker_map_format import init_template
+    _stub("ticker.map", init_template())
     _stub(".gitignore", _TEMPLATE_GITIGNORE)
     from taxjson.lib.config_template import input_readme as _readme
     for acct in account_names:
@@ -20871,6 +20876,30 @@ def _build_parser(prog: str = "taxjson"
     p_fmt.add_argument("--no-backup", action="store_true",
                        help="With --write: no taxjson.toml.bak")
     p_fmt.set_defaults(func=cmd_format)
+
+    p_fmap = sub.add_parser(
+        "format-map", help="Lay out ticker.map in keyword groups",
+        description="Rewrite ticker.map in the layout `taxjson init` "
+                    "writes: a short header, then the rules in groups "
+                    "(Spellings, Listings of one security, Clean-up, Dated "
+                    "events, Lookups), each under its heading, your order "
+                    "kept within a group. A comment directly above a line "
+                    "moves with it; other comments stay where they are; "
+                    "spacing is normalised and exact duplicate lines "
+                    "dropped; a line taxjson cannot use is kept as written "
+                    "in an \"Unrecognized\" group. The parsed map must "
+                    "stay identical or nothing is written. Default: print "
+                    "the changes as a diff.")
+    _fmap_mode = p_fmap.add_mutually_exclusive_group()
+    _fmap_mode.add_argument("--write", action="store_true",
+                            help="Write the formatted file (the previous "
+                                 "one is kept as ticker.map.bak)")
+    _fmap_mode.add_argument("--check", action="store_true",
+                            help="Exit 1 when the file is not formatted "
+                                 "(writes nothing; for CI)")
+    p_fmap.add_argument("--no-backup", action="store_true",
+                        help="With --write: no ticker.map.bak")
+    p_fmap.set_defaults(func=cmd_format_map)
 
     p_init = sub.add_parser(
         "init", help="Create a new project folder for a tax year",
