@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- **No account number in a security name.** An RBC or Questrade transfer row
+  whose description ends with a bare account reference (`TO ACCOUNT n`,
+  `TFR TO n`, `TFR FROM n`) with no `TRANSFER` word before it kept the account
+  number in the security name the run compares and shows (warnings,
+  `taxjson ticker-map --suggest`). The reference is now cut either way.
 - **A ticker.map line naming an IB temporary symbol now wins over the fold.**
   The parser folds IB's time-stamped symbol onto its ticker; it did so even
   when a ticker.map line (`GLOBAL`, `RENAME`, `TOBASE`, `DISTINCT`, an

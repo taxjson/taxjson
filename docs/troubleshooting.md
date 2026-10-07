@@ -407,6 +407,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/listing_suffix.py` — `resolve`, `scan_questrade`, `scan_rbc`, `why`, `listing on a`; `src/taxjson/bin/taxjson_run.py` — `stage_listing_suffix`, `_listing_suffix_stale`, `_ticker_map_named`, `stage_cross_listings`; `src/taxjson/bin/taxjson_ticker_map.py` — `named_symbols`, `_lookup_named`; `src/taxjson/bin/taxjson_brokerage.py` — `listing_fixes`; `src/taxjson/lib/cross_listings.py` — `joined_note`
 
+### An account number inside a security name, e.g. `tjs ticker-map --suggest` or a join warning naming 'QZX CORP TFR TO 55500001'
+- **Check:** the name in the line ends with `TO ACCOUNT <number>`, `FROM ACCOUNT <number>`, `TFR TO <number>`, `TFR FROM <number>` or `TO <number>`, with no `TRANSFER` word before it; the row is an RBC (or Questrade) transfer whose export has no separate security-name column for it.
+- **Cause:** the name is read from the row description, and the transfer's account reference was cut only when a `TRANSFER` word came before it, so the account number stayed in the name: in the `.sum`, the console and `--suggest`, and two rows of one security could fail to compare equal.
+- **Fix:** upgrade and `tjs run`. The reference is cut with or without a `TRANSFER` word (never a name's first word; a description that is only a reference names nothing).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/symbol_codes.py` — `_cut_account_ref`, `_ACCOUNT_REF_RE`, `rbc_name`, `questrade_name`; `src/taxjson/lib/listing_suffix.py` — `scan_rbc`
+
 ### Questrade: "Warning: 99900001.csv: 1 dividend(s) marked NON-RES TAX WITHHELD are booked at the NET amount"
 - **Check:** the next line lists each dividend (`QZQ.US 2025-03-15 8.50`); `tjs divs` shows it at the net amount with no TAX row. On RBC the same wording is grossed up instead: `tjs events` shows a TAX row described `(Implied Tax)` at 15% of the gross.
 - **Cause:** Questrade's export gives neither the gross nor the tax of such a dividend, so it is booked at the net: income understated, foreign tax missing. RBC's export also gives only the net; its parser assumes the 15% US treaty rate (`gross = net / 0.85`) whatever the issuer's country.

@@ -288,6 +288,32 @@ _CONFIRM_RE = re.compile(
     r"|AS\s+OF\s+\d).*$")
 
 
+# A transfer's account reference after the security's name, with
+# everything after it: "<NAME> TO ACCOUNT 555-55501-13", "<NAME> FROM
+# ACCOUNT", "<NAME> TFR TO 55500001", "<NAME> TFR FROM 55500001",
+# "<NAME> TO 555-55501-13" — with or without a TRANSFER word before it
+# (_RBC_EVENT_RE cuts "... TRANSFER TO ..."). An account number never
+# belongs in a name, a suggestion or a warning. Language only; never the
+# name's first word (a description that is only the reference —
+# _ACCOUNT_ONLY_RE — names nothing). # pii-ok: synthetic ids
+_ACCOUNT_REF_RE = re.compile(
+    r"(?<=\S)\s+(?:(?:TFR|TRF)\s+(?:TO|FROM)\b"
+    r"|(?:TO|FROM)\s+(?:ACCOUNT|ACCT)(?![A-Z0-9])"
+    r"|(?:TO|FROM)\s+(?:A/C\s*|NO\.?\s*|#\s*)?\d[\d-]{4,}\d(?!\d))"
+    r".*$")
+_ACCOUNT_ONLY_RE = re.compile(
+    r"^(?:(?:TFR|TRF)\s+)?(?:TO|FROM)\s+(?:ACCOUNT(?![A-Z0-9])"
+    r"|ACCT(?![A-Z0-9])|A/C|NO\.?\s*\d|#\s*\d|\d)")
+
+
+def _cut_account_ref(s: str) -> str:
+    """`s` without a transfer's account reference (_ACCOUNT_REF_RE); ""
+    when `s` is nothing but one."""
+    if _ACCOUNT_ONLY_RE.match(s):
+        return ""
+    return _ACCOUNT_REF_RE.sub("", s).strip()
+
+
 def _carry_designators(key: str, tail: str) -> str:
     """`key` with the share designators of the cut-off `tail` added back
     (a class letter after CL / CLASS, VOTING, ADR ...) when the key does
@@ -323,6 +349,7 @@ def questrade_name(desc: str) -> str:
                                                    _get_desc_key)
     d = " ".join(str(desc or "").split())
     key = " ".join(_SUBST_PAY_RE.sub("", _get_desc_key(d)).split())
+    key = _cut_account_ref(key)
     key, confirm = _cut_confirmation(key)
     if not key:
         return key
@@ -365,9 +392,10 @@ _RBC_DESK_RE = re.compile(
 
 def rbc_name(desc: str, trade: bool = False) -> str:
     """The security name an RBC Direct Investing row description gives:
-    the event code before it ("DIV - ", "TFO - ") and the event wording
-    after it (_RBC_EVENT_RE, the transfer's "TO ACCOUNT ..." with it)
-    cut, then the trade wording (_RBC_TRADE_RE, _CONFIRM_RE) with any
+    the event code before it ("DIV - ", "TFO - "), a transfer's account
+    reference ("TO ACCOUNT n", "TFR FROM n": _cut_account_ref, with or
+    without a TRANSFER word) and the event wording after it
+    (_RBC_EVENT_RE) cut, then the trade wording (_RBC_TRADE_RE, _CONFIRM_RE) with any
     share designator in it carried back; on a trade row (`trade`) the
     closing desk code ("DA", "CA JNL") too."""
     from taxjson.lib.brokerages.rbc_direct import _RBC_CODE_RE
@@ -375,6 +403,7 @@ def rbc_name(desc: str, trade: bool = False) -> str:
     m = _RBC_CODE_RE.match(s)
     if m:
         s = s[m.end():].strip()
+    s = _cut_account_ref(s)
     s = _RBC_EVENT_RE.sub("", s).strip()
     tail = ""
     m = _RBC_TRADE_RE.search(s)

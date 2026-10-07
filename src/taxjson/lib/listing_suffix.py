@@ -227,6 +227,7 @@ def scan_rbc(paths: Iterable[Path]) -> Scan:
                                                    read_rbc_rows)
     from taxjson.lib.corp_actions import (rbc_is_option_code,
                                           rbc_is_temp_symbol)
+    from taxjson.lib.symbol_codes import rbc_name
     helper = RbcBrokerage()
     scan = Scan()
     for p in paths:
@@ -243,13 +244,17 @@ def scan_rbc(paths: Iterable[Path]) -> Scan:
                     or helper._row_occ(r) or cur not in _SFX):
                 continue
             listing = helper.apply_currency_suffix(raw, cur)
-            scan.saw(listing, cur, r.symdesc or r.desc)
+            # The name: the Symbol Description, else the row description
+            # with RBC's wording (a transfer's account reference
+            # included) cut (symbol_codes.rbc_name).
+            name = r.symdesc or rbc_name(r.desc, trade=r.cls == 'trade')
+            scan.saw(listing, cur, name)
             if (canonical_ca_listing(raw, cur) is not None
                     or _sfx(listing) != _SFX[cur]
                     or other_listing(listing) is None):
                 continue
             c = scan.candidate(listing, cur)
-            c.add_name(r.symdesc or r.desc)
+            c.add_name(name)
             if r.cls == 'transfer' and r.qty > _EPS and r.date:
                 c.arrivals.append((r.date[:10], r.qty))
     return scan
