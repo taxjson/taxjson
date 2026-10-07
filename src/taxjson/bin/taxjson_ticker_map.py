@@ -122,9 +122,14 @@ def _parse_map_text(text: str, name: str = "ticker.map",
     # the .tt RENAME declarations with their origin in a note (`# .tt:
     # inputs/<acct>/<file>.tt:<n>`, lib/dated_events): read back as that
     # declaration's place and source.
-    from taxjson.lib.dated_events import TT_ORIGIN_RE
+    from taxjson.lib.dated_events import EVENT_META, TT_ORIGIN_RE
     _effective = str(name).endswith(".effective")
     dated: list = []
+    # The merged facts of each rename event (lib/dated_events.
+    # effective_lines): a .tt line's JSON tail, {index in dated: facts};
+    # a legacy map line's EVENT_META comment lines.
+    _origin_meta: Dict[int, dict] = {}
+    _event_meta: List[dict] = []
     undated_rename = set()
     # from -> (target, where, line) of its first rename rule
     first_rule: Dict[str, tuple] = {}
@@ -139,6 +144,13 @@ def _parse_map_text(text: str, name: str = "ticker.map",
         for lineno, raw in enumerate(f, 1):
             line = raw.split('#', 1)[0].strip()
             if not line:
+                if _effective and raw.lstrip().startswith(EVENT_META):
+                    try:
+                        _m = json.loads(raw.lstrip()[len(EVENT_META):])
+                    except ValueError:
+                        _m = None
+                    if isinstance(_m, dict):
+                        _event_meta.append(_m)
                 continue
             where = f"{name}:{lineno}"
             parts = line.split()
@@ -184,9 +196,16 @@ def _parse_map_text(text: str, name: str = "ticker.map",
                 _origin = (TT_ORIGIN_RE.match(raw.split('#', 1)[1])
                            if _effective and '#' in raw else None)
                 if _origin:
+                    if _origin.group(3):
+                        try:
+                            _m = json.loads(_origin.group(3))
+                        except ValueError:
+                            _m = None
+                        if isinstance(_m, dict):
+                            _origin_meta[len(dated)] = _m
                     dated.append(DatedRename(
                         syms[0], syms[1], _d, _late, _origin.group(1),
-                        _origin.group(2).strip(), source="tt"))
+                        (_origin.group(2) or "").strip(), source="tt"))
                 else:
                     dated.append(DatedRename(syms[0], syms[1], _d, _late,
                                              where, line))
@@ -249,8 +268,13 @@ def _parse_map_text(text: str, name: str = "ticker.map",
     # (contradictions between rules) keep both.
     if dropped is not None:
         dropped.extend(problems + side.problems)
+    if _origin_meta or _event_meta:
+        from taxjson.lib.dated_events import apply_meta
+        dated = apply_meta(dated, _event_meta, _origin_meta)
     # A dated rename next to an undated rule for the same symbol, or two
-    # dated renames of one symbol close together, contradict each other.
+    # dated renames of one symbol close together, contradict each other
+    # (two events of different kinds — a security's and a coin's — never
+    # meet: lib/dated_events).
     _seen_dated: Dict[str, list] = {}
     for dr in dated:
         if dr.old in glob:
@@ -263,6 +287,8 @@ def _parse_map_text(text: str, name: str = "ticker.map",
         for prev in _seen_dated.get(dr.old, []):
             from taxjson.lib.renames import WINDOW_DAYS, _days
             gap = _days(prev.date, dr.date)
+            if prev.kind and dr.kind and prev.kind != dr.kind:
+                continue
             if gap is not None and gap <= WINDOW_DAYS:
                 problems.append(
                     f"{dr.where}: RENAME {dr.old} on {dr.date} repeats "
@@ -631,6 +657,14 @@ def main():
                              "the crypto pipeline's subset (TOBASE/"
                              "JOURNAL assume exchange-suffixed "
                              "cross-listings).")
+    parser.add_argument("--kind", choices=("securities", "crypto"),
+                        default="",
+                        help="The accounts' kind: a dated RENAME a .tt "
+                             "line of a crypto account declares books "
+                             "only in crypto accounts, a securities "
+                             "account's only in securities accounts "
+                             "(`taxjson run` passes it; default: every "
+                             "dated RENAME).")
     args = parser.parse_args()
     if args.map_flag and args.map_file:
         # Two map sources: the positional one used to win silently
@@ -664,7 +698,8 @@ def main():
         # symbols like taxjson-merge2 does.
         from taxjson.lib.renames import RenameConflict, apply_dated_renames
         try:
-            transactions = apply_dated_renames(transactions, tmap.dated)
+            transactions = apply_dated_renames(transactions, tmap.dated,
+                                               kind=args.kind)
         except RenameConflict as e:
             emit_line(f"taxjson-ticker-map: error: {e}")
             sys.exit(1)
