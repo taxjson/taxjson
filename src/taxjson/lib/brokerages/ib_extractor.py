@@ -1550,7 +1550,12 @@ def _project_tt_renames(paths) -> List[Any]:
     if root is None:
         return []
     from taxjson.lib.dated_events import tt_renames
-    return list(tt_renames(root))
+    from taxjson.lib.renames import KIND_CRYPTO
+    # The resolved events (one per change, lib/dated_events.
+    # resolve_renames); a crypto account's coin ticker change never
+    # names a stock.
+    return [d for d in tt_renames(root)
+            if getattr(d, 'kind', '') != KIND_CRYPTO]
 
 
 def _account_tt_links(paths) -> Dict[tuple, str]:

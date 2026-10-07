@@ -50,8 +50,16 @@
   disposition, in both countries; a journal the broker's rows already hold
   is said and booked once, and one with a single broker leg gets the
   other), and `RENAME <date> OLD NEW [late=fold|late=separate]`, declared
-  in any account's folder, applies to every account holding the old symbol
-  and is recorded once. A malformed line stops the run, naming the form.
+  in any account's folder, applies to every account of the same kind
+  (securities, or crypto for a coin's new ticker) holding the old symbol
+  and is recorded once. Every declaration of one change, in any file, is
+  one event dated the earliest; the changes apply in date order, so a
+  ticker that changed twice carries the position twice. A line's `late=`
+  covers its own account's late rows and every account without a line of
+  its own; another account may declare its own. A malformed line stops the
+  run, naming the form, and so do declarations that cannot all be true
+  (one ticker renamed to two symbols, one change on two dates, a cycle such
+  as A to B plus B to A), naming every line.
 - **IB's ticker changes are booked.** When IB lists one contract id under
   two symbols, the change is booked as a dated rename event, with a
   Warning naming the way out (`DISTINCT` in ticker.map for two securities,
@@ -73,18 +81,27 @@
   `TOBASE A B` and a dated `RENAME` line as the event, with one Warning per
   run. A JOURNAL line no longer folds the two listings in the holdings view
   on its own: the journal's legs move the units (the broker's, or a `.tt`
-  JOURNAL line's when the export lacks them).
+  JOURNAL line's when the export lacks them); the tax books are unchanged,
+  and the Warning says so.
 - **`taxjson format-map` migrates the dated events.** It rewrites each
   `JOURNAL` line as `TOBASE` and moves each dated `RENAME` line, with its
-  comments, to `inputs/<account>/renames.tt` (one file, in the first account
-  whose books carry the change); the dry run shows both, `--check` fails
-  while a migration is pending, and the books stay the same. `taxjson init`
+  comments, to `inputs/<account>/renames.tt` (in the first account whose
+  books carry the change, one per account kind); the dry run shows both,
+  and names a `.tt` JOURNAL line where the holdings show a migrated
+  journal's listings long and short. It simulates the run first: unless the
+  rename events booked after the move — the project's own `.tt` lines
+  included — are the ones booked now, nothing is written (exit 2, naming
+  the lines). Every target is checked before the first write (a link to
+  outside the project, of a file or an `inputs/<account>` folder, is
+  refused), a block a `.tt` file already holds is not added twice, and
+  `--check` also fails on a map `taxjson run` refuses. `taxjson init`
   writes no dated event in ticker.map; the account READMEs show the `.tt`
   lines.
 - **Every dated event is recorded with its source.** `work/dated_events.state`
   lists each journal and rename with where it came from (`tt`, `map`,
   `ib-conid`, `broker`) and its place; `taxjson renames --json` and the
-  cross-listing state carry the source too.
+  cross-listing state carry the source too. A run that stops removes the
+  last run's record rather than leave it describing other books.
 
 ### Fixed
 

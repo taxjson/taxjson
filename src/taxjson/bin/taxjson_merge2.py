@@ -511,9 +511,13 @@ def main():
         # date in every account holding the old symbol, and `late=fold`
         # rows re-booked under the new one — on the RAW symbols, before
         # the undated renames below map both (A2-0197).
-        from taxjson.lib.renames import RenameConflict, apply_dated_renames
+        # (this is the securities path: a coin's .tt RENAME — declared
+        # in a crypto account — never books here.)
+        from taxjson.lib.renames import (KIND_SECURITIES, RenameConflict,
+                                         apply_dated_renames)
         try:
-            txs = apply_dated_renames(txs, tmap.dated)
+            txs = apply_dated_renames(txs, tmap.dated,
+                                      kind=KIND_SECURITIES)
         except RenameConflict as e:
             emit_line(f"error: {e}")
             return 1

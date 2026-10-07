@@ -70,10 +70,24 @@ SOURCE_MAP = "map"
 SOURCE_IB_CONID = "ib-conid"
 
 
+# The kind of account a .tt RENAME applies to (DatedRename.kind): a
+# security's ticker change never touches a coin, nor a coin's a security
+# (tax-logic CA-CRYPTO-RENAME / US-CRYPTO-RENAME). A legacy ticker.map
+# line has no account: KIND_ANY.
+KIND_ANY = ""
+KIND_SECURITIES = "securities"
+KIND_CRYPTO = "crypto"
+
+
 @dataclass(frozen=True)
 class DatedRename:
     """One declared dated rename: a .tt `RENAME <date> OLD NEW` line or a
-    legacy ticker.map `RENAME OLD NEW YYYY-MM-DD` line."""
+    legacy ticker.map `RENAME OLD NEW YYYY-MM-DD` line — or, once
+    lib/dated_events.resolve_renames has merged the declarations of one
+    change, the EVENT: its date (the earliest declared), `late` the
+    choice for an account without a line of its own, `lates` each
+    declaring account's own choice, `kind` the accounts it applies to,
+    `also` the other declarations it merged."""
     old: str
     new: str
     date: str
@@ -81,11 +95,25 @@ class DatedRename:
     where: str = ""         # "ticker.map:<lineno>" | "inputs/<acct>/<f>.tt:<n>"
     line: str = ""
     source: str = SOURCE_MAP    # SOURCE_MAP | SOURCE_TT
+    account: str = ""           # the .tt line's account ('' for the map)
+    kind: str = KIND_ANY        # KIND_ANY | KIND_SECURITIES | KIND_CRYPTO
+    lates: Tuple[Tuple[str, str], ...] = ()     # (account, late) overrides
+    also: Tuple[str, ...] = ()                  # merged declarations' where
 
     def tt_line(self) -> str:
         """The declaration as a .tt line (date first)."""
         return (f"RENAME {self.date} {self.old} {self.new}"
                 + (f" late={self.late}" if self.late else ""))
+
+    def late_for(self, account: str) -> str:
+        """The late= choice for `account`'s late rows: its own line's
+        when it declared one, else the event's (M4)."""
+        return dict(self.lates).get(account, self.late)
+
+    def applies_to(self, kind: str) -> bool:
+        """The event books in an account of `kind` (KIND_ANY: unknown,
+        every event)."""
+        return not kind or not self.kind or self.kind == kind
 
 
 class RenameConflict(ValueError):
@@ -245,9 +273,13 @@ def rename_events(rows: Iterable[Any]) -> List[Dict[str, Any]]:
 def late_rows(rows: Iterable[Any], events: List[Dict[str, Any]]
               ) -> List[Tuple[Any, Dict[str, Any]]]:
     """(row, event) for each position row that names a renamed ticker
-    (or an option on it) AFTER that ticker's rename date (a row on the
-    date itself is the renamed security, as the engines class it): the
-    LATEST rename of the ticker on or before the row's trade date."""
+    (or an option on it) AFTER the rename in its account's books: the
+    LATEST rename of the ticker before the row. "After" is the books'
+    order: past the account's own rename row (date and time — a booked
+    SPLIT is dated at the start of its day, 00:00:00, so an OLD row later
+    that day is already late), or, in an account with no rename row of
+    its own, on or after the event's date — the same rows `late=fold`
+    re-books (apply_dated_renames)."""
     by_old: Dict[str, List[Dict[str, Any]]] = {}
     for e in events:
         by_old.setdefault(e["old"], []).append(e)
@@ -255,6 +287,13 @@ def late_rows(rows: Iterable[Any], events: List[Dict[str, Any]]
         v.sort(key=lambda e: e["date"])
     if not by_old:
         return []
+
+    def acct_of(r: Any) -> str:
+        return str(_g(r, "_acct") or _g(r, "account") or "")
+
+    def at(r: Any) -> Tuple[str, str]:
+        return (str(_g(r, "date"))[:10], str(_g(r, "time") or "00:00:00"))
+
     out = []
     for r in rows:
         if str(_g(r, "action")).upper() not in _POSITION_ACTIONS:
@@ -266,10 +305,12 @@ def late_rows(rows: Iterable[Any], events: List[Dict[str, Any]]
             cands = by_old.get(root) if root else None
         if not cands:
             continue
-        d = str(_g(r, "date"))[:10]
+        here = at(r)
+        acct = acct_of(r)
         hit = None
         for e in cands:
-            if d > e["date"]:
+            own = [at(x) for x in e["rows"] if acct_of(x) == acct]
+            if (here > min(own)) if own else (here[0] >= e["date"]):
                 hit = e
         if hit is not None:
             out.append((r, hit))
@@ -279,9 +320,9 @@ def late_rows(rows: Iterable[Any], events: List[Dict[str, Any]]
 def matching_lines(dated: Iterable[DatedRename], event: Dict[str, Any],
                    mapping: Optional[Dict[str, str]] = None
                    ) -> List[DatedRename]:
-    """The dated ticker.map lines that name `event`: the line's OLD
-    (through the stage's undated renames, `mapping`) is the event's old
-    symbol and its date is within WINDOW_DAYS of the event's."""
+    """The dated declarations that name `event`: the line's OLD (through
+    the stage's undated renames, `mapping`) is the event's old symbol and
+    its date is within WINDOW_DAYS of the event's."""
     from taxjson.bin.taxjson_ticker_map import map_symbol
     out = []
     for dr in dated:
@@ -293,12 +334,15 @@ def matching_lines(dated: Iterable[DatedRename], event: Dict[str, Any],
 
 
 def declared_late(dated: Iterable[DatedRename], event: Dict[str, Any],
-                  mapping: Optional[Dict[str, str]] = None) -> str:
-    """The late= choice the ticker.map declares for `event` ('' when
-    none)."""
+                  mapping: Optional[Dict[str, str]] = None,
+                  account: Optional[str] = None) -> str:
+    """The late= choice the declarations make for `event` ('' when none);
+    with `account`, the choice for that account's late rows
+    (DatedRename.late_for: its own line's, else the event's)."""
     for dr in matching_lines(dated, event, mapping):
-        if dr.late:
-            return dr.late
+        late = dr.late_for(account) if account is not None else dr.late
+        if late:
+            return late
     return ""
 
 
@@ -315,27 +359,41 @@ def _booked_source(dr: DatedRename) -> str:
 
 
 def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
-                        *, stream=None) -> List[Any]:
-    """Book each dated ticker.map RENAME in `txs` (TaxTransactions on
-    their RAW symbols, before the undated renames apply): a SPLIT row
-    OLD -> NEW (ratio 1) on the date in every account that holds OLD
-    before it, unless the account already books a rename of OLD within
-    WINDOW_DAYS (to NEW: nothing to add; to another symbol: refused).
-    `late=fold` re-books every OLD row (and option on OLD) on or after
-    the date as NEW. Returns the new list."""
+                        *, stream=None, kind: str = KIND_ANY) -> List[Any]:
+    """Book each dated RENAME (a .tt line through the run's effective
+    map, or a legacy ticker.map line) in `txs` (TaxTransactions on their
+    RAW symbols, before the undated renames apply): a SPLIT row OLD ->
+    NEW (ratio 1) on the date in every account that holds OLD before it,
+    unless the account already books a rename of OLD within WINDOW_DAYS
+    (to NEW: nothing to add; to another symbol: refused). The renames
+    apply in DATE order whatever order they were declared in, so a chain
+    A -> B -> C carries the position twice: an account holds B before
+    the second date when an earlier rename row moved A into B (H3).
+    `late=fold` (the account's own choice, DatedRename.late_for)
+    re-books the account's OLD rows (and options on OLD) on or after the
+    date as NEW. `kind`: the accounts' kind (KIND_SECURITIES on the
+    equity merge, KIND_CRYPTO on the crypto map stage) — a .tt RENAME
+    applies only to accounts of its declaring account's kind
+    (DatedRename.applies_to). Returns the new list."""
     from taxjson.bin.taxjson_ticker_map import map_symbol
     from taxjson.lib.core import TaxTransaction
     stream = stream or sys.stderr
-    dated = list(dated)
+    # Stable: two renames on one date keep their declared order.
+    dated = sorted((dr for dr in dated if dr.applies_to(kind)),
+                   key=lambda dr: dr.date)
     if not dated:
         return txs
     out = list(txs)
     for dr in dated:
-        # Accounts with OLD position rows before the date.
+        # Accounts with an OLD position before the date: OLD rows, or a
+        # rename row that moved another symbol into OLD.
         held: Dict[str, Any] = {}
         for t in out:
-            if (t.action in _POSITION_ACTIONS + ("SPLIT",)
-                    and t.symbol == dr.old and (t.date or "") < dr.date):
+            if (t.date or "") >= dr.date:
+                continue
+            if ((t.action in _POSITION_ACTIONS + ("SPLIT",)
+                 and t.symbol == dr.old)
+                    or rename_target(t) == dr.old):
                 held[t.account] = t
         booked: Dict[str, str] = {}
         for t in out:
@@ -381,18 +439,20 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
             at = next((i for i, t in enumerate(out)
                        if (t.date or "") >= dr.date), len(out))
             out[at:at] = added
-        if dr.late == LATE_FOLD:
-            moved = 0
-            m = {dr.old: dr.new}
-            for t in out:
-                if (t.action != "SPLIT" and (t.date or "") >= dr.date
-                        and names_symbol(t.symbol, dr.old)):
-                    t.symbol = map_symbol(t.symbol, m)
-                    moved += 1
-            if moved:
-                emit_line(f"note: {dr.where}: {moved} {dr.old} row(s) on or "
-                          f"after {dr.date} booked as {dr.new} (late=fold).",
-                          file=stream)
+        moved: Dict[str, int] = {}
+        m = {dr.old: dr.new}
+        for t in out:
+            if (t.action != "SPLIT" and (t.date or "") >= dr.date
+                    and names_symbol(t.symbol, dr.old)
+                    and dr.late_for(t.account) == LATE_FOLD):
+                t.symbol = map_symbol(t.symbol, m)
+                moved[t.account] = moved.get(t.account, 0) + 1
+        if moved:
+            emit_line(f"note: {dr.where}: {sum(moved.values())} {dr.old} "
+                      f"row(s) on or after {dr.date} booked as {dr.new} "
+                      f"(late=fold"
+                      + (f": {', '.join(sorted(moved))}"
+                         if dr.lates else "") + ").", file=stream)
     return out
 
 
@@ -512,14 +572,18 @@ def _walk_states(rows: List[Dict[str, Any]]):
 # looks renamed to B — ... GLOBAL A B ... B ... first appears on DATE",
 # and a dated `RENAME OLD NEW YYYY-MM-DD` a message names (Webull's
 # "likely a ticker change", IB's one stock under several symbols).
+# (The gaps are bounded: an unbounded lazy `.*?` after each candidate
+# start made a long adversarial .diag message quadratic.)
 _LOOKS_RE = re.compile(
-    r"\b(Questrade|RBC) symbol \S+(?: \(\w+\))? looks renamed to \S+ "
-    r".*?\bGLOBAL (\S+) (\S+)\s.*?first appears on (\d{4}-\d{2}-\d{2})")
+    r"\b(Questrade|RBC) symbol \S{1,64}(?: \(\w{1,32}\))? looks renamed "
+    r"to \S{1,64} .{0,300}?\bGLOBAL (\S{1,64}) (\S{1,64})\s.{0,300}?"
+    r"first appears on (\d{4}-\d{2}-\d{2})")
 # The hint as written since the dated .tt events (lib/dated_events): the
 # .tt line, date first.
 _LOOKS_TT_RE = re.compile(
-    r"\b(Questrade|RBC) symbol \S+(?: \(\w+\))? looks renamed to \S+ "
-    r".*?\bRENAME (\d{4}-\d{2}-\d{2}) (\S+) (\S+)\s")
+    r"\b(Questrade|RBC) symbol \S{1,64}(?: \(\w{1,32}\))? looks renamed "
+    r"to \S{1,64} .{0,300}?\bRENAME (\d{4}-\d{2}-\d{2}) (\S{1,64}) "
+    r"(\S{1,64})\s")
 _DATED_HINT_RE = re.compile(
     r"`RENAME (\S+) (\S+) (\d{4}-\d{2}-\d{2})`")
 _DATED_HINT_TT_RE = re.compile(
@@ -617,10 +681,11 @@ def report(root: Path, cfg: Dict[str, Any],
     (with the dated form when a broker event gives the date)."""
     root = Path(root)
     tmap, ren = _ticker_map(root)
-    dated = list(getattr(tmap, "dated", ()) or ()) if tmap else []
-    # The declarations of record: .tt RENAME lines (lib/dated_events).
-    from taxjson.lib.dated_events import tt_renames
-    dated += tt_renames(root, cfg.get("accounts") or {})
+    # The rename events the declarations make — .tt RENAME lines (the
+    # form of record) and legacy dated ticker.map lines, merged as the
+    # run merges them (lib/dated_events.resolve_renames).
+    from taxjson.lib.dated_events import project_renames
+    dated = project_renames(root, cfg.get("accounts") or {}, tmap)
     rows = _book_rows(root, cfg)
     base_cur = ((cfg.get("settings") or {}).get("base_currency") or "")
     events = rename_events(rows)
@@ -646,7 +711,8 @@ def report(root: Path, cfg: Dict[str, Any],
                 "qty": round(q, 6),
                 "qty_after": round(q * (e["ratio"] or 1.0), 6),
                 "book_cost": round(c, 2)})
-        lines = [dr.where for dr in matching_lines(dated, e, ren)]
+        lines = [w for dr in matching_lines(dated, e, ren)
+                 for w in (dr.where,) + tuple(dr.also)]
         ids = e.get("source_ids") or []
         out_events.append({
             "date": e["date"], "old": e["old"], "new": e["new"],
@@ -661,7 +727,7 @@ def report(root: Path, cfg: Dict[str, Any],
     for r, e in late_rows(rows, events):
         if account and r["_acct"] != account:
             continue
-        choice = declared_late(dated, e, ren)
+        choice = declared_late(dated, e, ren, account=r["_acct"])
         late.append({
             "account": r["_acct"], "date": str(r.get("date") or "")[:10],
             "action": r.get("action"), "symbol": r.get("symbol"),
@@ -763,15 +829,22 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
         mine = [x for x in late if x["symbol"] and x["rename_date"]
                 == e["date"] and x["renamed_to"] == e["new"]]
         if mine:
-            res = mine[0]["resolution"]
+            # (late= is per account: each row says its own when the
+            # accounts chose differently)
+            kinds = {x["resolution"] for x in mine}
+            res = mine[0]["resolution"] if len(kinds) == 1 else (
+                "unresolved" if "unresolved" in kinds else "mixed")
             word = {"fold": "declared the renamed shares (late=fold)",
                     "separate": "declared another security "
-                                "(late=separate)"}.get(res, "UNRESOLVED")
+                                "(late=separate)",
+                    "mixed": "declared per account"}.get(res, "UNRESOLVED")
             _hang(d, f"{len(mine)} trade(s) in {e['old']} on or "
                    f"after {e['date']}: {word}", "  ", "    ")
             for x in mine:
                 d.line(f"    {x['date']}  {x['account']:<8} "
-                       f"{x['action']:<8} {x['symbol']} {x['qty']:+g}")
+                       f"{x['action']:<8} {x['symbol']} {x['qty']:+g}"
+                       + (f"  ({x['resolution']})" if len(kinds) > 1
+                          else ""))
             if res == "unresolved":
                 _hang(d, "Declare one in a .tt file of the account — the "
                        f"broker still books the renamed shares as "

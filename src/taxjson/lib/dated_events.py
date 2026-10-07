@@ -28,12 +28,26 @@ converted file — `taxjson run` reads it here):
 
   RENAME <date> <OLD> <NEW> [late=fold|late=separate]
       a ticker change on that date (lib/renames). Declared once, in any
-      account's .tt file, it applies to every account whose books carry
-      OLD before the date (a rename is the security's, not an
-      account's), and is recorded once. The run writes it into its
-      effective map (work/ticker.map.effective, with the line's place in
-      a `# .tt: <where>` note) so every stage that books renames reads
-      it: the SPLIT row it books carries `event_source` "tt".
+      account's .tt file, it applies to every account OF THE SAME KIND
+      (securities or crypto: a security's ticker change never touches a
+      coin, nor a coin's a security) whose books carry OLD before the
+      date (a rename is the security's, not an account's), and is
+      recorded once. `late=` describes how one broker booked the late
+      rows: a line's choice applies to the declaring account's late rows
+      and to every account without a line of its own; an account that
+      books them differently says so in a line of its own (the same
+      change, its own late=) — DatedRename.late_for. Every declaration
+      of one change (.tt lines in several accounts, a legacy map line)
+      is merged into one event (resolve_renames): its date is the
+      earliest declared; declarations that cannot all be true stop the
+      run naming the lines (OLD to two symbols, one change on two dates
+      more than renames.WINDOW_DAYS apart, a cycle such as A -> B plus
+      B -> A, one account choosing late=fold and late=separate). The run
+      writes the events into its effective map (work/ticker.map.
+      effective, with the line's place in a `# .tt: <where>` note, and
+      the merged facts in a JSON tail — EVENT_META) so every stage that
+      books renames reads them: the SPLIT row it books carries
+      `event_source` "tt".
 
 The legacy ticker.map forms (`JOURNAL FROM TO`: read as TOBASE;
 `RENAME OLD NEW YYYY-MM-DD`) are still read, with one Warning per run
@@ -63,8 +77,14 @@ SOURCE_TT = "tt"
 LEG_TIME = "09:30:00"
 # The note the run writes after a .tt RENAME line in its effective map:
 # `# .tt: <inputs/acct/file.tt:N> | <the line as written>`.
-TT_ORIGIN_RE = re.compile(r"^\s*\.tt: (.+?\.tt:\d+)(?: \| (.*?))?\s*$",
-                          re.IGNORECASE)
+# The merged event's facts follow in a JSON tail: `... || {json}`.
+TT_ORIGIN_RE = re.compile(r"^\s*\.tt: (.+?\.tt:\d+)(?: \| (.*?))?"
+                          r"(?: \|\| (\{.*\}))?\s*$", re.IGNORECASE)
+# The facts of a legacy ticker.map line's event that .tt lines of the
+# same change merged into (its date, its late= choices, its other
+# declarations): a comment line of the effective map, `# dated-event:
+# {json}` (the line itself stays as the user wrote it, above).
+EVENT_META = "# dated-event: "
 EFFECTIVE_HEAD = ("# taxjson run: ticker changes declared in .tt files "
                   "(lib/dated_events)")
 
@@ -148,7 +168,15 @@ class Journal:
 @dataclass
 class Declarations:
     journals: List[Journal] = field(default_factory=list)
-    renames: List[Any] = field(default_factory=list)   # renames.DatedRename
+    # The rename events a .tt line declares and no ticker.map line does
+    # (renames.DatedRename, merged: resolve_renames) — the effective
+    # map's .tt lines.
+    renames: List[Any] = field(default_factory=list)
+    # Every rename event of the project, ticker.map's included (set by
+    # check_against_map; the .tt ones alone without a map).
+    events: List[Any] = field(default_factory=list)
+    # The .tt RENAME lines as written (one DatedRename each).
+    tt_declared: List[Any] = field(default_factory=list)
     # Info lines: a rename declared twice, a journal the broker's rows
     # already hold.
     notes: List[str] = field(default_factory=list)
@@ -213,77 +241,246 @@ def read_declarations(root: Path, accounts: Dict[str, Any]) -> Declarations:
                 elif r is not None:
                     tt_renames.append(DatedRename(
                         r["old"], r["new"], r["date"], r["late"], where,
-                        r["line"], source=SOURCE_TT))
-    kept, notes, errs = _merge_renames(tt_renames, [])
+                        r["line"], source=SOURCE_TT, account=acct,
+                        kind=account_kind(acfg)))
+    out.tt_declared = tt_renames
+    kept, notes, errs = resolve_renames(tt_renames, [])
     problems += errs
     out.notes += notes
     out.renames = kept
+    out.events = list(kept)
     if problems:
         raise DatedEventError("\n".join(problems))
     return out
 
 
-def _merge_renames(tt: Sequence[Any], mapped: Sequence[Any]
-                   ) -> Tuple[List[Any], List[str], List[str]]:
-    """(the .tt renames to book, Info notes, problems): a .tt RENAME that
-    repeats another declaration of the same change (the same OLD and NEW
-    within renames.WINDOW_DAYS: another .tt line, a ticker.map line) is
-    one event, recorded once; one that renames OLD to another symbol
-    within the window contradicts it."""
-    from taxjson.lib.renames import WINDOW_DAYS, _days
-    kept: List[Any] = []
-    notes: List[str] = []
+def account_kind(acfg: Any) -> str:
+    """renames.KIND_CRYPTO for a crypto account (crypto = true), else
+    renames.KIND_SECURITIES."""
+    from taxjson.lib.renames import KIND_CRYPTO, KIND_SECURITIES
+    return KIND_CRYPTO if isinstance(acfg, dict) and acfg.get("crypto") \
+        else KIND_SECURITIES
+
+
+def _kinds_meet(a: str, b: str) -> bool:
+    """Two declarations can name one event: a legacy map line (no kind)
+    meets every account; .tt lines meet within one kind."""
+    return not a or not b or a == b
+
+
+def _decl_text(dr: Any) -> str:
+    return (f"{dr.where} (RENAME {dr.date} {dr.old} {dr.new}"
+            + (f" late={dr.late}" if dr.late else "") + ")")
+
+
+def resolve_renames(tt: Sequence[Any], mapped: Sequence[Any]
+                    ) -> Tuple[List[Any], List[str], List[str]]:
+    """(the rename EVENTS, Info notes, problems) of the project's dated
+    RENAME declarations: `tt` the .tt lines as written, `mapped` the
+    legacy ticker.map lines (renames.DatedRename). Declarations of one
+    change — the same OLD and NEW within renames.WINDOW_DAYS, of one
+    account kind (a map line meets both) — are one event, whatever order
+    the files are read in:
+
+      - its date is the earliest declared;
+      - it is recorded at the map line when there is one (the line stays
+        in the map), else at the first .tt line by date and place; the
+        others are its `also`;
+      - its kind: the map line's (every account) or the .tt lines';
+      - late=: each declaring account's own non-empty choice is that
+        account's (`lates`); the event's `late` (an account without a
+        line of its own) is the map line's, else the one choice the .tt
+        lines agree on, else none (an account without its own line then
+        lists its late rows as unresolved).
+
+    Problems (each naming every line involved): OLD renamed to two
+    symbols within the window; one change declared on two dates further
+    apart (two events of one pair); a cycle of changes (A -> B and
+    B -> A); one account declaring both late=fold and late=separate."""
+    from dataclasses import replace
+    from taxjson.lib.renames import SOURCE_TT, WINDOW_DAYS, _days
+    decls = list(mapped) + list(tt)
+    order = sorted(range(len(decls)), key=lambda i: (
+        decls[i].date, decls[i].source == SOURCE_TT, decls[i].where, i))
+    clusters: List[List[Any]] = []
     problems: List[str] = []
-    for dr in tt:
-        twin = None
-        for other in list(mapped) + kept:
-            gap = _days(other.date, dr.date)
-            if other.old != dr.old or gap is None or gap > WINDOW_DAYS:
-                continue
-            if other.new != dr.new:
-                problems.append(
-                    f"{dr.where}: RENAME {dr.date} {dr.old} {dr.new} "
-                    f"contradicts {other.where} ({other.old} -> "
-                    f"{other.new} on {other.date}) — one ticker change, one "
-                    f"line: {dr.line!r}")
-                twin = other
+    notes: List[str] = []
+    said: set = set()
+
+    def problem(msg: str) -> None:
+        if msg not in said:
+            said.add(msg)
+            problems.append(msg)
+
+    for i in order:
+        dr = decls[i]
+        home = None
+        for c in clusters:
+            for o in c:
+                gap = _days(o.date, dr.date)
+                if (o.old != dr.old or gap is None or gap > WINDOW_DAYS
+                        or not _kinds_meet(o.kind, dr.kind)):
+                    continue
+                if o.new != dr.new:
+                    problem(f"{dr.where}: RENAME {dr.date} {dr.old} "
+                            f"{dr.new} contradicts {o.where} ({o.old} -> "
+                            f"{o.new} on {o.date}) — one ticker change, "
+                            f"one line: {dr.line!r}")
+                    home = False
+                    break
+                home = c
                 break
-            if other.late and dr.late and other.late != dr.late:
-                problems.append(
-                    f"{dr.where}: RENAME {dr.date} {dr.old} {dr.new} "
-                    f"late={dr.late} contradicts {other.where} "
-                    f"(late={other.late}) — keep one line: {dr.line!r}")
-            notes.append(f"{dr.where}: RENAME {dr.old} -> {dr.new} on "
-                         f"{dr.date} repeats {other.where}: one event, "
-                         f"booked once")
-            twin = other
-            break
-        if twin is None:
-            kept.append(dr)
-    return kept, notes, problems
+            if home is not None:
+                break
+        if home is False:
+            continue
+        if home is None:
+            clusters.append([dr])
+        else:
+            home.append(dr)
+    events: List[Any] = []
+    for c in clusters:
+        maps = [d for d in c if d.source != SOURCE_TT]
+        tts = [d for d in c if d.source == SOURCE_TT]
+        prim = maps[0] if maps else tts[0]
+        own: Dict[str, Dict[str, Any]] = {}
+        for d in tts:
+            if d.late:
+                own.setdefault(d.account, {}).setdefault(d.late, d)
+        for acct, by in sorted(own.items()):
+            if len(by) > 1:
+                problem(f"account {acct} declares the ticker change "
+                        f"{prim.old} -> {prim.new} both late=fold and "
+                        f"late=separate: "
+                        f"{'; '.join(_decl_text(d) for d in by.values())}"
+                        f" — keep one line")
+        map_late = next((d.late for d in maps if d.late), "")
+        tt_lates = sorted({d.late for d in tts if d.late})
+        late = map_late or (tt_lates[0] if len(tt_lates) == 1 else "")
+        if not map_late and len(tt_lates) > 1:
+            notes.append(
+                f"{prim.where}: the ticker change {prim.old} -> "
+                f"{prim.new} is declared late=fold in one account and "
+                f"late=separate in another: each applies to its own "
+                f"account's late rows; an account with no line of its "
+                f"own has its late rows listed as unresolved (`taxjson "
+                f"renames`)")
+        lates = tuple(sorted((a, next(iter(by))) for a, by in own.items()
+                             if len(by) == 1))
+        ev = replace(prim, date=min(d.date for d in c), late=late,
+                     kind=prim.kind if maps else tts[0].kind,
+                     lates=lates,
+                     also=tuple(d.where for d in c if d is not prim))
+        if maps:
+            ev = replace(ev, kind="")
+        for d in c:
+            if d is not prim:
+                notes.append(f"{d.where}: RENAME {d.old} -> {d.new} on "
+                             f"{d.date} repeats {prim.where}: one event, "
+                             f"booked once"
+                             + (f" on {ev.date}" if d.date != ev.date
+                                or prim.date != ev.date else ""))
+        events.append(ev)
+    # One change on two dates: two events of one pair.
+    for i, a in enumerate(events):
+        for b in events[i + 1:]:
+            if (a.old, a.new) == (b.old, b.new) and \
+                    _kinds_meet(a.kind, b.kind):
+                problem(f"{b.where}: the ticker change {b.old} -> {b.new} "
+                        f"is declared on {b.date} here and on {a.date} at "
+                        f"{a.where} — one change has one date: keep one "
+                        f"line (lines more than {WINDOW_DAYS} days apart "
+                        f"would book two changes): {b.line!r}")
+    # A cycle: A -> B, B -> A (or longer).
+    for kind in ("securities", "crypto"):
+        edges: Dict[str, List[Any]] = {}
+        for e in events:
+            if _kinds_meet(e.kind, kind):
+                edges.setdefault(e.old, []).append(e)
+        for cyc in _cycles(edges):
+            syms = " -> ".join([e.old for e in cyc] + [cyc[0].old])
+            problem(f"the ticker changes {syms} form a cycle: "
+                    f"{'; '.join(_decl_text(e) for e in cyc)} — a chain "
+                    f"of ticker changes must end at one symbol; keep the "
+                    f"real ones (a symbol that really changed back is "
+                    f"booked in its account with a .tt line `SPLIT <date> "
+                    f"<time> OLD NEW 1`)")
+    events.sort(key=lambda e: (e.date, e.old, e.new))
+    return events, notes, problems
+
+
+def _cycles(edges: Dict[str, List[Any]]) -> List[List[Any]]:
+    """The cycles of the rename graph `edges` ({old: [event]}), each as
+    its events in order, each cycle once (from its smallest symbol)."""
+    out: List[List[Any]] = []
+    seen: set = set()
+
+    def walk(start: str, cur: str, path: List[Any]) -> None:
+        for e in edges.get(cur, ()):
+            if e.new == start:
+                cyc = path + [e]
+                key = frozenset(id(x) for x in cyc)
+                if key not in seen:
+                    seen.add(key)
+                    out.append(cyc)
+            elif e.new > start and all(x.old != e.new for x in path) \
+                    and len(path) < 16:
+                walk(start, e.new, path + [e])
+
+    for start in sorted(edges):
+        walk(start, start, [])
+    return out
 
 
 def check_against_map(decl: Declarations, tmap) -> List[str]:
     """Settle the .tt declarations against the project's ticker.map
-    (`tmap`, None without one): a .tt RENAME the map's dated RENAME
-    already declares is booked once (a note), one the map contradicts —
-    another target, or an undated rule renaming OLD at every date — is a
-    problem (returned). A .tt JOURNAL between two listings a DISTINCT
-    line keeps apart is a Warning (decl.warnings): its legs are booked,
-    the listings stay separate."""
+    (`tmap`, None without one): every dated RENAME, the map's legacy
+    lines included, is merged into its events (resolve_renames: a .tt
+    line repeating a map line is one event, recorded at the map line;
+    one the map contradicts is a problem, returned); a .tt RENAME of a
+    symbol an undated map rule renames at every date is a problem too.
+    Warnings (decl.warnings): a .tt RENAME naming a symbol a TOBASE,
+    DELETE or DISTINCT line also decides, and a .tt JOURNAL between two
+    listings a DISTINCT line keeps apart (its legs are booked, the
+    listings stay separate)."""
     if tmap is None:
         return []
-    kept, notes, problems = _merge_renames(decl.renames,
-                                           list(tmap.dated or ()))
-    for dr in kept:
+    events, notes, problems = resolve_renames(
+        decl.tt_declared, list(tmap.dated or ()))
+    from taxjson.lib.renames import SOURCE_TT
+    decl.events = events
+    decl.renames = [e for e in events if e.source == SOURCE_TT]
+    decl.notes = notes      # (read_declarations' notes are renames')
+    for dr in decl.renames:
         if dr.old in tmap.glob:
             problems.append(
                 f"{dr.where}: RENAME {dr.date} {dr.old} {dr.new} is dated, "
                 f"but ticker.map renames {dr.old} to {tmap.glob[dr.old]} at "
                 f"every date (GLOBAL or an undated RENAME) — keep one of "
                 f"the two: {dr.line!r}")
-    decl.renames = kept
-    decl.notes += notes
+            continue
+        for sym in (dr.old, dr.new):
+            if sym in (tmap.tobase or {}):
+                decl.warnings.append(
+                    f"{dr.where}: RENAME {dr.date} {dr.old} {dr.new}: "
+                    f"ticker.map also joins {sym} to {tmap.tobase[sym]} "
+                    f"(TOBASE, at every date, in the base-currency books) "
+                    f"— the change is booked on the exports' symbols "
+                    f"first; check that both lines are meant")
+            if sym in (tmap.delete or ()):
+                decl.warnings.append(
+                    f"{dr.where}: RENAME {dr.date} {dr.old} {dr.new}: "
+                    f"ticker.map deletes every row of {sym} (DELETE {sym})"
+                    f" — the change carries "
+                    f"{'nothing' if sym == dr.old else 'the position into rows that are deleted'}"
+                    f"; delete one of the two lines")
+        if frozenset((dr.old, dr.new)) in (tmap.distinct or ()):
+            decl.warnings.append(
+                f"{dr.where}: RENAME {dr.date} {dr.old} {dr.new} carries "
+                f"the position from one to the other, and ticker.map "
+                f"keeps them apart (DISTINCT {dr.old} {dr.new}): after "
+                f"the date they are two securities — delete one of the "
+                f"two lines if that is not meant")
     for j in decl.journals:
         if frozenset((j.frm, j.to)) in (tmap.distinct or ()):
             decl.warnings.append(
@@ -292,6 +489,23 @@ def check_against_map(decl: Declarations, tmap) -> List[str]:
                 f"{j.frm} {j.to}): the legs are booked, the listings stay "
                 f"two securities — delete one of the two lines")
     return problems
+
+
+def project_renames(root: Path, accounts: Optional[Dict[str, Any]] = None,
+                    tmap: Any = None) -> List[Any]:
+    """Every rename event of a project as `taxjson run` books it
+    (resolve_renames over the .tt lines and ticker.map's dated lines);
+    only the map's lines when a .tt line cannot be read (the run names
+    it). `tmap` the parsed ticker.map (None: none)."""
+    if accounts is None:
+        accounts = _project_accounts(root)
+    mapped = list(getattr(tmap, "dated", ()) or ()) if tmap else []
+    try:
+        decl = read_declarations(root, accounts)
+    except DatedEventError:
+        return mapped
+    events, _n, problems = resolve_renames(decl.tt_declared, mapped)
+    return events if not problems else mapped + decl.renames
 
 
 # ------------------------------------------------------------ journals
@@ -411,14 +625,68 @@ def journal_legs(journals: Iterable[Journal]):
 
 # ------------------------------------------------------------ renames
 
-def effective_lines(renames: Iterable[Any]) -> List[str]:
-    """The .tt RENAME declarations as lines of the run's effective map,
-    each with its origin note (TT_ORIGIN_RE)."""
+def _meta(dr: Any) -> Dict[str, Any]:
+    return {"account": dr.account, "kind": dr.kind,
+            "lates": dict(dr.lates), "also": list(dr.also)}
+
+
+def effective_lines(events: Iterable[Any]) -> List[str]:
+    """The rename events as lines of the run's effective map: an event a
+    .tt line records as a RENAME line with its origin note and its
+    merged facts (TT_ORIGIN_RE); an event recorded at a legacy map line
+    (the line is in the map above) that .tt lines merged into, as an
+    EVENT_META comment line naming the map line by its OLD, NEW and
+    written date."""
+    from taxjson.lib.renames import SOURCE_TT
     out = []
-    for dr in renames:
-        out.append(f"RENAME {dr.old} {dr.new} {dr.date}"
-                   + (f" late={dr.late}" if dr.late else "")
-                   + f"  # .tt: {dr.where} | {dr.line}")
+    for dr in events:
+        if dr.source == SOURCE_TT:
+            out.append(f"RENAME {dr.old} {dr.new} {dr.date}"
+                       + (f" late={dr.late}" if dr.late else "")
+                       + f"  # .tt: {dr.where} | {dr.line} || "
+                       + json.dumps(_meta(dr), sort_keys=True))
+        elif dr.also or dr.lates:
+            m = _meta(dr)
+            m.update({"old": dr.old, "new": dr.new, "written": _written(dr),
+                      "date": dr.date, "late": dr.late})
+            out.append(EVENT_META + json.dumps(m, sort_keys=True))
+    return out
+
+
+def _written(dr: Any) -> str:
+    """The date a declaration's line is written with (a merged event
+    keeps its line's text in `line`)."""
+    m = re.search(r"\d{4}-\d{2}-\d{2}", dr.line or "")
+    return m.group(0) if m else dr.date
+
+
+def apply_meta(dated: List[Any], metas: List[Dict[str, Any]],
+               origin: Dict[int, Dict[str, Any]]) -> List[Any]:
+    """The effective map's dated lines with their merged facts: `origin`
+    {index in dated: the JSON tail of its .tt origin note}, `metas` the
+    EVENT_META lines (a legacy map line's event)."""
+    from dataclasses import replace
+    out = []
+    for i, dr in enumerate(dated):
+        m = origin.get(i)
+        if m is None:
+            m = next((x for x in metas if (x.get("old"), x.get("new"),
+                                           x.get("written"))
+                      == (dr.old, dr.new, dr.date)), None)
+            if m is not None:
+                dr = replace(dr, date=str(m.get("date") or dr.date),
+                             late=str(m.get("late") or ""))
+        if isinstance(m, dict):
+            lates = m.get("lates") if isinstance(m.get("lates"), dict) \
+                else {}
+            dr = replace(
+                dr, account=str(m.get("account") or ""),
+                kind=str(m.get("kind") or ""),
+                lates=tuple(sorted((str(a), str(v)) for a, v in
+                                   lates.items())),
+                also=tuple(str(w) for w in (m.get("also") or [])
+                           if isinstance(m.get("also"), list)))
+        out.append(dr)
     return out
 
 
@@ -468,12 +736,17 @@ def legacy_note(tmap) -> Optional[Tuple[str, List[str]]]:
         f"{nj} JOURNAL line(s)" if nj else "",
         f"{nr} dated RENAME line(s)" if nr else "") if x)
     return (f"ticker.map holds {what}: dated events written the old way",
-            ["They still work (a JOURNAL line is read as TOBASE, a dated "
-             "RENAME as the ticker change on its date). Dated events now "
-             "go in an account's .tt file, date first (`JOURNAL <date> "
-             "FROM TO <qty>`, `RENAME <date> OLD NEW`); `taxjson "
-             "format-map --write` migrates the lines, and the books stay "
-             "the same."])
+            ["They still work in the tax books (a JOURNAL line is read "
+             "as TOBASE, a dated RENAME as the ticker change on its "
+             "date). A JOURNAL line no longer moves units in the holdings "
+             "view: a journal's units move by its rows — the broker's, or "
+             "a .tt line `JOURNAL <date> FROM TO <qty>` when the export "
+             "lacks them. Dated events now go in an account's .tt file, "
+             "date first (`JOURNAL <date> FROM TO <qty>`, `RENAME <date> "
+             "OLD NEW`); `taxjson format-map --write` migrates the lines "
+             "(the tax books stay the same — it refuses a move that would "
+             "change them) and names a JOURNAL line to add where the "
+             "holdings show the two listings long and short."])
 
 
 # ------------------------------------------------------------ the record
@@ -494,7 +767,10 @@ def read_state(path: Path) -> Dict[str, List[Dict[str, Any]]]:
         doc = None
     if not isinstance(doc, dict) or doc.get("format") != FORMAT:
         return {"journals": [], "renames": []}
-    return {k: [r for r in (doc.get(k) or []) if isinstance(r, dict)]
+    # (a hand-edited or truncated file: a key that is not a list, a
+    # record that is not an object — dropped, never a traceback)
+    return {k: [r for r in (doc.get(k) if isinstance(doc.get(k), list)
+                            else []) if isinstance(r, dict)]
             for k in ("journals", "renames")}
 
 
@@ -518,20 +794,28 @@ def rename_records(book_rows: Iterable[Any], declared: Iterable[Any]
         ids = list(e.get("source_ids") or [])
         src = next((s for s in ("tt", "map", "ib-conid", "broker")
                     if s in ids), ids[0] if ids else "broker")
-        out.append({"date": e["date"], "old": e["old"], "new": e["new"],
-                    "late": next((dr.late for dr in decl if dr.late), ""),
-                    "source": src, "sources": ids,
-                    "where": [dr.where for dr in decl],
-                    "accounts": list(e["accounts"]),
-                    "status": "booked"})
+        rec = {"date": e["date"], "old": e["old"], "new": e["new"],
+               "late": next((dr.late for dr in decl if dr.late), ""),
+               "source": src, "sources": ids,
+               "where": [w for dr in decl
+                         for w in (dr.where,) + tuple(dr.also)],
+               "accounts": list(e["accounts"]),
+               "status": "booked"}
+        lates = {a: v for dr in decl for a, v in dr.lates}
+        if lates:
+            rec["lates"] = lates        # each declaring account's own
+        out.append(rec)
     for dr in declared:
         if id(dr) in used:
             continue
-        out.append({"date": dr.date, "old": dr.old, "new": dr.new,
-                    "late": dr.late, "source": dr.source or SOURCE_MAP,
-                    "sources": [dr.source or SOURCE_MAP],
-                    "where": [dr.where], "accounts": [],
-                    "status": "unused"})
+        rec = {"date": dr.date, "old": dr.old, "new": dr.new,
+               "late": dr.late, "source": dr.source or SOURCE_MAP,
+               "sources": [dr.source or SOURCE_MAP],
+               "where": [dr.where] + list(dr.also), "accounts": [],
+               "status": "unused"}
+        if dr.lates:
+            rec["lates"] = dict(dr.lates)
+        out.append(rec)
     out.sort(key=lambda r: (r["date"], r["old"], r["new"]))
     return out
 
@@ -545,36 +829,233 @@ RENAMES_TT_HEAD = (
     "# A line here applies to every account whose books hold OLD.\n")
 
 
+def _book_symbols(root: Path, acct: str) -> Optional[set]:
+    """The symbols an account's books name (work/<acct>_base.json: each
+    row's symbol, a rename row's new symbol, an option's underlying);
+    None when the account has no books yet."""
+    from taxjson.lib.renames import _option_root, rename_target
+    p = Path(root) / "work" / f"{acct}_base.json"
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return None
+    rows = doc.get("transactions") if isinstance(doc, dict) else doc
+    out: set = set()
+    for r in rows if isinstance(rows, list) else []:
+        if not isinstance(r, dict):
+            continue
+        sym = str(r.get("symbol") or "").upper()
+        out.add(sym)
+        root_ = _option_root(sym)
+        if root_:
+            out.add(root_.upper())
+        if rename_target(r):
+            out.add(rename_target(r).upper())
+    return out
+
+
+def _carries(root: Path, acct: str, old: str, new: str, date: str) -> bool:
+    """The account's books carry the change: a SPLIT row renaming OLD (or
+    to NEW) within renames.WINDOW_DAYS of the date."""
+    from taxjson.lib.renames import WINDOW_DAYS, _days, rename_target
+    p = Path(root) / "work" / f"{acct}_base.json"
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return False
+    rows = doc.get("transactions") if isinstance(doc, dict) else doc
+    for r in rows if isinstance(rows, list) else []:
+        if not isinstance(r, dict) or not rename_target(r):
+            continue
+        gap = _days(str(r.get("date") or ""), date)
+        if gap is not None and gap <= WINDOW_DAYS and (
+                str(r.get("symbol") or "").upper() == old
+                or rename_target(r).upper() == new):
+            return True
+    return False
+
+
+def home_accounts(root: Path, accounts: Dict[str, Any], old: str,
+                  new: str, date: str) -> List[Tuple[str, str]]:
+    """[(account, why)] of the .tt file(s) a migrated ticker.map RENAME
+    goes to: one per account KIND whose books name OLD or NEW (a .tt
+    RENAME applies to its own kind only — securities or crypto; a legacy
+    map line applied to both); the securities kind when no account's
+    books name them (or no account has books yet), crypto only in a
+    project with no securities account. Within a kind (taxjson.toml
+    order): the first account whose books carry the change (a SPLIT row
+    renaming OLD within renames.WINDOW_DAYS of the date), else the first
+    whose books name OLD or NEW, else the kind's only account, else its
+    first taxable account, else its first account."""
+    from taxjson.lib.renames import KIND_CRYPTO, KIND_SECURITIES
+    names = list(accounts or {})
+    kind = {a: account_kind(accounts.get(a)) for a in names}
+    touch = {}
+    for a in names:
+        syms = _book_symbols(root, a)
+        touch[a] = bool(syms) and (old in syms or new in syms)
+    kinds = [k for k in (KIND_SECURITIES, KIND_CRYPTO)
+             if any(touch[a] and kind[a] == k for a in names)]
+    if not kinds:
+        kinds = [KIND_SECURITIES if any(kind[a] == KIND_SECURITIES
+                                        for a in names) else KIND_CRYPTO]
+    out = []
+    for k in kinds:
+        mine = [a for a in names if kind[a] == k]
+        if not mine:
+            continue
+        pick = next(((a, "its books carry the change") for a in mine
+                     if _carries(root, a, old, new, date)), None) \
+            or next(((a, f"its books hold {old} or {new}") for a in mine
+                     if touch[a]), None)
+        if pick is None and len(mine) == 1:
+            pick = (mine[0], "the project's only account"
+                    if len(names) == 1 else f"the only {k} account")
+        if pick is None:
+            pick = next(((a, f"no account's books carry it yet: the "
+                          f"first taxable {k} account") for a in mine
+                         if (accounts.get(a) or {}).get("type")
+                         == "taxable"), None) \
+                or (mine[0], f"the first {k} account")
+        out.append(pick)
+    return out
+
+
 def home_account(root: Path, accounts: Dict[str, Any], old: str, new: str,
                  date: str) -> Tuple[str, str]:
-    """(account, why) of the .tt file a migrated ticker.map RENAME goes
-    to — one file: the rename applies project-wide wherever it is
-    declared. The first account (taxjson.toml order) whose books carry
-    the event (a SPLIT row renaming OLD within renames.WINDOW_DAYS of the
-    date, in work/<acct>_base.json); else the only account; else the
-    first taxable account (else the first account)."""
-    from taxjson.lib.renames import WINDOW_DAYS, _days, rename_target
-    names = list(accounts or {})
-    cache = Path(root) / "work"
-    for acct in names:
-        p = cache / f"{acct}_base.json"
-        try:
-            doc = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError, RecursionError):
-            continue
-        rows = doc.get("transactions") if isinstance(doc, dict) else doc
-        for r in rows if isinstance(rows, list) else []:
-            if not isinstance(r, dict) or not rename_target(r):
+    """(account, why): the first of home_accounts ('' when the project
+    has no account)."""
+    homes = home_accounts(root, accounts, old, new, date)
+    return homes[0] if homes else ("", "the first account")
+
+
+@dataclass
+class MigrationPlan:
+    """What `taxjson format-map --write` adds to which .tt file, and
+    whether the books stay the same (plan_migration)."""
+    # {inputs/<acct>/renames.tt: [blocks]}: each block a moved line's
+    # comments and line, in order.
+    adds: Dict[str, List[List[str]]] = field(default_factory=dict)
+    homes: List[str] = field(default_factory=list)
+    skipped: List[str] = field(default_factory=list)
+    # A moved line and an existing .tt line of the same change that
+    # differ (date, late=): booked as one event — to reconcile.
+    twins: List[str] = field(default_factory=list)
+    # Why the migration would change the books (nothing is written).
+    refused: List[str] = field(default_factory=list)
+
+
+def _view(events: Sequence[Any], accounts: Dict[str, Any],
+          syms: Dict[str, Optional[set]]) -> set:
+    """What the books of each account get from the rename events: (account,
+    OLD, NEW, date, the account's late=) for each event that applies to
+    the account's kind and names a symbol its books hold (every event,
+    for an account without books)."""
+    out = set()
+    for acct in accounts:
+        kind = account_kind(accounts.get(acct))
+        have = syms.get(acct)
+        for e in events:
+            if not e.applies_to(kind):
                 continue
-            gap = _days(str(r.get("date") or ""), date)
-            if gap is not None and gap <= WINDOW_DAYS and (
-                    str(r.get("symbol") or "").upper() == old
-                    or rename_target(r).upper() == new):
-                return acct, "its books carry the change"
-    if len(names) == 1:
-        return names[0], "the project's only account"
-    for acct in names:
-        if (accounts.get(acct) or {}).get("type") == "taxable":
-            return acct, ("no account's books carry it yet: the first "
-                          "taxable account")
-    return (names[0] if names else ""), "the first account"
+            if have is not None and e.old not in have and e.new not in have:
+                continue
+            out.add((acct, e.old, e.new, e.date, e.late_for(acct)))
+    return out
+
+
+def plan_migration(root: Path, accounts: Dict[str, Any], map_text: str,
+                   moved: Sequence[Any]) -> MigrationPlan:
+    """Where each dated RENAME line `format_map(migrate=True)` moves out of
+    the map goes (home_accounts), and a simulation of the run: the
+    rename events the project books now (its .tt lines plus the map's
+    dated lines, resolve_renames) against the ones it would book after
+    the move (the .tt lines plus the moved ones). Any difference — an
+    account's late= choice, a date, a contradiction the move creates —
+    refuses the migration (MigrationPlan.refused names the lines);
+    accounts are compared on the events naming a symbol their books hold
+    (work/<acct>_base.json; an account without books on every event)."""
+    from taxjson.bin.taxjson_ticker_map import _parse_map_text
+    from taxjson.lib.renames import DatedRename, SOURCE_TT
+    plan = MigrationPlan()
+    root = Path(root)
+    try:
+        decl = read_declarations(root, accounts)
+    except DatedEventError as e:
+        plan.refused = [f"a .tt dated-event line cannot be booked: {m}"
+                        for m in str(e).splitlines()]
+        return plan
+    tmap = _parse_map_text(map_text, "ticker.map")[0]
+    mapped = list(tmap.dated or ())
+    before, _n, bad = resolve_renames(decl.tt_declared, mapped)
+    if bad:
+        plan.refused = [f"the project's dated renames contradict each "
+                        f"other (`taxjson run` stops on them): {m}"
+                        for m in bad]
+        return plan
+    have = {(d.old, d.new, d.date, d.late, d.kind): d.where
+            for d in decl.tt_declared}
+    added: List[Any] = []
+    for mv in moved:
+        homes = home_accounts(root, accounts, mv.old, mv.new, mv.date)
+        if not homes:
+            continue
+        for n, (acct, why) in enumerate(homes):
+            kind = account_kind(accounts.get(acct))
+            key = (mv.old, mv.new, mv.date, mv.late, kind)
+            dup = not mv.commented and key in have
+            rel = f"inputs/{acct}/{RENAMES_TT}"
+            block = list(mv.comments) if n == 0 else []
+            if dup:
+                plan.skipped.append(f"{mv.tt_line.split('  #')[0]} "
+                                    f"(already in {have[key]})")
+            else:
+                block.append(("# " + mv.tt_line) if mv.commented
+                             else mv.tt_line)
+            if block:
+                plan.adds.setdefault(rel, []).append(block)
+            if mv.commented or dup:
+                continue
+            plan.homes.append(f"{mv.old} -> {mv.new} ({mv.date}): {rel} "
+                              f"({why})")
+            nd = DatedRename(mv.old, mv.new, mv.date, mv.late,
+                             f"{rel} (moved from ticker.map)",
+                             mv.tt_line.split("  #")[0], source=SOURCE_TT,
+                             account=acct, kind=kind)
+            added.append(nd)
+            for d in decl.tt_declared:
+                if (d.old, d.new) == (nd.old, nd.new) and \
+                        _kinds_meet(d.kind, kind) and \
+                        (d.date, d.late) != (nd.date, nd.late):
+                    from taxjson.lib.renames import WINDOW_DAYS, _days
+                    gap = _days(d.date, nd.date)
+                    if gap is not None and gap <= WINDOW_DAYS:
+                        plan.twins.append(
+                            f"ticker.map's `RENAME {mv.old} {mv.new} "
+                            f"{mv.date}{' late=' + mv.late if mv.late else ''}`"
+                            f" and {_decl_text(d)} declare one change "
+                            f"differently: booked as one event — keep "
+                            f"one line")
+    after, _n, bad = resolve_renames(list(decl.tt_declared) + added, [])
+    if bad:
+        plan.refused = [f"after the move: {m}" for m in bad]
+        return plan
+    syms = {a: _book_symbols(root, a) for a in accounts}
+    old_v, new_v = _view(before, accounts, syms), _view(after, accounts,
+                                                        syms)
+    for acct, o, nw, d, late in sorted(old_v - new_v):
+        alt = sorted(x for x in new_v if x[:3] == (acct, o, nw))
+        now = (f"{d}" + (f" late={late}" if late else ""))
+        then = ", ".join(f"{x[3]}" + (f" late={x[4]}" if x[4] else "")
+                         for x in alt) or "not booked"
+        plan.refused.append(
+            f"account {acct}: the ticker change {o} -> {nw} is booked "
+            f"{now} now and would be {then} after the move — the map line "
+            f"and the account's .tt lines of this change must say the "
+            f"same (date, late=)")
+    for acct, o, nw, d, late in sorted(new_v - old_v):
+        if not any(x[:3] == (acct, o, nw) for x in old_v):
+            plan.refused.append(
+                f"account {acct}: the ticker change {o} -> {nw} on {d} "
+                f"would be booked after the move and is not now")
+    return plan
