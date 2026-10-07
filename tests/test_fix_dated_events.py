@@ -140,13 +140,28 @@ def _gambit_tt(x, cur):
             f"800.00 0.00\n")
 
 
+# A .tt JOURNAL joins two listings of one security (one root: pre-release
+# review M2): the home-currency line and the TSX US-dollar line, both
+# traded in the home currency so the loss is exact.
+_TT_PAIR = {"TO": ("QZG.TO", "QZG.U.TO"), "US": ("QZG.US", "QZG.U.TO")}
+
+
+def _tt_gambit(x, cur):
+    a, b = _TT_PAIR[x]
+    return (f"BUYSELL 2025-03-03 10:00:00 {a} 100 {cur} 10.00 1000.00 "
+            f"0.00\n"
+            f"JOURNAL 2025-03-05 {a} {b} 100\n"
+            f"BUYSELL 2025-03-06 10:00:00 {b} -100 {cur} 8.00 "
+            f"800.00 0.00\n")
+
+
 class TestTtJournal(unittest.TestCase):
 
     def _check(self, country):
         x, cur = _HOME[country]
         with tempfile.TemporaryDirectory() as td:
             root = projects_both(td, files={
-                "inputs/margin/m.tt": _gambit_tt(x, cur)})[country]
+                "inputs/margin/m.tt": _tt_gambit(x, cur)})[country]
             r = cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, _out(r)[-3000:])
             out = _out(r)
@@ -158,7 +173,8 @@ class TestTtJournal(unittest.TestCase):
             legs = side["transactions"]
             self.assertEqual(sorted((t["symbol"], t["quantity"])
                                     for t in legs),
-                             [(f"QZG.{x}", -100.0), (f"QZGB.{x}", 100.0)])
+                             sorted([(_TT_PAIR[x][0], -100.0),
+                                     (_TT_PAIR[x][1], 100.0)]))
             self.assertEqual({t["journal_pair"] for t in legs},
                              {"tt:margin:2025-03-05#1"})
             self.assertEqual({t["event_source"] for t in legs}, {"tt"})
@@ -198,8 +214,8 @@ class TestTtJournal(unittest.TestCase):
     def test_distinct_keeps_the_listings_apart(self):
         with tempfile.TemporaryDirectory() as td:
             root = projects_both(td, files={
-                "inputs/margin/m.tt": _gambit_tt("TO", "CAD"),
-                "ticker.map": "DISTINCT QZG.TO QZGB.TO\n"})["canada"]
+                "inputs/margin/m.tt": _tt_gambit("TO", "CAD"),
+                "ticker.map": "DISTINCT QZG.TO QZG.U.TO\n"})["canada"]
             r = cli(root, "run", "--no-input")
             self.assertIn("ticker.map keeps apart (DISTINCT", _out(r))
             st = XL.read_state(root / "work" / XL.STATE)
@@ -614,13 +630,12 @@ class TestSourcesInTheCommands(unittest.TestCase):
         x, cur = _HOME[country]
         with tempfile.TemporaryDirectory() as td:
             root = projects_both(td, files={
-                "inputs/margin/m.tt": _gambit_tt(x, cur)})[country]
+                "inputs/margin/m.tt": _tt_gambit(x, cur)})[country]
             self.assertEqual(cli(root, "run", "--no-input").returncode, 0)
             doc = json.loads(cli(root, "journals", "--json").stdout)
             got = [(j["source"], j["state"], j["from"], j["to"])
                    for j in doc["journals"]]
-            self.assertEqual(got, [("tt", "joined", f"QZG.{x}",
-                                    f"QZGB.{x}")])
+            self.assertEqual(got, [("tt", "joined", *_TT_PAIR[x])])
             text = cli(root, "journals").stdout
             self.assertIn(".tt", text)
 

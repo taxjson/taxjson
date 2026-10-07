@@ -47,7 +47,9 @@
   listings and a ticker change happen on a date, so they are `.tt` lines of
   an account, written date first: `JOURNAL <date> FROM TO <qty>` books the
   move's two transfer legs and joins the two listings as one security (no
-  disposition, in both countries; a journal the broker's rows already hold
+  disposition, in both countries — when the two symbols share one root or
+  the exports' names agree, else the run stops and a ticker.map `TOBASE`
+  line is the deliberate join; a journal the broker's rows already hold
   is said and booked once, and one with a single broker leg gets the
   other), and `RENAME <date> OLD NEW [late=fold|late=separate]`, declared
   in any account's folder, applies to every account holding the old symbol

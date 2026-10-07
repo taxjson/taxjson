@@ -249,5 +249,68 @@ class TestNoOptionJournalOrRename(unittest.TestCase):
                     "into a share listing")
 
 
+# ------------------------------------------------------------------ M2
+
+class TestDeclaredJournalNeedsEvidence(unittest.TestCase):
+
+    def test_verdict(self):
+        from taxjson.lib import cross_listings as XL
+        from taxjson.lib.symbol_codes import exact_name
+        self.assertEqual(XL.listing_root("QZG.U.TO"), "QZG")
+        self.assertEqual(XL.listing_root("QZG-U.TO"), "QZG")
+        self.assertEqual(XL.listing_root("QZG.US"), "QZG")
+        self.assertEqual(XL.listing_root("QZG.UN.TO"), "QZG.UN")
+        self.assertEqual(XL.listing_root("QZG.B.TO"), "QZG.B")
+        a, b = exact_name("QZALPHA MINES LTD"), exact_name("QZALPHA MINES")
+        c = exact_name("QZBETA PHARMA INC")
+        shown = {}
+        # One root: joined, unless the names name two companies.
+        self.assertEqual(XL.declared_verdict("QZG.TO", "QZG.U.TO", {},
+                                             shown), "")
+        self.assertEqual(XL.declared_verdict(
+            "QZG.TO", "QZG.US", {"QZG.TO": {a}, "QZG.US": {c}}, shown),
+            XL.DIFFERENT)
+        # Two roots: the names must agree.
+        self.assertEqual(XL.declared_verdict(
+            "QZA.TO", "QZB.US", {"QZA.TO": {a}, "QZB.US": {b}}, shown), "")
+        why = XL.declared_verdict("QZAAA.TO", "QZBBB.TO", {}, shown)
+        self.assertIn("nothing shows QZAAA.TO and QZBBB.TO", why)
+        self.assertIn("roots differ", why)
+
+    def _check(self, country):
+        x, cur = {"canada": ("TO", "CAD"), "usa": ("US", "USD")}[country]
+        tt = (f"BUYSELL 2025-03-03 10:00:00 QZAAA.{x} 100 {cur} 10.00 "
+              f"1000.00 0.00\n"
+              f"JOURNAL 2025-03-05 QZAAA.{x} QZBBB.{x} 1\n")
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, files={
+                "inputs/margin/m.tt": tt})[country]
+            r = _run(self, root, ok=False)
+            self.assertNotEqual(r.returncode, 0)
+            out = _out(r)
+            self.assertIn("join two listings that nothing shows are one "
+                          "security", out)
+            self.assertIn("inputs/margin/m.tt:2", out)
+            self.assertRegex(out, rf"`TOBASE QZ(AAA|BBB)\.{x} "
+                                  rf"QZ(AAA|BBB)\.{x}`")
+            # `taxjson journals` lists it as pending, with the way out.
+            doc = json.loads(cli(root, "journals", "--json").stdout)
+            (j,) = doc["journals"]
+            self.assertEqual((j["state"], j["pending"]), ("refused", True))
+            self.assertIn("TOBASE", j["undo"])
+            # The deliberate join: a TOBASE line, then the line books.
+            (root / "ticker.map").write_text(
+                f"TOBASE QZAAA.{x} QZBBB.{x}\n")
+            _run(self, root)
+
+    @rule("CA-XLIST-04")
+    def test_canada_two_roots_with_no_evidence_stop_the_run(self):
+        self._check("canada")
+
+    @rule("US-XLIST-03")
+    def test_usa_two_roots_with_no_evidence_stop_the_run(self):
+        self._check("usa")
+
+
 if __name__ == "__main__":
     unittest.main()

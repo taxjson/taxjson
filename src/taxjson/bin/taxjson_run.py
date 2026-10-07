@@ -2307,6 +2307,27 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
         text = XL.state_text(result)
         if _read_work_stamp(state) != text:
             _write_work_stamp(state, text)
+        # A .tt JOURNAL line between two listings nothing shows are one
+        # security stops the run (pre-release review M2): a join of two
+        # symbols on the user's word alone is a ticker.map TOBASE line.
+        _unproven = [p for p in _refused
+                     if p.extra.get("refused") == XL.UNPROVEN]
+        if _unproven:
+            _die(f"{len(_unproven)} .tt JOURNAL line(s) join two listings "
+                 f"that nothing shows are one security",
+                 *[f"- {p.extra.get('where') or p.out.account}: JOURNAL "
+                   f"{p.out.date} {p.out.symbol} {p.into.symbol} — "
+                   f"{p.reason}" for p in _unproven],
+                 "A JOURNAL line moves units between two listings of ONE "
+                 "security (a TSX line and its US-dollar or NYSE line): "
+                 "check the two symbols. To join two symbols on your word "
+                 "(the same shares under another ticker), add "
+                 + " / ".join(
+                     "`TOBASE {} {}`".format(*XL.tobase_direction(
+                         p.out.symbol, p.into.symbol, _base))
+                     for p in _unproven)
+                 + " to ticker.map: the line is then booked. Else delete "
+                 "the line.")
         eff = cache / XL.EFFECTIVE_MAP
         # The ticker changes declared in .tt files (lib/dated_events)
         # reach every stage that books renames through the effective map.

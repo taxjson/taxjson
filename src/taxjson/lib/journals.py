@@ -33,8 +33,10 @@ Each journal is in one state:
              inputs, or a ticker.map line);
   refused    kept apart: the reason, and how to undo it (remove the
              DISTINCT line, or the ticker.map line to add when the two
-             listings are one security after all). A journal the user's
-             ticker.map keeps apart (a DISTINCT line, a line naming a
+             listings are one security after all). A .tt JOURNAL line
+             between two listings nothing shows are one security
+             (`unproven`) is pending: the run stops on it. A journal the
+             user's ticker.map keeps apart (a DISTINCT line, a line naming a
              listing) is a decision made: listed, never pending; one
              refused because its legs name two companies is pending.
 
@@ -341,6 +343,13 @@ def _classify(j: Dict[str, Any], m: _Map) -> None:
         j["decided_by"] = "ticker.map"
         j["undo"] = ("edit that line, or add `" + _settle_lines(j)[1]
                      + "` to ticker.map if they are one security")
+    elif why == "unproven":
+        # A .tt JOURNAL line between two listings nothing shows are one
+        # security (lib/cross_listings.declared_verdict): the run stops.
+        j["pending"] = True
+        j["undo"] = ("add `" + _settle_lines(j)[1] + "` to ticker.map if "
+                     "they are one security (a deliberate join), else "
+                     "delete the .tt line")
     else:
         # The legs name two companies: no line of the user's says so.
         j["pending"] = True

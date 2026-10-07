@@ -515,6 +515,61 @@ def _journal_names_verdict(o: Leg, i: Leg, nx: Set[Tuple[str, ...]],
             f"({o.raw_name!r} vs {i.raw_name!r})")
 
 
+def listing_root(symbol: str) -> str:
+    """A listing's symbol without its venue suffix and, on a Canadian
+    venue, without the US-dollar line's `.U` / `-U` (SAMPLF.U.TO and
+    SAMPLF.TO: SAMPLF; QZG.US: QZG; a class or unit designator stays:
+    QZG.B.TO is QZG.B, QZG.UN.TO is QZG.UN)."""
+    from taxjson.lib.income_dating import CA_LISTING_SUFFIXES
+    s = str(symbol or "").upper().strip()
+    if "." not in s:
+        return s
+    base, sfx = s.rsplit(".", 1)
+    if sfx in CA_LISTING_SUFFIXES:
+        base = re.sub(r"[.\-]U$", "", base)
+    return base
+
+
+# Why a .tt JOURNAL line's two listings are not joined: nothing shows
+# they are one security (analyze's `refused` reason, "unproven").
+UNPROVEN = "unproven"
+
+
+def declared_verdict(frm: str, to: str,
+                     names: Dict[str, Set[Tuple[str, ...]]],
+                     shown: Dict[Tuple[str, ...], str]) -> str:
+    """"" when something shows a .tt JOURNAL line's FROM and TO are two
+    listings of one security, else why not (DIFFERENT for two
+    companies): the exports' names of the two listings must not name
+    different companies (companies_differ: a ticker another company
+    uses on the other venue), and either the two share one root
+    (listing_root: QZG.TO / QZG.U.TO / QZG.US) or some name of each
+    agrees as a journal's two legs' names must (_journal_names_verdict).
+    A ticker.map line naming either listing is checked before this (the
+    user's map decides: a TOBASE line is the deliberate join)."""
+    nx, ny = names.get(frm, set()), names.get(to, set())
+    if nx and ny and all(companies_differ(a, b) for a in nx for b in ny):
+        return DIFFERENT
+    if listing_root(frm) == listing_root(to):
+        return ""
+    why = ""
+    for a in sorted(nx):
+        for b in sorted(ny):
+            la = Leg("", "", frm, "", -1.0, name=a,
+                     raw_name=shown.get(a, " ".join(a)))
+            lb = Leg("", "", to, "", 1.0, name=b,
+                     raw_name=shown.get(b, " ".join(b)))
+            v = _journal_names_verdict(la, lb, nx, ny, shown)
+            if v == "":
+                return ""
+            why = why or v
+    if not nx or not ny:
+        why = ("no security name for " + ("either listing" if not nx
+                                          and not ny else "one listing"))
+    return (f"nothing shows {frm} and {to} are one security: their roots "
+            f"differ ({listing_root(frm)}, {listing_root(to)}) and {why}")
+
+
 def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             shown: Dict[Tuple[str, ...], str], *,
             map_named: Iterable[str] = (),
@@ -580,6 +635,20 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             _refuse(Pair(o, i, o.symbol, i.symbol, journal="tt",
                          extra={"where": j.where}),
                     *_map_reason(o.symbol, i.symbol))
+            continue
+        # On the user's word only when something shows the two are
+        # listings of one security (pre-release review M2): a deliberate
+        # join of two symbols is a ticker.map TOBASE line.
+        verdict = declared_verdict(o.symbol, i.symbol, names, shown)
+        if verdict:
+            if refused is not None:
+                nx = names.get(o.symbol, set())
+                ny = names.get(i.symbol, set())
+                p = Pair(o, i, o.symbol, i.symbol, journal="tt",
+                         names=(shown.get(min(nx), "") if nx else "",
+                                shown.get(min(ny), "") if ny else ""),
+                         extra={"where": j.where})
+                _refuse(p, UNPROVEN, verdict)
             continue
         frm, to = tobase_direction(o.symbol, i.symbol, base_currency)
         joined.append(Pair(o, i, frm, to, journal="tt",

@@ -353,6 +353,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/bin/taxjson_convert_tt.py` — `parse_journal_line`, `parse_rename_line`, `_rename_derivative_check`; `src/taxjson/lib/dated_events.py` — `read_declarations`, `check_against_map`, `DatedEventError`; `src/taxjson/bin/taxjson_run.py` — `_read_dated_events`
 
+### "Error: 1 .tt JOURNAL line(s) join two listings that nothing shows are one security"
+- **Check:** each listed line names its place (`inputs/<account>/<file>.tt:N`), the two symbols and why: "their roots differ (QZAAA, QZBBB) and no security name for either listing" (or "the legs' names are not equal word for word"), or "the names name different companies". `tjs journals --pending` lists it as refused with the way out.
+- **Cause:** a `.tt` `JOURNAL` line joins its two listings as one security in every account and year, so it needs evidence that they are two listings of ONE security: the same root (the symbol without its venue and, on a Canadian venue, without the US-dollar line's `.U`: `QZG.TO`, `QZG.U.TO`, `QZG.US`), or names in the exports that agree as a broker journal's legs' names must, and no names of two different companies (tax-logic CA-XLIST-04 / US-XLIST-03). A typo in a symbol used to merge two companies' pools silently.
+- **Fix:** check the two symbols. If they are one security under two tickers, add the line the message prints, `TOBASE FROM TO`, to ticker.map (a deliberate, standing join): the `.tt` line is then booked. Otherwise delete the `.tt` line.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cross_listings.py` — `declared_verdict`, `listing_root`, `UNPROVEN`, `analyze`; `src/taxjson/bin/taxjson_run.py` — `stage_cross_listings`, `nothing shows are one security`
+
 ### `reports/<account>_holdings.toml` shows a long on one listing and an equal short on the other after a Norbert's gambit (ticker.map `JOURNAL` line)
 - **Check:** `tjs transfers` shows no journal rows for the gambit's day in that account (the export lacks the journal's two legs); the account's totals in `tjs sum` are right, and `tjs sanity` (which compares the joined security) agrees with the broker.
 - **Cause:** a ticker.map `JOURNAL` line used to fold the two listings together in the holdings view. It is now read as `TOBASE` (one security for the cost and the loss rules), and the holdings view moves units between listings only by the journal's transfer legs, which this export does not have.
