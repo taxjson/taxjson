@@ -687,17 +687,26 @@ def _journal_names_verdict(o: Leg, i: Leg, nx: Set[Tuple[str, ...]],
 
 
 def listing_root(symbol: str) -> str:
-    """A listing's symbol without its venue suffix and, on a Canadian
-    venue, without the US-dollar line's `.U` / `-U` (SAMPLF.U.TO and
-    SAMPLF.TO: SAMPLF; QZG.US: QZG; a class or unit designator stays:
-    QZG.B.TO is QZG.B, QZG.UN.TO is QZG.UN)."""
+    """A listing's symbol without its VENUE suffix (a listing suffix the
+    market data knows: lib/markets.known_suffixes) and, on a Canadian
+    venue, without the US-dollar unit class (markets.toml
+    [usd_unit_class]: SAMPLF.U.TO and SAMPLF.TO are SAMPLF; QZG.US is
+    QZG). Any other dotted part is the security's own — a class, a
+    warrant, a unit designator: QZG.B.TO is QZG.B, QZG.UN.TO is QZG.UN,
+    QZG.WS is QZG.WS, and QZG.A and QZG.B are two roots (second
+    pre-release review, finding 12: a class or warrant suffix read as a
+    venue joined two securities on one root)."""
+    from taxjson.lib.markets import data, known_suffixes
     from taxjson.lib.income_dating import CA_LISTING_SUFFIXES
     s = str(symbol or "").upper().strip()
     if "." not in s:
         return s
     base, sfx = s.rsplit(".", 1)
+    if sfx not in known_suffixes():
+        return s
     if sfx in CA_LISTING_SUFFIXES:
-        base = re.sub(r"[.\-]U$", "", base)
+        cls = re.escape(str(data()["usd_unit_class"]["class"]).upper())
+        base = re.sub(rf"[.\-]{cls}$", "", base)
     return base
 
 
@@ -752,7 +761,8 @@ def _hub_partners_agree(hub: str, pairs: List[Pair],
     for word (a fund renamed between two journals: each partner equal to
     the hub's name of its day), or a .tt JOURNAL line between two
     listings of one root — or else when the two partners' own leg names
-    pass _journal_names_verdict against each other."""
+    pass _journal_names_verdict against each other. Partners whose names
+    state different corporate forms never agree (forms_differ)."""
     def side(p: Pair) -> Tuple[Leg, Leg]:
         return (p.out, p.into) if p.into.symbol == hub else (p.into, p.out)
 
@@ -763,8 +773,29 @@ def _hub_partners_agree(hub: str, pairs: List[Pair],
         return bool(mine.name and theirs.name
                     and _journal_key(mine.raw_name)
                     == _journal_key(theirs.raw_name))
+
+    def forms(leg: Leg) -> Set[str]:
+        """The corporate forms the partner's names state (its leg's own
+        and every name of its listing)."""
+        from taxjson.lib.symbol_codes import _FORM
+        keys = set(names.get(leg.symbol, set()))
+        if leg.raw_name:
+            keys.add(_journal_key(leg.raw_name))
+        return {w for k in keys for w in _trailing_form(k, _FORM)}
+
+    def forms_differ(la: Leg, lb: Leg) -> bool:
+        """Two partners whose names state different corporate forms (an
+        LP and a CORP), or a partnership form one states and the other
+        does not — never pooled, however the hub's formless name agrees
+        with each leg (second pre-release review, finding 12)."""
+        fa, fb = forms(la), forms(lb)
+        if fa and fb and not (fa & fb):
+            return True
+        return (fa & _KEPT_FORMS) != (fb & _KEPT_FORMS)
     for n, a in enumerate(pairs):
         for b in pairs[n + 1:]:
+            if forms_differ(side(a)[0], side(b)[0]):
+                return False
             if solid(a) and solid(b):
                 continue
             la, lb = side(a)[0], side(b)[0]

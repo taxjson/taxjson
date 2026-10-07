@@ -171,6 +171,27 @@
   two symbols over the years) is joined to each — when those listings are
   one security with each other too (a PLC and a CORP that each match a
   name stating no form are not).
+- **A journal's legs pair inside their account before any other
+  transfer.** The cross-listing pairing first cancelled same-listing legs
+  across all accounts, so another account's transfer-in of the same
+  listing on the day of an RBC gambit's `J~` legs (or a Questrade BRW
+  pair in a US project) took one of the journal's legs: the journal was
+  only suggested and its sale read as a short. Legs that carry the
+  broker's reference now pair in their account first, in both countries,
+  and a journal's leg never cancels another account's transfer.
+- **A `.tt` `JOURNAL` line bigger than the broker's journal a day away is
+  said.** Such a line on the broker's own date already stopped the run;
+  dated a business day off (RBC dates a gambit's trades a day before its
+  `J~` legs) it was booked in full on top of the broker's journal without
+  a word. It is still booked, with a Warning naming both and the date to
+  use to restate the broker's journal.
+- **A share class or warrant is not a listing.** A `.tt` `JOURNAL` line
+  between two symbols with one root joins them; the root dropped any last
+  dotted part, so two classes (`QZB.A`, `QZB.B`) or a warrant and a London
+  line (`QZA.WS`, `QZA.L`) joined with no evidence. Only a venue suffix of
+  `data/markets.toml` is set aside now. And two partners of one hub
+  listing whose names state different corporate forms (an LP and a CORP)
+  are no longer pooled through it.
 - **A move between brokers over a weekend pairs.** The transfer pairing
   window is 5 business days instead of 5 calendar days, and so is the
   window in which a Questrade or RBC transfer-in reads its listing from

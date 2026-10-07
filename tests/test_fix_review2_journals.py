@@ -315,5 +315,90 @@ class TestBiggerLineADayFromTheBrokersJournal(unittest.TestCase):
         self._check("usa")
 
 
+# ------------------------------------------------------------------ 12
+
+class TestHubPartnersOfTwoForms(unittest.TestCase):
+    """Two journals onto one hub whose name states no form, each leg
+    named as the hub word for word: an LP partner and a CORP partner
+    (their listings' other names) are not one security."""
+
+    def _legs(self, a_names, b_names):
+        from test_fix_journal_pairing import _gambit, _names
+        legs = (_gambit("2024-02-15", 100, "QZCO", frm="QZA.US",
+                        to="QZX.TO")
+                + _gambit("2024-06-12", 50, "QZCO", frm="QZB.US",
+                          to="QZX.TO"))
+        return legs, _names(QZA_US=a_names, QZB_US=b_names,
+                            QZX_TO=["QZCO"])
+
+    def _check(self):
+        from test_fix_journal_pairing import _run
+        r = _run(*self._legs(["QZCO", "QZCO LP"], ["QZCO", "QZCO CORP"]))
+        self.assertEqual(r["joined"], [])
+        self.assertEqual({p.reason for p in r["suggested"]},
+                         {"a listing pairs with two other listings"})
+        # A partnership one states and the other does not: apart too.
+        r = _run(*self._legs(["QZCO", "QZCO LP"], ["QZCO"]))
+        self.assertEqual(r["joined"], [])
+        # Partners that state no form, or the same one: still a hub.
+        for a, b in ((["QZCO"], ["QZCO"]),
+                     (["QZCO", "QZCO CORP"], ["QZCO CORP"])):
+            r = _run(*self._legs(a, b))
+            self.assertEqual(sorted((p.frm, p.to) for p in r["joined"]),
+                             [("QZA.US", "QZX.TO"), ("QZB.US", "QZX.TO")])
+
+    @rule("CA-XLIST-01")
+    def test_canada_lp_and_corp_partners_are_not_pooled(self):
+        self._check()
+
+    @rule("US-XLIST-01")
+    def test_usa_lp_and_corp_partners_are_not_pooled(self):
+        self._check()
+
+
+class TestListingRootIsTheVenueOnly(unittest.TestCase):
+
+    def test_listing_root(self):
+        from taxjson.lib.cross_listings import listing_root
+        for sym, root in (("QZG.U.TO", "QZG"), ("QZG-U.TO", "QZG"),
+                          ("QZG.TO", "QZG"), ("QZG.US", "QZG"),
+                          ("QZG.L", "QZG"), ("QZG.B.TO", "QZG.B"),
+                          ("QZG.UN.TO", "QZG.UN"), ("QZG.WS", "QZG.WS"),
+                          ("QZG.A", "QZG.A"), ("QZG.B", "QZG.B"),
+                          ("QZG", "QZG")):
+            with self.subTest(sym):
+                self.assertEqual(listing_root(sym), root)
+
+    def test_a_class_or_warrant_is_no_evidence(self):
+        from taxjson.lib.cross_listings import UNPROVEN, declared_verdict
+        for frm, to in (("QZA.WS", "QZA.L"), ("QZB.A", "QZB.B"),
+                        ("QZB.A.TO", "QZB.B.TO")):
+            with self.subTest(frm=frm, to=to):
+                self.assertIn("nothing shows", declared_verdict(
+                    frm, to, {}, {}))
+        self.assertEqual(UNPROVEN, "unproven")
+        self.assertEqual(declared_verdict("QZG.U.TO", "QZG.TO", {}, {}), "")
+
+    def _check(self, country):
+        files = {"inputs/margin/m.tt": (
+            "BUYSELL 2025-02-03 10:00:00 QZB.A 100 USD 10.00 1000.00 "
+            "0.00\n"
+            "JOURNAL 2025-03-05 QZB.A QZB.B 100\n")}
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, files=files, usa=_USA_CAD)[country]
+            r = _run(self, root, ok=False)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("nothing shows QZB.A and QZB.B are one "
+                          "security", _out(r))
+
+    @rule("CA-XLIST-04")
+    def test_canada_two_classes_need_evidence(self):
+        self._check("canada")
+
+    @rule("US-XLIST-03")
+    def test_usa_two_classes_need_evidence(self):
+        self._check("usa")
+
+
 if __name__ == "__main__":
     unittest.main()
