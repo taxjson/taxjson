@@ -734,6 +734,38 @@ Each journal:
 
 ---
 
+## `taxjson quick-start --json`
+
+The workflow, step by step, as one document: a stable schema for programs
+(new keys and new steps may be added; none is renamed or removed while
+`schema_version` is 1). It only reads the project's files: the checklist's
+file-reading checks, `checklist.json` marks and `reports/run_summary.json`.
+Code: `src/taxjson/lib/quick_start.py` — `to_json`, `SCHEMA_VERSION`,
+`STATUSES`.
+
+| Key | Meaning |
+| --- | --- |
+| `schema_version` | `1` |
+| `in_project` | `true` when the folder (or `-C DIR`) holds a taxjson.toml |
+| `year`, `country` | the project's `[settings]`; `null` outside a project |
+| `counts` | `{"done", "attention", "todo", "review", "n/a"}`: how many steps have each status; `null` outside a project |
+| `next` | `{"step", "id", "title", "do"}` of the first step that is `todo` or `attention` (`do`: what to do, usually its first command); `null` when none, and outside a project |
+| `steps` | one object per step, in order (below) |
+
+Each step:
+
+| Key | Meaning |
+| --- | --- |
+| `step`, `id` | its number (1, 2 ...) and a stable id (`install`, `inputs`, `run`, `missing-history`, `checklist`, `close-year` ...) |
+| `section`, `title` | the stage it belongs to (`Set up`, `Fill the gaps`, `Check` ...) and what it is |
+| `how`, `why` | what to do besides the commands (may be empty), and why the step matters |
+| `commands` | `[{"command", "note", "country"}]`: the line to type, a short note, and `"canada"` / `"usa"` for a command only one country has (`null` for both); inside a project the other country's are left out |
+| `status` | `done`, `attention`, `todo`, `review` (yours to run and read: taxjson cannot tell whether you did) or `n/a`; `null` outside a project |
+| `detail` | what the project's files say about it (empty when nothing to say) |
+| `next` | `true` for the step `next` names |
+
+---
+
 ## Old files and environment variables
 
 - Old per-purpose files are no longer read and stop every command until `taxjson migrate` folds them in: `yf_ticker.map` (QUOTE lines), `crypto_ticker.map` (CRYPTO), `ticker_extraction_overrides.txt` (EXTRACT), `t1135.map` (T1135), `amt_carryover.txt` (`[estimate] amt_carryover`), `claimed_losses.txt` (`[carryover] claimed`), `capital_gains_dividends.map` (`[[capital_gains_dividends]]`), `distributions.map` (`[[distributions]]`). `tv_exchange.map` is only renamed. Code: `src/taxjson/lib/migrate.py` — `legacy_files`.

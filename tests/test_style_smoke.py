@@ -60,7 +60,8 @@ class TestConvertedCommands(unittest.TestCase):
               ("journals", "--pending"), ("spinoffs",),
               ("splits",), ("audit", "--summary"), ("audit", "QZQ.US"),
               ("help",), ("help", "--all"), ("help", "audit"),
-              ("channels", "--offline"), ("ticker-map", "--suggest")]
+              ("channels", "--offline"), ("ticker-map", "--suggest"),
+              ("quick-start",), ("quick-start", "--all")]
 
     def test_converted_commands(self):
         for country in ("canada", "usa"):
