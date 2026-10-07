@@ -799,7 +799,9 @@ def close_on(symbol: str, quote_symbol: str, day: str, *,
              verbose: bool = False) -> Optional[DayClose]:
     """The close of `symbol` (Yahoo spelling `quote_symbol`) on `day`,
     or the last one before it within CLOSE_LOOKBACK_DAYS: from the
-    on-disk close cache (work/.close_cache.json, keyed SYMBOL@DAY), else
+    on-disk close cache (work/.close_cache.json, keyed
+    SYMBOL|QUOTE_SYMBOL@DAY: two Yahoo spellings of one symbol are two
+    closes; an entry of the older SYMBOL@DAY form is a miss), else
     Yahoo's daily history (written back to the cache). None when no
     tier has it. Yahoo's closes are split-adjusted: a split after `day`
     makes the figure wrong — the caller says the value is an estimate.
@@ -810,7 +812,7 @@ def close_on(symbol: str, quote_symbol: str, day: str, *,
     skips the live tier; a miss then raises OfflineCloseMissing."""
     from datetime import date as _date, timedelta as _td
     from taxjson.lib.offline import offline_enabled
-    key = f"{symbol}@{day}"
+    key = f"{symbol}|{quote_symbol}@{day}"
     cache = _load_cache(cache_path)
     rec = cache.get(key)
     if isinstance(rec, dict):

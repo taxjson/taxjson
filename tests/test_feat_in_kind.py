@@ -310,10 +310,11 @@ class TestCanadaYahooValue(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = self._root(td)
             (root / "work").mkdir()
+            # Keyed SYMBOL|YAHOO SPELLING@DAY.
             (root / "work" / ".close_cache.json").write_text(json.dumps({
-                "QZK.TO@2025-03-14": {"price": 13.0, "day": "2025-03-14",
-                                      "currency": "CAD",
-                                      "asof": "2025-03-20"}}))
+                "QZK.TO|QZK.TO@2025-03-14": {
+                    "price": 13.0, "day": "2025-03-14", "currency": "CAD",
+                    "asof": "2025-03-20"}}))
             r = _run(self, root)
             self.assertIn("at 1,300.00 CAD (Yahoo close 2025-03-14, "
                           "ESTIMATED: split-adjusted, from the close "
@@ -535,6 +536,28 @@ class TestCloseLookup(unittest.TestCase):
             with self.assertRaises(PC.OfflineCloseMissing):
                 PC.close_on("QZK.TO", "QZK.TO", "2025-04-16",
                             cache_path=cp, offline=True)
+
+    @rule("CA-INKIND-06")
+    def test_two_spellings_two_closes(self):
+        # Keyed by the Yahoo spelling too (pre-release review F4).
+        from taxjson.lib import price_chain as PC
+
+        def fetch(pairs, start, end):
+            (sym, ysym), = pairs.items()
+            return {sym: {"2025-03-14": 10.0 if ysym == "QZK" else 13.0}}
+        with tempfile.TemporaryDirectory() as td:
+            cp = Path(td) / ".close_cache.json"
+            a = PC.close_on("QZK.US", "QZK", "2025-03-14", cache_path=cp,
+                            fetchers=[fetch])
+            b = PC.close_on("QZK.US", "QZK.TO", "2025-03-14", cache_path=cp,
+                            fetchers=[fetch])
+            self.assertEqual((a.price, b.price), (10.0, 13.0))
+            # An entry of the old form (no Yahoo spelling) is a miss.
+            cp.write_text(json.dumps({"QZK.US@2025-03-14": {
+                "price": 99.0, "day": "2025-03-14", "currency": "USD"}}))
+            with self.assertRaises(PC.OfflineCloseMissing):
+                PC.close_on("QZK.US", "QZK", "2025-03-14", cache_path=cp,
+                            offline=True)
 
 
 if __name__ == "__main__":
