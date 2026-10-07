@@ -480,6 +480,22 @@ def _journal_key(raw: str) -> Tuple[str, ...]:
         str(raw or "").upper().split())))
 
 
+# Corporate forms a journal's names never set aside when only one name
+# states them: a partnership's units are not the company's shares.
+_KEPT_FORMS = frozenset(("LP", "LLP"))
+
+
+def _trailing_form(key: Tuple[str, ...], forms: Iterable[str]
+                   ) -> Tuple[str, ...]:
+    """The corporate-form words at the END of a name key ("QZCO CORP
+    INC" -> ("CORPORATION", "INC") as exact_name spells them)."""
+    forms = set(forms) - {"THE"}
+    n = len(key)
+    while n > 0 and key[n - 1] in forms:
+        n -= 1
+    return tuple(key[n:])
+
+
 def _journal_names_verdict(o: Leg, i: Leg, nx: Set[Tuple[str, ...]],
                            ny: Set[Tuple[str, ...]],
                            shown: Dict[Tuple[str, ...], str]) -> str:
@@ -488,12 +504,13 @@ def _journal_names_verdict(o: Leg, i: Leg, nx: Set[Tuple[str, ...]],
     compared (each row's, on the journal's date), not every name either
     listing ever had — a fund renamed later, or a listing whose name
     another broker spells with other designators, says nothing about
-    this journal. Word for word (exact_name), with two broker spellings
-    set aside: a corporate-form word (LTD, CORP, INC ...) that one name
-    states and the other states none of, and a NEW after a generic
-    share word ("COM NEW"). Corporate forms both names state must
-    agree (LP is not CORP), and every share designator and class letter
-    counts. Any name of either listing that names another company
+    this journal. Word for word (exact_name), with three broker spellings
+    set aside: a leading THE, the corporate-form words (LTD, CORP, INC
+    ...) that END one name when the other ends with none (only at the
+    end: "QZ SE ASIA FUND" is not "QZ ASIA FUND"; never LP / LLP: a
+    partnership is not the company), and a NEW after a generic share
+    word ("COM NEW"). Corporate forms both names state must agree (LP
+    is not CORP), and every share designator and class letter counts. Any name of either listing that names another company
     (companies_differ with both legs' names) refuses."""
     from taxjson.lib.symbol_codes import _FORM
     a, b = o.name, i.name
@@ -504,11 +521,15 @@ def _journal_names_verdict(o: Leg, i: Leg, nx: Set[Tuple[str, ...]],
             return (f"another name of the listings names another company "
                     f"({shown.get(n, ' '.join(n))!r} vs {o.raw_name!r})")
     ka, kb = _journal_key(o.raw_name), _journal_key(i.raw_name)
-    fa = tuple(w for w in ka if w in _FORM)
-    fb = tuple(w for w in kb if w in _FORM)
-    if not fa or not fb:
-        ka = tuple(w for w in ka if w not in _FORM)
-        kb = tuple(w for w in kb if w not in _FORM)
+    # A leading THE is no part of the name.
+    ka, kb = (tuple(k[1:]) if k[:1] == ("THE",) else k for k in (ka, kb))
+    ta, tb = _trailing_form(ka, _FORM), _trailing_form(kb, _FORM)
+    if not ta or not tb:
+        # The form one name states and the other leaves out, at its END
+        # only ("QZ SE ASIA FUND" is not "QZ ASIA FUND"), and never a
+        # partnership's (an LP is not the corporation: _KEPT_FORMS).
+        if not set(ta + tb) & _KEPT_FORMS:
+            ka, kb = ka[:len(ka) - len(ta)], kb[:len(kb) - len(tb)]
     if ka == kb:
         return ""
     return (f"the legs' names are not equal word for word "
@@ -574,9 +595,9 @@ def _hub_partners_agree(hub: str, pairs: List[Pair],
                         names: Dict[str, Set[Tuple[str, ...]]],
                         shown: Dict[Tuple[str, ...], str]) -> bool:
     """The listings several journals map onto `hub` are one security
-    with each other too (pre-release review M5: "QZCO LP" -> "QZCO" and
+    with each other too (pre-release review M5: "QZCO PLC" -> "QZCO" and
     "QZCO CORP" -> "QZCO" each pass with the hub's name, which states no
-    form, yet the LP is not the CORP). Every two partners agree when
+    form, yet the PLC is not the CORP). Every two partners agree when
     each one's join is SOLID — its leg's own name is its hub leg's word
     for word (a fund renamed between two journals: each partner equal to
     the hub's name of its day), or a .tt JOURNAL line between two

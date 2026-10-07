@@ -122,7 +122,8 @@
   another broker spells without LTD, left the pair as a suggestion. Such a
   pair (one account, one day, the same quantity, both legs in the broker's
   journal wording) now compares its two legs' own names; a corporate-form
-  word stated by one name only and a `COM NEW` spelling no longer block it.
+  word ending one name only (not one inside a name, never `LP`), a leading
+  `THE` and a `COM NEW` spelling no longer block it.
   Another share class or company still refuses.
 - **Equal journals days apart pair on their own day.** Two gambits of the
   same size two days apart were "the legs pair with more than one other
@@ -130,7 +131,7 @@
   both legs carry (RBC's `J~…`, Questrade's journal pair) is their pair id.
   A listing that several journals map onto (a fund's US-dollar line under
   two symbols over the years) is joined to each — when those listings are
-  one security with each other too (an LP and a CORP that each match a
+  one security with each other too (a PLC and a CORP that each match a
   name stating no form are not).
 - **A move between brokers over a weekend pairs.** The transfer pairing
   window is 5 business days instead of 5 calendar days.

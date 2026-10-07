@@ -332,14 +332,14 @@ class TestHubPartnersAgree(unittest.TestCase):
 
     def _check(self):
         from test_fix_journal_pairing import _run
-        # LP -> the hub, CORP -> the hub: each passes with the hub's
-        # name (it states no form), but the LP is not the CORP.
-        r = _run(*self._legs("QZCO LP", "QZCO CORP"))
+        # PLC -> the hub, CORP -> the hub: each passes with the hub's
+        # name (it states no form), but the PLC is not the CORP.
+        r = _run(*self._legs("QZCO PLC", "QZCO CORP"))
         self.assertEqual(r["joined"], [])
         self.assertEqual({p.reason for p in r["suggested"]},
                          {"a listing pairs with two other listings"})
         # Partners that agree with each other: still a hub.
-        r = _run(*self._legs("QZCO LP", "QZCO LP"))
+        r = _run(*self._legs("QZCO PLC", "QZCO PLC"))
         self.assertEqual(sorted((p.frm, p.to) for p in r["joined"]),
                          [("QZA.US", "QZX.TO"), ("QZB.US", "QZX.TO")])
 
@@ -402,6 +402,41 @@ class TestMigratedJournalLineWalksTheSame(unittest.TestCase):
     @rule("US-XLIST-03")
     def test_usa_migrated_journal_line_walks_the_same(self):
         self._check("usa")
+
+
+# ------------------------------------------------------------------ lows
+
+class TestTrailingFormOnly(unittest.TestCase):
+
+    def _verdict(self, a, b):
+        from test_fix_journal_pairing import _leg, _names
+        from taxjson.lib import cross_listings as XL
+        o = _leg("QZA.US", "2025-03-05", -10, a)
+        i = _leg("QZA.TO", "2025-03-05", 10, b)
+        names = _names(QZA_US=[a], QZA_TO=[b])
+        shown = {t: " ".join(t) for v in names.values() for t in v}
+        return XL._journal_names_verdict(o, i, names["QZA.US"],
+                                         names["QZA.TO"], shown)
+
+    def _check(self):
+        self.assertEqual(self._verdict("QZALPHA MINES LTD", "QZALPHA MINES"),
+                         "")
+        self.assertEqual(self._verdict("THE QZCO COMPANY", "QZCO"), "")
+        # A form word inside a name is a word of the name.
+        self.assertIn("not equal", self._verdict("QZ SE ASIA FUND",
+                                                 "QZ ASIA FUND"))
+        self.assertIn("not equal", self._verdict("QZ SE ASIA FUND",
+                                                 "QZ ASIA FUND INC"))
+        # A partnership is never the company.
+        self.assertIn("not equal", self._verdict("QZCO LP", "QZCO"))
+
+    @rule("CA-XLIST-01")
+    def test_canada_only_a_trailing_form_is_set_aside(self):
+        self._check()
+
+    @rule("US-XLIST-01")
+    def test_usa_only_a_trailing_form_is_set_aside(self):
+        self._check()
 
 
 if __name__ == "__main__":
