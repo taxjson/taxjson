@@ -55,7 +55,18 @@
 - **IB's ticker changes are booked.** When IB lists one contract id under
   two symbols, the change is booked as a dated rename event, with a
   Warning naming the way out (`DISTINCT` in ticker.map for two securities,
-  `late=separate` for another company reusing the old ticker). The weaker
+  `late=separate` for another company reusing the old ticker). It is booked
+  only when that contract id's own rows date it: every old-symbol trade or
+  transfer on an earlier day than the new symbol's first row, and no
+  new-symbol row of any section (a split, a return of capital, a dividend)
+  before its first trade. Otherwise — the rows overlap, a new-symbol event
+  comes first, one statement lists the symbol under two contract ids
+  (another company used the ticker) — nothing is booked and an ATTENTION
+  line gives the `.tt` line `RENAME <date> OLD NEW` and why. Nothing is
+  booked on top of an IB corporate action that names both symbols (a split
+  that also renames) or a `.tt` SPLIT row between them, nor when a
+  declaration renames the old symbol elsewhere; IB's `.OLD` placeholder is
+  never a rename target. The weaker
   look-alike hints of Questrade, RBC and Webull stay suggestions, now
   printed as the `.tt` line.
 - **Legacy ticker.map lines keep working.** A `JOURNAL A B` line is read as

@@ -240,6 +240,47 @@ UNBOOKED_PREFIX = "warning: UNBOOKED:"
 # The security an IB tender allocation DELIVERS: the first token of the
 # row's trailing `(TICKER, NAME, ISIN)` parenthetical.
 _IB_DELIVERED_RE = re.compile(r'\(\s*([A-Z0-9][A-Z0-9 .]*?)\s*,[^()]*\)\s*$')
+# Sections whose rows are not events of a named stock for the
+# one-contract-id ticker-change dates (_ib_prescan `conid_rows`): the
+# position rows (read by their Symbol), the instrument list and the
+# statement's metadata.
+_IB_NO_EVENT_SECTIONS = frozenset((
+    'Trades', 'Transfers', 'Open Positions',
+    'Financial Instrument Information', 'Statement', 'Account Information',
+    'Cash Report', 'Codes', 'Notes/Legal Notes'))
+# The stocks a row's Description names: its head (`QZX(US...) Cash
+# Dividend`, `QZX(US...) Split 2 for 1`) and the first token of every
+# `(TICKER, NAME, ...)` parenthetical (a corporate action's delivered
+# line). IB's format, not security data.
+_IB_DESC_HEAD_RE = re.compile(r'^\s*([A-Z0-9][A-Z0-9 .]*?)\s*\(')
+_IB_DESC_PAREN_RE = re.compile(r'\(\s*([A-Z0-9][A-Z0-9 .]*?)\s*,')
+
+
+def _ib_description_tickers(desc: str) -> List[str]:
+    """The stock symbols (as the Trades section roots them: spaces as
+    dots) an IB row Description names, in order, once each."""
+    out: List[str] = []
+    m = _IB_DESC_HEAD_RE.match(desc or '')
+    found = ([m.group(1)] if m else []) + _IB_DESC_PAREN_RE.findall(
+        desc or '')
+    for t in found:
+        t = re.sub(r'\s+', '.', t.strip())
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def _ib_placeholder_ticker(sym: str) -> Optional[str]:
+    """The ticker inside an IB placeholder spelling of a contract —
+    a temporary symbol (`20260101093000QZX`) or the `.OLD` line a
+    corporate action retires (`QZX.OLD`) — else None. Never a ticker
+    change's old or new symbol (audit review LOW)."""
+    s = (sym or '').strip().upper()
+    if s.endswith('.OLD') and len(s) > 4:
+        return s[:-4]
+    return ib_temp_symbol_ticker(s)
+
+
 _IB_STOCK_DIV_RE = re.compile(
     r'^\s*([A-Z0-9][A-Z0-9 .]*?)\s*\([^)]*\)\s+Stock\s+Dividend\b',
     re.IGNORECASE)
@@ -293,6 +334,7 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          parse_strict_number, shown_name,
                                          ticker_map_joins,
                                          ticker_map_loaded,
+                                         ticker_map_renames,
                                          ticker_map_mentioned)
 from taxjson.lib.corp_actions import (ib_cash_merger, ib_merger_owned,
                                       ib_spinoff_parts, ib_tender_root)
@@ -1108,50 +1150,206 @@ def _note_temp_folds(folds: Dict[str, str], where: str,
                   f"onto {tk}).")
 
 
+def _conid_seen(statements, conid_syms: Dict[str, set]
+                ) -> Dict[tuple, Dict[str, Any]]:
+    """The times (`YYYY-MM-DD[ HH:MM:SS]`) of each stock symbol PER
+    CONTRACT ID, from the statements' rows (`statements`: (name,
+    _ib_prescan) pairs; `conid_syms`: the account's contract id ->
+    symbols): {(conid, symbol): {'first', 'last': its first and last
+    position row (a
+    Trades, Transfers or Open Positions row), 'any': its first row of
+    ANY section (a corporate action, a dividend, withholding, a payment
+    in lieu, a fee ...), 'any_what': that row's section ('pos' for a
+    position row), 'amb': {statement: [contract ids]} where the symbol
+    is listed under several contract ids, so its rows there cannot be
+    told apart}}. A row belongs to the contract ids its own statement's
+    instrument list gives the symbol (another company that reused the
+    ticker has its own id there), else the account's (audit review M1:
+    symbol-keyed dates booked a reused ticker's change reversed and
+    backdated)."""
+    acct: Dict[str, set] = {}
+    for c, syms in conid_syms.items():
+        for x in syms:
+            acct.setdefault(x, set()).add(c)
+    out: Dict[tuple, Dict[str, Any]] = {}
+    for name, pre in statements:
+        own: Dict[str, set] = {}
+        for c, syms in (pre.get('stock_conid_syms') or {}).items():
+            for x in syms:
+                own.setdefault(x, set()).add(c)
+        for root, day, kind in pre.get('conid_rows') or ():
+            cands = own.get(root) or acct.get(root)
+            if not cands:
+                continue
+            for c in cands:
+                st = out.setdefault((c, root), {
+                    'first': '', 'last': '', 'any': '', 'any_what': '',
+                    'amb': {}})
+                if len(cands) > 1:
+                    st['amb'].setdefault(name, sorted(cands))
+                if kind == 'pos':
+                    if not st['first'] or day < st['first']:
+                        st['first'] = day
+                    if day > st['last']:
+                        st['last'] = day
+                if (not st['any'] or day < st['any']
+                        or (day == st['any'] and kind == 'pos')):
+                    st['any'], st['any_what'] = day, kind
+    return out
+
+
+def _conid_link(order: List[str], full: List[str], links, tt_links
+                ) -> Optional[str]:
+    """How the account's own rows already join two of one contract id's
+    symbols (`order`: its symbols as IB roots them, `full`: as booked):
+    a corporate action naming both (its head and its delivered line,
+    IB's `.OLD` placeholder read as its ticker: a split or merger that
+    changes the symbol — the corporate-action path books it, audit
+    review H6), or a `.tt` SPLIT row from one to the other. None when
+    nothing does."""
+    roots = set(order)
+    for named, day in sorted(links or (), key=lambda x: x[1]):
+        both = sorted(roots & set(named))
+        if len(both) >= 2:
+            return (f"a corporate action of {day} names "
+                    f"{' and '.join(both)} together")
+    fulls = {f.upper() for f in full}
+    for (a, b), where in sorted((tt_links or {}).items()):
+        if a in fulls and b in fulls:
+            return f"{where} books a SPLIT row from {a} to {b}"
+    return None
+
+
+def _declared_clash(full: List[str], declared, mapping) -> Optional[str]:
+    """A declaration that renames one of the change's old symbols to a
+    symbol outside the group (a `.tt` RENAME OLD C, a ticker.map rule
+    renaming OLD elsewhere): the user's line decides, the contract id
+    books nothing (audit review LOW). None when there is none."""
+    from taxjson.bin.taxjson_ticker_map import map_symbol
+    group = {f.upper() for f in full}
+    for old in full[:-1]:
+        o = old.upper()
+        for d in declared or ():
+            d_old, d_new = (getattr(d, 'old', None), getattr(d, 'new', None))
+            if d_old is None:
+                d_old, d_new = d
+            if d_old.upper() == o and d_new.upper() not in group:
+                where = getattr(d, 'where', '') or 'a .tt line'
+                return (f"{where} renames {old} to {d_new.upper()}")
+        if ticker_map_loaded():
+            if ticker_map_renames(o) and not any(
+                    ticker_map_joins(o, f) for f in group - {o}):
+                return f"a ticker.map line renames {old}"
+        elif mapping is not None:
+            ren, dated = mapping
+            m = map_symbol(o, ren)
+            if m != o and m not in {map_symbol(f, ren) for f in group}:
+                return f"a ticker.map line renames {old} to {m}"
+            for d_old, d_new in dated:
+                if d_old.upper() == o and d_new.upper() not in group:
+                    return (f"a ticker.map line renames {old} to "
+                            f"{d_new.upper()}")
+    return None
+
+
+def _conid_verdict(conid: str, o: str, n: str,
+                   seen: Dict[tuple, Dict[str, Any]]):
+    """(date, why, hint) for the change of one contract id from IB
+    symbol `o` to `n`: the date to book it on
+    — NEW's first row, when every row of OLD's is on an earlier day and
+    no row of NEW's, in any section, comes before NEW's first trade —
+    else why it cannot be dated from the rows and the `.tt` line hint
+    (None: a date the rows cannot give)."""
+    so = seen.get((conid, o)) or {}
+    sn = seen.get((conid, n)) or {}
+    amb = {**(so.get('amb') or {}), **(sn.get('amb') or {})}
+    if amb:
+        bad = [x for x in (o, n) if (seen.get((conid, x)) or {}).get('amb')]
+        st, ids = sorted(amb.items())[0]
+        return None, (f"{st} lists {' and '.join(bad)} under several "
+                      f"contract ids ({', '.join(ids)}): the rows there "
+                      f"cannot be told apart"), None
+    # Days: the order of two rows on one day is no date of a change.
+    lo, first_n = (so.get('last') or '')[:10], (sn.get('first') or '')[:10]
+    any_n, what = (sn.get('any') or '')[:10], sn.get('any_what') or ''
+    if not lo or not any_n:
+        return None, (f"{o if not lo else n} has no dated row"), None
+    if any_n <= lo:
+        return None, (f"{n}'s rows begin on {any_n}, on or before "
+                      f"{o}'s last trade or transfer ({lo})"), any_n
+    if not first_n or any_n < first_n:
+        return None, (f"{n}'s {what} row on {any_n} comes before its "
+                      f"first trade or transfer"
+                      f"{f' ({first_n})' if first_n else ''}: the change "
+                      f"happened between {o}'s last row ({lo}) and "
+                      f"{any_n}, and IB's rows do not say when"), any_n
+    return first_n, '', first_n
+
+
 def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
-                        first_seen=None, listing=None,
-                        mapping=None, last_seen=None,
-                        folds=None, book: bool = False,
-                        declared=(), distinct=frozenset()
-                        ) -> List[Dict[str, str]]:
+                        seen=None, listing=None,
+                        mapping=None, folds=None, book: bool = False,
+                        declared=(), distinct=frozenset(), links=(),
+                        tt_links=None) -> List[Dict[str, str]]:
     """One stock conid listed under several symbols (a ticker change
     with no corporate-action row): the parser would book each symbol as
     its own security, so the position splits into two pools (audit
     S059-13 / S060-17). The change is a DATED event (renames are events,
-    lib/renames): OLD the symbol whose rows end first, NEW the one that
-    continues, the date NEW's first row; each with the listing suffix it
-    is booked under (an alphabetical pair with a hard-coded .US joined
-    nothing, or renamed new to old — audit A2-0611).
+    lib/renames): OLD the symbol whose position rows end first, NEW the
+    one that continues; each with the listing suffix it is booked under
+    (an alphabetical pair with a hard-coded .US joined nothing, or
+    renamed new to old — audit A2-0611). The dates are the contract
+    id's own (`seen`, _conid_seen: another company that reused a ticker
+    has its own id).
 
     With `book` (the account-level pass, prepare_files) the change is
-    strong evidence — one contract id — and is BOOKED: the events are
-    returned (old, new, date, conid; reconcile_files adds their SPLIT
-    rows, event_source "ib-conid"), each said as a Warning naming the
-    way out (`DISTINCT OLD NEW` in ticker.map: two securities; a .tt
-    `RENAME <date> OLD NEW late=separate`: OLD's later rows are another
-    company's). Without `book`, or when a date is missing, it is said as
-    ATTENTION with the .tt line to add. IB's temporary symbols (`folds`,
-    _ib_temp_folds: folded onto the ticker, or named by a ticker.map
-    line, which decides) are no alias here and never a rename target; a
-    stamped symbol of another ticker is named but never suggested.
+    strong evidence — one contract id — and is BOOKED on NEW's first row
+    (00:00) when the rows date it: every OLD position row on an earlier
+    day, and no NEW row of any section (a corporate action, a dividend,
+    a return of capital ...) before NEW's first trade or transfer. The
+    events are returned (old, new, date, conid; reconcile_files adds
+    their SPLIT rows, event_source "ib-conid"), each said as a Warning
+    naming the way out (`DISTINCT OLD NEW` in ticker.map: two
+    securities; a .tt `RENAME <date> OLD NEW late=separate`: OLD's later
+    rows are another company's). It is NOT booked — an ATTENTION line
+    gives the .tt line `RENAME <date> OLD NEW` and why — when the rows
+    cannot date it (NEW's rows start on or before OLD's last one, a NEW
+    row precedes NEW's first trade, a symbol listed under several
+    contract ids in one statement), and without `book`. Nothing is
+    booked, with a note, when the account's own rows already join the
+    symbols (`links`: a corporate action naming both, the corporate-
+    action path's; `tt_links`: a .tt SPLIT row from one to the other —
+    audit review H6), and an ATTENTION line names a declaration that
+    renames OLD to another symbol (the user's line decides). IB's
+    placeholder spellings — temporary symbols (`folds`, _ib_temp_folds:
+    folded onto the ticker, or named by a ticker.map line, which
+    decides) and the `.OLD` line a corporate action retires — are no
+    alias here and never a rename target; a stamped symbol of another
+    ticker is named but never suggested.
     Quiet, and not booked, once the project's ticker.map (`mapping`:
-    (renames, dated pairs)) or a .tt RENAME line (`declared`: (old,
-    new) pairs) joins them, or a DISTINCT line (`distinct`: pairs) keeps
-    them apart."""
-    first_seen = first_seen or {}
-    last_seen = last_seen or {}
+    (renames, dated pairs)) or a .tt RENAME line (`declared`: the
+    DatedRename declarations, or (old, new) pairs) joins them, or a
+    DISTINCT line (`distinct`: pairs) keeps them apart."""
+    seen = seen or {}
     listing = listing or {}
     folds = folds or {}
     booked: List[Dict[str, str]] = []
+    pairs = []
+    for d in declared or ():
+        pairs.append((d.old, d.new) if hasattr(d, 'old') else tuple(d))
     for conid, syms in sorted(conid_syms.items()):
         syms = {x for x in syms if x not in folds}
         if len(syms) < 2:
             continue
-        real = [x for x in syms if not ib_temp_symbol_ticker(x)]
+        real = [x for x in syms if not _ib_placeholder_ticker(x)]
         temps = sorted(x for x in syms if ib_temp_symbol_ticker(x))
-        order = sorted(real, key=lambda x: (last_seen.get(x) or '9999',
-                                            first_seen.get(x) or '9999',
-                                            x))
+        olds = sorted(x for x in syms if _ib_placeholder_ticker(x)
+                      and not ib_temp_symbol_ticker(x))
+
+        def _d(x, k, _c=conid):
+            return (seen.get((_c, x)) or {}).get(k) or ''
+        order = sorted(real, key=lambda x: (_d(x, 'last') or '9999',
+                                            _d(x, 'first') or '9999', x))
         full = [listing.get(x) or f"{x}.US" for x in order]
         if len(full) >= 2:
             if ticker_map_loaded():
@@ -1160,12 +1358,12 @@ def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
                     continue
             elif mapping is not None and _project_map_joins(full, mapping):
                 continue
-            if declared and _project_map_joins(full, ({}, list(declared))):
+            if pairs and _project_map_joins(full, ({}, pairs)):
                 continue        # a .tt RENAME line declares the change
             if any(frozenset((full[k], full[k + 1])) in distinct
                    for k in range(len(full) - 1)):
                 continue        # DISTINCT: the user's call, two securities
-        named = ', '.join(order + temps)
+        named = ', '.join(order + temps + olds)
         _is = ("is an IB temporary symbol" if len(temps) == 1
                else "are IB temporary symbols")
         tmp_note = (f" {', '.join(temps)} {_is} (a time stamp before the "
@@ -1173,49 +1371,82 @@ def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
                     f"corporate action) for another ticker — never a "
                     f"rename target; check that corporate action."
                     if temps else "")
+        if olds:
+            tmp_note += (f" {', '.join(olds)}: IB's placeholder for the "
+                         f"line a corporate action retires — never a "
+                         f"rename target.")
+        head = (f"{where}: IB lists one stock (contract id {conid}) under "
+                f"several symbols: {named}")
         if len(full) < 2:
-            emit_line(f"{ATTENTION_PREFIX} {where}: IB lists one stock "
-                      f"(contract id {conid}) under several symbols: "
-                      f"{named}.{tmp_note}")
+            if temps:           # (IB's `.OLD` placeholder alone: quiet)
+                emit_line(f"{ATTENTION_PREFIX} {head}.{tmp_note}")
             continue
-        dated = [first_seen.get(x) for x in order[1:]]
-        if all(dated) and all(last_seen.get(x) for x in order):
-            if book:
-                events = [{"old": full[k], "new": full[k + 1],
-                           "date": dated[k], "conid": str(conid)}
-                          for k in range(len(full) - 1)]
-                booked.extend(events)
-                what = "; ".join(f"{e['old']} -> {e['new']} on {e['date']}"
-                                 for e in events)
-                outs = " / ".join(f"`DISTINCT {e['old']} {e['new']}`"
-                                  for e in events)
-                lates = " / ".join(f"`RENAME {e['date']} {e['old']} "
-                                   f"{e['new']} late=separate`"
-                                   for e in events)
-                emit_line(f"{ATTENTION_PREFIX} {where}: IB lists one stock "
-                          f"(contract id {conid}) under several symbols: "
-                          f"{named} — booked as a ticker change, a dated "
-                          f"event ({what}): the position, its cost and "
-                          f"acquisition dates carry to the new symbol. If "
-                          f"they are two securities, add {outs} to "
-                          f"ticker.map; if the old symbol's rows after the "
-                          f"date are another company's, add {lates} to a "
-                          f".tt file of this account.{tmp_note}")
-                continue
-            lines = [f"`RENAME {dated[k]} {full[k]} {full[k + 1]}`"
-                     for k in range(len(full) - 1)]
-            how = (f"{' and '.join(lines)} (OLD is the symbol whose rows "
-                   f"end first, the date the first row of the one that "
-                   f"continues)")
+        link = _conid_link(order, full, links, tt_links)
+        if link:
+            emit_line(f"note: {head} — {link}: the change is that row's "
+                      f"(booked from it), not booked again from the "
+                      f"contract id.{tmp_note}")
+            continue
+        clash = _declared_clash(full, declared, mapping)
+        if clash:
+            emit_line(f"{ATTENTION_PREFIX} {head} — not booked as a ticker "
+                      f"change: {clash}, and that line decides. If "
+                      f"{full[0]} became {full[1]}, fix the declaration "
+                      f"(one ticker change, one line); if they are two "
+                      f"securities, add `DISTINCT {full[0]} {full[1]}` to "
+                      f"ticker.map.{tmp_note}")
+            continue
+        verdicts = [_conid_verdict(str(conid), order[k], order[k + 1],
+                                   seen)
+                    for k in range(len(full) - 1)]
+        if book and all(v[0] for v in verdicts):
+            events = [{"old": full[k], "new": full[k + 1],
+                       "date": verdicts[k][0], "conid": str(conid)}
+                      for k in range(len(full) - 1)]
+            booked.extend(events)
+            what = "; ".join(f"{e['old']} -> {e['new']} on {e['date']}"
+                             for e in events)
+            outs = " / ".join(f"`DISTINCT {e['old']} {e['new']}`"
+                              for e in events)
+            lates = " / ".join(f"`RENAME {e['date']} {e['old']} "
+                               f"{e['new']} late=separate`"
+                               for e in events)
+            emit_line(f"{ATTENTION_PREFIX} {head} — "
+                      f"booked as a ticker change, a dated event ({what}): "
+                      f"the position, its cost and acquisition dates carry "
+                      f"to the new symbol. If they are two securities, add "
+                      f"{outs} to ticker.map; if the old symbol's rows "
+                      f"after the "
+                      f"date are another company's, add {lates} to a .tt "
+                      f"file of this account.{tmp_note}")
+            continue
+        whys = [v[1] for v in verdicts if v[1]]
+        lines = []
+        for k, (_date, _why, hint) in enumerate(verdicts):
+            if hint:
+                lines.append(f"`RENAME {hint} {full[k]} {full[k + 1]}`")
+            else:
+                lines.append(f"`RENAME YYYY-MM-DD {full[k]} "
+                             f"{full[k + 1]}` with the date of the change")
+        if whys:
+            why = (f" — a ticker change taxjson "
+                   f"does not book from the contract id: "
+                   f"{'; '.join(whys)}. Each symbol is "
+                   f"booked as its own security until a .tt line of this "
+                   f"account records the change as a dated event, e.g. "
+                   f"{' and '.join(lines)} (`late=fold` if the old "
+                   f"symbol's rows after the date are the renamed shares, "
+                   f"`late=separate` if another company's), or, if they "
+                   f"are two securities, `DISTINCT {full[0]} {full[1]}` "
+                   f"in ticker.map.")
         else:
-            how = (f"`RENAME YYYY-MM-DD {full[0]} {full[-1]}` with the date "
-                   f"of the change (OLD is the symbol whose rows end "
-                   f"first)")
-        emit_line(f"{ATTENTION_PREFIX} {where}: IB lists one stock (contract "
-                  f"id {conid}) under several symbols: {named} — a ticker "
-                  f"change. Each symbol is booked as its own security "
-                  f"until a .tt line of this account records the change as "
-                  f"a dated event, e.g. {how}.{tmp_note}")
+            why = (f" — a ticker change. Each symbol is booked as its own "
+                   f"security until a .tt line of this account records "
+                   f"the change as a dated event, e.g. "
+                   f"{' and '.join(lines)} (OLD is the symbol whose rows "
+                   f"end first, the date the first row of the one that "
+                   f"continues).")
+        emit_line(f"{ATTENTION_PREFIX} {head}{why}{tmp_note}")
     return booked
 
 
@@ -1304,14 +1535,46 @@ def _project_root(paths) -> Optional[Path]:
     return None
 
 
-def _project_tt_renames(paths) -> List[Tuple[str, str]]:
-    """The (old, new) pairs the project's .tt RENAME lines declare
-    (lib/dated_events): a change a line declares is booked from it."""
+def _project_tt_renames(paths) -> List[Any]:
+    """The project's .tt RENAME declarations (lib/dated_events
+    DatedRename: old, new, date, where): a change a line declares is
+    booked from it; one that renames OLD elsewhere decides."""
     root = _project_root(paths)
     if root is None:
         return []
     from taxjson.lib.dated_events import tt_renames
-    return [(dr.old, dr.new) for dr in tt_renames(root)]
+    return list(tt_renames(root))
+
+
+def _account_tt_links(paths) -> Dict[tuple, str]:
+    """{(OLD, NEW): where} of the `.tt` SPLIT rows of the account folder
+    of `paths` (inputs/<account>/) that move a position to another
+    symbol (`SPLIT <date> <time> OLD NEW <ratio>`): the account's own
+    rows already book that change (audit review H6)."""
+    from taxjson.bin.taxjson_convert_tt import strip_tt_comment
+    from taxjson.lib.dated_events import tt_files
+    out: Dict[tuple, str] = {}
+    dirs = []
+    for path in paths:
+        try:
+            d = Path(path).resolve().parent
+        except OSError:
+            continue
+        if d.parent.name == 'inputs' and d not in dirs:
+            dirs.append(d)
+    for d in dirs:
+        for tt in tt_files(d):
+            try:
+                text = tt.read_text(encoding='utf-8-sig')
+            except (OSError, UnicodeError):
+                continue        # the .tt stage names an unreadable file
+            for n, raw in enumerate(text.splitlines(), 1):
+                parts = strip_tt_comment(raw).split()
+                if (len(parts) >= 5 and parts[0] == 'SPLIT'
+                        and parts[3].upper() != parts[4].upper()):
+                    out.setdefault((parts[3].upper(), parts[4].upper()),
+                                   f"{shown_name(tt)}:{n}")
+    return out
 
 
 def _project_distinct(paths) -> frozenset:
@@ -1346,7 +1609,22 @@ def _book_conid_renames(parsed) -> None:
     _p, ex, txs = files[0]
     acct = next((t.get('account') for _f in files for t in _f[2]
                  if t.get('account')), getattr(ex, 'DEFAULT_ACCOUNT', ''))
+    # The account's rows that already move one symbol to another (a
+    # corporate action's split or merger with a symbol change): an
+    # event they join is theirs, never booked twice (audit review H6;
+    # prepare_files already stands down for a corporate action naming
+    # both — this is the rows' own word).
+    moved = {frozenset((str(t.get('symbol') or '').upper(),
+                        str(t.get('symbol_new') or '').upper()))
+             for _f in parsed for t in _f[2]
+             if t.get('action') == 'SPLIT' and t.get('symbol_new')
+             and t.get('symbol_new') != t.get('symbol')}
     for e in events:
+        if frozenset((e['old'].upper(), e['new'].upper())) in moved:
+            emit_line(f"note: the account's IB statements: {e['old']} -> "
+                      f"{e['new']} is booked from IB's own corporate-action "
+                      f"row, not again from the contract id.")
+            continue
         txs.append({
             'action': 'SPLIT', 'date': e['date'], 'time': '00:00:00',
             'date_settle': e['date'], 'symbol': e['old'],
@@ -1393,7 +1671,7 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
         'has_order_level': False, 'order_levels': {},
         'stock_isins': {}, 'stock_conid_syms': {}, 'opt_underlying': {},
         'held_rows': [], 'broker_name': '', 'cash_bad': {},
-        'first_seen': {}, 'last_seen': {}, 'stock_listing': {},
+        'conid_rows': [], 'ca_links': [], 'stock_listing': {},
     }
     occ_by_conid: Dict[str, set] = {}
     contract_conids: Dict[tuple, set] = {}
@@ -1426,11 +1704,35 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
             _sroot = re.sub(r'\s+', '.', g('Symbol'))
             _sday = (g('Date/Time') or g('Date')).replace(',', ' ').split()
             if _sday and _IB_DATE_RE.match(_sday[0]):
-                _prev = out['first_seen'].get(_sroot)
-                if _prev is None or _sday[0] < _prev:
-                    out['first_seen'][_sroot] = _sday[0]
-                if _sday[0] > out['last_seen'].get(_sroot, ''):
-                    out['last_seen'][_sroot] = _sday[0]
+                # A position row of the symbol at that time: the dates a
+                # one-contract-id ticker change is read from
+                # (_conid_seen, per contract id).
+                out['conid_rows'].append((_sroot, ' '.join(_sday[:2]),
+                                          'pos'))
+        elif (sec not in _IB_NO_EVENT_SECTIONS and 'Description' in h
+              and g('Description')):
+            # Any other dated row that names a stock (a corporate
+            # action, a dividend, withholding, a payment in lieu, a
+            # fee): the symbol already existed on that day (audit
+            # review H4: NEW's split before its first trade was lost).
+            _eday = ''
+            for _dc in ('Date/Time', 'Date', 'Report Date'):
+                _d = g(_dc).replace(',', ' ').split()
+                if _d and _IB_DATE_RE.match(_d[0]):
+                    _eday = ' '.join(_d[:2])
+                    break
+            if _eday:
+                _named = _ib_description_tickers(g('Description'))
+                for _t in _named:
+                    out['conid_rows'].append((_t, _eday, sec))
+                if sec == 'Corporate Actions' and _named:
+                    # The symbols one corporate action names together
+                    # (its head and its delivered line, IB's `.OLD`
+                    # placeholder read as its ticker): a change the
+                    # corporate-action path books (H6).
+                    out['ca_links'].append((frozenset(
+                        _ib_placeholder_ticker(t) or t for t in _named),
+                        _eday[:10]))
         if (sec == 'Trades'
                 and g('DataDiscriminator') in ('Order', 'Trade')):
             # Quantity per (category, symbol, trade day) and detail
@@ -1685,9 +1987,12 @@ class IbBrokerage(BaseBrokerage):
             'opt_underlying': {}, 'stock_conid_syms': {},
             'stock_isins': {}, 'held': set(), 'posted_dividends': [],
             'tender_parked': {}, 'accrual_facts': [],
-            'file_accounts': {}, 'first_seen': {}, 'last_seen': {},
+            'file_accounts': {}, 'ca_links': [],
             'stock_listing': {}, 'stock_folds': {}}
         read: List[tuple] = []
+        # (statement, prescan) of each statement, for the per-contract-id
+        # dates of a one-contract-id ticker change (_conid_seen).
+        _conid_stmts: List[tuple] = []
         for path in paths:
             try:
                 rows = cls._read_rows(Path(path))
@@ -1745,12 +2050,8 @@ class IbBrokerage(BaseBrokerage):
                 ctx['stock_conid_syms'].setdefault(conid, set()).update(syms)
             for root, ids in pre['stock_isins'].items():
                 ctx['stock_isins'].setdefault(root, set()).update(ids)
-            for root, d in pre['first_seen'].items():
-                if d < ctx['first_seen'].get(root, '9999'):
-                    ctx['first_seen'][root] = d
-            for root, d in pre['last_seen'].items():
-                if d > ctx['last_seen'].get(root, ''):
-                    ctx['last_seen'][root] = d
+            _conid_stmts.append((shown_name(path), pre))
+            ctx['ca_links'].extend(pre['ca_links'])
             for root, full in pre['stock_listing'].items():
                 ctx['stock_listing'].setdefault(root, full)
             for sym, cat, cur in pre['held_rows']:
@@ -1794,12 +2095,13 @@ class IbBrokerage(BaseBrokerage):
                   f"advantaged) account its own folder.")
         ctx['conid_renames'] = _warn_stock_aliases(
             ctx['stock_conid_syms'], 'the account\'s IB statements',
-            first_seen=ctx['first_seen'], last_seen=ctx['last_seen'],
+            seen=_conid_seen(_conid_stmts, ctx['stock_conid_syms']),
             listing=ctx['stock_listing'],
             mapping=_project_ticker_map(paths),
             folds={**folds, **map_kept}, book=True,
             declared=_project_tt_renames(paths),
-            distinct=_project_distinct(paths))
+            distinct=_project_distinct(paths),
+            links=ctx['ca_links'], tt_links=_account_tt_links(paths))
         return ctx
 
     @classmethod
@@ -3000,10 +3302,11 @@ class IbBrokerage(BaseBrokerage):
                     tgt.setdefault(root, set()).update(ids)
         else:
             _warn_stock_aliases(pre['stock_conid_syms'], shown_name(path),
-                                first_seen=pre['first_seen'],
-                                last_seen=pre['last_seen'],
+                                seen=_conid_seen([(shown_name(path), pre)],
+                                                 pre['stock_conid_syms']),
                                 listing=pre['stock_listing'],
-                                folds={**_folds, **_map_kept})
+                                folds={**_folds, **_map_kept},
+                                links=pre['ca_links'])
         self._ib_pre = pre
         self._check_statement_kind(pre, path)
         fii = pre['fii']

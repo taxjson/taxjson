@@ -418,7 +418,8 @@ class TestIbContractIdRename(unittest.TestCase):
             r = cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, _out(r)[-3000:])
             out = _out(r)
-            self.assertIn("booked as a ticker change", out)
+            # (the console starts the line's second part with a capital)
+            self.assertIn("booked as a ticker change", out.lower())
             self.assertIn("`DISTINCT QZOA.US QZNB.US`", out)
             self.assertNotIn("go short", out)
             doc = json.loads(cli(root, "renames", "--json").stdout)
@@ -459,19 +460,25 @@ class TestIbContractIdRename(unittest.TestCase):
 
     @rule("CA-ACB-RENAME")
     def test_late_separate_is_the_way_out(self):
+        # QZOA rows after QZNB's first: the contract id's rows overlap,
+        # so nothing is booked from it (pre-release review M1); the
+        # ATTENTION line names the .tt line and its late= choices.
         with tempfile.TemporaryDirectory() as td:
             root = projects_both(td, files={
                 "inputs/margin/ib.csv": _ib(late=True)})["canada"]
             r = cli(root, "run", "--no-input", "--strict")
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("RENAME 2025-05-12 QZOA.US QZNB.US late=separate",
+            self.assertIn("`RENAME 2025-05-12 QZOA.US QZNB.US`", _out(r))
+            self.assertIn("`late=separate`", _out(r))
+            self.assertNotIn("booked as a ticker change", _out(r).lower())
+            self.assertIn("RENAME 2025-05-12 QZOA.US QZNB.US",
                           cli(root, "renames").stdout)
             (root / "inputs" / "margin" / "renames.tt").write_text(
                 "RENAME 2025-05-12 QZOA.US QZNB.US late=separate\n")
             r = cli(root, "run", "--no-input", "--strict")
             self.assertEqual(r.returncode, 0, _out(r)[-3000:])
             # The .tt line books the change now (IB's booking stands down).
-            self.assertNotIn("booked as a ticker change", _out(r))
+            self.assertNotIn("booked as a ticker change", _out(r).lower())
             doc = json.loads(cli(root, "renames", "--json").stdout)
             self.assertEqual(doc["unresolved"], 0)
             self.assertEqual(doc["renames"][0]["source"], "tt")
