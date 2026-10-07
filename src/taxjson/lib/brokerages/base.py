@@ -413,13 +413,17 @@ def source_identity(source, key) -> str:
 def decode_broker_text(raw: bytes, name: str = '') -> str:
     """The text of a broker export, decoded the way every parser and
     broker detection read it: a UTF-16 BOM is UTF-16, anything else
-    UTF-8 with an optional BOM. Any other encoding (a cp1252 re-save)
+    UTF-8 with an optional BOM (any number of them). Any other encoding (a cp1252 re-save)
     raises BrokerageParseError with a one-line remedy instead of a codec
     traceback (audit S059-17)."""
     try:
         if raw[:2] in (b'\xff\xfe', b'\xfe\xff'):
-            return raw.decode('utf-16')
-        return raw.decode('utf-8-sig')
+            text = raw.decode('utf-16')
+        else:
+            text = raw.decode('utf-8-sig')
+        # A file re-saved by a tool that adds its own BOM in front of one
+        # it kept carries two: every one in front is still not text.
+        return text.lstrip('\ufeff')
     except UnicodeDecodeError as e:
         where = f"{name}: " if name else ''
         raise BrokerageParseError(

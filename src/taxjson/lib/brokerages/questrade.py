@@ -18,6 +18,7 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          _parse_div_qty_rate,
                                          DESC_NUMBER_RE,
                                          canonical_ca_listing,
+                                         decode_broker_text,
                                          desc_number,
                                          income_facts_from_description,
                                          is_roc_description,
@@ -215,9 +216,7 @@ def _read_qt_rows(path: Path, warn: bool = False) -> List[tuple]:
     """(line number, row) for every data row of a Questrade export. The
     header must carry every column in _QT_COLUMNS."""
     path = Path(path)
-    raw = path.read_bytes()
-    text = (raw.decode('utf-16') if raw[:2] in (b'\xff\xfe', b'\xfe\xff')
-            else raw.decode('utf-8-sig'))
+    text = decode_broker_text(path.read_bytes(), shown_name(path))
     reader = csv.DictReader(io.StringIO(text, newline=''))
     header = [h.strip() if h else h for h in (reader.fieldnames or [])]
     missing = missing_columns(header)

@@ -116,6 +116,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_detect_brokerage.py` — `cannot_detect_message`, `cannot detect broker for`; `src/taxjson/lib/brokerages/detect.py` — `content_matches`; `src/taxjson/bin/taxjson_run.py` — `group_inputs_detailed`
 
+### "Error: cannot detect broker for inputs/qt/99900001.csv" (or "Questrade export is missing required column(s) 'Transaction Date'") for a file whose header looks right
+- **Check:** `head -c 8 inputs/qt/99900001.csv | od -c` shows `357 273 277` (a UTF-8 byte-order mark) twice before the first column name.
+- **Cause:** the file was saved as "CSV UTF-8" by a tool that adds a byte-order mark in front of one the file already had. One mark was always read; the second stayed glued to the first column name, so neither detection nor the parser found the header.
+- **Fix:** upgrade: every leading mark is dropped. On an older install, re-export the file from the broker, or save it once more from a text editor as plain UTF-8.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/brokerages/base.py` — `decode_broker_text`; `src/taxjson/lib/brokerages/questrade.py` — `_read_qt_rows`
+
 ### "Error: cannot detect broker for inputs/qt/activity.csv. Closest: a Questrade header lacking column(s) Account #, Account Type. …"
 - **Check:** the `Closest:` part names the export the file nearly matched and the columns its header lacks (`a Webull header (Action Code) lacking …`, `an RBC activity header lacking …` for those brokers).
 - **Cause:** the header has lost columns. Common reasons: columns deleted or renamed in a spreadsheet, a re-save, or a custom report instead of the standard activity export. Detection needs every column the parser reads.

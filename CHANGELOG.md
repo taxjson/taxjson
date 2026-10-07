@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A broker export with two byte-order marks is read.** A file saved as
+  "CSV UTF-8" by a tool that adds its own byte-order mark in front of one
+  the file already had stopped with "cannot detect broker" (or a Questrade
+  "missing required column"), although its header was right. Every leading
+  mark is now dropped, for every broker.
 
 ## v0.23.0 (2026-10-06)
 

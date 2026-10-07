@@ -307,7 +307,7 @@ def rbc_export_as_of(path) -> str:
     try:
         text = (head.decode('utf-16', errors='ignore')
                 if head[:2] in (b'\xff\xfe', b'\xfe\xff')
-                else head.decode('utf-8-sig', errors='ignore'))
+                else head.decode('utf-8-sig', errors='ignore')).lstrip('\ufeff')
     except (UnicodeDecodeError, LookupError):
         return ''
     lines = text.splitlines()[:5]
@@ -455,6 +455,7 @@ def read_rbc_rows(path: Path) -> RbcExport:
             text = raw.decode('utf-16')           # Excel "Unicode text" save
         else:
             text = raw.decode('utf-8-sig')
+        text = text.lstrip('\ufeff')             # a re-save's second BOM
     except UnicodeDecodeError as e:
         raise RbcFormatError(f"{shown_name(path)}: not UTF-8/UTF-16 text ({e}) — "
                              f"re-export the CSV from RBC") from None
