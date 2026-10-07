@@ -86,11 +86,10 @@ class TestNoBuiltinTable(unittest.TestCase):
                              {"QZT": "QZT55504", "QZX": "qzx55505"})
 
     def test_init_stub_names_no_real_coin(self):
-        from taxjson.bin import taxjson_run as tr
-        stub = tr._TEMPLATE_TICKER_MAP
-        crypto = [ln for ln in stub.splitlines()
+        from taxjson.lib.ticker_map_format import init_template
+        crypto = [ln for ln in init_template().splitlines()
                   if ln.startswith("# CRYPTO ")]
-        self.assertEqual(crypto, ["# CRYPTO   ABC        ABC12345"])
+        self.assertEqual(crypto, ["# CRYPTO ABC ABC12345"])
 
 
 class _Resp:
