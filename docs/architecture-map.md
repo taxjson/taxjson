@@ -62,7 +62,7 @@ drift check and the end-of-run summary. A full rebuild is the default;
 `--fast` reuses cached stages only when this same code built them.
 
 - `src/taxjson/bin/taxjson_run.py` — `cmd_run`, `_acquire_run_lock`, `needs_rebuild`, `_package_fingerprint`, `stage_account`, `stage_wash_pass`, `stage_blended_wash_pass`, `stage_cross_reports`, `stage_fees`, `collect_diagnostics`, `echo_attention_lines`, `_first_run_summary`: the run, its one-run-per-project lock and the `--fast` cache rules; `stage_account` is the per-account chain (parse, corp actions, .tt files, transfer arrivals, merge, gains, raw holdings, the `.sum` report); then the passes across accounts; what each stage printed, folded into the console and the `.sum` DIAGNOSTICS section; the closing summary.
-- `src/taxjson/lib/first_run.py` — `collect`, `render`, `render_blocks`, `uncovered_short_sales`, `zero_cost_positions`, `income_without_position`, `SUMMARY_FILE`: the "what to check next" counts at the end of a run.
+- `src/taxjson/lib/first_run.py` — `collect`, `render`, `render_blocks`, `uncovered_short_sales`, `engine_booking`, `zero_cost_positions`, `income_without_position`, `SUMMARY_FILE`: the "what to check next" counts at the end of a run; `engine_booking` reads the gains files so a sale is called "NOT in `taxjson sum`" only when they lack it.
 
 ## Input discovery and broker detection
 
@@ -240,7 +240,7 @@ sales are detected, listed with suggestions, and can be answered with a
 `missing_history.json` entry (opening lots the gains run synthesizes) or a
 draft of the missing purchases.
 
-- `src/taxjson/lib/missing_history.py` — `detect_missing_history`, `MissingHistoryCandidate`, `classify_year_shorts`, `missing_history_suspects`, `detect_zero_basis_acquisitions`, `load_missing_history`, `synthesize_openings`, `stale_missing_history_entries`, `MISSING_HISTORY_FILE`, `draft_purchases`, `detect_superficial_loss_warnings`: finding sales with no purchase; the project file and the openings synthesized from it; purchase drafts and loss-window warnings.
+- `src/taxjson/lib/missing_history.py` — `detect_missing_history`, `MissingHistoryCandidate`, `classify_year_shorts`, `missing_history_suspects`, `detect_zero_basis_acquisitions`, `load_missing_history`, `synthesize_openings`, `stale_missing_history_entries`, `MISSING_HISTORY_FILE`, `draft_purchases`, `detect_superficial_loss_warnings`, `_walk_key`, `walk_journal_symbols`, `detected_journal_symbols`, `journal_leg_key`, `journal_targets`: finding sales with no purchase; the project file and the openings synthesized from it; purchase drafts and loss-window warnings; the walks' order, where a journal between a security's two lines (a JOURNAL line, a join of the run, a Questrade `journal_pair`, RBC's J~ reference) reads a day's buys and in-legs first.
 - `src/taxjson/bin/taxjson_missing_history.py` — `main`, `_print_section`, `_print_zero_section`, `_write_purchases`: the `taxjson-missing-history` tool.
 - `src/taxjson/bin/taxjson_run.py` — `cmd_find_missing_history`, `_missing_history_suspects`, `_year_short_rows`, `_refuse_unknown_missing_history_accounts`: `taxjson find-missing-history` and the run's use of the file.
 - `src/taxjson/lib/phantom_holdings.py` — `missing_history`: the old module name, kept as an alias.

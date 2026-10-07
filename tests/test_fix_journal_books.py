@@ -26,6 +26,8 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from taxjson.lib import cross_listings as XL
+from taxjson.lib import first_run as FR
+from taxjson.lib import missing_history as MH
 from taxjson.lib.core import TaxTransaction
 from tax_rules import rule, rule_absent
 
@@ -174,6 +176,299 @@ class TestQuestradePairIdUsa(unittest.TestCase):
             st = XL.read_state(root / 'work' / XL.STATE)
             self.assertFalse(any(j.get('kind') == 'JOURNAL'
                                  for j in st['joined']))
+
+
+# ------------------------------------------ 5. RBC gambit, no JOURNAL line
+
+from test_fix_rbc import HDR, row   # noqa: E402
+
+RNAME = 'QZD US DLR CURRENCY ETF UNIT'
+EXTRACT = f'EXTRACT {RNAME} | USD | QZD.U.TO\n'
+
+
+def _rbc_gambit():
+    """Bought on the CAD line and sold on the USD line on one day (RBC's
+    "CA JNL" trades; its newest-first row clock puts the sale first),
+    the journal's TFR legs dated the settlement day."""
+    desc = RNAME + ' UNSOLICITED CA JNL'
+    return ('"Activity Export as of Jan 5, 2026 at 8:59:00 am ET"\n\n' + HDR
+            + row("May 6, 2025", "Transfers", "QZD", RNAME, "1000", "", "0",
+                  "USD", "TFR - " + RNAME + " TRANSFER FROM C$  J~1")
+            + row("May 6, 2025", "Transfers", "QZD", RNAME, "-1000", "",
+                  "0", "CAD", "TFR - " + RNAME + " TRANSFER TO U$  J~1")
+            + row("May 5, 2025", "Buy", "QZD", RNAME, "1000", "13.80",
+                  "-13800", "CAD", desc, settle="May 6, 2025")
+            + row("May 5, 2025", "Sell", "QZD", RNAME, "-1000", "10.10",
+                  "10100", "USD", desc, settle="May 6, 2025"))
+
+
+def _rbc_project(td, name, tmap, transfers):
+    root = Path(td) / name
+    (root / 'inputs' / 'margin').mkdir(parents=True)
+    (root / 'taxjson.toml').write_text(_config(transfers=transfers))
+    (root / 'inputs' / 'margin' / 'rbc.csv').write_text(_rbc_gambit())
+    (root / 'ticker.map').write_text(tmap)
+    (root / 'work').mkdir()
+    _rates(root / 'work' / 'to_base.csv')
+    return root
+
+
+class TestRbcGambitNeedsNoJournalLine(unittest.TestCase):
+    """The same books with a JOURNAL line, a TOBASE line or no line:
+    no short, no warning, the same total (proceeds 10100 USD at 1.35 =
+    13635 CAD less 13800 CAD = -165)."""
+
+    CASES = {
+        'journal-in-books': (EXTRACT + 'JOURNAL QZD.U.TO QZD.TO\n', True),
+        'tobase-aside': (EXTRACT + 'TOBASE QZD.U.TO QZD.TO\n', False),
+        'tobase-in-books': (EXTRACT + 'TOBASE QZD.U.TO QZD.TO\n', True),
+        'no-line-aside': (EXTRACT, False),
+        'no-line-in-books': (EXTRACT, True),
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        cls._td = tempfile.TemporaryDirectory()
+        cls.got = {}
+        for name, (tmap, tr) in cls.CASES.items():
+            root = _rbc_project(cls._td.name, name, tmap, tr)
+            r = _run(root, 'run', '--no-input')
+            cls.got[name] = (root, r)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._td.cleanup()
+
+    def test_no_short_and_no_warning(self):
+        for name, (root, r) in self.got.items():
+            with self.subTest(name):
+                out = ' '.join((r.stdout + r.stderr).split())
+                self.assertEqual(r.returncode, 0, out[-3000:])
+                self.assertNotIn('go short', out)
+                self.assertNotIn('no purchase in your files', out)
+                self.assertNotIn('NOT in', out)
+                m = _run(root, 'find-missing-history')
+                self.assertNotIn('QZD', m.stdout)
+
+    def test_sum_is_the_gambit_and_nothing_is_uncovered(self):
+        for name, (root, _r) in self.got.items():
+            with self.subTest(name):
+                doc = _sum(root)
+                self.assertAlmostEqual(doc['totals']['total'], -165.0,
+                                       delta=0.011)
+                self.assertEqual(doc['no_purchase_uncovered'], [])
+                self.assertEqual(doc['no_purchase_in_totals'], [])
+
+    def test_the_walk_knows_the_journal_without_a_journal_line(self):
+        root, _r = self.got['tobase-aside']
+        self.assertEqual(MH.journal_targets(root / 'ticker.map'), set())
+        self.assertIn('QZD.TO', MH.walk_journal_symbols(
+            root / 'work', root / 'ticker.map'))
+
+
+class TestJournalDetection(unittest.TestCase):
+    def _leg(self, sym, qty, desc='', pair='', day='2025-05-06', acct='m'):
+        return TaxTransaction(action='TRANSFER', date=day, symbol=sym,
+                              quantity=qty, account=acct, description=desc,
+                              journal_pair=pair)
+
+    def test_rbc_reference_pairs_the_legs_the_renames_fold(self):
+        legs = [self._leg('QZD.TO', -1000, 'TFR - X TRANSFER TO U$  J~1'),
+                self._leg('QZD.U.TO', 1000, 'TFR - X TRANSFER FROM C$ J~1')]
+        rows = [(t.account, t) for t in legs]
+        self.assertEqual(MH.detected_journal_symbols(rows), set())
+        self.assertEqual(MH.detected_journal_symbols(
+            rows, {'QZD.U.TO': 'QZD.TO'}), {'QZD.TO', 'QZD.U.TO'})
+        # An overlapping copy of a leg counts once.
+        self.assertEqual(MH.detected_journal_symbols(
+            rows + rows[:1], {'QZD.U.TO': 'QZD.TO'}),
+            {'QZD.TO', 'QZD.U.TO'})
+
+    def test_parser_pair_id_and_unpaired_legs(self):
+        legs = [self._leg('QZD.TO', -300, pair='2025-09-25#1'),
+                self._leg('QZD.TO', 300, pair='2025-09-25#1')]
+        self.assertEqual(MH.detected_journal_symbols(
+            [(t.account, t) for t in legs]), {'QZD.TO'})
+        # Legs of two accounts, or of different quantities, never pair.
+        other = [self._leg('QZD.TO', -300, pair='p', acct='a'),
+                 self._leg('QZD.TO', 300, pair='p', acct='b'),
+                 self._leg('ZZQ.TO', -5, 'TFR J~2'),
+                 self._leg('ZZQ.TO', 4, 'TFR J~2')]
+        self.assertEqual(MH.detected_journal_symbols(
+            [(t.account, t) for t in other]), set())
+
+    def _gambit(self, with_legs):
+        def tx(qty, time, action='BUYSELL', desc='', day='2025-05-05'):
+            return TaxTransaction(action=action, date=day, time=time,
+                                  date_settle='2025-05-06', symbol='QZD.TO',
+                                  quantity=qty, account='m', currency='CAD',
+                                  description=desc)
+        rows = [tx(-1000, '09:30:00'), tx(1000, '09:30:01')]
+        if with_legs:
+            rows += [tx(-1000, '09:30:00', 'TRANSFER',
+                        'TFR - X TRANSFER TO U$ J~1', '2025-05-06'),
+                     tx(1000, '09:30:01', 'TRANSFER',
+                        'TFR - X TRANSFER FROM C$ J~1', '2025-05-06')]
+        return rows
+
+    def test_walk_reads_the_books_own_journal(self):
+        # The legs in the books (transfers = true) name the journal.
+        self.assertEqual(MH.detect_missing_history(self._gambit(True)), [])
+        # Without them (transfers aside) the caller's set does.
+        self.assertEqual(len(MH.detect_missing_history(
+            self._gambit(False))), 1)
+        self.assertEqual(MH.detect_missing_history(
+            self._gambit(False), journal_symbols={'QZD.TO'}), [])
+
+    def test_settle_day_legs_read_in_leg_first(self):
+        rows = self._gambit(True)[2:]
+        self.assertEqual(len(MH.detect_missing_history(rows)), 0)
+        js = {'QZD.TO'}
+        keys = sorted(rows, key=lambda t: (MH._walk_key(t, js),
+                                           0 if t.quantity > 0 else 1))
+        self.assertEqual([t.quantity for t in keys], [1000, -1000])
+
+    def test_state_joins_are_journals(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td) / 'work'
+            cache.mkdir()
+            (cache / XL.STATE).write_text(json.dumps({
+                'format': XL.FORMAT, 'joined': [
+                    {'from': 'QZD.U.TO', 'to': 'QZD.TO'}],
+                'suggested': [], 'collisions': []}))
+            self.assertEqual(MH.walk_journal_symbols(cache),
+                             {'QZD.TO', 'QZD.U.TO'})
+
+
+# --------------------------------------------- 6. NOT in `taxjson sum`
+
+def _row(sales, sym='ZZQ.TO', acct='margin'):
+    c = MH.MissingHistoryCandidate(symbol=sym, account=acct, currency='CAD',
+                                   first_negative_date='', peak_short=-10.0,
+                                   end_position=-10.0, disposition_count=1,
+                                   registered=False)
+    return MH.MissingHistoryRow(candidate=c, affects_year=True,
+                                in_year_dispositions=len(sales),
+                                in_year_proceeds=0.0, last_in_year_date='',
+                                in_year_short_sales=tuple(sales))
+
+
+class TestEngineBooking(unittest.TestCase):
+    def _cache(self, td, recs):
+        cache = Path(td)
+        (cache / 'margin_gains.json').write_text(json.dumps(
+            {'transactions': recs, 'inventory': []}))
+        return cache
+
+    def test_three_bookings(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache = self._cache(td, [
+                # the sale itself, closed against a long position
+                {'id': 's1', 'symbol': 'ZZQ.TO', 'qty': 10,
+                 'direction': 'LONG', 'date': '2025-03-03',
+                 'date_settle': '2025-03-04'},
+                # a short of ZZR.TO closed by a buy of the year
+                {'id': 'b2', 'symbol': 'ZZR.TO', 'qty': 10,
+                 'direction': 'SHORT', 'date': '2025-06-02',
+                 'date_settle': '2025-06-03'}])
+            got = FR.engine_booking(cache, [
+                _row([('s1', 10.0)]), _row([('s2', 10.0)], 'ZZR.TO'),
+                _row([('s3', 10.0)], 'ZZS.TO')], 2025)
+            self.assertEqual(got, {('ZZQ.TO', 'margin'): FR.BOOKED_MATCHED,
+                                   ('ZZR.TO', 'margin'):
+                                   FR.BOOKED_SHORT_COVER,
+                                   ('ZZS.TO', 'margin'): FR.BOOKED_OPEN})
+
+    def test_a_cover_of_the_next_year_is_not_this_years(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache = self._cache(td, [
+                {'id': 'b2', 'symbol': 'ZZR.TO', 'qty': 10,
+                 'direction': 'SHORT', 'date': '2025-12-31',
+                 'date_settle': '2026-01-02'}])
+            self.assertEqual(FR.engine_booking(
+                cache, [_row([('s2', 10.0)], 'ZZR.TO')], 2025),
+                {('ZZR.TO', 'margin'): FR.BOOKED_OPEN})
+            self.assertEqual(FR.engine_booking(
+                cache, [_row([('s2', 10.0)], 'ZZR.TO')], 2025,
+                date_basis='trade'),
+                {('ZZR.TO', 'margin'): FR.BOOKED_SHORT_COVER})
+
+    def test_render_claims_not_in_sum_only_for_open(self):
+        doc = {'year': 2025,
+               'no_purchase': [{'symbol': 'ZZS.TO', 'account': 'm'}],
+               'no_purchase_in_sum': [
+                   {'symbol': 'ZZR.TO', 'account': 'm',
+                    'booked': FR.BOOKED_SHORT_COVER},
+                   {'symbol': 'ZZQ.TO', 'account': 'm',
+                    'booked': FR.BOOKED_MATCHED}]}
+        text = ' '.join(' '.join(FR.render(doc, width_=0)).split())
+        self.assertIn('ZZS.TO (m). Those sales are NOT in `taxjson sum`',
+                      text)
+        self.assertIn('ZZR.TO (m). `taxjson sum` books those sales as short '
+                      'sales closed by a later purchase', text)
+        self.assertIn('Info: 1 position read short in 2025', text)
+        self.assertEqual(text.count('NOT in'), 1)
+        doc['no_purchase'] = []
+        self.assertNotIn('NOT in', ' '.join(FR.render(doc, width_=0)))
+
+
+def _qt_trade(td, action, sym, qty, price, net, sd):
+    gross = -net if action == 'Buy' else net
+    return (f"{td} 09:30:00 AM,{sd} 12:00:00 AM,{action},{sym},{sym} CORP,"
+            f"{qty},{price:.2f},{gross:.2f},0.00,{net:.2f},CAD,55500001,"  # pii-ok
+            f"Trades,Individual\n")
+
+
+class TestNotInSumEndToEnd(unittest.TestCase):
+    """A sale with no purchase and no later buy is NOT in the totals;
+    one a later purchase of the year closes is in them."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._td = tempfile.TemporaryDirectory()
+        root = Path(cls._td.name)
+        (root / 'inputs' / 'margin').mkdir(parents=True)
+        (root / 'taxjson.toml').write_text(_config(source='CAD').replace(
+            'source_currencies = ["CAD"]', 'source_currencies = []'))
+        (root / 'inputs' / 'margin' / 'questrade_2025.csv').write_text(
+            QH + _qt_trade('2025-02-03', 'Sell', 'ZZO.TO', -10, 30.0, 300.0,
+                           '2025-02-04')
+            + _qt_trade('2025-03-03', 'Sell', 'ZZC.TO', -10, 30.0, 300.0,
+                        '2025-03-04')
+            + _qt_trade('2025-04-01', 'Buy', 'ZZC.TO', 10, 20.0, -200.0,
+                        '2025-04-02'))
+        cls.root = root
+        cls.r = _run(root, 'run', '--no-input')
+        cls.sum = _sum(root)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._td.cleanup()
+
+    def test_run_summary(self):
+        out = ' '.join((self.r.stdout + self.r.stderr).split())
+        self.assertEqual(self.r.returncode, 0, out[-3000:])
+        self.assertIn('ZZO.TO (margin). Those sales are NOT in `taxjson '
+                      'sum`', out)
+        self.assertIn('ZZC.TO (margin). `taxjson sum` books those sales as '
+                      'short sales closed by a later purchase', out)
+        doc = json.loads((self.root / 'reports' /
+                          FR.SUMMARY_FILE).read_text())
+        self.assertEqual([x['symbol'] for x in doc['no_purchase']],
+                         ['ZZO.TO'])
+        self.assertEqual([(x['symbol'], x['booked'])
+                          for x in doc['no_purchase_in_sum']],
+                         [('ZZC.TO', FR.BOOKED_SHORT_COVER)])
+
+    def test_sum(self):
+        self.assertEqual([x['symbol'] for x in
+                          self.sum['no_purchase_uncovered']], ['ZZO.TO'])
+        self.assertEqual([(x['symbol'], x['booked']) for x in
+                          self.sum['no_purchase_in_totals']],
+                         [('ZZC.TO', FR.BOOKED_SHORT_COVER)])
+        # The short ZZC.TO closed is in the totals: 300 - 200.
+        self.assertAlmostEqual(self.sum['totals']['total'], 100.0,
+                               delta=0.011)
 
 
 if __name__ == '__main__':

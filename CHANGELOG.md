@@ -10,6 +10,24 @@
   account that keeps its transfers in the books the run never saw the
   journal, and joined the two lines only when their names were equal word
   for word. The id is now kept on the book rows as well.
+- **No false short after a Norbert's gambit without a ticker.map `JOURNAL`
+  line.** RBC books a gambit as a buy of one line and a sale of the other on
+  one day, with the journal's transfer legs dated the settlement day; its row
+  clock puts the sale first. The missing-history checks read such a day buys
+  first only for a `JOURNAL` line, so with a `TOBASE` line, or with the run's
+  own join, they reported a short with no purchase. They now read every
+  journal the books show the same way (a join of the run, a Questrade pair
+  id, RBC's J~ reference on the two legs), the legs in-leg first. A
+  `JOURNAL` line is still read.
+- **"NOT in `taxjson sum`" only when it is true.** The closing summary and
+  `taxjson sum` said a sale with no purchase in the files was missing from
+  the totals even when the gains engine had booked it (as a short sale a later
+  purchase of the year closed, or from a purchase it reads first). The claim
+  is now made only for sales the gains files lack; a short closed within the
+  year is a Warning saying it is in the totals at the later purchase's cost,
+  and a sale the engine matched is an Info line. `sum --json` lists those as
+  `no_purchase_in_totals`.
+
 
 ## v0.23.1 (2026-10-06)
 

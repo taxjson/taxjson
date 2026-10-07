@@ -6968,17 +6968,20 @@ def _short_positions_cands(base_json: Path, account: str,
     """A taxable account's positions that go short in its books — a sale
     with no purchase in the files, unless the broker marks it a short
     sale or codes it closing (those are said as ATTENTION lines) — read
-    like find-missing-history reads them (ticker.map JOURNAL pairs and
-    missing_history.json entries are not missing history). [] when the
+    like find-missing-history reads them (a journal's same-day legs —
+    lib/missing_history.walk_journal_symbols — and missing_history.json
+    entries are not missing history). [] when the
     books cannot be read (advisory: never breaks a run)."""
     try:
         from taxjson.lib.core import load_transactions
         from taxjson.lib.first_run import read_missing_history_pairs
         from taxjson.lib.missing_history import (detect_missing_history,
-                                                  journal_targets)
+                                                  walk_journal_symbols)
         txs = load_transactions(base_json)
-        journal = (journal_targets(str(ticker_map))
-                   if ticker_map and Path(ticker_map).is_file() else set())
+        journal = walk_journal_symbols(
+            Path(base_json).parent,
+            ticker_map if ticker_map and Path(ticker_map).is_file()
+            else None)
         covered = {(sym, a.lower()) for sym, a in
                    read_missing_history_pairs(missing_history)}
         return [c for c in detect_missing_history(
@@ -7109,16 +7112,18 @@ def _report_short_positions(root: Path, settings: Dict[str, Any],
 
 def _uncovered_sales(root: Path, cfg: Dict[str, Any],
                      account: Optional[str] = None) -> List[Dict[str, Any]]:
-    """[{symbol, account, sales, proceeds}] — the tax year's sales in
-    taxable accounts with no purchase in the files that
-    missing_history.json does not cover (lib/first_run). [] outside a
-    project or when the books cannot be read (advisory)."""
+    """[{symbol, account, sales, proceeds, booked}] — the tax year's
+    sales in taxable accounts with no purchase in the files that
+    missing_history.json does not cover (lib/first_run), with what the
+    gains files did with them (`booked`, first_run.engine_booking:
+    "open" — not in the totals —, "short_cover" or "matched"). []
+    outside a project or when the books cannot be read (advisory)."""
     if not cfg:
         return []
     try:
         from taxjson.lib import first_run as FR
         from taxjson.lib.country import settings_tax_date
-        from taxjson.lib.missing_history import journal_targets
+        from taxjson.lib.missing_history import walk_journal_symbols
         settings = cfg.get("settings") or {}
         accounts = cfg.get("accounts") or {}
         txs, _failed = FR.load_books(root / "work")
@@ -7128,18 +7133,23 @@ def _uncovered_sales(root: Path, cfg: Dict[str, Any],
                      for n, a in accounts.items() if isinstance(a, dict)
                      and a.get("type") in ("taxable", "sheltered")}
         tm = root / "ticker.map"
-        journal = journal_targets(str(tm)) if tm.is_file() else set()
+        journal = walk_journal_symbols(root / "work",
+                                       tm if tm.is_file() else None)
         from taxjson.lib.missing_history import missing_history_path
         mh = missing_history_path(root, note=False)
         rows = FR.uncovered_short_sales(
             txs, settings.get("year"), sheltered=sheltered,
             covered=FR.read_missing_history_pairs(mh),
             date_basis=settings_tax_date(settings), journal=journal)
+        booked = FR.engine_booking(root / "work", rows, settings.get("year"),
+                                   date_basis=settings_tax_date(settings))
     except Exception:                               # noqa: BLE001
         return []
     return [{"symbol": r.candidate.symbol, "account": r.candidate.account,
              "sales": r.in_year_dispositions,
-             "proceeds": r.in_year_proceeds}
+             "proceeds": r.in_year_proceeds,
+             "booked": booked.get((r.candidate.symbol, r.candidate.account),
+                                  FR.BOOKED_OPEN)}
             for r in rows if not account or r.candidate.account == account]
 
 
@@ -12424,8 +12434,30 @@ def cmd_summary(args: argparse.Namespace) -> None:
     # not cover: the engine books them as an open short, so their gain is
     # simply not in these totals — and nothing above said so for a
     # Questrade / RBC / Webull sale (new-user study).
-    _uncovered = _uncovered_sales(root, cfg,
-                                  getattr(args, "account", None) or None)
+    # Only the sales the gains files lack are out of the totals
+    # (first_run.engine_booking): one the engine closed as a short sale
+    # within the year, or sold from a purchase it reads first, is in
+    # them.
+    _no_purchase = _uncovered_sales(root, cfg,
+                                    getattr(args, "account", None) or None)
+    _uncovered = [{k: v for k, v in r.items() if k != "booked"}
+                  for r in _no_purchase if r.get("booked") == "open"]
+    _in_totals = [r for r in _no_purchase if r.get("booked") != "open"]
+    _covers = [r for r in _in_totals if r.get("booked") == "short_cover"]
+    if _covers:
+        _shown_c = ", ".join(f"{r['symbol']} ({r['account']})"
+                             for r in _covers[:4]) \
+            + (f" +{len(_covers) - 4} more" if len(_covers) > 4 else "")
+        _out.warn(f"{len(_covers)} position(s) sold in "
+                  f"{(cfg.get('settings') or {}).get('year')} with no "
+                  f"purchase in your files were booked as short sales "
+                  f"closed by a later purchase: their gain is in these "
+                  f"totals at that purchase's cost", prog=_prog,
+                  details=[f"Not in missing_history.json: {_shown_c}.",
+                           "If you held the shares before your files "
+                           "start, `taxjson find-missing-history` lists "
+                           "them and the fixes (docs/getting-started.md, "
+                           "step 5)."])
     if _uncovered:
         _shown = ", ".join(f"{r['symbol']} ({r['account']})"
                            for r in _uncovered[:4]) \
@@ -12462,8 +12494,13 @@ def cmd_summary(args: argparse.Namespace) -> None:
             "unknown_cost_included": tainted_included,
             "unknown_cost_routed": tainted_routed,
             # Sales with no purchase that missing_history.json does not
-            # cover: not in the totals at all (an open short).
+            # cover and the gains files lack: not in the totals at all
+            # (an open short).
             "no_purchase_uncovered": _uncovered,
+            # Such sales the gains engine booked (a short sale a later
+            # purchase of the year closed, or sold from a purchase it
+            # reads first): in the totals.
+            "no_purchase_in_totals": _in_totals,
             # Same row-sum path as the printed tables and subtotals, so
             # totals == Σ subtotals == Σ rows holds exactly for machine
             # consumers (the unrounded accumulation drifted by a cent).
@@ -20006,7 +20043,7 @@ def _year_short_rows(root: Path, files: List[Path], year: Any):
     from taxjson.lib.core import load_transactions
     from taxjson.lib.missing_history import (account_types_near,
                                               classify_year_shorts,
-                                              journal_targets)
+                                              walk_journal_symbols)
     txs = []
     for f in files:
         try:
@@ -20014,12 +20051,9 @@ def _year_short_rows(root: Path, files: List[Path], year: Any):
         except (OSError, ValueError):
             continue
     settings = _soft_settings(root)
-    journal: set = set()
-    if (root / "ticker.map").is_file():
-        try:
-            journal = journal_targets(root / "ticker.map")
-        except Exception:                           # noqa: BLE001
-            journal = set()
+    tm = root / "ticker.map"
+    journal = walk_journal_symbols(root / "work",
+                                   tm if tm.is_file() else None)
     types = (account_types_near(files[0]) if files else {})
     return classify_year_shorts(
         txs, year, country=_country(settings), registered=types,
@@ -20036,8 +20070,8 @@ def _missing_history_suspects(root: Path, cache: Path
     try:
         from taxjson.lib.core import load_transactions
         from taxjson.lib.missing_history import (account_types_near,
-                                                  journal_targets,
-                                                  missing_history_suspects)
+                                                  missing_history_suspects,
+                                                  walk_journal_symbols)
         files = _project_base_files(cache)
         txs = []
         for f in files:
@@ -20045,12 +20079,8 @@ def _missing_history_suspects(root: Path, cache: Path
                 txs.extend(load_transactions(f))
             except (OSError, ValueError):
                 continue
-        journal: set = set()
-        if (root / "ticker.map").is_file():
-            try:
-                journal = journal_targets(root / "ticker.map")
-            except Exception:                       # noqa: BLE001
-                journal = set()
+        tm = root / "ticker.map"
+        journal = walk_journal_symbols(cache, tm if tm.is_file() else None)
         return missing_history_suspects(
             txs, registered=(account_types_near(files[0]) if files
                              else {}),
@@ -20273,26 +20303,21 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
             for e in entries:
                 merged[(e.get("symbol"), e.get("account"))] = e
 
-        # A short that a same-day JOURNAL leg covers (Norbert's gambit,
+        # A short that a same-day journal leg covers (Norbert's gambit,
         # RBC's ordinal times put the sale first) is not missing
         # history: an entry for it pulled the sale off Schedule 3 and
-        # invented the shares (audit A2-0309). taxjson-gains has no
-        # ticker.map, so the JOURNAL symbols are re-checked here with
-        # the walk that knows them.
+        # invented the shares (audit A2-0309). taxjson-gains knows no
+        # journal, so the journal symbols (a JOURNAL line, a join of the
+        # run, a broker journal of the exports — lib/missing_history.
+        # walk_journal_symbols) are re-checked here with the walk that
+        # knows them.
         _tm_path = root / "ticker.map"
-        # The map the books were merged with: the run's joins (a
-        # currency journal's JOURNAL line, lib/cross_listings) included.
-        from taxjson.lib.cross_listings import EFFECTIVE_MAP as _EFF
-        if (cache / _EFF).is_file():
-            _tm_path = cache / _EFF
-        if _tm_path.exists() and merged:
+        if merged:
             from taxjson.lib.missing_history import (detect_missing_history,
-                                                      journal_targets)
+                                                      walk_journal_symbols)
             from taxjson.lib.core import load_transactions
-            try:
-                _journal = journal_targets(_tm_path)
-            except (OSError, ValueError):
-                _journal = set()
+            _journal = walk_journal_symbols(
+                cache, _tm_path if _tm_path.is_file() else None)
             _js = {k for k in merged
                    if str(k[0] or "").upper() in _journal}
             if _js:
@@ -20308,8 +20333,9 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
                 for k in sorted(_js - _still):
                     del merged[k]
                     print(f"  left out {k[0]} / {k[1]}: its short is the "
-                          f"same-day leg of a ticker.map JOURNAL pair "
-                          f"(Norbert's gambit), not missing history.",
+                          f"same-day leg of a journal between the "
+                          f"security's lines (Norbert's gambit), not "
+                          f"missing history.",
                           file=sys.stderr)
 
         rows = list(merged.values())
