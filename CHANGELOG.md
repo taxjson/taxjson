@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.23.0 (2026-10-06)
+
 ### Fixed
 
 - **No account number in a security name.** An RBC or Questrade transfer row
