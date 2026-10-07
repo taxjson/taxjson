@@ -820,27 +820,13 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
                                names=(shown.get(min(nx), "") if nx else "",
                                       shown.get(min(ny), "") if ny
                                       else "")))
-    ins = [g for g in legs if g.quantity > 0]
-    outs = [g for g in legs if g.quantity < 0]
-    # 1. The same symbol's legs cancel (a custody move, a broker switch):
-    #    the same quantity, the closest date first.
-    cands = sorted(((abs((_d(o.date) - _d(i.date)).days), o.date, n, m)
-                    for n, o in enumerate(outs) for m, i in enumerate(ins)
-                    if o.symbol == i.symbol and _same_qty(o, i)
-                    and _close(o, i, days)), key=lambda c: c[:3])
-    for _gap, _dt, n, m in cands:
-        if not outs[n].used and not ins[m].used:
-            outs[n].used = ins[m].used = True
-    # 2. Another symbol's leg: the journal fingerprint. Two legs whose
-    #    broker reference differs are two journals, never one pair.
-    def _fits(o: Leg, i: Leg) -> bool:
-        return (not o.used and not i.used and i.symbol != o.symbol
-                and _same_qty(o, i) and _close(o, i, days)
-                and not (o.ref and i.ref and (o.account, o.broker, o.ref)
-                         != (i.account, i.broker, i.ref)))
+    # 0b. A journal inside one account: the legs a broker reference
+    #     pairs (RBC's J~ reference, Questrade's journal_pair — in a US
+    #     project too, where step 0 does not run) settle within their
+    #     account and pair BEFORE any other leg is looked at (second
+    #     pre-release review, finding 2): another account's transfer of
+    #     the same listing on that day never cancels one of them.
     picked: List[Tuple[Leg, Leg]] = []
-    # 2a. A broker reference both legs share is their pair id (RBC's
-    #     J~ reference, Questrade's journal_pair).
     by_ref: Dict[Tuple[str, str, str], List[Leg]] = {}
     for g in legs:
         if g.ref and not g.used:
@@ -848,9 +834,42 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
     for _k, gl in sorted(by_ref.items()):
         o = [g for g in gl if g.quantity < 0]
         i = [g for g in gl if g.quantity > 0]
-        if len(o) == 1 and len(i) == 1 and _fits(o[0], i[0]):
+        if (len(o) == 1 and len(i) == 1 and _same_qty(o[0], i[0])
+                and _close(o[0], i[0], days)):
             o[0].used = i[0].used = True
-            picked.append((o[0], i[0]))
+            if o[0].symbol != i[0].symbol:
+                picked.append((o[0], i[0]))
+
+    def _own(g: Leg) -> bool:
+        # A journal's leg (a broker reference, a .tt JOURNAL line's):
+        # it moves units inside its account only.
+        return bool(g.ref or g.decl)
+    ins = [g for g in legs if g.quantity > 0]
+    outs = [g for g in legs if g.quantity < 0]
+    # 1. The same symbol's legs cancel (a custody move, a broker switch):
+    #    the same quantity, the closest date first — a journal's leg left
+    #    over from its pair only within its own account.
+    cands = sorted(((abs((_d(o.date) - _d(i.date)).days), o.date, n, m)
+                    for n, o in enumerate(outs) for m, i in enumerate(ins)
+                    if o.symbol == i.symbol and _same_qty(o, i)
+                    and _close(o, i, days)
+                    and (o.account == i.account
+                         or not (_own(o) or _own(i)))),
+                   key=lambda c: c[:3])
+    for _gap, _dt, n, m in cands:
+        if not outs[n].used and not ins[m].used:
+            outs[n].used = ins[m].used = True
+    # 2. Another symbol's leg: the journal fingerprint. Two legs whose
+    #    broker reference differs are two journals, never one pair; a
+    #    journal's leg pairs within its own account only.
+    def _fits(o: Leg, i: Leg) -> bool:
+        return (not o.used and not i.used and i.symbol != o.symbol
+                and _same_qty(o, i) and _close(o, i, days)
+                and (o.account == i.account
+                     or not (_own(o) or _own(i)))
+                and not (o.ref and i.ref and (o.account, o.broker, o.ref)
+                         != (i.account, i.broker, i.ref)))
+    # 2a. The broker-referenced pairs (step 0b) come first.
     # 2b. An explicit journal pair (_explicit_journal: one account, one
     #     day, both legs in the broker's journal wording) unique on its
     #     day pairs before any leg of another day (two equal gambits two

@@ -258,6 +258,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/transfer_in.py` — `own_journal_legs`, `movable_rows`, `arrivals`, `sidecar_rows`; `src/taxjson/bin/taxjson_run.py` — `transfer_arrivals`, `in_kind_state`, `_sidecar_transfer_rows`
 
+### "Info: 1 position(s) go short in b's data (QZD.U.TO)" after a Norbert's gambit in one account while another account received the same listing by transfer that day; the gambit's join only suggested
+- **Check:** `tjs transfers` shows account b's journal legs (RBC `TFR … J~1`, or a Questrade BRW `JOURNAL POSITION` pair) and, the same day, a transfer-in of the same listing (QZD.TO, the same quantity) in account a; `tjs journals` (or `tjs ticker-map --suggest`) lists b's journal as a suggestion, not a join.
+- **Cause:** the cross-listing pairing first cancelled every same-symbol out-leg and in-leg across all accounts, before it paired legs by the broker's reference: a's arrival cancelled b's out-leg, so b's journal had one leg left and its two listings were not joined (b's sale of the other listing had no purchase). A Questrade BRW pair in a US project went the same way.
+- **Fix:** upgrade and `tjs run`: legs that carry the broker's reference (RBC's `J~`, Questrade's journal pair, in both countries) pair inside their account first, and a journal's leg never cancels another account's transfer (tax-logic CA-XLIST-01 / US-XLIST-01). On an older install add `TOBASE QZD.U.TO QZD.TO` to ticker.map.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cross_listings.py` — `analyze`
+
 ### "Warning: 1 transfer in a taxable loss's 30-day window counted as an account move, not a purchase"
 - **Check:** the detail lines name each transfer, its date and the loss sale; `tjs transfers` lists the rows.
 - **Cause:** a transfer between your accounts moves shares; it is not an acquisition, so it does not deny the loss (CA-SL-16 / US-WASH-23). If one leg was really a contribution to a registered plan or a purchase, the loss may be superficial (or a wash sale).

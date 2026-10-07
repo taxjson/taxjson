@@ -144,5 +144,105 @@ class TestJournalDaysOnly(unittest.TestCase):
         self._check("usa")
 
 
+# ------------------------------------------------------------------ 2
+
+def _total(test, root):
+    return _sum(test, root)["totals"]["total"]
+
+
+_QD = "QZD US DLR CURRENCY ETF UNIT"
+
+
+def _qt_arrival(acct_no, day, qty, bv, sold_day, price):
+    """Questrade: `qty` QZD.TO arrive from outside the books on `day`
+    (stated book value `bv`), all sold on `sold_day` at `price`."""
+    return _QT_HDR + (
+        f"{day},{day},TF6,QZD.TO,{_QD} TRANSFER BOOK VALUE {bv:.2f},{qty},"
+        f"0.00,0.00,0.00,0.00,CAD,Transfers,{acct_no},Margin\n"
+        f"{sold_day},{sold_day},Sell,QZD.TO,{_QD},-{qty},{price:.2f},"
+        f"{qty * price:.2f},0.00,{qty * price:.2f},CAD,Trades,{acct_no},"
+        f"Margin\n")
+
+
+class TestJournalLegsPairInTheirAccountFirst(unittest.TestCase):
+    """Account b's broker journal (RBC's J~ legs; Questrade's BRW pair)
+    and account a's transfer-in of the same listing the same day: a's
+    arrival keeps its stated book value and b's journal joins its two
+    lines — the two accounts' totals add up."""
+
+    def _check(self, country, b_files, a_csv, tmap):
+        acc_a = '[accounts.a]\ntype = "taxable"\n'
+        acc_b = '[accounts.b]\ntype = "taxable"\n'
+        sets = {"a": (acc_a, {"inputs/a/qt.csv": a_csv}),
+                "b": (acc_b, b_files),
+                "ab": (acc_a + "\n" + acc_b,
+                       dict(b_files, **{"inputs/a/qt.csv": a_csv}))}
+        with tempfile.TemporaryDirectory() as td:
+            got, out = {}, {}
+            for k, (acc, files) in sets.items():
+                files = dict(files, **{"ticker.map": tmap})
+                root = projects_both(Path(td) / k, accounts=acc,
+                                     files=files, usa=_USA_CAD)[country]
+                out[k] = _out(_run(self, root))
+                got[k] = _total(self, root)
+            self.assertNotIn("no purchase in your files", out["ab"])
+            self.assertAlmostEqual(got["ab"], got["a"] + got["b"],
+                                   delta=0.011)
+            self.assertNotEqual(round(got["b"], 2), 0.0)
+
+    def _rbc(self, country):
+        from test_fix_dated_events import _rbc_gambit
+        rbc, tmap = _rbc_gambit(True)
+        self._check(country, {"inputs/b/rbc.csv": rbc},
+                    _qt_arrival("55500002", "2025-05-06", 1000, 9000.0,
+                                "2025-06-02", 12.10), tmap)
+
+    def _brw(self, country):
+        from test_fix_journal_books import QT_CSV
+        self._check(country, {"inputs/b/questrade.csv": QT_CSV},
+                    _qt_arrival("55500002", "2025-09-25", 300, 2700.0,
+                                "2025-10-02", 14.50), "")
+
+    @rule("CA-XLIST-04")
+    def test_canada_rbc_journal_is_not_cancelled_by_an_arrival(self):
+        self._rbc("canada")
+
+    @rule("US-XLIST-03")
+    def test_usa_rbc_journal_is_not_cancelled_by_an_arrival(self):
+        self._rbc("usa")
+
+    @rule("CA-XLIST-04")
+    def test_canada_brw_pair_is_not_cancelled_by_an_arrival(self):
+        self._brw("canada")
+
+    @rule("US-XLIST-03")
+    def test_usa_brw_pair_is_not_cancelled_by_an_arrival(self):
+        self._brw("usa")
+
+    def test_analyze_pairs_referenced_legs_in_their_account(self):
+        from taxjson.lib import cross_listings as XL
+        nm = ("QZD", "US", "DLR", "CURRENCY", "ETF", "UNIT")
+
+        def leg(acct, broker, sym, q, ref=""):
+            return XL.Leg(acct, broker, sym, "2025-05-06", q, name=nm,
+                          raw_name=" ".join(nm), ref=ref,
+                          journal=broker if ref else "")
+        legs = [leg("b", "rbc_direct", "QZD.TO", -1000, "ref|x|1"),
+                leg("b", "rbc_direct", "QZD.U.TO", 1000, "ref|x|1"),
+                leg("a", "questrade", "QZD.TO", 1000)]
+        names = {"QZD.TO": {nm}, "QZD.U.TO": {nm}}
+        r = XL.analyze(legs, names, {nm: " ".join(nm)},
+                       base_currency="CAD")
+        self.assertEqual([(p.out.account, p.out.symbol, p.into.symbol)
+                          for p in r["joined"]],
+                         [("b", "QZD.TO", "QZD.U.TO")])
+        self.assertFalse(legs[2].used)
+        # An orphan journal leg never cancels another account's leg.
+        legs = [leg("b", "rbc_direct", "QZD.TO", -1000, "ref|x|1"),
+                leg("a", "questrade", "QZD.TO", 1000)]
+        XL.analyze(legs, names, {nm: " ".join(nm)}, base_currency="CAD")
+        self.assertFalse(legs[0].used or legs[1].used)
+
+
 if __name__ == "__main__":
     unittest.main()
