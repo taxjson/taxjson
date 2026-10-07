@@ -120,6 +120,7 @@ PARTITION_RULES = frozenset({
     "CA-ACB-12",       # manual missing-history loss check on settle dates
     "CA-OPEN-01",      # opening balance: pooled, not a purchase (US: lot dates)
     "CA-XLIST-03",     # a broker's CAD/USD currency journal joined (US: transfer legs)
+    "CA-XLIST-05",     # cross-listing loss radar: still held at day 30 (US: none)
     "CA-OPEN-02",      # opening cost at the snapshot day's BoC rate (US: USD only)
     "CA-CRYPTO-02",    # stablecoins as US-dollar cash
     "CA-DATE-01",      # settle-date tax year by default
@@ -1021,6 +1022,23 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "ticker.map `JOURNAL FROM TO` "
                  "line is read as `TOBASE FROM TO`, said once per run; "
                  "`taxjson format-map --write` rewrites it."),
+            Rule("CA-XLIST-05",
+                 "Two listings are never joined on their names alone, but "
+                 "a loss on one listing in a taxable account, in the tax "
+                 "year, with another listing of the same root (QZG.TO, "
+                 "QZG.U.TO, QZG.US) bought within 30 days before or after "
+                 "it (settle dates) in any of your accounts, taxable or "
+                 "registered, and still held at the end of day 30, is a "
+                 "possible superficial loss when the exports name the "
+                 "two listings EQUALLY word for word once normalised "
+                 "(CA-XLIST-01): a Warning naming the ticker.map line that "
+                 "makes them one security (`TOBASE FROM TO`, the loss "
+                 "then denied) and the one that keeps them two "
+                 "(`DISTINCT A B`); `taxjson ticker-map --suggest` offers "
+                 "the TOBASE line, `taxjson scan` lists it (XLIST-LOSS) "
+                 "and `run --strict` stops until the map has one of the "
+                 "two. Nothing is denied until then; a listing with no "
+                 "name in the exports (a .tt-only book) is not flagged."),
             Rule("CA-ACB-11",
                  "Shares sold with no purchase in your files (bought "
                  "before the data starts) go in missing_history.json "
@@ -2381,6 +2399,23 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "ticker.map `JOURNAL FROM TO` line is read as `TOBASE "
                  "FROM TO`, said once per run; `taxjson format-map "
                  "--write` rewrites it."),
+            Rule("US-XLIST-04",
+                 "Two listings are never joined on their names alone, but "
+                 "a loss on one listing in a taxable account, in the tax "
+                 "year, with another listing of the same root (QZG.US, "
+                 "QZG.TO, QZG.U.TO) bought within 30 days before or after "
+                 "it (trade dates; no still-held test) in any of your "
+                 "accounts, IRAs included, is a possible wash sale "
+                 "(substantially identical securities, §1091) when the "
+                 "exports name the two listings EQUALLY word for word "
+                 "once normalised (US-XLIST-01): a Warning naming the "
+                 "ticker.map line that makes them one security (`TOBASE "
+                 "FROM TO`, the loss then disallowed) and the one that "
+                 "keeps them two (`DISTINCT A B`); `taxjson ticker-map "
+                 "--suggest` offers the TOBASE line, `taxjson scan` lists "
+                 "it (XLIST-LOSS) and `run --strict` stops until the map "
+                 "has one of the two. Nothing is disallowed until then; "
+                 "a listing with no name in the exports is not flagged."),
             Rule("US-BASIS-07",
                  "Accounts typed \"sheltered\" (an IRA, Roth IRA, "
                  "401(k)...) are tracked but kept out of the filing "
@@ -2555,7 +2590,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "(US-WASH-22) —",
                  cont=True),
             Rule("US-WASH-07",
-                 "and look-alike securities are not detected.", cont=True),
+                 "and look-alike securities are not detected (two "
+                 "listings of one security that the books keep apart are "
+                 "flagged: US-XLIST-04).", cont=True),
             Rule("US-WASH-08",
                  "Matching across accounts needs a full `taxjson run` "
                  "(not `--account`)."),

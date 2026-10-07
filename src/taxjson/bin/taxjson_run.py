@@ -5296,6 +5296,42 @@ def stage_in_kind_context(root: Path, cache: Path, settings: Dict[str, Any],
     return p
 
 
+def _say_xlist_losses(root: Path, cfg: Dict[str, Any], cache: Path, *,
+                      strict: bool = False) -> None:
+    """A loss on one listing and a purchase of another listing of the
+    same root under an equal name within 30 days (lib/xlist_loss_radar,
+    tax-logic CA-XLIST-05 / US-XLIST-04): one Warning per pair naming the
+    TOBASE and DISTINCT lines that answer it, the findings written to
+    work/xlist_loss_radar.state (`ticker-map --suggest`, `scan`);
+    `strict`: a pair the map does not answer stops the run. Advisory: a
+    failure to read the books is never fatal."""
+    from taxjson.lib import xlist_loss_radar as XR
+    from taxjson.lib.country import settings_country
+    country = settings_country(cfg.get("settings") or {})
+    try:
+        found = XR.analyze(root, cfg)
+    except Exception as e:                          # noqa: BLE001
+        _say("warning", f"the cross-listing loss check failed: {e}",
+             prog=_PROG)
+        return
+    state = cache / XR.STATE
+    text = XR.state_text(found, country)
+    if _read_work_stamp(state) != text:
+        _write_work_stamp(state, text)
+    if not found:
+        return
+    for f in found:
+        head, details = XR.message(f.record(), country)
+        _say_once(("xlist-loss", f.loss_symbol, f.other_symbol), "warning",
+                  head, *details, indent="  ", file=sys.stdout)
+    if strict:
+        _die(f"--strict: {len(found)} possible "
+             f"{XR._kind(country, len(found))} across listings (warning "
+             f"above) — aborting",
+             "Add the TOBASE line (one security) or the DISTINCT line (two) "
+             "to ticker.map.")
+
+
 def _say_in_kind(root: Path, cache: Path, settings: Dict[str, Any], *,
                  strict: bool = False) -> None:
     """ONE warning per run: each in-kind move booked (accounts, symbol,
@@ -6751,6 +6787,11 @@ def cmd_run(args: argparse.Namespace) -> None:
     _say_transfer_windows(settings)
     _say_in_kind(root, cache, settings,
                  strict=getattr(args, "strict", False))
+    if not args.account and not pending_accounts:
+        # Every account's gains are final: a loss on one listing, the
+        # other listing bought in the window (QA F3).
+        _say_xlist_losses(root, cfg, cache,
+                          strict=getattr(args, "strict", False))
     if not args.account and not pending_accounts:
         # A sheltered account never gets a wash pass. One re-typed from
         # taxable kept its old <name>_gains_wash.json / _wash.sum, which
@@ -11501,6 +11542,12 @@ def cmd_scan(args: argparse.Namespace) -> None:
                    verifies every defined map pair names one issuer
                    (MAP-BAD? on mismatch). Candidates to verify, not
                    verdicts.
+      XLIST-LOSS   a loss on one listing with another listing of the
+                   same root, under an equal name, bought within 30
+                   days (any account): a superficial loss / wash sale
+                   the books cannot see until ticker.map says TOBASE
+                   (one security) or DISTINCT (two) — both countries
+                   (lib/xlist_loss_radar).
       CDR-PAIR     a .TO line whose exchange name says CDR (Canadian
                    Depositary Receipt — SAMPLR.TO over SAMPLR.US): the SAME
                    issuer but NOT a listing equivalent (fractional,
@@ -11710,6 +11757,17 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     "ticker.map has no GLOBAL/TOBASE entry — the "
                     "engine treats them as two securities (splits the "
                     "ACB pool; the radar can miss the pair)."))
+
+    # XLIST-LOSS: a loss on one listing, another listing of the same
+    # root under an equal name bought within 30 days, the pair neither
+    # joined nor ruled DISTINCT (lib/xlist_loss_radar — the last run's
+    # findings the map does not answer yet).
+    from taxjson.lib import xlist_loss_radar as _XR
+    for _f in _XR.open_findings(root):
+        findings.append(("XLIST-LOSS", ", ".join(sorted(
+            {str(x.get("account")) for x in _f.get("losses") or []})),
+            f"{_f['loss_symbol']}/{_f['other_symbol']}",
+            _XR.scan_text(_f, country)))
 
     # MAP-UNUSED (note, not a finding): rules whose FROM symbol never
     # occurs in any parsed source — judged the way the ENGINE applies

@@ -1431,6 +1431,20 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                       f"the cross-account pass) — run `taxjson run`")
     # US projects in §1091's words, never CRA's (S049-14).
     _us = is_us(ctx.settings.get("country"))
+    # A loss on one listing with the other listing bought in its window,
+    # the pair neither joined nor ruled DISTINCT (lib/xlist_loss_radar):
+    # the books deny nothing until ticker.map answers it.
+    from taxjson.lib.xlist_loss_radar import open_findings
+    xl = [f"{f['loss_symbol']}/{f['other_symbol']}"
+          for f in open_findings(ctx.root)]
+    if xl:
+        return Result("wash-reviewed", "attention",
+                      f"{len(xl)} possible "
+                      f"{'wash sale' if _us else 'superficial loss'}(s) "
+                      f"across listings: {', '.join(xl[:4])}"
+                      f"{' ...' if len(xl) > 4 else ''} — add the TOBASE "
+                      f"(one security) or DISTINCT (two) line to ticker.map "
+                      f"(`taxjson ticker-map --suggest`)")
     flag_note = ""
     if flags:
         shown = sorted(flags)

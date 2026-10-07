@@ -115,6 +115,16 @@
 
 ### Fixed
 
+- **A loss on one listing with the other listing bought within 30 days is
+  flagged.** Two listings of one security (a TSX line and its NYSE line)
+  that the books keep apart kept such a loss allowed with nothing said.
+  Now a loss on one listing with another listing of the same root, under
+  an equal name, bought within 30 days in any of your accounts (Canada:
+  still held at day 30) is a Warning naming the `TOBASE` line that makes
+  them one security and the `DISTINCT` line that keeps them two;
+  `taxjson ticker-map --suggest` offers the `TOBASE` line, `taxjson scan`
+  lists it (XLIST-LOSS) and `run --strict` stops until one is in
+  ticker.map. Both countries (the US: a wash sale, no still-held test).
 - **A `.tt` total that disagrees with its quantity, price and fee is said
   on the console.** A line whose total was more than 1% off quantity x
   price + fee was booked as written with the warning only in the `.sum`
