@@ -1156,11 +1156,10 @@ def _conid_seen(statements, conid_syms: Dict[str, set]
     CONTRACT ID, from the statements' rows (`statements`: (name,
     _ib_prescan) pairs; `conid_syms`: the account's contract id ->
     symbols): {(conid, symbol): {'first', 'last': its first and last
-    position row (a
-    Trades, Transfers or Open Positions row), 'any': its first row of
-    ANY section (a corporate action, a dividend, withholding, a payment
-    in lieu, a fee ...), 'any_what': that row's section ('pos' for a
-    position row), 'amb': {statement: [contract ids]} where the symbol
+    position row (a Trades, Transfers or Open Positions row), 'any' /
+    'last_any': its first / last row of ANY section (a corporate action,
+    a dividend, withholding, a payment in lieu, a fee ...), 'any_what' /
+    'last_what': that row's section ('pos' for a position row), 'amb': {statement: [contract ids]} where the symbol
     is listed under several contract ids, so its rows there cannot be
     told apart}}. A row belongs to the contract ids its own statement's
     instrument list gives the symbol (another company that reused the
@@ -1184,6 +1183,7 @@ def _conid_seen(statements, conid_syms: Dict[str, set]
             for c in cands:
                 st = out.setdefault((c, root), {
                     'first': '', 'last': '', 'any': '', 'any_what': '',
+                    'last_any': '', 'last_what': '',
                     'amb': {}})
                 if len(cands) > 1:
                     st['amb'].setdefault(name, sorted(cands))
@@ -1195,6 +1195,9 @@ def _conid_seen(statements, conid_syms: Dict[str, set]
                 if (not st['any'] or day < st['any']
                         or (day == st['any'] and kind == 'pos')):
                     st['any'], st['any_what'] = day, kind
+                if (day > st['last_any']
+                        or (day == st['last_any'] and kind == 'pos')):
+                    st['last_any'], st['last_what'] = day, kind
     return out
 
 
@@ -1255,11 +1258,13 @@ def _declared_clash(full: List[str], declared, mapping) -> Optional[str]:
 def _conid_verdict(conid: str, o: str, n: str,
                    seen: Dict[tuple, Dict[str, Any]]):
     """(date, why, hint) for the change of one contract id from IB
-    symbol `o` to `n`: the date to book it on
-    — NEW's first row, when every row of OLD's is on an earlier day and
-    no row of NEW's, in any section, comes before NEW's first trade —
-    else why it cannot be dated from the rows and the `.tt` line hint
-    (None: a date the rows cannot give)."""
+    symbol `o` to `n`: the date to book it on — NEW's earliest row of
+    ANY section (a trade, a transfer, a corporate action, a dividend, a
+    return of capital, withholding ...), when every row of OLD's, in any
+    section, is on an earlier day: the change happened in between, and
+    every row of either symbol falls on its side of that date — else why
+    the rows cannot date it and the `.tt` line hint (None: a date the
+    rows cannot give)."""
     so = seen.get((conid, o)) or {}
     sn = seen.get((conid, n)) or {}
     amb = {**(so.get('amb') or {}), **(sn.get('amb') or {})}
@@ -1270,20 +1275,17 @@ def _conid_verdict(conid: str, o: str, n: str,
                       f"contract ids ({', '.join(ids)}): the rows there "
                       f"cannot be told apart"), None
     # Days: the order of two rows on one day is no date of a change.
-    lo, first_n = (so.get('last') or '')[:10], (sn.get('first') or '')[:10]
-    any_n, what = (sn.get('any') or '')[:10], sn.get('any_what') or ''
+    lo = (so.get('last_any') or '')[:10]
+    any_n = (sn.get('any') or '')[:10]
     if not lo or not any_n:
         return None, (f"{o if not lo else n} has no dated row"), None
     if any_n <= lo:
-        return None, (f"{n}'s rows begin on {any_n}, on or before "
-                      f"{o}'s last trade or transfer ({lo})"), any_n
-    if not first_n or any_n < first_n:
-        return None, (f"{n}'s {what} row on {any_n} comes before its "
-                      f"first trade or transfer"
-                      f"{f' ({first_n})' if first_n else ''}: the change "
-                      f"happened between {o}'s last row ({lo}) and "
-                      f"{any_n}, and IB's rows do not say when"), any_n
-    return first_n, '', first_n
+        def _w(k):
+            return 'trade or transfer' if k == 'pos' else f"{k} row"
+        return None, (f"{n}'s rows begin on {any_n} (a "
+                      f"{_w(sn.get('any_what'))}), on or before {o}'s last "
+                      f"row ({lo}, a {_w(so.get('last_what'))})"), any_n
+    return any_n, '', any_n
 
 
 def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
@@ -1295,7 +1297,7 @@ def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
     with no corporate-action row): the parser would book each symbol as
     its own security, so the position splits into two pools (audit
     S059-13 / S060-17). The change is a DATED event (renames are events,
-    lib/renames): OLD the symbol whose position rows end first, NEW the
+    lib/renames): OLD the symbol whose rows end first, NEW the
     one that continues; each with the listing suffix it is booked under
     (an alphabetical pair with a hard-coded .US joined nothing, or
     renamed new to old — audit A2-0611). The dates are the contract
@@ -1303,19 +1305,21 @@ def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
     has its own id).
 
     With `book` (the account-level pass, prepare_files) the change is
-    strong evidence — one contract id — and is BOOKED on NEW's first row
-    (00:00) when the rows date it: every OLD position row on an earlier
-    day, and no NEW row of any section (a corporate action, a dividend,
-    a return of capital ...) before NEW's first trade or transfer. The
+    strong evidence — one contract id — and is BOOKED at 00:00 on NEW's
+    earliest row of ANY section (a trade, a transfer, a corporate
+    action, a dividend, a return of capital ...) when every OLD row of
+    any section is on an earlier day (audit review H4: NEW's split
+    before its first trade was lost when the event was dated at that
+    trade). The
     events are returned (old, new, date, conid; reconcile_files adds
     their SPLIT rows, event_source "ib-conid"), each said as a Warning
     naming the way out (`DISTINCT OLD NEW` in ticker.map: two
     securities; a .tt `RENAME <date> OLD NEW late=separate`: OLD's later
     rows are another company's). It is NOT booked — an ATTENTION line
     gives the .tt line `RENAME <date> OLD NEW` and why — when the rows
-    cannot date it (NEW's rows start on or before OLD's last one, a NEW
-    row precedes NEW's first trade, a symbol listed under several
-    contract ids in one statement), and without `book`. Nothing is
+    cannot date it (NEW's rows start on or before OLD's last one, a
+    symbol listed under several contract ids in one statement), and
+    without `book`. Nothing is
     booked, with a note, when the account's own rows already join the
     symbols (`links`: a corporate action naming both, the corporate-
     action path's; `tt_links`: a .tt SPLIT row from one to the other —
@@ -1348,8 +1352,11 @@ def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
 
         def _d(x, k, _c=conid):
             return (seen.get((_c, x)) or {}).get(k) or ''
-        order = sorted(real, key=lambda x: (_d(x, 'last') or '9999',
-                                            _d(x, 'first') or '9999', x))
+        # OLD: the symbol whose trades and transfers end first (its
+        # other rows, a late dividend, may run past the change).
+        order = sorted(real, key=lambda x: (
+            _d(x, 'last') or _d(x, 'last_any') or '9999',
+            _d(x, 'first') or _d(x, 'any') or '9999', x))
         full = [listing.get(x) or f"{x}.US" for x in order]
         if len(full) >= 2:
             if ticker_map_loaded():

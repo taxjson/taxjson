@@ -1,15 +1,17 @@
 """IB one-contract-id ticker changes (pre-release review of v0.24.0):
 the change is booked only when the contract id's own rows date it.
 
-- H4: NEW's earliest row of ANY section (a corporate action, a return of
-  capital) before NEW's first trade: not booked, ATTENTION with the .tt
-  line `RENAME <date> OLD NEW`; the line then books it (both countries).
+- H4: the change is booked at NEW's earliest row of ANY section (a
+  corporate action, a return of capital, a dividend), not its first
+  trade: the split / return of capital before that trade is kept (both
+  countries).
 - H6: a corporate action that names OLD and NEW together (a split that
   changes the symbol) is IB's own rename: no contract-id event on top.
 - M1: dates per (contract id, symbol): another company that used the
   ticker (its own contract id) never dates the change; a symbol listed
   under two contract ids in one statement, or NEW's rows starting on or
-  before OLD's last one, is not booked.
+  before OLD's last row of any section, is not booked (ATTENTION with
+  the .tt line).
 - LOW: a .tt RENAME of OLD to another symbol stops the booking; IB's
   `.OLD` placeholder is never a rename target.
 
@@ -78,32 +80,26 @@ def _h4(new_first, old_sym="QZOA", fii=_ONE_ID, sale=600):
 
 _H4_SPLIT = CA_H + _ca(_SPLIT2, 100, when='2025-06-02, 20:25:00')
 _H4_ROC = DIV_H + _ROC
+_H4_DIV = DIV_H + ('Dividends,Data,USD,2025-06-02,QZNB(US9990007791) Cash '
+                   'Dividend USD 0.25 per Share (Ordinary Dividend),25\n')
 
 
 class TestNewEventBeforeNewFirstTrade(unittest.TestCase):
     """H4: the change was booked on NEW's first TRADE, after NEW's split
-    (or return of capital): the split was lost (US -400 for +100)."""
+    (or return of capital): the split was lost (US -400 for +100). It is
+    booked at 00:00 on NEW's earliest row of ANY section now."""
 
     def _check(self, country, new_first, sale):
         files = {"inputs/margin/ib.csv": _h4(new_first, sale=sale)}
         td, root, r = _run(files, country)
         with td:
             out = _out(r)
-            self.assertNotEqual(r.returncode, 0, out[-2000:])
-            self.assertIn("`RENAME 2025-06-02 QZOA.US QZNB.US`", out)
-            self.assertIn("comes before its first trade", out)
-            self.assertFalse(_booked(out), out[-2000:])
-            self.assertEqual(_events(root), [])
-            self.assertIn("RENAME 2025-06-02 QZOA.US QZNB.US",
-                          cli(root, "renames").stdout)
-            # The line the ATTENTION gives books it: the same gain as a
-            # book where the shares always were QZNB.
-            (root / "inputs" / "margin" / "renames.tt").write_text(
-                "RENAME 2025-06-02 QZOA.US QZNB.US\n")
-            r = cli(root, "run", "--no-input", "--strict")
-            self.assertEqual(r.returncode, 0, _out(r)[-3000:])
-            self.assertEqual([e[3] for e in _events(root)], ["tt"])
+            self.assertEqual(r.returncode, 0, out[-3000:])
+            self.assertTrue(_booked(out), out[-2000:])
+            self.assertEqual(_events(root), [("QZOA.US", "QZNB.US",
+                                              "2025-06-02", "ib-conid")])
             got = _gain(root)
+        # The same gain as a book where the shares always were QZNB.
         ref_files = {"inputs/margin/ib.csv": _h4(new_first, "QZNB",
                                                  _NEW_ONLY, sale)}
         td, ref, r = _run(ref_files, country)
@@ -128,6 +124,15 @@ class TestNewEventBeforeNewFirstTrade(unittest.TestCase):
     @rule("US-BASIS-RENAME")
     def test_usa_return_of_capital_before_first_trade(self):
         self.assertAlmostEqual(self._check("usa", _H4_ROC, 1200), 300.0,
+                               places=2)
+
+    @rule("CA-ACB-RENAME")
+    def test_canada_dividend_before_first_trade(self):
+        self._check("canada", _H4_DIV, 1200)
+
+    @rule("US-BASIS-RENAME")
+    def test_usa_dividend_before_first_trade(self):
+        self.assertAlmostEqual(self._check("usa", _H4_DIV, 1200), 200.0,
                                places=2)
 
 
@@ -272,7 +277,32 @@ class TestDatesPerContractId(unittest.TestCase):
         td, root, r = _run({"inputs/margin/ib.csv": body}, "canada")
         with td:
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("on or before QZOA's last trade", _out(r))
+            self.assertIn("on or before QZOA's last row", _out(r))
+            self.assertEqual(_events(root), [])
+
+
+class TestOldRowAfterNewFirstRow(unittest.TestCase):
+
+    @rule("CA-ACB-RENAME")
+    def test_old_dividend_after_new_first_row_not_booked(self):
+        # OLD's dividend after NEW's first trade: the rows overlap, the
+        # date is the user's to give.
+        body = (HEAD + TRADES_H
+                + _trade('QZOA', '2025-02-05, 10:00:00', 100, 10, -1000)
+                + _trade('QZNB', '2025-05-12, 10:00:00', -100, 12, 1200,
+                         code='C')
+                + DIV_H + ('Dividends,Data,USD,2025-05-20,QZOA(US9990007791) '
+                           'Cash Dividend USD 0.25 per Share (Ordinary '
+                           'Dividend),25\n')
+                + FII_H + _ONE_ID)
+        td, root, r = _run({"inputs/margin/ib.csv": body}, "canada")
+        with td:
+            out = _out(r)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("on or before QZOA's last row (2025-05-20, a "
+                          "Dividends row)", out)
+            self.assertIn("`RENAME 2025-05-12 QZOA.US QZNB.US`", out)
+            self.assertFalse(_booked(out))
             self.assertEqual(_events(root), [])
 
 
