@@ -13,9 +13,13 @@ line would, when the evidence is unambiguous:
 
 * the legs pair uniquely: an out-leg of X and an in-leg of Y (X != Y) in
   your accounts (the same account, or two of yours: a move across
-  brokers), the same quantity, dated within PAIR_DAYS of each other, and
-  neither leg pairs with any other candidate (after the same-symbol legs
-  cancel each other);
+  brokers), the same quantity, dated within PAIR_DAYS business days of
+  each other (business_days: weekends not counted), and neither leg
+  pairs with any other candidate (after the same-symbol legs cancel
+  each other) — except that a reference the broker writes on both legs
+  of one journal (RBC's J~, Questrade's journal_pair) pairs those two
+  first and no others, and an explicit journal pair unique on its day
+  pairs before legs of other days (two equal gambits two days apart);
 * the security names are EQUAL: some name the exports give X and some
   name they give Y are the same word for word once normalised
   (lib/symbol_codes.exact_name: case, punctuation, abbreviations, broker
@@ -25,11 +29,30 @@ line would, when the evidence is unambiguous:
   "QZALPHA BANK OF CANADA", and a word such as HEDGED must be on both
   sides too. No subset of words, no designator stated by one name only.
   And every other name either listing has states the same designators
-  and corporate form (a listing also named "... CL B" never joins);
+  and corporate form (a listing also named "... CL B" never joins).
+  An EXPLICIT JOURNAL pair instead (_explicit_journal: one account, one
+  day, the same quantity, both legs in the broker's journal wording —
+  journal_wording: RBC's TFR "TRANSFER TO C$ / FROM U$  J", IB's
+  InterDepot, Questrade's BRW JOURNAL POSITION) compares the two legs'
+  OWN names (_journal_names_verdict): a fund renamed later or a listing
+  another broker names otherwise says nothing about that journal; a
+  corporate-form word one name states and the other states none of,
+  and a "COM NEW" spelling, are set aside; every designator counts,
+  two stated forms must agree, and a name of either listing that names
+  another company refuses;
 * no ticker.map rule renames or deletes X or Y (TOBASE / JOURNAL /
   GLOBAL / RENAME / DELETE, either side) and no DISTINCT line pairs the
   two: the user's map always wins, DISTINCT keeps them apart;
-* neither symbol is joined to a third listing by another pair.
+* neither symbol is joined to a third listing by another pair — except
+  the listing every other one maps onto (each line's TO) when each of
+  those joins rests on its broker's journal pairs (the fund's USD line
+  under two symbols over the years, both journaled onto its CAD line).
+
+A transfer between two listings that a journal pair joined is part of
+that join (recorded with "via": "journal") when its legs pair uniquely
+and their own names agree as a journal's must: a move from one broker's
+TSX line to another broker's NYSE line, the two brokers spelling the
+corporate form differently.
 
 Everything else stays a suggestion (`taxjson ticker-map --suggest`) —
 except two listings whose names name different companies (no leading
@@ -61,8 +84,10 @@ suggested. In a US project those legs are ordinary transfer legs.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import date as _date
+from datetime import timedelta as _timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -89,6 +114,15 @@ class Leg:
     used: bool = False
     pair: str = ""                  # a currency journal's id (parser)
     currency: str = ""              # the row's currency
+    # The leg's OWN security name (its row's, symbol_codes._row_name):
+    # exact_name key and as written.
+    name: Tuple[str, ...] = ()
+    raw_name: str = ""
+    # The broker's journal wording on the row (journal_wording): the
+    # broker that wrote it ("" for an ordinary transfer leg), and the
+    # reference both legs of one journal share ("" when none).
+    journal: str = ""
+    ref: str = ""
 
 
 @dataclass
@@ -103,10 +137,16 @@ class Pair:
     # The ticker.map keyword the join stands for: TOBASE (a transfer
     # journal between two listings) or JOURNAL (a currency journal).
     kind: str = "TOBASE"
+    # The broker whose journal wording both legs carry (an explicit
+    # journal pair, _explicit_journal), "" otherwise.
+    journal: str = ""
 
     def record(self) -> Dict[str, Any]:
         return {"from": self.frm, "to": self.to,
                 **({"kind": self.kind} if self.kind != "TOBASE" else {}),
+                **({"journal": self.journal} if self.journal else {}),
+                **({"via": self.extra["via"]} if self.extra.get("via")
+                   else {}),
                 "out": {"account": self.out.account,
                         "broker": self.out.broker,
                         "symbol": self.out.symbol, "date": self.out.date,
@@ -220,14 +260,54 @@ def gather(cache: Path, accounts: Iterable[str],
                     continue
                 if abs(q) <= _EPS or _d(t.get("date")) is None:
                     continue
+                jw, ref = journal_wording(broker,
+                                          str(t.get("description") or ""))
+                pair = str(t.get("journal_pair") or "")
                 legs.append(Leg(acct, broker, sym,
                                 str(t.get("date"))[:10], q,
-                                pair=str(t.get("journal_pair") or ""),
+                                pair=pair,
                                 currency=str(t.get("currency") or "")
-                                .upper()))
+                                .upper(),
+                                name=toks,
+                                raw_name=" ".join(
+                                    _row_name(t, broker).split()),
+                                journal=jw, ref=ref or pair))
     legs.sort(key=lambda g: (g.date, g.account, g.broker, g.symbol,
                              g.quantity))
     return legs, names, shown
+
+
+# A broker's journal wording on a transfer row (language, from the
+# brokers' own rows; no security data): RBC's TFR currency journal
+# ("TFR - <NAME> TRANSFER TO C$  J~<ref>" / "... TRANSFER FROM U$  J",
+# the reference from late 2024 on), IB's listing flip ("InterDepot
+# (<ROOT>)", the parser's description) and Questrade's BRW currency
+# journal ("<NAME> JOURNAL POSITION TO USD" / "FROM CAD ...").
+_RBC_JOURNAL_RE = re.compile(
+    r"^\s*TFR\s*-.*\bTRANSFER\s+(?:TO|FROM)\s+[CU]\$\s+J(?:~(\S+))?\s*$",
+    re.IGNORECASE)
+_IB_JOURNAL_RE = re.compile(r"^\s*InterDepot\s*\(", re.IGNORECASE)
+
+
+def journal_wording(broker: str, desc: str) -> Tuple[str, str]:
+    """(broker, reference) when a transfer row carries its broker's
+    journal wording (_RBC_JOURNAL_RE, _IB_JOURNAL_RE, Questrade's BRW
+    JOURNAL POSITION), else ("", ""). The reference is the one RBC
+    writes after J~ (both legs of one journal share it); Questrade's is
+    the parser's `journal_pair` id (gather)."""
+    d = " ".join(str(desc or "").split())
+    if broker == "rbc_direct":
+        m = _RBC_JOURNAL_RE.match(d)
+        if m:
+            return broker, (f"J~{m.group(1)}" if m.group(1) else "")
+    elif broker == "ib":
+        if _IB_JOURNAL_RE.match(d):
+            return broker, ""
+    elif broker == "questrade":
+        from taxjson.lib.brokerages.questrade import _BRW_JOURNAL_RE
+        if _BRW_JOURNAL_RE.search(d):
+            return broker, ""
+    return "", ""
 
 
 def tobase_direction(out_sym: str, in_sym: str,
@@ -277,9 +357,23 @@ def companies_differ(a: Iterable[str], b: Iterable[str]) -> bool:
     return bool(la) and bool(lb) and not (la & lb)
 
 
+def business_days(a: _date, b: _date) -> int:
+    """The weekdays (Monday to Friday) after the earlier date up to and
+    including the later one: Wednesday to the next Tuesday is 4. A
+    transfer between brokers is booked by each on its own business
+    days; a weekend never counts (holidays do: no exchange calendar is
+    assumed)."""
+    lo, hi = (a, b) if a <= b else (b, a)
+    full, rest = divmod((hi - lo).days, 7)
+    return full * 5 + sum(1 for k in range(1, rest + 1)
+                          if (lo + _timedelta(days=k)).weekday() < 5)
+
+
 def _close(a: Leg, b: Leg, days: int) -> bool:
+    """The two legs are dated at most `days` business days apart
+    (business_days)."""
     da, db = _d(a.date), _d(b.date)
-    return bool(da and db and abs((da - db).days) <= days)
+    return bool(da and db and business_days(da, db) <= days)
 
 
 def _same_qty(a: Leg, b: Leg) -> bool:
@@ -314,6 +408,62 @@ def _names_verdict(nx: Set[Tuple[str, ...]], ny: Set[Tuple[str, ...]],
                     f"or corporate form ({shown.get(n, ' '.join(n))!r} vs "
                     f"{shown.get(both[0], ' '.join(both[0]))!r})")
     return ""
+
+
+def _explicit_journal(o: Leg, i: Leg) -> bool:
+    """An explicit journal pair: one account at one broker, one day, the
+    same quantity, both legs in that broker's journal wording
+    (journal_wording)."""
+    return (bool(o.journal) and o.journal == i.journal
+            and o.account == i.account and o.broker == i.broker
+            and o.date == i.date and _same_qty(o, i))
+
+
+# A generic share word followed by NEW ("QZCO CORP COM NEW"): a broker's
+# spelling of the common shares, read as the share word alone between
+# the two legs of one journal.
+_COM_NEW_RE = re.compile(r"\b(COM|COMMON|STK|STOCK|SHS|SHARES?)\s+NEW\b")
+
+
+def _journal_key(raw: str) -> Tuple[str, ...]:
+    from taxjson.lib.symbol_codes import exact_name
+    return exact_name(_COM_NEW_RE.sub(r"\1", " ".join(
+        str(raw or "").upper().split())))
+
+
+def _journal_names_verdict(o: Leg, i: Leg, nx: Set[Tuple[str, ...]],
+                           ny: Set[Tuple[str, ...]],
+                           shown: Dict[Tuple[str, ...], str]) -> str:
+    """"" when the two legs of a journal pair name one security, else
+    why not (DIFFERENT for two companies). The legs' OWN names are
+    compared (each row's, on the journal's date), not every name either
+    listing ever had — a fund renamed later, or a listing whose name
+    another broker spells with other designators, says nothing about
+    this journal. Word for word (exact_name), with two broker spellings
+    set aside: a corporate-form word (LTD, CORP, INC ...) that one name
+    states and the other states none of, and a NEW after a generic
+    share word ("COM NEW"). Corporate forms both names state must
+    agree (LP is not CORP), and every share designator and class letter
+    counts. Any name of either listing that names another company
+    (companies_differ with both legs' names) refuses."""
+    from taxjson.lib.symbol_codes import _FORM
+    a, b = o.name, i.name
+    if companies_differ(a, b):
+        return DIFFERENT
+    for n in sorted(nx | ny):
+        if companies_differ(n, a) and companies_differ(n, b):
+            return (f"another name of the listings names another company "
+                    f"({shown.get(n, ' '.join(n))!r} vs {o.raw_name!r})")
+    ka, kb = _journal_key(o.raw_name), _journal_key(i.raw_name)
+    fa = tuple(w for w in ka if w in _FORM)
+    fb = tuple(w for w in kb if w in _FORM)
+    if not fa or not fb:
+        ka = tuple(w for w in ka if w not in _FORM)
+        kb = tuple(w for w in kb if w not in _FORM)
+    if ka == kb:
+        return ""
+    return (f"the legs' names are not equal word for word "
+            f"({o.raw_name!r} vs {i.raw_name!r})")
 
 
 def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
@@ -383,52 +533,121 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
     for _gap, _dt, n, m in cands:
         if not outs[n].used and not ins[m].used:
             outs[n].used = ins[m].used = True
-    # 2. Another symbol's leg: the journal fingerprint.
+    # 2. Another symbol's leg: the journal fingerprint. Two legs whose
+    #    broker reference differs are two journals, never one pair.
+    def _fits(o: Leg, i: Leg) -> bool:
+        return (not o.used and not i.used and i.symbol != o.symbol
+                and _same_qty(o, i) and _close(o, i, days)
+                and not (o.ref and i.ref and (o.account, o.broker, o.ref)
+                         != (i.account, i.broker, i.ref)))
+    picked: List[Tuple[Leg, Leg]] = []
+    # 2a. A broker reference both legs share is their pair id (RBC's
+    #     J~ reference, Questrade's journal_pair).
+    by_ref: Dict[Tuple[str, str, str], List[Leg]] = {}
+    for g in legs:
+        if g.ref and not g.used:
+            by_ref.setdefault((g.account, g.broker, g.ref), []).append(g)
+    for _k, gl in sorted(by_ref.items()):
+        o = [g for g in gl if g.quantity < 0]
+        i = [g for g in gl if g.quantity > 0]
+        if len(o) == 1 and len(i) == 1 and _fits(o[0], i[0]):
+            o[0].used = i[0].used = True
+            picked.append((o[0], i[0]))
+    # 2b. An explicit journal pair (_explicit_journal: one account, one
+    #     day, both legs in the broker's journal wording) unique on its
+    #     day pairs before any leg of another day (two equal gambits two
+    #     days apart are two pairs, not four candidates).
+    same_day: Dict[int, List[int]] = {}
+    same_back: Dict[int, List[int]] = {}
+    for n, o in enumerate(outs):
+        for m, i in enumerate(ins):
+            if _fits(o, i) and _explicit_journal(o, i):
+                same_day.setdefault(n, []).append(m)
+                same_back.setdefault(m, []).append(n)
+    for n, ms in sorted(same_day.items()):
+        if len(ms) == 1 and len(same_back[ms[0]]) == 1:
+            outs[n].used = ins[ms[0]].used = True
+            picked.append((outs[n], ins[ms[0]]))
+    # 2c. The rest: a pair only when neither leg pairs with another.
     links: Dict[int, List[int]] = {}
     back: Dict[int, List[int]] = {}
     for n, o in enumerate(outs):
-        if o.used:
-            continue
         for m, i in enumerate(ins):
-            if (i.used or i.symbol == o.symbol or not _same_qty(o, i)
-                    or not _close(o, i, days)):
-                continue
-            links.setdefault(n, []).append(m)
-            back.setdefault(m, []).append(n)
-    for n, ms in sorted(links.items()):
-        for m in ms:
-            o, i = outs[n], ins[m]
-            frm, to = tobase_direction(o.symbol, i.symbol, base_currency)
-            nx, ny = names.get(o.symbol, set()), names.get(i.symbol, set())
-            p = Pair(o, i, frm, to,
-                     names=(shown.get(min(nx), "") if nx else "",
-                            shown.get(min(ny), "") if ny else ""))
-            if (o.symbol in named or i.symbol in named
-                    or frozenset((o.symbol, i.symbol)) in apart):
-                continue                # the user's map decides
-            if o.symbol in collided or i.symbol in collided:
-                continue                # separate the symbol first
+            if _fits(o, i):
+                links.setdefault(n, []).append(m)
+                back.setdefault(m, []).append(n)
+    cands = [(o, i, False) for o, i in picked] + [
+        (outs[n], ins[m], len(ms) > 1 or len(back.get(m, ())) > 1)
+        for n, ms in sorted(links.items()) for m in ms]
+    for o, i, ambiguous in cands:
+        frm, to = tobase_direction(o.symbol, i.symbol, base_currency)
+        nx, ny = names.get(o.symbol, set()), names.get(i.symbol, set())
+        if (o.symbol in named or i.symbol in named
+                or frozenset((o.symbol, i.symbol)) in apart):
+            continue                    # the user's map decides
+        if o.symbol in collided or i.symbol in collided:
+            continue                    # separate the symbol first
+        journal = o.journal if _explicit_journal(o, i) else ""
+        verdict = (_journal_names_verdict(o, i, nx, ny, shown)
+                   if journal and o.name and i.name else None)
+        if verdict is None:
+            journal = ""
             verdict = _names_verdict(nx, ny, shown)
-            if verdict == DIFFERENT:
-                continue                # two companies: no TOBASE line
-            if len(ms) > 1 or len(back.get(m, ())) > 1:
-                p.reason = "the legs pair with more than one other leg"
-            else:
-                p.reason = verdict
-            (suggested if p.reason else joined).append(p)
-    # One partner per symbol: a listing joined to two others is ambiguous.
+        if verdict == DIFFERENT:
+            continue                    # two companies: no TOBASE line
+        if journal:
+            shown_names = (o.raw_name, i.raw_name)
+        else:
+            shown_names = (shown.get(min(nx), "") if nx else "",
+                           shown.get(min(ny), "") if ny else "")
+        p = Pair(o, i, frm, to, names=shown_names, journal=journal)
+        p.reason = ("the legs pair with more than one other leg"
+                    if ambiguous else verdict)
+        (suggested if p.reason else joined).append(p)
+    # One partner per symbol: a listing joined to two others is
+    # ambiguous — except the listing every other one maps onto (each
+    # TOBASE line's TO) when each of those joins rests on its broker's
+    # journal pairs: the broker itself moved the units between them.
     partners: Dict[str, Set[str]] = {}
     for p in joined:
         partners.setdefault(p.frm, set()).add(p.to)
         partners.setdefault(p.to, set()).add(p.frm)
+    hubs = {sym for sym, ps in partners.items() if len(ps) > 1
+            and all(len(partners[x]) == 1 for x in ps)
+            and all(p.journal for p in joined if sym in (p.frm, p.to))
+            and all(p.to == sym for p in joined if sym in (p.frm, p.to))}
     keep: List[Pair] = []
     for p in joined:
-        if len(partners[p.frm]) > 1 or len(partners[p.to]) > 1:
+        if ((len(partners[p.frm]) > 1 or len(partners[p.to]) > 1)
+                and p.to not in hubs):
             p.reason = "a listing pairs with two other listings"
             suggested.append(p)
         else:
             keep.append(p)
-    return {"joined": keep, "suggested": suggested}
+    # A transfer between two listings that a journal pair joined is part
+    # of that join (one TOBASE line per pair of listings) when its legs
+    # pair uniquely and their own names agree as a journal's legs must
+    # (a broker move to the other listing, booked by two brokers that
+    # spell the name differently).
+    by_listings = {(p.frm, p.to) for p in keep if p.journal}
+    still: List[Pair] = []
+    for p in suggested:
+        if ((p.frm, p.to) in by_listings
+                and p.reason not in ("the legs pair with more than one "
+                                     "other leg",
+                                     "a listing pairs with two other "
+                                     "listings")
+                and p.out.name and p.into.name
+                and _journal_names_verdict(
+                    p.out, p.into, names.get(p.out.symbol, set()),
+                    names.get(p.into.symbol, set()), shown) == ""):
+            p.reason = ""
+            p.extra["via"] = "journal"
+            p.names = (p.out.raw_name, p.into.raw_name)
+            keep.append(p)
+        else:
+            still.append(p)
+    return {"joined": keep, "suggested": still}
 
 
 @dataclass
@@ -736,6 +955,19 @@ def joined_note(account: str, joined: Iterable[Pair],
         items.append(f"{p.out.symbol} ↔ {p.into.symbol} (transfer "
                      f"{p.out.date}" + "".join(f"; {w}" for w in fixed)
                      + ")")
+        if p.journal or p.extra.get("via"):
+            nm = (repr(p.names[0]) if p.names[0] == p.names[1]
+                  or not p.names[1] else
+                  f"{p.names[0]!r} / {p.names[1]!r}")
+            what = ("the broker's journal moved the units between the "
+                    "two listings" if p.journal else
+                    "a transfer between two listings a broker journal "
+                    "joined")
+            undo.append(f"- {p.out.symbol} ↔ {p.into.symbol}: {what}, "
+                        f"both legs naming one security ({nm}); if they "
+                        f"are not one security, add `DISTINCT "
+                        f"{p.out.symbol} {p.into.symbol}` to ticker.map")
+            continue
         undo.append(f"- {p.out.symbol} ↔ {p.into.symbol}: their names are "
                     f"the same word for word "
                     f"({p.names[0] or p.names[1]!r}); if they are not one "

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A broker's own journal between two listings is joined on its legs'
+  names.** An RBC Norbert's gambit (`TFR … TRANSFER TO C$` / `FROM U$`), an
+  IB InterDepot listing flip or a Questrade BRW journal compared every name
+  either listing ever had, so a fund renamed after the journal, or a listing
+  another broker spells without LTD, left the pair as a suggestion. Such a
+  pair (one account, one day, the same quantity, both legs in the broker's
+  journal wording) now compares its two legs' own names; a corporate-form
+  word stated by one name only and a `COM NEW` spelling no longer block it.
+  Another share class or company still refuses.
+- **Equal journals days apart pair on their own day.** Two gambits of the
+  same size two days apart were "the legs pair with more than one other
+  leg"; journal legs unique on their day now pair first, and a reference
+  both legs carry (RBC's `J~…`, Questrade's journal pair) is their pair id.
+  A listing that several journals map onto (a fund's US-dollar line under
+  two symbols over the years) is joined to each.
+- **A move between brokers over a weekend pairs.** The transfer pairing
+  window is 5 business days instead of 5 calendar days.
+
 
 ## v0.23.1 (2026-10-06)
 

@@ -400,6 +400,27 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/lib/cross_listings.py` — `_names_verdict`, `the names are not equal word for word `; `src/taxjson/lib/symbol_codes.py` — `_CONFIRM_RE`, `rbc_name`, `questrade_name`; `src/taxjson/lib/ticker_map_suggest.py` — `from_cross_listings`, `not joined `
 
 
+### `tjs ticker-map --suggest`: "TOBASE QZD.US QZD.TO … not joined automatically: another name of the listings states another share or corporate form (…)" for a broker's own journal (RBC Norbert's gambit, IB InterDepot)
+- **Check:** the pair's two legs are one account's, on one day, the same quantity, in the broker's journal wording: RBC `TFR - <NAME> TRANSFER TO C$  J` / `… TRANSFER FROM U$  J~<ref>`, IB `InterDepot (<ROOT>)`, Questrade `<NAME> JOURNAL POSITION TO USD`. The names in the reason are a fund's two brands (`'QZNEWBRAND US DLR CURRENCY ETF UNIT CL A' vs 'QZOLDBRAND U S DLR CURRENCY ETF UNIT NEW …'`), or one name with and one without its corporate form (`'QZNATURAL RESOURCES LTD' vs 'QZNATURAL RESOURCES'`, `'QZGOLD CORP COM NEW' vs 'QZGOLD CORP'`).
+- **Cause:** the join compared every name either listing ever had in the project, so a fund renamed after the journal, or a listing another broker spells without LTD, refused a journal whose own two legs name one security.
+- **Fix:** upgrade and `tjs run`. An explicit journal pair now compares the two legs' own names on its date; a corporate-form word stated by one name only and a `COM NEW` spelling do not block it (two stated forms must still agree, every share class and designator counts, and a name naming another company refuses). Each join is a Warning ending "the broker's journal moved the units between the two listings, both legs naming one security (…)"; a `DISTINCT` line undoes it. A ticker.map `TOBASE` / `JOURNAL` line you added for the pair stays valid.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cross_listings.py` — `journal_wording`, `_explicit_journal`, `_journal_names_verdict`, `_journal_key`, `analyze`, `joined_note`, `the broker's journal moved the units`
+
+### `tjs ticker-map --suggest`: "TOBASE QZD.U.TO QZD.TO … not joined automatically: the legs pair with more than one other leg" (two equal gambits days apart) or "… a listing pairs with two other listings"
+- **Check:** `tjs transfers` (or the export) shows two journals of the same quantity a day or two apart (out and in on 2023-03-07, out and in on 2023-03-09), or the security's US-dollar line under two symbols over the years (QZD.US in older exports, QZD.U.TO later), each journaled onto QZD.TO.
+- **Cause:** a leg that could pair with two others was ambiguous, even when each journal's two legs were on one day or carried the same broker reference; and a listing joined to two others was ambiguous, even when both were the other-currency lines of one fund moved onto it by the broker's journals.
+- **Fix:** upgrade and `tjs run`. Explicit journal legs unique on their day pair first; a reference both legs carry (RBC's `J~…`, Questrade's journal pair) pairs those two and no others; the base-currency listing that several journal pairs map onto is joined to each. Ordinary transfers in those shapes stay suggestions: add the `TOBASE` line only if they are one security.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cross_listings.py` — `analyze`, `the legs pair with more than one other leg`, `a listing pairs with two other listings`
+
+### A move between brokers that changes the listing (RBC `TFO` out of QZP.TO, IB `ATON` into QZP.US) is not joined over a weekend
+- **Check:** `tjs transfers` shows the out-leg and the in-leg six or seven calendar days apart with a weekend between them (out on a Wednesday, in the next Tuesday); the new listing's sales read as a short and the old listing's shares never sell.
+- **Cause:** the pairing window was 5 calendar days; brokers book a transfer on their business days.
+- **Fix:** upgrade and `tjs run`: the window is 5 business days (weekends not counted; holidays count as days). The legs must still be the same quantity and pair uniquely, and the names must be equal. Such a move between two listings that a broker journal already joined is part of that join when its legs' names agree as a journal's must (one broker spelling the corporate form, the other not).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cross_listings.py` — `business_days`, `_close`, `PAIR_DAYS`, `a transfer between two listings a broker journal`
+
 ### `tjs ticker-map --suggest`: "TOBASE QZLR.US QZLR.TO — rbc.csv: QZLR: dividend row(s) but no trade rows for QZLR in any RBC file of this account" for a US stock
 - **Check:** `tjs ticker-map --suggest` lists the line, but no account, `.tt` file or holdings file in the project has the `QZLR.TO` listing (every QZLR row in every broker is in USD). The run's own message ("… booked as QZLR.US, the payment currency's listing. Only if the position is really held under the other listing …") is right to stay.
 - **Cause:** a parser hint that says "only if …" (RBC's dividend on a symbol no RBC file trades; RBC's re-described option; IB's currency-tagged symbol; a Questrade code's look-alike) became an unconditional suggestion, so `--suggest --write --all` wrote a line moving a US stock's rows to a TSX listing that does not exist. In the same listing, a suggestion that another suggestion covers (two `EXTRACT` lines for one listing) was headed "Already answered by ticker.map" with no rule in the map.
