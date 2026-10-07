@@ -21488,7 +21488,12 @@ def cmd_quick_start(args: argparse.Namespace) -> None:
     from taxjson.lib import quick_start as QS
     root = Path(args.dir).resolve()
     if (root / "taxjson.toml").is_file():
-        guide = QS.evaluate(root)
+        # The checks it reads may print their own notes (a built-in
+        # market list entry, say); a guide that runs nothing shows none.
+        import contextlib
+        import io
+        with contextlib.redirect_stderr(io.StringIO()):
+            guide = QS.evaluate(root)
     else:
         guide = QS.outside()
     if args.json:

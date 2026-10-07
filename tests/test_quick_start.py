@@ -27,7 +27,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _style import PIPE_WIDTH, assert_console, assert_styled, env, project  # noqa: E402
+from _style import PIPE_WIDTH, assert_styled, env, project  # noqa: E402
 
 from taxjson.lib import quick_start as QS  # noqa: E402
 
@@ -253,8 +253,9 @@ class TestAfterARun(unittest.TestCase):
                 r = project(country).run("quick-start")
                 self.assertEqual(r.returncode, 0, r.stderr)
                 assert_styled(self, r.stdout, PIPE_WIDTH)
-                if r.stderr:
-                    assert_console(self, r.stderr)
+                # The guide runs nothing, so the checks it reads print
+                # no notes of their own (a built-in market list entry).
+                self.assertEqual(r.stderr, "")
                 out = r.stdout
                 self.assertRegex(out, r"(?m)^  \[>\]  7\. Fill in missing "
                                       r"purchase history$")
