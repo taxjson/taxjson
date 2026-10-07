@@ -4856,7 +4856,12 @@ def transfer_arrivals(root: Path, cache: Path,
     # at fair market value, not an arrival; a contribution's out leg
     # cancels nothing.
     _ik = in_kind_taxable_legs(cache)
-    found = TI.arrivals([r for r in TI.sidecar_rows(cache, names)
+    # The .tt JOURNAL legs too: a journal inside one account cancels
+    # within its own pair (TI.own_journal_legs), with the broker's leg a
+    # one-legged line stands beside — never another account's arrival
+    # (pre-release review H1).
+    found = TI.arrivals([r for r in TI.sidecar_rows(cache, names,
+                                                    declared=True)
                          if _leg_ident(r[0], r[2]) not in _ik], key=key)
     tt_rows: Dict[str, List[Dict[str, Any]]] = {}
     import json as _json
@@ -4996,10 +5001,11 @@ def _registered_transfer_rows(names: List[str], cache: Path
     """(account, broker, TRANSFER row) of registered accounts: the
     transfer sidecars (transfers = false) and the parsed exports'
     in-book TRANSFER rows (transfers = true), both before the books'
-    currency conversion."""
+    currency conversion — the .tt JOURNAL legs included (the caller
+    settles each journal inside its account: TI.movable_rows)."""
     import json as _json
     from taxjson.lib import transfer_in as TI
-    rows = list(TI.sidecar_rows(cache, names))
+    rows = list(TI.sidecar_rows(cache, names, declared=True))
     longer = sorted(names, key=len, reverse=True)
     for n in names:
         others = [o for o in longer if o != n and o.startswith(f"{n}_")]
@@ -5108,9 +5114,12 @@ def in_kind_state(root: Path, cache: Path, settings: Dict[str, Any]
         return st
     from taxjson.lib import transfer_in as TI
     key = _transfer_key(root)
-    rows = list(TI.sidecar_rows(cache, taxable))
+    rows = list(TI.sidecar_rows(cache, taxable, declared=True))
     if registered:
         rows += _registered_transfer_rows(registered, cache)
+    # A journal inside one account (its legs' pair id, a .tt JOURNAL
+    # line) is never an in-kind move (pre-release review H1).
+    rows = TI.movable_rows(rows)
     legs = IK.legs(rows, plans, key=key)
     lines, problems = _inkind_lines(root, taxable)
     own, declared = IK.line_legs(lines, legs, key=key)
@@ -5253,28 +5262,19 @@ def _say_in_kind(root: Path, cache: Path, settings: Dict[str, Any], *,
 def _sidecar_transfer_rows(names: List[str], cache: Path
                            ) -> List[Tuple[str, Dict[str, Any]]]:
     """(account, TRANSFER row) of every `names` account's transfer
-    sidecars (transfers = false keeps TRANSFER rows out of the books)."""
-    import json as _json
+    sidecars (transfers = false keeps TRANSFER rows out of the books),
+    less the legs of a journal inside one account (a broker's journal
+    pair, a .tt JOURNAL line: lib/transfer_in.movable_rows) — a journal
+    never pairs with another account's leg (pre-release review H1)."""
+    from taxjson.lib import transfer_in as TI
     rows = []
-    for n in names:
-        for sc in sorted(cache.glob(f"{n}_*_transfers.json")):
-            try:
-                doc = _json.loads(sc.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            md = ((doc.get("metadata") or {}) if isinstance(doc, dict)
-                  else {})
-            if (md.get("kind") != "transfer_sidecar"
-                    or md.get("account") != n):
-                continue        # another account's (or a .tt) file
-            from taxjson.lib.dated_events import SIDECAR_BROKER
-            if md.get("brokerage") == SIDECAR_BROKER:
-                continue        # a .tt JOURNAL's legs: inside one account
-            for t in doc.get("transactions") or []:
-                if (isinstance(t, dict) and t.get("action") == "TRANSFER"
-                        and t.get("symbol")
-                        and abs(float(t.get("quantity") or 0)) > 1e-9):
-                    rows.append((n, t))
+    for n, _b, t in TI.movable_rows(TI.sidecar_rows(cache, names,
+                                                    declared=True)):
+        try:
+            if abs(float(t.get("quantity") or 0)) > 1e-9:
+                rows.append((n, t))
+        except (TypeError, ValueError):
+            continue
     return rows
 
 

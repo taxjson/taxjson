@@ -234,7 +234,7 @@ crypto send that never arrives in another of your accounts may be a
 disposition, decided once and saved. Opening balances come from a broker's
 positions report.
 
-- `src/taxjson/lib/transfer_in.py` — `Arrival`, `arrivals`, `sidecar_rows`, `booked_rows`, `mark_covered`, `attention_lines`: shares that arrived by transfer.
+- `src/taxjson/lib/transfer_in.py` — `Arrival`, `arrivals`, `sidecar_rows`, `own_journal_legs`, `movable_rows`, `booked_rows`, `mark_covered`, `attention_lines`: shares that arrived by transfer; a journal inside one account settled within its own pair.
 - `src/taxjson/lib/in_kind.py` — `Leg`, `Move`, `legs`, `pair_all`, `Pairing`, `pair`, `line_legs`, `in_parts`, `parts_message`, `apply_lines`, `decide`, `value`, `booked_rows`, `mark_sheltered`, `message`, `contribution_results`: in-kind contributions and withdrawals between a taxable and a registered account (CA-INKIND-* / US-INKIND-*).
 - `src/taxjson/bin/taxjson_run.py` — `in_kind_state`, `stage_in_kind_context`, `_say_in_kind`, `in_kind_taxable_legs`, `_registered_transfer_rows`, `_inkind_lines`, `_in_kind_close`: the run's in-kind moves (work/in_kind.json), the plan's purchase marked in work/sheltered_base.json, the one warning.
 - `src/taxjson/bin/taxjson_convert_tt.py` — `parse_inkind_line`: the `.tt` INKIND line (a value, never a row of the books).

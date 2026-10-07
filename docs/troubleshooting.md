@@ -244,6 +244,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.18.0`
 - **Code:** `src/taxjson/lib/transfer_in.py` — `the broker `, `states on the row`
 
+### A transfer-in from outside your books lost its cost (no "booked at the ACB the broker states" line) or an in-kind move was booked, after a journal between two listings in ANOTHER account
+- **Check:** `tjs transfers` shows the arrival in one account and, in another account on or near the same day, a journal's two legs of the same security (a `.tt` `JOURNAL` line's legs, a Questrade BRW `JOURNAL POSITION` pair, RBC `TFR … J~` legs); the arrival's "booked at the ACB the broker states on the row" Warning is missing, or an "in-kind move(s) … booked" Warning names the journal's account.
+- **Cause:** the transfer pairing pooled every account's transfer legs per security, so the journal's out-leg of one listing cancelled the other account's arrival (the arrival's book value was dropped and the sale read the other account's cost), or its in-leg paired with a taxable account's transfer-out as an in-kind contribution. A journal moves units inside one account: its legs now cancel within their own pair (or with the broker's leg a one-legged `.tt` line stands beside) and never pair with another account's transfer (tax-logic CA-XLIST-04 / US-XLIST-03).
+- **Fix:** re-run `tjs run` on a release with the fix. On an older install remove the `.tt` `JOURNAL` line and add `TOBASE FROM TO` to ticker.map instead.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/transfer_in.py` — `own_journal_legs`, `movable_rows`, `arrivals`, `sidecar_rows`; `src/taxjson/bin/taxjson_run.py` — `transfer_arrivals`, `in_kind_state`, `_sidecar_transfer_rows`
+
 ### "Warning: 1 transfer in a taxable loss's 30-day window counted as an account move, not a purchase"
 - **Check:** the detail lines name each transfer, its date and the loss sale; `tjs transfers` lists the rows.
 - **Cause:** a transfer between your accounts moves shares; it is not an acquisition, so it does not deny the loss (CA-SL-16 / US-WASH-23). If one leg was really a contribution to a registered plan or a purchase, the loss may be superficial (or a wash sale).

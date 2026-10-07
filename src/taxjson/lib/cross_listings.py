@@ -286,7 +286,7 @@ def gather(cache: Path, accounts: Iterable[str],
                 pair = str(t.get("journal_pair") or "")
                 # The broker's pair id: Questrade's journal_pair, RBC's
                 # J~ reference (missing_history.journal_leg_key).
-                key = journal_leg_key(t)
+                key = journal_leg_key(t, broker=broker)
                 ref = "|".join(key) if key else ""
                 legs.append(Leg(acct, broker, sym,
                                 str(t.get("date"))[:10], q,

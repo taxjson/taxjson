@@ -16,7 +16,9 @@ This module finds them and decides what the run does with each:
   false`) accounts are pooled per security (after ticker.map's undated
   renames); every out leg cancels in legs of the same security — the
   same quantity and the closest date first — and what is left of an in
-  leg arrived from outside;
+  leg arrived from outside. A journal inside one account (a broker's
+  journal pair, a .tt JOURNAL line) cancels within its own pair first
+  and never against another account's leg (own_journal_legs);
 * such an arrival is COVERED when the receiving account's .tt files
   already hold purchases of that security, dated on or before the
   arrival, for its quantity (the documented fix: the original purchase
@@ -97,10 +99,17 @@ def stated_book_value(row: Dict[str, Any]) -> Optional[float]:
     return bv if bv > 0 else None
 
 
-def sidecar_rows(cache: Path, accounts: Sequence[str]
+def sidecar_rows(cache: Path, accounts: Sequence[str], *,
+                 declared: bool = False
                  ) -> List[Tuple[str, str, Dict[str, Any]]]:
     """(account, broker, TRANSFER row) of each account's transfer
-    sidecars in work/ (work/<acct>_<broker>_transfers.json)."""
+    sidecars in work/ (work/<acct>_<broker>_transfers.json). The legs of
+    the account's .tt JOURNAL lines (lib/dated_events.SIDECAR_BROKER: a
+    move inside the account) are left out unless `declared`: a caller
+    that reads them settles every journal inside its account first
+    (own_journal_legs), so a journal's legs never pair with another
+    account's transfer (pre-release review H1)."""
+    from taxjson.lib.dated_events import SIDECAR_BROKER
     out: List[Tuple[str, str, Dict[str, Any]]] = []
     names = sorted(accounts, key=len, reverse=True)
     for n in accounts:
@@ -118,6 +127,8 @@ def sidecar_rows(cache: Path, accounts: Sequence[str]
                     or md.get("account") != n):
                 continue
             broker = str(md.get("brokerage") or "")
+            if broker == SIDECAR_BROKER and not declared:
+                continue        # a .tt JOURNAL's legs: inside the account
             for t in doc.get("transactions") or []:
                 if (isinstance(t, dict) and t.get("action") == "TRANSFER"
                         and t.get("symbol")):
@@ -130,6 +141,86 @@ def sidecar_rows(cache: Path, accounts: Sequence[str]
     return out
 
 
+def own_journal_legs(rows: Sequence[Tuple[str, str, Dict[str, Any]]]
+                     ) -> Tuple[set, set]:
+    """(settled, orphans): the indices of `rows` ((account, broker, row))
+    that are the legs of a journal INSIDE one account — never a move
+    between two of your accounts, an arrival from outside the books, or
+    an in-kind move (pre-release review H1):
+
+    * the legs a journal's own pair id marks (missing_history.
+      journal_leg_key: Questrade's BRW `journal_pair`, RBC's J~
+      reference, a .tt JOURNAL line's pair id) cancel within their
+      account and pair: a pair whose out-legs and in-legs add up to the
+      same quantity is settled, every leg of it;
+    * a leg left over from such a pair (a .tt JOURNAL line whose other
+      leg the broker's rows hold: lib/dated_events.settle_journals)
+      settles with the account's leg it stands beside: the opposite
+      direction, the same quantity, within cross_listings.PAIR_DAYS
+      business days, another symbol first, the closest date first;
+    * a journal leg still left (its pair incomplete) is an orphan: it
+      may cancel only legs of its own account."""
+    from taxjson.lib.cross_listings import PAIR_DAYS, business_days
+    from taxjson.lib.missing_history import journal_leg_key
+    groups: Dict[Tuple[Any, ...], List[int]] = {}
+    for n, (acct, broker, t) in enumerate(rows):
+        k = journal_leg_key(t, broker=broker)
+        if k is not None:
+            groups.setdefault((acct,) + k, []).append(n)
+
+    def _q(n: int) -> float:
+        try:
+            return float(rows[n][2].get("quantity") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+    settled: set = set()
+    left: List[int] = []
+    for _k, ns in sorted(groups.items()):
+        qs = [_q(n) for n in ns]
+        if (any(q > _EPS for q in qs) and any(q < -_EPS for q in qs)
+                and abs(sum(qs)) <= max(_EPS, 1e-6 * max(abs(q)
+                                                         for q in qs))):
+            settled.update(ns)
+        else:
+            left.extend(ns)
+    orphans: set = set()
+    for n in sorted(left, key=lambda x: str(rows[x][2].get("date") or "")):
+        if n in settled:
+            continue
+        acct, _b, t = rows[n]
+        q, dn = _q(n), _d(t.get("date"))
+        best = None
+        for m, (a2, _b2, u) in enumerate(rows):
+            if m == n or m in settled or a2 != acct:
+                continue
+            qm, dm = _q(m), _d(u.get("date"))
+            if (qm * q >= 0 or abs(abs(qm) - abs(q))
+                    > max(_EPS, 1e-6 * abs(q)) or dn is None or dm is None):
+                continue
+            gap = business_days(dn, dm)
+            if gap > PAIR_DAYS:
+                continue
+            rank = (str(u.get("symbol") or "").upper()
+                    == str(t.get("symbol") or "").upper(), gap, m)
+            if best is None or rank < best[0]:
+                best = (rank, m)
+        if best is not None:
+            settled.update((n, best[1]))
+        else:
+            orphans.add(n)
+    return settled, orphans - settled
+
+
+def movable_rows(rows: Sequence[Tuple[str, str, Dict[str, Any]]]
+                 ) -> List[Tuple[str, str, Dict[str, Any]]]:
+    """`rows` less every leg of a journal inside one account (settled or
+    orphan: own_journal_legs) — the transfer rows that may pair with
+    another account's (a move of your own, an in-kind move)."""
+    settled, orphans = own_journal_legs(rows)
+    return [r for n, r in enumerate(rows)
+            if n not in settled and n not in orphans]
+
+
 def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
              key: Optional[Callable[[str], str]] = None) -> List[Arrival]:
     """The transfer-in quantities that came from outside the books.
@@ -137,13 +228,23 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
     Per security (`key`: the symbol after ticker.map renames; default
     the upper-cased symbol), every out leg cancels in legs — same
     quantity first, then the closest date — across ALL the given
-    accounts (a move between two of your accounts is not an arrival).
-    What is left of each in leg is an Arrival."""
+    accounts (a move between two of your accounts is not an arrival) —
+    except the legs of a journal inside one account (own_journal_legs),
+    which cancel within their own pair. What is left of each in leg is
+    an Arrival."""
     keyf = key or (lambda s: str(s or "").upper())
-    legs = []           # [account, broker, row, key, quantity left]
-    for acct, broker, t in rows:
+    rows = list(rows)
+    # A journal inside one account (its legs' pair id, a .tt JOURNAL
+    # line) cancels within its pair: never against another account's leg
+    # (pre-release review H1). An orphan journal leg (its pair
+    # incomplete) cancels its own account's legs only.
+    settled, orphans = own_journal_legs(rows)
+    legs = []    # [account, broker, row, key, quantity left, journal leg]
+    for n, (acct, broker, t) in enumerate(rows):
+        if n in settled:
+            continue
         legs.append([acct, broker, t, keyf(str(t.get("symbol") or "")),
-                     float(t.get("quantity") or 0.0)])
+                     float(t.get("quantity") or 0.0), n in orphans])
     ins = [g for g in legs if g[4] > 0]
     outs = [g for g in legs if g[4] < 0]
     for g in outs:
@@ -164,7 +265,8 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
     _cancel([(abs(inn[4] - o[4]) > _EPS, _gap(inn, o),
               str(inn[2].get("date")), i, j)
              for i, inn in enumerate(ins) for j, o in enumerate(outs)
-             if inn[3] == o[3]])
+             if inn[3] == o[3]
+             and (inn[0] == o[0] or not (inn[5] or o[5]))])
     # 2. A listing journal (the same units moved between two listings of
     #    one security, e.g. a US-dollar and a Canadian-dollar line, with
     #    no ticker.map rule joining them): an out leg of another symbol
@@ -174,7 +276,7 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
              if inn[3] != o[3] and inn[0] == o[0]
              and abs(inn[4] - o[4]) <= _EPS and _gap(inn, o) <= 3])
     out: List[Arrival] = []
-    for a, b, t, k, left in ins:
+    for a, b, t, k, left, _j in ins:
         if left <= _EPS:
             continue
         q = float(t.get("quantity") or 0.0)

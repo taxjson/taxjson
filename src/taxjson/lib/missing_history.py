@@ -381,15 +381,23 @@ def journal_targets(ticker_map) -> Set[str]:
 
 
 # RBC's reference on the two TFR legs of one journal between a
-# security's lines ("TFR - ... TRANSFER TO U$ J~1" / "... FROM C$ J~1").
-_JOURNAL_REF_RE = re.compile(r'(?<!\S)J~(\w+)\b')
+# security's lines ("TFR - ... TRANSFER TO U$ J~1" / "... FROM C$ J~1"),
+# read only on a TFR row (any other text that happens to hold "J~" is no
+# journal reference).
+_JOURNAL_REF_RE = re.compile(r'^\s*TFR\b.*(?<!\S)J~(\w+)\b',
+                             re.IGNORECASE)
+# The broker whose J~ reference that is (lib/brokerages ids).
+_JOURNAL_REF_BROKER = 'rbc_direct'
 
 
-def journal_leg_key(t: Any) -> Optional[Tuple[str, ...]]:
-    """What pairs a TRANSFER row with the other leg of its broker
-    journal, within one account: the parser's `journal_pair` (a
-    Questrade BRW currency journal, brokerages/questrade), else RBC's
-    J~ reference with the leg's date. None for any other row. `t` is a
+def journal_leg_key(t: Any, broker: Optional[str] = None
+                    ) -> Optional[Tuple[str, ...]]:
+    """What pairs a TRANSFER row with the other leg of its journal,
+    within one account: the row's `journal_pair` (a Questrade BRW
+    currency journal, brokerages/questrade; a .tt JOURNAL line's legs,
+    lib/dated_events), else RBC's J~ reference on a TFR row, with the
+    leg's date — and only on an RBC row when `broker` (the parser id of
+    the row's file) is known. None for any other row. `t` is a
     TaxTransaction or a parsed row (dict)."""
     get = t.get if isinstance(t, dict) else (
         lambda k, d=None: getattr(t, k, d))
@@ -398,7 +406,10 @@ def journal_leg_key(t: Any) -> Optional[Tuple[str, ...]]:
     pair = str(get('journal_pair') or '').strip()
     if pair:
         return ('pair', pair)
-    m = _JOURNAL_REF_RE.search(str(get('description') or ''))
+    if broker and broker != _JOURNAL_REF_BROKER:
+        return None
+    m = _JOURNAL_REF_RE.search(' '.join(str(get('description') or '')
+                                        .split()))
     if m:
         return ('ref', str(get('date') or '')[:10], m.group(1).upper())
     return None
@@ -518,7 +529,8 @@ def walk_journal_symbols(cache, ticker_map=None) -> Set[str]:
                 continue
             txs = doc.get('transactions') if isinstance(doc, dict) else None
             for t in txs if isinstance(txs, list) else []:
-                if isinstance(t, dict) and journal_leg_key(t) is not None:
+                if (isinstance(t, dict)
+                        and journal_leg_key(t, broker=_b) is not None):
                     rows.append((acct, t))
     return out | detected_journal_symbols(rows, renames)
 

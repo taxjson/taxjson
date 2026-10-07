@@ -77,6 +77,14 @@
 
 ### Fixed
 
+- **A journal between two listings stays inside its account.** The
+  transfer pairing pooled every account's transfer legs, so a journal's
+  legs in one account (a Questrade BRW pair, RBC's `J~` legs, a `.tt`
+  `JOURNAL` line) could cancel another account's transfer-in from outside
+  the books (its stated book value dropped, the sale reading the other
+  account's cost) or pair with a taxable transfer-out as an in-kind
+  contribution to a plan. A journal's legs now cancel within their own
+  pair, and RBC's `J~` reference is read on RBC's TFR rows only.
 - **A Questrade currency journal is joined with `transfers = true` too.**
   The parser pairs the two BRW legs of a journal between a security's CAD
   and USD lines, but the pair id reached only the transfer sidecar: in an
