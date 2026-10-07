@@ -776,20 +776,26 @@ def read_state(path: Path) -> Dict[str, List[Dict[str, Any]]]:
             for k in ("journals", "renames")}
 
 
-def rename_records(book_rows: Iterable[Any], declared: Iterable[Any]
+def rename_records(book_rows: Iterable[Any], declared: Iterable[Any],
+                   mapping: Optional[Dict[str, str]] = None
                    ) -> List[Dict[str, Any]]:
     """One record per rename event the books carry (lib/renames.
     rename_events over every account's rows: the SPLIT rows with a new
     symbol), with its machine source and where it was declared; plus each
     declaration (`declared`: renames.DatedRename) no account's books
-    carried (accounts [], status "unused")."""
+    carried (accounts [], status "unused"). `mapping`: the base stage's
+    undated renames (the books' symbols are the mapped ones)."""
+    from taxjson.bin.taxjson_ticker_map import map_symbol
     from taxjson.lib.renames import (SOURCE_MAP, WINDOW_DAYS, _days,
                                      rename_events)
+    mapping = mapping or {}
+    declared = list(declared)
     out = []
     used = set()
     for e in rename_events(book_rows):
-        decl = [dr for dr in declared if dr.old == e["old"]
-                and dr.new == e["new"]
+        decl = [dr for dr in declared
+                if map_symbol(dr.old, mapping) == e["old"]
+                and map_symbol(dr.new, mapping) == e["new"]
                 and (_days(dr.date, e["date"]) or 0) <= WINDOW_DAYS]
         for dr in decl:
             used.add(id(dr))
@@ -828,7 +834,9 @@ RENAMES_TT = "renames.tt"
 RENAMES_TT_HEAD = (
     "# Ticker changes: dated events, one line each, date first:\n"
     "#   RENAME <date> <OLD> <NEW> [late=fold|late=separate]\n"
-    "# A line here applies to every account whose books hold OLD.\n")
+    "# A line here applies to every account of this account's kind\n"
+    "# (securities, or crypto in a crypto account) whose books hold OLD\n"
+    "# before the date.\n")
 
 
 def _book_symbols(root: Path, acct: str) -> Optional[set]:
@@ -877,8 +885,26 @@ def _carries(root: Path, acct: str, old: str, new: str, date: str) -> bool:
     return False
 
 
+def _disagrees(declared: Iterable[Any], acct: str, old: str, new: str,
+               date: str, late: str) -> bool:
+    """`acct`'s own .tt lines declare the change OLD -> NEW (within
+    renames.WINDOW_DAYS of `date`) with another late= than `late`: a
+    moved line there would make it declare both."""
+    from taxjson.lib.renames import WINDOW_DAYS, _days
+    if not late:
+        return False
+    for d in declared:
+        gap = _days(d.date, date)
+        if (d.account == acct and (d.old, d.new) == (old, new)
+                and gap is not None and gap <= WINDOW_DAYS
+                and d.late and d.late != late):
+            return True
+    return False
+
+
 def home_accounts(root: Path, accounts: Dict[str, Any], old: str,
-                  new: str, date: str) -> List[Tuple[str, str]]:
+                  new: str, date: str, late: str = "",
+                  declared: Iterable[Any] = ()) -> List[Tuple[str, str]]:
     """[(account, why)] of the .tt file(s) a migrated ticker.map RENAME
     goes to: one per account KIND whose books name OLD or NEW (a .tt
     RENAME applies to its own kind only — securities or crypto; a legacy
@@ -888,7 +914,10 @@ def home_accounts(root: Path, accounts: Dict[str, Any], old: str,
     order): the first account whose books carry the change (a SPLIT row
     renaming OLD within renames.WINDOW_DAYS of the date), else the first
     whose books name OLD or NEW, else the kind's only account, else its
-    first taxable account, else its first account."""
+    first taxable account, else its first account — among the accounts
+    whose own .tt lines (`declared`) agree with the moved line's `late`
+    when there is one (a home that declares the change with the other
+    late= would declare both: second pre-release review, 9)."""
     from taxjson.lib.renames import KIND_CRYPTO, KIND_SECURITIES
     names = list(accounts or {})
     kind = {a: account_kind(accounts.get(a)) for a in names}
@@ -902,10 +931,14 @@ def home_accounts(root: Path, accounts: Dict[str, Any], old: str,
         kinds = [KIND_SECURITIES if any(kind[a] == KIND_SECURITIES
                                         for a in names) else KIND_CRYPTO]
     out = []
+    declared = list(declared)
     for k in kinds:
         mine = [a for a in names if kind[a] == k]
         if not mine:
             continue
+        agree = [a for a in mine
+                 if not _disagrees(declared, a, old, new, date, late)]
+        mine = agree or mine
         pick = next(((a, "its books carry the change") for a in mine
                      if _carries(root, a, old, new, date)), None) \
             or next(((a, f"its books hold {old} or {new}") for a in mine
@@ -976,7 +1009,10 @@ def plan_migration(root: Path, accounts: Dict[str, Any], map_text: str,
     account's late= choice, a date, a contradiction the move creates —
     refuses the migration (MigrationPlan.refused names the lines);
     accounts are compared on the events naming a symbol their books hold
-    (work/<acct>_base.json; an account without books on every event)."""
+    (work/<acct>_base.json; an account without books on every event that
+    still reaches it after the move — a legacy map line that applied to
+    both kinds no longer reaches an account of the other kind, and with
+    no books there is nothing to change)."""
     from taxjson.bin.taxjson_ticker_map import _parse_map_text
     from taxjson.lib.renames import DatedRename, SOURCE_TT
     plan = MigrationPlan()
@@ -999,7 +1035,9 @@ def plan_migration(root: Path, accounts: Dict[str, Any], map_text: str,
             for d in decl.tt_declared}
     added: List[Any] = []
     for mv in moved:
-        homes = home_accounts(root, accounts, mv.old, mv.new, mv.date)
+        homes = home_accounts(root, accounts, mv.old, mv.new, mv.date,
+                              "" if mv.commented else mv.late,
+                              decl.tt_declared)
         if not homes:
             continue
         for n, (acct, why) in enumerate(homes):
@@ -1047,6 +1085,11 @@ def plan_migration(root: Path, accounts: Dict[str, Any], map_text: str,
                                                         syms)
     for acct, o, nw, d, late in sorted(old_v - new_v):
         alt = sorted(x for x in new_v if x[:3] == (acct, o, nw))
+        if not alt and syms.get(acct) is None:
+            # An account without books, of a kind the moved line no
+            # longer reaches (a legacy map line applied to both kinds):
+            # nothing booked changes (second pre-release review, 9).
+            continue
         now = (f"{d}" + (f" late={late}" if late else ""))
         then = ", ".join(f"{x[3]}" + (f" late={x[4]}" if x[4] else "")
                          for x in alt) or "not booked"

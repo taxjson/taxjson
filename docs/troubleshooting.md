@@ -79,6 +79,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `ticker.map problem(s)`; `src/taxjson/lib/ticker_map.py` — `read_side_rules`, `parse_side_line`, `line has no ticker.map keyword`; `src/taxjson/bin/taxjson_ticker_map.py` — `map_file_problems`
 
+### "Error: 1 ticker.map problem(s)" with "ticker.map:3: GLOBAL joins an option contract (QZK250620C00010000.US) with a share listing (QZK.US)" or "… joins two different option contracts"
+- **Check:** the named line is a `GLOBAL`, `TOBASE`, `JOURNAL` or undated `RENAME` line with an option symbol (or a future, `F:…`) on one side and a share symbol on the other, or two option symbols whose expiry, right (C/P), strike or market (`.US`, `.TO`) differ.
+- **Cause:** such a line makes the two the same security at every date: the contract's cost was pooled with the shares (or with another contract), and the gains changed without a word. Earlier the line was accepted silently (only a dated `RENAME` was refused).
+- **Fix:** delete the line. An option follows its underlying's line: join the shares' symbols instead (a line for the shares moves their options too). A respelling of one contract — the same expiry, right, strike and market, the root spelled otherwise (`GLOBAL QZB.B250620C00010000.TO QZB250620C00010000.TO`, an adjusted-series digit) — is allowed. Book an exercise or assignment as the broker's rows show it.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_convert_tt.py` — `_join_derivative_check`; `src/taxjson/bin/taxjson_ticker_map.py` — `_parse_map_text`
+
 ### `tjs format-map`: "Warning: 2 ticker.map problem(s): `taxjson run` refuses the map until each is fixed" or "Error: ticker.map: laying the map out in groups would change what it means"
 - **Check:** the warning lists each problem as `- ticker.map:<line>: …` (the line numbers of the file before formatting) and says how many lines went to the "Unrecognized" group; the error writes nothing (exit 2).
 - **Cause:** a line `taxjson run` cannot use (no keyword, malformed, a second target for one symbol) is kept exactly as written at the end of the file, in the "Unrecognized" group, so the line that wins stays first. The error means that moving the lines into their groups would change which of two contradicting lines wins, or the order of two dated renames that contradict each other.
@@ -362,7 +369,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### "Error: moving ticker.map's dated RENAME lines to .tt files would change the books — nothing was written"
 - **Check:** each listed line names the account and the change, how it is booked now and how it would be after the move (`… is booked 2025-04-01 late=separate now and would be 2025-04-01 after the move`), or the contradiction the move would create; `tjs renames` shows the event and its declarations.
-- **Cause:** a dated ticker.map `RENAME` and a `.tt` `RENAME` line of the same change say different things (another `late=`, another date). The run books them as one event — the date the earliest declared, each declaring account's `late=` for its own late rows, the map line's `late=` for the others — and moving the map line into an account's `.tt` file would change that (for example an account would then declare both `late=fold` and `late=separate`). Earlier, `--write` moved it anyway and the books changed (a `late=fold` lost, a late buy split from the renamed shares). An account with no books yet (`work/<account>_base.json`) is compared on every change.
+- **Cause:** a dated ticker.map `RENAME` and a `.tt` `RENAME` line of the same change say different things (another `late=`, another date). The run books them as one event — the date the earliest declared, each declaring account's `late=` for its own late rows, the map line's `late=` for the others — and moving the map line into an account's `.tt` file would change that (for example an account would then declare both `late=fold` and `late=separate`). Earlier, `--write` moved it anyway and the books changed (a `late=fold` lost, a late buy split from the renamed shares). An account with no books yet (`work/<account>_base.json`) is compared on every change of its kind; earlier such an account of the other kind (a crypto account with no inputs yet, for a securities change) refused every move, and so did a home account whose own `.tt` line chose the other `late=` while another account could take the line — the line now goes to an account whose own lines agree.
 - **Fix:** make the two lines say the same, or delete one; run `tjs run`, then `tjs format-map --write` again. A moved line that repeats a `.tt` line written differently but booked the same is moved, with an Info line asking you to keep one.
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/dated_events.py` — `plan_migration`, `resolve_renames`, `MigrationPlan`; `src/taxjson/bin/taxjson_run.py` — `cmd_format_map`
@@ -384,9 +391,30 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### A ticker that changed twice (`RENAME` A to B, then B to C) leaves the position in B and C goes short
 - **Check:** `tjs renames` lists both changes, but the second shows no position carried in an account that held A; `tjs shares` shows that account long B and short C.
 - **Cause:** the dated renames were applied in the order they were read (ticker.map order, then the accounts' `.tt` files), not by date, and an account counted as holding B only from rows of B, not from the first change's rename row. A `format-map` migration that put the two lines in different accounts' files could reverse the order.
-- **Fix:** upgrade: the changes apply in date order, and the first change's rename row counts as holding B. Re-run `tjs run`.
+- **Fix:** upgrade: the changes apply in date order, and the first change's rename row counts as holding B (on the same date too, in the lines' order). Re-run `tjs run`.
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/renames.py` — `apply_dated_renames`
+
+### "Error: SPLIT QZA.TO→QZB.TO: rename would merge a LONG position into an existing SHORT pool" (US: a total that misses the sales between the declared date and the broker's rename row) with a `.tt` `RENAME … late=fold`
+- **Check:** the account's own rows hold the change (a broker corporate-action row or a `.tt` `SPLIT <date> <time> OLD NEW 1`) a few days after the date the `RENAME` line declares, and the account sold OLD between the two dates; `tjs shares` shows NEW short before the rename row.
+- **Cause:** `late=fold` re-booked every OLD row on or after the declared date as NEW, even the ones before the account's own rename row, while `tjs renames` called only the rows after that row late. The sale became a short NEW position that the rename row then merged into.
+- **Fix:** upgrade: `late=fold` re-books only the rows after the account's own rename row (date and time; a row dated at the start of its day, 00:00:00, comes before every row that day), the rows `tjs renames` lists. Re-run `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/renames.py` — `apply_dated_renames`, `after_rename_row`, `late_rows`
+
+### "Warning: ATTENTION: 2 trade(s) in QZOLD.TO after its rename to QZNEW.TO on 2025-04-01" for an account that never held QZOLD.TO, while another account's line says `late=fold`
+- **Check:** `tjs renames --json` lists the account's rows under `late` as `unresolved`; the account's stage notes (`work/<account>_*.diag`) say "… row(s) of account b on or after 2025-04-01 are kept as QZOLD.TO: late=fold applies to the accounts that held QZOLD.TO before the date".
+- **Cause:** an event's `late=` describes how the brokers of the accounts that held the old ticker booked the renamed shares. An account that bought the old ticker only after the change may hold another company's shares now using it; earlier, another account's `late=fold` folded those rows into the new symbol without a word.
+- **Fix:** add a line of the account's own to one of its `.tt` files: `RENAME 2025-04-01 QZOLD.TO QZNEW.TO late=separate` (another security) or `… late=fold` (the renamed shares), then `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/renames.py` — `apply_dated_renames`, `DatedRename`, `declared_late`
+
+### "Warning: inputs/margin/m.tt:2: RENAME 2025-04-01 QZAA.TO QZB.TO books nothing"
+- **Check:** `tjs renames` lists the line under DECLARED, NOT BOOKED (`--pending` counts it); `work/dated_events.state` records it with status `unused`.
+- **Cause:** no account of the line's kind (securities, or crypto for a crypto account's line) holds the old symbol before the date: a typo of the symbol, a date after the last row of it, or a line in an account of the other kind. Earlier such a line was silently ignored. A chain declared for one day (`RENAME 2025-04-01 QZA.TO QZB.TO` and `RENAME 2025-04-01 QZB.TO QZC.TO`) used to book only the first link; it now books both, in date and line order.
+- **Fix:** correct the symbols or the date, or delete the line; then `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_unused_renames`; `src/taxjson/lib/renames.py` — `unused_declarations`, `apply_dated_renames`; `src/taxjson/lib/dated_events.py` — `rename_records`
 
 ### A `.tt` RENAME in a securities account moved a coin in a crypto account (or the reverse)
 - **Check:** `tjs renames` lists the change under the crypto account too, `work/<crypto account>_base.json` holds a SPLIT row for it, and the coin's sale goes short.
@@ -412,7 +440,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### "Warning: 2 trade(s) in OLDQZ after its rename to NEWQZ on 2025-03-03"
 - **Check:** `tjs renames` lists the dated rename, the position it carried and the late trades as UNRESOLVED.
 - **Cause:** after a rename the old ticker is not automatically the same security: the broker may still book the renamed shares under it, or another company may now use the ticker. Until you say which, the rows are a separate security and `tjs run --strict` stops.
-- **Fix:** add one line to a `.tt` file of the account, date first: `RENAME 2025-03-03 OLDQZ NEWQZ late=fold` (the broker's late rows are the renamed shares) or `… late=separate` (another security); `tjs renames` prints both. A line's `late=` applies to its own account's late rows and to every account without a line of its own; an account whose broker booked them differently adds its own line with its own `late=` (no longer refused as a contradiction). Releases before the dated `.tt` events took the line in ticker.map (`RENAME OLDQZ NEWQZ 2025-03-03 late=fold`, still read). A trade in the old ticker later on the change's own day is late too (the change is booked at the start of its day).
+- **Fix:** add one line to a `.tt` file of the account, date first: `RENAME 2025-03-03 OLDQZ NEWQZ late=fold` (the broker's late rows are the renamed shares) or `… late=separate` (another security); `tjs renames` prints both. A line's `late=` applies to its own account's late rows and to every account without a line of its own that held the old ticker before the date (another account's late rows stay unresolved until its own line says); an account whose broker booked them differently adds its own line with its own `late=` (no longer refused as a contradiction). Releases before the dated `.tt` events took the line in ticker.map (`RENAME OLDQZ NEWQZ 2025-03-03 late=fold`, still read). A trade in the old ticker later on the change's own day is late too (the change is booked at the start of its day).
 - **Fixed in:** `v0.17.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_check_renamed_late`; `src/taxjson/lib/renames.py` — `unresolved_late`, `LATE_FOLD`
 
