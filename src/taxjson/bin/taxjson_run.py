@@ -20915,8 +20915,8 @@ def cmd_format_map(args: argparse.Namespace) -> None:
                        "change say the same (or delete one), run "
                        "`taxjson run`, then format the map again. An "
                        "account without books yet (no work/<account>_"
-                       "base.json) is compared on every change: run "
-                       "`taxjson run` first.")
+                       "base.json) is compared on every change of its "
+                       "kind: run `taxjson run` first.")
     if not res.changed and not pending:
         print("ticker.map is already formatted.")
         return

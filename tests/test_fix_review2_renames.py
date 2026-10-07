@@ -283,5 +283,63 @@ class TestUndatedLinesNeverJoinContractsToShares(unittest.TestCase):
         self._run_refused("usa")
 
 
+# ------------------------------------------------------------ 9
+
+class TestFormatMapComparesReachableBooks(unittest.TestCase):
+
+    def test_an_account_without_books_of_the_other_kind(self):
+        # kx: a crypto account with no inputs yet (no work/kx_base.json).
+        x, cur = _HOME["canada"]
+        accounts = ('[accounts.margin]\ntype = "taxable"\n\n'
+                    '[accounts.kx]\ntype = "taxable"\ncrypto = true\n')
+        files = {"ticker.map": f"RENAME QZOLD.{x} QZNEW.{x} 2025-04-01\n",
+                 "inputs/margin/m.tt": (
+                     _bt("2024-01-10", f"QZOLD.{x}", 10, cur, 10.0)
+                     + _bt("2025-06-03", f"QZNEW.{x}", -10, cur, 11.0))}
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, accounts=accounts,
+                                 files=files)["canada"]
+            _run(self, root)
+            self.assertFalse((root / "work/kx_base.json").exists())
+            before = _sum(root)
+            w = cli(root, "format-map", "--write", "--no-backup")
+            self.assertEqual(w.returncode, 0, _out(w))
+            self.assertIn(f"RENAME 2025-04-01 QZOLD.{x} QZNEW.{x}",
+                          (root / "inputs/margin/renames.tt").read_text())
+            _run(self, root, "--strict")
+            self.assertEqual(_sum(root), before)
+
+    def test_a_home_whose_own_lines_agree(self):
+        # The map line says late=fold; aa's own .tt line late=separate;
+        # bb has no line: the line goes to bb (aa would declare both).
+        x, cur = _HOME["canada"]
+        accounts = ('[accounts.aa]\ntype = "taxable"\n\n'
+                    '[accounts.bb]\ntype = "taxable"\n')
+        files = {
+            "ticker.map": (f"RENAME QZOLD.{x} QZNEW.{x} 2025-04-01 "
+                           f"late=fold\n"),
+            "inputs/aa/a.tt": (
+                _bt("2024-01-10", f"QZOLD.{x}", 10, cur, 10.0)
+                + f"RENAME 2025-04-01 QZOLD.{x} QZNEW.{x} late=separate\n"
+                + _bt("2025-05-06", f"QZOLD.{x}", 7, cur, 3.0)
+                + _bt("2025-06-03", f"QZNEW.{x}", -10, cur, 11.0)),
+            "inputs/bb/b.tt": (
+                _bt("2024-02-10", f"QZOLD.{x}", 20, cur, 10.0)
+                + _bt("2025-04-06", f"QZOLD.{x}", 5, cur, 10.0)
+                + _bt("2025-06-03", f"QZNEW.{x}", -25, cur, 11.0))}
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, accounts=accounts,
+                                 files=files)["canada"]
+            _run(self, root, "--strict")
+            before = _sum(root)
+            w = cli(root, "format-map", "--write", "--no-backup")
+            self.assertEqual(w.returncode, 0, _out(w))
+            self.assertFalse((root / "inputs/aa/renames.tt").exists())
+            self.assertIn(f"RENAME 2025-04-01 QZOLD.{x} QZNEW.{x} late=fold",
+                          (root / "inputs/bb/renames.tt").read_text())
+            _run(self, root, "--strict")
+            self.assertEqual(_sum(root), before)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -134,6 +134,12 @@
   now refuses it naming the line, and `taxjson format-map` files it under
   Unrecognized. A respelling of one contract (the same expiry, right,
   strike and market) is still allowed.
+- **`taxjson format-map --write` no longer refuses moves that keep the
+  books.** An account with no books yet of the other kind (a crypto account
+  with no inputs, for a securities ticker change) counted as a change, and
+  a moved line went to the first account even when that account's own
+  `.tt` line chose the other `late=`; such an account is now left out, and
+  the line goes to an account whose own lines agree.
 - **A declared rename that books nothing is said.** A `.tt` (or legacy
   ticker.map) RENAME no account's books carry (a typo of the symbol, a late
   date) gets a Warning naming the line, and `taxjson renames` lists it
