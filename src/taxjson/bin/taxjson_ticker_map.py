@@ -252,6 +252,17 @@ def _parse_map_text(text: str, name: str = "ticker.map",
                         notes.append(f"{where}: {kw} renames a symbol to "
                                      f"itself (no effect): {line!r}")
                         continue
+                    # An option contract or a future is never one
+                    # security with shares, nor with another contract
+                    # (second pre-release review, 6).
+                    from taxjson.bin.taxjson_convert_tt import \
+                        _join_derivative_check
+                    try:
+                        _join_derivative_check(kw, frm, to, f"{where}: ",
+                                               line.strip())
+                    except ValueError as e:
+                        problems.append(str(e))
+                        continue
                     prev = first_rule.get(frm)
                     if prev is not None and prev[0] != to:
                         problems.append(

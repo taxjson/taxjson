@@ -125,6 +125,36 @@
 
 ### Fixed
 
+- **`late=fold` re-books only the rows after the account's own rename
+  row.** With a broker rename row a few days after the declared date, a
+  sale of the old ticker between the two was re-booked as the new symbol
+  before the rename row moved the position: Canada stopped ("would merge a
+  LONG position into an existing SHORT pool"), the US engine dropped the
+  sale's gain. The rows folded are now the ones `taxjson renames` calls
+  late.
+- **An event's `late=` applies to the accounts that held the old ticker.**
+  Another account that bought the old ticker only after the change (maybe
+  another company's shares) had its rows folded into the new symbol by a
+  `late=fold` it never declared; they are now kept, listed as undeclared
+  until a line of its own says.
+- **An undated ticker.map line never joins an option to its stock.**
+  `GLOBAL`, `TOBASE`, a legacy `JOURNAL` or a `RENAME` without a date that
+  joined an option contract or a future with a share listing (or two
+  different contracts) was accepted silently and pooled them; `taxjson run`
+  now refuses it naming the line, and `taxjson format-map` files it under
+  Unrecognized. A respelling of one contract (the same expiry, right,
+  strike and market) is still allowed.
+- **`taxjson format-map --write` no longer refuses moves that keep the
+  books.** An account with no books yet of the other kind (a crypto account
+  with no inputs, for a securities ticker change) counted as a change, and
+  a moved line went to the first account even when that account's own
+  `.tt` line chose the other `late=`; such an account is now left out, and
+  the line goes to an account whose own lines agree.
+- **A declared rename that books nothing is said.** A `.tt` (or legacy
+  ticker.map) RENAME no account's books carry (a typo of the symbol, a late
+  date) gets a Warning naming the line, and `taxjson renames` lists it
+  (`--pending` counts it). A chain declared for one day (A to B, then B to
+  C) books both links.
 - **A journal between two listings stays inside its account.** The
   transfer pairing pooled every account's transfer legs, so a journal's
   legs in one account (a Questrade BRW pair, RBC's `J~` legs, a `.tt`
