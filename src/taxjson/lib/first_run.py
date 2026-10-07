@@ -37,7 +37,6 @@ from taxjson.lib.missing_history import (
 from taxjson.lib.corporate_timeline import normalize_symbol_new
 
 SUMMARY_FILE = "run_summary.json"
-GUIDE = "docs/getting-started.md"
 
 # Income paid this long after the books last held the security is not a
 # late payment on shares just sold (a record date before the sale, the
@@ -522,6 +521,7 @@ def render_blocks(doc: Dict[str, Any], *,
                "(docs/getting-started.md, step 5)"]]
     for kind, it in items:
         blocks.append(out.wrap(f"{kind}: {it}", w, "", hang))
-    blocks.append(out.wrap(f"Info: Then run `taxjson checklist`. Every "
-                           f"step is in {GUIDE}.", w, "", hang))
+    blocks.append(out.wrap("Info: Then run `taxjson checklist`. `taxjson "
+                           "quick-start` lists every step and names the "
+                           "next one.", w, "", hang))
     return blocks
