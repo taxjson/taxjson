@@ -6703,8 +6703,10 @@ def cmd_run(args: argparse.Namespace) -> None:
             raise SystemExit(1)
         return
     _report_short_positions(root, settings, cache, ticker_map_arg, mh_arg)
-    _write_dated_events_state(root, cfg, cache, _tmap_parsed)
+    _rename_records = _write_dated_events_state(root, cfg, cache,
+                                                _tmap_parsed)
     if not pending_accounts:
+        _warn_unused_renames(_rename_records)
         _check_renamed_late(root, strict=getattr(args, "strict", False))
     if _blend_names and not args.account and not pending_accounts:
         stage_blended_wash_pass(_blend_names, settings, cache,
@@ -14302,8 +14304,10 @@ def cmd_renames(args: argparse.Namespace) -> None:
     an old ticker after its rename with how ticker.map resolves it,
     the look-alike renames the exports show (suggested, with the `.tt`
     line `RENAME <date> OLD NEW` that books each) and the undated
-    ticker.map renames (lib/renames). Exit 1 while a late trade is
-    unresolved; with --pending, also while a suggestion is open."""
+    ticker.map renames (lib/renames), and each declared rename that
+    books nothing. Exit 1 while a late trade is unresolved; with
+    --pending, also while a suggestion is open or a declaration books
+    nothing."""
     from taxjson.lib.renames import render, report
     root = Path(args.dir).resolve()
     try:
@@ -14457,11 +14461,11 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
 
 
 def _write_dated_events_state(root: Path, cfg: Dict[str, Any], cache: Path,
-                              tmap: Any) -> None:
+                              tmap: Any) -> List[Dict[str, Any]]:
     """work/dated_events.state (lib/dated_events): every declared journal
     with its status, and every rename event the books carry (each
     account's base rows) with its source and declarations, plus each
-    declaration no account's books carried."""
+    declaration no account's books carried. Returns the rename records."""
     from taxjson.lib import dated_events as DE
     from taxjson.lib.renames import _book_rows
     decl = _DATED_THIS_RUN.get(cache.resolve())
@@ -14475,14 +14479,41 @@ def _write_dated_events_state(root: Path, cfg: Dict[str, Any], cache: Path,
         rows = _book_rows(root, cfg)
     except ValueError:
         rows = []
-    doc = DE.state_doc(decl.journals if decl is not None else (),
-                       DE.rename_records(rows, declared))
+    mapping: Dict[str, str] = {}
+    if tmap is not None:
+        from taxjson.bin.taxjson_ticker_map import merge_renames
+        try:
+            mapping = merge_renames(tmap, to_base=True)
+        except ValueError:
+            mapping = {}
+    records = DE.rename_records(rows, declared, mapping)
+    doc = DE.state_doc(decl.journals if decl is not None else (), records)
     import json
     text = json.dumps(doc, indent=2, sort_keys=True,
                       ensure_ascii=False) + "\n"
     path = cache / DE.STATE
     if _read_work_stamp(path) != text:
         _write_work_stamp(path, text)
+    return records
+
+
+def _warn_unused_renames(records: List[Dict[str, Any]]) -> None:
+    """A declared rename no account's books carry (a typo of the symbol,
+    a date after the last OLD row was sold, an account of the other kind):
+    one Warning per declaration, naming its line (second pre-release
+    review, 11)."""
+    for r in records:
+        if r.get("status") != "unused":
+            continue
+        where = ", ".join(r.get("where") or []) or "a declaration"
+        _say_once(("rename-unused", where, r["old"], r["new"]), "warning",
+                  f"{where}: RENAME {r['date']} {r['old']} {r['new']} books "
+                  f"nothing",
+                  f"No account's books hold {r['old']} before "
+                  f"{r['date']} (in an account of the line's kind: "
+                  f"securities or crypto) — check the symbols (a typo?) "
+                  f"and the date, or delete the line. `taxjson renames` "
+                  f"lists it.", prog=_PROG)
 
 
 def _check_renamed_late(root: Path, *, strict: bool) -> None:
@@ -22109,8 +22140,9 @@ def _build_parser(prog: str = "taxjson"
     p_ren.add_argument("--json", action="store_true",
                        help="Emit JSON instead of text")
     p_ren.add_argument("--pending", action="store_true",
-                       help="Only the undeclared late trades and the "
-                            "suggested renames; exit 1 when there is one")
+                       help="Only the undeclared late trades, the "
+                            "suggested renames and the declared renames "
+                            "that book nothing; exit 1 when there is one")
     p_ren.set_defaults(func=cmd_renames)
 
     p_logic = sub.add_parser(

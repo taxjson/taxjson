@@ -776,20 +776,26 @@ def read_state(path: Path) -> Dict[str, List[Dict[str, Any]]]:
             for k in ("journals", "renames")}
 
 
-def rename_records(book_rows: Iterable[Any], declared: Iterable[Any]
+def rename_records(book_rows: Iterable[Any], declared: Iterable[Any],
+                   mapping: Optional[Dict[str, str]] = None
                    ) -> List[Dict[str, Any]]:
     """One record per rename event the books carry (lib/renames.
     rename_events over every account's rows: the SPLIT rows with a new
     symbol), with its machine source and where it was declared; plus each
     declaration (`declared`: renames.DatedRename) no account's books
-    carried (accounts [], status "unused")."""
+    carried (accounts [], status "unused"). `mapping`: the base stage's
+    undated renames (the books' symbols are the mapped ones)."""
+    from taxjson.bin.taxjson_ticker_map import map_symbol
     from taxjson.lib.renames import (SOURCE_MAP, WINDOW_DAYS, _days,
                                      rename_events)
+    mapping = mapping or {}
+    declared = list(declared)
     out = []
     used = set()
     for e in rename_events(book_rows):
-        decl = [dr for dr in declared if dr.old == e["old"]
-                and dr.new == e["new"]
+        decl = [dr for dr in declared
+                if map_symbol(dr.old, mapping) == e["old"]
+                and map_symbol(dr.new, mapping) == e["new"]
                 and (_days(dr.date, e["date"]) or 0) <= WINDOW_DAYS]
         for dr in decl:
             used.add(id(dr))
@@ -828,7 +834,9 @@ RENAMES_TT = "renames.tt"
 RENAMES_TT_HEAD = (
     "# Ticker changes: dated events, one line each, date first:\n"
     "#   RENAME <date> <OLD> <NEW> [late=fold|late=separate]\n"
-    "# A line here applies to every account whose books hold OLD.\n")
+    "# A line here applies to every account of this account's kind\n"
+    "# (securities, or crypto in a crypto account) whose books hold OLD\n"
+    "# before the date.\n")
 
 
 def _book_symbols(root: Path, acct: str) -> Optional[set]:

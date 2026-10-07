@@ -105,10 +105,17 @@ class DatedRename:
         return (f"RENAME {self.date} {self.old} {self.new}"
                 + (f" late={self.late}" if self.late else ""))
 
-    def late_for(self, account: str) -> str:
+    def late_for(self, account: str, held: bool = True) -> str:
         """The late= choice for `account`'s late rows: its own line's
-        when it declared one, else the event's (M4)."""
-        return dict(self.lates).get(account, self.late)
+        when it declared one, else the event's (M4) — the event's only
+        for an account that `held` OLD before the date (its books carry
+        the rename row): the late rows of an account that never held OLD
+        are another security or a broker's late booking only that
+        account can say (second pre-release review, 8)."""
+        own = dict(self.lates)
+        if account in own:
+            return own[account]
+        return self.late if held else ""
 
     def applies_to(self, kind: str) -> bool:
         """The event books in an account of `kind` (KIND_ANY: unknown,
@@ -270,16 +277,33 @@ def rename_events(rows: Iterable[Any]) -> List[Dict[str, Any]]:
     return evs
 
 
+def row_stamp(r: Any) -> Tuple[str, str]:
+    """(date, time) of a row in the books' order (no time: the start of
+    its day)."""
+    return (str(_g(r, "date"))[:10], str(_g(r, "time") or "00:00:00"))
+
+
+def after_rename_row(here: Tuple[str, str], own: Tuple[str, str]) -> bool:
+    """A row stamped `here` comes after an account's rename row stamped
+    `own` in the books: a later date, or a later time that day — a
+    rename row dated at the start of its day (00:00:00: the row the
+    pipeline books, a .tt SPLIT without a time of day) precedes every row
+    of that day."""
+    if here[0] != own[0]:
+        return here[0] > own[0]
+    return own[1] <= "00:00:00" or here[1] > own[1]
+
+
 def late_rows(rows: Iterable[Any], events: List[Dict[str, Any]]
               ) -> List[Tuple[Any, Dict[str, Any]]]:
     """(row, event) for each position row that names a renamed ticker
     (or an option on it) AFTER the rename in its account's books: the
     LATEST rename of the ticker before the row. "After" is the books'
-    order: past the account's own rename row (date and time — a booked
-    SPLIT is dated at the start of its day, 00:00:00, so an OLD row later
-    that day is already late), or, in an account with no rename row of
-    its own, on or after the event's date — the same rows `late=fold`
-    re-books (apply_dated_renames)."""
+    order: past the account's own rename row (after_rename_row: date and
+    time — a booked SPLIT is dated at the start of its day, 00:00:00, so
+    an OLD row that day is already late), or, in an account with no
+    rename row of its own, on or after the event's date — the same rows
+    `late=fold` re-books (apply_dated_renames)."""
     by_old: Dict[str, List[Dict[str, Any]]] = {}
     for e in events:
         by_old.setdefault(e["old"], []).append(e)
@@ -290,9 +314,6 @@ def late_rows(rows: Iterable[Any], events: List[Dict[str, Any]]
 
     def acct_of(r: Any) -> str:
         return str(_g(r, "_acct") or _g(r, "account") or "")
-
-    def at(r: Any) -> Tuple[str, str]:
-        return (str(_g(r, "date"))[:10], str(_g(r, "time") or "00:00:00"))
 
     out = []
     for r in rows:
@@ -305,12 +326,13 @@ def late_rows(rows: Iterable[Any], events: List[Dict[str, Any]]
             cands = by_old.get(root) if root else None
         if not cands:
             continue
-        here = at(r)
+        here = row_stamp(r)
         acct = acct_of(r)
         hit = None
         for e in cands:
-            own = [at(x) for x in e["rows"] if acct_of(x) == acct]
-            if (here > min(own)) if own else (here[0] >= e["date"]):
+            own = [row_stamp(x) for x in e["rows"] if acct_of(x) == acct]
+            if after_rename_row(here, min(own)) if own \
+                    else (here[0] >= e["date"]):
                 hit = e
         if hit is not None:
             out.append((r, hit))
@@ -335,12 +357,14 @@ def matching_lines(dated: Iterable[DatedRename], event: Dict[str, Any],
 
 def declared_late(dated: Iterable[DatedRename], event: Dict[str, Any],
                   mapping: Optional[Dict[str, str]] = None,
-                  account: Optional[str] = None) -> str:
+                  account: Optional[str] = None, held: bool = True) -> str:
     """The late= choice the declarations make for `event` ('' when none);
     with `account`, the choice for that account's late rows
-    (DatedRename.late_for: its own line's, else the event's)."""
+    (DatedRename.late_for: its own line's, else the event's when the
+    account `held` OLD before the date — its books carry the event)."""
     for dr in matching_lines(dated, event, mapping):
-        late = dr.late_for(account) if account is not None else dr.late
+        late = (dr.late_for(account, held) if account is not None
+                else dr.late)
         if late:
             return late
     return ""
@@ -368,13 +392,18 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
     (to NEW: nothing to add; to another symbol: refused). The renames
     apply in DATE order whatever order they were declared in, so a chain
     A -> B -> C carries the position twice: an account holds B before
-    the second date when an earlier rename row moved A into B (H3).
-    `late=fold` (the account's own choice, DatedRename.late_for)
-    re-books the account's OLD rows (and options on OLD) on or after the
-    date as NEW. `kind`: the accounts' kind (KIND_SECURITIES on the
-    equity merge, KIND_CRYPTO on the crypto map stage) — a .tt RENAME
-    applies only to accounts of its declaring account's kind
-    (DatedRename.applies_to). Returns the new list."""
+    the second date when an earlier rename row moved A into B (H3) — on
+    the same date too, A -> B and B -> C declared for one day (second
+    pre-release review, 11). `late=fold` (DatedRename.late_for) re-books
+    the account's OLD rows (and options on OLD) AFTER its own rename row
+    (after_rename_row: the rows late_rows calls late — an OLD row the
+    account books before its broker's rename row is still OLD) as NEW;
+    the event's late= applies to the accounts that held OLD before the
+    date, an account that never did folds only on a line of its own
+    (second pre-release review, 5 and 8). `kind`: the accounts' kind
+    (KIND_SECURITIES on the equity merge, KIND_CRYPTO on the crypto map
+    stage) — a .tt RENAME applies only to accounts of its declaring
+    account's kind (DatedRename.applies_to). Returns the new list."""
     from taxjson.bin.taxjson_ticker_map import map_symbol
     from taxjson.lib.core import TaxTransaction
     stream = stream or sys.stderr
@@ -384,12 +413,21 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
     if not dated:
         return txs
     out = list(txs)
+    # The rename rows this function booked (an earlier event's row on the
+    # same date moves a position into the next link of a chain).
+    ours: set = set()
     for dr in dated:
         # Accounts with an OLD position before the date: OLD rows, or a
-        # rename row that moved another symbol into OLD.
+        # rename row that moved another symbol into OLD (on the date: one
+        # this function booked for an earlier event of that day).
         held: Dict[str, Any] = {}
         for t in out:
-            if (t.date or "") >= dr.date:
+            d = t.date or ""
+            if d > dr.date or (d == dr.date and id(t) not in ours):
+                continue
+            if d == dr.date:
+                if rename_target(t) == dr.old:
+                    held[t.account] = t
                 continue
             if ((t.action in _POSITION_ACTIONS + ("SPLIT",)
                  and t.symbol == dr.old)
@@ -435,16 +473,40 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
                       f"({', '.join(t.account for t in added)}).",
                       file=stream)
             # Placed before the first row dated on or after the rename
-            # (the rows are already in the pipeline's order).
+            # (the rows are already in the pipeline's order), after the
+            # rows booked for an earlier rename that day.
             at = next((i for i, t in enumerate(out)
                        if (t.date or "") >= dr.date), len(out))
+            while at < len(out) and id(out[at]) in ours \
+                    and (out[at].date or "") == dr.date:
+                at += 1
             out[at:at] = added
+            ours.update(id(t) for t in added)
+        # Each account's own rename row of this change: its late rows
+        # are the ones after it.
+        own: Dict[str, Tuple[str, str]] = {}
+        for t in out:
+            if t.symbol == dr.old and rename_target(t) == dr.new:
+                gap = _days(t.date, dr.date)
+                if gap is not None and gap <= WINDOW_DAYS:
+                    st = row_stamp(t)
+                    own[t.account] = min(own.get(t.account, st), st)
         moved: Dict[str, int] = {}
+        kept: Dict[str, int] = {}
         m = {dr.old: dr.new}
         for t in out:
-            if (t.action != "SPLIT" and (t.date or "") >= dr.date
-                    and names_symbol(t.symbol, dr.old)
-                    and dr.late_for(t.account) == LATE_FOLD):
+            if (t.action == "SPLIT" or (t.date or "") < dr.date
+                    or not names_symbol(t.symbol, dr.old)):
+                continue
+            if t.account in own:
+                if not after_rename_row(row_stamp(t), own[t.account]):
+                    continue
+                choice = dr.late_for(t.account)
+            else:
+                choice = dr.late_for(t.account, held=False)
+                if not choice and dr.late == LATE_FOLD:
+                    kept[t.account] = kept.get(t.account, 0) + 1
+            if choice == LATE_FOLD:
                 t.symbol = map_symbol(t.symbol, m)
                 moved[t.account] = moved.get(t.account, 0) + 1
         if moved:
@@ -453,6 +515,16 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
                       f"(late=fold"
                       + (f": {', '.join(sorted(moved))}"
                          if dr.lates else "") + ").", file=stream)
+        for acct, n in sorted(kept.items()):
+            emit_line(f"note: {dr.where}: {n} {dr.old} row(s) of account "
+                      f"{acct} on or after {dr.date} are kept as {dr.old}: "
+                      f"late=fold applies to the accounts that held "
+                      f"{dr.old} before the date, and {acct} did not "
+                      f"(another company may use the ticker now) — "
+                      f"`taxjson renames` lists them; a .tt line of "
+                      f"{acct}'s own (`RENAME {dr.date} {dr.old} {dr.new} "
+                      f"late=fold` or `late=separate`) settles them.",
+                      file=stream)
     return out
 
 
@@ -727,7 +799,8 @@ def report(root: Path, cfg: Dict[str, Any],
     for r, e in late_rows(rows, events):
         if account and r["_acct"] != account:
             continue
-        choice = declared_late(dated, e, ren, account=r["_acct"])
+        choice = declared_late(dated, e, ren, account=r["_acct"],
+                               held=r["_acct"] in e["accounts"])
         late.append({
             "account": r["_acct"], "date": str(r.get("date") or "")[:10],
             "action": r.get("action"), "symbol": r.get("symbol"),
@@ -759,9 +832,33 @@ def report(root: Path, cfg: Dict[str, Any],
     unresolved = sum(1 for x in late if x["resolution"] == "unresolved")
     suggested = (rename_hints(root, cfg, events, account) if hints
                  else [])
+    unused = []
+    for dr in unused_declarations(dated, events, ren):
+        if account and dr.account and dr.account != account:
+            continue
+        unused.append({"date": dr.date, "old": dr.old, "new": dr.new,
+                       "late": dr.late, "source": dr.source or SOURCE_MAP,
+                       "where": [dr.where] + list(dr.also),
+                       "line": dr.tt_line()})
     return {"renames": out_events, "late": late, "undated": undated,
-            "suggested": suggested, "unresolved": unresolved,
-            "pending": unresolved + len(suggested)}
+            "suggested": suggested, "unused": unused,
+            "unresolved": unresolved,
+            "pending": unresolved + len(suggested) + len(unused)}
+
+
+def unused_declarations(dated: Iterable[DatedRename],
+                        events: List[Dict[str, Any]],
+                        mapping: Optional[Dict[str, str]] = None
+                        ) -> List[DatedRename]:
+    """The declared renames (`dated`, merged events) no rename event of
+    the books carries (matching_lines: OLD through the undated renames,
+    the date within WINDOW_DAYS): a typo of the symbol, a date after the
+    last OLD row, an account of the other kind — booked nowhere."""
+    used = set()
+    for e in events:
+        for dr in matching_lines(dated, e, mapping):
+            used.add(id(dr))
+    return [dr for dr in dated if id(dr) not in used]
 
 
 def unresolved_late(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -790,6 +887,7 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
     from taxjson.lib.out import Doc
     evs, late, undated = doc["renames"], doc["late"], doc["undated"]
     hints = doc.get("suggested") or []
+    unused = doc.get("unused") or []
     if pending:
         bad = {(x["rename_date"], x["renamed_to"]) for x in late
                if x["resolution"] == "unresolved"}
@@ -797,7 +895,9 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
         undated = []
     d = Doc(f"RENAMES ({len(evs)})" if not pending else
             f"RENAMES — pending: {len(evs)} with an undeclared late trade, "
-            f"{len(hints)} suggested", width_=width_)
+            f"{len(hints)} suggested"
+            + (f", {len(unused)} declared but not booked" if unused else ""),
+            width_=width_)
     d.blank()
     if not evs and not pending:
         d.para("No dated rename in the books.")
@@ -856,6 +956,17 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
                        f"late=separate")
                 _hang(d, "Until then they are a separate security and "
                        "`taxjson run --strict` stops.", "  ", "    ")
+    if unused:
+        d.section(f"DECLARED, NOT BOOKED ({len(unused)})")
+        d.para("No account's books hold the old symbol before the date "
+               "(in an account of the line's kind: securities or crypto), "
+               "so the line books nothing. Check the symbols (a typo?) and "
+               "the date, or delete the line.", "  ")
+        for u in unused:
+            d.blank()
+            d.item(f"{u['old']} -> {u['new']} on {u['date']} "
+                   f"({', '.join(u['where'])})", "  ")
+            d.line(f"      {u['line']}")
     if hints:
         d.section(f"SUGGESTED ({len(hints)}): look-alike renames the "
                   f"exports show")
@@ -889,5 +1000,7 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
            "No unresolved trade in an old ticker after its rename.")
     if hints:
         msg += f" {len(hints)} look-alike rename(s) to settle."
+    if unused:
+        msg += f" {len(unused)} declared rename(s) book nothing."
     d.para(msg)
     return d.lines()
