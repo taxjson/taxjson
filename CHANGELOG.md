@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A Questrade currency journal is joined with `transfers = true` too.**
+  The parser pairs the two BRW legs of a journal between a security's CAD
+  and USD lines, but the pair id reached only the transfer sidecar: in an
+  account that keeps its transfers in the books the run never saw the
+  journal, and joined the two lines only when their names were equal word
+  for word. The id is now kept on the book rows as well.
 
 ## v0.23.1 (2026-10-06)
 
