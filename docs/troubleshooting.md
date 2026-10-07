@@ -295,6 +295,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/lib/first_run.py` — `unchecked_accounts`; `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `no arguments, and no account in `
 
+### `tjs sanity`: "QZD.U.TO MISSING_IN_TAXJSON" (or `QTY_MISMATCH` on QZD.TO) for a listing the run joined by its transfer journal
+- **Check:** the run's console said "joined as one security by their transfer journal: QZD.U.TO ↔ QZD.TO …" and `work/ticker.map.effective` has the `TOBASE` / `JOURNAL` line; `ticker.map` itself has no line for the pair. The books hold the position under one symbol, the broker lists it under both.
+- **Cause:** `tjs sanity` folded the broker's symbols with `ticker.map` only, not with the listings the run joined itself, so the broker's other-listing position was compared on its own.
+- **Fix:** upgrade: sanity folds with the map the books were merged with (`work/ticker.map.effective` when the run wrote one, else `ticker.map`). A real difference still shows.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `_EFF_MAP`; `src/taxjson/lib/cross_listings.py` — `EFFECTIVE_MAP`
+
 ### "Warning: 3 positions differ from the broker's holdings files"
 - **Check:** `tjs sanity` lists each symbol with TAXJSON and HOLDINGS quantities and an ISSUE: `QTY_MISMATCH`, `MISSING_IN_TAXJSON` (the broker holds it, the books do not), `MISSING_IN_HOLDINGS`.
 - **Cause:** fewer shares in taxjson than at the broker usually means missing history (purchases before the exports start, or shares transferred in). A trade after the last export, a symbol spelled differently (`QZQ.TO` vs `QZQ.US`) or a holdings file of another date are the other usual causes.

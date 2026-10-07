@@ -58,6 +58,10 @@
   two symbols over the years) is joined to each.
 - **A move between brokers over a weekend pairs.** The transfer pairing
   window is 5 business days instead of 5 calendar days.
+- **`taxjson sanity` folds the listings the run joined.** A broker position
+  on a listing that `taxjson run` joined to another by its transfer journal
+  read as missing from the books; sanity now applies the run's own joins
+  (`work/ticker.map.effective`) as well as ticker.map.
 
 ## v0.23.1 (2026-10-06)
 

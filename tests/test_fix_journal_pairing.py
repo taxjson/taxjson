@@ -496,6 +496,30 @@ class TestRun(unittest.TestCase):
     def test_usa_ib_interdepot_with_one_sided_form_joins(self):
         self._check_ib("usa")
 
+    def _check_sanity(self, country):
+        # 800 bought on the USD line, 300 journaled to the CAD line, 100
+        # sold there: one security of 700. The broker lists 500 on the
+        # USD line and 200 on the CAD line; sanity folds them with the
+        # run's own join, as the books were merged.
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(Path(td), files={
+                "inputs/margin/rbc.csv": _rbc([("May 12, 2025", 300,
+                                                "0TFR1Q")])})[country]
+            self.assertEqual(cli(root, "run", "--no-input").returncode, 0)
+            f = Path(td) / "margin_holdings_broker.toml"
+            f.write_text('[meta]\naccount = "margin"\n'
+                         '[[holding]]\nsymbol = "QZD.US"\n'
+                         'quantity = 500.0\n'
+                         '[[holding]]\nsymbol = "QZD.TO"\n'
+                         'quantity = 200.0\n')
+            r = cli(root, "sanity", f"margin={f}")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertNotIn("MISSING", r.stdout)
+
+    @rule("CA-XLIST-01")
+    def test_canada_sanity_folds_the_listings_the_run_joined(self):
+        self._check_sanity("canada")
+
 
 if __name__ == "__main__":
     unittest.main()

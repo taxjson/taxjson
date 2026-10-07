@@ -14963,11 +14963,17 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         _die("nothing to check")
 
     # Same consolidation the canonical pipeline applied: GLOBAL+TOBASE
-    # renames from ticker.map; options follow their underlying.
+    # renames from the map the books were merged with — the run's
+    # effective map (ticker.map plus the listings it joined by their
+    # transfer journal, lib/cross_listings) when it wrote one, else
+    # ticker.map; options follow their underlying.
     renames: Optional[Dict[str, str]] = None
     native_renames: Optional[Dict[str, str]] = None
     map_symbol = None
-    map_file = root / "ticker.map"
+    from taxjson.lib.cross_listings import EFFECTIVE_MAP as _EFF_MAP
+    map_file = root / "work" / _EFF_MAP
+    if not map_file.is_file():
+        map_file = root / "ticker.map"
     if map_file.exists():
         try:
             from taxjson.bin.taxjson_ticker_map import (load_map_file,
