@@ -495,13 +495,16 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
         kept: Dict[str, int] = {}
         m = {dr.old: dr.new}
         for t in out:
-            if (t.action == "SPLIT" or (t.date or "") < dr.date
-                    or not names_symbol(t.symbol, dr.old)):
+            if t.action == "SPLIT" or not names_symbol(t.symbol, dr.old):
                 continue
             if t.account in own:
+                # (a broker's row a few days BEFORE the declared date
+                # included: the rows after it are late)
                 if not after_rename_row(row_stamp(t), own[t.account]):
                     continue
                 choice = dr.late_for(t.account)
+            elif (t.date or "") < dr.date:
+                continue
             else:
                 choice = dr.late_for(t.account, held=False)
                 if not choice and dr.late == LATE_FOLD:
@@ -511,7 +514,8 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
                 moved[t.account] = moved.get(t.account, 0) + 1
         if moved:
             emit_line(f"note: {dr.where}: {sum(moved.values())} {dr.old} "
-                      f"row(s) on or after {dr.date} booked as {dr.new} "
+                      f"row(s) after the rename ({dr.date}) booked as "
+                      f"{dr.new} "
                       f"(late=fold"
                       + (f": {', '.join(sorted(moved))}"
                          if dr.lates else "") + ").", file=stream)

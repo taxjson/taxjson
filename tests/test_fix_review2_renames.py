@@ -82,6 +82,33 @@ class TestFoldAfterTheAccountsOwnRow(unittest.TestCase):
     def test_usa(self):
         self._check("usa")
 
+    def _earlier_row(self, country):
+        # The broker's row (03-28) BEFORE the declared date (04-01): an OLD
+        # buy between the two is late (after the account's own row), and
+        # late=fold books it as NEW.
+        x, cur = _HOME[country]
+        files = {"inputs/margin/m.tt": (
+            _bt("2024-03-01", f"QZA.{x}", 50, cur, 10.0)
+            + f"SPLIT 2025-03-28 00:00:00 QZA.{x} QZB.{x} 1\n"
+            + _bt("2025-03-31", f"QZA.{x}", 10, cur, 10.0)
+            + f"RENAME 2025-04-01 QZA.{x} QZB.{x} late=fold\n"
+            + _bt("2025-06-02", f"QZB.{x}", -60, cur, 12.0))}
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, files=files)[country]
+            _run(self, root, "--strict")
+            self.assertAlmostEqual(_sum(root)["totals"]["total"], 120.0,
+                                   delta=0.011)
+            doc = json.loads(cli(root, "renames", "--json").stdout)
+            self.assertEqual(doc["late"], [])
+
+    @rule("CA-ACB-RENAME")
+    def test_canada_broker_row_before_the_date(self):
+        self._earlier_row("canada")
+
+    @rule("US-BASIS-RENAME")
+    def test_usa_broker_row_before_the_date(self):
+        self._earlier_row("usa")
+
 
 # ------------------------------------------------------------ 8
 
