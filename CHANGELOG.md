@@ -136,8 +136,15 @@
   first only for a `JOURNAL` line, so with a `TOBASE` line, or with the run's
   own join, they reported a short with no purchase. They now read every
   journal the books show the same way (a join of the run, a Questrade pair
-  id, RBC's J~ reference on the two legs), the legs in-leg first. A
-  `JOURNAL` line is still read.
+  id, RBC's J~ reference on the two legs, a `.tt` `JOURNAL` line), the legs
+  in-leg first — on the journal's own days only: its legs' days and the day
+  of its trades (a buy of one listing and a sale of the same quantity of
+  the other). A `JOURNAL` line is still read, on its days of such trades.
+  A `TOBASE` line names no journal: read as one on every day of its
+  symbols it hid a genuinely missing purchase (a sale with no purchase on
+  one listing and a buy of the other, or a later sale and rebuy after a
+  gambit). A day that looks like a journal with no evidence of one is
+  named with the `.tt` `JOURNAL` line to add.
 - **"NOT in `taxjson sum`" only when it is true.** The closing summary and
   `taxjson sum` said a sale with no purchase in the files was missing from
   the totals even when the gains engine had booked it (as a short sale a later

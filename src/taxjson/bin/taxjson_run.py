@@ -7258,6 +7258,32 @@ def _report_short_positions(root: Path, settings: Dict[str, Any],
     for name, syms in notes:
         _say("note", *_short_positions_note(name, syms), indent="  ",
              file=sys.stdout)
+    if notes:
+        # A day a TOBASE line's two listings trade opposite ways with no
+        # journal on it reads in clock order: the line to add when the
+        # units were journaled (lib/missing_history.
+        # undeclared_journal_days).
+        try:
+            from taxjson.lib.missing_history import undeclared_journal_days
+            _named = {n for n, _s in notes}
+            _undecl = [u for u in undeclared_journal_days(cache, ticker_map)
+                       if u[0] in _named]
+        except Exception:                           # noqa: BLE001
+            _undecl = []
+        if _undecl:
+            _say("note", f"{len(_undecl)} day(s) with a buy of one listing "
+                 f"and a sale of the other that a ticker.map TOBASE line "
+                 f"joins, the same quantity, and no journal",
+                 "A TOBASE line says two listings are one security, not "
+                 "that units moved between them: such a day reads in "
+                 "clock order, and a sale stamped before the buy is a "
+                 "sale with no purchase. If the units were journaled (a "
+                 "Norbert's gambit), declare each journal in a .tt file "
+                 "of its account: "
+                 + "; ".join(f"`JOURNAL {d} {b} {s_} {q:g}` ({a})"
+                             for a, d, b, s_, q in _undecl[:5])
+                 + (" ..." if len(_undecl) > 5 else "") + ".",
+                 indent="  ", file=sys.stdout)
     if outside:
         n = len(outside)
         when = ("before" if all(

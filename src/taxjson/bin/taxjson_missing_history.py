@@ -636,13 +636,14 @@ def main(argv=None):
               "input — a row's tax year is taken from its SETTLEMENT date "
               "(run it on a project's work/ files to use the project's "
               "country and tax_date)", file=sys.stderr)
-    # Journal symbols: a same-day Norbert's-gambit pair is not a one-day
-    # short with a missing purchase (audit A2-0636 / A2-0309). A
-    # ticker.map JOURNAL line names one; so does a join of the run or a
-    # broker journal the project's parsed exports show (the work/
-    # folder beside the books — lib/missing_history.
-    # walk_journal_symbols).
-    journal = set()
+    # Journal days: a same-day Norbert's-gambit pair is not a one-day
+    # short with a missing purchase (audit A2-0636 / A2-0309) — on the
+    # days that hold a journal only: a join of the run, a broker journal
+    # the project's parsed exports show (the work/ folder beside the
+    # books), a legacy ticker.map JOURNAL line's days of opposite trades
+    # (lib/missing_history.walk_journal_symbols).
+    from taxjson.lib.missing_history import JournalDays
+    journal = JournalDays()
     if args.ticker_map:
         from taxjson.lib.missing_history import journal_targets
         try:
@@ -652,8 +653,14 @@ def main(argv=None):
                   f"{args.ticker_map} ({e}) — its JOURNAL lines are not "
                   f"read.", file=sys.stderr)
     from taxjson.lib.missing_history import walk_journal_symbols
+    _lines = set(journal)
     for _wd in sorted({Path(f).resolve().parent for f in args.files}):
         journal |= walk_journal_symbols(_wd, args.ticker_map)
+    if _lines and not journal.inputs_read:
+        # Books with no parsed exports beside them: a JOURNAL line's
+        # days are read from the books (books_journal_days).
+        from taxjson.lib.missing_history import books_journal_days
+        journal |= books_journal_days(txs, _lines)
     if args.write_purchases is not None:
         return _write_purchases(args, txs, country=country, basis=basis,
                                 types=types, journal=journal,

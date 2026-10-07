@@ -2336,7 +2336,9 @@ taxjson find-missing-history --write-missing-history --outside-year
 root. It never overwrites an existing file (a reviewed `missing_history.json`
 keeps your prunes and hand-added pairs): write to a new file and merge, or pass `--force` (the old
 file is kept as `<file>.bak`, or the next free `<file>.bakN`). A same-day Norbert's-gambit pair (a journal the
-books show) is not offered as a candidate.
+books show: the broker's journal legs, a `.tt` `JOURNAL` line) is not offered as a candidate — on the
+journal's own days only; a `TOBASE` line alone is no journal, and `taxjson run` names the `.tt` line to add
+for a day that looks like one.
 
 `taxjson run` (and t1135, wash-radar, option-boundary) still applies an entry
 the detection would not propose — a short the broker marks as a short sale

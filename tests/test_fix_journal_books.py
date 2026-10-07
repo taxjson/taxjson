@@ -261,13 +261,14 @@ class TestRbcGambitNeedsNoJournalLine(unittest.TestCase):
 
     def test_the_walk_knows_the_journal_without_a_journal_line(self):
         root, _r = self.got['tobase-aside']
-        # A TOBASE line between a fund's two currency lines is read as
-        # the journal a JOURNAL line was (pre-release review M6: the form
-        # format-map migrates JOURNAL to); the legs say it too.
-        self.assertEqual(MH.journal_targets(root / 'ticker.map'),
-                         {'QZD.TO', 'QZD.U.TO'})
-        self.assertIn('QZD.TO', MH.walk_journal_symbols(
-            root / 'work', root / 'ticker.map'))
+        # A TOBASE line is no journal (second pre-release review, 1):
+        # the legs say it, and name its days — the J~ legs' settlement
+        # day and the gambit's trade day — and no other.
+        self.assertEqual(MH.journal_targets(root / 'ticker.map'), set())
+        js = MH.walk_journal_symbols(root / 'work', root / 'ticker.map')
+        self.assertIn('QZD.TO', js)
+        self.assertEqual(sorted({d for _a, d, _s in js.days}),
+                         ['2025-05-05', '2025-05-06'])
 
 
 class TestJournalDetection(unittest.TestCase):
@@ -279,7 +280,7 @@ class TestJournalDetection(unittest.TestCase):
     def test_rbc_reference_pairs_the_legs_the_renames_fold(self):
         legs = [self._leg('QZD.TO', -1000, 'TFR - X TRANSFER TO U$  J~1'),
                 self._leg('QZD.U.TO', 1000, 'TFR - X TRANSFER FROM C$ J~1')]
-        rows = [(t.account, t) for t in legs]
+        rows = [(t.account, t, 'rbc_direct') for t in legs]
         self.assertEqual(MH.detected_journal_symbols(rows), set())
         self.assertEqual(MH.detected_journal_symbols(
             rows, {'QZD.U.TO': 'QZD.TO'}), {'QZD.TO', 'QZD.U.TO'})
@@ -287,6 +288,12 @@ class TestJournalDetection(unittest.TestCase):
         self.assertEqual(MH.detected_journal_symbols(
             rows + rows[:1], {'QZD.U.TO': 'QZD.TO'}),
             {'QZD.TO', 'QZD.U.TO'})
+        # RBC's reference is read on RBC's rows only (second pre-release
+        # review, 12): another broker's row, or a row of no known file.
+        for other in ([(a, t, 'questrade') for a, t, _b in rows],
+                      [(a, t) for a, t, _b in rows]):
+            self.assertEqual(MH.detected_journal_symbols(
+                other, {'QZD.U.TO': 'QZD.TO'}), set())
 
     def test_parser_pair_id_and_unpaired_legs(self):
         legs = [self._leg('QZD.TO', -300, pair='2025-09-25#1'),
@@ -301,12 +308,14 @@ class TestJournalDetection(unittest.TestCase):
         self.assertEqual(MH.detected_journal_symbols(
             [(t.account, t) for t in other]), set())
 
-    def _gambit(self, with_legs):
+    def _gambit(self, with_legs, pair=''):
         def tx(qty, time, action='BUYSELL', desc='', day='2025-05-05'):
             return TaxTransaction(action=action, date=day, time=time,
                                   date_settle='2025-05-06', symbol='QZD.TO',
                                   quantity=qty, account='m', currency='CAD',
-                                  description=desc)
+                                  description=desc,
+                                  journal_pair=pair if action == 'TRANSFER'
+                                  else '')
         rows = [tx(-1000, '09:30:00'), tx(1000, '09:30:01')]
         if with_legs:
             rows += [tx(-1000, '09:30:00', 'TRANSFER',
@@ -316,32 +325,65 @@ class TestJournalDetection(unittest.TestCase):
         return rows
 
     def test_walk_reads_the_books_own_journal(self):
-        # The legs in the books (transfers = true) name the journal.
-        self.assertEqual(MH.detect_missing_history(self._gambit(True)), [])
-        # Without them (transfers aside) the caller's set does.
+        # The legs in the books (transfers = true) name the journal's
+        # own day; its trades' day (one symbol in the books: the two
+        # listings are told apart only by the parsed exports) is named
+        # by walk_journal_symbols' days (second pre-release review, 1).
+        self.assertEqual(len(MH.detect_missing_history(
+            self._gambit(True, pair='p1'))), 1)
+        days = MH.JournalDays(days=[('m', '2025-05-05', 'QZD.TO')])
+        self.assertEqual(MH.detect_missing_history(
+            self._gambit(True, pair='p1'), journal_symbols=days), [])
         self.assertEqual(len(MH.detect_missing_history(
             self._gambit(False))), 1)
+        self.assertEqual(MH.detect_missing_history(
+            self._gambit(False), journal_symbols=days), [])
+        # Another day of the symbol keeps the clock.
+        other = MH.JournalDays(days=[('m', '2025-05-07', 'QZD.TO')])
+        self.assertEqual(len(MH.detect_missing_history(
+            self._gambit(False), journal_symbols=other)), 1)
+        # A caller's plain set of symbols reads every day of them.
         self.assertEqual(MH.detect_missing_history(
             self._gambit(False), journal_symbols={'QZD.TO'}), [])
 
     def test_settle_day_legs_read_in_leg_first(self):
-        rows = self._gambit(True)[2:]
+        # Paired by their pair id in the books (RBC's J~ reference is read
+        # from the parsed exports, where the broker is known).
+        rows = self._gambit(True, pair='p1')[2:]
         self.assertEqual(len(MH.detect_missing_history(rows)), 0)
-        js = {'QZD.TO'}
+        self.assertEqual(len(MH.detect_missing_history(
+            self._gambit(True)[2:])), 1)
+        js = MH.JournalDays(days=[('m', '2025-05-06', 'QZD.TO')])
         keys = sorted(rows, key=lambda t: (MH._walk_key(t, js),
                                            0 if t.quantity > 0 else 1))
         self.assertEqual([t.quantity for t in keys], [1000, -1000])
 
     def test_state_joins_are_journals(self):
+        def leg(sym, day='2025-05-06'):
+            return {'account': 'm', 'broker': 'rbc_direct', 'date': day,
+                    'quantity': 1000.0, 'symbol': sym}
         with tempfile.TemporaryDirectory() as td:
             cache = Path(td) / 'work'
             cache.mkdir()
             (cache / XL.STATE).write_text(json.dumps({
                 'format': XL.FORMAT, 'joined': [
-                    {'from': 'QZD.U.TO', 'to': 'QZD.TO'}],
+                    {'from': 'QZD.U.TO', 'to': 'QZD.TO',
+                     'out': leg('QZD.TO'), 'in': leg('QZD.U.TO')}],
+                'refused': [
+                    # A broker journal the user's map decided.
+                    {'from': 'QZE.U.TO', 'to': 'QZE.TO', 'refused': 'map',
+                     'journal': 'rbc_direct', 'out': leg('QZE.TO'),
+                     'in': leg('QZE.U.TO', '2025-05-07')},
+                    # A coincidence of two transfers the map decided.
+                    {'from': 'QZG.U.TO', 'to': 'QZG.TO', 'refused': 'map',
+                     'out': leg('QZG.TO'), 'in': leg('QZG.U.TO')}],
                 'suggested': [], 'collisions': []}))
-            self.assertEqual(MH.walk_journal_symbols(cache),
-                             {'QZD.TO', 'QZD.U.TO'})
+            js = MH.walk_journal_symbols(cache)
+            self.assertEqual(js, {'QZD.TO', 'QZD.U.TO', 'QZE.TO',
+                                  'QZE.U.TO'})
+            self.assertTrue(js.on('m', '2025-05-06', 'QZD.U.TO'))
+            self.assertTrue(js.on('m', '2025-05-07', 'QZE.TO'))
+            self.assertFalse(js.on('m', '2025-05-08', 'QZD.TO'))
 
 
 # --------------------------------------------- 6. NOT in `taxjson sum`

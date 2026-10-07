@@ -11,7 +11,9 @@ moves units between two listings INSIDE one account, so
 - M5: a listing joined to two others through a hub joins them only when
   their own names agree with each other;
 - M6: migrating a ticker.map JOURNAL line to TOBASE changes nothing in
-  the missing-history walks;
+  the missing-history walks where the journal has evidence (the broker's
+  legs, a .tt JOURNAL line) — a TOBASE line alone is no journal (second
+  pre-release review, test_fix_review2_journals);
 - the lows: trailing corporate forms only, one record per currency
   journal, RBC's J~ reference on RBC's rows only, identical .tt lines,
   a partial duplicate of the broker's journal, future dates and absurd
@@ -355,19 +357,24 @@ class TestHubPartnersAgree(unittest.TestCase):
 # ------------------------------------------------------------------ M6
 
 class TestMigratedJournalLineWalksTheSame(unittest.TestCase):
+    """M6, as the second pre-release review (finding 1) left it: a legacy
+    JOURNAL line still names a journal on its days of opposite trades; a
+    TOBASE line — the form format-map migrates it to — is no journal by
+    itself (it hid a genuinely missing purchase), so a gambit with no
+    journal evidence (no broker legs) reads as a short after the
+    migration until a .tt JOURNAL line declares it. With the broker's
+    legs (test_fix_journal_books.TestRbcGambitNeedsNoJournalLine) the
+    migration changes nothing."""
 
-    def test_tobase_lines_that_stand_for_a_journal(self):
+    def test_only_journal_lines_are_read(self):
         from types import SimpleNamespace
         from taxjson.lib.missing_history import _journal_line_symbols
         tm = SimpleNamespace(journal={}, tobase={
             "QZG.U.TO": "QZG.TO",       # a fund's two currency lines
-            "QZF.US": "QZF.TO",         # an interlisted stock: no
-            "QZA.US": "QZB.TO"})        # two roots: no
+            "QZF.US": "QZF.TO"})        # an interlisted stock
+        self.assertEqual(_journal_line_symbols(tm), set())
+        tm.journal = {"QZG.U.TO": "QZG.TO"}
         self.assertEqual(_journal_line_symbols(tm), {"QZG.U.TO", "QZG.TO"})
-        # Opposite trades on one day in one account: a journal's day.
-        trades = {("m", "2025-03-05"): {"QZA.US": {-1}, "QZB.TO": {1}}}
-        self.assertEqual(_journal_line_symbols(tm, trades),
-                         {"QZG.U.TO", "QZG.TO", "QZA.US", "QZB.TO"})
 
     def _check(self, country):
         files = {
@@ -385,7 +392,7 @@ class TestMigratedJournalLineWalksTheSame(unittest.TestCase):
             def state():
                 r = _run(self, root)
                 s = json.loads(cli(root, "sum", "--json").stdout)
-                return ("sold with no purchase" in _out(r),
+                return ("no purchase in your files" in _out(r),
                         s.get("no_purchase_in_totals"), s["totals"])
             before = state()
             self.assertFalse(before[0])
@@ -393,14 +400,18 @@ class TestMigratedJournalLineWalksTheSame(unittest.TestCase):
             self.assertEqual(w.returncode, 0, _out(w))
             self.assertIn("TOBASE QZG.U.TO QZG.TO",
                           (root / "ticker.map").read_text())
+            self.assertTrue(state()[0])
+            # The journal declared on its day: the walk reads it again.
+            (root / "inputs" / "margin" / "j.tt").write_text(
+                "JOURNAL 2025-03-05 QZG.TO QZG.U.TO 100\n")
             self.assertEqual(state(), before)
 
     @rule("CA-XLIST-04")
-    def test_canada_migrated_journal_line_walks_the_same(self):
+    def test_canada_migrated_journal_line_needs_its_evidence(self):
         self._check("canada")
 
     @rule("US-XLIST-03")
-    def test_usa_migrated_journal_line_walks_the_same(self):
+    def test_usa_migrated_journal_line_needs_its_evidence(self):
         self._check("usa")
 
 

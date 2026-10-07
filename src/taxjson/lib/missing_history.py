@@ -358,45 +358,117 @@ def _is_marked_short(tx) -> bool:
     return bool(broker_short_marker(tx))
 
 
-def _journal_line_symbols(tm, trades: Optional[Dict[Tuple[str, str],
-                                                   Dict[str, Set[int]]]]
-                          = None) -> Set[str]:
-    """Both symbols of every legacy JOURNAL line of a parsed ticker map,
-    and of every TOBASE line that stands for a journal — so migrating
-    `JOURNAL A B` to `TOBASE A B` (taxjson format-map) changes nothing
-    in the walks (pre-release review M6): a TOBASE line whose two
-    listings are one fund's currency lines (one root on one venue, two
-    quote currencies: SAMPLF.U.TO / SAMPLF.TO), or one whose two listings have
-    opposite trades on one day in one account (`trades`: (account,
-    date) -> symbol -> the signs of its BUYSELL quantities that day)."""
-    from taxjson.lib.cross_listings import listing_root
-    from taxjson.lib.price_chain import quote_currency
+class JournalDays:
+    """The days the missing-history walks read as a journal's
+    (_walk_key: buys and in-legs before sales and out-legs): a set of
+    (account, date, SYMBOL), each symbol as the walked books spell it
+    and as the inputs do. `in` tests a symbol of any journal pair (the
+    symbols a caller re-checks: taxjson_run). A day that holds no
+    journal keeps the clock — a sale and a rebuy of one listing, a sale
+    of one listing with no purchase and a buy of the other the same day
+    (a ticker.map TOBASE line says the two are one security, not that
+    the units were journaled) are missing history (second pre-release
+    review, finding 1). Built by walk_journal_symbols; journal_targets
+    gives the JOURNAL lines' symbols with no day."""
+
+    def __init__(self, symbols: Iterable[str] = (),
+                 days: Iterable[Tuple[str, str, str]] = ()):
+        self.symbols: Set[str] = {str(s).upper() for s in symbols if s}
+        self.days: Set[Tuple[str, str, str]] = set(days)
+        # Whether parsed exports (or a run's join record) were read: the
+        # days come from them (walk_journal_symbols). Books alone cannot
+        # tell a journal's two listings apart (books_journal_days).
+        self.inputs_read = False
+
+    def add(self, account: str, day: str, *symbols: str) -> None:
+        for s in symbols:
+            if s:
+                s = str(s).upper()
+                self.symbols.add(s)
+                self.days.add((str(account), str(day)[:10], s))
+
+    def on(self, account: Any, day: Any, symbol: Any) -> bool:
+        """Whether `symbol`'s rows of `account` on `day` are a journal's."""
+        return (str(account), str(day or '')[:10],
+                str(symbol or '').upper()) in self.days
+
+    def __contains__(self, symbol: Any) -> bool:
+        return str(symbol or '').upper() in self.symbols
+
+    def __iter__(self):
+        return iter(sorted(self.symbols))
+
+    def __len__(self) -> int:
+        return len(self.symbols)
+
+    def __bool__(self) -> bool:
+        return bool(self.symbols or self.days)
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, JournalDays):
+            return (self.symbols, self.days) == (other.symbols, other.days)
+        if isinstance(other, (set, frozenset)):
+            return self.symbols == {str(s).upper() for s in other}
+        return NotImplemented
+
+    __hash__ = None             # mutable, like a set
+
+    def __or__(self, other: Any) -> 'JournalDays':
+        out = JournalDays(self.symbols, self.days)
+        out.inputs_read = self.inputs_read
+        if isinstance(other, JournalDays):
+            out.symbols |= other.symbols
+            out.days |= other.days
+            out.inputs_read |= other.inputs_read
+        elif isinstance(other, (set, frozenset)):
+            out.symbols |= {str(s).upper() for s in other}
+        else:
+            return NotImplemented
+        return out
+
+    __ror__ = __or__
+
+    def __ior__(self, other: Any) -> 'JournalDays':
+        res = self | other
+        if res is NotImplemented:
+            return NotImplemented
+        self.symbols, self.days = res.symbols, res.days
+        self.inputs_read = res.inputs_read
+        return self
+
+    def __repr__(self) -> str:
+        return (f"JournalDays({sorted(self.symbols)!r}, "
+                f"{sorted(self.days)!r})")
+
+
+def _journal_line_symbols(tm) -> Set[str]:
+    """Both symbols of every legacy JOURNAL line of a parsed ticker map.
+    A TOBASE line is no journal (second pre-release review, finding 1):
+    it says two listings are one security, not that units moved between
+    them — `taxjson format-map` migrates a JOURNAL line to one, and the
+    journal's days then come from its evidence (the broker's legs, a .tt
+    JOURNAL line: walk_journal_symbols)."""
     out: Set[str] = set()
     for src, dst in (getattr(tm, 'journal', {}) or {}).items():
         out.add(str(dst).upper())
         out.add(str(src).upper())
-    for src, dst in (getattr(tm, 'tobase', {}) or {}).items():
-        a, b = str(src).upper(), str(dst).upper()
-        ca, cb = quote_currency(a), quote_currency(b)
-        if (listing_root(a) == listing_root(b) and ca and cb and ca != cb
-                and a.rsplit('.', 1)[-1] == b.rsplit('.', 1)[-1]):
-            out.update((a, b))
-            continue
-        for day in (trades or {}).values():
-            sa, sb = day.get(a, set()), day.get(b, set())
-            if (1 in sa and -1 in sb) or (-1 in sa and 1 in sb):
-                out.update((a, b))
-                break
     return out
 
 
+def _journal_line_pairs(tm) -> Set[Tuple[str, str]]:
+    """(FROM, TO) of every legacy JOURNAL line of a parsed ticker map."""
+    return {(str(s).upper(), str(d).upper())
+            for s, d in (getattr(tm, 'journal', {}) or {}).items()}
+
+
 def _day_trades(cache: Path, accounts: Iterable[str]
-                ) -> Dict[Tuple[str, str], Dict[str, Set[int]]]:
-    """(account, date) -> symbol -> the signs of the BUYSELL quantities
-    the account's parsed exports and converted .tt files hold that day
-    (the symbols as the inputs spell them, before any map)."""
+                ) -> Dict[Tuple[str, str], Dict[str, List[float]]]:
+    """(account, date) -> symbol -> [units bought, units sold] by the
+    BUYSELL rows of the account's parsed exports and converted .tt files
+    that day (the symbols as the inputs spell them, before any map: the
+    two listings of a journal are still apart)."""
     from taxjson.lib import cross_listings as XL
-    out: Dict[Tuple[str, str], Dict[str, Set[int]]] = {}
+    out: Dict[Tuple[str, str], Dict[str, List[float]]] = {}
     for acct in sorted(set(accounts)):
         files = [f for _b, f, side in XL._parsed_files(cache, acct)
                  if not side]
@@ -418,26 +490,40 @@ def _day_trades(cache: Path, accounts: Iterable[str]
                     continue
                 if abs(q) < 1e-12:
                     continue
-                out.setdefault((acct, str(t.get('date') or '')[:10]),
-                               {}).setdefault(
-                    str(t.get('symbol') or '').upper(),
-                    set()).add(1 if q > 0 else -1)
+                tot = out.setdefault(
+                    (acct, str(t.get('date') or '')[:10]), {}).setdefault(
+                    str(t.get('symbol') or '').upper(), [0.0, 0.0])
+                tot[0 if q > 0 else 1] += abs(q)
     return out
 
 
-def journal_targets(ticker_map) -> Set[str]:
-    """The symbols ticker.map's JOURNAL lines fold a listing INTO (and
-    from): a Norbert's-gambit pair (sell SAMPLF.TO, buy SAMPLF.U.TO the same
-    morning) is one symbol in the books — and those of a TOBASE line
-    between a fund's two currency lines, the form `taxjson format-map`
-    migrates a JOURNAL line to (_journal_line_symbols). Empty without a readable map
-    (a missing map is not an error here: the caller decides). A JOURNAL
-    line is one source of walk_journal_symbols; the journal the books
-    themselves show is the other."""
+def _opposite_trades(day: Dict[str, List[float]], a: str, b: str) -> bool:
+    """A journal's trades on one day: units of one listing bought and the
+    same number of units of the OTHER listing sold (a Norbert's gambit's
+    buy and sale, the broker's clock in any order). Never one listing's
+    own sale and rebuy (a == b)."""
+    if a == b:
+        return False
+    ta, tb = day.get(a), day.get(b)
+    if not ta or not tb:
+        return False
+
+    def same(x: float, y: float) -> bool:
+        return x > 1e-9 and abs(x - y) <= max(1e-6, 1e-6 * max(x, y))
+    return same(ta[0], tb[1]) or same(tb[0], ta[1])
+
+
+def journal_targets(ticker_map) -> JournalDays:
+    """The symbols ticker.map's legacy JOURNAL lines fold a listing INTO
+    (and from): a Norbert's-gambit pair (sell SAMPLF.TO, buy SAMPLF.U.TO
+    the same morning) is one symbol in the books. No day: the days of
+    those lines come from the trades (walk_journal_symbols). Empty
+    without a readable map (a missing map is not an error here: the
+    caller decides). A TOBASE line is no journal (_journal_line_symbols)."""
     if not ticker_map:
-        return set()
+        return JournalDays()
     from taxjson.bin.taxjson_ticker_map import load_map_file
-    return _journal_line_symbols(load_map_file(Path(ticker_map)))
+    return JournalDays(_journal_line_symbols(load_map_file(Path(ticker_map))))
 
 
 # RBC's reference on the two TFR legs of one journal between a
@@ -448,6 +534,9 @@ _JOURNAL_REF_RE = re.compile(r'^\s*TFR\b.*(?<!\S)J~(\w+)\b',
                              re.IGNORECASE)
 # The broker whose J~ reference that is (lib/brokerages ids).
 _JOURNAL_REF_BROKER = 'rbc_direct'
+# The broker of a row whose file is not known (a row of the books):
+# journal_leg_key reads its `journal_pair` only.
+_NO_BROKER = '?'
 
 
 def journal_leg_key(t: Any, broker: Optional[str] = None
@@ -475,26 +564,32 @@ def journal_leg_key(t: Any, broker: Optional[str] = None
     return None
 
 
-def detected_journal_symbols(rows: Iterable[Tuple[str, Any]],
-                             renames: Optional[Dict[str, str]] = None
-                             ) -> Set[str]:
-    """The symbols of the broker journals the rows show: `rows` are
-    (account, row) — TaxTransactions or parsed rows — and a journal is
-    one out-leg and one in-leg of the same quantity that journal_leg_key
-    pairs in one account (overlapping copies of a row count once). A
-    journal whose two legs land on ONE symbol once `renames` apply (the
-    books' TOBASE / JOURNAL / GLOBAL renames, a join of the run —
-    lib/cross_listings) is a Norbert's gambit inside one security: the
-    symbol and both legs' symbols are returned, the way a ticker.map
-    JOURNAL line names them (journal_targets)."""
+def _row_get(t: Any):
+    return t.get if isinstance(t, dict) else (
+        lambda f, d=None, _t=t: getattr(_t, f, d))
+
+
+def _detected_journals(rows: Iterable[Tuple[Any, ...]],
+                       renames: Optional[Dict[str, str]] = None
+                       ) -> List[Tuple[str, str, str, str, str]]:
+    """(account, out-leg date, out symbol, in-leg date, in symbol) of each
+    broker journal the rows show whose two legs land on ONE symbol once
+    `renames` apply. `rows` are (account, row) or (account, row, broker):
+    TaxTransactions or parsed rows; a journal is one out-leg and one
+    in-leg of the same quantity that journal_leg_key pairs in one
+    account (overlapping copies of a row count once). RBC's J~ reference
+    is read only on a row whose broker is RBC (`broker`, the parser id
+    of the row's file); a row of no known broker pairs by its
+    `journal_pair` id alone (second pre-release review, finding 12)."""
     ren = {str(k).upper(): str(v).upper() for k, v in (renames or {}).items()}
-    groups: Dict[Tuple[Any, ...], Dict[str, Tuple[str, float]]] = {}
-    for acct, t in rows:
-        k = journal_leg_key(t)
+    groups: Dict[Tuple[Any, ...], Dict[str, Tuple[str, float, str]]] = {}
+    for item in rows:
+        acct, t = item[0], item[1]
+        broker = item[2] if len(item) > 2 else _NO_BROKER
+        k = journal_leg_key(t, broker=broker)
         if k is None:
             continue
-        get = t.get if isinstance(t, dict) else (
-            lambda f, d=None, _t=t: getattr(_t, f, d))
+        get = _row_get(t)
         sym = str(get('symbol') or '').upper()
         try:
             q = float(get('quantity') or 0.0)
@@ -503,9 +598,10 @@ def detected_journal_symbols(rows: Iterable[Tuple[str, Any]],
         if not sym or abs(q) < 1e-9:
             continue
         rid = str(get('id') or '') or f"{sym}|{q!r}|{get('date')}"
-        groups.setdefault((str(acct),) + k, {})[rid] = (sym, q)
-    out: Set[str] = set()
-    for legs in groups.values():
+        groups.setdefault((str(acct),) + k, {})[rid] = (
+            sym, q, str(get('date') or '')[:10])
+    out: List[Tuple[str, str, str, str, str]] = []
+    for k, legs in sorted(groups.items()):
         outs = [g for g in legs.values() if g[1] < 0]
         ins = [g for g in legs.values() if g[1] > 0]
         if len(outs) != 1 or len(ins) != 1 \
@@ -514,44 +610,79 @@ def detected_journal_symbols(rows: Iterable[Tuple[str, Any]],
         a, b = (ren.get(outs[0][0], outs[0][0]),
                 ren.get(ins[0][0], ins[0][0]))
         if a == b:
-            out.update({a, outs[0][0], ins[0][0]})
+            out.append((k[0], outs[0][2], outs[0][0], ins[0][2], ins[0][0]))
+    return out
+
+
+def detected_journal_symbols(rows: Iterable[Tuple[Any, ...]],
+                             renames: Optional[Dict[str, str]] = None
+                             ) -> Set[str]:
+    """The symbols of the broker journals the rows show (_detected_
+    journals): a journal whose two legs land on ONE symbol once `renames`
+    apply (the books' TOBASE / JOURNAL / GLOBAL renames, a join of the
+    run — lib/cross_listings) is a Norbert's gambit inside one security:
+    the symbol and both legs' symbols are returned."""
+    ren = {str(k).upper(): str(v).upper() for k, v in (renames or {}).items()}
+    out: Set[str] = set()
+    for _a, _od, o, _id, i in _detected_journals(rows, renames):
+        out.update({ren.get(o, o), o, i})
     return out
 
 
 def _book_journals(txs: Sequence[TaxTransaction],
-                   journal_symbols: Optional[Set[str]]) -> Set[str]:
+                   journal_symbols: Any) -> Any:
     """`journal_symbols` plus the journals the walked rows themselves
     show (an account whose transfers stay in its books: the two legs on
-    one symbol once the books' renames applied)."""
-    return set(journal_symbols or ()) | detected_journal_symbols(
-        (t.account, t) for t in txs if t.action == 'TRANSFER')
+    one symbol once the books' renames applied, paired by their
+    `journal_pair` id — a row of the books names no broker, so RBC's J~
+    reference is read from the parsed exports: walk_journal_symbols).
+    A JournalDays (or None) gains the legs' own days; a caller's plain
+    set of symbols (every day of them) gains their symbols."""
+    found = _detected_journals((t.account, t) for t in txs
+                               if t.action == 'TRANSFER')
+    if journal_symbols is not None and not isinstance(journal_symbols,
+                                                      JournalDays):
+        return set(journal_symbols) | {s for j in found
+                                       for s in (j[2], j[4])}
+    out = JournalDays() | (journal_symbols or JournalDays())
+    for acct, od, o, idt, i in found:
+        out.add(acct, od, o, i)
+        out.add(acct, idt, o, i)
+    return out
 
 
-def walk_journal_symbols(cache, ticker_map=None) -> Set[str]:
-    """The symbols the missing-history walks read as one security's
-    journal (_walk_key: a day's buys and in-legs before its sales and
-    out-legs), for the project whose work/ folder is `cache`:
+def walk_journal_symbols(cache, ticker_map=None) -> JournalDays:
+    """The days the missing-history walks read as one security's journal
+    (_walk_key: a day's buys and in-legs before its sales and out-legs),
+    for the project whose work/ folder is `cache` — only the days that
+    hold a journal (second pre-release review, finding 1):
 
-    - both symbols of a ticker.map JOURNAL line (`ticker_map`, and the
-      run's effective map, work/ticker.map.effective) — still accepted,
-      no longer needed — and of a TOBASE line that stands for one (a
-      fund's two currency lines on one venue, or two listings with opposite
-      trades on one day in one account: _journal_line_symbols), so
-      `taxjson format-map`'s migration changes nothing;
-    - both listings of every join the run made from a transfer journal
-      (work/cross_listings.state: a cross-listing joined as TOBASE, a
-      currency journal joined as JOURNAL);
-    - every broker journal the parsed exports show (a Questrade BRW
-      pair's `journal_pair`, RBC's J~ reference on the two TFR legs —
-      in the books or in the transfer sidecar) whose two legs the books'
-      renames fold onto one symbol: a ticker.map TOBASE line does that
-      as well as a JOURNAL line (detected_journal_symbols).
+    - the legs' own days of every journal the evidence shows: a join of
+      the run (work/cross_listings.state: a cross-listing or currency
+      journal joined, and a broker or .tt journal the user's map decided
+      — "refused": "map"), and every broker journal the parsed exports
+      show (a Questrade BRW pair's `journal_pair`, RBC's J~ reference on
+      the two TFR legs of an RBC export, a .tt JOURNAL line's legs) whose
+      two legs the books' renames fold onto one symbol;
+    - for each such journal, the day in its account within cross_listings.
+      PAIR_DAYS business days of the legs with opposite trades of the
+      same quantity on its two DIFFERENT listings (_opposite_trades: an
+      RBC gambit's buy of the CAD line and sale of the USD line, its J~
+      legs dated the settlement day);
+    - for a legacy ticker.map JOURNAL line (`ticker_map`, and the run's
+      effective map, work/ticker.map.effective) — still accepted, no
+      longer needed — each day of any account with such opposite trades
+      on its two listings.
 
-    Advisory: an unreadable piece is skipped."""
+    A TOBASE line alone is no journal; a sale and a rebuy of one listing
+    never is. Each day is recorded for the symbols as the inputs spell
+    them and as the books do (the effective map's renames). Advisory: an
+    unreadable piece is skipped."""
     from taxjson.bin.taxjson_ticker_map import load_map_file, merge_renames
     from taxjson.lib import cross_listings as XL
+    from taxjson.lib.dated_events import SIDECAR_BROKER
     cache = Path(cache)
-    out: Set[str] = set()
+    out = JournalDays()
     renames: Dict[str, str] = {}
     accounts: Set[str] = set()
     try:
@@ -565,28 +696,51 @@ def walk_journal_symbols(cache, ticker_map=None) -> Set[str]:
     maps = [Path(ticker_map)] if ticker_map else []
     if eff.is_file():
         maps.append(eff)
-    trades = None
+    lines: Set[Tuple[str, str]] = set()
     for m in maps:
         if not m.is_file():
             continue
         try:
             tm = load_map_file(m)
-            if trades is None and getattr(tm, 'tobase', None):
-                trades = _day_trades(cache, accounts)
-            out |= _journal_line_symbols(tm, trades)
+            lines |= _journal_line_pairs(tm)
             # The effective map (read last) is the one the books were
             # merged with.
             renames = merge_renames(tm, True)
         except Exception:                           # noqa: BLE001
             continue
-    for r in XL.read_state(cache / XL.STATE).get('joined', []):
-        pair = {str(r.get('from') or '').upper(),
-                str(r.get('to') or '').upper()} - {''}
-        if len(pair) == 2:
-            out |= pair
-    rows: List[Tuple[str, Any]] = []
+    trades = _day_trades(cache, accounts)
+    out.inputs_read = bool(trades)
+    # (account, out date, out symbol, in date, in symbol) of each journal
+    # the evidence shows.
+    dated: List[Tuple[str, str, str, str, str]] = []
+    st = XL.read_state(cache / XL.STATE)
+    recs = list(st.get('joined', [])) + [
+        r for r in st.get('refused', [])
+        if r.get('refused') == 'map' and (r.get('journal') or r.get('ref')
+                                          or r.get('kind') == 'JOURNAL')]
+    for r in recs:
+        o, i = r.get('out'), r.get('in')
+        if not isinstance(o, dict) or not isinstance(i, dict):
+            continue
+        os_, is_ = (str(o.get('symbol') or '').upper(),
+                    str(i.get('symbol') or '').upper())
+        od, idt = str(o.get('date') or '')[:10], str(i.get('date') or '')[:10]
+        oa, ia = str(o.get('account') or ''), str(i.get('account') or '')
+        if not (os_ and is_ and od and idt):
+            continue
+        if oa == ia:
+            dated.append((oa, od, os_, idt, is_))
+        else:
+            # A move between two of your accounts: each leg's own day in
+            # its own account (no gambit's trades span two accounts).
+            out.add(oa, od, os_, renames.get(os_, os_))
+            out.add(ia, idt, is_, renames.get(is_, is_))
+    rows: List[Tuple[str, Any, str]] = []
     for acct in sorted(accounts):
-        for _b, f, side in XL._parsed_files(cache, acct):
+        files = list(XL._parsed_files(cache, acct)) + [
+            (SIDECAR_BROKER, cache / f'{acct}_{SIDECAR_BROKER}_transfers'
+             f'.json', True)]
+        for _b, f, side in files:
             if not f.is_file():
                 continue
             try:
@@ -597,27 +751,130 @@ def walk_journal_symbols(cache, ticker_map=None) -> Set[str]:
             for t in txs if isinstance(txs, list) else []:
                 if (isinstance(t, dict)
                         and journal_leg_key(t, broker=_b) is not None):
-                    rows.append((acct, t))
-    return out | detected_journal_symbols(rows, renames)
+                    rows.append((acct, t, _b))
+    dated += _detected_journals(rows, renames)
+    out.inputs_read |= bool(recs or rows)
+    from datetime import date as _date
+
+    def _d(s: str):
+        try:
+            return _date.fromisoformat(s)
+        except ValueError:
+            return None
+    for acct, od, o, idt, i in dated:
+        syms = (o, i, renames.get(o, o), renames.get(i, i))
+        out.add(acct, od, *syms)
+        out.add(acct, idt, *syms)
+        legs = [x for x in (_d(od), _d(idt)) if x is not None]
+        for (a, day), tr in trades.items():
+            dd = _d(day)
+            if (a != acct or dd is None or not legs
+                    or min(XL.business_days(dd, x) for x in legs)
+                    > XL.PAIR_DAYS):
+                continue
+            if _opposite_trades(tr, o, i):
+                out.add(acct, day, *syms)
+    for a_, b_ in sorted(lines):
+        syms = (a_, b_, renames.get(a_, a_), renames.get(b_, b_))
+        out.symbols.update(s for s in syms if s)
+        for (acct, day), tr in trades.items():
+            if _opposite_trades(tr, a_, b_):
+                out.add(acct, day, *syms)
+    return out
 
 
-def _walk_key(t, journal_symbols: Optional[Set[str]] = None) -> Tuple:
-    """The missing-history walks' order. A journal symbol's trades and
-    transfer legs of one day read buys and in-legs first whatever their
-    clock: RBC stamps a day's rows with its row ORDINAL (09:30:00 + k s,
+def undeclared_journal_days(cache, ticker_map=None,
+                            journal: Optional[JournalDays] = None
+                            ) -> List[Tuple[str, str, str, str, float]]:
+    """(account, date, listing bought, listing sold, units) of each day
+    with opposite trades of the same quantity on the two listings of a
+    ticker.map TOBASE line that holds no journal (`journal`:
+    walk_journal_symbols): the day reads in clock order, so a sale
+    stamped before the buy is a short. If the units were journaled
+    between the two listings (a Norbert's gambit), a .tt line
+    `JOURNAL <date> <bought> <sold> <units>` declares it — the run's
+    hint (second pre-release review, finding 1)."""
+    if not ticker_map or not Path(ticker_map).is_file():
+        return []
+    from taxjson.bin.taxjson_ticker_map import load_map_file
+    cache = Path(cache)
+    try:
+        tm = load_map_file(Path(ticker_map))
+    except Exception:                               # noqa: BLE001
+        return []
+    pairs = {(str(a).upper(), str(b).upper())
+             for a, b in (getattr(tm, 'tobase', {}) or {}).items()}
+    if not pairs:
+        return []
+    if journal is None:
+        journal = walk_journal_symbols(cache, ticker_map)
+    accounts = {p.name[:-len('_base.json')] for p in cache.glob('*_base.json')
+                if not p.name.endswith('_raw_base.json')}
+    out: List[Tuple[str, str, str, str, float]] = []
+    for (acct, day), tr in sorted(_day_trades(cache, accounts).items()):
+        for a, b in sorted(pairs):
+            if not _opposite_trades(tr, a, b) or journal.on(acct, day, a) \
+                    or journal.on(acct, day, b):
+                continue
+            bought, sold = (a, b) if tr[a][0] > 1e-9 and abs(
+                tr[a][0] - tr[b][1]) <= max(1e-6, 1e-6 * tr[a][0]) \
+                else (b, a)
+            out.append((acct, day, bought, sold, tr[sold][1]))
+    return out
+
+
+def books_journal_days(txs: Iterable[TaxTransaction],
+                       symbols: Iterable[str]) -> JournalDays:
+    """The journal days of books read with no parsed exports beside them
+    (taxjson-missing-history on base files outside a project): a legacy
+    ticker.map JOURNAL line's symbol (`symbols`, journal_targets) on each
+    day one account's books hold a buy and a sale of it of the same
+    quantity. The books' rows carry the folded symbol, so its two
+    listings cannot be told apart there: the user's JOURNAL line is taken
+    at its word on those days only. In a project the parsed exports
+    decide (walk_journal_symbols)."""
+    syms = {str(s).upper() for s in symbols}
+    tot: Dict[Tuple[str, str, str], List[float]] = {}
+    for t in txs:
+        sym = str(t.symbol or '').upper()
+        if t.action != 'BUYSELL' or sym not in syms:
+            continue
+        q = float(t.quantity or 0.0)
+        if abs(q) < 1e-12:
+            continue
+        tot.setdefault((str(t.account), str(t.date or '')[:10], sym),
+                       [0.0, 0.0])[0 if q > 0 else 1] += abs(q)
+    out = JournalDays(syms)
+    for (acct, day, sym), (b, s) in tot.items():
+        if b > 1e-9 and abs(b - s) <= max(1e-6, 1e-6 * max(b, s)):
+            out.add(acct, day, sym)
+    return out
+
+
+def _journal_day(journal_symbols: Any, t: Any) -> bool:
+    """Whether `t` is on a journal's day (JournalDays.on); a caller's
+    plain set of symbols reads every day of them as one."""
+    if isinstance(journal_symbols, JournalDays):
+        return journal_symbols.on(t.account, t.date, t.symbol)
+    return str(t.symbol or '').upper() in journal_symbols
+
+
+def _walk_key(t, journal_symbols: Any = None) -> Tuple:
+    """The missing-history walks' order. A journal's trades and transfer
+    legs of one day read buys and in-legs first whatever their clock:
+    RBC stamps a day's rows with its row ORDINAL (09:30:00 + k s,
     newest-first export), so the Norbert's-gambit sale of SAMPLF.TO
     sorted ahead of the same morning's SAMPLF.U.TO buy and read as a
     one-day short — reported as missing history, and the file generator
     wrote an entry that pulled the sale off Schedule 3 (audit A2-0309 /
     A2-0636); the journal's own legs, dated the trades' settlement day,
     read out-leg first the same way. `journal_symbols` come from
-    walk_journal_symbols (a JOURNAL line, a join of the run, or a broker
-    journal the exports show). Other symbols keep the clock: a same-day
-    sale and rebuy of shares bought before the data IS missing
-    history."""
+    walk_journal_symbols (JournalDays: only the days that hold a
+    journal). Every other day keeps the clock: a same-day sale and
+    rebuy of shares bought before the data IS missing history."""
     k = event_sort_key(t, profile='missing_history_walk')
     if (journal_symbols and t.action in ('BUYSELL', 'TRANSFER')
-            and str(t.symbol or '').upper() in journal_symbols):
+            and _journal_day(journal_symbols, t)):
         k = (k[0], k[1], '', k[3])
     return k
 
