@@ -1033,7 +1033,8 @@ def _renamed_late(root: Path, cfg: Dict[str, Any],
     (lib/renames): a different security unless ticker.map folds them."""
     from taxjson.lib.renames import report
     try:
-        return report(root, cfg, account)["late"]
+        return report(root, cfg, account, undated=False,
+                      hints=False)["late"]
     except ValueError:
         return []
 
