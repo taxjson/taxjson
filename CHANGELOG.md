@@ -125,6 +125,15 @@
 
 ### Fixed
 
+- **A journal no longer hides an unrelated sale with no purchase near it.**
+  The missing-history checks read a day near a journal's legs buys first
+  when it held a buy of one listing and a sale of the same quantity of the
+  other — any quantity, either way, any number of days. A sale with no
+  purchase on one listing and a buy of the other a few days from an
+  unrelated journal between the two listings was read as that journal's
+  trades and said nowhere. Now only the one nearest day whose trades are the
+  journal's own counts: its quantity, the listing it moves from bought and
+  the listing it moves to sold.
 - **A loss on one listing with the other listing bought within 30 days is
   flagged.** Two listings of one security (a TSX line and its NYSE line)
   that the books keep apart kept such a loss allowed with nothing said.

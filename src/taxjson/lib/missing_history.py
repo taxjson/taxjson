@@ -508,9 +508,54 @@ def _opposite_trades(day: Dict[str, List[float]], a: str, b: str) -> bool:
     if not ta or not tb:
         return False
 
-    def same(x: float, y: float) -> bool:
-        return x > 1e-9 and abs(x - y) <= max(1e-6, 1e-6 * max(x, y))
-    return same(ta[0], tb[1]) or same(tb[0], ta[1])
+    return _same_units(ta[0], tb[1]) or _same_units(tb[0], ta[1])
+
+
+def _same_units(x: float, y: float) -> bool:
+    return x > 1e-9 and abs(x - y) <= max(1e-6, 1e-6 * max(x, y))
+
+
+def _journal_trade_day(trades: Dict[Tuple[str, str], Dict[str, List[float]]],
+                       account: str, legs: Iterable[str], frm: str, to: str,
+                       units: float) -> Optional[str]:
+    """The ONE day of `account` whose trades are this journal's own (a
+    Norbert's gambit: `units` of the FROM listing bought, the same units
+    of the TO listing sold — RBC dates the J~ legs the trades' settlement
+    day): within cross_listings.PAIR_DAYS business days of the legs'
+    dates `legs`, the nearest such day (a legs' own day first; a tie goes
+    to the earlier: trades settle after they are made). None when no day
+    holds those trades. A day of another quantity, or of the reverse
+    direction, is not this journal's: a sale with no purchase near an
+    unrelated journal stays missing history (third pre-release review,
+    finding 2)."""
+    from datetime import date as _date
+    from taxjson.lib import cross_listings as XL
+
+    def _d(s: str):
+        try:
+            return _date.fromisoformat(str(s)[:10])
+        except ValueError:
+            return None
+    frm, to = str(frm).upper(), str(to).upper()
+    legd = [x for x in (_d(s) for s in legs) if x is not None]
+    if not legd or frm == to or units <= 1e-9:
+        return None
+    best: Optional[Tuple[int, str]] = None
+    for (a, day), tr in trades.items():
+        dd = _d(day)
+        if a != account or dd is None:
+            continue
+        gap = min(XL.business_days(dd, x) for x in legd)
+        if gap > XL.PAIR_DAYS:
+            continue
+        bought, sold = tr.get(frm), tr.get(to)
+        if not bought or not sold or not _same_units(bought[0], units) \
+                or not _same_units(sold[1], units):
+            continue
+        rank = (gap, day)
+        if best is None or rank < best:
+            best = rank
+    return best[1] if best else None
 
 
 def journal_targets(ticker_map) -> JournalDays:
@@ -571,8 +616,8 @@ def _row_get(t: Any):
 
 def _detected_journals(rows: Iterable[Tuple[Any, ...]],
                        renames: Optional[Dict[str, str]] = None
-                       ) -> List[Tuple[str, str, str, str, str]]:
-    """(account, out-leg date, out symbol, in-leg date, in symbol) of each
+                       ) -> List[Tuple[str, str, str, str, str, float]]:
+    """(account, out-leg date, out symbol, in-leg date, in symbol, units) of each
     broker journal the rows show whose two legs land on ONE symbol once
     `renames` apply. `rows` are (account, row) or (account, row, broker):
     TaxTransactions or parsed rows; a journal is one out-leg and one
@@ -600,7 +645,7 @@ def _detected_journals(rows: Iterable[Tuple[Any, ...]],
         rid = str(get('id') or '') or f"{sym}|{q!r}|{get('date')}"
         groups.setdefault((str(acct),) + k, {})[rid] = (
             sym, q, str(get('date') or '')[:10])
-    out: List[Tuple[str, str, str, str, str]] = []
+    out: List[Tuple[str, str, str, str, str, float]] = []
     for k, legs in sorted(groups.items()):
         outs = [g for g in legs.values() if g[1] < 0]
         ins = [g for g in legs.values() if g[1] > 0]
@@ -610,7 +655,8 @@ def _detected_journals(rows: Iterable[Tuple[Any, ...]],
         a, b = (ren.get(outs[0][0], outs[0][0]),
                 ren.get(ins[0][0], ins[0][0]))
         if a == b:
-            out.append((k[0], outs[0][2], outs[0][0], ins[0][2], ins[0][0]))
+            out.append((k[0], outs[0][2], outs[0][0], ins[0][2], ins[0][0],
+                        ins[0][1]))
     return out
 
 
@@ -624,7 +670,7 @@ def detected_journal_symbols(rows: Iterable[Tuple[Any, ...]],
     the symbol and both legs' symbols are returned."""
     ren = {str(k).upper(): str(v).upper() for k, v in (renames or {}).items()}
     out: Set[str] = set()
-    for _a, _od, o, _id, i in _detected_journals(rows, renames):
+    for _a, _od, o, _id, i, _q in _detected_journals(rows, renames):
         out.update({ren.get(o, o), o, i})
     return out
 
@@ -645,7 +691,7 @@ def _book_journals(txs: Sequence[TaxTransaction],
         return set(journal_symbols) | {s for j in found
                                        for s in (j[2], j[4])}
     out = JournalDays() | (journal_symbols or JournalDays())
-    for acct, od, o, idt, i in found:
+    for acct, od, o, idt, i, _q in found:
         out.add(acct, od, o, i)
         out.add(acct, idt, o, i)
     return out
@@ -664,11 +710,13 @@ def walk_journal_symbols(cache, ticker_map=None) -> JournalDays:
       show (a Questrade BRW pair's `journal_pair`, RBC's J~ reference on
       the two TFR legs of an RBC export, a .tt JOURNAL line's legs) whose
       two legs the books' renames fold onto one symbol;
-    - for each such journal, the day in its account within cross_listings.
-      PAIR_DAYS business days of the legs with opposite trades of the
-      same quantity on its two DIFFERENT listings (_opposite_trades: an
-      RBC gambit's buy of the CAD line and sale of the USD line, its J~
-      legs dated the settlement day);
+    - for each such journal, ONE day in its account within
+      cross_listings.PAIR_DAYS business days of the legs whose trades are
+      the journal's own: its units of the FROM listing bought and of the
+      TO listing sold (_journal_trade_day: an RBC gambit's buy of the CAD
+      line and sale of the USD line, its J~ legs dated the settlement
+      day). Opposite trades of another quantity or direction near the
+      journal are not its own (third pre-release review, finding 2);
     - for a legacy ticker.map JOURNAL line (`ticker_map`, and the run's
       effective map, work/ticker.map.effective) — still accepted, no
       longer needed — each day of any account with such opposite trades
@@ -710,9 +758,9 @@ def walk_journal_symbols(cache, ticker_map=None) -> JournalDays:
             continue
     trades = _day_trades(cache, accounts)
     out.inputs_read = bool(trades)
-    # (account, out date, out symbol, in date, in symbol) of each journal
-    # the evidence shows.
-    dated: List[Tuple[str, str, str, str, str]] = []
+    # (account, out date, out symbol, in date, in symbol, units) of each
+    # journal the evidence shows.
+    dated: List[Tuple[str, str, str, str, str, float]] = []
     st = XL.read_state(cache / XL.STATE)
     recs = list(st.get('joined', [])) + [
         r for r in st.get('refused', [])
@@ -728,8 +776,12 @@ def walk_journal_symbols(cache, ticker_map=None) -> JournalDays:
         oa, ia = str(o.get('account') or ''), str(i.get('account') or '')
         if not (os_ and is_ and od and idt):
             continue
+        try:
+            units = abs(float(i.get('quantity') or o.get('quantity') or 0))
+        except (TypeError, ValueError):
+            units = 0.0
         if oa == ia:
-            dated.append((oa, od, os_, idt, is_))
+            dated.append((oa, od, os_, idt, is_, units))
         else:
             # A move between two of your accounts: each leg's own day in
             # its own account (no gambit's trades span two accounts).
@@ -754,26 +806,14 @@ def walk_journal_symbols(cache, ticker_map=None) -> JournalDays:
                     rows.append((acct, t, _b))
     dated += _detected_journals(rows, renames)
     out.inputs_read |= bool(recs or rows)
-    from datetime import date as _date
-
-    def _d(s: str):
-        try:
-            return _date.fromisoformat(s)
-        except ValueError:
-            return None
-    for acct, od, o, idt, i in dated:
+    # One journal the run joined and the exports show is read once.
+    for acct, od, o, idt, i, units in sorted(set(dated)):
         syms = (o, i, renames.get(o, o), renames.get(i, i))
         out.add(acct, od, *syms)
         out.add(acct, idt, *syms)
-        legs = [x for x in (_d(od), _d(idt)) if x is not None]
-        for (a, day), tr in trades.items():
-            dd = _d(day)
-            if (a != acct or dd is None or not legs
-                    or min(XL.business_days(dd, x) for x in legs)
-                    > XL.PAIR_DAYS):
-                continue
-            if _opposite_trades(tr, o, i):
-                out.add(acct, day, *syms)
+        day = _journal_trade_day(trades, acct, (od, idt), o, i, units)
+        if day:
+            out.add(acct, day, *syms)
     for a_, b_ in sorted(lines):
         syms = (a_, b_, renames.get(a_, a_), renames.get(b_, b_))
         out.symbols.update(s for s in syms if s)
