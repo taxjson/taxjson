@@ -7433,7 +7433,7 @@ def _report_short_positions(root: Path, settings: Dict[str, Any],
         # undeclared_journal_days).
         try:
             from taxjson.lib.missing_history import undeclared_journal_days
-            _named = {n for n, _s in notes}
+            _named = {n[0] for n in notes}
             _undecl = [u for u in undeclared_journal_days(cache, ticker_map)
                        if u[0] in _named]
         except Exception:                           # noqa: BLE001
