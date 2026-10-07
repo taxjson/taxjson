@@ -322,22 +322,28 @@ def _echo_tt_totals(account: str, tt: Path, out_path: Path,
     """The .tt lines whose total is not qty x price +/- fee
     (lib/tt_totals, read from the .tt stage's .diag): one `Warning:`
     each on the console, naming file:line, the written total and the
-    formula's; `--strict` stops on them."""
-    from taxjson.lib.tt_totals import read_diag
+    formula's; `--strict` stops on them. The file is named as the
+    run's step line names it (masked: brokerages.base.shown_name), and
+    the line is quoted as written (an ACQUIRED line, not the BUYSELL it
+    expands to: third pre-release review, finding 9)."""
+    from taxjson.lib.brokerages.base import shown_name
+    from taxjson.lib.tt_totals import read_diag, source_line
     found = read_diag(out_path)
     if not found:
         return
-    real = _console_names([tt])
+    shown = shown_name(tt)
     for m in found:
-        head, details = m.message(f"inputs/{account}/{real(m.where)}")
+        line_no = m.where.rsplit(":", 1)[-1]
+        head, details = m.message(f"inputs/{account}/{shown}:{line_no}",
+                                  source_line(tt, m.where))
         _say_once(("tt-total", account, m.where), "warning", head,
                   *details, prog=_PROG)
     if strict:
-        _die(f"--strict: {account}: inputs/{account}/{tt.name} has "
+        _die(f"--strict: {account}: inputs/{account}/{shown} has "
              f"{len(found)} line(s) whose total is not qty x price +/- "
              f"fee (warning above) — aborting",
-             "Fix the total, or put the difference in the line's fee "
-             "column.")
+             "Fix the total, or make the line agree with it (the "
+             "warning above says how).")
 
 
 def _codes_note_head() -> str:
@@ -3981,7 +3987,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                  f"{tt.stem[:-len(_clash)] + _clash.replace('_', '-')}.tt")
         out = tt_json_path(cache, name, tt.name)
         if force or needs_rebuild(out, tt, src_manifest):
-            _step(f"Reading {_mask_ids_in_path(tt.name)}")
+            # The name as the .tt warnings name it (_echo_tt_totals).
+            from taxjson.lib.brokerages.base import shown_name as _shown
+            _step(f"Reading {_shown(tt)}")
             run_to_file(_cmd("taxjson-convert-tt") + ["--account-name", name, str(tt)],
                         out)
         # A line whose total is not its qty x price +/- fee: the total is
@@ -5381,10 +5389,17 @@ def _say_xlist_losses(root: Path, cfg: Dict[str, Any], cache: Path, *,
         _write_work_stamp(state, text)
     if not found:
         return
-    for f in found:
+    for f in found[:XR.RADAR_SHOWN]:
         head, details = XR.message(f.record(), country)
         _say_once(("xlist-loss", f.loss_symbol, f.other_symbol), "warning",
                   head, *details, indent="  ", file=sys.stdout)
+    if len(found) > XR.RADAR_SHOWN:
+        # The rest counted in one line (third pre-release review,
+        # finding 9: one Warning per pair flooded the console).
+        head, details = XR.more_message(len(found) - XR.RADAR_SHOWN,
+                                        country)
+        _say_once(("xlist-loss-more",), "warning", head, *details,
+                  indent="  ", file=sys.stdout)
     if strict:
         _die(f"--strict: {len(found)} possible "
              f"{XR._kind(country, len(found))} across listings (warning "
@@ -7398,7 +7413,10 @@ def _report_short_positions(root: Path, settings: Dict[str, Any],
     # What the gains engine booked for each listed pair (the split the
     # closing summary and `taxjson sum` make, lib/first_run.
     # engine_booking): a short a later purchase of the year closed is IN
-    # the totals — "in no total" said for it contradicted both.
+    # the totals — "in no total" said for it contradicted both. This
+    # run's plain gains files: the cross-account wash pass has not yet
+    # rebuilt <acct>_gains_wash.json, the last run's (third pre-release
+    # review, finding 5).
     booked: Dict[Tuple[str, str], str] = {}
     if rows:
         try:
@@ -7407,7 +7425,8 @@ def _report_short_positions(root: Path, settings: Dict[str, Any],
                 cache, [rows[(c.symbol, c.account)]
                         for _n, cands in unmarked for c in cands
                         if (c.symbol, c.account) in rows],
-                year, date_basis=_tax_date_basis(settings))
+                year, date_basis=_tax_date_basis(settings),
+                prefer_wash=False)
         except Exception:                           # noqa: BLE001
             booked = {}
     notes: List[Tuple[str, List[str], str]] = []
