@@ -629,9 +629,9 @@ BUYSELL  2021-03-15  09:30:00  SAMPK.TO  40  CAD  15.00  600.00  0
 
   The value comes from, in order: an `INKIND` line in a `.tt` file in the
   taxable account's folder; the market value the broker prints on the
-  transfer row (IB's `VALUE`); Yahoo's close on that day, marked
-  ESTIMATED. With `TAXJSON_OFFLINE` set and no cached close the run stops
-  and prints the line to add. The line (no time column; the quantity is
+  transfer row (IB's Transfers `Market Value` column); Yahoo's close on
+  that day, marked ESTIMATED. With `TAXJSON_OFFLINE` set and no cached
+  close the run stops and prints the line to add. The line (no time column; the quantity is
   negative for shares out to the plan, positive for shares back):
 
   ```
@@ -643,6 +643,14 @@ BUYSELL  2021-03-15  09:30:00  SAMPK.TO  40  CAD  15.00  600.00  0
   the plan's account is not in the project, the same line declares the
   move for the taxable account's transfer row; add `plan=rrsp` (or
   `tfsa`, `ira` ...).
+
+  Moves between two of your taxable accounts (or two registered ones)
+  pair first and stay moves of your own. When a transfer row could pair
+  with more than one account's row, the run does not guess: the warning
+  lists the move as ambiguous and NOT booked, with the candidates. Answer
+  with the `INKIND` line (it books the move; `plan=` picks the plan), or
+  `INKIND 2024-06-03 SAMPK.TO -100 plan=own` for a move of your own. A
+  transfer-out the plan received in parts is warned about the same way.
 - A position the broker moved from one listing of a stock to another
   (`SAMPK.US` out, `SAMPK.TO` in, the same quantity) is joined into one
   security when the exports' names agree: an `Info: ... joined as one

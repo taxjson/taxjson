@@ -137,6 +137,18 @@
   `TAXJSON_OFFLINE` and no cached close the run stops and prints the line to
   add). One warning per run lists each move; `taxjson transfers` labels the
   rows. Tax-logic CA-INKIND-01..06, US-INKIND-01..03.
+  Pairing order: legs of the same kind (taxable with taxable, registered with
+  registered) pair first across the project, so two moves of your own are
+  never booked as a contribution and a withdrawal whatever their gaps; a
+  taxable leg pairs with a registered one only when neither has another
+  plausible partner, else the pair is listed NOT booked as ambiguous with the
+  line that settles it (`run --strict` stops). `INKIND <date> <symbol> <qty>
+  plan=own` declares a transfer row a move of your own. A transfer-out a plan
+  received in parts (silent before) is warned about, and an `INKIND` line for
+  it books the move with the plan's rows that add up to it. Two identical
+  moves on one day are two sales (the books' merge kept one). The close cache
+  is keyed by the Yahoo spelling too, an `INKIND` value that is not a finite
+  amount is refused, and an empty `plan=` names the values it takes.
 
 
 ## v0.22.0 (2026-10-06)

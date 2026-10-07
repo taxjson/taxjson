@@ -22,6 +22,7 @@ import difflib
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -385,32 +386,60 @@ def parse_inkind_line(line: str, source: str = ''):
     withdrawal). `price` is the fair market value per share (option: per
     share of the contract) in `currency`; give 0 and a `total` to state
     the whole value instead. `plan=` names the plan when its account is
-    not in the project (rrsp, tfsa, ira ...). The line values the move
-    the run pairs from the transfer rows on that date (within 10 days),
-    or declares one for a transfer row of this account whose other side
-    is outside the project. Raises ValueError on a malformed line."""
+    not in the project (rrsp, tfsa, ira ...), or picks the plan's leg. The
+    line values and declares the move of this account's transfer row of
+    that quantity nearest the date (within 10 days) — the run pairs it
+    with the plan's transfer row, or takes it as a move to a plan outside
+    the project. `INKIND <date> <symbol> <qty> plan=own` (no value)
+    declares the row a move of your own, never in kind; it returns
+    plan "own" and total None. Raises ValueError on a malformed line."""
     where = _where(source)
     body = strip_tt_comment(line)
     parts = body.split()
     if not parts or parts[0] != 'INKIND':
         return None
     facts = {}
-    while parts and _FACT_RE.match(parts[-1]):
-        k, v = _FACT_RE.match(parts.pop()).groups()
+    while parts and (_FACT_RE.match(parts[-1])
+                     or re.match(r'^[a-z]+=$', parts[-1])):
+        k, _eq, v = parts.pop().partition('=')
         facts[k] = v
     form = ("`INKIND <date> <symbol> <qty> <currency> <price> [<total>] "
             "[plan=<kind>]` (no time column; qty negative = out of this "
-            "account into a plan, positive = in from a plan)")
-    if len(parts) > 2 and _TIME_RE.match(parts[2]):
-        raise ValueError(f"{where}an INKIND line has no time column: "
-                         f"{form}: {line.strip()!r}")
-    if len(parts) not in (6, 7):
-        raise ValueError(f"{where}malformed INKIND line — expected {form}, "
-                         f"got {len(parts) - 1} field(s): {line.strip()!r}")
+            "account into a plan, positive = in from a plan), or "
+            "`INKIND <date> <symbol> <qty> plan=own` for a move of your own")
+    if 'plan' in facts and not facts['plan']:
+        raise ValueError(f"{where}INKIND plan= needs a value (the plan's "
+                         f"kind: rrsp, tfsa, ira ...; or own for a move "
+                         f"of your own): {line.strip()!r}")
     bad = sorted(set(facts) - {'plan'})
     if bad:
         raise ValueError(f"{where}INKIND line: unknown key {bad[0]}= (only "
                          f"plan=<kind>): {line.strip()!r}")
+    if len(parts) > 2 and _TIME_RE.match(parts[2]):
+        raise ValueError(f"{where}an INKIND line has no time column: "
+                         f"{form}: {line.strip()!r}")
+    if (facts.get('plan') or '').lower() == 'own':
+        if len(parts) not in (4, 6, 7):
+            raise ValueError(f"{where}malformed INKIND plan=own line — "
+                             f"expected `INKIND <date> <symbol> <qty> "
+                             f"plan=own` (no value): {line.strip()!r}")
+        _, day, sym, qty_t = parts[:4]
+        _check_date(day, 'date', line, source)
+        try:
+            qty = _tt_num(qty_t)
+        except ValueError as e:
+            raise ValueError(f"{where}malformed INKIND line ({e}): "
+                             f"{line.strip()!r}") from e
+        if abs(qty) < 1e-12:
+            raise ValueError(f"{where}INKIND quantity is 0 — the transfer "
+                             f"row's quantity, negative for shares out: "
+                             f"{line.strip()!r}")
+        return {'date': day, 'symbol': sym.upper(), 'quantity': qty,
+                'currency': '', 'total': None, 'plan': 'own',
+                'source': source}
+    if len(parts) not in (6, 7):
+        raise ValueError(f"{where}malformed INKIND line — expected {form}, "
+                         f"got {len(parts) - 1} field(s): {line.strip()!r}")
     _, day, sym, qty_t, cur, price_t = parts[:6]
     _check_date(day, 'date', line, source)
     try:
@@ -446,6 +475,10 @@ def parse_inkind_line(line: str, source: str = ''):
                          f"qty x price {by_price:.2f} — give one of them "
                          f"(price 0 and the total, or the price alone): "
                          f"{line.strip()!r}")
+    if not math.isfinite(total):
+        raise ValueError(f"{where}INKIND value is not a finite amount "
+                         f"(qty x price overflows) — give the fair market "
+                         f"value per share: {line.strip()!r}")
     if total <= 0:
         raise ValueError(f"{where}INKIND value is 0 — a move in kind is "
                          f"valued at the shares' fair market value: "

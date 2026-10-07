@@ -4869,12 +4869,14 @@ def in_kind_taxable_legs(cache: Path) -> Set[Tuple[str, str, str, float]]:
 
 class _InKindState:
     """The in-kind moves of one run (lib/in_kind): the moves, the
-    INKIND-line problems, and the taxable accounts' booked rows."""
+    INKIND-line problems, the taxable accounts' booked rows, and the
+    transfer rows possibly moved in kind in parts (lib/in_kind.in_parts)."""
 
-    def __init__(self, moves=None, problems=None, rows=None):
+    def __init__(self, moves=None, problems=None, rows=None, parts=None):
         self.moves = list(moves or [])
         self.problems = list(problems or [])
         self.rows: Dict[str, List[Dict[str, Any]]] = dict(rows or {})
+        self.parts = list(parts or [])
 
 
 # {work dir: _InKindState} — computed once per run (cmd_run clears it).
@@ -5017,9 +5019,12 @@ def in_kind_state(root: Path, cache: Path, settings: Dict[str, Any]
     if registered:
         rows += _registered_transfer_rows(registered, cache)
     legs = IK.legs(rows, plans, key=key)
-    moves = IK.pair(legs)
     lines, problems = _inkind_lines(root, taxable)
+    own, declared = IK.line_legs(lines, legs, key=key)
+    pairing = IK.pair_all(legs, own=own, declared=declared)
+    moves = pairing.moves
     problems += IK.apply_lines(moves, lines, legs, key=key)
+    st.parts = IK.in_parts(pairing)
     IK.decide(moves, country)
     IK.value(moves, _in_kind_close(root, cache),
              broker_names=DISPLAY_NAMES)
@@ -5027,10 +5032,15 @@ def in_kind_state(root: Path, cache: Path, settings: Dict[str, Any]
     st.rows = IK.booked_rows(moves, country)
     import json as _json
     p = cache / IN_KIND_FILE
-    if moves or problems:
+    if moves or problems or st.parts:
         text = _json.dumps({"metadata": {"kind": "in_kind_moves"},
                             "moves": [m.as_dict() for m in moves],
-                            "problems": problems},
+                            "problems": problems,
+                            "in_parts": [
+                                {"leg": list(g.ident()),
+                                 "plan_legs": [list(h.ident())
+                                               for h in hs]}
+                                for g, hs in st.parts]},
                            indent=2, sort_keys=True) + "\n"
         try:
             same = p.read_text(encoding="utf-8") == text
@@ -5108,9 +5118,20 @@ def _say_in_kind(root: Path, cache: Path, settings: Dict[str, Any], *,
     from the books) and each one not booked (CA-INKIND-* /
     US-INKIND-*). `strict`: a move not booked stops the run."""
     st = _IN_KIND_THIS_RUN.get(cache.resolve())
-    if st is None or ("inkind",) in _SHOWN_THIS_RUN:
+    if st is None:
         return
     from taxjson.lib import in_kind as IK
+    pm = IK.parts_message(st.parts)
+    if pm is not None and ("inkind-parts",) not in _SHOWN_THIS_RUN:
+        _SHOWN_THIS_RUN.add(("inkind-parts",))
+        _say("warning", pm[0], *pm[1], indent="  ", file=sys.stdout)
+        if strict:
+            _die(f"--strict: {len(st.parts)} transfer row(s) of a taxable "
+                 f"account possibly in-kind in parts (warning above)",
+                 "Answer each with a .tt INKIND line (the move's value, "
+                 "or plan=own); nothing else was changed.")
+    if ("inkind",) in _SHOWN_THIS_RUN:
+        return
     from taxjson.lib.report_model import resolve_gains_files
     import json as _json
     docs = []
@@ -8662,8 +8683,12 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
             encoding="utf-8"))
         for _m in _ikdoc.get("moves") or []:
             _lbl = (f"in-kind {_m.get('kind')}"
-                    + ("" if _m.get("booked") else " (NOT booked)"))
-            for _leg in (_m.get("taxable_leg"), _m.get("registered_leg")):
+                    + ("" if _m.get("booked") else
+                       " (ambiguous, NOT booked)"
+                       if _m.get("problem") == "ambiguous" else
+                       " (NOT booked)"))
+            for _leg in ([_m.get("taxable_leg"), _m.get("registered_leg")]
+                         + list(_m.get("registered_legs") or [])):
                 if isinstance(_leg, list) and len(_leg) == 4:
                     _ik[(str(_leg[0]), str(_leg[1]), str(_leg[2]),
                          round(float(_leg[3]), 8))] = _lbl

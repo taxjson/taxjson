@@ -363,7 +363,12 @@ in the project needs nothing: the run finds it (below).
 **In-kind moves between a taxable and a registered account are booked.** A
 taxable account's transfer-out paired with a registered account's transfer-in
 of the same security and quantity within 10 days (or the reverse; across
-brokers) is an in-kind contribution (withdrawal), not a move of your own. The
+brokers) is an in-kind contribution (withdrawal), not a move of your own. Legs
+of the same kind pair first across the project — taxable with taxable,
+registered with registered: moves of your own, whatever the gap — and a
+taxable leg pairs with a registered one only when neither has another
+plausible partner; an ambiguous pair is listed as NOT booked with both
+candidates and the line that settles it (`run --strict` stops). The
 run books it in the taxable account at the shares' **fair market value** on
 the transfer date and prints one warning listing each move, its value and
 where the value came from, and the gain or the denied loss:
@@ -387,16 +392,20 @@ where the value came from, and the gain or the denied loss:
 The value comes from, in order: a `.tt` line in the taxable account's folder,
 `INKIND <date> <symbol> <qty> <currency> <price> [<total>] [plan=<kind>]` (no
 time column; the quantity negative for shares out to the plan, positive for
-shares back — the same line declares a move whose plan is not in the project);
-the market value the broker prints on the transfer row (IB's `VALUE` — a value
-here, never a cost); else Yahoo's close on that day, marked ESTIMATED
+shares back — the same line declares the move of that transfer row, settles
+an ambiguous pair (`plan=` picks the plan's leg) and declares a move whose plan
+is not in the project); the market value the broker prints on the transfer row
+(IB's Transfers `Market Value` column — a value here, never a cost); else Yahoo's close on that day, marked ESTIMATED
 (split-adjusted; cached in `work/.close_cache.json`). It is converted at the
 Bank of Canada rate of the date like any row. With `TAXJSON_OFFLINE` set and no
 cached close the run stops and prints the `INKIND` line to add; a move with no
 value is listed as NOT booked. `taxjson transfers` labels both legs
-`in-kind_contribution` / `in-kind_withdrawal`. Partial deliveries (one
-transfer-out received as two transfer-ins) are not paired: declare them with
-`INKIND` lines.
+`in-kind_contribution` / `in-kind_withdrawal`. A partial delivery (one
+transfer-out a plan received as two transfer-ins) is not paired on its own: it
+is warned about ("possibly in-kind in parts"; `run --strict` stops); an
+`INKIND` line for the taxable row books it with the plan's rows that add up to
+it. `INKIND <date> <symbol> <qty> plan=own` declares a transfer row a move of
+your own (never in kind). Two identical moves on one day are two sales.
 
 `[settings] transfers_as_acquisitions = true` restores the strict treatment:
 every unmatched sheltered TRANSFER is an acquisition or disposition on its
