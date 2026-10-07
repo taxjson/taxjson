@@ -244,5 +244,76 @@ class TestJournalLegsPairInTheirAccountFirst(unittest.TestCase):
         self.assertFalse(legs[0].used or legs[1].used)
 
 
+# ------------------------------------------------------------------ 7
+
+class TestBiggerLineADayFromTheBrokersJournal(unittest.TestCase):
+    """RBC dates the gambit's trades May 5 and its J~ legs May 6. A .tt
+    line of 1500 dated May 5 (the trade date) or May 7 (one business day
+    after the legs) is booked and said as a Warning naming both; on May 6
+    it stops the run (partial_overlaps); two business days away it is
+    another journal, booked without a word."""
+
+    def _run_line(self, country, day):
+        from test_fix_dated_events import _rbc_gambit
+        from taxjson.lib import dated_events as DE
+        rbc, tmap = _rbc_gambit(True)
+        files = {"inputs/margin/rbc.csv": rbc, "ticker.map": tmap,
+                 "inputs/margin/j.tt": (f"JOURNAL {day} QZD.TO QZD.U.TO "
+                                        f"1500\n")}
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, files=files, usa=_USA_CAD)[country]
+            out = _out(_run(self, root))
+            rec = DE.read_state(root / "work" / DE.STATE)["journals"]
+            return out, [(j["status"], j["quantity"]) for j in rec]
+
+    def _check(self, country):
+        for day in ("2025-05-05", "2025-05-07"):
+            out, rec = self._run_line(country, day)
+            self.assertEqual(rec, [("booked", 1500.0)])
+            self.assertIn(f"inputs/margin/j.tt:1: JOURNAL {day} QZD.TO "
+                          f"QZD.U.TO 1500 is booked in full beside the "
+                          f"broker's journal of 1000", out)
+            self.assertIn("2025-05-06, 2025-05-06", out)
+            self.assertIn("date it 2025-05-06", out)
+        out, rec = self._run_line(country, "2025-05-08")
+        self.assertEqual(rec, [("booked", 1500.0)])
+        self.assertNotIn("booked in full beside", out)
+
+    def test_trade_day_two_business_days_before_the_legs(self):
+        from types import SimpleNamespace
+        from taxjson.lib import cross_listings as XL
+        legs = [XL.Leg("m", "rbc_direct", "QZD.TO", "2025-05-07", -1000,
+                       ref="ref|2025-05-07|1"),
+                XL.Leg("m", "rbc_direct", "QZD.U.TO", "2025-05-07", 1000,
+                       ref="ref|2025-05-07|1")]
+
+        def line(day, qty=1500):
+            return SimpleNamespace(account="m", date=day, frm="QZD.TO",
+                                   to="QZD.U.TO", quantity=qty,
+                                   where="j.tt:1", status="booked")
+        trades = {("m", "2025-05-05"): {"QZD.TO": [1000.0, 0.0],
+                                        "QZD.U.TO": [0.0, 1000.0]}}
+        # T+2: the trades' day is two business days before the legs.
+        self.assertEqual(len(XL.near_restatements(
+            [line("2025-05-05")], legs, trades)), 1)
+        self.assertEqual(XL.near_restatements(
+            [line("2025-05-05")], legs, {}), [])
+        # One business day off the legs; not a bigger line; another day.
+        self.assertEqual(len(XL.near_restatements(
+            [line("2025-05-08")], legs)), 1)
+        self.assertEqual(XL.near_restatements(
+            [line("2025-05-08", 1000)], legs), [])
+        self.assertEqual(XL.near_restatements(
+            [line("2025-05-12")], legs, trades), [])
+
+    @rule("CA-XLIST-04")
+    def test_canada_a_bigger_line_a_day_off_is_said(self):
+        self._check("canada")
+
+    @rule("US-XLIST-03")
+    def test_usa_a_bigger_line_a_day_off_is_said(self):
+        self._check("usa")
+
+
 if __name__ == "__main__":
     unittest.main()

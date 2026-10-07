@@ -526,6 +526,89 @@ def partial_overlaps(journals: Iterable[Any], legs: Iterable[Leg],
     return out
 
 
+# How many business days from the broker's journal a bigger .tt JOURNAL
+# line reads as a likely restatement of it (near_restatements): RBC dates
+# a gambit's trades on the trade day and its J~ legs on the settlement
+# day, one business day later.
+NEAR_DAYS = 1
+
+
+def near_restatements(journals: Iterable[Any], legs: Iterable[Leg],
+                      trades: Optional[Dict[Tuple[str, str],
+                                            Dict[str, List[float]]]] = None
+                      ) -> List[str]:
+    """Warning lines for the .tt JOURNAL lines booked in full (status
+    "booked") that move MORE units than a journal the broker's rows hold
+    between the same two listings in the same account (its out-leg of
+    FROM and in-leg of TO, one quantity) dated within NEAR_DAYS business
+    days of the line but not on its date — or on the day of that
+    journal's trades (`trades`, missing_history._day_trades: a buy of one
+    listing and a sale of the other of its quantity, up to PAIR_DAYS
+    business days before its legs) — and that no other .tt line already
+    restates (second pre-release review, finding 7). Such a line most
+    likely restates the broker's journal a day off (the gambit's trade
+    date for its settlement date): booked in full, it moves those units
+    twice. On the broker's own date it stops the run (partial_overlaps);
+    here it is booked, and said."""
+    from taxjson.lib.missing_history import _opposite_trades
+    journals = list(journals)
+    legs = [g for g in legs if g.broker != "tt" and not g.decl]
+    out: List[str] = []
+    for j in journals:
+        if getattr(j, "status", "booked") != "booked":
+            continue
+        jd = _d(j.date)
+        if jd is None:
+            continue
+        outs = [g for g in legs if g.account == j.account
+                and g.symbol == j.frm and g.quantity < 0]
+        ins = [g for g in legs if g.account == j.account
+               and g.symbol == j.to and g.quantity > 0]
+        for o in outs:
+            q = -o.quantity
+            if not (q < j.quantity - _EPS):
+                continue
+            i = next((g for g in ins if _same_qty(o, g)
+                      and _close(o, g, PAIR_DAYS)
+                      and (not o.ref or o.ref == g.ref)), None)
+            if i is None or j.date in (o.date[:10], i.date[:10]):
+                continue        # the same date: partial_overlaps stops
+            # Another .tt line already restates that journal.
+            if any(k is not j and k.account == j.account
+                   and k.frm == j.frm and k.to == j.to
+                   and getattr(k, "status", "") != "booked"
+                   and abs(k.quantity - q) <= max(_EPS, 1e-6 * q)
+                   for k in journals):
+                continue
+            od, idt = _d(o.date), _d(i.date)
+            near = any(x is not None and business_days(x, jd) <= NEAR_DAYS
+                       for x in (od, idt))
+            # The line on the day of that journal's trades (a buy of one
+            # listing and a sale of the other, its quantity, before the
+            # legs and within PAIR_DAYS business days of them).
+            tr = (trades or {}).get((j.account, j.date))
+            tday = j.date if (
+                tr and od is not None and jd <= max(od, idt or od)
+                and business_days(jd, od) <= PAIR_DAYS
+                and _opposite_trades(tr, j.frm, j.to)
+                and abs(max(tr[j.frm]) - q) <= max(_EPS, 1e-6 * q)) else ""
+            if not (near or tday):
+                continue
+            out.append(
+                f"{j.where}: JOURNAL {j.date} {j.frm} {j.to} "
+                f"{j.quantity:g} is booked in full beside the broker's "
+                f"journal of {q:g} between the same listings ({o.date}, "
+                f"{i.date}"
+                + (f"; its trades {tday}" if tday else "")
+                + f"), a day from the line: together they move "
+                f"{j.quantity + q:g} units. If the line restates the "
+                f"broker's journal, date it {o.date}: the run then says "
+                f"what to write; if it is a separate journal, check its "
+                f"date — this Warning stays while the two sit a day apart")
+            break
+    return out
+
+
 def _explicit_journal(o: Leg, i: Leg) -> bool:
     """An explicit journal pair: one account at one broker, one day, the
     same quantity, both legs in that broker's journal wording

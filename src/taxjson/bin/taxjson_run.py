@@ -2250,6 +2250,12 @@ def stage_dated_events(cache: Path, accounts: List[str]):
                  *[f"- {p}" for p in _over],
                  "A journal the broker's rows already hold is booked from "
                  "them; a .tt JOURNAL line adds only what they lack.")
+        # A bigger line a day from the broker's journal (the gambit's
+        # trade date for its settlement date): booked, and said.
+        from taxjson.lib.missing_history import _day_trades
+        for _w in XL.near_restatements(decl.journals, legs,
+                                       _day_trades(cache, accounts)):
+            _say("warning", *_split_msg(_w), prog=_PROG)
     DE.write_sidecars(cache, accounts, decl.journals)
     by_acct: Dict[str, List[str]] = {}
     for j in decl.journals:
