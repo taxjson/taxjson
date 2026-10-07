@@ -707,7 +707,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "the ticker, given around a corporate action) listed "
                  "under the ticker's own contract id is that ticker: "
                  "its rows are booked as the ticker, no ticker.map line "
-                 "needed; a ticker change IB shows only as one contract "
+                 "needed (a ticker.map line naming the stamped symbol, in "
+                 "any keyword, wins: it keeps its rows); a ticker change "
+                 "IB shows only as one contract "
                  "id under two symbols is suggested as the dated line "
                  "(OLD the symbol whose rows end first, the date NEW's "
                  "first row), never toward a temporary symbol.", cont=True),
@@ -2026,7 +2028,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "the ticker, given around a corporate action) listed "
                  "under the ticker's own contract id is that ticker: "
                  "its rows are booked as the ticker, no ticker.map line "
-                 "needed; a ticker change IB shows only as one contract "
+                 "needed (a ticker.map line naming the stamped symbol, in "
+                 "any keyword, wins: it keeps its rows); a ticker change "
+                 "IB shows only as one contract "
                  "id under two symbols is suggested as the dated line "
                  "(OLD the symbol whose rows end first, the date NEW's "
                  "first row), never toward a temporary symbol.", cont=True),

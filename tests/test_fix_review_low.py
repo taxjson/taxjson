@@ -6,6 +6,9 @@ F5  — a command started without stdout or stderr (`>&-`, `2>&-`: Python
 F8b — the listing-suffix correction (lib/listing_suffix) moved rows away
       from a QUOTE / T1135 line written for the `.US` spelling: a
       ticker.map line naming the symbol in any keyword now blocks it.
+F8a — IB's temporary-symbol fold (ib_extractor._ib_temp_folds) never
+      consulted ticker.map: a line naming the stamped symbol now wins (the
+      fold is skipped, the Info line says the map line decides).
 """
 import os
 import subprocess
@@ -118,6 +121,85 @@ class TestListingSuffixLookupLinesWin(_RunBase, unittest.TestCase):
                                          "questrade"))
         self.assertEqual(st.get("corrected") or {}, {})
         self.assertIn("ticker.map", st["kept"]["QZBX.US"]["reason"])
+
+
+# ------------------------------------------------ F8a: IB temporary symbol
+from taxjson.lib.brokerages import base as _base  # noqa: E402
+from taxjson.lib.brokerages.ib_extractor import IbBrokerage  # noqa: E402
+from test_fix_ibparse import _parse_account, _parse_ib  # noqa: E402
+import test_fix_suggest_quality as _sq  # noqa: E402
+
+TEMP = f"{_sq.STAMP}QZHN"
+BODY = _sq.TestIbTemporarySymbol.BODY
+
+
+def _project_parse(tmap, lone=False):
+    """Parse BODY as inputs/margin/ib.csv of a project whose ticker.map
+    is `tmap` (no map loaded: the parser finds the project's). ->
+    (symbols, stderr)."""
+    import contextlib
+    import io
+    err = io.StringIO()
+    with tempfile.TemporaryDirectory() as td:
+        acct = Path(td) / "inputs" / "margin"
+        acct.mkdir(parents=True)
+        p = acct / "ib.csv"
+        p.write_text(BODY)
+        (Path(td) / "ticker.map").write_text(tmap)
+        with contextlib.redirect_stderr(err):
+            b = IbBrokerage()
+            if not lone:
+                b.account_context = IbBrokerage.prepare_files([p])
+            txs = b.parse_file(p)
+    return {t["symbol"] for t in txs}, err.getvalue()
+
+
+@rule("CA-ACB-RENAME")
+class TestIbTempFoldMapWins(unittest.TestCase):
+    """A ticker.map line naming IB's temporary symbol decides it."""
+
+    def tearDown(self):
+        _base.set_ticker_map(None)
+
+    def _loaded(self, tmap):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "ticker.map"
+            p.write_text(tmap)
+            _base.set_ticker_map(p)
+        return _parse_account({"ib.csv": BODY})
+
+    def assertKept(self, syms, err):
+        self.assertIn(f"{TEMP}.US", syms, err)
+        self.assertIn(f"a ticker.map line names {TEMP}", err)
+        self.assertIn("the map line decides", err)
+        self.assertNotIn("its rows are booked as QZHN", err)
+        self.assertNotIn("several symbols", err)
+
+    def test_loaded_map_lines_of_any_keyword(self):
+        for line in (f"GLOBAL {TEMP}.US QZQQ.US",
+                     f"RENAME {TEMP}.US QZQQ.US 2026-06-29",
+                     f"TOBASE {TEMP}.US QZHN.TO",
+                     f"DISTINCT {TEMP}.US QZHN.US",
+                     f"EXTRACT QZHN CORP | USD | {TEMP}.US",
+                     f"QUOTE {TEMP} QZHN"):
+            with self.subTest(line=line):
+                txs, err = self._loaded(line + "\n")
+                self.assertKept({t["symbol"] for t in txs}, err)
+
+    def test_project_map_account_and_lone_parse(self):
+        for lone in (False, True):
+            with self.subTest(lone=lone):
+                syms, err = _project_parse(
+                    f"DISTINCT {TEMP}.US QZHN.US\n", lone=lone)
+                self.assertKept(syms, err)
+
+    def test_a_map_naming_other_symbols_keeps_the_fold(self):
+        txs, err = self._loaded("QUOTE QZHN.US QZHN\n"
+                                "GLOBAL QZOO.US QZPP.US\n")
+        self.assertEqual({t["symbol"] for t in txs}, {"QZHN.US"}, err)
+        self.assertIn(f"{TEMP} is IB's temporary symbol for QZHN", err)
+        syms, err = _project_parse("GLOBAL QZOO.US QZPP.US\n")
+        self.assertEqual(syms, {"QZHN.US"}, err)
 
 
 if __name__ == "__main__":

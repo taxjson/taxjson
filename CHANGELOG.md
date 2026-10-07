@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- **A ticker.map line naming an IB temporary symbol now wins over the fold.**
+  The parser folds IB's time-stamped symbol onto its ticker; it did so even
+  when a ticker.map line (`GLOBAL`, `RENAME`, `TOBASE`, `DISTINCT`, an
+  `EXTRACT` target, `QUOTE` …) named the stamped symbol, so the line never
+  applied. Such a symbol now keeps its rows and the line decides; the Info
+  line says so.
 - **A lookup line in ticker.map now stops the listing correction for its
   symbol.** The run reads a Questrade or RBC bare ticker on a USD row as the
   TSX listing when the books show it, unless ticker.map names the symbol; a
