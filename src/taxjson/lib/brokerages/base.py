@@ -291,6 +291,13 @@ def ticker_map_loaded() -> bool:
     return _TICKER_JOINS is not None
 
 
+def ticker_map_rules():
+    """(the undated rename map, the dated RENAME (old, new) pairs) of the
+    loaded ticker.map, or None without one — for a check that needs the
+    direction of a dated line (ticker_map_joins reads either)."""
+    return _TICKER_JOINS
+
+
 def ticker_map_renames(sym: str) -> bool:
     """True when the loaded ticker.map renames listing `sym` (an
     undated rule or chain, or a dated RENAME of it)."""
