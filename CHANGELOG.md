@@ -125,6 +125,11 @@
 
 ### Fixed
 
+- **The mid-run short-sale note says what this run booked.** It read the
+  last run's cross-account wash file, rebuilt only after the note: after
+  adding the purchase that closes a short sale and re-running, it still
+  said "in no total" while the closing summary said the sale was in the
+  totals (and the reverse after removing it).
 - **A journal no longer hides an unrelated sale with no purchase near it.**
   The missing-history checks read a day near a journal's legs buys first
   when it held a buy of one listing and a sale of the same quantity of the

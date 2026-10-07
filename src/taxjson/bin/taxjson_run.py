@@ -7394,7 +7394,10 @@ def _report_short_positions(root: Path, settings: Dict[str, Any],
     # What the gains engine booked for each listed pair (the split the
     # closing summary and `taxjson sum` make, lib/first_run.
     # engine_booking): a short a later purchase of the year closed is IN
-    # the totals — "in no total" said for it contradicted both.
+    # the totals — "in no total" said for it contradicted both. This
+    # run's plain gains files: the cross-account wash pass has not yet
+    # rebuilt <acct>_gains_wash.json, the last run's (third pre-release
+    # review, finding 5).
     booked: Dict[Tuple[str, str], str] = {}
     if rows:
         try:
@@ -7403,7 +7406,8 @@ def _report_short_positions(root: Path, settings: Dict[str, Any],
                 cache, [rows[(c.symbol, c.account)]
                         for _n, cands in unmarked for c in cands
                         if (c.symbol, c.account) in rows],
-                year, date_basis=_tax_date_basis(settings))
+                year, date_basis=_tax_date_basis(settings),
+                prefer_wash=False)
         except Exception:                           # noqa: BLE001
             booked = {}
     notes: List[Tuple[str, List[str], str]] = []

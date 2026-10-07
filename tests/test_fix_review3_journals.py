@@ -5,10 +5,13 @@
   listing bought, the TO listing sold), and only one such day; a sale
   with no purchase on one listing and a buy of the other near an
   unrelated journal of another size stays missing history.
+- 5: the run's mid-run short-sale note reads this run's gains, not the
+  last run's cross-account wash file (rebuilt only after the note).
 
 Every fixture is SYNTHETIC: invented QZ* tickers and names, fake account
 ids (pii-ok: 55500001).
 """
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -123,6 +126,53 @@ class TestJournalDayUnit(unittest.TestCase):
              ("m", "2025-05-05"): {"QZD.TO": [1000.0, 0.0],
                                    "QZD.U.TO": [0.0, 1000.0]}},
             "m", legs, "QZD.TO", "QZD.U.TO", 1000.0))
+
+
+# ------------------------------------------------------------------ 5
+
+_SALE = "BUYSELL 2024-03-01 10:00:00 QZS.TO -100 CAD 10.00 1000.00 0.00\n"
+_COVER = "BUYSELL 2024-05-01 10:00:00 QZS.TO 100 CAD 8.00 800.00 0.00\n"
+_COVERED = ("1 position(s) go short in margin's data (QZS.TO): booked as "
+            "short sales closed by a later purchase")
+_OPEN = "their gain is in no total"
+
+
+class TestShortNoteReadsThisRun(unittest.TestCase):
+    """Run 1 with one book, run 2 with the other, in one project: the
+    mid-run note says what run 2's engine booked (as the closing summary
+    and `taxjson sum` do)."""
+
+    def _two_runs(self, country, first, second):
+        from _qa_project import project, tj
+        with tempfile.TemporaryDirectory() as td:
+            root = project(td, "p", {"margin/book.tt": first},
+                           country=country)
+            tj(root, "run", "--no-input")
+            (root / "inputs" / "margin" / "book.tt").write_text(second)
+            r = tj(root, "run", "--no-input")
+            s = tj(root, "sum", "--json").stdout
+            mid = " ".join(r.stdout.split(
+                "Checking for missing purchase history", 1)[-1]
+                .split("==>", 1)[0].split())
+            return mid, json.loads(s)
+
+    def _check(self, country):
+        mid, s = self._two_runs(country, _SALE, _SALE + _COVER)
+        self.assertIn(_COVERED, mid)
+        self.assertNotIn(_OPEN, mid)
+        self.assertEqual([x["booked"] for x in s["no_purchase_in_totals"]],
+                         ["short_cover"])
+        mid, s = self._two_runs(country, _SALE + _COVER, _SALE)
+        self.assertIn(_OPEN, mid)
+        self.assertNotIn("booked as short sales closed", mid)
+        self.assertEqual([x["symbol"] for x in s["no_purchase_uncovered"]],
+                         ["QZS.TO"])
+
+    def test_canada_note_follows_this_run(self):
+        self._check("canada")
+
+    def test_usa_note_follows_this_run(self):
+        self._check("usa")
 
 
 if __name__ == "__main__":

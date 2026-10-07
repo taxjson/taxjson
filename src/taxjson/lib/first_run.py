@@ -129,7 +129,8 @@ BOOKED_OPEN, BOOKED_SHORT_COVER, BOOKED_MATCHED = (
 
 
 def engine_booking(cache: Path, rows: Sequence[MissingHistoryRow],
-                   year: Any, *, date_basis: str = "settle"
+                   year: Any, *, date_basis: str = "settle",
+                   prefer_wash: bool = True
                    ) -> Dict[Tuple[str, str], str]:
     """{(symbol, account): BOOKED_*} for each uncovered row: what the
     account's gains file (the one `taxjson sum` reads —
@@ -139,11 +140,15 @@ def engine_booking(cache: Path, rows: Sequence[MissingHistoryRow],
     (matched); units still short are covered by the year's short-close
     records of the symbol (short_cover); what is left the gains files
     lack (open). A row whose account has no readable gains file is
-    "open" (the claim the summary always made)."""
+    "open" (the claim the summary always made). `prefer_wash=False`
+    reads each account's plain gains file: a run's mid-run note comes
+    before the cross-account wash pass rebuilds `<acct>_gains_wash.json`,
+    so the wash file there is the LAST run's (third pre-release review,
+    finding 5)."""
     from taxjson.lib.report_model import resolve_gains_files
     ys = str(year) if year is not None else ""
     try:
-        files = resolve_gains_files(cache)
+        files = resolve_gains_files(cache, prefer_wash=prefer_wash)
     except Exception:                               # noqa: BLE001
         files = {}
     docs: Dict[str, List[Dict[str, Any]]] = {}
