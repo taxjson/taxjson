@@ -317,6 +317,29 @@ def echo_parse_stats(out_path: Path, files=None) -> None:
             _echo_captured(line)
 
 
+def _echo_tt_totals(account: str, tt: Path, out_path: Path,
+                    strict: bool = False) -> None:
+    """The .tt lines whose total is not qty x price +/- fee
+    (lib/tt_totals, read from the .tt stage's .diag): one `Warning:`
+    each on the console, naming file:line, the written total and the
+    formula's; `--strict` stops on them."""
+    from taxjson.lib.tt_totals import read_diag
+    found = read_diag(out_path)
+    if not found:
+        return
+    real = _console_names([tt])
+    for m in found:
+        head, details = m.message(f"inputs/{account}/{real(m.where)}")
+        _say_once(("tt-total", account, m.where), "warning", head,
+                  *details, prog=_PROG)
+    if strict:
+        _die(f"--strict: {account}: inputs/{account}/{tt.name} has "
+             f"{len(found)} line(s) whose total is not qty x price +/- "
+             f"fee (warning above) — aborting",
+             "Fix the total, or put the difference in the line's fee "
+             "column.")
+
+
 def _codes_note_head() -> str:
     from taxjson.lib.symbol_codes import NOTE_HEAD
     return NOTE_HEAD
@@ -3946,6 +3969,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             _step(f"Reading {_mask_ids_in_path(tt.name)}")
             run_to_file(_cmd("taxjson-convert-tt") + ["--account-name", name, str(tt)],
                         out)
+        # A line whose total is not its qty x price +/- fee: the total is
+        # booked as written. Read from the persisted .diag on EVERY run,
+        # cached or not (as the 0-transaction check), shown on the
+        # console and refused by --strict (QA F2: the warning reached only
+        # the .sum DIAGNOSTICS).
+        _echo_tt_totals(name, tt, out, strict)
         tt_jsons.append(out)
 
     # Broker groups REMOVED from inputs/: their parsed JSON, .diag and

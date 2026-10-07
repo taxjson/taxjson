@@ -790,6 +790,17 @@ def d_run_clean(ctx: Ctx) -> Result:
     if sheets:
         problems.append("unread spreadsheet(s) " + ", ".join(sheets)
                         + " — convert to CSV (taxjson-xlsx-to-csv)")
+    # A .tt line whose total is not its qty x price +/- fee is booked as
+    # written (lib/tt_totals; `run --strict` refuses it — QA F2).
+    from taxjson.lib.tt_totals import project_mismatches
+    tt_off = [f"inputs/{a}/{tt}:{m.where.rsplit(':', 1)[-1]}"
+              for a, tt, m in project_mismatches(ctx.root, ctx.accounts)]
+    if tt_off:
+        problems.append(
+            f"{len(tt_off)} .tt line(s) whose total is not qty x price "
+            f"+/- fee, booked as written: {', '.join(tt_off[:5])}"
+            + (f" +{len(tt_off) - 5} more" if len(tt_off) > 5 else "")
+            + " — fix the total or put the difference in the fee column")
     if problems:
         return Result("run-clean", "attention", "; ".join(problems))
     stamp = datetime.fromtimestamp(oldest_report).strftime("%Y-%m-%d %H:%M")

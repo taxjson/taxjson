@@ -134,6 +134,7 @@ against a synthetic fixture.
 - `src/taxjson/lib/brokerages/generic.py` — `GenericBrokerage`, `mapping_path`, `_load_mapping`, `_check_keys`, `_check_trade_row`: the column-mapped importer.
 - `src/taxjson/bin/taxjson_convert_tt.py` — `tt_to_json`, `parse_tt_line`, `parse_opening_line`, `json_to_tt_lines`, `compute_tt_id`, `main`: the .tt format in both directions.
 - `src/taxjson/bin/taxjson_run.py` — `stage_account`, `_refuse_crypto_openings`: where an account's `.tt` files are converted; an OPENING line in a crypto account is refused.
+- `src/taxjson/lib/tt_totals.py` — `read_diag`, `project_mismatches`, `Mismatch`, `tolerance`: a `.tt` line whose total is not qty x price +/- fee (booked as written), read back from the stage's .diag; `src/taxjson/bin/taxjson_run.py` — `_echo_tt_totals` shows each on the console on every run and `--strict` stops on it; `src/taxjson/lib/checklist.py` — `d_run_clean` lists them.
 - `src/taxjson/bin/taxjson_generate_parser.py` — `main`, `identity_findings`, `_call_claude`, `_call_gemini`: maintainer tool that drafts a parser from a sample CSV.
 - `tests/parser_conformance.py` — `ParserConformance`, `FIXTURES`, `validate_transactions`: the harness every parser test subclasses (schema, golden output, determinism, row accounting).
 - `tests/test_parser_conformance.py` — `TestQuestradeConformance`, `TestIbConformance`, `TestKrakenConformance`, `UPDATE_GOLDEN`: one registration per parser.

@@ -272,6 +272,9 @@ def parse_tt_line(line: str, account_name: str = 'default',
                 # 1/100 guess called every correct futures total a typo
                 # (S029-00), so no comparison for them.
                 from taxjson.lib.core import is_option_symbol
+                # (the run reads this warning back: lib/tt_totals)
+                from taxjson.lib.tt_totals import \
+                    tolerance as _tt_tolerance
                 _is_fut = tx['symbol'].startswith(_FUTURES_PREFIXES)
                 _mult = (tx['multiplier'] if tx.get('multiplier')
                          else 100.0 if (is_option_symbol(tx['symbol'])
@@ -305,7 +308,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
                         # on the line (`x1000`).
                         and (not _is_fut or tx.get('multiplier'))
                         and abs(_total - _expected) >
-                        max(0.05, 0.01 * max(abs(_expected), 1.0))):
+                        _tt_tolerance(_expected)):
                     emit_line(
                         f"warning: {_where(source)}.tt line total "
                         f"{_total:.2f} differs from "

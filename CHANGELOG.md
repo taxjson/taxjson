@@ -115,6 +115,13 @@
 
 ### Fixed
 
+- **A `.tt` total that disagrees with its quantity, price and fee is said
+  on the console.** A line whose total was more than 1% off quantity x
+  price + fee was booked as written with the warning only in the `.sum`
+  DIAGNOSTICS. The run now shows it as a Warning naming the file and line,
+  both figures and that the total is what is booked (on every run),
+  `run --strict` stops on it and `taxjson checklist`'s run-clean step
+  lists it.
 - **A journal between two listings stays inside its account.** The
   transfer pairing pooled every account's transfer legs, so a journal's
   legs in one account (a Questrade BRW pair, RBC's `J~` legs, a `.tt`
