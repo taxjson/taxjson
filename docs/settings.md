@@ -409,7 +409,7 @@ The project's one mapping file, at the project root; one rule per line, symbols 
 
 #### `JOURNAL`
 - **Form:** `JOURNAL FROM TO`
-- **Meaning:** like `TOBASE`, and also nets the two legs together in the holdings view (a Norbert's Gambit pair of one fund's USD and CAD units). A Canadian run adds this line itself for a Questrade currency journal (BRW) the parser pairs; a line of yours naming either listing wins.
+- **Meaning:** like `TOBASE`, and also nets the two legs together in the holdings view (a Norbert's Gambit pair of one fund's USD and CAD units). A Canadian run adds this line itself for a Questrade currency journal (BRW) the parser pairs; a line of yours naming either listing wins. The missing-history checks do not need it: a journal the books show (a join of the run, a Questrade pair, RBC's J~ reference on the two transfer legs, folded onto one symbol by a `TOBASE` line as well) reads that day's buys first.
 - **Country:** both.
 - **Example:** `JOURNAL ZZG.U.TO ZZG.TO`
 

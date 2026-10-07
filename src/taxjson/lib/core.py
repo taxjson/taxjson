@@ -178,6 +178,15 @@ class TaxTransaction:
     # of its own. Evidence only: NOT part of compute_id, omitted from
     # to_dict() when 0.
     market_value: float = 0.0
+    # The id a parser gives the two legs of one broker CURRENCY journal
+    # (Questrade's BRW "JOURNAL POSITION TO USD" / "FROM CAD" pair,
+    # brokerages/questrade._plan_qt_journals): kept on the TRANSFER row
+    # whether the account keeps its transfers in the books or aside, so
+    # the run joins the two lines as one security (lib/cross_listings,
+    # CA-XLIST-03) and the missing-history walks read the pair as a
+    # journal. Evidence only: NOT part of compute_id, omitted from
+    # to_dict() when empty.
+    journal_pair: str = ''
 
     def __post_init__(self):
         if self.id is None:
@@ -235,7 +244,7 @@ EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
                    'contract_size_basis',
                    'source', 'source_key',
                    'source_account', 'exercise_of', 'corp_cash',
-                   'lot_date', 'market_value')
+                   'lot_date', 'market_value', 'journal_pair')
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]
 # e.g. "SAMPLG250120C00150000.US", "ABC271217P00029000.TO", or
@@ -944,7 +953,7 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                  'dealer_country', 'issuer_country', 'broker_time',
                  'security_name', 'open_close', 'broker_basis',
                  'broker_lots', 'exercise_of', 'corp_cash', 'contract_size_basis',
-                 'lot_date'):
+                 'lot_date', 'journal_pair'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]

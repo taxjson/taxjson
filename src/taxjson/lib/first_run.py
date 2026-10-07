@@ -114,6 +114,88 @@ def uncovered_short_sales(txs: Sequence[TaxTransaction], year: Any, *,
                  str(r.candidate.account).lower()) not in cov]
 
 
+# How the gains engine booked the year's sales the missing-history walk
+# reads as sold with no purchase (engine_booking):
+#   "open"         a sale the gains files lack — the engine still holds
+#                  it as an open short at the year's end: its gain is
+#                  NOT in `taxjson sum`;
+#   "short_cover"  booked as a short sale a later purchase of the year
+#                  closed: in `taxjson sum`, at that purchase's cost;
+#   "matched"      the engine sold it from a purchase in the files (it
+#                  reads the day's rows in another order than the walk):
+#                  in `taxjson sum` as an ordinary sale.
+BOOKED_OPEN, BOOKED_SHORT_COVER, BOOKED_MATCHED = (
+    "open", "short_cover", "matched")
+
+
+def engine_booking(cache: Path, rows: Sequence[MissingHistoryRow],
+                   year: Any, *, date_basis: str = "settle"
+                   ) -> Dict[Tuple[str, str], str]:
+    """{(symbol, account): BOOKED_*} for each uncovered row: what the
+    account's gains file (the one `taxjson sum` reads —
+    report_model.resolve_gains_files) did with the year's sales the walk
+    found short (MissingHistoryRow.in_year_short_sales). A sale's units
+    the engine closed against a long position carry the sale's id
+    (matched); units still short are covered by the year's short-close
+    records of the symbol (short_cover); what is left the gains files
+    lack (open). A row whose account has no readable gains file is
+    "open" (the claim the summary always made)."""
+    from taxjson.lib.report_model import resolve_gains_files
+    ys = str(year) if year is not None else ""
+    try:
+        files = resolve_gains_files(cache)
+    except Exception:                               # noqa: BLE001
+        files = {}
+    docs: Dict[str, List[Dict[str, Any]]] = {}
+    out: Dict[Tuple[str, str], str] = {}
+    for r in rows:
+        sym, acct = r.candidate.symbol, r.candidate.account
+        if acct not in docs:
+            recs: List[Dict[str, Any]] = []
+            f = files.get(acct)
+            if f is not None:
+                try:
+                    d = json.loads(Path(f).read_text(encoding="utf-8"))
+                    recs = [x for x in (d.get("transactions") or [])
+                            if isinstance(x, dict)]
+                except (OSError, ValueError, AttributeError):
+                    recs = []
+            docs[acct] = recs
+        recs = [x for x in docs[acct] if x.get("symbol") == sym]
+        if not recs:
+            out[(sym, acct)] = BOOKED_OPEN
+            continue
+        long_by_id: Dict[str, float] = {}
+        covered = 0.0
+        for x in recs:
+            try:
+                q = abs(float(x.get("qty") or 0.0))
+            except (TypeError, ValueError):
+                continue
+            if x.get("direction") == "SHORT":
+                d = str((x.get("date_settle") if date_basis == "settle"
+                         else None) or x.get("date") or "")
+                if not x.get("grant") and d.startswith(ys):
+                    covered += q
+            else:
+                i = str(x.get("id") or "")
+                long_by_id[i] = long_by_id.get(i, 0.0) + q
+        matched = rest = 0.0
+        for sid, units in r.in_year_short_sales:
+            m = min(units, long_by_id.get(sid, 0.0))
+            matched += m
+            rest += units - m
+        sales = bool(r.in_year_short_sales)
+        if rest - covered > 1e-6:
+            out[(sym, acct)] = BOOKED_OPEN
+        elif rest > 1e-6 or (not sales and covered > 1e-6):
+            # (no sale of the year: a cover of a short carried in)
+            out[(sym, acct)] = BOOKED_SHORT_COVER
+        else:
+            out[(sym, acct)] = BOOKED_MATCHED if sales else BOOKED_OPEN
+    return out
+
+
 def zero_cost_positions(txs: Sequence[TaxTransaction], year: Any, *,
                         sheltered: Dict[str, bool],
                         country: Optional[str],
@@ -282,33 +364,41 @@ def collect(root: Path, cfg: Dict[str, Any], *,
                  and a.get("type") in ("taxable", "sheltered")}
     crypto = {n for n, a in accounts.items()
               if isinstance(a, dict) and a.get("crypto")}
-    journal: Set[str] = set()
     tm = root / "ticker.map"
-    if tm.is_file():
-        try:
-            from taxjson.lib.missing_history import journal_targets
-            journal = journal_targets(str(tm))
-        except Exception:                           # noqa: BLE001
-            journal = set()
+    from taxjson.lib.missing_history import walk_journal_symbols
+    journal = walk_journal_symbols(cache, tm if tm.is_file() else None)
     txs, failed = load_books(cache)
     covered = read_missing_history_pairs(missing_history)
     shorts = uncovered_short_sales(txs, year, sheltered=sheltered,
                                    covered=covered, date_basis=basis,
                                    journal=journal, country=country)
+    booked = engine_booking(cache, shorts, year, date_basis=basis)
     zero_sold, zero_held = zero_cost_positions(
         txs, year, sheltered=sheltered, country=country, date_basis=basis)
     income = income_without_position(txs, year, skip_accounts=crypto,
                                      date_basis=basis, declared=covered)
     no_cost = [a for a in arrivals if getattr(a, "status", "") == "no_cost"]
-    booked = [a for a in arrivals
-              if getattr(a, "status", "") == "book_value"]
+    book_value = [a for a in arrivals
+                  if getattr(a, "status", "") == "book_value"]
+
+    def _how(r):
+        return booked.get((r.candidate.symbol, r.candidate.account),
+                          BOOKED_OPEN)
     return {
         "schema_version": 1,
         "year": year,
+        # Sales the gains files lack: NOT in `taxjson sum`.
         "no_purchase": [{"symbol": r.candidate.symbol,
                          "account": r.candidate.account,
                          "sales": r.in_year_dispositions}
-                        for r in shorts],
+                        for r in shorts if _how(r) == BOOKED_OPEN],
+        # Sales the walk reads short that the gains engine booked
+        # (engine_booking): in `taxjson sum`.
+        "no_purchase_in_sum": [{"symbol": r.candidate.symbol,
+                                "account": r.candidate.account,
+                                "sales": r.in_year_dispositions,
+                                "booked": _how(r)}
+                               for r in shorts if _how(r) != BOOKED_OPEN],
         "zero_cost_sold": [{"symbol": r.symbol, "account": r.account}
                            for r in zero_sold],
         "zero_cost_held": [{"symbol": r.symbol, "account": r.account,
@@ -320,7 +410,7 @@ def collect(root: Path, cfg: Dict[str, Any], *,
         "transfer_in_book_value": [{"symbol": a.symbol,
                                     "account": a.account, "date": a.date,
                                     "quantity": a.quantity}
-                                   for a in booked],
+                                   for a in book_value],
         "unchecked_accounts": [{"account": a, "positions": n}
                                for a, n in unchecked_accounts(cache,
                                                               accounts)],
@@ -336,8 +426,9 @@ def _names(items: Sequence[Dict[str, Any]], n: int = 3) -> str:
 
 def is_clean(doc: Dict[str, Any]) -> bool:
     return not any(doc.get(k) for k in (
-        "no_purchase", "zero_cost_sold", "zero_cost_held",
-        "transfer_in_no_cost", "unchecked_accounts", "income_not_held"))
+        "no_purchase", "no_purchase_in_sum", "zero_cost_sold",
+        "zero_cost_held", "transfer_in_no_cost", "unchecked_accounts",
+        "income_not_held"))
 
 
 def _accounts_shown(items: Sequence[Dict[str, Any]], n: int = 6) -> str:
@@ -382,6 +473,24 @@ def render_blocks(doc: Dict[str, Any], *,
                      f"sold in {yr} with no purchase in your files, not in "
                      f"{mh_name}: {_names(np_)}. Those sales are NOT in "
                      f"`taxjson sum`; run `taxjson find-missing-history`."))
+    ins = doc.get("no_purchase_in_sum") or []
+    cov = [i for i in ins if i.get("booked") == BOOKED_SHORT_COVER]
+    mat = [i for i in ins if i.get("booked") != BOOKED_SHORT_COVER]
+    if cov:
+        items.append(("Warning", f"{_n(len(cov), 'position', 'positions')} "
+                     f"sold in {yr} with no purchase in your files, not in "
+                     f"{mh_name}: {_names(cov)}. `taxjson sum` books those "
+                     f"sales as short sales closed by a later purchase, at "
+                     f"that purchase's cost — not yours if you held the "
+                     f"shares before your files start; run `taxjson "
+                     f"find-missing-history`."))
+    if mat:
+        items.append(("Info", f"{_n(len(mat), 'position', 'positions')} "
+                     f"read short in {yr} by `taxjson find-missing-history`"
+                     f": {_names(mat)}. The gains engine sold them from "
+                     f"purchases in your files, so they are in `taxjson "
+                     f"sum`; the check reads that day's rows in another "
+                     f"order: compare it with the broker's trades."))
     zs, zh = doc.get("zero_cost_sold") or [], doc.get("zero_cost_held") or []
     if zs or zh:
         parts = ([f"{len(zs)} sold in {yr}"] if zs else []) \

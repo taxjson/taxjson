@@ -202,6 +202,20 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/lib/first_run.py` — `render`, `with no purchase in your files, not in `; `src/taxjson/bin/taxjson_run.py` — `_short_positions_note`; `src/taxjson/lib/missing_history.py` — `detect_missing_history`
 
+### "Info: 1 position(s) go short in margin's data (QZD.TO)" or "Warning: 1 position sold in 2025 with no purchase in your files, not in missing_history.json: QZD.TO (margin)" after a Norbert's gambit, with a ticker.map `TOBASE` line (or none) instead of `JOURNAL`
+- **Check:** `tjs find-missing-history` lists the CAD line (QZD.TO) short on the gambit's day, and the export shows a buy of one line and a sale of the other that day (RBC trade rows ending `CA JNL`), with the journal's two transfer legs (RBC `TFR - … TRANSFER TO U$ J~1` / `… FROM C$ J~1`, Questrade's BRW `JOURNAL POSITION` pair) dated the settlement day. `tjs sum` has the gambit's gain in its totals.
+- **Cause:** the missing-history walks read a day's rows by the broker's clock (RBC numbers a day's rows, newest first), so the sale came before the buy, and the journal's out-leg before its in-leg. Only a ticker.map `JOURNAL` line made them read a journal's buys and in-legs first. Now a journal the books show is enough: a join of the run (work/cross_listings.state), a Questrade pair id, or RBC's J~ reference on two legs that the books' renames put on one symbol (a `TOBASE` line does that as well as `JOURNAL`). A `JOURNAL` line still works.
+- **Fix:** re-run `tjs run` on a release with the fix; no `JOURNAL` line is needed. On an older install write the pair as `JOURNAL` (not `TOBASE`) in ticker.map, or ignore the line: the totals are right.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/missing_history.py` — `walk_journal_symbols`, `detected_journal_symbols`, `journal_leg_key`, `_walk_key`
+
+### "Warning: … with no purchase in your files … Those sales are NOT in `taxjson sum`" while `tjs sum` has the sale in its totals; or "`taxjson sum` books those sales as short sales closed by a later purchase" or "Info: 1 position read short in 2025 by `taxjson find-missing-history`"
+- **Check:** `tjs sum --json`: `no_purchase_uncovered` lists the sales the totals lack; `no_purchase_in_totals` lists those the gains engine booked, with `booked` = `short_cover` or `matched`.
+- **Cause:** the closing summary and `tjs sum` said "NOT in `taxjson sum`" for every sale the missing-history walk read as sold before bought, also when the gains engine had booked it: as a short sale a later purchase of the year closed (in the totals, at that purchase's cost), or from a purchase it reads first (the walk and the engine order a day's rows differently). Now the claim is made only for sales the gains files lack (an open short at the year's end); a short closed within the year is a Warning saying so, and a sale the engine matched is an Info line.
+- **Fix:** for "NOT in `taxjson sum`" and for a short closed by a later purchase when you held the shares before your files start, supply the purchase (`tjs find-missing-history`, docs/getting-started.md step 5). For the Info line, compare the day's trades with the broker's: the totals already have the sale.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/first_run.py` — `engine_booking`, `BOOKED_SHORT_COVER`, `render_blocks`; `src/taxjson/bin/taxjson_run.py` — `_uncovered_sales`, `no_purchase_in_totals`
+
 ### "Warning: Short position: QZQ.US (margin): the broker codes the sale on 2025-04-01 CLOSING (IB code C, IB Basis …), but the data holds no position to close"
 - **Check:** `tjs find-missing-history` shows the pair with "broker says closing (IB code C)" and IB's Basis for the shares sold.
 - **Cause:** IB marks the sale as closing a position, so it is not a short sale: the purchase predates the statements in `inputs/`.
@@ -384,6 +398,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** re-run `tjs run` on a release with the fix. On an older install add `EXTRACT <NAME> | USD | QZD.U.TO` and `JOURNAL QZD.U.TO QZD.TO` to `ticker.map`. For a lone leg, re-export the journal's day so both rows are in the file. A short that remains on the CAD line (QZD.TO) is the units' real purchase missing from your files: supply it (`tjs find-missing-history`).
 - **Fixed in:** `v0.23.0`
 - **Code:** `src/taxjson/lib/brokerages/questrade.py` — `_plan_qt_journals`, `_journal_listing`, `journal_codes`, `has no partner`; `src/taxjson/lib/cross_listings.py` — `analyze`, `currency journal`; `src/taxjson/lib/markets.py` — `usd_unit_listing`
+
+### Questrade, an account with `transfers = true`: "joined as one security by their transfer journal: QZD.TO ↔ QZD.U.TO (transfer 2025-09-25)" for a currency journal, or the journal not joined and the USD sale short
+- **Check:** the account's `[accounts.NAME]` has `transfers = true`, and the export holds the BRW pair `<NAME> JOURNAL POSITION TO USD` / `… FROM CAD BOOK VALUE: $X CNV@ r`. With `transfers = false` the same export says "(currency journal 2025-09-25)".
+- **Cause:** the parser gives the two legs one pair id (`journal_pair`), but the books dropped it: only the transfer sidecar (`transfers = false`) kept it, so with `transfers = true` the run never saw the currency journal and joined the lines only when the names were equal word for word.
+- **Fix:** re-run `tjs run` on a release with the fix: the pair id is kept on the book rows too. On an older install add `JOURNAL QZD.U.TO QZD.TO` to ticker.map.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/core.py` — `journal_pair`; `src/taxjson/lib/brokerages/questrade.py` — `_plan_qt_journals`; `src/taxjson/lib/cross_listings.py` — `gather`
 
 ### "Warning: 99900001.csv: Questrade symbol QZOLD.US looks renamed to QZNEW.US" or "Warning: 99900001.csv: RBC symbol QZOLD (USD) looks renamed to QZNEW"
 - **Check:** the next lines say the old symbol stops with shares still open and the new one (same description) starts with a sale or goes short. IB says `IB lists one stock (contract id …) under several symbols`; Webull says `… goes short with a SALE on … — likely a ticker change Webull reported without a reorganization row`. `tjs shares` shows the old symbol open and the new one short.
