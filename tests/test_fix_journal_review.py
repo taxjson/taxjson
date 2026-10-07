@@ -352,5 +352,57 @@ class TestHubPartnersAgree(unittest.TestCase):
         self._check()
 
 
+# ------------------------------------------------------------------ M6
+
+class TestMigratedJournalLineWalksTheSame(unittest.TestCase):
+
+    def test_tobase_lines_that_stand_for_a_journal(self):
+        from types import SimpleNamespace
+        from taxjson.lib.missing_history import _journal_line_symbols
+        tm = SimpleNamespace(journal={}, tobase={
+            "QZG.U.TO": "QZG.TO",       # a fund's two currency lines
+            "QZF.US": "QZF.TO",         # an interlisted stock: no
+            "QZA.US": "QZB.TO"})        # two roots: no
+        self.assertEqual(_journal_line_symbols(tm), {"QZG.U.TO", "QZG.TO"})
+        # Opposite trades on one day in one account: a journal's day.
+        trades = {("m", "2025-03-05"): {"QZA.US": {-1}, "QZB.TO": {1}}}
+        self.assertEqual(_journal_line_symbols(tm, trades),
+                         {"QZG.U.TO", "QZG.TO", "QZA.US", "QZB.TO"})
+
+    def _check(self, country):
+        files = {
+            "ticker.map": "JOURNAL QZG.U.TO QZG.TO  # gambit\n",
+            # The gambit's day, by the broker's clock: the sale of the USD
+            # line before the buy of the CAD line.
+            "inputs/margin/m.tt": (
+                "BUYSELL 2025-03-05 10:00:00 QZG.TO 100 CAD 10.00 1000.00 "
+                "0.00\n"
+                "BUYSELL 2025-03-05 09:00:00 QZG.U.TO -100 USD 7.50 750.00 "
+                "0.00\n")}
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, files=files, usa=_USA_CAD)[country]
+
+            def state():
+                r = _run(self, root)
+                s = json.loads(cli(root, "sum", "--json").stdout)
+                return ("sold with no purchase" in _out(r),
+                        s.get("no_purchase_in_totals"), s["totals"])
+            before = state()
+            self.assertFalse(before[0])
+            w = cli(root, "format-map", "--write", "--no-backup")
+            self.assertEqual(w.returncode, 0, _out(w))
+            self.assertIn("TOBASE QZG.U.TO QZG.TO",
+                          (root / "ticker.map").read_text())
+            self.assertEqual(state(), before)
+
+    @rule("CA-XLIST-04")
+    def test_canada_migrated_journal_line_walks_the_same(self):
+        self._check("canada")
+
+    @rule("US-XLIST-03")
+    def test_usa_migrated_journal_line_walks_the_same(self):
+        self._check("usa")
+
+
 if __name__ == "__main__":
     unittest.main()

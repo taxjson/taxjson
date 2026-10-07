@@ -72,7 +72,9 @@
   `JOURNAL` line as `TOBASE` and moves each dated `RENAME` line, with its
   comments, to `inputs/<account>/renames.tt` (one file, in the first account
   whose books carry the change); the dry run shows both, `--check` fails
-  while a migration is pending, and the books stay the same. `taxjson init`
+  while a migration is pending, and the books stay the same (the
+  missing-history checks read a `TOBASE` line between a fund's two
+  currency lines as the journal the `JOURNAL` line was). `taxjson init`
   writes no dated event in ticker.map; the account READMEs show the `.tt`
   lines.
 - **Every dated event is recorded with its source.** `work/dated_events.state`

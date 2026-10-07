@@ -261,7 +261,11 @@ class TestRbcGambitNeedsNoJournalLine(unittest.TestCase):
 
     def test_the_walk_knows_the_journal_without_a_journal_line(self):
         root, _r = self.got['tobase-aside']
-        self.assertEqual(MH.journal_targets(root / 'ticker.map'), set())
+        # A TOBASE line between a fund's two currency lines is read as
+        # the journal a JOURNAL line was (pre-release review M6: the form
+        # format-map migrates JOURNAL to); the legs say it too.
+        self.assertEqual(MH.journal_targets(root / 'ticker.map'),
+                         {'QZD.TO', 'QZD.U.TO'})
         self.assertIn('QZD.TO', MH.walk_journal_symbols(
             root / 'work', root / 'ticker.map'))
 

@@ -358,19 +358,79 @@ def _is_marked_short(tx) -> bool:
     return bool(broker_short_marker(tx))
 
 
-def _journal_line_symbols(tm) -> Set[str]:
-    """Both symbols of every JOURNAL line of a parsed ticker map."""
+def _journal_line_symbols(tm, trades: Optional[Dict[Tuple[str, str],
+                                                   Dict[str, Set[int]]]]
+                          = None) -> Set[str]:
+    """Both symbols of every legacy JOURNAL line of a parsed ticker map,
+    and of every TOBASE line that stands for a journal — so migrating
+    `JOURNAL A B` to `TOBASE A B` (taxjson format-map) changes nothing
+    in the walks (pre-release review M6): a TOBASE line whose two
+    listings are one fund's currency lines (one root on one venue, two
+    quote currencies: SAMPLF.U.TO / SAMPLF.TO), or one whose two listings have
+    opposite trades on one day in one account (`trades`: (account,
+    date) -> symbol -> the signs of its BUYSELL quantities that day)."""
+    from taxjson.lib.cross_listings import listing_root
+    from taxjson.lib.price_chain import quote_currency
     out: Set[str] = set()
     for src, dst in (getattr(tm, 'journal', {}) or {}).items():
         out.add(str(dst).upper())
         out.add(str(src).upper())
+    for src, dst in (getattr(tm, 'tobase', {}) or {}).items():
+        a, b = str(src).upper(), str(dst).upper()
+        ca, cb = quote_currency(a), quote_currency(b)
+        if (listing_root(a) == listing_root(b) and ca and cb and ca != cb
+                and a.rsplit('.', 1)[-1] == b.rsplit('.', 1)[-1]):
+            out.update((a, b))
+            continue
+        for day in (trades or {}).values():
+            sa, sb = day.get(a, set()), day.get(b, set())
+            if (1 in sa and -1 in sb) or (-1 in sa and 1 in sb):
+                out.update((a, b))
+                break
+    return out
+
+
+def _day_trades(cache: Path, accounts: Iterable[str]
+                ) -> Dict[Tuple[str, str], Dict[str, Set[int]]]:
+    """(account, date) -> symbol -> the signs of the BUYSELL quantities
+    the account's parsed exports and converted .tt files hold that day
+    (the symbols as the inputs spell them, before any map)."""
+    from taxjson.lib import cross_listings as XL
+    out: Dict[Tuple[str, str], Dict[str, Set[int]]] = {}
+    for acct in sorted(set(accounts)):
+        files = [f for _b, f, side in XL._parsed_files(cache, acct)
+                 if not side]
+        files += sorted(cache.glob(f'{acct}_tt_*.json'))
+        for f in files:
+            if not f.is_file():
+                continue
+            try:
+                doc = json.loads(f.read_text(encoding='utf-8'))
+            except (OSError, ValueError, RecursionError):
+                continue
+            txs = doc.get('transactions') if isinstance(doc, dict) else None
+            for t in txs if isinstance(txs, list) else []:
+                if not isinstance(t, dict) or t.get('action') != 'BUYSELL':
+                    continue
+                try:
+                    q = float(t.get('quantity') or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if abs(q) < 1e-12:
+                    continue
+                out.setdefault((acct, str(t.get('date') or '')[:10]),
+                               {}).setdefault(
+                    str(t.get('symbol') or '').upper(),
+                    set()).add(1 if q > 0 else -1)
     return out
 
 
 def journal_targets(ticker_map) -> Set[str]:
     """The symbols ticker.map's JOURNAL lines fold a listing INTO (and
     from): a Norbert's-gambit pair (sell SAMPLF.TO, buy SAMPLF.U.TO the same
-    morning) is one symbol in the books. Empty without a readable map
+    morning) is one symbol in the books — and those of a TOBASE line
+    between a fund's two currency lines, the form `taxjson format-map`
+    migrates a JOURNAL line to (_journal_line_symbols). Empty without a readable map
     (a missing map is not an error here: the caller decides). A JOURNAL
     line is one source of walk_journal_symbols; the journal the books
     themselves show is the other."""
@@ -474,7 +534,10 @@ def walk_journal_symbols(cache, ticker_map=None) -> Set[str]:
 
     - both symbols of a ticker.map JOURNAL line (`ticker_map`, and the
       run's effective map, work/ticker.map.effective) — still accepted,
-      no longer needed;
+      no longer needed — and of a TOBASE line that stands for one (a
+      fund's two currency lines on one venue, or two listings with opposite
+      trades on one day in one account: _journal_line_symbols), so
+      `taxjson format-map`'s migration changes nothing;
     - both listings of every join the run made from a transfer journal
       (work/cross_listings.state: a cross-listing joined as TOBASE, a
       currency journal joined as JOURNAL);
@@ -490,16 +553,27 @@ def walk_journal_symbols(cache, ticker_map=None) -> Set[str]:
     cache = Path(cache)
     out: Set[str] = set()
     renames: Dict[str, str] = {}
+    accounts: Set[str] = set()
+    try:
+        accounts |= {str(a) for a in (_project_doc_near(
+            cache / 'x_base.json').get('accounts') or {})}
+    except Exception:                               # noqa: BLE001
+        pass
+    accounts |= {p.name[:-len('_base.json')] for p in cache.glob('*_base.json')
+                 if not p.name.endswith('_raw_base.json')}
     eff = cache / XL.EFFECTIVE_MAP
     maps = [Path(ticker_map)] if ticker_map else []
     if eff.is_file():
         maps.append(eff)
+    trades = None
     for m in maps:
         if not m.is_file():
             continue
         try:
             tm = load_map_file(m)
-            out |= _journal_line_symbols(tm)
+            if trades is None and getattr(tm, 'tobase', None):
+                trades = _day_trades(cache, accounts)
+            out |= _journal_line_symbols(tm, trades)
             # The effective map (read last) is the one the books were
             # merged with.
             renames = merge_renames(tm, True)
@@ -510,14 +584,6 @@ def walk_journal_symbols(cache, ticker_map=None) -> Set[str]:
                 str(r.get('to') or '').upper()} - {''}
         if len(pair) == 2:
             out |= pair
-    accounts: Set[str] = set()
-    try:
-        accounts |= {str(a) for a in (_project_doc_near(
-            cache / 'x_base.json').get('accounts') or {})}
-    except Exception:                               # noqa: BLE001
-        pass
-    accounts |= {p.name[:-len('_base.json')] for p in cache.glob('*_base.json')
-                 if not p.name.endswith('_raw_base.json')}
     rows: List[Tuple[str, Any]] = []
     for acct in sorted(accounts):
         for _b, f, side in XL._parsed_files(cache, acct):
