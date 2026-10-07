@@ -531,7 +531,10 @@ def parse_rename_line(line: str, source: str = ''):
     old, new, late}: a ticker change on that date (lib/renames: the
     position, cost and acquisition dates carry from OLD to NEW), or None
     when the line is not a RENAME line. `taxjson run` books it in every
-    account whose books carry OLD (lib/dated_events). Raises ValueError
+    account whose books carry OLD (lib/dated_events). Two spellings of
+    one listing in the books (A.TO / A.CN: a Canadian venue folds into
+    .TO) return the line with `noop`, the Info line to say: nothing is
+    booked (a SPLIT would strand the pool). Raises ValueError
     naming the form on a malformed line — the ticker.map form `RENAME
     OLD NEW YYYY-MM-DD` included (a .tt line is date first)."""
     from taxjson.lib.renames import parse_rename_tail
@@ -561,6 +564,18 @@ def parse_rename_line(line: str, source: str = ''):
            'symbol_new': parts[3].upper()}
     _canonical_ca_symbols(_sy)
     old, new = _sy['symbol'], _sy['symbol_new']
+    if old == new and parts[2].upper() != parts[3].upper():
+        # Two spellings of ONE listing in the books (a Canadian venue
+        # suffix folds into .TO: A.CN is A.TO). A SPLIT between them
+        # would strand the pool under the old spelling: nothing to book
+        # (`noop`: the Info line the run says).
+        _not_in_future(date, 'RENAME', where, shown)
+        return {'date': date, 'old': old, 'new': new, 'late': late,
+                'line': shown,
+                'noop': (f"{where}RENAME {date} {parts[2].upper()} "
+                         f"{parts[3].upper()}: both are {old} in the books "
+                         f"(one listing), so there is nothing to rename — "
+                         f"the line is not booked: {shown!r}")}
     if old == new:
         raise ValueError(
             f"{where}malformed RENAME line — OLD and NEW are the same "

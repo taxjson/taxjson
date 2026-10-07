@@ -738,7 +738,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "becomes shares (or shares a contract) by a ticker "
                  "change, an option follows its underlying's change (the "
                  "stock's line is the one to write), and another expiry, "
-                 "strike or right is another contract.", cont=True),
+                 "strike or right is another contract. A RENAME between "
+                 "two spellings of one listing in the books (a Canadian "
+                 "venue folds into .TO: A.TO and A.CN) books nothing, "
+                 "said as an Info line.", cont=True),
             Rule("CA-ACB-05",
                  "Accounts typed \"sheltered\" (RRSP, TFSA, FHSA, LIRA, "
                  "RESP...) are tracked but kept out of the filing totals. "
@@ -2199,7 +2202,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "becomes shares (or shares a contract) by a ticker "
                  "change, an option follows its underlying's change (the "
                  "stock's line is the one to write), and another expiry, "
-                 "strike or right is another contract.", cont=True),
+                 "strike or right is another contract. A RENAME between "
+                 "two spellings of one listing in the books (a Canadian "
+                 "venue folds into .TO: A.TO and A.CN) books nothing, "
+                 "said as an Info line.", cont=True),
             Rule("US-XLIST-01",
                  "Two listings of one company's same class of shares (a "
                  "US line and its Canadian line, two currency lines of "

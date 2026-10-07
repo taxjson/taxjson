@@ -238,6 +238,8 @@ def read_declarations(root: Path, accounts: Dict[str, Any]) -> Declarations:
                         pair=f"tt:{acct}:{j['date']}#{counter[k]}",
                         source_name=shown_name(tt),
                         source_key=source_key(tt)))
+                elif r is not None and r.get("noop"):
+                    out.notes.append(r["noop"])  # one listing: nothing
                 elif r is not None:
                     tt_renames.append(DatedRename(
                         r["old"], r["new"], r["date"], r["late"], where,

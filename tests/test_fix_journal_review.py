@@ -585,5 +585,43 @@ class TestJournalsReadsADamagedState(unittest.TestCase):
                         self.assertIn(r.returncode, (0, 1), _out(r))
 
 
+class TestRenameBetweenSpellingsOfOneListing(unittest.TestCase):
+    """`RENAME <date> A.TO A.CN`: a Canadian venue folds into .TO, so the
+    two are one listing in the books — a SPLIT between them would strand
+    the pool. Nothing is booked; an Info line says so."""
+
+    def test_parse(self):
+        from taxjson.bin.taxjson_convert_tt import parse_rename_line
+        r = parse_rename_line("RENAME 2025-04-01 QZA.TO QZA.CN", "x.tt:2")
+        self.assertEqual((r["old"], r["new"]), ("QZA.TO", "QZA.TO"))
+        self.assertIn("one listing", r["noop"])
+        with self.assertRaises(ValueError):
+            parse_rename_line("RENAME 2025-04-01 QZA.TO QZA.TO", "x.tt:2")
+
+    def _check(self, country):
+        tt = ("BUYSELL 2025-03-03 10:00:00 QZA.TO 100 CAD 10.00 1000.00 "
+              "0.00\n"
+              "RENAME 2025-04-01 QZA.TO QZA.CN\n"
+              "BUYSELL 2025-05-06 10:00:00 QZA.TO -100 CAD 12.00 1200.00 "
+              "0.00\n")
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, files={"inputs/margin/m.tt": tt},
+                                 usa=_USA_CAD)[country]
+            r = _run(self, root, "--strict")
+            self.assertIn("nothing to rename", _out(r))
+            self.assertNotIn("go short", _out(r))
+            base = json.loads((root / "work" / "margin_base.json")
+                              .read_text())["transactions"]
+            self.assertFalse([t for t in base if t["action"] == "SPLIT"])
+
+    @rule("CA-ACB-RENAME")
+    def test_canada_one_listing_rename_is_a_no_op(self):
+        self._check("canada")
+
+    @rule("US-BASIS-RENAME")
+    def test_usa_one_listing_rename_is_a_no_op(self):
+        self._check("usa")
+
+
 if __name__ == "__main__":
     unittest.main()
