@@ -335,16 +335,37 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### "Warning: ticker.map holds 1 JOURNAL line(s) and 1 dated RENAME line(s): dated events written the old way"
 - **Check:** `tjs format-map --check` says "ticker.map holds dated events to migrate"; `tjs format-map` (a dry run) shows each `JOURNAL A B` becoming `TOBASE A B` and each dated `RENAME OLD NEW YYYY-MM-DD` moving to `inputs/<account>/renames.tt`.
 - **Cause:** ticker.map now holds standing truths only. A journal between two listings and a ticker change happen on a date: they are `.tt` lines of an account, date first (`JOURNAL <date> FROM TO <qty>`, `RENAME <date> OLD NEW`). The old lines still work (a `JOURNAL` line is read as `TOBASE`, a dated `RENAME` as the event), said once per run.
-- **Fix:** `tjs format-map --write`: it rewrites the `JOURNAL` lines as `TOBASE`, moves the dated `RENAME` lines (comments too) to one `renames.tt` (the first account whose books carry the change), keeps a backup of ticker.map, and refuses rather than change the books. Then `tjs run`: the totals and holdings are the same.
+- **Fix:** `tjs format-map --write`: it rewrites the `JOURNAL` lines as `TOBASE`, moves the dated `RENAME` lines (comments too) to a `renames.tt` (the first account whose books carry the change; one per account kind, securities or crypto, whose books hold the symbols), keeps a backup of ticker.map, and refuses rather than change the books. Then `tjs run`: the totals are the same. The tax books never changed with a `JOURNAL` line; the holdings view did (it moves a journal's units only by its rows): where the holdings show the two listings long and short, the dry run names a `.tt` line `JOURNAL <date> FROM TO <qty>` to add.
 - **Fixed in:** unreleased
-- **Code:** `src/taxjson/lib/dated_events.py` — `legacy_note`, `home_account`; `src/taxjson/lib/ticker_map_format.py` — `format_map`, `_migrate_items`, `Moved`; `src/taxjson/bin/taxjson_run.py` — `cmd_format_map`
+- **Code:** `src/taxjson/lib/dated_events.py` — `legacy_note`, `home_accounts`, `plan_migration`; `src/taxjson/lib/ticker_map_format.py` — `format_map`, `_migrate_items`, `Moved`; `src/taxjson/bin/taxjson_run.py` — `cmd_format_map`, `_journal_gaps`
+
+### "Error: moving ticker.map's dated RENAME lines to .tt files would change the books — nothing was written"
+- **Check:** each listed line names the account and the change, how it is booked now and how it would be after the move (`… is booked 2025-04-01 late=separate now and would be 2025-04-01 after the move`), or the contradiction the move would create; `tjs renames` shows the event and its declarations.
+- **Cause:** a dated ticker.map `RENAME` and a `.tt` `RENAME` line of the same change say different things (another `late=`, another date). The run books them as one event — the date the earliest declared, each declaring account's `late=` for its own late rows, the map line's `late=` for the others — and moving the map line into an account's `.tt` file would change that (for example an account would then declare both `late=fold` and `late=separate`). Earlier, `--write` moved it anyway and the books changed (a `late=fold` lost, a late buy split from the renamed shares). An account with no books yet (`work/<account>_base.json`) is compared on every change.
+- **Fix:** make the two lines say the same, or delete one; run `tjs run`, then `tjs format-map --write` again. A moved line that repeats a `.tt` line written differently but booked the same is moved, with an Info line asking you to keep one.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/dated_events.py` — `plan_migration`, `resolve_renames`, `MigrationPlan`; `src/taxjson/bin/taxjson_run.py` — `cmd_format_map`
 
 ### "Error: 1 .tt dated-event line(s) cannot be booked"
 - **Check:** each listed line names its file and line (`inputs/<account>/<file>.tt:N`) and the form it expected: `JOURNAL <date> <FROM> <TO> <qty>` or `RENAME <date> <OLD> <NEW> [late=fold|late=separate]`.
-- **Cause:** a dated event line is malformed (the ticker.map order `RENAME OLD NEW YYYY-MM-DD` instead of date first, `JOURNAL FROM TO` with no date or quantity, a zero quantity), a JOURNAL sits in a crypto account, or a RENAME contradicts another declaration of the same ticker (another `.tt` line or a ticker.map line renaming it to another symbol, or an undated ticker.map rule for it). Nothing is built: a dropped event would change the books.
-- **Fix:** fix or delete the line. A ticker change declared in two places is fine when both say the same (one event, an Info line).
+- **Cause:** a dated event line is malformed (the ticker.map order `RENAME OLD NEW YYYY-MM-DD` instead of date first, `JOURNAL FROM TO` with no date or quantity, a zero quantity), a JOURNAL sits in a crypto account, or RENAME declarations cannot all be true: one ticker renamed to two symbols within a week ("contradicts"), one change declared on two dates further apart ("one change has one date"), a cycle such as `A -> B` plus `B -> A` ("form a cycle"), one account choosing both `late=fold` and `late=separate`, or an undated ticker.map rule for the same ticker. Each declaration counts, `.tt` lines of every account and dated ticker.map lines alike. Nothing is built: a dropped event would change the books. Earlier, two declarations of one change a month apart were booked as two changes, and a swap was accepted.
+- **Fix:** fix or delete the line. A ticker change declared in two places is fine when both name the same change within a week (one event, dated the earliest, an Info line). Two accounts may choose different `late=` for their own late rows. A symbol that really changed back is booked in its account with a `.tt` line `SPLIT <date> <time> OLD NEW 1`.
 - **Fixed in:** unreleased
-- **Code:** `src/taxjson/bin/taxjson_convert_tt.py` — `parse_journal_line`, `parse_rename_line`; `src/taxjson/lib/dated_events.py` — `read_declarations`, `check_against_map`, `DatedEventError`; `src/taxjson/bin/taxjson_run.py` — `_read_dated_events`
+- **Code:** `src/taxjson/bin/taxjson_convert_tt.py` — `parse_journal_line`, `parse_rename_line`; `src/taxjson/lib/dated_events.py` — `read_declarations`, `check_against_map`, `resolve_renames`, `DatedEventError`; `src/taxjson/bin/taxjson_run.py` — `_read_dated_events`
+
+### A ticker that changed twice (`RENAME` A to B, then B to C) leaves the position in B and C goes short
+- **Check:** `tjs renames` lists both changes, but the second shows no position carried in an account that held A; `tjs shares` shows that account long B and short C.
+- **Cause:** the dated renames were applied in the order they were read (ticker.map order, then the accounts' `.tt` files), not by date, and an account counted as holding B only from rows of B, not from the first change's rename row. A `format-map` migration that put the two lines in different accounts' files could reverse the order.
+- **Fix:** upgrade: the changes apply in date order, and the first change's rename row counts as holding B. Re-run `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/renames.py` — `apply_dated_renames`
+
+### A `.tt` RENAME in a securities account moved a coin in a crypto account (or the reverse)
+- **Check:** `tjs renames` lists the change under the crypto account too, `work/<crypto account>_base.json` holds a SPLIT row for it, and the coin's sale goes short.
+- **Cause:** a `.tt` RENAME applied to every account holding the old symbol, whatever its kind; a bare symbol can name a security and a coin.
+- **Fix:** upgrade: a `.tt` RENAME applies only to accounts of its declaring account's kind (tax-logic CA-CRYPTO-RENAME / US-CRYPTO-RENAME). Declare a coin's ticker change in a crypto account's `.tt` file. A legacy ticker.map dated RENAME still applies to every account.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/renames.py` — `apply_dated_renames`, `KIND_CRYPTO`; `src/taxjson/lib/dated_events.py` — `account_kind`
 
 ### `reports/<account>_holdings.toml` shows a long on one listing and an equal short on the other after a Norbert's gambit (ticker.map `JOURNAL` line)
 - **Check:** `tjs transfers` shows no journal rows for the gambit's day in that account (the export lacks the journal's two legs); the account's totals in `tjs sum` are right, and `tjs sanity` (which compares the joined security) agrees with the broker.
@@ -356,7 +377,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### "Warning: 2 trade(s) in OLDQZ after its rename to NEWQZ on 2025-03-03"
 - **Check:** `tjs renames` lists the dated rename, the position it carried and the late trades as UNRESOLVED.
 - **Cause:** after a rename the old ticker is not automatically the same security: the broker may still book the renamed shares under it, or another company may now use the ticker. Until you say which, the rows are a separate security and `tjs run --strict` stops.
-- **Fix:** add one line to a `.tt` file of the account, date first: `RENAME 2025-03-03 OLDQZ NEWQZ late=fold` (the broker's late rows are the renamed shares) or `… late=separate` (another security); `tjs renames` prints both. Releases before the dated `.tt` events took the line in ticker.map (`RENAME OLDQZ NEWQZ 2025-03-03 late=fold`, still read).
+- **Fix:** add one line to a `.tt` file of the account, date first: `RENAME 2025-03-03 OLDQZ NEWQZ late=fold` (the broker's late rows are the renamed shares) or `… late=separate` (another security); `tjs renames` prints both. A line's `late=` applies to its own account's late rows and to every account without a line of its own; an account whose broker booked them differently adds its own line with its own `late=` (no longer refused as a contradiction). Releases before the dated `.tt` events took the line in ticker.map (`RENAME OLDQZ NEWQZ 2025-03-03 late=fold`, still read). A trade in the old ticker later on the change's own day is late too (the change is booked at the start of its day).
 - **Fixed in:** `v0.17.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_check_renamed_late`; `src/taxjson/lib/renames.py` — `unresolved_late`, `LATE_FOLD`
 

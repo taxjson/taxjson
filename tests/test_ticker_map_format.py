@@ -336,9 +336,12 @@ class TestCommand(unittest.TestCase):
             self.assertEqual((root / "ticker.map.bak").read_text(), MESSY)
             self.assertEqual((root / "ticker.map").read_text(),
                              F.format_map(MESSY).text)
+            # Formatted, but `taxjson run` still refuses the map (its two
+            # problem lines): --check fails and says so.
             r = _cli(root, "format-map", "--check")
-            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.returncode, 1, r.stderr)
             self.assertIn("already formatted", r.stdout)
+            self.assertIn("`taxjson run` refuses this ticker.map", r.stderr)
             # A formatted file is left alone: no second backup.
             r = _cli(root, "format-map", "--write")
             self.assertEqual(r.returncode, 0)
