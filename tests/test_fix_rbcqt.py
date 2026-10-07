@@ -193,7 +193,8 @@ class TestQtSymbolResolution(unittest.TestCase):
                     price='20', gross='10000', comm='0', net='10000'))
         _, err, _ = qt_parse(body)
         self.assertIn('ticker change', err)
-        self.assertIn('GLOBAL QQOL.US QQNW.US', err)
+        # The .tt line, date first (v0.24 dated events).
+        self.assertIn('RENAME 2025-09-10 QQOL.US QQNW.US', err)
 
     def test_two_buys_under_one_description_are_not_a_ticker_change(self):
         body = (q(sym='QQOL', desc='QQ HOLDINGS CORP WE ACTED AS AGENT')
@@ -248,7 +249,7 @@ class TestQtRowShapes(unittest.TestCase):
         self.assertAlmostEqual(of(txs, symbol='DLR.TO')[0]['net_amount'],
                                round(2468.13 * 1.3579, 2))
         self.assertNotIn('UNBOOKED', err)
-        self.assertIn('JOURNAL', err)
+        self.assertIn('BRW journal row(s)', err)
 
     def test_brw_journal_nets_under_a_journal_rule(self):
         """End to end through taxjson-brokerage + the transfer pre-pass:

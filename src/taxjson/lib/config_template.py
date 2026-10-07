@@ -1283,6 +1283,14 @@ def input_readme(country: str, name: str) -> str:
         "",
         "Purchases the download does not reach go in a .tt file in this",
         "folder: docs/getting-started.md, step 5.",
+        "",
+        "A ticker change or a journal between two listings that the",
+        "export does not show is a dated event: one .tt line, date first",
+        "(docs/settings.md, .tt files), e.g.",
+        "  RENAME 2025-04-01 OLDQ.US NEWQ.US" if not crypto
+        else "  RENAME 2025-04-01 OLDC NEWC",
+        *(["  JOURNAL 2025-03-05 ABCX.TO ABCX.U.TO 100"] if not crypto
+          else []),
     ]
     if sheltered:
         lines += [

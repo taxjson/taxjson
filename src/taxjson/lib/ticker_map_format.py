@@ -8,11 +8,22 @@ naming its keywords:
   Spellings                 GLOBAL, and RENAME without a date (it is GLOBAL)
   Listings of one security  TOBASE, DISTINCT
   Clean-up                  DELETE
-  Dated events              RENAME with a date, JOURNAL
+  Dated events              legacy: RENAME with a date, JOURNAL (only when
+                            the file has one; migrate() moves them out)
   Lookups                   QUOTE, EXTRACT, CRYPTO, T1135 and the market
                             lists (STABLE ... VENUE)
   Retired                   TRADINGVIEW (only when the file has one)
   Unrecognized              lines taxjson cannot use (only when present)
+
+Dated events are not standing truths: a journal and a ticker change are
+.tt lines of an account, date first (lib/dated_events). `format_map(text,
+migrate=True)` — what `taxjson format-map` does — rewrites each `JOURNAL
+A B` as `TOBASE A B` (what it means now) and moves each dated `RENAME OLD
+NEW YYYY-MM-DD [late=...]` out of the map (FormatResult.moved: the .tt
+line `RENAME YYYY-MM-DD OLD NEW [late=...]` with its comments, which the
+command writes to an account's renames.tt). The result must mean the
+same: the map's tables with the JOURNAL pairs as TOBASE and without the
+moved lines, plus the moved lines read back as .tt declarations.
 
 Rules:
 
@@ -91,12 +102,14 @@ GROUPS: Tuple[Tuple[str, Tuple[str, ...], Doc], ...] = (
         ("DELETE SYMBOL", "drop every row of a symbol that is no real "
          "security (a broker artifact)"),
     ))),
-    (DATED, ("RENAME", "JOURNAL"), ("", (
-        ("RENAME OLD NEW YYYY-MM-DD [late=fold|late=separate]",
-         "a ticker change on that date"),
-        ("JOURNAL FROM TO", "a Norbert's Gambit pair: one cost pool, "
-         "netted in the holdings view"),
-    ))),
+    (DATED, ("RENAME", "JOURNAL"), (
+        "Legacy: dated events now go in a .tt file of an account, date "
+        "first (`RENAME YYYY-MM-DD OLD NEW`, `JOURNAL YYYY-MM-DD FROM TO "
+        "QTY`); `taxjson format-map --write` moves these lines.", (
+            ("RENAME OLD NEW YYYY-MM-DD [late=fold|late=separate]",
+             "a ticker change on that date"),
+            ("JOURNAL FROM TO", "read as TOBASE FROM TO"),
+        ))),
     (LOOKUPS, ("QUOTE", "EXTRACT", "CRYPTO", "T1135", "STABLE",
                "SPLITSHARE", "INDEXOPT", "EVENING", "MULT", "VENUE"),
      ("They change no symbol in the books.", (
@@ -124,7 +137,7 @@ GROUPS: Tuple[Tuple[str, Tuple[str, ...], Doc], ...] = (
 )
 GROUP_NAMES = tuple(g for g, _k, _d in GROUPS)
 # Shown only when they hold something.
-OPTIONAL_GROUPS = (RETIRED, UNRECOGNIZED)
+OPTIONAL_GROUPS = (DATED, RETIRED, UNRECOGNIZED)
 KEYWORD_GROUP: Dict[str, str] = {kw: g for g, kws, _d in GROUPS
                                  for kw in kws}
 ALL_KEYWORDS = RENAME_KEYWORDS + SIDE_KEYWORDS + tuple(RETIRED_KEYWORDS)
@@ -132,8 +145,9 @@ ALL_KEYWORDS = RENAME_KEYWORDS + SIDE_KEYWORDS + tuple(RETIRED_KEYWORDS)
 HEADER = (
     "ticker.map: standing truths about the securities in your books, one "
     "rule per line, in groups: a spelling to read as another symbol, two "
-    "listings that are one security (or are not), a symbol to drop, a "
-    "ticker change on a date, and lookups an export cannot give. Optional: "
+    "listings that are one security (or are not), a symbol to drop, and "
+    "lookups an export cannot give. A ticker change or a journal on a date "
+    "is an event: a .tt line of the account (docs/settings.md). Optional: "
     "a run needs no rule here. Symbols are case-insensitive; a note goes "
     "after `#`; a line starting `# KEYWORD` is a rule switched off (delete "
     "the `# ` to use it). `taxjson format-map` keeps this layout, and a "
@@ -197,6 +211,8 @@ cc4f90c34dc82b18 ccc2de5407f0b248 cf96752f3f331088 d9eae8f569b22a0b
 e2b4c2cd06694258 e8f2ed7569e503bd ecff9d4866de8089 f3cf7a16576d97c4
 f9d2e8bf0c3996e0 f9f4fb8408af37c9 fa5932b0b777a54f fb45c83e3a4dd8d8
 fc493d8d1d00b0b3 fd3d15db6d964346 fe502ff31abba977
+3e27a7f2ce6a3162 72fb375a23c5c30d 74b5308380eceeb2 878eb147753d9752
+8d593d1e44882439 8d8eaadbea1e0e6b
 """.split())
 
 
@@ -308,6 +324,25 @@ class Item:
 
 
 @dataclass
+class Moved:
+    """A dated RENAME line `format_map(migrate=True)` moved out of the
+    map: its .tt line (date first, the inline note kept) with the comment
+    lines that moved with it, ready for an account's renames.tt."""
+    old: str
+    new: str
+    date: str
+    late: str
+    tt_line: str                # `RENAME <date> OLD NEW [late=..]  # note`
+    comments: List[str]         # the comment lines above / below it
+    commented: bool = False     # a switched-off rule (`# RENAME ...`)
+    lineno: int = 0
+
+    def lines(self) -> List[str]:
+        return list(self.comments) + [
+            ("# " + self.tt_line) if self.commented else self.tt_line]
+
+
+@dataclass
 class FormatResult:
     text: str
     changed: bool
@@ -316,6 +351,17 @@ class FormatResult:
     duplicates: List[Tuple[int, str]]      # (line number, line) dropped
     retired: int                           # live lines in Retired
     preamble: int                          # free-standing blocks kept at the top
+    # migrate=True: the dated RENAME lines moved out (for .tt files) and
+    # the JOURNAL lines rewritten as TOBASE (line numbers).
+    moved: List[Moved] = field(default_factory=list)
+    journals: List[int] = field(default_factory=list)
+    # A commented-out example an earlier `taxjson init` wrote (a dated
+    # RENAME), dropped by the migration.
+    dropped_examples: List[str] = field(default_factory=list)
+
+    @property
+    def migration_pending(self) -> bool:
+        return bool(self.moved or self.journals or self.dropped_examples)
 
 
 def _problems(text: str) -> Tuple[List[str], Dict[int, str], set]:
@@ -545,14 +591,156 @@ def _comment_lines(text: str) -> Counter:
     return out
 
 
-def format_map(text: str) -> FormatResult:
-    """Lay a ticker.map's text out in groups (module docstring). Raises
-    FormatError when the result would mean something else or lose a
-    comment (nothing should then be written)."""
+# Commented-out dated RENAME examples earlier `taxjson init` templates
+# wrote (their own text, not the user's): the migration drops them.
+_OLD_EXAMPLES = frozenset({"# RENAME OLDQ.US NEWQ.US 2024-06-10"})
+
+
+def _rule_body(it: "Item") -> str:
+    """The rule text of a live or commented-out rule item (no `#`)."""
+    ln = it.line.strip()
+    if it.kind == "commented":
+        ln = ln[1:].strip()
+    return ln
+
+
+def _migrate_items(items: List["Item"]
+                   ) -> Tuple[List["Item"], List[Moved], List[int],
+                              List[str], List[str]]:
+    """(items kept, dated RENAME lines moved out, line numbers of the
+    JOURNAL lines rewritten as TOBASE (0 for a switched-off one), init
+    examples dropped, the switched-off rule lines rewritten or moved as
+    they were written). A switched-off rule inside another rule's comment
+    block (`# JOURNAL A B` directly above a line) is migrated in place
+    the same way."""
+    from taxjson.lib.renames import parse_rename_tail
+    kept: List[Item] = []
+    moved: List[Moved] = []
+    journals: List[int] = []
+    examples: List[str] = []
+    switched: List[str] = []
+
+    def as_tobase(body: str) -> str:
+        code, hash_, note = body.partition("#")
+        toks = code.split()
+        return normalise_rule("TOBASE" + code.strip()[len(toks[0]):]
+                              + (hash_ + note if hash_ else ""))
+
+    def as_tt(body: str) -> Optional[Tuple[str, str, str, str, str]]:
+        """(old, new, date, late, .tt line) of a dated RENAME's text."""
+        code, hash_, note = body.partition("#")
+        toks = code.split()
+        try:
+            date, late = parse_rename_tail(toks[3:])
+        except ValueError:
+            return None
+        old, new = toks[1].upper(), toks[2].upper()
+        return (old, new, date, late,
+                f"RENAME {date} {old} {new}"
+                + (f" late={late}" if late else "")
+                + (f"  #{note.rstrip()}" if hash_ else ""))
+
+    def fix_block(lines: List[str]) -> List[str]:
+        out = []
+        for ln in lines:
+            kw = _switched_off(ln)
+            body = ln.strip()[1:].strip()
+            if kw == "JOURNAL":
+                switched.append(ln.strip())
+                journals.append(0)
+                out.append("# " + as_tobase(body))
+                continue
+            if kw == "RENAME" and len(body.split("#")[0].split()) > 3:
+                if ln.strip() in _OLD_EXAMPLES:
+                    examples.append(ln.strip())
+                    continue
+                tt = as_tt(body)
+                if tt is not None:
+                    switched.append(ln.strip())
+                    moved.append(Moved(*tt, comments=[], commented=True))
+                    continue
+            out.append(ln)
+        return out
+
+    for it in items:
+        it.above = fix_block(it.above)
+        it.below = fix_block(it.below)
+        if it.kind not in ("rule", "commented"):
+            kept.append(it)
+            continue
+        body = _rule_body(it)
+        code = body.split("#", 1)[0]
+        toks = code.split()
+        kw = toks[0].upper() if toks else ""
+        if kw == "JOURNAL":
+            if it.kind == "commented":
+                switched.append(it.line.strip())
+            new = as_tobase(body)
+            it.line = new if it.kind == "rule" else "# " + new
+            it.group = LISTINGS
+            journals.append(it.lineno)
+            kept.append(it)
+            continue
+        if kw == "RENAME" and len(toks) > 3:
+            if it.kind == "commented" and it.line.strip() in _OLD_EXAMPLES \
+                    and not it.above and not it.below:
+                examples.append(it.line.strip())
+                continue
+            tt = as_tt(body)
+            if tt is None:
+                kept.append(it)         # Unrecognized: left as written
+                continue
+            if it.kind == "commented":
+                switched.append(it.line.strip())
+            prose = []
+            for ln in it.above + it.below:
+                kw2 = _switched_off(ln)
+                if kw2:
+                    # A switched-off map rule beside it stays in the map.
+                    kept.append(Item("commented", it.seq, line=ln,
+                                     group=_rule_group(
+                                         kw2, ln[ln.index("#") + 1:]),
+                                     heading=it.heading))
+                else:
+                    prose.append(ln)
+            moved.append(Moved(*tt, comments=prose,
+                               commented=it.kind == "commented",
+                               lineno=it.lineno))
+            continue
+        kept.append(it)
+    return kept, moved, journals, examples, switched
+
+
+def _migrated_meaning(text: str) -> tuple:
+    """meaning() of a map once migrated: the JOURNAL pairs read as TOBASE
+    (they already are, in `tobase`) and no JOURNAL / dated RENAME line."""
+    m = list(meaning(text))
+    m[2] = {}            # journal
+    m[5] = ()            # dated
+    return tuple(m)
+
+
+def format_map(text: str, migrate: bool = False) -> FormatResult:
+    """Lay a ticker.map's text out in groups (module docstring); with
+    `migrate`, rewrite its JOURNAL lines as TOBASE and move its dated
+    RENAME lines out (FormatResult.moved). Raises FormatError when the
+    result would mean something else or lose a comment (nothing should
+    then be written)."""
     original = text
     if text.startswith("\ufeff"):
         text = text[1:]
     items = _items(text)
+    moved: List[Moved] = []
+    journals: List[int] = []
+    examples: List[str] = []
+    switched: List[str] = []
+    if migrate:
+        if _problems(text)[0]:
+            # A map `taxjson run` refuses has no single meaning to keep.
+            migrate = False
+        else:
+            items, moved, journals, examples, switched = \
+                _migrate_items(items)
     named = _problems(text)[2]
     seen: Dict[str, int] = {}
     dups: List[Tuple[int, str]] = []
@@ -570,14 +758,27 @@ def format_map(text: str) -> FormatResult:
             seen.setdefault(it.line, it.lineno)
         kept.append(it)
     new = _render(kept)
-    if meaning(new) != meaning(text):
+    if migrate and (moved or journals or examples):
+        if (meaning(new) != _migrated_meaning(text)
+                or _moved_meaning(moved) != _parse_dated(text)):
+            raise FormatError(
+                "moving the dated events out of the map would change what "
+                "it means — please report this")
+    elif meaning(new) != meaning(text):
         raise FormatError(
             "laying the map out in groups would change what it means "
             "(two lines whose order matters are in different groups) — "
             "fix the problems `taxjson run` reports, then format it again")
+    moved_comments: Counter = Counter()
+    for mv in moved:
+        for ln in mv.comments:
+            moved_comments[ln.strip()] += 1
+        if "#" in mv.tt_line and not mv.commented:
+            moved_comments["#" + mv.tt_line.split("#", 1)[1]] += 1
     lost = (_comment_lines(text)
             - Counter(ln[ln.index("#"):] for _n, ln in dups if "#" in ln)
-            - _comment_lines(new))
+            - _comment_lines(new) - moved_comments
+            - Counter(switched) - Counter(examples))
     if lost:
         raise FormatError(
             f"laying the map out would lose comment text "
@@ -589,7 +790,27 @@ def format_map(text: str) -> FormatResult:
         text=new, changed=new != original,
         counts=counts, problems=_problems(text)[0], duplicates=dups,
         retired=counts[RETIRED],
-        preamble=sum(1 for it in kept if it.group == ""))
+        preamble=sum(1 for it in kept if it.group == ""),
+        moved=moved, journals=journals, dropped_examples=examples)
+
+
+def _parse_dated(text: str) -> tuple:
+    """The map's dated RENAME declarations in order (the parser's)."""
+    from taxjson.bin.taxjson_ticker_map import _parse_map_text
+    tm = _parse_map_text(text, TICKER_MAP_NAME)[0]
+    return tuple((d.old, d.new, d.date, d.late) for d in tm.dated)
+
+
+def _moved_meaning(moved: List[Moved]) -> tuple:
+    """The live moved lines read back as .tt RENAME declarations."""
+    from taxjson.bin.taxjson_convert_tt import parse_rename_line
+    out = []
+    for mv in moved:
+        if mv.commented:
+            continue
+        r = parse_rename_line(mv.tt_line)
+        out.append((r["old"], r["new"], r["date"], r["late"]))
+    return tuple(out)
 
 
 # ------------------------------------------------------------ template
@@ -600,10 +821,9 @@ _INIT_EXAMPLES = (
     "# GLOBAL ABCX-B.US ABCX.B.US",
     "# GLOBAL ZZC2 ZZC",
     "# TOBASE XYZQ.US XYZQ.TO",
+    "# TOBASE ABCX.U.TO ABCX.TO",
     "# DISTINCT WXYQ.US WXYQ.TO",
     "# DELETE ZZZQ.US",
-    "# RENAME OLDQ.US NEWQ.US 2024-06-10",
-    "# JOURNAL ABCX.U.TO ABCX.TO",
     "# QUOTE XYZQ.TO XYZQ.V",
     "# EXTRACT Example US Dollar Unit Fund | USD | ABCX.U.TO",
     "# CRYPTO ABC ABC12345",

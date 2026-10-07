@@ -1111,25 +1111,38 @@ def _note_temp_folds(folds: Dict[str, str], where: str,
 def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
                         first_seen=None, listing=None,
                         mapping=None, last_seen=None,
-                        folds=None) -> None:
+                        folds=None, book: bool = False,
+                        declared=(), distinct=frozenset()
+                        ) -> List[Dict[str, str]]:
     """One stock conid listed under several symbols (a ticker change
-    with no corporate-action row): the parser books each symbol as its
-    own security, so the position splits into two pools (audit S059-13 /
-    S060-17). Said on the console with the ticker.map fix — a DATED
-    rename (renames are events, lib/renames): `RENAME OLD NEW
-    YYYY-MM-DD`, OLD the symbol whose rows end first, NEW the one that
+    with no corporate-action row): the parser would book each symbol as
+    its own security, so the position splits into two pools (audit
+    S059-13 / S060-17). The change is a DATED event (renames are events,
+    lib/renames): OLD the symbol whose rows end first, NEW the one that
     continues, the date NEW's first row; each with the listing suffix it
     is booked under (an alphabetical pair with a hard-coded .US joined
-    nothing, or renamed new to old — audit A2-0611). IB's temporary
-    symbols (`folds`, _ib_temp_folds: folded onto the ticker, or named
-    by a ticker.map line, which decides) are no alias here and never a
-    rename target; a stamped symbol of another ticker is named but
-    never suggested. Quiet once the project's ticker.map (`mapping`:
-    (renames, dated pairs)) joins them."""
+    nothing, or renamed new to old — audit A2-0611).
+
+    With `book` (the account-level pass, prepare_files) the change is
+    strong evidence — one contract id — and is BOOKED: the events are
+    returned (old, new, date, conid; reconcile_files adds their SPLIT
+    rows, event_source "ib-conid"), each said as a Warning naming the
+    way out (`DISTINCT OLD NEW` in ticker.map: two securities; a .tt
+    `RENAME <date> OLD NEW late=separate`: OLD's later rows are another
+    company's). Without `book`, or when a date is missing, it is said as
+    ATTENTION with the .tt line to add. IB's temporary symbols (`folds`,
+    _ib_temp_folds: folded onto the ticker, or named by a ticker.map
+    line, which decides) are no alias here and never a rename target; a
+    stamped symbol of another ticker is named but never suggested.
+    Quiet, and not booked, once the project's ticker.map (`mapping`:
+    (renames, dated pairs)) or a .tt RENAME line (`declared`: (old,
+    new) pairs) joins them, or a DISTINCT line (`distinct`: pairs) keeps
+    them apart."""
     first_seen = first_seen or {}
     last_seen = last_seen or {}
     listing = listing or {}
     folds = folds or {}
+    booked: List[Dict[str, str]] = []
     for conid, syms in sorted(conid_syms.items()):
         syms = {x for x in syms if x not in folds}
         if len(syms) < 2:
@@ -1147,6 +1160,11 @@ def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
                     continue
             elif mapping is not None and _project_map_joins(full, mapping):
                 continue
+            if declared and _project_map_joins(full, ({}, list(declared))):
+                continue        # a .tt RENAME line declares the change
+            if any(frozenset((full[k], full[k + 1])) in distinct
+                   for k in range(len(full) - 1)):
+                continue        # DISTINCT: the user's call, two securities
         named = ', '.join(order + temps)
         _is = ("is an IB temporary symbol" if len(temps) == 1
                else "are IB temporary symbols")
@@ -1162,20 +1180,43 @@ def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
             continue
         dated = [first_seen.get(x) for x in order[1:]]
         if all(dated) and all(last_seen.get(x) for x in order):
-            lines = [f"`RENAME {full[k]} {full[k + 1]} {dated[k]}`"
+            if book:
+                events = [{"old": full[k], "new": full[k + 1],
+                           "date": dated[k], "conid": str(conid)}
+                          for k in range(len(full) - 1)]
+                booked.extend(events)
+                what = "; ".join(f"{e['old']} -> {e['new']} on {e['date']}"
+                                 for e in events)
+                outs = " / ".join(f"`DISTINCT {e['old']} {e['new']}`"
+                                  for e in events)
+                lates = " / ".join(f"`RENAME {e['date']} {e['old']} "
+                                   f"{e['new']} late=separate`"
+                                   for e in events)
+                emit_line(f"{ATTENTION_PREFIX} {where}: IB lists one stock "
+                          f"(contract id {conid}) under several symbols: "
+                          f"{named} — booked as a ticker change, a dated "
+                          f"event ({what}): the position, its cost and "
+                          f"acquisition dates carry to the new symbol. If "
+                          f"they are two securities, add {outs} to "
+                          f"ticker.map; if the old symbol's rows after the "
+                          f"date are another company's, add {lates} to a "
+                          f".tt file of this account.{tmp_note}")
+                continue
+            lines = [f"`RENAME {dated[k]} {full[k]} {full[k + 1]}`"
                      for k in range(len(full) - 1)]
             how = (f"{' and '.join(lines)} (OLD is the symbol whose rows "
                    f"end first, the date the first row of the one that "
                    f"continues)")
         else:
-            how = (f"`RENAME {full[0]} {full[-1]} YYYY-MM-DD` with the date "
+            how = (f"`RENAME YYYY-MM-DD {full[0]} {full[-1]}` with the date "
                    f"of the change (OLD is the symbol whose rows end "
                    f"first)")
         emit_line(f"{ATTENTION_PREFIX} {where}: IB lists one stock (contract "
                   f"id {conid}) under several symbols: {named} — a ticker "
                   f"change. Each symbol is booked as its own security "
-                  f"until ticker.map records the change as a dated event, "
-                  f"e.g. {how}.{tmp_note}")
+                  f"until a .tt line of this account records the change as "
+                  f"a dated event, e.g. {how}.{tmp_note}")
+    return booked
 
 
 def _project_map_joins(full: List[str], mapping) -> bool:
@@ -1248,6 +1289,76 @@ def _project_map_root(paths) -> Optional[Path]:
         if root is not None and (root / 'ticker.map').is_file():
             return root
     return None
+
+
+def _project_root(paths) -> Optional[Path]:
+    """The project folder of inputs/<account>/<statement> for the first
+    of `paths`, else None."""
+    for path in paths:
+        try:
+            pp = Path(path).resolve().parents
+            if pp[1].name == 'inputs' and (pp[2] / 'taxjson.toml').is_file():
+                return pp[2]
+        except (IndexError, OSError):
+            continue
+    return None
+
+
+def _project_tt_renames(paths) -> List[Tuple[str, str]]:
+    """The (old, new) pairs the project's .tt RENAME lines declare
+    (lib/dated_events): a change a line declares is booked from it."""
+    root = _project_root(paths)
+    if root is None:
+        return []
+    from taxjson.lib.dated_events import tt_renames
+    return [(dr.old, dr.new) for dr in tt_renames(root)]
+
+
+def _project_distinct(paths) -> frozenset:
+    """The DISTINCT pairs of the loaded ticker.map, else the project's."""
+    from taxjson.lib.brokerages.base import ticker_map_distinct_pairs
+    if ticker_map_loaded():
+        return ticker_map_distinct_pairs()
+    root = _project_map_root(paths)
+    if root is None:
+        return frozenset()
+    try:
+        from taxjson.bin.taxjson_ticker_map import _parse_map_file
+        return frozenset(_parse_map_file(root / 'ticker.map')[0].distinct)
+    except Exception:                   # the run reports a bad map
+        return frozenset()
+
+
+def _book_conid_renames(parsed) -> None:
+    """The SPLIT rows (ratio 1, `symbol_new`, event_source "ib-conid") of
+    the ticker changes prepare_files booked, appended once to the
+    account's first IB statement — in its broker account's currency of
+    the old listing."""
+    files = [(p, ex, txs) for p, ex, txs in parsed
+             if isinstance(ex, IbBrokerage)]
+    if not files:
+        return
+    ctx = files[0][1].account_context or {}
+    events = ctx.get('conid_renames') or []
+    if not events:
+        return
+    from taxjson.lib.price_chain import quote_currency
+    _p, ex, txs = files[0]
+    acct = next((t.get('account') for _f in files for t in _f[2]
+                 if t.get('account')), getattr(ex, 'DEFAULT_ACCOUNT', ''))
+    for e in events:
+        txs.append({
+            'action': 'SPLIT', 'date': e['date'], 'time': '00:00:00',
+            'date_settle': e['date'], 'symbol': e['old'],
+            'symbol_new': e['new'], 'quantity': 1.0, 'price': 0.0,
+            'net_amount': 0.0,
+            'currency': quote_currency(e['old']) or '',
+            'account': acct,
+            'description': (f"Ticker change {e['old']}→{e['new']} (IB "
+                            f"lists one contract id under both symbols; "
+                            f"no disposition: cost, acquisition dates "
+                            f"and identity carried)"),
+            'event_source': 'ib-conid'})
 
 
 def _project_ticker_map(paths):
@@ -1681,22 +1792,26 @@ class IbBrokerage(BaseBrokerage):
                   f"right only when they are one tax entity (e.g. two "
                   f"taxable margin accounts); give a sheltered (tax-"
                   f"advantaged) account its own folder.")
-        _warn_stock_aliases(ctx['stock_conid_syms'],
-                            'the account\'s IB statements',
-                            first_seen=ctx['first_seen'],
-                            last_seen=ctx['last_seen'],
-                            listing=ctx['stock_listing'],
-                            mapping=_project_ticker_map(paths),
-                            folds={**folds, **map_kept})
+        ctx['conid_renames'] = _warn_stock_aliases(
+            ctx['stock_conid_syms'], 'the account\'s IB statements',
+            first_seen=ctx['first_seen'], last_seen=ctx['last_seen'],
+            listing=ctx['stock_listing'],
+            mapping=_project_ticker_map(paths),
+            folds={**folds, **map_kept}, book=True,
+            declared=_project_tt_renames(paths),
+            distinct=_project_distinct(paths))
         return ctx
 
     @classmethod
     def reconcile_files(cls, parsed) -> None:
         """See `_reconcile_files`; then every statement's deferred
         Corporate Actions side-effect lines print, minus the events the
-        cross-statement pass undid (re-audit A2-1091)."""
+        cross-statement pass undid (re-audit A2-1091). The ticker changes
+        prepare_files booked (one contract id under two symbols) get
+        their SPLIT rows here, once for the account (_book_conid_renames)."""
         try:
             cls._reconcile_files(parsed)
+            _book_conid_renames(parsed)
         finally:
             for _p, ex, _t in parsed:
                 flush = getattr(ex, 'ca_side_effects', None)

@@ -52,8 +52,9 @@ the open steps one at a time; `--quick` skips the slow detectors.
       unrecoverable.
 - [ ] `taxjson renames` — every ticker change is a dated event, and no
       trade in an old ticker after its rename date is left undeclared
-      (a dated `RENAME OLD NEW YYYY-MM-DD late=fold|late=separate` line
-      in `ticker.map` says which; `run --strict` stops until then).
+      (a `.tt` line `RENAME YYYY-MM-DD OLD NEW late=fold|late=separate`
+      in an account's folder says which; `run --strict` stops until
+      then).
 - [ ] `taxjson elect --pending` — no unresolved merger or spin-off
       election.
 - [ ] `taxjson crypto-sends` — every crypto send that did not arrive in

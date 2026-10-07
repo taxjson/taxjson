@@ -275,7 +275,8 @@ class TestRenamesReport(unittest.TestCase):
         self.assertEqual(doc["undated"], [
             {"rule": "GLOBAL", "old": "OLD.TO", "new": "NEW.TO",
              "broker_dates": ["2024-06-01"]}])
-        self.assertIn("RENAME OLD.TO NEW.TO 2024-06-01",
+        # The dated form is a .tt line, date first (lib/dated_events).
+        self.assertIn("RENAME 2024-06-01 OLD.TO NEW.TO",
                       "\n".join(render(doc)))
 
     def test_checklist_and_edge_cases_name_the_late_trade(self):

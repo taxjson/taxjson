@@ -275,7 +275,7 @@ class TestMoneyWarningsReachTheConsole(unittest.TestCase):
     def test_rbc_ticker_change_puts_the_map_line_first(self):
         _txs, err, _ = parse_one("".join(RENAME_ROWS))
         (ln,) = [x for x in _attention(err) if "PQRA" in x]
-        self.assertIn("GLOBAL PQRA.US PQRB.US", ln)
+        self.assertIn("RENAME 2022-10-17 PQRA.US PQRB.US", ln)
 
     def test_rbc_ticker_change_with_a_buy_first(self):
         # A2-0270: the new symbol opens with a small buy, then sells more.
@@ -285,7 +285,7 @@ class TestMoneyWarningsReachTheConsole(unittest.TestCase):
                       "-210.05", "USD", "ZEPHYR LENDING UNSOLICITED DA")
                 + "".join(RENAME_ROWS[1:]))
         _txs, err, _ = parse_one(body)
-        self.assertTrue(any("GLOBAL PQRA.US PQRB.US" in ln
+        self.assertTrue(any("RENAME 2022-10-14 PQRA.US PQRB.US" in ln
                             for ln in _attention(err)), err)
 
     def test_rbc_notional_distribution(self):
@@ -324,7 +324,7 @@ class TestMoneyWarningsReachTheConsole(unittest.TestCase):
                     qty="-600", price="30", gross="18000", comm="0",
                     net="18000"))
         _txs, err, _ = qt_parse(body)
-        self.assertTrue(any("GLOBAL QQOL.US QQNW.US" in ln
+        self.assertTrue(any("RENAME 2025-05-01 QQOL.US QQNW.US" in ln
                             for ln in _attention(err)), err)
 
     def test_run_echoes_the_continuation_line(self):

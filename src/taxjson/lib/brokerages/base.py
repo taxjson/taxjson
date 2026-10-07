@@ -252,6 +252,8 @@ _TICKER_NAMED: frozenset = frozenset()
 # ... and every symbol any line of it names, a lookup line's included
 # (named_symbols(lookups=True)).
 _TICKER_MENTIONED: frozenset = frozenset()
+# ... and its DISTINCT pairs (frozensets of two symbols).
+_TICKER_DISTINCT: frozenset = frozenset()
 
 
 def set_ticker_map(path) -> None:
@@ -259,11 +261,12 @@ def set_ticker_map(path) -> None:
     moot (re-audit A2-1056): a ticker-change or listing hint for a pair
     the map already pools is not printed. None clears it. A map that
     does not parse is ignored here (`taxjson run` refuses it up front)."""
-    global _TICKER_JOINS, _TICKER_NAMED, _TICKER_MENTIONED
+    global _TICKER_JOINS, _TICKER_NAMED, _TICKER_MENTIONED, _TICKER_DISTINCT
     if path is None:
         _TICKER_JOINS = None
         _TICKER_NAMED = frozenset()
         _TICKER_MENTIONED = frozenset()
+        _TICKER_DISTINCT = frozenset()
         return
     from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
                                                 merge_renames,
@@ -271,11 +274,17 @@ def set_ticker_map(path) -> None:
     tmap = _parse_map_file(Path(path))[0]
     _TICKER_NAMED = named_symbols(tmap)
     _TICKER_MENTIONED = named_symbols(tmap, lookups=True)
+    _TICKER_DISTINCT = frozenset(tmap.distinct)
     try:
         ren = merge_renames(tmap, True)
     except ValueError:
         ren = {}
     _TICKER_JOINS = (ren, frozenset((d.old, d.new) for d in tmap.dated))
+
+
+def ticker_map_distinct_pairs() -> frozenset:
+    """The DISTINCT pairs of the loaded ticker.map (empty without one)."""
+    return _TICKER_DISTINCT
 
 
 def ticker_map_loaded() -> bool:

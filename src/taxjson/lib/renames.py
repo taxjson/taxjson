@@ -8,22 +8,25 @@ booked as a SPLIT row with a `symbol_new` (ratio 1 for a pure ticker
 change) and comes from one of three places:
 
   - a broker row (IB's Corporate Actions, the corp-action stage's
-    `rename` election, a parser's own SPLIT);
-  - a `.tt` line `SPLIT <date> <time> OLD NEW 1`;
-  - a ticker.map line `RENAME OLD NEW YYYY-MM-DD` — the pipeline books
-    the SPLIT row in every account that held OLD before the date (none
-    is added where the broker already booked the event).
+    `rename` election, a parser's own SPLIT — IB's one contract id under
+    two symbols is one, event_source "ib-conid");
+  - a `.tt` line `RENAME <date> OLD NEW [late=...]` in any account's
+    folder (lib/dated_events: the run writes it into its effective map)
+    or, legacy, a ticker.map line `RENAME OLD NEW YYYY-MM-DD` — the
+    pipeline books the SPLIT row in every account that held OLD before
+    the date (none is added where the broker already booked the event);
+  - a `.tt` line `SPLIT <date> <time> OLD NEW 1` (that account only).
 
 After the date OLD is NOT automatically the same security. A trade in
 OLD after the rename date is either the broker still booking the
 renamed shares under the old ticker, or another company that now uses
 the ticker — the export cannot tell. Such rows are listed by
 `taxjson renames`, stop `taxjson run --strict`, and stay a separate
-security until the user declares them in ticker.map on the dated line:
+security until the user declares them on the dated line (.tt form):
 
-  RENAME OLD NEW YYYY-MM-DD late=fold      the late OLD rows ARE the
+  RENAME YYYY-MM-DD OLD NEW late=fold      the late OLD rows ARE the
                                            renamed shares: booked as NEW
-  RENAME OLD NEW YYYY-MM-DD late=separate  another security: kept as OLD
+  RENAME YYYY-MM-DD OLD NEW late=separate  another security: kept as OLD
 
 An UNDATED ticker.map rename (`GLOBAL OLD NEW`, or `RENAME OLD NEW`
 without a date) keeps its old meaning — every row of OLD, at any date,
@@ -58,15 +61,31 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 WINDOW_DAYS = 7
 
 
+# Where a dated rename was declared (DatedRename.source, a booked SPLIT
+# row's event_source): a .tt line `RENAME <date> OLD NEW` (the form of
+# record, lib/dated_events), a legacy ticker.map line, or IB's contract
+# id under two symbols (brokerages/ib_extractor).
+SOURCE_TT = "tt"
+SOURCE_MAP = "map"
+SOURCE_IB_CONID = "ib-conid"
+
+
 @dataclass(frozen=True)
 class DatedRename:
-    """One dated ticker.map RENAME line."""
+    """One declared dated rename: a .tt `RENAME <date> OLD NEW` line or a
+    legacy ticker.map `RENAME OLD NEW YYYY-MM-DD` line."""
     old: str
     new: str
     date: str
     late: str = ""          # "", "fold" or "separate"
-    where: str = ""         # "ticker.map:<lineno>"
+    where: str = ""         # "ticker.map:<lineno>" | "inputs/<acct>/<f>.tt:<n>"
     line: str = ""
+    source: str = SOURCE_MAP    # SOURCE_MAP | SOURCE_TT
+
+    def tt_line(self) -> str:
+        """The declaration as a .tt line (date first)."""
+        return (f"RENAME {self.date} {self.old} {self.new}"
+                + (f" late={self.late}" if self.late else ""))
 
 
 class RenameConflict(ValueError):
@@ -142,13 +161,30 @@ def rename_target(r: Any) -> str:
 def row_source(r: Any) -> str:
     """Where a rename row came from, for the report."""
     src = str(_g(r, "source") or "")
-    if src == TICKER_MAP_SOURCE:
+    ev = str(_g(r, "event_source") or "")
+    if ev == SOURCE_IB_CONID:
+        return "IB contract id"
+    if src == TICKER_MAP_SOURCE or ev == SOURCE_MAP:
         return "ticker.map line"
     if src.lower().endswith(".tt"):
         return f".tt line ({src})"
     if _g(r, "corp_event_id"):
         return "broker corporate action"
     return f"broker row ({src})" if src else "broker row"
+
+
+def row_source_id(r: Any) -> str:
+    """The machine source of a rename row: "tt", "map", "ib-conid" or
+    "broker" (a broker's own row: a corporate action, a parser's SPLIT)."""
+    ev = str(_g(r, "event_source") or "")
+    if ev:
+        return ev
+    src = str(_g(r, "source") or "")
+    if src == TICKER_MAP_SOURCE:
+        return SOURCE_MAP
+    if src.lower().endswith(".tt"):
+        return SOURCE_TT
+    return "broker"
 
 
 def rename_events(rows: Iterable[Any]) -> List[Dict[str, Any]]:
@@ -169,12 +205,16 @@ def rename_events(rows: Iterable[Any]) -> List[Dict[str, Any]]:
         else:
             e = {"date": d, "old": old, "new": new,
                  "ratio": float(_g(r, "quantity", 0.0) or 0.0),
-                 "sources": [], "accounts": [], "rows": []}
+                 "sources": [], "source_ids": [], "accounts": [],
+                 "rows": []}
             evs.append(e)
         e["rows"].append(r)
         s = row_source(r)
         if s not in e["sources"]:
             e["sources"].append(s)
+        s = row_source_id(r)
+        if s not in e["source_ids"]:
+            e["source_ids"].append(s)
         a = str(_g(r, "_acct") or _g(r, "account") or "")
         if a and a not in e["accounts"]:
             e["accounts"].append(a)
@@ -243,6 +283,16 @@ def declared_late(dated: Iterable[DatedRename], event: Dict[str, Any],
 
 # ------------------------------------------------- the pipeline stage
 
+def _booked_source(dr: DatedRename) -> str:
+    """The `source` of the SPLIT row a declaration books: the .tt file's
+    name for a .tt line, else TICKER_MAP_SOURCE."""
+    if dr.source == SOURCE_TT and dr.where:
+        name = dr.where.rsplit(":", 1)[0].rsplit("/", 1)[-1]
+        if name.lower().endswith(".tt"):
+            return name
+    return TICKER_MAP_SOURCE
+
+
 def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
                         *, stream=None) -> List[Any]:
     """Book each dated ticker.map RENAME in `txs` (TaxTransactions on
@@ -279,7 +329,8 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
                             f"{dr.date} disagrees with the rename "
                             f"{dr.old} -> {new} on {t.date} the books "
                             f"already carry (account {t.account}) — fix "
-                            f"the ticker.map line ({dr.line!r})")
+                            f"the {'.tt' if dr.source == SOURCE_TT else 'ticker.map'}"
+                            f" line ({dr.line!r})")
         added = []
         for acct in sorted(held):
             if acct in booked:
@@ -290,11 +341,15 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
                 date_settle=dr.date, symbol=dr.old, symbol_new=dr.new,
                 quantity=1.0, price=0.0, net_amount=0.0,
                 currency=last.currency or "", account=acct,
+                # (where it was declared is the row's source, not its
+                # description: the row id stays the same when a legacy
+                # ticker.map line moves to a .tt file)
                 description=(f"Ticker change {dr.old}→{dr.new} "
-                             f"({dr.where} RENAME; no disposition: "
+                             f"(a dated RENAME; no disposition: "
                              f"basis, acquisition dates and identity "
                              f"carried)"),
-                source=TICKER_MAP_SOURCE))
+                source=_booked_source(dr),
+                event_source=dr.source or SOURCE_MAP))
         if added:
             emit_line(f"note: {dr.where}: RENAME {dr.old} -> {dr.new} on "
                       f"{dr.date} booked in {len(added)} account(s) "
@@ -441,6 +496,9 @@ def report(root: Path, cfg: Dict[str, Any],
     root = Path(root)
     tmap, ren = _ticker_map(root)
     dated = list(getattr(tmap, "dated", ()) or ()) if tmap else []
+    # The declarations of record: .tt RENAME lines (lib/dated_events).
+    from taxjson.lib.dated_events import tt_renames
+    dated += tt_renames(root, cfg.get("accounts") or {})
     rows = _book_rows(root, cfg)
     base_cur = ((cfg.get("settings") or {}).get("base_currency") or "")
     events = rename_events(rows)
@@ -467,9 +525,13 @@ def report(root: Path, cfg: Dict[str, Any],
                 "qty_after": round(q * (e["ratio"] or 1.0), 6),
                 "book_cost": round(c, 2)})
         lines = [dr.where for dr in matching_lines(dated, e, ren)]
+        ids = e.get("source_ids") or []
         out_events.append({
             "date": e["date"], "old": e["old"], "new": e["new"],
             "ratio": e["ratio"], "sources": e["sources"],
+            "source": next((x for x in (SOURCE_TT, SOURCE_MAP,
+                                        SOURCE_IB_CONID, "broker")
+                            if x in ids), "broker"),
             "ticker_map_lines": lines, "accounts": e["accounts"],
             "carried": carried, "currency": base_cur,
             "late": declared_late(dated, e, ren)})
@@ -539,11 +601,12 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None) -> List[str]:
             d.blank()
         ratio = "" if abs((e["ratio"] or 1.0) - 1.0) < 1e-12 else \
             f" x{e['ratio']:g}"
+        _declared = any(x == "ticker.map line" or x.startswith(".tt line")
+                        for x in e["sources"])
         _hang(d, f"{e['date']}  {e['old']} -> {e['new']}{ratio}  "
                f"source: {', '.join(e['sources'])}"
                + (f" (also {', '.join(e['ticker_map_lines'])})"
-                  if e["ticker_map_lines"]
-                  and "ticker.map line" not in e["sources"] else ""),
+                  if e["ticker_map_lines"] and not _declared else ""),
                "", "  ")
         for c in e["carried"]:
             cost = ("" if c["sheltered"] else
@@ -564,13 +627,13 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None) -> List[str]:
                 d.line(f"    {x['date']}  {x['account']:<8} "
                        f"{x['action']:<8} {x['symbol']} {x['qty']:+g}")
             if res == "unresolved":
-                _hang(d, "Declare one in ticker.map — the broker still books "
-                       f"the renamed shares as {e['old']} (late=fold), or "
-                       f"another company now uses {e['old']} "
-                       f"(late=separate):", "  ", "    ")
-                d.line(f"    RENAME {e['old']} {e['new']} {e['date']} "
+                _hang(d, "Declare one in a .tt file of the account — the "
+                       f"broker still books the renamed shares as "
+                       f"{e['old']} (late=fold), or another company now "
+                       f"uses {e['old']} (late=separate):", "  ", "    ")
+                d.line(f"    RENAME {e['date']} {e['old']} {e['new']} "
                        f"late=fold")
-                d.line(f"    RENAME {e['old']} {e['new']} {e['date']} "
+                d.line(f"    RENAME {e['date']} {e['old']} {e['new']} "
                        f"late=separate")
                 _hang(d, "Until then they are a separate security and "
                        "`taxjson run --strict` stops.", "  ", "    ")
@@ -582,11 +645,12 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None) -> List[str]:
             d.line(f"  {u['rule']} {u['old']} {u['new']}")
             for dd in u["broker_dates"]:
                 _hang(d, f"the broker books this change on {dd}; the dated "
-                       f"form is:", "    ", "      ")
-                d.line(f"      RENAME {u['old']} {u['new']} {dd}")
+                       f"form (a .tt line, in place of the ticker.map "
+                       f"line) is:", "    ", "      ")
+                d.line(f"      RENAME {dd} {u['old']} {u['new']}")
     d.blank()
     n = doc["unresolved"]
     d.para(f"{n} trade(s) in an old ticker after its rename need a "
-           f"ticker.map declaration." if n else
+           f"declaration (a .tt RENAME line with late=)." if n else
            "No unresolved trade in an old ticker after its rename.")
     return d.lines()

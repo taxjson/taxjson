@@ -140,12 +140,11 @@ def _apply_transfer_evidence(agg: Dict[str, Dict[str, Any]],
     the TRANSFER sidecar PROVES were journaled between listings of the
     same security — and only those quantities.
 
-    A JOURNAL map line re-symbols unconditionally, which is right for
-    intrinsically fungible classes (SAMPLF.U.TO/SAMPLF.TO exist for
-    Norbert's Gambit) but wrong as a blanket statement for ordinary
-    cross-listings: whether 300 SAMPLI.US became SAMPLI.TO is a FACT recorded
-    by the broker's InterDepot rows, not a timeless property of the
-    symbol pair (2026-09 design review). So: net the sidecar's
+    Whether 300 SAMPLI.US became SAMPLI.TO is a FACT recorded by the
+    broker's InterDepot rows (or a .tt JOURNAL line's legs, lib/
+    dated_events), not a timeless property of the symbol pair (2026-09
+    design review) — a legacy ticker.map JOURNAL line is a TOBASE line
+    and no longer re-symbols the holdings on its own. So: net the sidecar's
     TRANSFER quantities per symbol, and within each map-declared
     identity class (GLOBAL/TOBASE/JOURNAL union) move matched
     negative→positive residuals between buckets, capped at what the
@@ -165,13 +164,10 @@ def _apply_transfer_evidence(agg: Dict[str, Dict[str, Any]],
     applied: list = []
     if not evidence_paths or tmap is None:
         return applied
-    # Evidence symbols go through the SAME journal fold the buckets
-    # did — a journal pair's out/in legs then land on one key and
-    # cancel, so intrinsically-fungible (JOURNAL) classes are never
-    # evidence-moved on top of their fold (round-five audit finding 4:
-    # the un-folded net re-symboled shares already sold through the
-    # journaled-to listing).
-    _fold = dict(tmap.journal)
+    # No fold: the buckets are per listing (a legacy JOURNAL line no
+    # longer folds them — its pair is a TOBASE class, moved by evidence
+    # like any other).
+    _fold: Dict[str, str] = {}
     net: Dict[str, float] = {}
     for p in evidence_paths:
         # An unreadable sidecar used to be skipped with a warning: the
@@ -259,24 +255,20 @@ def _replay_moves_on_base(base_agg: Dict[str, Dict[str, Any]],
                           moves, tmap) -> None:
     """The base inventory must mirror the native pass's applied
     moves exactly. It is keyed like the native one — GLOBAL renames
-    applied upstream, JOURNAL folded at aggregation, cross-listings
-    kept per-listing — so endpoints fold through the JOURNAL set only
-    (a journal pair's move is a no-op on its folded bucket; a TOBASE
-    pair's move REPLAYS, moving the base cost with the shares).
-    Deriving moves independently, or folding through the to-base
-    renames, both diverge (round-five finding 5 / round-six
-    finding 1)."""
+    applied upstream, cross-listings kept per-listing (a legacy JOURNAL
+    line folds nothing any more) — so every move REPLAYS, moving the
+    base cost with the shares. Deriving moves independently, or folding
+    through the to-base renames, both diverge (round-five finding 5 /
+    round-six finding 1)."""
     if not moves or tmap is None:
         return
-    # Fold endpoints through the SAME rename set base_agg was built
-    # with — the JOURNAL fold only. The base inventory comes from the
-    # RAW-base pipeline, which applies GLOBAL renames upstream and
-    # keeps cross-listings per-listing (no TOBASE consolidation), so
-    # folding through merge_renames(to_base=True) here made every
-    # TOBASE-pair move a "same key" no-op and the flipped shares'
-    # base cost silently vanished (round-six adversarial audit,
-    # finding 1 — a HIGH regression over the round-five fix).
-    ren = dict(tmap.journal)
+    # The base inventory comes from the RAW-base pipeline, which applies
+    # GLOBAL renames upstream and keeps cross-listings per-listing (no
+    # TOBASE consolidation): folding through merge_renames(to_base=True)
+    # here made every TOBASE-pair move a "same key" no-op and the
+    # flipped shares' base cost silently vanished (round-six adversarial
+    # audit, finding 1 — a HIGH regression over the round-five fix).
+    ren: Dict[str, str] = {}
     for src, dst, qty in moves:
         bs = ren.get(src, src)
         bd = ren.get(dst, dst)
@@ -992,13 +984,14 @@ def main():
 
     agg: Dict[str, Dict[str, Any]] = {}
 
-    # The holdings aggregation applies JOURNAL renames — they net
-    # offsetting cross-currency legs (Norbert's Gambit) here, post-gains,
-    # since they can't be merged before the gains engine. DELETE is
-    # honored too (idempotent — the merge already applied it).
+    # The holdings stay per listing: a journal between two listings is
+    # moved by its transfer legs (the broker's, or a .tt JOURNAL line's —
+    # lib/dated_events) through _apply_transfer_evidence, a legacy
+    # ticker.map JOURNAL line being a TOBASE line. DELETE is honored
+    # (idempotent — the merge already applied it).
     if args.map_file:
         _tmap = load_map_file(Path(args.map_file))
-        holdings_map, holdings_drops = _tmap.journal, _tmap.delete
+        holdings_map, holdings_drops = {}, _tmap.delete
     else:
         _tmap = None
         holdings_map, holdings_drops = {}, set()

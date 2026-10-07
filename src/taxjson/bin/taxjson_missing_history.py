@@ -308,6 +308,9 @@ def _transfer_sidecar_rows(files):
             if not isinstance(md, dict) or md.get("kind") != \
                     "transfer_sidecar" or not md.get("account"):
                 continue
+            from taxjson.lib.dated_events import SIDECAR_BROKER
+            if md.get("brokerage") == SIDECAR_BROKER:
+                continue    # a .tt JOURNAL's legs: a move inside the account
             for t in doc.get("transactions") or []:
                 if isinstance(t, dict) and t.get("action") == "TRANSFER":
                     rows.append(dict(t, account=md["account"]))

@@ -10,7 +10,7 @@ in work/ (nothing is recomputed but the cheap reads):
   that `taxjson run` did not join itself (lib/cross_listings: the names
   are missing or disagree, the pairing is ambiguous): `TOBASE FROM TO`
   (never for two companies); and the symbol collisions (one symbol, two
-  companies): `EXTRACT words | CURRENCY | SYMBOL` with its `JOURNAL`, or
+  companies): `EXTRACT words | CURRENCY | SYMBOL` with its `TOBASE`, or
   a template with a placeholder (listed, never written);
 * work/<account>_symbol_codes.state — Questrade internal codes the run
   could not resolve, with a "looks like" candidate: `GLOBAL CODE TICKER`;
@@ -57,12 +57,21 @@ _RENAMES = ("GLOBAL", "TOBASE", "JOURNAL", "RENAME")
 _KW = "|".join(KEYWORDS)
 _TICK_RE = re.compile(rf"`((?:{_KW}) [^`]+)`")
 _ADD_RE = re.compile(rf"add to ticker\.map:\s+((?:{_KW})\s+\S+\s+\S+)")
+# A look-alike ticker change's .tt line (Questrade, RBC: "add to a .tt
+# file of this account:  RENAME <date> OLD NEW").
+_ADD_TT_RE = re.compile(r"add to a \.tt file[^:]*:\s+(RENAME\s+\d{4}-\d{2}-\d{2}"
+                        r"\s+\S+\s+\S+)")
 _BARE_RE = re.compile(rf"^\s+((?:{_KW})\s+\S+\s+\S+)\s*$")
 # `EXTRACT description words | CURRENCY | SYMBOL` (its words hold
 # spaces: read on its own; a backticked one ends at the backtick).
 _EXTRACT_RE = re.compile(r"\bEXTRACT\s+([^|`\n]+?)\s*\|\s*([A-Za-z*]{1,5})"
                          r"\s*\|\s*([^\s`|]+)")
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-_:/=^]*$")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# A message that says a change was BOOKED (IB's contract id under two
+# symbols): its backticked lines are the way out (DISTINCT, late=
+# separate), never suggestions.
+_BOOKED_RE = re.compile(r"booked as a ticker change", re.IGNORECASE)
 _PLACEHOLDERS = frozenset("""
 FROM TO OLD NEW SYMBOL SYM ROOT CODE A B X Y N YAHOO_ID YAHOO_SYMBOL
 TICKER CUR YYYY-MM-DD COIN LISTING
@@ -95,9 +104,20 @@ class Suggestion:
         return self.line.split()[0]
 
     @property
+    def tt(self) -> bool:
+        """A dated event's .tt line (`RENAME <date> OLD NEW`, date first:
+        lib/dated_events), not a ticker.map line: listed, never written
+        to ticker.map."""
+        parts = self.line.split()
+        return (parts[0] == "RENAME" and len(parts) >= 4
+                and bool(_DATE_RE.match(parts[1])))
+
+    @property
     def symbols(self) -> List[str]:
         if self.keyword == "EXTRACT":
             return [self.line.rsplit("|", 1)[1].strip()]
+        if self.tt:
+            return self.line.split()[2:4]
         return self.line.split()[1:]
 
     @property
@@ -119,6 +139,8 @@ class Suggestion:
                "source": self.source}
         if self.template:
             out["template"] = True
+        if self.tt:
+            out["tt"] = True
         return out
 
 
@@ -161,6 +183,12 @@ def _clean(line: str) -> Optional[str]:
         if (not _TOKEN_RE.match(a) or a.upper() in _PLACEHOLDERS
                 or any(c in a for c in "<>|…")):
             return None
+    if kw == "RENAME" and _DATE_RE.match(args[0]):
+        # The .tt form (date first, lib/dated_events).
+        if len(args) < 3 or args[1].upper() == args[2].upper():
+            return None
+        return " ".join([kw, args[0], args[1].upper(), args[2].upper()]
+                        + args[3:])
     syms = [a.upper() for a in args[:2]]
     if kw != "CRYPTO" and syms[0] == syms[1]:
         return None
@@ -228,6 +256,8 @@ def from_diag(path: Path, rel: str) -> List[Suggestion]:
     out: List[Suggestion] = []
     for head, cont in _messages(text):
         whole = _unquoted(" ".join([head] + [c.strip() for c in cont]))
+        if _BOOKED_RE.search(whole):
+            continue
         # (candidate, its span in `whole`: the clause around it says
         # whether the hint is conditional)
         found = [(m.group(1), m.start(), m.end())
@@ -235,6 +265,8 @@ def from_diag(path: Path, rel: str) -> List[Suggestion]:
                  if not m.group(1).startswith("EXTRACT")]
         found += [(m.group(1), m.start(), m.end())
                   for m in _ADD_RE.finditer(whole)]
+        found += [(m.group(1), m.start(), m.end())
+                  for m in _ADD_TT_RE.finditer(whole)]
         found += [(m.group(0), m.start(), m.end())
                   for m in _EXTRACT_RE.finditer(whole)]
         for c in cont:
@@ -426,7 +458,10 @@ class MapState:
 
 def map_state(path: Path) -> MapState:
     if not Path(path).is_file():
-        return MapState({}, set(), set(), set(), [], set())
+        from taxjson.lib.dated_events import tt_renames
+        return MapState({}, set(), set(), set(), [], set(),
+                        {frozenset((dr.old.upper(), dr.new.upper()))
+                         for dr in tt_renames(Path(path).parent)})
     from taxjson.bin.taxjson_ticker_map import _parse_map_file, named_symbols
     from taxjson.lib.ticker_map import read_side_rules
     tm = _parse_map_file(Path(path))[0]
@@ -440,13 +475,17 @@ def map_state(path: Path) -> MapState:
         ln = " ".join(raw.split("#", 1)[0].split()).upper()
         if ln:
             lines.add(ln)
+    # The ticker changes the project's .tt files declare count as
+    # answered too (lib/dated_events).
+    from taxjson.lib.dated_events import tt_renames
+    _tt = tt_renames(Path(path).parent)
     return MapState(renamed, set(named_symbols(tm)),
                     {frozenset(p) for p in tm.distinct},
                     {str(k).upper() for k in side.crypto},
                     [(d, c, str(v).upper()) for d, c, v in side.extract],
                     lines,
                     {frozenset((dr.old.upper(), dr.new.upper()))
-                     for dr in tm.dated})
+                     for dr in list(tm.dated) + list(_tt)})
 
 
 def already(s: Suggestion, st: MapState) -> Optional[str]:
@@ -523,7 +562,7 @@ def pending(root: Path) -> Tuple[List[Suggestion], List[Tuple[Suggestion, str]]]
                                    f"({prev})"))
                 continue
             extracts[s.extract_key] = s.line
-        if s.keyword in _RENAMES:
+        if s.keyword in _RENAMES and not s.tt:
             prev = froms.get(s.symbols[0])
             if prev is not None:
                 skipped.append((s, f"{_COVERED}maps "

@@ -630,8 +630,11 @@ class TestTickerChangeHint(unittest.TestCase):
 
     def test_hint_is_old_first_with_the_listing_suffix(self):
         # A dated rename since renames are events (the date: QZKB's
-        # first row); GLOBAL folded every row at any date.
-        self.assertIn('`RENAME QZMR.TO QZKB.TO 2025-09-10`', self._run())
+        # first row); GLOBAL folded every row at any date. One contract
+        # id: booked as the event (v0.24), OLD first.
+        err = self._run()
+        self.assertIn('booked as a ticker change', err)
+        self.assertIn('(QZMR.TO -> QZKB.TO on 2025-09-10)', err)
 
     def test_quiet_once_ticker_map_joins_them(self):
         self.assertNotIn('several symbols',

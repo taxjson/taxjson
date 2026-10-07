@@ -187,6 +187,12 @@ class TaxTransaction:
     # journal. Evidence only: NOT part of compute_id, omitted from
     # to_dict() when empty.
     journal_pair: str = ''
+    # Where a DATED EVENT row came from when no broker row states it
+    # (lib/dated_events): "tt" (a .tt JOURNAL leg or RENAME line), "map"
+    # (a legacy ticker.map dated RENAME line) or "ib-conid" (a ticker
+    # change IB shows as one contract id under two symbols). Evidence
+    # only: NOT part of compute_id, omitted from to_dict() when empty.
+    event_source: str = ''
 
     def __post_init__(self):
         if self.id is None:
@@ -244,7 +250,8 @@ EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
                    'contract_size_basis',
                    'source', 'source_key',
                    'source_account', 'exercise_of', 'corp_cash',
-                   'lot_date', 'market_value', 'journal_pair')
+                   'lot_date', 'market_value', 'journal_pair',
+                   'event_source')
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]
 # e.g. "SAMPLG250120C00150000.US", "ABC271217P00029000.TO", or
@@ -953,7 +960,7 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                  'dealer_country', 'issuer_country', 'broker_time',
                  'security_name', 'open_close', 'broker_basis',
                  'broker_lots', 'exercise_of', 'corp_cash', 'contract_size_basis',
-                 'lot_date', 'journal_pair'):
+                 'lot_date', 'journal_pair', 'event_source'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]

@@ -385,27 +385,34 @@ class TestEvidenceFoldInteractions(unittest.TestCase):
                           "account": "margin", "brokerage": "ib"}}))
         return str(p)
 
-    def test_journal_folded_class_never_evidence_moved(self):
-        """Finding 4: buy 1000 DLR.TO, journal 500 to the U line
-        (sidecar pair), sell 300 U. The agg is journal-FOLDED (one
-        DLR.TO bucket, 700 left); the evidence legs fold to the same
-        key and cancel — the flip must be a no-op, not a re-symboling
-        of shares already sold through the other listing."""
+    def test_legacy_journal_pair_moves_by_its_evidence(self):
+        """Buy 1000 DLR.TO, journal 500 to the U line (sidecar pair),
+        sell 300 U. A legacy ticker.map JOURNAL line no longer folds the
+        holdings (v0.24: it is a TOBASE line; the journal is a dated
+        event): the buckets stay per listing and the evidence moves the
+        500 journaled units — 500 left on the CAD line, 200 on the U
+        line, as the broker lists them. (Finding 4's fold, and its
+        double-move risk, are gone with the fold.)"""
         from taxjson.bin.taxjson_export import _apply_transfer_evidence
-        tmap = self._tmap(journal={"DLR.U.TO": "DLR.TO"})
-        agg = {"DLR.TO": {"qty": 700.0, "total_cost": 7000.0,
+        tmap = self._tmap(journal={"DLR.U.TO": "DLR.TO"},
+                          tobase={"DLR.U.TO": "DLR.TO"})
+        agg = {"DLR.TO": {"qty": 1000.0, "total_cost": 10000.0,
                           "currency": "CAD",
-                          "cost_by_currency": {"CAD": 7000.0},
-                          "position_start_date": "2026-01-05"}}
+                          "cost_by_currency": {"CAD": 10000.0},
+                          "position_start_date": "2026-01-05"},
+               "DLR.U.TO": {"qty": -300.0, "total_cost": -2200.0,
+                            "currency": "USD",
+                            "cost_by_currency": {"USD": -2200.0},
+                            "position_start_date": "2026-06-20"}}
         with tempfile.TemporaryDirectory() as td:
             p = self._sidecar(td, [
                 ("2026-06-15", "DLR.TO", -500),
                 ("2026-06-15", "DLR.U.TO", +500)])
             with redirect_stderr(io.StringIO()):
                 moves = _apply_transfer_evidence(agg, [p], tmap)
-        self.assertEqual(moves, [])
-        self.assertEqual(set(agg), {"DLR.TO"})
-        self.assertAlmostEqual(agg["DLR.TO"]["qty"], 700.0)
+        self.assertEqual(moves, [("DLR.TO", "DLR.U.TO", 500.0)])
+        self.assertAlmostEqual(agg["DLR.TO"]["qty"], 500.0)
+        self.assertAlmostEqual(agg["DLR.U.TO"]["qty"], 200.0)
 
     def test_base_inventory_replays_native_moves(self):
         """Round-six finding 1 (corrects the round-five pin's wrong
@@ -450,19 +457,22 @@ class TestEvidenceFoldInteractions(unittest.TestCase):
         self.assertAlmostEqual(base["RYQ.TO"]["qty"], 1600.0)
         self.assertAlmostEqual(base["RYQ.TO"]["total_cost"], 69654.51)
 
-    def test_journal_pair_base_replay_is_noop(self):
-        """A JOURNAL pair's move endpoints fold to one key in BOTH
-        inventories — the base replay must no-op, not double-move."""
+    def test_journal_pair_base_replay_moves(self):
+        """A legacy JOURNAL pair is per listing in BOTH inventories now
+        (no fold, v0.24): the base replay moves the journaled units
+        with their base cost, as for any TOBASE pair."""
         from taxjson.bin.taxjson_export import _replay_moves_on_base
-        tmap = self._tmap(journal={"DLR.U.TO": "DLR.TO"})
-        base = {"DLR.TO": {"qty": 1000.0, "total_cost": 10000.0,
-                           "currency": "CAD",
-                           "cost_by_currency": {"CAD": 10000.0},
-                           "position_start_date": None}}
+        tmap = self._tmap(journal={"DLR.U.TO": "DLR.TO"},
+                          tobase={"DLR.U.TO": "DLR.TO"})
+        base = {"DLR.U.TO": {"qty": 1000.0, "total_cost": 10000.0,
+                             "currency": "CAD",
+                             "cost_by_currency": {"CAD": 10000.0},
+                             "position_start_date": None}}
         _replay_moves_on_base(
             base, [("DLR.U.TO", "DLR.TO", 500.0)], tmap)
-        self.assertAlmostEqual(base["DLR.TO"]["qty"], 1000.0)
-        self.assertAlmostEqual(base["DLR.TO"]["total_cost"], 10000.0)
+        self.assertAlmostEqual(base["DLR.U.TO"]["qty"], 500.0)
+        self.assertAlmostEqual(base["DLR.TO"]["qty"], 500.0)
+        self.assertAlmostEqual(base["DLR.TO"]["total_cost"], 5000.0)
 
     def test_base_replay_moves_when_keys_distinct_in_base(self):
         """When the base books did NOT fold the pair (no map entry),

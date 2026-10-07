@@ -47,7 +47,10 @@ class TestLoadMapFile(unittest.TestCase):
             "DELETE  ABH.CAD.TO\n"
         )
         self.assertEqual(tmap.glob, {'QZD1.US': 'QZD.US'})
-        self.assertEqual(tmap.tobase, {'AEM.US': 'AEM.TO'})
+        # A legacy JOURNAL line is a TOBASE line (v0.24, dated events:
+        # the journal itself is a .tt line); `journal` keeps it on record.
+        self.assertEqual(tmap.tobase, {'AEM.US': 'AEM.TO',
+                                       'DLR.U.TO': 'DLR.TO'})
         self.assertEqual(tmap.journal, {'DLR.U.TO': 'DLR.TO'})
         self.assertEqual(tmap.delete, {'ABH.CAD.TO'})
 

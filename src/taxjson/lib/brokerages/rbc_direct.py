@@ -1444,7 +1444,8 @@ def _detect_ticker_changes(ctx: RbcAccountContext, helper) -> None:
                 ctx.messages.append(
                     f"warning: ATTENTION: {fb}: RBC symbol {a.symbol} "
                     f"({cur}) looks renamed to {b.symbol} — if they are "
-                    f"one security add to ticker.map:  GLOBAL {sa} {sb}  "
+                    f"one security, add to a .tt file of this account:  "
+                    f"RENAME {b.first} {sa} {sb}  "
                     f"— {a.symbol} stops on {a.last} with {open_a:g} "
                     f"share(s) still open, and {b.symbol} (same Symbol "
                     f"Description {a.names[nm]!r}) {how}. That is a "

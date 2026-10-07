@@ -287,15 +287,15 @@ RQA_ROWS = [
 
 @rule("CA-ACB-RENAME")
 class TestTickerChangeWithoutReorganization(unittest.TestCase):
-    def test_one_file_warns_with_the_ticker_map_line(self):
+    def test_one_file_warns_with_the_tt_line(self):
         _, err, _ = parse_one(''.join(RQA_ROWS))
-        self.assertIn('GLOBAL RQA.US RQB.US', err)
+        self.assertIn('RENAME 2023-09-06 RQA.US RQB.US', err)
         self.assertIn('warning', err)
 
     def test_across_files(self):
         _, err, _ = parse_files({'rbc_a.csv': ''.join(RQA_ROWS[1:]),
                                  'rbc_b.csv': RQA_ROWS[0]})
-        self.assertIn('GLOBAL RQA.US RQB.US', err)
+        self.assertIn('RENAME 2023-09-06 RQA.US RQB.US', err)
 
     def test_second_symbol_opening_with_a_buy_is_not_flagged(self):
         body = (row("September 6, 2023", "Buy", "RQB", NWC, "10", "15",

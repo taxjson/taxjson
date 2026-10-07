@@ -16,6 +16,41 @@
   `ticker.map.bak` unless `--no-backup`); `--check` exits 1 when the file is
   not formatted. `taxjson init` now writes ticker.map in this layout.
 
+### Changed
+
+- **Journals and ticker changes are dated events in the books.** ticker.map
+  now holds only standing truths about securities. A journal between two
+  listings and a ticker change happen on a date, so they are `.tt` lines of
+  an account, written date first: `JOURNAL <date> FROM TO <qty>` books the
+  move's two transfer legs and joins the two listings as one security (no
+  disposition, in both countries; a journal the broker's rows already hold
+  is said and booked once, and one with a single broker leg gets the
+  other), and `RENAME <date> OLD NEW [late=fold|late=separate]`, declared
+  in any account's folder, applies to every account holding the old symbol
+  and is recorded once. A malformed line stops the run, naming the form.
+- **IB's ticker changes are booked.** When IB lists one contract id under
+  two symbols, the change is booked as a dated rename event, with a
+  Warning naming the way out (`DISTINCT` in ticker.map for two securities,
+  `late=separate` for another company reusing the old ticker). The weaker
+  look-alike hints of Questrade, RBC and Webull stay suggestions, now
+  printed as the `.tt` line.
+- **Legacy ticker.map lines keep working.** A `JOURNAL A B` line is read as
+  `TOBASE A B` and a dated `RENAME` line as the event, with one Warning per
+  run. A JOURNAL line no longer folds the two listings in the holdings view
+  on its own: the journal's legs move the units (the broker's, or a `.tt`
+  JOURNAL line's when the export lacks them).
+- **`taxjson format-map` migrates the dated events.** It rewrites each
+  `JOURNAL` line as `TOBASE` and moves each dated `RENAME` line, with its
+  comments, to `inputs/<account>/renames.tt` (one file, in the first account
+  whose books carry the change); the dry run shows both, `--check` fails
+  while a migration is pending, and the books stay the same. `taxjson init`
+  writes no dated event in ticker.map; the account READMEs show the `.tt`
+  lines.
+- **Every dated event is recorded with its source.** `work/dated_events.state`
+  lists each journal and rename with where it came from (`tt`, `map`,
+  `ib-conid`, `broker`) and its place; `taxjson renames --json` and the
+  cross-listing state carry the source too.
+
 ### Fixed
 
 - **A Questrade currency journal is joined with `transfers = true` too.**

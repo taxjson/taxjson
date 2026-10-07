@@ -252,8 +252,9 @@ class TestAnalyze(unittest.TestCase):
         self.assertEqual(r['suggested'], [])
         self.assertEqual({(p.kind, p.frm, p.to) for p in r['joined']},
                          {('JOURNAL', 'QZD.U.TO', 'QZD.TO')})
+        # A JOURNAL line is legacy (read as TOBASE): the run writes TOBASE.
         self.assertEqual(XL.map_lines(r['joined'])[0].split('#')[0].strip(),
-                         'JOURNAL QZD.U.TO QZD.TO')
+                         'TOBASE QZD.U.TO QZD.TO')
 
     def test_a_map_rule_naming_a_line_wins(self):
         r = XL.analyze(self._legs(), {}, {}, base_currency='CAD',
@@ -342,7 +343,7 @@ class TestRunCanada(unittest.TestCase):
 
     def test_the_two_lines_are_joined_as_a_journal(self):
         eff = (self.root / 'work' / XL.EFFECTIVE_MAP).read_text()
-        self.assertIn('JOURNAL QZD.U.TO QZD.TO', eff)
+        self.assertIn('TOBASE QZD.U.TO QZD.TO', eff)
         out = ' '.join(self.r.stdout.split())
         self.assertEqual(out.count('QZD.TO ↔ QZD.U.TO (currency journal '
                                    '2026-09-25)'), 2, out)
@@ -381,7 +382,7 @@ class TestRunOverrides(unittest.TestCase):
             r = _run(root, 'run', '--no-input')
             self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-3000:])
             eff = (root / 'work' / XL.EFFECTIVE_MAP).read_text()
-            self.assertIn('JOURNAL QZDU.TO QZD.TO', eff)
+            self.assertIn('TOBASE QZDU.TO QZD.TO', eff)
             self.assertNotIn('QZD.U.TO', eff)
             self.assertAlmostEqual(_gain(root), -180.525, delta=0.011)
 
@@ -405,7 +406,7 @@ class TestRunUsa(unittest.TestCase):
             r = _run(root, 'run', '--no-input')
             self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-3000:])
             eff = root / 'work' / XL.EFFECTIVE_MAP
-            self.assertFalse(eff.exists() and 'JOURNAL ' in eff.read_text())
+            self.assertFalse(eff.exists() and 'currency journal' in eff.read_text())
             # The parser's facts are the same in both countries.
             side = json.loads((root / 'work' /
                                'marg_questrade_transfers.json').read_text())

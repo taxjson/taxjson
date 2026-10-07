@@ -2165,6 +2165,70 @@ def _say_once(key: Any, kind: str, text: str, *details: str,
 # The cross-listing joins this run computed: {work dir: (map path or
 # None, analysis)} — once per run (lib/cross_listings).
 _XLIST_THIS_RUN: Dict[Path, Tuple[Optional[Path], Dict[str, Any]]] = {}
+# The dated events the project's .tt files declare (lib/dated_events):
+# {work dir: Declarations} — read once per run, up front (cmd_run), and
+# settled against the broker's legs once (stage_dated_events).
+_DATED_THIS_RUN: Dict[Path, Any] = {}
+_DATED_SETTLED: set = set()
+
+
+def _read_dated_events(root: Path, accounts: Dict[str, Any],
+                       tmap: Any) -> Any:
+    """The project's .tt JOURNAL and RENAME lines (lib/dated_events),
+    checked against ticker.map; a line that cannot be booked stops the
+    run with its message (it names the form). Said once: the notes (a
+    rename declared twice) and warnings."""
+    from taxjson.lib import dated_events as DE
+    try:
+        decl = DE.read_declarations(root, accounts)
+        problems = DE.check_against_map(decl, tmap)
+    except DE.DatedEventError as e:
+        problems = str(e).splitlines()
+    if problems:
+        _die(f"{len(problems)} .tt dated-event line(s) cannot be booked",
+             *[f"- {p}" for p in problems],
+             "A JOURNAL line is `JOURNAL <date> <FROM> <TO> <qty>`, a "
+             "RENAME line `RENAME <date> <OLD> <NEW> "
+             "[late=fold|late=separate]` (date first). Fix the line or "
+             "delete it.")
+    for n in decl.notes:
+        _say("note", *_split_msg(n), prog=_PROG)
+    for w in decl.warnings:
+        _say("warning", *_split_msg(w), prog=_PROG)
+    _DATED_THIS_RUN[(root / "work").resolve()] = decl
+    return decl
+
+
+def stage_dated_events(cache: Path, accounts: List[str]):
+    """The declared journals settled against the broker's own legs
+    (lib/dated_events.settle_journals: a duplicate is booked once, a
+    journal with one broker leg books the other), their legs written to
+    each account's transfer evidence (work/<acct>_tt-journal_
+    transfers.json) — once per run, from every equity account's parsed
+    exports (`gathered`, lib/cross_listings.gather). Returns the
+    Declarations (None when cmd_run read none: a stand-alone stage)."""
+    from taxjson.lib import dated_events as DE
+    key = cache.resolve()
+    decl = _DATED_THIS_RUN.get(key)
+    if decl is None or key in _DATED_SETTLED:
+        return decl
+    _DATED_SETTLED.add(key)
+    if decl.journals:
+        from taxjson.lib import cross_listings as XL
+        legs, _n, _s = XL.gather(cache, accounts)
+        for n in DE.settle_journals(decl.journals, legs):
+            _say("note", *_split_msg(n), prog=_PROG)
+    DE.write_sidecars(cache, accounts, decl.journals)
+    by_acct: Dict[str, List[str]] = {}
+    for j in decl.journals:
+        if j.status != DE.STATUS_DUPLICATE:
+            by_acct.setdefault(j.account, []).append(
+                f"{j.date} {j.frm} -> {j.to} {j.quantity:g}")
+    for acct, items in sorted(by_acct.items()):
+        _say("note", f"{acct}: {len(items)} journal(s) from .tt lines "
+             f"booked as transfer legs (one security, no disposition): "
+             f"{'; '.join(items)}", indent="  ", file=sys.stdout)
+    return decl
 
 
 def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
@@ -2203,9 +2267,18 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
                 for _dr in _tm.dated:
                     named.update((_dr.old, _dr.new))
                 apart = set(_tm.distinct)
+        _pre = _DATED_THIS_RUN.get(key)
+        for _dr in (_pre.renames if _pre is not None else ()):
+            named.update((_dr.old, _dr.new))
         from taxjson.lib.country import is_canada
+        from taxjson.lib import dated_events as _DE
+        _decl = stage_dated_events(cache, accounts or [name])
         _rows: list = []
         legs, names, shown = XL.gather(cache, accounts or [name], _rows)
+        if _decl is not None and _decl.journals:
+            legs = sorted(legs + _DE.journal_legs(_decl.journals),
+                          key=lambda g: (g.date, g.account, g.broker,
+                                         g.symbol, g.quantity))
         _base = str(settings.get("base_currency") or "").upper() or None
         # One symbol naming two companies (a TSX fund's US-dollar unit
         # booked .US beside an NYSE stock of the root): never a join or
@@ -2221,15 +2294,22 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
                             # (CA-XLIST-03); a US project reads its legs
                             # as transfers.
                             currency_journals=is_canada(
-                                settings.get("country")))
+                                settings.get("country")),
+                            declared=(_decl.journals if _decl is not None
+                                      else ()))
         result["collisions"] = _coll
         state = cache / XL.STATE
         text = XL.state_text(result)
         if _read_work_stamp(state) != text:
             _write_work_stamp(state, text)
         eff = cache / XL.EFFECTIVE_MAP
-        if result["joined"]:
-            body = XL.effective_map_text(ticker_map, result["joined"])
+        # The ticker changes declared in .tt files (lib/dated_events)
+        # reach every stage that books renames through the effective map.
+        _ren_lines = _DE.effective_lines(_decl.renames
+                                         if _decl is not None else ())
+        if result["joined"] or _ren_lines:
+            body = XL.effective_map_text(ticker_map, result["joined"],
+                                         _ren_lines)
             if _read_work_stamp(eff) != body:
                 _write_work_stamp(eff, body)
             path: Optional[Path] = eff
@@ -3666,6 +3746,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # read the effective map (ticker.map plus the joins' TOBASE lines).
     if not is_crypto:
         ticker_map = stage_cross_listings(name, settings, cache, ticker_map)
+    elif getattr(_DATED_THIS_RUN.get(cache.resolve()), "renames", None):
+        # A ticker change declared in a .tt file (a coin's new ticker)
+        # reaches the crypto books through the effective map too.
+        ticker_map = stage_cross_listings(name, settings, cache, ticker_map)
 
     # 1b. crypto sends: an outgoing transfer that never arrived on
     # another exchange is a gift, a payment, or a move to your own
@@ -3816,7 +3900,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         | ({f"{name}_{b}_transfers" for b in grouped}
            if not include_transfers else set()) \
         | {tt_json_path(cache, name, tt.name).stem
-           for tt in input_files(acct_dir, ".tt")}
+           for tt in input_files(acct_dir, ".tt")} \
+        | {f"{name}_tt-journal_transfers"}      # lib/dated_events
     # Prefix-sibling guard: for account `m`, the glob also matches
     # account `m_extra`'s artifacts — deleting those every run
     # destroyed m_extra's parsed books and (worse) its elections
@@ -5177,6 +5262,9 @@ def _sidecar_transfer_rows(names: List[str], cache: Path
             if (md.get("kind") != "transfer_sidecar"
                     or md.get("account") != n):
                 continue        # another account's (or a .tt) file
+            from taxjson.lib.dated_events import SIDECAR_BROKER
+            if md.get("brokerage") == SIDECAR_BROKER:
+                continue        # a .tt JOURNAL's legs: inside one account
             for t in doc.get("transactions") or []:
                 if (isinstance(t, dict) and t.get("action") == "TRANSFER"
                         and t.get("symbol")
@@ -5989,6 +6077,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     _SHOWN_THIS_RUN.clear()
     _LOSS_CONTEXT_GAINS.clear()
     _XLIST_THIS_RUN.clear()
+    _DATED_THIS_RUN.clear()
+    _DATED_SETTLED.clear()
     _IN_KIND_THIS_RUN.clear()
     _SHORT_SOURCES.clear()
     root = Path(args.dir).resolve()
@@ -6118,6 +6208,21 @@ def cmd_run(args: argparse.Namespace) -> None:
                  "single meaning; either changes ACB pools and gains. Fix "
                  "the line (KEYWORD FROM TO, separated by spaces; notes "
                  "after `#`) or delete it.")
+    # Dated events: the .tt JOURNAL / RENAME lines of every account
+    # (lib/dated_events), checked up front; ticker.map's legacy JOURNAL
+    # and dated RENAME lines still work, said once.
+    _tmap_parsed = None
+    if ticker_map_arg:
+        from taxjson.bin.taxjson_ticker_map import _parse_map_file
+        try:
+            _tmap_parsed = _parse_map_file(ticker_map)[0]
+        except (OSError, ValueError):
+            _tmap_parsed = None
+        from taxjson.lib.dated_events import legacy_note
+        _legacy = legacy_note(_tmap_parsed)
+        if _legacy:
+            _say("warning", _legacy[0], *_legacy[1], prog=_PROG)
+    _read_dated_events(root, accounts, _tmap_parsed)
     # ticker.map EXTRACT lines — description-keyed ticker corrections
     # for securities the currency->exchange suffix mislabels. The parse
     # stage gets the map as taxjson-brokerage --security-overrides when
@@ -6539,6 +6644,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             raise SystemExit(1)
         return
     _report_short_positions(root, settings, cache, ticker_map_arg, mh_arg)
+    _write_dated_events_state(root, cfg, cache, _tmap_parsed)
     if not pending_accounts:
         _check_renamed_late(root, strict=getattr(args, "strict", False))
     if _blend_names and not args.account and not pending_accounts:
@@ -11748,8 +11854,8 @@ def cmd_scan(args: argparse.Namespace) -> None:
                             f"both held and both named "
                             f"{names[u]!r} — looks like one issuer's "
                             f"two listings with no ticker.map entry; "
-                            f"VERIFY and add `TOBASE {u} {c}` (or "
-                            f"JOURNAL) if so."))
+                            f"VERIFY and add `TOBASE {u} {c}` if "
+                            f"so."))
 
     if getattr(args, "json", False):
         print(json.dumps({"findings": [
@@ -14152,7 +14258,9 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
             d.blank()
             for s in offer:
                 d.line(s.line + ("   (a template: edit, then add it by "
-                                 "hand)" if s.template else ""))
+                                 "hand)" if s.template else
+                                 "   (a .tt line: add it to a .tt file of "
+                                 "the account)" if s.tt else ""))
                 d.para(s.reason, indent="  ")
         # A suggestion another one covers is not answered by the map:
         # its own heading.
@@ -14185,6 +14293,12 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
             # a symbol that is not one: never written.
             print(f"Not added (a template — edit it, then add it by hand): "
                   f"{s.line}")
+            continue
+        if s.tt:
+            # A dated event is a .tt line of an account (lib/dated_events),
+            # never a ticker.map line.
+            print(f"Not added (a .tt line — add it to a .tt file of the "
+                  f"account): {s.line}")
             continue
         if interactive:
             print(s.line)
@@ -14240,9 +14354,35 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
           + ". Run `taxjson run` to apply them.")
 
 
+def _write_dated_events_state(root: Path, cfg: Dict[str, Any], cache: Path,
+                              tmap: Any) -> None:
+    """work/dated_events.state (lib/dated_events): every declared journal
+    with its status, and every rename event the books carry (each
+    account's base rows) with its source and declarations, plus each
+    declaration no account's books carried."""
+    from taxjson.lib import dated_events as DE
+    from taxjson.lib.renames import _book_rows
+    decl = _DATED_THIS_RUN.get(cache.resolve())
+    declared = list(getattr(tmap, "dated", ()) or ()) if tmap else []
+    declared += list(decl.renames) if decl is not None else []
+    try:
+        rows = _book_rows(root, cfg)
+    except ValueError:
+        rows = []
+    doc = DE.state_doc(decl.journals if decl is not None else (),
+                       DE.rename_records(rows, declared))
+    import json
+    text = json.dumps(doc, indent=2, sort_keys=True,
+                      ensure_ascii=False) + "\n"
+    path = cache / DE.STATE
+    if _read_work_stamp(path) != text:
+        _write_work_stamp(path, text)
+
+
 def _check_renamed_late(root: Path, *, strict: bool) -> None:
     """A trade in a renamed ticker after its rename date that no
-    ticker.map line declares (lib/renames, A2-0197): ATTENTION, and
+    declaration resolves (a .tt `RENAME <date> OLD NEW late=...` line, or
+    a legacy ticker.map one: lib/renames, A2-0197): ATTENTION, and
     --strict stops."""
     from taxjson.lib.renames import unresolved_late
     try:
@@ -14259,11 +14399,12 @@ def _check_renamed_late(root: Path, *, strict: bool) -> None:
                    if (x["symbol"], x["rename_date"]) == (sym, d))
         _say("attention", f"{n} trade(s) in {sym} after its rename to "
              f"{new} on {d}",
-             "Booked as a separate security until ticker.map says which "
-             "it is (`taxjson renames`).", indent="  ")
+             "Booked as a separate security until a .tt RENAME line says "
+             "which it is (`late=fold` or `late=separate`; `taxjson "
+             "renames` prints the lines).", indent="  ")
     if rows and strict:
         _die(f"--strict: {len(rows)} trade(s) in a renamed ticker after "
-             f"its rename are not declared in ticker.map — aborting",
+             f"its rename are not declared — aborting",
              "See the warnings above and `taxjson renames`.")
 
 
@@ -20529,13 +20670,19 @@ def cmd_format(args: argparse.Namespace) -> None:
 def cmd_format_map(args: argparse.Namespace) -> None:
     """`taxjson format-map [--write [--no-backup] | --check]`: lay
     ticker.map out in keyword groups (lib/ticker_map_format): a short
-    header, then Spellings, Listings of one security, Clean-up, Dated
-    events and Lookups, each under its heading, the user's order kept in
-    a group, a comment directly above a line moved with it, spacing
-    normalised, exact duplicates dropped, a line taxjson cannot use kept
-    as written in an Unrecognized group. The parsed map before and after
-    must be identical and every comment kept, or nothing is written.
-    Default: print a unified diff and the lines per group."""
+    header, then Spellings, Listings of one security, Clean-up and
+    Lookups, each under its heading, the user's order kept in a group, a
+    comment directly above a line moved with it, spacing normalised,
+    exact duplicates dropped, a line taxjson cannot use kept as written
+    in an Unrecognized group. Dated events leave the map (v0.24): a
+    `JOURNAL A B` line becomes `TOBASE A B`, and each dated `RENAME OLD
+    NEW YYYY-MM-DD [late=...]` moves, with its comments, to a .tt line
+    `RENAME YYYY-MM-DD OLD NEW [late=...]` in inputs/<account>/renames.tt
+    (lib/dated_events.home_account). The parsed map before and after
+    (plus the moved lines) must mean the same and every comment be kept,
+    or nothing is written. Default: print a unified diff, the .tt
+    additions and the lines per group; --check fails while the map is not
+    formatted or a migration is pending."""
     import difflib
     from taxjson.lib.cli_diag import read_text_utf8
     from taxjson.lib.ticker_map_format import FormatError, format_map
@@ -20554,7 +20701,7 @@ def cmd_format_map(args: argparse.Namespace) -> None:
     except OSError as e:
         _die_input(f"cannot read {tm}: {e.strerror or e}")
     try:
-        res = format_map(text)
+        res = format_map(text, migrate=True)
     except FormatError as e:
         _die_input(f"ticker.map: {e}", "Nothing was written.")
     if res.problems:
@@ -20564,7 +20711,9 @@ def cmd_format_map(args: argparse.Namespace) -> None:
              *[f"- {m}" for m in res.problems],
              *([f"The {_n_bad} line(s) taxjson cannot use are kept as "
                 f"written in the \"Unrecognized\" group."] if _n_bad
-               else []), prog=prog)
+               else []),
+             *(["Its dated events are moved out once the map has no "
+                "problem."] if res.problems else []), prog=prog)
     if res.duplicates:
         _say("note", f"dropped {len(res.duplicates)} exact duplicate "
              f"line(s)",
@@ -20573,27 +20722,101 @@ def cmd_format_map(args: argparse.Namespace) -> None:
         _say("note", f"{res.retired} line(s) of a removed feature are in "
              f"the \"Retired\" group", "taxjson ignores them; delete "
              "them.", prog=prog)
-    if not res.changed:
+    # Where each moved RENAME goes (one .tt file: a .tt RENAME applies to
+    # every account holding the old symbol).
+    adds: Dict[str, List[str]] = {}
+    homes: List[str] = []
+    skipped: List[str] = []
+    if res.moved:
+        from taxjson.lib import dated_events as DE
+        cfg = load_config(root)
+        accounts = cfg.get("accounts") or {}
+        if not accounts:
+            _die_input("ticker.map's dated RENAME lines move to an "
+                       "account's .tt file, and taxjson.toml has no "
+                       "account", "Nothing was written.")
+        have = {(d.old, d.new, d.date, d.late): d.where
+                for d in DE.tt_renames(root, accounts)}
+        for mv in res.moved:
+            key = (mv.old, mv.new, mv.date, mv.late)
+            if not mv.commented and key in have:
+                skipped.append(f"{mv.tt_line.split('  #')[0]} (already "
+                               f"in {have[key]})")
+                if not mv.comments:
+                    continue
+            acct, why = DE.home_account(root, accounts, mv.old, mv.new,
+                                        mv.date)
+            rel = f"inputs/{acct}/{DE.RENAMES_TT}"
+            block = list(mv.comments)
+            if not (not mv.commented and key in have):
+                block += [("# " + mv.tt_line) if mv.commented
+                          else mv.tt_line]
+            adds.setdefault(rel, []).extend(block)
+            if not mv.commented:
+                homes.append(f"{mv.old} -> {mv.new} ({mv.date}): {rel} "
+                             f"({why})")
+    pending = res.migration_pending
+    if not res.changed and not pending:
         print("ticker.map is already formatted.")
         return
     if args.check:
-        _say("warning", "ticker.map is not formatted",
-             "`taxjson format-map` shows the changes, `taxjson format-map "
-             "--write` applies them.", prog=prog)
+        if pending:
+            _say("warning", f"ticker.map holds dated events to migrate: "
+                 f"{len(res.journals)} JOURNAL line(s) (to TOBASE), "
+                 f"{len([m for m in res.moved if not m.commented])} dated "
+                 f"RENAME line(s) (to a .tt file)",
+                 "`taxjson format-map` shows the changes, `taxjson "
+                 "format-map --write` applies them.", prog=prog)
+        else:
+            _say("warning", "ticker.map is not formatted",
+                 "`taxjson format-map` shows the changes, `taxjson "
+                 "format-map --write` applies them.", prog=prog)
         sys.exit(1)
     counts = ", ".join(f"{g} {n}" for g, n in res.counts.items()
-                       if n or g not in ("Retired", "Unrecognized"))
+                       if n or g not in ("Retired", "Unrecognized",
+                                         "Dated events"))
     if not args.write:
         sys.stdout.writelines(difflib.unified_diff(
             text.splitlines(keepends=True),
             res.text.splitlines(keepends=True),
             fromfile="ticker.map", tofile="ticker.map (formatted)"))
+        for rel, block in sorted(adds.items()):
+            exists = (root / rel).is_file()
+            print(f"--- {rel}{'' if exists else ' (new file)'}")
+            print(f"+++ {rel} (with the dated events from ticker.map)")
+            for ln in ([] if exists else
+                       DE.RENAMES_TT_HEAD.splitlines()) + block:
+                print(f"+{ln}")
+        _migration_notes(res, homes, skipped, prog)
         _say("note", f"lines per group: {counts}", prog=prog)
         _say("note", "dry run: nothing written",
-             "`taxjson format-map --write` applies this; the map means "
+             "`taxjson format-map --write` applies this; the books are "
              "the same either way.", prog=prog)
         return
     from taxjson.lib.safe_write import OutsideLinkError, write_user_file
+    # The .tt files first: a map without its moved lines must never be
+    # left behind without them.
+    for rel, block in sorted(adds.items()):
+        p = root / rel
+        try:
+            cur = read_text_utf8(p) if p.is_file() else ""
+        except OSError as e:
+            _die_input(f"cannot read {rel}: {e.strerror or e}",
+                       "Nothing was written.")
+        new_txt = (cur + ("" if not cur or cur.endswith("\n") else "\n")
+                   + ("\n" if cur.strip() else "")
+                   + ("" if cur.strip() else DE.RENAMES_TT_HEAD)
+                   + "\n".join(block) + "\n")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            write_user_file(p, new_txt, root, suffix=".format.part",
+                            backup=bool(cur) and not args.no_backup)
+        except OutsideLinkError as e:
+            _die_input(str(e))
+        except OSError as e:
+            _die_input(f"cannot write {rel}: {e.strerror or e}")
+        print(f"wrote {rel} ({sum(1 for b in block if b.startswith('RENAME'))}"
+              f" ticker change(s) from ticker.map)")
     try:
         bak = write_user_file(tm, res.text, root, suffix=".format.part",
                               backup=not args.no_backup)
@@ -20603,7 +20826,31 @@ def cmd_format_map(args: argparse.Namespace) -> None:
         _die_input(f"cannot write ticker.map: {e.strerror or e}")
     print("formatted ticker.map"
           + (f" (previous version: {bak.name})" if bak else ""))
+    _migration_notes(res, homes, skipped, prog)
     _say("note", f"lines per group: {counts}", prog=prog)
+
+
+def _migration_notes(res, homes: List[str], skipped: List[str],
+                     prog: str) -> None:
+    """The migration's Info lines (format-map): what moved where."""
+    if res.journals:
+        _say("note", f"{len(res.journals)} JOURNAL line(s) rewritten as "
+             f"TOBASE (what they mean now)",
+             "A journal on a date is a .tt line of the account: `JOURNAL "
+             "<date> <FROM> <TO> <qty>` (only needed when the broker's "
+             "export lacks the journal's rows).", prog=prog)
+    if homes:
+        _say("note", f"{len(homes)} dated RENAME line(s) moved to a .tt "
+             f"file (a .tt RENAME applies to every account holding the "
+             f"old symbol)", *homes, prog=prog)
+    if skipped:
+        _say("note", f"{len(skipped)} dated RENAME line(s) already "
+             f"declared in a .tt file: removed from ticker.map", *skipped,
+             prog=prog)
+    if res.dropped_examples:
+        _say("note", f"dropped {len(res.dropped_examples)} switched-off "
+             f"example(s) an earlier `taxjson init` wrote",
+             *res.dropped_examples, prog=prog)
 
 
 def cmd_init(args: argparse.Namespace) -> None:

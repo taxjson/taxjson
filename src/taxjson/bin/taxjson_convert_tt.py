@@ -39,6 +39,15 @@ _VALID_ACTIONS = (
 # INKIND (the value of an in-kind move between a taxable and a registered
 # account: read by `taxjson run`, lib/in_kind — never a row of the books).
 _SUGAR_ACTIONS = ('ACQUIRED', 'INKIND')
+# Dated events written date first (lib/dated_events): a JOURNAL between
+# two listings of one security inside the account, and a ticker change
+# (RENAME). `taxjson run` reads them from the .tt files of every account
+# and books them as events (the journal's transfer legs, the rename's
+# SPLIT row in each account holding the old symbol) — they are checked
+# here and never rows of the converted file.
+_EVENT_ACTIONS = ('JOURNAL', 'RENAME')
+JOURNAL_FORM = "JOURNAL <date> <FROM> <TO> <qty>"
+RENAME_FORM = "RENAME <date> <OLD> <NEW> [late=fold|late=separate]"
 # The time an OPENING row is booked at: the start of the snapshot day,
 # before anything else that day (the line itself has no time column).
 OPENING_TIME = '00:00:00'
@@ -126,7 +135,7 @@ def _tt_num(tok: str) -> float:
 
 
 def _unknown_action(action: str, line: str, source: str) -> ValueError:
-    valid = _VALID_ACTIONS + _SUGAR_ACTIONS
+    valid = _VALID_ACTIONS + _SUGAR_ACTIONS + _EVENT_ACTIONS
     guess = difflib.get_close_matches(action.upper(), valid, n=1,
                                       cutoff=0.5)
     hint = f" Did you mean {guess[0]}?" if guess else ''
@@ -374,6 +383,112 @@ def parse_tt_line(line: str, account_name: str = 'default',
     _warn_unknown_suffix(tx, line, source)
     tx['id'] = compute_tt_id(tx)
     return tx
+
+
+def _is_date(tok: str) -> bool:
+    if not _DATE_RE.match(tok or ''):
+        return False
+    try:
+        datetime.strptime(tok, '%Y-%m-%d')
+    except ValueError:
+        return False
+    return True
+
+
+def parse_journal_line(line: str, source: str = ''):
+    """`JOURNAL <date> <FROM> <TO> <qty>` -> {date, from, to, quantity}:
+    a move of `qty` units from listing FROM to listing TO of one security
+    inside this account (a Norbert's gambit's journal, a TSX line moved to
+    its NYSE line), or None when the line is not a JOURNAL line. No time
+    column. `taxjson run` books it as the move's two transfer legs and
+    joins the listings (lib/dated_events, tax-logic CA-XLIST-04 /
+    US-XLIST-03): no disposition. Raises ValueError naming the form on a
+    malformed line."""
+    where = _where(source)
+    body = strip_tt_comment(line)
+    parts = body.split()
+    if not parts or parts[0] != 'JOURNAL':
+        return None
+    shown = body.strip()
+    if len(parts) != 5:
+        hint = ''
+        if len(parts) == 3 and not _is_date(parts[1]):
+            hint = (" — `JOURNAL FROM TO` is the old ticker.map line; in a "
+                    ".tt file a journal is dated and sized")
+        raise ValueError(
+            f"{where}malformed JOURNAL line — expected `{JOURNAL_FORM}` "
+            f"(a move of <qty> units from listing FROM to listing TO in "
+            f"this account){hint}: {shown!r}")
+    _, date, frm, to, qty = parts
+    if not _is_date(date):
+        raise ValueError(
+            f"{where}malformed JOURNAL line — the date {date!r} is not "
+            f"YYYY-MM-DD (expected `{JOURNAL_FORM}`): {shown!r}")
+    # Spelled as the account's other .tt rows are (no currency: only the
+    # unambiguous Canadian venues fold, as on a SPLIT line).
+    _sy = {'action': 'SPLIT', 'symbol': frm.upper(), 'symbol_new': to.upper()}
+    _canonical_ca_symbols(_sy)
+    frm, to = _sy['symbol'], _sy['symbol_new']
+    if frm == to:
+        raise ValueError(
+            f"{where}malformed JOURNAL line — FROM and TO are the same "
+            f"listing {frm} (expected `{JOURNAL_FORM}`): {shown!r}")
+    try:
+        q = _tt_num(qty)
+    except ValueError as e:
+        raise ValueError(
+            f"{where}malformed JOURNAL line — the quantity {qty!r} is not "
+            f"a number ({e}; expected `{JOURNAL_FORM}`): {shown!r}") from None
+    if not q > 0:
+        raise ValueError(
+            f"{where}malformed JOURNAL line — the quantity must be "
+            f"positive (the units moved from {frm} to {to}; expected "
+            f"`{JOURNAL_FORM}`): {shown!r}")
+    return {'date': date, 'from': frm, 'to': to, 'quantity': q,
+            'line': shown}
+
+
+def parse_rename_line(line: str, source: str = ''):
+    """`RENAME <date> <OLD> <NEW> [late=fold|late=separate]` -> {date,
+    old, new, late}: a ticker change on that date (lib/renames: the
+    position, cost and acquisition dates carry from OLD to NEW), or None
+    when the line is not a RENAME line. `taxjson run` books it in every
+    account whose books carry OLD (lib/dated_events). Raises ValueError
+    naming the form on a malformed line — the ticker.map form `RENAME
+    OLD NEW YYYY-MM-DD` included (a .tt line is date first)."""
+    from taxjson.lib.renames import parse_rename_tail
+    where = _where(source)
+    body = strip_tt_comment(line)
+    parts = body.split()
+    if not parts or parts[0] != 'RENAME':
+        return None
+    shown = body.strip()
+    if len(parts) >= 4 and not _is_date(parts[1]) and _is_date(parts[3]):
+        raise ValueError(
+            f"{where}malformed RENAME line — a .tt line is date first: "
+            f"`RENAME {parts[3]} {parts[1].upper()} {parts[2].upper()}"
+            f"{' ' + ' '.join(parts[4:]) if parts[4:] else ''}` (expected "
+            f"`{RENAME_FORM}`): {shown!r}")
+    if len(parts) not in (4, 5):
+        raise ValueError(
+            f"{where}malformed RENAME line — expected `{RENAME_FORM}`: "
+            f"{shown!r}")
+    try:
+        date, late = parse_rename_tail([parts[1]] + parts[4:])
+    except ValueError as e:
+        raise ValueError(
+            f"{where}malformed RENAME line — {e} (expected "
+            f"`{RENAME_FORM}`): {shown!r}") from None
+    _sy = {'action': 'SPLIT', 'symbol': parts[2].upper(),
+           'symbol_new': parts[3].upper()}
+    _canonical_ca_symbols(_sy)
+    old, new = _sy['symbol'], _sy['symbol_new']
+    if old == new:
+        raise ValueError(
+            f"{where}malformed RENAME line — OLD and NEW are the same "
+            f"symbol {old} (expected `{RENAME_FORM}`): {shown!r}")
+    return {'date': date, 'old': old, 'new': new, 'late': late,
+            'line': shown}
 
 
 def parse_inkind_line(line: str, source: str = ''):
@@ -969,6 +1084,11 @@ def tt_to_json(input_path: Path, account_name: str) -> dict:
             # An INKIND line values an in-kind move (`taxjson run` reads
             # it, lib/in_kind): checked here, never a row of the books.
             if parse_inkind_line(line, source) is not None:
+                continue
+            # A dated JOURNAL / RENAME is an event `taxjson run` books
+            # (lib/dated_events): checked here, never a row of the file.
+            if (parse_journal_line(line, source) is not None
+                    or parse_rename_line(line, source) is not None):
                 continue
             try:
                 expanded = expand_acquired(line)

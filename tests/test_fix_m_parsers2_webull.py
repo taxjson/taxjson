@@ -260,7 +260,8 @@ class TestTickerChangeWarning(unittest.TestCase):
                 'USD,12-06-2025,SELL,QQNW,QQ HOLDINGS CORP,SHS,-500,20.00,,"9,997.01"\n')
         tx, err = _parse(text)
         self.assertEqual(len(tx), 2)
-        self.assertIn("ticker.map", err)
+        # The dated event, a .tt line date first (v0.24).
+        self.assertIn("RENAME 2025-06-11 QQOL.US QQNW.US", err)
         self.assertIn("QQOL.US", err)
         self.assertIn("QQNW.US", err)
 

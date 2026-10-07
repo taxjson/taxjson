@@ -261,7 +261,10 @@ class TestHoldingsToml(unittest.TestCase):
         self.assertEqual(len(doc['holding']), 1)
 
     def test_map_nets_norberts_gambit(self):
-        """A --map entry folds the DLR.US leg into DLR.TO; the offsetting
+        """A legacy JOURNAL --map line no longer folds the holdings
+        (v0.24: it is a TOBASE line; the journal is a dated event): the
+        journal's legs (here a .tt JOURNAL line's, in its transfer
+        evidence) move the DLR.US units onto DLR.TO; the offsetting
         quantities then net to zero and the position drops out, while an
         unrelated holding is untouched."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -276,8 +279,20 @@ class TestHoldingsToml(unittest.TestCase):
             ]}))
             mapfile = Path(tmp) / 'ticker.map'
             mapfile.write_text("JOURNAL DLR.US DLR.TO\n")
+            side = Path(tmp) / 'm_tt-journal_transfers.json'
+            side.write_text(json.dumps({
+                'transactions': [
+                    {'action': 'TRANSFER', 'date': '2025-03-05',
+                     'symbol': s, 'quantity': q, 'account': 'm',
+                     'journal_pair': 'tt:m:2025-03-05#1',
+                     'event_source': 'tt'}
+                    for s, q in (('DLR.US', -10000.0),
+                                 ('DLR.TO', 10000.0))],
+                'metadata': {'kind': 'transfer_sidecar', 'account': 'm',
+                             'brokerage': 'tt-journal'}}))
             cmd = [sys.executable, '-m', 'taxjson.bin.taxjson_export',
-                   '--holdings-toml', '--map', str(mapfile), str(gains)]
+                   '--holdings-toml', '--map', str(mapfile),
+                   '--transfer-evidence', str(side), str(gains)]
             r = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             doc = tomllib.loads(r.stdout)

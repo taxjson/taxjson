@@ -389,7 +389,7 @@ CRA instalments (`taxjson instalments`, and a summary in `taxjson estimate`). Ca
 
 ## ticker.map
 
-The project's one mapping file, at the project root; one rule per line, symbols case-insensitive, notes after `#`. `taxjson run` refuses a map with a malformed line, a rename cycle, one symbol renamed to two targets, or a `DISTINCT` pair the renames pool together. `taxjson ticker-map --suggest --write` appends suggested lines. `taxjson format-map` lays the file out the way `taxjson init` writes it: a short header, then the rules in groups, each under a `## --- <Group> ---` heading — Spellings (`GLOBAL`, an undated `RENAME`), Listings of one security (`TOBASE`, `DISTINCT`), Clean-up (`DELETE`), Dated events (a dated `RENAME`, `JOURNAL`), Lookups (`QUOTE`, `EXTRACT`, `CRYPTO`, `T1135` and the market lists), then Retired (`TRADINGVIEW`) and Unrecognized (lines `taxjson run` cannot use, kept as written) when there are any. Your order is kept within a group, a comment directly above a line moves with it, and the parsed map must stay identical (`src/taxjson/lib/ticker_map_format.py` — `format_map`, `GROUPS`). The parsers are `src/taxjson/bin/taxjson_ticker_map.py` — `_parse_map_file`, `merge_renames`; `src/taxjson/lib/ticker_map.py` — `parse_side_line`, `RENAME_KEYWORDS`, `SIDE_KEYWORDS`, `MARKET_KEYWORDS`.
+The project's one mapping file, at the project root; one rule per line, symbols case-insensitive, notes after `#`. `taxjson run` refuses a map with a malformed line, a rename cycle, one symbol renamed to two targets, or a `DISTINCT` pair the renames pool together. `taxjson ticker-map --suggest --write` appends suggested lines. ticker.map holds standing truths only: a ticker change or a journal between two listings happens on a date and is a `.tt` line of an account, date first (`RENAME <date> OLD NEW`, `JOURNAL <date> FROM TO <qty>`; see [.tt files](#tt-files)). A map that still has the legacy `JOURNAL` or dated `RENAME` lines works (`JOURNAL` is read as `TOBASE`), with one Warning per run. `taxjson format-map` lays the file out the way `taxjson init` writes it: a short header, then the rules in groups, each under a `## --- <Group> ---` heading — Spellings (`GLOBAL`, an undated `RENAME`), Listings of one security (`TOBASE`, `DISTINCT`), Clean-up (`DELETE`), Lookups (`QUOTE`, `EXTRACT`, `CRYPTO`, `T1135` and the market lists), then Retired (`TRADINGVIEW`) and Unrecognized (lines `taxjson run` cannot use, kept as written) when there are any. It also migrates the dated events: each `JOURNAL A B` becomes `TOBASE A B`, and each dated `RENAME OLD NEW YYYY-MM-DD [late=…]` moves, with its comments, to `inputs/<account>/renames.tt` as `RENAME YYYY-MM-DD OLD NEW [late=…]` — one file, in the first account whose books carry the change (else the only account, else the first taxable one): a `.tt` RENAME applies to every account. The dry run shows the map diff and the `.tt` additions; `--check` fails while a migration is pending. Your order is kept within a group, a comment directly above a line moves with it, and the parsed map (plus the moved lines) must mean the same (`src/taxjson/lib/ticker_map_format.py` — `format_map`, `GROUPS`, `Moved`; `src/taxjson/lib/dated_events.py` — `home_account`). The parsers are `src/taxjson/bin/taxjson_ticker_map.py` — `_parse_map_file`, `merge_renames`; `src/taxjson/lib/ticker_map.py` — `parse_side_line`, `RENAME_KEYWORDS`, `SIDE_KEYWORDS`, `MARKET_KEYWORDS`.
 
 ### Rename rules
 
@@ -407,11 +407,11 @@ The project's one mapping file, at the project root; one rule per line, symbols 
 - **When:** an interlisted share you trade on both lines that the run did not join itself (`taxjson ticker-map --suggest` proposes it).
 - **Example:** `TOBASE ZZQ.US ZZQ.TO`
 
-#### `JOURNAL`
+#### `JOURNAL` (legacy)
 - **Form:** `JOURNAL FROM TO`
-- **Meaning:** like `TOBASE`, and also nets the two legs together in the holdings view (a Norbert's Gambit pair of one fund's USD and CAD units). A Canadian run adds this line itself for a Questrade currency journal (BRW) the parser pairs; a line of yours naming either listing wins. The missing-history checks do not need it: a journal the books show (a join of the run, a Questrade pair, RBC's J~ reference on the two transfer legs, folded onto one symbol by a `TOBASE` line as well) reads that day's buys first.
+- **Meaning:** read as `TOBASE FROM TO` (one security), with one Warning per run; `taxjson format-map --write` rewrites it. It no longer nets the two listings in the holdings view: a journal's own transfer legs move the units — the broker's (a Questrade BRW pair, RBC's TFR legs, IB's InterDepot) or, when the export lacks them, a `.tt` line `JOURNAL <date> FROM TO <qty>`. The missing-history checks read a journal the books show (a join of the run, a Questrade pair, RBC's J~ reference on the two transfer legs, a `.tt` JOURNAL line) with that day's buys first.
 - **Country:** both.
-- **Example:** `JOURNAL ZZG.U.TO ZZG.TO`
+- **Example:** `JOURNAL ZZG.U.TO ZZG.TO` (write `TOBASE ZZG.U.TO ZZG.TO`)
 
 #### `DELETE`
 - **Form:** `DELETE SYMBOL`
@@ -426,10 +426,10 @@ The project's one mapping file, at the project root; one rule per line, symbols 
 - **Example:** `DISTINCT ZZR.TO ZZR.US`
 
 #### `RENAME`
-- **Form:** `RENAME OLD NEW YYYY-MM-DD [late=fold|late=separate]`
-- **Meaning:** a ticker change on that date, booked as an event: the pool (US: the lots and holding periods) carries from OLD to NEW. A trade in OLD after the date is listed by `taxjson renames` and stops `run --strict` until `late=fold` (book it as NEW) or `late=separate` (another company reusing the ticker). Without a date, `RENAME OLD NEW` is `GLOBAL OLD NEW`.
+- **Form:** `RENAME OLD NEW` (undated); legacy: `RENAME OLD NEW YYYY-MM-DD [late=fold|late=separate]`
+- **Meaning:** without a date, `GLOBAL OLD NEW`. The dated form is legacy: a ticker change on a date is a `.tt` line `RENAME YYYY-MM-DD OLD NEW [late=…]` (the `.tt` RENAME action below). A dated line here still works the same way, with one Warning per run; `taxjson format-map --write` moves it to a `.tt` file.
 - **Country:** both.
-- **Example:** `RENAME ZZOLD.US ZZNEW.US 2025-04-01 late=fold`
+- **Example:** `RENAME ZZOLD.US ZZNEW.US` · legacy `RENAME ZZOLD.US ZZNEW.US 2025-04-01 late=fold`
 
 ### Lookups (change no symbol in the books)
 
@@ -507,7 +507,7 @@ The lists taxjson cannot read from an export ship in `src/taxjson/data/markets.t
 
 ## .tt files
 
-Hand-entered rows, any `*.tt` file in `inputs/<account>/`. One space-separated line per row; `#` starts a comment; numbers take a decimal point (a thousands comma is fine, a decimal comma is refused); symbols are upper-cased and carry their listing suffix (`.TO`, `.US`; options in OCC form). A line has one date, used as both trade and settle date: write the date that matches `tax_date`. Rows at one date and time are taken in file order. Validate a file with `taxjson-convert-tt --account margin inputs/margin/x.tt`. The parser is `src/taxjson/bin/taxjson_convert_tt.py` — `parse_tt_line`, `parse_opening_line`, `parse_inkind_line`, `expand_acquired`, `_VALID_ACTIONS`, `_SUGAR_ACTIONS`.
+Hand-entered rows, any `*.tt` file in `inputs/<account>/`. One space-separated line per row; `#` starts a comment; numbers take a decimal point (a thousands comma is fine, a decimal comma is refused); symbols are upper-cased and carry their listing suffix (`.TO`, `.US`; options in OCC form). A line has one date, used as both trade and settle date: write the date that matches `tax_date`. Rows at one date and time are taken in file order. Validate a file with `taxjson-convert-tt --account margin inputs/margin/x.tt`. The parser is `src/taxjson/bin/taxjson_convert_tt.py` — `parse_tt_line`, `parse_opening_line`, `parse_inkind_line`, `parse_journal_line`, `parse_rename_line`, `expand_acquired`, `_VALID_ACTIONS`, `_SUGAR_ACTIONS`, `_EVENT_ACTIONS`. The dated events (`JOURNAL`, `RENAME`) are written date first with no time column; `taxjson run` books them (`src/taxjson/lib/dated_events.py` — `read_declarations`, `settle_journals`, `write_sidecars`) and records each in `work/dated_events.state` with its source (`tt`, `map`, `ib-conid`, `broker`) and place.
 
 #### `BUYSELL`
 - **Form:** `BUYSELL DATE TIME SYMBOL QTY CUR PRICE TOTAL [FEE] [xSIZE]`
@@ -538,6 +538,16 @@ Hand-entered rows, any `*.tt` file in `inputs/<account>/`. One space-separated l
 - **Form:** `INKIND DATE SYMBOL QTY CUR PRICE [TOTAL] [plan=KIND]` (no time column), in a taxable account's folder; or `INKIND DATE SYMBOL QTY plan=own` (no value).
 - **Meaning:** declares and values an in-kind move between this taxable account and a registered plan (an RRSP or TFSA contribution, a withdrawal; US: an IRA distribution). QTY is signed as the shares move in this account: negative = out to the plan, positive = back from it. PRICE is the value per share in CUR; give `0` and a TOTAL to state the whole value. The line names this account's transfer row of that security and quantity nearest DATE (within 10 days) and books it as in kind, dated DATE: with the plan's transfer row of the same quantity (it settles an ambiguous pair the run would not book on its own; `plan=` picks the plan's leg), else the plan's rows that add up to it (a delivery in parts), else as a move to a plan outside the project — `plan=` names that plan (`rrsp`, `tfsa`, `ira` ...). `plan=own` declares the row a move of your own: never in kind, and it no longer makes another pair ambiguous or a delivery in parts suspect. `plan=` needs a value; a value that is not a finite amount is refused. It is never a row of the books; a line matching no transfer row is listed in the run's in-kind warning. The parser is `parse_inkind_line`.
 - **Example:** `INKIND 2025-03-14 ZZQ.TO -100 CAD 15.00` (100 shares contributed at 15.00 each); `INKIND 2025-03-14 ZZQ.TO -100 plan=own` (that transfer-out was a move between your own accounts)
+
+#### `JOURNAL`
+- **Form:** `JOURNAL DATE FROM TO QTY` (no time column)
+- **Meaning:** QTY units moved from listing FROM to listing TO of one security inside this account (a Norbert's gambit's journal, a TSX line moved to its NYSE line). Booked as the move's two transfer legs, kept with the account's transfer evidence (`work/<account>_tt-journal_transfers.json`), never a purchase or a sale: the two listings are joined as one security (as a ticker.map `TOBASE` line would; the base-currency listing is kept), the holdings view moves the units, the missing-history checks read the day as a journal. Both countries. When the broker's rows already hold both legs (the account's out-leg of FROM and in-leg of TO, the same quantity, within 5 business days) the line is a duplicate: an Info line, nothing booked twice; with one leg there, only the other leg is booked. A ticker.map rule naming either listing wins; a `DISTINCT` line keeps them apart (a Warning). Refused in a crypto account.
+- **Example:** `JOURNAL 2025-03-05 ZZG.TO ZZG.U.TO 100`
+
+#### `RENAME`
+- **Form:** `RENAME DATE OLD NEW [late=fold|late=separate]` (no time column)
+- **Meaning:** a ticker change on that date, booked as an event: the pool (US: the lots and holding periods) carries from OLD to NEW. Written in any account's .tt file, it applies to every account whose books hold OLD before the date and is recorded once (a second line for the same change is an Info line; one renaming OLD to another symbol, here or in ticker.map, is refused). A trade in OLD after the date is listed by `taxjson renames` and stops `run --strict` until `late=fold` (book it as NEW) or `late=separate` (another company reusing the ticker). IB's one contract id under two symbols is booked as this event without a line (a Warning names the `DISTINCT` and `late=separate` way out); a line for the change books it instead.
+- **Example:** `RENAME 2025-04-01 ZZOLD.US ZZNEW.US late=fold`
 
 #### `SPLIT`
 - **Form:** `SPLIT DATE TIME OLD NEW RATIO`

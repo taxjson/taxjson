@@ -139,16 +139,30 @@ class TestIbTickerChangeIsADatedRename(unittest.TestCase):
             + FII_H + _fii('QZNB, QZOA', '990000779', 'US9990007791'))
 
     @rule("CA-ACB-RENAME")
-    def test_dated_rename_suggested(self):
+    def test_dated_rename_booked_with_the_way_out(self):
+        # One contract id is strong evidence: the account-level pass
+        # BOOKS the change as a dated event (v0.24) and names the way out.
         err = self._err(self.BODY)
-        self.assertIn('`RENAME QZOA.US QZNB.US 2025-05-12`', err)
+        self.assertIn('booked as a ticker change', err)
+        self.assertIn('QZOA.US -> QZNB.US on 2025-05-12', err)
+        self.assertIn('`DISTINCT QZOA.US QZNB.US`', err)
+        self.assertIn('`RENAME 2025-05-12 QZOA.US QZNB.US late=separate`',
+                      err)
         self.assertNotIn('GLOBAL', err)
+
+    @rule("CA-ACB-RENAME")
+    def test_one_statement_alone_prints_the_tt_line(self):
+        # A statement parsed on its own (no account pass) books nothing:
+        # the .tt line to add, date first.
+        _p, _txs, err = _parse_ib(self.BODY)
+        self.assertIn('`RENAME 2025-05-12 QZOA.US QZNB.US`', err)
+        self.assertNotIn('booked as a ticker change', err)
 
     def test_quiet_once_ticker_map_has_the_dated_rename(self):
         self.assertNotIn('several symbols', self._err(
             self.BODY, 'RENAME QZOA.US QZNB.US 2025-05-12\n'))
 
-    def test_suggest_reads_the_dated_line(self):
+    def test_suggest_offers_nothing_for_a_booked_change(self):
         from taxjson.lib import ticker_map_suggest as TS
         err = self._err(self.BODY)
         with tempfile.TemporaryDirectory() as td:
@@ -156,8 +170,18 @@ class TestIbTickerChangeIsADatedRename(unittest.TestCase):
             (root / 'work').mkdir()
             (root / 'work' / 'margin_ib.json.diag').write_text(err)
             offer, _ = TS.pending(root)
-            self.assertEqual([s.line for s in offer],
-                             ['RENAME QZOA.US QZNB.US 2025-05-12'])
+            self.assertEqual([s.line for s in offer], [])
+
+    def test_suggest_lists_the_tt_line_of_a_lone_statement(self):
+        from taxjson.lib import ticker_map_suggest as TS
+        _p, _txs, err = _parse_ib(self.BODY)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / 'work').mkdir()
+            (root / 'work' / 'margin_ib.json.diag').write_text(err)
+            offer, _ = TS.pending(root)
+            self.assertEqual([(s.line, s.tt) for s in offer],
+                             [('RENAME 2025-05-12 QZOA.US QZNB.US', True)])
             (root / 'ticker.map').write_text(
                 'RENAME QZOA.US QZNB.US 2025-05-12\n')
             offer, skipped = TS.pending(root)
@@ -241,7 +265,7 @@ class TestSymbolCollision(unittest.TestCase):
         self.assertFalse(c.template)
         self.assertEqual(c.extract, 'EXTRACT DLR CURRENCY ETF | USD | '
                                     'QZD.U.TO')
-        self.assertEqual(c.journal, 'JOURNAL QZD.U.TO QZD.TO')
+        self.assertEqual(c.journal, 'TOBASE QZD.U.TO QZD.TO')
         words = c.extract.split('|')[0][len('EXTRACT '):].strip()
         for d in (RBC_OLD, RBC_OUT, RBC_IN, QT_CODE, QT_UNIT):
             self.assertTrue(extract_words_match(words, d), d)
@@ -263,7 +287,7 @@ class TestSymbolCollision(unittest.TestCase):
         cs = XL.collisions(rows, names, shown, legs, base_currency='USD')
         self.assertEqual([c.symbol for c in cs], ['QZD.US'])
         # A US base currency: the CAD line maps onto the USD unit.
-        self.assertEqual(cs[0].journal, 'JOURNAL QZD.TO QZD.U.TO')
+        self.assertEqual(cs[0].journal, 'TOBASE QZD.TO QZD.U.TO')
         r = XL.analyze(legs, names, shown, base_currency='USD',
                        collided=['QZD.US'])
         self.assertEqual(r, {'joined': [], 'suggested': []})
@@ -314,12 +338,12 @@ class TestSymbolCollision(unittest.TestCase):
             self.assertEqual(
                 [(s.line, s.template) for s in offer],
                 [('EXTRACT DLR CURRENCY ETF | USD | QZD.U.TO', False),
-                 ('JOURNAL QZD.U.TO QZD.TO', False),
+                 ('TOBASE QZD.U.TO QZD.TO', False),
                  ('EXTRACT <words that name it> | USD | QZK.U.TO', True)])
             self.assertEqual(len(skipped), 1)
             (root / 'ticker.map').write_text(
                 'EXTRACT DLR CURRENCY ETF | USD | QZD.U.TO\n'
-                'JOURNAL QZD.U.TO QZD.TO\n')
+                'TOBASE QZD.U.TO QZD.TO\n')
             offer, _ = TS.pending(root)
             self.assertEqual([s.line for s in offer],
                              ['EXTRACT <words that name it> | USD | '
@@ -386,8 +410,11 @@ class TestCollisionRun(unittest.TestCase):
             lines = [s['line'] for s in js['suggestions']]
             self.assertEqual(lines, [
                 'EXTRACT DLR CURRENCY ETF | USD | QZD.U.TO',
-                'JOURNAL QZD.U.TO QZD.TO'])
-            self.assertFalse(any(x.startswith('TOBASE') for x in lines))
+                'TOBASE QZD.U.TO QZD.TO'])
+            # (a JOURNAL line is legacy: the separated unit's CAD line
+            # is a TOBASE line; never one through the colliding .US)
+            self.assertFalse(any(x.startswith('TOBASE') and 'QZD.US' in x
+                                 for x in lines))
         with tempfile.TemporaryDirectory() as td:
             root = self._project(td, 'EXTRACT DLR CURRENCY ETF | USD | '
                                      'QZD.U.TO\nJOURNAL QZD.U.TO QZD.TO\n')

@@ -600,7 +600,7 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
                     f"({a.date}) pairs with {b.symbol} in "
                     f"+{b.quantity:g} ({b.date})",
                     [f"If these are the SAME security's two listings, "
-                     f"add `TOBASE {_frm} {_to}` (or JOURNAL) to "
+                     f"add `TOBASE {_frm} {_to}` to "
                      f"ticker.map so the legs net as one symbol; if they "
                      f"are different securities, ignore this note."],
                     legacy=f"NOTE: possible unmapped cross-listing journal "
@@ -608,7 +608,7 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
                     f"{a.quantity:g} ({a.date}) pairs with "
                     f"{b.symbol} in +{b.quantity:g} ({b.date}). If "
                     f"these are the SAME security's two listings, "
-                    f"add `TOBASE {_frm} {_to}` (or JOURNAL) to "
+                    f"add `TOBASE {_frm} {_to}` to "
                     f"ticker.map so the legs net as one symbol; if "
                     f"they are different securities, ignore this "
                     f"note.")

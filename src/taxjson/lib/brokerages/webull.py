@@ -838,8 +838,8 @@ class WebullBrokerage(BaseBrokerage):
         earlier yearly export (A2-1067 / A2-1070): `transactions` is
         every export of the folder, and a pair is named only when the
         row that takes the new symbol short is one of `own` (this
-        file's rows), so it is named once. Name the pair; a dated ticker.map
-        RENAME joins them."""
+        file's rows), so it is named once. Name the pair; a dated .tt
+        RENAME line (lib/dated_events) joins them."""
         own_ids = ({id(t) for t in own} if own is not None
                    else {id(t) for t in transactions})
         groups: Dict[tuple, Dict[str, List[Dict[str, Any]]]] = {}
@@ -875,10 +875,10 @@ class WebullBrokerage(BaseBrokerage):
                       f"Description {desc!r} with {prev_sym} — likely a "
                       f"ticker change Webull reported without a "
                       f"reorganization row. If so, add the dated change "
-                      f"`RENAME {prev_sym} {sym} {rows[0]['date']}` (the "
+                      f"`RENAME {rows[0]['date']} {prev_sym} {sym}` (the "
                       f"first {sym} row here; use the broker's change date "
-                      f"if you know it) to ticker.map so both are one "
-                      f"position (`taxjson renames`).")
+                      f"if you know it) to a .tt file of this account so "
+                      f"both are one position (`taxjson renames`).")
 
     @staticmethod
     def _find_header(lines):

@@ -42,16 +42,19 @@ from taxjson.lib.ticker_map import map_ticker
 #                       when converting to base currency (the main
 #                       pipeline). The raw holdings view keeps the two
 #                       listings separate.
-#   JOURNAL from to   — like TOBASE in the main pipeline, AND nets the
-#                       two legs together in the holdings view (a
-#                       Norbert's Gambit pair, e.g. SAMPLF.U.TO / SAMPLF.TO).
+#   JOURNAL from to   — legacy: read as TOBASE (one security). The
+#                       journal itself is a dated event now, a .tt line
+#                       `JOURNAL <date> FROM TO <qty>` (lib/dated_events);
+#                       `taxjson format-map --write` rewrites the line.
 #   DELETE  from      — nuke that ticker's transactions (a pure artifact).
 #   DISTINCT a b      — declares two look-alike listings are SEPARATE
 #                       securities (a CDR vs its US underlying); changes
 #                       no symbol, silences the scan's MAP-GAP nag.
 #   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
-#                     — a ticker change on that date: a DATED event
-#                       (lib/renames). Without a date it is GLOBAL.
+#                     — legacy: a ticker change on that date, a DATED
+#                       event (lib/renames) now written in a .tt file as
+#                       `RENAME <date> OLD NEW` (`taxjson format-map
+#                       --write` moves it). Without a date it is GLOBAL.
 # Four more keywords are lookups that change no symbol (lib/ticker_map,
 # which parses them): QUOTE (Yahoo quote spelling), CRYPTO (a coin's
 # Yahoo id), EXTRACT (a parser symbol-extraction override) and T1135 (a
@@ -115,6 +118,12 @@ def _parse_map_text(text: str, name: str = "ticker.map",
     notes: List[str] = []
     buckets = {"GLOBAL": glob, "TOBASE": tobase, "JOURNAL": journal,
                "RENAME": glob}
+    # The effective map `taxjson run` writes (lib/cross_listings) carries
+    # the .tt RENAME declarations with their origin in a note (`# .tt:
+    # inputs/<acct>/<file>.tt:<n>`, lib/dated_events): read back as that
+    # declaration's place and source.
+    from taxjson.lib.dated_events import TT_ORIGIN_RE
+    _effective = str(name).endswith(".effective")
     dated: list = []
     undated_rename = set()
     # from -> (target, where, line) of its first rename rule
@@ -172,8 +181,15 @@ def _parse_map_text(text: str, name: str = "ticker.map",
                     notes.append(f"{where}: RENAME renames a symbol to "
                                  f"itself (no effect): {line!r}")
                     continue
-                dated.append(DatedRename(syms[0], syms[1], _d, _late,
-                                         where, line))
+                _origin = (TT_ORIGIN_RE.match(raw.split('#', 1)[1])
+                           if _effective and '#' in raw else None)
+                if _origin:
+                    dated.append(DatedRename(
+                        syms[0], syms[1], _d, _late, _origin.group(1),
+                        _origin.group(2).strip(), source="tt"))
+                else:
+                    dated.append(DatedRename(syms[0], syms[1], _d, _late,
+                                             where, line))
                 continue
             want = 1 if kw == "DELETE" else 2
             if len(syms) > want:
@@ -216,6 +232,13 @@ def _parse_map_text(text: str, name: str = "ticker.map",
                         continue
                     first_rule.setdefault(frm, (to, where, line))
                     buckets[kw][frm] = to
+                    if kw == "JOURNAL":
+                        # Legacy: a JOURNAL line is a TOBASE line (one
+                        # security); its holdings netting is done by the
+                        # journal's dated legs (lib/dated_events). Kept in
+                        # `journal` too, for the legacy note and the
+                        # missing-history walk's order.
+                        tobase[frm] = to
                     if kw == "RENAME":
                         undated_rename.add(frm)
                 else:
@@ -583,9 +606,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "ticker.map keywords (one rule per line, notes after `#`):\n"
-            "  renames:  GLOBAL from to | TOBASE from to | JOURNAL from to |\n"
-            "            DELETE sym | DISTINCT a b |\n"
-            "            RENAME from to [YYYY-MM-DD [late=fold|late=separate]]\n"
+            "  renames:  GLOBAL from to | TOBASE from to | DELETE sym |\n"
+            "            DISTINCT a b | RENAME from to (undated: GLOBAL)\n"
+            "  legacy (dated events now go in a .tt file, date first):\n"
+            "            JOURNAL from to (read as TOBASE) |\n"
+            "            RENAME from to YYYY-MM-DD [late=fold|late=separate]\n"
             "  lookups (change no symbol; read by other tools):\n"
             "            QUOTE SYMBOL YAHOO_SYMBOL [QTY_RATIO]   price lookups\n"
             "            CRYPTO SYMBOL YAHOO_ID                a coin's Yahoo id\n"

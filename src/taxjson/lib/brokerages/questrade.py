@@ -803,7 +803,8 @@ def _detect_qt_ticker_changes(ctx: QtAccountContext, by_name, where) -> None:
                 ctx.messages.append(
                     f"warning: ATTENTION: {where.get(b, '?')}: Questrade "
                     f"symbol {a} looks renamed to {b} — if they are one "
-                    f"security add to ticker.map:  GLOBAL {a} {b}  — {a} "
+                    f"security, add to a .tt file of this account:  "
+                    f"RENAME {tb[0][0]} {a} {b}  — {a} "
                     f"stops on {ta[-1][0]} with {open_a:g} share(s) still "
                     f"open, and {b} (same Description {key!r}) {how}. "
                     f"That looks like a ticker change booked without a "
@@ -1931,7 +1932,7 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"security ({', '.join(journals[:6])}) — booked as "
                   f"TRANSFER legs; in a Canadian project `taxjson run` "
                   f"joins a paired journal's two lines as one security, "
-                  f"as a ticker.map JOURNAL rule (e.g. JOURNAL "
+                  f"as a ticker.map TOBASE line (e.g. TOBASE "
                   f"SAMPLF.U.TO SAMPLF.TO) would, so the pair nets out.")
         self.emit_skip_summary(shown_name(path))
         return transactions

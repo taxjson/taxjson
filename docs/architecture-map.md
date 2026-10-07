@@ -155,21 +155,29 @@ distributions are added, and the result is validated: the account's
 
 ## ticker.map, renames, cross-listings and symbol codes
 
-ticker.map is one keyword-prefixed rules file at the project root: renames,
-consolidations of two listings (TOBASE), journal pairs, deletions, EXTRACT
-fixes, T1135 countries. A rename is a dated event: the position and its cost
-carry to the new ticker on that date. Two listings joined by a transfer
-journal become one security, and Questrade internal codes are resolved to real
-tickers from the other accounts' evidence.
+ticker.map is one keyword-prefixed rules file at the project root holding
+standing truths: spellings, consolidations of two listings (TOBASE),
+deletions, EXTRACT fixes, T1135 countries. A ticker change and a journal
+between two listings are dated events, `.tt` lines of an account written date
+first (`RENAME <date> OLD NEW`, `JOURNAL <date> FROM TO <qty>`): the position
+and its cost carry to the new ticker on that date; the journal's legs join the
+two listings as one security. The legacy ticker.map JOURNAL (read as TOBASE)
+and dated RENAME lines still work; `taxjson format-map --write` migrates
+them. Two listings joined by a transfer journal become one security, and
+Questrade internal codes are resolved to real tickers from the other accounts'
+evidence.
 
 - `src/taxjson/lib/ticker_map.py` — `find_ticker_map`, `read_side_rules`, `parse_side_line`, `SideRules`, `map_ticker`, `refuse_legacy_map_file`: reading ticker.map and mapping one symbol.
 - `src/taxjson/bin/taxjson_ticker_map.py` — `apply_mapping`, `load_map_file`, `map_file_problems`, `merge_renames`, `bare_target_warnings`, `guard_option_listing_collisions`, `named_symbols`: the `taxjson-ticker-map` stage applied to a book; the symbols a map's lines name (`lookups=True`: a lookup line's symbol too).
-- `src/taxjson/lib/renames.py` — `DatedRename`, `rename_events`, `apply_dated_renames`, `late_rows`, `unresolved_late`, `render`: renames as dated events and `taxjson renames`.
-- `src/taxjson/lib/cross_listings.py` — `gather`, `analyze`, `map_lines`, `effective_map_text`, `joined_note`, `companies_differ`, `collisions`, `extract_words`, `collision_note`, `journal_wording`, `_explicit_journal`, `_journal_names_verdict`, `business_days`: two listings joined by their transfer journal (a broker's explicit journal pair by its legs' own names; the window in business days); a symbol naming two companies (a fund's US-dollar unit beside an NYSE stock) and the EXTRACT line that separates them; a Questrade currency journal the parser paired, joined as a JOURNAL line (Canada only).
+- `src/taxjson/lib/renames.py` — `DatedRename`, `rename_events`, `apply_dated_renames`, `late_rows`, `unresolved_late`, `render`, `row_source`, `row_source_id`: renames as dated events and `taxjson renames`.
+- `src/taxjson/lib/dated_events.py` — `read_declarations`, `check_against_map`, `settle_journals`, `write_sidecars`, `journal_legs`, `effective_lines`, `tt_renames`, `rename_records`, `state_doc`, `read_state`, `legacy_note`, `home_account`, `Journal`, `STATE`: the `.tt` JOURNAL and RENAME lines of every account (checked up front), a journal settled against the broker's own legs and booked as transfer evidence (work/<acct>_tt-journal_transfers.json), the renames written into the run's effective map, and the record of every dated event (work/dated_events.state, each with its source and place).
+- `src/taxjson/bin/taxjson_convert_tt.py` — `parse_journal_line`, `parse_rename_line`, `_EVENT_ACTIONS`: the two dated-event `.tt` lines (date first, never rows of the converted file).
+- `src/taxjson/lib/cross_listings.py` — `gather`, `analyze`, `map_lines`, `effective_map_text`, `joined_note`, `companies_differ`, `collisions`, `extract_words`, `collision_note`, `journal_wording`, `_explicit_journal`, `_journal_names_verdict`, `business_days`: two listings joined by their transfer journal (a broker's explicit journal pair by its legs' own names; the window in business days); a symbol naming two companies (a fund's US-dollar unit beside an NYSE stock) and the EXTRACT line that separates them; a Questrade currency journal the parser paired, joined as a TOBASE line (Canada only); a `.tt` JOURNAL line's pair joined on the user's word (`declared`, `_claim`; both countries), its record carrying `source`.
 - `src/taxjson/lib/symbol_codes.py` — `resolve`, `project_evidence`, `names_agree`, `is_code`, `read_state`, `codes_note`, `exact_name`, `questrade_name`, `rbc_name`, `_CONFIRM_RE`, `_cut_account_ref`: Questrade internal codes resolved to tickers; the security names (dealer confirmation wording and a transfer's account reference cut) that codes and cross-listings compare.
 - `src/taxjson/lib/listing_suffix.py` — `scan_questrade`, `scan_rbc`, `project_evidence`, `resolve`, `fixes`, `corrections_note`, `suggestions`: a Questrade / RBC bare ticker's listing read from the books, not the row currency (applied by `taxjson-brokerage --listing-fixes`).
-- `src/taxjson/bin/taxjson_run.py` — `stage_cross_listings`, `stage_symbol_codes`, `stage_listing_suffix`, `_listing_suffix_stale`, `cmd_ticker_map`, `cmd_renames`, `_check_renamed_late`: where the run and the commands use them.
-- `src/taxjson/lib/ticker_map_format.py` — `format_map`, `init_template`, `GROUPS`, `meaning`, `commented_rule`, `FormatError`: `taxjson format-map` (ticker.map in keyword groups, comments moved with their line, the parsed map kept identical) and the ticker.map `taxjson init` writes; `src/taxjson/bin/taxjson_run.py` — `cmd_format_map`.
+- `src/taxjson/bin/taxjson_run.py` — `stage_cross_listings`, `stage_dated_events`, `_read_dated_events`, `_write_dated_events_state`, `stage_symbol_codes`, `stage_listing_suffix`, `_listing_suffix_stale`, `cmd_ticker_map`, `cmd_renames`, `_check_renamed_late`: where the run and the commands use them.
+- `src/taxjson/lib/brokerages/ib_extractor.py` — `_warn_stock_aliases`, `_book_conid_renames`, `_project_tt_renames`, `_project_distinct`: IB's one contract id under two symbols booked as a rename event (event_source `ib-conid`).
+- `src/taxjson/lib/ticker_map_format.py` — `format_map`, `init_template`, `GROUPS`, `meaning`, `commented_rule`, `FormatError`, `Moved`, `_migrate_items`: `taxjson format-map` (ticker.map in keyword groups, comments moved with their line, the parsed map kept identical; the legacy dated events migrated: JOURNAL to TOBASE, a dated RENAME moved out as a `.tt` line) and the ticker.map `taxjson init` writes; `src/taxjson/bin/taxjson_run.py` — `cmd_format_map`, `_migration_notes`.
 - `src/taxjson/lib/ticker_map_suggest.py` — `gather`, `pending`, `Suggestion`, `from_diag`, `from_cross_listings`, `from_symbol_codes`, `from_listing_suffix`, `clean_extract`, `books_symbols`, `covered_by_suggestion`, `appended_text`: `taxjson ticker-map --suggest` and `--write` (a template line is listed, never written; a conditional hint only when the books hold every symbol it joins).
 - `src/taxjson/lib/t1135_country.py` — `parse_country`, `override_value`, `NOT_FOREIGN`: the country word of a T1135 line in ticker.map.
 

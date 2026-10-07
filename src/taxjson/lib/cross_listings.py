@@ -61,7 +61,7 @@ suggestion. A `.US` symbol whose rows name two different companies, one
 of them a Canadian-listed fund's US-dollar units (a TSX fund's US-dollar
 unit booked `.US` beside an NYSE stock of the same root), is a SYMBOL
 COLLISION (`collisions`): a Warning on the run's console and the EXTRACT
-line (plus a JOURNAL) that gives the fund's rows their own symbol, never
+line (plus a TOBASE) that gives the fund's rows their own symbol, never
 a join through that symbol. The
 joins are written to work/cross_listings.state (JSON) and appended, as
 TOBASE lines, to the effective map the merge stages read
@@ -75,8 +75,9 @@ A broker's CURRENCY journal (Questrade's BRW "JOURNAL POSITION TO USD" /
 "FROM CAD" pair, which the parser pairs within one account and marks
 with a `journal_pair` id) moves units between the CAD and USD lines of
 one security. In a Canadian project (tax-logic CA-XLIST-03) the two
-lines are joined as a ticker.map `JOURNAL FROM TO` line would — one
-security for the cost and the loss rules, netted in the holdings view —
+lines are joined as a ticker.map `TOBASE FROM TO` line would — one
+security for the cost and the loss rules, the journal's legs moving the
+units in the holdings view —
 on the parser's pairing alone (the legs share one description). The
 user's map still wins, and a listing joined to two others is only
 suggested. In a US project those legs are ordinary transfer legs.
@@ -123,6 +124,9 @@ class Leg:
     # reference both legs of one journal share ("" when none).
     journal: str = ""
     ref: str = ""
+    # A leg a .tt JOURNAL line booked (lib/dated_events, broker "tt"):
+    # that journal's pair id.
+    decl: str = ""
 
 
 @dataclass
@@ -141,12 +145,19 @@ class Pair:
     # journal pair, _explicit_journal), "" otherwise.
     journal: str = ""
 
+    @property
+    def source(self) -> str:
+        """"tt" for a pair a .tt JOURNAL line declared, else "broker"."""
+        return "tt" if self.journal == "tt" else "broker"
+
     def record(self) -> Dict[str, Any]:
-        return {"from": self.frm, "to": self.to,
+        return {"from": self.frm, "to": self.to, "source": self.source,
                 **({"kind": self.kind} if self.kind != "TOBASE" else {}),
                 **({"journal": self.journal} if self.journal else {}),
                 **({"via": self.extra["via"]} if self.extra.get("via")
                    else {}),
+                **({"where": self.extra["where"]}
+                   if self.extra.get("where") else {}),
                 "out": {"account": self.out.account,
                         "broker": self.out.broker,
                         "symbol": self.out.symbol, "date": self.out.date,
@@ -413,6 +424,32 @@ def _names_verdict(nx: Set[Tuple[str, ...]], ny: Set[Tuple[str, ...]],
     return ""
 
 
+def _claim(legs: List[Leg], j: Any, sym: str, sign: int) -> Optional[Leg]:
+    """The leg of a declared journal `j` (lib/dated_events.Journal) on
+    listing `sym`, direction `sign`: the one its line booked, else the
+    broker's leg it duplicates (the account's, the same quantity, within
+    PAIR_DAYS business days of the line's date, the closest first)."""
+    for g in legs:
+        if (g.decl and g.decl == j.pair and g.symbol == sym
+                and g.quantity * sign > 0 and not g.used):
+            return g
+    jd = _d(j.date)
+    best = None
+    for g in legs:
+        if (g.used or g.decl or g.account != j.account or g.symbol != sym
+                or g.quantity * sign <= 0
+                or abs(abs(g.quantity) - j.quantity)
+                > max(_EPS, 1e-6 * j.quantity)):
+            continue
+        gd = _d(g.date)
+        if gd is None or jd is None:
+            continue
+        gap = business_days(gd, jd)
+        if gap <= PAIR_DAYS and (best is None or gap < best[0]):
+            best = (gap, g)
+    return best[1] if best else None
+
+
 def _explicit_journal(o: Leg, i: Leg) -> bool:
     """An explicit journal pair: one account at one broker, one day, the
     same quantity, both legs in that broker's journal wording
@@ -476,19 +513,39 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             base_currency: Optional[str] = None,
             days: int = PAIR_DAYS,
             collided: Iterable[str] = (),
-            currency_journals: bool = False) -> Dict[str, List[Pair]]:
+            currency_journals: bool = False,
+            declared: Iterable[Any] = ()) -> Dict[str, List[Pair]]:
     """{"joined": [...], "suggested": [...]}: the cross-listing journals
     the legs show (module docstring). A pair whose names name different
     companies (companies_differ) is neither joined nor suggested; a pair
     with a `collided` symbol (one symbol, two companies: `collisions`)
     is left to the collision's EXTRACT line. `currency_journals`: join
     the parser-paired currency journals as JOURNAL lines (Canada,
-    CA-XLIST-03; the caller gates the country)."""
+    CA-XLIST-03; the caller gates the country). `declared`: the .tt
+    JOURNAL lines (lib/dated_events.Journal) — each joins its two
+    listings on the user's word, in both countries (CA-XLIST-04 /
+    US-XLIST-03), with the legs it booked or the broker's legs it
+    found; the user's ticker.map still wins."""
     collided = {s.upper() for s in collided}
     named = {s.upper() for s in map_named}
     apart = {frozenset(x.upper() for x in pair) for pair in map_distinct}
     joined: List[Pair] = []
     suggested: List[Pair] = []
+    # -1. A journal the user declared in a .tt file: its legs (the ones
+    #     it booked, else the broker's it duplicates) are one pair.
+    for j in declared:
+        o = _claim(legs, j, j.frm, -1)
+        i = _claim(legs, j, j.to, +1)
+        if o is None or i is None:
+            continue
+        o.used = i.used = True
+        if (o.symbol in named or i.symbol in named
+                or frozenset((o.symbol, i.symbol)) in apart
+                or {o.symbol, i.symbol} & collided):
+            continue                    # the user's map decides
+        frm, to = tobase_direction(o.symbol, i.symbol, base_currency)
+        joined.append(Pair(o, i, frm, to, journal="tt",
+                           extra={"where": j.where}))
     # 0. A currency journal the parser paired (one account, one day, one
     #    description): its two lines are one security.
     if currency_journals:
@@ -665,7 +722,7 @@ class Collision:
     odd: str                        # the name of the rows to move
     extract: str                    # the EXTRACT line
     template: bool                  # extract has a placeholder to edit
-    journal: str = ""               # JOURNAL line for the moved rows
+    journal: str = ""               # TOBASE line for the moved rows
     why: str = ""                   # how the target / words were found
 
     def record(self) -> Dict[str, Any]:
@@ -779,7 +836,7 @@ def collisions(rows: List[Row], names: Dict[str, Set[Tuple[str, ...]]],
       words share two with it), none of another security's — a template
       with a placeholder when no run qualifies;
     * a transfer journal pairing the symbol with another listing of the
-      fund adds `JOURNAL <target> <listing>` (tobase_direction).
+      fund adds `TOBASE <target> <listing>` (tobase_direction).
     """
     from taxjson.lib.markets import (USD_UNITS_RE, strip_listing_suffix,
                                      usd_unit_listing)
@@ -843,7 +900,7 @@ def collisions(rows: List[Row], names: Dict[str, Set[Tuple[str, ...]]],
             if len(partners) == 1:
                 frm, to = tobase_direction(target, partners.pop(),
                                            base_currency)
-                journal = f"JOURNAL {frm} {to}"
+                journal = f"TOBASE {frm} {to}"
             out.append(Collision(sym, sh, wh, _display(g, shown), line,
                                  words is None, journal, why))
     return out
@@ -874,7 +931,9 @@ def map_lines(joined: Iterable[Pair]) -> List[str]:
             continue
         seen.add((p.frm, p.to))
         what = "currency journal" if p.kind == "JOURNAL" else "transfer"
-        out.append(f"{p.kind} {p.frm} {p.to}  # {what} {p.out.symbol} -> "
+        # (TOBASE for a currency journal too: a JOURNAL line is legacy,
+        # read as TOBASE — lib/dated_events)
+        out.append(f"TOBASE {p.frm} {p.to}  # {what} {p.out.symbol} -> "
                    f"{p.into.symbol} {p.out.date} ({p.out.account})")
     return out
 
@@ -902,22 +961,31 @@ def read_state(path: Path) -> Dict[str, List[Dict[str, Any]]]:
 
 
 def effective_map_text(ticker_map: Optional[Path],
-                       joined: Iterable[Pair]) -> Optional[str]:
+                       joined: Iterable[Pair],
+                       renames: Iterable[str] = ()) -> Optional[str]:
     """The map the merge stages read: the project's ticker.map as it is,
-    then the joins' TOBASE lines. None when there is neither."""
+    then the joins' TOBASE lines, then the ticker changes declared in .tt
+    files (`renames`: lib/dated_events.effective_lines). None when there
+    is none of them."""
+    from taxjson.lib.dated_events import EFFECTIVE_HEAD as _REN_HEAD
     lines = map_lines(joined)
+    renames = list(renames)
     base = ""
     if ticker_map is not None and Path(ticker_map).is_file():
         from taxjson.lib.cli_diag import read_text_utf8
         base = read_text_utf8(Path(ticker_map))
-    if not lines and not base:
+    if not lines and not base and not renames:
         return None
-    if not lines:
+    if not lines and not renames:
         return base
     if base and not base.endswith("\n"):
         base += "\n"
-    return base + ("\n" if base else "") + EFFECTIVE_HEAD + "\n" + \
-        "\n".join(lines) + "\n"
+    out = base
+    for head, block in ((EFFECTIVE_HEAD, lines), (_REN_HEAD, renames)):
+        if block:
+            out += ("\n" if out else "") + head + "\n" + \
+                "\n".join(block) + "\n"
+    return out
 
 
 def joined_note(account: str, joined: Iterable[Pair],
@@ -936,6 +1004,8 @@ def joined_note(account: str, joined: Iterable[Pair],
     for p in sorted(joined, key=lambda p: (p.out.date, p.frm)):
         if account not in (p.out.account, p.into.account):
             continue
+        if p.source == "tt":
+            continue        # the user's own .tt JOURNAL line (Info)
         k = (p.out.symbol, p.into.symbol, p.out.date)
         if k in seen:
             continue
@@ -948,8 +1018,9 @@ def joined_note(account: str, joined: Iterable[Pair],
                         f"journaled the units between the CAD and USD "
                         f"lines of one security "
                         f"({p.names[0] or p.names[1]!r}), booked as a "
-                        f"ticker.map JOURNAL line would (netted in the "
-                        f"holdings view); if they are not one security, "
+                        f"ticker.map TOBASE line would (the journal's "
+                        f"legs move the units in the holdings view); if "
+                        f"they are not one security, "
                         f"add `DISTINCT {p.out.symbol} {p.into.symbol}` "
                         f"to ticker.map")
             continue
