@@ -14110,8 +14110,9 @@ def cmd_journals(args: argparse.Namespace) -> None:
     how it was found and its state: joined (the map line that pools the
     two), suggested (the reason, and the `.tt` / ticker.map line that
     settles it) or refused (the reason, and the undo) — read from the
-    last run's work/ (lib/journals). `--pending` lists only the journals
-    not joined and exits 1 when there is one."""
+    last run's work/ (lib/journals). `--pending` lists only the pending
+    journals (suggested, or refused with no ticker.map line behind it)
+    and exits 1 when there is one."""
     from taxjson.lib.journals import JournalsError, render, report
     root = Path(args.dir).resolve()
     cfg = load_config(root)
@@ -14125,7 +14126,7 @@ def cmd_journals(args: argparse.Namespace) -> None:
              "The journals are read from the last run's work/ folder.")
     if args.pending:
         doc = dict(doc, journals=[j for j in doc["journals"]
-                                  if j["state"] != "joined"])
+                                  if j["pending"]])
     if getattr(args, "json", False):
         _json_out(doc)
     else:
@@ -21654,8 +21655,9 @@ def _build_parser(prog: str = "taxjson"
                       help="Only the journals dated in this year "
                            "(default: every year)")
     p_jn.add_argument("--pending", action="store_true",
-                      help="Only the journals not joined (suggested or "
-                           "refused); exit 1 when there is one")
+                      help="Only the pending journals (suggested, or "
+                           "refused with no ticker.map line of yours "
+                           "behind it); exit 1 when there is one")
     p_jn.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text (a stable schema: "
                            "docs/settings.md)")

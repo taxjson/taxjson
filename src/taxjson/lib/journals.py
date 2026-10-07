@@ -33,7 +33,10 @@ Each journal is in one state:
              inputs, or a ticker.map line);
   refused    kept apart: the reason, and how to undo it (remove the
              DISTINCT line, or the ticker.map line to add when the two
-             listings are one security after all).
+             listings are one security after all). A journal the user's
+             ticker.map keeps apart (a DISTINCT line, a line naming a
+             listing) is a decision made: listed, never pending; one
+             refused because its legs name two companies is pending.
 
 The JSON form (`--json`, FORMAT) is a stable schema: docs/settings.md
 describes it.
@@ -282,9 +285,14 @@ def _settle_lines(j: Dict[str, Any]) -> List[str]:
 
 def _classify(j: Dict[str, Any], m: _Map) -> None:
     """Fill in the state's fields: line / line_at (joined), settle
-    (suggested), undo (joined, refused)."""
+    (suggested), undo (joined, refused), and whether it is pending: a
+    suggested journal, or one refused with no line of the user's
+    behind it (the legs name two companies). A journal the user's map
+    decides (a DISTINCT line, a line naming a listing) is a decision
+    made, never pending (`decided_by`: "ticker.map")."""
     a, b = j["from"], j["to"]
-    j.update(line=None, line_at=None, settle=[], undo=None)
+    j.update(line=None, line_at=None, settle=[], undo=None,
+             pending=False, decided_by=None)
     joins = m.joining(a, b)
     if j["state"] == "refused" and j["_refused"] == "map" and joins:
         j["state"], j["reason"] = "joined", None
@@ -308,6 +316,7 @@ def _classify(j: Dict[str, Any], m: _Map) -> None:
                          f"not one security")
         return
     if j["state"] == "suggested":
+        j["pending"] = True
         j["settle"] = _settle_lines(j)
         if not j["reason"]:
             j["reason"] = ("the run did not pair the legs (a symbol that "
@@ -320,6 +329,7 @@ def _classify(j: Dict[str, Any], m: _Map) -> None:
     if why == "distinct" or pair in m.distinct:
         where, line = m.distinct.get(pair, ("ticker.map", f"DISTINCT {a} {b}"))
         j["reason"] = j["reason"] or f"ticker.map keeps them apart ({line})"
+        j["decided_by"] = "ticker.map"
         j["undo"] = (f"remove `{line}` ({where}) to let `taxjson run` "
                      f"decide")
     elif why == "map":
@@ -327,11 +337,15 @@ def _classify(j: Dict[str, Any], m: _Map) -> None:
         if named:
             j["reason"] = (f"ticker.map names a listing otherwise: "
                            + "; ".join(f"{ln} ({w})" for w, ln in named))
+        j["decided_by"] = "ticker.map"
         j["undo"] = ("edit that line, or add `" + _settle_lines(j)[1]
                      + "` to ticker.map if they are one security")
     else:
+        # The legs name two companies: no line of the user's says so.
+        j["pending"] = True
         j["undo"] = ("add `" + _settle_lines(j)[1] + "` to ticker.map only "
-                     "if they are one security")
+                     "if they are one security, or `DISTINCT " + a + " " + b
+                     + "` if they are not")
 
 
 def report(root: Path, cfg: Dict[str, Any], account: Optional[str] = None,
@@ -384,13 +398,16 @@ def report(root: Path, cfg: Dict[str, Any], account: Optional[str] = None,
         out.append(j)
     out.sort(key=lambda j: (j["account"], j["date"], j["from"], j["to"]))
     counts = {s: sum(1 for j in out if j["state"] == s) for s in STATES}
+    # The refused journals the user's own ticker.map decided (not
+    # pending).
+    counts["decided"] = sum(1 for j in out if j["decided_by"])
     return {"format": FORMAT, "account": account,
             "year": int(year) if year else None,
             "map": (None if m.path is None else
                     ("work/" + m.path.name if m.path.parent == cache
                      else m.path.name)),
             "journals": out, "counts": counts,
-            "pending": counts["suggested"] + counts["refused"]}
+            "pending": sum(1 for j in out if j["pending"])}
 
 
 # ------------------------------------------------------------ the text
@@ -421,8 +438,7 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
     per account, then the journals not joined with the lines that settle
     them (never wrapped); the last line counts them."""
     from taxjson.lib.out import Doc
-    js = [j for j in doc["journals"]
-          if not pending or j["state"] != "joined"]
+    js = [j for j in doc["journals"] if not pending or j["pending"]]
     scope = []
     if doc.get("year"):
         scope.append(f"tax year {doc['year']}")
@@ -462,7 +478,9 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
             if j["state"] == "joined":
                 continue
             d.blank()
-            d.item(f"{j['date']} {j['from']} → {j['to']} {j['state']}: "
+            how = (f"{j['state']} by your ticker.map" if j["decided_by"]
+                   else j["state"])
+            d.item(f"{j['date']} {j['from']} → {j['to']} {how}: "
                    f"{j['reason']}", "  ")
             if j["state"] == "suggested":
                 d.para(f"If they are one security, add the .tt line to a "
@@ -471,11 +489,14 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
                 for ln in j["settle"]:
                     d.line(f"      {ln}")
             elif j["undo"]:
-                d.para(f"Undo: {j['undo']}.", "    ")
+                d.para(f"{'To change it' if j['decided_by'] else 'Undo'}: "
+                       f"{j['undo']}.", "    ")
     c = doc["counts"]
     d.blank()
     tail = (f"{c['joined']} joined, {c['suggested']} suggested, "
-            f"{c['refused']} refused.")
+            f"{c['refused']} refused"
+            + (f" ({c['decided']} by your ticker.map)" if c.get("decided")
+               else "") + f"; {doc['pending']} pending.")
     if doc["pending"]:
         tail += (" Settle each with the line it names, then re-run "
                  "`taxjson run`.")

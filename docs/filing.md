@@ -57,8 +57,9 @@ the open steps one at a time; `--quick` skips the slow detectors.
       no look-alike rename the exports show is left unbooked
       (`taxjson renames --pending`).
 - [ ] `taxjson journals --pending` — every broker journal between two
-      listings of one security is joined, or settled with the `.tt` or
-      ticker.map line it names.
+      listings of one security is joined, settled with the `.tt` or
+      ticker.map line it names, or kept apart by a line of your
+      ticker.map (`DISTINCT`).
 - [ ] `taxjson elect --pending` — no unresolved merger or spin-off
       election.
 - [ ] `taxjson crypto-sends` — every crypto send that did not arrive in

@@ -24,10 +24,12 @@
   listings, yours or the run's own, and the `DISTINCT` line that undoes
   it), suggested (the reason, and the `.tt` line `JOURNAL <date> FROM TO
   QTY` or the ticker.map line that settles it) or refused (kept apart by a
-  `DISTINCT` line, or the legs name two companies: the reason and the
+  `DISTINCT` line or another line of your ticker.map — a decision made,
+  never pending — or the legs name two companies: the reason and the
   undo). Read-only, from the last run. `--account`, `--year`, `--json` (a
-  stable schema, docs/settings.md), and `--pending` (only the journals not
-  joined; exit 1 when there is one). `taxjson checklist` has a journals
+  stable schema, docs/settings.md), and `--pending` (only the pending
+  journals: suggested, or refused with no line of yours behind it; exit 1
+  when there is one). `taxjson checklist` has a journals
   step.
 - **`taxjson renames` names each rename's source** (a broker row, an IB
   contract id, a `.tt` line, a ticker.map line; an undated ticker.map rule

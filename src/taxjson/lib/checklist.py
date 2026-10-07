@@ -1586,12 +1586,14 @@ def d_journals(ctx: Ctx) -> Result:
     c = doc["counts"]
     if doc["pending"]:
         return Result("journals", "attention",
-                      f"{c['suggested']} suggested, {c['refused']} refused "
-                      f"journal(s) between two listings — `taxjson journals "
-                      f"--pending`")
+                      f"{doc['pending']} pending journal(s) between two "
+                      f"listings ({c['suggested']} suggested, "
+                      f"{c['refused'] - c['decided']} refused) — "
+                      f"`taxjson journals --pending`")
     return Result("journals", "done",
-                  f"{c['joined']} journal(s) between two listings, all "
-                  f"joined")
+                  f"{c['joined']} journal(s) between two listings joined"
+                  + (f", {c['decided']} kept apart by ticker.map"
+                     if c["decided"] else ""))
 
 
 def d_handoff(ctx: Ctx) -> Result:

@@ -201,9 +201,32 @@ class TestSourcesAndStates(unittest.TestCase):
         self.assertEqual(b["state"], "refused")
         self.assertEqual(b["reason"], XL.DIFFERENT)
         self.assertIn("TOBASE QZW.US QZW.TO", b["undo"])
-        self.assertEqual(doc["counts"],
-                         {"joined": 0, "suggested": 0, "refused": 2})
-        self.assertIn("0 joined, 0 suggested, 2 refused.", text)
+        self.assertIn("DISTINCT QZW.US QZW.TO", b["undo"])
+        self.assertEqual(doc["counts"], {"joined": 0, "suggested": 0,
+                                         "refused": 2, "decided": 1})
+        # The user's DISTINCT line is a decision made: listed, not
+        # pending. Two companies with no line of the user's: pending.
+        self.assertEqual((a["pending"], a["decided_by"]),
+                         (False, "ticker.map"))
+        self.assertEqual((b["pending"], b["decided_by"]), (True, None))
+        self.assertEqual(doc["pending"], 1)
+        self.assertIn("refused by your ticker.map: ticker.map keeps them "
+                      "apart", " ".join(text.split()))
+        self.assertIn("To change it: remove", " ".join(text.split()))
+        self.assertIn("0 joined, 0 suggested, 2 refused (1 by your "
+                      "ticker.map); 1 pending.", " ".join(text.split()))
+
+    def test_a_map_line_naming_a_listing_decides_not_pending(self):
+        # GLOBAL renames one listing elsewhere: the user's map decides.
+        legs = [_leg("QZA.US", "2025-03-03", -10, "QZALPHA CORP"),
+                _leg("QZA.TO", "2025-03-03", 10, "QZALPHA CORP")]
+        doc, _t = self._doc(legs, tmap="GLOBAL QZA.US QZB.US\n",
+                            named=["QZA.US", "QZB.US"])
+        j = _one(doc, "QZA.US")
+        self.assertEqual((j["state"], j["pending"], j["decided_by"]),
+                         ("refused", False, "ticker.map"))
+        self.assertIn("GLOBAL QZA.US QZB.US (ticker.map:1)", j["reason"])
+        self.assertEqual(doc["pending"], 0)
 
     def test_two_companies_by_coincidence_are_not_a_journal(self):
         # No journal wording, no broker reference: two unrelated
@@ -284,7 +307,7 @@ class TestSourcesAndStates(unittest.TestCase):
         self.assertEqual(set(doc["journals"][0]), {
             "account", "broker", "date", "from", "to", "quantity", "in",
             "source", "found_by", "state", "line", "line_at", "reason",
-            "settle", "undo", "names", "where"})
+            "settle", "undo", "names", "where", "pending", "decided_by"})
         json.dumps(doc)
 
     def test_layout_passes_the_style_lint(self):
@@ -299,7 +322,7 @@ class TestSourcesAndStates(unittest.TestCase):
         self.assertTrue(text.splitlines()[0].startswith("JOURNALS — "))
         self.assertIn("ACCOUNT margin (2)", text)
         self.assertTrue(text.splitlines()[-1].startswith(
-            "1 joined, 1 suggested, 0 refused."))
+            "1 joined, 1 suggested, 0 refused; 1 pending."))
         pend = "\n".join(J.render(dict(doc, journals=[
             j for j in doc["journals"] if j["state"] != "joined"]),
             width_=120, pending=True))
@@ -367,24 +390,33 @@ class TestCommand(unittest.TestCase):
                     t = cli(root, "journals", width="120")
                     self.assertEqual(t.returncode, 0)
                     self.assertEqual(out.lint(t.stdout, width_=120), [])
-                    # The user keeps the listings apart: refused, and
-                    # --pending exits 1.
+                    # The user keeps the listings apart: refused, a
+                    # decision made — listed, never pending.
                     (root / "ticker.map").write_text(
                         "DISTINCT QZD.US QZD.TO\n")
                     cli(root, "run", "--no-input")
-                    r = cli(root, "journals", "--pending", "--json")
-                    self.assertEqual(r.returncode, 1, r.stderr)
+                    r = cli(root, "journals", "--json")
+                    self.assertEqual(r.returncode, 0, r.stderr)
                     doc = json.loads(r.stdout)
-                    self.assertEqual({j["state"] for j in doc["journals"]},
-                                     {"refused"})
-                    self.assertEqual(doc["pending"], 2)
+                    self.assertEqual(
+                        {(j["state"], j["pending"], j["decided_by"])
+                         for j in doc["journals"]},
+                        {("refused", False, "ticker.map")})
+                    self.assertEqual(doc["pending"], 0)
                     self.assertIn("DISTINCT QZD.US QZD.TO",
                                   doc["journals"][0]["reason"])
+                    r = cli(root, "journals", "--pending", "--json")
+                    self.assertEqual(r.returncode, 0, r.stderr)
+                    self.assertEqual(json.loads(r.stdout)["journals"], [])
                     t = cli(root, "journals", "--pending", width="120")
-                    self.assertEqual(t.returncode, 1)
+                    self.assertEqual(t.returncode, 0)
                     self.assertEqual(out.lint(t.stdout, width_=120), [])
                     self.assertTrue(t.stdout.splitlines()[-1].startswith(
-                        "0 joined, 0 suggested, 2 refused."), t.stdout)
+                        "0 joined, 0 suggested, 2 refused (2 by your "
+                        "ticker.map); 0 pending."), t.stdout)
+                    t = cli(root, "journals", width="120")
+                    self.assertEqual(out.lint(t.stdout, width_=120), [])
+                    self.assertIn("refused by your ticker.map", t.stdout)
                     # The user's TOBASE line joins them.
                     (root / "ticker.map").write_text(
                         "TOBASE QZD.US QZD.TO\n")
@@ -494,6 +526,16 @@ class TestRenames(unittest.TestCase):
                                  [h["old"] for h in doc["suggested"]])
                 self.assertEqual(len(doc["suggested"]), 2)
 
+    def test_a_hint_the_books_answer_is_not_pending(self):
+        # A rename event of the pair in the books (a .tt line, a broker
+        # row): the hint is answered, never pending.
+        from taxjson.lib.renames import rename_hints
+        with tempfile.TemporaryDirectory() as td:
+            hs = rename_hints(_renames_project(td), _CFG, [
+                {"old": "QZOLD.US", "new": "QZNEW.US",
+                 "date": "2025-03-07"}])
+        self.assertEqual([h["old"] for h in hs], ["QZR.US", "QZV"])
+
     def test_source_labels(self):
         from taxjson.lib.renames import row_source
         for src, want in (("tt", ".tt line"), ("ib-conid",
@@ -569,6 +611,24 @@ class TestChecklist(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             r = checklist.d_journals(self._ctx(Path(td)))
             self.assertEqual(r.status, "blocked")
+        # Kept apart by the user's DISTINCT line: done (a decision made);
+        # a broker journal whose legs name two companies: attention.
+        apart = [_leg("QZA.US", "2025-03-03", -10, "QZALPHA CORP"),
+                 _leg("QZA.TO", "2025-03-03", 10, "QZALPHA CORP")]
+        two = [_leg("QZW.US", "2025-03-10", -20, "QZWIDGET ENERGY INC"),
+               _leg("QZW.TO", "2025-03-10", 20, "QZMOUNTAIN MINING LTD")]
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(td, _state(apart,
+                                       distinct=[("QZA.US", "QZA.TO")]),
+                            "DISTINCT QZA.US QZA.TO\n")
+            r = checklist.d_journals(self._ctx(root))
+            self.assertEqual(r.status, "done", r.detail)
+            self.assertIn("1 kept apart by ticker.map", r.detail)
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(td, _state(two))
+            r = checklist.d_journals(self._ctx(root))
+            self.assertEqual(r.status, "attention")
+            self.assertIn("1 pending journal(s)", r.detail)
 
     def test_renames_step_flags_a_hint(self):
         from taxjson.lib import checklist

@@ -700,9 +700,9 @@ A stable schema for programs (a checklist, a script): new keys may be added, non
 | `format` | `"taxjson-journals/1"` |
 | `account`, `year` | the `--account` / `--year` filters, `null` when not given |
 | `map` | the map the books were merged with: `work/ticker.map.effective`, `ticker.map`, or `null` |
-| `journals` | one object per journal (below), ordered by account and date; with `--pending` only the ones not joined |
-| `counts` | `{"joined": N, "suggested": N, "refused": N}` over the journals `--account` / `--year` keep (`--pending` does not change them) |
-| `pending` | `suggested + refused`; `--pending` exits 1 when it is not 0 |
+| `journals` | one object per journal (below), ordered by account and date; with `--pending` only the pending ones |
+| `counts` | `{"joined": N, "suggested": N, "refused": N, "decided": N}` over the journals `--account` / `--year` keep (`--pending` does not change them); `decided` counts the refused ones your ticker.map decided |
+| `pending` | how many journals are pending (each journal's `pending`); `--pending` exits 1 when it is not 0 |
 
 Each journal:
 
@@ -716,7 +716,9 @@ Each journal:
 | `line`, `line_at` | joined: the map line(s) that pool the two listings and where (`ticker.map:N` for yours, `work/ticker.map.effective:N` for the run's own join); otherwise `null` |
 | `reason` | suggested or refused: why not joined; `null` when joined |
 | `settle` | suggested: the `.tt` line `JOURNAL <date> FROM TO QTY` and the ticker.map line, either of which settles it; `[]` otherwise |
-| `undo` | joined or refused: how to undo the state (the `DISTINCT` line to add, the line to remove) |
+| `undo` | joined or refused: how to undo or change the state (the `DISTINCT` line to add, the line to remove) |
+| `pending` | `true` for a suggested journal and for one refused because its legs name two companies (no line of yours covers it); `false` when joined or when your ticker.map decided it (a `DISTINCT` line, a line naming a listing): a decision already made |
+| `decided_by` | `"ticker.map"` when your map decided a refused journal, else `null` |
 | `names` | the two legs' security names as the exports write them |
 | `where` | where a declared journal was written (a `.tt` line's file and line), else `null` |
 

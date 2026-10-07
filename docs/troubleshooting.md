@@ -597,10 +597,10 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ## Before you file
 
-### `tjs checklist`: "[!] journals … 1 suggested, 0 refused journal(s) between two listings — `taxjson journals --pending`"
+### `tjs checklist`: "[!] journals … 1 pending journal(s) between two listings (1 suggested, 0 refused) — `taxjson journals --pending`"
 - **Check:** `tjs journals --pending` lists each journal the books did not pool: its date, FROM → TO, quantity, broker, how it was found (a Questrade BRW journal, an RBC journal transfer, an IB InterDepot, a move across brokers), the reason, and the lines that settle it. `tjs journals` shows the joined ones too, each with the `TOBASE` / `JOURNAL` line that pools it.
-- **Cause:** a broker journal moved a position from one listing of a security to another, and the run did not join the two listings: their names are not equal word for word or the legs pair more than one way (suggested), or a `DISTINCT` line keeps them apart or the two legs name different companies (refused). Not pooled, the old listing's shares never sell and the new listing's sales read as a short.
-- **Fix:** if they are one security, add the `.tt` line (`JOURNAL <date> FROM TO QTY`, in a `.tt` file of the account's `inputs/`) or the ticker.map line it gives, then `tjs run`. A refused journal names its undo (the `DISTINCT` line to remove, or the line to add if they are one security after all).
+- **Cause:** a broker journal moved a position from one listing of a security to another, and the run did not join the two listings: their names are not equal word for word or the legs pair more than one way (suggested), or the two legs name different companies (refused). Not pooled, the old listing's shares never sell and the new listing's sales read as a short.
+- **Fix:** if they are one security, add the `.tt` line (`JOURNAL <date> FROM TO QTY`, in a `.tt` file of the account's `inputs/`) or the ticker.map line it gives, then `tjs run`. If the legs really are two securities, add `DISTINCT FROM TO` to ticker.map: a journal your ticker.map keeps apart (a `DISTINCT` line, a line naming a listing) is still listed as refused, with how to change it, but is a decision made and never pending.
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/checklist.py` — `d_journals`; `src/taxjson/lib/journals.py` — `report`, `_classify`; `src/taxjson/lib/cross_listings.py` — `analyze`, `refused`
 
