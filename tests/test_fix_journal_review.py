@@ -181,5 +181,73 @@ class TestOwnJournalLegs(unittest.TestCase):
             tfr, description="QZD MEMO J~0TFR1Q")))
 
 
+# ------------------------------------------------------------------ H7
+
+_OPT = {"canada": "QZK250620C00010000.TO", "usa": "QZK250620C00010000.US"}
+_STK = {"canada": "QZK.TO", "usa": "QZK.US"}
+
+
+class TestNoOptionJournalOrRename(unittest.TestCase):
+
+    def test_parse_refuses_contracts(self):
+        from taxjson.bin.taxjson_convert_tt import (parse_journal_line,
+                                                    parse_rename_line)
+        for bad in ("JOURNAL 2025-03-05 QZK250620C00010000.TO QZK.TO 1",
+                    "JOURNAL 2025-03-05 QZK.TO QZK250620C00010000.TO 1",
+                    "JOURNAL 2025-03-05 QZK.US F:QZK.US 1"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError) as cm:
+                parse_journal_line(bad, "x.tt:4")
+            self.assertIn("x.tt:4", str(cm.exception))
+            self.assertIn("never journaled", str(cm.exception))
+        for bad, word in (
+                ("RENAME 2025-04-01 QZK250620C00010000.US QZK.US",
+                 "into a share listing"),
+                ("RENAME 2025-04-01 QZK.US QZK250620C00010000.US",
+                 "from a share listing"),
+                ("RENAME 2025-04-01 QZO250620C00010000.US "
+                 "QZN250620C00010000.US", "RENAME 2025-04-01 QZO.US QZN.US"),
+                ("RENAME 2025-04-01 QZO250620C00010000.US "
+                 "QZO250620C00012000.US", "another contract")):
+            with self.subTest(bad=bad), self.assertRaises(ValueError) as cm:
+                parse_rename_line(bad, "x.tt:2")
+            self.assertIn(word, str(cm.exception))
+        # Two share listings still parse.
+        self.assertEqual(parse_rename_line("RENAME 2025-04-01 QZO.US "
+                                           "QZN.US")["new"], "QZN.US")
+
+    def _check(self, country, line, word):
+        tt = (f"BUYSELL 2025-03-03 10:00:00 {_OPT[country]} 1 "
+              f"{'CAD' if country == 'canada' else 'USD'} 1.00 100.00 0.00 "
+              f"x100\n" + line.format(o=_OPT[country], s=_STK[country]))
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, files={
+                "inputs/margin/m.tt": tt})[country]
+            r = _run(self, root, ok=False)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("cannot be booked", _out(r))
+            self.assertIn(word, _out(r))
+            self.assertIn("inputs/margin/m.tt:2", _out(r))
+
+    @rule("CA-XLIST-04")
+    def test_canada_option_journal_stops_the_run(self):
+        self._check("canada", "JOURNAL 2025-03-05 {o} {s} 1\n",
+                    "never journaled")
+
+    @rule("US-XLIST-03")
+    def test_usa_option_journal_stops_the_run(self):
+        self._check("usa", "JOURNAL 2025-03-05 {o} {s} 1\n",
+                    "never journaled")
+
+    @rule("CA-ACB-RENAME")
+    def test_canada_option_rename_stops_the_run(self):
+        self._check("canada", "RENAME 2025-04-01 {o} {s}\n",
+                    "into a share listing")
+
+    @rule("US-BASIS-RENAME")
+    def test_usa_option_rename_stops_the_run(self):
+        self._check("usa", "RENAME 2025-04-01 {o} {s}\n",
+                    "into a share listing")
+
+
 if __name__ == "__main__":
     unittest.main()

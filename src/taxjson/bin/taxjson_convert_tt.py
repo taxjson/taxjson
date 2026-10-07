@@ -433,6 +433,17 @@ def parse_journal_line(line: str, source: str = ''):
         raise ValueError(
             f"{where}malformed JOURNAL line — FROM and TO are the same "
             f"listing {frm} (expected `{JOURNAL_FORM}`): {shown!r}")
+    for sym in (frm, to):
+        kind = _derivative_kind(sym)
+        if kind:
+            # A contract is never units of a share listing: journaling it
+            # would merge it into the stock's pool (pre-release review H7).
+            raise ValueError(
+                f"{where}JOURNAL line names {kind} {sym}: a journal moves "
+                f"units between two LISTINGS of one security (shares, "
+                f"units); an option or a future is never journaled — book "
+                f"its exercise, assignment or sale as the broker's rows "
+                f"show it: {shown!r}")
     try:
         q = _tt_num(qty)
     except ValueError as e:
@@ -446,6 +457,51 @@ def parse_journal_line(line: str, source: str = ''):
             f"`{JOURNAL_FORM}`): {shown!r}")
     return {'date': date, 'from': frm, 'to': to, 'quantity': q,
             'line': shown}
+
+
+def _derivative_kind(sym: str) -> str:
+    """"an option contract" / "a future" for such a symbol, else ""."""
+    from taxjson.lib.core import is_option_symbol
+    if is_option_symbol(sym):
+        return 'an option contract'
+    if str(sym or '').startswith(_FUTURES_PREFIXES):
+        return 'a future'
+    return ''
+
+
+def _rename_derivative_check(old: str, new: str, date: str, where: str,
+                             shown: str) -> None:
+    """A RENAME between a share listing and a contract is refused (a
+    contract never becomes shares by a ticker change: pre-release review
+    H7), and so is one between two contracts: an option follows its
+    underlying's ticker change (lib/renames), so the line to write is the
+    stock's; a series with another expiry, strike or right is another
+    contract, not a new name."""
+    from taxjson.lib.core import parse_option_underlying
+    ko, kn = _derivative_kind(old), _derivative_kind(new)
+    if not ko and not kn:
+        return
+    if not ko or not kn:
+        sym, kind = (old, ko) if ko else (new, kn)
+        raise ValueError(
+            f"{where}RENAME line renames {kind} ({sym}) "
+            f"{'into' if ko else 'from'} a share listing: a ticker change "
+            f"keeps the security, and a contract never becomes shares (or "
+            f"shares a contract) by one — book the exercise, assignment or "
+            f"sale as the broker's rows show it: {shown!r}")
+    uo, un = parse_option_underlying(old), parse_option_underlying(new)
+    if uo and un and old[len(uo.rsplit('.', 1)[0]):] == \
+            new[len(un.rsplit('.', 1)[0]):] and uo != un:
+        raise ValueError(
+            f"{where}RENAME line renames an option contract: an option "
+            f"follows its underlying's ticker change — declare the stock's "
+            f"instead, `RENAME {date} {uo} {un}`: {shown!r}")
+    raise ValueError(
+        f"{where}RENAME line renames {ko} ({old}) into {kn} ({new}): another "
+        f"expiry, strike or right is another contract, not a new name of "
+        f"the same one — book the broker's rows as they are (an option "
+        f"follows its underlying's ticker change: declare the stock's "
+        f"RENAME): {shown!r}")
 
 
 def parse_rename_line(line: str, source: str = ''):
@@ -487,6 +543,7 @@ def parse_rename_line(line: str, source: str = ''):
         raise ValueError(
             f"{where}malformed RENAME line — OLD and NEW are the same "
             f"symbol {old} (expected `{RENAME_FORM}`): {shown!r}")
+    _rename_derivative_check(old, new, date, where, shown)
     return {'date': date, 'old': old, 'new': new, 'late': late,
             'line': shown}
 

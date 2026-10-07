@@ -721,7 +721,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "ticker.map rule joining the two books it instead. A "
                  "weaker look-alike (Questrade, RBC, Webull: two symbols "
                  "sharing a description, the new one going short) is only "
-                 "suggested, as the .tt line.", cont=True),
+                 "suggested, as the .tt line. A RENAME naming an option "
+                 "contract or a future is refused: a contract never "
+                 "becomes shares (or shares a contract) by a ticker "
+                 "change, an option follows its underlying's change (the "
+                 "stock's line is the one to write), and another expiry, "
+                 "strike or right is another contract.", cont=True),
             Rule("CA-ACB-05",
                  "Accounts typed \"sheltered\" (RRSP, TFSA, FHSA, LIRA, "
                  "RESP...) are tracked but kept out of the filing totals. "
@@ -950,7 +955,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "not twice (an Info line); with one leg there, only the "
                  "other is booked. A ticker.map rule naming either "
                  "listing wins; a DISTINCT line keeps them two securities "
-                 "(a Warning). The legacy ticker.map `JOURNAL FROM TO` "
+                 "(a Warning). An option contract or a future is never "
+                 "journaled: such a line is refused. The legacy "
+                 "ticker.map `JOURNAL FROM TO` "
                  "line is read as `TOBASE FROM TO`, said once per run; "
                  "`taxjson format-map --write` rewrites it."),
             Rule("CA-ACB-11",
@@ -2124,7 +2131,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "ticker.map rule joining the two books it instead. A "
                  "weaker look-alike (Questrade, RBC, Webull: two symbols "
                  "sharing a description, the new one going short) is only "
-                 "suggested, as the .tt line.", cont=True),
+                 "suggested, as the .tt line. A RENAME naming an option "
+                 "contract or a future is refused: a contract never "
+                 "becomes shares (or shares a contract) by a ticker "
+                 "change, an option follows its underlying's change (the "
+                 "stock's line is the one to write), and another expiry, "
+                 "strike or right is another contract.", cont=True),
             Rule("US-XLIST-01",
                  "Two listings of one company's same class of shares (a "
                  "US line and its Canadian line, two currency lines of "
@@ -2238,7 +2250,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "business days) is booked from them, not twice (an Info "
                  "line); with one leg there, only the other is booked. A "
                  "ticker.map rule naming either listing wins; a DISTINCT "
-                 "line keeps them two securities (a Warning). The legacy "
+                 "line keeps them two securities (a Warning). An option "
+                 "contract or a future is never journaled: such a line is "
+                 "refused. The legacy "
                  "ticker.map `JOURNAL FROM TO` line is read as `TOBASE "
                  "FROM TO`, said once per run; `taxjson format-map "
                  "--write` rewrites it."),

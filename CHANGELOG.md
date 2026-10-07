@@ -51,7 +51,10 @@
   is said and booked once, and one with a single broker leg gets the
   other), and `RENAME <date> OLD NEW [late=fold|late=separate]`, declared
   in any account's folder, applies to every account holding the old symbol
-  and is recorded once. A malformed line stops the run, naming the form.
+  and is recorded once. A malformed line stops the run, naming the form,
+  and so does a line naming an option contract or a future (a contract
+  never becomes shares by a journal or a ticker change; an option
+  follows its underlying's rename).
 - **IB's ticker changes are booked.** When IB lists one contract id under
   two symbols, the change is booked as a dated rename event, with a
   Warning naming the way out (`DISTINCT` in ticker.map for two securities,
