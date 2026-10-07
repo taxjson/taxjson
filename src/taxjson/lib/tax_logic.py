@@ -935,7 +935,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "(in the in-leg's currency; the other leg's at the "
                  "stated CNV@ rate) is carried on the legs only where "
                  "they do not net. A journal leg with no partner is a "
-                 "transfer leg of its own line, said as ATTENTION."),
+                 "transfer leg of its own line, said as ATTENTION. The "
+                 "journal's legs move units inside that account only: "
+                 "they never pair with another account's transfer (a "
+                 "transfer-in from outside the books, an in-kind move)."),
             Rule("CA-XLIST-04",
                  "A journal you declare in an account's .tt file, `JOURNAL "
                  "YYYY-MM-DD FROM TO QTY` (QTY units moved from listing "
