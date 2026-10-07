@@ -4,6 +4,20 @@
 
 ### Added
 
+- **`taxjson quick-start` lists every step from install to filing**
+  (`tjs quick-start`), each with the exact command(s) and a one-line why:
+  install or upgrade, `init`, the accounts, the broker files, `run`, filling
+  the gaps (missing history, transfers, ticker.map, journals, renames, crypto
+  sends, `.tt` lines), tidying the config, the checks (`scan`, `sanity`,
+  `edge-cases`, `wash-sales`, `check-dates`, `checklist`), the results and
+  filing outputs, sharing a redacted sample, and the year end. In a project
+  folder (or `-C DIR`) each step is marked done, needs attention, to do,
+  yours to review or n/a from the project's own files, and the next step is
+  named with its command. It only reads files: it runs nothing, writes
+  nothing and goes online for nothing. `--all` shows every step in full;
+  `--json` is a stable schema (docs/settings.md). `taxjson init` and the
+  run's closing list now point to it. A test fails when a new command is in
+  no step (or is not listed as left out on purpose).
 - **`taxjson format-map` lays out ticker.map** (`tjs format-map`), as
   `taxjson format` does taxjson.toml: a short header saying what the file
   holds, then the rules in groups in a fixed order (Spellings, Listings of

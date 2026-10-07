@@ -1098,8 +1098,8 @@ class _CappedHelpFormatter(argparse.HelpFormatter):
 # sits in exactly one group (tests/test_cli_polish.py); the README's
 # command table uses the same groups in the same order.
 _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Set up", ("init", "format", "format-map", "migrate", "fetch",
-                "elect", "ticker-map")),
+    ("Set up", ("quick-start", "init", "format", "format-map", "migrate",
+                "fetch", "elect", "ticker-map")),
     ("Build the books", ("run", "crypto-sends", "find-missing-history",
                          "opening")),
     ("Summaries", ("amt", "estimate", "fx-cash", "instalments", "stats",
@@ -21464,8 +21464,28 @@ def cmd_init(args: argparse.Namespace) -> None:
     print("  3. Run:")
     # A command to copy: its own line, never wrapped.
     print(f"       taxjson -C {_shlex.quote(str(root))} run")
+    print("  4. Every step after that, and which one is next:")
+    print(f"       taxjson -C {_shlex.quote(str(root))} quick-start")
     if country == "usa":
         _say("note", *_US_EXPERIMENTAL_NOTE, prog=f"{_PROG} init")
+
+
+def cmd_quick_start(args: argparse.Namespace) -> None:
+    """`taxjson quick-start [--all] [--json]`: the workflow, step by
+    step (lib/quick_start). Outside a project every step with its
+    commands; inside one (taxjson.toml in -C DIR) each step marked from
+    the project's files and the next one named. Read-only: no command
+    run, no file written, no network."""
+    from taxjson.lib import quick_start as QS
+    root = Path(args.dir).resolve()
+    if (root / "taxjson.toml").is_file():
+        guide = QS.evaluate(root)
+    else:
+        guide = QS.outside()
+    if args.json:
+        _json_out(QS.to_json(guide))
+        return
+    print(QS.render(guide, show_all=args.all))
 
 
 # The carryover flag means what each country's return does with it
@@ -21688,6 +21708,25 @@ def _build_parser(prog: str = "taxjson"
                         help="Tax year for the generated config "
                              "(default: current year)")
     p_init.set_defaults(func=cmd_init)
+
+    p_qs = sub.add_parser(
+        "quick-start",
+        help="Every step from install to filing; which is next",
+        description="The whole workflow as numbered steps, each with the "
+                    "exact command(s) and why. Inside a project (a "
+                    "taxjson.toml here, or -C DIR) each step is marked "
+                    "done, needs attention, to do, yours to review or "
+                    "n/a from the project's files, and the next one is "
+                    "named with its command. Reads files only: it runs "
+                    "nothing, writes nothing and opens no connection "
+                    "(`taxjson checklist` runs the slow checks).")
+    p_qs.add_argument("--all", action="store_true",
+                      help="Show every step's commands and why, also "
+                           "the done ones")
+    p_qs.add_argument("--json", action="store_true",
+                      help="Emit the guide as JSON (a stable schema, "
+                           "schema_version 1: docs/settings.md)")
+    p_qs.set_defaults(func=cmd_quick_start)
 
     p_tx = sub.add_parser(
         "events",
@@ -23040,9 +23079,11 @@ def _main() -> None:
             # `taxjson run` first)" — send the user to the real problem.
             _die_input(f"no such directory: {args.dir} (-C/--dir names the "
                  f"project root — the folder holding taxjson.toml)")
-        if args.cmd not in ("init", "help", "migrate") + _RELEASE_CMDS:
+        if args.cmd not in ("init", "help", "migrate",
+                            "quick-start") + _RELEASE_CMDS:
             # An old per-purpose file (yf_ticker.map, distributions.map
-            # ...) stops every command, whatever it reads (lib/migrate).
+            # ...) stops every command, whatever it reads (lib/migrate);
+            # quick-start names it as the step to do.
             _refuse_legacy_project_files(Path(args.dir).resolve())
         _enforce_command_country(args)
         _refuse_artifact_account(args)

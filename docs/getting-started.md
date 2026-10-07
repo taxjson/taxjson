@@ -14,6 +14,11 @@ says `...`.
 
 `tjs` is the short name of `taxjson`; both work.
 
+**Not sure what comes next?** Run `tjs quick-start`. It lists every
+step of this guide with the command for it; in a project folder it
+marks which steps are done from the project's files and names the next
+one. It only reads files, so run it as often as you like.
+
 ## 1. Install
 
 ```bash
@@ -133,7 +138,7 @@ Warning: 1 transfer-in from outside your books kept out with no cost: SAMPK.TO (
 Info: 1 account with open positions and no holdings file to check them against: margin (4). Run `taxjson sanity` with
 the broker's positions.
 
-Info: Then run `taxjson checklist`. Every step is in docs/getting-started.md.
+Info: Then run `taxjson checklist`. `taxjson quick-start` lists every step and names the next one.
 ```
 
 Every line starts with `==> ` (a step the run is doing), `Info:`,
