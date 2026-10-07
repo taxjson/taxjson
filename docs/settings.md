@@ -511,7 +511,7 @@ Hand-entered rows, any `*.tt` file in `inputs/<account>/`. One space-separated l
 
 #### `BUYSELL`
 - **Form:** `BUYSELL DATE TIME SYMBOL QTY CUR PRICE TOTAL [FEE] [xSIZE]`
-- **Meaning:** a trade. QTY positive = buy, negative = sell; TOTAL is the net cash: buy = qty × price + fee, sell = qty × price − fee, written positive (a sale whose fee exceeds its gross has a negative total). A total more than 1% off qty × price ± fee is warned about. `xSIZE` is a contract size other than an equity option's 100 (`x1000`, `x50`).
+- **Meaning:** a trade. QTY positive = buy, negative = sell; TOTAL is the net cash: buy = qty × price + fee, sell = qty × price − fee, written positive (a sale whose fee exceeds its gross has a negative total). A total more than 1% (at least 0.05) off qty × price ± fee is booked as written and warned about on the run's console (file:line, both figures); `run --strict` stops on it and `taxjson checklist` lists it. A line with price 0 states its amount by the total alone and is not compared. `xSIZE` is a contract size other than an equity option's 100 (`x1000`, `x50`).
 - **Example:** `BUYSELL 2025-03-10 09:30:00 ZZQ.US 10 USD 45.00 459.95 9.95`
 
 #### `ASSIGN`

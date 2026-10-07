@@ -871,7 +871,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson buy-check SYMBOL ...` | Buy-side wash check: is buying this ticker today safe? **UNSAFE** when a loss was sold within the past 30 days (the rebuy cancels it — permanently if bought sheltered), with the safe-from date when one is determinable (violations defer to `wash-radar` rather than print a date that would invite an early rebuy); **SAFE\*** when buying merely extends an open wash window. Root-matched (`buy-check SAMPLU` covers `SAMPLU.US` and cross-listings, folding in `ticker.map` pairs); `--json` for machines; exit 1 on unsafe. |
 | `taxjson sell-check SYMBOL ...` | Sell-side wash check: is selling this ticker **at a loss** today safe? **UNSAFE** when a registered account's recent buy it still holds would deny the loss on the whole position (LOCKED), or an open violation is backed by a registered account's in-window buy; **PARTIAL** when only some units are at risk (the line says how many; the rest of the loss stands); **ACTION** when a violation can be rescued by selling the taxable replacement before the deadline (Canada only — a US wash sale cannot be rescued, and a WASHED row is SAFE\* with the reason); **SAFE\*/SAFE** with the applicable caveats. Whether it *is* a loss at today's price is `harvest`'s job. `--json` for machines; exit 1 on UNSAFE or PARTIAL. |
 | `taxjson harvest [SYMBOL ...]` | Unrealized gain/(loss) per open position at current prices — "if I sold this today, is it a loss?" Losses first, wash-radar advisory on each loss, `LT_IN` days-to-long-term for US projects. |
-| `taxjson scan` | Lint the project for common tax-efficiency mistakes: cross-listed Canadian dividend payers held via the US line in taxable/TFSA, US payers in a TFSA (unrecoverable 15% withholding), and ticker.map cross-listing gaps. `--online` probes yfinance for unmapped .TO twins. Exit 1 on findings. |
+| `taxjson scan` | Lint the project for common tax-efficiency mistakes: cross-listed Canadian dividend payers held via the US line in taxable/TFSA, US payers in a TFSA (unrecoverable 15% withholding), ticker.map cross-listing gaps, and a loss on one listing with the other listing bought within 30 days (XLIST-LOSS). `--online` probes yfinance for unmapped .TO twins. Exit 1 on findings. |
 | `taxjson watch` | Cron-able change detector: reports only what CHANGED since the last watch run — new/changed/cleared radar advisories, moved clear dates, and (with `--harvest`) the harvestable-now loss total moving more than `--threshold` (default 100). A report ends with the scope line (verdicts cover this project's accounts only — CA-PLAN-04 / US-PLAN-04). Silent with exit 0 when nothing changed, so a cron line mails only on news; `--exit-code` exits 1 on changes for scripting, `--json` for machines. State: `work/.watch_state.json`; `--state PATH` gives a cron cadence its own baseline (daily and weekly lines can coexist). |
 
 #### Before you file
@@ -1821,6 +1821,13 @@ Lints the whole project for placement mistakes the pipeline can see:
   `.TO` sibling seen anywhere in your data) held via its **US listing** in a
   taxable account or TFSA while receiving dividends. Hold the `.TO` line
   instead: clean eligible-dividend treatment, no USD conversion drag.
+- **XLIST-LOSS** — a loss on one listing with another listing of the same
+  root, under an equal name in the exports, bought within 30 days in any
+  account (Canada: still held at day 30): a superficial loss (US: a wash
+  sale) the books cannot see while the two listings stay apart. Add the
+  `TOBASE` line it names if they are one security (the loss is then
+  denied), the `DISTINCT` line if not. The run warns about it too and
+  `run --strict` stops on it; `ticker-map --suggest` offers the line.
 - **MAP-UNUSED** (a note, never a finding) — `ticker.map` rules whose
   FROM symbol matches nothing in the parsed sources. The check is
   root-aware: a rule with no stock rows is still live when option trades

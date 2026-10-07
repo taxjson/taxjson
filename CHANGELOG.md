@@ -125,6 +125,28 @@
 
 ### Fixed
 
+- **A loss on one listing with the other listing bought within 30 days is
+  flagged.** Two listings of one security (a TSX line and its NYSE line)
+  that the books keep apart kept such a loss allowed with nothing said.
+  Now a loss on one listing with another listing of the same root, under
+  an equal name, bought within 30 days in any of your accounts (Canada:
+  still held at day 30) is a Warning naming the `TOBASE` line that makes
+  them one security and the `DISTINCT` line that keeps them two;
+  `taxjson ticker-map --suggest` offers the `TOBASE` line, `taxjson scan`
+  lists it (XLIST-LOSS) and `run --strict` stops until one is in
+  ticker.map. Both countries (the US: a wash sale, no still-held test).
+- **A `.tt` total that disagrees with its quantity, price and fee is said
+  on the console.** A line whose total was more than 1% off quantity x
+  price + fee was booked as written with the warning only in the `.sum`
+  DIAGNOSTICS. The run now shows it as a Warning naming the file and line,
+  both figures and that the total is what is booked (on every run),
+  `run --strict` stops on it and `taxjson checklist`'s run-clean step
+  lists it.
+- **A short sale closed within the year is no longer said to be in no
+  total.** The run's mid-run note now follows how the gains engine booked
+  the sale, as the closing summary and `taxjson sum` do, and
+  `taxjson find-missing-history` counts only sales in its in-year sales
+  and proceeds (the covering purchase was counted as a second sale).
 - **`late=fold` re-books only the rows after the account's own rename
   row.** With a broker rename row a few days after the declared date, a
   sale of the old ticker between the two was re-booked as the new symbol

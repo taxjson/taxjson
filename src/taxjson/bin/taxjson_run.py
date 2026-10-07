@@ -317,6 +317,29 @@ def echo_parse_stats(out_path: Path, files=None) -> None:
             _echo_captured(line)
 
 
+def _echo_tt_totals(account: str, tt: Path, out_path: Path,
+                    strict: bool = False) -> None:
+    """The .tt lines whose total is not qty x price +/- fee
+    (lib/tt_totals, read from the .tt stage's .diag): one `Warning:`
+    each on the console, naming file:line, the written total and the
+    formula's; `--strict` stops on them."""
+    from taxjson.lib.tt_totals import read_diag
+    found = read_diag(out_path)
+    if not found:
+        return
+    real = _console_names([tt])
+    for m in found:
+        head, details = m.message(f"inputs/{account}/{real(m.where)}")
+        _say_once(("tt-total", account, m.where), "warning", head,
+                  *details, prog=_PROG)
+    if strict:
+        _die(f"--strict: {account}: inputs/{account}/{tt.name} has "
+             f"{len(found)} line(s) whose total is not qty x price +/- "
+             f"fee (warning above) — aborting",
+             "Fix the total, or put the difference in the line's fee "
+             "column.")
+
+
 def _codes_note_head() -> str:
     from taxjson.lib.symbol_codes import NOTE_HEAD
     return NOTE_HEAD
@@ -3961,6 +3984,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             _step(f"Reading {_mask_ids_in_path(tt.name)}")
             run_to_file(_cmd("taxjson-convert-tt") + ["--account-name", name, str(tt)],
                         out)
+        # A line whose total is not its qty x price +/- fee: the total is
+        # booked as written. Read from the persisted .diag on EVERY run,
+        # cached or not (as the 0-transaction check), shown on the
+        # console and refused by --strict (QA F2: the warning reached only
+        # the .sum DIAGNOSTICS).
+        _echo_tt_totals(name, tt, out, strict)
         tt_jsons.append(out)
 
     # Broker groups REMOVED from inputs/: their parsed JSON, .diag and
@@ -5323,6 +5352,42 @@ def stage_in_kind_context(root: Path, cache: Path, settings: Dict[str, Any],
              "Check the transfer rows `taxjson transfers` labels "
              "in-kind, or value them with a .tt INKIND line.")
     return p
+
+
+def _say_xlist_losses(root: Path, cfg: Dict[str, Any], cache: Path, *,
+                      strict: bool = False) -> None:
+    """A loss on one listing and a purchase of another listing of the
+    same root under an equal name within 30 days (lib/xlist_loss_radar,
+    tax-logic CA-XLIST-05 / US-XLIST-04): one Warning per pair naming the
+    TOBASE and DISTINCT lines that answer it, the findings written to
+    work/xlist_loss_radar.state (`ticker-map --suggest`, `scan`);
+    `strict`: a pair the map does not answer stops the run. Advisory: a
+    failure to read the books is never fatal."""
+    from taxjson.lib import xlist_loss_radar as XR
+    from taxjson.lib.country import settings_country
+    country = settings_country(cfg.get("settings") or {})
+    try:
+        found = XR.analyze(root, cfg)
+    except Exception as e:                          # noqa: BLE001
+        _say("warning", f"the cross-listing loss check failed: {e}",
+             prog=_PROG)
+        return
+    state = cache / XR.STATE
+    text = XR.state_text(found, country)
+    if _read_work_stamp(state) != text:
+        _write_work_stamp(state, text)
+    if not found:
+        return
+    for f in found:
+        head, details = XR.message(f.record(), country)
+        _say_once(("xlist-loss", f.loss_symbol, f.other_symbol), "warning",
+                  head, *details, indent="  ", file=sys.stdout)
+    if strict:
+        _die(f"--strict: {len(found)} possible "
+             f"{XR._kind(country, len(found))} across listings (warning "
+             f"above) — aborting",
+             "Add the TOBASE line (one security) or the DISTINCT line (two) "
+             "to ticker.map.")
 
 
 def _say_in_kind(root: Path, cache: Path, settings: Dict[str, Any], *,
@@ -6783,6 +6848,11 @@ def cmd_run(args: argparse.Namespace) -> None:
     _say_in_kind(root, cache, settings,
                  strict=getattr(args, "strict", False))
     if not args.account and not pending_accounts:
+        # Every account's gains are final: a loss on one listing, the
+        # other listing bought in the window (QA F3).
+        _say_xlist_losses(root, cfg, cache,
+                          strict=getattr(args, "strict", False))
+    if not args.account and not pending_accounts:
         # A sheltered account never gets a wash pass. One re-typed from
         # taxable kept its old <name>_gains_wash.json / _wash.sum, which
         # resolve_gains_files prefers forever — the "run a full `taxjson
@@ -7221,12 +7291,33 @@ def _short_positions_cands(base_json: Path, account: str,
         return []
 
 
-def _short_positions_note(account: str, symbols: List[str]
-                          ) -> Tuple[str, ...]:
+def _short_positions_note(account: str, symbols: List[str],
+                          booked: str = "open") -> Tuple[str, ...]:
     """The note (headline, detail) naming a taxable account's positions
-    that go short (_short_positions_cands) and bear on the tax year."""
+    that go short (_short_positions_cands) and bear on the tax year.
+    `booked`: what the gains engine did with their sales
+    (lib/first_run.engine_booking, the split the run's closing summary
+    and `taxjson sum` say too): "open" — not in any total —,
+    "short_cover" — a short sale a later purchase closed, in the totals
+    — or "matched" — sold from a purchase in the files."""
     shown = ", ".join(symbols[:5]) \
         + (f" +{len(symbols) - 5} more" if len(symbols) > 5 else "")
+    if booked == "short_cover":
+        return (f"{len(symbols)} position(s) go short in {account}'s data "
+                f"({shown}): booked as short sales closed by a later "
+                f"purchase",
+                "Sales with no purchase in your files, unless they were "
+                "real short sales. Their gain is in the totals at the "
+                "covering purchase's cost — not yours if you held the "
+                "shares before your files start; `taxjson "
+                "find-missing-history` lists them with the fixes.")
+    if booked == "matched":
+        return (f"{len(symbols)} position(s) read short in {account}'s "
+                f"data by the missing-history check ({shown})",
+                "The gains engine sold them from purchases in your files, "
+                "so they are in the totals; the check reads that day's "
+                "rows in another order: compare it with the broker's "
+                "trades.")
     return (f"{len(symbols)} position(s) go short in {account}'s data "
             f"({shown})",
             "Sales with no purchase in your files, unless they were real "
@@ -7300,23 +7391,40 @@ def _report_short_positions(root: Path, settings: Dict[str, Any],
             # (a later pass's echo of it — the blended pass, a failed
             # stage — is not shown either)
             _SHOWN_THIS_RUN.add(("short",) + key)
-    notes: List[Tuple[str, List[str]]] = []
+    # What the gains engine booked for each listed pair (the split the
+    # closing summary and `taxjson sum` make, lib/first_run.
+    # engine_booking): a short a later purchase of the year closed is IN
+    # the totals — "in no total" said for it contradicted both.
+    booked: Dict[Tuple[str, str], str] = {}
+    if rows:
+        try:
+            from taxjson.lib.first_run import engine_booking
+            booked = engine_booking(
+                cache, [rows[(c.symbol, c.account)]
+                        for _n, cands in unmarked for c in cands
+                        if (c.symbol, c.account) in rows],
+                year, date_basis=_tax_date_basis(settings))
+        except Exception:                           # noqa: BLE001
+            booked = {}
+    notes: List[Tuple[str, List[str], str]] = []
     for name, cands in unmarked:
-        keep = []
+        keep: Dict[str, List[str]] = {}
         for c in cands:
             key = (c.symbol, c.account)
             if _listed(key):
-                keep.append(c.symbol)
+                keep.setdefault(booked.get(key, "open"), []).append(
+                    c.symbol)
             else:
                 outside[key] = rows[key]
-        if keep:
-            notes.append((name, keep))
+        for how in ("open", "short_cover", "matched"):
+            if keep.get(how):
+                notes.append((name, keep[how], how))
     _step("Checking for missing purchase history")
     for b in shown_blocks:
         for line in b:
             _echo_captured(line, once=True)
-    for name, syms in notes:
-        _say("note", *_short_positions_note(name, syms), indent="  ",
+    for name, syms, how in notes:
+        _say("note", *_short_positions_note(name, syms, how), indent="  ",
              file=sys.stdout)
     if notes:
         # A day a TOBASE line's two listings trade opposite ways with no
@@ -11520,6 +11628,12 @@ def cmd_scan(args: argparse.Namespace) -> None:
                    verifies every defined map pair names one issuer
                    (MAP-BAD? on mismatch). Candidates to verify, not
                    verdicts.
+      XLIST-LOSS   a loss on one listing with another listing of the
+                   same root, under an equal name, bought within 30
+                   days (any account): a superficial loss / wash sale
+                   the books cannot see until ticker.map says TOBASE
+                   (one security) or DISTINCT (two) — both countries
+                   (lib/xlist_loss_radar).
       CDR-PAIR     a .TO line whose exchange name says CDR (Canadian
                    Depositary Receipt — SAMPLR.TO over SAMPLR.US): the SAME
                    issuer but NOT a listing equivalent (fractional,
@@ -11729,6 +11843,17 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     "ticker.map has no GLOBAL/TOBASE entry — the "
                     "engine treats them as two securities (splits the "
                     "ACB pool; the radar can miss the pair)."))
+
+    # XLIST-LOSS: a loss on one listing, another listing of the same
+    # root under an equal name bought within 30 days, the pair neither
+    # joined nor ruled DISTINCT (lib/xlist_loss_radar — the last run's
+    # findings the map does not answer yet).
+    from taxjson.lib import xlist_loss_radar as _XR
+    for _f in _XR.open_findings(root):
+        findings.append(("XLIST-LOSS", ", ".join(sorted(
+            {str(x.get("account")) for x in _f.get("losses") or []})),
+            f"{_f['loss_symbol']}/{_f['other_symbol']}",
+            _XR.scan_text(_f, country)))
 
     # MAP-UNUSED (note, not a finding): rules whose FROM symbol never
     # occurs in any parsed source — judged the way the ENGINE applies

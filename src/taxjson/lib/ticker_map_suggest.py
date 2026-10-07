@@ -12,6 +12,11 @@ in work/ (nothing is recomputed but the cheap reads):
   (never for two companies); and the symbol collisions (one symbol, two
   companies): `EXTRACT words | CURRENCY | SYMBOL` with its `TOBASE`, or
   a template with a placeholder (listed, never written);
+* work/xlist_loss_radar.state — a loss on one listing with another
+  listing of the same root and an equal name bought within 30 days
+  (lib/xlist_loss_radar): `TOBASE FROM TO`, offered (the equal names
+  and the trades are the evidence), its reason naming the DISTINCT line
+  for two securities;
 * work/<account>_symbol_codes.state — Questrade internal codes the run
   could not resolve, with a "looks like" candidate: `GLOBAL CODE TICKER`;
 * every stage's .diag — a ticker.map line a message names: IB's "one
@@ -362,12 +367,34 @@ def from_listing_suffix(cache: Path) -> List[Suggestion]:
     return out
 
 
+def from_xlist_loss_radar(cache: Path) -> List[Suggestion]:
+    """The TOBASE line of each loss on one listing with the other
+    listing (same root, an equal name) bought in the loss window
+    (lib/xlist_loss_radar). Offered, not conditional: the books hold
+    both symbols and the equal names are the evidence; DISTINCT is the
+    answer when they are two securities (the reason says so)."""
+    from taxjson.lib import xlist_loss_radar as XR
+    try:
+        doc = json.loads((cache / XR.STATE).read_text(encoding="utf-8"))
+        country = str(doc.get("country") or "")
+    except (OSError, ValueError, RecursionError, AttributeError):
+        return []
+    out = []
+    for f in XR.read_state(cache):
+        line = _clean(str(f.get("tobase") or ""))
+        if line:
+            out.append(Suggestion(line, XR.suggestion_reason(f, country),
+                                  f"work/{XR.STATE}"))
+    return out
+
+
 def gather(root: Path) -> List[Suggestion]:
     """Every suggestion in the project's work/ (deduplicated by line, the
     first source's reason kept), in a stable order."""
     cache = Path(root) / "work"
     found: List[Suggestion] = []
     if cache.is_dir():
+        found += from_xlist_loss_radar(cache)
         found += from_cross_listings(cache)
         found += from_symbol_codes(cache)
         found += from_listing_suffix(cache)

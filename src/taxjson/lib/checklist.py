@@ -790,6 +790,17 @@ def d_run_clean(ctx: Ctx) -> Result:
     if sheets:
         problems.append("unread spreadsheet(s) " + ", ".join(sheets)
                         + " — convert to CSV (taxjson-xlsx-to-csv)")
+    # A .tt line whose total is not its qty x price +/- fee is booked as
+    # written (lib/tt_totals; `run --strict` refuses it — QA F2).
+    from taxjson.lib.tt_totals import project_mismatches
+    tt_off = [f"inputs/{a}/{tt}:{m.where.rsplit(':', 1)[-1]}"
+              for a, tt, m in project_mismatches(ctx.root, ctx.accounts)]
+    if tt_off:
+        problems.append(
+            f"{len(tt_off)} .tt line(s) whose total is not qty x price "
+            f"+/- fee, booked as written: {', '.join(tt_off[:5])}"
+            + (f" +{len(tt_off) - 5} more" if len(tt_off) > 5 else "")
+            + " — fix the total or put the difference in the fee column")
     if problems:
         return Result("run-clean", "attention", "; ".join(problems))
     stamp = datetime.fromtimestamp(oldest_report).strftime("%Y-%m-%d %H:%M")
@@ -1420,6 +1431,20 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                       f"the cross-account pass) — run `taxjson run`")
     # US projects in §1091's words, never CRA's (S049-14).
     _us = is_us(ctx.settings.get("country"))
+    # A loss on one listing with the other listing bought in its window,
+    # the pair neither joined nor ruled DISTINCT (lib/xlist_loss_radar):
+    # the books deny nothing until ticker.map answers it.
+    from taxjson.lib.xlist_loss_radar import open_findings
+    xl = [f"{f['loss_symbol']}/{f['other_symbol']}"
+          for f in open_findings(ctx.root)]
+    if xl:
+        return Result("wash-reviewed", "attention",
+                      f"{len(xl)} possible "
+                      f"{'wash sale' if _us else 'superficial loss'}(s) "
+                      f"across listings: {', '.join(xl[:4])}"
+                      f"{' ...' if len(xl) > 4 else ''} — add the TOBASE "
+                      f"(one security) or DISTINCT (two) line to ticker.map "
+                      f"(`taxjson ticker-map --suggest`)")
     flag_note = ""
     if flags:
         shown = sorted(flags)
