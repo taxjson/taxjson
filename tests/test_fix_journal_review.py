@@ -556,5 +556,34 @@ class TestDeclaredLineChecks(unittest.TestCase):
         self._partial("usa")
 
 
+class TestJournalsReadsADamagedState(unittest.TestCase):
+
+    def test_no_crash_on_a_damaged_state(self):
+        from taxjson.lib import cross_listings as XL
+        ok = {"from": "QZD.U.TO", "to": "QZD.TO", "source": "broker",
+              "out": {"account": "margin", "broker": "rbc_direct",
+                      "symbol": "QZD.U.TO", "date": "2025-05-06",
+                      "quantity": 10},
+              "in": {"account": "margin", "broker": "rbc_direct",
+                     "symbol": "QZD.TO", "date": "2025-05-06",
+                     "quantity": 10}}
+        docs = [{"joined": [1]}, {"joined": 1}, {"joined": {"a": 1}},
+                {"joined": [{"out": 1, "in": "x"}]},
+                {"joined": [dict(ok, names=7)]},
+                {"suggested": [dict(ok, names=[1, None], out=[])]},
+                {"refused": [dict(ok, refused=3, reason=[1])]}]
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td)["canada"]
+            (root / "work").mkdir()
+            for d in docs:
+                with self.subTest(doc=d):
+                    (root / "work" / XL.STATE).write_text(json.dumps(
+                        dict(d, format=XL.FORMAT)))
+                    for args in (("journals", "--json"), ("journals",)):
+                        r = cli(root, *args)
+                        self.assertNotIn("Traceback", r.stderr)
+                        self.assertIn(r.returncode, (0, 1), _out(r))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -179,7 +179,7 @@ def source_of(rec: Dict[str, Any]) -> str:
     src = str(rec.get("source") or "").strip()
     if src not in _BROKER_SOURCES:
         return src
-    o, i = rec.get("out") or {}, rec.get("in") or {}
+    o, i = _obj(rec.get("out")), _obj(rec.get("in"))
     journal = str(rec.get("journal") or "")
     ref = str(rec.get("ref") or "")
     broker = str(o.get("broker") or rec.get("broker") or "")
@@ -208,8 +208,14 @@ def _leg_key(acct: str, sym: str, date: str, in_sym: str,
             round(abs(q), 6))
 
 
+def _obj(x: Any) -> Dict[str, Any]:
+    """`x` when it is a JSON object, else {} (a damaged state record)."""
+    return x if isinstance(x, dict) else {}
+
+
 def _from_record(rec: Dict[str, Any], state: str) -> Dict[str, Any]:
-    o, i = rec.get("out") or {}, rec.get("in") or {}
+    rec = _obj(rec)
+    o, i = _obj(rec.get("out")), _obj(rec.get("in"))
     frm = str(o.get("symbol") or rec.get("from") or "").upper()
     to = str(i.get("symbol") or rec.get("to") or "").upper()
     qty = abs(_f(o.get("quantity") if o else rec.get("quantity")))
@@ -234,7 +240,9 @@ def _from_record(rec: Dict[str, Any], state: str) -> Dict[str, Any]:
                  str(rec.get("kind") or "TOBASE").upper()),
         "_refused": str(rec.get("refused") or ""),
         "reason": str(rec.get("reason") or "") or None,
-        "names": [str(n) for n in (rec.get("names") or [])][:2],
+        "names": [str(n) for n in (rec.get("names")
+                                   if isinstance(rec.get("names"),
+                                                 (list, tuple)) else [])][:2],
         # Where a declared journal was written (a .tt line's place).
         "where": str(rec.get("where") or "") or None,
     }

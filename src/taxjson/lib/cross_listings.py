@@ -1222,7 +1222,10 @@ def read_state(path: Path) -> Dict[str, List[Dict[str, Any]]]:
         doc = None
     if not isinstance(doc, dict) or doc.get("format") != FORMAT:
         return {k: [] for k in STATE_KEYS}
-    return {k: [r for r in (doc.get(k) or []) if isinstance(r, dict)]
+    # A hand-edited or damaged file: a key that is not a list, a record
+    # that is not an object, is skipped (never a crash of a reader).
+    return {k: [r for r in (doc.get(k) if isinstance(doc.get(k), list)
+                            else []) if isinstance(r, dict)]
             for k in STATE_KEYS}
 
 
