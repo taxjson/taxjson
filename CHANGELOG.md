@@ -134,7 +134,9 @@
   one security with each other too (a PLC and a CORP that each match a
   name stating no form are not).
 - **A move between brokers over a weekend pairs.** The transfer pairing
-  window is 5 business days instead of 5 calendar days.
+  window is 5 business days instead of 5 calendar days, and so is the
+  window in which a Questrade or RBC transfer-in reads its listing from
+  another broker's transfer out.
 - **`taxjson sanity` folds the listings the run joined.** A broker position
   on a listing that `taxjson run` joined to another by its transfer journal
   read as missing from the books; sanity now applies the run's own joins

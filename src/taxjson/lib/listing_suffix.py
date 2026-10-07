@@ -16,7 +16,7 @@ the project's other books instead, in this order:
 
 1. transfer pairing: a transfer-in of the symbol (quantity q, date d) is
    the arrival of exactly one outgoing transfer of q shares, within
-   cross_listings.PAIR_DAYS days, in the export of a broker that names
+   cross_listings.PAIR_DAYS business days, in the export of a broker that names
    the listing (not a CURRENCY_SUFFIX_BROKERS export), whose security
    name is EQUAL to the arriving one (symbol_codes.exact_name, as the
    cross-listing join reads names), and that leg is
@@ -407,9 +407,13 @@ def project_evidence(cache: Path, accounts: Iterable[str], *,
 # ------------------------------------------------------------ inference
 
 def _close(a: str, b: str, days: int) -> bool:
-    from taxjson.lib.cross_listings import _d
+    """The two dates are at most `days` BUSINESS days apart (weekends not
+    counted), as the cross-listing pairing reads its window
+    (cross_listings.business_days): a move between brokers over a
+    weekend is one arrival here too."""
+    from taxjson.lib.cross_listings import _d, business_days
     da, db = _d(a), _d(b)
-    return bool(da and db and abs((da - db).days) <= days)
+    return bool(da and db and business_days(da, db) <= days)
 
 
 def _same_qty(a: float, b: float) -> bool:

@@ -458,5 +458,32 @@ class TestCurrencyJournalRecordedOnce(unittest.TestCase):
                          [("QZD.U.TO", "QZD.TO", "tt")])
 
 
+class TestListingSuffixWindowIsBusinessDays(unittest.TestCase):
+
+    def _check(self):
+        from test_fix_qt_listing_suffix import _ev, _res, _scan
+        # Out on a Friday, in the next Friday: 7 calendar days, 5
+        # business days — the cross-listing pairing's window.
+        r = _res(_scan(QZAX_US=("USD", "QZALPHA MINES CORP",
+                                [("2026-09-11", 24.0)])),
+                 _ev(outs=[("QZAA.US", "2026-09-04", 24,
+                            "QZALPHA MINES CORP")]))
+        self.assertEqual(r["corrected"]["QZAX.US"]["symbol"], "QZAX.TO")
+        # Six business days: not the arrival.
+        r = _res(_scan(QZAX_US=("USD", "QZALPHA MINES CORP",
+                                [("2026-09-14", 24.0)])),
+                 _ev(outs=[("QZAA.US", "2026-09-04", 24,
+                            "QZALPHA MINES CORP")]))
+        self.assertEqual(r["corrected"], {})
+
+    @rule("CA-XLIST-02")
+    def test_canada_window_counts_business_days(self):
+        self._check()
+
+    @rule("US-XLIST-02")
+    def test_usa_window_counts_business_days(self):
+        self._check()
+
+
 if __name__ == "__main__":
     unittest.main()
