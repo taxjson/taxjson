@@ -327,6 +327,26 @@ class TestWindowAndStar(unittest.TestCase):
         self.assertEqual({p.reason for p in r["suggested"]},
                          {"a listing pairs with two other listings"})
 
+    @rule("CA-XLIST-03")
+    def test_canada_currency_journal_and_gambit_share_the_cad_line(self):
+        # Questrade's parser-paired journal (JOURNAL line) onto QZD.TO
+        # and RBC's gambit from QZD.US onto QZD.TO: both joined.
+        nm = "QZD US DLR CURRENCY ETF UNIT CL A"
+        qt = [_leg("QZD.U.TO", "2025-10-21", -150, nm, account="tfsa",
+                   broker="questrade"),
+              _leg("QZD.TO", "2025-10-21", 150, nm, account="tfsa",
+                   broker="questrade")]
+        qt[0].currency, qt[1].currency = "USD", "CAD"
+        for g in qt:
+            g.pair = g.ref = "p1"
+        r = _run(qt + _gambit("2022-02-15", 1200, OLD),
+                 _names(QZD_US=[OLD], QZD_TO=[OLD, nm], QZD_U_TO=[nm]),
+                 currency_journals=True)
+        self.assertEqual(r["suggested"], [])
+        self.assertEqual(sorted((p.kind, p.frm, p.to) for p in r["joined"]),
+                         [("JOURNAL", "QZD.U.TO", "QZD.TO"),
+                          ("TOBASE", "QZD.US", "QZD.TO")])
+
     @rule("CA-XLIST-01")
     @rule("US-XLIST-01")
     def test_a_move_between_listings_a_journal_joined_is_joined(self):

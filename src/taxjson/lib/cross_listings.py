@@ -519,6 +519,7 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             nx = names.get(o[0].symbol, set())
             ny = names.get(i[0].symbol, set())
             joined.append(Pair(o[0], i[0], frm, to, kind="JOURNAL",
+                               journal=o[0].broker,
                                names=(shown.get(min(nx), "") if nx else "",
                                       shown.get(min(ny), "") if ny
                                       else "")))
