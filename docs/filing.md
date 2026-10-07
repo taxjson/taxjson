@@ -53,7 +53,12 @@ the open steps one at a time; `--quick` skips the slow detectors.
 - [ ] `taxjson renames` — every ticker change is a dated event, and no
       trade in an old ticker after its rename date is left undeclared
       (a dated `RENAME OLD NEW YYYY-MM-DD late=fold|late=separate` line
-      in `ticker.map` says which; `run --strict` stops until then).
+      in `ticker.map` says which; `run --strict` stops until then), and
+      no look-alike rename the exports show is left unbooked
+      (`taxjson renames --pending`).
+- [ ] `taxjson journals --pending` — every broker journal between two
+      listings of one security is joined, or settled with the `.tt` or
+      ticker.map line it names.
 - [ ] `taxjson elect --pending` — no unresolved merger or spin-off
       election.
 - [ ] `taxjson crypto-sends` — every crypto send that did not arrive in

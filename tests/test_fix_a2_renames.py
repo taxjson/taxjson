@@ -274,6 +274,7 @@ class TestRenamesReport(unittest.TestCase):
             doc = report(root, cfg)
         self.assertEqual(doc["undated"], [
             {"rule": "GLOBAL", "old": "OLD.TO", "new": "NEW.TO",
+             "source": "legacy undated map",
              "broker_dates": ["2024-06-01"]}])
         self.assertIn("RENAME OLD.TO NEW.TO 2024-06-01",
                       "\n".join(render(doc)))

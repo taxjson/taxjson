@@ -15,6 +15,28 @@
   identical, or nothing is written. Default: a diff; `--write` (with a
   `ticker.map.bak` unless `--no-backup`); `--check` exits 1 when the file is
   not formatted. `taxjson init` now writes ticker.map in this layout.
+- **`taxjson journals` lists every broker journal between two listings**
+  (`tjs journals`): per account, each journal's date, FROM → TO, quantity,
+  broker, how it was found (a Questrade BRW journal, an RBC journal
+  transfer with or without its `J~` reference, an IB InterDepot, a move
+  across brokers that changes the listing, a `.tt` or ticker.map line) and
+  its state: joined (the `TOBASE` / `JOURNAL` line that pools the two
+  listings, yours or the run's own, and the `DISTINCT` line that undoes
+  it), suggested (the reason, and the `.tt` line `JOURNAL <date> FROM TO
+  QTY` or the ticker.map line that settles it) or refused (kept apart by a
+  `DISTINCT` line, or the legs name two companies: the reason and the
+  undo). Read-only, from the last run. `--account`, `--year`, `--json` (a
+  stable schema, docs/settings.md), and `--pending` (only the journals not
+  joined; exit 1 when there is one). `taxjson checklist` has a journals
+  step.
+- **`taxjson renames` names each rename's source** (a broker row, an IB
+  contract id, a `.tt` line, a ticker.map line; an undated ticker.map rule
+  is a "legacy undated map") in a table, and lists the look-alike renames
+  the Questrade, RBC and Webull exports show ("looks renamed") as
+  suggested, each with the `.tt` line `RENAME <date> OLD NEW` and the
+  dated ticker.map line that book it. `--pending` lists only the
+  undeclared late trades and the suggestions and exits 1 when there is
+  one; the checklist's renames step is [!] while a suggestion is open.
 
 ### Fixed
 

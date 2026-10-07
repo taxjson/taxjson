@@ -55,7 +55,9 @@ class TestConvertedCommands(unittest.TestCase):
              ("format",), ("migrate", "--dry-run")]
     # group E (the rest, exit 1 by design, in tests/test_style_e.py)
     CASES += [("tax-logic",), ("tax-logic", "--ids"), ("edge-cases",),
-              ("find-missing-history",), ("renames",), ("spinoffs",),
+              ("find-missing-history",), ("renames",),
+              ("renames", "--pending"), ("journals",),
+              ("journals", "--pending"), ("spinoffs",),
               ("splits",), ("audit", "--summary"), ("audit", "QZQ.US"),
               ("help",), ("help", "--all"), ("help", "audit"),
               ("channels", "--offline"), ("ticker-map", "--suggest")]

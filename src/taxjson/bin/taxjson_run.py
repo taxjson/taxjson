@@ -1086,8 +1086,8 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
                          "reconcile-slips", "carryover", "option-boundary",
                          "close-year", "check-filed", "handoff")),
     ("Explain and check", ("audit", "wash-sales", "tax-logic", "edge-cases",
-                           "check-dates", "sanity", "renames", "spinoffs",
-                           "splits")),
+                           "check-dates", "sanity", "journals", "renames",
+                           "spinoffs", "splits")),
     ("Release", ("channels", "deploy", "promote")),
     ("Tools", ("redact", "help")),
 )
@@ -14104,24 +14104,66 @@ def cmd_splits(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def cmd_journals(args: argparse.Namespace) -> None:
+    """`taxjson journals`: every broker journal between two listings of
+    one security, per account — its date, FROM -> TO, quantity, broker,
+    how it was found and its state: joined (the map line that pools the
+    two), suggested (the reason, and the `.tt` / ticker.map line that
+    settles it) or refused (the reason, and the undo) — read from the
+    last run's work/ (lib/journals). `--pending` lists only the journals
+    not joined and exits 1 when there is one."""
+    from taxjson.lib.journals import JournalsError, render, report
+    root = Path(args.dir).resolve()
+    cfg = load_config(root)
+    want = (args.account or "").strip() or None
+    if want and want not in (cfg.get("accounts") or {}):
+        _die(f"no [accounts.{want}] in taxjson.toml — check the name.")
+    try:
+        doc = report(root, cfg, want, args.year)
+    except JournalsError as e:
+        _die(f"{e} — run `taxjson run` first",
+             "The journals are read from the last run's work/ folder.")
+    if args.pending:
+        doc = dict(doc, journals=[j for j in doc["journals"]
+                                  if j["state"] != "joined"])
+    if getattr(args, "json", False):
+        _json_out(doc)
+    else:
+        for ln in render(doc, pending=args.pending):
+            print(ln)
+    if args.pending and doc["pending"]:
+        raise SystemExit(1)
+
+
 def cmd_renames(args: argparse.Namespace) -> None:
     """`taxjson renames`: every ticker change in the books as a dated
     event (date, source, position and book cost carried), every trade in
     an old ticker after its rename with how ticker.map resolves it,
-    and the undated ticker.map renames (lib/renames). Exit 1 while a late
-    trade is unresolved."""
+    the look-alike renames the exports show (suggested, with the `.tt`
+    line `RENAME <date> OLD NEW` that books each) and the undated
+    ticker.map renames (lib/renames). Exit 1 while a late trade is
+    unresolved; with --pending, also while a suggestion is open."""
     from taxjson.lib.renames import render, report
     root = Path(args.dir).resolve()
     try:
         doc = report(root, load_config(root), args.account)
     except ValueError as e:
         _die(str(e))
+    pending = getattr(args, "pending", False)
     if getattr(args, "json", False):
+        if pending:
+            bad = {(x["rename_date"], x["renamed_to"]) for x in doc["late"]
+                   if x["resolution"] == "unresolved"}
+            doc = dict(doc, renames=[e for e in doc["renames"]
+                                     if (e["date"], e["new"]) in bad],
+                       late=[x for x in doc["late"]
+                             if x["resolution"] == "unresolved"],
+                       undated=[])
         _json_out(doc)
     else:
-        for ln in render(doc):
+        for ln in render(doc, pending=pending):
             print(ln)
-    if doc["unresolved"]:
+    if doc["unresolved"] or (pending and doc["pending"]):
         raise SystemExit(1)
 
 
@@ -21593,6 +21635,32 @@ def _build_parser(prog: str = "taxjson"
                       help="Emit JSON instead of text")
     p_tm.set_defaults(func=cmd_ticker_map)
 
+    p_jn = sub.add_parser(
+        "journals",
+        help="Broker journals between listings, and their state",
+        description="Every broker journal between two listings of one "
+             "security, per account: its date, FROM -> TO, quantity, "
+             "broker, how it was found (a Questrade BRW journal, an RBC "
+             "journal transfer, an IB InterDepot, a move across brokers "
+             "with a listing change, a .tt or ticker.map line) and its "
+             "state — joined (the ticker.map line that pools them), "
+             "suggested (the reason, and the `.tt` line `JOURNAL <date> "
+             "FROM TO QTY` or ticker.map line that settles it) or "
+             "refused (the reason, and the undo). Read from the last "
+             "`taxjson run`; no network.")
+    p_jn.add_argument("--account", metavar="NAME",
+                      help="Only this account's journals")
+    p_jn.add_argument("--year", type=int, metavar="YYYY",
+                      help="Only the journals dated in this year "
+                           "(default: every year)")
+    p_jn.add_argument("--pending", action="store_true",
+                      help="Only the journals not joined (suggested or "
+                           "refused); exit 1 when there is one")
+    p_jn.add_argument("--json", action="store_true",
+                      help="Emit JSON instead of text (a stable schema: "
+                           "docs/settings.md)")
+    p_jn.set_defaults(func=cmd_journals)
+
     p_ren = sub.add_parser(
         "renames",
         help="Ticker changes as dated events",
@@ -21600,10 +21668,18 @@ def _build_parser(prog: str = "taxjson"
              "from, the position and cost it carried) and every trade "
              "in an old ticker after its rename, with how ticker.map "
              "resolves it (`RENAME OLD NEW YYYY-MM-DD late=fold|"
-             "separate`); exit 1 while one is not declared.")
+             "separate`); exit 1 while one is not declared. Each dated "
+             "rename names its source (a broker row, an IB contract id, "
+             "a .tt line, a ticker.map line); the look-alike renames "
+             "the Questrade, RBC and Webull exports show are listed as "
+             "suggested, with the `.tt` line `RENAME <date> OLD NEW` "
+             "that books each.")
     p_ren.add_argument("account", nargs="?", help="Account (default: all)")
     p_ren.add_argument("--json", action="store_true",
                        help="Emit JSON instead of text")
+    p_ren.add_argument("--pending", action="store_true",
+                       help="Only the undeclared late trades and the "
+                            "suggested renames; exit 1 when there is one")
     p_ren.set_defaults(func=cmd_renames)
 
     p_logic = sub.add_parser(
