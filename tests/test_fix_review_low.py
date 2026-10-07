@@ -1,0 +1,72 @@
+"""Pre-release review fixes (low): synthetic data only.
+
+F5  — a command started without stdout or stderr (`>&-`, `2>&-`: Python
+      sets the stream to None) printed a traceback / stopped with exit 1:
+      lib/out.settling_streams wrapped the None stream.
+"""
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from test_fix_a2_errb import _env, _make_project  # noqa: E402
+
+
+def _closed(fd, root, home, *a):
+    """`taxjson -C root *a` with file descriptor `fd` (1 or 2) closed,
+    the other captured. -> (returncode, captured text)."""
+    keep = 2 if fd == 1 else 1
+    code = (f"import os, subprocess, sys; os.close({fd}); "
+            f"sys.exit(subprocess.call(sys.argv[1:], stdin=subprocess.DEVNULL,"
+            f" close_fds=False))")
+    r = subprocess.run(
+        [sys.executable, "-c", code, sys.executable, "-m",
+         "taxjson.bin.taxjson_run", "-C", str(root), *a],
+        cwd=str(root), env=_env(home),
+        stdout=subprocess.PIPE if keep == 1 else subprocess.DEVNULL,
+        stderr=subprocess.PIPE if keep == 2 else subprocess.DEVNULL,
+        text=True)
+    return r.returncode, (r.stdout if keep == 1 else r.stderr) or ""
+
+
+class TestClosedStreams(unittest.TestCase):
+    """F5: `tjs sum >&-` and `tjs run --no-input 2>&-` exit 0."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._td = tempfile.TemporaryDirectory()
+        td = Path(cls._td.name)
+        cls.home = td / "home"
+        cls.home.mkdir()
+        cls.root = td / "p"
+        _make_project(cls.root)
+        # A retired ticker.map line: the run's Info about it is printed
+        # to stderr by the run itself (not a stage).
+        (cls.root / "ticker.map").write_text(
+            "TRADINGVIEW ABC.TO TSX:ABC\n")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._td.cleanup()
+
+    def test_run_with_stderr_closed(self):
+        rc, out = _closed(2, self.root, self.home, "run", "--no-input")
+        self.assertEqual(rc, 0, out[-2000:])
+        self.assertIn("Done.", out)
+        self.assertTrue((self.root / "reports").is_dir())
+
+    def test_sum_with_stdout_closed(self):
+        rc, _out = _closed(2, self.root, self.home, "run", "--no-input")
+        self.assertEqual(rc, 0)
+        rc, err = _closed(1, self.root, self.home, "sum")
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(rc, 0, err[-2000:])
+
+
+if __name__ == "__main__":
+    unittest.main()

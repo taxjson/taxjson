@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- **A command started with its output or error stream closed works again.**
+  `taxjson sum >&-` printed a traceback and `taxjson run --no-input 2>&-`
+  stopped with exit 1 and no output (both exit 0 on v0.22.0): the start-up
+  wrapper that spaces console messages wrapped the missing stream too. A
+  missing stream is now left alone.
 - **`taxjson ticker-map --suggest` no longer offers a conditional hint as a
   plain suggestion.** A parser hint phrased "only if …" (RBC's dividend on a
   symbol no RBC file trades, which names `TOBASE ROOT.US ROOT.TO`; RBC's

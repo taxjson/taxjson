@@ -100,6 +100,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_summary`, `_tax_estimate_result`, `the canada estimate needs a province`
 
+### A traceback ending "AttributeError: 'NoneType' object has no attribute 'write'" after `tjs sum >&-`, or `tjs run --no-input 2>&-` stops with exit 1 and no output
+- **Check:** the command was started with its output or error stream closed (`>&-`, `2>&-`, or a scheduler that starts it without one); the same command with `>/dev/null` or `2>/dev/null` works.
+- **Cause:** since the blank-line handling between console messages (after v0.22.0), every command wraps its output streams at start-up, and a stream the process was started without was wrapped too, so the first line written to it failed.
+- **Fix:** upgrade; meanwhile redirect to `/dev/null` instead of closing the stream. A closed stream is now left unwrapped, as in v0.22.0, and the command finishes and exits as it would otherwise.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/out.py` — `settling_streams`; `src/taxjson/lib/cli_diag.py` — `run_top_level`
+
 ## Reading the broker files
 
 ### "Error: cannot detect broker for inputs/qt/99900001.csv. Check the header first: …"

@@ -540,11 +540,14 @@ def settling_streams():
     """Within it, sys.stdout and sys.stderr write the blank line a
     multi-line message owes (show()) before whatever any code prints
     next to the same destination — a report's raw print() included.
-    The top of a process only (lib/cli_diag.run_top_level)."""
+    The top of a process only (lib/cli_diag.run_top_level). A stream
+    the process started without (`>&-`, `2>&-`: None) stays None —
+    print() to it is a no-op, as it was before the proxies; wrapped,
+    every write raised AttributeError."""
     saved = sys.stdout, sys.stderr
-    if not isinstance(sys.stdout, _Settling):
+    if sys.stdout is not None and not isinstance(sys.stdout, _Settling):
         sys.stdout = _Settling(sys.stdout)
-    if not isinstance(sys.stderr, _Settling):
+    if sys.stderr is not None and not isinstance(sys.stderr, _Settling):
         sys.stderr = _Settling(sys.stderr)
     try:
         yield
