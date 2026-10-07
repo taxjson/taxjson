@@ -305,5 +305,61 @@ class TestUnusedDeclarationStopsStrict(unittest.TestCase):
         self._check("usa")
 
 
+# ------------------------------------------------------------ 6
+
+class TestFastRunAfterTheLastOtherIbStatementGoes(unittest.TestCase):
+    """Two IB accounts share one contract id under two symbols; mb's
+    QZNB row (05-08) dates the change for ma too. When mb's IB statement
+    is replaced by a .tt file, `run --fast` re-parses ma: its change is
+    dated from its own rows again (05-12)."""
+
+    def _check(self, country):
+        from test_fix_review2_ib import _ONE_ID, _U2
+        from test_fix_ibparse import FII_H, HEAD, TRADES_H, _trade
+        ma = (HEAD + TRADES_H
+              + _trade('QZOA', '2025-02-05, 10:00:00', 100, 10, -1000)
+              + _trade('QZNB', '2025-05-12, 10:00:00', -100, 12, 1200,
+                       code='C')
+              + FII_H + _ONE_ID)
+        mb = (HEAD + TRADES_H
+              + _trade('QZOA', '2025-02-05, 10:00:00', 50, 10, -500,
+                       acct=_U2)
+              + _trade('QZNB', '2025-05-08, 10:00:00', -50, 12, 600,
+                       code='C', acct=_U2)
+              + FII_H + _ONE_ID)
+        accounts = ('[accounts.ma]\ntype = "taxable"\n'
+                    '[accounts.mb]\ntype = "taxable"\n')
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, accounts=accounts,
+                                 files={"inputs/ma/ib.csv": ma,
+                                        "inputs/mb/ib.csv": mb})[country]
+
+            def split_dates():
+                doc = json.loads((root / "work/ma_ib.json").read_text())
+                rows = doc.get("transactions", doc) \
+                    if isinstance(doc, dict) else doc
+                return [t["date"] for t in rows
+                        if t.get("action") == "SPLIT"]
+            _run(self, root)
+            self.assertEqual(split_dates(), ["2025-05-08"])
+            (root / "inputs/mb/ib.csv").unlink()
+            (root / "inputs/mb/m.tt").write_text(
+                _bt("2025-01-06", f"QZZ.{_HOME[country][0]}", 1,
+                    _HOME[country][1], 5.0))
+            _run(self, root, "--fast")
+            self.assertEqual(split_dates(), ["2025-05-12"])
+            state = json.loads(
+                (root / "work/ma_ib_project.state").read_text())
+            self.assertEqual(state["accounts"], {})
+
+    @rule("CA-ACB-RENAME")
+    def test_canada(self):
+        self._check("canada")
+
+    @rule("US-BASIS-RENAME")
+    def test_usa(self):
+        self._check("usa")
+
+
 if __name__ == "__main__":
     unittest.main()

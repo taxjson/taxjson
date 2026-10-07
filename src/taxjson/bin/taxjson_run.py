@@ -3683,8 +3683,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # statements are deps.
             _ibp, _ibp_deps = stage_ib_project(name, inputs_dir.parent,
                                                cache)
-            if _ibp is not None:
-                deps += [_ibp] + _ibp_deps
+            deps += [_ibp] + _ibp_deps
+            if _ibp_deps:
                 _codes_args += ["--project-statements", str(_ibp)]
         if broker in _LS.CURRENCY_SUFFIX_BROKERS and not is_crypto:
             # The listings read from the evidence (a dep, rewritten only
@@ -4732,14 +4732,18 @@ def _symbol_codes_suffix() -> str:
 
 
 def stage_ib_project(name: str, root: Path, cache: Path
-                     ) -> Tuple[Optional[Path], List[Path]]:
+                     ) -> Tuple[Path, List[Path]]:
     """work/<name>_ib_project.state: the project's OTHER securities
     accounts' IB statements ({"account": name, "accounts": {label:
     [paths]}}), passed to the IB parse as --project-statements: a ticker
     change IB shows as one contract id under two symbols is the
     security's, dated from every account's rows (review 2 #4). Returns
-    (the state, those statements: deps of the parse). (None, []) when no
-    other account has an IB statement. Written only when it changes."""
+    (the state, those statements: deps of the parse; none when no other
+    account has an IB statement — then the parse gets no
+    --project-statements). Written only when it changes, and kept with
+    `"accounts": {}` when the last other statement goes: the state is
+    always a dep, so `run --fast` re-parses then too (third pre-release
+    review, 6)."""
     import json as _json
     from taxjson.lib.brokerages.detect import detect
     out = cache / f"{name}_ib_project.state"
@@ -4764,9 +4768,6 @@ def stage_ib_project(name: str, root: Path, cache: Path
         if found:
             others[label] = [str(p) for p in found]
             deps.extend(found)
-    if not others:
-        out.unlink(missing_ok=True)
-        return None, []
     text = _json.dumps({"account": name, "accounts": others}, indent=1,
                       sort_keys=True) + "\n"
     if _read_work_stamp(out) != text:

@@ -171,6 +171,9 @@
   the refusal of a line naming the raw spelling gives the line to write.
 - **`run --strict` stops on a declared rename that books nothing**, like
   the other unresolved rename items.
+- **`run --fast` re-parses an IB account when the project's last other
+  IB statement is removed.** The ticker change one contract id shows
+  stayed dated from the removed statement's rows.
 - **An event's `late=` applies to the accounts that held the old ticker.**
   Another account that bought the old ticker only after the change (maybe
   another company's shares) had its rows folded into the new symbol by a
