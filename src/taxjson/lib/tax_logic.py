@@ -770,7 +770,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "venue folds into .TO: A.TO and A.CN) books nothing, "
                  "said as an Info line. A legacy ticker.map dated RENAME "
                  "naming an option or a future is refused the same "
-                 "way.", cont=True),
+                 "way, and so is an undated ticker.map line (GLOBAL, "
+                 "TOBASE, JOURNAL, RENAME without a date) joining an "
+                 "option or a future with shares, an option with a "
+                 "future, or two option contracts of another expiry, "
+                 "right, strike or market; a respelling of one contract "
+                 "(the same expiry, right, strike and market) may be "
+                 "joined.", cont=True),
             Rule("CA-ACB-05",
                  "Accounts typed \"sheltered\" (RRSP, TFSA, FHSA, LIRA, "
                  "RESP...) are tracked but kept out of the filing totals. "
@@ -2265,7 +2271,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "venue folds into .TO: A.TO and A.CN) books nothing, "
                  "said as an Info line. A legacy ticker.map dated RENAME "
                  "naming an option or a future is refused the same "
-                 "way.", cont=True),
+                 "way, and so is an undated ticker.map line (GLOBAL, "
+                 "TOBASE, JOURNAL, RENAME without a date) joining an "
+                 "option or a future with shares, an option with a "
+                 "future, or two option contracts of another expiry, "
+                 "right, strike or market; a respelling of one contract "
+                 "(the same expiry, right, strike and market) may be "
+                 "joined.", cont=True),
             Rule("US-XLIST-01",
                  "Two listings of one company's same class of shares (a "
                  "US line and its Canadian line, two currency lines of "

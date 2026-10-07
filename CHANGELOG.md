@@ -127,6 +127,13 @@
   another company's shares) had its rows folded into the new symbol by a
   `late=fold` it never declared; they are now kept, listed as undeclared
   until a line of its own says.
+- **An undated ticker.map line never joins an option to its stock.**
+  `GLOBAL`, `TOBASE`, a legacy `JOURNAL` or a `RENAME` without a date that
+  joined an option contract or a future with a share listing (or two
+  different contracts) was accepted silently and pooled them; `taxjson run`
+  now refuses it naming the line, and `taxjson format-map` files it under
+  Unrecognized. A respelling of one contract (the same expiry, right,
+  strike and market) is still allowed.
 - **A declared rename that books nothing is said.** A `.tt` (or legacy
   ticker.map) RENAME no account's books carry (a typo of the symbol, a late
   date) gets a Warning naming the line, and `taxjson renames` lists it

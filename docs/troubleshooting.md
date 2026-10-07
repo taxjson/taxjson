@@ -79,6 +79,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `ticker.map problem(s)`; `src/taxjson/lib/ticker_map.py` — `read_side_rules`, `parse_side_line`, `line has no ticker.map keyword`; `src/taxjson/bin/taxjson_ticker_map.py` — `map_file_problems`
 
+### "Error: 1 ticker.map problem(s)" with "ticker.map:3: GLOBAL joins an option contract (QZK250620C00010000.US) with a share listing (QZK.US)" or "… joins two different option contracts"
+- **Check:** the named line is a `GLOBAL`, `TOBASE`, `JOURNAL` or undated `RENAME` line with an option symbol (or a future, `F:…`) on one side and a share symbol on the other, or two option symbols whose expiry, right (C/P), strike or market (`.US`, `.TO`) differ.
+- **Cause:** such a line makes the two the same security at every date: the contract's cost was pooled with the shares (or with another contract), and the gains changed without a word. Earlier the line was accepted silently (only a dated `RENAME` was refused).
+- **Fix:** delete the line. An option follows its underlying's line: join the shares' symbols instead (a line for the shares moves their options too). A respelling of one contract — the same expiry, right, strike and market, the root spelled otherwise (`GLOBAL QZB.B250620C00010000.TO QZB250620C00010000.TO`, an adjusted-series digit) — is allowed. Book an exercise or assignment as the broker's rows show it.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_convert_tt.py` — `_join_derivative_check`; `src/taxjson/bin/taxjson_ticker_map.py` — `_parse_map_text`
+
 ### `tjs format-map`: "Warning: 2 ticker.map problem(s): `taxjson run` refuses the map until each is fixed" or "Error: ticker.map: laying the map out in groups would change what it means"
 - **Check:** the warning lists each problem as `- ticker.map:<line>: …` (the line numbers of the file before formatting) and says how many lines went to the "Unrecognized" group; the error writes nothing (exit 2).
 - **Cause:** a line `taxjson run` cannot use (no keyword, malformed, a second target for one symbol) is kept exactly as written at the end of the file, in the "Unrecognized" group, so the line that wins stays first. The error means that moving the lines into their groups would change which of two contradicting lines wins, or the order of two dated renames that contradict each other.

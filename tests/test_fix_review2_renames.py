@@ -208,5 +208,80 @@ class TestUnusedDeclarations(unittest.TestCase):
                              ["unused"])
 
 
+# ------------------------------------------------------------ 6
+
+def _problems(text):
+    from taxjson.bin.taxjson_ticker_map import _parse_map_text
+    return _parse_map_text(text, "ticker.map")[1]
+
+
+class TestUndatedLinesNeverJoinContractsToShares(unittest.TestCase):
+
+    def test_option_and_shares_refused_in_every_undated_keyword(self):
+        for kw in ("GLOBAL", "TOBASE", "JOURNAL", "RENAME"):
+            for a, b in (("QZK250620C00010000.US", "QZK.US"),
+                         ("QZK.US", "QZK250620C00010000.US"),
+                         ("F:QZESM5", "QZES.US")):
+                with self.subTest(kw=kw, a=a, b=b):
+                    probs = _problems(f"{kw} {a} {b}\n")
+                    self.assertEqual(len(probs), 1, probs)
+                    self.assertIn("ticker.map:1:", probs[0])
+                    self.assertIn("with a share listing", probs[0])
+
+    def test_two_contracts_refused(self):
+        for b in ("QZK250620C00012000.US",      # another strike
+                  "QZK250620P00010000.US",      # another right
+                  "QZK250718C00010000.US",      # another expiry
+                  "QZK250620C00010000.TO",      # another market
+                  "F:QZESM5"):                  # a future
+            with self.subTest(b=b):
+                probs = _problems(f"GLOBAL QZK250620C00010000.US {b}\n")
+                self.assertEqual(len(probs), 1, probs)
+                self.assertIn("contract", probs[0])
+
+    def test_a_respelling_of_one_contract_is_allowed(self):
+        for a, b in (("QZOQ250620C00010000.US", "QZOP250620C00010000.US"),
+                     ("QZB.B250620C00010000.TO", "QZB250620C00010000.TO"),
+                     ("QZT1260918C00062000.TO", "QZT260918C00062000.TO"),
+                     ("QZK250620C10000", "QZK250620C00010000.US"),
+                     ("F:QZESM5", "/QZESM5")):
+            with self.subTest(a=a, b=b):
+                self.assertEqual(_problems(f"GLOBAL {a} {b}\n"), [])
+
+    def test_format_map_files_it_as_unrecognized(self):
+        from taxjson.lib.ticker_map_format import UNRECOGNIZED, format_map
+        text = ("JOURNAL QZK250620C00010000.US QZK.US\n"
+                "RENAME QZA.US QZB.US 2025-04-01\n")
+        res = format_map(text, migrate=True)
+        self.assertEqual(res.moved, [])
+        self.assertEqual(res.journals, [])
+        self.assertTrue(any("with a share listing" in p_
+                            for p_ in res.problems), res.problems)
+        tail = res.text.split(f"--- {UNRECOGNIZED} ---", 1)[1]
+        self.assertIn("JOURNAL QZK250620C00010000.US QZK.US", tail)
+
+    def _run_refused(self, country):
+        x, cur = _HOME[country]
+        files = {"ticker.map": f"GLOBAL QZK250620C00010000.{x} QZK.{x}\n",
+                 "inputs/margin/m.tt": (
+                     _bt("2025-03-01", f"QZK.{x}", 10, cur, 10.0)
+                     + _bt("2025-06-02", f"QZK.{x}", -10, cur, 12.0))}
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, files=files)[country]
+            r = cli(root, "run", "--no-input")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("ticker.map:1: GLOBAL joins an option contract "
+                          f"(QZK250620C00010000.{x}) with a share listing",
+                          _out(r))
+
+    @rule("CA-ACB-RENAME")
+    def test_canada_run_refuses(self):
+        self._run_refused("canada")
+
+    @rule("US-BASIS-RENAME")
+    def test_usa_run_refuses(self):
+        self._run_refused("usa")
+
+
 if __name__ == "__main__":
     unittest.main()
