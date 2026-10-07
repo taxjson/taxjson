@@ -3654,6 +3654,15 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                                _codes_state)
             deps.append(_codes_state)
             _codes_args = ["--symbol-codes", str(_codes_state)]
+        if broker == "ib" and not is_crypto:
+            # The project's other IB accounts: a one-contract-id ticker
+            # change is dated from all of them (review 2 #4); their
+            # statements are deps.
+            _ibp, _ibp_deps = stage_ib_project(name, inputs_dir.parent,
+                                               cache)
+            if _ibp is not None:
+                deps += [_ibp] + _ibp_deps
+                _codes_args += ["--project-statements", str(_ibp)]
         if broker in _LS.CURRENCY_SUFFIX_BROKERS and not is_crypto:
             # The listings read from the evidence (a dep, rewritten only
             # when they change).
@@ -4689,6 +4698,49 @@ TRANSFER_COSTS_SUFFIX = "_transfer_costs.json"
 def _symbol_codes_suffix() -> str:
     from taxjson.lib.symbol_codes import SUFFIX
     return SUFFIX
+
+
+def stage_ib_project(name: str, root: Path, cache: Path
+                     ) -> Tuple[Optional[Path], List[Path]]:
+    """work/<name>_ib_project.state: the project's OTHER securities
+    accounts' IB statements ({"account": name, "accounts": {label:
+    [paths]}}), passed to the IB parse as --project-statements: a ticker
+    change IB shows as one contract id under two symbols is the
+    security's, dated from every account's rows (review 2 #4). Returns
+    (the state, those statements: deps of the parse). (None, []) when no
+    other account has an IB statement. Written only when it changes."""
+    import json as _json
+    from taxjson.lib.brokerages.detect import detect
+    out = cache / f"{name}_ib_project.state"
+    others: Dict[str, List[str]] = {}
+    deps: List[Path] = []
+    for label, acfg in sorted((_soft_config(root).get("accounts")
+                               or {}).items()):
+        if (label == name or not isinstance(acfg, dict)
+                or acfg.get("crypto")):
+            continue
+        acct_dir = root / "inputs" / label
+        if not acct_dir.is_dir():
+            continue
+        found = []
+        for csv in input_files(acct_dir, ".csv"):
+            try:
+                det = detect(csv)
+            except Exception:                      # noqa: BLE001
+                continue        # that account's own stage names it
+            if det.broker == "ib" and not det.positions:
+                found.append(csv)
+        if found:
+            others[label] = [str(p) for p in found]
+            deps.extend(found)
+    if not others:
+        out.unlink(missing_ok=True)
+        return None, []
+    text = _json.dumps({"account": name, "accounts": others}, indent=1,
+                      sort_keys=True) + "\n"
+    if _read_work_stamp(out) != text:
+        _write_work_stamp(out, text)
+    return out, deps
 
 
 def stage_symbol_codes(name: str, csvs: List[Path], root: Path,
