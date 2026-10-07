@@ -54,23 +54,31 @@ def _gambit(day, qty, name, ref="", journal=True, frm="QZD.US",
 
 class TestWording(unittest.TestCase):
     def test_journal_wording_and_reference(self):
+        from taxjson.lib.missing_history import journal_leg_key
         w = XL.journal_wording
         self.assertEqual(
             w("rbc_direct", "TFR - " + OLD + " TRANSFER TO C$    J"),
-            ("rbc_direct", ""))
+            "rbc_direct")
         self.assertEqual(
             w("rbc_direct", "TFR - " + NEW + " TRANSFER FROM U$  J~0TFR1Q"),
-            ("rbc_direct", "J~0TFR1Q"))
-        self.assertEqual(w("ib", "InterDepot (QZN)"), ("ib", ""))
+            "rbc_direct")
+        self.assertEqual(w("ib", "InterDepot (QZN)"), "ib")
         self.assertEqual(w("questrade", "QZD JOURNAL POSITION TO USD"),
-                         ("questrade", ""))
+                         "questrade")
         for b, d in (("rbc_direct", "TFO - " + OLD + " ACCOUNT TRANSFER"),
                      ("rbc_direct", "TFR - " + OLD + " TRANSFER TO C$"),
                      ("ib", "ATON (QZN)"), ("ib", "ACATS (QZN)"),
                      ("questrade", "QZD TRANSFER IN"),
                      ("webull", "InterDepot (QZN)")):
             with self.subTest(b=b, d=d):
-                self.assertEqual(w(b, d), ("", ""))
+                self.assertEqual(w(b, d), "")
+        # The pair id is missing_history.journal_leg_key's: RBC's J~
+        # reference (with the day) shared by the two legs.
+        legs = [{"action": "TRANSFER", "date": "2024-06-12",
+                 "description": "TFR - " + NEW + " TRANSFER " + t + "  J~0TFR1Q"}
+                for t in ("TO C$", "FROM U$")]
+        self.assertEqual(journal_leg_key(legs[0]), journal_leg_key(legs[1]))
+        self.assertIsNotNone(journal_leg_key(legs[0]))
 
     def test_business_days(self):
         bd = XL.business_days

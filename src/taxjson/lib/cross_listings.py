@@ -208,6 +208,7 @@ def gather(cache: Path, accounts: Iterable[str],
     account's parsed exports in work/. `rows`, when given, receives
     every share-listing and broker-code row (Row: the symbol-collision
     check, `collisions`)."""
+    from taxjson.lib.missing_history import journal_leg_key
     from taxjson.lib.symbol_codes import (_CONTROL_RE, _plain_listing,
                                           _row_name, exact_name, is_code)
     legs: List[Leg] = []
@@ -260,9 +261,13 @@ def gather(cache: Path, accounts: Iterable[str],
                     continue
                 if abs(q) <= _EPS or _d(t.get("date")) is None:
                     continue
-                jw, ref = journal_wording(broker,
-                                          str(t.get("description") or ""))
+                jw = journal_wording(broker,
+                                     str(t.get("description") or ""))
                 pair = str(t.get("journal_pair") or "")
+                # The broker's pair id: Questrade's journal_pair, RBC's
+                # J~ reference (missing_history.journal_leg_key).
+                key = journal_leg_key(t)
+                ref = "|".join(key) if key else ""
                 legs.append(Leg(acct, broker, sym,
                                 str(t.get("date"))[:10], q,
                                 pair=pair,
@@ -271,7 +276,7 @@ def gather(cache: Path, accounts: Iterable[str],
                                 name=toks,
                                 raw_name=" ".join(
                                     _row_name(t, broker).split()),
-                                journal=jw, ref=ref or pair))
+                                journal=jw, ref=ref))
     legs.sort(key=lambda g: (g.date, g.account, g.broker, g.symbol,
                              g.quantity))
     return legs, names, shown
@@ -284,30 +289,28 @@ def gather(cache: Path, accounts: Iterable[str],
 # (<ROOT>)", the parser's description) and Questrade's BRW currency
 # journal ("<NAME> JOURNAL POSITION TO USD" / "FROM CAD ...").
 _RBC_JOURNAL_RE = re.compile(
-    r"^\s*TFR\s*-.*\bTRANSFER\s+(?:TO|FROM)\s+[CU]\$\s+J(?:~(\S+))?\s*$",
+    r"^\s*TFR\s*-.*\bTRANSFER\s+(?:TO|FROM)\s+[CU]\$\s+J(?:~\S+)?\s*$",
     re.IGNORECASE)
 _IB_JOURNAL_RE = re.compile(r"^\s*InterDepot\s*\(", re.IGNORECASE)
 
 
-def journal_wording(broker: str, desc: str) -> Tuple[str, str]:
-    """(broker, reference) when a transfer row carries its broker's
-    journal wording (_RBC_JOURNAL_RE, _IB_JOURNAL_RE, Questrade's BRW
-    JOURNAL POSITION), else ("", ""). The reference is the one RBC
-    writes after J~ (both legs of one journal share it); Questrade's is
-    the parser's `journal_pair` id (gather)."""
+def journal_wording(broker: str, desc: str) -> str:
+    """The broker when a transfer row carries its journal wording
+    (_RBC_JOURNAL_RE, _IB_JOURNAL_RE, Questrade's BRW JOURNAL POSITION),
+    else "". The reference both legs of one journal share (RBC's J~,
+    Questrade's journal_pair) is missing_history.journal_leg_key's."""
     d = " ".join(str(desc or "").split())
     if broker == "rbc_direct":
-        m = _RBC_JOURNAL_RE.match(d)
-        if m:
-            return broker, (f"J~{m.group(1)}" if m.group(1) else "")
+        if _RBC_JOURNAL_RE.match(d):
+            return broker
     elif broker == "ib":
         if _IB_JOURNAL_RE.match(d):
-            return broker, ""
+            return broker
     elif broker == "questrade":
         from taxjson.lib.brokerages.questrade import _BRW_JOURNAL_RE
         if _BRW_JOURNAL_RE.search(d):
-            return broker, ""
-    return "", ""
+            return broker
+    return ""
 
 
 def tobase_direction(out_sym: str, in_sym: str,
