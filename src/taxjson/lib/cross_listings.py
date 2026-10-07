@@ -147,6 +147,15 @@ class Pair:
                 **({"journal": self.journal} if self.journal else {}),
                 **({"via": self.extra["via"]} if self.extra.get("via")
                    else {}),
+                # The broker's pair id the legs share (Questrade's
+                # journal_pair: "pair", RBC's J~ reference: "ref").
+                **({"ref": self.out.ref.split("|", 1)[0]}
+                   if self.out.ref and self.out.ref == self.into.ref
+                   else {}),
+                # Why a pair was not joined (`refused`): "distinct",
+                # "different" or "map" (analyze).
+                **({"refused": self.extra["refused"]}
+                   if self.extra.get("refused") else {}),
                 "out": {"account": self.out.account,
                         "broker": self.out.broker,
                         "symbol": self.out.symbol, "date": self.out.date,
@@ -476,19 +485,41 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             base_currency: Optional[str] = None,
             days: int = PAIR_DAYS,
             collided: Iterable[str] = (),
-            currency_journals: bool = False) -> Dict[str, List[Pair]]:
+            currency_journals: bool = False,
+            refused: Optional[List[Pair]] = None) -> Dict[str, List[Pair]]:
     """{"joined": [...], "suggested": [...]}: the cross-listing journals
     the legs show (module docstring). A pair whose names name different
     companies (companies_differ) is neither joined nor suggested; a pair
     with a `collided` symbol (one symbol, two companies: `collisions`)
     is left to the collision's EXTRACT line. `currency_journals`: join
     the parser-paired currency journals as JOURNAL lines (Canada,
-    CA-XLIST-03; the caller gates the country)."""
+    CA-XLIST-03; the caller gates the country).
+
+    `refused`, when given, receives the unambiguous pairs left alone
+    (`taxjson journals` lists them): a ticker.map DISTINCT line keeps
+    them apart (extra["refused"] = "distinct"), the user's map names a
+    listing and decides ("map"), or the legs of a broker journal name
+    different companies ("different"). A coincidence of two unrelated
+    transfers (no journal wording, no shared broker reference) whose
+    names name different companies is not recorded."""
     collided = {s.upper() for s in collided}
     named = {s.upper() for s in map_named}
     apart = {frozenset(x.upper() for x in pair) for pair in map_distinct}
     joined: List[Pair] = []
     suggested: List[Pair] = []
+
+    def _refuse(p: Pair, why: str, reason: str) -> None:
+        if refused is not None:
+            p.extra["refused"] = why
+            p.reason = reason
+            refused.append(p)
+
+    def _map_reason(a: str, b: str) -> Tuple[str, str]:
+        if frozenset((a, b)) in apart:
+            return "distinct", (f"ticker.map keeps them apart "
+                                f"(DISTINCT {a} {b})")
+        sym = a if a in named else b
+        return "map", f"ticker.map names {sym}: its line decides"
     # 0. A currency journal the parser paired (one account, one day, one
     #    description): its two lines are one security.
     if currency_journals:
@@ -504,10 +535,15 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
                     or not _same_qty(o[0], i[0])):
                 continue
             o[0].used = i[0].used = True
+            if {o[0].symbol, i[0].symbol} & collided:
+                continue    # a collision's EXTRACT line decides
             if (o[0].symbol in named or i[0].symbol in named
-                    or frozenset((o[0].symbol, i[0].symbol)) in apart
-                    or {o[0].symbol, i[0].symbol} & collided):
-                continue    # the user's map (or a collision's EXTRACT)
+                    or frozenset((o[0].symbol, i[0].symbol)) in apart):
+                # The user's map decides.
+                _refuse(Pair(o[0], i[0], o[0].symbol, i[0].symbol,
+                             kind="JOURNAL", journal=o[0].broker),
+                        *_map_reason(o[0].symbol, i[0].symbol))
+                continue
             # The line in the other currency maps onto the base one
             # (the legs' own currencies; an EXTRACT symbol may not spell
             # its currency).
@@ -586,19 +622,36 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
     for o, i, ambiguous in cands:
         frm, to = tobase_direction(o.symbol, i.symbol, base_currency)
         nx, ny = names.get(o.symbol, set()), names.get(i.symbol, set())
-        if (o.symbol in named or i.symbol in named
-                or frozenset((o.symbol, i.symbol)) in apart):
-            continue                    # the user's map decides
         if o.symbol in collided or i.symbol in collided:
             continue                    # separate the symbol first
+        mapped = (o.symbol in named or i.symbol in named
+                  or frozenset((o.symbol, i.symbol)) in apart)
+        if mapped and refused is None:
+            continue                    # the user's map decides
         journal = o.journal if _explicit_journal(o, i) else ""
         verdict = (_journal_names_verdict(o, i, nx, ny, shown)
                    if journal and o.name and i.name else None)
         if verdict is None:
             journal = ""
             verdict = _names_verdict(nx, ny, shown)
+        # A broker journal: its wording on both legs, or the broker's
+        # pair id both legs share.
+        brokered = bool(journal or (o.ref and o.ref == i.ref))
+        if mapped:
+            # The user's map decides (listed by `taxjson journals` when
+            # the pair is a journal, not a coincidence of two companies).
+            if not ambiguous and (verdict != DIFFERENT or brokered):
+                _refuse(Pair(o, i, frm, to, journal=journal,
+                             names=(o.raw_name, i.raw_name)),
+                        *_map_reason(o.symbol, i.symbol))
+            continue
         if verdict == DIFFERENT:
-            continue                    # two companies: no TOBASE line
+            # Two companies: no TOBASE line.
+            if not ambiguous and brokered:
+                _refuse(Pair(o, i, frm, to, journal=journal,
+                             names=(o.raw_name, i.raw_name)),
+                        "different", DIFFERENT)
+            continue
         if journal:
             shown_names = (o.raw_name, i.raw_name)
         else:
@@ -879,26 +932,34 @@ def map_lines(joined: Iterable[Pair]) -> List[str]:
     return out
 
 
+# The record lists of the state file (read_state).
+STATE_KEYS = ("joined", "suggested", "refused", "collisions")
+
+
 def state_text(result: Dict[str, List[Any]]) -> str:
     doc = {"format": FORMAT,
            "joined": [p.record() for p in result["joined"]],
            "suggested": [p.record() for p in result["suggested"]],
            "collisions": [c.record()
                           for c in result.get("collisions") or []]}
+    if result.get("refused"):
+        doc["refused"] = [p.record() for p in result["refused"]]
     return json.dumps(doc, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
 def read_state(path: Path) -> Dict[str, List[Dict[str, Any]]]:
-    """The state file's records ({"joined": [], "suggested": []} when
-    missing or unreadable)."""
+    """The state file's records, one list per STATE_KEYS key (each empty
+    when the file is missing or unreadable): the pairs joined, the pairs
+    suggested, the pairs left alone (`refused`: analyze) and the symbol
+    collisions."""
     try:
         doc = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError, RecursionError):
         doc = None
     if not isinstance(doc, dict) or doc.get("format") != FORMAT:
-        return {"joined": [], "suggested": [], "collisions": []}
+        return {k: [] for k in STATE_KEYS}
     return {k: [r for r in (doc.get(k) or []) if isinstance(r, dict)]
-            for k in ("joined", "suggested", "collisions")}
+            for k in STATE_KEYS}
 
 
 def effective_map_text(ticker_map: Optional[Path],

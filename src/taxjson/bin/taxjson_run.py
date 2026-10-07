@@ -2212,6 +2212,7 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
         # a TOBASE suggestion — the EXTRACT line that separates them.
         _coll = XL.collisions(_rows, names, shown, legs,
                               base_currency=_base)
+        _refused: list = []
         result = XL.analyze(legs, names, shown, map_named=named,
                             map_distinct=apart, base_currency=_base,
                             collided=[c.symbol for c in _coll],
@@ -2221,8 +2222,12 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
                             # (CA-XLIST-03); a US project reads its legs
                             # as transfers.
                             currency_journals=is_canada(
-                                settings.get("country")))
+                                settings.get("country")),
+                            # The pairs left alone (the user's map, two
+                            # companies): `taxjson journals` lists them.
+                            refused=_refused)
         result["collisions"] = _coll
+        result["refused"] = _refused
         state = cache / XL.STATE
         text = XL.state_text(result)
         if _read_work_stamp(state) != text:
