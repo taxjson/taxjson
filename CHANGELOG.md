@@ -4,6 +4,28 @@
 
 ### Fixed
 
+- **No account number in a security name.** An RBC or Questrade transfer row
+  whose description ends with a bare account reference (`TO ACCOUNT n`,
+  `TFR TO n`, `TFR FROM n`) with no `TRANSFER` word before it kept the account
+  number in the security name the run compares and shows (warnings,
+  `taxjson ticker-map --suggest`). The reference is now cut either way.
+- **A ticker.map line naming an IB temporary symbol now wins over the fold.**
+  The parser folds IB's time-stamped symbol onto its ticker; it did so even
+  when a ticker.map line (`GLOBAL`, `RENAME`, `TOBASE`, `DISTINCT`, an
+  `EXTRACT` target, `QUOTE` …) named the stamped symbol, so the line never
+  applied. Such a symbol now keeps its rows and the line decides; the Info
+  line says so.
+- **A lookup line in ticker.map now stops the listing correction for its
+  symbol.** The run reads a Questrade or RBC bare ticker on a USD row as the
+  TSX listing when the books show it, unless ticker.map names the symbol; a
+  `QUOTE` or `T1135` line written for the `.US` spelling did not count, so
+  the rows moved away from the line. A line naming the symbol in any keyword
+  now keeps the row currency's listing.
+- **A command started with its output or error stream closed works again.**
+  `taxjson sum >&-` printed a traceback and `taxjson run --no-input 2>&-`
+  stopped with exit 1 and no output (both exit 0 on v0.22.0): the start-up
+  wrapper that spaces console messages wrapped the missing stream too. A
+  missing stream is now left alone.
 - **`taxjson ticker-map --suggest` no longer offers a conditional hint as a
   plain suggestion.** A parser hint phrased "only if …" (RBC's dividend on a
   symbol no RBC file trades, which names `TOBASE ROOT.US ROOT.TO`; RBC's

@@ -292,7 +292,8 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          is_roc_description,
                                          parse_strict_number, shown_name,
                                          ticker_map_joins,
-                                         ticker_map_loaded)
+                                         ticker_map_loaded,
+                                         ticker_map_mentioned)
 from taxjson.lib.corp_actions import (ib_cash_merger, ib_merger_owned,
                                       ib_spinoff_parts, ib_tender_root)
 from taxjson.lib.trade_cancel import TRADE_CANCEL_TYPE, pair_cancellations
@@ -1005,19 +1006,65 @@ def ib_temp_symbol_ticker(root: str) -> Optional[str]:
     return m.group(2) if m else None
 
 
-def _ib_temp_folds(conid_syms: Dict[str, set]) -> Dict[str, str]:
+def _ib_temp_folds(conid_syms: Dict[str, set], named=frozenset(),
+                   kept: Optional[Dict[str, str]] = None
+                   ) -> Dict[str, str]:
     """{temporary root: plain root} for every IB temporary symbol listed
     under the SAME contract id as the plain ticker it stamps: one
     security under IB's working name, folded onto the ticker with no
     ticker.map line. A stamped symbol whose ticker the contract does not
-    also list stays as it is (no evidence it is that ticker)."""
+    also list stays as it is (no evidence it is that ticker). Nor one a
+    line of the project's ticker.map names (`named`: the map's symbols,
+    a lookup line's included — _map_names_temp): the user's line
+    decides what it is (a GLOBAL / RENAME / TOBASE target or source,
+    DISTINCT, DELETE, an EXTRACT target ...); such a symbol goes to
+    `kept` instead."""
     out: Dict[str, str] = {}
     for _conid, syms in conid_syms.items():
         for s in syms:
             tk = ib_temp_symbol_ticker(s)
             if tk and tk in syms:
+                if named and _map_names_temp(s, named):
+                    if kept is not None:
+                        kept[s] = tk
+                    continue
                 out[s] = tk
     return out
+
+
+def _map_names_temp(temp: str, named) -> bool:
+    """True when a symbol of `named` (ticker.map's) is IB temporary
+    symbol `temp` as IB writes it or as the parser books it (with its
+    listing suffix: `<stamp>QZX.US`)."""
+    from taxjson.lib.markets import known_suffixes
+    t = re.sub(r'\s+', '.', (temp or '').strip().upper())
+    if not t:
+        return False
+    sfx = {x.upper() for x in known_suffixes()}
+    for n in named:
+        n = str(n).upper()
+        if n == t or (n.startswith(t + '.') and n[len(t) + 1:] in sfx):
+            return True
+    return False
+
+
+def _project_map_names(paths) -> frozenset:
+    """Every symbol a line of the project's ticker.map names, a lookup
+    line's included: the map `taxjson-brokerage --ticker-map` loaded,
+    else the one next to inputs/<account>/<statement> (empty without
+    one, or when it does not parse — the run refuses such a map)."""
+    if ticker_map_loaded():
+        return ticker_map_mentioned()
+    root = _project_map_root(paths)
+    if root is None:
+        return frozenset()
+    try:
+        from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+                                                    named_symbols)
+        return named_symbols(_parse_map_file(root / 'ticker.map')[0],
+                             lookups=True)
+    except Exception:                   # the run reports a bad map
+        return frozenset()
 
 
 def _ib_fold_rows(rows: List[List[str]], folds: Dict[str, str]
@@ -1044,13 +1091,21 @@ def _ib_fold_rows(rows: List[List[str]], folds: Dict[str, str]
     return out
 
 
-def _note_temp_folds(folds: Dict[str, str], where: str) -> None:
-    """One Info line per fold (the console's `note:` channel)."""
+def _note_temp_folds(folds: Dict[str, str], where: str,
+                     kept: Optional[Dict[str, str]] = None) -> None:
+    """One Info line per fold (the console's `note:` channel), and per
+    temporary symbol ticker.map names (`kept`: not folded)."""
     for temp, tk in sorted(folds.items()):
         emit_line(f"note: {where}: {temp} is IB's temporary symbol for "
                   f"{tk} (the same contract id, renamed around a corporate "
                   f"action) — its rows are booked as {tk}; no ticker.map "
                   f"line is needed.")
+    for temp, tk in sorted((kept or {}).items()):
+        emit_line(f"note: {where}: {temp} is IB's temporary symbol for "
+                  f"{tk} (the same contract id, renamed around a corporate "
+                  f"action), but a ticker.map line names {temp}: its rows "
+                  f"keep that symbol and the map line decides (not folded "
+                  f"onto {tk}).")
 
 
 def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
@@ -1066,8 +1121,9 @@ def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
     continues, the date NEW's first row; each with the listing suffix it
     is booked under (an alphabetical pair with a hard-coded .US joined
     nothing, or renamed new to old — audit A2-0611). IB's temporary
-    symbols (`folds`, _ib_temp_folds) are already the ticker and never
-    a rename target; a stamped symbol of another ticker is named but
+    symbols (`folds`, _ib_temp_folds: folded onto the ticker, or named
+    by a ticker.map line, which decides) are no alias here and never a
+    rename target; a stamped symbol of another ticker is named but
     never suggested. Quiet once the project's ticker.map (`mapping`:
     (renames, dated pairs)) joins them."""
     first_seen = first_seen or {}
@@ -1180,28 +1236,36 @@ def _flush_ca_side_effects(path, late_warnings, cash_takeovers,
             f"(BUYSELL / SPLIT rows).")
 
 
-def _project_ticker_map(paths):
-    """(the rename map, the dated RENAME (old, new) pairs) of the project
-    ticker.map next to inputs/<account>/<statement>, or None (a
-    statement outside a project, no map, or a map that does not
-    parse)."""
+def _project_map_root(paths) -> Optional[Path]:
+    """The project folder whose ticker.map sits next to inputs/<account>/
+    <statement> for the first of `paths` that has one, else None."""
     for path in paths:
         try:
             pp = Path(path).resolve().parents
             root = pp[2] if pp[1].name == 'inputs' else None
         except (IndexError, OSError):
             root = None
-        if root is None or not (root / 'ticker.map').is_file():
-            continue
-        try:
-            from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
-                                                        merge_renames)
-            tm = _parse_map_file(root / 'ticker.map')[0]
-            return (merge_renames(tm, True),
-                    [(dr.old, dr.new) for dr in tm.dated])
-        except Exception:               # the run reports a bad map
-            return None
+        if root is not None and (root / 'ticker.map').is_file():
+            return root
     return None
+
+
+def _project_ticker_map(paths):
+    """(the rename map, the dated RENAME (old, new) pairs) of the project
+    ticker.map next to inputs/<account>/<statement>, or None (a
+    statement outside a project, no map, or a map that does not
+    parse)."""
+    root = _project_map_root(paths)
+    if root is None:
+        return None
+    try:
+        from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+                                                    merge_renames)
+        tm = _parse_map_file(root / 'ticker.map')[0]
+        return (merge_renames(tm, True),
+                [(dr.old, dr.new) for dr in tm.dated])
+    except Exception:                   # the run reports a bad map
+        return None
 
 
 def _ib_prescan(rows, where: str) -> Dict[str, Any]:
@@ -1526,9 +1590,13 @@ class IbBrokerage(BaseBrokerage):
         for _p, _r, _pre in read:
             for conid, syms in _pre['stock_conid_syms'].items():
                 _all_syms.setdefault(conid, set()).update(syms)
-        folds = ctx['stock_folds'] = _ib_temp_folds(_all_syms)
-        if folds:
-            _note_temp_folds(folds, "the account's IB statements")
+        # A temporary symbol a ticker.map line names is the line's to
+        # decide: not folded (`map_kept`).
+        map_kept: Dict[str, str] = {}
+        folds = ctx['stock_folds'] = _ib_temp_folds(
+            _all_syms, _project_map_names(paths), map_kept)
+        if folds or map_kept:
+            _note_temp_folds(folds, "the account's IB statements", map_kept)
         for path, rows, pre in read:
             name = Path(path).name
             if folds:
@@ -1619,7 +1687,7 @@ class IbBrokerage(BaseBrokerage):
                             last_seen=ctx['last_seen'],
                             listing=ctx['stock_listing'],
                             mapping=_project_ticker_map(paths),
-                            folds=folds)
+                            folds={**folds, **map_kept})
         return ctx
 
     @classmethod
@@ -2766,15 +2834,18 @@ class IbBrokerage(BaseBrokerage):
         # under the ticker's contract id): the ticker's rows — the
         # account's statements decide (prepare_files), a lone statement
         # its own instrument list.
+        _map_kept: Dict[str, str] = {}
         _folds = (ctx.get('stock_folds', {}) if ctx
-                  else _ib_temp_folds(pre['stock_conid_syms']))
+                  else _ib_temp_folds(pre['stock_conid_syms'],
+                                      _project_map_names([path]),
+                                      _map_kept))
         if _folds:
             _folded = _ib_fold_rows(rows, _folds)
             if _folded != rows:
                 rows = _folded
                 pre = _ib_prescan(rows, shown_name(path))
-            if not ctx:
-                _note_temp_folds(_folds, shown_name(path))
+        if not ctx and (_folds or _map_kept):
+            _note_temp_folds(_folds, shown_name(path), _map_kept)
         # The statement's first day. A row dated before it (a Trades,
         # Transfers or Corporate Actions row) is IB's cancel-and-rebook
         # of a row of an EARLIER statement: under the account context
@@ -2817,7 +2888,7 @@ class IbBrokerage(BaseBrokerage):
                                 first_seen=pre['first_seen'],
                                 last_seen=pre['last_seen'],
                                 listing=pre['stock_listing'],
-                                folds=_folds)
+                                folds={**_folds, **_map_kept})
         self._ib_pre = pre
         self._check_statement_kind(pre, path)
         fii = pre['fii']

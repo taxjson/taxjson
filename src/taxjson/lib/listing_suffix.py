@@ -37,9 +37,10 @@ the project's other books instead, in this order:
    USD trade of the bare ticker is that US listing.
 
 Never corrected (the symbol keeps the row currency's listing):
-* a ticker.map rule naming the listing (a rename, DELETE, a dated
-  RENAME) or a `DISTINCT ROOT.US ROOT.TO` line: the user's map wins (the
-  DISTINCT line is the undo a correction's warning names);
+* a ticker.map line naming the listing in any keyword (a rename,
+  DELETE, a dated RENAME, a QUOTE, T1135, CRYPTO, STABLE or MULT line, an
+  EXTRACT target) or a `DISTINCT ROOT.US ROOT.TO` line: the user's map
+  wins (the DISTINCT line is the undo a correction's warning names);
 * the listing is real: a broker that names its listings (IB, Webull, a
   generic CSV) has rows of it;
 * a rename row in the books joins the two tickers (a ticker change, not
@@ -226,6 +227,7 @@ def scan_rbc(paths: Iterable[Path]) -> Scan:
                                                    read_rbc_rows)
     from taxjson.lib.corp_actions import (rbc_is_option_code,
                                           rbc_is_temp_symbol)
+    from taxjson.lib.symbol_codes import rbc_name
     helper = RbcBrokerage()
     scan = Scan()
     for p in paths:
@@ -242,13 +244,17 @@ def scan_rbc(paths: Iterable[Path]) -> Scan:
                     or helper._row_occ(r) or cur not in _SFX):
                 continue
             listing = helper.apply_currency_suffix(raw, cur)
-            scan.saw(listing, cur, r.symdesc or r.desc)
+            # The name: the Symbol Description, else the row description
+            # with RBC's wording (a transfer's account reference
+            # included) cut (symbol_codes.rbc_name).
+            name = r.symdesc or rbc_name(r.desc, trade=r.cls == 'trade')
+            scan.saw(listing, cur, name)
             if (canonical_ca_listing(raw, cur) is not None
                     or _sfx(listing) != _SFX[cur]
                     or other_listing(listing) is None):
                 continue
             c = scan.candidate(listing, cur)
-            c.add_name(r.symdesc or r.desc)
+            c.add_name(name)
             if r.cls == 'transfer' and r.qty > _EPS and r.date:
                 c.arrivals.append((r.date[:10], r.qty))
     return scan
@@ -423,7 +429,7 @@ def resolve(scan: Scan, ev: Evidence, *, account: str, broker: str,
     """{"corrected": {listing: {...}}, "kept": {listing: {...}}} for one
     (account, broker) group (module docstring): `scan` its exports read
     before the parse, `ev` the rest of the project's books.
-    `mapped(symbol)`: a ticker.map rename / DELETE rule names it;
+    `mapped(symbol)`: a ticker.map line names it (any keyword);
     `distinct`: the map's DISTINCT pairs."""
     from taxjson.lib.cross_listings import PAIR_DAYS
     days = PAIR_DAYS if days is None else days

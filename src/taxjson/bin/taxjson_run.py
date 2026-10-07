@@ -4624,11 +4624,13 @@ def _listing_suffix_text(name: str, broker: str, csvs: List[Path],
                     if isinstance(c, dict) and not c.get("crypto")]
         ev = LS.project_evidence(cache, accounts or [name],
                                  receiving=(name, broker))
-        # ANY ticker.map rule naming the listing (a rename either way,
-        # DELETE, DISTINCT, a dated RENAME) wins: `DISTINCT ROOT.US
-        # ROOT.TO` keeps the row currency's listing, and a rule written
-        # for the listing as filed keeps meaning what it says.
-        named = {str(x).upper() for x in _ticker_map_named(root)}
+        # ANY ticker.map line naming the listing (a rename either way,
+        # DELETE, DISTINCT, a dated RENAME, and a lookup line: QUOTE,
+        # T1135, an EXTRACT target ...) wins: `DISTINCT ROOT.US ROOT.TO`
+        # keeps the row currency's listing, and a line written for the
+        # listing as filed keeps meaning what it says.
+        named = {str(x).upper()
+                 for x in _ticker_map_named(root, lookups=True)}
         result = LS.resolve(scan, ev, account=name, broker=broker,
                             mapped=lambda s: s in named)
         # The TOBASE line of a correction's transfer journal, as the
@@ -4678,17 +4680,18 @@ def _listing_suffix_stale(root: Path, cache: Path) -> List[str]:
     return out
 
 
-def _ticker_map_named(root: Path) -> frozenset:
+def _ticker_map_named(root: Path, lookups: bool = False) -> frozenset:
     """Every symbol a rule of the project's ticker.map names
-    (taxjson_ticker_map.named_symbols); empty without a map. A map that
-    does not parse is refused by `taxjson run` up front."""
+    (taxjson_ticker_map.named_symbols; `lookups`: a lookup line's symbol
+    too); empty without a map. A map that does not parse is refused by
+    `taxjson run` up front."""
     tm = root / "ticker.map"
     if not tm.is_file():
         return frozenset()
     from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
                                                 named_symbols)
     try:
-        return named_symbols(_parse_map_file(tm)[0])
+        return named_symbols(_parse_map_file(tm)[0], lookups=lookups)
     except (OSError, ValueError):
         return frozenset()
 

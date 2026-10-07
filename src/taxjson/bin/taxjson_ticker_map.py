@@ -71,10 +71,15 @@ _MAP_KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DELETE", "DISTINCT",
 # dated: the dated RENAME lines (lib/renames.DatedRename), each a ticker
 # change booked as an event on its date; undated_rename: the FROM symbols
 # of undated RENAME lines (kept in glob — they mean exactly GLOBAL).
+# lookup_named: the symbols the lookup lines name (QUOTE, CRYPTO, T1135,
+# STABLE, MULT, an EXTRACT target) — they change no symbol, but a line
+# written for a symbol says the user decided what that symbol is
+# (named_symbols(lookups=True)).
 TickerMap = namedtuple("TickerMap",
                        ["glob", "tobase", "journal", "delete",
-                        "distinct", "dated", "undated_rename"],
-                       defaults=((), frozenset()))
+                        "distinct", "dated", "undated_rename",
+                        "lookup_named"],
+                       defaults=((), frozenset(), frozenset()))
 
 
 def _parse_map_file(file_path: Path):
@@ -229,7 +234,8 @@ def _parse_map_file(file_path: Path):
         _seen_dated.setdefault(dr.old, []).append(dr)
     problems += side.problems
     tmap = TickerMap(glob, tobase, journal, delete, distinct,
-                     tuple(dated), frozenset(undated_rename))
+                     tuple(dated), frozenset(undated_rename),
+                     _lookup_named(side))
     for to_base in (False, True):
         raw = raw_renames(tmap, to_base)
         for frm in sorted(raw):
@@ -282,13 +288,33 @@ def raw_renames(tmap: "TickerMap", to_base: bool) -> Dict[str, str]:
     return renames
 
 
-def named_symbols(tmap: "TickerMap") -> frozenset:
+def _lookup_named(side) -> frozenset:
+    """The symbols the lookup lines of a map name (SideRules): the
+    symbol of a QUOTE, CRYPTO, T1135, STABLE or MULT line and an EXTRACT
+    line's target. A root-wide market line (SPLITSHARE, INDEXOPT,
+    EVENING) and a VENUE code name no symbol."""
+    out = set()
+    for table in (side.quote, side.crypto, side.t1135, side.stable,
+                  side.mult):
+        out.update(str(k) for k in table)
+    out.update(str(sym) for _d, _c, sym in side.extract)
+    return frozenset(s.upper() for s in out if s)
+
+
+def named_symbols(tmap: "TickerMap", lookups: bool = False) -> frozenset:
     """Every symbol a rule of the map names, on either side: GLOBAL /
     TOBASE / JOURNAL / undated RENAME, DELETE, DISTINCT and dated RENAME
     lines. A symbol the user wrote a rule for is the user's call: an
     inference (lib/symbol_codes) never overrides it — a DELETEd code
-    stays deleted, a dated rename keeps its date."""
+    stays deleted, a dated rename keeps its date. `lookups`: the symbols
+    the lookup lines name too (QUOTE, CRYPTO, T1135, STABLE, MULT, an
+    EXTRACT target — TickerMap.lookup_named): an inference that would
+    move a symbol's rows to another symbol (lib/listing_suffix, IB's
+    temporary-symbol fold) leaves a symbol any ticker.map line names, so
+    the line keeps meaning what it says."""
     out = set(tmap.delete)
+    if lookups:
+        out.update(tmap.lookup_named)
     for d in (tmap.glob, tmap.tobase, tmap.journal):
         out.update(d)
         out.update(d.values())
