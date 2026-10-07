@@ -284,9 +284,11 @@ class TestDatesPerContractId(unittest.TestCase):
 class TestOldRowAfterNewFirstRow(unittest.TestCase):
 
     @rule("CA-ACB-RENAME")
-    def test_old_dividend_after_new_first_row_not_booked(self):
-        # OLD's dividend after NEW's first trade: the rows overlap, the
-        # date is the user's to give.
+    def test_old_dividend_after_new_first_row_booked(self):
+        # OLD's dividend after NEW's first trade moves no position: it no
+        # longer leaves the date to the user (second review #10; it used
+        # to refuse the change). A return of capital still does
+        # (test_fix_review2_ib).
         body = (HEAD + TRADES_H
                 + _trade('QZOA', '2025-02-05, 10:00:00', 100, 10, -1000)
                 + _trade('QZNB', '2025-05-12, 10:00:00', -100, 12, 1200,
@@ -298,12 +300,10 @@ class TestOldRowAfterNewFirstRow(unittest.TestCase):
         td, root, r = _run({"inputs/margin/ib.csv": body}, "canada")
         with td:
             out = _out(r)
-            self.assertNotEqual(r.returncode, 0)
-            self.assertIn("on or before QZOA's last row (2025-05-20, a "
-                          "Dividends row)", out)
-            self.assertIn("`RENAME 2025-05-12 QZOA.US QZNB.US`", out)
-            self.assertFalse(_booked(out))
-            self.assertEqual(_events(root), [])
+            self.assertEqual(r.returncode, 0, out[-3000:])
+            self.assertTrue(_booked(out))
+            self.assertEqual(_events(root), [("QZOA.US", "QZNB.US",
+                                              "2025-05-12", "ib-conid")])
 
 
 class TestDeclarationsAndPlaceholders(unittest.TestCase):

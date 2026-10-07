@@ -491,6 +491,17 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--project-statements", dest="project_statements", metavar="FILE",
+        default=None,
+        help=(
+            "IB: the project's other IB accounts and their statements "
+            "(work/<acct>_ib_project.state, JSON {\"account\": this "
+            "label, \"accounts\": {label: [paths]}}; `taxjson run` "
+            "passes it): a ticker change IB shows as one contract id "
+            "under two symbols is dated from every account's rows."
+        ),
+    )
+    parser.add_argument(
         "--rates", dest="rates", metavar="FILE", default=None,
         help=(
             "The run's currency rates (work/to_base.csv, `taxjson run` "
@@ -533,6 +544,23 @@ Examples:
         emit_line(f"taxjson-brokerage: error: no such file: --symbol-codes "
                   f"{args.symbol_codes}")
         sys.exit(2)
+    project_statements = None
+    if args.project_statements:
+        try:
+            project_statements = json.loads(Path(
+                args.project_statements).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            emit_line(f"taxjson-brokerage: error: no such file: "
+                      f"--project-statements {args.project_statements}")
+            sys.exit(2)
+        except (OSError, ValueError) as e:
+            emit_line(f"taxjson-brokerage: error: --project-statements "
+                      f"{args.project_statements}: {e}")
+            sys.exit(2)
+        if not isinstance(project_statements, dict):
+            emit_line(f"taxjson-brokerage: error: --project-statements "
+                      f"{args.project_statements}: not a JSON object")
+            sys.exit(2)
     if args.listing_fixes and not Path(args.listing_fixes).exists():
         emit_line(f"taxjson-brokerage: error: no such file: --listing-fixes "
                   f"{args.listing_fixes}")
@@ -609,6 +637,8 @@ Examples:
                 _pkw['taxable'] = args.account_type == 'taxable'
             if 'symbol_codes' in _pp and args.symbol_codes:
                 _pkw['symbol_codes'] = args.symbol_codes
+            if 'project' in _pp and project_statements is not None:
+                _pkw['project'] = project_statements
             shared_context = _prepare(input_paths, **_pkw)
         except csv.Error as e:
             emit_line(f"taxjson-brokerage: error: the CSV module refused an "
