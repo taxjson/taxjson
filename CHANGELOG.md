@@ -56,7 +56,10 @@
   and is recorded once. A malformed line stops the run, naming the form,
   and so does a line naming an option contract or a future (a contract
   never becomes shares by a journal or a ticker change; an option
-  follows its underlying's rename).
+  follows its underlying's rename), one dated in the future, a JOURNAL of
+  an implausible quantity, and a JOURNAL moving more units than the
+  broker's own journal between the same listings. Two identical JOURNAL
+  lines are one journal, with a Warning.
 - **IB's ticker changes are booked.** When IB lists one contract id under
   two symbols, the change is booked as a dated rename event, with a
   Warning naming the way out (`DISTINCT` in ticker.map for two securities,

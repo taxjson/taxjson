@@ -455,8 +455,30 @@ def parse_journal_line(line: str, source: str = ''):
             f"{where}malformed JOURNAL line — the quantity must be "
             f"positive (the units moved from {frm} to {to}; expected "
             f"`{JOURNAL_FORM}`): {shown!r}")
+    if q > _MAX_EVENT_QTY:
+        raise ValueError(
+            f"{where}JOURNAL line — the quantity {qty} is not a plausible "
+            f"number of units (more than {_MAX_EVENT_QTY:,.0f}): "
+            f"{shown!r}")
+    _not_in_future(date, 'JOURNAL', where, shown)
     return {'date': date, 'from': frm, 'to': to, 'quantity': q,
             'line': shown}
+
+
+# The most units a dated event may move (a JOURNAL line): no position
+# holds a trillion units; a bigger number is a typo (1e308).
+_MAX_EVENT_QTY = 1e12
+
+
+def _not_in_future(date: str, kind: str, where: str, shown: str) -> None:
+    """A dated event is something that happened: a date after today is
+    refused (a typo of the year, or a line written ahead of the event)."""
+    from datetime import date as _date
+    if date > _date.today().isoformat():
+        raise ValueError(
+            f"{where}{kind} line is dated {date}, in the future — a dated "
+            f"event is written once it has happened (check the year): "
+            f"{shown!r}")
 
 
 def _derivative_kind(sym: str) -> str:
@@ -544,6 +566,7 @@ def parse_rename_line(line: str, source: str = ''):
             f"{where}malformed RENAME line — OLD and NEW are the same "
             f"symbol {old} (expected `{RENAME_FORM}`): {shown!r}")
     _rename_derivative_check(old, new, date, where, shown)
+    _not_in_future(date, 'RENAME', where, shown)
     return {'date': date, 'old': old, 'new': new, 'late': late,
             'line': shown}
 

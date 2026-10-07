@@ -485,5 +485,76 @@ class TestListingSuffixWindowIsBusinessDays(unittest.TestCase):
         self._check()
 
 
+class TestDeclaredLineChecks(unittest.TestCase):
+
+    def test_future_dates_and_absurd_quantities(self):
+        from taxjson.bin.taxjson_convert_tt import (parse_journal_line,
+                                                    parse_rename_line)
+        for bad, word in (
+                ("JOURNAL 2099-03-05 QZG.TO QZG.U.TO 10", "in the future"),
+                ("JOURNAL 2025-03-05 QZG.TO QZG.U.TO 1e308", "plausible"),
+                ("JOURNAL 2025-03-05 QZG.TO QZG.U.TO inf", "not a number")):
+            with self.subTest(bad=bad), self.assertRaises(ValueError) as cm:
+                parse_journal_line(bad, "x.tt:1")
+            self.assertIn(word, str(cm.exception))
+        with self.assertRaises(ValueError) as cm:
+            parse_rename_line("RENAME 2099-04-01 QZO.US QZN.US", "x.tt:2")
+        self.assertIn("in the future", str(cm.exception))
+
+    def _identical(self, country):
+        x, cur = {"canada": ("TO", "CAD"), "usa": ("US", "USD")}[country]
+        a, b = {"TO": ("QZG.TO", "QZG.U.TO"), "US": ("QZG.US", "QZG.U.TO")}[x]
+        line = f"JOURNAL 2025-03-05 {a} {b} 100\n"
+        tt = (f"BUYSELL 2025-03-03 10:00:00 {a} 100 {cur} 10.00 1000.00 "
+              f"0.00\n" + line + line
+              + f"BUYSELL 2025-03-06 10:00:00 {b} -100 {cur} 8.00 800.00 "
+              f"0.00\n")
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, files={
+                "inputs/margin/m.tt": tt})[country]
+            r = _run(self, root)
+            self.assertIn("repeats inputs/margin/m.tt:2 word for word",
+                          _out(r))
+            from taxjson.lib import dated_events as DE
+            side = json.loads(DE.sidecar_path(root / "work", "margin")
+                              .read_text())["transactions"]
+            self.assertEqual(len(side), 2)
+            self.assertEqual(len(DE.read_state(root / "work" / DE.STATE)
+                                 ["journals"]), 1)
+            self.assertNotIn("go short", _out(r))
+            self.assertAlmostEqual(_total(self, root), -200.0, delta=0.011)
+
+    @rule("CA-XLIST-04")
+    def test_canada_identical_lines_are_one_journal(self):
+        self._identical("canada")
+
+    @rule("US-XLIST-03")
+    def test_usa_identical_lines_are_one_journal(self):
+        self._identical("usa")
+
+    def _partial(self, country):
+        from test_fix_dated_events import _rbc_gambit
+        rbc, tmap = _rbc_gambit(True)
+        files = {"inputs/margin/rbc.csv": rbc, "ticker.map": tmap,
+                 "inputs/margin/j.tt": ("JOURNAL 2025-05-06 QZD.TO "
+                                        "QZD.U.TO 1500\n")}
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, files=files, usa=_USA_CAD)[country]
+            r = _run(self, root, ok=False)
+            self.assertNotEqual(r.returncode, 0)
+            out = _out(r)
+            self.assertIn("already hold a journal of 1000", out)
+            self.assertIn("(500)", out)
+            self.assertIn("inputs/margin/j.tt:1", out)
+
+    @rule("CA-XLIST-04")
+    def test_canada_a_bigger_restatement_of_the_brokers_journal_stops(self):
+        self._partial("canada")
+
+    @rule("US-XLIST-03")
+    def test_usa_a_bigger_restatement_of_the_brokers_journal_stops(self):
+        self._partial("usa")
+
+
 if __name__ == "__main__":
     unittest.main()

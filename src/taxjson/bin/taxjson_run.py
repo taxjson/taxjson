@@ -2184,6 +2184,11 @@ def _read_dated_events(root: Path, accounts: Dict[str, Any],
         problems = DE.check_against_map(decl, tmap)
     except DE.DatedEventError as e:
         problems = str(e).splitlines()
+    else:
+        # Two identical JOURNAL lines are one journal (a Warning).
+        from taxjson.lib.cross_listings import declared_twins
+        decl.journals, _twins = declared_twins(decl.journals)
+        decl.warnings += _twins
     if problems:
         _die(f"{len(problems)} .tt dated-event line(s) cannot be booked",
              *[f"- {p}" for p in problems],
@@ -2218,6 +2223,14 @@ def stage_dated_events(cache: Path, accounts: List[str]):
         legs, _n, _s = XL.gather(cache, accounts)
         for n in DE.settle_journals(decl.journals, legs):
             _say("note", *_split_msg(n), prog=_PROG)
+        # A line restating the broker's own journal with another size
+        # would move those units twice: it stops the run.
+        _over = XL.partial_overlaps(decl.journals, legs)
+        if _over:
+            _die(f"{len(_over)} .tt dated-event line(s) cannot be booked",
+                 *[f"- {p}" for p in _over],
+                 "A journal the broker's rows already hold is booked from "
+                 "them; a .tt JOURNAL line adds only what they lack.")
     DE.write_sidecars(cache, accounts, decl.journals)
     by_acct: Dict[str, List[str]] = {}
     for j in decl.journals:

@@ -459,6 +459,74 @@ def _claim(legs: List[Leg], j: Any, sym: str, sign: int) -> Optional[Leg]:
     return best[1] if best else None
 
 
+def declared_twins(journals: Iterable[Any]) -> Tuple[List[Any], List[str]]:
+    """(the .tt JOURNAL lines to book, Warning lines): two IDENTICAL lines
+    (one account, date, FROM, TO and quantity — a line pasted twice, or
+    one file copied) are one journal, booked once; the second is said as
+    a Warning naming both places (two journals of one size on one day
+    are one line with the total quantity)."""
+    kept: List[Any] = []
+    seen: Dict[Tuple[Any, ...], Any] = {}
+    warnings: List[str] = []
+    for j in journals:
+        k = (j.account, j.date, j.frm, j.to, round(float(j.quantity), 8))
+        first = seen.get(k)
+        if first is None:
+            seen[k] = j
+            kept.append(j)
+            continue
+        warnings.append(
+            f"{j.where}: JOURNAL {j.date} {j.frm} {j.to} {j.quantity:g} "
+            f"repeats {first.where} word for word: one journal, booked "
+            f"once — two journals of that size on that day are one line "
+            f"with the total quantity")
+    return kept, warnings
+
+
+def partial_overlaps(journals: Iterable[Any], legs: Iterable[Leg],
+                     days: int = PAIR_DAYS) -> List[str]:
+    """The .tt JOURNAL lines booked in full (status "booked") that move
+    MORE units than a journal the broker's rows already hold between the
+    same two listings in the same account (its out-leg of FROM and
+    in-leg of TO, one quantity, within `days` business days of the
+    line's date): the line most likely restates that journal with
+    another size, and booking it in full would move those units twice.
+    Returns one problem line each (the run stops on it)."""
+    legs = [g for g in legs if g.broker != "tt" and not g.decl]
+    out: List[str] = []
+    for j in journals:
+        if getattr(j, "status", "booked") != "booked":
+            continue
+        jd = _d(j.date)
+        if jd is None:
+            continue
+
+        def near(g: Leg) -> bool:
+            gd = _d(g.date)
+            return bool(gd and business_days(gd, jd) <= days)
+        outs = [g for g in legs if g.account == j.account
+                and g.symbol == j.frm and g.quantity < 0 and near(g)]
+        ins = [g for g in legs if g.account == j.account
+               and g.symbol == j.to and g.quantity > 0 and near(g)]
+        for o in outs:
+            q = -o.quantity
+            if not (q < j.quantity - _EPS):
+                continue
+            i = next((g for g in ins
+                      if abs(g.quantity - q) <= max(_EPS, 1e-6 * q)), None)
+            if i is None:
+                continue
+            out.append(
+                f"{j.where}: JOURNAL {j.date} {j.frm} {j.to} "
+                f"{j.quantity:g} — the broker's rows already hold a "
+                f"journal of {q:g} between them ({o.date}, {i.date}): if "
+                f"this line is that journal, delete it; if the rows lack "
+                f"part of it, write only the units they lack "
+                f"({j.quantity - q:g})")
+            break
+    return out
+
+
 def _explicit_journal(o: Leg, i: Leg) -> bool:
     """An explicit journal pair: one account at one broker, one day, the
     same quantity, both legs in that broker's journal wording
