@@ -603,5 +603,74 @@ class TestFormatMigration(unittest.TestCase):
         self.assertNotIn("--- Dated events ---", t)
 
 
+# ------------------------------------------- the two listing commands
+
+class TestSourcesInTheCommands(unittest.TestCase):
+    """`taxjson journals` and `taxjson renames` name where each dated
+    event came from: a .tt line, a legacy ticker.map line, IB's contract
+    id (both countries)."""
+
+    def _journal(self, country):
+        x, cur = _HOME[country]
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, files={
+                "inputs/margin/m.tt": _gambit_tt(x, cur)})[country]
+            self.assertEqual(cli(root, "run", "--no-input").returncode, 0)
+            doc = json.loads(cli(root, "journals", "--json").stdout)
+            got = [(j["source"], j["state"], j["from"], j["to"])
+                   for j in doc["journals"]]
+            self.assertEqual(got, [("tt", "joined", f"QZG.{x}",
+                                    f"QZGB.{x}")])
+            text = cli(root, "journals").stdout
+            self.assertIn(".tt", text)
+
+    @rule("CA-XLIST-04")
+    def test_canada_journals_names_the_tt_source(self):
+        self._journal("canada")
+
+    @rule("US-XLIST-03")
+    def test_usa_journals_names_the_tt_source(self):
+        self._journal("usa")
+
+    def _renames(self, country):
+        x, cur = _HOME[country]
+        cases = {
+            "tt": _rename_files(x, cur),
+            "map": _legacy_files(x, cur),
+        }
+        for want, files in cases.items():
+            with self.subTest(source=want), \
+                    tempfile.TemporaryDirectory() as td:
+                root = projects_both(td, accounts=_TWO_ACCOUNTS,
+                                     files=files)[country]
+                self.assertEqual(cli(root, "run", "--no-input")
+                                 .returncode, 0)
+                doc = json.loads(cli(root, "renames", "--json").stdout)
+                (ev,) = doc["renames"]
+                self.assertEqual(ev["source"], want)
+                label = {"tt": ".tt line", "map": "ticker.map line"}[want]
+                self.assertTrue(any(s.startswith(label)
+                                    for s in ev["sources"]), ev)
+                self.assertIn(label, cli(root, "renames").stdout)
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, files={
+                "inputs/margin/ib.csv": _ib()})[country]
+            self.assertEqual(cli(root, "run", "--no-input").returncode, 0)
+            doc = json.loads(cli(root, "renames", "--json").stdout)
+            self.assertEqual([(e["source"], e["sources"])
+                              for e in doc["renames"]],
+                             [("ib-conid", ["detected IB contract id"])])
+            self.assertIn("detected IB contract id",
+                          cli(root, "renames").stdout)
+
+    @rule("CA-ACB-RENAME")
+    def test_canada_renames_names_tt_map_and_ib_sources(self):
+        self._renames("canada")
+
+    @rule("US-BASIS-RENAME")
+    def test_usa_renames_names_tt_map_and_ib_sources(self):
+        self._renames("usa")
+
+
 if __name__ == "__main__":
     unittest.main()

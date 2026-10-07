@@ -274,6 +274,7 @@ class TestRenamesReport(unittest.TestCase):
             doc = report(root, cfg)
         self.assertEqual(doc["undated"], [
             {"rule": "GLOBAL", "old": "OLD.TO", "new": "NEW.TO",
+             "source": "legacy undated map",
              "broker_dates": ["2024-06-01"]}])
         # The dated form is a .tt line, date first (lib/dated_events).
         self.assertIn("RENAME 2024-06-01 OLD.TO NEW.TO",

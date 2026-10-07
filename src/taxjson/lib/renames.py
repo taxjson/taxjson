@@ -158,14 +158,35 @@ def rename_target(r: Any) -> str:
     return "" if not new or new == str(_g(r, "symbol")) else new
 
 
+# The words of a rename's `source` (the SOURCE column of `taxjson
+# renames`): the stamp a stage writes on the SPLIT row. A source not
+# named here is shown as it is (a broker row's file name: `broker row
+# (<file>)`).
+SOURCE_LABELS: Dict[str, str] = {
+    TICKER_MAP_SOURCE: "ticker.map line",
+    "map": "ticker.map line",
+    "tt": ".tt line",
+    "ib-conid": "detected IB contract id",
+    "map-undated": "legacy undated map",
+    "legacy": "legacy undated map",
+}
+# An undated ticker.map rename (GLOBAL, RENAME without a date).
+UNDATED_SOURCE = "legacy undated map"
+
+
 def row_source(r: Any) -> str:
-    """Where a rename row came from, for the report."""
-    src = str(_g(r, "source") or "")
+    """Where a rename row came from, for the report (SOURCE_LABELS): the
+    row's `event_source` (the stage that booked it) when it names one,
+    else its `source`."""
     ev = str(_g(r, "event_source") or "")
-    if ev == SOURCE_IB_CONID:
-        return "IB contract id"
-    if src == TICKER_MAP_SOURCE or ev == SOURCE_MAP:
-        return "ticker.map line"
+    if ev in SOURCE_LABELS:
+        src = str(_g(r, "source") or "")
+        if ev == "tt" and src.lower().endswith(".tt"):
+            return f".tt line ({src})"
+        return SOURCE_LABELS[ev]
+    src = str(_g(r, "source") or "")
+    if src in SOURCE_LABELS:
+        return SOURCE_LABELS[src]
     if src.lower().endswith(".tt"):
         return f".tt line ({src})"
     if _g(r, "corp_event_id"):
@@ -486,9 +507,110 @@ def _walk_states(rows: List[Dict[str, Any]]):
     return snap
 
 
+# The look-alike rename hints a broker parse writes to its .diag
+# (captured bytes, one line per message): Questrade's and RBC's "symbol A
+# looks renamed to B — ... GLOBAL A B ... B ... first appears on DATE",
+# and a dated `RENAME OLD NEW YYYY-MM-DD` a message names (Webull's
+# "likely a ticker change", IB's one stock under several symbols).
+_LOOKS_RE = re.compile(
+    r"\b(Questrade|RBC) symbol \S+(?: \(\w+\))? looks renamed to \S+ "
+    r".*?\bGLOBAL (\S+) (\S+)\s.*?first appears on (\d{4}-\d{2}-\d{2})")
+# The hint as written since the dated .tt events (lib/dated_events): the
+# .tt line, date first.
+_LOOKS_TT_RE = re.compile(
+    r"\b(Questrade|RBC) symbol \S+(?: \(\w+\))? looks renamed to \S+ "
+    r".*?\bRENAME (\d{4}-\d{2}-\d{2}) (\S+) (\S+)\s")
+_DATED_HINT_RE = re.compile(
+    r"`RENAME (\S+) (\S+) (\d{4}-\d{2}-\d{2})`")
+_DATED_HINT_TT_RE = re.compile(
+    r"`RENAME (\d{4}-\d{2}-\d{2}) (\S+) (\S+)`")
+_BROKER_WORD_RE = re.compile(r"\b(Questrade|RBC|Webull|IB)\b")
+
+
+def _diag_account(name: str, accounts: Iterable[str]) -> str:
+    """The account whose stage wrote work/<name> (the longest account
+    name the file name starts with), '' when none."""
+    best = ""
+    for a in accounts:
+        if name.startswith(f"{a}_") and len(a) > len(best):
+            best = a
+    return best
+
+
+def rename_hints(root: Path, cfg: Dict[str, Any],
+                 events: Iterable[Dict[str, Any]] = (),
+                 account: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The look-alike renames the brokers' exports show (_LOOKS_RE,
+    _DATED_HINT_RE in the run's work/*.diag) that neither the books (a
+    rename event of OLD to NEW) nor ticker.map (a line that joins or
+    dates the two, a DISTINCT line) already answer: each with its
+    account, date (the new symbol's first row: the latest date the
+    change can have) and the `.tt` line `RENAME <date> OLD NEW` that
+    books it."""
+    from taxjson.lib import ticker_map_suggest as TS
+    cache = Path(root) / "work"
+    if not cache.is_dir():
+        return []
+    accounts = list(cfg.get("accounts") or {})
+    st = TS.map_state(Path(root) / "ticker.map")
+    booked = {(e["old"], e["new"]) for e in events}
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for p in sorted(cache.glob("*.diag")):
+        acct = _diag_account(p.name, accounts)
+        if account and acct != account:
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for head, cont in TS._messages(text):
+            whole = TS._unquoted(" ".join([head] + [c.strip()
+                                                     for c in cont]))
+            found = []
+            m = _LOOKS_RE.search(whole)
+            mt = _LOOKS_TT_RE.search(whole)
+            if m:
+                found.append((m.group(1), m.group(2).upper(),
+                              m.group(3).upper(), m.group(4)))
+            elif mt:
+                found.append((mt.group(1), mt.group(3).upper(),
+                              mt.group(4).upper(), mt.group(2)))
+            else:
+                b = _BROKER_WORD_RE.search(whole)
+                for m in _DATED_HINT_RE.finditer(whole):
+                    found.append((b.group(1) if b else "broker",
+                                  m.group(1).upper(), m.group(2).upper(),
+                                  m.group(3)))
+                for m in _DATED_HINT_TT_RE.finditer(whole):
+                    found.append((b.group(1) if b else "broker",
+                                  m.group(2).upper(), m.group(3).upper(),
+                                  m.group(1)))
+            for broker, old, new, day in found:
+                if old == new or old in ("OLD", "A") \
+                        or (acct, old, new) in seen:
+                    continue
+                seen.add((acct, old, new))
+                if (old, new) in booked:
+                    continue
+                why = TS.already(TS.Suggestion(f"GLOBAL {old} {new}", "",
+                                               ""), st)
+                if why:
+                    continue
+                out.append({
+                    "account": acct, "broker": broker, "old": old,
+                    "new": new, "date": day,
+                    "source": f"{broker} looks renamed",
+                    "where": f"work/{p.name}",
+                    "line": f"RENAME {day} {old} {new}",
+                    "map_line": f"RENAME {old} {new} {day}"})
+    out.sort(key=lambda h: (h["account"], h["date"], h["old"]))
+    return out
+
+
 def report(root: Path, cfg: Dict[str, Any],
            account: Optional[str] = None, *,
-           undated: bool = True) -> Dict[str, Any]:
+           undated: bool = True, hints: bool = True) -> Dict[str, Any]:
     """`taxjson renames`: every rename event with its date, source and
     the position / book cost it carried per account; every late trade
     in an old ticker with its resolution; the undated ticker.map renames
@@ -566,15 +688,20 @@ def report(root: Path, cfg: Dict[str, Any],
             undated.append({"rule": ("RENAME" if frm in undated_rn
                                      else "GLOBAL"),
                             "old": frm, "new": to,
+                            "source": UNDATED_SOURCE,
                             "broker_dates": sorted(set(hint))})
     unresolved = sum(1 for x in late if x["resolution"] == "unresolved")
+    suggested = (rename_hints(root, cfg, events, account) if hints
+                 else [])
     return {"renames": out_events, "late": late, "undated": undated,
-            "unresolved": unresolved}
+            "suggested": suggested, "unresolved": unresolved,
+            "pending": unresolved + len(suggested)}
 
 
 def unresolved_late(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     """The late trades no ticker.map line declares (`run --strict`)."""
-    return [x for x in report(root, cfg, undated=False)["late"]
+    return [x for x in report(root, cfg, undated=False,
+                              hints=False)["late"]
             if x["resolution"] == "unresolved"]
 
 
@@ -585,29 +712,48 @@ def _hang(d, text: str, indent: str = "", hang: str = "  ") -> None:
         d.line(ln)
 
 
-def render(doc: Dict[str, Any], width_: Optional[int] = None) -> List[str]:
-    """The renames in the house layout (docs/output-style.md): each
-    dated rename with the positions it carried and its late trades, the
-    ticker.map lines to copy never wrapped; the last line says whether a
-    declaration is needed."""
+def render(doc: Dict[str, Any], width_: Optional[int] = None,
+           pending: bool = False) -> List[str]:
+    """The renames in the house layout (docs/output-style.md): a table of
+    the dated renames with their source, then each one with the
+    positions it carried and its late trades, the look-alike renames
+    the exports show (suggested, with the `.tt` line that books each),
+    the undated ticker.map renames; the lines to copy never wrapped;
+    the last line says whether a declaration is needed. `pending`: only
+    the unresolved late trades and the suggestions."""
     from taxjson.lib.out import Doc
     evs, late, undated = doc["renames"], doc["late"], doc["undated"]
-    d = Doc(f"RENAMES ({len(evs)})", width_=width_)
+    hints = doc.get("suggested") or []
+    if pending:
+        bad = {(x["rename_date"], x["renamed_to"]) for x in late
+               if x["resolution"] == "unresolved"}
+        evs = [e for e in evs if (e["date"], e["new"]) in bad]
+        undated = []
+    d = Doc(f"RENAMES ({len(evs)})" if not pending else
+            f"RENAMES — pending: {len(evs)} with an undeclared late trade, "
+            f"{len(hints)} suggested", width_=width_)
     d.blank()
-    if not evs:
+    if not evs and not pending:
         d.para("No dated rename in the books.")
-    for k, e in enumerate(evs):
-        if k:
-            d.blank()
+    if evs:
+        body = []
+        for e in evs:
+            ratio = "1" if abs((e["ratio"] or 1.0) - 1.0) < 1e-12 else \
+                f"{e['ratio']:g}"
+            src = ", ".join(e["sources"])
+            if e["ticker_map_lines"] and not any(
+                    x == "ticker.map line" or x.startswith(".tt line")
+                    for x in e["sources"]):
+                src += f" (also {', '.join(e['ticker_map_lines'])})"
+            body.append([e["date"], f"{e['old']} -> {e['new']}", ratio,
+                         src, ", ".join(e["accounts"])])
+        d.table(["DATE", "RENAME", "RATIO", "SOURCE", "ACCOUNTS"], body,
+                aligns="<<><<", drop=(2, 4), key=(0, 1))
+    for e in evs:
+        d.blank()
         ratio = "" if abs((e["ratio"] or 1.0) - 1.0) < 1e-12 else \
             f" x{e['ratio']:g}"
-        _declared = any(x == "ticker.map line" or x.startswith(".tt line")
-                        for x in e["sources"])
-        _hang(d, f"{e['date']}  {e['old']} -> {e['new']}{ratio}  "
-               f"source: {', '.join(e['sources'])}"
-               + (f" (also {', '.join(e['ticker_map_lines'])})"
-                  if e["ticker_map_lines"] and not _declared else ""),
-               "", "  ")
+        _hang(d, f"{e['date']}  {e['old']} -> {e['new']}{ratio}", "", "  ")
         for c in e["carried"]:
             cost = ("" if c["sheltered"] else
                     f"; book cost {c['book_cost']:,.2f} {e['currency']} "
@@ -637,10 +783,25 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None) -> List[str]:
                        f"late=separate")
                 _hang(d, "Until then they are a separate security and "
                        "`taxjson run --strict` stops.", "  ", "    ")
+    if hints:
+        d.section(f"SUGGESTED ({len(hints)}): look-alike renames the "
+                  f"exports show")
+        d.para("Not booked: the old symbol stops with shares still open "
+               "and the new one starts with a sale, under one security "
+               "name. If it is one security, add the .tt line to a .tt file "
+               "in the account's inputs/ folder (a ticker change is a dated "
+               "event) — the date is the new symbol's first row; use the "
+               "broker's change date if you know it — then re-run "
+               "`taxjson run`.", "  ")
+        for h in hints:
+            d.blank()
+            d.item(f"{h['old']} -> {h['new']} ({h['account'] or '?'}, "
+                   f"{h['source']}; {h['where']})", "  ")
+            d.line(f"      {h['line']}")
     if undated:
         d.section(f"UNDATED RENAMES IN ticker.map ({len(undated)})")
-        d.para("Every row of the old symbol, at any date, is the new one.",
-               "  ")
+        d.para(f"Source: {UNDATED_SOURCE}. Every row of the old symbol, at "
+               f"any date, is the new one.", "  ")
         for u in undated:
             d.line(f"  {u['rule']} {u['old']} {u['new']}")
             for dd in u["broker_dates"]:
@@ -650,7 +811,10 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None) -> List[str]:
                 d.line(f"      RENAME {dd} {u['old']} {u['new']}")
     d.blank()
     n = doc["unresolved"]
-    d.para(f"{n} trade(s) in an old ticker after its rename need a "
+    msg = (f"{n} trade(s) in an old ticker after its rename need a "
            f"declaration (a .tt RENAME line with late=)." if n else
            "No unresolved trade in an old ticker after its rename.")
+    if hints:
+        msg += f" {len(hints)} look-alike rename(s) to settle."
+    d.para(msg)
     return d.lines()

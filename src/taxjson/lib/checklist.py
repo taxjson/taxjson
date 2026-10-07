@@ -88,6 +88,10 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "taxjson renames",
      "A rename carries the position and cost on its date; a later trade in the old ticker is "
      "another security unless ticker.map folds it (`late=fold` / `late=separate`)."),
+    ("journals", 2, "Every journal between two listings joined or settled",
+     "taxjson journals --pending",
+     "A broker journal moves a position from one listing of a security to another; one the books do "
+     "not pool leaves a long on one listing and a short on the other, and a sale's cost wrong."),
     ("elections", 2, "No unresolved merger or spin-off election",
      "taxjson elect --pending",
      "A deferred election leaves the account out of the run."),
@@ -1561,9 +1565,35 @@ def d_renames(ctx: Ctx) -> Result:
         return Result("renames", "attention",
                       f"{doc['unresolved']} trade(s) in an old ticker after "
                       f"its rename not declared — `taxjson renames`")
+    if doc.get("suggested"):
+        return Result("renames", "attention",
+                      f"{len(doc['suggested'])} look-alike rename(s) not "
+                      f"booked — `taxjson renames --pending`")
     return Result("renames", "done",
                   f"{len(doc['renames'])} dated rename(s); no undeclared "
                   f"late trade")
+
+
+def d_journals(ctx: Ctx) -> Result:
+    from taxjson.lib.journals import JournalsError, report
+    if not ctx.cache.is_dir():
+        return Result("journals", "blocked", "no work/ — run `taxjson run`")
+    try:
+        doc = report(ctx.root, ctx.cfg)
+    except JournalsError as e:
+        return Result("journals", "blocked",
+                      f"{e} — run `taxjson run`")
+    c = doc["counts"]
+    if doc["pending"]:
+        return Result("journals", "attention",
+                      f"{doc['pending']} pending journal(s) between two "
+                      f"listings ({c['suggested']} suggested, "
+                      f"{c['refused'] - c['decided']} refused) — "
+                      f"`taxjson journals --pending`")
+    return Result("journals", "done",
+                  f"{c['joined']} journal(s) between two listings joined"
+                  + (f", {c['decided']} kept apart by ticker.map"
+                     if c["decided"] else ""))
 
 
 def d_handoff(ctx: Ctx) -> Result:
@@ -1979,6 +2009,7 @@ DETECTORS: Dict[str, Callable[[Ctx], Result]] = {
     "run-clean": d_run_clean,
     "check-dates": d_check_dates,
     "renames": d_renames,
+    "journals": d_journals,
     "sanity": d_sanity,
     "missing-history": d_missing_history,
     "elections": d_elections,

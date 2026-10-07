@@ -320,8 +320,13 @@ class TestRun(unittest.TestCase):
     def test_canada_distinct_wins(self):
         st = self._check_not_joined(
             "canada", tail="DISTINCT SAMPQ.TO SAMPR.TO\n")
-        self.assertEqual(st, {"joined": [], "suggested": [],
-                              "collisions": []})
+        # The pair the DISTINCT line keeps apart is recorded as refused
+        # (`taxjson journals` lists it), never joined or suggested.
+        self.assertEqual({k: st[k] for k in ("joined", "suggested",
+                                              "collisions")},
+                         {"joined": [], "suggested": [], "collisions": []})
+        self.assertEqual([r.get("refused") for r in st["refused"]],
+                         ["distinct"])
 
     @rule("US-XLIST-01")
     def test_usa_distinct_wins(self):

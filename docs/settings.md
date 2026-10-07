@@ -404,12 +404,12 @@ The project's one mapping file, at the project root; one rule per line, symbols 
 - **Form:** `TOBASE FROM TO`
 - **Meaning:** two listings of one security (a US line and its TSX line) are one ACB pool / one security; applied when converting to the base currency. The raw holdings view keeps them apart except where the broker's transfer rows prove a move.
 - **Country:** both.
-- **When:** an interlisted share you trade on both lines that the run did not join itself (`taxjson ticker-map --suggest` proposes it).
+- **When:** an interlisted share you trade on both lines that the run did not join itself (`taxjson ticker-map --suggest` proposes it; `taxjson journals` lists each journal between the two listings, the line that pools them, or why it is not joined).
 - **Example:** `TOBASE ZZQ.US ZZQ.TO`
 
 #### `JOURNAL` (legacy)
 - **Form:** `JOURNAL FROM TO`
-- **Meaning:** read as `TOBASE FROM TO` (one security), with one Warning per run; `taxjson format-map --write` rewrites it. It no longer nets the two listings in the holdings view: a journal's own transfer legs move the units — the broker's (a Questrade BRW pair, RBC's TFR legs, IB's InterDepot) or, when the export lacks them, a `.tt` line `JOURNAL <date> FROM TO <qty>`. The missing-history checks read a journal the books show (a join of the run, a Questrade pair, RBC's J~ reference on the two transfer legs, a `.tt` JOURNAL line) with that day's buys first.
+- **Meaning:** read as `TOBASE FROM TO` (one security), with one Warning per run; `taxjson format-map --write` rewrites it. It no longer nets the two listings in the holdings view: a journal's own transfer legs move the units — the broker's (a Questrade BRW pair, RBC's TFR legs, IB's InterDepot) or, when the export lacks them, a `.tt` line `JOURNAL <date> FROM TO <qty>`. The missing-history checks read a journal the books show (a join of the run, a Questrade pair, RBC's J~ reference on the two transfer legs, a `.tt` JOURNAL line) with that day's buys first. `taxjson journals` lists every broker journal between two listings with the line that pools it (yours, `ticker.map:N`, or the run's own join).
 - **Country:** both.
 - **Example:** `JOURNAL ZZG.U.TO ZZG.TO` (write `TOBASE ZZG.U.TO ZZG.TO`)
 
@@ -421,13 +421,13 @@ The project's one mapping file, at the project root; one rule per line, symbols 
 
 #### `DISTINCT`
 - **Form:** `DISTINCT A B`
-- **Meaning:** two look-alike listings are separate securities (a CDR and its US share); changes no symbol, undoes an automatic cross-listing join and silences the scan's MAP-GAP nag.
+- **Meaning:** two look-alike listings are separate securities (a CDR and its US share); changes no symbol, undoes an automatic cross-listing join and silences the scan's MAP-GAP nag. `taxjson journals` lists a journal between the two as refused, naming this line.
 - **Country:** both.
 - **Example:** `DISTINCT ZZR.TO ZZR.US`
 
 #### `RENAME`
 - **Form:** `RENAME OLD NEW` (undated); legacy: `RENAME OLD NEW YYYY-MM-DD [late=fold|late=separate]`
-- **Meaning:** without a date, `GLOBAL OLD NEW`. The dated form is legacy: a ticker change on a date is a `.tt` line `RENAME YYYY-MM-DD OLD NEW [late=…]` (the `.tt` RENAME action below). A dated line here still works the same way, with one Warning per run; `taxjson format-map --write` moves it to a `.tt` file.
+- **Meaning:** without a date, `GLOBAL OLD NEW`. The dated form is legacy: a ticker change on a date is a `.tt` line `RENAME YYYY-MM-DD OLD NEW [late=…]` (the `.tt` RENAME action below). A dated line here still works the same way, with one Warning per run; `taxjson format-map --write` moves it to a `.tt` file. `taxjson renames` names each dated rename's source (a broker row, an IB contract id, a `.tt` line, a legacy ticker.map line) and lists the look-alike renames the exports show as suggested.
 - **Country:** both.
 - **Example:** `RENAME ZZOLD.US ZZNEW.US` · legacy `RENAME ZZOLD.US ZZNEW.US 2025-04-01 late=fold`
 
@@ -698,6 +698,39 @@ Country: `gift` is Canada only (a disposition at fair value, s.69(1)(b)); a US p
 ## filed/YEAR.json: close-year locks
 
 Written by `taxjson close-year`: the closed year's sales, year-end positions and cost, its country and date basis, and the carry-forwards (net capital loss or US short/long-term carryover; Canada's minimum tax carryover). Read by `taxjson check-filed`, `taxjson handoff`, `taxjson carryover`, `taxjson option-boundary` and the next year's estimate (through `prior_year_record`). Commit it; do not edit it. A lock closed under the other country's rules is refused.
+
+---
+
+## `taxjson journals --json`
+
+A stable schema for programs (a checklist, a script): new keys may be added, none is renamed or removed while `format` stays `taxjson-journals/1`. Read from the last run's `work/cross_listings.state`, the parsed exports in `work/` and the map the books were merged with; `taxjson journals` refuses a project with no completed run. Code: `src/taxjson/lib/journals.py` — `report`, `FORMAT`, `SOURCES`.
+
+| Key | Meaning |
+| --- | --- |
+| `format` | `"taxjson-journals/1"` |
+| `account`, `year` | the `--account` / `--year` filters, `null` when not given |
+| `map` | the map the books were merged with: `work/ticker.map.effective`, `ticker.map`, or `null` |
+| `journals` | one object per journal (below), ordered by account and date; with `--pending` only the pending ones |
+| `counts` | `{"joined": N, "suggested": N, "refused": N, "decided": N}` over the journals `--account` / `--year` keep (`--pending` does not change them); `decided` counts the refused ones your ticker.map decided |
+| `pending` | how many journals are pending (each journal's `pending`); `--pending` exits 1 when it is not 0 |
+
+Each journal:
+
+| Key | Meaning |
+| --- | --- |
+| `account`, `broker`, `date` | the out-leg's account, broker id (`rbc_direct`, `questrade`, `ib` ...) and date |
+| `from`, `to`, `quantity` | the listing the units left, the listing they arrived on, how many |
+| `in` | `{"account", "broker", "date"}` of the in-leg (another account or broker for a move across brokers) |
+| `source`, `found_by` | how it was found: `questrade-brw`, `rbc-journal-ref` (a `J~` reference), `rbc-journal`, `ib-interdepot`, `cross-broker`, `transfer`, `tt`, `map`; a source another stage writes is passed through as it is. `found_by` is the words the text shows |
+| `state` | `joined`, `suggested` or `refused` |
+| `line`, `line_at` | joined: the map line(s) that pool the two listings and where (`ticker.map:N` for yours, `work/ticker.map.effective:N` for the run's own join); otherwise `null` |
+| `reason` | suggested or refused: why not joined; `null` when joined |
+| `settle` | suggested: the `.tt` line `JOURNAL <date> FROM TO QTY` and the ticker.map line, either of which settles it; `[]` otherwise |
+| `undo` | joined or refused: how to undo or change the state (the `DISTINCT` line to add, the line to remove) |
+| `pending` | `true` for a suggested journal and for one refused because its legs name two companies (no line of yours covers it); `false` when joined or when your ticker.map decided it (a `DISTINCT` line, a line naming a listing): a decision already made |
+| `decided_by` | `"ticker.map"` when your map decided a refused journal, else `null` |
+| `names` | the two legs' security names as the exports write them |
+| `where` | where a declared journal was written (a `.tt` line's file and line), else `null` |
 
 ---
 
