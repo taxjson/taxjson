@@ -19,7 +19,8 @@ Claude Code, Codex, Gemini CLI, Cursor and Copilot read this file.
    cause, the fix, the release it was **fixed in** (newer than theirs, from
    `tjs --version`: the fix starts with upgrading) and the code.
 3. **Settings:** `docs/settings.md` (every taxjson.toml key; `tjs format`
-   lays the file out). **Tax rules:** `docs/tax-rules.md`; the spec is
+   lays the file out, `tjs format-map` lays out ticker.map). **Tax
+   rules:** `docs/tax-rules.md`; the spec is
    `tjs tax-logic` (`--ids` shows each rule id).
 4. **Where the code is:** `docs/architecture-map.md`. Don't read
    `src/taxjson/bin/taxjson_run.py` (22k lines) top to bottom: search it for

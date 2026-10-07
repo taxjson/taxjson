@@ -360,13 +360,20 @@ def read_side_rules(path) -> "SideRules":
     from pathlib import Path
     from taxjson.lib.cli_diag import read_text_utf8
     p = Path(path)
+    return side_rules_from_text(read_text_utf8(p), p.name)
+
+
+def side_rules_from_text(text: str, name: str = TICKER_MAP_NAME
+                         ) -> "SideRules":
+    """read_side_rules of a map's text, `name` its file name in the
+    messages."""
     rules = SideRules()
-    for lineno, raw in enumerate(read_text_utf8(p).splitlines(), 1):
+    for lineno, raw in enumerate(text.splitlines(), 1):
         line = _comment_free(raw)
         if not line:
             continue
         kw = line.split()[0].upper()
-        where = f"{p.name}:{lineno}"
+        where = f"{name}:{lineno}"
         if kw in RENAME_KEYWORDS:
             continue
         if kw in RETIRED_KEYWORDS:

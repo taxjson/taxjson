@@ -231,8 +231,8 @@ class TestProject(unittest.TestCase):
         self.assertTrue(rep["filing_required"])
 
     def test_init_template_documents_the_keyword(self):
-        from taxjson.bin.taxjson_run import _TEMPLATE_TICKER_MAP
-        self.assertIn("T1135", _TEMPLATE_TICKER_MAP)
+        from taxjson.lib.ticker_map_format import init_template
+        self.assertIn("T1135", init_template())
 
 
 if __name__ == "__main__":

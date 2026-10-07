@@ -28,7 +28,7 @@ import sys
 import re
 from collections import namedtuple
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 from taxjson.lib.cli_diag import InputContentError, guard_main
@@ -83,7 +83,19 @@ TickerMap = namedtuple("TickerMap",
 
 
 def _parse_map_file(file_path: Path):
-    """(TickerMap, problems, notes). `problems` are the lines that
+    """_parse_map_text of the file at `file_path` (a non-UTF-8 map is a
+    one-line error naming it, S053-06; a BOM is dropped)."""
+    from taxjson.lib.cli_diag import read_text_utf8
+    return _parse_map_text(read_text_utf8(file_path), file_path.name)
+
+
+def _parse_map_text(text: str, name: str = "ticker.map",
+                    dropped: Optional[List[str]] = None):
+    """(TickerMap, problems, notes) of a map's text, `name` its file
+    name in the messages; `dropped`, when given, receives the problems
+    whose line's rule is not in the map (a malformed line, a second
+    target or lookup value: lib/ticker_map_format files those lines
+    under Unrecognized). `problems` are the lines that
     could not be parsed — each rule on them is DROPPED — or that
     contradict another line (one FROM with two targets, a rename
     cycle, a DISTINCT pair the renames join), as
@@ -109,19 +121,17 @@ def _parse_map_file(file_path: Path):
     first_rule: Dict[str, tuple] = {}
     distinct_where: Dict[frozenset, tuple] = {}
     from io import StringIO
-    from taxjson.lib.cli_diag import read_text_utf8
     from taxjson.lib.ticker_map import (RENAME_KEYWORDS,
                                         RETIRED_KEYWORDS, SIDE_KEYWORDS,
                                         SideRules, add_side_rule,
                                         parse_side_line)
     side = SideRules()
-    # A non-UTF-8 map is a one-line error naming it (S053-06).
-    with StringIO(read_text_utf8(file_path)) as f:
+    with StringIO(text) as f:
         for lineno, raw in enumerate(f, 1):
             line = raw.split('#', 1)[0].strip()
             if not line:
                 continue
-            where = f"{file_path.name}:{lineno}"
+            where = f"{name}:{lineno}"
             parts = line.split()
             kw = parts[0].upper()
             syms = [p.upper() for p in parts[1:]]
@@ -212,6 +222,10 @@ def _parse_map_file(file_path: Path):
                     problems.append(f"{where}: {kw} line needs `from to` "
                                     f"(two symbols separated by a space): "
                                     f"{line!r}")
+    # Every problem so far dropped its line's rule; the ones below
+    # (contradictions between rules) keep both.
+    if dropped is not None:
+        dropped.extend(problems + side.problems)
     # A dated rename next to an undated rule for the same symbol, or two
     # dated renames of one symbol close together, contradict each other.
     _seen_dated: Dict[str, list] = {}
@@ -247,7 +261,7 @@ def _parse_map_file(file_path: Path):
                        f"({wheres}) — a chain of renames must end at "
                        f"one symbol")
                 if not any(msg in p for p in problems):
-                    problems.append(f"{file_path.name}: {msg}")
+                    problems.append(f"{name}: {msg}")
     if not any("rename cycle" in p for p in problems):
         for to_base, view in ((False, "GLOBAL"), (True, "base-currency")):
             ren = merge_renames(tmap, to_base)

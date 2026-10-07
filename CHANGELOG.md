@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+
+- **`taxjson format-map` lays out ticker.map** (`tjs format-map`), as
+  `taxjson format` does taxjson.toml: a short header saying what the file
+  holds, then the rules in groups in a fixed order (Spellings, Listings of
+  one security, Clean-up, Dated events, Lookups), your order kept within a
+  group, one space between fields, exact duplicate lines dropped. A comment
+  directly above a line moves with it, and every comment line is kept. A
+  line `taxjson run` cannot use stays as written in an "Unrecognized" group
+  at the end, and the console names its problem. The parsed map must stay
+  identical, or nothing is written. Default: a diff; `--write` (with a
+  `ticker.map.bak` unless `--no-backup`); `--check` exits 1 when the file is
+  not formatted. `taxjson init` now writes ticker.map in this layout.
 
 ## v0.23.1 (2026-10-06)
 
