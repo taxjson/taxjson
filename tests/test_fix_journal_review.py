@@ -439,5 +439,24 @@ class TestTrailingFormOnly(unittest.TestCase):
         self._check()
 
 
+class TestCurrencyJournalRecordedOnce(unittest.TestCase):
+
+    @rule("CA-XLIST-03")
+    def test_brw_pair_and_its_tt_twin_are_one_record(self):
+        from taxjson.lib import cross_listings as XL
+        from taxjson.lib import dated_events as DE
+        legs = [XL.Leg("m", "questrade", "QZD.TO", "2025-05-06", -100.0,
+                       pair="2025-05-06#1", currency="CAD"),
+                XL.Leg("m", "questrade", "QZD.U.TO", "2025-05-06", 100.0,
+                       pair="2025-05-06#1", currency="USD")]
+        j = DE.Journal("m", "2025-05-06", "QZD.TO", "QZD.U.TO", 100.0,
+                       "inputs/m/j.tt:1", pair="tt:m:2025-05-06#1",
+                       status=DE.STATUS_DUPLICATE, legs=())
+        r = XL.analyze(legs, {}, {}, base_currency="CAD",
+                       currency_journals=True, declared=[j], refused=[])
+        self.assertEqual([(p.frm, p.to, p.source) for p in r["joined"]],
+                         [("QZD.U.TO", "QZD.TO", "tt")])
+
+
 if __name__ == "__main__":
     unittest.main()

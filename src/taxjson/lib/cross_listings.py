@@ -713,7 +713,10 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
     if currency_journals:
         groups: Dict[Tuple[str, str, str], List[Leg]] = {}
         for g in legs:
-            if g.pair:
+            # A leg a .tt JOURNAL line already claimed (step -1: the
+            # broker's journal the line repeats) is that pair's: never a
+            # second record of the same journal.
+            if g.pair and not g.used:
                 groups.setdefault((g.account, g.broker, g.pair),
                                   []).append(g)
         for _k, gl in sorted(groups.items()):
