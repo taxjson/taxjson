@@ -424,7 +424,9 @@ def main():
         metavar='{canada,ca,usa,us}',
         help="The project's country: required with --to when the book "
              "has futures contracts (their settled P/L follows the "
-             "country's lot rule: average cost in Canada, FIFO in the US).",
+             "country's lot rule: average cost in Canada, FIFO in the US), "
+             "and when a dated RENAME's late rows depend on the "
+             "country's engine order (`taxjson run` always passes it).",
     )
     parser.add_argument(
         '--default-rate', type=positive_rate, default=None,
@@ -517,7 +519,9 @@ def main():
                                          apply_dated_renames)
         try:
             txs = apply_dated_renames(txs, tmap.dated,
-                                      kind=KIND_SECURITIES)
+                                      kind=KIND_SECURITIES,
+                                      country=args.country or "",
+                                      mapping=renames)
         except RenameConflict as e:
             emit_line(f"error: {e}")
             return 1

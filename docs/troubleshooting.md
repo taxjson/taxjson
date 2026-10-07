@@ -412,9 +412,30 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### "Error: SPLIT QZA.TO→QZB.TO: rename would merge a LONG position into an existing SHORT pool" (US: a total that misses the sales between the declared date and the broker's rename row) with a `.tt` `RENAME … late=fold`
 - **Check:** the account's own rows hold the change (a broker corporate-action row or a `.tt` `SPLIT <date> <time> OLD NEW 1`) a few days after the date the `RENAME` line declares, and the account sold OLD between the two dates; `tjs shares` shows NEW short before the rename row.
 - **Cause:** `late=fold` re-booked every OLD row on or after the declared date as NEW, even the ones before the account's own rename row, while `tjs renames` called only the rows after that row late. The sale became a short NEW position that the rename row then merged into.
-- **Fix:** upgrade: `late=fold` re-books only the rows after the account's own rename row (date and time; a row dated at the start of its day, 00:00:00, comes before every row that day), the rows `tjs renames` lists. Re-run `tjs run`.
+- **Fix:** upgrade: `late=fold` re-books only the rows the engine takes after the account's own rename row (next entry), the rows `tjs renames` lists. Re-run `tjs run`.
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/renames.py` — `apply_dated_renames`, `after_rename_row`, `late_rows`
+
+### Canada: an OLD sale on the day of an evening rename row (IB's 20:25 corporate actions, a timed `.tt` SPLIT) goes short with `late=fold` declared, and `run --strict` passes
+- **Check:** the account's rename row is timed later in the day (`SPLIT 2025-04-03 20:25:00 QZA.TO QZB.TO 1`) than an OLD trade of the same day (10:00); `work/<account>_base.json` keeps that trade as QZA.TO; `tjs find-missing-history` lists QZA.TO short, and the total misses its gain. A US project books the same input correctly.
+- **Cause:** the late rows were decided by clock time, but the Canada engine orders by settlement date and takes a ticker change ahead of every trade executed on its date: the morning sale, kept as OLD, came after the change had emptied OLD.
+- **Fix:** upgrade: an account's late rows are the ones its country's engine takes after its own rename row. In Canada every OLD trade executed on the rename row's date is late (`late=fold` books it as NEW; without a declaration `tjs renames` lists it and `run --strict` stops); in the US the clock decides (a trade before the evening row is still OLD). Re-run `tjs run`. A stage tool run on its own (`taxjson-merge2`, `taxjson-ticker-map`) takes `--country` for this and refuses such a row without it.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/renames.py` — `after_rename_row`, `RenameNeedsCountry`, `late_rows`, `apply_dated_renames`; `src/taxjson/lib/corporate_timeline.py` — `event_sort_key`
+
+### A broker's (or a `.tt`) SPLIT QZA→QZB and a `RENAME` QZB→QZC on the same date: "RENAME 2025-04-01 QZB.TO QZC.TO books nothing" and QZC goes short
+- **Check:** the account's own rows rename QZA into QZB on the date the `RENAME` line declares for QZB; `tjs renames --pending` lists the line under DECLARED, NOT BOOKED.
+- **Cause:** on the date itself only a rename row the run had booked from another declaration counted as holding QZB; the broker's or a `.tt` SPLIT row did not.
+- **Fix:** upgrade: any rename row into the old symbol on the date counts, and the second change is stamped no earlier than the first. Re-run `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/renames.py` — `apply_dated_renames`
+
+### "RENAME 2025-04-01 QZA.TO QZB.TO books nothing" when ticker.map respells the rows (`GLOBAL QZAX.TO QZA.TO`), and "is dated, but ticker.map renames QZAX.TO to QZA.TO at every date" for the raw spelling
+- **Check:** ticker.map has an undated line mapping the broker's spelling onto the symbol the `RENAME` line names; `tjs renames --pending` lists the line under DECLARED, NOT BOOKED.
+- **Cause:** a dated rename books on the exports' raw symbols, before the undated renames apply, and only matched the declared symbol: the rows in the raw spelling were never renamed. Declaring the raw spelling is refused because the map renames it at every date.
+- **Fix:** upgrade: a declaration naming the symbol ticker.map gives the rows (`RENAME 2025-04-01 QZA.TO QZB.TO`) books on every raw spelling mapped onto it, late rows included; the refusal of the raw spelling names that line. Re-run `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/renames.py` — `apply_dated_renames`; `src/taxjson/lib/dated_events.py` — `check_against_map`
 
 ### "Warning: ATTENTION: 2 trade(s) in QZOLD.TO after its rename to QZNEW.TO on 2025-04-01" for an account that never held QZOLD.TO, while another account's line says `late=fold`
 - **Check:** `tjs renames --json` lists the account's rows under `late` as `unresolved`; the account's stage notes (`work/<account>_*.diag`) say "… row(s) of account b on or after 2025-04-01 are kept as QZOLD.TO: late=fold applies to the accounts that held QZOLD.TO before the date".
@@ -426,7 +447,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### "Warning: inputs/margin/m.tt:2: RENAME 2025-04-01 QZAA.TO QZB.TO books nothing"
 - **Check:** `tjs renames` lists the line under DECLARED, NOT BOOKED (`--pending` counts it); `work/dated_events.state` records it with status `unused`.
 - **Cause:** no account of the line's kind (securities, or crypto for a crypto account's line) holds the old symbol before the date: a typo of the symbol, a date after the last row of it, or a line in an account of the other kind. Earlier such a line was silently ignored. A chain declared for one day (`RENAME 2025-04-01 QZA.TO QZB.TO` and `RENAME 2025-04-01 QZB.TO QZC.TO`) used to book only the first link; it now books both, in date and line order.
-- **Fix:** correct the symbols or the date, or delete the line; then `tjs run`.
+- **Fix:** correct the symbols or the date, or delete the line; then `tjs run`. `run --strict` stops on such a line ("--strict: 1 declared rename(s) book nothing — aborting"); earlier it passed.
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_unused_renames`; `src/taxjson/lib/renames.py` — `unused_declarations`, `apply_dated_renames`; `src/taxjson/lib/dated_events.py` — `rename_records`
 

@@ -687,6 +687,13 @@ def main():
                              "account's only in securities accounts "
                              "(`taxjson run` passes it; default: every "
                              "dated RENAME).")
+    from taxjson.lib.country import country_arg
+    parser.add_argument("--country", type=country_arg, default=None,
+                        metavar="{canada,ca,usa,us}",
+                        help="The project's country: the engine order "
+                             "that decides a dated RENAME's late rows "
+                             "on the rename row's day (`taxjson run` "
+                             "passes it).")
     args = parser.parse_args()
     if args.map_flag and args.map_file:
         # Two map sources: the positional one used to win silently
@@ -721,7 +728,9 @@ def main():
         from taxjson.lib.renames import RenameConflict, apply_dated_renames
         try:
             transactions = apply_dated_renames(transactions, tmap.dated,
-                                               kind=args.kind)
+                                               kind=args.kind,
+                                               country=args.country or "",
+                                               mapping=mapping)
         except RenameConflict as e:
             emit_line(f"taxjson-ticker-map: error: {e}")
             sys.exit(1)

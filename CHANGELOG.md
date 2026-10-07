@@ -154,6 +154,23 @@
   LONG position into an existing SHORT pool"), the US engine dropped the
   sale's gain. The rows folded are now the ones `taxjson renames` calls
   late.
+- **Canada: an old-ticker trade on the day of an evening rename row is
+  late.** The rows `late=fold` re-books (and `taxjson renames` lists) are
+  now the ones the country's engine takes after the account's own rename
+  row. The Canada engine orders by settlement date and takes a ticker
+  change ahead of every trade executed that day, so a morning sale before
+  an evening corporate-action row (IB's 20:25) stayed in the old ticker,
+  went short and left the total; with no declaration, `run --strict` let
+  it pass. The US order (trade date and clock time) is unchanged.
+- **A same-day chain through a broker's rename row books.** A broker's or
+  a `.tt` SPLIT A to B and a declared `RENAME` B to C on the same date
+  booked nothing for B to C ("books nothing") and C went short.
+- **A rename of a symbol ticker.map respells books.** With `GLOBAL RAW
+  OLD` in ticker.map, a `.tt` `RENAME <date> OLD NEW` booked nothing on
+  the RAW rows; it now books on every raw spelling mapped onto OLD, and
+  the refusal of a line naming the raw spelling gives the line to write.
+- **`run --strict` stops on a declared rename that books nothing**, like
+  the other unresolved rename items.
 - **An event's `late=` applies to the accounts that held the old ticker.**
   Another account that bought the old ticker only after the change (maybe
   another company's shares) had its rows folded into the new symbol by a

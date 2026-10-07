@@ -278,32 +278,89 @@ def rename_events(rows: Iterable[Any]) -> List[Dict[str, Any]]:
 
 
 def row_stamp(r: Any) -> Tuple[str, str]:
-    """(date, time) of a row in the books' order (no time: the start of
-    its day)."""
+    """(date, time) of a row (no time: the start of its day)."""
     return (str(_g(r, "date"))[:10], str(_g(r, "time") or "00:00:00"))
 
 
-def after_rename_row(here: Tuple[str, str], own: Tuple[str, str]) -> bool:
-    """A row stamped `here` comes after an account's rename row stamped
-    `own` in the books: a later date, or a later time that day — a
-    rename row dated at the start of its day (00:00:00: the row the
-    pipeline books, a .tt SPLIT without a time of day) precedes every row
-    of that day."""
-    if here[0] != own[0]:
-        return here[0] > own[0]
-    return own[1] <= "00:00:00" or here[1] > own[1]
+class RenameNeedsCountry(RenameConflict):
+    """The order of a row and a rename row on one day differs between
+    the Canada and the US engine, and no country was given."""
 
 
-def late_rows(rows: Iterable[Any], events: List[Dict[str, Any]]
-              ) -> List[Tuple[Any, Dict[str, Any]]]:
+class _Ordered:
+    """A row's fields for the engines' sort key (dicts or rows)."""
+    __slots__ = ("action", "date", "date_settle", "time", "quantity",
+                 "symbol", "exercise_of")
+
+    def __init__(self, r: Any) -> None:
+        self.action = str(_g(r, "action")).upper()
+        self.date = str(_g(r, "date"))[:10]
+        self.date_settle = str(_g(r, "date_settle") or "")[:10]
+        self.time = str(_g(r, "time") or "00:00:00")
+        try:
+            self.quantity = float(_g(r, "quantity", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            self.quantity = 0.0
+        self.symbol = str(_g(r, "symbol"))
+        self.exercise_of = str(_g(r, "exercise_of") or "")
+
+
+# The engine's ordering ladder per country (lib/corporate_timeline): the
+# Canada engine orders by settle date and takes a SPLIT ahead of every
+# execution of its settle date (whatever its clock time); the US engine
+# orders by trade date and clock time.
+_ENGINE_PROFILE = {"canada": "ca_main", "usa": "us_main"}
+
+
+def _engine_after(r: Any, rename_row: Any, country: str) -> bool:
+    from taxjson.lib.corporate_timeline import event_sort_key
+    prof = _ENGINE_PROFILE[country]
+    return (event_sort_key(_Ordered(r), profile=prof)
+            > event_sort_key(_Ordered(rename_row), profile=prof))
+
+
+def after_rename_row(r: Any, rename_row: Any, country: str) -> bool:
+    """Row `r` comes after the account's rename row `rename_row` in the
+    books of `country`'s engine (lib/corporate_timeline.event_sort_key):
+    in Canada a SPLIT is taken ahead of every execution of its settle
+    date, so an OLD trade executed that day — before the rename row's
+    clock time too — is after it (third pre-release review, 1); in the
+    US a later date, or a later time that day (a rename row stamped
+    00:00:00 precedes the day's trades). Without a `country` (a stage
+    tool run on its own) the rows where the two engines agree are
+    decided and any other is refused (RenameNeedsCountry)."""
+    from taxjson.lib.country import canonical_country
+    if country:
+        return _engine_after(r, rename_row, canonical_country(country))
+    ca = _engine_after(r, rename_row, "canada")
+    us = _engine_after(r, rename_row, "usa")
+    if ca == us:
+        return ca
+    raise RenameNeedsCountry(
+        f"{_g(r, 'symbol')} on {str(_g(r, 'date'))[:10]} "
+        f"{_g(r, 'time') or ''}: whether it comes after the rename row "
+        f"{_g(rename_row, 'symbol')} -> {_g(rename_row, 'symbol_new')} "
+        f"of that day depends on the country's engine — pass --country")
+
+
+def _own_rename_row(rows: Iterable[Any]) -> Any:
+    """The earliest (date, time) of an account's rename rows of one
+    change."""
+    return min(rows, key=row_stamp)
+
+
+def late_rows(rows: Iterable[Any], events: List[Dict[str, Any]],
+              country: str = "") -> List[Tuple[Any, Dict[str, Any]]]:
     """(row, event) for each position row that names a renamed ticker
     (or an option on it) AFTER the rename in its account's books: the
-    LATEST rename of the ticker before the row. "After" is the books'
-    order: past the account's own rename row (after_rename_row: date and
-    time — a booked SPLIT is dated at the start of its day, 00:00:00, so
-    an OLD row that day is already late), or, in an account with no
-    rename row of its own, on or after the event's date — the same rows
-    `late=fold` re-books (apply_dated_renames)."""
+    LATEST rename of the ticker before the row. "After" is the order of
+    `country`'s engine: past the account's own rename row
+    (after_rename_row — in Canada every execution of the rename row's
+    settle date; in the US a later date or clock time, and a booked
+    SPLIT is dated at the start of its day, 00:00:00, so an OLD row that
+    day is already late), or, in an account with no rename row of its
+    own, on or after the event's date — the same rows `late=fold`
+    re-books (apply_dated_renames)."""
     by_old: Dict[str, List[Dict[str, Any]]] = {}
     for e in events:
         by_old.setdefault(e["old"], []).append(e)
@@ -326,13 +383,12 @@ def late_rows(rows: Iterable[Any], events: List[Dict[str, Any]]
             cands = by_old.get(root) if root else None
         if not cands:
             continue
-        here = row_stamp(r)
         acct = acct_of(r)
         hit = None
         for e in cands:
-            own = [row_stamp(x) for x in e["rows"] if acct_of(x) == acct]
-            if after_rename_row(here, min(own)) if own \
-                    else (here[0] >= e["date"]):
+            own = [x for x in e["rows"] if acct_of(x) == acct]
+            if (after_rename_row(r, _own_rename_row(own), country) if own
+                    else row_stamp(r)[0] >= e["date"]):
                 hit = e
         if hit is not None:
             out.append((r, hit))
@@ -383,30 +439,39 @@ def _booked_source(dr: DatedRename) -> str:
 
 
 def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
-                        *, stream=None, kind: str = KIND_ANY) -> List[Any]:
+                        *, stream=None, kind: str = KIND_ANY,
+                        country: str = "",
+                        mapping: Optional[Dict[str, str]] = None
+                        ) -> List[Any]:
     """Book each dated RENAME (a .tt line through the run's effective
     map, or a legacy ticker.map line) in `txs` (TaxTransactions on their
     RAW symbols, before the undated renames apply): a SPLIT row OLD ->
     NEW (ratio 1) on the date in every account that holds OLD before it,
     unless the account already books a rename of OLD within WINDOW_DAYS
-    (to NEW: nothing to add; to another symbol: refused). The renames
-    apply in DATE order whatever order they were declared in, so a chain
-    A -> B -> C carries the position twice: an account holds B before
-    the second date when an earlier rename row moved A into B (H3) — on
-    the same date too, A -> B and B -> C declared for one day (second
-    pre-release review, 11). `late=fold` (DatedRename.late_for) re-books
-    the account's OLD rows (and options on OLD) AFTER its own rename row
-    (after_rename_row: the rows late_rows calls late — an OLD row the
-    account books before its broker's rename row is still OLD) as NEW;
-    the event's late= applies to the accounts that held OLD before the
-    date, an account that never did folds only on a line of its own
-    (second pre-release review, 5 and 8). `kind`: the accounts' kind
-    (KIND_SECURITIES on the equity merge, KIND_CRYPTO on the crypto map
-    stage) — a .tt RENAME applies only to accounts of its declaring
-    account's kind (DatedRename.applies_to). Returns the new list."""
+    (to NEW: nothing to add; to another symbol: refused). OLD is the
+    declared symbol and every raw spelling the undated renames
+    (`mapping`, e.g. `GLOBAL RAW OLD`) map onto it (third pre-release
+    review, 4). The renames apply in DATE order whatever order they were
+    declared in, so a chain A -> B -> C carries the position twice: an
+    account holds B before the second date when an earlier rename row
+    moved A into B (H3) — on the same date too: any rename row into B
+    that day, booked here for A -> B or the broker's / a .tt SPLIT
+    (second pre-release review, 11; third, 3); the B -> C row is then
+    stamped no earlier than it. `late=fold` (DatedRename.late_for)
+    re-books the account's OLD rows (and options on OLD) AFTER its own
+    rename row in `country`'s engine order (after_rename_row: the rows
+    late_rows calls late — an OLD row the account books before its
+    broker's rename row is still OLD) as NEW; the event's late= applies
+    to the accounts that held OLD before the date, an account that never
+    did folds only on a line of its own (second pre-release review, 5
+    and 8). `kind`: the accounts' kind (KIND_SECURITIES on the equity
+    merge, KIND_CRYPTO on the crypto map stage) — a .tt RENAME applies
+    only to accounts of its declaring account's kind
+    (DatedRename.applies_to). Returns the new list."""
     from taxjson.bin.taxjson_ticker_map import map_symbol
     from taxjson.lib.core import TaxTransaction
     stream = stream or sys.stderr
+    mapping = mapping or {}
     # Stable: two renames on one date keep their declared order.
     dated = sorted((dr for dr in dated if dr.applies_to(kind)),
                    key=lambda dr: dr.date)
@@ -417,34 +482,43 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
     # same date moves a position into the next link of a chain).
     ours: set = set()
     for dr in dated:
+        # The raw spellings of OLD: the declared symbol and every symbol
+        # an undated rename maps onto it.
+        olds = {dr.old} | {k for k, v in mapping.items() if v == dr.old}
         # Accounts with an OLD position before the date: OLD rows, or a
-        # rename row that moved another symbol into OLD (on the date: one
-        # this function booked for an earlier event of that day).
+        # rename row that moved another symbol into OLD (on the date:
+        # any such row — `into` keeps the latest, which the booked row
+        # must follow).
         held: Dict[str, Any] = {}
+        into: Dict[str, Any] = {}
         for t in out:
             d = t.date or ""
-            if d > dr.date or (d == dr.date and id(t) not in ours):
+            if d > dr.date:
                 continue
             if d == dr.date:
-                if rename_target(t) == dr.old:
+                if rename_target(t) in olds:
                     held[t.account] = t
+                    if t.account not in into \
+                            or row_stamp(t) >= row_stamp(into[t.account]):
+                        into[t.account] = t
                 continue
             if ((t.action in _POSITION_ACTIONS + ("SPLIT",)
-                 and t.symbol == dr.old)
-                    or rename_target(t) == dr.old):
+                 and t.symbol in olds)
+                    or rename_target(t) in olds):
                 held[t.account] = t
         booked: Dict[str, str] = {}
         for t in out:
             new = rename_target(t)
-            if new and t.symbol == dr.old:
+            if new and t.symbol in olds:
                 gap = _days(t.date, dr.date)
                 if gap is not None and gap <= WINDOW_DAYS:
                     booked[t.account] = new
-                    if new != dr.new:
+                    if map_symbol(new, mapping) != map_symbol(dr.new,
+                                                              mapping):
                         raise RenameConflict(
                             f"{dr.where}: RENAME {dr.old} {dr.new} "
                             f"{dr.date} disagrees with the rename "
-                            f"{dr.old} -> {new} on {t.date} the books "
+                            f"{t.symbol} -> {new} on {t.date} the books "
                             f"already carry (account {t.account}) — fix "
                             f"the {'.tt' if dr.source == SOURCE_TT else 'ticker.map'}"
                             f" line ({dr.line!r})")
@@ -453,8 +527,13 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
             if acct in booked:
                 continue
             last = held[acct]
+            prev = into.get(acct)
             added.append(TaxTransaction(
-                action="SPLIT", date=dr.date, time="00:00:00",
+                action="SPLIT", date=dr.date,
+                # (after a same-day rename row into OLD: a chain's
+                # second link never precedes its first)
+                time=max("00:00:00", row_stamp(prev)[1] if prev
+                         is not None else ""),
                 date_settle=dr.date, symbol=dr.old, symbol_new=dr.new,
                 quantity=1.0, price=0.0, net_amount=0.0,
                 currency=last.currency or "", account=acct,
@@ -474,33 +553,43 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
                       file=stream)
             # Placed before the first row dated on or after the rename
             # (the rows are already in the pipeline's order), after the
-            # rows booked for an earlier rename that day.
+            # rows booked for an earlier rename that day and after the
+            # day's rename rows into OLD.
             at = next((i for i, t in enumerate(out)
                        if (t.date or "") >= dr.date), len(out))
             while at < len(out) and id(out[at]) in ours \
                     and (out[at].date or "") == dr.date:
                 at += 1
+            prevs = {id(t) for t in into.values()}
+            for i, t in enumerate(out):
+                if id(t) in prevs:
+                    at = max(at, i + 1)
             out[at:at] = added
             ours.update(id(t) for t in added)
         # Each account's own rename row of this change: its late rows
         # are the ones after it.
-        own: Dict[str, Tuple[str, str]] = {}
+        own: Dict[str, Any] = {}
+        new_m = map_symbol(dr.new, mapping)
         for t in out:
-            if t.symbol == dr.old and rename_target(t) == dr.new:
+            tgt = rename_target(t)
+            if t.symbol in olds and tgt \
+                    and map_symbol(tgt, mapping) == new_m:
                 gap = _days(t.date, dr.date)
                 if gap is not None and gap <= WINDOW_DAYS:
-                    st = row_stamp(t)
-                    own[t.account] = min(own.get(t.account, st), st)
+                    if t.account not in own \
+                            or row_stamp(t) < row_stamp(own[t.account]):
+                        own[t.account] = t
         moved: Dict[str, int] = {}
         kept: Dict[str, int] = {}
-        m = {dr.old: dr.new}
+        m = {o: dr.new for o in olds}
         for t in out:
-            if t.action == "SPLIT" or not names_symbol(t.symbol, dr.old):
+            if t.action == "SPLIT" or not any(names_symbol(t.symbol, o)
+                                              for o in olds):
                 continue
             if t.account in own:
                 # (a broker's row a few days BEFORE the declared date
                 # included: the rows after it are late)
-                if not after_rename_row(row_stamp(t), own[t.account]):
+                if not after_rename_row(t, own[t.account], country):
                     continue
                 choice = dr.late_for(t.account)
             elif (t.date or "") < dr.date:
@@ -748,6 +837,16 @@ def rename_hints(root: Path, cfg: Dict[str, Any],
     return out
 
 
+def _project_country(cfg: Dict[str, Any]) -> str:
+    """The project's canonical country ('' when missing or unknown: the
+    late rows then decide only where both engines agree)."""
+    from taxjson.lib.country import CountryError, settings_country
+    try:
+        return settings_country(cfg.get("settings"))
+    except CountryError:
+        return ""
+
+
 def report(root: Path, cfg: Dict[str, Any],
            account: Optional[str] = None, *,
            undated: bool = True, hints: bool = True) -> Dict[str, Any]:
@@ -800,7 +899,7 @@ def report(root: Path, cfg: Dict[str, Any],
             "carried": carried, "currency": base_cur,
             "late": declared_late(dated, e, ren)})
     late = []
-    for r, e in late_rows(rows, events):
+    for r, e in late_rows(rows, events, _project_country(cfg)):
         if account and r["_acct"] != account:
             continue
         choice = declared_late(dated, e, ren, account=r["_acct"],

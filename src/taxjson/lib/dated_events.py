@@ -458,8 +458,11 @@ def check_against_map(decl: Declarations, tmap) -> List[str]:
             problems.append(
                 f"{dr.where}: RENAME {dr.date} {dr.old} {dr.new} is dated, "
                 f"but ticker.map renames {dr.old} to {tmap.glob[dr.old]} at "
-                f"every date (GLOBAL or an undated RENAME) — keep one of "
-                f"the two: {dr.line!r}")
+                f"every date (GLOBAL or an undated RENAME) — declare the "
+                f"change on the name ticker.map gives it, `RENAME "
+                f"{dr.date} {tmap.glob[dr.old]} {dr.new}` (it books on "
+                f"the {dr.old} rows too), or keep only one of the two: "
+                f"{dr.line!r}")
             continue
         for sym in (dr.old, dr.new):
             if sym in (tmap.tobase or {}):

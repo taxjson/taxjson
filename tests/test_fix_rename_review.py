@@ -609,11 +609,17 @@ class TestStateAndHints(unittest.TestCase):
         late = RN.late_rows(rows, ev)
         self.assertEqual([r["_acct"] for r, _e in late], ["m", "other"])
         # A broker's rename row later that day: an earlier trade is not
-        # late in its account.
+        # late in its account in the US engine's order (trade date and
+        # clock); the Canada engine takes the SPLIT ahead of every
+        # execution of its day, so it is late there (third pre-release
+        # review, 1). Without a country the order is refused.
         ev = RN.rename_events([{"action": "SPLIT", "symbol": "QZA",
                                 "symbol_new": "QZB", "date": "2025-04-01",
                                 "time": "16:00:00", "_acct": "m"}])
-        self.assertEqual(RN.late_rows(rows[:1], ev), [])
+        self.assertEqual(RN.late_rows(rows[:1], ev, "usa"), [])
+        self.assertEqual(len(RN.late_rows(rows[:1], ev, "canada")), 1)
+        with self.assertRaises(RN.RenameNeedsCountry):
+            RN.late_rows(rows[:1], ev)
 
     def test_hint_regexes_are_bounded(self):
         text = ("RBC symbol A looks renamed to B " + "x " * 5000) * 2

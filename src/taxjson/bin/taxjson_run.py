@@ -4095,7 +4095,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 _step("Mapping tickers")
                 run_to_file(_cmd("taxjson-ticker-map") + [
                     str(sorted_), "--map", str(ticker_map),
-                    "--global-only", "--kind", "crypto"], mapped)
+                    "--global-only", "--kind", "crypto",
+                    "--country", country], mapped)
         elif (cache / f"{name}_mapped.json").exists():
             (cache / f"{name}_mapped.json").unlink()
         filled = cache / f"{name}_filled.json"
@@ -4381,7 +4382,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         raw_deps = (list(sources) + [src_manifest]
                     + ([ticker_map] if ticker_map else []))
         if force or needs_rebuild(raw_json, *raw_deps):
-            raw_cmd = _cmd("taxjson-merge2") + ["--sort", "--dedup"]
+            raw_cmd = _cmd("taxjson-merge2") + ["--sort", "--dedup",
+                                                 "--country", country]
             if ticker_map:
                 raw_cmd += ["--map", str(ticker_map)]
             raw_cmd += [str(p) for p in sources]
@@ -6829,7 +6831,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     _rename_records = _write_dated_events_state(root, cfg, cache,
                                                 _tmap_parsed)
     if not pending_accounts:
-        _warn_unused_renames(_rename_records)
+        _warn_unused_renames(_rename_records,
+                             strict=getattr(args, "strict", False))
         _check_renamed_late(root, strict=getattr(args, "strict", False))
     if _blend_names and not args.account and not pending_accounts:
         stage_blended_wash_pass(_blend_names, settings, cache,
@@ -14706,14 +14709,15 @@ def _write_dated_events_state(root: Path, cfg: Dict[str, Any], cache: Path,
     return records
 
 
-def _warn_unused_renames(records: List[Dict[str, Any]]) -> None:
+def _warn_unused_renames(records: List[Dict[str, Any]], *,
+                         strict: bool = False) -> None:
     """A declared rename no account's books carry (a typo of the symbol,
     a date after the last OLD row was sold, an account of the other kind):
     one Warning per declaration, naming its line (second pre-release
-    review, 11)."""
-    for r in records:
-        if r.get("status") != "unused":
-            continue
+    review, 11); --strict stops, like the other unresolved rename items
+    (third pre-release review, 7)."""
+    unused = [r for r in records if r.get("status") == "unused"]
+    for r in unused:
         where = ", ".join(r.get("where") or []) or "a declaration"
         _say_once(("rename-unused", where, r["old"], r["new"]), "warning",
                   f"{where}: RENAME {r['date']} {r['old']} {r['new']} books "
@@ -14723,6 +14727,10 @@ def _warn_unused_renames(records: List[Dict[str, Any]]) -> None:
                   f"securities or crypto) — check the symbols (a typo?) "
                   f"and the date, or delete the line. `taxjson renames` "
                   f"lists it.", prog=_PROG)
+    if unused and strict:
+        _die(f"--strict: {len(unused)} declared rename(s) book nothing "
+             f"— aborting",
+             "See the warnings above and `taxjson renames --pending`.")
 
 
 def _check_renamed_late(root: Path, *, strict: bool) -> None:
@@ -19135,9 +19143,9 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
     bases = _radar_taxable_bases(root, cache, prog)
     cmd = _cmd("taxjson-wash-radar") + [
         "--taxable", *[str(b) for b in bases], "--all", "--json"]
+    _proj_country = _country(_radar_config(root, prog).get("settings", {}))
     cmd += _radar_engine_args(
-        bases, _missing_history_path(root),
-        _country(_radar_config(root, prog).get("settings", {})))
+        bases, _missing_history_path(root), _proj_country)
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         cmd += ["--sheltered", str(sheltered_base)]
@@ -19237,7 +19245,7 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
                   if isinstance(_bdoc, dict) else [])
         _all_rows += [_t for _t in _brows if isinstance(_t, dict)]
     _late_old = {e["old"] for _r, e in _late_rows(
-        _all_rows, _rename_events(_all_rows))}
+        _all_rows, _rename_events(_all_rows), _proj_country)}
     for _t in _all_rows:
         if (_t.get("action") or "").upper() != "SPLIT":
             continue
