@@ -285,7 +285,8 @@ class TestM5RenamedShort(unittest.TestCase):
                 self.assertTrue(r.in_year_activity)
                 self.assertTrue(r.short_at_year_start)
                 self.assertTrue(r.year_listed)
-                self.assertEqual(r.in_year_dispositions, 1)
+                # (the successor's cover is no sale: QA F4)
+                self.assertEqual(r.in_year_dispositions, 0)
         # Covered in 2024: nothing of 2025 draws on it.
         rows = classify_year_shorts(
             self._book("2024"), 2025, country="canada",

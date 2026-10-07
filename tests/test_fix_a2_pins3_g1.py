@@ -407,7 +407,9 @@ class TestTaxYearRelevance(unittest.TestCase):
             _tx("BUYSELL", "2024-03-10", "ASG.TO", -100, 1000.0),
             _tx("ASSIGN", "2025-03-21", "ASG.TO", 100, -900.0),
         ]
-        self.assertEqual(self._rel(rows), {"ASG.TO": (True, 1, 900.0)})
+        # The cover bears on the year but is no sale: InYrSales counts
+        # sales only, and a purchase's cost is never proceeds (QA F4).
+        self.assertEqual(self._rel(rows), {"ASG.TO": (True, 0, 0.0)})
 
     def test_one_unit_phantom_and_zero_proceeds(self):
         rows = [_tx("BUYSELL", "2025-04-10", "ONE.TO", -1, 12.0)]

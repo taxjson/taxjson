@@ -1030,7 +1030,8 @@ class MissingHistoryRow:
     a specific tax year."""
     candidate: MissingHistoryCandidate
     affects_year: bool          # has an in-year disposition drawing from short
-    in_year_dispositions: int   # count of those in-year sales drawing on it
+    # count of those in-year SALES drawing on it (a cover is no sale)
+    in_year_dispositions: int
     in_year_proceeds: float     # their summed proceeds (dollar-impact gauge)
     last_in_year_date: str
     # Any row of the pair (a trade, a transfer, income) dated in the year,
@@ -1172,9 +1173,15 @@ def assess_tax_year_relevance(
             continue
         for k in _with_origins(key):
             st = stats.setdefault(k, {'n': 0, 'proceeds': 0.0, 'last': '',
-                                      'sales': []})
-            st['n'] += 1
-            st['proceeds'] += abs(getattr(tx, 'net_amount', 0.0) or 0.0)
+                                      'sales': [], 'draws': 0})
+            st['draws'] += 1
+            # A cover (a purchase) bears on the year but is no sale: its
+            # amount is a cost, never proceeds (QA F4: a short and its
+            # cover read as 2 sales, the cover's cost added to proceeds).
+            if tx.quantity < 0:
+                st['n'] += 1
+                st['proceeds'] += abs(getattr(tx, 'net_amount', 0.0)
+                                      or 0.0)
             if d > st['last']:
                 st['last'] = d
             if tx.quantity < 0 and cur < -1e-9:
@@ -1188,10 +1195,11 @@ def assess_tax_year_relevance(
     out: List[MissingHistoryRow] = []
     for c in candidates:
         st = stats.get((c.symbol, c.account),
-                       {'n': 0, 'proceeds': 0.0, 'last': '', 'sales': []})
+                       {'n': 0, 'proceeds': 0.0, 'last': '', 'sales': [],
+                        'draws': 0})
         out.append(MissingHistoryRow(
             candidate=c,
-            affects_year=(year_str is None or st['n'] > 0),
+            affects_year=(year_str is None or st['draws'] > 0),
             in_year_dispositions=st['n'],
             in_year_proceeds=round(st['proceeds'], 2),
             last_in_year_date=st['last'],

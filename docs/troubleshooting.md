@@ -223,6 +223,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/first_run.py` — `engine_booking`, `BOOKED_SHORT_COVER`, `render_blocks`; `src/taxjson/bin/taxjson_run.py` — `_uncovered_sales`, `no_purchase_in_totals`
 
+### "Info: 1 position(s) go short in margin's data (QZN.TO) … Until the purchase is supplied their gain is in no total" for a short sale closed within the year; or `tjs find-missing-history` counting its cover as a sale (InYrSales 2)
+- **Check:** the closing summary says "`taxjson sum` books those sales as short sales closed by a later purchase" for the same symbol, and `tjs sum --json` lists it under `no_purchase_in_totals` with `booked` = `short_cover`. `tjs find-missing-history` showed InYrSales 2 and InYrProceeds as the sale's proceeds plus the cover's cost.
+- **Cause:** the run's mid-run note said "in no total" for every position that went short, while the gains engine had booked a short a later purchase of the year closed (in the totals, at that purchase's cost). find-missing-history's in-year count took every row that drew on the short, the covering purchase included, and added its cost to the proceeds.
+- **Fix:** upgrade and `tjs run`. The mid-run note now follows the engine's booking, as the closing summary and `tjs sum` do: "booked as short sales closed by a later purchase" (in the totals), "read short … by the missing-history check" (sold from a purchase in your files), or "in no total" (still short at the year's end). InYrSales and InYrProceeds count sales only; a short carried into the year and covered in it is still listed, with a line saying the cover's gain or loss is in the year. If you held the shares before your files start, supply the purchase (docs/getting-started.md step 5).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_short_positions_note`, `_report_short_positions`; `src/taxjson/lib/first_run.py` — `engine_booking`; `src/taxjson/lib/missing_history.py` — `assess_tax_year_relevance`; `src/taxjson/bin/taxjson_missing_history.py` — `_print_section`
+
 ### "Warning: Short position: QZQ.US (margin): the broker codes the sale on 2025-04-01 CLOSING (IB code C, IB Basis …), but the data holds no position to close"
 - **Check:** `tjs find-missing-history` shows the pair with "broker says closing (IB code C)" and IB's Basis for the shares sold.
 - **Cause:** IB marks the sale as closing a position, so it is not a short sale: the purchase predates the statements in `inputs/`.

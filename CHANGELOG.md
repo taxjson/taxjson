@@ -122,6 +122,11 @@
   both figures and that the total is what is booked (on every run),
   `run --strict` stops on it and `taxjson checklist`'s run-clean step
   lists it.
+- **A short sale closed within the year is no longer said to be in no
+  total.** The run's mid-run note now follows how the gains engine booked
+  the sale, as the closing summary and `taxjson sum` do, and
+  `taxjson find-missing-history` counts only sales in its in-year sales
+  and proceeds (the covering purchase was counted as a second sale).
 - **A journal between two listings stays inside its account.** The
   transfer pairing pooled every account's transfer legs, so a journal's
   legs in one account (a Questrade BRW pair, RBC's `J~` legs, a `.tt`

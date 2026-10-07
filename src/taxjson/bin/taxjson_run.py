@@ -7190,12 +7190,33 @@ def _short_positions_cands(base_json: Path, account: str,
         return []
 
 
-def _short_positions_note(account: str, symbols: List[str]
-                          ) -> Tuple[str, ...]:
+def _short_positions_note(account: str, symbols: List[str],
+                          booked: str = "open") -> Tuple[str, ...]:
     """The note (headline, detail) naming a taxable account's positions
-    that go short (_short_positions_cands) and bear on the tax year."""
+    that go short (_short_positions_cands) and bear on the tax year.
+    `booked`: what the gains engine did with their sales
+    (lib/first_run.engine_booking, the split the run's closing summary
+    and `taxjson sum` say too): "open" — not in any total —,
+    "short_cover" — a short sale a later purchase closed, in the totals
+    — or "matched" — sold from a purchase in the files."""
     shown = ", ".join(symbols[:5]) \
         + (f" +{len(symbols) - 5} more" if len(symbols) > 5 else "")
+    if booked == "short_cover":
+        return (f"{len(symbols)} position(s) go short in {account}'s data "
+                f"({shown}): booked as short sales closed by a later "
+                f"purchase",
+                "Sales with no purchase in your files, unless they were "
+                "real short sales. Their gain is in the totals at the "
+                "covering purchase's cost — not yours if you held the "
+                "shares before your files start; `taxjson "
+                "find-missing-history` lists them with the fixes.")
+    if booked == "matched":
+        return (f"{len(symbols)} position(s) read short in {account}'s "
+                f"data by the missing-history check ({shown})",
+                "The gains engine sold them from purchases in your files, "
+                "so they are in the totals; the check reads that day's "
+                "rows in another order: compare it with the broker's "
+                "trades.")
     return (f"{len(symbols)} position(s) go short in {account}'s data "
             f"({shown})",
             "Sales with no purchase in your files, unless they were real "
@@ -7269,23 +7290,40 @@ def _report_short_positions(root: Path, settings: Dict[str, Any],
             # (a later pass's echo of it — the blended pass, a failed
             # stage — is not shown either)
             _SHOWN_THIS_RUN.add(("short",) + key)
-    notes: List[Tuple[str, List[str]]] = []
+    # What the gains engine booked for each listed pair (the split the
+    # closing summary and `taxjson sum` make, lib/first_run.
+    # engine_booking): a short a later purchase of the year closed is IN
+    # the totals — "in no total" said for it contradicted both.
+    booked: Dict[Tuple[str, str], str] = {}
+    if rows:
+        try:
+            from taxjson.lib.first_run import engine_booking
+            booked = engine_booking(
+                cache, [rows[(c.symbol, c.account)]
+                        for _n, cands in unmarked for c in cands
+                        if (c.symbol, c.account) in rows],
+                year, date_basis=_tax_date_basis(settings))
+        except Exception:                           # noqa: BLE001
+            booked = {}
+    notes: List[Tuple[str, List[str], str]] = []
     for name, cands in unmarked:
-        keep = []
+        keep: Dict[str, List[str]] = {}
         for c in cands:
             key = (c.symbol, c.account)
             if _listed(key):
-                keep.append(c.symbol)
+                keep.setdefault(booked.get(key, "open"), []).append(
+                    c.symbol)
             else:
                 outside[key] = rows[key]
-        if keep:
-            notes.append((name, keep))
+        for how in ("open", "short_cover", "matched"):
+            if keep.get(how):
+                notes.append((name, keep[how], how))
     _step("Checking for missing purchase history")
     for b in shown_blocks:
         for line in b:
             _echo_captured(line, once=True)
-    for name, syms in notes:
-        _say("note", *_short_positions_note(name, syms), indent="  ",
+    for name, syms, how in notes:
+        _say("note", *_short_positions_note(name, syms, how), indent="  ",
              file=sys.stdout)
     if outside:
         n = len(outside)

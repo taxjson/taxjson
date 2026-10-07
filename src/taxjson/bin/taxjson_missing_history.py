@@ -185,6 +185,13 @@ def _print_section(title, rows, *, show_year_cols, year=None):
                      f"{', '.join(r.pooled_with)}: one ACB pool across "
                      f"your taxable accounts (s.47), so this short "
                      f"changes that account's {year} gain.")
+        if (year and r.affects_year and not r.in_year_dispositions
+                and r.short_at_year_start):
+            # A cover is no sale (InYrSales counts sales only): say why
+            # the pair still bears on the year.
+            d.append(f"short at the start of {year} and covered by a "
+                     f"{year} purchase: the cover's gain or loss is in "
+                     f"{year}.")
         if year and r.short_at_year_start and not r.in_year_activity:
             d.append(f"still short at the start of {year}, with no {year} "
                      f"activity: no {year} gain depends on it; the "
