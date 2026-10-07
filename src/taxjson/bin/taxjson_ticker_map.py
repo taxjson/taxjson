@@ -193,6 +193,17 @@ def _parse_map_text(text: str, name: str = "ticker.map",
                     notes.append(f"{where}: RENAME renames a symbol to "
                                  f"itself (no effect): {line!r}")
                     continue
+                # An option contract or a future is never renamed into
+                # shares (or another series): the .tt form's refusal
+                # (pre-release review H7).
+                from taxjson.bin.taxjson_convert_tt import \
+                    _rename_derivative_check
+                try:
+                    _rename_derivative_check(syms[0], syms[1], _d,
+                                             f"{where}: ", line.strip())
+                except ValueError as e:
+                    problems.append(str(e))
+                    continue
                 _origin = (TT_ORIGIN_RE.match(raw.split('#', 1)[1])
                            if _effective and '#' in raw else None)
                 if _origin:

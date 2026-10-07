@@ -547,6 +547,30 @@ class TestDeclaredLineChecks(unittest.TestCase):
             self.assertIn("(500)", out)
             self.assertIn("inputs/margin/j.tt:1", out)
 
+    def _other_date(self, country):
+        from test_fix_dated_events import _rbc_gambit
+        rbc, tmap = _rbc_gambit(True)
+        # Two days after the broker's journal: another journal, booked.
+        files = {"inputs/margin/rbc.csv": rbc, "ticker.map": tmap,
+                 "inputs/margin/j.tt": ("JOURNAL 2025-05-08 QZD.TO "
+                                        "QZD.U.TO 1500\n")}
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, files=files, usa=_USA_CAD)[country]
+            r = _run(self, root)
+            self.assertNotIn("already hold a journal", _out(r))
+            from taxjson.lib import dated_events as DE
+            rec = DE.read_state(root / "work" / DE.STATE)["journals"]
+            self.assertEqual([(j["status"], j["quantity"]) for j in rec],
+                             [("booked", 1500.0)])
+
+    @rule("CA-XLIST-04")
+    def test_canada_a_journal_on_another_date_is_booked(self):
+        self._other_date("canada")
+
+    @rule("US-XLIST-03")
+    def test_usa_a_journal_on_another_date_is_booked(self):
+        self._other_date("usa")
+
     @rule("CA-XLIST-04")
     def test_canada_a_bigger_restatement_of_the_brokers_journal_stops(self):
         self._partial("canada")
@@ -620,6 +644,52 @@ class TestRenameBetweenSpellingsOfOneListing(unittest.TestCase):
 
     @rule("US-BASIS-RENAME")
     def test_usa_one_listing_rename_is_a_no_op(self):
+        self._check("usa")
+
+
+class TestLegacyMapRenameOfAContract(unittest.TestCase):
+    """A legacy ticker.map dated RENAME naming an option or a future gets
+    the .tt form's refusal."""
+
+    def test_parse(self):
+        from taxjson.bin.taxjson_ticker_map import _parse_map_text
+        for line, word in (
+                ("RENAME QZK250620C00010000.US QZK.US 2025-04-01",
+                 "into a share listing"),
+                ("RENAME QZO250620C00010000.US QZN250620C00010000.US "
+                 "2025-04-01", "RENAME 2025-04-01 QZO.US QZN.US"),
+                ("RENAME QZO250620C00010000.US QZO250620C00012000.US "
+                 "2025-04-01", "another contract")):
+            with self.subTest(line=line):
+                tm, problems, _n = _parse_map_text(line + "\n",
+                                                   "ticker.map")
+                self.assertEqual(len(problems), 1, problems)
+                self.assertIn("ticker.map:1", problems[0])
+                self.assertIn(word, problems[0])
+                self.assertEqual(tuple(tm.dated), ())
+        tm, problems, _n = _parse_map_text(
+            "RENAME QZO.US QZN.US 2025-04-01\n", "ticker.map")
+        self.assertEqual((problems, len(tm.dated)), ([], 1))
+
+    def _check(self, country):
+        x = {"canada": "TO", "usa": "US"}[country]
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, files={
+                "inputs/margin/m.tt": (
+                    f"BUYSELL 2025-03-03 10:00:00 QZK.{x} 100 "
+                    f"{'CAD' if x == 'TO' else 'USD'} 10.00 1000.00 0.00\n"),
+                "ticker.map": (f"RENAME QZK250620C00010000.{x} QZK.{x} "
+                               f"2025-04-01\n")})[country]
+            r = _run(self, root, ok=False)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("into a share listing", _out(r))
+
+    @rule("CA-ACB-RENAME")
+    def test_canada_map_rename_of_a_contract_is_refused(self):
+        self._check("canada")
+
+    @rule("US-BASIS-RENAME")
+    def test_usa_map_rename_of_a_contract_is_refused(self):
         self._check("usa")
 
 

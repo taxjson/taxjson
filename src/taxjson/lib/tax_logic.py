@@ -741,7 +741,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "strike or right is another contract. A RENAME between "
                  "two spellings of one listing in the books (a Canadian "
                  "venue folds into .TO: A.TO and A.CN) books nothing, "
-                 "said as an Info line.", cont=True),
+                 "said as an Info line. A legacy ticker.map dated RENAME "
+                 "naming an option or a future is refused the same "
+                 "way.", cont=True),
             Rule("CA-ACB-05",
                  "Accounts typed \"sheltered\" (RRSP, TFSA, FHSA, LIRA, "
                  "RESP...) are tracked but kept out of the filing totals. "
@@ -996,8 +998,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "the future or moving an implausible quantity. Two "
                  "identical lines are one journal (a Warning), and a "
                  "line moving MORE units than a journal the broker's "
-                 "rows already hold between the same two listings stops "
-                 "the run (it would move those units twice). The legacy "
+                 "rows already hold between the same two listings on "
+                 "the line's date stops the run (it would move those "
+                 "units twice; a line on another date is another "
+                 "journal). The legacy "
                  "ticker.map `JOURNAL FROM TO` "
                  "line is read as `TOBASE FROM TO`, said once per run; "
                  "`taxjson format-map --write` rewrites it."),
@@ -2205,7 +2209,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "strike or right is another contract. A RENAME between "
                  "two spellings of one listing in the books (a Canadian "
                  "venue folds into .TO: A.TO and A.CN) books nothing, "
-                 "said as an Info line.", cont=True),
+                 "said as an Info line. A legacy ticker.map dated RENAME "
+                 "naming an option or a future is refused the same "
+                 "way.", cont=True),
             Rule("US-XLIST-01",
                  "Two listings of one company's same class of shares (a "
                  "US line and its Canadian line, two currency lines of "
@@ -2338,8 +2344,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "refused, as is one dated in the future or moving an "
                  "implausible quantity; two identical lines are one "
                  "journal (a Warning); a line moving more units than the "
-                 "broker's own journal between the same listings stops "
-                 "the run. The legacy "
+                 "broker's own journal between the same listings on its "
+                 "date stops the run. The legacy "
                  "ticker.map `JOURNAL FROM TO` line is read as `TOBASE "
                  "FROM TO`, said once per run; `taxjson format-map "
                  "--write` rewrites it."),

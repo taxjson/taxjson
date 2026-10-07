@@ -487,27 +487,26 @@ def partial_overlaps(journals: Iterable[Any], legs: Iterable[Leg],
                      days: int = PAIR_DAYS) -> List[str]:
     """The .tt JOURNAL lines booked in full (status "booked") that move
     MORE units than a journal the broker's rows already hold between the
-    same two listings in the same account (its out-leg of FROM and
-    in-leg of TO, one quantity, within `days` business days of the
-    line's date): the line most likely restates that journal with
-    another size, and booking it in full would move those units twice.
-    Returns one problem line each (the run stops on it)."""
+    same two listings in the same account ON THE LINE'S DATE (its
+    out-leg of FROM and in-leg of TO, one quantity): the line most
+    likely restates that journal with another size, and booking it in
+    full would move those units twice. A line on another date is another
+    journal, booked. Returns one problem line each (the run stops on
+    it). `days` is kept for the callers' signature."""
     legs = [g for g in legs if g.broker != "tt" and not g.decl]
     out: List[str] = []
     for j in journals:
         if getattr(j, "status", "booked") != "booked":
             continue
-        jd = _d(j.date)
-        if jd is None:
-            continue
-
-        def near(g: Leg) -> bool:
-            gd = _d(g.date)
-            return bool(gd and business_days(gd, jd) <= days)
+        # A restatement is dated as the broker's journal: a .tt line on
+        # another day is another journal, booked (two real journals in
+        # one week are no dead end).
         outs = [g for g in legs if g.account == j.account
-                and g.symbol == j.frm and g.quantity < 0 and near(g)]
+                and g.symbol == j.frm and g.quantity < 0
+                and g.date[:10] == j.date]
         ins = [g for g in legs if g.account == j.account
-               and g.symbol == j.to and g.quantity > 0 and near(g)]
+               and g.symbol == j.to and g.quantity > 0
+               and g.date[:10] == j.date]
         for o in outs:
             q = -o.quantity
             if not (q < j.quantity - _EPS):
