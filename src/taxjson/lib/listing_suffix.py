@@ -37,9 +37,10 @@ the project's other books instead, in this order:
    USD trade of the bare ticker is that US listing.
 
 Never corrected (the symbol keeps the row currency's listing):
-* a ticker.map rule naming the listing (a rename, DELETE, a dated
-  RENAME) or a `DISTINCT ROOT.US ROOT.TO` line: the user's map wins (the
-  DISTINCT line is the undo a correction's warning names);
+* a ticker.map line naming the listing in any keyword (a rename,
+  DELETE, a dated RENAME, a QUOTE, T1135, CRYPTO, STABLE or MULT line, an
+  EXTRACT target) or a `DISTINCT ROOT.US ROOT.TO` line: the user's map
+  wins (the DISTINCT line is the undo a correction's warning names);
 * the listing is real: a broker that names its listings (IB, Webull, a
   generic CSV) has rows of it;
 * a rename row in the books joins the two tickers (a ticker change, not
@@ -423,7 +424,7 @@ def resolve(scan: Scan, ev: Evidence, *, account: str, broker: str,
     """{"corrected": {listing: {...}}, "kept": {listing: {...}}} for one
     (account, broker) group (module docstring): `scan` its exports read
     before the parse, `ev` the rest of the project's books.
-    `mapped(symbol)`: a ticker.map rename / DELETE rule names it;
+    `mapped(symbol)`: a ticker.map line names it (any keyword);
     `distinct`: the map's DISTINCT pairs."""
     from taxjson.lib.cross_listings import PAIR_DAYS
     days = PAIR_DAYS if days is None else days

@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- **A lookup line in ticker.map now stops the listing correction for its
+  symbol.** The run reads a Questrade or RBC bare ticker on a USD row as the
+  TSX listing when the books show it, unless ticker.map names the symbol; a
+  `QUOTE` or `T1135` line written for the `.US` spelling did not count, so
+  the rows moved away from the line. A line naming the symbol in any keyword
+  now keeps the row currency's listing.
 - **A command started with its output or error stream closed works again.**
   `taxjson sum >&-` printed a traceback and `taxjson run --no-input 2>&-`
   stopped with exit 1 and no output (both exit 0 on v0.22.0): the start-up
