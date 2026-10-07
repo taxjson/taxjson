@@ -125,6 +125,17 @@
 
 ### Fixed
 
+- **The cross-listing loss check finds a class share's US line written
+  without the class letter**, scales the other listing's units for a split
+  or consolidation when it tests that they are still held at day 30
+  (Canada), and lists at most 20 pairs on the run's console, counting the
+  rest in one line (`taxjson scan` lists every one). Equal names are still
+  required.
+- **The `.tt` total warning quotes an `ACQUIRED` line as written** and
+  gives the price that agrees with its total instead of a fee column the
+  line does not have; the warning and the `--strict` stop name the file
+  the same way the "Reading" step line does (an account-number-like part
+  masked).
 - **The mid-run short-sale note says what this run booked.** It read the
   last run's cross-account wash file, rebuilt only after the note: after
   adding the purchase that closes a short sale and re-running, it still

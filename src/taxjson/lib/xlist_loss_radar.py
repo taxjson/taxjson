@@ -18,7 +18,9 @@ run's work files (nothing is recomputed):
   in the tax year (the gains file `taxjson sum` reads,
   report_model.resolve_gains_files);
 * another listing of the same root (cross_listings.listing_root:
-  ZZX.TO, ZZX.U.TO and ZZX.US share ZZX) whose security names in the
+  ZZX.TO, ZZX.U.TO and ZZX.US share ZZX; a share class's root is also
+  read without its class letter, _roots: ZZX.B.TO is ZZX.B and ZZX, as
+  a Canadian class share's US line is often written) whose security names in the
   exports are EQUAL once normalised (cross_listings._names_verdict over
   symbol_codes.exact_name, the test a journal join applies) — names
   that differ, or a listing with no name in the exports (a .tt-only
@@ -33,7 +35,8 @@ run's work files (nothing is recomputed):
   A TOBASE (or GLOBAL) line, or the run's own join, makes them one
   symbol in the books, so the engine already applies the rule.
 
-Each pair is a `Warning:` on the run's console naming the two lines of
+Each pair is a `Warning:` on the run's console (the first RADAR_SHOWN;
+then one line counting the rest, which `taxjson scan` lists) naming the two lines of
 ticker.map that answer it (`TOBASE FROM TO` if they are one security,
 `DISTINCT A B` if not), and `run --strict` stops until one is in the map.
 `taxjson ticker-map --suggest` offers the TOBASE line (not a conditional
@@ -48,6 +51,7 @@ taken out.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import date as _date, timedelta
 from pathlib import Path
@@ -58,8 +62,17 @@ FORMAT = "xlist_loss_radar/1"
 # The rule's window, days before and after the loss.
 WINDOW = 30
 _EPS = 1e-9
-# Rows that move a listing's position (the still-held test).
-_POSITION_ACTIONS = ("BUYSELL", "ASSIGN", "TRANSFER", "OPENING_BALANCE")
+# Rows that move a listing's position (the still-held test; a SPLIT
+# row's quantity is its ratio: _held_at).
+_POSITION_ACTIONS = ("BUYSELL", "ASSIGN", "TRANSFER", "OPENING_BALANCE",
+                     "SPLIT")
+# The pairs the run's console lists one by one; the rest are counted in
+# one line (`taxjson scan` lists every one).
+RADAR_SHOWN = 20
+# A share-class designator at the end of a listing's root: one letter
+# after a dot or a hyphen (the market's spelling of a class, ZZX.B /
+# ZZX-B), never a unit or warrant designator (ZZX.UN, ZZX.WS).
+_CLASS_SUFFIX_RE = re.compile(r"^(?P<root>.+?)[.\-][A-Z]$")
 
 
 @dataclass
@@ -109,6 +122,22 @@ def _share_listing(sym: str) -> bool:
     from taxjson.lib.core import is_option_symbol
     from taxjson.lib.symbol_codes import _plain_listing
     return bool(sym) and _plain_listing(sym) and not is_option_symbol(sym)
+
+
+def _roots(sym: str) -> Set[str]:
+    """The roots a listing pairs under: its listing root (cross_listings.
+    listing_root, which keeps a class: ZZX.B.TO is ZZX.B) and, for a
+    class share, that root without its class letter (ZZX): a Canadian
+    class share's US line is often written without the letter (third
+    pre-release review, finding 8). Two classes then share a root; the
+    equal-names test still keeps them apart ("CL A" is not "CL B")."""
+    from taxjson.lib.cross_listings import listing_root
+    root = listing_root(sym)
+    out = {root}
+    m = _CLASS_SUFFIX_RE.match(root)
+    if m:
+        out.add(m["root"])
+    return out
 
 
 def _final_names(cache: Path, accounts: List[str], renames: Dict[str, str]
@@ -236,14 +265,16 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
             rows_by_sym.setdefault(sym, []).append(r)
     by_root: Dict[str, Set[str]] = {}
     for sym in rows_by_sym:
-        by_root.setdefault(XL.listing_root(sym), set()).add(sym)
+        for r in _roots(sym):
+            by_root.setdefault(r, set()).add(sym)
 
     names: Optional[Dict[str, Set[Tuple[str, ...]]]] = None
     shown: Dict[Tuple[str, ...], str] = {}
     found: Dict[Tuple[str, str], Finding] = {}
     for acct, loss in losses:
         a = str(loss.get("symbol") or "").upper()
-        others = sorted(by_root.get(XL.listing_root(a), set()) - {a})
+        others = sorted(set().union(*(by_root.get(r, set())
+                                      for r in _roots(a))) - {a})
         if not others:
             continue
         ld = _d(loss_window_date(loss, country))
@@ -304,15 +335,32 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
 
 def _held_at(rows: List[Dict[str, Any]], day: _date, country: str) -> float:
     """Units of a listing held across the accounts at the end of `day`
-    (rows dated on the rule's basis; a split scales the position)."""
+    (rows dated on the rule's basis, in their books' order within a
+    day): a SPLIT row of an account scales that account's units by its
+    ratio (a split, a consolidation), and one that renames the listing
+    to another symbol moves them off it (third pre-release review,
+    finding 9: the ratio was added as units)."""
     from taxjson.lib.missing_history import loss_window_date
-    pos = 0.0
+    dated = []
     for r in rows:
         rd = _d(loss_window_date(r, country))
-        if rd is None or rd > day:
+        if rd is not None and rd <= day:
+            dated.append((rd, r))
+    dated.sort(key=lambda x: x[0])
+    pos: Dict[str, float] = {}
+    for _rd, r in dated:
+        acct = str(r.get("account") or "")
+        if str(r.get("action") or "") == "SPLIT":
+            sym = str(r.get("symbol") or "").upper()
+            new = str(r.get("symbol_new") or "").upper()
+            ratio = _qty(r)
+            if new and new != sym:
+                pos[acct] = 0.0
+            elif ratio > _EPS:
+                pos[acct] = pos.get(acct, 0.0) * ratio
             continue
-        pos += _qty(r)
-    return pos
+        pos[acct] = pos.get(acct, 0.0) + _qty(r)
+    return sum(pos.values())
 
 
 def state_text(findings: Iterable[Finding], country: str) -> str:
@@ -387,6 +435,15 @@ def message(f: Dict[str, Any], country: str) -> Tuple[str, List[str]]:
              "If they are not, add:",
              str(f.get("distinct")),
              "`run --strict` stops until ticker.map has one of the two."])
+
+
+def more_message(n: int, country: str) -> Tuple[str, List[str]]:
+    """(headline, details) of the run's one line counting the findings
+    past the first RADAR_SHOWN."""
+    return (f"{n} more possible {_kind(country, n)} across listings, not "
+            f"listed here",
+            ["`taxjson scan` lists every one (XLIST-LOSS) with the "
+             "TOBASE and DISTINCT lines that answer it."])
 
 
 def scan_text(f: Dict[str, Any], country: str) -> str:

@@ -78,10 +78,25 @@ class Mismatch:
         f = self.formula.replace("*", " x ")
         return f.replace("+", " + ").replace("-", " - ")
 
-    def message(self, where: str = "") -> Tuple[str, List[str]]:
+    def message(self, where: str = "", source: str = ""
+                ) -> Tuple[str, List[str]]:
         """(headline, details) of the console Warning; `where` names
-        the line (default: the .diag's `<file>:<line>`)."""
+        the line (default: the .diag's `<file>:<line>`), `source` is the
+        line as written in the .tt file (source_line): an ACQUIRED line
+        is checked as the BUYSELL it expands to, but is quoted as
+        written and has no fee column to advise (third pre-release
+        review, finding 9)."""
         where = where or self.where
+        acq = _acquired(source)
+        if acq is not None and not self.sell_zero:
+            return (f"{where}: a .tt ACQUIRED line's total {self.total} "
+                    f"is not qty x price = {self.expected}",
+                    ["The total is what is booked as the lot's cost, so "
+                     "check it for a typo:", " ".join(source.split()),
+                     f"ACQUIRED has no fee column: if the total is right "
+                     f"as written (a commission included), write the "
+                     f"price that agrees with it ({acq}). `run --strict` "
+                     f"stops on it."])
         if self.sell_zero:
             return (f"{where}: a .tt sale's total is 0 but its "
                     f"commission exceeds its gross: the proceeds are "
@@ -98,6 +113,36 @@ class Mismatch:
                  "If it is right as written, put the difference in the "
                  "line's fee column so the two agree. `run --strict` "
                  "stops on it."])
+
+
+def _acquired(source: str):
+    """The price that agrees with an ACQUIRED line's total (total ÷
+    quantity, as text), or None when `source` is not an ACQUIRED line."""
+    parts = str(source or "").split("#", 1)[0].split()
+    if len(parts) < 8 or parts[0].upper() != "ACQUIRED":
+        return None
+    try:
+        qty = float(parts[4].replace(",", ""))
+        total = float(parts[7].replace(",", ""))
+    except ValueError:
+        return None
+    if abs(qty) < 1e-12:
+        return None
+    px = f"{abs(total / qty):.6f}".rstrip("0")
+    whole, _dot, frac = px.partition(".")
+    return f"{whole}.{frac.ljust(2, '0')}"
+
+
+def source_line(tt: Path, where: str) -> str:
+    """The line of the .tt file `tt` that a .diag's `<file>:<line>`
+    names, as written ("" when it cannot be read)."""
+    try:
+        n = int(str(where).rsplit(":", 1)[-1])
+        lines = Path(tt).read_text(encoding="utf-8-sig",
+                                   errors="replace").splitlines()
+    except (OSError, ValueError):
+        return ""
+    return lines[n - 1].strip() if 0 < n <= len(lines) else ""
 
 
 def parse_lines(lines: Iterable[str]) -> List[Mismatch]:

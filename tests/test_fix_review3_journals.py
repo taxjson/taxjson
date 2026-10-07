@@ -7,6 +7,13 @@
   unrelated journal of another size stays missing history.
 - 5: the run's mid-run short-sale note reads this run's gains, not the
   last run's cross-account wash file (rebuilt only after the note).
+- 8: the cross-listing loss radar pairs a Canadian class share
+  (QZT.B.TO) with its US listing written without the class letter (QZT),
+  equal names still required.
+- 9: the radar's still-held test scales for splits and consolidations,
+  and lists at most RADAR_SHOWN pairs on the console; the .tt total
+  warning quotes an ACQUIRED line as written (no fee column advised) and
+  names the file as the step line does (masked).
 
 Every fixture is SYNTHETIC: invented QZ* tickers and names, fake account
 ids (pii-ok: 55500001).
@@ -19,6 +26,10 @@ from pathlib import Path
 from tax_rules import rule
 from tax_rules.dual import projects_both
 
+# Imported here, not inside a test: _qa_project snapshots the
+# environment, and a @rule test sets the engine guard while it runs.
+from _qa_project import project, tj
+from test_fix_qa_f3_xlist_loss import F3_ROWS, QT_HEAD, qt_row
 from test_fix_review2_journals import _USA_CAD, _short_reported
 
 
@@ -143,7 +154,6 @@ class TestShortNoteReadsThisRun(unittest.TestCase):
     and `taxjson sum` do)."""
 
     def _two_runs(self, country, first, second):
-        from _qa_project import project, tj
         with tempfile.TemporaryDirectory() as td:
             root = project(td, "p", {"margin/book.tt": first},
                            country=country)
@@ -173,6 +183,187 @@ class TestShortNoteReadsThisRun(unittest.TestCase):
 
     def test_usa_note_follows_this_run(self):
         self._check("usa")
+
+
+# ------------------------------------------------------------------ 8
+
+def _qt_trades(rows):
+    from test_fix_qa_f3_xlist_loss import QT_HEAD, qt_row
+    return QT_HEAD + "".join(qt_row(*r) for r in rows)
+
+
+_CL_B = "QZT HOLDINGS INC CL B SUBORDINATE VOTING"
+
+
+class TestRadarClassShareListedWithoutItsLetter(unittest.TestCase):
+
+    def _run(self, country, us_name=_CL_B):
+        rows = [("2024-01-02", "2024-01-04", "Buy", "QZT.B.TO", 100, 70,
+                 "CAD", _CL_B),
+                ("2024-03-01", "2024-03-05", "Sell", "QZT.B.TO", -100, 60,
+                 "CAD", _CL_B),
+                ("2024-03-11", "2024-03-13", "Buy", "QZT", 100, 45, "USD",
+                 us_name)]
+        with tempfile.TemporaryDirectory() as td:
+            root = project(td, "p", {"margin/q.csv": _qt_trades(rows)},
+                           country=country)
+            return tj(root, "run", "--no-input").stdout
+
+    def _check(self, country, kind):
+        out = self._run(country)
+        self.assertIn(f"Warning: possible {kind} across listings: QZT.B.TO "
+                      f"sold at a loss, QZT.US bought within 30 days", out)
+        # A US line named without the class is not the class share.
+        out = self._run(country, "QZT HOLDINGS INC")
+        self.assertNotIn("across listings", out)
+
+    @rule("CA-XLIST-05")
+    def test_canada_class_share_and_its_us_line(self):
+        self._check("canada", "superficial loss")
+
+    @rule("US-XLIST-04")
+    def test_usa_class_share_and_its_us_line(self):
+        self._check("usa", "wash sale")
+
+    def test_roots(self):
+        from taxjson.lib.xlist_loss_radar import _roots
+        self.assertEqual(_roots("QZT.B.TO"), {"QZT.B", "QZT"})
+        self.assertEqual(_roots("QZT.US"), {"QZT"})
+        self.assertEqual(_roots("QZT.U.TO"), {"QZT"})
+        # A unit or warrant designator is not a class letter.
+        self.assertEqual(_roots("QZT.UN.TO"), {"QZT.UN"})
+        self.assertEqual(_roots("QZT.WS"), {"QZT.WS"})
+
+
+# ------------------------------------------------------------------ 9
+
+class TestRadarHeldAtScalesSplits(unittest.TestCase):
+
+    def test_held_at(self):
+        from datetime import date
+        from taxjson.lib.xlist_loss_radar import _held_at
+
+        def r(action, day, q, acct="m", **kw):
+            return dict(action=action, date=day, date_settle=day,
+                        quantity=q, account=acct, symbol="QZX.US", **kw)
+        rows = [r("BUYSELL", "2024-03-11", 100),
+                r("SPLIT", "2024-03-15", 2, symbol_new="QZX.US"),
+                r("BUYSELL", "2024-03-20", -150)]
+        self.assertAlmostEqual(_held_at(rows, date(2024, 3, 31),
+                                        "canada"), 50.0)
+        # A one-for-ten consolidation, then all ten sold.
+        rows = [r("BUYSELL", "2024-03-11", 100),
+                r("SPLIT", "2024-03-15", 0.1),
+                r("BUYSELL", "2024-03-20", -10)]
+        self.assertAlmostEqual(_held_at(rows, date(2024, 3, 31),
+                                        "canada"), 0.0)
+        # Each account's split scales its own units.
+        rows = [r("BUYSELL", "2024-03-11", 100),
+                r("BUYSELL", "2024-03-11", 10, acct="t"),
+                r("SPLIT", "2024-03-15", 2)]
+        self.assertAlmostEqual(_held_at(rows, date(2024, 3, 31),
+                                        "canada"), 210.0)
+        # A split renaming the listing away moves its units off it.
+        rows = [r("BUYSELL", "2024-03-11", 100),
+                r("SPLIT", "2024-03-15", 1, symbol_new="QZY.US")]
+        self.assertAlmostEqual(_held_at(rows, date(2024, 3, 31),
+                                        "canada"), 0.0)
+
+    @rule("CA-XLIST-05")
+    def test_canada_split_keeps_the_listing_held(self):
+        """Bought 100 in the window, split two-for-one, 150 sold before
+        day 30: 50 still held, so the loss is flagged."""
+        rows = F3_ROWS + qt_row("2024-03-20", "2024-03-21", "Sell", "ZZX",
+                                -150, 46, "USD")
+        with tempfile.TemporaryDirectory() as td:
+            root = project(td, "p", {
+                "margin/q.csv": QT_HEAD + rows,
+                "margin/split.tt": "SPLIT 2024-03-15 09:30:00 ZZX.US "
+                                   "ZZX.US 2\n"})
+            out = tj(root, "run", "--no-input").stdout
+        self.assertIn("Warning: possible superficial loss across listings: "
+                      "ZZX.TO sold at a loss, ZZX.US bought within 30 days",
+                      out)
+
+
+class TestRadarCap(unittest.TestCase):
+
+    def test_list_capped_with_a_summary(self):
+        import contextlib
+        import io
+        from taxjson.bin import taxjson_run as TR
+        from taxjson.lib import xlist_loss_radar as XR
+
+        def finding(k):
+            return XR.Finding(f"QZ{k:02d}.TO", f"QZ{k:02d}.US", "QZ CO",
+                              f"TOBASE QZ{k:02d}.US QZ{k:02d}.TO",
+                              f"DISTINCT QZ{k:02d}.TO QZ{k:02d}.US",
+                              [{"account": "m", "date": "2024-03-01"}],
+                              [{"account": "m", "date": "2024-03-11"}])
+        n = XR.RADAR_SHOWN + 3
+        orig = XR.analyze
+        XR.analyze = lambda root, cfg: [finding(k) for k in range(n)]
+        TR._SHOWN_THIS_RUN.clear()
+        buf = io.StringIO()
+        try:
+            with tempfile.TemporaryDirectory() as td, \
+                    contextlib.redirect_stdout(buf), \
+                    contextlib.redirect_stderr(buf):
+                TR._say_xlist_losses(Path(td), {"settings": {
+                    "country": "canada"}}, Path(td))
+        finally:
+            XR.analyze = orig
+        text = " ".join(buf.getvalue().split())
+        self.assertEqual(text.count("possible superficial loss across "
+                                    "listings: QZ"), XR.RADAR_SHOWN)
+        self.assertIn("3 more possible superficial losses across listings",
+                      text)
+        self.assertIn("taxjson scan", text)
+
+
+_ACQ = ("ACQUIRED 2024-01-10 09:30:00 QZA.TO 40 CAD 12.00 530.00 "
+        "ARRIVED 2024-06-03\n")
+
+
+class TestTtTotalWarning(unittest.TestCase):
+    """An ACQUIRED line whose total is not qty x price, and a .tt file
+    whose name holds an account-number-like part."""
+
+    def _run(self, country, name, body, *args, acct="margin"):
+        with tempfile.TemporaryDirectory() as td:
+            root = project(td, "p", {f"{acct}/{name}": body},
+                           country=country, extra_accounts=(
+                               '[accounts.plan]\ntype = "sheltered"\n'))
+            return tj(root, "run", "--no-input", *args, check=False)
+
+    def _check(self, country):
+        # (a sheltered account: the arrival leg needs no broker row)
+        r = self._run(country, "lots.tt", _ACQ, acct="plan")
+        self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr)
+        text = " ".join(r.stdout.split() + r.stderr.split())
+        self.assertIn("ACQUIRED 2024-01-10 09:30:00 QZA.TO 40 CAD 12.00 "
+                      "530.00 ARRIVED 2024-06-03", text)
+        self.assertNotIn("BUYSELL 2024-01-10", text)
+        self.assertNotIn("put the difference in the line's fee column", text)
+        self.assertIn("13.25", text)        # the price that agrees
+
+    def test_canada_acquired_line_quoted_as_written(self):
+        self._check("canada")
+
+    def test_usa_acquired_line_quoted_as_written(self):
+        self._check("usa")
+
+    def test_masked_name_everywhere(self):
+        body = "BUYSELL 2024-02-01 10:00:00 QZA.TO 10 CAD 10.00 500.00 0\n"
+        name = "acct55500001.tt"                                # pii-ok
+        r = self._run("canada", name, body, "--strict")
+        text = r.stdout + r.stderr
+        self.assertNotEqual(r.returncode, 0)
+        self.assertNotIn("55500001", text)                      # pii-ok
+        self.assertIn("Reading acct55***.tt", text)
+        self.assertIn("inputs/margin/acct55***.tt:1:", text)
+        self.assertIn("--strict: margin: inputs/margin/acct55***.tt has",
+                      " ".join(text.split()))
 
 
 if __name__ == "__main__":
