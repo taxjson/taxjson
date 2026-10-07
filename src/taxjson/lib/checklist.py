@@ -1594,6 +1594,10 @@ def d_renames(ctx: Ctx) -> Result:
         return Result("renames", "attention",
                       f"{len(doc['suggested'])} look-alike rename(s) not "
                       f"booked — `taxjson renames --pending`")
+    if doc.get("unused"):
+        return Result("renames", "attention",
+                      f"{len(doc['unused'])} declared rename(s) book "
+                      f"nothing — `taxjson renames --pending`")
     return Result("renames", "done",
                   f"{len(doc['renames'])} dated rename(s); no undeclared "
                   f"late trade")
