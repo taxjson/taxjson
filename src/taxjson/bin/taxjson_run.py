@@ -2667,7 +2667,10 @@ def _raw_align_adjust_currency(raw_json: Path, rates_path: Path,
     """Restate, in the pool's own currency, every ADJUST / DISALLOW row of
     the NATIVE-currency raw merge that is in another currency: a USD
     return of capital on a TSX listing (RBC, Questrade, IB), a CAD T3
-    box-42 ADJUST on a USD unit (README recipe). The native gains pass
+    box-42 ADJUST on a USD unit (README recipe); and a purchase booked
+    under a listing of another currency than its cash (its
+    `listing_currency`: a Questrade REI paid on the USD side buying the
+    account's TSX listing, GitHub issue #3), price and amounts alike. The native gains pass
     pools one currency per symbol and used to stop the whole run at
     "raw gains" with advice a project user cannot act on (audit
     A2-0055/0191/0204). The amount is converted through the base
@@ -2684,13 +2687,23 @@ def _raw_align_adjust_currency(raw_json: Path, rates_path: Path,
     except (OSError, ValueError):
         return []
     txs = doc.get("transactions", []) if isinstance(doc, dict) else []
+
+    def _listed(t) -> str:
+        # A row booked under a listing of another currency than its
+        # cash (a Questrade REI paid in USD buying the TSX listing,
+        # TaxTransaction.listing_currency): the pool's currency is the
+        # listing's.
+        lc = str(t.get("listing_currency") or "").upper()
+        return lc if lc and lc != t.get("currency") else ""
     pool_cur: Dict[str, set] = {}
     for t in txs:
         if t.get("action") in ("BUYSELL", "ASSIGN", "TRANSFER",
                                "OPENING_BALANCE") and t.get("currency"):
-            pool_cur.setdefault(t.get("symbol"), set()).add(t["currency"])
+            pool_cur.setdefault(t.get("symbol"), set()).add(
+                _listed(t) or t["currency"])
     todo = [t for t in txs
-            if t.get("action") in ("ADJUST", "DISALLOW")
+            if (t.get("action") in ("ADJUST", "DISALLOW")
+                or (t.get("action") == "BUYSELL" and _listed(t)))
             and t.get("currency")
             and len(pool_cur.get(t.get("symbol"), ())) == 1
             and t["currency"] not in pool_cur[t.get("symbol")]]
@@ -2724,7 +2737,10 @@ def _raw_align_adjust_currency(raw_json: Path, rates_path: Path,
         if not r_src or not r_dst:
             continue
         f = r_src / r_dst
-        for k in ("net_amount", "gross_amount"):
+        keys = ("net_amount", "gross_amount") + (
+            ("price", "commission", "fee") if t["action"] == "BUYSELL"
+            else ())
+        for k in keys:
             if t.get(k) not in (None, ""):
                 t[k] = float(_D(str(t[k])) * f)
         t["currency"] = dst

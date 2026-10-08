@@ -778,6 +778,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/brokerages/questrade.py` — `_rei_listing`, `_resolve_symbol`; `src/taxjson/lib/listing_suffix.py` — `resolve`, `project_evidence`, `scan_questrade`, `proved`
 
+### "Warning: raw holdings skipped for 'lira': QZP.TO would pool mixed currencies" after a dividend reinvestment, then `tjs scan`: "no holdings reports"
+- **Check:** the account's Questrade export has an REI row with the bare TSX ticker on a USD row (`QZP`, `REINV@C$…`) and the account trades `QZP.TO` in CAD. `reports/<account>_holdings.toml` is missing or old. The totals are right.
+- **Cause:** a development build after v0.24.0 booked the reinvestment on the held CAD listing (the entry above) but kept its USD cash, so the native-currency books (which never convert) held one pool in two currencies and were skipped.
+- **Fix:** upgrade: the row now carries its listing's currency (`listing_currency`) and the native books restate it at the day's rate, like a foreign-currency return of capital; the run prints a `note:` line saying so. With no rate on file for that day the view is still skipped: refresh the rates (`tjs run` without `TAXJSON_OFFLINE`).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_raw_align_adjust_currency`, `_raw_mixed_currency_symbols`, `would pool mixed currencies`; `src/taxjson/lib/brokerages/questrade.py` — `_rei_listing`, `listing_currency`; `src/taxjson/lib/core.py` — `TaxTransaction`
+
 ### Questrade: "Warning: 99900001.csv: 1 dividend(s) marked NON-RES TAX WITHHELD are booked at the NET amount"
 - **Check:** the next line lists each dividend (`QZQ.US 2025-03-15 8.50`); `tjs divs` shows it at the net amount with no TAX row. On RBC the same wording is grossed up instead: `tjs events` shows a TAX row described `(Implied Tax)` at 15% of the gross.
 - **Cause:** Questrade's export gives neither the gross nor the tax of such a dividend, so it is booked at the net: income understated, foreign tax missing. RBC's export also gives only the net; its parser assumes the 15% US treaty rate (`gross = net / 0.85`) whatever the issuer's country.

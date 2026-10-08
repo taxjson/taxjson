@@ -104,7 +104,9 @@
   registered account). It now books the listing the account trades under
   the same name and root; and when another account's evidence proved the
   same broker files that security's TSX listing on USD rows, the account's
-  USD rows of it are read as `ROOT.TO` too.
+  USD rows of it are read as `ROOT.TO` too. The reinvestment's cash is
+  restated in the listing's currency in the native-currency books, so the
+  holdings report is still written and `taxjson scan` still runs.
 
 
 ## v0.24.0 (2026-10-07)

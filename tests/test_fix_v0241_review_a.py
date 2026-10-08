@@ -18,7 +18,6 @@ account ids (pii-ok: 55500001, U5550001).
 import json
 import tempfile
 import unittest
-from pathlib import Path
 
 from _style import CapturedWidth
 from tax_rules import rule
@@ -226,6 +225,56 @@ class TestSpinoffLegIgnoresTheParentsClass(unittest.TestCase):
     @rule('US-BASIS-CODES')
     def test_usa_spun_off_code_resolves(self):
         self._run('usa')
+
+
+# ------------------------------------------------------------------ M3
+
+class TestReinvestmentKeepsTheNativeBooksSingleCurrency(unittest.TestCase):
+    """GitHub issue #3's CSV: the USD REI row bound to the CAD listing is
+    restated in CAD in the native-currency books, so the raw holdings
+    report is written and `taxjson scan` runs."""
+
+    def _check(self, country):
+        from test_fix_v0241_leftovers import _ISSUE3
+        from test_fix_tobase_transfer_pair import _rates
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(
+                td, year=2026, accounts='[accounts.lira]\ntype = '
+                '"sheltered"\n', files={'inputs/lira/q.csv': _ISSUE3},
+                canada={'source_currencies': ['USD']},
+                usa={'source_currencies': ['CAD']})[country]
+            if country == 'canada':
+                _rates(root / 'work' / 'to_base.csv', 'USD CAD', '1.2500')
+            else:
+                _rates(root / 'work' / 'to_base.csv', 'CAD USD', '0.8000')
+            r = cli(root, 'run', '--no-input')
+            out = _flat(r.stdout + r.stderr)
+            self.assertEqual(r.returncode, 0, out[-3000:])
+            self.assertNotIn('mixed currencies', out)
+            self.assertTrue((root / 'reports' / 'lira_holdings.toml')
+                            .exists(), out[-3000:])
+            raw = json.loads((root / 'work' / 'lira_raw.json').read_text())
+            rei = [t for t in raw['transactions']
+                   if 'REINV' in t.get('description', '')]
+            self.assertEqual(len(rei), 1)
+            self.assertEqual((rei[0]['symbol'], rei[0]['currency']),
+                             ('QZP.TO', 'CAD'))
+            # 29.50 USD restated at the day's rate.
+            want = 29.5 * 1.25 if country == 'canada' else 29.5 / 0.8
+            self.assertAlmostEqual(rei[0]['net_amount'], want, places=2)
+            sc = cli(root, 'scan')
+            self.assertNotIn('no holdings reports',
+                             _flat(sc.stdout + sc.stderr))
+            self.assertEqual(sc.returncode, 0,
+                             _flat(sc.stdout + sc.stderr)[-3000:])
+
+    @rule('CA-XLIST-02')
+    def test_canada_native_books_stay_single_currency(self):
+        self._check('canada')
+
+    @rule('US-XLIST-02')
+    def test_usa_native_books_stay_single_currency(self):
+        self._check('usa')
 
 
 if __name__ == '__main__':

@@ -2271,6 +2271,11 @@ class QuestradeBrokerage(BaseBrokerage):
             'account': self.DEFAULT_ACCOUNT,
             'description': desc,
         }
+        if scur and scur != currency:
+            # The listing's currency is not the cash's (a TSX listing's
+            # DRIP paid on the USD side, _rei_listing): the native books
+            # restate the row in the listing's currency.
+            tx['listing_currency'] = scur
         _grp = [tx]
         rev_originals.setdefault(key, []).append(_grp)
         self._orig_line[id(_grp)] = lineno

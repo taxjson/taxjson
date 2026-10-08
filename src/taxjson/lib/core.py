@@ -193,6 +193,14 @@ class TaxTransaction:
     # change IB shows as one contract id under two symbols). Evidence
     # only: NOT part of compute_id, omitted from to_dict() when empty.
     event_source: str = ''
+    # The currency of the listing a row is booked under when the row's
+    # cash is in another (a Questrade reinvestment paid on the USD side
+    # buying the account's TSX listing: brokerages/questrade._rei_listing).
+    # The converted books convert the cash as usual; the native-currency
+    # books restate the row in this currency at the day's rate
+    # (taxjson_run._raw_align_adjust_currency), one currency per pool.
+    # Evidence only: NOT part of compute_id, omitted when empty.
+    listing_currency: str = ''
 
     def __post_init__(self):
         if self.id is None:
@@ -251,7 +259,7 @@ EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
                    'source', 'source_key',
                    'source_account', 'exercise_of', 'corp_cash',
                    'lot_date', 'market_value', 'journal_pair',
-                   'event_source')
+                   'event_source', 'listing_currency')
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]
 # e.g. "SAMPLG250120C00150000.US", "ABC271217P00029000.TO", or
@@ -960,7 +968,8 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                  'dealer_country', 'issuer_country', 'broker_time',
                  'security_name', 'open_close', 'broker_basis',
                  'broker_lots', 'exercise_of', 'corp_cash', 'contract_size_basis',
-                 'lot_date', 'journal_pair', 'event_source'):
+                 'lot_date', 'journal_pair', 'event_source',
+                 'listing_currency'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]
