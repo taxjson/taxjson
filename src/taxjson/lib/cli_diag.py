@@ -81,11 +81,12 @@ class OutputWriteError(OSError):
 
 
 def write_text_atomic(path, text: str, encoding: str = "utf-8") -> None:
-    """Write `text` to `path` through `<path>.part` in the same folder
-    (the old contents stay until the new ones are complete). A failure
-    raises OutputWriteError naming `path` and leaves no .part behind.
-    The .part is created fresh and a symlink at either name is never
-    written through (lib/safe_write)."""
+    """Write `text` to `path` through a temp file of this write's own
+    in the same folder (`<path>.<random>.part`; the old contents stay
+    until the new ones are complete). A failure raises OutputWriteError
+    naming `path` and leaves no .part behind. The temp is created fresh
+    and a symlink at either name is never written through
+    (lib/safe_write)."""
     from pathlib import Path
     from taxjson.lib.safe_write import write_atomic
     path = Path(path)
