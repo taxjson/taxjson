@@ -24,8 +24,11 @@ base currency at IB's rate; `Withhold*` is the tax withheld (negative).
 
 The `Account` section carries the account holder's NAME: this module
 never keeps it (only the account number, which is hashed the way the
-books' rows carry it — bin/taxjson_brokerage.hash_broker_account — and
-masked to its first two characters for display).
+books' rows carry it — bin/taxjson_brokerage.hash_broker_account, kept
+in memory and in work/ only; slips.toml gets a salted key,
+lib/slip_audit.broker_key — and masked to its first two characters for
+display). A report holding two accounts is refused: its payment rows
+do not say which account they are in.
 """
 from __future__ import annotations
 
@@ -229,8 +232,17 @@ def read_report(path: Path) -> Report:
         if sec == "Account":
             # Only the number and the base currency: the holder's name
             # and the alias are never read into anything.
-            acct = (d.get("AccountNumber") or "").strip()
-            base = (d.get("BaseCurrency") or "").strip().upper()
+            num = (d.get("AccountNumber") or "").strip()
+            if acct and num and num != acct:
+                # Its payment rows name no account: which account each
+                # is cannot be told.
+                raise IBReportError(
+                    f"{where}: a second account ({mask_account(num)}, "
+                    f"after {mask_account(acct)}) — the report's payments "
+                    f"do not say which account they are in; download one "
+                    f"dividends report per account")
+            acct = num or acct
+            base = (d.get("BaseCurrency") or "").strip().upper() or base
             continue
         if sec not in ("DividendDetail", "PILDetail"):
             continue

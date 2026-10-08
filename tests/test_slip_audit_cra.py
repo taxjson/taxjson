@@ -93,10 +93,10 @@ class TestParse(unittest.TestCase):
             p = CRA.t5(Path(td) / "t5.pdf", IB_NAME,
                        {"24": "1,494.50", "18": "20.50"},
                        other={"15": "48.15", "16": "7.94"})
-            s = read_pdf(p)
+            (s,) = read_pdf(p)
             q = CRA.t3(Path(td) / "t3.pdf", ["ZZT SAMPLE INDEX ETF"],
                        {"49": "30.00"}, other={"25": "6.55", "42": "3.45"})
-            t = read_pdf(q)
+            (t,) = read_pdf(q)
         self.assertEqual(s.issuer, " ".join(IB_NAME))
         self.assertEqual({k: v for k, v in s.boxes.items() if v},
                          {"24": 1494.5, "18": 20.5, "15": 48.15,
@@ -193,13 +193,19 @@ class TestImportEndToEnd(unittest.TestCase):
                    "--write")
             self.assertEqual(r.returncode, 0, r.stderr)
             from taxjson.bin.taxjson_brokerage import hash_broker_account
+            from taxjson.lib import slip_audit as SA
             from taxjson.lib.tomlcompat import tomllib
-            doc = tomllib.loads((root / "inputs" / "slips" / "slips.toml")
-                                .read_text())
-            got = {(s["type"], s.get("security"), s["broker_key"])
-                   for s in doc["slip"]}
-            key = hash_broker_account(IB_ACCT)
-            self.assertEqual(got, {("T5", None, key), ("T3", "ZZT.TO", key)})
+            text = (root / "inputs" / "slips" / "slips.toml").read_text()
+            doc = tomllib.loads(text)
+            got = {(s["type"], s.get("security"), s["broker_key"],
+                    s["status"]) for s in doc["slip"]}
+            # The key is salted with the project's work/ salt: never the
+            # books' own hash (brute-forceable back to the IB id).
+            key = SA.broker_key(SA.key_salt(root),
+                                hash_broker_account(IB_ACCT))
+            self.assertEqual(got, {("T5", None, key, "original"),
+                                   ("T3", "ZZT.TO", key, "original")})
+            self.assertNotIn(hash_broker_account(IB_ACCT), text)
             # Again: nothing twice.
             r = tj(root, home, "slip-audit", "--import-cra", str(cra),
                    "--write")

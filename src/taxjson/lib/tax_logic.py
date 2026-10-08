@@ -1733,7 +1733,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "the payments at the year's average rate (the mean of the "
                  "Bank's daily rates of the year) and names the one a CAD "
                  "slip's figure is closer to; a slip in another currency "
-                 "is compared in that currency.", cont=True),
+                 "is compared in that currency. IB's dividends report of "
+                 "an account whose base currency is not CAD is converted "
+                 "payment by payment at the Bank of Canada rate of its pay "
+                 "date (a Canadian slip is in CAD; the year's average is "
+                 "shown too); with no rate it is not compared.", cont=True),
             Rule("CA-SLIP-03",
                  "The slip is authoritative (CA-INC-02): the audit changes "
                  "no figure. It lists the [[capital_gains_dividends]] "
@@ -1749,7 +1753,15 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "ambiguous slip is listed), and where IB's dividends "
                  "report covers the same broker account the CRA slip's "
                  "boxes are compared and the report keeps only its "
-                 "payments.", cont=True),
+                 "payments — as it does beside a slip typed for that "
+                 "broker account with a box the report covers. Each slip "
+                 "counts once: a PDF holding two slips is read as two, a "
+                 "slip read twice (a second download, a file named with "
+                 "its folder) is kept once, and an amended slip replaces "
+                 "the original of the same issuer, account, fund and "
+                 "broker account (in the import or already in slips.toml); "
+                 "where that cannot be told neither is imported.",
+                 cont=True),
         ]),
         ("Crypto", [
             Rule("CA-CRYPTO-01",

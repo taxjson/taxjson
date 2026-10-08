@@ -1684,11 +1684,13 @@ foreign income and tax withheld (T5 15/16, T3 24/25/33/34), return of capital
 in [docs/settings.md](./docs/settings.md)), import the PDFs CRA My Account
 shows under "Tax information slips" (`taxjson slip-audit --import-cra
 <folder>`: one layout for every issuer; each slip placed in the account,
-broker account and fund whose payments it matches; `--write` adds them), or
+broker account and fund whose payments it matches, each slip once — an
+amended slip replaces its original; `--write` adds them), or
 drop IBKR's dividends report
 (`U*.YYYY.dividends.csv`, its per-payment T5/T3 split) in `inputs/slips/` —
 it is matched to the account whose books carry that IB account, payment by
-payment. A slip in USD (RBC, Webull) is compared in USD, and its CAD is shown
+payment (a USD-base account's payments converted to CAD at the Bank of
+Canada rate of each pay date). A slip in USD (RBC, Webull) is compared in USD, and its CAD is shown
 both ways: each payment at the Bank of Canada rate of its date (what the
 books do) and the year's average rate (the mean of the Bank's daily rates in
 the FX cache); for a CAD slip holding converted payments (IBKR) the report

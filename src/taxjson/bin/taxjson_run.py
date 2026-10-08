@@ -2235,6 +2235,16 @@ def group_inputs_detailed(account_dir: Path):
                 _die(str(not_utf8(csv, e)))
             except OSError:
                 pass
+            # IB's dividends report (a slip source, not activity) in an
+            # account's folder: said so, its name masked (IB names it
+            # after the account number).
+            from taxjson.lib.ib_dividends import is_dividends_report
+            if is_dividends_report(csv):
+                from taxjson.lib.brokerages.base import shown_name
+                _die(f"inputs/{account_dir.name}/{shown_name(csv)} is IB's "
+                     f"dividends report (the T5 / T3 income per payment), "
+                     f"not an activity export — move it to inputs/slips/, "
+                     f"where `taxjson slip-audit` reads it.")
             # On the console: the file as it is on disk (an export's
             # default name is its account number; masking it here hid
             # which of two such files is meant).
@@ -19162,11 +19172,17 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
 
 def _slip_audit_import_cra(root: Path, cfg: Dict[str, Any],
                            args: argparse.Namespace) -> None:
-    """`taxjson slip-audit [ACCOUNT] --import-cra PDF|DIR ... [--write]`:
-    CRA-downloaded T5 / T3 slip PDFs as [[slip]] tables, each placed in
-    a project account (and broker account, a T3 its fund) by the books
-    (lib/cra_slips). Shows what it would add; --write appends it to
-    inputs/slips/slips.toml."""
+    """`taxjson slip-audit [ACCOUNT] --import-cra PDF|DIR ... [--write]
+    [--json]`: CRA-downloaded T5 / T3 slip PDFs as [[slip]] tables, each
+    placed in a project account (and broker account, a T3 its fund) by
+    the books (lib/cra_slips). A slip read twice is kept once; an
+    amended slip replaces its original (in this import, or a table
+    already in slips.toml — commented out, the file backed up). Shows
+    what it would add; --write writes it to inputs/slips/slips.toml."""
+    import contextlib
+    import datetime as _dtm
+    import io
+    import tempfile
     from taxjson.lib import cra_slips as CS
     from taxjson.lib import out
     from taxjson.lib import slip_audit as SA
@@ -19174,6 +19190,7 @@ def _slip_audit_import_cra(root: Path, cfg: Dict[str, Any],
     from taxjson.lib.safe_write import OutsideLinkError, write_user_file
     year = int((cfg.get("settings") or {}).get("year"))
     acct = getattr(args, "account", None)
+    as_json = bool(getattr(args, "json", False))
     if acct and acct not in SA.slip_accounts(cfg):
         _die_input(f"account {acct!r} gets no T5 or T3",
                    "Name a taxable, non-crypto [accounts.*] account.")
@@ -19184,92 +19201,186 @@ def _slip_audit_import_cra(root: Path, cfg: Dict[str, Any],
     slips, skipped = [], []
     for p in paths:
         try:
-            sl = CS.read_pdf(p)
+            got = CS.read_pdf(p)
         except CS.CraSlipError as e:
             if "pdftotext is not installed" in str(e):
                 _die_input(str(e))
             skipped.append(str(e))
             continue
-        if sl.year != year:
-            skipped.append(f"{sl.shown}: a {sl.year} slip; the project's "
-                           f"year is {year}")
-            continue
-        slips.append(sl)
+        for sl in got:
+            if sl.year != year:
+                skipped.append(f"{sl.shown}: a {sl.year} slip; the "
+                               f"project's year is {year}")
+            elif sl.status == "cancelled":
+                skipped.append(f"{sl.shown}: a cancelled slip — not "
+                               f"imported (delete the table of the slip it "
+                               f"cancels from slips.toml)")
+            else:
+                slips.append(sl)
+    n_read = len(slips)
+    slips, dup_notes = CS.drop_duplicates(slips)
     sf = SA.slips_dir(root) / SA.SLIPS_FILE
-    have = set()
+    old_text = ""
+    have: List[Any] = []
     if sf.is_file():
         try:
-            for s0 in SA.load_slips_file(sf, cfg, year)[0]:
-                if s0.origin:
-                    have.add(s0.origin)
-        except SA.SlipsError as e:
+            have = SA.load_slips_file(sf, cfg, year)[0]
+            old_text = sf.read_text(encoding="utf-8-sig")
+        except (SA.SlipsError, OSError, UnicodeDecodeError) as e:
             _die_input(str(e))
-    reports = []
+    reports, seen = [], set()
     for p in SA.find_ib_reports(root):
         try:
-            reports.append(read_report(p))
+            rep = read_report(p)
         except IBReportError:
-            pass
+            continue
+        if SA.report_identity(rep) not in seen:
+            seen.add(SA.report_identity(rep))
+            reports.append(rep)
     rate = {}
     for c in sorted({s.currency for s in slips} - {"CAD"}):
         a = SA.annual_average(c, year)
         rate[c] = a["rate"] if a else None
-    import contextlib
-    import io
     try:
         # The market list's notes are the views' to print.
         with contextlib.redirect_stderr(io.StringIO()):
             groups = CS.book_groups(root, cfg, year)
     except ValueError as e:
         _die_input(str(e))
-    placed = CS.place(slips, groups, year, rate, reports, account=acct)
-    new = [pl for pl in placed if pl.account
-           and f"cra:{pl.slip.shown}" not in have]
-    again = [pl for pl in placed if f"cra:{pl.slip.shown}" in have]
-    d = out.Doc(f"CRA SLIP IMPORT — tax year {year}: {len(slips)} slip(s) "
+    # Originals and amended slips are placed apart, so an amended slip
+    # lands where its original does and the pair is not shared out as
+    # two slips.
+    placed = []
+    for part in ([s for s in slips if s.status != "amended"],
+                 [s for s in slips if s.status == "amended"]):
+        if part:
+            placed += CS.place(part, groups, year, rate, reports,
+                               account=acct)
+    order = {id(s): i for i, s in enumerate(slips)}
+    placed.sort(key=lambda pl: order[id(pl.slip)])
+    salt = SA.key_salt(root, create=True)
+    keyed = [(pl, SA.broker_key(salt, pl.key) if pl.key else "")
+             for pl in placed]
+    hashes = {h for g in groups for h in g.hashes} | {
+        r.account_hash for r in reports}
+    existing = []
+    for i, s0 in enumerate(have, 1):
+        keys = {s0.broker_key} if s0.broker_key else set()
+        keys |= {SA.broker_key(salt, h) for h in s0.broker_hashes
+                 if h in hashes}
+        existing.append(CS.Existing(
+            index=i, type=s0.type, account=s0.account,
+            security=s0.security, issuer=s0.issuer, status=s0.status,
+            currency=s0.currency, boxes=dict(s0.boxes),
+            keys=frozenset(k for k in keys if k),
+            imported=s0.origin.startswith("cra:")))
+    plan = CS.plan_import(keyed, existing)
+    notes = [f"{pl.slip.shown}: {pl.how}" for pl in placed
+             if not pl.account]
+    notes += dup_notes + plan.notes
+    notes += [f"skipped {m}" for m in skipped]
+    in_import = list(plan.superseded)
+    replaced_notes = in_import + [
+        f"slips.toml [[slip]] #{e.index} ({e.status or 'original'}): "
+        f"replaced by the amended slip {pl.slip.shown}"
+        for e, pl, _k in plan.replace]
+    tables = [CS.table(pl, k) for pl, k in plan.add] + [
+        CS.table(pl, k) for _e, pl, k in plan.replace]
+    text = ("\n\n".join(tables) + "\n") if tables else ""
+    new_text = None
+    if tables:
+        today = _dtm.date.today().isoformat()
+        base = old_text
+        if plan.replace:
+            try:
+                base = SA.comment_out_tables(old_text, {
+                    e.index: (f"Replaced by the amended slip "
+                              f"{CS._comment(pl.slip.shown)} (taxjson "
+                              f"slip-audit --import-cra, {today}):")
+                    for e, pl, _k in plan.replace})
+            except SA.SlipsError as e:
+                _die_input(str(e))
+        if not base:
+            base = f"year = {year}\n"
+        sep = "" if base.endswith("\n\n") else (
+            "\n" if base.endswith("\n") else "\n\n")
+        new_text = base + sep + text
+        # Never write a file slip-audit cannot read back.
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td) / SA.SLIPS_FILE
+            tp.write_text(new_text, encoding="utf-8")
+            try:
+                back = SA.load_slips_file(tp, cfg, year)[0]
+            except SA.SlipsError as e:
+                _die(f"the tables to write do not read back ({e}); "
+                     f"slips.toml is unchanged")
+        if len(back) != len(have) - len(plan.replace) + len(tables):
+            _die("the tables to write do not read back as written; "
+                 "slips.toml is unchanged")
+    backup = None
+    if args.write and new_text is not None:
+        sf.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            backup = write_user_file(sf, new_text, root)
+        except OutsideLinkError as e:
+            _die_input(str(e))
+    if as_json:
+        _json_out({
+            "schema_version": 1, "year": year,
+            "slips": [{"file": pl.slip.shown, "type": pl.slip.type,
+                       "status": pl.slip.status, "issuer": pl.slip.issuer,
+                       "currency": pl.slip.currency,
+                       "boxes": {b: round(v, 2) for b, v in
+                                 pl.slip.boxes.items()},
+                       "account": pl.account,
+                       "broker_account": (list(pl.group.sources)
+                                          if pl.group else None),
+                       "fund": pl.security or None, "how": pl.how}
+                      for pl in placed],
+            "add": [pl.slip.shown for pl, _k in plan.add],
+            "replace": [{"table": e.index, "by": pl.slip.shown}
+                        for e, pl, _k in plan.replace],
+            "replaced_in_import": in_import,
+            "not_imported": notes, "tables": text,
+            "written": bool(args.write and new_text is not None),
+            "backup": (f"inputs/slips/{backup.name}" if backup
+                       else None)})
+        return
+    d = out.Doc(f"CRA SLIP IMPORT — tax year {year}: {n_read} slip(s) "
                 f"read")
-    body = [[pl.slip.shown, pl.slip.type, pl.slip.issuer,
+    body = [[pl.slip.shown, pl.slip.type, pl.slip.status, pl.slip.issuer,
              pl.slip.currency, pl.account or "-",
              ", ".join(pl.group.sources) if pl.group else "-",
              pl.security or ""] for pl in placed]
     if body:
         d.blank()
-        d.table(["FILE", "TYPE", "ISSUER", "CUR", "ACCOUNT",
-                 "BROKER ACCOUNT", "FUND"], body, drop=(2, 5), key=0)
-    notes = [f"{pl.slip.shown}: {pl.how}" for pl in placed
-             if not pl.account]
-    notes += [f"{pl.slip.shown}: already in slips.toml (source = "
-              f"\"cra:{pl.slip.shown}\"); delete its table to import it "
-              f"again" for pl in again]
-    notes += [f"skipped {m}" for m in skipped]
+        d.table(["FILE", "TYPE", "STATUS", "ISSUER", "CUR", "ACCOUNT",
+                 "BROKER ACCOUNT", "FUND"], body, drop=(3, 6, 2), key=0)
+    if replaced_notes:
+        d.section("Amended")
+        d.items(replaced_notes)
     if notes:
         d.section("Not imported")
         d.items(notes)
-    if new:
-        text = "\n\n".join(CS.table(pl) for pl in new) + "\n"
+    if text:
         d.section(f"{'Added to' if args.write else 'Would add to'} "
                   f"inputs/slips/{SA.SLIPS_FILE}")
         for ln in text.splitlines():
             d.line("  " + ln if ln else "")
-        if args.write:
-            old = sf.read_text(encoding="utf-8") if sf.is_file() else (
-                f"year = {year}\n")
-            sep = "" if old.endswith("\n\n") or not old else (
-                "\n" if old.endswith("\n") else "\n\n")
-            sf.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                write_user_file(sf, old + sep + text, root)
-            except OutsideLinkError as e:
-                _die_input(str(e))
     d.blank()
-    if not new:
+    if not text:
         d.para("Nothing to add.")
     elif args.write:
-        d.para(f"Added {len(new)} slip(s); `taxjson slip-audit` compares "
-               f"them with the books.")
+        d.para(f"Added {len(tables)} slip(s)"
+               + (f", {len(plan.replace)} replacing an original (commented "
+                  f"out" + (f"; the old file is {backup.name}" if backup
+                            else "") + ")" if plan.replace else "")
+               + "; `taxjson slip-audit` compares them with the books.")
     else:
-        d.para(f"Run again with --write to add {len(new)} slip(s) to "
-               f"inputs/slips/{SA.SLIPS_FILE}.")
+        d.para(f"Run again with --write to add {len(tables)} slip(s) to "
+               f"inputs/slips/{SA.SLIPS_FILE}"
+               + (f" ({len(plan.replace)} replacing an original, which is "
+                  f"commented out)" if plan.replace else "") + ".")
     d.print()
 
 
