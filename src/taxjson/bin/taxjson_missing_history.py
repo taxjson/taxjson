@@ -750,7 +750,9 @@ def main(argv=None):
                 and (not args.account or r.account == args.account)]
     zero_declared = [r for r in zero_all if r.declared
                      and (r.still_held_qty > 0
-                          or (r.sold and r.affects_year))]
+                          or (r.sold and r.affects_year))
+                     and not is_registered_account(r.account, types or None,
+                                                   country)]
     zero_all = [r for r in zero_all if not r.declared]
     zero_rows = [r for r in zero_all if r.sold]
     zero_held = [r for r in zero_all if r.still_held_qty > 0
