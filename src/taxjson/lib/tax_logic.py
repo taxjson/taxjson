@@ -1093,7 +1093,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "journal's legs, or on its trades' day, is booked and "
                  "said as a Warning naming both (date it as the broker's "
                  "journal to restate it); a line on another date is "
-                 "another journal. The legacy "
+                 "another journal, and so is a line ending `separate`: "
+                 "booked in full, never settled against the broker's "
+                 "legs nor said as a restatement. The legacy "
                  "ticker.map `JOURNAL FROM TO` "
                  "line is read as `TOBASE FROM TO`, said once per run; "
                  "`taxjson format-map --write` rewrites it."),
@@ -2543,7 +2545,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "broker's own journal between the same listings on its "
                  "date stops the run, and one dated a business day from "
                  "it (or on its trades' day) is booked and said as a "
-                 "Warning. The legacy "
+                 "Warning; a line ending `separate` is a journal of its "
+                 "own, booked in full (never settled against the "
+                 "broker's legs, never said as a restatement). The legacy "
                  "ticker.map `JOURNAL FROM TO` line is read as `TOBASE "
                  "FROM TO`, said once per run; `taxjson format-map "
                  "--write` rewrites it."),

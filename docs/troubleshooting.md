@@ -398,9 +398,16 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### "Warning: inputs/margin/j.tt:1: JOURNAL 2025-05-05 QZD.TO QZD.U.TO 1500 is booked in full beside the broker's journal of 1000 between the same listings"
 - **Check:** the Warning names the broker's journal's legs (`2025-05-06, 2025-05-06`) and, for an RBC gambit, its trades' day; `tjs transfers` shows the broker's legs and the `.tt` line's legs both moving units between the two listings; `tjs journals` lists both.
 - **Cause:** a `.tt` `JOURNAL` line that moves more units than the broker's own journal between the same two listings in the same account stops the run on the journal's own date (it would move those units twice), but a line dated one business day off — RBC dates a gambit's trades on the trade day and its `J~` legs on the settlement day — was booked in full on top of the broker's journal without a word.
-- **Fix:** if the line restates the broker's journal, date it as the broker's legs (`JOURNAL 2025-05-06 …`): the run then says which units the rows lack, and you write only those. If it is a separate journal, check its date against your records; nothing else is needed.
+- **Fix:** if the line restates the broker's journal, date it as the broker's legs (`JOURNAL 2025-05-06 …`): the run then says which units the rows lack, and you write only those. If it is a separate journal, end the line with `separate` (next entry).
 - **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/cross_listings.py` — `near_restatements`, `NEAR_DAYS`; `src/taxjson/bin/taxjson_run.py` — `stage_dated_events`
+
+### The "booked in full beside the broker's journal" Warning stays for a journal that really is separate
+- **Check:** the `.tt` `JOURNAL` line is a second, real journal (your records show two gambits a day apart), and the Warning repeats on every run; on v0.24.0 nothing silenced it.
+- **Cause:** a bigger `.tt` journal one business day from the broker's journal reads as a likely restatement of it, and the line had no way to say it is not.
+- **Fix:** upgrade and end the line with `separate`: `JOURNAL 2025-05-07 QZD.TO QZD.U.TO 1500 separate`. The line is then a journal of its own: booked in full, never settled against the broker's legs near it (a line equal to the broker's journal is booked too, not read as a duplicate) and never said as a restatement. `work/dated_events.state` records it with `"separate": true`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_convert_tt.py` — `parse_journal_line`, `JOURNAL_SEPARATE`; `src/taxjson/lib/dated_events.py` — `Journal`, `settle_journals`; `src/taxjson/lib/cross_listings.py` — `near_restatements`, `partial_overlaps`
 
 ### A ticker that changed twice (`RENAME` A to B, then B to C) leaves the position in B and C goes short
 - **Check:** `tjs renames` lists both changes, but the second shows no position carried in an account that held A; `tjs shares` shows that account long B and short C.

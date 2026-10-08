@@ -19,6 +19,12 @@
   no longer counts as evidence: the names must agree, else the run stops
   naming the line.
 
+- **A `.tt` JOURNAL line can say it is a separate journal**: a trailing
+  `separate` (`JOURNAL 2025-05-07 QZD.TO QZD.U.TO 1500 separate`) books the
+  line as a journal of its own, in full, and silences the "booked in full
+  beside the broker's journal" Warning, which nothing could silence
+  before (docs/settings.md).
+
 
 ## v0.24.0 (2026-10-07)
 

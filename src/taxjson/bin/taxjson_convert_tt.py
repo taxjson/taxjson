@@ -46,7 +46,11 @@ _SUGAR_ACTIONS = ('ACQUIRED', 'INKIND')
 # SPLIT row in each account holding the old symbol) — they are checked
 # here and never rows of the converted file.
 _EVENT_ACTIONS = ('JOURNAL', 'RENAME')
-JOURNAL_FORM = "JOURNAL <date> <FROM> <TO> <qty>"
+JOURNAL_FORM = "JOURNAL <date> <FROM> <TO> <qty> [separate]"
+# The trailing word that marks a .tt JOURNAL line as a journal of its
+# own, never a restatement of a broker's journal near it
+# (lib/dated_events.Journal.separate).
+JOURNAL_SEPARATE = "separate"
 RENAME_FORM = "RENAME <date> <OLD> <NEW> [late=fold|late=separate]"
 # The time an OPENING row is booked at: the start of the snapshot day,
 # before anything else that day (the line itself has no time column).
@@ -399,11 +403,14 @@ def _is_date(tok: str) -> bool:
 
 
 def parse_journal_line(line: str, source: str = ''):
-    """`JOURNAL <date> <FROM> <TO> <qty>` -> {date, from, to, quantity}:
-    a move of `qty` units from listing FROM to listing TO of one security
-    inside this account (a Norbert's gambit's journal, a TSX line moved to
-    its NYSE line), or None when the line is not a JOURNAL line. No time
-    column. `taxjson run` books it as the move's two transfer legs and
+    """`JOURNAL <date> <FROM> <TO> <qty> [separate]` -> {date, from, to,
+    quantity, separate}: a move of `qty` units from listing FROM to
+    listing TO of one security inside this account (a Norbert's gambit's
+    journal, a TSX line moved to its NYSE line), or None when the line is
+    not a JOURNAL line. No time column. A trailing `separate` says the
+    line is a journal of its own, never the restatement of a broker's
+    journal near it: booked in full, nothing asked (v0.24.1 leftovers,
+    3). `taxjson run` books it as the move's two transfer legs and
     joins the listings (lib/dated_events, tax-logic CA-XLIST-04 /
     US-XLIST-03): no disposition. Raises ValueError naming the form on a
     malformed line."""
@@ -413,11 +420,18 @@ def parse_journal_line(line: str, source: str = ''):
     if not parts or parts[0] != 'JOURNAL':
         return None
     shown = body.strip()
+    separate = (len(parts) == 6
+                and parts[5].lower() == JOURNAL_SEPARATE)
+    if separate:
+        parts = parts[:5]
     if len(parts) != 5:
         hint = ''
         if len(parts) == 3 and not _is_date(parts[1]):
             hint = (" — `JOURNAL FROM TO` is the old ticker.map line; in a "
                     ".tt file a journal is dated and sized")
+        elif len(parts) == 6:
+            hint = (f" — the only word after the quantity is "
+                    f"`{JOURNAL_SEPARATE}` (a journal of its own)")
         raise ValueError(
             f"{where}malformed JOURNAL line — expected `{JOURNAL_FORM}` "
             f"(a move of <qty> units from listing FROM to listing TO in "
@@ -465,7 +479,7 @@ def parse_journal_line(line: str, source: str = ''):
             f"{shown!r}")
     _not_in_future(date, 'JOURNAL', where, shown)
     return {'date': date, 'from': frm, 'to': to, 'quantity': q,
-            'line': shown}
+            'line': shown, 'separate': separate}
 
 
 # The most units a dated event may move (a JOURNAL line): no position

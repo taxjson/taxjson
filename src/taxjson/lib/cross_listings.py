@@ -496,8 +496,9 @@ def partial_overlaps(journals: Iterable[Any], legs: Iterable[Leg],
     legs = [g for g in legs if g.broker != "tt" and not g.decl]
     out: List[str] = []
     for j in journals:
-        if getattr(j, "status", "booked") != "booked":
-            continue
+        if (getattr(j, "status", "booked") != "booked"
+                or getattr(j, "separate", False)):
+            continue        # (a line declared `separate`: its own journal)
         # A restatement is dated as the broker's journal: a .tt line on
         # another day is another journal, booked (two real journals in
         # one week are no dead end).
@@ -555,8 +556,9 @@ def near_restatements(journals: Iterable[Any], legs: Iterable[Leg],
     legs = [g for g in legs if g.broker != "tt" and not g.decl]
     out: List[str] = []
     for j in journals:
-        if getattr(j, "status", "booked") != "booked":
-            continue
+        if (getattr(j, "status", "booked") != "booked"
+                or getattr(j, "separate", False)):
+            continue        # (a line declared `separate`: its own journal)
         jd = _d(j.date)
         if jd is None:
             continue
@@ -603,8 +605,8 @@ def near_restatements(journals: Iterable[Any], legs: Iterable[Leg],
                 + f"), a day from the line: together they move "
                 f"{j.quantity + q:g} units. If the line restates the "
                 f"broker's journal, date it {o.date}: the run then says "
-                f"what to write; if it is a separate journal, check its "
-                f"date — this Warning stays while the two sit a day apart")
+                f"what to write; if it is a separate journal, end the "
+                f"line with `separate`")
             break
     return out
 

@@ -7,6 +7,9 @@
 - 2: a CDR (written on Cboe Canada, QZG.NE, or named "... CDR" in the
   exports) is its own security: a .tt JOURNAL between it and QZG.US
   needs names that agree, not the shared root.
+- 3: a .tt JOURNAL line ending `separate` is a journal of its own: the
+  near-restatement Warning is silenced and the line is booked in full,
+  never settled against the broker's legs near it.
 
 Every fixture is SYNTHETIC: invented QZ*/ZZX tickers and names, fake
 account ids (pii-ok: 55500001).
@@ -185,6 +188,73 @@ class TestCdrIsItsOwnRoot(unittest.TestCase):
     @rule("US-XLIST-03")
     def test_usa_cdr_named_in_the_export_needs_names(self):
         self._named("usa")
+
+
+
+# ------------------------------------------------------------------ 3
+
+class TestSeparateJournalLine(unittest.TestCase):
+
+    def test_parse(self):
+        from taxjson.bin.taxjson_convert_tt import parse_journal_line
+        j = parse_journal_line("JOURNAL 2025-05-07 QZD.TO QZD.U.TO 1500 "
+                               "separate  # a second gambit")
+        self.assertTrue(j["separate"])
+        self.assertEqual(j["quantity"], 1500.0)
+        self.assertFalse(parse_journal_line(
+            "JOURNAL 2025-05-07 QZD.TO QZD.U.TO 1500")["separate"])
+        self.assertTrue(parse_journal_line(
+            "JOURNAL 2025-05-07 QZD.TO QZD.U.TO 1500 SEPARATE")["separate"])
+        with self.assertRaises(ValueError) as cm:
+            parse_journal_line("JOURNAL 2025-05-07 QZD.TO QZD.U.TO 1500 "
+                               "apart", "j.tt:1")
+        self.assertIn("`separate`", str(cm.exception))
+
+    def _run_line(self, country, line):
+        from test_fix_dated_events import _rbc_gambit
+        from taxjson.lib import dated_events as DE
+        rbc, tmap = _rbc_gambit(True)
+        files = {"inputs/margin/rbc.csv": rbc, "ticker.map": tmap,
+                 "inputs/margin/j.tt": line + "\n"}
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, files=files,
+                                 usa={"source_currencies": ["CAD"]}
+                                 )[country]
+            r = cli(root, "run", "--no-input")
+            out = _flat(r.stdout + r.stderr)
+            self.assertEqual(r.returncode, 0, out[-3000:])
+            rec = DE.read_state(root / "work" / DE.STATE)["journals"]
+            return out, [(j["status"], j["quantity"], j["legs"],
+                          j.get("separate", False)) for j in rec]
+
+    def _check(self, country):
+        # A bigger line a business day after the broker's journal:
+        # warned without the word, silent with it.
+        out, rec = self._run_line(country,
+                                  "JOURNAL 2025-05-07 QZD.TO QZD.U.TO 1500")
+        self.assertIn("is booked in full beside the broker's journal", out)
+        self.assertIn("end the line with `separate`", out)
+        out, rec = self._run_line(
+            country, "JOURNAL 2025-05-07 QZD.TO QZD.U.TO 1500 separate")
+        self.assertNotIn("booked in full beside", out)
+        self.assertEqual(rec, [("booked", 1500.0, ["out", "in"], True)])
+        # The broker's own journal restated: a duplicate without the
+        # word, its own journal (both legs booked) with it.
+        out, rec = self._run_line(country,
+                                  "JOURNAL 2025-05-06 QZD.TO QZD.U.TO 1000")
+        self.assertEqual(rec, [("duplicate", 1000.0, [], False)])
+        out, rec = self._run_line(
+            country, "JOURNAL 2025-05-06 QZD.TO QZD.U.TO 1000 separate")
+        self.assertEqual(rec, [("booked", 1000.0, ["out", "in"], True)])
+        self.assertNotIn("already in the broker's rows", out)
+
+    @rule("CA-XLIST-04")
+    def test_canada_separate_line(self):
+        self._check("canada")
+
+    @rule("US-XLIST-03")
+    def test_usa_separate_line(self):
+        self._check("usa")
 
 
 if __name__ == "__main__":

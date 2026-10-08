@@ -7,7 +7,7 @@ trade or a dividend, written date first in a .tt file of an account
 (`taxjson-convert-tt` checks the line; it is never a row of the
 converted file — `taxjson run` reads it here):
 
-  JOURNAL <date> <FROM> <TO> <qty>
+  JOURNAL <date> <FROM> <TO> <qty> [separate]
       <qty> units moved from listing FROM to listing TO of one security
       inside this account (a Norbert's gambit's journal, a TSX line moved
       to its NYSE line). Booked as the move's two transfer legs (an
@@ -24,7 +24,9 @@ converted file — `taxjson run` reads it here):
       out-leg of FROM and in-leg of TO, the same quantity, within
       cross_listings.PAIR_DAYS business days) is a duplicate: said as
       Info and not booked twice; with one leg there, only the other leg
-      is booked.
+      is booked. A line ending `separate` is a journal of its own: booked
+      in full, never settled against the broker's legs nor read as a
+      restatement of a broker's journal near it.
 
   RENAME <date> <OLD> <NEW> [late=fold|late=separate]
       a ticker change on that date (lib/renames). Declared once, in any
@@ -130,6 +132,10 @@ class Journal:
     note: str = ""
     source_name: str = ""       # the .tt file's shown name (row `source`)
     source_key: str = ""
+    # The line ends with `separate`: a journal of its own, booked in full
+    # — never settled against the broker's legs near it, never read as
+    # a restatement of a broker's journal (v0.24.1 leftovers, 3).
+    separate: bool = False
 
     def record(self) -> Dict[str, Any]:
         out = {"date": self.date, "account": self.account,
@@ -137,6 +143,8 @@ class Journal:
                "quantity": self.quantity, "source": SOURCE_TT,
                "where": self.where, "pair": self.pair,
                "status": self.status, "legs": list(self.legs)}
+        if self.separate:
+            out["separate"] = True
         if self.note:
             out["note"] = self.note
         return out
@@ -237,7 +245,8 @@ def read_declarations(root: Path, accounts: Dict[str, Any]) -> Declarations:
                         j["quantity"], where, j["line"],
                         pair=f"tt:{acct}:{j['date']}#{counter[k]}",
                         source_name=shown_name(tt),
-                        source_key=source_key(tt)))
+                        source_key=source_key(tt),
+                        separate=bool(j.get("separate"))))
                 elif r is not None and r.get("noop"):
                     out.notes.append(r["noop"])  # one listing: nothing
                 elif r is not None:
@@ -550,6 +559,11 @@ def settle_journals(journals: Iterable[Journal], legs: Iterable[Any],
         return best[1] if best else None
 
     for j in sorted(journals, key=lambda x: (x.account, x.date, x.where)):
+        if j.separate:
+            # Declared a journal of its own: both legs booked, no
+            # broker leg claimed.
+            j.status, j.legs, j.note = STATUS_BOOKED, ("out", "in"), ""
+            continue
         o = find(j, j.frm, -1)
         i = find(j, j.to, +1)
         for g in (o, i):
