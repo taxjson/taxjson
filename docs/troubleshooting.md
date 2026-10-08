@@ -708,6 +708,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.23.0`
 - **Code:** `src/taxjson/lib/symbol_codes.py` — `_cut_account_ref`, `_ACCOUNT_REF_RE`, `rbc_name`, `questrade_name`; `src/taxjson/lib/listing_suffix.py` — `scan_rbc`
 
+### Questrade or RBC: "Warning: Row check: … BUYSELL QZPIPE.US 2026-09-29: net_amount -44.98 is far from qty*price = 62.90 …" on a dividend reinvestment
+- **Check:** the row is a reinvestment (Questrade `REI`, RBC's reinvestment activity) whose description quotes the price in the other currency: `QZPIPE CORP REINV@C$62.90 …` on a USD row, `QZGOLD CORP REINV@U$5.3783 …` on a CAD row. The booked cost (the Net Amount / Value) was right; only the Warning was wrong.
+- **Cause:** the parser booked the REINV@ price as the row's price, in the row's currency, so the row check compared units x a Canadian-dollar price against a US-dollar cash amount (or the reverse); RBC's fee, worked out from that price, was nonsense too.
+- **Fix:** upgrade. A reinvestment priced in the other currency is booked at the cash per unit (the row's own currency); the description keeps the quoted price. A reinvestment whose price is in the row's currency and misses the cash still warns (and one more than 5% off is refused, naming the row).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/brokerages/rbc_direct.py` — `reinvest_row_price`, `reinvest_identity_error`; `src/taxjson/lib/brokerages/questrade.py` — `reinvest_row_price`; `src/taxjson/lib/brokerages/schema.py` — `is far `
+
 ### Questrade: "Warning: 99900001.csv: 1 dividend(s) marked NON-RES TAX WITHHELD are booked at the NET amount"
 - **Check:** the next line lists each dividend (`QZQ.US 2025-03-15 8.50`); `tjs divs` shows it at the net amount with no TAX row. On RBC the same wording is grossed up instead: `tjs events` shows a TAX row described `(Implied Tax)` at 15% of the gross.
 - **Cause:** Questrade's export gives neither the gross nor the tax of such a dividend, so it is booked at the net: income understated, foreign tax missing. RBC's export also gives only the net; its parser assumes the 15% US treaty rate (`gross = net / 0.85`) whatever the issuer's country.

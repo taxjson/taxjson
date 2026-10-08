@@ -252,8 +252,10 @@ _QT_H = ('Transaction Date,Settlement Date,Action,Symbol,Description,'
 
 
 class TestNotionalMismatchIsAttention(unittest.TestCase):
-    """S065-12: a DRIP priced in US dollars on a CAD row (REINV@U$) is a
-    notional mismatch the parser cannot resolve — echoed as ATTENTION."""
+    """S065-12: a DRIP whose units x price misses the cash is echoed as
+    ATTENTION. (A price in the OTHER currency — REINV@U$ on a CAD row —
+    is booked at the cash per unit since v0.24.1 leftovers 8, and no
+    longer warns: tests/test_fix_v0241_leftovers.py.)"""
 
     def test_schema_tags_undeclared_mismatch_only(self):
         from taxjson.lib.brokerages.schema import (ATTENTION_TAG,
@@ -270,12 +272,14 @@ class TestNotionalMismatchIsAttention(unittest.TestCase):
         self.assertEqual(len(errs), 1)
         self.assertFalse(errs[0].startswith(ATTENTION_TAG))
 
-    def test_drip_in_another_currency_reaches_the_console(self):
+    def test_drip_mismatch_reaches_the_console(self):
         from taxjson.bin.taxjson_run import echo_parse_stats
+        # 100 units at C$10.00 for 1040 CAD: 4% off (within the parser's
+        # refusal margin), far enough for the row check.
         csv = _QT_H + (
             "2026-05-11 12:00:00 AM,2026-05-11 12:00:00 AM,REI,ZZQ.TO,"
-            "ZZQ CORP REINV@U$7.00000 REC 04/30/26 PAY 05/11/26,11,0,0,0,"
-            "-105.00,CAD,55500001,Dividend reinvestment,Individual margin\n")
+            "ZZQ CORP REINV@C$10.00000 REC 04/30/26 PAY 05/11/26,100,0,0,0,"
+            "-1040.00,CAD,55500001,Dividend reinvestment,Individual margin\n")
         with tempfile.TemporaryDirectory() as td:
             src = Path(td) / "questrade_activity.csv"
             src.write_text(csv)

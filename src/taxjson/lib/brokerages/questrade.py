@@ -2169,17 +2169,20 @@ class QuestradeBrokerage(BaseBrokerage):
         # decimal comma falls back to the cash / units.
         price = desc_number(m.group(1), strict=False) if m else None
         from taxjson.lib.brokerages.rbc_direct import (
-            _REINV_CUR, _REINV_CUR_RE, reinvest_identity_error)
+            _REINV_CUR, _REINV_CUR_RE, reinvest_identity_error,
+            reinvest_row_price)
         mc = _REINV_CUR_RE.search(desc)
-        bad = reinvest_identity_error(
-            qty, net, price,
-            _REINV_CUR.get(mc.group(1).upper(), '?') if mc else currency,
-            currency)
+        price_cur = (_REINV_CUR.get(mc.group(1).upper(), '?') if mc
+                     else currency)
+        bad = reinvest_identity_error(qty, net, price, price_cur, currency)
         if bad:
             raise BrokerageParseError(
                 f"{self._where(lineno)}: REI row: {bad} ({desc[:50]!r}) "
                 f"— a wrong or shifted column; refusing to book it as the "
                 f"units' cost (re-audit A2-0268).")
+        # A REINV@C$ price on a USD row (U$ on a CAD row) is another
+        # currency's number: booked at the cash per unit instead.
+        price = reinvest_row_price(qty, net, price, price_cur, currency)
         if not price:
             price = round(net / qty, 8)
         tx = {

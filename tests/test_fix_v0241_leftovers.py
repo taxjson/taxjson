@@ -18,6 +18,10 @@
   line's event-level late=); when no home keeps it, the refusal names
   the account and the line to add. An account that never held OLD is
   not "changed" by the move.
+- 8: a Questrade (or RBC) DRIP row whose REINV@ price is in the other
+  currency (REINV@C$ on a USD row, U$ on a CAD row) is booked at the
+  cash per unit, with no row-check Warning; a same-currency mismatch
+  still warns.
 
 Every fixture is SYNTHETIC: invented QZ*/ZZX tickers and names, fake
 account ids (pii-ok: 55500001).
@@ -465,6 +469,73 @@ class TestFormatMapKeepsEveryLate(unittest.TestCase):
             r = cli(root, "run", "--no-input", "--strict")
             self.assertEqual(r.returncode, 0, _flat(r.stdout + r.stderr))
             self.assertEqual(self._sum(root), before)
+
+
+
+# ------------------------------------------------------------------ 8
+
+_QT_DRIP_H = ("Transaction Date,Settlement Date,Action,Symbol,Description,"
+              "Quantity,Price,Gross Amount,Commission,Net Amount,Currency,"
+              "Account #,Activity Type,Account Type\n")
+
+
+def _drip(sym, desc, qty, net, cur):
+    return (f"2026-09-29 12:00:00 AM,2026-09-29 12:00:00 AM,REI,{sym},"
+            f"{desc},{qty},0,0,0,{net:.2f},{cur},55500001,"   # pii-ok
+            f"Dividend reinvestment,Individual margin\n")
+
+
+class TestDripPricedInTheOtherCurrency(unittest.TestCase):
+
+    def test_row_price(self):
+        from taxjson.lib.brokerages.rbc_direct import reinvest_row_price
+        self.assertEqual(reinvest_row_price(1, -44.98, 62.90, "CAD", "USD"),
+                         44.98)
+        self.assertEqual(reinvest_row_price(5, -37.31, 5.3783, "USD",
+                                            "CAD"), 7.462)
+        self.assertEqual(reinvest_row_price(5, -26.9, 5.38, "CAD", "CAD"),
+                         5.38)
+
+    def _run(self, country, csv):
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(
+                td, year=2026, files={"inputs/margin/q.csv": csv},
+                canada={"source_currencies": ["USD"]},
+                usa={"source_currencies": ["CAD"]})[country]
+            r = cli(root, "run", "--no-input")
+            out = _flat(r.stdout + r.stderr)
+            self.assertEqual(r.returncode, 0, out[-3000:])
+            rows = []
+            for p in (root / "work").glob("margin_questrade*.json"):
+                doc = json.loads(p.read_text())
+                rows += [t for t in doc.get("transactions") or []
+                         if t.get("action") == "BUYSELL"]
+            return out, rows
+
+    def _check(self, country):
+        csv = _QT_DRIP_H + _drip(
+            "QZPIPE", "QZPIPE CORP REINV@C$62.90 REC 09/15/26 PAY 09/29/26",
+            1, -44.98, "USD") + _drip(
+            "QZGOLD.TO", "QZGOLD CORP REINV@U$5.3783 REC 09/15/26 PAY "
+            "09/29/26", 5, -37.31, "CAD")
+        out, rows = self._run(country, csv)
+        self.assertNotIn("is far from qty*price", out)
+        got = sorted((t["symbol"], t["quantity"], t["net_amount"],
+                      round(t["price"], 4)) for t in rows)
+        self.assertEqual(got, [("QZGOLD.TO", 5.0, 37.31, 7.462),
+                               ("QZPIPE.US", 1.0, 44.98, 44.98)])
+        # The same currency, 4% off: still said.
+        csv = _QT_DRIP_H + _drip(
+            "QZGOLD.TO", "QZGOLD CORP REINV@C$10.00 REC 09/15/26 PAY "
+            "09/29/26", 100, -1040.00, "CAD")
+        out, _rows = self._run(country, csv)
+        self.assertIn("is far from qty*price", out)
+
+    def test_canada_drip_priced_in_the_other_currency(self):
+        self._check("canada")
+
+    def test_usa_drip_priced_in_the_other_currency(self):
+        self._check("usa")
 
 
 if __name__ == "__main__":

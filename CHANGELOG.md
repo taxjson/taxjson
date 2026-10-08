@@ -40,6 +40,13 @@
   names each such account and the `.tt` line to add. An account that never
   held the old ticker is no longer counted as changed.
 
+- **A DRIP priced in the other currency no longer warns**: a Questrade or
+  RBC reinvestment whose description quotes the price in the other
+  currency (`REINV@C$` on a USD row, `REINV@U$` on a CAD row) is booked at
+  the cash per unit, so the row check no longer flags it (the cost was
+  already right; RBC's fee worked out from the foreign price is gone). A
+  same-currency mismatch still warns.
+
 
 ## v0.24.0 (2026-10-07)
 
