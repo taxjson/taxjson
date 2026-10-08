@@ -516,6 +516,25 @@ class TestExportCoverage(unittest.TestCase):
             res = cl.d_export_coverage(ctx_of(root, 2026, date(2026, 10, 7)))
             self.assertEqual(res.status, "done", res.detail)
 
+    def test_tt_closes_after_the_gap_do_not_cover_it(self):
+        """A finished year: the export ends 2025-09-30 and the calls are
+        closed by a .tt line dated 2026 — outside the gap (Oct–Dec 2025),
+        so a missing 2025 sale would still be missing: a Warning."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make(tmp, "after", 2025, {
+                "margin/webull_2025.csv": webull("September 30 2025",
+                                                 WB_OPEN_CALLS),
+                "margin/wb_2026_manual.tt":
+                    "BUYSELL 2026-01-05 10:00:00 ZZBB260116C00045000.US "
+                    "-14 USD 2 2800\n"})
+            text = flat(console(tj(root, "run", "--no-input")))
+            self.assertIn("Warning: Webull exports for margin end 2025-09-30 "
+                          "with open positions (ZZBB260116C00045000.US 14); "
+                          "download the rest of 2025", text)
+            self.assertNotIn("were closed by .tt lines", text)
+            g, = EC.find_gaps(root, cfg_of(root), today=date(2026, 3, 1))
+            self.assertFalse(g.info)
+
     def test_only_positions_still_open_are_named(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._year_summary_project(

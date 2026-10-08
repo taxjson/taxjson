@@ -22,7 +22,7 @@ still holds positions in the account at the end (its own rows: the
 account's books attributed by their source file, its transfer legs and
 corporate-action rows; a long position, or a written option, whose
 contract has not expired by the end) that the account's later rows of
-any source — a .tt line closing it, another broker's sale, a
+any source dated inside the gap (after the end, up to the cutoff) — a .tt line closing it, another broker's sale, a
 transfer-out — do not close. A broker whose positions are all closed is
 never listed: nothing after its end can be missing; when .tt lines
 closed them, the run says so as an Info ("... were closed by .tt lines —
@@ -382,8 +382,11 @@ def account_gaps(root: Path, acct: str, year: int, today: date
         held = open_positions(rows, end)
         if not held:
             continue
+        # Only rows inside the gap the missing export would cover (after
+        # its end, up to the cutoff) close a position: a .tt close dated
+        # next year says nothing about this year's missing months.
         later = [r for r in all_rows
-                 if (_d(r.get("date")) or end) > end
+                 if end < (_d(r.get("date")) or end) <= cutoff
                  and str(r.get("action") or "") in _POSITION_ACTIONS]
         still, by_tt, by_other = closed_later(held, later)
         if not still and not by_tt:
