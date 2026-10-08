@@ -9,7 +9,8 @@ that lists and fixes it (docs/getting-started.md, step 5):
     not cover and that fall in the tax year (taxable accounts) —
     `taxjson find-missing-history`;
   * positions at a $0 cost: sold in the tax year, or still held —
-    `taxjson find-missing-history`;
+    `taxjson find-missing-history` (a spin-off whose election declares
+    the $0, fmv_per_share=0, is an Info naming its event instead);
   * shares that arrived by transfer from outside the books with no
     cost (lib/transfer_in) — `taxjson transfers`;
   * accounts with open positions and no holdings file to check them
@@ -200,26 +201,55 @@ def engine_booking(cache: Path, rows: Sequence[MissingHistoryRow],
     return out
 
 
-def zero_cost_positions(txs: Sequence[TaxTransaction], year: Any, *,
-                        sheltered: Dict[str, bool],
-                        country: Optional[str],
-                        date_basis: str = "settle"
-                        ) -> Tuple[List[ZeroBasisRow], List[ZeroBasisRow]]:
-    """($0-cost shares sold in the tax year, $0-cost shares still held),
-    taxable accounts only (no gain to misstate in a sheltered one)."""
+def _zero_cost_rows(txs: Sequence[TaxTransaction], year: Any, *,
+                    sheltered: Dict[str, bool], country: Optional[str],
+                    date_basis: str = "settle",
+                    declared: Iterable[Tuple[str, str]] = ()
+                    ) -> List[ZeroBasisRow]:
+    """The $0-cost pools of the taxable accounts (no gain to misstate in
+    a sheltered one), sold in the tax year or still held."""
     from taxjson.lib.country import stock_dividend_zero_cost
     txs = list(txs)
     linked_new = {(l.new_symbol, l.account)
                   for l in detect_corp_action_links(txs)}
     spread = country is not None and not stock_dividend_zero_cost(country)
-    rows = [r for r in detect_zero_basis_acquisitions(
+    return [r for r in detect_zero_basis_acquisitions(
                 txs, year, date_basis=date_basis, include_held=True,
-                stock_dividends_spread=spread)
+                stock_dividends_spread=spread, declared_events=declared)
             if (r.symbol, r.account) not in linked_new
             and not is_registered_account(r.account, sheltered or None,
-                                          country)]
+                                          country)
+            and ((r.sold and r.affects_year) or r.still_held_qty > 0)]
+
+
+def zero_cost_positions(txs: Sequence[TaxTransaction], year: Any, *,
+                        sheltered: Dict[str, bool],
+                        country: Optional[str],
+                        date_basis: str = "settle",
+                        declared: Iterable[Tuple[str, str]] = ()
+                        ) -> Tuple[List[ZeroBasisRow], List[ZeroBasisRow]]:
+    """($0-cost shares sold in the tax year, $0-cost shares still held),
+    taxable accounts only (no gain to misstate in a sheltered one). A
+    spin-off whose election declares the $0 (`declared`: {(account,
+    event id)}, corp_actions.declared_zero_value_events) is the user's
+    answer, left out of both (declared_zero_cost)."""
+    rows = [r for r in _zero_cost_rows(txs, year, sheltered=sheltered,
+                                       country=country,
+                                       date_basis=date_basis,
+                                       declared=declared)
+            if not r.declared]
     return ([r for r in rows if r.sold and r.affects_year],
             [r for r in rows if r.still_held_qty > 0])
+
+
+def declared_zero_cost(rows: Iterable[ZeroBasisRow]) -> List[Dict[str, Any]]:
+    """[{symbol, account, events, quantity}] of the $0-cost pools whose
+    every $0 acquisition is a spin-off booked at the $0 value its
+    election declares: the run's closing summary lists them as an Info
+    (`quantity`: still held)."""
+    return [{"symbol": r.symbol, "account": r.account,
+             "events": list(r.event_ids), "quantity": r.still_held_qty}
+            for r in rows if r.declared]
 
 
 def income_without_position(txs: Sequence[TaxTransaction], year: Any, *,
@@ -377,8 +407,14 @@ def collect(root: Path, cfg: Dict[str, Any], *,
                                    covered=covered, date_basis=basis,
                                    journal=journal, country=country)
     booked = engine_booking(cache, shorts, year, date_basis=basis)
-    zero_sold, zero_held = zero_cost_positions(
-        txs, year, sheltered=sheltered, country=country, date_basis=basis)
+    from taxjson.lib.corp_actions import declared_zero_value_events
+    _zrows = _zero_cost_rows(txs, year, sheltered=sheltered,
+                             country=country, date_basis=basis,
+                             declared=declared_zero_value_events(root))
+    zero_sold = [r for r in _zrows if not r.declared and r.sold
+                 and r.affects_year]
+    zero_held = [r for r in _zrows if not r.declared
+                 and r.still_held_qty > 0]
     income = income_without_position(txs, year, skip_accounts=crypto,
                                      date_basis=basis, declared=covered)
     no_cost = [a for a in arrivals if getattr(a, "status", "") == "no_cost"]
@@ -408,6 +444,8 @@ def collect(root: Path, cfg: Dict[str, Any], *,
         "zero_cost_held": [{"symbol": r.symbol, "account": r.account,
                             "quantity": r.still_held_qty}
                            for r in zero_held],
+        # A $0 cost the user declared (fmv_per_share=0): an Info.
+        "zero_cost_declared": declared_zero_cost(_zrows),
         "transfer_in_no_cost": [{"symbol": a.symbol, "account": a.account,
                                  "date": a.date, "quantity": a.quantity}
                                 for a in no_cost],
@@ -431,8 +469,8 @@ def _names(items: Sequence[Dict[str, Any]], n: int = 3) -> str:
 def is_clean(doc: Dict[str, Any]) -> bool:
     return not any(doc.get(k) for k in (
         "no_purchase", "no_purchase_in_sum", "zero_cost_sold",
-        "zero_cost_held", "transfer_in_no_cost", "unchecked_accounts",
-        "income_not_held"))
+        "zero_cost_held", "zero_cost_declared", "transfer_in_no_cost",
+        "unchecked_accounts", "income_not_held"))
 
 
 def _accounts_shown(items: Sequence[Dict[str, Any]], n: int = 6) -> str:
@@ -503,6 +541,21 @@ def render_blocks(doc: Dict[str, Any], *,
                      f" at a $0 cost ({', '.join(parts)}): "
                      f"{_names(zs + zh)}. Run `taxjson "
                      f"find-missing-history`."))
+    zd = doc.get("zero_cost_declared") or []
+    if zd:
+        shown = ", ".join(
+            f"{i['symbol']} ({i['account']}, event "
+            f"{', '.join(i.get('events') or []) or '?'})" for i in zd[:3]) \
+            + (f" +{len(zd) - 3} more" if len(zd) > 3 else "")
+        one = zd[0]
+        how = (f"`taxjson elect {one['account']} --redo --event "
+               f"{(one.get('events') or ['ID'])[0]}`"
+               if len(zd) == 1 and len(one.get("events") or []) == 1
+               else "`taxjson elect ACCOUNT --redo --event ID`")
+        items.append(("Info", f"{_n(len(zd), 'position', 'positions')} at "
+                     f"the $0 cost you declared (fmv_per_share=0 in the "
+                     f"spin-off's election): {shown}. To change it: "
+                     f"{how}."))
     tn = doc.get("transfer_in_no_cost") or []
     if tn:
         items.append(("Warning", f"{_n(len(tn), 'transfer-in', 'transfer-ins')}"

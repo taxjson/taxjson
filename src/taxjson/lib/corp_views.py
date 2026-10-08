@@ -22,7 +22,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from taxjson.lib.corp_actions import ALLOCATED_BASIS_HINT, SHELTERED_DEFAULT
+from taxjson.lib.corp_actions import (ALLOCATED_BASIS_HINT, SHELTERED_DEFAULT,
+                                      declares_zero_value)
 from taxjson.lib.country import (CANADA, USA, display_name, home_currency,
                                  settings_country)
 
@@ -265,7 +266,15 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                            f"<{'|'.join(spin_options)}>`.")
             elif election in _FMV_ELECTIONS:
                 why.append(_FMV_ELECTIONS[election])
-                if not fmv_ps and not sheltered:
+                if not fmv_ps and declares_zero_value(election, hints):
+                    # The user's own $0 (a warrant distributed at no
+                    # value): answered, not a flag.
+                    why.append("booked at the $0 value you declared "
+                               "(fmv_per_share=0): no dividend income and "
+                               "a $0 cost for the new shares. To change "
+                               f"it: `taxjson elect {acct} --redo --event "
+                               f"{eid}`.")
+                elif not fmv_ps and not sheltered:
                     flags.append("ZERO-VALUE")
                     msg = ("booked at $0: no dividend income and a $0 cost "
                            "for the new shares, so a later sale overstates "

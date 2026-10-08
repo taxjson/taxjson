@@ -11,6 +11,8 @@ from typing import List, Dict, Any, Optional, Tuple
 from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          ticker_map_joins,
+                                         answered_rename_note,
+                                         declared_rename_where,
                                          ticker_map_names,
                                          ticker_map_renames,
                                          combined_accounts_note,
@@ -834,6 +836,12 @@ def _detect_qt_ticker_changes(ctx: QtAccountContext, by_name, where) -> None:
                     continue
                 if ticker_map_joins(a, b):
                     continue    # ticker.map already pools them (A2-1056)
+                declared = declared_rename_where(a, b)
+                if declared:
+                    # A .tt RENAME line already books it: a note.
+                    ctx.messages.append(answered_rename_note(
+                        where.get(b, '?'), "Questrade", a, b, declared))
+                    continue
                 how = (f"first appears on {tb[0][0]} with a SALE of "
                        f"{-first_b:g}" if first_b < 0 else
                        f"first appears on {tb[0][0]} and goes {-low:g} "

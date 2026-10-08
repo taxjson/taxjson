@@ -68,9 +68,11 @@ class TestSpinoffsViewUs(unittest.TestCase):
 
     @rule("US-CORP-06")
     def test_a2_0063_us_301_zero_value_flagged(self):
+        # No value saved (a fmv_per_share=0 written by the user is a
+        # declared $0, not a flag: test_fix_quietdeclared).
         td, root, cfg = _proj(_spin_rows(0.0), {EV: {
             "election": "taxable_distribution_301",
-            "hints": {"fmv_per_share": 0.0}}}, country="usa")
+            "hints": {}}}, country="usa")
         with td:
             doc = spinoffs(root, cfg)
         s = doc["spinoffs"][0]

@@ -95,7 +95,7 @@ class holds the shared helpers: OCC option symbols, currency suffixes, strict
 number parsing, settlement dates and skip accounting. The schema module is the
 one table of what a normalized row must look like.
 
-- `src/taxjson/lib/brokerages/base.py` — `BaseBrokerage`, `parse_file`, `BrokerageParseError`, `count_skip`, `emit_skip_summary`, `format_occ_symbol`, `apply_currency_suffix`, `canonical_ca_listing`, `parse_strict_number`, `read_broker_text`, `equity_settlement_date`, `income_facts_from_description`, `set_ticker_map`, `ticker_map_mentioned`, `source_identity`: the base class and its row-accounting contract; option and listing symbols; strict number and text reading; settlement dates and income facts; what a parser knows of ticker.map and of which account a file belongs to.
+- `src/taxjson/lib/brokerages/base.py` — `BaseBrokerage`, `parse_file`, `BrokerageParseError`, `count_skip`, `emit_skip_summary`, `format_occ_symbol`, `apply_currency_suffix`, `canonical_ca_listing`, `parse_strict_number`, `read_broker_text`, `equity_settlement_date`, `income_facts_from_description`, `set_ticker_map`, `ticker_map_mentioned`, `set_declared_renames`, `declared_rename_where`, `source_identity`: the base class and its row-accounting contract; option and listing symbols; strict number and text reading; settlement dates and income facts; what a parser knows of ticker.map and of the .tt RENAME lines, and of which account a file belongs to.
 - `src/taxjson/lib/brokerages/schema.py` — `SCHEMA`, `KNOWN_ACTIONS`, `validate_transactions`, `render_schema_prompt`: the normalized-row schema and its validator.
 
 ## Equity broker parsers

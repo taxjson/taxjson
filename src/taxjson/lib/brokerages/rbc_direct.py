@@ -29,6 +29,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          ticker_map_joins,
+                                         answered_rename_note,
+                                         declared_rename_where,
                                          combined_accounts_note,
                                          combined_accounts_refusal,
                                          DESC_NUMBER_RE, OPTION_STRIKE_RE,
@@ -1450,6 +1452,13 @@ def _detect_ticker_changes(ctx: RbcAccountContext, helper) -> None:
                 if ticker_map_joins(sa, sb):
                     continue    # ticker.map already pools them (A2-1056)
                 fb = ctx.exports[ctx.files[b.events[0][2]]].path.name
+                declared = declared_rename_where(sa, sb)
+                if declared:
+                    # A .tt RENAME line already books it: a note.
+                    ctx.messages.append(answered_rename_note(
+                        fb, "RBC", f"{a.symbol} ({cur})", b.symbol,
+                        declared))
+                    continue
                 how = (f"first appears on {b.first} with a SALE of "
                        f"{-first_b:g}" if first_b < 0 else
                        f"first appears on {b.first} and goes {-low_b:g} "

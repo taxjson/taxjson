@@ -468,6 +468,17 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--declared-renames", dest="declared_renames", metavar="FILE",
+        default=None,
+        help=(
+            "The ticker changes the project's .tt RENAME lines declare "
+            "(`taxjson run` passes work/declared_renames.list: one "
+            "OLD<TAB>NEW<TAB>WHERE line each). A look-alike rename hint "
+            "for a declared pair becomes a note naming the line; --lint "
+            "keeps the hint."
+        ),
+    )
+    parser.add_argument(
         "--symbol-codes", dest="symbol_codes", metavar="FILE",
         default=None,
         help=(
@@ -540,6 +551,14 @@ Examples:
             except (OSError, ValueError) as e:
                 emit_line(f"taxjson-brokerage: error: {args.ticker_map}: {e}")
                 sys.exit(2)
+    if args.declared_renames and not args.lint:
+        from taxjson.lib.brokerages.base import set_declared_renames
+        try:
+            set_declared_renames(Path(args.declared_renames))
+        except (OSError, UnicodeDecodeError) as e:
+            emit_line(f"taxjson-brokerage: error: --declared-renames "
+                      f"{args.declared_renames}: {e}")
+            sys.exit(2)
     if args.symbol_codes and not Path(args.symbol_codes).exists():
         emit_line(f"taxjson-brokerage: error: no such file: --symbol-codes "
                   f"{args.symbol_codes}")

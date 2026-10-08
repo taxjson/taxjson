@@ -1744,6 +1744,12 @@ class ZeroBasisRow:
     # now, and their sale will overstate a gain.
     still_held_qty: float = 0.0
     sold: bool = True           # some $0-cost shares were sold
+    # Every $0 acquisition of the pool is a spin-off whose election
+    # DECLARES the $0 (corp_actions.declares_zero_value): answered, an
+    # Info, not missing cost. `event_ids`: the corp events of its $0
+    # acquisitions.
+    declared: bool = False
+    event_ids: Tuple[str, ...] = ()
 
 
 def detect_zero_basis_acquisitions(
@@ -1754,6 +1760,7 @@ def detect_zero_basis_acquisitions(
     date_basis: str = 'settle',
     include_held: bool = False,
     stock_dividends_spread: bool = False,
+    declared_events: Iterable[Tuple[str, str]] = (),
 ) -> List[ZeroBasisRow]:
     """Flag (symbol, account) pairs that ACQUIRED shares at ~$0 cost — almost
     always a broker corporate-action row (a merger/spinoff "shares received"
@@ -1784,8 +1791,14 @@ def detect_zero_basis_acquisitions(
     `stock_dividends_spread` (a US project, lib/country
     .stock_dividend_zero_cost): a stock dividend's shares share the old
     shares' basis, so they are never $0-cost here.
+
+    `declared_events` ({(account, corp event id)}, corp_actions
+    .declared_zero_value_events): spin-offs whose election declares the
+    $0 value. A pool whose every $0 acquisition is one of them is
+    reported with `declared` set — the user's answer, listed apart.
     """
     year_str = str(year) if year is not None else None
+    declared = set(declared_events)
     transactions = list(transactions)
     # A positive ADJUST on the same (symbol, account) from 31 days before
     # to 7 days after a $0 acquisition is its cost — the documented fix
@@ -1846,9 +1859,13 @@ def detect_zero_basis_acquisitions(
                     'running': 0.0, 'active': False, 'zero_qty': 0.0,
                     'acq_date': '', 'desc': '', 'corp': False,
                     'any_disp': 0, 'in_year': 0, 'in_year_proc': 0.0,
+                    'undeclared': 0.0, 'events': [],
                 })
                 t['running'] += old['running'] * ratio
                 t['zero_qty'] += old['zero_qty'] * ratio
+                t['undeclared'] += old['undeclared'] * ratio
+                t['events'] += [e for e in old['events']
+                                if e not in t['events']]
                 t['active'] = t['active'] or old['active']
                 t['acq_date'] = t['acq_date'] or old['acq_date']
                 if old['corp'] and not t['corp']:
@@ -1864,7 +1881,7 @@ def detect_zero_basis_acquisitions(
         s = state.setdefault(key, {
             'running': 0.0, 'active': False, 'zero_qty': 0.0, 'acq_date': '',
             'desc': '', 'corp': False, 'any_disp': 0, 'in_year': 0,
-            'in_year_proc': 0.0,
+            'in_year_proc': 0.0, 'undeclared': 0.0, 'events': [],
         })
         qty = float(tx.quantity or 0.0)
         cost = abs(float(tx.net_amount or 0.0))
@@ -1876,6 +1893,11 @@ def detect_zero_basis_acquisitions(
                              and is_stock_dividend(tx))):
                 s['active'] = True
                 s['zero_qty'] += qty
+                eid = getattr(tx, 'corp_event_id', '') or ''
+                if eid and eid not in s['events']:
+                    s['events'].append(eid)
+                if not eid or (tx.account, eid) not in declared:
+                    s['undeclared'] += qty
                 if not s['acq_date']:
                     s['acq_date'] = tx.date
                 desc = tx.description or ''
@@ -1912,6 +1934,8 @@ def detect_zero_basis_acquisitions(
             in_year_proceeds=round(s['in_year_proc'], 2),
             still_held_qty=round(held, 4),
             sold=s['any_disp'] > 0,
+            declared=s['undeclared'] <= 1e-9,
+            event_ids=tuple(s['events']),
         ))
     out.sort(key=lambda r: (r.symbol, r.account))
     return out

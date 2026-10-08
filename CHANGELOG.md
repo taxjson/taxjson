@@ -43,6 +43,19 @@
   the other writers do since #9: it used the fixed `<file>.part`, so a
   leftover one (an interrupted export) stopped every later export with
   "File exists", and two exports of one file shared the temp file.
+- A spin-off elected with `--hint fmv_per_share=0` (shares that came at
+  no value, such as warrants distributed for nothing) is a declared $0
+  cost: the run lists it as an Info with its event id and how to change
+  it (`taxjson elect ACCOUNT --redo --event ID`), and it is no longer the
+  "$0 cost" Warning of the closing summary, a "$0-COST SHARES STILL
+  HELD" row of `taxjson find-missing-history`, a flag in `taxjson
+  spinoffs`, or ATTENTION in the checklist and quick-start. A $0 cost the
+  broker booked with no value saved is still a Warning.
+- The RBC, Questrade and Webull look-alike rename hint ("RBC symbol OLD
+  looks renamed to NEW") is no longer printed when a `.tt` line `RENAME
+  <date> OLD NEW` already declares the change: the run passes the
+  declared changes to the parser, and the `.sum` keeps a note naming the
+  line ("answered by inputs/<account>/renames.tt:N").
 - `taxjson slip-audit` and `--import-cra` (pre-release review):
   - a PDF holding two slips (pages saved together, a merged file) is
     read as two slips; it was one slip with the second slip's boxes
