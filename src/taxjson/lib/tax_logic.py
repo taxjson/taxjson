@@ -686,7 +686,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "closed with (or CASHOPEN lines), and computes nothing — "
                  "listing why — on a missing opening pool, an undeclared "
                  "move, a reconciliation gap or an overdraft in an "
-                 "account that does not reconcile.",
+                 "account that does not reconcile. It reads the exports "
+                 "of IB, RBC, Questrade, Kraken and Coinbase; an account "
+                 "of a broker whose export it does not read (Webull, the "
+                 "generic importer) that moves foreign cash is refused "
+                 "until its .tt cash lines are declared complete "
+                 "(`CASHBOOK <book> complete`), and the report lists "
+                 "those accounts.",
                  keys=("fx_cash_gains", "fx_cash_ledger",
                        "fx_cash_inflow_cost")),
         ]),
@@ -1494,10 +1500,18 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "keeps that sale's loss allowed, and no ACB is raised for "
                  "it (no double benefit); the replacement units it would "
                  "use stay used, so every other sale's denial is "
-                 "unchanged. A line naming no denied sale, or two, stops "
-                 "the run; each position is a Warning on every run and "
-                 "listed with the denial the rule would make (`taxjson "
-                 "sum` FILING POSITIONS, `wash-sales`, the checklist)."),
+                 "unchanged. The line names a whole sale: its units, when "
+                 "given, are the sale's total (one fill of a same-day "
+                 "sell-down names none). A line naming no denied sale, or "
+                 "two, or the same sale as another line (with and without "
+                 "units, by trade and by settlement date), stops the run; "
+                 "each position is a Warning on every run and listed with "
+                 "the denial the rule would make (`taxjson sum` FILING "
+                 "POSITIONS, `wash-sales` and its --explain trace, "
+                 "`audit`, `carryover`, `handoff`, the checklist) and "
+                 "noted on its Schedule 3 row in `form-export` (text, "
+                 "--json, --csv): the row claims the loss, its ACB not "
+                 "reduced by the denial."),
         ]),
         ("In-kind moves to and from registered plans", [
             Rule("CA-INKIND-01",
@@ -2423,7 +2437,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "(fx_cash_ledger = \"v2\", under audit) reads "
                  "conversions, deposits, withdrawals and statement "
                  "balances and computes nothing — listing why — instead "
-                 "of guessing.",
+                 "of guessing; an account of a broker whose export it "
+                 "does not read (Webull, the generic importer) that moves "
+                 "foreign cash is refused until its .tt cash lines are "
+                 "declared complete (`CASHBOOK <book> complete`).",
                  keys=("fx_cash_gains", "fx_cash_ledger",
                        "fx_cash_inflow_cost")),
         ]),
@@ -3160,10 +3177,19 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "replacement (no double benefit); the replacement shares "
                  "it would take stay matched to it, so every other loss's "
                  "verdict is unchanged. A line naming no disallowed sale, "
-                 "or two, stops the run; each position is a Warning on "
-                 "every run and listed with the disallowance §1091 would "
-                 "make (`taxjson sum` FILING POSITIONS, `wash-sales`, the "
-                 "checklist)."),
+                 "or two, or the same sale as another line, stops the "
+                 "run (the units, when given, are the sale's total); each "
+                 "position is a Warning on every run and listed with the "
+                 "disallowance §1091 would make (`taxjson sum` FILING "
+                 "POSITIONS, `wash-sales` and its --explain trace, "
+                 "`audit`, `wash-radar`, `carryover`, `handoff`, the "
+                 "checklist). On Form 8949 (`form-export`, every format) "
+                 "the row is the user's position — no code W, nothing in "
+                 "(g) — with a note; when the 1099-B reports a wash-sale "
+                 "amount in box 1g for that sale the row differs from it, "
+                 "and the Form 8949 instructions for a 1099-B amount "
+                 "believed incorrect apply (taxjson does not pick that "
+                 "code)."),
         ]),
         ("In-kind moves to and from retirement accounts", [
             Rule("US-INKIND-01",

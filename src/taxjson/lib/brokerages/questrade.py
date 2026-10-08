@@ -2524,3 +2524,110 @@ class QuestradeBrokerage(BaseBrokerage):
             tx['multiplier'] = mult
             tx['contract_size_basis'] = 'assumed'
         return tx
+
+
+# ---------------------------------------------------------- cash events
+
+# The cash rows the position parser leaves out (recognized non-events):
+# deposits and withdrawals (pre-release review M8 — the FX-on-cash
+# ledger v2 computed a Questrade account's figure without them).
+_QT_CASH_MOVE_CODES = ('CON', 'DEP', 'EFT', 'EWD', 'WDR', 'CTR')
+_QT_CASH_MOVE_TYPES = ('Deposits', 'Withdrawals', 'Contributions')
+
+
+def questrade_cash_events(path) -> List[Dict[str, Any]]:
+    """The cash events of one Questrade activity export for the FX-on-
+    cash ledger v2 (lib/cash_events, tax-logic CA-FX-07): each FX
+    conversion (FXT — Questrade prints its two legs as two rows of one
+    account and day, the currency left negative and the one received
+    positive) as one FXCONV; each deposit, withdrawal or contribution
+    (CON, DEP, EFT, EWD, WDR, CTR) and each cash-only transfer journal
+    (TF6 with no units) as a CASHMOVE; stock-lending income (LFJ, which
+    the books do not carry) as a FLOW. A conversion leg with no other
+    leg that day is a CASHMOVE the user declares. The export carries no
+    cash balance: a CASHBAL .tt line gives the ledger one."""
+    from taxjson.bin.taxjson_brokerage import hash_broker_account
+    from taxjson.lib import cash_events as CE
+    name = shown_name(path)
+    out: List[Dict[str, Any]] = []
+    legs: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
+
+    def _day(row, col, lineno):
+        raw = (row.get(col) or '').strip()
+        dt = BaseBrokerage.parse_date(raw, *_DATE_FMTS) if raw else None
+        if dt is None and col == 'Transaction Date':
+            raise BrokerageParseError(f"{name} line {lineno}: {col} "
+                                      f"{raw!r} is not a date")
+        return dt.strftime('%Y-%m-%d') if dt else None
+
+    for lineno, row in _read_qt_rows(Path(path)):
+        action = _canon_action(row.get('Action'))
+        atype = (row.get('Activity Type') or '').strip()
+        sym = (row.get('Symbol') or '').strip()
+        try:
+            qty = parse_strict_number(row.get('Quantity'), field='Quantity',
+                                      where=f"{name} line {lineno}",
+                                      allow_blank=True, blank=0.0)
+            net = parse_strict_number(row.get('Net Amount'),
+                                      field='Net Amount',
+                                      where=f"{name} line {lineno}",
+                                      allow_blank=True, blank=0.0)
+        except (ValueError, BrokerageParseError):
+            continue            # the position parser names the row
+        cur = (row.get('Currency') or '').strip().upper()
+        if not cur or abs(net) < 0.005:
+            continue
+        is_fx = action == 'FXT' or atype == 'FX conversion'
+        is_move = (abs(qty) < 1e-9 and not sym
+                   and (atype in _QT_CASH_MOVE_TYPES
+                        or action in _QT_CASH_MOVE_CODES))
+        is_tf = (abs(qty) < 1e-9 and (action == 'TF6'
+                                      or atype == 'Transfers'))
+        is_lfj = action == 'LFJ'
+        if not (is_fx or is_move or is_tf or is_lfj):
+            continue
+        d = _day(row, 'Transaction Date', lineno)
+        s = _day(row, 'Settlement Date', lineno) or d
+        raw_acct = (row.get('Account #') or '').strip()
+        acct = hash_broker_account(raw_acct) if raw_acct else ''
+        where = f"{name}:{lineno}"
+        if is_fx:
+            legs.setdefault((acct, d, s), []).append(
+                {"cur": cur, "net": net, "where": where})
+            continue
+        if is_lfj:
+            ev = CE.flow(d, cur, net, settle=s, where=name, account=acct,
+                         desc="LFJ stock-lending income")
+        else:
+            ev = CE.move(d, cur, net, settle=s, where=name, account=acct,
+                         desc=action or atype)
+        ev['line_where'] = where
+        out.append(ev)
+    for (acct, d, s), ls in legs.items():
+        outs = [x for x in ls if x["net"] < 0]
+        ins = [x for x in ls if x["net"] > 0]
+        used: set = set()
+        for o in outs:
+            j = next((k for k, i in enumerate(ins) if k not in used
+                      and i["cur"] != o["cur"]), None)
+            if j is None:
+                ev = CE.move(d, o["cur"], o["net"], settle=s, where=name,
+                             account=acct,
+                             desc="FXT conversion leg with no other leg")
+                ev['line_where'] = o["where"]
+                out.append(ev)
+                continue
+            used.add(j)
+            ev = CE.conv(d, o["cur"], -o["net"], ins[j]["cur"],
+                         ins[j]["net"], settle=s, where=name, account=acct,
+                         desc="FXT")
+            ev['line_where'] = o["where"]
+            out.append(ev)
+        for k, i in enumerate(ins):
+            if k not in used:
+                ev = CE.move(d, i["cur"], i["net"], settle=s, where=name,
+                             account=acct,
+                             desc="FXT conversion leg with no other leg")
+                ev['line_where'] = i["where"]
+                out.append(ev)
+    return out

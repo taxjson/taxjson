@@ -380,7 +380,11 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
                           or is_option_symbol(str(g.get("symbol") or ""))),
         "warnings": [], "failures": [],
     }
-    for _k in ("lots", "term_split", "days_held_range", "note"):
+    for _k in ("lots", "term_split", "days_held_range", "note",
+               # A .tt ALLOWLOSS filing position on this sale (CA-SL-18
+               # / US-WASH-25): the trace showed "disallowed 0.00" and
+               # nothing else (pre-release review M7).
+               "loss_override"):
         if g.get(_k):
             ev[_k] = g[_k]
 
@@ -793,6 +797,10 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
         money("allowed gain", float(ev.get("gain") or 0))
     else:
         money("gain", float(ev.get("gain") or 0))
+    if isinstance(ev.get("loss_override"), dict):
+        from taxjson.lib.loss_overrides import note_text
+        _sec(out, paint, "POSITION", paint(
+            note_text(ev["loss_override"], country), "warn"))
 
     # ---- tie-out -----------------------------------------------------
     tie = ev.get("tie_out") or {}
@@ -1377,6 +1385,12 @@ def main(argv=None) -> int:
             if float(e.get("disallowed_amount") or 0) > TIE:
                 flags += "  " + paint(
                     f"WASH+{float(e['disallowed_amount']):.2f}",
+                    "warn")
+            if isinstance(e.get("loss_override"), dict):
+                # A filing position against the rule (.tt ALLOWLOSS).
+                flags += "  " + paint(
+                    f"ALLOWLOSS(rule: "
+                    f"{float(e['loss_override'].get('would_disallow') or 0):.2f})",
                     "warn")
             print(f"{paint((e['id'] or '')[:_idw].ljust(_idw), 'dim')}  "
                   f"{e['date']}  "

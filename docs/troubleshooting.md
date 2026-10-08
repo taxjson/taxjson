@@ -963,10 +963,31 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### `tjs fx-cash --ledger v2`: "FX on foreign cash: NOT COMPUTED for 2025, ledger v2 (opt-in, under audit) — 4 problems, first: no opening pool for margin/ib USD … ; no reportable figure"
 - **Check:** the report's NOT COMPUTED table lists each problem with its date, account (book) and amount, and the lines below it say what to add; `--cash-events` lists every conversion, move and balance the ledger read.
-- **Cause:** ledger v2 refuses instead of guessing: an account holds foreign cash at the start of the year with no cost (`opening`), a deposit or withdrawal nothing declares (`undeclared`), a statement balance the ledger does not reach within 1.00 (`reconcile`: a conversion or move it does not see), an account with activity and no balance to check against, an overdraft in an account that does not reconcile, a move between your own accounts that arrives before it leaves (`own`), or a missing FX rate.
-- **Fix:** add the `.tt` lines it names to a `.tt` file of the account's `inputs/` folder (docs/settings.md, `.tt` files: `CASHOPEN` once for the first year, `CASHMOVE … cost=` / `kept` / `proceeds=` / `own` / `spot` per move, `CASHBAL` for an export without balances, `CASHBOOK <book>` in a `.tt` file of a folder holding several broker accounts), then `tjs fx-cash --ledger v2` again; `fx_cash_inflow_cost = "spot"` takes the day's rate for undeclared deposits. Close the year with `fx_cash_ledger = "v2"` and the next year opens from the recorded pool.
+- **Cause:** ledger v2 refuses instead of guessing: an account holds foreign cash at the start of the year with no cost (`opening`), a deposit or withdrawal nothing declares (`undeclared`), a statement balance the ledger does not reach within 1.00 (`reconcile`: a conversion or move it does not see), an account with activity and no balance to check against, an overdraft in an account that does not reconcile, a move between your own accounts that arrives before it leaves (`own`), a missing FX rate, or an account of a broker whose export it reads no conversion, deposit or withdrawal from (`unread`: Webull, the generic importer).
+- **Fix:** add the `.tt` lines it names to a `.tt` file of the account's `inputs/` folder (docs/settings.md, `.tt` files: `CASHOPEN` once for the first year, `CASHMOVE … cost=` / `kept` / `proceeds=` / `own` / `spot` per move, `CASHBAL` for an export without balances, `CASHBOOK <book>` in a `.tt` file of a folder holding several broker accounts, `CASHBOOK <book> complete` once a Webull or generic account's conversions and moves are all lines), then `tjs fx-cash --ledger v2` again; `fx_cash_inflow_cost = "spot"` takes the day's rate for undeclared deposits. Close the year with `fx_cash_ledger = "v2"` and the next year opens from the recorded pool.
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/fx_cash_v2.py` — `build`, `headline`, `TOL`; `src/taxjson/lib/cash_events.py` — `parse_line`, `collect`, `Books`
+
+### `tjs fx-cash --ledger v2` computed a Questrade account's figure as a margin loan ("BORROWED"), or: "wb/webull: taxjson does not read webull's conversions, deposits or withdrawals from its export"
+- **Check:** `tjs fx-cash --ledger v2 --cash-events` lists what the ledger read for the account; the report's NOT READ FROM THE EXPORT table names the accounts whose exports give it nothing.
+- **Cause:** ledger v2 read no cash event from a Questrade, Webull or generic export, so an account that converted Canadian dollars before buying a US share read as one that borrowed them, and a figure was computed on it.
+- **Fix:** upgrade: Questrade's FX conversions (FXT), deposits, withdrawals, cash-only transfers and stock-lending income are read. For Webull and the generic importer write each conversion and move as a `.tt` line (`FXCONV`, `CASHMOVE`) in the account's folder, then `CASHBOOK <book> complete` (e.g. `CASHBOOK webull complete`) to say they are all there.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/brokerages/questrade.py` — `questrade_cash_events`; `src/taxjson/lib/cash_events.py` — `READERS`, `unread`; `src/taxjson/lib/fx_cash_v2.py` — `unread_books`
+
+### "Error: m.tt:4: malformed CASHBAL line — … — a line of the FX-on-cash ledger v2 only"
+- **Check:** the line named is a `FXCONV`, `CASHMOVE`, `CASHOPEN`, `CASHBAL` or `CASHBOOK` line.
+- **Cause:** the cash lines are read only by the opt-in ledger v2, but a malformed one stops `tjs run` under either ledger (a typo must not vanish).
+- **Fix:** correct the line to the form the message shows, or delete it if you do not use ledger v2.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_convert_tt.py` — `a line of the FX-on-cash ledger v2 only`
+
+### `tjs elect` says "No elections recorded: lira" although the run booked a spin-off there ("sheltered account lira: spin-off … booked at $0 cost")
+- **Check:** `tjs spinoffs` lists the event with election `sheltered_default`.
+- **Cause:** the sheltered default books the event without saving an election, and the listing read only the saved ones.
+- **Fix:** upgrade: `tjs elect` lists each such event as "sheltered default ($0 cost for the distributed shares)" (a merger: "the old shares' cost carried"); `tjs elect ACCOUNT --set ID=ELECTION` records another treatment.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_defaulted_events`, `_elections_section`
 
 ### `tjs checklist`: "[!] journals … 1 pending journal(s) between two listings (1 suggested, 0 refused) — `taxjson journals --pending`"
 - **Check:** `tjs journals --pending` lists each journal the books did not pool: its date, FROM → TO, quantity, broker, how it was found (a Questrade BRW journal, an RBC journal transfer, an IB InterDepot, a move across brokers), the reason, and the lines that settle it. `tjs journals` shows the joined ones too, each with the `TOBASE` / `JOURNAL` line that pools it.
@@ -1013,9 +1034,23 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### A superficial loss (US: a wash sale) taxjson denies that I want to claim: a replacement inside day 30 counted from the settlement date, outside it from the trade date
 - **Check:** `tjs wash-sales` lists the denial and its replacement; `tjs edge-cases` marks a replacement a few days from day 30 THE DATE BASIS DECIDES THIS ONE. In Canada the window is counted on settle dates whatever `tax_date` says (CA-SL-01); in the US on trade dates (US-WASH-01).
 - **Cause:** the engines apply the rule as the law's mechanical test, black and white. Taking a position against one denial is a filing decision only you (and your adviser) can make; taxjson never infers it.
-- **Fix:** add a line to a `.tt` file of the taxable account that sold: `ALLOWLOSS 2025-12-19 QZA.TO reason="the RRSP call was bought 32 days after the trade date"` (the sale's trade or settlement date, its symbol as `tjs wash-sales` spells it, and its units when two denied sales of the symbol share the day), then `tjs run`. The loss stays allowed and no ACB (US: basis) is raised for it; every run says so in one Warning, `tjs sum` lists it under FILING POSITIONS with the denial the rule would make, and the checklist's filing-positions step stays manual until you mark it done. Delete the line to apply the rule again. If the run stops with "Error: 1 .tt ALLOWLOSS line(s) name no single denied superficial loss", the line's date or symbol matches no denied sale (the message lists that day's trades in the account) or matches two (add the units sold).
+- **Fix:** add a line to a `.tt` file of the taxable account that sold: `ALLOWLOSS 2025-12-19 QZA.TO reason="the RRSP call was bought 32 days after the trade date"` (the sale's trade or settlement date, its symbol as `tjs wash-sales` spells it, and its units when two denied sales of the symbol share the day), then `tjs run`. The loss stays allowed and no ACB (US: basis) is raised for it; every run says so in one Warning, `tjs sum` lists it under FILING POSITIONS with the denial the rule would make, and the checklist's filing-positions step stays manual until you mark it done. `tjs form-export` notes the position on the sale's row (US: no code W), and `tjs audit`, `tjs wash-sales --explain`, `tjs carryover` and `tjs handoff` name it. Delete the line to apply the rule again. If the run stops with "Error: 1 .tt ALLOWLOSS line(s) name no single denied superficial loss", the line's date or symbol matches no denied sale (the message lists that day's trades in the account) or matches two (add the units sold).
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/loss_overrides.py` — `parse_line`, `problems`, `warning_message`; `src/taxjson/bin/taxjson_run.py` — `_read_loss_overrides`, `_say_loss_overrides`, `name no single`; `src/taxjson/lib/checklist.py` — `d_filing_positions`
+
+### "Error: 1 .tt ALLOWLOSS line(s) name no single denied superficial loss" with "names the same sale as inputs/margin/m.tt:3" or "60 units is one fill of the 100-unit sale"
+- **Check:** the message names both lines, or the sale's units; `tjs wash-sales` lists the denied sale.
+- **Cause:** a line names a WHOLE sale. Two lines naming one sale in different spellings (one with the units, one without; one by the trade date, one by the settlement date) are one position taken twice. The units, when given, are the sale's total: one same-day sell-down in several fills is one sale, and one fill's units used to override the whole sale.
+- **Fix:** keep one line per sale; write the sale's total units, or none. A `reason="..."` written after a `#` is part of the comment: put the reason before it.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/loss_overrides.py` — `problems`, `plan`, `parse_line`, `_comment_start`
+
+### `tjs form-export` (or `tjs audit`) shows an ALLOWLOSS sale as an ordinary loss: no note, "disallowed 0.00", and `tjs wash-sales --explain` says "no matching gains found"
+- **Check:** `tjs sum` lists the sale under FILING POSITIONS.
+- **Cause:** the return forms and the per-sale traces did not read the position the run recorded on the sale's rows (`loss_override`), so a claimed loss the rule would deny looked like any other loss.
+- **Fix:** upgrade. The Schedule 3 row's notes and the Form 8949 part say "filing position: ALLOWLOSS inputs/margin/m.tt:4, the superficial-loss rule would deny …" (`--json`: `filing_positions` / `filing_position`; `--csv`: the notes / note column; `--form txf` warns, its record carries no wash-sale amount); `tjs audit` has a POSITION line, `tjs wash-sales --explain` traces the sale, the US `tjs wash-radar` reads the loss as claimed. US: the 8949 row has no code W and nothing in (g); if the 1099-B reports box 1g for that sale, docs/tax-rules.md (US-WASH-25) says how the row differs.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_form_export.py` — `_filing_position`, `FILING_POSITION_NOTE_8949`; `src/taxjson/bin/taxjson_audit.py` — `loss_override`; `src/taxjson/lib/trace_format.py` — `filing_position_text`; `src/taxjson/bin/taxjson_wash_radar.py` — `_us_engine_losses`
 
 ### `tjs checklist`: "[!] inputs-frozen … latest activity 2025-12-31 — January 2026 is not in the books yet"
 - **Check:** the step's detail names the latest activity date (IB statements are checked per account).

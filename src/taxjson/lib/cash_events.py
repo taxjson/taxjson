@@ -29,7 +29,9 @@ moves and conversions; and `.tt` lines for whatever no export carries
         how: own | kept | spot | cost=<base> | proceeds=<base>
     CASHOPEN <date> <cur> <signed units> <base cost> [at=<book>]
     CASHBAL <date> <cur> <balance> [at=<book>]
-    CASHBOOK <book>     (whose cash the file's rows move)
+    CASHBOOK <book> [complete]  (whose cash the file's rows move;
+                        `complete`: the book's cash lines are all of its
+                        conversions, deposits and withdrawals)
 
 A CASHMOVE line that names a move a broker export carries (same account
 folder, date, currency and amount) DECLARES that move — what it was —
@@ -58,8 +60,15 @@ FORMS = {
     "CASHOPEN": "CASHOPEN <date> <currency> <signed units> <base cost> "
                 "[at=<book>]",
     "CASHBAL": "CASHBAL <date> <currency> <balance> [at=<book>]",
-    "CASHBOOK": "CASHBOOK <book>",
+    "CASHBOOK": "CASHBOOK <book> [complete]",
 }
+# The brokers whose exports' conversions, deposits and withdrawals the
+# ledger reads (`_extract`). A book of any other broker (Webull, the
+# generic importer) that moves foreign cash is refused until a
+# `CASHBOOK <book> complete` line says its .tt cash lines are all of
+# them (pre-release review M8).
+READERS = ("ib", "rbc_direct", "kraken", "coinbase", "questrade")
+COMPLETE = "complete"
 MOVE_HOW = ("own", "kept", "spot")
 
 # Parser ids (lib/brokerages/detect) -> the short name a book and an
@@ -130,12 +139,17 @@ def parse_line(line: str, source: str = "") -> Optional[Dict[str, Any]]:
     if kw == "CASHBOOK":
         # Which account's cash this file's rows move (a folder holding
         # several broker accounts): a standing fact of the file, no date.
-        if len(parts) != 2 or not _BOOK_RE.match(parts[1]):
+        # `complete`: every conversion, deposit and withdrawal of the
+        # book is a .tt line (a broker whose export taxjson does not read
+        # them, READERS).
+        if (len(parts) not in (2, 3) or not _BOOK_RE.match(parts[1])
+                or (len(parts) == 3 and parts[2] != COMPLETE)):
             raise CashLineError(f"{where}malformed CASHBOOK line — "
                                 f"expected `{FORMS[kw]}` (a book as "
                                 f"`taxjson fx-cash --ledger v2` prints "
                                 f"it: ib, rbc:3f2a, webull ...): {shown!r}")
         return {"kind": kw, "book_name": parts[1], "line": shown,
+                "complete": len(parts) == 3,
                 "where": source, "origin": "tt", "date": ""}
     keys: Dict[str, str] = {}
     toks: List[str] = []
@@ -450,6 +464,8 @@ class Books:
         self.file_accounts: Dict[Tuple[str, str], set] = {}
         # (label, .tt file name) -> the book its CASHBOOK line names
         self.tt_book: Dict[Tuple[str, str], str] = {}
+        # books a `CASHBOOK <book> complete` line declares complete
+        self.complete: set = set()
 
     def add(self, label: str, broker: str, account: str = "") -> None:
         self.seen.setdefault(label, {}).setdefault(broker, set()).add(
@@ -474,6 +490,20 @@ class Books:
             real = sorted(a for a in accts if a) or [""]
             for a in real:
                 out.append(self.name(label, broker, a))
+        return sorted(set(out))
+
+    def unread(self) -> List[Tuple[str, str]]:
+        """[(book, broker)] of every book whose broker's export the
+        ledger reads no cash event from (not in READERS)."""
+        out = []
+        for label in sorted(self.seen):
+            for broker in sorted(self.seen[label]):
+                if broker in READERS:
+                    continue
+                accts = sorted(a for a in self.seen[label][broker]
+                               if a) or [""]
+                for a in accts:
+                    out.append((self.name(label, broker, a), broker))
         return sorted(set(out))
 
     def for_file(self, label: str, file: str, account: str = ""
@@ -608,6 +638,8 @@ def collect(root: Path, cfg: Dict[str, Any], country: str,
                             f"cash; split the file")
         else:
             books.tt_book[k] = b
+        if b and ev.get("complete"):
+            books.complete.add(b)
     lines = [x for x in lines if x["kind"] != "CASHBOOK"]
     for ev in lines:
         if ev.get("at"):
@@ -638,4 +670,10 @@ def _extract(broker: str, path: Path, stable_cash: bool,
     if broker == "coinbase":
         from taxjson.lib.brokerages.coinbase import coinbase_cash_events
         return coinbase_cash_events(path, stable_cash)
+    if broker == "questrade":
+        from taxjson.lib.brokerages.questrade import questrade_cash_events
+        return questrade_cash_events(path)
+    # Webull and the generic importer: no reader (READERS) — the ledger
+    # refuses a book of theirs that moves foreign cash until a CASHBOOK
+    # line declares its .tt cash lines complete.
     return []
