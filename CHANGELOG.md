@@ -32,6 +32,13 @@
   one listing, its in-legs one, the units balance and the legs are within
   5 business days; otherwise no journal for any of them.
 
+- **`taxjson format-map --write` homes a dated RENAME where every
+  account keeps its `late=`**: when the default home would take the map
+  line's `late=` away from an account that relies on it, the line goes to
+  an account whose copy keeps every choice; when none does, the refusal
+  names each such account and the `.tt` line to add. An account that never
+  held the old ticker is no longer counted as changed.
+
 
 ## v0.24.0 (2026-10-07)
 

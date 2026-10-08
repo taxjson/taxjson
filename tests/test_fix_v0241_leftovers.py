@@ -13,6 +13,11 @@
 - 4: one rule for a broker reference several legs share (a journal the
   broker split over rows): the cross-listing join, the transfer-in
   arrivals and the missing-history walk agree on a 3-leg group.
+- 5: `format-map --write` homes a moved dated RENAME line where every
+  account's late= resolution is kept (an account relying on the map
+  line's event-level late=); when no home keeps it, the refusal names
+  the account and the line to add. An account that never held OLD is
+  not "changed" by the move.
 
 Every fixture is SYNTHETIC: invented QZ*/ZZX tickers and names, fake
 account ids (pii-ok: 55500001).
@@ -338,6 +343,111 @@ class TestSplitLegReferenceGroup(unittest.TestCase):
         self.assertEqual(ref_group_journal(
             [("A.TO", -6, "2025-01-02"), ("A.TO", -4, "2025-01-02"),
              ("A.U.TO", 10, "2025-01-03")]), ("A.TO", "A.U.TO", 10.0))
+
+
+
+# ------------------------------------------------------------------ 5
+
+_HOME = {"canada": ("TO", "CAD"), "usa": ("US", "USD")}
+
+
+def _bt(day, sym, qty, cur, price):
+    return (f"BUYSELL {day} 10:00:00 {sym} {qty} {cur} {price:.2f} "
+            f"{abs(qty) * price:.2f} 0.00\n")
+
+
+class TestFormatMapKeepsEveryLate(unittest.TestCase):
+    """ticker.map: `RENAME QZOLD QZNEW 2025-04-01 late=fold`. aa declares
+    the change late=separate in its own .tt line; bb (and cc) held QZOLD
+    and have late rows, relying on the map line's late=fold."""
+
+    def _files(self, x, cur, accts):
+        f = {"ticker.map": (f"RENAME QZOLD.{x} QZNEW.{x} 2025-04-01 "
+                            f"late=fold\n"),
+             "inputs/aa/a.tt": (
+                 _bt("2024-01-10", f"QZOLD.{x}", 10, cur, 10.0)
+                 + f"RENAME 2025-04-01 QZOLD.{x} QZNEW.{x} late=separate\n"
+                 + _bt("2025-05-06", f"QZOLD.{x}", 7, cur, 3.0)
+                 + _bt("2025-06-03", f"QZNEW.{x}", -10, cur, 11.0))}
+        for a, n in (("bb", 20), ("cc", 30)):
+            if a in accts:
+                f[f"inputs/{a}/{a}.tt"] = (
+                    _bt("2024-02-10", f"QZOLD.{x}", n, cur, 10.0)
+                    + _bt("2025-04-07", f"QZOLD.{x}", 5, cur, 10.0)
+                    + _bt("2025-06-03", f"QZNEW.{x}", -(n + 5), cur, 11.0))
+        if "ee" in accts:
+            # ee holds QZOLD too and says late=fold in its own line.
+            f["inputs/ee/e.tt"] = (
+                _bt("2024-03-10", f"QZOLD.{x}", 4, cur, 10.0)
+                + f"RENAME 2025-04-01 QZOLD.{x} QZNEW.{x} late=fold\n"
+                + _bt("2025-06-03", f"QZNEW.{x}", -4, cur, 11.0))
+        if "dd" in accts:
+            # dd never held QZOLD: only QZNEW, bought after the change.
+            f["inputs/dd/d.tt"] = _bt("2025-06-01", f"QZNEW.{x}", 3, cur,
+                                      10.0)
+        return f
+
+    def _project(self, td, country, accts):
+        x, cur = _HOME[country]
+        accounts = "".join(f'[accounts.{a}]\ntype = "taxable"\n\n'
+                           for a in accts)
+        root = projects_both(td, accounts=accounts,
+                             files=self._files(x, cur, accts))[country]
+        r = cli(root, "run", "--no-input", "--strict")
+        self.assertEqual(r.returncode, 0, _flat(r.stdout + r.stderr)[-3000:])
+        return root, x
+
+    def _sum(self, root):
+        r = cli(root, "sum", "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def _home_kept(self, country):
+        with tempfile.TemporaryDirectory() as td:
+            root, x = self._project(td, country, ("dd", "ee", "aa", "bb"))
+            before = self._sum(root)
+            w = cli(root, "format-map", "--write", "--no-backup")
+            self.assertEqual(w.returncode, 0, _flat(w.stdout + w.stderr))
+            self.assertIn(f"RENAME 2025-04-01 QZOLD.{x} QZNEW.{x} late=fold",
+                          (root / "inputs/bb/renames.tt").read_text())
+            self.assertIn("its line keeps every account's late= choice",
+                          _flat(w.stdout + w.stderr))
+            for a in ("dd", "ee", "aa"):
+                self.assertFalse((root / f"inputs/{a}/renames.tt").exists())
+            r = cli(root, "run", "--no-input", "--strict")
+            self.assertEqual(r.returncode, 0, _flat(r.stdout + r.stderr))
+            self.assertEqual(self._sum(root), before)
+
+    def test_canada_a_home_that_keeps_every_late(self):
+        self._home_kept("canada")
+
+    def test_usa_a_home_that_keeps_every_late(self):
+        self._home_kept("usa")
+
+    def test_no_home_keeps_it_names_the_line_to_add(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, x = self._project(td, "canada", ("aa", "bb", "cc"))
+            before = self._sum(root)
+            w = cli(root, "format-map", "--write", "--no-backup")
+            self.assertNotEqual(w.returncode, 0)
+            out = _flat(w.stdout + w.stderr)
+            line = f"RENAME 2025-04-01 QZOLD.{x} QZNEW.{x} late=fold"
+            self.assertRegex(out, rf"account (bb|cc): the ticker change "
+                                  rf"QZOLD.{x} -> QZNEW.{x} is booked "
+                                  rf"2025-04-01 late=fold now \(ticker.map's "
+                                  rf"late=, the account having no line of "
+                                  rf"its own\)")
+            self.assertIn(f"add `{line}` to inputs/", out)
+            # Adding the line it names to that account settles it.
+            acct = "cc" if "add `" + line + "` to inputs/cc" in out else "bb"
+            (root / f"inputs/{acct}/own.tt").write_text(line + "\n")
+            r = cli(root, "run", "--no-input", "--strict")
+            self.assertEqual(r.returncode, 0, _flat(r.stdout + r.stderr))
+            w = cli(root, "format-map", "--write", "--no-backup")
+            self.assertEqual(w.returncode, 0, _flat(w.stdout + w.stderr))
+            r = cli(root, "run", "--no-input", "--strict")
+            self.assertEqual(r.returncode, 0, _flat(r.stdout + r.stderr))
+            self.assertEqual(self._sum(root), before)
 
 
 if __name__ == "__main__":
