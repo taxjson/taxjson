@@ -6007,7 +6007,8 @@ def ib_cash_events(path) -> List[Dict[str, Any]]:
     Cash Report (Starting Cash at the end of the day before the period,
     Ending Cash at its last day) and Forex Balances as a cross-check
     (`note` events). Rows carry no account: a combined statement's Cash
-    Report is one balance."""
+    Report is one balance (no Account column), so its accounts are one
+    book — said in a `note` event naming them by hashed id."""
     from taxjson.lib import cash_events as CE
     from taxjson.lib.brokerages.base import read_broker_text
     name = shown_name(path)
@@ -6017,6 +6018,9 @@ def ib_cash_events(path) -> List[Dict[str, Any]]:
     period = None
     cash: Dict[Tuple[str, str], float] = {}
     fxbal: Dict[str, float] = {}
+    # The broker accounts the statement covers (Accounts Included, the
+    # rows' Account column): a consolidated statement is one book.
+    members: set = set()
 
     def _n(v: str, what: str, where: str) -> float:
         return parse_strict_number(v, field=what, where=where,
@@ -6034,6 +6038,14 @@ def ib_cash_events(path) -> List[Dict[str, Any]]:
         h = headers.get(sec) or []
         d = dict(zip(h, row[2:]))
         where = f"{name}:{lineno}"
+        _a = (d.get('Account') or '').strip()
+        if _a and 'total' not in _a.lower():
+            members.add(_a)
+        if sec == 'Account Information' \
+                and d.get('Field Name') == 'Accounts Included':
+            members |= {a.strip() for a in
+                        (d.get('Field Value') or '').split(',')
+                        if a.strip()}
         if sec == 'Statement' and d.get('Field Name') == 'Period':
             period = _ib_period(d.get('Field Value', ''))
         elif sec == 'Trades' and d.get('Asset Category') == 'Forex' \
@@ -6100,6 +6112,25 @@ def ib_cash_events(path) -> List[Dict[str, Any]]:
             if _IB_CUR_RE.match(cur):
                 fxbal[cur] = fxbal.get(cur, 0.0) + _n(
                     d.get('Quantity', ''), 'Quantity', where)
+    if len(members) > 1:
+        # Its Cash Report has no Account column: one combined balance,
+        # so the ledger keeps the statement's accounts in one book — a
+        # debt in one and cash in another net out. Said, not silent
+        # (pre-release review; a per-account split needs the accounts'
+        # own statements).
+        from taxjson.bin.taxjson_brokerage import hash_broker_account
+        ids = ", ".join(sorted("#" + hash_broker_account(a)[:4]
+                               for a in members))
+        _nd = period[1].isoformat() if period is not None else ""
+        out.append({"kind": "NOTE", "date": _nd, "settle": _nd,
+                    "currency": "", "where": name, "origin": "broker",
+                    "text": f"{name}: one IB statement of "
+                            f"{len(members)} accounts ({ids}) is one cash "
+                            f"book — its Cash Report is their combined "
+                            f"balance, so a debt in one account and cash "
+                            f"in another net out (each account's own "
+                            f"statement, exported apart, keeps them "
+                            f"apart)"})
     if cash and period is None:
         raise BrokerageParseError(
             f"{name}: a Cash Report but no Statement Period — the "

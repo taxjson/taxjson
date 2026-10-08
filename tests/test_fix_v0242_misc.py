@@ -258,6 +258,37 @@ class TestUnreadBroker(unittest.TestCase):
             CE.parse_line("CASHBOOK webull done", "c.tt:1")
 
 
+class TestCombinedIbStatement(unittest.TestCase):
+
+    @rule("CA-FX-07")
+    def test_one_book_said(self):
+        from test_fix_fx_cash_v2 import IB_STATEMENT
+        from taxjson.lib.brokerages.ib_extractor import ib_cash_events
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "ib.csv"
+            p.write_text(IB_STATEMENT)
+            evs = ib_cash_events(p)
+            one = Path(td) / "one.csv"
+            one.write_text(IB_STATEMENT.replace("U55X02", "U55X01"))
+            evs_one = ib_cash_events(one)
+        note, = [e for e in evs if e["kind"] == "NOTE"]
+        self.assertIn("one IB statement of 2 accounts (#", note["text"])
+        self.assertIn("is one cash book — its Cash Report is their "
+                      "combined balance", note["text"])
+        self.assertNotIn("U55X0", note["text"])
+        self.assertEqual([e for e in evs_one if e["kind"] == "NOTE"], [])
+        # The ledger shows it as a note.
+        b = CE.Books()
+        b.add("m", "ib", "")
+        for e in evs:
+            e.update(label="m", broker="ib", file="ib.csv", book="m/ib")
+        doc = V2.build([], {"events": evs, "lines": [], "books": b,
+                            "problems": []}, "CAD", 2025,
+                       lambda c, d: 1.35, country="canada")
+        self.assertTrue(any("one IB statement of 2 accounts" in n
+                            for n in doc["notes"]))
+
+
 # ------------------------------------------------------------- the lows
 
 class TestMalformedCashLine(unittest.TestCase):

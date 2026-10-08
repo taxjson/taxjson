@@ -123,7 +123,8 @@
   export gives the ledger no cash event (Webull, the generic importer)
   and that moves foreign cash is refused until a `CASHBOOK <book>
   complete` line says its `.tt` conversions and moves are all there; the
-  report lists those accounts.
+  report lists those accounts. A combined IB statement of several
+  accounts is said to be one cash book (its Cash Report is one balance).
 - A malformed FXCONV / CASHMOVE / CASHOPEN / CASHBAL / CASHBOOK line
   still stops `taxjson run`, and now says it is read only by ledger v2.
 - `taxjson elect` lists a sheltered account's spin-off or merger booked
