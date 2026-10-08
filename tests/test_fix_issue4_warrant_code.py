@@ -155,7 +155,6 @@ class TestDesignatorsOverAllDescriptions(unittest.TestCase):
         self.assertFalse(agree({'~WARRANT'}, set())[0])
         self.assertFalse(agree(set(), {'~WARRANT'})[0])      # vice versa
         self.assertFalse(agree({'~RIGHT'}, {'~WARRANT'})[0])
-        self.assertFalse(agree({'~UNIT'}, set())[0])
         self.assertFalse(agree({'~PREFERRED'}, set())[0])
         self.assertFalse(agree({'~B'}, set())[0])
         self.assertFalse(agree({'~B'}, {'~A'})[0])

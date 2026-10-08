@@ -206,7 +206,7 @@ rate. `stage_currency_rates` builds the project's rates file by calling
 `taxjson-to-base-curr` per source currency (Bank of Canada, with fallbacks);
 the rates are cached in the home folder.
 
-- `src/taxjson/bin/taxjson_run.py` — `stage_currency_rates`, `_rates_coverage_stale`, `_raw_align_adjust_currency`, `_home_currency`: the run's rate file, its freshness, and ADJUST rows restated in the pool's currency for the raw holdings books.
+- `src/taxjson/bin/taxjson_run.py` — `stage_currency_rates`, `_rates_coverage_stale`, `_raw_align_adjust_currency`, `_home_currency`: the run's rate file, its freshness, and ADJUST rows (and a purchase whose `listing_currency` is not its cash's, a Questrade REI) restated in the pool's currency for the raw holdings books.
 - `src/taxjson/bin/to_base_curr.py` — `build_rates`, `fetch_boc`, `fetch_boc_noon`, `fetch_yahoo`, `refresh_boc`, `resolve_rows`, `CACHE_FILE`: daily rates for one currency pair.
 - `src/taxjson/bin/taxjson_convert_currency.py` — `main`, `convert_transaction`, `get_rate_for_date`, `load_exchange_rates`, `MissingRateError`, `abort_if_currency_uncovered`, `fallback_rows`, `emit_fallback_summary`, `rate_source_summary`, `default_rate_for`: converting a book; rows priced with a fallback rate, and the summary of rate sources.
 - `src/taxjson/lib/json_cache.py` — `save_json_cache`: atomic, locked saves of the shared price and rate caches.

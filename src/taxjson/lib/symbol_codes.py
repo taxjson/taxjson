@@ -41,8 +41,8 @@ before the account is parsed, in this order, and records the evidence:
    candidate, with its GLOBAL line, when one exists but is not
    certain).
 
-In every step a code's kind designators (WARRANT, RIGHT, UNIT,
-PREFERRED) and class letter are read over ALL of its descriptions
+In every step a code's kind designators (WARRANT, RIGHT, PREFERRED;
+never UNIT, which trusts and funds use in their wording) and class letter are read over ALL of its descriptions
 (code_designators) and a listing's over all its names: they must agree
 (designators_agree) — one plain-worded row of a warrant code never makes
 it the common, and a plain code never takes a warrant listing.
@@ -541,11 +541,19 @@ def _marks(tokens: Iterable[str]) -> frozenset:
 
 
 # The designators that say what KIND of security a name is — a warrant,
-# a right, a unit, a preferred share — and the class letter: a code's
-# are read over ALL of its descriptions (code_designators), a listing's
-# over all its names, and they must agree (designators_agree; GitHub
-# issue #4: one plain-worded row of a warrant code matched the common).
-_KIND_MARKS = frozenset(("~WARRANT", "~RIGHT", "~UNIT", "~PREFERRED"))
+# a right, a preferred share — and the class letter: a code's are read
+# over ALL of its descriptions (code_designators), a listing's over all
+# its names, and they must agree (designators_agree; GitHub issue #4:
+# one plain-worded row of a warrant code matched the common).
+# UNIT / UNITS is no kind here: a trust, REIT, fund, ETF or LP is
+# routinely worded "TRUST UNITS" / "UNITS DIST ON ..." on some rows and
+# not on others, so the word read over ALL of a code's descriptions says
+# nothing about which security the code is. A SPAC unit (a share-and-
+# warrant bundle) is told apart by its bundle wording instead ("UNIT 1
+# CL A & 1/2 WT": the warrant word and the class letter count), never by
+# the word UNIT. (Two names compared word for word — names_agree — still
+# need UNIT on both or neither.)
+_KIND_MARKS = frozenset(("~WARRANT", "~RIGHT", "~PREFERRED"))
 # A Questrade spinoff / rights leg's event wording: the security's own
 # name is what comes before it ("WTS QZD DEV CORP WT EXP PENDING
 # SPINOFF ON 500 SHS FROM SEC# ... <PARENT NAME> REC ..." — the parser's
@@ -569,15 +577,20 @@ def questrade_own_name(desc: str) -> str:
 
 
 def code_designators(descriptions: Iterable[str]) -> frozenset:
-    """The kind designators (_KIND_MARKS: WARRANT, RIGHT, UNIT,
-    PREFERRED) and class letters stated ANYWHERE among a code's
-    Questrade descriptions — each read as the security's own name and as
-    the parser's name (questrade_own_name, questrade_name). One row
-    worded without them ('QZD DEVELOPMENT CORP SPINOFF ON ...') does not
-    make a warrant code a common share."""
+    """The kind designators (_KIND_MARKS: WARRANT, RIGHT, PREFERRED) and
+    class letters stated ANYWHERE among a code's Questrade descriptions.
+    One row worded without them ('QZD DEVELOPMENT CORP SPINOFF ON ...')
+    does not make a warrant code a common share. Each description is
+    read as the security's own name (questrade_own_name); a spinoff /
+    rights leg's ONLY by its own name — the parser's name for it
+    (questrade_name) is the PARENT's, whose class letter is not the
+    spun-off security's. Any other row also by the parser's name."""
     out: set = set()
     for d in descriptions:
-        for nm in {questrade_name(d), questrade_own_name(d)}:
+        nms = {questrade_own_name(d)}
+        if not _QT_LEG_WORDING_RE.search(" ".join(str(d or "").split())):
+            nms.add(questrade_name(d))
+        for nm in nms:
             out |= _kind_marks(_marks(name_tokens(nm)))
     return frozenset(out)
 
@@ -594,7 +607,7 @@ def listing_designators(names: Iterable[Tuple[str, ...]]) -> frozenset:
 def designators_agree(code: Iterable[str], listing: Iterable[str],
                       mode: str = "name_only") -> Tuple[bool, str]:
     """(agree, why) for a code's designators (code_designators) against
-    a listing's (listing_designators). The kinds (warrant, right, unit,
+    a listing's (listing_designators). The kinds (warrant, right,
     preferred) must be EQUAL — a code stating one never resolves to a
     listing stating none, and vice versa. Class letters: equal
     (mode="name_only", the in-account match); in transfer pairing

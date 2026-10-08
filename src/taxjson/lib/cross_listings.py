@@ -386,15 +386,37 @@ def lead_words(key: Iterable[str]) -> frozenset:
     return frozenset(out)
 
 
+def _run_ons(key: Iterable[str]) -> frozenset:
+    """The company words of a name (name_tokens' core) run together from
+    the start, word by word: "OPEN QZX CORP" -> {OPEN, OPENQZX}, "QZ-TEL
+    CORP" -> {QZ, QZTEL} — one company spelled with or without its
+    spaces and hyphens shares one (only those of 3+ characters)."""
+    from taxjson.lib.symbol_codes import name_tokens
+    out, acc = set(), ""
+    for w in name_tokens(" ".join(key)):
+        if w.startswith("~"):
+            continue
+        acc += w
+        if len(acc) >= 3 and not acc.isdigit():
+            out.add(acc)
+    return frozenset(out)
+
+
 def companies_differ(a: Iterable[str], b: Iterable[str]) -> bool:
     """Two names (exact_name keys) clearly name different companies:
     each has leading company words (lead_words) and they share none
-    ("QZREALTY TRUST INC" vs "SAMPLEX US DLR CURRENCY ETF"). A shared
-    word — the same issuer, a rebranded fund ("QZOLD U S DLR CURRENCY
-    ETF" / "QZNEW US DLR CURRENCY ETF"), or a name too short to tell —
-    is inconclusive, never "different"."""
+    ("QZREALTY TRUST INC" vs "SAMPLEX US DLR CURRENCY ETF"), nor do
+    their words run together from the start ("OPEN QZX CORP" and
+    "OPENQZX CORP", "QZ-TEL CORP" and "QZTEL CORP": one company two
+    brokers space differently; _run_ons). A shared word — the same
+    issuer, a rebranded fund ("QZOLD U S DLR CURRENCY ETF" / "QZNEW US
+    DLR CURRENCY ETF"), or a name too short to tell — is inconclusive,
+    never "different": the names are then compared word for word
+    (_names_verdict), "not equal — verify" when they are not."""
     la, lb = lead_words(a), lead_words(b)
-    return bool(la) and bool(lb) and not (la & lb)
+    if not la or not lb or la & lb:
+        return False
+    return not (_run_ons(a) & _run_ons(b))
 
 
 def business_days(a: _date, b: _date) -> int:
@@ -735,7 +757,9 @@ UNPROVEN = "unproven"
 
 
 def receipt_why(symbol: str, names: Iterable[Tuple[str, ...]] = (),
-                written: str = "") -> str:
+                written: str = "",
+                other_names: Iterable[Tuple[str, ...]] = (),
+                other_written: str = "") -> str:
     """Why `symbol` is a depositary receipt for a journal's evidence
     ("" when it is not): written on a venue that lists receipts under
     the underlying's ticker (markets.toml `receipts = true`: a CDR on
@@ -743,19 +767,56 @@ def receipt_why(symbol: str, names: Iterable[Tuple[str, ...]] = (),
     a Canadian venue into .TO), or a name in the exports with a receipt
     word ([lists] receipt_words: "... CDR"). A receipt is its own
     security, never one root with the share it holds (v0.24.1
-    leftovers, 2)."""
+    leftovers, 2).
+
+    The evidence tells two listings APART, so it counts only when the
+    other listing does not carry it too: the venue only when the other
+    (`other_written`) is written on another venue that lists no
+    receipts (a NEO ETF's CAD and USD units, QZG.NE and QZG.U.NE, are
+    two lines of one fund), a receipt word inside the company's name
+    (_inside_name) only when no name of the other (`other_names`)
+    states one (a company named "QZX SPONSORED HLDGS INC" on both
+    sides; v0.24.1 review, M2 / L2). A receipt word after the name
+    ("... INC CDR") always counts."""
     from taxjson.lib.markets import (receipt_suffixes, receipt_words,
                                      suffix_of)
     w = str(written or "").upper()
-    if w and suffix_of(w) in receipt_suffixes():
+    ow = str(other_written or "").upper()
+    rs = receipt_suffixes()
+    if w and suffix_of(w) in rs and not (ow and suffix_of(ow) in rs):
         return f"{w} is written on a venue that lists depositary receipts"
     words = receipt_words()
+    other_has = any(set(n) & words for n in other_names)
     for n in sorted(names):
         hit = sorted(set(n) & words)
-        if hit:
-            return (f"{symbol} is named as a depositary receipt "
-                    f"({hit[0]})")
+        if not hit:
+            continue
+        if other_has and all(_inside_name(n, w) for w in hit):
+            continue        # a word of the company's name, both sides
+        return (f"{symbol} is named as a depositary receipt "
+                f"({hit[0]})")
     return ""
+
+
+def _inside_name(key: Tuple[str, ...], word: str) -> bool:
+    """`word` sits inside the company's name: a corporate-form word
+    (INC, CORP, PLC ...) follows it ("QZX SPONSORED HLDGS INC"), unlike
+    a receipt designator after the name ("QZX PLATFORMS INC CDR", "QZX
+    PLC SPONSORED ADR")."""
+    from taxjson.lib.symbol_codes import _FORM
+    k = list(key)
+    return any(w in _FORM and w != "THE"
+               for i, x in enumerate(k) if x == word for w in k[i + 1:])
+
+
+def _receipt_between(a: str, na: Iterable[Tuple[str, ...]], wa: str,
+                     b: str, nb: Iterable[Tuple[str, ...]], wb: str
+                     ) -> str:
+    """receipt_why of either of two listings, each judged against the
+    other."""
+    na, nb = list(na), list(nb)
+    return (receipt_why(a, na, wa, nb, wb)
+            or receipt_why(b, nb, wb, na, wa))
 
 
 def shown_apart(a: str, b: str,
@@ -769,9 +830,9 @@ def shown_apart(a: str, b: str,
     `ticker-map --suggest`'s conditional hints)."""
     from taxjson.lib.markets import is_canadian_listing
     na, nb = names.get(a, set()), names.get(b, set())
-    for sym, ns in ((a, na), (b, nb)):
+    for sym, ns, other, ons in ((a, na, b, nb), (b, nb, a, na)):
         if is_canadian_listing(sym):
-            why = receipt_why(sym, ns, sym)
+            why = receipt_why(sym, ns, sym, ons, other)
             if why:
                 return why
     if na and nb and all(companies_differ(x, y) for x in na for y in nb):
@@ -797,8 +858,7 @@ def declared_verdict(frm: str, to: str,
     nx, ny = names.get(frm, set()), names.get(to, set())
     if nx and ny and all(companies_differ(a, b) for a in nx for b in ny):
         return DIFFERENT
-    receipt = (receipt_why(frm, nx, written[0])
-               or receipt_why(to, ny, written[1]))
+    receipt = _receipt_between(frm, nx, written[0], to, ny, written[1])
     if listing_root(frm) == listing_root(to) and not receipt:
         return ""
     why = ""
@@ -982,10 +1042,9 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
                 _refuse(p, UNPROVEN, verdict)
             continue
         frm, to = tobase_direction(o.symbol, i.symbol, base_currency)
-        receipt = bool(receipt_why(o.symbol, names.get(o.symbol, ()),
-                                   written[0])
-                       or receipt_why(i.symbol, names.get(i.symbol, ()),
-                                      written[1]))
+        receipt = bool(_receipt_between(
+            o.symbol, names.get(o.symbol, ()), written[0],
+            i.symbol, names.get(i.symbol, ()), written[1]))
         joined.append(Pair(o, i, frm, to, journal="tt",
                            extra={"where": j.where,
                                   **({"receipt": True} if receipt
@@ -1153,7 +1212,14 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
                     and not ({frozenset((o.symbol, i.symbol)),
                               frozenset((i.symbol, alt)),
                               frozenset((o.symbol, alt))} & apart)):
-                p = Pair(o, i, i.symbol, alt, journal=journal,
+                # The base currency's listing is kept (tobase_direction),
+                # unless that makes a listing the map already renames the
+                # line's FROM (one rename per symbol): the in-leg then
+                # joins it.
+                jf, jt = tobase_direction(i.symbol, alt, base_currency)
+                if jf == alt and alt in renames:
+                    jf, jt = i.symbol, alt
+                p = Pair(o, i, jf, jt, journal=journal,
                          names=((o.raw_name, i.raw_name) if journal else
                                 (shown.get(min(nx), "") if nx else "",
                                  shown.get(min(ny), "") if ny else "")),
@@ -1162,9 +1228,12 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
                 continue
             # The user's map decides (listed by `taxjson journals` when
             # the pair is a journal, not a coincidence of two companies).
+            # `verdict`: whether the legs' names agree (map_split warns
+            # only for those).
             if not ambiguous and (verdict != DIFFERENT or brokered):
                 _refuse(Pair(o, i, frm, to, journal=journal,
-                             names=(o.raw_name, i.raw_name)),
+                             names=(o.raw_name, i.raw_name),
+                             extra={"verdict": verdict}),
                         *_map_reason(o.symbol, i.symbol))
             continue
         if verdict == DIFFERENT:
@@ -1557,14 +1626,19 @@ def joined_note(account: str, joined: Iterable[Pair],
                         f"to ticker.map")
             continue
         if p.extra.get("map"):
+            # The in-leg's other listing (the pair's other symbol), and
+            # what the map's line says: it books the out-leg as that
+            # listing, or that listing as the out-leg.
+            alt = p.to if p.frm == p.into.symbol else p.frm
+            says = (f"{alt} as {p.out.symbol}"
+                    if p.extra["map"] == p.out.symbol
+                    else f"{p.out.symbol} as {p.extra['map']}")
             items.append(f"{p.out.symbol} ↔ {p.into.symbol} (transfer "
-                         f"{p.out.date}; ticker.map books {p.out.symbol} "
-                         f"as {p.extra['map']}, so {p.into.symbol} is "
-                         f"booked as {p.to})")
+                         f"{p.out.date}; ticker.map books {says}, so "
+                         f"{p.into.symbol} joins {alt})")
             undo.append(f"- {p.out.symbol} ↔ {p.into.symbol}: the two legs "
-                        f"of one move, and the map's line says "
-                        f"{p.out.symbol} is {p.extra['map']}: "
-                        f"{p.into.symbol} joins its other listing {p.to} "
+                        f"of one move, and the map's line books {says}: "
+                        f"{p.into.symbol} joins its other listing {alt} "
                         f"in the base-currency books (`TOBASE "
                         f"{p.frm} {p.to}`); if they are not one security, "
                         f"add `DISTINCT {p.out.symbol} {p.into.symbol}` to "
@@ -1605,25 +1679,36 @@ def joined_note(account: str, joined: Iterable[Pair],
 
 
 def map_split(refused: Iterable[Pair], map_named: Iterable[str],
-              map_renames: Optional[Dict[str, str]] = None
+              map_renames: Optional[Dict[str, str]] = None,
+              map_distinct: Iterable[Iterable[str]] = ()
               ) -> List[Tuple[Pair, str, str, str]]:
     """The pairs the user's map refused ("map", analyze) whose legs the
     map books as two different symbols — each leg is then left unpaired:
     the units leave one security and arrive in another. [(pair, the
     out-leg as booked, the in-leg as booked, the ticker.map line that
     books them as one)] — the line maps the leg no line names onto the
-    other leg as booked; "" when the map names both."""
+    other leg as booked; "" when the map names both. Only pairs whose
+    legs' names agree (analyze's verdict "": a quantity and a date in
+    common with an unrelated or unnamed leg are no move), and none a
+    `DISTINCT` line keeps apart (the legs, or the legs as booked)."""
     named = {s.upper() for s in map_named}
     ren = {str(k).upper(): str(v).upper()
            for k, v in (map_renames or {}).items()}
+    apart = {frozenset(str(x).upper() for x in pair)
+             for pair in map_distinct}
     out: List[Tuple[Pair, str, str, str]] = []
     for p in refused:
         if p.extra.get("refused") != "map":
             continue
+        if p.extra.get("verdict"):
+            continue                    # the names do not show one move
         eo = ren.get(p.out.symbol, p.out.symbol)
         ei = ren.get(p.into.symbol, p.into.symbol)
         if eo == ei:
             continue                    # the map books them as one
+        if {frozenset((p.into.symbol, eo)), frozenset((p.out.symbol, ei)),
+                frozenset((eo, ei))} & apart:
+            continue                    # the user keeps them apart
         if p.into.symbol not in named:
             line = f"TOBASE {p.into.symbol} {eo}"
         elif p.out.symbol not in named:

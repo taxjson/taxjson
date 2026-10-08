@@ -66,8 +66,9 @@
   US and a Canadian listing that share a root are still a MAP-GAP
   candidate, but not when the Canadian line is a depositary receipt (a
   CDR or ADR word in its name, or a receipt venue) or the two names share
-  no company word — such a pair needs no `DISTINCT` line, and US-LISTING
-  no longer suggests holding it. The MAP-GAP message says whether the
+  no company word, even with spaces and hyphens set aside ("OPEN QZX" and
+  "OPENQZX" stay a candidate, to verify) — such a pair needs no
+  `DISTINCT` line, and US-LISTING no longer suggests holding it. The MAP-GAP message says whether the
   names agree ("carry the same name … add `TOBASE`; if not, `DISTINCT`")
   or were not compared (verify first); `reports/crosslistings.rpt`
   and `ticker-map --suggest`'s conditional hints follow the same rule.
@@ -96,15 +97,20 @@
   registered account, a later sale left out of every total in a taxable one,
   and nothing on the console. The map's renames now apply to the out-leg
   first, and the in-leg is joined to the listing the map books the out-leg
-  as. A transfer pair the map books as two different symbols is a Warning
-  naming both legs and the line that books them as one; `run --strict`
-  stops on it.
+  as (keeping the base currency's listing, as any join does). A transfer
+  pair the map books as two different symbols is a Warning naming both
+  legs and the line that books them as one; `run --strict` stops on it —
+  only when the legs' names agree, and never for a pair a `DISTINCT` line
+  keeps apart.
 
 - **A Questrade internal code of a spun-off warrant no longer resolves to the
   common stock** (GitHub issue #4). A code whose descriptions state a
-  warrant, right, unit, preferred share or class letter anywhere is never
+  warrant, right, preferred share or class letter anywhere is never
   booked as a listing whose name states none (and the other way round): one
-  plain-worded row no longer decides. The account's own later trade under the
+  plain-worded row no longer decides. "UNITS" is not such a word (a trust's
+  or fund's "UNITS DIST ON ..." row would have kept its code from the trust's
+  listing, and the sale out of every total), and a spun-off code is read by
+  its own name, never its parent's class letter. The account's own later trade under the
   real ticker, described like the code's rows, resolves the code first. The
   corporate-action stage books a spinoff chain under the code as the
   symbol-code stage resolved it, so the run no longer prints a resolution and
@@ -125,7 +131,11 @@
   `QZG.NE`; marked in markets.toml) or named as a receipt in the exports
   ("... CDR") is its own security, so sharing the root QZG with `QZG.US`
   no longer counts as evidence: the names must agree, else the run stops
-  naming the line.
+  naming the line. Only one side's receipt evidence counts: two lines both
+  on Cboe Canada (an ETF's CAD and USD units, `QZG.NE` / `QZG.U.NE`) or two
+  names that both carry a receipt word inside the company's name ("QZX
+  SPONSORED HLDGS INC") are not told apart by it (also in `taxjson
+  scan`); a receipt word after the name ("... INC CDR") still counts.
 
 - **A `.tt` JOURNAL line can say it is a separate journal**: a trailing
   `separate` (`JOURNAL 2025-05-07 QZD.TO QZD.U.TO 1500 separate`) books the
@@ -163,7 +173,9 @@
   same broker files that security's TSX listing on USD rows, the units that
   came into the account on USD rows by a transfer or a reinvestment are
   read as `ROOT.TO` too (a purchase on a USD trade row keeps the US
-  listing).
+  listing). The reinvestment's cash is restated in the listing's currency
+  in the native-currency books, so the holdings report is still written
+  and `taxjson scan` still runs.
 
 
 ## v0.24.0 (2026-10-07)
