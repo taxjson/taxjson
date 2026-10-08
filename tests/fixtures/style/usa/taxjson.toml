@@ -60,6 +60,13 @@ source_currencies           = []
 ## window then stops the run).
 # transfers_as_acquisitions = false
 
+## --- Corporate actions ---
+## A spin-off or merger in a sheltered account with no saved election: "zero" (the default) books it
+## without asking (a spin-off's new shares at $0 cost, a merger's new shares at the old shares'
+## cost; no tax depends on it); "ask": asked like a taxable account's. `taxjson elect` wins either
+## way.
+# sheltered_elections       = "zero"  # zero | ask
+
 ## One [accounts.NAME] table per folder under inputs/ (the folder name is the account name). Every
 ## key, with its default:
 # [accounts.NAME]
