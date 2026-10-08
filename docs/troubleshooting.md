@@ -93,6 +93,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/ticker_map_format.py` — `format_map`, `would change what it means`; `src/taxjson/bin/taxjson_run.py` — `cmd_format_map`
 
+### `tjs format-map` keeps an old header ("# ticker.map — symbol rules for the taxjson pipeline. … JOURNAL from to A Norbert's Gambit pair …") above the new one, or "Info: a comment block looks like an old taxjson header you edited — kept; delete it if it no longer applies"
+- **Check:** ticker.map holds two headers after `tjs format-map --write`: the `## ticker.map: standing truths …` one and, below it, a `#` block describing GLOBAL, TOBASE, JOURNAL and DELETE. The Info line names the first line of a block kept because it differs from every header taxjson wrote; "Info: 1 comment block(s) still describe JOURNAL or a dated RENAME as a ticker.map rule" names a comment of yours that documents the legacy dated events.
+- **Cause:** format-map replaced only the headers of the recent `taxjson init` templates, and only a paragraph standing alone: the earliest projects' header (written before `taxjson init` had a template), a header re-wrapped or re-cased, and one with your notes directly below its last line were kept as your notes.
+- **Fix:** upgrade, then `tjs format-map` (the dry run shows the old header removed and says how many lines) and `tjs format-map --write`; `--check` fails while an old header is there. A block it keeps as edited is yours to delete. Your comments that mention JOURNAL or a dated RENAME are kept: a journal or a ticker change on a date is a `.tt` line now (see "ticker.map holds 1 JOURNAL line(s)" below).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/ticker_map_legacy.py` — `is_legacy_paragraph`, `near_legacy`, `corpus_tables`; `src/taxjson/lib/ticker_map_format.py` — `_scan_template`, `_legacy_spans`, `_dated_comment_blocks`; `src/taxjson/bin/taxjson_run.py` — `_format_map_header_notes`
+
 ### "Warning: [settings] option_grant_timing_since is not set, so grant timing (ITA s.49(1)) starts at the project year (2025)"
 - **Check:** shown by `tjs run` in a Canadian project with a taxable non-crypto account on grant timing (the default `option_premium_timing`).
 - **Cause:** without the key, grant timing starts at `year`, which moves when you bump `year` next spring: last year's year-straddling written options would go back to close timing and their premium would be taxed twice. See `tjs option-boundary` and `tjs tax-logic`.

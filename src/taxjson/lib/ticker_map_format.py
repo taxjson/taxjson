@@ -43,9 +43,13 @@ Rules:
   never formatted, it goes before the rule that follows it (to that rule's
   group), or after the last rule; one before every rule stays at the top,
   under the header. Comment lines are kept byte for byte (trailing blanks
-  dropped). `## ` lines this module writes, and the comment paragraphs
-  earlier `taxjson init` templates wrote (recognised by hash, a paragraph
-  the user edited kept whole), are regenerated.
+  dropped). `## ` lines this module writes, and the comment text earlier
+  taxjson versions wrote (lib/ticker_map_legacy: recognised by hash, line
+  by line or a paragraph at a time, re-wrapped or re-cased, the user's
+  own lines in the same block kept), are regenerated. A paragraph the
+  user edited is kept whole (FormatResult.edited_headers), and so is a
+  comment that still describes JOURNAL or a dated RENAME as a map rule
+  (FormatResult.dated_comments): `taxjson format-map` names each.
 - A line whose rule is not in the map (no keyword, malformed, a second
   target or lookup value for one symbol) is kept exactly as written, with
   its comments, in the Unrecognized group at the end (after the line it
@@ -65,7 +69,9 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from taxjson.lib.config_template import DOC_WIDTH, _hash, _norm
+from taxjson.lib.config_template import DOC_WIDTH
+from taxjson.lib.ticker_map_legacy import (is_legacy_line as _is_legacy,
+                                           is_legacy_paragraph, near_legacy)
 from taxjson.lib.ticker_map import (RENAME_KEYWORDS, RETIRED_KEYWORDS,
                                     SIDE_KEYWORDS, TICKER_MAP_NAME,
                                     side_rules_from_text)
@@ -162,6 +168,11 @@ def _prose(text: str, indent: str = "") -> List[str]:
         break_on_hyphens=False)]
 
 
+def header_text() -> str:
+    """The header a map starts with (`## ` lines), newline-terminated."""
+    return "\n".join(_prose(HEADER)) + "\n"
+
+
 def _doc_lines(doc: Doc) -> List[str]:
     """A group's text: its intro, then each form with its meaning beside
     it (wrapped under itself)."""
@@ -185,35 +196,13 @@ _OWN_LINES = frozenset(
     _prose(HEADER) + list(_HEADINGS)
     + [ln for _g, _k, doc in GROUPS for ln in _doc_lines(doc)])
 
-# Comment lines earlier `taxjson init` ticker.map templates wrote (every
-# version before the grouped layout), as hashes of their _norm text
-# (lib/config_template: leading '#'s and blanks dropped, years generic;
-# sha256, first 16 hex digits). Their commented-out example rules are
-# not here: those are kept like the user's own. format-map regenerates
-# these lines (the new header) instead of keeping them as notes; a bare
-# `#` line beside one goes with it. When the HEADER or a group's text
-# changes, add the old lines' hashes here.
-_LEGACY_TEMPLATE_HASHES = frozenset("""
-00a3f0154037172c 073bfe795ee08d6b 0abd4d7da73b73a1 0e0f17b044b09c49
-15ebd6f0aac94027 208f8b138e273883 283534607a882ad0 28690b485a860f91
-2b577ed893a8f4a0 2cc59cd628441c44 3ce39165443b6351 418b2aaca345e818
-43aa33fa691f26fe 455e9eb53cfffcf4 4cb6ec017c0c31a8 4de745aeab6694f3
-4e732dba203e8b70 530d5b56790d7f0c 54098570a516ee12 55da8b9532665902
-5766c4673142b2ab 5da5373b81e28e86 6257c02acdf8fd3b 62d07ddcd4e8626f
-6423d61bc021f2c5 68d4489ee559b472 6b86caba16ca90f3 6cfbde668d339194
-70b9b941625e1672 7582793a2046b476 794abc923ce8ae7b 7a70a201496dcf09
-820fedc12f7c411d 83165efb8b38283c 8687fdeac707ef39 8708d77fbeae50a2
-8e28e7caa035bb2e 8e410f2a6702f44b 94038cb7dd941eb0 99edf6b3006f1513
-a175827dc46f5185 a8d478b5ddd42491 a9b58705ca106c2a ac2dd6b64541323d
-b01f65c5eee57ccb ba4250e7b402ef87 ba5ad447551ade4a bd04ca4ba3f73aed
-bdd7713581cc79ed be6786485b6ea26b c3cfba0990e440b4 cb7472ebf86a801d
-cc4f90c34dc82b18 ccc2de5407f0b248 cf96752f3f331088 d9eae8f569b22a0b
-e2b4c2cd06694258 e8f2ed7569e503bd ecff9d4866de8089 f3cf7a16576d97c4
-f9d2e8bf0c3996e0 f9f4fb8408af37c9 fa5932b0b777a54f fb45c83e3a4dd8d8
-fc493d8d1d00b0b3 fd3d15db6d964346 fe502ff31abba977
-3e27a7f2ce6a3162 72fb375a23c5c30d 74b5308380eceeb2 878eb147753d9752
-8d593d1e44882439 8d8eaadbea1e0e6b
-""".split())
+# Comment text earlier taxjson versions wrote (every `taxjson init`
+# template, the earliest projects' header, `taxjson migrate`'s): template
+# text, regenerated as the current header instead of kept as the user's
+# note — lib/ticker_map_legacy, by hash. Their commented-out example rules
+# are not template text: those are kept like the user's own. A bare `#`
+# line beside a dropped line goes with it. When the HEADER or a group's
+# text changes, add the old text to that module's fixture.
 
 
 class FormatError(ValueError):
@@ -232,11 +221,6 @@ def _split_lines(text: str) -> List[str]:
     if lines and lines[-1] == "":
         lines.pop()
     return [ln.rstrip() for ln in lines]
-
-
-def _is_legacy(line: str) -> bool:
-    n = _norm(line.strip())
-    return bool(n) and _hash(n) in _LEGACY_TEMPLATE_HASHES
 
 
 def _accepted(line: str) -> bool:
@@ -358,6 +342,14 @@ class FormatResult:
     # A commented-out example an earlier `taxjson init` wrote (a dated
     # RENAME), dropped by the migration.
     dropped_examples: List[str] = field(default_factory=list)
+    # Comment lines of an earlier taxjson header replaced by the current
+    # one; the first line of each comment run kept because it looks like
+    # such a header edited (an Info line); the first line of each comment
+    # block that still describes JOURNAL or a dated RENAME as a map rule
+    # (migrate=True, once the map has no problem: an Info line).
+    regenerated: int = 0
+    edited_headers: List[str] = field(default_factory=list)
+    dated_comments: List[str] = field(default_factory=list)
 
     @property
     def migration_pending(self) -> bool:
@@ -381,15 +373,51 @@ def _problems(text: str) -> Tuple[List[str], Dict[int, str], set]:
     return problems, lines, named
 
 
-def _drop_template(lines: List[str]) -> List[Optional[str]]:
+# The most lines one earlier template paragraph can span (re-wrapped
+# narrower than it was written): a longer stretch is never compared.
+_SPAN_MAX = 40
+
+
+def _legacy_spans(run: List[str]) -> List[Tuple[int, int]]:
+    """The stretches [a, b) of a run of comment lines that are each a
+    whole paragraph (or header) of an earlier template, compared as text
+    (lib/ticker_map_legacy.is_legacy_paragraph: re-wrapped or re-cased
+    still counts), the longest first from each line."""
+    out = []
+    a = 0
+    while a < len(run):
+        for b in range(min(len(run), a + _SPAN_MAX), a, -1):
+            if is_legacy_paragraph(run[a:b]):
+                out.append((a, b))
+                a = b
+                break
+        else:
+            a += 1
+    return out
+
+
+@dataclass
+class _Scan:
+    """_scan_template's result."""
+    kept: List[Optional[str]]   # the lines, template text as None
+    regenerated: int            # comment lines of an earlier template
+    edited: List[List[str]]     # runs kept: an earlier paragraph edited
+    legacy: List[bool]          # dropped as an earlier template's text
+
+
+def _scan_template(lines: List[str]) -> _Scan:
     """`lines` with the template's own comment lines replaced by None: a
     `## ` line this module writes (a group heading is kept: it marks
-    where a free-standing block sits), and a paragraph of an earlier
-    `taxjson init` template — comment lines between bare `#` lines,
-    commented-out rules or the block's ends, every one of them that
-    template's text (a paragraph the user edited is kept whole) — with
-    the bare `#` lines beside it."""
+    where a free-standing block sits), and the text of an earlier
+    template (lib/ticker_map_legacy) in a run of comment lines (between
+    bare `#` lines, commented-out rules or the block's ends): the whole
+    run when every line is a template line, else each stretch that is a
+    whole template paragraph — the user's own lines in the run kept —
+    with the bare `#` lines beside it. A run whose remaining text holds
+    most of an earlier paragraph (one the user edited) is kept whole and
+    named in `edited`."""
     out: List[Optional[str]] = list(lines)
+    edited: List[List[str]] = []
 
     def comment(i: int) -> bool:
         return lines[i].strip().startswith("#")
@@ -400,9 +428,12 @@ def _drop_template(lines: List[str]) -> List[Optional[str]]:
     def rule(i: int) -> bool:
         return bool(_switched_off(lines[i]))
 
-    for i, ln in enumerate(lines):
-        st = ln.strip()
-        if st in _OWN_LINES and st not in _HEADINGS:
+    def own(i: int) -> bool:
+        st = lines[i].strip()
+        return st in _OWN_LINES and st not in _HEADINGS
+
+    for i in range(len(lines)):
+        if own(i):
             out[i] = None
     dropped = [False] * len(lines)
     i = 0
@@ -417,10 +448,26 @@ def _drop_template(lines: List[str]) -> List[Optional[str]]:
                and lines[j].strip() not in _HEADINGS):
             j += 1
         if all(_is_legacy(lines[k]) for k in range(i, j)):
-            for k in range(i, j):
-                out[k] = None
-                dropped[k] = True
+            drop = list(range(i, j))
+        else:
+            drop = [i + k for a, b in _legacy_spans(lines[i:j])
+                    for k in range(a, b)]
+            rest = [lines[k] for k in range(i, j) if k not in drop]
+            # (compared with the current layout's own `## ` lines beside
+            # it: an earlier `## ` header shares its first lines)
+            a, b = i, j
+            while a > 0 and own(a - 1):
+                a -= 1
+            while b < len(lines) and own(b):
+                b += 1
+            if near_legacy(lines[a:i] + rest + lines[j:b]):
+                edited.append(lines[i:j])
+                drop = []
+        for k in drop:
+            out[k] = None
+            dropped[k] = True
         i = j
+    legacy = list(dropped)
     for i in range(len(lines)):
         if out[i] is None or not bare(i):
             continue
@@ -430,14 +477,21 @@ def _drop_template(lines: List[str]) -> List[Optional[str]]:
                 j += step
             if 0 <= j < len(lines) and dropped[j]:
                 out[i] = None
+                legacy[i] = True
                 break
-    return out
+    return _Scan(out, sum(dropped), edited, legacy)
+
+
+def _drop_template(lines: List[str]) -> List[Optional[str]]:
+    """_scan_template's lines."""
+    return _scan_template(lines).kept
 
 
 def _items(text: str) -> List[Item]:
     """The items of a map's text, each with its group."""
     lines = _split_lines(text)
-    kept = _drop_template(lines)
+    scan = _scan_template(lines)
+    kept = scan.kept
     unusable = _problems(text)[1]
     items: List[Item] = []
     pending: List[str] = []
@@ -480,6 +534,11 @@ def _items(text: str) -> List[Item]:
 
     for lineno, ln in enumerate(kept, 1):
         if ln is None:
+            if scan.legacy[lineno - 1]:
+                # Where an earlier header was, a block ends (a note of
+                # the user's on the other side stays where it was).
+                flush()
+                last_live = None
             continue
         st = ln.strip()
         if not st or st in _HEADINGS:
@@ -786,12 +845,43 @@ def format_map(text: str, migrate: bool = False) -> FormatResult:
     counts = {g: sum(1 for it in kept if it.group == g
                      and it.kind in ("rule", "bad", "retired"))
               for g in GROUP_NAMES}
+    scan = _scan_template(_split_lines(text))
+    edited_lines = {ln.strip() for run in scan.edited for ln in run}
     return FormatResult(
         text=new, changed=new != original,
         counts=counts, problems=_problems(text)[0], duplicates=dups,
         retired=counts[RETIRED],
         preamble=sum(1 for it in kept if it.group == ""),
-        moved=moved, journals=journals, dropped_examples=examples)
+        moved=moved, journals=journals, dropped_examples=examples,
+        regenerated=scan.regenerated,
+        edited_headers=[run[0].strip() for run in scan.edited],
+        dated_comments=([b[0] for b in _dated_comment_blocks(new)
+                         if not edited_lines & set(b)] if migrate else []))
+
+
+# A comment that describes a dated event as a ticker.map rule: the
+# keyword JOURNAL, or a RENAME with a date after its two symbols.
+_DATED_DOC = re.compile(r"\bJOURNAL\b|\bRENAME\s+\S+\s+\S+\s+"
+                        r"(?:\d{4}-\d\d-\d\d|YYYY-MM-DD)\b")
+
+
+def _dated_comment_blocks(text: str) -> List[List[str]]:
+    """The comment blocks of a formatted map (its whole comment lines in
+    a row; `## ` lines this module writes and switched-off rules left
+    out) that mention JOURNAL or a dated RENAME: since dated events left
+    the map they describe the legacy rules (lib/dated_events)."""
+    out: List[List[str]] = []
+    cur: List[str] = []
+    for ln in _split_lines(text) + [""]:
+        st = ln.strip()
+        if (st.startswith("#") and st not in _OWN_LINES
+                and st not in _HEADINGS and not _switched_off(st)):
+            cur.append(st)
+            continue
+        if cur and _DATED_DOC.search(" ".join(c.lstrip("#") for c in cur)):
+            out.append(cur)
+        cur = []
+    return out
 
 
 def _parse_dated(text: str) -> tuple:
