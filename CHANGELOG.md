@@ -275,7 +275,9 @@
 - **A declared rename that books nothing is said.** A `.tt` (or legacy
   ticker.map) RENAME no account's books carry (a typo of the symbol, a late
   date) gets a Warning naming the line, and `taxjson renames` lists it
-  (`--pending` counts it). A chain declared for one day (A to B, then B to
+  (`--pending` counts it; `--json` lists it under a new `unused` key: its
+  date, old and new symbols, `late`, source, places and `.tt` line, and
+  `pending` counts it). A chain declared for one day (A to B, then B to
   C) books both links.
 - **A journal between two listings stays inside its account.** The
   transfer pairing pooled every account's transfer legs, so a journal's
