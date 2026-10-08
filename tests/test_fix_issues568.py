@@ -15,6 +15,7 @@ All data is synthetic.
 import contextlib
 import io
 import json
+import math
 import subprocess
 import sys
 import tempfile
@@ -188,6 +189,87 @@ class TestIssue6MissingTransactionsKey(unittest.TestCase):
                     r = _cli(mod, *args)
                     self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
                     self.assertIn('no "transactions" list', r.stderr)
+
+
+def _gains_doc(gain):
+    return {"summary": {"country": "canada", "base_currency": "CAD"},
+            "transactions": [{"date": "2025-10-01",
+                              "date_settle": "2025-10-01",
+                              "action": "BUYSELL", "symbol": "SYNTH.TO",
+                              "qty": 1, "proceeds": 120.0, "cost": 100.0,
+                              "gain": gain, "currency": "CAD",
+                              "direction": "LONG"}]}
+
+
+class TestIssue8NonFinite(unittest.TestCase):
+
+    def test_form_export_refuses_a_nan_gain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for bad in (float("nan"), float("inf"), float("-inf")):
+                p = Path(tmp) / "gains.json"
+                p.write_text(json.dumps(_gains_doc(bad)))
+                with self.subTest(value=bad):
+                    r = _cli("taxjson.bin.taxjson_form_export", str(p),
+                             "--country", "canada", "--form", "schedule3",
+                             "--year", "2025", "--json")
+                    self.assertEqual(r.returncode, 2, r.stdout)
+                    self.assertIn("non-finite", r.stderr)
+                    self.assertNotIn("NaN", r.stdout)
+            # The same file with a real number still exports.
+            p.write_text(json.dumps(_gains_doc(20.0)))
+            r = _cli("taxjson.bin.taxjson_form_export", str(p),
+                     "--country", "canada", "--form", "schedule3",
+                     "--year", "2025", "--json")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            json.loads(r.stdout)
+
+    def test_other_report_readers_refuse_a_nan_gain(self):
+        doc = json.dumps(_gains_doc(float("nan")))
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "gains.json"
+            p.write_text(doc)
+            for mod, args, stdin in (
+                    ("taxjson.bin.taxjson_sum_gains",
+                     ("--country", "canada", str(p)), None),
+                    ("taxjson.bin.taxjson_sum_gains",
+                     ("--country", "canada", "--json"), doc),
+                    ("taxjson.bin.taxjson_export",
+                     ("--report", str(p)), None)):
+                with self.subTest(tool=mod, stdin=stdin is not None):
+                    r = _cli(mod, *args, stdin=stdin)
+                    self.assertEqual(r.returncode, 2, r.stdout)
+                    self.assertIn("non-finite", r.stderr)
+
+    def test_shared_loader_refuses_nan_anywhere(self):
+        from taxjson.lib.json_input import InputFileError, read_json_doc
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "doc.json"
+            p.write_text('{"summary": {"total_gain": NaN}, '
+                         '"transactions": []}')
+            with self.assertRaises(InputFileError) as cm:
+                read_json_doc(p)
+            self.assertIn("non-finite", str(cm.exception))
+            self.assertIn(str(p), str(cm.exception))
+
+    def test_row_check_refuses_non_finite_numbers(self):
+        from taxjson.lib.json_input import InputFileError, check_row_types
+        for bad in (math.nan, math.inf):
+            with self.subTest(value=bad):
+                with self.assertRaises(InputFileError) as cm:
+                    check_row_types([{"symbol": "SYNTH.TO", "gain": bad}],
+                                    "g.json")
+                self.assertIn("non-finite", str(cm.exception))
+
+    def test_filing_writer_refuses_non_finite(self):
+        from taxjson.lib.json_input import dump_filing_json
+        buf = io.StringIO()
+        with self.assertRaises(ValueError) as cm:
+            dump_filing_json({"lines": [{"gain": math.nan}]}, buf)
+        self.assertIn("lines[0].gain", str(cm.exception))
+        self.assertEqual(buf.getvalue(), "")
+        dump_filing_json({"lines": [{"gain": 1.5}]}, buf)
+        self.assertEqual(json.loads(buf.getvalue()),
+                         {"lines": [{"gain": 1.5}]})
 
 
 if __name__ == "__main__":

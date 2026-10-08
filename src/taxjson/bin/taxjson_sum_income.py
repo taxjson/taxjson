@@ -417,7 +417,8 @@ def main():
         sys.exit(2)
 
     if args.json:
-        print(json.dumps(report_data, indent=2, sort_keys=True))
+        from taxjson.lib.json_input import filing_json_text
+        print(filing_json_text(report_data, indent=2, sort_keys=True))
         return
     print(format_report(report_data, args.sort_by))
 

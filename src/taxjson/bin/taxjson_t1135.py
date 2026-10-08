@@ -1438,7 +1438,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                details=["Re-run `taxjson run` to rebuild them."])
         return 2
     if args.json:
-        json.dump(rep, sys.stdout, indent=2, sort_keys=True)
+        from taxjson.lib.json_input import dump_filing_json
+        dump_filing_json(rep, sys.stdout)
         print()
     else:
         print(render_report(rep))

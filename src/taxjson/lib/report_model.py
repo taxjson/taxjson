@@ -180,24 +180,33 @@ def strip_report_comments(lines: Iterable[str]) -> str:
                    if not line.lstrip().startswith('#'))
 
 
+def _refuse_non_finite(token: str):
+    # json.loads reads the non-standard NaN / Infinity tokens as floats;
+    # a report built on one printed NaN figures at exit 0 (issue #8).
+    raise ValueError(f"holds a non-finite number ({token})")
+
+
 def parse_report_json(text: str) -> Any:
-    """json.loads over comment-stripped text."""
-    return json.loads(strip_report_comments(text.splitlines(keepends=True)))
+    """json.loads over comment-stripped text (NaN / Infinity refused)."""
+    return json.loads(strip_report_comments(text.splitlines(keepends=True)),
+                      parse_constant=_refuse_non_finite)
 
 
 def load_report_json(path: Optional[Path] = None) -> Any:
     """THE report-layer JSON loader: read `path` (or sys.stdin when None),
     strip '#' comment lines, parse. Raises OSError / json.JSONDecodeError
     exactly like the inline copies it replaces — callers keep their own
-    error policy."""
+    error policy — and a ValueError for a NaN / Infinity token."""
     if path is not None:
         # utf-8-sig: a BOM is dropped (re-audit A2-1412).
         with open(path, 'r', encoding='utf-8-sig') as f:
-            return json.loads(strip_report_comments(f))
+            return json.loads(strip_report_comments(f),
+                              parse_constant=_refuse_non_finite)
     # UTF-8 whatever the locale, as files are read (A2-1219).
     import io
     from taxjson.lib.cli_diag import read_stdin_utf8
-    return json.loads(strip_report_comments(io.StringIO(read_stdin_utf8())))
+    return json.loads(strip_report_comments(io.StringIO(read_stdin_utf8())),
+                      parse_constant=_refuse_non_finite)
 
 
 def render_table(headers, aligns, body, foot=(), gap="  "):

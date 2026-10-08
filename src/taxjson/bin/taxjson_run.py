@@ -4745,8 +4745,10 @@ def _income_rules(settings: Dict[str, Any]):
 
 
 def _json_dumps_report(payload) -> str:
-    import json as _json
-    return _json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    # The machine twin of the filing figures: a NaN / infinity is
+    # refused, never written as a bare token (issue #8).
+    from taxjson.lib.json_input import filing_json_text
+    return filing_json_text(payload, indent=2, sort_keys=True) + "\n"
 
 
 def _diagnostics_banner(cache: Path, account: str, *,

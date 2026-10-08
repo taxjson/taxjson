@@ -602,7 +602,8 @@ def main():
         report_data = summarize_gains(merged_data)
 
     if args.json:
-        print(json.dumps(report_data, indent=2, sort_keys=True))
+        from taxjson.lib.json_input import filing_json_text
+        print(filing_json_text(report_data, indent=2, sort_keys=True))
         return
     print(format_report(report_data, args.sort_by, args.no_color,
                         staking=args.staking, country=args.country))

@@ -1123,3 +1123,10 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** upgrade, then rename the key to `transactions` (or give the rows as a bare list). An explicit empty list (`{"transactions": []}`) is still an empty book.
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/core.py` — `load_transactions`; `src/taxjson/lib/json_input.py` — `rows_or_exit`; `src/taxjson/bin/taxjson_sum_income.py` — `load_income_data`; `src/taxjson/bin/taxjson_diff.py` — `main`
+
+### `taxjson-form-export gains.json`: "holds a non-finite number (NaN) — the file is damaged or hand-edited", or "refusing to write a non-finite number (NaN or infinity) at lines[0].gain"
+- **Check:** search the named JSON file for `NaN`, `Infinity` or `-Infinity`: JSON has no such numbers, but Python's `json` module reads and writes them. On an older release the same file gave a successful export whose JSON held `NaN` (not valid JSON, and not a figure anyone can file).
+- **Cause:** the report readers checked that a gain, cost or proceeds was a number, not that it was finite, so a damaged or hand-edited gains file (`work/<account>_gains.json`, a file passed to `taxjson-form-export`, `taxjson-sum-gains`, `taxjson-export`, `taxjson-t1135` and the other report tools) went through, and the JSON writers wrote the `NaN` back out.
+- **Fix:** upgrade. Re-run `tjs run` to rebuild the work files; for a file you wrote, replace the value with a real number. The JSON writers of filing figures (`taxjson-gains`, `taxjson-form-export`, `taxjson-sum-gains`, `taxjson-sum-income`, `taxjson-carryover`, `taxjson-t1135`, `taxjson-split-gains` and the run's `<account>_report.json`) now refuse a NaN or an infinity, naming where it is, instead of writing it.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/json_input.py` — `read_json_doc`, `check_row_types`, `filing_json_text`, `dump_filing_json`, `NonFiniteOutputError`; `src/taxjson/lib/report_model.py` — `load_report_json`

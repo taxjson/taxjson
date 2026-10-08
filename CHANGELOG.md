@@ -33,6 +33,11 @@
   `taxjson-gains` and the other tools that read a book file read it as
   an empty book and reported no gains at exit 0. A bare list of rows and
   an explicit empty list still load (#6).
+- A gains file holding `NaN` or `Infinity` (damaged or hand-edited) is
+  refused by the report tools with a message naming the file, row and
+  field. `taxjson-form-export` used to export it at exit 0 with `NaN` in
+  its JSON. The JSON writers of filing figures now refuse a non-finite
+  number instead of writing it (#8).
 - `taxjson format-map` replaces every header an earlier taxjson version
   wrote into ticker.map with the current one: the earliest projects'
   header ("symbol rules for the taxjson pipeline", "Each line is: KEYWORD

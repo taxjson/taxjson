@@ -1171,7 +1171,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.json:
         ledger["currency"] = args.base_currency.upper()
-        json.dump(ledger, sys.stdout, indent=2, sort_keys=True)
+        from taxjson.lib.json_input import dump_filing_json
+        dump_filing_json(ledger, sys.stdout)
         print()
     else:
         print(render(ledger, args.base_currency.upper(), first_tx_year,

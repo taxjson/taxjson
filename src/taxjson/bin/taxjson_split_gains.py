@@ -27,7 +27,6 @@ Per-account content:
 """
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -300,7 +299,8 @@ def main(argv=None) -> int:
             return 2
 
     out = split_for_account(combined, args.account, base_txs)
-    json.dump(out, sys.stdout, indent=2, sort_keys=True)
+    from taxjson.lib.json_input import dump_filing_json
+    dump_filing_json(out, sys.stdout)
     print()
     return 0
 

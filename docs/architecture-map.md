@@ -151,7 +151,7 @@ distributions are added, and the result is validated: the account's
 - `src/taxjson/bin/taxjson_merge.py` — `main`: concatenates transaction files.
 - `src/taxjson/bin/taxjson_sort.py` — `plan_dedup`, `DedupPlan`, `deduplicate`, `sort_transactions`, `_tt_near_duplicates`: sorting and cross-file dedup; ambiguous duplicates are reported, not dropped.
 - `src/taxjson/bin/taxjson_validate.py` — `validate_transactions`, `main`: the final shape check on a book.
-- `src/taxjson/lib/json_input.py` — `read_json_doc`, `load_json_doc_or_exit`, `check_row_types`, `require_gains_doc`, `read_work_doc`: how every tool reads a JSON input.
+- `src/taxjson/lib/json_input.py` — `read_json_doc`, `load_json_doc_or_exit`, `check_row_types`, `require_gains_doc`, `read_work_doc`, `rows_or_exit`, `filing_json_text`, `dump_filing_json`: how every tool reads a JSON input (a missing list, a wrong type or a NaN / Infinity is refused), and how filing figures are written (a non-finite number refused).
 - `src/taxjson/bin/taxjson_diff.py` — `main`, `extract_records`, `make_key`, `field_diffs`: compares two transaction or gains files (ADDED / REMOVED / MODIFIED).
 
 ## ticker.map, renames, cross-listings and symbol codes

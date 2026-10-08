@@ -364,10 +364,13 @@ class TestR5_EstimateMath(unittest.TestCase):
                 ' "proceeds": Infinity, "cost": 0.0, "gain": Infinity,'
                 ' "currency": "CAD", "days_held": 1}]}')
             r = _run(root, "sum", "--json")
-        self.assertEqual(r.returncode, 0, r.stderr)
+        # Since issue #8 the damaged file is refused, naming it, rather
+        # than summed with its non-finite figures written as null.
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("non-finite", r.stderr)
+        self.assertIn("margin_gains.json", r.stderr)
         self.assertNotIn("Infinity", r.stdout)
         self.assertNotIn("NaN", r.stdout)
-        json.loads(r.stdout)                      # strict-parseable
 
     def test_province_settings_key_recognized(self):
         from taxjson.bin.taxjson_run import load_config, validate_config

@@ -19,7 +19,6 @@ Output is a JSON object with per-security and aggregate totals.
 
 from taxjson.lib.stage_msg import emit_line
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -478,7 +477,9 @@ def _main():
         raise SystemExit(2)
 
     # Output
-    json.dump(results, sys.stdout, indent=2, sort_keys=True)
+    # allow_nan=False: a NaN gain is refused, not written (issue #8).
+    from taxjson.lib.json_input import dump_filing_json
+    dump_filing_json(results, sys.stdout)
 
 
 def write_traces_file(results, file_path, *, country, input_path, year, tax_date_basis):

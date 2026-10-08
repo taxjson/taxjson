@@ -85,7 +85,6 @@ the project's country).
 from taxjson.lib.out import exit_text
 import argparse
 import csv
-import json
 import os
 import sys
 from datetime import datetime, timedelta
@@ -1590,7 +1589,9 @@ def _main(args) -> int:
                                f"{args.csv}: {e}"))
         print(f"wrote {args.csv}", file=sys.stderr)
     if args.json:
-        json.dump(rep, sys.stdout, indent=2, sort_keys=True)
+        # A NaN figure is refused, never written (issue #8).
+        from taxjson.lib.json_input import dump_filing_json
+        dump_filing_json(rep, sys.stdout)
         print()
     else:
         print(text)
