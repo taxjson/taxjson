@@ -761,3 +761,33 @@ class TestBookAttribution(unittest.TestCase):
         self.assertEqual(doc["status"], "computed", doc["problems"])
         self.assertEqual(doc["per_currency"], {})
         self.assertIn("before its period", doc["notes"][0])
+
+
+class TestCloseYearCarry(unittest.TestCase):
+    @rule("CA-FX-07")
+    def test_close_year_records_the_v2_close_for_next_year(self):
+        import shutil
+        from taxjson.bin.taxjson_run import _fx_cash_carry
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proj"
+            (root / "inputs" / "margin").mkdir(parents=True)
+            (root / "taxjson.toml").write_text(
+                _TOML.format(extra='fx_cash_ledger = "v2"'))
+            (root / "inputs" / "margin" / "rows.tt").write_text(_ROWS_TT)
+            (root / "work").mkdir()
+            _rates(root / "work" / "to_base.csv")
+            self.assertEqual(_cli(root, "run", "--no-input").returncode, 0)
+            r = _cli(root, "close-year")
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+            rec = json.loads((root / "filed" / "2025.json").read_text())
+            # US$10,000 held at Dec 31, bought back at 1.40: cost 14,000.
+            self.assertEqual(rec["fx_cash_v2"], {
+                "year": 2025, "books": {"margin/tt": {
+                    "USD": {"units": 10000.0, "cost": 14000.0}}}})
+            nxt = Path(tmp) / "next"
+            shutil.copytree(root / "inputs", nxt / "inputs")
+            carry = _fx_cash_carry(
+                nxt, {"prior_year_record": str(root / "filed" /
+                                                 "2025.json")}, 2026)
+            self.assertEqual(carry, rec["fx_cash_v2"])
+            self.assertIsNone(_fx_cash_carry(nxt, {}, 2026))
