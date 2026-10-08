@@ -989,6 +989,48 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_reconcile_slips.py`; `src/taxjson/bin/taxjson_run.py` — `cmd_reconcile_slips`
 
+### `tjs slip-audit`: "Capital-gains dividends  T5 18 … differs" (or `tjs checklist` step `t5-t3`: "margin: 1 finding(s), e.g. margin (U5***) CAD: capital-gains dividends (T5 18) slip 20.00, books 0.00")
+- **Check:** `tjs slip-audit` shows the line, and under Suggestions a `[[capital_gains_dividends]]` table naming the payment (from IB's dividends report, or a `[[slip.line]]` with box 18 in `inputs/slips/slips.toml`).
+- **Cause:** a split-share or mutual-fund corporation paid part of a dividend as a capital-gains dividend (T5 box 18, line 17400). No export says so, so the books carry it as a dividend until taxjson.toml names it (tax-logic `CA-INC-06`).
+- **Fix:** add the suggested table to taxjson.toml and re-run `tjs run`; `tjs divs-sum` then shows it apart. A payment in lieu's box-18 part cannot be named (the table covers dividends only): it stays in the difference, said in the Notes.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/slip_audit.py` — `_suggest_cgd`, `_cgd_entry`; `src/taxjson/lib/cg_dividends.py` — `allocate`
+
+### `tjs slip-audit`: "Return of capital  T3 42 … differs"
+- **Check:** `tjs slip-audit` lists the T3's return of capital and, under Suggestions, `.tt` lines for `inputs/<account>/slip-audit.tt`; `tjs roc-sum` shows no ACB reduction for the fund.
+- **Cause:** the fund's T3 returns capital (box 42) that the export booked as part of the dividend (IB's statement carries the whole payment as one dividend), or a T3 issued after the year.
+- **Fix:** add the suggested lines to the `.tt` file and re-run: `ADJUST … type=roc` lowers the ACB, and a `DIVIDEND` line with a negative amount takes the return of capital out of the dividend income when the dividend row holds it. A Canadian trust's line carries its record date (`record=`) so it counts in the T3's year (`CA-INC-DATE-ROC-TRUST`).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/slip_audit.py` — `_suggest_roc`
+
+### `tjs slip-audit`: "Not compared: inputs/slips/U5***.2025.dividends.csv: no account's books carry IB account U5***"
+- **Check:** the IB statement for that account is in `inputs/<account>/` and `tjs run` has run since.
+- **Cause:** the report is matched to the account whose books carry the IB account; an IB statement of several accounts, or none in the project, leaves no match.
+- **Fix:** add the IB statement to the account's folder, or name the account in `inputs/slips/slips.toml`: `[[ib_report]]` with `file = "<the report's name>"` and `account = "margin"`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/slip_audit.py` — `audit`, `find_ib_reports`; `src/taxjson/lib/ib_dividends.py` — `read_report`
+
+### `tjs slip-audit`: "margin: Canadian dividends … from rbc.csv is on no slip" (or "… and no T5/T3 slip for it")
+- **Check:** the Coverage section names the account and the input files the income came from.
+- **Cause:** the account (or one broker account in it) has dividends, foreign income, withholding or return of capital in the books and no slip in `inputs/slips/`. Slips that name a `broker_account` cover only that broker account's rows.
+- **Fix:** type the missing slip into `inputs/slips/slips.toml` (`tjs slip-audit --template` prints one per account and currency). Interest alone under 50 is not a gap: no T5 is issued for it (it is still income).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/slip_audit.py` — `_audit_account`, `_income_by_source`
+
+### `tjs slip-audit`: "Error: inputs/slips/slips.toml [[slip]] #2: …"
+- **Check:** the message names the slip table and the key (`account is required`, `not a T5 amount box`, `an identifier, not an amount`, `'405 54' is not an amount`, `year = 2024, but the project's year is 2025`).
+- **Cause:** a slip typed in a way slip-audit cannot read: an unknown key or box, an account that is not in taxjson.toml or is registered, an amount with a space or a decimal comma, last year's file.
+- **Fix:** correct the table as the message says (format: `docs/settings.md`, "inputs/slips/"). Never type a name, a SIN or an account number into `boxes`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/slip_audit.py` — `load_slips_file`, `_slip_from_table`, `SlipsError`
+
+### `tjs reconcile-slips inputs/slips/*.csv`: "Info: skipped U5***.2025.dividends.csv: IB's dividends report (T5/T3 income, read by `taxjson slip-audit`), not a T5008"
+- **Check:** the skipped file is IBKR's dividends report.
+- **Cause:** IB's dividends report lives in `inputs/slips/` beside the T5008 CSVs; it is T5/T3 income, which `reconcile-slips` does not read (before, it failed the reconciliation as an unreadable T5008).
+- **Fix:** nothing: `tjs slip-audit` reads it. With only the report given, `reconcile-slips` stops with "no T5008 slip CSV to reconcile".
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_reconcile_slips`; `src/taxjson/lib/checklist.py` — `slip_files`
+
 ### `tjs handoff`: "Error: no prior-year record at filed/2024.json"
 - **Check:** `tjs checklist` step `handoff` says "no 2024 record".
 - **Cause:** handoff compares this year's opening positions with last year's lock, and there is none (first year with taxjson, or `close-year` was never run there).

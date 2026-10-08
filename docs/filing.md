@@ -106,11 +106,20 @@ the open steps one at a time; `--quick` skips the slow detectors.
       `taxjson reconcile-slips inputs/slips/*.csv` (all brokers' slips
       together) exits clean. The CRA matches Schedule 3 proceeds against
       these; this is the step that prevents a review letter.
-- [ ] **T5 / T3 / NR4 slips** against the TAXABLE line of `taxjson divs-sum` and
-      `taxjson roc-sum`. Trust units report on a T3, often weeks after
-      the T5s; split-share and mutual-fund corporations report on a T5,
-      and its box 18 capital-gains dividends go on line 17400 (taxjson
-      books them as ordinary dividends — see KNOWN_ISSUES).
+- [ ] **T5 / T3 slips**: `taxjson slip-audit` agrees with the books.
+      Type each slip into `inputs/slips/slips.toml` (`taxjson slip-audit
+      --template` prints one per account), or drop IB's dividends report
+      (`U*.YYYY.dividends.csv`) in `inputs/slips/`. It compares each box
+      with the books' income of the account (a USD slip in USD, with the
+      Bank of Canada daily and annual-average conversions side by side),
+      lists the payments missing on either side and the accounts with
+      income and no slip, and prints the `[[capital_gains_dividends]]`
+      entries (box 18, line 17400) and the `.tt` return-of-capital lines
+      (T3 box 42) that bring the books to the slips. Trust units report
+      on a T3, often weeks after the T5s; split-share and mutual-fund
+      corporations report on a T5. A difference you accept is answered
+      per account by `taxjson checklist --done t5-t3`. **NR4 slips**: by
+      hand.
 - [ ] **Foreign tax withheld** from the slips (not the broker rows) for
       the foreign tax credit, line 40500 / Form T2209.
 

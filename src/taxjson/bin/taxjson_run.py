@@ -1112,7 +1112,8 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Before you trade", ("wash-radar", "buy-check", "sell-check",
                           "harvest", "scan", "watch")),
     ("Before you file", ("checklist", "form-export", "t1135",
-                         "reconcile-slips", "carryover", "option-boundary",
+                         "reconcile-slips", "slip-audit", "carryover",
+                         "option-boundary",
                          "close-year", "check-filed", "handoff")),
     ("Explain and check", ("audit", "wash-sales", "tax-logic", "edge-cases",
                            "check-dates", "sanity", "journals", "renames",
@@ -18854,6 +18855,21 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
 
     _slips = (args.slip_csv if isinstance(args.slip_csv, list)
               else [args.slip_csv])
+    # IB's dividends report (T5/T3 data, `taxjson slip-audit`) lives in
+    # inputs/slips/ too: the documented `inputs/slips/*.csv` names it.
+    from taxjson.lib.ib_dividends import is_dividends_report
+    _ib = [f for f in _slips if is_dividends_report(Path(f))]
+    if _ib:
+        from taxjson.lib.brokerages.base import shown_name
+        note("taxjson reconcile-slips",
+             f"skipped {', '.join(shown_name(f) for f in _ib)}: IB's "
+             f"dividends report (T5/T3 income, read by `taxjson "
+             f"slip-audit`), not a T5008")
+        _slips = [f for f in _slips if f not in _ib]
+        if not _slips:
+            _die_input("no T5008 slip CSV to reconcile",
+                       "IB's dividends report is read by `taxjson "
+                       "slip-audit`.")
     gains_argv = _taxable_gains_argv(
         root, cache, exclude_crypto=True, prog="taxjson reconcile-slips",
         required=True)
@@ -18891,6 +18907,43 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
     if args.json:
         argv.append("--json")
     raise SystemExit(taxjson_reconcile_slips.main(argv))
+
+
+def cmd_slip_audit(args: argparse.Namespace) -> None:
+    """`taxjson slip-audit [ACCOUNT]`: the T5 / T3 slips in inputs/slips/
+    (slips.toml, IB's dividends reports) against the books' income, per
+    account and box (lib/slip_audit; tax-logic CA-SLIP-01..04). Canada
+    only (lib/country COMMAND_COUNTRY). Exit 1 on a finding."""
+    from taxjson.lib import slip_audit as SA
+    root = Path(args.dir).resolve()
+    cfg = load_config(root)
+    settings = cfg.get("settings") or {}
+    year = settings.get("year")
+    if year is None:
+        _die_input("taxjson.toml has no [settings] year",
+                   "slip-audit compares one tax year's slips.")
+    if not (root / "work").is_dir():
+        _die("no work/ in the project", "Run `taxjson run` first.")
+    if getattr(args, "template", False):
+        try:
+            sys.stdout.write(SA.template(root, cfg))
+        except (SA.SlipsError, ValueError) as e:
+            _die_input(str(e))
+        return
+    tol = (SA.DEFAULT_TOLERANCE if args.tolerance is None
+           else float(args.tolerance))
+    try:
+        rep = SA.audit(root, cfg, tolerance=tol,
+                       account=getattr(args, "account", None))
+    except SA.SlipsError as e:
+        _die_input(str(e))
+    if args.json:
+        _json_out(rep)
+    else:
+        for ln in SA.render(rep):
+            print(ln)
+    if rep["issues"]:
+        raise SystemExit(1)
 
 
 def _explain_wash_sales(root: Path, cache: Path,
@@ -23352,6 +23405,37 @@ def _build_parser(prog: str = "taxjson"
                        help="Emit the reconciliation as JSON instead of "
                             "text")
     p_rec.set_defaults(func=cmd_reconcile_slips)
+
+    p_sa = sub.add_parser(
+        "slip-audit",
+        help="Compare your T5 / T3 slips with the books' income",
+        description="Compare the broker's T5 and T3 slips with the "
+             "books' income, per account and slip box: Canadian and "
+             "foreign dividends, box 18 capital-gains dividends, "
+             "foreign tax, return of capital, interest. The slips are "
+             "inputs/slips/slips.toml (typed from the PDFs; --template "
+             "prints one) and IB's dividends reports "
+             "(U*.YYYY.dividends.csv) in inputs/slips/. A slip in USD is "
+             "compared in USD, with both CAD conversions (each payment "
+             "at the Bank of Canada rate of its date, and the year's "
+             "average rate). Lists missing payments, accounts with "
+             "income and no slip, and the [[capital_gains_dividends]] "
+             "entries and ROC .tt lines that bring the books to the "
+             "slips. Changes nothing. Canada only. Exit 1 on a finding.")
+    p_sa.add_argument("account", nargs="?", default=None,
+                      help="Only this account (default: every taxable "
+                           "account)")
+    p_sa.add_argument("--tolerance", type=_nonneg_float_arg, default=None,
+                      help="Allowed difference per box in CAD, a number "
+                           ">= 0 (default 1.00; a box holding converted "
+                           "money also allows 0.5%% of that part)")
+    p_sa.add_argument("--template", action="store_true",
+                      help="Print a slips.toml to fill in (a T5 per "
+                           "account and currency with income)")
+    p_sa.add_argument("--json", action="store_true",
+                      help="Emit the audit as JSON instead of text (a "
+                           "stable schema: docs/settings.md)")
+    p_sa.set_defaults(func=cmd_slip_audit)
 
     p_close = sub.add_parser(
         "close-year",

@@ -754,6 +754,19 @@ Also compare the books with the broker's slips (T5008; US: 1099-B):
 tjs reconcile-slips inputs/slips/*.csv
 ```
 
+In Canada, check the T5 and T3 slips against the books' income too:
+type them into `inputs/slips/slips.toml` (`tjs slip-audit --template`
+prints one to fill in) or drop IBKR's dividends report
+(`U*.YYYY.dividends.csv`) in `inputs/slips/`, then
+
+```bash
+tjs slip-audit
+```
+
+It shows each slip box beside the books' figure and prints the lines
+that bring the books to the slips (a box 18 capital-gains dividend, a
+T3's return of capital).
+
 ## 7. The filing checklist
 
 ```bash

@@ -375,10 +375,12 @@ class TestChecklistPins(unittest.TestCase):
                 self.assertIn("older than their inputs", r.detail)
 
     def test_t5_t3_names_the_taxable_line(self):
-        # A2-0866 (S068-14).
+        # A2-0866 (S068-14). A US project compares the 1099-DIV by
+        # hand; a Canadian one runs `taxjson slip-audit`
+        # (tests/test_slip_audit.py).
         from taxjson.lib import checklist as cl
         with tempfile.TemporaryDirectory() as td:
-            r = cl.DETECTORS["t5-t3"](_cl_ctx(Path(td)))
+            r = cl.DETECTORS["t5-t3"](_cl_ctx(Path(td), country="usa"))
         self.assertIn("TAXABLE line of `taxjson divs-sum`", r.detail)
 
     @rule("US-RPT-09")

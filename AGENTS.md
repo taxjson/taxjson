@@ -13,7 +13,8 @@ Claude Code, Codex, Gemini CLI, Cursor and Copilot read this file.
    from install to filing, each marked done or not from the project's
    files, and the next one named with its command (read-only). Then run
    the checks: `tjs checklist`, `tjs sanity` (positions against the
-   broker's holdings) and `tjs find-missing-history`. The console summary at the end of `tjs run`
+   broker's holdings), `tjs find-missing-history` and, in Canada,
+   `tjs slip-audit` (the T5 / T3 slips against the books' income). The console summary at the end of `tjs run`
    lists what to look at. Most problems are an input (a missing older export,
    a transfer in, an election not made), not a bug. Say which it is.
 2. **`docs/troubleshooting.md`: known problems.** Search it for the exact

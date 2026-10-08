@@ -122,15 +122,17 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
     ("t5008", 3, "T5008 slips reconcile to the computed dispositions",
      "taxjson reconcile-slips inputs/slips/*.csv",
      "The CRA matches Schedule 3 proceeds to the T5008s — this step prevents the review letter."),
-    ("t5-t3", 3, "T5 / T3 / NR4 slips agree with the dividend and ROC totals",
-     "taxjson divs-sum, taxjson roc-sum (the TAXABLE lines; compare by hand)",
+    ("t5-t3", 3, "T5 / T3 slips agree with the books' income (dividends, box 18, ROC, foreign tax, interest)",
+     "taxjson slip-audit",
      "Trust units report on a T3, often weeks after the T5s; split-share and mutual-fund "
      "corporations report on a T5, where box 18 capital-gains dividends go on line 17400 "
-     "(taxjson books them as dividends). reconcile-slips reads only T5008 disposition "
-     "slips, so this check is by hand; other known differences: payments in lieu "
-     "(divs-sum's PIL column — T5 box 24 may include them), trust distributions an IB "
-     "row dates by pay date (the T3 uses the record year), and T3 boxes the books carry "
-     "as dividends (capital gains box 21, return of capital box 42)."),
+     "(taxjson books them as dividends until [[capital_gains_dividends]] names them). "
+     "`taxjson slip-audit` compares each slip box with the books (the slips typed into "
+     "inputs/slips/slips.toml, IB's dividends reports) and lists the lines that bring the "
+     "books to the slips: payments in lieu, trust distributions dated by their record "
+     "year, a T3's split (capital gains box 21, return of capital box 42). A difference "
+     "you accept is answered per account by `taxjson checklist --done t5-t3`; NR4 slips "
+     "are compared by hand."),
     ("foreign-tax", 3, "Foreign tax withheld taken from the slips (line 40500 / T2209)",
      "T5 box 15/16, T3 box 33/34",
      "The credit is limited to what the slips show, not what the broker rows imply."),
@@ -1778,9 +1780,13 @@ def slip_files(root: Path) -> List[Path]:
     slips = root / "inputs" / "slips"
     if not slips.is_dir():
         return []
+    # IB's dividends report is a T5/T3 source (`taxjson slip-audit`,
+    # lib/ib_dividends), not a T5008 CSV.
+    from taxjson.lib.ib_dividends import is_dividends_report
     return sorted((p for p in slips.iterdir()
                    if p.is_file() and not _skipped_input_name(p.name)
-                   and p.suffix.lower() == ".csv"),
+                   and p.suffix.lower() == ".csv"
+                   and not is_dividends_report(p)),
                   key=lambda p: p.name.lower())
 
 
@@ -1788,9 +1794,12 @@ def _unread_slip_files(root: Path) -> List[Path]:
     slips = root / "inputs" / "slips"
     if not slips.is_dir():
         return []
+    # slips.toml holds the T5/T3 slips `taxjson slip-audit` reads.
+    from taxjson.lib.slip_audit import SLIPS_FILE
     return sorted(p for p in slips.iterdir()
                   if p.is_file() and not _skipped_input_name(p.name)
-                  and p.suffix.lower() != ".csv")
+                  and p.suffix.lower() != ".csv"
+                  and p.name.lower() != SLIPS_FILE)
 
 
 def _slip_mismatch_summary(code: int, out: str, err: str) -> str:
@@ -1864,6 +1873,51 @@ def d_t5008(ctx: Ctx) -> Result:
     if problems:
         return Result("t5008", "attention", "; ".join(problems))
     return Result("t5008", "done", f"{len(files)} slip file(s) reconcile together")
+
+
+def d_t5_t3(ctx: Optional[Ctx]) -> Result:
+    """Canada: `taxjson slip-audit` (lib/slip_audit) — done when every
+    taxable account with income has a slip and every box agrees within
+    the tolerance; a finding is a question answered per account by a
+    DONE mark (QUESTION_STEPS). US: compared by hand."""
+    if ctx is None or is_us(ctx.settings.get("country")):
+        return Result("t5-t3", "manual", "compare the slips with the TAXABLE "
+                      "line of `taxjson divs-sum` / `roc-sum`")
+    from taxjson.lib import slip_audit as SA
+    if not ctx.cache.is_dir():
+        return Result("t5-t3", "blocked", "no work/ — run `taxjson run`")
+    import contextlib
+    import io
+    try:
+        # In process: the market list's notes ("... is treated as a
+        # split-share corporation") are the views' to print, not the
+        # checklist's.
+        with contextlib.redirect_stderr(io.StringIO()):
+            rep = SA.audit(ctx.root, ctx.cfg)
+    except Exception as e:                              # noqa: BLE001
+        return Result("t5-t3", "blocked", str(e))
+    issues = rep.get("issues") or []
+    if not rep.get("sources"):
+        if not issues:
+            return Result("t5-t3", "done", "no taxable income that a T5 or "
+                          "T3 reports")
+        return Result("t5-t3", "todo",
+                      "no T5/T3 slips in inputs/slips/ — type them into "
+                      "inputs/slips/slips.toml (`taxjson slip-audit "
+                      "--template` prints one) or add IB's dividends "
+                      "report (U*.YYYY.dividends.csv)")
+    if issues:
+        by: Dict[str, List[str]] = {}
+        for i in issues:
+            by.setdefault(i["account"], []).append(i["text"])
+        parts = [f"{a}: {len(t)} finding(s), e.g. {t[0]}"
+                 for a, t in sorted(by.items())]
+        return Result("t5-t3", "attention",
+                      "; ".join(parts) + " — `taxjson slip-audit`",
+                      question=True, answers=SA.question_keys(rep))
+    n = sum(len(g["slips"]) for a in rep["accounts"] for g in a["groups"])
+    return Result("t5-t3", "done", f"{n} slip(s) agree with the books "
+                  f"within {rep['tolerance']:.2f}")
 
 
 def d_form_export(ctx: Ctx) -> Result:
@@ -2160,7 +2214,7 @@ DETECTORS: Dict[str, Callable[[Ctx], Result]] = {
     "option-boundary": d_option_boundary,
     "handoff": d_handoff,
     "t5008": d_t5008,
-    "t5-t3": lambda ctx: Result("t5-t3", "manual", "compare the slips with the TAXABLE line of `taxjson divs-sum` / `roc-sum`"),
+    "t5-t3": d_t5_t3,
     "foreign-tax": lambda ctx: Result("foreign-tax", "manual", "from the slips"),
     "form-export": d_form_export,
     "t1135": d_t1135,
@@ -2308,7 +2362,7 @@ def set_override(root: Path, year: int, step: str, mark: Optional[str],
 
 # The steps whose attention is a question a DONE mark answers — for the
 # questions asked when it was made (Result.answers).
-QUESTION_STEPS = ("export-coverage", "option-boundary")
+QUESTION_STEPS = ("export-coverage", "option-boundary", "t5-t3")
 
 
 def question_answers(root: Path, cfg: Dict[str, Any], step: str,
@@ -2323,6 +2377,17 @@ def question_answers(root: Path, cfg: Dict[str, Any], step: str,
     if step == "option-boundary":
         from taxjson.lib import option_boundary as OB
         return option_keys(OB.project_question_rows(root, cfg, today=today))
+    if step == "t5-t3":
+        from taxjson.lib import slip_audit as SA
+        if is_us((cfg.get("settings") or {}).get("country")):
+            return None
+        import contextlib
+        import io
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                return SA.question_keys(SA.audit(root, cfg))
+        except Exception:                               # noqa: BLE001
+            return []
     return None
 
 
@@ -2348,6 +2413,9 @@ def key_text(sid: str, key: str) -> str:
     if sid == "export-coverage":
         from taxjson.lib.export_coverage import key_text
         return key_text(key)
+    if sid == "t5-t3":
+        from taxjson.lib.slip_audit import key_text as _kt
+        return _kt(key)
     parts = key.split("|")
     return f"{parts[1]} written {parts[2]}" if len(parts) == 3 else key
 

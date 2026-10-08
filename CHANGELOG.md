@@ -4,6 +4,28 @@
 
 ### Added
 
+- **`taxjson slip-audit` (Canada): your T5 and T3 slips against the
+  books' income**, per account and slip box: Canadian dividends, box 18
+  capital-gains dividends, foreign income and tax withheld, return of
+  capital, interest. Type the slips into `inputs/slips/slips.toml`
+  (`--template` prints one per account), or drop IBKR's dividends report
+  (`U*.YYYY.dividends.csv`) in `inputs/slips/`: it is read payment by
+  payment with its T5/T3 split (the holder's name is never read) and
+  matched to the account whose books carry that IB account. A USD slip is
+  compared in USD with both CAD conversions shown (each payment's Bank of
+  Canada daily rate, and the year's average); for a CAD slip holding
+  converted payments it says which one the slip is closer to. It lists
+  payments missing on either side, trust distributions counted in another
+  year by their record date, accounts with income and no slip, and prints
+  the `[[capital_gains_dividends]]` entries and `.tt` return-of-capital
+  lines that bring the books to the slips. `--json` has a stable schema
+  (docs/settings.md); exit 1 on a finding. The checklist's `t5-t3` step
+  runs it (answered per account with `--done`) and quick-start has a
+  slip-audit step. Tax-logic `CA-SLIP-01` to `CA-SLIP-03`.
+- `taxjson reconcile-slips inputs/slips/*.csv` skips an IBKR dividends
+  report in the folder with a note instead of failing on it, and the
+  checklist's T5008 step no longer counts it as a T5008.
+
 - **A filing position against one superficial-loss denial (US: one wash
   sale), declared and listed**: a `.tt` line `ALLOWLOSS <sale date>
   <symbol> [<qty>] reason="..."` in the taxable account that sold keeps

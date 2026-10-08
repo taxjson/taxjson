@@ -323,7 +323,17 @@ def steps(year: int, country: Optional[str] = None) -> List[Step]:
              (Cmd("tjs reconcile-slips inputs/slips/*.csv", "T5008 (US: "
                   "1099-B / 1099-DA) CSVs against the dispositions"),
               Cmd("tjs roc-sum", "with `tjs divs-sum`: compare with the "
-                  "T5 / T3 (US: 1099-DIV) by hand"))),
+                  "1099-DIV by hand", "usa"))),
+        Step("slip-audit", "Results", "Check your T5 / T3 slips against "
+             "the books",
+             "The slip is what the return reports: a box-18 capital-gains "
+             "dividend, a T3's return of capital or a payment the exports "
+             "missed shows up here, with the lines that fix the books.",
+             (Cmd("tjs slip-audit", "the slips typed into inputs/slips/"
+                  "slips.toml (`tjs slip-audit --template`) and IB's "
+                  "dividends reports, box by box", "canada"),),
+             how="Type each T5 / T3 into inputs/slips/slips.toml (or drop "
+                 "IB's U*.YYYY.dividends.csv there), then run it."),
         Step("filing", "Results", "Produce the filing numbers",
              "The export is what goes on the return; its totals must "
              "equal `tjs sum`.",
@@ -762,6 +772,13 @@ def evaluate(root: Path, today: Optional[date] = None) -> Guide:
     S["slips"] = marked("t5008", State(
         "review", f"{len(slips)} slip file(s) in inputs/slips/" if slips
         else "no slip CSV in inputs/slips/ yet"))
+    if country == "usa":
+        S["slip-audit"] = State("n/a", "US project: compare the 1099-DIV "
+                                "with `tjs divs-sum` by hand")
+    elif ran:
+        S["slip-audit"] = checked("t5-t3", cl.d_t5_t3)
+    else:
+        S["slip-audit"] = State("todo", "after `tjs run`")
     S["filing"] = marked("form-export", State("review"))
     S["estimate"] = State("review")
     S["trading"] = State("review")
