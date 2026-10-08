@@ -19,6 +19,20 @@ from taxjson.lib import out
 from taxjson.lib.symbol_codes import exact_name
 from tax_rules.dual import SRC, projects_both
 from tax_rules.dual import cli as _cli
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
+
+
+def setUpModule():
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 
 def cli(root, *args, width="0"):

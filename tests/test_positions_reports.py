@@ -19,6 +19,20 @@ FIX = REPO_ROOT / "tests" / "fixtures"
 
 from taxjson.lib import positions_reports as P  # noqa: E402
 from taxjson.lib.brokerages import detect as D  # noqa: E402
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
+
+
+def setUpModule():
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 _IB_HEAD = (
     "Statement,Header,Field Name,Field Value\n"

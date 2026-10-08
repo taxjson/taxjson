@@ -21,6 +21,12 @@ from test_fix_rbc import (ABC_REC, ABC_REM, ABC_SELL, HDR, parse_files,
 from test_fix_rbcqt import q, qdiv, qt_parse
 from tax_rules import rule, rule_absent
 from tax_rules.dual import gains_both
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
 
 
 def setUpModule():
@@ -28,6 +34,11 @@ def setUpModule():
     # generalisation): the parsers outside a project read
     # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
     os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 REPO = Path(__file__).resolve().parent.parent
 ACCT = "55500001"  # pii-ok (synthetic)

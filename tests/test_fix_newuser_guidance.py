@@ -29,10 +29,21 @@ from pathlib import Path
 
 from tax_rules import rule
 from tax_rules.dual import cli, gains_both, settings_for, tx
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
 
 
 def setUpModule():
     os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 
 _QH = ("Transaction Date,Settlement Date,Action,Symbol,Description,"

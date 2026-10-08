@@ -17,6 +17,20 @@ from pathlib import Path
 
 from taxjson.lib.core import TaxTransaction, get_tax_rules
 from tax_rules import rule
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
+
+
+def setUpModule():
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

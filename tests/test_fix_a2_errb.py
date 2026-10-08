@@ -28,6 +28,20 @@ REPO_ROOT = Path(os.environ.get("ERRB_REPO") or Path(__file__).resolve().parent.
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from taxjson.lib import cli_diag  # noqa: E402
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
+
+
+def setUpModule():
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 
 def _env(home, **kw):

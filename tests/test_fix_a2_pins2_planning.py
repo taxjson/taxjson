@@ -20,6 +20,20 @@ from pathlib import Path
 
 from tax_rules import rule, rule_absent
 from tax_rules.dual import SRC, cli_both, gains_both, projects_both
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
+
+
+def setUpModule():
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 COUNTRIES = ("canada", "usa")
 

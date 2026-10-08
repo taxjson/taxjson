@@ -19,6 +19,12 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
 
 
 def setUpModule():
@@ -26,6 +32,11 @@ def setUpModule():
     # generalisation): the parsers outside a project read
     # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
     os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

@@ -59,6 +59,40 @@ def env(**extra) -> dict:
     return e
 
 
+class CapturedWidth:
+    """A test module whose assertions read taxjson's CAPTURED output (the
+    `warning: ATTENTION:` / `error:` labels, nothing wrapped:
+    TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite) sets that width
+    itself, so it passes run alone too (`python -m unittest test_x`
+    without the variable printed the person's style at width 120):
+
+        _WIDTH = CapturedWidth()
+        def setUpModule(): _WIDTH.start()
+        def tearDownModule(): _WIDTH.stop()
+
+    os.environ is set for the module's tests (every subprocess env built
+    from it, and lib/out read in-process) and restored after."""
+
+    def __init__(self, width: str = "0") -> None:
+        self.width = width
+        self._old = None
+        self._set = False
+
+    def start(self) -> None:
+        self._old = os.environ.get("TAXJSON_WIDTH")
+        os.environ["TAXJSON_WIDTH"] = self.width
+        self._set = True
+
+    def stop(self) -> None:
+        if not self._set:
+            return
+        if self._old is None:
+            os.environ.pop("TAXJSON_WIDTH", None)
+        else:
+            os.environ["TAXJSON_WIDTH"] = self._old
+        self._set = False
+
+
 class Project:
     def __init__(self, root: Path, country: str):
         self.root = root

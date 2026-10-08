@@ -15,6 +15,20 @@ from taxjson.bin.taxjson_run import (
     _load_holdings_summary, print_holdings_diff, _fmt_qty,
     maybe_print_holdings_diff,
 )
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
+
+
+def setUpModule():
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 
 def _toml(holdings):
