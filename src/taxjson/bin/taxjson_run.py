@@ -3896,9 +3896,16 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # at the event-date rate (one fair value for both legs).
             # ticker_map dep: a temporary code the map now renames is
             # no longer warned about (S072-03).
+            # symbol-codes dep (Questrade): a chain under an internal
+            # code books under the listing that record resolves it to
+            # (GitHub issue #4).
+            _corp_codes = (_codes_state if broker == "questrade"
+                           and _codes_state.exists() else None)
             if force or needs_rebuild(out, *csvs, manifest_path,
                                       src_manifest, rates,
                                       *([ticker_map] if ticker_map
+                                        else []),
+                                      *([_corp_codes] if _corp_codes
                                         else [])):
                 if not _corp_step:
                     _step("Processing corporate actions")
@@ -3911,7 +3918,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     "--rates", str(rates),
                     "--base-currency", base_currency,
                 ] + (["--ticker-map", str(ticker_map)] if ticker_map
-                     else [])
+                     else []) + (["--symbol-codes", str(_corp_codes)]
+                                 if _corp_codes else [])
                 # Interactive by default: corp-actions prompts for the tax
                 # election (taxable vs rollover) on stderr and reads the
                 # answer from stdin. Without a TTY (or with --no-input) it
@@ -4737,6 +4745,15 @@ TRANSFER_COSTS_SUFFIX = "_transfer_costs.json"
 def _symbol_codes_suffix() -> str:
     from taxjson.lib.symbol_codes import SUFFIX
     return SUFFIX
+
+
+def _symbol_codes_state(root: Path, name: str) -> Optional[Path]:
+    """work/<name>_symbol_codes.state when the run wrote one (lib/
+    symbol_codes): what the corp-action extraction books a Questrade
+    chain under an internal code as — `taxjson elect` and `--redo`
+    extract exactly as the run does."""
+    p = Path(root) / "work" / f"{name}{_symbol_codes_suffix()}"
+    return p if p.is_file() else None
 
 
 def stage_ib_project(name: str, root: Path, cache: Path
@@ -7700,7 +7717,10 @@ def _reextract_pending_entry(acct_dir: Path, name: str, country: str,
             with contextlib.redirect_stderr(sink), \
                     contextlib.redirect_stdout(sink):
                 events = combine_broker_copies(
-                    extract_events(extractor, csvs, name), stream=sink)
+                    extract_events(extractor, csvs, name,
+                                   symbol_codes=_symbol_codes_state(
+                                       acct_dir.parent.parent, name)),
+                    stream=sink)
         except Exception:
             continue
         for ev in events:
@@ -8223,10 +8243,14 @@ def cmd_elect(args: argparse.Namespace) -> None:
             if broker not in CORP_ACTION_BROKERS:
                 continue
             out = cache / f"{name}_{broker}_corp.json"
+            _sc = _symbol_codes_state(root, name)
             cmd = _cmd("taxjson-corp-actions") + [
                 "--account-name", name, "--country", country,
                 "--brokerage", broker, "--manifest", str(manifest_path),
-            ] + _redo_corp_flags + [str(p) for p in csvs]
+            ] + _redo_corp_flags + (
+                ["--symbol-codes", str(_sc)]
+                if _sc and broker == "questrade" else []) + [
+                str(p) for p in csvs]
             run_to_file(cmd, out, interactive=True)
             ran = True
     except (subprocess.CalledProcessError, KeyboardInterrupt):
@@ -9060,7 +9084,8 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
             return
         doc.section("SYMBOL CODES — Questrade internal codes")
         doc.para("Booked under the ticker inferred from your exports "
-                 "(another account's transfer or name, or a currency "
+                 "(the account's own rows of the same description, "
+                 "another account's transfer or name, or a currency "
                  "journal of the account; a ticker.map GLOBAL line for "
                  "the code "
                  "overrides it); an unresolved code stays its own "

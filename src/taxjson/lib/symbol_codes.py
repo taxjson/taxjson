@@ -13,6 +13,12 @@ asking for a ticker.map GLOBAL line.
 `taxjson run` now infers the ticker from the rest of the project's books
 before the account is parsed, in this order, and records the evidence:
 
+0. the account's own rows (how "account"): a trade or transfer of a real
+   ticker in the receiving account described like one of the code's rows
+   (the parser's description key; a spinoff leg read by its own name,
+   never the parent's), one such listing only (GitHub issue #4: a
+   spun-off warrant's code is the ticker of the account's later warrant
+   sale described like it);
 1. transfer pairing: a transfer-in of the code (quantity q on date d) is
    the arrival of an OUTGOING transfer of q shares in another broker's
    export of the project (any account) dated from PAIR_DAYS_BEFORE days
@@ -35,6 +41,12 @@ before the account is parsed, in this order, and records the evidence:
    candidate, with its GLOBAL line, when one exists but is not
    certain).
 
+In every step a code's kind designators (WARRANT, RIGHT, UNIT,
+PREFERRED) and class letter are read over ALL of its descriptions
+(code_designators) and a listing's over all its names: they must agree
+(designators_agree) — one plain-worded row of a warrant code never makes
+it the common, and a plain code never takes a warrant listing.
+
 Any ticker.map rule naming the code's listing (a rename, DELETE,
 DISTINCT, a dated RENAME) always wins: such a code is never inferred and
 is recorded under "mapped". No name->ticker table is kept: names and
@@ -47,7 +59,9 @@ kept when comparing names.
 The result is written to work/<acct>_symbol_codes.state (JSON) and passed
 to the parser (`taxjson-brokerage --symbol-codes`), which books every row
 of a resolved code under the ticker and prints ONE note per account
-(codes_note) instead of the per-code ATTENTION lines.
+(codes_note) instead of the per-code ATTENTION lines, and to the
+corp-action stage (`taxjson-corp-actions --symbol-codes`), which books a
+spinoff chain under the code as the same ticker — one source of truth.
 """
 from __future__ import annotations
 
@@ -526,6 +540,80 @@ def _marks(tokens: Iterable[str]) -> frozenset:
     return frozenset(t for t in tokens if t.startswith("~"))
 
 
+# The designators that say what KIND of security a name is — a warrant,
+# a right, a unit, a preferred share — and the class letter: a code's
+# are read over ALL of its descriptions (code_designators), a listing's
+# over all its names, and they must agree (designators_agree; GitHub
+# issue #4: one plain-worded row of a warrant code matched the common).
+_KIND_MARKS = frozenset(("~WARRANT", "~RIGHT", "~UNIT", "~PREFERRED"))
+# A Questrade spinoff / rights leg's event wording: the security's own
+# name is what comes before it ("WTS QZD DEV CORP WT EXP PENDING
+# SPINOFF ON 500 SHS FROM SEC# ... <PARENT NAME> REC ..." — the parser's
+# description key is the PARENT's name, questrade._SPINOFF_PARENT_RE).
+_QT_LEG_WORDING_RE = re.compile(
+    r"\s+(?:SPINOFF|RTS\s+DIST|RIGHTS\s+DIST)\b.*$", re.IGNORECASE)
+
+
+def _kind_marks(marks: Iterable[str]) -> frozenset:
+    return frozenset(m for m in marks if m in _KIND_MARKS
+                     or (len(m) == 2 and m[1].isalpha()))
+
+
+def questrade_own_name(desc: str) -> str:
+    """The name a Questrade row gives its OWN security: questrade_name,
+    except that a spinoff / rights leg is read before its event wording
+    (its description key names the parent)."""
+    d = " ".join(str(desc or "").split())
+    cut = _QT_LEG_WORDING_RE.sub("", d)
+    return questrade_name(cut if cut else d)
+
+
+def code_designators(descriptions: Iterable[str]) -> frozenset:
+    """The kind designators (_KIND_MARKS: WARRANT, RIGHT, UNIT,
+    PREFERRED) and class letters stated ANYWHERE among a code's
+    Questrade descriptions — each read as the security's own name and as
+    the parser's name (questrade_own_name, questrade_name). One row
+    worded without them ('QZD DEVELOPMENT CORP SPINOFF ON ...') does not
+    make a warrant code a common share."""
+    out: set = set()
+    for d in descriptions:
+        for nm in {questrade_name(d), questrade_own_name(d)}:
+            out |= _kind_marks(_marks(name_tokens(nm)))
+    return frozenset(out)
+
+
+def listing_designators(names: Iterable[Tuple[str, ...]]) -> frozenset:
+    """The kind designators and class letters of a listing: over all the
+    names (name_tokens) the project's books give it."""
+    out: set = set()
+    for t in names:
+        out |= _kind_marks(_marks(t))
+    return frozenset(out)
+
+
+def designators_agree(code: Iterable[str], listing: Iterable[str],
+                      mode: str = "name_only") -> Tuple[bool, str]:
+    """(agree, why) for a code's designators (code_designators) against
+    a listing's (listing_designators). The kinds (warrant, right, unit,
+    preferred) must be EQUAL — a code stating one never resolves to a
+    listing stating none, and vice versa. Class letters: equal
+    (mode="name_only", the in-account match); in transfer pairing
+    (mode="pairing") a letter stated on one side only is tolerated, as
+    names_agree tolerates it, two different letters never."""
+    c, s = frozenset(code), frozenset(listing)
+    ck, sk = c & _KIND_MARKS, s & _KIND_MARKS
+    if ck != sk:
+        return False, (f"another kind of security: the code's "
+                       f"descriptions state {_shown(ck)}, the listing's "
+                       f"name states {_shown(sk)}")
+    cl, sl = c - _KIND_MARKS, s - _KIND_MARKS
+    if cl == sl or (mode == "pairing" and not (cl and sl)):
+        return True, ""
+    return False, (f"another share class: the code's descriptions state "
+                   f"class {_shown(cl)}, the listing's name states class "
+                   f"{_shown(sl)}")
+
+
 def _strong(tokens: Iterable[str]) -> bool:
     return any(len(t) >= 3 and not t.isdigit() and not t.startswith("~")
                for t in tokens)
@@ -768,6 +856,13 @@ class CodeUse:
     # the description the name comes from may be cut off at the export's
     # width (QT_DESC_WIDTH): its last word may be a fragment
     name_cut: bool = False
+    # every distinct description of the code's rows: its designators are
+    # read over all of them (code_designators)
+    descriptions: List[str] = field(default_factory=list)
+    # the listings the receiving account's OWN trades / transfers name
+    # for some of the code's rows (the same description key): listing ->
+    # the names the account gives that listing
+    own: Dict[str, List[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -958,6 +1053,26 @@ def resolve(uses: Iterable[CodeUse], outs: List[OutLeg],
     resolved: Dict[str, Dict[str, Any]] = {}
     unresolved: Dict[str, Dict[str, Any]] = {}
     mapped_out: Dict[str, Dict[str, Any]] = {}
+    # Each listing's kind designators and class letters, over every name
+    # the project's books give it; each code's, over all its
+    # descriptions (GitHub issue #4). A listing they disagree with is
+    # never the code's, whatever one name says.
+    lnames: Dict[str, List[Tuple[str, ...]]] = {}
+    for n in names:
+        lnames.setdefault(n.symbol, []).append(n.tokens)
+    for o in outs:
+        lnames.setdefault(o.symbol, []).extend(o.names)
+    lmarks = {sym: listing_designators(ts) for sym, ts in lnames.items()}
+    cmarks: Dict[str, frozenset] = {}
+    # code -> {listing: why} the designators refused
+    refused: Dict[str, Dict[str, str]] = {}
+
+    def _agree(u: CodeUse, sym: str, mode: str = "name_only") -> bool:
+        ok, why = designators_agree(cmarks[u.code],
+                                    lmarks.get(sym, frozenset()), mode)
+        if not ok:
+            refused.setdefault(u.code, {}).setdefault(sym, why)
+        return ok
     # code -> [(arrival, [candidate legs])]
     pairs: Dict[str, List[Tuple[Tuple[str, float], List[OutLeg]]]] = {}
     # legs whose quantity and date pair but whose names name another
@@ -970,6 +1085,37 @@ def resolve(uses: Iterable[CodeUse], outs: List[OutLeg],
         if mapped(u.code):
             mapped_out[u.code] = {"how": "ticker.map",
                                   "evidence": "ticker.map rule"}
+            continue
+        cmarks[u.code] = (code_designators(u.descriptions)
+                          | _kind_marks(_marks(name_tokens(u.name))))
+        # 0. the account's own rows: a trade or transfer of a real
+        # ticker described like one of the code's rows (the parser's
+        # description key), its designators agreeing with ALL the
+        # code's descriptions — one such listing only.
+        own_ok = {}
+        for sym, nms in sorted((u.own or {}).items()):
+            ok, why = designators_agree(
+                cmarks[u.code],
+                listing_designators(name_tokens(x) for x in nms))
+            if ok:
+                own_ok[sym] = nms
+            else:
+                refused.setdefault(u.code, {})[sym] = why
+        if len(own_ok) == 1:
+            sym, nms = next(iter(own_ok.items()))
+            cur = next((c for c in list(u.currencies) + ["USD", "CAD"]
+                        if listing_ok(sym, c)), "")
+            resolved[u.code] = {
+                "symbol": sym, "currency": cur, "how": "account",
+                "evidence": (f"the account's own rows of {sym} are "
+                             f"described {nms[0]!r}, like the code's"),
+            }
+            continue
+        if len(own_ok) > 1:
+            unresolved[u.code] = {
+                "reason": "ambiguous", "candidates": sorted(own_ok),
+                "detail": (f"the account's own rows describe the code's "
+                           f"rows as {', '.join(sorted(own_ok))}")}
             continue
         toks = name_tokens(u.name, cut=u.name_cut)
         pairs[u.code] = []
@@ -991,6 +1137,8 @@ def resolve(uses: Iterable[CodeUse], outs: List[OutLeg],
                     continue
                 rels = [_relation(toks, n) for n in o.names]
                 rel = {r for r, _w in rels}
+                if "same" in rel and not _agree(u, o.symbol, "pairing"):
+                    continue
                 if "same" in rel:
                     cands.append(o)
                     if all(w for r, w in rels if r == "same"):
@@ -1091,15 +1239,18 @@ def resolve(uses: Iterable[CodeUse], outs: List[OutLeg],
                 if not any(listing_ok(n.symbol, c) for c in u.currencies):
                     continue
                 if n.tokens == toks:
-                    hits.setdefault(n.symbol, n)
+                    if _agree(u, n.symbol):
+                        hits.setdefault(n.symbol, n)
                 elif n.broker == broker and names_agree(
                         u.name, n.shown, "name_only", a_cut=u.name_cut,
                         b_cut=n.cut, same_broker=True)[0]:
                     # one description is the other cut off by the
                     # same broker's export
-                    cuts.setdefault(n.symbol, n)
+                    if _agree(u, n.symbol):
+                        cuts.setdefault(n.symbol, n)
                 elif (name_relation(toks, n.tokens)
                       or set(_core(toks)) == set(_core(n.tokens))):
+                    # only suggested ("if it is right"), never applied
                     alike.setdefault(n.symbol, n)
         if not hits and len(cuts) == 1 and not u.arrivals:
             n = next(iter(cuts.values()))
@@ -1166,6 +1317,13 @@ def resolve(uses: Iterable[CodeUse], outs: List[OutLeg],
                 info["detail"] = (
                     f"its name resembles {', '.join(sorted(look))}, not "
                     f"applied: {why}")
+        elif refused.get(u.code):
+            # Named, never suggested: the listing is another kind of
+            # security (a warrant code's plain-worded row matched the
+            # common's name).
+            info["detail"] = "; ".join(
+                f"not {sym}: {why}"
+                for sym, why in sorted(refused[u.code].items()))
         unresolved[u.code] = info
     return {"resolved": resolved, "unresolved": unresolved,
             "mapped": mapped_out}

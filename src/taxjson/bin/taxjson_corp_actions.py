@@ -74,13 +74,18 @@ EXTRACTORS = {
 
 def extract_events(extractor, csv_paths: List[Path],
                    account: Optional[str] = None,
-                   renames: Optional[dict] = None) -> List[CorporateAction]:
+                   renames: Optional[dict] = None,
+                   symbol_codes: Optional[Path] = None
+                   ) -> List[CorporateAction]:
     """Run `extractor` over every file of one broker group of an
     account. Extractors that resolve securities by name (Questrade and
     RBC spin-off parents, RBC merger placeholders) see ALL the group's
     files as context: the parent was usually bought in another export.
-    The one extraction definition for the CLI, `taxjson elect` and
-    `taxjson spinoffs`, so all three compute the same event ids."""
+    `symbol_codes`: the account's internal-code record (work/<acct>
+    _symbol_codes.state), for an extractor that books a chain under
+    a broker's internal code (Questrade). The one extraction definition
+    for the CLI, `taxjson elect` and `taxjson spinoffs`, so all three
+    compute the same event ids and targets."""
     events: List[CorporateAction] = []
     paths = [Path(p) for p in csv_paths]
     for csv_path in paths:
@@ -88,6 +93,9 @@ def extract_events(extractor, csv_paths: List[Path],
               if getattr(extractor, 'accepts_context', False) else {})
         if renames and getattr(extractor, 'accepts_renames', False):
             kw['renames'] = renames
+        if (symbol_codes
+                and getattr(extractor, 'accepts_symbol_codes', False)):
+            kw['symbol_codes'] = symbol_codes
         if account is None:
             events.extend(extractor(csv_path, **kw))
         else:
@@ -390,6 +398,12 @@ def main():
              "temporary code it already renames is not warned about.",
     )
     parser.add_argument(
+        '--symbol-codes', metavar='FILE', default=None,
+        help="The account's internal-code record (`taxjson run` passes "
+             "work/<acct>_symbol_codes.state): a Questrade chain booked "
+             "under an internal code takes the listing it resolves to.",
+    )
+    parser.add_argument(
         '--list', dest='list_only', action='store_true',
         help="Just print extracted events; don't prompt, don't write, don't emit JSON.",
     )
@@ -459,7 +473,8 @@ def main():
             raise SystemExit(2)
     try:
         events = extract_events(extractor, csv_paths, args.account_name,
-                                renames=renames)
+                                renames=renames,
+                                symbol_codes=args.symbol_codes)
     except BrokerageParseError as e:
         emit_line(f"taxjson-corp-actions: error: {e}", file=sys.stderr)
         raise SystemExit(2)

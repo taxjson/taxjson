@@ -2277,8 +2277,11 @@ rows of shares transferred in from another broker under an internal code
 (one letter + digits, `X000123`) instead of the ticker — the transfer-in,
 its dividends, sometimes a later sale (`taxjson fetch`'s API export carries
 the real ticker). A code the account's own trades of the same description
-name is resolved as before. For the rest, `taxjson run` parses your other
-accounts first and infers the ticker from them, in this order:
+name is resolved to that listing — a spinoff leg read by its own name, never
+its parent's, and one listing only (a spun-off warrant's code takes the
+ticker of the account's later warrant trade described like it). For the
+rest, `taxjson run` parses your other accounts first and infers the ticker
+from them, in this order:
 
 1. **the transfer it arrived by** — an outgoing transfer of the same
    quantity in another broker's export of the project (any account: IB's
@@ -2304,7 +2307,13 @@ accounts first and infers the ticker from them, in this order:
    description in another account starts with it (three strong words
    before the cut, no designator in the part cut off).
 
-Every row of the code is then booked under that ticker, and the parse says
+A code's designators (warrant, right, unit, preferred, the class letter) are
+read over ALL of its descriptions: a code any row of which says `WTS` is
+never booked as a listing whose name has no warrant word, even when another
+of its rows names only the issuer (and the other way round).
+
+Every row of the code, and a spinoff chain Questrade books under it, is then
+booked under that ticker, and the parse says
 so in ONE note per account — `note: Questrade internal symbol codes
 resolved (1): X000123 → ZZQ.US (paired with the Interactive Brokers transfer
 out of 24 on 2026-09-01, account margin)` — kept whole in the `.sum`;

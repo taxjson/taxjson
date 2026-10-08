@@ -1321,6 +1321,7 @@ def parse_questrade_corporate_actions(
     csv_path: Path, account: str = 'Questrade',
     context_files: Optional[List[Path]] = None,
     renames: Optional[Dict[str, str]] = None,
+    symbol_codes: Optional[Path] = None,
 ) -> List[CorporateAction]:
     """Extract spinoff events from a Questrade activity CSV.
 
@@ -1328,6 +1329,13 @@ def parse_questrade_corporate_actions(
     they record warrants→rights conversions as intermediate moves. We
     net by (target_symbol, parent_code) so the three-row pattern
     `+100 / -100 / +100` collapses to a single `qty_received=100` event.
+
+    `symbol_codes`: the account's work/<acct>_symbol_codes.state (lib/
+    symbol_codes, written by `taxjson run`): a chain booked under
+    Questrade's internal code takes the listing that stage resolved the
+    code to — the one the parser books the code's other rows under
+    (GitHub issue #4: the two stages disagreed). The event id keeps the
+    code, so a saved election survives the inference.
     """
     # The parser's own description normalizer: the DIS row names the
     # parent only by Questrade's internal SEC# code plus the company
@@ -1344,6 +1352,10 @@ def parse_questrade_corporate_actions(
     # — the corp rows must land on the pools the trades are booked under
     # (audits R1-141, S074-07).
     _suffix = QuestradeBrokerage().apply_currency_suffix
+    from taxjson.lib.symbol_codes import read_state
+    _codes = read_state(Path(symbol_codes)) if symbol_codes else {}
+    _code_hits = _codes.get("resolved") or {}
+    _code_miss = _codes.get("unresolved") or {}
 
     def _read(path: Path) -> List[Dict[str, str]]:
         # Decoded and header-normalized exactly like the parser: a
@@ -1598,7 +1610,14 @@ def parse_questrade_corporate_actions(
         # The parser's shape: ABC.WS -> ABC.WS.US (the old "no dot yet"
         # test left a dotted target bare), NEWCO.VN -> NEWCO.TO.
         symbol = _suffix(bare, listing)
-        if internal and not _renamed(symbol, renames):
+        code_symbol = symbol
+        _hit = (_code_hits.get(bare.upper())
+                if internal and not _renamed(symbol, renames) else None)
+        if _hit:
+            # The symbol-code stage's resolution (one source of truth:
+            # the parser books the code's other rows there too).
+            symbol = str(_hit["symbol"])
+        elif internal and not _renamed(symbol, renames):
             # A manual web export writes the distributed warrant/right
             # under Questrade's internal code (D012345) while its later
             # sale carries the real ticker (QZDW): booked as-is the
@@ -1608,10 +1627,13 @@ def parse_questrade_corporate_actions(
             # Named as the books carry it, and quiet once ticker.map
             # renames it — the RBC twin's S072-03 rule (A2-0966).
             ext = symbol.rsplit('.', 1)[-1]
+            _why = (_code_miss.get(bare.upper()) or {}).get('detail')
             emit_line(f"warning: Questrade spinoff chain on "
                       f"{event_date} is booked under Questrade's INTERNAL "
                       f"code {symbol}, not a ticker "
-                      f"({rows[0]['description'][:70]}). Its later trades "
+                      f"({rows[0]['description'][:70]})"
+                      + (f"; not resolved: {_why}" if _why else "")
+                      + f". Its later trades "
                       f"use the real ticker, so map the code with a "
                       f"ticker.map line:  GLOBAL {symbol} <TICKER>.{ext} — "
                       f"otherwise the position splits in two.")
@@ -1631,7 +1653,7 @@ def parse_questrade_corporate_actions(
             action_type='spinoff',
             source_symbol=parent_symbol or parent_code or '(unknown parent)',
             source_isin=parent_code,
-            target_symbol=symbol, target_isin=symbol,
+            target_symbol=code_symbol, target_isin=code_symbol,
             ratio_new=net_qty,
             ratio_old=source_qty or 1.0,
             qty_disposed=0.0,
@@ -1647,12 +1669,16 @@ def parse_questrade_corporate_actions(
             broker_account=','.join(sorted({r['account'] for r in rows}
                                            - {''})),
         ))
+        # The id was computed from the code (stable whatever the
+        # inference says); the rows book under the resolved listing.
+        events[-1].target_symbol = symbol
 
     return events
 
 
 parse_questrade_corporate_actions.accepts_context = True
 parse_questrade_corporate_actions.accepts_renames = True
+parse_questrade_corporate_actions.accepts_symbol_codes = True
 
 
 # --- RBC Direct extractor --------------------------------------------------
