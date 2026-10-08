@@ -1054,7 +1054,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### `tjs slip-audit --import-cra`: "Not imported: 2025 T5 Sample Bank.pdf: no broker in the books by the issuer's name"
 - **Check:** the slip's issuer is a bank or a broker none of the project's exports come from, or the broker's name on the CRA slip is not the one taxjson knows it by (a trade name).
-- **Cause:** a CRA copy shows no account number: the importer places a T5 by its issuer's name and the payments in the books. A bank account's interest is outside the books.
+- **Cause:** a CRA copy shows no account number: the importer places a T5 by its issuer's name and the payments in the books. The issuer must carry a broker's whole name (every word of it but a legal form like INC.): "TD DIRECT INVESTING", "RBC ROYAL BANK" or "RBC GLOBAL ASSET MANAGEMENT" is not RBC Direct Investing (before, a shared word such as DIRECT or RBC placed it there). A bank account's interest is outside the books.
 - **Fix:** import that PDF again naming the account it belongs to: `tjs slip-audit margin --import-cra "<file>" --write` (it is then compared with the account's rows no other slip's broker account holds), or leave it out and report it from the slip.
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/cra_slips.py` — `place`, `broker_of_issuer`
@@ -1086,6 +1086,76 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** `sudo apt install poppler-utils` (Debian, Ubuntu), `brew install poppler` (macOS); or type the slips into `inputs/slips/slips.toml`.
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/cra_slips.py` — `pdf_text`
+
+### `tjs slip-audit --import-cra`: one PDF shows as two slips ("merged.pdf #1", "merged.pdf #2"), or "skipped merged.pdf: box 24 twice in one T5 slip — the page cannot be read cleanly; not imported"
+- **Check:** the PDF holds two slips (pages saved together, or files merged); `pdftotext -layout merged.pdf -` shows two "2025 T5 slip (original) from …" lines.
+- **Cause:** each slip is read from its own slip line to the next one. Before, the first slip line was taken and the box rows of every later page were read into it: a T3 and a T5 became one slip (the T3's box 24 read as the T5's, boxes lost, placed in the wrong fund). A slip whose page repeats a box cannot be read cleanly and the whole file is refused.
+- **Fix:** nothing for a merged PDF (each slip is a table, `source = "cra:merged.pdf #1"` …). For a refused file, download each slip on its own from My Account, or type it into `inputs/slips/slips.toml`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cra_slips.py` — `parse_slips`, `_sections`, `twice in one`
+
+### `tjs slip-audit --import-cra`: "the same slip as t3.pdf — read once", "already in slips.toml ([[slip]] #1, the same boxes)", "replaced by the amended slip", or "slips.toml holds its amended slip"
+- **Check:** `inputs/slips/slips.toml` has one table per slip; an amended slip's table says `status = "amended"`, and the original it replaced is commented out under "# Replaced by the amended slip …" (the file before is `slips.toml.bak`).
+- **Cause:** each slip counts once. A second download (`t3 (1).pdf`), a file named with its folder, or a slip already in slips.toml (the same type, account, fund, broker account, currency and boxes) is not added again; an amended slip replaces the original of the same issuer, account, fund and broker account. Before, only the file name was compared and the status ignored: a re-download or an original plus its amended slip summed (a return of capital counted twice).
+- **Fix:** nothing. When it says "which cannot be told" (two originals an amended slip may replace), import the originals with `--write` first, then the amended slip; or delete the original's table by hand. A cancelled slip is not imported: delete the table of the slip it cancels.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cra_slips.py` — `drop_duplicates`, `plan_import`; `src/taxjson/lib/slip_audit.py` — `comment_out_tables`; `src/taxjson/bin/taxjson_run.py` — `_slip_audit_import_cra`
+
+### `tjs slip-audit --import-cra`: "skipped t5.pdf: a French-language slip page", "box 27 (foreign currency) reads 'Zorkmids'", "a slip line taxjson cannot read", or "a USD slip and no USD rate for 2025 in the FX cache"
+- **Check:** open the PDF: the page is CRA's French one, box 27 prints a currency name taxjson does not know, the slip line is not "YYYY T5 slip (original) from …", or the FX cache has no Bank of Canada rate for the year (`tjs run` offline).
+- **Cause:** the importer reads CRA's English page only and never guesses: an unknown wording is refused, and a slip in another currency is placed only when its amounts can be set against the books' CAD. Box 27 may print `USD`, `US$` or `U.S. dollars`; "(Original)" is read as original.
+- **Fix:** switch My Account to English and print the slip again; for a USD slip run `tjs run` online first (it fills the FX cache); else type the slip into `inputs/slips/slips.toml`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cra_slips.py` — `parse_slips`, `_currency`, `place`
+
+### `tjs slip-audit --import-cra`: "its broker account cannot be told: the statement holds several IB accounts and no dividends report matches it"
+- **Check:** the account's IB statement holds two IB accounts (one label exported together) and `inputs/slips/` has IB's dividends report for each, or none matches the slip's boxes 24 + 10, 18 and 15.
+- **Cause:** the rows of one statement of two accounts cannot be told apart, so the slip is written with the account whose dividends report shows its figures, else the one account with no report; neither: it is not placed (a wrong account would make the other account's report "payments only").
+- **Fix:** add the missing dividends report, or type the slip into `inputs/slips/slips.toml` with its `broker_account`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cra_slips.py` — `place`, `_report_matches`
+
+### `tjs slip-audit`: "broker_key is the books' own hash of the broker account" or "broker_key 0a1b2c3d4e is no broker account in the books"
+- **Check:** the `[[slip]]` table the message names has a `broker_key`; `ls work/.slip_key_salt`.
+- **Cause:** `--import-cra` writes a key of the broker account salted with the project's own salt (`work/.slip_key_salt`), so the key in slips.toml cannot be turned back into an account number by trying every IB number. A key written by an earlier version is the books' unsalted hash (it still works, said); a key written with another salt (work/ deleted, a slips.toml copied from another project, a `tjs redact` copy) matches no account and its slip is compared with no books.
+- **Fix:** delete the table and import the slip again (`tjs slip-audit --import-cra <file> --write`), or type `broker_account` instead.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/slip_audit.py` — `key_salt`, `broker_key`, `resolve_keys`; `src/taxjson/bin/taxjson_redact.py` — `_redact_broker_keys`
+
+### `tjs slip-audit`: a T5 typed for the IB account and IB's dividends report counted twice ("Canadian dividends … slip" twice the books)
+- **Check:** `inputs/slips/slips.toml` has a T5 with the IB account as `broker_account` and `inputs/slips/` has IB's dividends report for it.
+- **Cause:** the typed slip and the report are the same T5. A typed slip for that broker account with a box the report covers is now compared, and the report keeps only its payments (as beside a CRA slip); a T5 typed for its interest only (box 13: the report has none) is compared beside the report. `--template` prints no table for a broker account the report covers.
+- **Fix:** nothing.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/slip_audit.py` — `_audit_account`, `template`
+
+### `tjs slip-audit`: "the same IB dividends report as U5***.2025.dividends.csv … read once" or "Error: … two different IB dividends reports of IB account U5*** for 2025 — keep the newer download only"
+- **Check:** `inputs/slips/` holds two dividends reports of one IB account and year (`… (1).csv`).
+- **Cause:** both used to be read: every payment counted twice. Two identical copies are read once; two that differ cannot both be right.
+- **Fix:** delete one of them (the older download when they differ).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/slip_audit.py` — `audit`, `report_identity`
+
+### `tjs slip-audit`: "a second account (U5***, after U5***) — the report's payments do not say which account they are in; download one dividends report per account"
+- **Check:** the dividends report's `Account` section has two rows (a report run for several accounts).
+- **Cause:** the report's payment rows name no account, so a report of two accounts cannot be compared with either (before, the last account row was taken for every payment).
+- **Fix:** download IB's dividends report once per account.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/ib_dividends.py` — `read_report`
+
+### `tjs slip-audit`: "IB's report is in USD (the account's base currency) and the FX cache has no Bank of Canada USD rate for …"
+- **Check:** the IB account's base currency is USD (the report's `Account` row); a `tjs run` online fills the FX cache.
+- **Cause:** a Canadian slip is in CAD, so a USD-base account's report is converted payment by payment at the Bank of Canada rate of its pay date (tax-logic `CA-SLIP-02`; the Notes give the year's average-rate figure too). Before, it was compared in USD as if it were CAD.
+- **Fix:** run `tjs run` online once (it fills the FX cache), then `tjs slip-audit`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/slip_audit.py` — `ib_slips`, `_report_to_cad`, `_usd_base_note`
+
+### `tjs run`: "Error: inputs/margin/U5***.2025.dividends.csv is IB's dividends report (the T5 / T3 income per payment), not an activity export — move it to inputs/slips/"
+- **Check:** the file is in an account's folder, not in `inputs/slips/`.
+- **Cause:** IB's dividends report is a slip source, not activity; the run stopped with "cannot detect broker" and the file's name (IB's download carries the account number) unmasked.
+- **Fix:** move the file to `inputs/slips/`; `tjs slip-audit` reads it there.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `group_inputs_detailed`
 
 ### `tjs reconcile-slips inputs/slips/*.csv`: "Info: skipped U5***.2025.dividends.csv: IB's dividends report (T5/T3 income, read by `taxjson slip-audit`), not a T5008"
 - **Check:** the skipped file is IBKR's dividends report.
