@@ -187,7 +187,8 @@ def _pair_verdict(to, us, names, shown):
     else the cross-listing join's equal-name rule."""
     from taxjson.lib import cross_listings as XL
     nt, nu = names.get(to, set()), names.get(us, set())
-    rec = XL.receipt_why(to, nt) or XL.receipt_why(us, nu)
+    rec = (XL.receipt_why(to, nt, other_names=nu)
+           or XL.receipt_why(us, nu, other_names=nt))
     if rec:
         return "receipt", rec
     why = XL._names_verdict(nt, nu, shown)

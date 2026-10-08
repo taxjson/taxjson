@@ -277,5 +277,62 @@ class TestReinvestmentKeepsTheNativeBooksSingleCurrency(unittest.TestCase):
         self._check('usa')
 
 
+# ------------------------------------------------------------------ M2 / L2
+
+_QT_NEO = (QH
+           + qt('2025-09-02', 'Buy', 'QZG.TO', 'QZG GLOBAL ETF WE ACTED AS '
+                'AGENT', '300', net='-3000.00', price='10', gross='-3000')
+           + qt('2025-10-06', 'Sell', 'QZG.U.TO', 'QZG GLOBAL ETF USD UNITS '
+                'WE ACTED AS AGENT', '-300', net='2400.00', price='8',
+                gross='2400', cur='USD'))
+
+
+class TestReceiptEvidenceIsOneSided(unittest.TestCase):
+
+    def test_verdict(self):
+        from taxjson.lib import cross_listings as XL
+        from taxjson.lib.symbol_codes import exact_name
+        # Both written on the receipt venue: two lines of one fund.
+        self.assertEqual(XL.declared_verdict(
+            'QZG.TO', 'QZG.U.TO', {}, {}, ('QZG.NE', 'QZG.U.NE')), '')
+        # One side on it, the other elsewhere: still the receipt.
+        self.assertIn('written on a venue that lists depositary receipts',
+                      XL.declared_verdict('QZG.TO', 'QZG.US', {}, {},
+                                          ('QZG.NE', 'QZG.US')))
+        # A receipt word in BOTH names is a company's name (L2).
+        nm = exact_name('QZX SPONSORED HLDGS INC')
+        names = {'QZX.TO': {nm}, 'QZX.US': {nm}}
+        self.assertEqual(XL.shown_apart('QZX.US', 'QZX.TO', names), '')
+        self.assertEqual(XL.declared_verdict('QZX.TO', 'QZX.US', names,
+                                             {nm: 'QZX SPONSORED HLDGS'}),
+                         '')
+        # On one side only it still tells them apart.
+        cdr = exact_name('QZX HLDGS INC CDR')
+        plain = exact_name('QZX HLDGS INC')
+        self.assertIn('depositary receipt', XL.shown_apart(
+            'QZX.US', 'QZX.TO', {'QZX.TO': {cdr}, 'QZX.US': {plain}}))
+
+    def _run(self, country):
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(
+                td, files={'inputs/margin/q.csv': _QT_NEO,
+                           'inputs/margin/m.tt':
+                           'JOURNAL 2025-09-25 QZG.NE QZG.U.NE 300\n'},
+                canada={'source_currencies': ['USD']},
+                usa={'source_currencies': ['CAD']})[country]
+            r = cli(root, 'run', '--no-input')
+            out = _flat(r.stdout + r.stderr)
+            self.assertEqual(r.returncode, 0, out[-3000:])
+            self.assertNotIn('nothing shows', out)
+
+    @rule('CA-XLIST-04')
+    def test_canada_neo_units_journal_runs(self):
+        self._run('canada')
+
+    @rule('US-XLIST-03')
+    def test_usa_neo_units_journal_runs(self):
+        self._run('usa')
+
+
 if __name__ == '__main__':
     unittest.main()

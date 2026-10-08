@@ -68,7 +68,10 @@
   `QZG.NE`; marked in markets.toml) or named as a receipt in the exports
   ("... CDR") is its own security, so sharing the root QZG with `QZG.US`
   no longer counts as evidence: the names must agree, else the run stops
-  naming the line.
+  naming the line. Only one side's receipt evidence counts: two lines both
+  on Cboe Canada (an ETF's CAD and USD units, `QZG.NE` / `QZG.U.NE`) or two
+  names that both carry a receipt word are not told apart by it (also in
+  `taxjson scan`).
 
 - **A `.tt` JOURNAL line can say it is a separate journal**: a trailing
   `separate` (`JOURNAL 2025-05-07 QZD.TO QZD.U.TO 1500 separate`) books the

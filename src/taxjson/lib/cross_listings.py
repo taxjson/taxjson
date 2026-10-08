@@ -735,7 +735,9 @@ UNPROVEN = "unproven"
 
 
 def receipt_why(symbol: str, names: Iterable[Tuple[str, ...]] = (),
-                written: str = "") -> str:
+                written: str = "",
+                other_names: Iterable[Tuple[str, ...]] = (),
+                other_written: str = "") -> str:
     """Why `symbol` is a depositary receipt for a journal's evidence
     ("" when it is not): written on a venue that lists receipts under
     the underlying's ticker (markets.toml `receipts = true`: a CDR on
@@ -743,19 +745,41 @@ def receipt_why(symbol: str, names: Iterable[Tuple[str, ...]] = (),
     a Canadian venue into .TO), or a name in the exports with a receipt
     word ([lists] receipt_words: "... CDR"). A receipt is its own
     security, never one root with the share it holds (v0.24.1
-    leftovers, 2)."""
+    leftovers, 2).
+
+    The evidence tells two listings APART, so it counts only when the
+    other listing does not carry it too: the venue only when the other
+    (`other_written`) is written on another venue that lists no
+    receipts (a NEO ETF's CAD and USD units, QZG.NE and QZG.U.NE, are
+    two lines of one fund), a receipt word only when no name of the
+    other (`other_names`) states one (a company named "QZX SPONSORED
+    HLDGS" on both sides; v0.24.1 review, M2 / L2)."""
     from taxjson.lib.markets import (receipt_suffixes, receipt_words,
                                      suffix_of)
     w = str(written or "").upper()
-    if w and suffix_of(w) in receipt_suffixes():
+    ow = str(other_written or "").upper()
+    rs = receipt_suffixes()
+    if w and suffix_of(w) in rs and not (ow and suffix_of(ow) in rs):
         return f"{w} is written on a venue that lists depositary receipts"
     words = receipt_words()
+    if any(set(n) & words for n in other_names):
+        return ""
     for n in sorted(names):
         hit = sorted(set(n) & words)
         if hit:
             return (f"{symbol} is named as a depositary receipt "
                     f"({hit[0]})")
     return ""
+
+
+def _receipt_between(a: str, na: Iterable[Tuple[str, ...]], wa: str,
+                     b: str, nb: Iterable[Tuple[str, ...]], wb: str
+                     ) -> str:
+    """receipt_why of either of two listings, each judged against the
+    other."""
+    na, nb = list(na), list(nb)
+    return (receipt_why(a, na, wa, nb, wb)
+            or receipt_why(b, nb, wb, na, wa))
 
 
 def shown_apart(a: str, b: str,
@@ -769,9 +793,9 @@ def shown_apart(a: str, b: str,
     `ticker-map --suggest`'s conditional hints)."""
     from taxjson.lib.markets import is_canadian_listing
     na, nb = names.get(a, set()), names.get(b, set())
-    for sym, ns in ((a, na), (b, nb)):
+    for sym, ns, other, ons in ((a, na, b, nb), (b, nb, a, na)):
         if is_canadian_listing(sym):
-            why = receipt_why(sym, ns, sym)
+            why = receipt_why(sym, ns, sym, ons, other)
             if why:
                 return why
     if na and nb and all(companies_differ(x, y) for x in na for y in nb):
@@ -797,8 +821,7 @@ def declared_verdict(frm: str, to: str,
     nx, ny = names.get(frm, set()), names.get(to, set())
     if nx and ny and all(companies_differ(a, b) for a in nx for b in ny):
         return DIFFERENT
-    receipt = (receipt_why(frm, nx, written[0])
-               or receipt_why(to, ny, written[1]))
+    receipt = _receipt_between(frm, nx, written[0], to, ny, written[1])
     if listing_root(frm) == listing_root(to) and not receipt:
         return ""
     why = ""
@@ -982,10 +1005,9 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
                 _refuse(p, UNPROVEN, verdict)
             continue
         frm, to = tobase_direction(o.symbol, i.symbol, base_currency)
-        receipt = bool(receipt_why(o.symbol, names.get(o.symbol, ()),
-                                   written[0])
-                       or receipt_why(i.symbol, names.get(i.symbol, ()),
-                                      written[1]))
+        receipt = bool(_receipt_between(
+            o.symbol, names.get(o.symbol, ()), written[0],
+            i.symbol, names.get(i.symbol, ()), written[1]))
         joined.append(Pair(o, i, frm, to, journal="tt",
                            extra={"where": j.where,
                                   **({"receipt": True} if receipt
