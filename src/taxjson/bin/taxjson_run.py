@@ -2299,7 +2299,8 @@ def stage_dated_events(cache: Path, accounts: List[str]):
 
 
 def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
-                         ticker_map: Optional[Path]) -> Optional[Path]:
+                         ticker_map: Optional[Path],
+                         strict: bool = False) -> Optional[Path]:
     """Two listings of one security joined by their transfer journal
     (lib/cross_listings, tax-logic CA-XLIST-01 / US-XLIST-01): computed
     once per run from every equity account's parsed exports (the first
@@ -2318,6 +2319,7 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
                     if not (c or {}).get("crypto")]
         named: set = set()
         apart: set = set()
+        _renames: Dict[str, str] = {}
         if ticker_map is not None and ticker_map.is_file():
             from taxjson.bin.taxjson_ticker_map import _parse_map_file
             try:
@@ -2334,6 +2336,13 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
                 for _dr in _tm.dated:
                     named.update((_dr.old, _dr.new))
                 apart = set(_tm.distinct)
+                # The map's renames as the base-currency books apply
+                # them: a pair the map decides is read through them.
+                from taxjson.bin.taxjson_ticker_map import merge_renames
+                try:
+                    _renames = merge_renames(_tm, to_base=True)
+                except ValueError:
+                    _renames = {}
         _pre = _DATED_THIS_RUN.get(key)
         for _dr in (_pre.renames if _pre is not None else ()):
             named.update((_dr.old, _dr.new))
@@ -2367,9 +2376,13 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
                                       else ()),
                             # The pairs left alone (the user's map, two
                             # companies): `taxjson journals` lists them.
-                            refused=_refused)
+                            refused=_refused,
+                            map_renames=_renames)
         result["collisions"] = _coll
         result["refused"] = _refused
+        # A pair the map refused whose legs it books as two symbols:
+        # each leg is left unpaired (a Warning per account, below).
+        result["map_split"] = XL.map_split(_refused, named, _renames)
         state = cache / XL.STATE
         text = XL.state_text(result)
         if _read_work_stamp(state) != text:
@@ -2438,6 +2451,14 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
     msg = LS.corrections_note(name, cache, skip=_in_joins)
     if msg:
         _say_once(("listing", name), "warning", msg[0], *msg[1],
+                  indent="  ", file=sys.stdout)
+    # A transfer pair the user's map books as two securities (CA/US-
+    # XLIST-01): each leg is left unpaired — said, and --strict stops.
+    msg = XL.map_split_note(name, result.get("map_split") or ())
+    if msg:
+        if strict:
+            _die(f"--strict: {msg[0]}", *msg[1][:-1])
+        _say_once(("xlist-split", name), "warning", msg[0], *msg[1],
                   indent="  ", file=sys.stdout)
     return path
 
@@ -3846,7 +3867,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # (CA-XLIST-01 / US-XLIST-01): from here on the account's stages
     # read the effective map (ticker.map plus the joins' TOBASE lines).
     if not is_crypto:
-        ticker_map = stage_cross_listings(name, settings, cache, ticker_map)
+        ticker_map = stage_cross_listings(name, settings, cache, ticker_map,
+                                          strict=strict)
     elif _dated_effective_lines(cache):
         # A ticker change declared in a .tt file (a coin's new ticker)
         # reaches the crypto books through the effective map too.
@@ -4890,8 +4912,12 @@ def _listing_suffix_text(name: str, broker: str, csvs: List[Path],
         # listing as filed keeps meaning what it says.
         named = {str(x).upper()
                  for x in _ticker_map_named(root, lookups=True)}
+        # The map's renames (GLOBAL / TOBASE / JOURNAL, chains followed)
+        # apply to an out-leg before it is read as evidence: a correct
+        # `TOBASE QZAB.US QZAA.TO` books QZAB's transfer out as QZAA.TO.
         result = LS.resolve(scan, ev, account=name, broker=broker,
-                            mapped=lambda s: s in named)
+                            mapped=lambda s: s in named,
+                            renames=_ticker_map_renames(root))
         # The TOBASE line of a correction's transfer journal, as the
         # join will read it (the explicit lines `ticker-map --suggest`
         # shows).
@@ -4900,7 +4926,8 @@ def _listing_suffix_text(name: str, broker: str, csvs: List[Path],
                     .get("base_currency")) or "").upper() or None
         for r in result["corrected"].values():
             o = str((r.get("pair") or {}).get("symbol") or "")
-            if o and o != r["symbol"]:
+            # A pair the map's own line joins needs no line of its own.
+            if o and o != r["symbol"] and not r["pair"].get("map"):
                 r["join"] = list(tobase_direction(o, r["symbol"], base))
     return LS.state_text(name, broker, result)
 
@@ -4953,6 +4980,22 @@ def _ticker_map_named(root: Path, lookups: bool = False) -> frozenset:
         return named_symbols(_parse_map_file(tm)[0], lookups=lookups)
     except (OSError, ValueError):
         return frozenset()
+
+
+def _ticker_map_renames(root: Path) -> Dict[str, str]:
+    """The project's ticker.map renames as the base-currency merge books
+    them (taxjson_ticker_map.merge_renames: GLOBAL, TOBASE, JOURNAL and
+    undated RENAME lines, chains followed); empty without a map or when
+    it does not parse (`taxjson run` refuses such a map up front)."""
+    tm = root / "ticker.map"
+    if not tm.is_file():
+        return {}
+    from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+                                                merge_renames)
+    try:
+        return merge_renames(_parse_map_file(tm)[0], to_base=True)
+    except (OSError, ValueError):
+        return {}
 
 
 def _accounts_with_symbol_codes(inputs_dir: Path,

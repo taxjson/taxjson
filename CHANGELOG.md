@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- **A correct ticker.map `TOBASE` line no longer splits a transfer between
+  brokers.** IB moved a US listing out (`QZB.US`) and Questrade's export
+  booked the arrival under the company's TSX root on a USD row (`QZA`); with
+  `TOBASE QZB.US QZA.TO` in the map, the out-leg became `QZA.TO` while the
+  in-leg stayed `QZA.US` (the account also held `QZA.TO`), so the units
+  left one security and arrived in another: a withdrawal at fair value in a
+  registered account, a later sale left out of every total in a taxable one,
+  and nothing on the console. The map's renames now apply to the out-leg
+  first, and the in-leg is joined to the listing the map books the out-leg
+  as. A transfer pair the map books as two different symbols is a Warning
+  naming both legs and the line that books them as one; `run --strict`
+  stops on it.
+
 - **A Questrade internal code of a spun-off warrant no longer resolves to the
   common stock** (GitHub issue #4). A code whose descriptions state a
   warrant, right, unit, preferred share or class letter anywhere is never

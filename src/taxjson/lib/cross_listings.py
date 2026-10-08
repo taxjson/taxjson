@@ -42,7 +42,14 @@ line would, when the evidence is unambiguous:
   another company refuses;
 * no ticker.map rule renames or deletes X or Y (TOBASE / JOURNAL /
   GLOBAL / RENAME / DELETE, either side) and no DISTINCT line pairs the
-  two: the user's map always wins, DISTINCT keeps them apart;
+  two: the user's map always wins, DISTINCT keeps them apart. The map
+  is read through its renames: when it books the out-leg as the
+  in-leg's other listing (`TOBASE QZAB.US QZAA.TO`, QZAA.US in: the
+  account also holds QZAA.TO, lib/listing_suffix), the in-leg is
+  joined to that listing (`TOBASE QZAA.US QZAA.TO`); a pair the map
+  refuses whose legs it books as two different symbols (map_split) is
+  a Warning naming both legs and the line that books them as one —
+  each leg is otherwise left unpaired — and `run --strict` stops;
 * neither symbol is joined to a third listing by another pair — except
   the listing every other one maps onto (each line's TO) when each of
   those joins rests on its broker's journal pairs (the fund's USD line
@@ -155,6 +162,10 @@ class Pair:
                 **({"kind": self.kind} if self.kind != "TOBASE" else {}),
                 **({"journal": self.journal} if self.journal else {}),
                 **({"via": self.extra["via"]} if self.extra.get("via")
+                   else {}),
+                # A join through the map's own line (analyze): the
+                # listing the map books the out-leg as.
+                **({"map": self.extra["map"]} if self.extra.get("map")
                    else {}),
                 **({"where": self.extra["where"]}
                    if self.extra.get("where") else {}),
@@ -331,6 +342,12 @@ def journal_wording(broker: str, desc: str) -> str:
         if _BRW_JOURNAL_RE.search(d):
             return broker
     return ""
+
+
+def _other_listing(symbol: str) -> Optional[str]:
+    """ROOT.US <-> ROOT.TO (lib/listing_suffix.other_listing)."""
+    from taxjson.lib.listing_suffix import other_listing
+    return other_listing(symbol)
 
 
 def tobase_direction(out_sym: str, in_sym: str,
@@ -851,7 +868,9 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             collided: Iterable[str] = (),
             currency_journals: bool = False,
             declared: Iterable[Any] = (),
-            refused: Optional[List[Pair]] = None) -> Dict[str, List[Pair]]:
+            refused: Optional[List[Pair]] = None,
+            map_renames: Optional[Dict[str, str]] = None
+            ) -> Dict[str, List[Pair]]:
     """{"joined": [...], "suggested": [...]}: the cross-listing journals
     the legs show (module docstring). A pair whose names name different
     companies (companies_differ) is neither joined nor suggested; a pair
@@ -872,9 +891,23 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
     joins its two listings on the user's word, in both countries
     (CA-XLIST-04 / US-XLIST-03), with the legs it booked or the broker's
     legs it found; the user's ticker.map still wins (a refusal, "map" or
-    "distinct", recorded like the others)."""
+    "distinct", recorded like the others).
+
+    `map_renames`: the map's renames as the base-currency books apply
+    them (GLOBAL / TOBASE / JOURNAL, chains followed). A pair the map
+    decides is read through them: when the map books the out-leg as the
+    in-leg's other listing (`TOBASE QZAB.US QZAA.TO`, QZAA.US in) — or
+    as whatever the map books that other listing as — the in-leg is
+    joined to its other listing (`TOBASE QZAA.US QZAA.TO`,
+    extra["map"]): the map's line already says the out-leg is that
+    security, and the custody move is one security on both sides."""
     collided = {s.upper() for s in collided}
     named = {s.upper() for s in map_named}
+    renames = {str(k).upper(): str(v).upper()
+               for k, v in (map_renames or {}).items()}
+
+    def _booked(sym: str) -> str:
+        return renames.get(sym, sym)
     apart = {frozenset(x.upper() for x in pair) for pair in map_distinct}
     joined: List[Pair] = []
     suggested: List[Pair] = []
@@ -1087,6 +1120,25 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
         # pair id both legs share.
         brokered = bool(journal or (o.ref and o.ref == i.ref))
         if mapped:
+            # The map books the out-leg as the in-leg's other listing
+            # (through its lines): the in-leg is that listing too —
+            # joined to it, never the map's own symbols renamed.
+            alt = _other_listing(i.symbol)
+            if (not ambiguous and verdict == "" and alt
+                    and o.symbol != alt and i.symbol not in named
+                    and _booked(o.symbol) != _booked(i.symbol)
+                    and _booked(alt) == _booked(o.symbol)
+                    and (o.symbol in named or alt in named)
+                    and not ({frozenset((o.symbol, i.symbol)),
+                              frozenset((i.symbol, alt)),
+                              frozenset((o.symbol, alt))} & apart)):
+                p = Pair(o, i, i.symbol, alt, journal=journal,
+                         names=((o.raw_name, i.raw_name) if journal else
+                                (shown.get(min(nx), "") if nx else "",
+                                 shown.get(min(ny), "") if ny else "")),
+                         extra={"map": _booked(o.symbol)})
+                joined.append(p)
+                continue
             # The user's map decides (listed by `taxjson journals` when
             # the pair is a journal, not a coincidence of two companies).
             if not ambiguous and (verdict != DIFFERENT or brokered):
@@ -1483,6 +1535,20 @@ def joined_note(account: str, joined: Iterable[Pair],
                         f"add `DISTINCT {p.out.symbol} {p.into.symbol}` "
                         f"to ticker.map")
             continue
+        if p.extra.get("map"):
+            items.append(f"{p.out.symbol} ↔ {p.into.symbol} (transfer "
+                         f"{p.out.date}; ticker.map books {p.out.symbol} "
+                         f"as {p.extra['map']}, so {p.into.symbol} is "
+                         f"booked as {p.to})")
+            undo.append(f"- {p.out.symbol} ↔ {p.into.symbol}: the two legs "
+                        f"of one move, and the map's line says "
+                        f"{p.out.symbol} is {p.extra['map']}: "
+                        f"{p.into.symbol} joins its other listing {p.to} "
+                        f"in the base-currency books (`TOBASE "
+                        f"{p.frm} {p.to}`); if they are not one security, "
+                        f"add `DISTINCT {p.out.symbol} {p.into.symbol}` to "
+                        f"ticker.map")
+            continue
         fixed = [corrected[k] for k in ((p.out.account, p.out.symbol),
                                         (p.into.account, p.into.symbol))
                  if k in corrected]
@@ -1515,3 +1581,76 @@ def joined_note(account: str, joined: Iterable[Pair],
              "loss rules), as a ticker.map "
              + " / ".join(sorted(kinds)) + " line would — this "
              "changes your books."] + undo)
+
+
+def map_split(refused: Iterable[Pair], map_named: Iterable[str],
+              map_renames: Optional[Dict[str, str]] = None
+              ) -> List[Tuple[Pair, str, str, str]]:
+    """The pairs the user's map refused ("map", analyze) whose legs the
+    map books as two different symbols — each leg is then left unpaired:
+    the units leave one security and arrive in another. [(pair, the
+    out-leg as booked, the in-leg as booked, the ticker.map line that
+    books them as one)] — the line maps the leg no line names onto the
+    other leg as booked; "" when the map names both."""
+    named = {s.upper() for s in map_named}
+    ren = {str(k).upper(): str(v).upper()
+           for k, v in (map_renames or {}).items()}
+    out: List[Tuple[Pair, str, str, str]] = []
+    for p in refused:
+        if p.extra.get("refused") != "map":
+            continue
+        eo = ren.get(p.out.symbol, p.out.symbol)
+        ei = ren.get(p.into.symbol, p.into.symbol)
+        if eo == ei:
+            continue                    # the map books them as one
+        if p.into.symbol not in named:
+            line = f"TOBASE {p.into.symbol} {eo}"
+        elif p.out.symbol not in named:
+            line = f"TOBASE {p.out.symbol} {ei}"
+        else:
+            line = ""
+        out.append((p, eo, ei, line))
+    return out
+
+
+def map_split_note(account: str, items: Iterable[Tuple[Pair, str, str, str]]
+                   ) -> Optional[Tuple[str, List[str]]]:
+    """(headline, details) of the one Warning per account naming the
+    transfer pairs its ticker.map books as two securities (map_split);
+    None when there are none."""
+    heads: List[str] = []
+    details: List[str] = []
+    for p, eo, ei, line in items:
+        if account not in (p.out.account, p.into.account):
+            continue
+        q = f"{-p.out.quantity:g}"
+        heads.append(f"{q} {p.out.symbol} out {p.out.date} (booked as "
+                     f"{eo}) / {p.into.symbol} in {p.into.date}"
+                     + (f" (booked as {ei})" if ei != p.into.symbol
+                        else ""))
+        if line:
+            # The leg the map names: its line may be the one to correct.
+            other = (p.out.symbol if line.split()[1] == p.into.symbol
+                     else p.into.symbol)
+            fix = (f"if they are one security, add `{line}` to "
+                   f"ticker.map (or correct the line naming {other})")
+        else:
+            fix = (f"if they are one security, make the lines naming "
+                   f"{p.out.symbol} and {p.into.symbol} book them as one "
+                   f"symbol")
+        details.append(f"- {p.out.symbol} → {p.into.symbol} "
+                       f"({p.out.account} → {p.into.account}): {fix}; if "
+                       f"they are two, add `DISTINCT {p.out.symbol} "
+                       f"{p.into.symbol}`")
+    if not heads:
+        return None
+    return (f"{account}: ticker.map books the two legs of a transfer as two "
+            f"securities: " + "; ".join(heads),
+            ["The legs pair as one move (the same quantity, within "
+             f"{PAIR_DAYS} business days), but the units leave one "
+             "security and arrive in another: the out-leg leaves your "
+             "books (in a registered account, a withdrawal at fair "
+             "value) and the in-leg opens a position with no cost "
+             "carried."] + details
+            + ["`taxjson journals` lists the pair; `run --strict` stops on "
+               "it."])
