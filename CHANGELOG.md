@@ -100,6 +100,12 @@
   to add, never a guessed figure; a computed figure is labelled "v2
   (opt-in, under audit)" and the checklist keeps it at attention until you
   mark it reviewed. tax-logic CA-FX-07 / US-FX-03 state the method.
+- The `pre-push` hook scans every revision of a binary file the pushed
+  commits add, not only the one at the pushed tip (GitHub issue #7): a
+  PDF whose compressed text held a private value, replaced by a clean
+  copy in a later commit of the same push, was published in history
+  unscanned. Each distinct file revision is scanned once, and one the
+  remote already holds is skipped.
 
 ### Changed
 
