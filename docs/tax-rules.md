@@ -226,11 +226,11 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 
 ## FX gains on foreign cash
 
-- **Rule:** gains on holding foreign cash are not in the Schedule 3 totals: `taxjson fx-cash` estimates the year's net gain or loss beyond the $200 annual exemption from a pooled average cost per currency (`fx_cash_gains = true` also prints it at the end of `taxjson run`). Cash moves on a trade for cash, income, withholding, fees and the cash a corporate action pays; a share-for-share exchange, a coin swap or a fee in a coin moves none.
+- **Rule:** gains on holding foreign cash are not in the Schedule 3 totals. `taxjson fx-cash` applies one method: every spend of a foreign currency is a disposition, one pooled average cost per currency across the taxable accounts, a conversion at the Canadian-dollar amount actually paid or received, a move between two of your own accounts in the books not a disposition, money from outside the books at the cost you declare (`spot` opts into the day's rate) and money leaving them declared too (kept: it leaves at its cost; converted or spent: a disposition), and a negative broker balance a debt in that currency, realised when repaid; only the net beyond the $200 annual exemption counts. Cash moves on a trade for cash, income, withholding, fees and the cash a corporate action pays; a share-for-share exchange, a coin swap or a fee in a coin moves none. A USD stablecoin counts as US-dollar cash (a stated approximation, CA-CRYPTO-02; the report says so). The DEFAULT ledger (v1) reads only trades and income, so `taxjson sum`, `taxjson fx-cash` and the checklist say NOT RELIABLE — do not file its figure. The opt-in ledger v2 (`fx_cash_ledger = "v2"` or `taxjson fx-cash --ledger v2`, under audit) also reads IB Forex trades, Deposits & Withdrawals and Cash Report balances, RBC cash rows, Kraken fiat funding, conversions and balances, Coinbase fiat and stablecoin moves, and the `.tt` lines `FXCONV`, `CASHMOVE`, `CASHOPEN`, `CASHBAL`, `CASHBOOK`; it reconciles each broker account to its statement balances and refuses (NOT COMPUTED, each problem listed with date, account and amount) instead of guessing.
 - **Source:** s.39(1.1) (individuals, since 2016; formerly s.39(2)); **IT-95R** *Foreign Exchange Gains and Losses*.
 - **Rule ids:** `CA-FX-07`.
-- **Code:** `src/taxjson/bin/taxjson_fx_cash.py` — `build_ledger`, `apply_jurisdiction`, `_non_cash`, `CA_EXEMPTION`.
-- **Edge cases and limits:** IB `Trades / Forex` conversions and Kraken fiat conversions are not read, so an IB account's ledger can overdraft (KNOWN_ISSUES "IB `Trades / Forex` conversions are not modeled"). The estimate leaves the FX result out (KNOWN_ISSUES "Estimate and instalments: FX on cash").
+- **Code:** `src/taxjson/bin/taxjson_fx_cash.py` — `build_ledger`, `apply_jurisdiction`, `unreliable_status`, `_non_cash`, `CA_EXEMPTION`; `src/taxjson/lib/fx_cash_v2.py` — `build`, `headline`, `TOL`; `src/taxjson/lib/cash_events.py` — `parse_line`, `collect`, `pair_internal`, `Books`.
+- **Edge cases and limits:** v2 reads no Questrade or Webull cash events (declare them with `.tt` lines) and IB's deposit advances are netted against their cancellation; futures' daily cash settlement (IB "Cash Settling MTM") is not modelled, so an IB account with open futures at a statement end will not reconcile (KNOWN_ISSUES "FX on foreign cash"). The estimate leaves the FX result out (KNOWN_ISSUES "Estimate and instalments: FX on cash").
 
 ## Shares with an unknown cost: missing history, transfers in, opening balances
 
@@ -460,10 +460,10 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 
 ## FX gains on foreign cash (§988)
 
-- **Rule:** gains on holding foreign cash are ordinary income, not capital gains, and not in the Form 8949 totals; `taxjson fx-cash` estimates them (`fx_cash_gains = true` runs it after `taxjson run`). The §988(e) personal exclusion is not modelled and there is no $200 exemption.
+- **Rule:** gains on holding foreign cash are ordinary income, not capital gains, and not in the Form 8949 totals; `taxjson fx-cash` applies one method (spend = disposition, one pooled basis per currency, conversions at the US-dollar amount paid or received, own moves not dispositions, declared basis for money from outside the books, a negative broker balance a debt realised when repaid). The §988(e) personal exclusion is not modelled and there is no $200 exemption; a stablecoin is property, never cash. The default ledger is NOT RELIABLE (never file its figure); the opt-in ledger v2 (`fx_cash_ledger = "v2"`, under audit) reads the cash events and refuses instead of guessing.
 - **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rule `US-FX-03`.
 - **Rule ids:** `US-FX-03`.
-- **Code:** `src/taxjson/bin/taxjson_fx_cash.py` — `apply_jurisdiction`.
+- **Code:** `src/taxjson/bin/taxjson_fx_cash.py` — `apply_jurisdiction`, `unreliable_status`; `src/taxjson/lib/fx_cash_v2.py` — `build`.
 
 ## Shares with an unknown basis: missing history, transfers in, opening balances
 

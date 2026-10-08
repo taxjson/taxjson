@@ -10,9 +10,12 @@ treats investment FX as ORDINARY income with no de-minimis (the
 $200-per-transaction personal-use exemption of §988(e) is not
 modeled) — the report says so.
 
-The ledger is reconstructed from the taxable accounts' NATIVE
-transaction books (cash flows in their own currency) priced with the
-pipeline's per-day FX history:
+Two ledgers (tax-logic CA-FX-07 / US-FX-03):
+
+v1, the DEFAULT, is NOT RELIABLE and is never presented as a filing
+figure. It is reconstructed from the taxable accounts' NATIVE
+transaction books only (cash flows in their own currency) priced with
+the pipeline's per-day FX history:
 
     acquire USD  — sell a USD security, receive a USD dividend or
                    interest payment (GROSS — the withholding leaves
@@ -20,21 +23,26 @@ pipeline's per-day FX history:
     dispose USD  — buy a USD security, pay USD withholding tax or a
                    USD fee
 
-What the broker CSVs do NOT carry is explicit cash conversions and
-cash deposits/withdrawals, so the ledger can be asked to spend
-currency it never saw acquired. Such overdrafts dispose only what the
-pool holds (the excess moves at that day's rate with zero gain) and
-are COUNTED — a large overdraft count means conversion/deposit rows
-are missing. Unseen conversions can move the result in EITHER
-direction (a lot converted away and re-bought later is priced against
-the wrong pool), which the report says every time. This is why the
-feature is OFF by default (`fx_cash_gains = true` under [settings]
-turns the end-of-run report on); the `taxjson fx-cash` command works
-either way.
+It does not read what the brokers DO export about cash: currency
+conversions (IB Trades/Forex rows, Kraken/Coinbase fiat trades),
+deposits and withdrawals (IB Deposits & Withdrawals, RBC WIR/DEP/TFI
+rows), statement cash balances (IB Cash Report), margin debt in a
+foreign currency, or the pool carried in from the year before (each
+history starts empty). So the ledger is asked to spend currency it
+never saw acquired: such overdrafts dispose only what the pool holds
+(the excess moves at that day's rate with zero gain) and are COUNTED,
+per tax year with their amounts. Every v1 output says NOT RELIABLE —
+do not file this figure (`unreliable_status`).
+
+v2 (lib/fx_cash_v2, opt-in: [settings] fx_cash_ledger = "v2" or
+`taxjson fx-cash --ledger v2`) reads those cash events (lib/
+cash_events), models foreign-currency debt per broker account,
+reconciles each account's balance to the statement and REFUSES
+(no figure) instead of guessing. Even when it computes it is labelled
+"v2 (opt-in, under audit)".
 
 Nothing here changes the capital-gains engine, Schedule 3 / 8949
-exports, or `taxjson sum` totals — the output is a standalone report
-of the s.39(1.1) number and where to file it.
+exports, or `taxjson sum` totals.
 """
 from taxjson.lib.out import exit_text
 import sys
@@ -196,6 +204,9 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
     per_cur: Dict[str, Dict[str, float]] = {}
     events: List[Dict[str, Any]] = []
     overdrafts: Dict[str, int] = {}
+    # In the tax year only (settle date in it): count and the units the
+    # ledger could not cover — what the NOT RELIABLE headline quotes.
+    overdrafts_year: Dict[str, Dict[str, float]] = {}
     unrated: Dict[str, int] = {}
     ystr = str(year)
 
@@ -256,6 +267,11 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
             # acquired (a conversion/deposit the CSV doesn't carry).
             # Moves at today's rate, zero gain, loudly counted.
             overdrafts[cur] = overdrafts.get(cur, 0) + 1
+            if d.startswith(ystr):
+                oy = overdrafts_year.setdefault(cur, {"count": 0,
+                                                      "units": 0.0})
+                oy["count"] += 1
+                oy["units"] += units - covered
         if d.startswith(ystr):
             stat["disposed"] += units
             stat["gain"] += gain
@@ -279,6 +295,9 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
             "events": events,
             "net_gain": round(net, 2),
             "overdrafts": overdrafts,
+            "overdrafts_year": {c: {"count": int(v["count"]),
+                                    "units": round(v["units"], 2)}
+                                for c, v in sorted(overdrafts_year.items())},
             "unrated": unrated,
             # End of the whole history (the books may run past the
             # tax year) and at Dec 31 of the tax year — the latter is
@@ -314,25 +333,80 @@ def apply_jurisdiction(net_gain: float, country: str) -> Dict[str, Any]:
                     "promissory notes, and other similar properties'."}
 
 
+NOT_READ = ("conversions, deposits/withdrawals and margin balances are "
+            "not read")
+
+
+def has_activity(doc: Dict[str, Any]) -> bool:
+    """The v1 ledger saw foreign-currency cash move in the tax year."""
+    return bool(doc.get("overdrafts_year")) or any(
+        abs(float(v or 0.0)) > 0.005
+        for s in (doc.get("per_currency") or {}).values()
+        for v in s.values())
+
+
+def unreliable_status(doc: Dict[str, Any], year: int,
+                      verdict: Optional[Dict[str, Any]] = None
+                      ) -> Dict[str, Any]:
+    """The v1 ledger's status: NEVER a filing figure (CA-FX-07 /
+    US-FX-03). `headline` is the one line every output prints in place
+    of the reportable figure; the raw numbers stay under
+    `unreliable_raw` for whoever wants to look at them."""
+    od = doc.get("overdrafts_year") or {}
+    n = sum(int(v.get("count") or 0) for v in od.values())
+    amounts = ", ".join(f"{float(v.get('units') or 0.0):,.2f} {c}"
+                        for c, v in sorted(od.items()))
+    active = has_activity(doc)
+    if active:
+        headline = (f"FX on foreign cash: NOT RELIABLE for {year} — {n} "
+                    f"in-year overdraft{'' if n == 1 else 's'}"
+                    + (f" ({amounts})" if amounts else "")
+                    + f"; {NOT_READ}; do not file this figure")
+    else:
+        headline = (f"FX on foreign cash: no foreign-currency cash flow "
+                    f"in the taxable books for {year} ({NOT_READ})")
+    reasons = [f"{n} in-year overdraft(s): the ledger spent currency it "
+               f"never saw acquired" + (f" ({amounts})" if amounts
+                                        else ""),
+               "currency conversions (IB Forex, Kraken/Coinbase fiat "
+               "trades, bank conversions) are not read",
+               "cash deposits and withdrawals are not read",
+               "foreign-currency margin balances (debt) are not modelled",
+               "each history starts with an empty pool (no opening "
+               "balance carried from the year before)"]
+    raw = {"net_gain": doc.get("net_gain"),
+           "reportable": (verdict or {}).get("reportable")}
+    return {"ledger": "v1", "status": "unreliable", "reliable": False,
+            "active": active, "headline": headline, "reasons": reasons,
+            "overdrafts_in_year": od, "unreliable_raw": raw}
+
+
 def render_report(doc: Dict[str, Any], base: str, year: int,
                   country: str, verdict: Dict[str, Any],
                   width_: Optional[int] = None) -> str:
     """The report in the house layout (docs/output-style.md), wrapped at
-    `width_` (default: the house width; 0 = never). Its LAST line is
-    what `taxjson checklist` shows for the fx-cash step: the CAVEAT
-    paragraph (or the no-activity line, or the unrated-events warning),
-    whole when unwrapped."""
+    `width_` (default: the house width; 0 = never). Its FIRST
+    paragraph is the NOT RELIABLE headline (`unreliable_status`); the
+    checklist reads `fx-cash --json`."""
     from taxjson.lib import out
     from taxjson.lib.country import is_usa as _is_usa
     from taxjson.lib.report_model import fmt_money
     w = out.width() if width_ is None else width_
-    lines = out.wrap(f"FX GAINS ON CASH — {base}, tax year {year}, "
-                     f"{verdict['rule']}", w)
-    lines += out.wrap("ESTIMATE ONLY, not filing numbers — reconstructed "
-                      "from broker cash flows. Foreign cash is property: "
+    st = unreliable_status(doc, year, verdict)
+    # The caveat FIRST: whoever reads only the top never takes the
+    # figure below for a filing number.
+    lines = out.wrap(st["headline"] + ".", w, "", "  ")
+    lines.append("")
+    lines += out.wrap(f"FX GAINS ON CASH — {base}, tax year {year}, "
+                      f"{verdict['rule']}, ledger v1 (default)", w)
+    lines += out.wrap("NOT RELIABLE, not filing numbers — reconstructed "
+                      "from the trades and income in the taxable "
+                      "accounts' books only. Foreign cash is property: "
                       "spending it realizes the FX move since "
-                      "acquisition. Ledger: taxable accounts' native "
-                      "books, pooled average cost.", w)
+                      "acquisition (pooled average cost). The opt-in "
+                      "ledger v2 reads conversions, deposits and "
+                      "statement balances: [settings] fx_cash_ledger = "
+                      "\"v2\" or `taxjson fx-cash --ledger v2`.", w)
     lines.append("")
     # Currencies with in-year activity only — a stale pool with no
     # movement this year is noise. Largest flow first.
@@ -346,8 +420,7 @@ def render_report(doc: Dict[str, Any], base: str, year: int,
              fmt_money(s["gain"])]
             for c, s in sorted(active.items(),
                                key=lambda kv: -kv[1]["disposed"])]
-    foot = [["NET", "", "", fmt_money(doc["net_gain"])],
-            ["REPORTABLE", "", "", fmt_money(verdict["reportable"])]]
+    foot = [["NET (NOT RELIABLE)", "", "", fmt_money(doc["net_gain"])]]
     lines += out.fit_table(["CUR", "ACQUIRED", "DISPOSED", "GAIN(LOSS)"],
                            body, aligns=["<", ">", ">", ">"], foot=foot,
                            width_=w)
@@ -367,20 +440,26 @@ def render_report(doc: Dict[str, Any], base: str, year: int,
     if doc["overdrafts"]:
         counts = ", ".join(f"{c} {n}" for c, n
                            in sorted(doc["overdrafts"].items()))
+        oy = doc.get("overdrafts_year") or {}
+        inyear = ", ".join(f"{c} {int(v['count'])}x "
+                           f"{fmt_money(v['units'])}"
+                           for c, v in sorted(oy.items()))
         warn.append(f"{_W}disposals exceeded the ledgered "
-                    f"balance ({counts}; full history) — cash "
-                    f"conversions/deposits the broker CSVs don't "
-                    f"carry. The excess moves at the day's rate with "
-                    f"zero gain.")
+                    f"balance ({counts}; full history"
+                    + (f"; in {year}: {inyear}" if inyear else "")
+                    + ") — the cash conversions, deposits and margin "
+                    "debt this ledger does not read. The excess moves "
+                    "at the day's rate with zero gain.")
     # Always: explicit conversions (IB Forex rows, bank FX, deposits)
     # are not read, so a lot converted away and later re-bought is
     # priced against the wrong pool (R1-148).
-    warn.append("CAVEAT: explicit currency conversions and cash "
-                "deposits/withdrawals are not in the ledger, so this "
-                "figure can be wrong in either direction — not only "
-                "understated. Treat it as a starting point for the "
+    warn.append("CAVEAT: currency conversions, cash "
+                "deposits/withdrawals and foreign-currency margin "
+                "balances are not in the ledger, so this figure can be "
+                "wrong in either direction — not only understated. It "
+                "is not the "
                 + ("§988" if _is_usa(country) else "s.39(1.1)")
-                + " calculation, not the answer.")
+                + " figure; do not file it.")
     if doc["unrated"]:
         counts = ", ".join(f"{c} {n}" for c, n
                            in sorted(doc["unrated"].items()))

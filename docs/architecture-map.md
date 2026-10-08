@@ -344,7 +344,8 @@ foreign cash; `stats` is a trader's win and loss view.
 - `src/taxjson/lib/tax_estimate.py` — `estimate_canada`, `estimate_usa`, `_amt_canada`, `ca_amt_carryover`, `apply_vintage`, `CA_FED_BRACKETS`: brackets, credits and the AMT, by rate year.
 - `src/taxjson/lib/amt_report.py` — `build`, `render`, `render_recorded`: the AMT page.
 - `src/taxjson/bin/taxjson_instalments.py` — `build`, `render`, `required_schedule`, `interest_and_penalty`, `PUBLISHED_RATES`: instalment schedule, interest and penalty.
-- `src/taxjson/bin/taxjson_fx_cash.py` — `build_ledger`, `apply_jurisdiction`, `render_report`, `CA_EXEMPTION`: FX gains on foreign-currency cash.
+- `src/taxjson/bin/taxjson_fx_cash.py` — `build_ledger`, `apply_jurisdiction`, `render_report`, `unreliable_status`, `CA_EXEMPTION`: FX gains on foreign-currency cash, the default ledger (v1: trades and income only, flagged NOT RELIABLE everywhere).
+- `src/taxjson/lib/fx_cash_v2.py` — `build`, `headline`, `render`, `TOL`, `LABEL`: the opt-in ledger v2 (debt per broker account, reconciliation to statement balances, refusals); `src/taxjson/lib/cash_events.py` — `collect`, `parse_line`, `read_project_lines`, `pair_internal`, `Books`, `FORMS`: the cash-event book it reads (the `.tt` lines `FXCONV`, `CASHMOVE`, `CASHOPEN`, `CASHBAL`, and each broker's `ib_cash_events`, `rbc_cash_events`, `kraken_cash_events`, `coinbase_cash_events`); `src/taxjson/bin/taxjson_run.py` — `_fx_cash_status`, `_fx_cash_v2_doc`, `_fx_cash_ledger_choice`, `_fx_cash_carry`, `_fx_sum_item`: which ledger, the status `sum` / `checklist` / the run hook show, and the prior year's close (`fx_cash_v2` in the close-year record).
 - `src/taxjson/lib/trade_stats.py` — `compute`, `classify`, `written_option_trades`, `CLASSES`: win and loss statistics.
 
 ## Checks before filing

@@ -27,6 +27,13 @@ year                        = 2024
 base_currency               = "USD"
 ## true: an end-of-run FX-on-cash report (§988, ordinary income).
 # fx_cash_gains             = false
+## Ledger v2: money from outside the books needs a declared cost (a .tt CASHMOVE line); "spot" takes
+## the day's rate for every undeclared inflow instead.
+# fx_cash_inflow_cost       = "declared"  # declared | spot
+## The FX-on-cash ledger: v1 (the default) reads only trades and income and is NOT RELIABLE — never
+## a filing figure; v2 (opt-in, under audit) also reads conversions, deposits/withdrawals and
+## statement balances, models margin debt and refuses instead of guessing.
+# fx_cash_ledger            = "v1"        # v1 | v2
 ## Currencies you hold besides USD (their FX rates are fetched). Default none: an all-USD project
 ## needs nothing here; uncomment it only for an account or trade in another currency.
 source_currencies           = []

@@ -147,7 +147,11 @@ the open steps one at a time; `--quick` skips the slow detectors.
       `[carryover] claimed = { YEAR = AMOUNT }` as the 100% loss applied (the line 25300 amount divided by the
       inclusion rate — twice it at 50%).
 - [ ] `taxjson fx-cash` — gains on foreign-currency cash above the $200
-      de minimis (ITA s.39(1.1)).
+      de minimis (ITA s.39(1.1)). The default ledger says NOT RELIABLE:
+      it reads no conversion, deposit or margin balance, so never file
+      its figure. The opt-in ledger v2 (`--ledger v2`, under audit) reads
+      them and says what it computed or what it needs; mark a computed
+      figure reviewed with `taxjson checklist --done fx-cash`.
 - [ ] Carrying charges for line 22100 — the margin interest you paid,
       from the broker statements (`taxjson events` lists the INTEREST
       rows; the CASH INTEREST line of reports/<account>.sum nets credit

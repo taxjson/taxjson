@@ -440,9 +440,12 @@ class TestWording(unittest.TestCase):
                            apply_jurisdiction(5.0, "usa"))
         ca = render_report(doc, "CAD", 2025, "canada",
                            apply_jurisdiction(5.0, "canada"))
-        self.assertIn("§988 calculation", us)
+        # The default ledger's caveat names the country's rule and says
+        # the figure is not it (CA-FX-07 / US-FX-03: NOT RELIABLE).
+        self.assertIn("It is not the §988 figure; do not file it.", us)
         self.assertNotIn("s.39(1.1)", us)
-        self.assertIn("s.39(1.1) calculation", ca)
+        self.assertIn("It is not the s.39(1.1) figure; do not file it.",
+                      ca)
         from taxjson.lib import checklist as CL
         self.assertNotIn("$200 per transaction", str(CL.US_STEPS))
 
