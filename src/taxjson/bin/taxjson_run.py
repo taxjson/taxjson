@@ -2422,6 +2422,28 @@ def stage_dated_events(cache: Path, accounts: List[str]):
     return decl
 
 
+# The parsers that say a look-alike ticker change (a symbol stops, one of
+# the same name starts short): RBC, Questrade and Webull.
+_LOOKALIKE_RENAME_BROKERS = ("rbc_direct", "questrade", "webull")
+
+
+def stage_declared_renames(cache: Path) -> Path:
+    """work/declared_renames.list: the ticker changes the project's .tt
+    RENAME lines declare (read up front: _read_dated_events), one
+    `OLD<TAB>NEW<TAB>WHERE` line each — what taxjson-brokerage
+    --declared-renames reads, so a look-alike rename hint they answer
+    is a note naming the line. Rewritten only when it changes (a parse
+    dep under --fast); empty when there are none."""
+    decl = _DATED_THIS_RUN.get(cache.resolve())
+    path = cache / "declared_renames.list"
+    text = "".join(f"{dr.old}\t{dr.new}\t{dr.where}\n"
+                   for dr in (decl.tt_declared if decl is not None
+                              else ()))
+    if _read_work_stamp(path) != text:
+        _write_work_stamp(path, text)
+    return path
+
+
 def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
                          ticker_map: Optional[Path],
                          strict: bool = False) -> Optional[Path]:
@@ -3854,6 +3876,13 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             deps += [_ibp] + _ibp_deps
             if _ibp_deps:
                 _codes_args += ["--project-statements", str(_ibp)]
+        if broker in _LOOKALIKE_RENAME_BROKERS and not is_crypto:
+            # A look-alike ticker change a .tt RENAME line already
+            # declares is a note, not an ATTENTION (a dep, rewritten
+            # only when the lines change).
+            _dr = stage_declared_renames(cache)
+            deps.append(_dr)
+            _codes_args += ["--declared-renames", str(_dr)]
         if broker in _LS.CURRENCY_SUFFIX_BROKERS and not is_crypto:
             # The listings read from the evidence (a dep, rewritten only
             # when they change).

@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          ticker_map_joins,
+                                         answered_rename_note,
+                                         declared_rename_where,
                                          OPTION_STRIKE_RE, parse_strict_number,
                                          read_broker_text,
                                          shown_name)
@@ -867,6 +869,13 @@ class WebullBrokerage(BaseBrokerage):
                     continue
                 if ticker_map_joins(prev_sym, sym):
                     continue    # ticker.map already joins them (A2-1056)
+                declared = declared_rename_where(prev_sym, sym)
+                if declared:
+                    # A .tt RENAME line already books it: a note.
+                    emit_line(answered_rename_note(
+                        f"Webull {source}", "Webull", prev_sym, sym,
+                        declared))
+                    continue
                 # ATTENTION: on the run console (re-audit A2-0279; the
                 # plain warning reached only the .sum).
                 emit_line(f"warning: ATTENTION: Webull {source}: {sym} goes "

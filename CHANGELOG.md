@@ -28,6 +28,11 @@
   HELD" row of `taxjson find-missing-history`, a flag in `taxjson
   spinoffs`, or ATTENTION in the checklist and quick-start. A $0 cost the
   broker booked with no value saved is still a Warning.
+- The RBC, Questrade and Webull look-alike rename hint ("RBC symbol OLD
+  looks renamed to NEW") is no longer printed when a `.tt` line `RENAME
+  <date> OLD NEW` already declares the change: the run passes the
+  declared changes to the parser, and the `.sum` keeps a note naming the
+  line ("answered by inputs/<account>/renames.tt:N").
 - `taxjson format-map` replaces every header an earlier taxjson version
   wrote into ticker.map with the current one: the earliest projects'
   header ("symbol rules for the taxjson pipeline", "Each line is: KEYWORD

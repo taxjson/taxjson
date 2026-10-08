@@ -342,6 +342,57 @@ def ticker_map_joins(a: str, b: str) -> bool:
     return False
 
 
+# The ticker changes the project's .tt RENAME lines declare, as `taxjson
+# run` passes them (taxjson-brokerage --declared-renames): {(OLD, NEW):
+# the line's place, inputs/<acct>/<file>.tt:<n>}. Empty = none given.
+_DECLARED_RENAMES: Dict[Tuple[str, str], str] = {}
+
+
+def set_declared_renames(path) -> None:
+    """Load the declared ticker changes (one `OLD<TAB>NEW<TAB>WHERE` line
+    each, the file `taxjson run` writes: work/declared_renames.list)
+    that answer a parser's look-alike rename hint. None clears them."""
+    _DECLARED_RENAMES.clear()
+    if path is None:
+        return
+    for ln in Path(path).read_text(encoding="utf-8").splitlines():
+        parts = ln.split("\t")
+        if len(parts) >= 3 and parts[0].strip() and parts[1].strip():
+            _DECLARED_RENAMES.setdefault(
+                (parts[0].strip().upper(), parts[1].strip().upper()),
+                parts[2].strip())
+
+
+def declared_rename_where(a: str, b: str) -> Optional[str]:
+    """Where a declared ticker change (set_declared_renames) joins
+    listings `a` and `b` (either direction, read through the loaded
+    ticker.map's renames as ticker_map_joins reads them), or None."""
+    if not _DECLARED_RENAMES or not a or not b:
+        return None
+    ren = _TICKER_JOINS[0] if _TICKER_JOINS is not None else {}
+
+    def m(sym: str) -> str:
+        if not ren:
+            return sym.upper()
+        from taxjson.bin.taxjson_ticker_map import map_symbol
+        return map_symbol(sym.upper(), ren)
+    want = {m(a), m(b)}
+    for (old, new), where in _DECLARED_RENAMES.items():
+        if {m(old), m(new)} == want:
+            return where
+    return None
+
+
+def answered_rename_note(where: str, broker: str, old: str, new: str,
+                         declared_at: str) -> str:
+    """The parse's note in place of the look-alike rename ATTENTION when
+    a .tt RENAME line already declares the change (never the hint's
+    wording: `taxjson renames` reads that as an open hint)."""
+    return (f"note: {where}: {broker} symbol {old} stops and {new} starts "
+            f"with the same description — the ticker change is answered "
+            f"by {declared_at}.")
+
+
 def combined_accounts_note(where: str, broker: str, masked) -> str:
     """The one-line NOTE that replaces the 'statement spans N accounts'
     ATTENTION when the label declares combined_broker_accounts = true
