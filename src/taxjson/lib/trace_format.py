@@ -449,7 +449,7 @@ def render_gain_block(g: Dict[str, Any], align: bool = True,
         body.extend(window_lines)
     fp = filing_position_text(g)
     if fp:
-        body += ["#", f"# FILING POSITION: {fp}"]
+        body += ["#", f"# {fp[0].upper()}{fp[1:]}"]
     body.append(rule)
     return body
 

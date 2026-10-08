@@ -229,6 +229,10 @@ def fmt_summary(g) -> str:
             f"  ({direction})")
     if dis > 0.001:
         tag += f"  WASH+{dis:.2f}"
+    if isinstance(g.get('loss_override'), dict):
+        # A .tt ALLOWLOSS filing position (CA-SL-18 / US-WASH-25).
+        tag += (f"  ALLOWLOSS(rule: "
+                f"{float(g['loss_override'].get('would_disallow') or 0):.2f})")
     if g.get('term'):
         tag += f"  [{g['term']}]"
     return (
