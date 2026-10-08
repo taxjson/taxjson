@@ -231,5 +231,60 @@ class TestChangelogUnreleased(unittest.TestCase):
         self.assertEqual(len(heads), len(set(heads)))
 
 
+class TestChangelogReleasedSections(unittest.TestCase):
+    """A change made after a release goes under ## Unreleased: the newest
+    tag's own section gains no bullet and loses none after the tag (an
+    erratum may reword a bullet's body; its title stays). Skipped
+    without git or tags (an sdist)."""
+
+    def _git(self, *args):
+        try:
+            r = subprocess.run(["git", "-C", str(REPO), *args],
+                               capture_output=True, text=True,
+                               stdin=subprocess.DEVNULL, timeout=60)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return r.stdout if r.returncode == 0 else None
+
+    @staticmethod
+    def _section(text, tag):
+        start = text.find(f"## {tag} ")
+        if start == -1:
+            start = text.find(f"## {tag}\n")
+        if start == -1:
+            return None
+        end = text.find("\n## ", start + 1)
+        return text[start:end if end != -1 else len(text)]
+
+    @staticmethod
+    def _titles(section):
+        heads = re.findall(r"^### (.+)$", section, re.M)
+        return heads, [b[:60] for b in _bullets(section)]
+
+    def test_newest_release_section_matches_its_tag(self):
+        tags = self._git("tag", "--list", "v*", "--sort=-v:refname")
+        tags = [t for t in (tags or "").split()
+                if re.fullmatch(r"v\d+\.\d+\.\d+", t)]
+        if not tags:
+            self.skipTest("no git checkout with release tags")
+        tag = tags[0]
+        then = self._git("show", f"{tag}:CHANGELOG.md")
+        if then is None:
+            self.skipTest(f"{tag} has no CHANGELOG.md")
+        was = self._section(then, tag)
+        if was is None:
+            self.skipTest(f"{tag}'s CHANGELOG has no {tag} section")
+        now = self._section(_read("CHANGELOG.md"), tag)
+        self.assertIsNotNone(now, f"the {tag} section is gone")
+        heads_was, bullets_was = self._titles(was)
+        heads_now, bullets_now = self._titles(now)
+        self.assertEqual(heads_now, heads_was)
+        added = [b for b in bullets_now if b not in bullets_was]
+        removed = [b for b in bullets_was if b not in bullets_now]
+        self.assertEqual((added, removed), ([], []),
+                         f"{tag}'s section changed after the tag: move the "
+                         f"new bullets under ## Unreleased")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -26,7 +26,10 @@ the open steps one at a time; `--quick` skips the slow detectors.
 - [ ] **Every broker's exports reach the year end** wherever it still
       holds positions: `taxjson run` warns ("<broker> exports for
       <account> end <date> with open positions") when one stops early —
-      its later sales, option expiries and income would be missing.
+      its later sales, option expiries and income would be missing. If
+      the broker had no activity there after that date, `taxjson
+      checklist --done export-coverage` answers that gap (a new gap or a
+      later end asks again).
 - [ ] **Sheltered accounts too.** RRSP, LIRA, TFSA and RESP owe no tax,
       but their purchases decide the superficial-loss rule for the
       taxable ones; without them a permanently denied loss is invisible.

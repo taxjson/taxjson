@@ -198,11 +198,14 @@ def _scoped_names(cache: Path, accounts: List[str],
 
 
 def _source_brokers(cache: Path, accounts: Iterable[str]
-                    ) -> Dict[Tuple[str, str], str]:
-    """{(account, export file name): broker} from each parsed export's
-    metadata (the books' rows carry the file they came from)."""
+                    ) -> Dict[str, Dict[str, Optional[str]]]:
+    """{account: {export file's source id: broker}} from each parsed
+    export's metadata: the books' rows carry the file they came from as
+    the parse showed it (export_coverage.file_source_id: an account id
+    in the name masked), never its real name."""
     from taxjson.lib.brokerages.detect import DISPLAY_NAMES
-    out: Dict[Tuple[str, str], str] = {}
+    from taxjson.lib.export_coverage import add_source
+    out: Dict[str, Dict[str, Optional[str]]] = {}
     for acct in accounts:
         files = [(b, cache / f"{acct}_{b}.json") for b in DISPLAY_NAMES]
         files += [(p.name[len(acct) + 1:-len(".json")], p)
@@ -217,25 +220,41 @@ def _source_brokers(cache: Path, accounts: Iterable[str]
                 continue
             for f in md.get("input_files") or []:
                 if f:
-                    out.setdefault((acct, Path(str(f)).name), b)
+                    add_source(out.setdefault(acct, {}),
+                               Path(str(f)).name, b)
     return out
 
 
 # Words that say which VOTING class a share is (symbol_codes._DESIGNATORS
 # as exact_name spells them): a broker may write them or leave them out
 # ("QZCO INC SUBORD VTG SHS" / "QZCO INC COM") for an issuer with one
-# listed class.
-_VOTING_WORDS = frozenset(("VOTING", "SUBORDINATE", "MULTIPLE", "NON",
-                           "RESTRICTED"))
+# listed class — at the END of the name only, after the company's own
+# words ("... SUBORDINATE VOTING", "... MULTIPLE VOTING", "... NON
+# VOTING", "... RESTRICTED VOTING", "... VOTING"): a word of the
+# company's name ("NON STOP CORP", "RESTRICTED BRANDS INC") is never
+# share wording.
+_VOTING_KINDS = frozenset(("SUBORDINATE", "MULTIPLE", "NON", "RESTRICTED"))
+
+
+def _voting_phrase(k: Tuple[str, ...]) -> Tuple[str, ...]:
+    """The voting-share phrase a normalised name ends with (exact_name
+    spells "SUBORD VTG SHS" SUBORDINATE VOTING), else ()."""
+    if not k or k[-1] != "VOTING":
+        return ()
+    if len(k) >= 2 and k[-2] in _VOTING_KINDS:
+        return k[-2:]
+    return k[-1:]
 
 
 def _wording_only(na: Set[Tuple[str, ...]], nb: Set[Tuple[str, ...]],
                   all_a: Set[Tuple[str, ...]], all_b: Set[Tuple[str, ...]],
                   a: str, b: str) -> Optional[Tuple[Tuple[str, ...],
                                                     Tuple[str, ...]]]:
-    """(name of a, name of b) when the two names differ ONLY in voting
-    share wording one of them states (SUBORDINATE VOTING, MULTIPLE
-    VOTING, NON VOTING, RESTRICTED) — possibly a broker's style for an
+    """(name of a, name of b) when the two names differ ONLY in the
+    voting-share phrase one of them ends with (SUBORDINATE VOTING,
+    MULTIPLE VOTING, NON VOTING, RESTRICTED VOTING: _voting_phrase; the
+    same words inside a company's name are its name) — possibly a
+    broker's style for an
     issuer with one listed class — else None. Never when either
     listing is a depositary receipt (a CDR is its own security:
     cross_listings.shown_apart, receipt_why), when the names state any other share
@@ -255,13 +274,12 @@ def _wording_only(na: Set[Tuple[str, ...]], nb: Set[Tuple[str, ...]],
     every = all_a | all_b | na | nb
     if any(len(w) == 1 and w.isalpha() for k in every for w in k):
         return None                     # a class letter: two classes
-    classes = {frozenset(w for w in k if w in _VOTING_WORDS)
-               for k in every} - {frozenset()}
+    classes = {_voting_phrase(k) for k in every} - {()}
     if len(classes) > 1:
         return None                     # two voting classes named
 
     def strip(k: Tuple[str, ...]) -> Tuple[str, ...]:
-        return tuple(w for w in k if w not in _VOTING_WORDS)
+        return k[:len(k) - len(_voting_phrase(k))]
     for x in sorted(na):
         for y in sorted(nb):
             if x == y or XL.companies_differ(x, y):
@@ -395,16 +413,17 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
     brokers: Dict[Tuple[str, str], str] = {}
     # The broker of a books row: its export file (`source`); a gains row
     # through its books row's id.
-    src_of: Dict[Tuple[str, str], str] = {}
+    from taxjson.lib.export_coverage import source_broker
+    src_of: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for rows_ in rows_by_sym.values():
         for r in rows_:
             if r.get("id"):
-                src_of[(str(r.get("account") or ""), str(r["id"]))] = \
-                    Path(str(r.get("source") or "")).name
+                src_of[(str(r.get("account") or ""), str(r["id"]))] = r
 
-    def _names_for(acct_: str, sym: str, src: str) -> Set[Tuple[str, ...]]:
+    def _names_for(acct_: str, sym: str, row: Optional[Dict[str, Any]]
+                   ) -> Set[Tuple[str, ...]]:
         by_b, by_a = scoped
-        b_ = brokers.get((acct_, src)) if src else None
+        b_ = source_broker(brokers.get(acct_, {}), row) if row else None
         return (by_b.get((acct_, b_, sym)) if b_ else None) \
             or by_a.get((acct_, sym)) or names.get(sym, set())
 
@@ -443,12 +462,11 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
             # account and broker), not every name the project's exports
             # give either listing.
             na = _names_for(acct, a, src_of.get(
-                (acct, str(loss.get("id") or "")), ""))
+                (acct, str(loss.get("id") or ""))))
             nb: Set[Tuple[str, ...]] = set()
             for r in buys:
                 ra = str(r.get("account") or "")
-                nb |= _names_for(ra, b, Path(str(r.get("source") or "")
-                                             ).name)
+                nb |= _names_for(ra, b, r)
             verdict = XL._names_verdict(na, nb, shown)
             pair_names: Tuple[str, str] = ("", "")
             if verdict:

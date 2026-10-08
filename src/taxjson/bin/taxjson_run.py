@@ -5512,12 +5512,14 @@ def _say_xlist_losses(root: Path, cfg: Dict[str, Any], cache: Path, *,
 
 
 def _checklist_answered(root: Path, year: Any, step: str
-                        ) -> Optional[Tuple[str, str]]:
-    """(mark, note) of a DONE or skipped mark on checklist step `step`
-    for this year in checklist.json, None when there is no such mark (or
-    the file cannot be read): a question the user answered there
-    (option-boundary's transition question, export-coverage) is said as
-    a note, not a Warning."""
+                        ) -> Optional[Tuple[str, str, frozenset]]:
+    """(mark, note, the question keys a DONE mark recorded) of a DONE or
+    skipped mark on checklist step `step` for this year in
+    checklist.json, None when there is no such mark (or the file cannot
+    be read): a question the user answered there (option-boundary's
+    transition question, export-coverage) is said as a note, not a
+    Warning — a DONE mark answers the keys it recorded only
+    (checklist.question_answers); a skip accepts them all."""
     from taxjson.lib import checklist as _cl
     try:
         st = _cl.load_state(root)
@@ -5528,7 +5530,16 @@ def _checklist_answered(root: Path, year: Any, step: str
     ov = (st.get("overrides") or {}).get(step) or {}
     if ov.get("status") not in ("done", "skipped"):
         return None
-    return str(ov["status"]), str(ov.get("note") or "")
+    keys = frozenset(str(k) for k in (ov.get("answers") or [])
+                     if isinstance(k, str))
+    return str(ov["status"]), str(ov.get("note") or ""), keys
+
+
+def _mark_answers(mark: Optional[Tuple[str, str, frozenset]],
+                  key: str) -> bool:
+    """A checklist mark answers the question `key`: a skip accepts every
+    question, a DONE mark the keys it recorded."""
+    return mark is not None and (mark[0] == "skipped" or key in mark[2])
 
 
 def _say_option_transition(root: Path, cfg: Dict[str, Any]) -> None:
@@ -5552,16 +5563,26 @@ def _say_option_transition(root: Path, cfg: Dict[str, Any]) -> None:
     if not rows:
         return
     year = settings.get("year")
-    head, details = OB.question_message(rows, int(year), since)
+    from taxjson.lib.checklist import option_keys
     mark = _checklist_answered(root, year, OB.QUESTION_STEP)
-    if mark is not None:
-        _say_once(("option-transition",), "note",
+    # A DONE mark answers the contracts it recorded; one it did not (a
+    # contract the books gained since) is asked again.
+    done = [r for r in rows if _mark_answers(mark, option_keys([r])[0])]
+    asked = [r for r in rows if r not in done]
+    if done:
+        head, _details = OB.question_message(done, int(year), since)
+        _say_once(("option-transition", "answered"), "note",
                   f"{head} — answered in checklist.json (option-boundary "
                   f"marked {mark[0]}{': ' + mark[1] if mark[1] else ''})",
                   indent="  ", file=sys.stdout)
-        return
-    _say_once(("option-transition",), "warning", head, *details,
-              indent="  ", file=sys.stdout)
+    if asked:
+        head, details = OB.question_message(asked, int(year), since)
+        if done:
+            details = details + [
+                "checklist.json's option-boundary mark answered other "
+                "contracts; mark it done again once these are answered."]
+        _say_once(("option-transition",), "warning", head, *details,
+                  indent="  ", file=sys.stdout)
 
 
 def _say_export_coverage(root: Path, cfg: Dict[str, Any]) -> None:
@@ -5588,11 +5609,10 @@ def _say_export_coverage(root: Path, cfg: Dict[str, Any]) -> None:
                       file=sys.stdout)
             continue
         head, details = EC.message(g, int(year))
-        # A DONE mark answers an end read from the last row (the broker
-        # was quiet); a statement's own end is accepted only by --skip
-        # (the checklist's rule).
-        if mark is not None and (mark[0] == "skipped"
-                                 or g.how == "last-row"):
+        # A DONE mark answers the gaps it recorded (account, broker,
+        # end — the user knows the broker had no later activity there);
+        # a new gap or a later end asks again. A skip accepts them all.
+        if _mark_answers(mark, g.key):
             _say_once(key, "note", f"{head} — marked {mark[0]} in "
                       f"checklist.json ({EC.STEP}"
                       f"{': ' + mark[1] if mark[1] else ''})", indent="  ",
@@ -7959,9 +7979,9 @@ def _print_pending(root: Path, inputs_dir: Path, cache: Path,
         if ev.get("summary"):
             doc.para(ev["summary"], indent="  ")
         if ev.get("sheltered"):
-            from taxjson.bin.taxjson_corp_actions import SHELTERED_NOTE
-            doc.para(SHELTERED_NOTE[0].upper() + SHELTERED_NOTE[1:] + ".",
-                     indent="  ")
+            from taxjson.bin.taxjson_corp_actions import sheltered_note
+            _note = sheltered_note(country)
+            doc.para(_note[0].upper() + _note[1:] + ".", indent="  ")
         if rec is not None:
             # The pending file only clears on the next successful run —
             # without this marker, "did my --set take?" looked like NO
@@ -15397,9 +15417,16 @@ def cmd_checklist(args: argparse.Namespace) -> None:
     recorded: List[Dict[str, Any]] = []
     for step, mark in marks:
         if step:
+            # A question step's DONE mark answers the questions asked now
+            # (their keys stored with it); a later one asks again.
+            answers = (cl.question_answers(root, cfg, step,
+                                           today=_date.today())
+                       if mark == "done" and step in cl.QUESTION_STEPS
+                       else None)
             try:
                 changed = cl.set_override(root, year, step, mark,
-                                          note=args.note or "")
+                                          note=args.note or "",
+                                          answers=answers)
             except KeyError:
                 _die(f"unknown step {step!r}", f"Step ids: {', '.join(ids)}.")
             except cl.StateFileError as e:
@@ -15409,11 +15436,18 @@ def cmd_checklist(args: argparse.Namespace) -> None:
             if not changed:
                 verb = "had no mark — nothing to undo"
             recorded.append({"step": step, "mark": mark or "undo",
-                             "changed": changed, "note": args.note or ""})
+                             "changed": changed, "note": args.note or "",
+                             **({"answers": answers} if answers is not None
+                                else {})})
             if not args.json:
                 print(f"taxjson checklist: {step} {verb}"
                       + (f" (recorded in {cl.STATE_FILE})." if changed
                          else "."))
+                if answers:
+                    print(f"  it answers: "
+                          + "; ".join(cl.key_text(step, k)
+                                      for k in answers)
+                          + " — a new one asks again.")
     if args.reset:
         try:
             existed = cl.reset_state(root)
@@ -15538,7 +15572,11 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
                 quit_early = True
                 break
             if ans in ("d", "done"):
-                cl.set_override(ctx.root, ctx.year, sid, "done", note=note)
+                cl.set_override(
+                    ctx.root, ctx.year, sid, "done", note=note,
+                    answers=(cl.question_answers(ctx.root, ctx.cfg, sid,
+                                                 today=ctx.today)
+                             if sid in cl.QUESTION_STEPS else None))
                 print(f"  recorded: {sid} done")
                 break
             if ans in ("s", "skip"):
@@ -16645,6 +16683,29 @@ def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
         _print_report_table(lines)
 
 
+def _list_positional_date(args: argparse.Namespace) -> None:
+    """`taxjson list [ACCOUNT] [YYYY-MM-DD]`: a positional YYYY-MM-DD is
+    the date (as --date), anything else the account — `list margin
+    2026-04-28` and `list 2026-04-28` both work. Sets args.account and
+    args.date; two dates, two accounts or a date that differs from
+    --date stop with the usage."""
+    given = [v for v in (getattr(args, "account", None),
+                         getattr(args, "when", None)) if v]
+    dates = [v for v in given if _ISO_DATE_RE.match(v)]
+    accounts = [v for v in given if not _ISO_DATE_RE.match(v)]
+    if len(dates) > 1 or len(accounts) > 1:
+        _die(f"list takes one account and one date: got "
+             f"{' '.join(given)}",
+             "Usage: taxjson list [ACCOUNT] [YYYY-MM-DD]")
+    if dates:
+        if getattr(args, "date", None) and args.date != dates[0]:
+            _die(f"two dates: {dates[0]} and --date {args.date}",
+                 "Give the date once.")
+        args.date = dates[0]
+    args.account = accounts[0] if accounts else None
+    args.when = None
+
+
 def cmd_positions(args: argparse.Namespace) -> None:
     """List open positions per account, taken from each account's canonical
     gains file's `inventory` (wash-adjusted where built) — i.e. AFTER
@@ -16657,6 +16718,7 @@ def cmd_positions(args: argparse.Namespace) -> None:
                                           resolve_gains_files)
     root = Path(args.dir).resolve()
     cache = root / "work"
+    _list_positional_date(args)
     # Canonical per-account gains (wash-adjusted where built — same basis
     # as every other query command); the raw/native derivatives keep
     # cross-listings separate and in native currency, which is the opposite
@@ -22486,8 +22548,13 @@ def _build_parser(prog: str = "taxjson"
         description="List the open positions per account (quantity and "
                     "base-currency book cost) after ticker.map "
                     "consolidation and base-currency conversion, at the "
-                    "end of the books or --date.")
-    p_pos.add_argument("account", nargs="?", help="Account (default: all)")
+                    "end of the books or a date (`list margin 2026-04-28`, "
+                    "`list 2026-04-28`, or --date).")
+    p_pos.add_argument("account", nargs="?",
+                       help="Account (default: all); a YYYY-MM-DD here is "
+                            "the date (as --date)")
+    p_pos.add_argument("when", nargs="?", metavar="YYYY-MM-DD",
+                       help="Positions as of this date (as --date)")
     p_pos.add_argument("--date", metavar="YYYY-MM-DD", default=None,
                        help="Positions AS OF this date — each account's "
                             "books (already ticker.map-consolidated) "

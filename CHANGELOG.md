@@ -2,7 +2,51 @@
 
 ## Unreleased
 
+### Added
+
+- **`taxjson run` asks about written options carried in from last year**:
+  a contract written before `option_grant_timing_since` (a new project's
+  default is its own year) and bought back or expired this year is taxed at
+  the close, right only if last year's return did not report its premium.
+  The run now warns with the premium at stake and the question; `taxjson
+  option-boundary`, the checklist's option-boundary step and quick-start's
+  new option-timing step ask it too, until the setting is lowered to the
+  write year or the step is marked done. A `checklist --done
+  option-boundary` mark answers the contracts asked when it was made: a
+  contract the books gain later is asked again. Never asked in a US project.
+
+- **A broker whose exports stop while it holds positions is named**: for
+  each account and broker, exports that end before the tax year's end (or
+  before today in the year still running) — an IB statement's period, an
+  RBC export's as-of date, a Webull export's date range or trading-summary
+  year, else the last row — while the broker still holds positions there
+  are a run Warning ("<broker> exports for <account> end <date> with open
+  positions ...; download the rest of the year"), the checklist's new
+  export-coverage step and quick-start's inputs step. A position counts
+  only when the broker's own rows (an export named with its account
+  number included, transfer legs read through the books' journals and
+  `TOBASE` lines) leave it open and the account's books hold it too (a
+  broker's sale of calls an opening `.tt` line bought is no written call
+  at that broker), and only while the account's later rows of any source
+  dated inside the gap (a `.tt` close, another broker's sale, a
+  transfer-out) do not close it; when `.tt` lines closed them all, an
+  Info line says no export is needed. An option that expired after the
+  export's end with no expiry row is named as such. If the broker had no
+  activity in the account after that end, `taxjson checklist --done
+  export-coverage` answers it — for that account, broker and end only: a
+  new gap or a later end asks again.
+
+- **`taxjson list` takes the date as a word too**: `taxjson list margin
+  2026-04-28` and `taxjson list 2026-04-28` are `--date 2026-04-28` (a
+  YYYY-MM-DD word is the date, any other word the account).
+
 ### Changed
+
+- **A sheltered account's corporate-action election says what it
+  changes**: still asked (it sets the holdings' cost in the books), the
+  prompt and `taxjson elect --pending` now say there is no tax in the
+  account and that its holdings still count for the superficial-loss rule
+  (a US project: the wash-sale rule).
 
 - **`taxjson scan` stops asking about pairs the exports show apart**: a
   US and a Canadian listing that share a root are still a MAP-GAP
@@ -24,9 +68,11 @@
   wording ("... SUBORD VTG SHS"), although the loss's and the purchase's own
   broker named both listings alike. The radar now compares the names of the
   loss's rows and the purchase's rows (their account and broker); names of
-  one company that differ only in voting-share wording are flagged too,
-  said as such — never a depositary receipt, a class letter or two
-  companies.
+  one company that differ only in the voting-share phrase one of them ends
+  with ("... SUBORD VTG SHS") are flagged too, said as such — never a
+  depositary receipt, a class letter or two companies, and never for the
+  same words inside a company's name ("NON STOP CORP" is not "STOP
+  CORP").
 
 - **A correct ticker.map `TOBASE` line no longer splits a transfer between
   brokers.** IB moved a US listing out (`QZB.US`) and Questrade's export
@@ -110,40 +156,18 @@
   one share split into +1 / -1 across two listings (a false short in a
   registered account). It now books the listing the account trades under
   the same name and root; and when another account's evidence proved the
-  same broker files that security's TSX listing on USD rows, the account's
-  USD rows of it are read as `ROOT.TO` too. The reinvestment's cash is
-  restated in the listing's currency in the native-currency books, so the
-  holdings report is still written and `taxjson scan` still runs.
+  same broker files that security's TSX listing on USD rows, the units that
+  came into the account on USD rows by a transfer or a reinvestment are
+  read as `ROOT.TO` too (a purchase on a USD trade row keeps the US
+  listing). The reinvestment's cash is restated in the listing's currency
+  in the native-currency books, so the holdings report is still written
+  and `taxjson scan` still runs.
 
 
 ## v0.24.0 (2026-10-07)
 
 ### Added
 
-- **A sheltered account's corporate-action election says it is moot for
-  tax**: still asked (it sets the holdings' cost), the prompt and `taxjson
-  elect --pending` now say it affects the holdings only.
-
-- **`taxjson run` asks about written options carried in from last year**:
-  a contract written before `option_grant_timing_since` (a new project's
-  default is its own year) and bought back or expired this year is taxed at
-  the close, right only if last year's return did not report its premium.
-  The run now warns with the premium at stake and the question; `taxjson
-  option-boundary`, the checklist's option-boundary step and quick-start's
-  new option-timing step ask it too, until the setting is lowered to the
-  write year or the step is marked done. Never asked in a US project.
-- **A broker whose exports stop while it holds positions is named**: for
-  each account and broker, exports that end before the tax year's end (or
-  before today in the year still running) — an IB statement's period, an
-  RBC export's as-of date, a Webull export's date range or trading-summary
-  year, else the last row — while the broker still holds positions there
-  are a run Warning ("<broker> exports for <account> end <date> with open
-  positions ...; download the rest of the year"), the checklist's new
-  export-coverage step and quick-start's inputs step. Only positions still
-  open after the account's later rows of any source dated inside the gap
-  are named (a `.tt` close, another broker's sale, a transfer-out, up to the
-  year's end or today); when `.tt` lines closed them all, an Info line says
-  no export is needed.
 - **`taxjson quick-start` lists every step from install to filing**
   (`tjs quick-start`), each with the exact command(s) and a one-line why:
   install or upgrade, `init`, the accounts, the broker files, `run`, filling

@@ -17,7 +17,8 @@
    holds positions is a run Warning, the checklist's export-coverage
    step and quick-start's inputs step.
 4. A sheltered account's corporate-action election is still asked, and
-   says it affects the holdings only.
+   says there is no tax in the account (its holdings still count for the
+   superficial-loss rule).
 """
 import io
 import json
@@ -429,7 +430,11 @@ class TestExportCoverage(unittest.TestCase):
     def test_checklist_and_quick_start(self):
         res = cl.d_export_coverage(ctx_of(self.root, 2025, date(2026, 3, 1)))
         self.assertEqual(res.status, "attention")
-        self.assertFalse(res.question)      # the export's own end
+        # A question even for the export's own end (v0.24.1 review: the
+        # user may know the broker had no later activity); a DONE mark
+        # answers this (account, broker, end) only.
+        self.assertTrue(res.question)
+        self.assertEqual(res.answers, ["margin|webull|2025-09-30"])
         self.assertIn("Webull exports for margin end 2025-09-30", res.detail)
         g = QS.evaluate(self.root, today=date(2026, 3, 1))
         self.assertEqual(g.states["inputs"].status, "attention")
@@ -627,8 +632,10 @@ class TestShelteredElection(unittest.TestCase):
         with mock.patch("builtins.input", side_effect=["1", "0", "y", ""]), \
                 redirect_stderr(err):
             CA._prompt_election(self._event(), "canada", sheltered=True)
-        self.assertIn("Sheltered account: this election affects the "
-                      "holdings (their cost in the books) only",
+        self.assertIn("Sheltered account: this election sets the "
+                      "holdings' cost in the books — no tax in this "
+                      "account; its holdings still count for the "
+                      "superficial-loss rule",
                       flat(err.getvalue()))
         err = io.StringIO()
         with mock.patch("builtins.input", side_effect=["1", "0", "y", ""]), \
@@ -654,8 +661,10 @@ class TestShelteredElection(unittest.TestCase):
                 json.dumps({"schema_version": 1,
                             "accounts": {"rrsp": doc}}))
             r = tj(root, "elect", "--pending", check=False)
-            self.assertIn("Sheltered account: this election affects the "
-                          "holdings (their cost in the books) only",
+            self.assertIn("Sheltered account: this election sets the "
+                          "holdings' cost in the books — no tax in this "
+                          "account; its holdings still count for the "
+                          "superficial-loss rule",
                           flat(r.stdout))
 
 
