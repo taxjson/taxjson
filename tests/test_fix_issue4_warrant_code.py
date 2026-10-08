@@ -36,6 +36,19 @@ from pathlib import Path
 from taxjson.lib import symbol_codes as SC
 from taxjson.lib.brokerages.questrade import QuestradeBrokerage
 from tax_rules import rule
+from _style import CapturedWidth
+
+# The assertions read captured console lines (nothing wrapped).
+_WIDTH = CapturedWidth()
+
+
+def setUpModule():
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
+
 
 REPO = Path(__file__).resolve().parent.parent
 CODE = 'D0000001'
