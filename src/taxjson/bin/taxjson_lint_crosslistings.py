@@ -9,9 +9,12 @@ interlisting (e.g. SAMPLM.US → SAMPLM.TO). This lint scans the radar's OWN inp
 (the taxable/sheltered transaction files) for any root that still appears on
 BOTH `.TO` and `.US`, and classifies each:
 
-  OK    — CDR (CIBC depositary receipt: a DIFFERENT instrument, correctly
-          separate), a JOURNAL/Norbert's-Gambit pair, or a pair ticker.map
-          declares `DISTINCT` (two different securities).
+  OK    — a depositary receipt (a CDR: a DIFFERENT instrument, correctly
+          separate — a receipt word of markets.toml [lists] receipt_words
+          in a name), a JOURNAL/Norbert's-Gambit pair, a pair ticker.map
+          declares `DISTINCT`, or two listings whose names in the books
+          name different companies (cross_listings.companies_differ: no
+          leading company word in common).
 
 A listing counts when the books hold its shares OR options on it (an
 option on a security is substituted property for the superficial-loss
@@ -20,10 +23,11 @@ rule, s.54), and share positions follow SPLIT ratios and renames.
           so consolidation did not actually apply (e.g. the .TO leg isn't
           held in that account). The radar will MISS the superficial-loss
           link between them.
-  REVIEW— same ticker on both exchanges with no rule. Either a genuine
-          interlisting that needs a TOBASE entry, OR two different companies
-          that share a ticker (e.g. SAMPLN.TO, a Canadian issuer, vs SAMPLN.US, an
-          unrelated US one) — a human must decide.
+  REVIEW— same ticker on both exchanges with no rule and nothing showing
+          them apart: a genuine interlisting that needs a TOBASE entry,
+          or DISTINCT if not. The note says whether the names agree
+          (cross_listings._names_verdict over symbol_codes.exact_name),
+          differ in form, or are unknown (verify first).
 
 WARN/REVIEW rows carrying TAXABLE exposure are the actionable ones (a sheltered
 loss isn't a superficial-loss trigger on its own).
@@ -148,10 +152,57 @@ def _net_by_symbol(txs):
     return total, opt, desc
 
 
+def _listing_names(txs_lists):
+    """({listing: its names, symbol_codes.exact_name}, each name as
+    written): a row's security_name (IB's instrument name), else its
+    description when no row of the listing carries one — a description
+    that is only the ticker is no name."""
+    from taxjson.lib.symbol_codes import exact_name
+    sec: Dict[str, set] = {}
+    dsc: Dict[str, set] = {}
+    shown: Dict[tuple, str] = {}
+    for txs in txs_lists:
+        for t in txs:
+            if not isinstance(t, dict):
+                continue
+            s = str(t.get("symbol") or "").upper()
+            if _is_option(s) or not s.endswith(_LISTED):
+                continue
+            for key, into in (("security_name", sec), ("description", dsc)):
+                text = " ".join(str(t.get(key) or "").split())
+                if not text or text.upper() in (s, s.rsplit(".", 1)[0]):
+                    continue
+                k = exact_name(text)
+                if k:
+                    into.setdefault(s, set()).add(k)
+                    shown.setdefault(k, text)
+    return {s: sec.get(s) or dsc.get(s) or set()
+            for s in set(sec) | set(dsc)}, shown
+
+
+def _pair_verdict(to, us, names, shown):
+    """("receipt" | "different" | "unknown" | "unequal" | "same", why):
+    a receipt word in a name makes that listing its own security; names
+    with no leading company word in common name different companies;
+    else the cross-listing join's equal-name rule."""
+    from taxjson.lib import cross_listings as XL
+    nt, nu = names.get(to, set()), names.get(us, set())
+    rec = XL.receipt_why(to, nt) or XL.receipt_why(us, nu)
+    if rec:
+        return "receipt", rec
+    why = XL._names_verdict(nt, nu, shown)
+    if why == XL.DIFFERENT:
+        return "different", why
+    if not nt or not nu:
+        return "unknown", why
+    return ("unequal", why) if why else ("same", "")
+
+
 def analyze(taxable_txs, sheltered_txs, tobase, journal, distinct=()):
     tax_net, tax_opt, tax_desc = _net_by_symbol(taxable_txs)
     shl_net, shl_opt, shl_desc = _net_by_symbol(sheltered_txs)
     desc = {**shl_desc, **tax_desc}
+    names, shown = _listing_names((taxable_txs, sheltered_txs))
     roots: Dict[str, set] = {}
     for s in set(tax_net) | set(shl_net) | set(tax_opt) | set(shl_opt):
         root, ex = s.rsplit(".", 1)
@@ -160,9 +211,9 @@ def analyze(taxable_txs, sheltered_txs, tobase, journal, distinct=()):
     findings = []
     for root in sorted(r for r, ex in roots.items() if {"TO", "US"} <= ex):
         to, us = root + ".TO", root + ".US"
-        blob = (desc.get(to, "") + " " + desc.get(us, "")).upper()
         pair = frozenset((to, us))
-        if "CDR" in blob or "DEPOSITARY" in blob:
+        verdict, _why = _pair_verdict(to, us, names, shown)
+        if verdict == "receipt":
             sev, note = "OK", "CDR — different instrument, correctly separate"
         elif pair in journal:
             sev, note = "OK", "JOURNAL / Norbert's Gambit pair"
@@ -174,10 +225,19 @@ def analyze(taxable_txs, sheltered_txs, tobase, journal, distinct=()):
                          "TOBASE entry exists but BOTH listings still present "
                          "— consolidation did NOT apply; radar treats them "
                          "separately")
+        elif verdict == "different":
+            sev, note = ("OK", "the names name different companies — two "
+                         "securities")
+        elif verdict == "same":
+            sev, note = ("REVIEW",
+                         "same name on both listings — add a TOBASE entry "
+                         "if they are one security, DISTINCT if not")
         else:
             sev, note = ("REVIEW",
                          "interlisted (add a TOBASE entry) OR two different "
-                         "companies sharing a ticker (leave separate)")
+                         "companies sharing a ticker (DISTINCT) — "
+                         + ("names not compared" if verdict == "unknown"
+                            else "names not equal") + ", verify")
         findings.append({
             "root": root, "severity": sev, "note": note,
             "tax_to": tax_net.get(to, 0.0), "tax_us": tax_net.get(us, 0.0),
@@ -197,12 +257,14 @@ def analyze(taxable_txs, sheltered_txs, tobase, journal, distinct=()):
 from taxjson.lib.income_dating import CA_LISTING_SUFFIXES as _CA_VENUES
 
 
-def venue_splits(taxable_txs, sheltered_txs):
+def venue_splits(taxable_txs, sheltered_txs, distinct=()):
     """Roots held under two CANADIAN venue suffixes (ABC.TO and ABC.V /
     .CN / .NE). The broker parsers spell every Canadian listing ROOT.TO
     (base.canonical_ca_listing); a .V/.CN/.NE row comes from a .tt file
     or a ticker.map rule, and it splits one security into two ACB pools
     that the superficial-loss check never links (audit S010-05).
+    A pair ticker.map declares DISTINCT is the user's ruling (two
+    securities) and is not listed.
     Returns [{root, symbols, taxable}] sorted by root."""
     seen: Dict[str, Dict[str, bool]] = {}
     for txs, taxable in ((taxable_txs, True), (sheltered_txs, False)):
@@ -221,7 +283,9 @@ def venue_splits(taxable_txs, sheltered_txs):
             d[s] = d.get(s, False) or taxable
     out = []
     for root in sorted(seen):
-        if len(seen[root]) > 1:
+        if len(seen[root]) > 1 and not (
+                len(seen[root]) == 2 and frozenset(
+                    x.upper() for x in seen[root]) in distinct):
             out.append({"root": root, "symbols": sorted(seen[root]),
                         "taxable": any(seen[root].values())})
     return out
@@ -252,13 +316,15 @@ def main():
     taxable_txs = _load_txs(args.taxable)
     sheltered_txs = _load_txs(args.sheltered)
     findings = analyze(taxable_txs, sheltered_txs, tobase, journal, distinct)
-    splits = venue_splits(taxable_txs, sheltered_txs)
+    splits = venue_splits(taxable_txs, sheltered_txs, distinct)
 
     actionable = 0
     if splits:
         print("CANADIAN VENUE SPLIT — one root under two Canadian suffixes")
-        print("(taxjson books every Canadian listing as ROOT.TO; add "
-              "`GLOBAL ROOT.V ROOT.TO` to ticker.map, or fix the .tt line)")
+        print("(taxjson books every Canadian listing as ROOT.TO; if the "
+              "two are one security add `GLOBAL ROOT.V ROOT.TO` to "
+              "ticker.map or fix the .tt line; if not — a receipt on a "
+              "receipt venue, another issuer — `DISTINCT` records it)")
         for v in splits:
             flag = "WARN ‼" if v["taxable"] else "WARN"
             if v["taxable"]:
@@ -294,8 +360,8 @@ def main():
                   f"   {f[f'desc_{x}'][:48]!r}")
 
     print("\n" + "-" * 100)
-    print("OK = correctly separate (CDR / Norbert's / DISTINCT). "
-          "WARN = mapped but not consolidated. "
+    print("OK = correctly separate (CDR / Norbert's / DISTINCT / "
+          "different companies). WARN = mapped but not consolidated. "
           "REVIEW = needs a human call. ‼ = has taxable exposure (act now).")
     if args.strict and actionable:
         print(f"\nstrict: {actionable} actionable cross-listing(s) with taxable "

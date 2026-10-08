@@ -1831,7 +1831,9 @@ wash-adjusted, base currency — read from the wash-adjusted gains files.
 Lints the whole project for placement mistakes the pipeline can see:
 
 - **US-LISTING** — a cross-listed Canadian issuer (per `ticker.map`, or a
-  `.TO` sibling seen anywhere in your data) held via its **US listing** in a
+  Canadian listing of the same root seen in your data that the exports
+  do not show to be another security — a CDR or another company; "verify"
+  unless the names agree) held via its **US listing** in a
   taxable account or TFSA while receiving dividends. Hold the `.TO` line
   instead: clean eligible-dividend treatment, no USD conversion drag.
 - **XLIST-LOSS** — a loss on one listing with another listing of the same
@@ -1864,13 +1866,17 @@ Lints the whole project for placement mistakes the pipeline can see:
 - **TFSA-US-DIV** — a US-domiciled dividend payer inside a **TFSA**: the 15%
   US withholding is unrecoverable there. RRSPs are treaty-exempt (never
   flagged); taxable accounts can claim the foreign tax credit.
-- **MAP-GAP** — the `ticker.map` comprehensiveness prover: any root seen
-  under BOTH a `.TO` and `.US` listing anywhere in the project (holdings,
-  dividend history, the map itself) with no GLOBAL/TOBASE entry
-  consolidating them. Unmapped pairs split the ACB pool and can blind the
-  wash radar. Add `--online` to also probe yfinance for a `.TO` twin of
-  every unmapped US-listed dividend payer — candidates to verify, not
-  verdicts (same root can be a different issuer).
+- **MAP-GAP** — a `.US` and a Canadian listing of one root, both in the
+  project (holdings, dividend history, the map itself), with no
+  `ticker.map` line joining or parting them: add `TOBASE` if they are one
+  security, `DISTINCT` if not. The message says whether the exports name
+  them alike or the names were not compared (verify first). A pair the
+  exports show apart is not flagged and needs no `DISTINCT` line: the
+  Canadian line named as a depositary receipt (a CDR) or listed on a
+  receipt venue, or names of two different companies. Add `--online` to
+  also probe yfinance for a `.TO` twin of every unmapped US-listed
+  dividend payer — candidates to verify, not verdicts (same root can be a
+  different issuer).
 
 Registered-plan kinds are inferred from a plan word that is a whole token
 of the account name (`tfsa`, `rrsp2`, `my-tfsa`; not `admiral`); override

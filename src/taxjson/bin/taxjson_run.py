@@ -11655,11 +11655,65 @@ def _issuer_names_match(a: str, b: str) -> bool:
             and long_[:len(short)] == short)
 
 
+def _scan_listing_names(cache: Path, accounts: List[str],
+                        glob: Dict[str, str]
+                        ) -> Tuple[Dict[str, set], Dict[tuple, str]]:
+    """({listing: its security names, symbol_codes.exact_name}, each
+    name as written) from the parsed exports in work/
+    (cross_listings.gather, the names the cross-listing join and the
+    loss radar compare). A symbol a GLOBAL line renames gives its names
+    to the target, the spelling the books carry; a TOBASE line moves
+    none — each listing keeps its own."""
+    from taxjson.lib import cross_listings as XL
+    _legs, names, shown = XL.gather(cache, accounts)
+    out: Dict[str, set] = {}
+    for sym, ns in names.items():
+        out.setdefault(glob.get(sym, sym), set()).update(ns)
+    return out, shown
+
+
+# _scan_pair_verdict kinds that show two listings are NOT one security.
+_SCAN_APART = ("receipt", "different")
+
+
+def _scan_pair_verdict(us: str, ca: str, names: Dict[str, set],
+                       shown: Dict[tuple, str]) -> Tuple[str, str]:
+    """What the exports say about a US and a Canadian listing that share
+    a root: (kind, text). A shared root is a candidate (many interlisted
+    shares keep their letters) unless something shows the two apart:
+    "receipt" — the Canadian line is a depositary receipt (a receipt
+    word of markets.toml [lists] receipt_words in its name, or a listing
+    on a receipt venue); "different" — the names name different
+    companies (no leading company word in common): cross_listings.
+    shown_apart. Otherwise "same" (equal names
+    under the cross-listing join's rule, _names_verdict over
+    symbol_codes.exact_name; text: the name as written), "unequal" (the
+    names are not equal word for word; text: why) or "unknown" (no name
+    for a side; text: which)."""
+    from taxjson.lib import cross_listings as XL
+    nu, nc = names.get(us, set()), names.get(ca, set())
+    apart = XL.shown_apart(us, ca, names)
+    if apart:
+        return ("different" if apart == XL.DIFFERENT else "receipt"), apart
+    why = XL._names_verdict(nu, nc, shown)
+    if not nu or not nc:
+        return "unknown", ("no security name for "
+                           + ("either listing" if not nu and not nc
+                              else (us if not nu else ca)))
+    if why:
+        return "unequal", why
+    common = sorted(nu & nc)
+    return "same", shown.get(common[0], " ".join(common[0]))
+
+
 def cmd_scan(args: argparse.Namespace) -> None:
     """`taxjson scan`: lint the PROJECT for common tax-efficiency
     mistakes. Canada checks today:
 
-      US-LISTING   a cross-listed CANADIAN issuer held via its US line in
+      US-LISTING   a cross-listed CANADIAN issuer (a ticker.map join, or
+                   a same-root Canadian listing the exports do not show
+                   apart — "verify" unless the names agree) held via its
+                   US line in
                    a taxable account or TFSA while receiving dividends —
                    USD dividend conversion drag, and brokers can
                    misclassify the payment; the .TO line gives clean
@@ -11667,9 +11721,13 @@ def cmd_scan(args: argparse.Namespace) -> None:
       TFSA-US-DIV  a US-domiciled dividend payer inside a TFSA — the 15%
                    US withholding is unrecoverable there (an RRSP is
                    treaty-exempt; a taxable account can claim the FTC).
-      MAP-GAP      ticker.map coverage: roots seen under BOTH a .TO and
-                   .US listing anywhere in the project with no
-                   GLOBAL/TOBASE/JOURNAL entry consolidating them. With
+      MAP-GAP      ticker.map coverage: a .US and a Canadian listing of
+                   one root seen in the project with no GLOBAL/TOBASE/
+                   JOURNAL or DISTINCT line for them — unless the exports
+                   show them apart (the Canadian line a depositary
+                   receipt, or names of different companies). The
+                   message says whether the names agree, differ in form,
+                   or were not compared (verify first). With
                    --online, additionally probes yfinance for a .TO twin
                    of every US-listed dividend payer the map doesn't
                    know, clusters HELD listings by issuer name to catch
@@ -11771,6 +11829,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
     # ticker.map consolidations (GLOBAL + TOBASE + JOURNAL) and the
     # user's declared-distinct pairs (CDRs etc. — see DISTINCT).
     renames: Dict[str, str] = {}
+    glob_renames: Dict[str, str] = {}
     raw_rules: Dict[str, str] = {}
     distinct_pairs: set = set()
     map_file = root / "ticker.map"
@@ -11782,6 +11841,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
             _tmap = load_map_file(map_file)
             raw_rules = raw_renames(_tmap, to_base=True)
             renames = merge_renames(_tmap, to_base=True)
+            glob_renames = merge_renames(_tmap, to_base=False)
             distinct_pairs = {frozenset(s.upper() for s in pair)
                               for pair in _tmap.distinct}
         except Exception as e:
@@ -11821,20 +11881,43 @@ def cmd_scan(args: argparse.Namespace) -> None:
     from taxjson.lib.markets import canadian_suffixes as _ca_sufs
     _CA_SUFS = tuple(sorted(_ca_sufs()))
 
+    # The listings' security names in the parsed exports: the only
+    # identity evidence beyond a map ruling (read once, when a pair
+    # first needs it).
+    _xl: Dict[str, Any] = {}
+
+    def _verdict(a: str, b: str) -> Tuple[str, str]:
+        if "names" not in _xl:
+            _xl["names"], _xl["shown"] = _scan_listing_names(
+                cache, _equity_accts,
+                {k.upper(): v.upper() for k, v in glob_renames.items()})
+        return _scan_pair_verdict(a.upper(), b.upper(), _xl["names"],
+                                  _xl["shown"])
+
     def _ca_twins(rt: str, sym_u: str) -> List[str]:
         # ticker.map (GLOBAL/TOBASE onto a Canadian listing) is the
         # identity ruling; without one, a sighting of the same root on
         # ANY Canadian venue (.TO, .V, .CN, .NE, .VN — not only the TSX)
-        # is only evidence (MAP-GAP asks for the ruling too). A DISTINCT
-        # ruling settles it the other way: that line is a CDR or another
-        # issuer, and "hold it instead" is wrong advice (audit S042-06,
-        # S049-09).
+        # is a candidate (MAP-GAP asks for the ruling too) — unless the
+        # exports show the two apart (_scan_pair_verdict: the Canadian
+        # line is a receipt, or the names name different companies) or
+        # a DISTINCT line rules it: "hold it instead" would then be
+        # wrong advice (audit S042-06, S049-09).
         tgt = renames_u.get(sym_u, "")
         if _scan_symbol_root(tgt)[1] in _CA_SUFS:
             return [] if _declared_distinct(sym_u, tgt) else [tgt]
         return [f"{rt}.{s}" for s in sorted(seen_suffixes.get(rt) or ())
                 if s in _CA_SUFS
-                and not _declared_distinct(sym_u, f"{rt}.{s}")]
+                and not _declared_distinct(sym_u, f"{rt}.{s}")
+                and _verdict(sym_u, f"{rt}.{s}")[0] not in _SCAN_APART]
+
+    def _twins_proved(rt: str, sym_u: str) -> bool:
+        # A map ruling, or equal names for every twin named.
+        tgt = renames_u.get(sym_u, "")
+        if _scan_symbol_root(tgt)[1] in _CA_SUFS:
+            return True
+        return all(_verdict(sym_u, c)[0] == "same"
+                   for c in _ca_twins(rt, sym_u))
 
     def _has_ca_twin(rt: str, sym_u: str) -> bool:
         return bool(_ca_twins(rt, sym_u))
@@ -11861,12 +11944,15 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     continue
                 if _has_ca_twin(rt, sym_u):
                     _ca = " or ".join(_ca_twins(rt, sym_u))
+                    _chk = ("" if _twins_proved(rt, sym_u) else
+                            f" (verify {_ca} is the same security first: "
+                            f"only the letters match — see MAP-GAP)")
                     findings.append((
                         "US-LISTING", name, sym,
                         f"Canadian issuer held via its US listing in a "
                         f"{plan} account while paying dividends — hold "
                         f"{_ca} instead for clean eligible-dividend "
-                        f"treatment (and no USD conversion drag)."))
+                        f"treatment (and no USD conversion drag){_chk}."))
                 elif plan == "tfsa":
                     findings.append((
                         "TFSA-US-DIV", name, sym,
@@ -11875,23 +11961,45 @@ def cmd_scan(args: argparse.Namespace) -> None:
                         "RRSP (treaty-exempt) or a taxable account "
                         "(foreign tax credit claimable)."))
 
-    # MAP-GAP: both listings seen, no consolidating entry either way.
+    # MAP-GAP: a US and a Canadian listing of one root, both seen, no
+    # map line joining or parting them: a candidate (interlisted shares
+    # usually keep their letters) — unless the exports show the two
+    # apart (the Canadian line a receipt, names of different
+    # companies): those are two securities and need no DISTINCT line.
+    from taxjson.lib.cross_listings import tobase_direction
     for rt in sorted(seen_suffixes):
         sufs = seen_suffixes[rt]
         if "US" not in sufs:
             continue
         for _cs in sorted(s for s in sufs if s in _CA_SUFS):
             _ca = f"{rt}.{_cs}"
-            if _declared_distinct(f"{rt}.US", _ca):
+            _us = f"{rt}.US"
+            if _declared_distinct(_us, _ca):
                 continue        # user's DISTINCT ruling — settled
-            if (f"{rt}.US" not in renames_u
-                    and _ca not in renames_u):
-                findings.append((
-                    "MAP-GAP", "-", f"{_ca}/{rt}.US",
-                    "both listings appear in this project but "
-                    "ticker.map has no GLOBAL/TOBASE entry — the "
-                    "engine treats them as two securities (splits the "
-                    "ACB pool; the radar can miss the pair)."))
+            if _us in renames_u or _ca in renames_u:
+                continue
+            _v, _what = _verdict(_us, _ca)
+            if _v in _SCAN_APART:
+                continue
+            _frm, _to = tobase_direction(
+                _us, _ca, str(settings.get("base_currency") or "")
+                .upper() or None)
+            _lines = (f"`TOBASE {_frm} {_to}` (one cost pool, and the "
+                      f"loss rules see both); if not, "
+                      f"`DISTINCT {_us} {_ca}`.")
+            if _v == "same":
+                _msg = (f"{_us} and {_ca} carry the same name "
+                        f"({_what!r}) but ticker.map does not join them "
+                        f"— if they are one security add {_lines}")
+            elif _v == "unequal":
+                _msg = (f"{_us} and {_ca} share their letters but "
+                        f"{_what} — verify, then if they are one "
+                        f"security add {_lines}")
+            else:
+                _msg = (f"{_us} and {_ca} share their letters; "
+                        f"names not compared ({_what}) — verify, then if "
+                        f"they are one security add {_lines}")
+            findings.append(("MAP-GAP", "-", f"{_ca}/{_us}", _msg))
 
     # XLIST-LOSS: a loss on one listing, another listing of the same
     # root under an equal name bought within 30 days, the pair neither
@@ -12052,6 +12160,11 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 rt, suf = _scan_symbol_root(sym)
                 if (suf != "US" or _has_ca_twin(rt, sym.upper())
                         or _declared_distinct(f"{rt}.US", f"{rt}.TO")):
+                    continue
+                # The exports already name the two differently (a CDR,
+                # another issuer): nothing to verify. A pair the books
+                # cannot compare stays a candidate TO VERIFY.
+                if _verdict(f"{rt}.US", f"{rt}.TO")[0] in _SCAN_APART:
                     continue
                 _twin = _yf(f"{rt}.TO")
                 if not _twin:
