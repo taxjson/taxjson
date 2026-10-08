@@ -1116,3 +1116,10 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** upgrade. A month or day written with one digit (`2025-2-1`) is now read as `2025-02-01`; anything else that is not a real date in `YYYY-MM-DD` form (`2025-02-30`, `2025/02/01`, `25-2-1`, a date with a time) stops with the message above. Correct the row and run again.
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/core.py` — `coerce_transaction_row`, `canonical_date`, `DATE_FIELDS`
+
+### `taxjson-gains book.json`: "Error: book.json: no "transactions" list (keys: Transactions)", or a hand-written book that gives empty gains and no inventory at exit 0
+- **Check:** open the file: its top-level object has no key spelled exactly `transactions` (lower case); the message lists the keys it found.
+- **Cause:** a transaction book is a JSON object with a `"transactions"` list, or a bare list of rows. An object without that key (`"Transactions"`, `"rows"`) was read as an empty book by `taxjson-gains` and the other tools that read a book file (`taxjson-wash-radar`, `taxjson-lint-crosslistings`, `taxjson-sum-income`, `taxjson-diff`, `taxjson-export --trades`, `taxjson-split-gains --base`): empty gains and inventory, no message, exit 0. The stdin reader already refused it.
+- **Fix:** upgrade, then rename the key to `transactions` (or give the rows as a bare list). An explicit empty list (`{"transactions": []}`) is still an empty book.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/core.py` — `load_transactions`; `src/taxjson/lib/json_input.py` — `rows_or_exit`; `src/taxjson/bin/taxjson_sum_income.py` — `load_income_data`; `src/taxjson/bin/taxjson_diff.py` — `main`

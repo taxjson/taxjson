@@ -50,7 +50,12 @@ def load_income_data(file_path: Path = None) -> List[Dict[str, Any]]:
     elif isinstance(raw, list):
         rows = raw
     else:
-        return []
+        # {"Transactions": [...]} summed to no income at exit 0 (#6).
+        where = str(file_path) if file_path is not None else "<stdin>"
+        keys = (", ".join(sorted(map(str, raw))) or "none"
+                if isinstance(raw, dict) else type(raw).__name__)
+        raise InputFileError(f'{where}: no "transactions" list (keys: '
+                             f"{keys})")
     # The shared row funnel taxjson-gains reads the same book through:
     # an impossible date, a NaN / inf amount or a text amount was summed
     # at rc 0 (or a float() traceback) here while gains refused it in

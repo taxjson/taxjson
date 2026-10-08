@@ -262,10 +262,16 @@ class TestSumJson(unittest.TestCase):
         self.assertIsInstance(doc, dict)
 
     def test_sum_income_json_parseable(self):
-        r = _run_mod("taxjson_sum_income", "--json", stdin_text="{}")
+        # An explicit empty book; `{}` (no "transactions" list) is
+        # refused since issue #6.
+        r = _run_mod("taxjson_sum_income", "--json",
+                     stdin_text='{"transactions": []}')
         self.assertEqual(r.returncode, 0, r.stderr)
         doc = json.loads(r.stdout)
         self.assertIsInstance(doc, dict)
+        r = _run_mod("taxjson_sum_income", "--json", stdin_text="{}")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn('no "transactions" list', r.stderr)
 
 class TestSubcommandSynopsis(unittest.TestCase):
     """`taxjson <cmd> -h` must state what the command DOES, not just

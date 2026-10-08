@@ -203,6 +203,14 @@ def main():
     try:
         old_doc = read_json_doc(args.old)
         new_doc = read_json_doc(args.new)
+        for path, doc in ((args.old, old_doc), (args.new, new_doc)):
+            # A document with neither list ({"Transactions": [...]}, a
+            # report JSON) compared as empty: "no change" at exit 0
+            # (issue #6).
+            if 'transactions' not in doc and _MANUAL not in doc:
+                raise InputFileError(
+                    f'{path}: no "transactions" list (keys: '
+                    f"{', '.join(sorted(map(str, doc))) or 'none'})")
     except InputFileError as e:
         print(f"taxjson-diff: cannot read input {e}", file=sys.stderr)
         sys.exit(2)

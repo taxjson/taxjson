@@ -139,5 +139,56 @@ class TestIssue5DatesCanonical(unittest.TestCase):
         self.assertEqual(outs[0], outs[1])
 
 
+class TestIssue6MissingTransactionsKey(unittest.TestCase):
+
+    _ROWS = [_row("2025-01-01", 1, -100, sym="SYNTH.TO", cur="CAD")]
+
+    def _write(self, tmp, doc):
+        p = Path(tmp) / "book.json"
+        p.write_text(json.dumps(doc))
+        return p
+
+    def test_load_transactions_refuses_an_object_without_the_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._write(tmp, {"Transactions": self._ROWS})
+            with self.assertRaises(ValueError) as cm:
+                load_transactions(p)
+        msg = str(cm.exception)
+        self.assertIn('no "transactions" list', msg)
+        self.assertIn("Transactions", msg)        # the keys it found
+
+    def test_bare_list_and_explicit_empty_list_still_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(len(load_transactions(
+                self._write(tmp, self._ROWS))), 1)
+            self.assertEqual(load_transactions(
+                self._write(tmp, {"transactions": []})), [])
+
+    def test_gains_cli_exits_nonzero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._write(tmp, {"Transactions": self._ROWS})
+            r = _cli("taxjson.bin.taxjson_gains", str(p),
+                     "--country", "canada")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('no "transactions" list', r.stderr)
+        self.assertEqual(r.stdout.strip(), "")
+
+    def test_row_list_readers_refuse_the_missing_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._write(tmp, {"Transactions": self._ROWS})
+            for mod, args in (
+                    ("taxjson.bin.taxjson_wash_radar",
+                     ("--taxable", str(p), "--country", "canada")),
+                    ("taxjson.bin.taxjson_lint_crosslistings",
+                     ("--taxable", str(p))),
+                    ("taxjson.bin.taxjson_sum_income",
+                     (str(p), "--year", "2025")),
+                    ("taxjson.bin.taxjson_diff", (str(p), str(p)))):
+                with self.subTest(tool=mod):
+                    r = _cli(mod, *args)
+                    self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                    self.assertIn('no "transactions" list', r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

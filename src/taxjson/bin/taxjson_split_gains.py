@@ -288,7 +288,13 @@ def main(argv=None) -> int:
         # an unreadable combined file is (audit S050-15: it emptied the
         # account's fee map and dropped its blended holdings, exit 0).
         try:
-            base_txs = read_work_doc(args.base).get("transactions", [])
+            _base_doc = read_work_doc(args.base)
+            if "transactions" not in _base_doc:
+                # Read as an empty book: no fees, no holdings (#6).
+                raise InputFileError(
+                    f'{args.base}: no "transactions" list (keys: '
+                    f"{', '.join(sorted(map(str, _base_doc))) or 'none'})")
+            base_txs = _base_doc["transactions"]
         except (InputFileError, AttributeError) as e:
             cli_diag.error(PROG, f"could not read --base {e}")
             return 2

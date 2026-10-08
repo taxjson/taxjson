@@ -1117,7 +1117,15 @@ def load_transactions(path: Path) -> List[TaxTransaction]:
         raise json.JSONDecodeError(f"{path}: {e.msg}", e.doc,
                                    e.pos) from None
 
-    txs = data.get("transactions", []) if isinstance(data, dict) else data
+    if isinstance(data, dict) and "transactions" not in data:
+        # {"Transactions": [...]} (or any object without the key) was
+        # read as an empty book: empty gains and inventory at exit 0
+        # (issue #6). The stdin loader already refused it.
+        keys = ", ".join(sorted(map(str, data))) or "none"
+        raise ValueError(f"{path}: no \"transactions\" list (keys: "
+                         f"{keys}) — expected a JSON object with a "
+                         f"\"transactions\" list, or a bare list of rows")
+    txs = data["transactions"] if isinstance(data, dict) else data
     if not isinstance(txs, list):
         # {"transactions": 5} or a bare scalar was a TypeError traceback
         # in every tool that loads a book (audit S042-18).

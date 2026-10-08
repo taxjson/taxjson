@@ -560,8 +560,11 @@ def _load_trade_events(paths, mapping=None, drops=None,
                                                 split_seen)
     rows: List[Any] = []
     for p in paths:
-        data = _read_rows_doc(p, list_key="transactions")
-        for tx in data.get("transactions", []):
+        # require_key: a book without the list ({"Transactions": ...})
+        # read as no trades (issue #6).
+        data = _read_rows_doc(p, list_key="transactions",
+                              require_key="transactions")
+        for tx in data["transactions"]:
             if not isinstance(tx, dict):
                 continue
             act = tx.get("action")

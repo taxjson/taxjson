@@ -159,8 +159,15 @@ def load_json_doc_or_exit(prog: str, path, *, exit_code: int = 2,
 
 def rows_or_exit(prog: str, doc: Dict[str, Any], path, key: str,
                  *, exit_code: int = 2) -> list:
-    """``doc[key]`` as a list of objects, or a one-line refusal."""
-    rows = doc.get(key, []) or []
+    """``doc[key]`` as a list of objects, or a one-line refusal. A
+    document without ``key`` is refused too: read as an empty list, a
+    {"Transactions": [...]} book gave an empty report at exit 0 (issue
+    #6). An explicit empty list is fine."""
+    if key not in doc:
+        cli_diag.error(prog, f'{path}: no "{key}" list (keys: '
+                             f"{', '.join(sorted(map(str, doc))) or 'none'})")
+        sys.exit(exit_code)
+    rows = doc.get(key) or []
     if not isinstance(rows, list) or any(not isinstance(r, dict)
                                          for r in rows):
         cli_diag.error(prog, f'{path}: "{key}" must be a list of JSON '

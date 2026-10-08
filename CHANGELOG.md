@@ -28,6 +28,11 @@
   real calendar date in year-month-day form is refused with a message
   naming the row and field; this covers the trade, settlement, lot,
   record and ex dates (#5).
+- A JSON book whose object has no `transactions` key (for example
+  `Transactions`) is refused with a message listing the keys it has.
+  `taxjson-gains` and the other tools that read a book file read it as
+  an empty book and reported no gains at exit 0. A bare list of rows and
+  an explicit empty list still load (#6).
 - `taxjson format-map` replaces every header an earlier taxjson version
   wrote into ticker.map with the current one: the earliest projects'
   header ("symbol rules for the taxjson pipeline", "Each line is: KEYWORD
