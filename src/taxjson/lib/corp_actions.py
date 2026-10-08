@@ -3759,12 +3759,79 @@ def zero_basis_rollover_rows(rows: List[dict]) -> List[dict]:
 
 def zero_value_spinoff_rows(rows: List[dict]) -> List[dict]:
     """DIVIDEND rows of taxable spin-off elections booked at $0 — the
-    deferred-FMV state `taxjson run` keeps loud on every run."""
+    deferred-FMV state `taxjson run` keeps loud on every run (a $0 the
+    user declared is an Info instead: declares_zero_value)."""
     return [r for r in rows
             if r.get('action') == 'DIVIDEND'
-            and r.get('corp_election') in ('taxable_deemed_dividend',
-                                           'taxable_distribution_301')
+            and r.get('corp_election') in FMV_SPINOFF_ELECTIONS
             and abs(float(r.get('net_amount') or 0.0)) < 0.005]
+
+
+# The spin-off elections that book the new shares at their fair value
+# (Canada's deemed dividend, the US §301 distribution).
+FMV_SPINOFF_ELECTIONS = ('taxable_deemed_dividend',
+                         'taxable_distribution_301')
+
+
+def declares_zero_value(election: str, hints: Optional[dict]) -> bool:
+    """Whether a saved election DECLARES the spun-off shares worth $0:
+    an FMV spin-off election whose hints carry `fmv_per_share` written
+    as 0 (`taxjson elect --set ID=ELECTION --hint fmv_per_share=0`, or a
+    0 confirmed at the prompt) — a warrant distributed at no value. That
+    is the user's answer: the $0 cost is listed as an Info, never as a
+    Warning, ATTENTION or pending. A $0 the broker booked with no value
+    saved for it stays a Warning."""
+    hints = hints or {}
+    if election not in FMV_SPINOFF_ELECTIONS or 'fmv_per_share' not in hints:
+        return False
+    try:
+        return abs(float(hints['fmv_per_share'])) < 1e-12
+    except (TypeError, ValueError):
+        return False
+
+
+def declared_zero_value_ids(manifest_path: Path) -> set:
+    """The event ids whose saved election in `manifest_path` declares a
+    $0 value (declares_zero_value). An unreadable manifest declares
+    nothing (the commands that read it name the problem)."""
+    try:
+        man = Manifest.load(Path(manifest_path))
+    except (ManifestError, OSError, ValueError):
+        return set()
+    return {eid for eid, r in man.records.items()
+            if declares_zero_value(r.election, r.hints)}
+
+
+def declared_zero_value_events(root: Path) -> set:
+    """{(account, event id)} of the project's elections that declare a
+    $0 value: each account's manifest as `taxjson elect` reads it
+    (inputs/<account>/manifest.json, else the legacy
+    work/<account>_manifest.json)."""
+    root = Path(root)
+    found: Dict[str, Path] = {}
+    for pattern, name_of in (
+            ('work/*_manifest.json',
+             lambda p: p.name[:-len('_manifest.json')]),
+            # the canonical one wins
+            ('inputs/*/manifest.json', lambda p: p.parent.name)):
+        try:
+            for p in sorted(root.glob(pattern)):
+                found[name_of(p)] = p
+        except OSError:
+            continue
+    return {(acct, eid) for acct, p in found.items()
+            for eid in declared_zero_value_ids(p)}
+
+
+def declared_zero_value_text(account: str, symbol: str, date: str,
+                             event_id: str) -> str:
+    """The run's one Info line for a spin-off booked at the $0 value its
+    election declares (declares_zero_value)."""
+    return (f"{account}: spin-off {symbol} on {date} (event {event_id}) "
+            f"is booked at the $0 value you declared (fmv_per_share=0): "
+            f"no dividend income and a $0 cost for the new shares. To "
+            f"change it: taxjson elect {account} --redo --event "
+            f"{event_id}")
 
 
 def _canada_spinoff_deemed_dividend(event: CorporateAction, option: str, hints: dict) -> List[dict]:
@@ -4073,9 +4140,10 @@ HINTS_BY_ELECTION: Dict[str, List[tuple]] = {
         ('fmv_per_share',
          "FMV per share of the spunoff position on the receipt date "
          "(used to compute the deemed-dividend amount and cost basis). "
-         "The broker reported no value for this spin-off. Enter 0 to "
-         "defer this number — the rows will be zero-valued and every "
-         "`taxjson run` warns until you set it.",
+         "The broker reported no value for this spin-off. Enter 0 only "
+         "when the shares came at no value (a warrant distributed for "
+         "nothing): a declared $0 cost, which every `taxjson run` lists "
+         "as an Info.",
          lambda ev: spinoff_broker_value(ev)[0] <= 0),
     ],
     'rollover_s_86_1': [
@@ -4116,9 +4184,9 @@ HINTS_BY_ELECTION: Dict[str, List[tuple]] = {
         ('fmv_per_share',
          "FMV per share of the spun-off position on the receipt date "
          "(sets the taxable amount and the new cost basis). The broker "
-         "reported no value for this spin-off. Enter 0 to defer this "
-         "number — the rows will be zero-valued and every `taxjson run` "
-         "warns until you set it.",
+         "reported no value for this spin-off. Enter 0 only when the "
+         "shares came at no value (a warrant distributed for nothing): a "
+         "declared $0 cost, which every `taxjson run` lists as an Info.",
          lambda ev: spinoff_broker_value(ev)[0] <= 0),
     ],
     'tax_free_355': [

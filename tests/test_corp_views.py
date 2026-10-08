@@ -42,9 +42,11 @@ class TestSpinoffs(unittest.TestCase):
                      corp_event_id=EV, description=SPIN_DESC),
                 _row("BUYSELL", "2024-05-13", "SPNC.US", 20, 0.0,
                      corp_event_id=EV, description=SPIN_DESC)]
+        # No value saved (a fmv_per_share=0 written by the user is a
+        # declared $0, not a flag: test_fix_quietdeclared).
         td, root, cfg = _proj(rows, {EV: {
             "election": "taxable_deemed_dividend",
-            "hints": {"fmv_per_share": 0.0}, "summary": SUMMARY}})
+            "hints": {}, "summary": SUMMARY}})
         with td:
             doc = spinoffs(root, cfg)
         items = doc["spinoffs"]
@@ -54,6 +56,14 @@ class TestSpinoffs(unittest.TestCase):
         self.assertEqual(s["flags"], ["ZERO-VALUE"])
         self.assertEqual(s["broker_fmv"], 0.0)   # no current broker event
         self.assertIn("ZERO-VALUE", "\n".join(render_spinoffs(doc)))
+        td, root, cfg = _proj(rows, {EV: {
+            "election": "taxable_deemed_dividend",
+            "hints": {"fmv_per_share": 0.0}, "summary": SUMMARY}})
+        with td:
+            doc = spinoffs(root, cfg)
+        self.assertEqual(doc["spinoffs"][0]["flags"], [])
+        self.assertIn("the $0 value you declared",
+                      "\n".join(render_spinoffs(doc)))
 
     def test_valued_and_sheltered(self):
         rows = [_row("DIVIDEND", "2024-05-13", "SPNC.US", 0, 830.0,

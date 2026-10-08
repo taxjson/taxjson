@@ -376,10 +376,17 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### "Warning: margin: spin-off SPNC.US on 2025-06-03 (event …) is booked at $0"
 - **Check:** `tjs spinoffs` shows the election, the value used and the cost booked.
-- **Cause:** the election was saved with `fmv_per_share=0`: no dividend income is booked and the new shares cost $0, so a later sale overstates the gain. The same warning exists for a merger booked at $0 and a spin-off with $0 allocated cost.
+- **Cause:** the election has no `fmv_per_share` saved (a hand-edited or older manifest) and the broker reported no value: no dividend income is booked and the new shares cost $0, so a later sale overstates the gain. The same warning exists for a merger booked at $0 (there `fmv_per_share=0` still means "not known yet") and a spin-off with $0 allocated cost. A spin-off whose `fmv_per_share=0` you wrote yourself is a declared $0 cost: an Info (next entry).
 - **Fix:** set the value: `tjs elect margin --set EVENT_ID=ELECTION --hint fmv_per_share=<value>` (the line printed with the warning), then `tjs run`.
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_zero_value_spinoffs`
+
+### "Warning: 1 position at a $0 cost (1 still held): SPNW.TO (margin). Run `taxjson find-missing-history`" for a spin-off you elected with `fmv_per_share=0`
+- **Check:** `tjs elect margin` shows the event with `hints: fmv_per_share=0`; `tjs find-missing-history` listed the shares under "$0-COST SHARES STILL HELD", and the checklist and quick-start flagged the elections step ("spin-off/merger(s) booked at $0").
+- **Cause:** a spin-off whose shares truly came at no value (a warrant distributed for nothing) is answered by saving its election with `--hint fmv_per_share=0`, but every report read that $0 like a value the broker left out. Now a spin-off election whose `fmv_per_share` you wrote as 0 is a declared $0 cost: the run says "Info: margin: spin-off SPNW.TO on 2025-06-03 (event …) is booked at the $0 value you declared (fmv_per_share=0) …" and, in the closing summary, "Info: 1 position at the $0 cost you declared …"; find-missing-history lists it under "DECLARED $0 COST — answered by your election"; the checklist, quick-start and `tjs spinoffs` do not flag it. A $0 cost with no value saved (the broker gave none and no hint is in the manifest) is still a Warning.
+- **Fix:** nothing to do. To give the shares a value later: `tjs elect margin --redo --event EVENT_ID` (or `--set EVENT_ID=ELECTION --hint fmv_per_share=<value>`), then `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/corp_actions.py` — `declares_zero_value`, `declared_zero_value_events`, `declared_zero_value_text`; `src/taxjson/lib/first_run.py` — `declared_zero_cost`, `zero_cost_positions`; `src/taxjson/lib/missing_history.py` — `detect_zero_basis_acquisitions`; `src/taxjson/bin/taxjson_missing_history.py` — `DECLARED $0 COST`; `src/taxjson/bin/taxjson_run.py` — `_warn_zero_value_spinoffs`
 
 ### "Warning: QZA.US: stock dividend of 2 share(s) on 2025-07-03 entered at $0 cost"
 - **Check:** before it, the parser's line `QZA.US: stock dividend of 2 share(s) on 2025-07-03 (IB Value 80.00 USD) booked as a stock-dividend event` (RBC and Questrade say the same without the IB Value).

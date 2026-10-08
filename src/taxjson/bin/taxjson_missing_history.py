@@ -733,14 +733,25 @@ def main(argv=None):
     # --- 2. $0-cost corp-action acquisitions later sold (and, apart,
     #        those still held: their cost is understated now) ---
     from taxjson.lib.country import stock_dividend_zero_cost
+    # A spin-off whose election declares the $0 value (fmv_per_share=0
+    # written by the user) is answered: listed apart, never as missing
+    # cost (corp_actions.declares_zero_value).
+    from taxjson.lib.corp_actions import declared_zero_value_events
+    _root = _project_root(args.files[0])
     zero_all = [r for r in detect_zero_basis_acquisitions(
                     txs, args.year, include_options=args.include_options,
                     date_basis=basis, include_held=True,
                     stock_dividends_spread=(
                         country is not None
-                        and not stock_dividend_zero_cost(country)))
+                        and not stock_dividend_zero_cost(country)),
+                    declared_events=(declared_zero_value_events(_root)
+                                     if _root is not None else ()))
                 if (r.symbol, r.account) not in linked_new
                 and (not args.account or r.account == args.account)]
+    zero_declared = [r for r in zero_all if r.declared
+                     and (r.still_held_qty > 0
+                          or (r.sold and r.affects_year))]
+    zero_all = [r for r in zero_all if not r.declared]
     zero_rows = [r for r in zero_all if r.sold]
     zero_held = [r for r in zero_all if r.still_held_qty > 0
                  and not is_registered_account(r.account, types or None,
@@ -824,6 +835,26 @@ def main(argv=None):
             details.append([f"└ {r.description}"] if r.description else [])
         _table(["Symbol", "Account", "Cur", "HeldQty", "ZeroQty", "AcqDate",
                 "Why"], body, details)
+
+    if zero_declared:
+        # Never an AFFECTS / REMOVE heading: the checklist counts none
+        # of these rows.
+        _P.heading(f"DECLARED $0 COST — answered by your election: "
+                   f"{len(zero_declared)} pair(s)")
+        _P.line("INFO - a spin-off booked at the $0 value its election "
+                "declares (fmv_per_share=0); nothing to do:")
+        _table(["Symbol", "Account", "HeldQty", "ZeroQty", "AcqDate",
+                "Event"],
+               [[r.symbol, r.account, f"{r.still_held_qty:.4f}",
+                 f"{r.zero_cost_qty:.4f}", r.acquisition_date,
+                 ", ".join(r.event_ids) or "?"] for r in zero_declared],
+               [[] for _ in zero_declared])
+        _one = zero_declared[0]
+        _P.para("To change it: `taxjson elect "
+                + (f"{_one.account} --redo --event {_one.event_ids[0]}`"
+                   if len(zero_declared) == 1 and len(_one.event_ids) == 1
+                   else "ACCOUNT --redo --event ID`")
+                + ".")
 
     if not short_rows and not zero_rows and not links:
         scope = f" (account {args.account})" if args.account else ""

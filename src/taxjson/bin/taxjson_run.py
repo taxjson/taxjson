@@ -43,7 +43,7 @@ import subprocess
 import sys
 from datetime import date as date_cls, datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from taxjson.lib.cli_diag import note, write_text_atomic
 from taxjson.lib.cli_diag import tax_year as _tax_year_arg
@@ -1870,20 +1870,28 @@ def _note_sheltered_defaults(name: str, corp_files: List[Path]) -> None:
 
 
 def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
-                              corp_files: List[Path], cache: Path) -> None:
-    """A taxable spin-off booked at $0 (the documented `fmv_per_share=0`
-    "defer") books no dividend income and a $0 cost for the new shares:
-    a later sale overstates the gain by the same amount. It stays loud
-    on EVERY run — on the console and, through a `.diag` sidecar, in the
-    account's .sum — until a value is set (2026-09 audit: it was silent
-    after the prompt). Registered accounts: no tax effect, no warning."""
+                              corp_files: List[Path], cache: Path,
+                              declared: Iterable[str] = ()) -> None:
+    """A taxable spin-off booked at $0 with no value saved books no
+    dividend income and a $0 cost for the new shares: a later sale
+    overstates the gain by the same amount. It stays loud on EVERY run —
+    on the console and, through a `.diag` sidecar, in the account's .sum
+    — until a value is set (2026-09 audit: it was silent after the
+    prompt). `declared`: the event ids whose election DECLARES the $0
+    (`fmv_per_share=0` written by the user: corp_actions.
+    declares_zero_value) — answered, so one Info line each (a `note:`
+    in the sidecar, which the checklist does not count). Registered
+    accounts: no tax effect, no warning."""
     import json as _json
     from taxjson.lib.corp_actions import (ALLOCATED_BASIS_HINT,
+                                          declared_zero_value_text,
                                           zero_basis_rollover_rows,
                                           zero_value_merger_rows,
                                           zero_value_spinoff_rows)
     diag = cache / f"{name}_corp_spinoff_value.diag"
     lines: List[str] = []
+    notes: List[str] = []
+    declared = set(declared)
     if is_taxable:
         for f in corp_files:
             try:
@@ -1893,6 +1901,11 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
                 continue
             for r in zero_value_spinoff_rows(rows):
                 eid = r.get("corp_event_id", "?")
+                if eid in declared:
+                    notes.append(declared_zero_value_text(
+                        name, str(r.get("symbol") or ""),
+                        str(r.get("date") or ""), eid))
+                    continue
                 lines.append(
                     f"warning: {name}: spin-off {r.get('symbol')} on "
                     f"{r.get('date')} (event {eid}) is booked at $0 — no "
@@ -1927,12 +1940,16 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
                     f"the spin-off's sale books the gain. Set it: taxjson "
                     f"elect {name} --set {eid}={el} --hint "
                     f"{ALLOCATED_BASIS_HINT[el]}=<amount>")
-    if lines:
-        diag.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if lines or notes:
+        diag.write_text("\n".join(lines + [f"note: {n}" for n in notes])
+                        + "\n", encoding="utf-8")
         for ln in lines:
             _echo_captured(ln, file=sys.stderr)
     else:
         diag.unlink(missing_ok=True)
+    for n in notes:
+        _say_once(("declared-zero", name, n), "note", n, indent="  ",
+                  file=sys.stdout)
 
 
 def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
@@ -4113,7 +4130,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                      f"See the UNBOOKED warning above (also in "
                      f"work/{out.name}.diag).")
             corp_files.append(out)
-        _warn_zero_value_spinoffs(name, is_taxable, corp_files, cache)
+        from taxjson.lib.corp_actions import declared_zero_value_ids
+        _warn_zero_value_spinoffs(
+            name, is_taxable, corp_files, cache,
+            declared_zero_value_ids(manifest_path))
         if not is_taxable:
             _note_sheltered_defaults(name, corp_files)
 
@@ -8490,9 +8510,23 @@ def cmd_elect(args: argparse.Namespace) -> None:
                  indent="  ")
         _done.line("Run `taxjson run` to apply it.")
         _done.print()
-        if ("fmv_per_share" in hints and abs(hints["fmv_per_share"]) < 1e-12
+        from taxjson.lib.corp_actions import declares_zero_value
+        if declares_zero_value(election, hints):
+            # A spin-off's 0 is the user's declared value (a warrant
+            # distributed at no value): an Info on every run, never a
+            # Warning or pending.
+            _out.note(f"fmv_per_share=0 books this {election} at the $0 "
+                      f"value you declared",
+                      prog=f"{_PROG} elect",
+                      details=["No income and a $0 cost for the new "
+                               "shares; `taxjson run` lists it as an "
+                               "Info. To change it: `taxjson elect "
+                               f"{name} --redo --event {event_id}`."])
+        elif ("fmv_per_share" in hints
+                and abs(hints["fmv_per_share"]) < 1e-12
                 and election.startswith("taxable_")):
-            # 0 is the documented "defer" value (R1-11): say what it books.
+            # A merger's 0 is the documented "defer" value (R1-11): say
+            # what it books.
             _out.warn(f"fmv_per_share=0 books this {election} at $0",
                       prog=f"{_PROG} elect",
                       details=["No income and a $0 cost for the new "

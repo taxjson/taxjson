@@ -293,7 +293,9 @@ class TestSpinoffBrokerValue(unittest.TestCase):
             self.assertTrue(spec[2](self._event(fmv=0.0, target_fmv=0.0)))
 
     def test_zero_value_taxable_spinoff_warns_every_run(self):
-        # A Questrade spin-off (no broker value) deferred at 0.
+        # A Questrade spin-off (no broker value) booked at 0 with no
+        # value saved (fmv_per_share=0 written by the user is a declared
+        # $0, an Info: test_fix_quietdeclared).
         h = ('Transaction Date,Settlement Date,Action,Symbol,Description,'
              'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,'
              'Activity Type,Account #,Account Type\n')
@@ -312,6 +314,10 @@ class TestSpinoffBrokerValue(unittest.TestCase):
             _run_cli(root, "elect", "margin", "--set",
                      f"{eid}=taxable_deemed_dividend", "--hint",
                      "fmv_per_share=0")
+            man = root / "inputs" / "margin" / "manifest.json"
+            m = json.loads(man.read_text())
+            m["elections"][eid]["hints"] = {}
+            man.write_text(json.dumps(m))
             for _ in range(2):          # the second run rebuilds nothing
                 r = _run_cli(root, "run", "--no-input")
                 self.assertEqual(r.returncode, 0, r.stderr + r.stdout)

@@ -20,6 +20,14 @@
 
 ### Fixed
 
+- A spin-off elected with `--hint fmv_per_share=0` (shares that came at
+  no value, such as warrants distributed for nothing) is a declared $0
+  cost: the run lists it as an Info with its event id and how to change
+  it (`taxjson elect ACCOUNT --redo --event ID`), and it is no longer the
+  "$0 cost" Warning of the closing summary, a "$0-COST SHARES STILL
+  HELD" row of `taxjson find-missing-history`, a flag in `taxjson
+  spinoffs`, or ATTENTION in the checklist and quick-start. A $0 cost the
+  broker booked with no value saved is still a Warning.
 - `taxjson format-map` replaces every header an earlier taxjson version
   wrote into ticker.map with the current one: the earliest projects'
   header ("symbol rules for the taxjson pipeline", "Each line is: KEYWORD
