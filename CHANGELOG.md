@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.24.2 (2026-10-08)
+
 ### Added
 
 - **`taxjson slip-audit --import-cra`**: the T5 and T3 slip PDFs

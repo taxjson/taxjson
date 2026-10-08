@@ -97,7 +97,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** ticker.map holds two headers after `tjs format-map --write`: the `## ticker.map: standing truths …` one and, below it, a `#` block describing GLOBAL, TOBASE, JOURNAL and DELETE. The Info line names the first line of a block kept because it differs from every header taxjson wrote; "Info: 1 comment block(s) still describe JOURNAL or a dated RENAME as a ticker.map rule" names a comment of yours that documents the legacy dated events.
 - **Cause:** format-map replaced only the headers of the recent `taxjson init` templates, and only a paragraph standing alone: the earliest projects' header (written before `taxjson init` had a template), a header re-wrapped or re-cased, and one with your notes directly below its last line were kept as your notes.
 - **Fix:** upgrade, then `tjs format-map` (the dry run shows the old header removed and says how many lines) and `tjs format-map --write`; `--check` fails while an old header is there. A block it keeps as edited is yours to delete. Your comments that mention JOURNAL or a dated RENAME are kept: a journal or a ticker change on a date is a `.tt` line now (see "ticker.map holds 1 JOURNAL line(s)" below).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/ticker_map_legacy.py` — `is_legacy_paragraph`, `near_legacy`, `corpus_tables`; `src/taxjson/lib/ticker_map_format.py` — `_scan_template`, `_legacy_spans`, `_dated_comment_blocks`; `src/taxjson/bin/taxjson_run.py` — `_format_map_header_notes`
 
 ### "Warning: [settings] option_grant_timing_since is not set, so grant timing (ITA s.49(1)) starts at the project year (2025)"
@@ -371,7 +371,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs spinoffs` shows the event with election `sheltered_default` and the new shares' cost of 0; `tjs elect --pending` does not list it.
 - **Cause:** a spin-off in a sheltered account (RRSP, LIRA, TFSA, RESP, RRIF; US: IRA, Roth, 401(k), HSA, 529) is booked without asking: nothing is taxed inside the account, and nothing taxable reads its cost (an in-kind move uses fair market value; the superficial-loss / wash-sale rule counts units). The new shares start at $0 and the parent keeps its whole cost; a merger's new shares take the old shares' cost ("booked with the old shares' cost carried to the new shares"). It used to be asked like a taxable account's event, stopping `run --no-input`, `run --strict`, the checklist and quick-start until answered.
 - **Fix:** nothing to do. For a real cost in the holdings view, `tjs elect lira --set EVENT_ID=ELECTION` (the saved election wins); `sheltered_elections = "ask"` in `[settings]` asks for every such event again.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_note_sheltered_defaults`, `_sheltered_elections`; `src/taxjson/lib/corp_actions.py` — `sheltered_default_rows`, `sheltered_default_text`; `src/taxjson/bin/taxjson_corp_actions.py` — `--sheltered-elections`
 
 ### "Warning: margin: spin-off SPNC.US on 2025-06-03 (event …) is booked at $0"
@@ -385,7 +385,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs elect margin` shows the event with `hints: fmv_per_share=0`; `tjs find-missing-history` listed the shares under "$0-COST SHARES STILL HELD", and the checklist and quick-start flagged the elections step ("spin-off/merger(s) booked at $0").
 - **Cause:** a spin-off whose shares truly came at no value (a warrant distributed for nothing) is answered by saving its election with `--hint fmv_per_share=0`, but every report read that $0 like a value the broker left out. Now a spin-off election whose `fmv_per_share` you wrote as 0 is a declared $0 cost: the run says "Info: margin: spin-off SPNW.TO on 2025-06-03 (event …) is booked at the $0 value you declared (fmv_per_share=0) …" and, in the closing summary, "Info: 1 position at the $0 cost you declared …"; find-missing-history lists it under "DECLARED $0 COST — answered by your election"; the checklist, quick-start and `tjs spinoffs` do not flag it. A $0 cost with no value saved (the broker gave none and no hint is in the manifest) is still a Warning.
 - **Fix:** nothing to do. To give the shares a value later: `tjs elect margin --redo --event EVENT_ID` (or `--set EVENT_ID=ELECTION --hint fmv_per_share=<value>`), then `tjs run`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/corp_actions.py` — `declares_zero_value`, `declared_zero_value_events`, `declared_zero_value_text`; `src/taxjson/lib/first_run.py` — `declared_zero_cost`, `zero_cost_positions`; `src/taxjson/lib/missing_history.py` — `detect_zero_basis_acquisitions`; `src/taxjson/bin/taxjson_missing_history.py` — `DECLARED $0 COST`; `src/taxjson/bin/taxjson_run.py` — `_warn_zero_value_spinoffs`
 
 ### "Warning: QZA.US: stock dividend of 2 share(s) on 2025-07-03 entered at $0 cost"
@@ -627,7 +627,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs renames` lists the change as an event booked from the `.tt` line (and `tjs renames --pending` does not suggest it), yet the run's "Reading" step still printed the hint, and the account's `.sum` DIAGNOSTICS kept it.
 - **Cause:** the parsers (RBC, Questrade, Webull) dropped the hint for a pair ticker.map joins, but never saw the `.tt` RENAME lines, which the run reads apart from ticker.map. The hint's date may differ from the declared one (the new symbol's first row versus the company's change date): the pair is what counts.
 - **Fix:** nothing to do: the run passes the declared changes to the parser (`work/declared_renames.list`), the console no longer shows the hint, and the `.sum` keeps a note instead: "note: 99900001.csv: RBC symbol QZOLD (USD) stops and QZNEW starts with the same description — the ticker change is answered by inputs/margin/renames.tt:3."
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/brokerages/base.py` — `set_declared_renames`, `declared_rename_where`, `answered_rename_note`; `src/taxjson/bin/taxjson_run.py` — `stage_declared_renames`; `src/taxjson/bin/taxjson_brokerage.py` — `--declared-renames`
 
 ### "Warning: the account's IB statements: IB lists one stock (contract id …) under several symbols: QZOLD, QZNEW — booked as a ticker change, a dated event (QZOLD.US -> QZNEW.US on 2025-05-12)"
@@ -648,7 +648,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the update changed `src/taxjson/data/markets.toml` (a venue, an index-option root, a stablecoin, a split-share issuer) and no Python file; `tjs run` without `--fast` gives a different result from the `--fast` run before it.
 - **Cause:** `--fast` trusts its cached stages only when they were built by the installed taxjson, but that check (the content fingerprint in `work/.code_fingerprint` and the modification-time scan) read only the package's `.py` files, so a change to the shipped data the code reads went unnoticed.
 - **Fix:** upgrade: every shipped file the code reads counts, and the next `--fast` run says "Rebuilding everything: taxjson's code changed" and rebuilds. On an older install run `tjs run` without `--fast` once after updating.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_package_files`, `_package_fingerprint`, `_package_mtime`
 
 ### "Warning: the account's IB statements: IB lists one stock (contract id …) under several symbols: QZOLD, QZNEW — a ticker change taxjson does not book from the contract id: …"
@@ -958,35 +958,35 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs fx-cash` prints the same line first; `tjs fx-cash --json` has `"reliable": false` and the raw figures under `unreliable_raw`; `tjs checklist` shows `[!] fx-cash` with it. The project has no `[settings] fx_cash_ledger`, or it is `"v1"`.
 - **Cause:** the default FX-on-cash ledger (s.39(1.1), US §988) is rebuilt from the trades and income of the taxable books only. It never sees a currency conversion (IB Forex trades, Kraken or Coinbase fiat trades, a bank's), a deposit or withdrawal, a foreign-currency margin balance or the pool carried from the year before, so each spend it cannot cover is an "overdraft" moved at the day's rate with no gain, and the result can be wrong in either direction. Before this release `tjs sum` showed its figure as "reportable … line 15300" with a caveat.
 - **Fix:** do not file that figure. Work out the line 15300 FX result from the statements, or try the opt-in ledger v2 (under audit): `tjs fx-cash --ledger v2` reads the conversions, deposits/withdrawals and statement balances, and says what it computed or, line by line, what it needs (next entry). `tjs checklist --skip fx-cash --note "..."` records that you handled it yourself.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/bin/taxjson_fx_cash.py` — `unreliable_status`, `NOT_READ`; `src/taxjson/bin/taxjson_run.py` — `_fx_cash_status`, `_fx_sum_item`, `cmd_fx_cash`; `src/taxjson/lib/checklist.py` — `d_fx_cash`
 
 ### `tjs fx-cash --ledger v2`: "FX on foreign cash: NOT COMPUTED for 2025, ledger v2 (opt-in, under audit) — 4 problems, first: no opening pool for margin/ib USD … ; no reportable figure"
 - **Check:** the report's NOT COMPUTED table lists each problem with its date, account (book) and amount, and the lines below it say what to add; `--cash-events` lists every conversion, move and balance the ledger read.
 - **Cause:** ledger v2 refuses instead of guessing: an account holds foreign cash at the start of the year with no cost (`opening`), a deposit or withdrawal nothing declares (`undeclared`), a statement balance the ledger does not reach within 1.00 (`reconcile`: a conversion or move it does not see), an account with activity and no balance to check against, an overdraft in an account that does not reconcile, a move between your own accounts that arrives before it leaves (`own`), a missing FX rate, or an account of a broker whose export it reads no conversion, deposit or withdrawal from (`unread`: Webull, the generic importer).
 - **Fix:** add the `.tt` lines it names to a `.tt` file of the account's `inputs/` folder (docs/settings.md, `.tt` files: `CASHOPEN` once for the first year, `CASHMOVE … cost=` / `kept` / `proceeds=` / `own` / `spot` per move, `CASHBAL` for an export without balances, `CASHBOOK <book>` in a `.tt` file of a folder holding several broker accounts, `CASHBOOK <book> complete` once a Webull or generic account's conversions and moves are all lines), then `tjs fx-cash --ledger v2` again; `fx_cash_inflow_cost = "spot"` takes the day's rate for undeclared deposits. Close the year with `fx_cash_ledger = "v2"` and the next year opens from the recorded pool.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/fx_cash_v2.py` — `build`, `headline`, `TOL`; `src/taxjson/lib/cash_events.py` — `parse_line`, `collect`, `Books`
 
 ### `tjs fx-cash --ledger v2` computed a Questrade account's figure as a margin loan ("BORROWED"), or: "wb/webull: taxjson does not read webull's conversions, deposits or withdrawals from its export"
 - **Check:** `tjs fx-cash --ledger v2 --cash-events` lists what the ledger read for the account; the report's NOT READ FROM THE EXPORT table names the accounts whose exports give it nothing.
 - **Cause:** ledger v2 read no cash event from a Questrade, Webull or generic export, so an account that converted Canadian dollars before buying a US share read as one that borrowed them, and a figure was computed on it.
 - **Fix:** upgrade: Questrade's FX conversions (FXT), deposits, withdrawals, cash-only transfers and stock-lending income are read. For Webull and the generic importer write each conversion and move as a `.tt` line (`FXCONV`, `CASHMOVE`) in the account's folder, then `CASHBOOK <book> complete` (e.g. `CASHBOOK webull complete`) to say they are all there.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/brokerages/questrade.py` — `questrade_cash_events`; `src/taxjson/lib/cash_events.py` — `READERS`, `unread`; `src/taxjson/lib/fx_cash_v2.py` — `unread_books`
 
 ### "Error: m.tt:4: malformed CASHBAL line — … — a line of the FX-on-cash ledger v2 only"
 - **Check:** the line named is a `FXCONV`, `CASHMOVE`, `CASHOPEN`, `CASHBAL` or `CASHBOOK` line.
 - **Cause:** the cash lines are read only by the opt-in ledger v2, but a malformed one stops `tjs run` under either ledger (a typo must not vanish).
 - **Fix:** correct the line to the form the message shows, or delete it if you do not use ledger v2.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/bin/taxjson_convert_tt.py` — `a line of the FX-on-cash ledger v2 only`
 
 ### `tjs elect` says "No elections recorded: lira" although the run booked a spin-off there ("sheltered account lira: spin-off … booked at $0 cost")
 - **Check:** `tjs spinoffs` lists the event with election `sheltered_default`.
 - **Cause:** the sheltered default books the event without saving an election, and the listing read only the saved ones.
 - **Fix:** upgrade: `tjs elect` lists each such event as "sheltered default ($0 cost for the distributed shares)" (a merger: "the old shares' cost carried"); `tjs elect ACCOUNT --set ID=ELECTION` records another treatment.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_defaulted_events`, `_elections_section`
 
 ### `tjs checklist`: "[!] journals … 1 pending journal(s) between two listings (1 suggested, 0 refused) — `taxjson journals --pending`"
@@ -1035,21 +1035,21 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs wash-sales` lists the denial and its replacement; `tjs edge-cases` marks a replacement a few days from day 30 THE DATE BASIS DECIDES THIS ONE. In Canada the window is counted on settle dates whatever `tax_date` says (CA-SL-01); in the US on trade dates (US-WASH-01).
 - **Cause:** the engines apply the rule as the law's mechanical test, black and white. Taking a position against one denial is a filing decision only you (and your adviser) can make; taxjson never infers it.
 - **Fix:** add a line to a `.tt` file of the taxable account that sold: `ALLOWLOSS 2025-12-19 QZA.TO reason="the RRSP call was bought 32 days after the trade date"` (the sale's trade or settlement date, its symbol as `tjs wash-sales` spells it, and its units when two denied sales of the symbol share the day), then `tjs run`. The loss stays allowed and no ACB (US: basis) is raised for it; every run says so in one Warning, `tjs sum` lists it under FILING POSITIONS with the denial the rule would make, and the checklist's filing-positions step stays manual until you mark it done. `tjs form-export` notes the position on the sale's row (US: no code W), and `tjs audit`, `tjs wash-sales --explain`, `tjs carryover` and `tjs handoff` name it. Delete the line to apply the rule again. If the run stops with "Error: 1 .tt ALLOWLOSS line(s) name no single denied superficial loss", the line's date or symbol matches no denied sale (the message lists that day's trades in the account) or matches two (add the units sold).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/loss_overrides.py` — `parse_line`, `problems`, `warning_message`; `src/taxjson/bin/taxjson_run.py` — `_read_loss_overrides`, `_say_loss_overrides`, `name no single`; `src/taxjson/lib/checklist.py` — `d_filing_positions`
 
 ### "Error: 1 .tt ALLOWLOSS line(s) name no single denied superficial loss" with "names the same sale as inputs/margin/m.tt:3" or "60 units is one fill of the 100-unit sale"
 - **Check:** the message names both lines, or the sale's units; `tjs wash-sales` lists the denied sale.
 - **Cause:** a line names a WHOLE sale. Two lines naming one sale in different spellings (one with the units, one without; one by the trade date, one by the settlement date) are one position taken twice. The units, when given, are the sale's total: one same-day sell-down in several fills is one sale, and one fill's units used to override the whole sale.
 - **Fix:** keep one line per sale; write the sale's total units, or none. A `reason="..."` written after a `#` is part of the comment: put the reason before it.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/loss_overrides.py` — `problems`, `plan`, `parse_line`, `_comment_start`
 
 ### `tjs form-export` (or `tjs audit`) shows an ALLOWLOSS sale as an ordinary loss: no note, "disallowed 0.00", and `tjs wash-sales --explain` says "no matching gains found"
 - **Check:** `tjs sum` lists the sale under FILING POSITIONS.
 - **Cause:** the return forms and the per-sale traces did not read the position the run recorded on the sale's rows (`loss_override`), so a claimed loss the rule would deny looked like any other loss.
 - **Fix:** upgrade. The Schedule 3 row's notes and the Form 8949 part say "filing position: ALLOWLOSS inputs/margin/m.tt:4, the superficial-loss rule would deny …" (`--json`: `filing_positions` / `filing_position`; `--csv`: the notes / note column; `--form txf` warns, its record carries no wash-sale amount); `tjs audit` has a POSITION line, `tjs wash-sales --explain` traces the sale, the US `tjs wash-radar` reads the loss as claimed. US: the 8949 row has no code W and nothing in (g); if the 1099-B reports box 1g for that sale, docs/tax-rules.md (US-WASH-25) says how the row differs.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/bin/taxjson_form_export.py` — `_filing_position`, `FILING_POSITION_NOTE_8949`; `src/taxjson/bin/taxjson_audit.py` — `loss_override`; `src/taxjson/lib/trace_format.py` — `filing_position_text`; `src/taxjson/bin/taxjson_wash_radar.py` — `_us_engine_losses`
 
 ### `tjs checklist`: "[!] inputs-frozen … latest activity 2025-12-31 — January 2026 is not in the books yet"
@@ -1077,147 +1077,147 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs slip-audit` shows the line, and under Suggestions a `[[capital_gains_dividends]]` table naming the payment (from IB's dividends report, or a `[[slip.line]]` with box 18 in `inputs/slips/slips.toml`).
 - **Cause:** a split-share or mutual-fund corporation paid part of a dividend as a capital-gains dividend (T5 box 18, line 17400). No export says so, so the books carry it as a dividend until taxjson.toml names it (tax-logic `CA-INC-06`).
 - **Fix:** add the suggested table to taxjson.toml and re-run `tjs run`; `tjs divs-sum` then shows it apart. A payment in lieu's box-18 part cannot be named (the table covers dividends only): it stays in the difference, said in the Notes.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/slip_audit.py` — `_suggest_cgd`, `_cgd_entry`; `src/taxjson/lib/cg_dividends.py` — `allocate`
 
 ### `tjs slip-audit`: "Return of capital  T3 42 … differs"
 - **Check:** `tjs slip-audit` lists the T3's return of capital and, under Suggestions, `.tt` lines for `inputs/<account>/slip-audit.tt`; `tjs roc-sum` shows no ACB reduction for the fund.
 - **Cause:** the fund's T3 returns capital (box 42) that the export booked as part of the dividend (IB's statement carries the whole payment as one dividend), or a T3 issued after the year.
 - **Fix:** add the suggested lines to the `.tt` file and re-run: `ADJUST … type=roc` lowers the ACB, and a `DIVIDEND` line with a negative amount takes the return of capital out of the dividend income when the dividend row holds it. A Canadian trust's line carries its record date (`record=`) so it counts in the T3's year (`CA-INC-DATE-ROC-TRUST`).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/slip_audit.py` — `_suggest_roc`
 
 ### `tjs slip-audit`: "Not compared: inputs/slips/U5***.2025.dividends.csv: no taxable account's books carry IB account U5***"
 - **Check:** the IB statement for that account is in `inputs/<account>/` and `tjs run` has run since.
 - **Cause:** the report is matched to the taxable account whose books carry the IB account; a registered account (it gets no T5/T3), or no IB statement for the account in the project, leaves no match.
 - **Fix:** add the IB statement to the account's folder, or name the account in `inputs/slips/slips.toml`: `[[ib_report]]` with `file = "<the report's name>"` and `account = "margin"`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/slip_audit.py` — `audit`, `find_ib_reports`; `src/taxjson/lib/ib_dividends.py` — `read_report`
 
 ### `tjs slip-audit`: "margin: Canadian dividends … from rbc.csv is on no slip" (or "… and no T5/T3 slip for it")
 - **Check:** the Coverage section names the account and the input files the income came from.
 - **Cause:** the account (or one broker account in it) has dividends, foreign income, withholding or return of capital in the books and no slip in `inputs/slips/`. Slips that name a `broker_account` cover only that broker account's rows.
 - **Fix:** type the missing slip into `inputs/slips/slips.toml` (`tjs slip-audit --template` prints one per account and currency). Interest alone under 50 is not a gap: no T5 is issued for it (it is still income).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/slip_audit.py` — `_audit_account`, `_income_by_source`
 
 ### `tjs slip-audit`: "Error: inputs/slips/slips.toml [[slip]] #2: …"
 - **Check:** the message names the slip table and the key (`account is required`, `not a T5 amount box`, `an identifier, not an amount`, `'405 54' is not an amount`, `year = 2024, but the project's year is 2025`).
 - **Cause:** a slip typed in a way slip-audit cannot read: an unknown key or box, an account that is not in taxjson.toml or is registered, an amount with a space or a decimal comma, last year's file.
 - **Fix:** correct the table as the message says (format: `docs/settings.md`, "inputs/slips/"). Never type a name, a SIN or an account number into `boxes`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/slip_audit.py` — `load_slips_file`, `_slip_from_table`, `SlipsError`
 
 ### `tjs slip-audit --import-cra`: "Not imported: 2025 T5 Sample Bank.pdf: no broker in the books by the issuer's name"
 - **Check:** the slip's issuer is a bank or a broker none of the project's exports come from, or the broker's name on the CRA slip is not the one taxjson knows it by (a trade name).
 - **Cause:** a CRA copy shows no account number: the importer places a T5 by its issuer's name and the payments in the books. The issuer must carry a broker's whole name (every word of it but a legal form like INC.): "TD DIRECT INVESTING", "RBC ROYAL BANK" or "RBC GLOBAL ASSET MANAGEMENT" is not RBC Direct Investing (before, a shared word such as DIRECT or RBC placed it there). A bank account's interest is outside the books.
 - **Fix:** import that PDF again naming the account it belongs to: `tjs slip-audit margin --import-cra "<file>" --write` (it is then compared with the account's rows no other slip's broker account holds), or leave it out and report it from the slip.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/cra_slips.py` — `place`, `broker_of_issuer`
 
 ### `tjs slip-audit --import-cra`: "ambiguous: ZZF.TO and ZZF.TO distributions match it equally" or "no fund in the books whose distributions match its amounts or name"
 - **Check:** `tjs divs ZZF.TO` lists the fund's distributions in each broker account; compare with the T3's boxes (21, 23, 25, 26, 49 and 42).
 - **Cause:** a T3 is placed in the fund whose year's distributions add up to the slip (with or without its return of capital), or whose descriptions carry its name. Two holdings of one fund with the same total, or distributions the books lack, leave it unplaced.
 - **Fix:** type that T3 into `inputs/slips/slips.toml` with its `security` and `broker_account` (docs/settings.md), or add the missing export.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/cra_slips.py` — `place`
 
 ### `tjs slip-audit`: "Not compared: margin: ZZF.TO ADJUST 2025-01-08 (roc.tt) has no record= and is dated by its pay date, but the distribution paid 2025-01-08 has record date 2024-12-31"
 - **Check:** the `.tt` return-of-capital line was typed from last year's T3 (box 42) with the January pay date.
 - **Cause:** without `record=` the line is dated by its pay date and lowers the ACB in this year; the distribution it belongs to is last year's by its record date (CA-INC-DATE-ROC-TRUST). Before, slip-audit netted it against this year's T3 and suggested a wrong line.
 - **Fix:** add `record=2024-12-31` (the record date the message names) to the line and re-run `tjs run`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/slip_audit.py` — `_redate_prior_roc`
 
 ### `tjs slip-audit`: "ZZT.TO: the books already hold ADJUST 2025-09-30 3.45 CAD (roc.tt), not counted against this slip"
 - **Check:** `tjs roc-sum` lists the line; the fund is held at two brokers in one account (or the line's date puts it in another year).
 - **Cause:** a hand-entered row has no broker account; it goes with the fund's distribution on its record date or pay date, else with the one slip showing its amount. When that cannot decide, the row is counted against no slip — and slip-audit never suggests a line the books already hold (before, it suggested it again: applying it booked the return of capital twice).
 - **Fix:** give the line its record date (`record=`) or type each broker's T3 with its `broker_account`, so the row is placed; do not add the line again.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/slip_audit.py` — `_audit_account`, `_roc_match`, `_suggest_roc`
 
 ### `tjs slip-audit --import-cra`: "Error: pdftotext is not installed"
 - **Check:** `pdftotext -v` fails.
 - **Cause:** the CRA PDFs are read with pdftotext (poppler-utils).
 - **Fix:** `sudo apt install poppler-utils` (Debian, Ubuntu), `brew install poppler` (macOS); or type the slips into `inputs/slips/slips.toml`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/cra_slips.py` — `pdf_text`
 
 ### `tjs slip-audit --import-cra`: one PDF shows as two slips ("merged.pdf #1", "merged.pdf #2"), or "skipped merged.pdf: box 24 twice in one T5 slip — the page cannot be read cleanly; not imported"
 - **Check:** the PDF holds two slips (pages saved together, or files merged); `pdftotext -layout merged.pdf -` shows two "2025 T5 slip (original) from …" lines.
 - **Cause:** each slip is read from its own slip line to the next one. Before, the first slip line was taken and the box rows of every later page were read into it: a T3 and a T5 became one slip (the T3's box 24 read as the T5's, boxes lost, placed in the wrong fund). A slip whose page repeats a box cannot be read cleanly and the whole file is refused.
 - **Fix:** nothing for a merged PDF (each slip is a table, `source = "cra:merged.pdf #1"` …). For a refused file, download each slip on its own from My Account, or type it into `inputs/slips/slips.toml`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/cra_slips.py` — `parse_slips`, `_sections`, `twice in one`
 
 ### `tjs slip-audit --import-cra`: "the same slip as t3.pdf — read once", "already in slips.toml ([[slip]] #1, the same boxes)", "replaced by the amended slip", or "slips.toml holds its amended slip"
 - **Check:** `inputs/slips/slips.toml` has one table per slip; an amended slip's table says `status = "amended"`, and the original it replaced is commented out under "# Replaced by the amended slip …" (the file before is `slips.toml.bak`).
 - **Cause:** each slip counts once. A second download (`t3 (1).pdf`), a file named with its folder, or a slip already in slips.toml (the same type, account, fund, broker account, currency and boxes) is not added again; an amended slip replaces the original of the same issuer, account, fund and broker account. Before, only the file name was compared and the status ignored: a re-download or an original plus its amended slip summed (a return of capital counted twice).
 - **Fix:** nothing. When it says "which cannot be told" (two originals an amended slip may replace), import the originals with `--write` first, then the amended slip; or delete the original's table by hand. A cancelled slip is not imported: delete the table of the slip it cancels.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/cra_slips.py` — `drop_duplicates`, `plan_import`; `src/taxjson/lib/slip_audit.py` — `comment_out_tables`; `src/taxjson/bin/taxjson_run.py` — `_slip_audit_import_cra`
 
 ### `tjs slip-audit --import-cra`: "skipped t5.pdf: a French-language slip page", "box 27 (foreign currency) reads 'Zorkmids'", "a slip line taxjson cannot read", or "a USD slip and no USD rate for 2025 in the FX cache"
 - **Check:** open the PDF: the page is CRA's French one, box 27 prints a currency name taxjson does not know, the slip line is not "YYYY T5 slip (original) from …", or the FX cache has no Bank of Canada rate for the year (`tjs run` offline).
 - **Cause:** the importer reads CRA's English page only and never guesses: an unknown wording is refused, and a slip in another currency is placed only when its amounts can be set against the books' CAD. Box 27 may print `USD`, `US$` or `U.S. dollars`; "(Original)" is read as original.
 - **Fix:** switch My Account to English and print the slip again; for a USD slip run `tjs run` online first (it fills the FX cache); else type the slip into `inputs/slips/slips.toml`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/cra_slips.py` — `parse_slips`, `_currency`, `place`
 
 ### `tjs slip-audit --import-cra`: "its broker account cannot be told: the statement holds several IB accounts and no dividends report matches it"
 - **Check:** the account's IB statement holds two IB accounts (one label exported together) and `inputs/slips/` has IB's dividends report for each, or none matches the slip's boxes 24 + 10, 18 and 15.
 - **Cause:** the rows of one statement of two accounts cannot be told apart, so the slip is written with the account whose dividends report shows its figures, else the one account with no report; neither: it is not placed (a wrong account would make the other account's report "payments only").
 - **Fix:** add the missing dividends report, or type the slip into `inputs/slips/slips.toml` with its `broker_account`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/cra_slips.py` — `place`, `_report_matches`
 
 ### `tjs slip-audit`: "broker_key is the books' own hash of the broker account" or "broker_key 0a1b2c3d4e is no broker account in the books"
 - **Check:** the `[[slip]]` table the message names has a `broker_key`; `ls work/.slip_key_salt`.
 - **Cause:** `--import-cra` writes a key of the broker account salted with the project's own salt (`work/.slip_key_salt`), so the key in slips.toml cannot be turned back into an account number by trying every IB number. A key written by an earlier version is the books' unsalted hash (it still works, said); a key written with another salt (work/ deleted, a slips.toml copied from another project, a `tjs redact` copy) matches no account and its slip is compared with no books.
 - **Fix:** delete the table and import the slip again (`tjs slip-audit --import-cra <file> --write`), or type `broker_account` instead.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/slip_audit.py` — `key_salt`, `broker_key`, `resolve_keys`; `src/taxjson/bin/taxjson_redact.py` — `_redact_broker_keys`
 
 ### `tjs slip-audit`: a T5 typed for the IB account and IB's dividends report counted twice ("Canadian dividends … slip" twice the books)
 - **Check:** `inputs/slips/slips.toml` has a T5 with the IB account as `broker_account` and `inputs/slips/` has IB's dividends report for it.
 - **Cause:** the typed slip and the report are the same T5. A typed slip for that broker account with a box the report covers is now compared, and the report keeps only its payments (as beside a CRA slip); a T5 typed for its interest only (box 13: the report has none) is compared beside the report. `--template` prints no table for a broker account the report covers.
 - **Fix:** nothing.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/slip_audit.py` — `_audit_account`, `template`
 
 ### `tjs slip-audit`: "the same IB dividends report as U5***.2025.dividends.csv … read once" or "Error: … two different IB dividends reports of IB account U5*** for 2025 — keep the newer download only"
 - **Check:** `inputs/slips/` holds two dividends reports of one IB account and year (`… (1).csv`).
 - **Cause:** both used to be read: every payment counted twice. Two identical copies are read once; two that differ cannot both be right.
 - **Fix:** delete one of them (the older download when they differ).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/slip_audit.py` — `audit`, `report_identity`
 
 ### `tjs slip-audit`: "a second account (U5***, after U5***) — the report's payments do not say which account they are in; download one dividends report per account"
 - **Check:** the dividends report's `Account` section has two rows (a report run for several accounts).
 - **Cause:** the report's payment rows name no account, so a report of two accounts cannot be compared with either (before, the last account row was taken for every payment).
 - **Fix:** download IB's dividends report once per account.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/ib_dividends.py` — `read_report`
 
 ### `tjs slip-audit`: "IB's report is in USD (the account's base currency) and the FX cache has no Bank of Canada USD rate for …"
 - **Check:** the IB account's base currency is USD (the report's `Account` row); a `tjs run` online fills the FX cache.
 - **Cause:** a Canadian slip is in CAD, so a USD-base account's report is converted payment by payment at the Bank of Canada rate of its pay date (tax-logic `CA-SLIP-02`; the Notes give the year's average-rate figure too). Before, it was compared in USD as if it were CAD.
 - **Fix:** run `tjs run` online once (it fills the FX cache), then `tjs slip-audit`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/slip_audit.py` — `ib_slips`, `_report_to_cad`, `_usd_base_note`
 
 ### `tjs run`: "Error: inputs/margin/U5***.2025.dividends.csv is IB's dividends report (the T5 / T3 income per payment), not an activity export — move it to inputs/slips/"
 - **Check:** the file is in an account's folder, not in `inputs/slips/`.
 - **Cause:** IB's dividends report is a slip source, not activity; the run stopped with "cannot detect broker" and the file's name (IB's download carries the account number) unmasked.
 - **Fix:** move the file to `inputs/slips/`; `tjs slip-audit` reads it there.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `group_inputs_detailed`
 
 ### `tjs reconcile-slips inputs/slips/*.csv`: "Info: skipped U5***.2025.dividends.csv: IB's dividends report (T5/T3 income, read by `taxjson slip-audit`), not a T5008"
 - **Check:** the skipped file is IBKR's dividends report.
 - **Cause:** IB's dividends report lives in `inputs/slips/` beside the T5008 CSVs; it is T5/T3 income, which `reconcile-slips` does not read (before, it failed the reconciliation as an unreadable T5008).
 - **Fix:** nothing: `tjs slip-audit` reads it. With only the report given, `reconcile-slips` stops with "no T5008 slip CSV to reconcile".
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_reconcile_slips`; `src/taxjson/lib/checklist.py` — `slip_files`
 
 ### `tjs handoff`: "Error: no prior-year record at filed/2024.json"
@@ -1240,26 +1240,26 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the message names the row (its index, id and symbol) and the field: `date`, `date_settle`, `lot_date`, `record_date` or `ex_date`. On an older release, write the date `2025-02-01` and run again: if the gains (or a sale read as a short cover) change, it is this problem.
 - **Cause:** the engines order rows by comparing their dates as text, so a date must be written year-month-day with two-digit month and day. A JSON book (one you wrote, or `taxjson-gains`, `taxjson-validate`, `taxjson-wash-radar` and the other stand-alone tools fed a file) with `2025-2-01` was accepted, and that row sorted after `2025-10-01`: FIFO and ACB took the wrong lot and a sale could open a short that a later purchase covered. The broker parsers and `.tt` files always wrote two digits.
 - **Fix:** upgrade. A month or day written with one digit (`2025-2-1`) is now read as `2025-02-01`; anything else that is not a real date in `YYYY-MM-DD` form (`2025-02-30`, `2025/02/01`, `25-2-1`, a date with a time) stops with the message above. Correct the row and run again.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/core.py` — `coerce_transaction_row`, `canonical_date`, `DATE_FIELDS`
 
 ### `taxjson-gains book.json`: "Error: book.json: no "transactions" list (keys: Transactions)", or a hand-written book that gives empty gains and no inventory at exit 0
 - **Check:** open the file: its top-level object has no key spelled exactly `transactions` (lower case); the message lists the keys it found.
 - **Cause:** a transaction book is a JSON object with a `"transactions"` list, or a bare list of rows. An object without that key (`"Transactions"`, `"rows"`) was read as an empty book by `taxjson-gains` and the other tools that read a book file (`taxjson-wash-radar`, `taxjson-lint-crosslistings`, `taxjson-sum-income`, `taxjson-diff`, `taxjson-export --trades`, `taxjson-split-gains --base`): empty gains and inventory, no message, exit 0. The stdin reader already refused it.
 - **Fix:** upgrade, then rename the key to `transactions` (or give the rows as a bare list). An explicit empty list (`{"transactions": []}`) is still an empty book.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/core.py` — `load_transactions`; `src/taxjson/lib/json_input.py` — `rows_or_exit`; `src/taxjson/bin/taxjson_sum_income.py` — `load_income_data`; `src/taxjson/bin/taxjson_diff.py` — `main`
 
 ### `taxjson-form-export gains.json`: "holds a non-finite number (NaN) — the file is damaged or hand-edited", or "refusing to write a non-finite number (NaN or infinity) at lines[0].gain"
 - **Check:** search the named JSON file for `NaN`, `Infinity` or `-Infinity`: JSON has no such numbers, but Python's `json` module reads and writes them. On an older release the same file gave a successful export whose JSON held `NaN` (not valid JSON, and not a figure anyone can file).
 - **Cause:** the report readers checked that a gain, cost or proceeds was a number, not that it was finite, so a damaged or hand-edited gains file (`work/<account>_gains.json`, a file passed to `taxjson-form-export`, `taxjson-sum-gains`, `taxjson-export`, `taxjson-t1135` and the other report tools) went through, and the JSON writers wrote the `NaN` back out.
 - **Fix:** upgrade. Re-run `tjs run` to rebuild the work files; for a file you wrote, replace the value with a real number. The JSON writers of filing figures (`taxjson-gains`, `taxjson-form-export`, `taxjson-sum-gains`, `taxjson-sum-income`, `taxjson-carryover`, `taxjson-t1135`, `taxjson-split-gains` and the run's `<account>_report.json`) now refuse a NaN or an infinity, naming where it is, instead of writing it.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/json_input.py` — `read_json_doc`, `check_row_types`, `filing_json_text`, `dump_filing_json`, `NonFiniteOutputError`; `src/taxjson/lib/report_model.py` — `load_report_json`
 
 ### `taxjson-form-export --csv s3.csv`: "cannot write --csv s3.csv: [Errno 17] File exists: 's3.csv.part'"
 - **Check:** a file `s3.csv.part` sits beside the CSV, left by an earlier export that was killed or interrupted, or written by another export of the same file running at the same time.
 - **Cause:** the CSV was written through the fixed temp name `<file>.part` and created it only if it did not exist, so a leftover one stopped every later export, and the failed write then deleted it (another export's unfinished data).
 - **Fix:** upgrade: the CSV is now written through a new owner-only temp file of its own and renamed over the target, as the other taxjson writers do. On an older release, delete the leftover `.part` file once no export is running.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/bin/taxjson_form_export.py` — `write_csv`; `src/taxjson/lib/safe_write.py` — `atomic_open`
