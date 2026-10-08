@@ -1038,6 +1038,20 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/cra_slips.py` — `place`
 
+### `tjs slip-audit`: "Not compared: margin: ZZF.TO ADJUST 2025-01-08 (roc.tt) has no record= and is dated by its pay date, but the distribution paid 2025-01-08 has record date 2024-12-31"
+- **Check:** the `.tt` return-of-capital line was typed from last year's T3 (box 42) with the January pay date.
+- **Cause:** without `record=` the line is dated by its pay date and lowers the ACB in this year; the distribution it belongs to is last year's by its record date (CA-INC-DATE-ROC-TRUST). Before, slip-audit netted it against this year's T3 and suggested a wrong line.
+- **Fix:** add `record=2024-12-31` (the record date the message names) to the line and re-run `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/slip_audit.py` — `_redate_prior_roc`
+
+### `tjs slip-audit`: "ZZT.TO: the books already hold ADJUST 2025-09-30 3.45 CAD (roc.tt), not counted against this slip"
+- **Check:** `tjs roc-sum` lists the line; the fund is held at two brokers in one account (or the line's date puts it in another year).
+- **Cause:** a hand-entered row has no broker account; it goes with the fund's distribution on its record date or pay date, else with the one slip showing its amount. When that cannot decide, the row is counted against no slip — and slip-audit never suggests a line the books already hold (before, it suggested it again: applying it booked the return of capital twice).
+- **Fix:** give the line its record date (`record=`) or type each broker's T3 with its `broker_account`, so the row is placed; do not add the line again.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/slip_audit.py` — `_audit_account`, `_roc_match`, `_suggest_roc`
+
 ### `tjs slip-audit --import-cra`: "Error: pdftotext is not installed"
 - **Check:** `pdftotext -v` fails.
 - **Cause:** the CRA PDFs are read with pdftotext (poppler-utils).

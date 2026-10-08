@@ -243,5 +243,138 @@ class TestImportEndToEnd(unittest.TestCase):
             self.assertIn("--import-cra", r.stderr)
 
 
+_QT = ("Transaction Date,Settlement Date,Action,Symbol,Description,Quantity,"
+       "Price,Gross Amount,Commission,Net Amount,Currency,Account #,"
+       "Activity Type,Account Type\n")
+QT_ACCT = "55500077"  # pii-ok (synthetic)
+
+
+def _two_broker_project(tmp: Path, qt_t3: str) -> Path:
+    """One account holding ZZT at IB and at Questrade; a hand-entered
+    .tt return of capital of the IB distribution (IB's T3 box 42)."""
+    root = _ib_project(tmp)
+    rows = [
+        f"2025-01-06 09:30:00 AM,2025-01-07 12:00:00 AM,Buy,ZZT.TO,ZZT "
+        f"INDEX ETF WE ACTED AS AGENT,100,30.00,-3000.00,0.00,-3000.00,CAD,"
+        f"{QT_ACCT},Trades,Individual margin",
+        f"2025-09-30 12:00:00 AM,2025-09-30 12:00:00 AM,DIS,ZZT.TO,ZZT "
+        f"INDEX ETF DIST ON 100 SHS REC 09/24/25 PAY 09/30/25,0,0.00,0.00,"
+        f"0.00,20.00,CAD,{QT_ACCT},Dividends,Individual margin"]
+    (root / "inputs" / "margin" / "questrade.csv").write_text(
+        _QT + "\n".join(rows) + "\n")
+    (root / "inputs" / "margin" / "roc.tt").write_text(
+        "ADJUST 2025-09-30 09:30:00 ZZT.TO CAD -3.45 type=roc\n")
+    (root / "inputs" / "slips" / "slips.toml").write_text(
+        f'[[slip]]\ntype = "T3"\nissuer = "ZZT FUND"\naccount = '
+        f'"margin"\nbroker_account = "{QT_ACCT}"\nsecurity = "ZZT.TO"\n'
+        f'boxes = {{ {qt_t3} }}\n')
+    return root
+
+
+class TestAuditFixes(unittest.TestCase):
+    """The read-only audit of a full CRA slip set (2026-10): hand-entered
+    rows of a fund held at two brokers, a prior year's ROC line dated by
+    its pay date, a T3 split net of the trust's foreign tax, a CDR's
+    dividends, and no box-18 table for a trust's box 21."""
+
+    @rule("CA-SLIP-03")
+    def test_tt_roc_of_a_fund_at_two_brokers_is_never_suggested_again(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = _home(tmp)
+            # Questrade's T3 returns 2.00: the .tt 3.45 is IB's.
+            root = _two_broker_project(tmp / "a", "49 = 18.00, 42 = 2.00")
+            r = tj(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stdout[-1500:] + r.stderr)
+            rep = json.loads(tj(root, home, "slip-audit", "--json").stdout)
+            lines = [ln for e in rep["suggestions"]["tt_lines"]
+                     for ln in e["lines"]]
+            self.assertFalse([ln for ln in lines if "-3.45" in ln], lines)
+            self.assertIn("ADJUST 2025-09-30 16:00:00 ZZT.TO CAD -2.00 "
+                          "type=roc record=2025-09-24", lines)
+            ib = next(g for a in rep["accounts"] for g in a["groups"]
+                      if g["broker_account"] == "U5***")
+            roc = {ln["category"]: ln for ln in ib["buckets"][0]["lines"]}
+            self.assertEqual((roc["roc"]["books"], roc["roc"]["status"]),
+                             (3.45, "ok"))
+            # Both T3s show 3.45: the row cannot be placed — it is never
+            # suggested again, and a note says where it is.
+            root = _two_broker_project(tmp / "b", "49 = 16.55, 42 = 3.45")
+            self.assertEqual(tj(root, home, "run", "--no-input").returncode,
+                             0)
+            rep = json.loads(tj(root, home, "slip-audit", "--json").stdout)
+            lines = [ln for e in rep["suggestions"]["tt_lines"]
+                     for ln in e["lines"]]
+            self.assertFalse([ln for ln in lines if "ADJUST" in ln
+                              and "-3.45" in ln], lines)
+            self.assertTrue(any("already hold" in n for n in
+                                rep["suggestions"]["notes"]))
+
+    @rule("CA-SLIP-01", "CA-SLIP-03", "CA-INC-DATE-ROC-TRUST")
+    def test_prior_year_roc_box34_split_and_cdr(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = _home(tmp)
+            root = tmp / "p"
+            (root / "inputs" / "tr").mkdir(parents=True)
+            (root / "inputs" / "slips").mkdir(parents=True)
+            (root / "inputs" / "tr" / "tr.tt").write_text(
+                "BUYSELL 2025-01-02 10:00:00 ZZF.TO 100 CAD 20 2000 0\n"
+                "DIVIDEND 2025-01-08 09:30:00 ZZF.TO 100 CAD 0.50 50.00 "
+                "record=2024-12-31 label=distribution\n"
+                "DIVIDEND 2025-06-30 09:30:00 ZZF.TO 100 CAD 0.50 50.00 "
+                "record=2025-06-27 label=distribution\n"
+                "ADJUST 2025-01-08 09:30:00 ZZF.TO CAD -5.00 type=roc\n")
+            # A CDR's dividend, as a broker's export names it.
+            (root / "inputs" / "tr" / "questrade.csv").write_text(_QT + (
+                f"2025-01-06 09:30:00 AM,2025-01-07 12:00:00 AM,Buy,ZZC.TO,"
+                f"ZZC CORP CDR (CAD HEDGED) WE ACTED AS AGENT,10,30.00,"
+                f"-300.00,0.00,-300.00,CAD,{QT_ACCT},Trades,Individual "
+                f"margin\n"
+                f"2025-04-01 12:00:00 AM,2025-04-01 12:00:00 AM,DIV,ZZC.TO,"
+                f"ZZC CORP CDR (CAD HEDGED) DIV ON 10 SHS REC 03/20/25 PAY "
+                f"04/01/25,0,0.00,0.00,0.00,10.00,CAD,{QT_ACCT},Dividends,"
+                f"Individual margin\n"))
+            # The 2025 distribution: cash 50 = 30 + 12 gross foreign - 2
+            # withheld + 10 return of capital.
+            (root / "inputs" / "slips" / "slips.toml").write_text(
+                '[[slip]]\ntype = "T3"\naccount = "tr"\nsecurity = '
+                '"ZZF.TO"\nboxes = { 49 = 30.00, 21 = 0.00, 25 = 12.00, '
+                '34 = 2.00, 42 = 10.00 }\n'
+                '[[slip]]\ntype = "T5"\naccount = "tr"\n'
+                'boxes = { 15 = 10.00 }\n')
+            (root / "taxjson.toml").write_text(
+                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                'base_currency = "CAD"\nsource_currencies = ["USD"]\n'
+                'option_grant_timing_since = 2025\n'
+                '[accounts.tr]\ntype = "taxable"\n')
+            r = tj(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stdout[-1500:] + r.stderr)
+            rep = json.loads(tj(root, home, "slip-audit", "--json").stdout)
+            # (b) the pay-dated line is 2024's: said, not netted.
+            self.assertTrue(any("ADJUST 2025-01-08" in p and
+                                "record=2024-12-31" in p
+                                for p in rep["problems"]), rep["problems"])
+            (g,) = rep["accounts"][0]["groups"]
+            ln = {x["category"]: x for x in g["buckets"][0]["lines"]}
+            self.assertEqual(ln["roc"]["books"], 0.0)
+            # (c) split gross of box 34: the foreign income and the tax
+            # agree; (d) the CDR's dividend is foreign, not Canadian.
+            self.assertEqual((ln["ca_div"]["slip"], ln["ca_div"]["books"],
+                              ln["ca_div"]["status"]), (30.0, 30.0, "ok"))
+            self.assertEqual((ln["foreign"]["slip"], ln["foreign"]["books"],
+                              ln["foreign"]["status"]), (22.0, 22.0, "ok"))
+            self.assertEqual(ln["foreign_tax"]["status"], "ok")
+            (tt,) = rep["suggestions"]["tt_lines"]
+            self.assertEqual(tt["lines"], [
+                "ADJUST 2025-06-30 16:00:00 ZZF.TO CAD -10.00 type=roc "
+                "record=2025-06-27",
+                "DIVIDEND 2025-06-30 16:00:00 ZZF.TO 0 CAD 0 -10.00 "
+                "record=2025-06-27 label=distribution"])
+            # A trust's box 21 is never a [[capital_gains_dividends]].
+            self.assertEqual(rep["suggestions"]["capital_gains_dividends"],
+                             [])
+
+
 if __name__ == "__main__":
     unittest.main()

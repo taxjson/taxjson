@@ -18,6 +18,25 @@
   account, the CRA copy's boxes are compared and the report keeps only
   its payments. Tax-logic `CA-SLIP-04`.
 
+### Fixed
+
+- `taxjson slip-audit` (found auditing a full CRA slip set):
+  - a hand-entered `.tt` return of capital of a fund held at two brokers
+    in one account goes with the distribution it belongs to (record date,
+    pay date, then the one slip showing its amount), and a line the
+    books already hold is never suggested again (applying it booked the
+    return of capital twice);
+  - a `.tt` ROC line with no `record=`, dated in January for a
+    distribution whose record date is in December, is said ("add
+    record=") and no longer netted against this year's T3;
+  - a T3's split is applied to the distribution grossed up by the
+    foreign tax the trust withheld (box 34), and that tax is counted as
+    withheld;
+  - a depositary receipt's (CDR's) dividends are foreign income (T5
+    box 15), not Canadian dividends;
+  - a trust's capital gains (T3 box 21) stay their own row and never get
+    a `[[capital_gains_dividends]]` suggestion (pinned by a test).
+
 - **`taxjson slip-audit` (Canada): your T5 and T3 slips against the
   books' income**, per account and slip box: Canadian dividends, box 18
   capital-gains dividends, foreign income and tax withheld, return of
