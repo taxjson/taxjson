@@ -386,15 +386,37 @@ def lead_words(key: Iterable[str]) -> frozenset:
     return frozenset(out)
 
 
+def _run_ons(key: Iterable[str]) -> frozenset:
+    """The company words of a name (name_tokens' core) run together from
+    the start, word by word: "OPEN QZX CORP" -> {OPEN, OPENQZX}, "QZ-TEL
+    CORP" -> {QZ, QZTEL} — one company spelled with or without its
+    spaces and hyphens shares one (only those of 3+ characters)."""
+    from taxjson.lib.symbol_codes import name_tokens
+    out, acc = set(), ""
+    for w in name_tokens(" ".join(key)):
+        if w.startswith("~"):
+            continue
+        acc += w
+        if len(acc) >= 3 and not acc.isdigit():
+            out.add(acc)
+    return frozenset(out)
+
+
 def companies_differ(a: Iterable[str], b: Iterable[str]) -> bool:
     """Two names (exact_name keys) clearly name different companies:
     each has leading company words (lead_words) and they share none
-    ("QZREALTY TRUST INC" vs "SAMPLEX US DLR CURRENCY ETF"). A shared
-    word — the same issuer, a rebranded fund ("QZOLD U S DLR CURRENCY
-    ETF" / "QZNEW US DLR CURRENCY ETF"), or a name too short to tell —
-    is inconclusive, never "different"."""
+    ("QZREALTY TRUST INC" vs "SAMPLEX US DLR CURRENCY ETF"), nor do
+    their words run together from the start ("OPEN QZX CORP" and
+    "OPENQZX CORP", "QZ-TEL CORP" and "QZTEL CORP": one company two
+    brokers space differently; _run_ons). A shared word — the same
+    issuer, a rebranded fund ("QZOLD U S DLR CURRENCY ETF" / "QZNEW US
+    DLR CURRENCY ETF"), or a name too short to tell — is inconclusive,
+    never "different": the names are then compared word for word
+    (_names_verdict), "not equal — verify" when they are not."""
     la, lb = lead_words(a), lead_words(b)
-    return bool(la) and bool(lb) and not (la & lb)
+    if not la or not lb or la & lb:
+        return False
+    return not (_run_ons(a) & _run_ons(b))
 
 
 def business_days(a: _date, b: _date) -> int:

@@ -289,6 +289,9 @@ _QT_NEO = (QH
 
 class TestReceiptEvidenceIsOneSided(unittest.TestCase):
 
+    @rule('CA-XLIST-04')
+    @rule('US-XLIST-03')
+    @rule('CA-SCAN-02')
     def test_verdict(self):
         from taxjson.lib import cross_listings as XL
         from taxjson.lib.symbol_codes import exact_name
@@ -332,6 +335,38 @@ class TestReceiptEvidenceIsOneSided(unittest.TestCase):
     @rule('US-XLIST-03')
     def test_usa_neo_units_journal_runs(self):
         self._run('usa')
+
+
+# ------------------------------------------------------------------ L1
+
+class TestSpacingIsNoOtherCompany(unittest.TestCase):
+
+    @rule('CA-XLIST-01')
+    @rule('US-XLIST-01')
+    @rule('CA-SCAN-02')
+    def test_spelled_together_is_not_apart(self):
+        from taxjson.bin.taxjson_run import _scan_pair_verdict
+        from taxjson.lib import cross_listings as XL
+        from taxjson.lib.symbol_codes import exact_name
+        for us_name, ca_name in (('OPEN QZX CORP', 'OPENQZX CORP'),
+                                 ('QZ-TEL CORP', 'QZTEL CORP'),
+                                 ('OPENQZX CORP', 'OPEN QZX TECHNOLOGIES')):
+            with self.subTest(us=us_name, ca=ca_name):
+                u, c = exact_name(us_name), exact_name(ca_name)
+                self.assertFalse(XL.companies_differ(u, c))
+                names = {'QZX.US': {u}, 'QZX.TO': {c}}
+                self.assertEqual(XL.shown_apart('QZX.US', 'QZX.TO', names),
+                                 '')
+                kind, why = _scan_pair_verdict(
+                    'QZX.US', 'QZX.TO', names,
+                    {u: us_name, c: ca_name})
+                self.assertEqual(kind, 'unequal', why)
+        # Two companies stay two.
+        self.assertTrue(XL.companies_differ(
+            exact_name('QZREALTY TRUST INC'),
+            exact_name('SAMPLEX US DLR CURRENCY ETF')))
+        self.assertTrue(XL.companies_differ(exact_name('QZTEL CORP'),
+                                            exact_name('QZTELUS CORP')))
 
 
 if __name__ == '__main__':

@@ -8,8 +8,9 @@
   US and a Canadian listing that share a root are still a MAP-GAP
   candidate, but not when the Canadian line is a depositary receipt (a
   CDR or ADR word in its name, or a receipt venue) or the two names share
-  no company word — such a pair needs no `DISTINCT` line, and US-LISTING
-  no longer suggests holding it. The MAP-GAP message says whether the
+  no company word, even with spaces and hyphens set aside ("OPEN QZX" and
+  "OPENQZX" stay a candidate, to verify) — such a pair needs no
+  `DISTINCT` line, and US-LISTING no longer suggests holding it. The MAP-GAP message says whether the
   names agree ("carry the same name … add `TOBASE`; if not, `DISTINCT`")
   or were not compared (verify first); `reports/crosslistings.rpt`
   and `ticker-map --suggest`'s conditional hints follow the same rule.
