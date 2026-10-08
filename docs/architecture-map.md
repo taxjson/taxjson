@@ -327,7 +327,7 @@ The `*-sum` commands total one row type per security or per year. `list` and
 `shares` show positions from the canonical books (after ticker.map and
 base-currency conversion, wash-adjusted where built).
 
-- `src/taxjson/bin/taxjson_run.py` — `cmd_divs_sum`, `cmd_dil_sum`, `cmd_roc_sum`, `cmd_trades_sum`, `cmd_fees_sum`, `cmd_ccd_sum`, `cmd_leaps_sum`, `cmd_winners`, `cmd_positions`, `cmd_shares`, `_box18_fractions`: totals by type; option totals and the ranked winners and losers; `list` and `shares`.
+- `src/taxjson/bin/taxjson_run.py` — `cmd_divs_sum`, `cmd_dil_sum`, `cmd_roc_sum`, `cmd_trades_sum`, `cmd_fees_sum`, `cmd_ccd_sum`, `cmd_leaps_sum`, `cmd_winners`, `cmd_positions` (`_list_positional_date`: `list [ACCOUNT] [YYYY-MM-DD]`), `cmd_shares`, `_box18_fractions`: totals by type; option totals and the ranked winners and losers; `list` and `shares`.
 
 ## Summaries and estimates
 

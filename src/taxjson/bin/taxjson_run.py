@@ -16666,6 +16666,29 @@ def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
         _print_report_table(lines)
 
 
+def _list_positional_date(args: argparse.Namespace) -> None:
+    """`taxjson list [ACCOUNT] [YYYY-MM-DD]`: a positional YYYY-MM-DD is
+    the date (as --date), anything else the account — `list margin
+    2026-04-28` and `list 2026-04-28` both work. Sets args.account and
+    args.date; two dates, two accounts or a date that differs from
+    --date stop with the usage."""
+    given = [v for v in (getattr(args, "account", None),
+                         getattr(args, "when", None)) if v]
+    dates = [v for v in given if _ISO_DATE_RE.match(v)]
+    accounts = [v for v in given if not _ISO_DATE_RE.match(v)]
+    if len(dates) > 1 or len(accounts) > 1:
+        _die(f"list takes one account and one date: got "
+             f"{' '.join(given)}",
+             "Usage: taxjson list [ACCOUNT] [YYYY-MM-DD]")
+    if dates:
+        if getattr(args, "date", None) and args.date != dates[0]:
+            _die(f"two dates: {dates[0]} and --date {args.date}",
+                 "Give the date once.")
+        args.date = dates[0]
+    args.account = accounts[0] if accounts else None
+    args.when = None
+
+
 def cmd_positions(args: argparse.Namespace) -> None:
     """List open positions per account, taken from each account's canonical
     gains file's `inventory` (wash-adjusted where built) — i.e. AFTER
@@ -16678,6 +16701,7 @@ def cmd_positions(args: argparse.Namespace) -> None:
                                           resolve_gains_files)
     root = Path(args.dir).resolve()
     cache = root / "work"
+    _list_positional_date(args)
     # Canonical per-account gains (wash-adjusted where built — same basis
     # as every other query command); the raw/native derivatives keep
     # cross-listings separate and in native currency, which is the opposite
@@ -22507,8 +22531,13 @@ def _build_parser(prog: str = "taxjson"
         description="List the open positions per account (quantity and "
                     "base-currency book cost) after ticker.map "
                     "consolidation and base-currency conversion, at the "
-                    "end of the books or --date.")
-    p_pos.add_argument("account", nargs="?", help="Account (default: all)")
+                    "end of the books or a date (`list margin 2026-04-28`, "
+                    "`list 2026-04-28`, or --date).")
+    p_pos.add_argument("account", nargs="?",
+                       help="Account (default: all); a YYYY-MM-DD here is "
+                            "the date (as --date)")
+    p_pos.add_argument("when", nargs="?", metavar="YYYY-MM-DD",
+                       help="Positions as of this date (as --date)")
     p_pos.add_argument("--date", metavar="YYYY-MM-DD", default=None,
                        help="Positions AS OF this date — each account's "
                             "books (already ticker.map-consolidated) "

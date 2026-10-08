@@ -528,5 +528,40 @@ class TestBrokerProofScope(unittest.TestCase):
             self.assertTrue(LS.scan_questrade([p]).cands["QZAX.US"].bought)
 
 
+# ================================================ taxjson list YYYY-MM-DD
+class TestListPositionalDate(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.root = make(cls.tmp.name, "list", 2026, {
+            "margin/book.tt":
+                "BUYSELL 2026-01-05 10:00:00 ZZA.TO 10 CAD 20 200\n"
+                "BUYSELL 2026-03-02 10:00:00 ZZA.TO -4 CAD 25 100\n"})
+        tj(cls.root, "run", "--no-input")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def _json(self, *args):
+        return json.loads(tj(self.root, "list", *args, "--json").stdout)
+
+    def test_a_date_word_is_the_date(self):
+        want = self._json("margin", "--date", "2026-02-01")
+        self.assertEqual(self._json("margin", "2026-02-01"), want)
+        self.assertEqual(self._json("2026-02-01", "margin"), want)
+        self.assertEqual(self._json("2026-02-01"),
+                         self._json("--date", "2026-02-01"))
+        self.assertNotEqual(self._json("margin"), want)
+
+    def test_two_dates_stop(self):
+        r = tj(self.root, "list", "2026-02-01", "2026-03-01", check=False)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("one account and one date", flat(r.stderr))
+        r = tj(self.root, "list", "2026-02-01", "--date", "2026-03-01",
+               check=False)
+        self.assertNotEqual(r.returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
