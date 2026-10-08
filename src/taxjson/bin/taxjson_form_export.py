@@ -235,6 +235,63 @@ _BOXES = {("I", False): "A/B/C", ("II", False): "D/E/F",
           ("I", True): "G/H/I", ("II", True): "J/K/L"}
 
 
+FILING_POSITION_NOTE_8949 = (
+    "A row with a filing position (your .tt ALLOWLOSS line, US-WASH-25) "
+    "is filed as your position: no code W in (f), nothing in (g), so (h) "
+    "claims the loss. When the broker's 1099-B reports a wash-sale loss "
+    "disallowed (box 1g) for that sale, the row differs from it: enter "
+    "the proceeds and basis as the 1099-B reports them and follow the "
+    "Form 8949 instructions for a 1099-B amount you believe is incorrect "
+    "(the code and the (g) adjustment that bring the row to your "
+    "figure). taxjson does not pick that code: check the instructions "
+    "or a tax professional, and keep the reason with your records.")
+FILING_POSITION_NOTE_S3 = (
+    "A row with a filing position (your .tt ALLOWLOSS line, CA-SL-18) "
+    "claims a loss the superficial-loss rule would deny: GAIN(LOSS) "
+    "includes it, the ACB is not reduced by it and no replacement's ACB "
+    "is raised for it. It is your position, not the rule's test: be "
+    "ready to support it (CRA guidance, a tax professional); delete the "
+    "line to apply the rule.")
+
+
+def _filing_position(e: Dict[str, Any], country: str
+                     ) -> Optional[Dict[str, Any]]:
+    """The row's `loss_override` (a .tt ALLOWLOSS filing position,
+    lib/loss_overrides: CA-SL-18 / US-WASH-25) with its sentence, or
+    None. The gain on the row is the claimed (allowed) loss; the note
+    says what the rule would have denied."""
+    n = e.get("loss_override")
+    if not isinstance(n, dict) or not n.get("where"):
+        return None
+    from taxjson.lib.loss_overrides import note_text
+    return {"where": n.get("where"), "reason": n.get("reason") or "",
+            "would_disallow": _cents(n.get("would_disallow") or 0.0),
+            "would_permanent": _cents(n.get("would_permanent") or 0.0),
+            "note": note_text(n, country)}
+
+
+def _merge_positions(rows_fp: List[Dict[str, Any]], country: str
+                     ) -> List[Dict[str, Any]]:
+    """Several rows' positions summed per ALLOWLOSS line (a Schedule 3
+    row aggregates a symbol's sales), each with its sentence."""
+    from taxjson.lib.loss_overrides import note_text
+    by: Dict[str, Dict[str, Any]] = {}
+    for fp in rows_fp:
+        cur = by.setdefault(fp["where"], {"where": fp["where"],
+                                          "reason": fp["reason"],
+                                          "would_disallow": 0.0,
+                                          "would_permanent": 0.0})
+        cur["would_disallow"] += fp["would_disallow"]
+        cur["would_permanent"] += fp["would_permanent"]
+    out = []
+    for cur in by.values():
+        cur["would_disallow"] = _cents(cur["would_disallow"])
+        cur["would_permanent"] = _cents(cur["would_permanent"])
+        cur["note"] = note_text(cur, country)
+        out.append(cur)
+    return out
+
+
 def build_8949(entries: List[Dict[str, Any]],
                year: Optional[int] = None) -> Dict[str, Any]:
     """Form 8949 rows by part. `year` (default: the latest year among
@@ -330,6 +387,7 @@ def build_8949(entries: List[Dict[str, Any]],
         _d, _e = _cents(proceeds), _cents(cost)
         _g = _cents(adj) if code else 0.0
         _da = bool(da_boxes and e.get("_crypto"))
+        _fp = _filing_position(e, "usa")
         parts[part].append({
             "boxes": _BOXES[(part, _da)],
             "digital_asset": _da,
@@ -342,6 +400,10 @@ def build_8949(entries: List[Dict[str, Any]],
             "adjustment": _g,
             "gain": round(_d - _e + _g, 2) + 0.0,
             "account": e.get("account") or "",
+            # The user's ALLOWLOSS position against §1091 (US-WASH-25):
+            # no code W, no (g) — the row claims the loss; said here
+            # and under the table (pre-release review M7).
+            **({"filing_position": _fp} if _fp else {}),
         })
     if drift_warned:
         from taxjson.lib.out import warn as _warn
@@ -640,8 +702,11 @@ def build_schedule3(entries: List[Dict[str, Any]],
             "denied": 0.0, "perm_denied": 0.0, "denied_contrib": 0.0,
             "short": False,
             "classes": set(), "n": 0, "grant_units": 0.0,
-            "short_close_units": 0.0,
+            "short_close_units": 0.0, "positions": [],
         })
+        _fp = _filing_position(e, "canada")
+        if _fp:
+            rec["positions"].append(_fp)
         rec["classes"].add(pclass)
         rec["n"] += 1
         qty = abs(float(e.get("qty") or 0.0))
@@ -763,6 +828,11 @@ def build_schedule3(entries: List[Dict[str, Any]],
         if r["short"]:
             notes.append("includes short position(s) — PROCEEDS is the "
                          "short sale or write, ACB the cover")
+        # The user's ALLOWLOSS position (CA-SL-18): the loss is claimed
+        # although the rule would deny it — the row never showed it
+        # (pre-release review M7).
+        _positions = _merge_positions(r["positions"], "canada")
+        notes += [fp["note"] for fp in _positions]
         proceeds, acb, outlays, gain = _foot_cells(
             r["proceeds"], r["outlays"], r["gain"])
         pclass = sorted(r["classes"])[0] if len(r["classes"]) == 1 \
@@ -788,6 +858,7 @@ def build_schedule3(entries: List[Dict[str, Any]],
             "denied_contribution": _cents(r["denied_contrib"]),
             "dispositions": r["n"],
             "notes": "; ".join(notes),
+            **({"filing_positions": _positions} if _positions else {}),
         })
 
     lines: List[Dict[str, Any]] = []
@@ -1108,6 +1179,10 @@ def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str) -> str:
             lines += _rows_table(rows)
         if rows:
             lines += _totals(f"TOTALS (to Schedule D part {part}):", t)
+        for r in rows:
+            if r.get("filing_position"):
+                lines += _item(f"{r['description']} sold {r['date_sold']}: "
+                               f"{r['filing_position']['note']}", "  ")
         lines.append("")
     lines += section_1256_lines(rep, cur)
     lines += _manual_console(rep.get("manual_reporting_required") or [],
@@ -1128,6 +1203,9 @@ def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str) -> str:
                        "against whether your broker reported basis on the "
                        "1099-B.")
     lines += _item("Short sales show the cover date in both date columns.")
+    if any(r.get("filing_position") for p in ("I", "II")
+           for r in rep[f"part_{p}"]):
+        lines += _item(FILING_POSITION_NOTE_8949)
     lines += _rounding_note(rep)
     lines += _item("Not tax advice; reconcile against your 1099-B before "
                    "filing.")
@@ -1200,6 +1278,8 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
                    "acquisition, which is permanent for this return with "
                    "no ACB addition here (an affiliated person adds it to "
                    "their own ACB, s.53(1)(f); noted per row).")
+    if any(r.get("filing_positions") for r in rep.get("rows") or []):
+        lines += _item(FILING_POSITION_NOTE_S3)
     lines += _item("Apply the inclusion rate on Schedule 3 itself; these "
                    "are 100% amounts.")
     lines += _item("PROCEEDS re-adds sell-side commissions so OUTLAYS can "
@@ -1244,13 +1324,15 @@ def _rows_csv(rep: Dict[str, Any], f) -> None:
     if rep["form"] == "8949":
         w.writerow(["part", "description", "date_acquired", "date_sold",
                     "proceeds", "cost", "code", "adjustment",
-                    "gain", "account", "boxes"])
+                    "gain", "account", "boxes", "note"])
         for part in ("I", "II"):
             for r in rep[f"part_{part}"]:
                 w.writerow([part, r["description"], r["date_acquired"],
                             r["date_sold"], r["proceeds"], r["cost"],
                             r["code"], r["adjustment"], r["gain"],
-                            r["account"], r.get("boxes", "")])
+                            r["account"], r.get("boxes", ""),
+                            (r.get("filing_position") or {}).get("note",
+                                                                 "")])
         # §1256 contracts: Form 6781 by hand, never an 8949 row.
         for r in rep.get("section_1256") or []:
             w.writerow(["6781", f"{r['description']} ({r['kind']})",
@@ -1532,6 +1614,19 @@ def _main(args) -> int:
                            "which have no TXF reference number taxjson "
                            "knows — enter them by hand (`--form 8949` "
                            "lists them by box)."])
+        _fp_rows = [r for p in ("I", "II") for r in rep[f"part_{p}"]
+                    if r.get("filing_position")
+                    and not r.get("digital_asset")]
+        if _fp_rows:
+            # TXF has no note field: the record carries the claimed loss
+            # (no wash-sale amount) and says nothing (pre-release M7).
+            _warn(f"{len(_fp_rows)} TXF record(s) carry a filing position "
+                  f"(.tt ALLOWLOSS): imported with no wash-sale amount, "
+                  f"the loss claimed",
+                  details=[f"- {r['description']} sold {r['date_sold']}: "
+                           f"{r['filing_position']['note']}"
+                           for r in _fp_rows]
+                  + [FILING_POSITION_NOTE_8949])
         if args.out:
             from taxjson.lib.safe_write import write_atomic
             try:

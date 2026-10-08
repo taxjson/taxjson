@@ -71,10 +71,14 @@ def parse_line(line: str, source: str = "") -> Optional[Dict[str, Any]]:
     a malformed one. A `#` inside the quoted reason is text; after it, a
     comment."""
     where = f"{source}: " if source else ""
-    m = _REASON_RE.search(line)
+    # The comment starts at the first `#` outside a quoted text: a
+    # reason="..." written after it is part of the comment, never the
+    # line's reason (pre-release review: `ALLOWLOSS ... # reason="x"`
+    # was accepted).
+    body = line[:_comment_start(line)]
+    m = _REASON_RE.search(body)
     reason = m.group(1).strip() if m else None
-    rest = (line[:m.start()] + " " + line[m.end():]) if m else line
-    rest = rest.split("#", 1)[0]
+    rest = (body[:m.start()] + " " + body[m.end():]) if m else body
     parts = rest.split()
     if not parts or parts[0] != KEYWORD:
         return None
@@ -124,6 +128,18 @@ def parse_line(line: str, source: str = "") -> Optional[Dict[str, Any]]:
         symbol = canonical_ca_listing(symbol, "") or symbol
     return {"date": date, "symbol": symbol, "qty": qty, "reason": reason,
             "line": shown}
+
+
+def _comment_start(line: str) -> int:
+    """Index of the first `#` outside double quotes (len(line) when
+    none)."""
+    quoted = False
+    for i, ch in enumerate(line):
+        if ch == '"':
+            quoted = not quoted
+        elif ch == "#" and not quoted:
+            return i
+    return len(line)
 
 
 def _is_date(tok: str) -> bool:
@@ -259,6 +275,9 @@ class Plan:
         self.row_of: Dict[str, int] = {}
         self.groups: Dict[int, List[List[Any]]] = {}
         self.day_rows: Dict[int, List[Any]] = {}
+        # {index: [units of each same-day sale one of whose fills, not
+        # the sale, has the declared quantity]} (the message's hint).
+        self.fill_of: Dict[int, List[float]] = {}
 
     def __bool__(self) -> bool:
         return bool(self.overrides)
@@ -270,7 +289,8 @@ def plan(overrides: Sequence[Dict[str, Any]], rows_in_order) -> Plan:
     traded or settled on its date, grouped into sales the way Canada's
     formula groups fills (core.disposition_groups: one account's
     uninterrupted same-day sell-down is one sale), kept when the sale's
-    units, or one fill's, equal the declared quantity."""
+    total units equal the declared quantity (one fill's units name no
+    sale: a line overrides a whole sale or none)."""
     from taxjson.lib.core import disposition_groups
     pl = Plan(overrides)
     if not pl:
@@ -295,9 +315,18 @@ def plan(overrides: Sequence[Dict[str, Any]], rows_in_order) -> Plan:
         if q:
             def _eq(a: float) -> bool:
                 return abs(abs(a) - q) <= _QTY_TOL * max(1.0, q)
-            sales = [s for s in sales
-                     if _eq(sum(float(t.quantity) for t in s))
-                     or any(_eq(float(t.quantity)) for t in s)]
+            # The units name a WHOLE sale: its total. A quantity equal
+            # to one fill of a several-fill sale used to name the whole
+            # sale (pre-release review) — a line written for one fill
+            # overrode the denial on all of them. Such a line names no
+            # sale; the message says which sale the fill belongs to.
+            whole = [s for s in sales
+                     if _eq(sum(float(t.quantity) for t in s))]
+            pl.fill_of[i] = [
+                abs(sum(float(t.quantity) for t in s)) for s in sales
+                if s not in whole and len(s) > 1
+                and any(_eq(float(t.quantity)) for t in s)]
+            sales = whole
         pl.groups[i] = sales
         for s in sales:
             for t in s:
@@ -377,6 +406,11 @@ def summarize(pl: Plan, would: Dict[str, Dict[str, Any]], *,
                 "would_defer": round(dis - perm, 6),
                 "replacements": sorted(reps.values(),
                                        key=lambda r: (r["date"], r["id"])),
+                # Each row's own share (a several-fill sale's rows each
+                # carry theirs: a per-row note sums to the sale's).
+                "rows": {t.id: [round(r["disallowed"], 6),
+                                round(r["permanent"], 6)]
+                         for t, r in recs},
             })
         status = (STATUS_APPLIED if len(sales) == 1 else
                   STATUS_UNMATCHED if not sales else STATUS_AMBIGUOUS)
@@ -386,6 +420,7 @@ def summarize(pl: Plan, would: Dict[str, Dict[str, Any]], *,
             "symbol": ov["symbol"], "qty": ov.get("qty"),
             "reason": ov.get("reason") or "", "country": country,
             "status": status, "sales": sales,
+            "fill_of": [round(q, 9) for q in pl.fill_of.get(i, [])],
             "day_trades": [{"symbol": t.symbol, "date": t.date,
                             "date_settle": t.date_settle or t.date,
                             "qty": float(t.quantity)}
@@ -394,11 +429,34 @@ def summarize(pl: Plan, would: Dict[str, Dict[str, Any]], *,
     return out
 
 
-def entry_note(item: Dict[str, Any], sale: Dict[str, Any]) -> Dict[str, Any]:
-    """The `loss_override` stamped on each gain row of the sale."""
+def entry_note(item: Dict[str, Any], sale: Dict[str, Any],
+               rid: Optional[str] = None) -> Dict[str, Any]:
+    """The `loss_override` stamped on gain row `rid` of the sale: the
+    row's own share of the denial (`would_*`) and the sale's
+    (`sale_would_*`)."""
+    if "rows" in sale:
+        dis, perm = sale["rows"].get(rid) or (0.0, 0.0)
+    else:
+        dis, perm = sale["would_disallow"], sale["would_permanent"]
     return {"where": item["where"], "reason": item["reason"],
-            "would_disallow": sale["would_disallow"],
-            "would_permanent": sale["would_permanent"]}
+            "would_disallow": dis, "would_permanent": perm,
+            "sale_would_disallow": sale["would_disallow"],
+            "sale_would_permanent": sale["would_permanent"]}
+
+
+def note_text(note: Dict[str, Any], country: str) -> str:
+    """One sentence for a row carrying `loss_override` (entry_note):
+    the form-export rows, `taxjson audit`, `wash-sales --explain`. The
+    figure is the row's own share of the sale's denial."""
+    us = country in ("us", "usa")
+    dis = float(note.get("would_disallow") or 0.0)
+    perm = float(note.get("would_permanent") or 0.0)
+    fate = ("" if perm < 0.005 else " for good" if dis - perm < 0.005
+            else f" ({_money(perm)} of it for good)")
+    return (f"filing position: {KEYWORD} {note.get('where')}, the "
+            f"{'wash-sale' if us else 'superficial-loss'} rule would "
+            f"{'disallow' if us else 'deny'} {_money(dis)}{fate}; the "
+            f"loss is claimed in full. Reason: \"{note.get('reason')}\"")
 
 
 def stamp_entries(entries: Iterable[Dict[str, Any]],
@@ -410,7 +468,7 @@ def stamp_entries(entries: Iterable[Dict[str, Any]],
             continue
         for s in it["sales"]:
             for rid in s["ids"]:
-                by_id[rid] = entry_note(it, s)
+                by_id[rid] = entry_note(it, s, rid)
     if not by_id:
         return
     for e in entries:
@@ -459,6 +517,26 @@ def problems(items: Sequence[Dict[str, Any]],
     (and per line of the project the final books never saw)."""
     out = []
     recorded = {it.get("where") for it in items}
+    # Two lines naming one sale in different spellings (with and without
+    # the units, by trade and by settlement date): read_project only
+    # catches the same spelling twice (pre-release review). The engine
+    # resolved both to the same rows; the second line is refused.
+    named: Dict[str, Dict[str, Any]] = {}
+    for it in items:
+        if it.get("status") != STATUS_APPLIED:
+            continue
+        first = None
+        for s in it.get("sales") or []:
+            for rid in s.get("ids") or []:
+                first = first or named.get(rid)
+        if first is not None and first.get("where") != it.get("where"):
+            out.append(f"{it.get('where')}: {it.get('line')!r} — names the "
+                       f"same sale as {first.get('where')} "
+                       f"({first.get('line')!r}): keep one line")
+            continue
+        for s in it.get("sales") or []:
+            for rid in s.get("ids") or []:
+                named.setdefault(rid, it)
     for ov in expected:
         if ov.get("where") not in recorded:
             out.append(f"{ov.get('where')}: {ov.get('line')!r} — no final "
@@ -480,6 +558,16 @@ def problems(items: Sequence[Dict[str, Any]],
                        f"{len(it.get('sales') or [])} denied sales of "
                        f"{what} ({sales}): add the units sold to the line "
                        f"to name one")
+            continue
+        fills = it.get("fill_of") or []
+        if fills:
+            out.append(f"{it.get('where')}: {it.get('line')!r} — "
+                       f"{_units(it.get('qty'))} units is one fill of "
+                       f"the {' / '.join(_units(q) for q in fills)}-unit "
+                       f"sale of {it.get('symbol')} that day in account "
+                       f"{it.get('account')} (one same-day sell-down is "
+                       f"one sale): a line names a whole sale — write "
+                       f"its units, {_units(fills[0])}, or none")
             continue
         days = it.get("day_trades") or []
         seen_txt = ("; that day's trades in account "

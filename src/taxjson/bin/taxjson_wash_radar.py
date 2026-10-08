@@ -178,7 +178,7 @@ def _category_title(cat: str, country: str) -> str:
     return _CATEGORY_TITLE.get(cat, cat or "OTHER")
 
 
-def _us_engine_losses(taxable_rows, sheltered_rows):
+def _us_engine_losses(taxable_rows, sheltered_rows, loss_overrides=()):
     """The US engine's verdict on every loss in these books: {tx id:
     {qty, loss, disallowed, permanent, denied_units, direction,
     is_option, replacements}}. It is lib/core USATaxRules itself — the
@@ -186,7 +186,10 @@ def _us_engine_losses(taxable_rows, sheltered_rows):
     (every account, IRAs included; no still-held test; re-shorts) and
     FIFO-per-account basis `taxjson run` uses — run on the radar's books
     as of its date, so the radar can never state a second version of
-    the rule (partition COMMANDS-01/02/05)."""
+    the rule (partition COMMANDS-01/02/05). `loss_overrides`: the
+    project's .tt ALLOWLOSS filing positions (US-WASH-25), applied as
+    `taxjson run` applies them; a named sale's record carries
+    `position` (its loss_override) and is not disallowed."""
     import contextlib
     import copy
     import io
@@ -198,7 +201,9 @@ def _us_engine_losses(taxable_rows, sheltered_rows):
         with contextlib.redirect_stderr(err):
             res = get_tax_rules("usa").compute_gains(
                 tax, sheltered_transactions=shl, detect_wash_sales=True,
-                per_account_basis=True)
+                per_account_basis=True,
+                **({"loss_overrides": tuple(loss_overrides)}
+                   if loss_overrides else {}))
     except Exception as e:                                # noqa: BLE001
         _out.fail(f"the US engine could not evaluate these books: {e}",
                  prog=_PROG,
@@ -223,6 +228,10 @@ def _us_engine_losses(taxable_rows, sheltered_rows):
         for rep in r.get("wash_replacements") or []:
             o["denied_units"] += float(rep.get("match_qty") or 0.0)
             o["replacements"].append(rep)
+        if isinstance(r.get("loss_override"), dict):
+            o["position"] = r["loss_override"]
+            o["would_disallow"] = (o.get("would_disallow", 0.0) + float(
+                r["loss_override"].get("would_disallow") or 0.0))
     return out
 
 
@@ -346,6 +355,9 @@ def main():
                              "in its window (CA-SL-12). Default: exempt "
                              "(CA-SL-11). The gains files' summary states "
                              "it too.")
+    from taxjson.lib.pipeline import (add_loss_override_args,
+                                      loss_overrides_from_args)
+    add_loss_override_args(parser)
     add_country_argument(parser,
                          help="Project country (required). canada "
                              "(s.54, settle dates): only a LONG acquisition "
@@ -362,6 +374,10 @@ def main():
 
     args = parser.parse_args()
     us_mode = args.country == "usa"
+    try:
+        _overrides = loss_overrides_from_args(args)
+    except ValueError as e:
+        _out.fail(str(e), prog=_PROG)
     if us_mode and args.option_buyback_wash:
         # A Canada-only flag (lib/country FLAG_COUNTRY: ITA s.54).
         from taxjson.lib.country import flag_country_problems
@@ -1034,7 +1050,8 @@ def main():
         _booked_rows = [t for t in transactions if _booked(t)]
         _us = _us_engine_losses(
             [t for t in _booked_rows if t._group == 'TAXABLE'],
-            [t for t in _booked_rows if t._group != 'TAXABLE'])
+            [t for t in _booked_rows if t._group != 'TAXABLE'],
+            _overrides)
         _seen_ids = set()
         for t in _booked_rows:
             v = _us.get(str(t.id)) if t._group == 'TAXABLE' else None
@@ -1054,6 +1071,9 @@ def main():
                 'currency': (getattr(t, 'currency', '') or '').strip().upper(),
                 'is_option': v['is_option'] or is_option_ticker(t.symbol),
                 'source': 'engine-usa',
+                **({'position': v['position'],
+                    'would_disallow': v.get('would_disallow', 0.0)}
+                   if v.get('position') else {}),
             })
 
     # ---- who backs which denial (CA-SL-08 / US-WASH-02) ----
@@ -1439,7 +1459,32 @@ def main():
             _washed = ([l for l in in_window_losses
                         if float(l.get('disallowed') or 0.0) > 0.005]
                        if us_mode else [])
-            if _washed:
+            # A loss a .tt ALLOWLOSS line claims (US-WASH-25): the books
+            # allow it, so it is neither washed nor open — the radar
+            # called it WASHED, "added to the replacement's basis"
+            # (pre-release review).
+            _claimed = ([l for l in in_window_losses if l.get('position')]
+                        if us_mode else [])
+            _unclaimed_open = [
+                l for l in in_window_losses if not l.get('position')
+                and float(l['loss'])
+                - float(l.get('disallowed') or 0.0) > 0.01]
+            if _claimed and not _washed and not _unclaimed_open:
+                cl_raw = sum(float(l['loss']) for l in _claimed)
+                cl_dis = sum(float(l.get('would_disallow') or 0.0)
+                             for l in _claimed)
+                adv = (f"WASHED: the loss of ${cl_raw:.2f} on "
+                       + ", ".join(sorted({l['date'] for l in _claimed}))
+                       + " is claimed as your filing position against "
+                         "§1091 ("
+                       + ", ".join(sorted({f"ALLOWLOSS "
+                                           f"{l['position'].get('where')}"
+                                           for l in _claimed}))
+                       + f"): the rule would disallow ${cl_dis:.2f}; the "
+                         f"books allow it and add nothing to the "
+                         f"replacement's basis. Delete the line to apply "
+                         f"the rule.")
+            elif _washed:
                 dis = sum(float(l['disallowed']) for l in _washed)
                 perm = sum(float(l.get('permanent') or 0.0)
                            for l in _washed)
@@ -1474,8 +1519,15 @@ def main():
                 if perm > 0.005:
                     adv += (f" ${perm:.2f} matched an IRA purchase and "
                             f"is lost for good.")
+                if _claimed:
+                    adv += (f" The loss of ${sum(float(l['loss']) for l in _claimed):.2f} "
+                            f"on " + ", ".join(sorted(
+                                {l['date'] for l in _claimed}))
+                            + " is claimed as your filing position "
+                              "(.tt ALLOWLOSS): the books allow it.")
                 _open = [l for l in in_window_losses
-                         if float(l['loss'])
+                         if not l.get('position')
+                         and float(l['loss'])
                          - float(l.get('disallowed') or 0.0) > 0.01]
                 if _open:
                     last = max(_open, key=lambda l: l['epoch'])

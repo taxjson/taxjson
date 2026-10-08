@@ -142,6 +142,36 @@
   split-share issuers) kept serving results built from the old lists.
   Every file shipped in the package that the code reads now counts.
 
+- An ALLOWLOSS filing position is visible wherever the sale is: `taxjson
+  form-export` notes it on the Schedule 3 row and under the Form 8949 part
+  (text, `--json`, `--csv`; a TXF export warns) — on Form 8949 the row has
+  no code W, and docs/tax-rules.md says how it differs from a 1099-B that
+  reports box 1g; `taxjson audit` has a POSITION line (and `--summary` a
+  flag), `taxjson wash-sales --explain` traces the sale instead of "no
+  matching gains found", the US `taxjson wash-radar` reads the loss as
+  claimed instead of WASHED into the replacement's basis, and `taxjson
+  carryover` and `taxjson handoff` name the positions their figures
+  include. `taxjson sum` says "the totals above include them" only of
+  this year's sales. The line: a `reason=` after a `#` is comment, not
+  the reason; its units are the sale's total (one fill of a several-fill
+  sale used to override the whole sale); two lines naming one sale in
+  different spellings stop the run.
+
+- FX-on-cash ledger v2 (opt-in): Questrade's FX conversions, deposits,
+  withdrawals, cash-only transfers and stock-lending income are read, so
+  a Questrade account that converted to US dollars before buying no
+  longer reads as a US-dollar margin loan. An account of a broker whose
+  export gives the ledger no cash event (Webull, the generic importer)
+  and that moves foreign cash is refused until a `CASHBOOK <book>
+  complete` line says its `.tt` conversions and moves are all there; the
+  report lists those accounts. A combined IB statement of several
+  accounts is said to be one cash book (its Cash Report is one balance).
+- A malformed FXCONV / CASHMOVE / CASHOPEN / CASHBAL / CASHBOOK line
+  still stops `taxjson run`, and now says it is read only by ledger v2.
+- `taxjson elect` lists a sheltered account's spin-off or merger booked
+  by the sheltered default instead of "No elections recorded".
+- A US project's `taxjson quick-start` has no T5 / T3 slips step.
+
 ### Changed
 
 - **A spin-off or merger in a sheltered account is no longer asked.**
