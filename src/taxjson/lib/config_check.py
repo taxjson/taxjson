@@ -218,6 +218,19 @@ def bool_setting_problems(cfg: Dict[str, Any]) -> List[str]:
             if v is not None and not isinstance(v, bool):
                 out.append(f"[settings] {key} must be true or false, "
                            f"unquoted (got {v!r})")
+        # The FX-on-cash ledger (CA-FX-07 / US-FX-03): v1 is the default,
+        # v2 the opt-in under audit; a typo must not fall back to either.
+        led = settings.get("fx_cash_ledger")
+        if led is not None and (not isinstance(led, str)
+                                or led.strip().lower() not in ("v1", "v2")):
+            out.append(f"[settings] fx_cash_ledger must be \"v1\" or "
+                       f"\"v2\" (got {led!r})")
+        inc = settings.get("fx_cash_inflow_cost")
+        if inc is not None and (not isinstance(inc, str)
+                                or inc.strip().lower()
+                                not in ("declared", "spot")):
+            out.append(f"[settings] fx_cash_inflow_cost must be "
+                       f"\"declared\" or \"spot\" (got {inc!r})")
         # Only `run` checked these: option-boundary read a typo'd
         # "grants" as close timing and advised enabling grant timing,
         # close-year wrote the typo into the filed-year lock, and a

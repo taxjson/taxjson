@@ -2102,3 +2102,128 @@ class KrakenBrokerage(BaseBrokerage):
             tx['id'] = refid
         return self._drop_dust([(tx, recv if is_buy else spend)],
                                refid)
+
+
+def kraken_cash_events(path, stable_cash: bool = True
+                       ) -> List[Dict[str, Any]]:
+    """The cash events of a Kraken LEDGER export for the FX-on-cash
+    ledger v2 (lib/cash_events, tax-logic CA-FX-07): a CASHMOVE per fiat
+    (or, in a cash-mode book, stablecoin) deposit/withdrawal/transfer
+    with its fee a FLOW, an FXCONV per trade whose legs are all currency
+    (USD for CAD, USDC for EUR — a stablecoin folded into USD against
+    USD is no conversion), and a CASHBAL per currency at the end of
+    every year the export spans (from its `balance` column, summed over
+    the assets that fold into one currency). A trades export: none (its
+    fills are in the position book)."""
+    from datetime import datetime
+    from taxjson.lib import cash_events as CE
+    from taxjson.lib.brokerages.base import read_broker_text, shown_name
+    from taxjson.lib.brokerages._crypto_common import (strict_money,
+                                                       utc_to_local)
+    name = shown_name(path)
+    text = read_broker_text(path)
+    rows = list(csv.DictReader(io.StringIO(text)))
+    if not rows or 'refid' not in rows[0] or 'asset' not in rows[0]:
+        return []
+    cashlike = _FIAT_ASSETS if stable_cash else _FIAT_CURRENCIES
+
+    def _day(raw: str, where: str) -> str:
+        try:
+            dt = datetime.strptime((raw or '').split('.')[0].strip(),
+                                   "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            raise ValueError(f"{where}: unparseable Kraken time "
+                             f"{raw!r}") from None
+        return utc_to_local(dt).date().isoformat()
+
+    out: List[Dict[str, Any]] = []
+    groups: Dict[str, list] = {}
+    # (asset, day, row order) -> balance after the row, for CASHBAL
+    bal_rows: List[tuple] = []
+    seen_ids: set = set()
+    for i, r in enumerate(rows, 2):
+        where = f"{name}:{i}"
+        raw_asset = (r.get('asset') or '').strip()
+        bare = _normalize_asset(raw_asset, fold_stable=False)
+        if bare not in cashlike:
+            continue
+        txid = (r.get('txid') or '').strip()
+        if txid and txid in seen_ids:
+            continue
+        seen_ids.add(txid)
+        cur = _normalize_asset(raw_asset, fold_stable=stable_cash)
+        day = _day(r.get('time', ''), where)
+        amt = strict_money(r.get('amount'), 'amount', f"Kraken {where}")
+        fee = strict_money(r.get('fee') or '0', 'fee', f"Kraken {where}")
+        if (r.get('balance') or '').strip():
+            bal_rows.append((cur, bare, day, i, strict_money(
+                r.get('balance'), 'balance', f"Kraken {where}"), amt, fee))
+        typ = (r.get('type') or '').strip().lower()
+        if typ in _FIAT_FUNDING_TYPES:
+            if abs(amt) > 1e-9:
+                ev = CE.move(day, cur, amt, where=name,
+                             desc=f"Kraken {typ} {bare}")
+                ev['line_where'] = where
+                out.append(ev)
+            if abs(fee) > 1e-9:
+                out.append(CE.flow(day, cur, -fee, where=where,
+                                   desc=f"Kraken {typ} fee"))
+        elif typ in ('trade', 'spend', 'receive'):
+            groups.setdefault((r.get('refid') or '').strip() or txid,
+                              []).append((day, cur, amt, fee, where, bare))
+    # A trade whose every leg is currency: a conversion (the position
+    # book never sees it — kraken.py's fiat-for-fiat non-event).
+    all_assets_by_ref: Dict[str, set] = {}
+    for r in rows:
+        ref = (r.get('refid') or '').strip()
+        if ref in groups:
+            all_assets_by_ref.setdefault(ref, set()).add(
+                _normalize_asset((r.get('asset') or '').strip(),
+                                 fold_stable=False))
+    for ref, legs in groups.items():
+        if any(a not in cashlike for a in all_assets_by_ref.get(ref, ())):
+            continue        # a coin leg: the position book's fill
+        neg = [lg for lg in legs if lg[2] < 0]
+        pos = [lg for lg in legs if lg[2] > 0]
+        for lg in legs:
+            if abs(lg[3]) > 1e-9:
+                out.append(CE.flow(lg[0], lg[1], -lg[3], where=lg[4],
+                                   desc="Kraken conversion fee"))
+        if len(neg) != 1 or len(pos) != 1:
+            continue
+        a, b = neg[0], pos[0]
+        if a[1] == b[1]:
+            # USDC <-> USD in a cash-mode book: the same currency.
+            continue
+        out.append(CE.conv(b[0], a[1], -a[2], b[1], b[2], where=a[4],
+                           desc=f"Kraken {a[5]}->{b[5]}"))
+    # Balances: per folded currency, at the end of each year spanned and
+    # before the first row (the opening of the first year).
+    if bal_rows:
+        assets = sorted({(c, a) for c, a, *_ in bal_rows})
+        by_asset: Dict[tuple, list] = {}
+        for cur, bare, day, i, bal, amt, fee in bal_rows:
+            by_asset.setdefault((cur, bare), []).append((day, i, bal, amt,
+                                                         fee))
+        first_day = min(x[2] for x in bal_rows)
+        last_day = max(x[2] for x in bal_rows)
+        y0, y1 = int(first_day[:4]), int(last_day[:4])
+        points = [(f"{y0 - 1}-12-31", "open")] + [
+            (min(f"{y}-12-31", last_day), "close")
+            for y in range(y0, y1 + 1)]
+        for at, _k in points:
+            tot: Dict[str, float] = {}
+            for (cur, bare) in assets:
+                seq = sorted(by_asset[(cur, bare)])
+                before = [x for x in seq if x[0] <= at]
+                if before:
+                    v = before[-1][2]
+                else:
+                    f = seq[0]
+                    v = f[2] - f[3] + f[4]      # before its first row
+                tot[cur] = tot.get(cur, 0.0) + v
+            for cur, v in sorted(tot.items()):
+                out.append(CE.balance(at, cur, round(v, 8),
+                                      where=f"{name}: ledger balance",
+                                      statement=name))
+    return out

@@ -1067,3 +1067,65 @@ class CoinbaseBrokerage(BaseBrokerage):
         if idx < 0 or idx >= len(row):
             return default
         return row[idx]
+
+
+def coinbase_cash_events(path, stable_cash: bool = True
+                         ) -> List[Dict[str, Any]]:
+    """The cash events of a Coinbase transactions export for the FX-on-
+    cash ledger v2 (lib/cash_events, tax-logic CA-FX-07): a CASHMOVE per
+    Deposit / Withdrawal of a currency, and (cash-mode book: a USD
+    stablecoin is US-dollar cash, CA-CRYPTO-02) per Send / Receive of a
+    stablecoin; an FXCONV per Buy / Sell of a stablecoin for another
+    currency ("Bought 3495.67 USDC for 5000 CAD"). The export has no
+    balance: a CASHBAL .tt line gives the ledger one."""
+    from taxjson.lib import cash_events as CE
+    from taxjson.lib.brokerages.base import shown_name
+    name = shown_name(path)
+    cb = CoinbaseBrokerage()
+    cb.stablecoins_as_cash = stable_cash
+    out: List[Dict[str, Any]] = []
+    header_map: Dict[str, int] = {}
+    cash_coins = set(_STABLECOINS) if stable_cash else set()
+    for i, row in enumerate(csv.reader(io.StringIO(read_broker_text(path))),
+                            1):
+        if not header_map:
+            if is_header_row(row):
+                header_map, _missing = resolve_header(
+                    [c.strip() for c in row])
+            continue
+        if not any((c or '').strip() for c in row):
+            continue
+        typ = cb._col(row, header_map, 'transaction type').strip().lower()
+        asset = cb._col(row, header_map, 'asset').strip().upper()
+        if not typ or not asset:
+            continue
+        is_fiat = asset in _FIAT
+        is_cash_coin = asset in cash_coins
+        if not (is_fiat or is_cash_coin):
+            continue
+        cur = 'USD' if is_cash_coin else asset
+        where = f"{name}:{i}"
+        qty = abs(cb._num(row, header_map, 'quantity transacted'))
+        if qty < 1e-9:
+            continue
+        day = cb._ts(row, header_map, typ).date().isoformat()
+        if typ in ('deposit', 'receive', 'withdrawal', 'send'):
+            sign = 1.0 if typ in ('deposit', 'receive') else -1.0
+            ev = CE.move(day, cur, sign * qty, where=name,
+                         desc=f"Coinbase {typ} {asset}")
+            ev['line_where'] = where
+            out.append(ev)
+        elif is_cash_coin and typ in ('buy', 'sell'):
+            pc = (cb._col(row, header_map, 'price currency') or 'USD'
+                  ).strip().upper() or 'USD'
+            pc = 'USD' if pc in cash_coins else pc
+            if pc == cur:
+                continue                # USDC for USD: the same currency
+            total = abs(cb._num(row, header_map, 'total'))
+            if typ == 'buy':
+                out.append(CE.conv(day, pc, total, cur, qty, where=where,
+                                   desc=f"Coinbase buy {asset}"))
+            else:
+                out.append(CE.conv(day, cur, qty, pc, total, where=where,
+                                   desc=f"Coinbase sell {asset}"))
+    return out

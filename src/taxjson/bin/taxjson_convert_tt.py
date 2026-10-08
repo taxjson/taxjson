@@ -45,7 +45,8 @@ _SUGAR_ACTIONS = ('ACQUIRED', 'INKIND')
 # and books them as events (the journal's transfer legs, the rename's
 # SPLIT row in each account holding the old symbol) — they are checked
 # here and never rows of the converted file.
-_EVENT_ACTIONS = ('JOURNAL', 'RENAME', 'ALLOWLOSS')
+_EVENT_ACTIONS = ('JOURNAL', 'RENAME', 'ALLOWLOSS', 'FXCONV', 'CASHMOVE',
+                  'CASHOPEN', 'CASHBAL', 'CASHBOOK')
 # ALLOWLOSS (lib/loss_overrides) is a filing position against the loss
 # rule on one sale of the account: read by `taxjson run`, checked here,
 # never a row of the books.
@@ -1266,6 +1267,12 @@ def tt_to_json(input_path: Path, account_name: str) -> dict:
             # read by `taxjson run`, never a row of the books.
             from taxjson.lib.loss_overrides import parse_line as _allowloss
             if _allowloss(line, source) is not None:
+                continue
+            # A line of the FX-on-cash ledger v2 (lib/cash_events: FXCONV,
+            # CASHMOVE, CASHOPEN, CASHBAL, CASHBOOK): checked here, read by
+            # `taxjson fx-cash --ledger v2`, never a row of the books.
+            from taxjson.lib.cash_events import parse_line as _cashline
+            if _cashline(line, source) is not None:
                 continue
             try:
                 expanded = expand_acquired(line)

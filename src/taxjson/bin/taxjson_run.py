@@ -13116,8 +13116,10 @@ def cmd_summary(args: argparse.Namespace) -> None:
                    if filing_line_rows else 0.0)
     _denied_label = "adjustment (g)" if _is_us else "denied"
     # FX on foreign cash (s.39(1.1)) is reported on line 15300 too
-    # (T4037) but lives outside the engine's dispositions; show the
-    # estimate beside the block when the ledger builds, else a pointer.
+    # (T4037) but lives outside the engine's dispositions. The default
+    # ledger (v1) is NOT RELIABLE and its figure is never shown as
+    # reportable (CA-FX-07); the opt-in v2 says what it computed or why
+    # it refused (_fx_cash_status).
     _fx_note: Optional[Dict[str, Any]] = None
     _fx_err = ""
     if filing_rows and not _is_us:
@@ -13126,19 +13128,8 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _fx_buf = _io.StringIO()
         try:
             with _ctx.redirect_stderr(_fx_buf):
-                _fxl, _fxv, _, _, _ = _fx_cash_doc(root, cache)
-            _fx_note = {"net_gain": round(float(_fxl["net_gain"]), 2),
-                        "reportable": round(float(_fxv["reportable"]), 2),
-                        "estimate": True, "line": "15300",
-                        # The ledger cannot see conversions or deposits
-                        # (R1-148): carry its own warning signs so the
-                        # figure is never quoted without them.
-                        "overdrafts": dict(_fxl.get("overdrafts") or {}),
-                        "pools_year_end": dict(
-                            _fxl.get("pools_year_end") or {}),
-                        "caveat": "explicit conversions and deposits "
-                                  "are not in the ledger; the figure "
-                                  "can be wrong in either direction"}
+                _fx_note = _fx_cash_status(root, cache)
+            _fx_note = dict(_fx_note, line="15300")
         except SystemExit as e:
             # The ledger refused (an unreadable or missing native tx
             # file): say so instead of a silent pointer (S005-04).
@@ -13441,18 +13432,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                       f"{money(_engine_denied)} ({_denied_gap:+,.2f} on "
                       f"the RETURN row).")
             if _fx_note is not None:
-                _item(f"FX on foreign cash (s.39(1.1), ESTIMATE — not in "
-                      f"the rows above): net {money(_fx_note['net_gain'])}, "
-                      f"reportable {money(_fx_note['reportable'])} after "
-                      f"the $200 exemption; T4037 puts it on line 15300. "
-                      + (f"The ledger overdrew "
-                         + ", ".join(f"{c} {n}x" for c, n in sorted(
-                             _fx_note["overdrafts"].items()))
-                         + " (conversions/deposits it cannot see); "
-                         if _fx_note["overdrafts"] else "")
-                      + "unseen conversions make it wrong in either "
-                        "direction — review with `taxjson fx-cash` "
-                        "before using it.")
+                _item(_fx_sum_item(_fx_note, money))
             else:
                 _item("FX on foreign cash (s.39(1.1)) is not in the rows "
                       "above — T4037 puts it on line 15300; see `taxjson "
@@ -18283,6 +18263,25 @@ def cmd_close_year(args: argparse.Namespace) -> None:
     _cf = _carryforwards_for_lock(root, cfg)
     if _cf is not None:
         extra["carryforwards"] = _cf
+    if _fx_cash_ledger_choice(settings) == "v2":
+        # The FX-on-cash ledger v2's close (each account's foreign cash
+        # and its cost, each debt): the next year's opening pool
+        # (CA-FX-07). Only a COMPUTED ledger is carried.
+        try:
+            _v2doc = _fx_cash_v2_doc(root, root / "work")[0]
+        except SystemExit as e:
+            _v2doc = {"status": "not_computed",
+                      "problems": [{"text": str(e.code or "")}]}
+        if _v2doc.get("status") == "computed":
+            extra["fx_cash_v2"] = _v2doc["close"]
+            print(_out.fill(f"Recorded the FX-on-cash ledger v2's close "
+                            f"for the {int(year) + 1} opening pool."))
+        else:
+            _out.warn("the FX-on-cash ledger v2 did not compute — its "
+                      "close is not recorded (the next year needs "
+                      "CASHOPEN lines)", prog=_prog,
+                      details=[str((_v2doc.get("problems") or [{}])[0]
+                                   .get("text", ""))])
     path = taxjson_filed.write_snapshot(
         root, year, _normalize_country(settings["country"]), basis,
         accounts, force=args.force,
@@ -18795,7 +18794,19 @@ def _fx_cash_after_run(root: Path, cache: Path,
     if not _soft_settings(root).get("fx_cash_gains"):
         return
     _step("Calculating FX gains on cash (fx_cash_gains = true)")
+    from taxjson.lib.safe_write import write_atomic
+    rpt = reports_dir / "fx_cash.rpt"
     try:
+        if _fx_cash_ledger_choice(_soft_settings(root)) == "v2":
+            from taxjson.lib import fx_cash_v2 as V2
+            doc, verdict, _c, base, year, country = _fx_cash_v2_doc(root,
+                                                                    cache)
+            write_atomic(rpt, V2.render(doc, verdict, country, width_=0)
+                         + "\n")
+            _say("note", f"{V2.headline(doc, verdict)} -> "
+                 f"{_out_relpath(rpt, root)}", indent="  ",
+                 file=sys.stdout)
+            return
         ledger, verdict, base, year, country = _fx_cash_doc(root, cache)
     except SystemExit as e:
         _say("warning", f"FX gains on cash skipped: {e}", indent="  ")
@@ -18803,12 +18814,11 @@ def _fx_cash_after_run(root: Path, cache: Path,
     # A file, like the captured stage reports: never wrapped.
     text = FX.render_report(ledger, base, year, country, verdict,
                             width_=0)
-    rpt = reports_dir / "fx_cash.rpt"
-    from taxjson.lib.safe_write import write_atomic
     write_atomic(rpt, text + "\n")
-    _say("note", f"FX gains on cash: net {ledger['net_gain']:,.2f} "
-         f"{base}, reportable {verdict['reportable']:,.2f} {base} -> "
-         f"{_out_relpath(rpt, root)}", indent="  ", file=sys.stdout)
+    # Never a reportable figure from the default ledger (CA-FX-07).
+    st = FX.unreliable_status(ledger, year, verdict)
+    _say("note", f"{st['headline']} -> {_out_relpath(rpt, root)}",
+         indent="  ", file=sys.stdout)
 
 
 def cmd_check_filed(args: argparse.Namespace) -> None:
@@ -19691,11 +19701,63 @@ def cmd_fetch(args: argparse.Namespace) -> None:
               "`taxjson fetch run`).")
 
 
-def _fx_cash_doc(root: Path, cache: Path):
-    """(doc, verdict, base, year, country) for the FX-cash report —
-    shared by the fx-cash command and the end-of-run hook."""
-    import json as _json
+FX_CASH_LEDGERS = ("v1", "v2")
+
+
+def _fx_cash_ledger_choice(settings: Dict[str, Any],
+                           flag: Optional[str] = None) -> str:
+    """Which FX-on-cash ledger: `--ledger` when given, else [settings]
+    fx_cash_ledger, else "v1" — the default, flagged NOT RELIABLE
+    (CA-FX-07 / US-FX-03). v2 stays opt-in until it has been audited."""
+    v = flag or (settings or {}).get("fx_cash_ledger") or "v1"
+    v = str(v).strip().lower()
+    if v not in FX_CASH_LEDGERS:
+        sys.exit(exit_text(f"taxjson fx-cash: fx_cash_ledger must be "
+                           f"\"v1\" or \"v2\" (got {v!r})"))
+    return v
+
+
+def _fx_cash_status(root: Path, cache: Path,
+                    ledger: Optional[str] = None) -> Dict[str, Any]:
+    """The FX-on-cash result every output shares (sum, fx-cash --json,
+    checklist, the end-of-run note): `reliable`, `headline` (the one
+    line shown in place of a reportable figure), `reasons`, and the
+    figures only where they may be quoted. v1 (default): NOT RELIABLE,
+    the raw numbers under `unreliable_raw`. v2 (opt-in): `computed`
+    (labelled under audit) or `not_computed` with its problems."""
     from taxjson.bin import taxjson_fx_cash as FX
+    settings = (_soft_config(root).get("settings") or {})
+    which = _fx_cash_ledger_choice(settings, ledger)
+    if which == "v2":
+        return _fx_cash_v2_status(root, cache)
+    doc, verdict, base, year, country = _fx_cash_doc(root, cache)
+    st = FX.unreliable_status(doc, year, verdict)
+    st.update(year=year, currency=base, rule=verdict.get("rule"))
+    return st
+
+
+def _fx_sum_item(st: Dict[str, Any], money) -> str:
+    """`taxjson sum` FOR THE RETURN's FX-on-cash line."""
+    if st.get("ledger") == "v2" and st.get("status") == "computed":
+        return (f"FX on foreign cash, ledger {st.get('label')}, "
+                f"s.39(1.1): net {money(st['net_gain'])}, reportable "
+                f"{money(st['reportable'])} after the $200 exemption — not "
+                f"in the rows above; T4037 puts it on line 15300. Review "
+                f"`taxjson fx-cash` and mark the checklist's fx-cash step "
+                f"reviewed before using it.")
+    if st.get("ledger") == "v2":
+        return (st["headline"] + " (`taxjson fx-cash` lists each "
+                "problem).")
+    return (st["headline"] + " (line 15300; `taxjson fx-cash` shows the "
+            "raw ledger, and the opt-in ledger v2 reads the missing "
+            "cash events).")
+
+
+def _fx_cash_native(root: Path, cache: Path):
+    """(rows, base, year, country, fx history) for the FX-on-cash
+    ledgers: every TAXABLE account's native rows (each with `account`)
+    — s.39(1.1) / §988 reach the person's taxable holdings; registered
+    accounts are exempt."""
     from taxjson.lib.price_chain import load_fx_history
     cfg = _soft_config(root)
     settings = cfg.get("settings", {}) or {}
@@ -19709,8 +19771,7 @@ def _fx_cash_doc(root: Path, cache: Path):
     found = False
     for name, acfg in sorted((cfg.get("accounts") or {}).items()):
         if (acfg or {}).get("type") != "taxable":
-            continue                    # s.39 reaches the person's
-            # taxable holdings; registered accounts are exempt.
+            continue
         f = _native_tx_file(cache, name)
         if f is None:
             if _has_inputs(root, name):
@@ -19738,8 +19799,19 @@ def _fx_cash_doc(root: Path, cache: Path):
     if not found:
         sys.exit(exit_text(f"taxjson fx-cash: no native transaction files in "
                            f"{cache} (run `taxjson run` first)."))
-    try:      # an unreadable rates file, a futures refusal (A2-1424/1434)
+    try:
         fx = load_fx_history(cache / "to_base.csv", base)
+    except (OSError, ValueError) as e:
+        sys.exit(exit_text(f"taxjson fx-cash: error: {e}"))
+    return txs, base, int(year), country, fx
+
+
+def _fx_cash_doc(root: Path, cache: Path):
+    """(doc, verdict, base, year, country) for the default (v1) FX-cash
+    report — shared by the fx-cash command and the end-of-run hook."""
+    from taxjson.bin import taxjson_fx_cash as FX
+    txs, base, year, country, fx = _fx_cash_native(root, cache)
+    try:      # a futures refusal (A2-1424/1434)
         ledger = FX.build_ledger(txs, base, fx, int(year), country=country)
     except (OSError, ValueError) as e:
         sys.exit(exit_text(f"taxjson fx-cash: error: {e}"))
@@ -19747,24 +19819,149 @@ def _fx_cash_doc(root: Path, cache: Path):
     return ledger, verdict, base, int(year), country
 
 
+def _fx_cash_carry(root: Path, settings: Dict[str, Any], year: int
+                   ) -> Optional[Dict[str, Any]]:
+    """The prior year's v2 close (close-year's `fx_cash_v2` in the
+    prior-year record), or None."""
+    import json as _json
+    try:
+        from taxjson.bin.taxjson_filed import prior_record_setting
+        p = prior_record_setting(root, settings)
+    except Exception:                                   # noqa: BLE001
+        p = None
+    if p is None:
+        p = root / "filed" / f"{year - 1}.json"
+    try:
+        rec = _json.loads(Path(p).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    close = rec.get("fx_cash_v2") if isinstance(rec, dict) else None
+    if not isinstance(close, dict) or close.get("year") != year - 1:
+        return None
+    return close
+
+
+def _fx_cash_v2_doc(root: Path, cache: Path):
+    """(doc, verdict or None, cash, base, year, country) of the opt-in
+    ledger v2 (lib/fx_cash_v2): the native rows attributed to their
+    broker account's book, the cash events (lib/cash_events), the prior
+    year's close."""
+    import re as _re
+    from taxjson.lib import cash_events as CE
+    from taxjson.lib import fx_cash_v2 as V2
+    from taxjson.bin import taxjson_fx_cash as FX
+    from taxjson.lib.price_chain import latest_rate
+    txs, base, year, country, fx = _fx_cash_native(root, cache)
+    cfg = _soft_config(root)
+    settings = cfg.get("settings", {}) or {}
+    by_label: Dict[str, List[Dict[str, Any]]] = {}
+    for t in txs:
+        by_label.setdefault(str(t.get("account")), []).append(t)
+    try:
+        cash = CE.collect(root, cfg, country, by_label)
+    except (OSError, ValueError) as e:
+        sys.exit(exit_text(f"taxjson fx-cash: error: {e}"))
+    books = cash["books"]
+    for t in txs:
+        src = _re.sub(r"#\d+$", "", str(t.get("source") or ""))
+        t["_book"] = books.for_file(str(t.get("account")), src,
+                                    str(t.get("source_account") or ""))
+
+    def rate_of(cur: str, d: str):
+        r, _d = latest_rate(fx, cur, d,
+                            max_age_days=FX.FX_MAX_RATE_AGE_DAYS)
+        return r
+    try:
+        doc = V2.build(txs, cash, base, year, rate_of, country=country,
+                       carry=_fx_cash_carry(root, settings, year),
+                       inflow_spot=str(settings.get("fx_cash_inflow_cost")
+                                       or "").strip().lower() == "spot")
+    except ValueError as e:
+        sys.exit(exit_text(f"taxjson fx-cash: error: {e}"))
+    verdict = (FX.apply_jurisdiction(doc["net_gain"], country)
+               if doc["status"] == "computed" else None)
+    return doc, verdict, cash, base, year, country
+
+
+def _fx_cash_v2_status(root: Path, cache: Path) -> Dict[str, Any]:
+    from taxjson.lib import fx_cash_v2 as V2
+    doc, verdict, _cash, base, year, _country = _fx_cash_v2_doc(root, cache)
+    st = {"ledger": "v2", "label": V2.LABEL, "status": doc["status"],
+          "reliable": doc["status"] == "computed", "under_audit": True,
+          "headline": V2.headline(doc, verdict),
+          "reasons": [p["text"] for p in doc["problems"]],
+          "problems": doc["problems"], "year": year, "currency": base}
+    if verdict is not None:
+        st.update(net_gain=doc["net_gain"],
+                  reportable=verdict["reportable"], rule=verdict["rule"],
+                  review_key=f"v2|{year}|{verdict['reportable']:.2f}")
+    return st
+
+
+def _cmd_fx_cash_v2(root: Path, cache: Path, args) -> None:
+    from taxjson.lib import fx_cash_v2 as V2
+    doc, verdict, cash, base, year, country = _fx_cash_v2_doc(root, cache)
+    evs = None
+    if getattr(args, "cash_events", False):
+        evs = sorted(list(cash["events"]) + list(cash["lines"]),
+                     key=lambda e: (e.get("date", ""), e.get("book") or ""))
+    if getattr(args, "json", False):
+        out = dict(doc)
+        out["headline"] = V2.headline(doc, verdict)
+        if verdict is not None:
+            out.update(reportable=verdict["reportable"],
+                       rule=verdict["rule"],
+                       review_key=f"v2|{year}|{verdict['reportable']:.2f}")
+        if not getattr(args, "events", False):
+            out["events"] = None
+        if evs is not None:
+            out["cash_events"] = [{k: v for k, v in e.items()
+                                   if not k.startswith("_")} for e in evs]
+        _json_out(out)
+        return
+    print(V2.render(doc, verdict, country, cash_events=evs))
+    if getattr(args, "events", False) and doc["events"]:
+        from taxjson.lib import out as _o
+        print()
+        print("EVENTS")
+        print("\n".join(_o.fit_table(
+            ["DATE", "BOOK", "CUR", "UNITS", "RATE", "GAIN", "WHAT"],
+            [[e["date"], e["book"], e["currency"], f"{e['units']:,.2f}",
+              f"{e['rate']:g}" if e["rate"] is not None else "-",
+              f"{e['gain']:+,.2f}", e["what"] or "-"]
+             for e in doc["events"]],
+            aligns=["<", "<", "<", ">", ">", ">", "<"], key=0)))
+
+
 def cmd_fx_cash(args: argparse.Namespace) -> None:
-    """`taxjson fx-cash`: FX capital gains on foreign-currency cash
-    (ITA s.39(1.1) with the $200 de minimis; §988 ordinary-income
-    figure for US projects). A standalone REPORT — nothing here
-    changes the engine's gains, sum, or the filing exports. Runs on
-    demand regardless of the `fx_cash_gains` setting (which only
-    controls the end-of-run report)."""
+    """`taxjson fx-cash`: FX gains on foreign-currency cash (ITA
+    s.39(1.1) with the $200 de minimis; the §988 ordinary-income figure
+    for US projects). A standalone REPORT — nothing here changes the
+    engine's gains, sum, or the filing exports. The default ledger (v1)
+    is NOT RELIABLE and says so first; `--ledger v2` (or [settings]
+    fx_cash_ledger = "v2") runs the opt-in ledger that reads the cash
+    events and refuses instead of guessing (lib/fx_cash_v2)."""
     from taxjson.bin import taxjson_fx_cash as FX
     root = Path(args.dir).resolve()
     cache = root / "work"
+    settings = (_soft_config(root).get("settings") or {})
+    which = _fx_cash_ledger_choice(settings, getattr(args, "ledger", None))
+    if which == "v2":
+        _cmd_fx_cash_v2(root, cache, args)
+        return
     ledger, verdict, base, year, country = _fx_cash_doc(root, cache)
+    st = FX.unreliable_status(ledger, year, verdict)
     if getattr(args, "json", False):
-        _json_out({"per_currency": ledger["per_currency"],
+        _json_out({"ledger": "v1", "status": st["status"],
+                   "reliable": False, "active": st["active"],
+                   "headline": st["headline"],
+                   "reasons": st["reasons"],
+                   "overdrafts_in_year": st["overdrafts_in_year"],
+                   "unreliable_raw": st["unreliable_raw"],
+                   "per_currency": ledger["per_currency"],
                    "events": (ledger["events"]
                               if getattr(args, "events", False)
                               else None),
-                   "net_gain": ledger["net_gain"],
-                   "reportable": verdict["reportable"],
                    "rule": verdict["rule"],
                    "overdrafts": ledger["overdrafts"],
                    "unrated": ledger["unrated"],
@@ -19774,8 +19971,6 @@ def cmd_fx_cash(args: argparse.Namespace) -> None:
         return
     print(FX.render_report(ledger, base, year, country, verdict))
     if getattr(args, "events", False) and ledger["events"]:
-        # After the report: the CAVEAT stays its last line without
-        # --events (the checklist reads it).
         print()
         print("EVENTS")
         print("\n".join(FX.render_events(ledger["events"])))
@@ -23442,9 +23637,23 @@ def _build_parser(prog: str = "taxjson"
         description="FX capital gains on foreign-currency CASH (ITA "
              "s.39(1.1) with the $200 de minimis; the §988 "
              "ordinary-income figure for US projects) — a standalone "
-             "report from the taxable accounts' native books; it "
-             "changes NO other number. Set fx_cash_gains = true under "
-             "[settings] to also print it at the end of every run.")
+             "report; it changes NO other number. The default ledger "
+             "(v1) reads only trades and income and is NOT RELIABLE: "
+             "never file its figure. --ledger v2 (opt-in, under audit) "
+             "also reads conversions, deposits/withdrawals and statement "
+             "balances and refuses instead of guessing. Set "
+             "fx_cash_gains = true under [settings] to also print it at "
+             "the end of every run.")
+    p_fxc.add_argument("--ledger", choices=FX_CASH_LEDGERS,
+                       help="v1 (the default: NOT RELIABLE, never a "
+                            "filing figure) or v2 (opt-in, under audit: "
+                            "reads conversions, deposits/withdrawals and "
+                            "statement balances, models margin debt, "
+                            "refuses instead of guessing). Overrides "
+                            "[settings] fx_cash_ledger.")
+    p_fxc.add_argument("--cash-events", action="store_true",
+                       help="v2: list every cash event read (conversions, "
+                            "moves, balances) after the report")
     p_fxc.add_argument("--events", action="store_true",
                        help="List each in-year disposal event (date, "
                             "units, rate, gain)")

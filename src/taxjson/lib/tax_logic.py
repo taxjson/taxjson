@@ -620,18 +620,41 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("CA-FX-07",
                  "Gains on holding foreign cash (s.39(1.1)) are NOT in the "
-                 "Schedule 3 totals: `taxjson fx-cash` estimates the "
-                 "year's net gain or net loss beyond the $200 annual "
-                 "exemption (a net gain or loss within $200 is nil), from "
-                 "a pooled average cost per currency. Cash moves only on "
-                 "a trade for cash, income, withholding, fees and the "
-                 "cash a corporate action pays (cash in lieu of a "
+                 "Schedule 3 totals; `taxjson fx-cash` applies one method: "
+                 "every spend of a foreign currency is a disposition, with "
+                 "one pooled average cost per currency across the taxable "
+                 "accounts; a conversion is at the Canadian-dollar amount "
+                 "actually paid or received; a move between two of your "
+                 "own accounts in the books is not a disposition (the "
+                 "units and their cost travel); money from outside the "
+                 "books costs what you declare (the day's rate only when "
+                 "you opt in with `spot`), and money leaving them is "
+                 "declared too (kept elsewhere: it leaves at its cost; "
+                 "converted or spent: a disposition); a negative balance "
+                 "in a broker account is a debt in that currency, and "
+                 "repaying it realises the move since it was borrowed. "
+                 "Only the year's net gain or net loss beyond the $200 "
+                 "annual exemption counts (within $200 it is nil). Cash "
+                 "moves on a trade for cash, income, withholding, fees "
+                 "and the cash a corporate action pays (cash in lieu of a "
                  "fraction, whether booked as its own sale or inside an "
                  "exchange's proceeds, and boot); a share-for-share "
                  "exchange, a coin-for-coin swap, a fee paid in a coin "
-                 "and a reward in a coin move none (a USD stablecoin is "
-                 "US-dollar cash, CA-CRYPTO-02).",
-                 keys=("fx_cash_gains",)),
+                 "and a reward in a coin move none. A USD stablecoin is "
+                 "US-dollar cash (CA-CRYPTO-02; the report says so). The "
+                 "default ledger reads only the trades and income — no "
+                 "conversion, deposit, withdrawal, margin balance or "
+                 "opening pool — so its figure is NOT RELIABLE and is "
+                 "never shown as reportable. The opt-in ledger v2 "
+                 "(fx_cash_ledger = \"v2\", under audit) reads them, "
+                 "reconciles each broker account to its statement "
+                 "balances, opens the year with the pool the prior year "
+                 "closed with (or CASHOPEN lines), and computes nothing — "
+                 "listing why — on a missing opening pool, an undeclared "
+                 "move, a reconciliation gap or an overdraft in an "
+                 "account that does not reconcile.",
+                 keys=("fx_cash_gains", "fx_cash_ledger",
+                       "fx_cash_inflow_cost")),
         ]),
         ("Cost base (ACB)", [
             Rule("CA-ACB-01",
@@ -2338,15 +2361,31 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-FX-03",
                  "Gains on holding foreign cash (§988) are ordinary "
                  "income, not capital gains, and are NOT in the Form 8949 "
-                 "totals: `taxjson fx-cash` estimates the year's net from "
-                 "a pooled average cost per currency (fx_cash_gains = "
-                 "true runs it after `taxjson run`); the §988(e) "
-                 "exclusion for personal transactions is not modelled, "
-                 "and there is no $200 annual exemption. The cash a "
-                 "corporate action pays (cash in lieu of a fraction, "
-                 "§356 boot) is currency received; a share-for-share "
-                 "exchange moves none.",
-                 keys=("fx_cash_gains",)),
+                 "totals; `taxjson fx-cash` applies one method: every "
+                 "spend of a foreign currency is a disposition, with one "
+                 "pooled average basis per currency across the taxable "
+                 "accounts; a conversion is at the US-dollar amount "
+                 "actually paid or received; a move between two of your "
+                 "own accounts in the books is not a disposition; money "
+                 "from outside the books has the basis you declare (the "
+                 "day's rate only when you opt in with `spot`), and money "
+                 "leaving them is declared too; a negative balance in a "
+                 "broker account is a debt in that currency, realised "
+                 "when repaid. The whole net counts: there is no $200 "
+                 "annual exemption, and the §988(e) exclusion for "
+                 "personal transactions is not modelled. The cash a "
+                 "corporate action pays (cash in lieu of a fraction, §356 "
+                 "boot) is currency received; a share-for-share exchange "
+                 "moves none; a stablecoin is property (US-CRYPTO-02), "
+                 "never cash. The default ledger reads only the trades "
+                 "and income, so its figure is NOT RELIABLE and is never "
+                 "shown as reportable; the opt-in ledger v2 "
+                 "(fx_cash_ledger = \"v2\", under audit) reads "
+                 "conversions, deposits, withdrawals and statement "
+                 "balances and computes nothing — listing why — instead "
+                 "of guessing.",
+                 keys=("fx_cash_gains", "fx_cash_ledger",
+                       "fx_cash_inflow_cost")),
         ]),
         ("Basis and holding period", [
             Rule("US-BASIS-01", "First in, first out per account"),

@@ -281,6 +281,8 @@ SETTING_COUNTRY: Dict[str, str] = {
     "source_currencies": BOTH,
     "cross_asset": BOTH,            # retired; warned and ignored
     "fx_cash_gains": BOTH,          # s.39(1.1) in Canada, §988 in the US
+    "fx_cash_ledger": BOTH,         # v1 (default, NOT RELIABLE) | v2 (opt-in)
+    "fx_cash_inflow_cost": BOTH,    # v2: declared (default) | spot
     "futures_settle": BOTH,
     "prior_year_record": BOTH,
     "local_timezone": BOTH,         # the zone crypto UTC stamps are dated in

@@ -214,7 +214,10 @@ def _run_with_fx_note(root, *args):
         "import sys\n"
         "import taxjson.bin.taxjson_run as R\n"
         "R._fx_cash_doc = lambda root, cache: ("
-        "{'net_gain': -12708.35, 'overdrafts': {}, 'pools_year_end': {}},"
+        "{'net_gain': -12708.35, 'overdrafts': {}, 'pools_year_end': {},"
+        " 'per_currency': {'USD': {'acquired': 1.0, 'disposed': 1.0,"
+        " 'gain': -12708.35}}, 'overdrafts_year': {'USD': {'count': 2,"
+        " 'units': 300.0}}},"
         " {'reportable': -12508.35}, 'CAD', 2025, 'canada')\n"
         f"sys.argv = ['taxjson', '-C', {str(root)!r}] + {list(args)!r}\n"
         "R.main()\n")
@@ -262,11 +265,19 @@ class TestSumTable(unittest.TestCase):
             fx = json.loads(r.stdout)["filing"]["fx_cash"]
             self.assertIsNotNone(fx, "Canada FOR THE RETURN lost its "
                                      "line 15300 FX note")
-            self.assertEqual((fx["line"], fx["net_gain"], fx["reportable"]),
-                             ("15300", -12708.35, -12508.35))
-            t = _run_with_fx_note(root, "sum").stdout
-            self.assertIn("net -12,708.35, reportable -12,508.35 after "
-                          "the $200 exemption", t)
+            # The default ledger is NOT RELIABLE (CA-FX-07): no
+            # reportable figure, the raw ones under unreliable_raw.
+            self.assertEqual((fx["line"], fx["reliable"]), ("15300", False))
+            self.assertNotIn("reportable", fx)
+            self.assertEqual((fx["unreliable_raw"]["net_gain"],
+                              fx["unreliable_raw"]["reportable"]),
+                             (-12708.35, -12508.35))
+            t = " ".join(_run_with_fx_note(root, "sum").stdout.split())
+            self.assertIn("FX on foreign cash: NOT RELIABLE for 2025 — 2 "
+                          "in-year overdrafts (300.00 USD); conversions, "
+                          "deposits/withdrawals and margin balances are not "
+                          "read; do not file this figure", t)
+            self.assertNotIn("-12,508.35", t)
 
     def test_denied_footer_names_the_permanent_part(self):
         cfg = _CONFIG + '\n[accounts.tfsa]\ntype = "sheltered"\n'

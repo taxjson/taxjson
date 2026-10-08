@@ -148,7 +148,9 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "record the 100% loss applied (line 25300 divided by the inclusion rate)."),
     ("fx-cash", 4, "FX gain on foreign cash reviewed (ITA s.39(1.1), $200 de minimis)",
      "taxjson fx-cash",
-     "Foreign currency is property; the net gain above $200 is a capital gain."),
+     "Foreign currency is property; the net gain above $200 is a capital gain. The default "
+     "ledger is NOT RELIABLE (it reads no conversions, deposits or margin balances); the "
+     "opt-in ledger v2 (fx_cash_ledger = \"v2\") is under audit."),
     ("fees", 4, "Carrying charges (margin interest) for line 22100 taken from the statements",
      "broker statements (`taxjson events` lists the INTEREST rows)",
      "Interest on money borrowed to invest is deductible on line 22100; trade "
@@ -225,7 +227,8 @@ US_STEPS: Dict[str, Any] = {
                   "line 6 / 14 carryover."),
     "fx-cash": ("FX gain on foreign cash reviewed (§988)", "taxjson fx-cash",
                 "§988 currency gains on investment cash are ordinary income; "
-                "`taxjson fx-cash` estimates the year's net (the §988(e) "
+                "`taxjson fx-cash`'s default ledger is NOT RELIABLE and the "
+                "opt-in ledger v2 is under audit (the §988(e) "
                 "personal-transaction exclusion is not modelled)."),
     "fees": ("Margin interest collected (Form 4952, if itemizing)",
              "broker statements (`taxjson events` lists the INTEREST rows)",
@@ -2066,10 +2069,43 @@ def d_carryover(ctx: Ctx) -> Result:
 
 
 def d_fx_cash(ctx: Ctx) -> Result:
-    code, out, err = ctx.sub("fx-cash")
-    if code != 0 and not out:
+    """`taxjson fx-cash --json` (tax-logic CA-FX-07 / US-FX-03). The
+    default ledger (v1) is NOT RELIABLE: attention whenever it saw
+    foreign cash move (a `--skip` mark is the deliberate accept). The
+    opt-in v2: attention with its problems when it refused; when it
+    computed, attention until the user marks THAT figure reviewed (a
+    DONE mark answers the year and reportable amount it saw — a changed
+    figure asks again)."""
+    code, out, err = ctx.sub("fx-cash", "--json")
+    if code != 0 or not out.strip():
         return Result("fx-cash", "blocked", _last_line(err) or f"exit {code}")
-    return Result("fx-cash", "manual", _last_line(out)[:100])
+    try:
+        doc = json.loads(out)
+    except ValueError:
+        return Result("fx-cash", "blocked", "unreadable `taxjson fx-cash "
+                                            "--json`")
+    head = str(doc.get("headline") or "")
+    if doc.get("ledger") == "v2":
+        if doc.get("status") == "computed":
+            key = fx_review_key(doc)
+            return Result("fx-cash", "attention",
+                          f"{head} — review `taxjson fx-cash` and mark it "
+                          f"reviewed: `taxjson checklist --done fx-cash`",
+                          question=True, answers=[key] if key else [])
+        return Result("fx-cash", "attention", head)
+    if not doc.get("active", True) and not doc.get("overdrafts_in_year"):
+        return Result("fx-cash", "manual", head)
+    return Result("fx-cash", "attention", head)
+
+
+def fx_review_key(doc: Dict[str, Any]) -> str:
+    """The question a DONE mark on fx-cash answers: this year's v2
+    figure, as computed."""
+    rep = doc.get("reportable")
+    if doc.get("ledger") != "v2" or doc.get("status") != "computed" \
+            or rep is None:
+        return ""
+    return f"v2|{doc.get('year')}|{float(rep):.2f}"
 
 
 def d_fees(ctx: Ctx) -> Result:
@@ -2362,7 +2398,8 @@ def set_override(root: Path, year: int, step: str, mark: Optional[str],
 
 # The steps whose attention is a question a DONE mark answers — for the
 # questions asked when it was made (Result.answers).
-QUESTION_STEPS = ("export-coverage", "option-boundary", "t5-t3")
+QUESTION_STEPS = ("export-coverage", "option-boundary", "t5-t3",
+                  "fx-cash")
 
 
 def question_answers(root: Path, cfg: Dict[str, Any], step: str,
@@ -2388,6 +2425,16 @@ def question_answers(root: Path, cfg: Dict[str, Any], step: str,
                 return SA.question_keys(SA.audit(root, cfg))
         except Exception:                               # noqa: BLE001
             return []
+    if step == "fx-cash":
+        # The v2 figure the mark reviews (none for the default ledger:
+        # its NOT RELIABLE finding is never answered by a mark).
+        from taxjson.bin.taxjson_run import _fx_cash_status
+        try:
+            st = _fx_cash_status(Path(root), Path(root) / "work")
+        except (SystemExit, Exception):                 # noqa: BLE001
+            return []
+        k = fx_review_key(st)
+        return [k] if k else []
     return None
 
 
@@ -2417,6 +2464,8 @@ def key_text(sid: str, key: str) -> str:
         from taxjson.lib.slip_audit import key_text as _kt
         return _kt(key)
     parts = key.split("|")
+    if sid == "fx-cash" and len(parts) == 3:
+        return f"the {parts[1]} ledger v2 figure {parts[2]}"
     return f"{parts[1]} written {parts[2]}" if len(parts) == 3 else key
 
 

@@ -81,6 +81,37 @@
   step. tax-logic CA-SL-18 / US-WASH-25 state it as your position, not the
   rule's test; CA-SL-01 and US-WASH-01 now say the window is counted on
   settle (Canada) or trade (US) dates whatever `tax_date` says.
+- **FX on foreign cash: an opt-in ledger v2, under audit**
+  (`[settings] fx_cash_ledger = "v2"` or `taxjson fx-cash --ledger v2`):
+  besides the trades and income it reads currency conversions (IB Forex
+  trades, Kraken fiat trades, Coinbase stablecoin buys and sells),
+  deposits and withdrawals (IB Deposits & Withdrawals, RBC cash rows,
+  Kraken and Coinbase fiat moves) and statement balances (the IB Cash
+  Report, Kraken's ledger balances), plus the new `.tt` lines `FXCONV`,
+  `CASHMOVE`, `CASHOPEN`, `CASHBAL` and `CASHBOOK` for what no export
+  carries and whose account a `.tt` file's cash is. A
+  conversion counts at the amount actually paid or received, a move
+  between your own accounts is not a disposition, money from outside the
+  books costs what you declare (`spot`, or `fx_cash_inflow_cost = "spot"`,
+  for the day's rate), a negative broker balance is a debt in that
+  currency realised when repaid, each account is reconciled to its
+  statement balances, and the year opens with the pool `close-year`
+  recorded. Anything missing makes it NOT COMPUTED with the list of what
+  to add, never a guessed figure; a computed figure is labelled "v2
+  (opt-in, under audit)" and the checklist keeps it at attention until you
+  mark it reviewed. tax-logic CA-FX-07 / US-FX-03 state the method.
+
+### Changed
+
+- **The default FX-on-cash figure is no longer presented as reportable**:
+  it never read conversions, deposits/withdrawals or margin balances, so
+  `taxjson sum` (FOR THE RETURN), `taxjson fx-cash` (first line), the
+  end-of-run note and the checklist now say "FX on foreign cash: NOT
+  RELIABLE for <year> — <n> in-year overdrafts (<amount> <currency>);
+  conversions, deposits/withdrawals and margin balances are not read; do
+  not file this figure". `sum --json` and `fx-cash --json` carry
+  `"reliable": false` and the reasons, with the raw figures under
+  `unreliable_raw`.
 
 ## v0.24.1 (2026-10-08)
 
