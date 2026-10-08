@@ -421,7 +421,7 @@ The project's one mapping file, at the project root; one rule per line, symbols 
 
 #### `DISTINCT`
 - **Form:** `DISTINCT A B`
-- **Meaning:** two look-alike listings are separate securities (a CDR and its US share); changes no symbol, undoes an automatic cross-listing join and silences the scan's MAP-GAP nag. `taxjson journals` lists a journal between the two as refused, naming this line.
+- **Meaning:** two look-alike listings are separate securities (a CDR and its US share); changes no symbol, undoes an automatic cross-listing join and silences the scan's MAP-GAP nag. `taxjson journals` lists a journal between the two as refused, naming this line. A symbol written bare (no market suffix) beside a share listing is the US listing, as the books spell a broker's bare US ticker: `DISTINCT ZZR ZZR.TO` is read as `DISTINCT ZZR.US ZZR.TO`, with an Info line. A `GLOBAL`, `TOBASE`, `JOURNAL` or undated `RENAME` line pairing a bare symbol with a share listing is not re-read (a bare symbol is a coin in the books, and the line would move pools): `taxjson run` warns, naming the line to write (`src/taxjson/bin/taxjson_ticker_map.py` — `canonical_distinct`, `listing_spelling_notes`).
 - **Country:** both.
 - **Example:** `DISTINCT ZZR.TO ZZR.US`
 

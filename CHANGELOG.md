@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A `DISTINCT` line written with the bare US ticker answers the pair**:
+  `DISTINCT QZX QZX.TO` is read as `DISTINCT QZX.US QZX.TO` (the books spell
+  a broker's bare US ticker `.US`), so the cross-listing loss warning,
+  `taxjson scan` and `ticker-map --suggest` stop asking, with an Info line
+  saying how it was read. A `GLOBAL` / `TOBASE` / `JOURNAL` / undated
+  `RENAME` line so written is not re-read (it would move pools): the run
+  warns, naming the line to write.
+
 
 ## v0.24.0 (2026-10-07)
 

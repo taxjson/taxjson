@@ -1111,7 +1111,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "the TOBASE line, `taxjson scan` lists it (XLIST-LOSS) "
                  "and `run --strict` stops until the map has one of the "
                  "two. Nothing is denied until then; a listing with no "
-                 "name in the exports (a .tt-only book) is not flagged."),
+                 "name in the exports (a .tt-only book) is not flagged. A "
+                 "DISTINCT line naming the US listing bare (`DISTINCT "
+                 "QZG QZG.TO`) answers it: beside a share listing a bare "
+                 "ticker is the US listing, QZG.US, as every parser "
+                 "spells a broker's bare US ticker (an Info line says "
+                 "so); a GLOBAL or TOBASE line so written is not re-read "
+                 "(it would join pools): a Warning names the line to "
+                 "write."),
             Rule("CA-ACB-11",
                  "Shares sold with no purchase in your files (bought "
                  "before the data starts) go in missing_history.json "
@@ -2549,7 +2556,14 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "--suggest` offers the TOBASE line, `taxjson scan` lists "
                  "it (XLIST-LOSS) and `run --strict` stops until the map "
                  "has one of the two. Nothing is disallowed until then; "
-                 "a listing with no name in the exports is not flagged."),
+                 "a listing with no name in the exports is not flagged. A "
+                 "DISTINCT line naming the US listing bare (`DISTINCT "
+                 "QZG QZG.TO`) answers it: beside a share listing a bare "
+                 "ticker is the US listing, QZG.US, as every parser "
+                 "spells a broker's bare US ticker (an Info line says "
+                 "so); a GLOBAL or TOBASE line so written is not re-read "
+                 "(it would join pools): a Warning names the line to "
+                 "write."),
             Rule("US-BASIS-07",
                  "Accounts typed \"sheltered\" (an IRA, Roth IRA, "
                  "401(k)...) are tracked but kept out of the filing "

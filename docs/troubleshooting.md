@@ -638,6 +638,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/xlist_loss_radar.py` — `analyze`, `open_findings`, `message`, `across listings`, `_roots`, `_held_at`, `RADAR_SHOWN`, `more_message`; `src/taxjson/bin/taxjson_run.py` — `_say_xlist_losses`, `cmd_scan`, `XLIST-LOSS`; `src/taxjson/lib/ticker_map_suggest.py` — `from_xlist_loss_radar`
 
+### "Info: ticker.map:3: `DISTINCT QZX QZX.TO` is read as `DISTINCT QZX.US QZX.TO`" or "Warning: ticker.map:3: `TOBASE QZX QZX.TO` names QZX without a market suffix"
+- **Check:** the ticker.map line names one listing without its suffix (the broker's bare US ticker) and the other with one. On v0.24.0 and earlier nothing was said, and the `DISTINCT` line did not answer the cross-listing loss warning for QZX.TO and QZX.US (the warning, `tjs scan` XLIST-LOSS and `tjs ticker-map --suggest` kept asking for the pair).
+- **Cause:** the books spell every share listing with its suffix: a broker's bare US ticker (a Questrade or RBC USD row, an IB symbol) is `QZX.US`, and a bare symbol is a coin. The loss radar, the suggestions and the cross-listing join compared the line's symbols as written, so `QZX` matched nothing.
+- **Fix:** upgrade. A `DISTINCT` line now reads a bare ticker beside a share listing as the US listing (it changes no symbol, so no pool moves), with the Info line; writing it `DISTINCT QZX.US QZX.TO` says the same. A `GLOBAL`, `TOBASE`, `JOURNAL` or undated `RENAME` line written that way is not re-read (it would join pools and change the gain on its own): write it as the Warning gives it (`TOBASE QZX.US QZX.TO`) and `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_ticker_map.py` — `canonical_distinct`, `listing_spelling_notes`, `listing_pair_spelling`, `_parse_map_text`; `src/taxjson/lib/journals.py` — `canonical_distinct`; `src/taxjson/bin/taxjson_run.py` — `listing_spelling_notes`
+
 ### A move between brokers that changes the listing (RBC `TFO` out of QZP.TO, IB `ATON` into QZP.US) is not joined over a weekend
 - **Check:** `tjs transfers` shows the out-leg and the in-leg six or seven calendar days apart with a weekend between them (out on a Wednesday, in the next Tuesday); the new listing's sales read as a short and the old listing's shares never sell.
 - **Cause:** the pairing window was 5 calendar days; brokers book a transfer on their business days.

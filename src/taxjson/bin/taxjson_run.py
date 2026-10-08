@@ -6408,6 +6408,17 @@ def cmd_run(args: argparse.Namespace) -> None:
                  "single meaning; either changes ACB pools and gains. Fix "
                  "the line (KEYWORD FROM TO, separated by spaces; notes "
                  "after `#`) or delete it.")
+        # A bare ticker beside a share listing (`DISTINCT QZX QZX.TO`):
+        # DISTINCT reads it as the US listing; a rename keyword does not
+        # (it would move pools) and is said (v0.24.1 leftovers, 1).
+        from taxjson.bin.taxjson_ticker_map import listing_spelling_notes
+        from taxjson.lib.cli_diag import read_text_utf8
+        _sp_info, _sp_warn = listing_spelling_notes(
+            read_text_utf8(ticker_map), ticker_map.name)
+        for _m in _sp_info:
+            _say("note", _m, prog=_PROG)
+        for _m in _sp_warn:
+            _say("warning", _m, prog=_PROG)
     # Dated events: the .tt JOURNAL / RENAME lines of every account
     # (lib/dated_events), checked up front; ticker.map's legacy JOURNAL
     # and dated RENAME lines still work, said once.
