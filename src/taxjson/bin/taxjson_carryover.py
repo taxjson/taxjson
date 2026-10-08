@@ -627,6 +627,19 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
         item("The $3,000 ordinary-income offset is ASSUMED used "
              "whenever available; override a year with a --claimed "
              "line (0 is valid).")
+    if ledger.get('filing_positions'):
+        _fps = ledger['filing_positions']
+        item(f"Includes {len(_fps)} filing position(s) taken against the "
+             + ("wash-sale rule (§1091)" if country == 'usa'
+                else "superficial-loss rule (s.54)")
+             + " (.tt ALLOWLOSS): "
+             + "; ".join(f"{fp['date'][:4]} {fp['symbol']} loss "
+                         f"{_money(fp['loss'])} claimed, the rule would "
+                         f"{'disallow' if country == 'usa' else 'deny'} "
+                         f"{_money(fp['would_disallow'])} ({fp['where']})"
+                         for fp in _fps)
+             + ". The nets above count each loss as allowed; delete the "
+               "line to apply the rule.")
     if ledger.get('scope_note'):
         # (the --json note keeps its "->"; a wrapped line must not
         # start with one)
@@ -1063,6 +1076,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     first_tx_year = min(tx_years) if tx_years else None
     ledger['first_transaction_year'] = first_tx_year
     ledger['scope_note'] = SCOPE_NOTE[country]
+    # The .tt ALLOWLOSS filing positions the nets include (CA-SL-18 /
+    # US-WASH-25): the ledger counted the claimed losses without a word
+    # (pre-release review).
+    from taxjson.lib import loss_overrides as _LO
+    _fp = _LO.positions(
+        [it for it in (results.get('loss_overrides') or [])
+         if it.get('status') == _LO.STATUS_APPLIED])
+    if _fp:
+        ledger['filing_positions'] = [
+            {k: v for k, v in fp.items() if k != 'in_year'} for fp in _fp]
     if claimed_ignored:
         ledger['claimed_ignored'] = claimed_ignored
     if args.project_year is not None:

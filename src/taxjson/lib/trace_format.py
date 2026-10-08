@@ -359,6 +359,18 @@ def _render_wash_explanation(g: Dict[str, Any]) -> List[str]:
     return out
 
 
+def filing_position_text(g: Dict[str, Any],
+                         country: Optional[str] = None) -> str:
+    """The sentence for a gain row carrying a .tt ALLOWLOSS filing
+    position (`loss_override`, lib/loss_overrides), '' otherwise. The
+    country defaults from the row: only the US engine writes a term."""
+    n = g.get('loss_override')
+    if not isinstance(n, dict):
+        return ''
+    from taxjson.lib.loss_overrides import note_text
+    return note_text(n, country or ('usa' if g.get('term') else 'canada'))
+
+
 def render_gain_block(g: Dict[str, Any], align: bool = True,
                       manual: bool = False) -> List[str]:
     """Render one gain as a tt-style block: rule, header, trace lines, rule.
@@ -435,6 +447,9 @@ def render_gain_block(g: Dict[str, Any], align: bool = True,
     if window_lines:
         body.append("#")
         body.extend(window_lines)
+    fp = filing_position_text(g)
+    if fp:
+        body += ["#", f"# {fp[0].upper()}{fp[1:]}"]
     body.append(rule)
     return body
 
@@ -677,7 +692,8 @@ def _report_window_lines(g: Dict[str, Any], width_: Optional[int],
 
 
 def render_report_block(g: Dict[str, Any], width_: Optional[int] = None,
-                        manual: bool = False) -> List[str]:
+                        manual: bool = False,
+                        country: Optional[str] = None) -> List[str]:
     """One disposition in the report layout: a heading line, its figures
     as `label:  value` lines, then the pool history, the denial and the
     window as indented blocks separated by one blank line. [] when the
@@ -709,6 +725,11 @@ def render_report_block(g: Dict[str, Any], width_: Optional[int] = None,
         if g.get('days_held') is not None:
             pairs.append(("days held", str(g['days_held'])))
     pairs.append(("id", (g.get('id') or '')[:16]))
+    fp = filing_position_text(g, country)
+    if fp:
+        # A .tt ALLOWLOSS position: the gain is the claimed loss and the
+        # rule's denial is not applied (pre-release review M7).
+        pairs.append(("position", fp[0].upper() + fp[1:]))
     out = [head] + kv_lines(pairs, "  ", w)
     return out + render_report_trace(g, w)
 

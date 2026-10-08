@@ -1862,15 +1862,13 @@ def _sheltered_elections(settings: Optional[Dict[str, Any]]) -> str:
         _die(str(e))
 
 
-def _note_sheltered_defaults(name: str, corp_files: List[Path]) -> None:
-    """One Info line per run for each spin-off or merger of a sheltered
-    account booked without asking (corp_actions.SHELTERED_DEFAULT): the
-    rows carry the tag, so a cached corp stage says it too. Not a
-    warning, and not pending: no tax in the account depends on its cost
-    (CA-CORP-11 / US-CORP-12)."""
+def _sheltered_default_events(corp_files: List[Path]
+                              ) -> Dict[str, Dict[str, str]]:
+    """{event id: {date, kind (spinoff | merger), symbol}} of the events
+    the corp stage files booked by the sheltered default
+    (corp_actions.SHELTERED_DEFAULT: their rows carry the tag)."""
     import json as _json
-    from taxjson.lib.corp_actions import (SHELTERED_DEFAULT,
-                                          sheltered_default_text)
+    from taxjson.lib.corp_actions import SHELTERED_DEFAULT
     seen: Dict[str, Dict[str, str]] = {}
     for f in corp_files:
         try:
@@ -1891,6 +1889,17 @@ def _note_sheltered_defaults(name: str, corp_files: List[Path]) -> None:
             elif (r.get("action") == "BUYSELL" and not ev["symbol"]
                   and float(r.get("quantity") or 0) > 0):
                 ev["symbol"] = str(r.get("symbol") or "")
+    return seen
+
+
+def _note_sheltered_defaults(name: str, corp_files: List[Path]) -> None:
+    """One Info line per run for each spin-off or merger of a sheltered
+    account booked without asking (corp_actions.SHELTERED_DEFAULT): the
+    rows carry the tag, so a cached corp stage says it too. Not a
+    warning, and not pending: no tax in the account depends on its cost
+    (CA-CORP-11 / US-CORP-12)."""
+    from taxjson.lib.corp_actions import sheltered_default_text
+    seen = _sheltered_default_events(corp_files)
     for eid, ev in sorted(seen.items(), key=lambda x: (x[1]["date"], x[0])):
         _say_once(("sheltered-default", name, eid), "note",
                   sheltered_default_text(name, ev["kind"], ev["symbol"],
@@ -8002,19 +8011,48 @@ def _hint_text(hints: Dict[str, Any]) -> str:
     return ", ".join(f"{k}={_v(v)}" for k, v in sorted(hints.items()))
 
 
+def _defaulted_events(cache: Path, name: str
+                      ) -> Dict[str, Dict[str, str]]:
+    """The account's events booked by the sheltered default, from its
+    corp stage files in work/ ({} before a run)."""
+    return _sheltered_default_events(sorted(
+        p for p in Path(cache).glob(f"{name}_*_corp.json") if p.is_file()))
+
+
+def _default_label(kind: str) -> str:
+    return ("sheltered default ($0 cost for the distributed shares)"
+            if kind != "merger" else
+            "sheltered default (the old shares' cost carried)")
+
+
 def _elections_section(doc, name: str, manifest_path: Path, root: Path,
-                       country: Optional[str] = None) -> int:
+                       country: Optional[str] = None,
+                       defaulted: Optional[Dict[str, Dict[str, str]]] = None
+                       ) -> int:
     """One account's saved elections into `doc` (lib/out.Doc): a heading
     naming the manifest, then one `- ID: election` item per event with
-    its summary, hints and notes aligned under it. Returns the count
-    (0: nothing added — the caller lists the empty accounts together)."""
+    its summary, hints and notes aligned under it, and each event the
+    run booked by the sheltered default (`defaulted`, nothing saved —
+    "No elections recorded" hid them, pre-release review). Returns the
+    count (0: nothing added — the caller lists the empty accounts
+    together)."""
     from taxjson.lib import out as _out
     from taxjson.lib.corp_actions import Manifest, election_keys
     man = Manifest.load(manifest_path)
-    if not man.records:
+    dflt = {e: v for e, v in (defaulted or {}).items()
+            if e not in man.records}
+    if not man.records and not dflt:
         return 0
     known = election_keys(country) if country else None
     doc.section(f"{name} — {_out.relpath(manifest_path, root)}")
+    for eid, ev in sorted(dflt.items(), key=lambda x: (x[1]["date"], x[0])):
+        doc.item(f"{eid}: {_default_label(ev['kind'])}")
+        doc.kv([("event", f"{ev['kind']} {ev['symbol']} on {ev['date']}"
+                 .replace("spinoff", "spin-off")),
+                ("change", f"`taxjson elect {name} --set {eid}=<election>`"
+                           f" (nothing saved: the run booked it without "
+                           f"asking; no tax in the account depends on it)")],
+               indent="  ")
     for eid, r in sorted(man.records.items()):
         # A hand-typed key no rule knows: `taxjson run` refuses it, so
         # say so here too (audit S072-16 — it was listed as if valid).
@@ -8034,7 +8072,7 @@ def _elections_section(doc, name: str, manifest_path: Path, root: Path,
                                  f"with `taxjson elect {name} --redo "
                                  f"--event {eid}`"))
         doc.kv(pairs, indent="  ")
-    return len(man.records)
+    return len(man.records) + len(dflt)
 
 
 def _print_elections(names: List[str], inputs_dir: Path, cache: Path,
@@ -8046,7 +8084,8 @@ def _print_elections(names: List[str], inputs_dir: Path, cache: Path,
     empty = []
     for name in names:
         if not _elections_section(doc, name, _manifest_path_for(
-                inputs_dir / name, cache, name), root, country):
+                inputs_dir / name, cache, name), root, country,
+                _defaulted_events(cache, name)):
             empty.append(name)
     if empty:
         doc.blank().para(f"No elections recorded: {', '.join(empty)}.")
@@ -8320,9 +8359,11 @@ def cmd_elect(args: argparse.Namespace) -> None:
             # here silently printed the text listing.
             from taxjson.lib.corp_actions import Manifest
             doc: Dict[str, Any] = {}
+            from taxjson.lib.corp_actions import SHELTERED_DEFAULT
             for name in accounts:
                 mp = _manifest_path_for(inputs_dir / name, cache, name)
-                if not mp.exists() and not mp.is_symlink():
+                dflt = _defaulted_events(cache, name)
+                if not mp.exists() and not mp.is_symlink() and not dflt:
                     continue
                 try:
                     man = Manifest.load(mp)
@@ -8335,6 +8376,14 @@ def cmd_elect(args: argparse.Namespace) -> None:
                           "hints": dict(rec.hints or {}),
                           "notes": rec.notes or ""}
                     for eid, rec in sorted(man.records.items())}
+                # Booked by the sheltered default, nothing saved.
+                for eid, ev in sorted(dflt.items()):
+                    doc[name].setdefault(eid, {
+                        "election": SHELTERED_DEFAULT,
+                        "summary": f"{ev['kind']} {ev['symbol']} on "
+                                   f"{ev['date']}",
+                        "hints": {}, "notes": _default_label(ev["kind"]),
+                        "saved": False})
             _json_out({"accounts": doc})
             return
         _print_elections(list(accounts), inputs_dir, cache, root, country,
@@ -13545,9 +13594,19 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _rule = ("wash-sale rule (§1091)" if _is_us
                  else "superficial-loss rule (s.54)")
         print()
+        # "the totals above include them" only of this year's sales: a
+        # position on another year's sale shapes this year's ACB, not
+        # its totals (pre-release review).
+        _n_in = sum(1 for _fp in _positions if _fp["in_year"])
+        _n_out = len(_positions) - _n_in
         _para(f"FILING POSITIONS — {len(_positions)} loss(es) claimed "
-              f"against the {_rule} (.tt ALLOWLOSS lines); the totals "
-              f"above include them")
+              f"against the {_rule} (.tt ALLOWLOSS lines)"
+              + ("; the totals above include them" if not _n_out else
+                 "; sales of another year: not in the totals above, "
+                 "their effect on the " + ("basis" if _is_us else "ACB")
+                 + " carries" if not _n_in else
+                 f"; the totals above include the {_n_in} of this year, "
+                 f"not the {_n_out} of another year"))
         for _fp in _positions:
             _item(f"{_fp['account']} {_fp['date']} {_fp['symbol']} "
                   f"{fmt_qty(_fp['qty'])} units: loss {money(_fp['loss'])} "
@@ -18566,6 +18625,38 @@ def _prior_record_path(root: Path, settings: Dict[str, Any],
     return root / "filed" / f"{year - 1}.json"
 
 
+def _handoff_positions(rep: Dict[str, Any], cache: Path, ry: int,
+                       settings: Dict[str, Any]) -> None:
+    """The .tt ALLOWLOSS filing positions on sales up to the closed
+    year `ry` (CA-SL-18 / US-WASH-25): they shape the opening cost the
+    hand-off compares (no ACB / basis raised for the replacement), so
+    the report names them (`filing_positions` and a note; pre-release
+    review). The closed year's project must take the same position."""
+    from taxjson.lib import loss_overrides as _LO
+    from taxjson.lib.report_model import resolve_gains_files
+    if not _LO.read_state(cache):
+        return
+    key = "date" if _tax_date_basis(settings) == "trade" else "date_settle"
+    fps = [fp for fp in _LO.positions(_LO.gather(resolve_gains_files(cache)))
+           if str(fp.get(key) or fp.get("date"))[:4] <= str(ry)]
+    if not fps:
+        return
+    rep["filing_positions"] = [
+        {k: v for k, v in fp.items() if k != "in_year"} for fp in fps]
+    us = _country(settings) in ("us", "usa")
+    rep.setdefault("notes", []).append(
+        f"{len(fps)} filing position(s) taken against the "
+        + ("wash-sale rule (§1091)" if us else "superficial-loss rule (s.54)")
+        + f" on sales up to {ry} (.tt ALLOWLOSS): "
+        + "; ".join(f"{fp['date']} {fp['symbol']}, the rule would "
+                    f"{'disallow' if us else 'deny'} "
+                    f"{fp['would_disallow']:,.2f} ({fp['where']})"
+                    for fp in fps)
+        + f". The opening " + ("basis" if us else "ACB")
+        + " here carries no denied loss for them; the " + str(ry)
+        + " project must hold the same line, or its closing cost differs.")
+
+
 def cmd_handoff(args: argparse.Namespace) -> None:
     """`taxjson handoff`: check this project against the previous year's
     close-year record — opening positions and cost at Dec 31, trades
@@ -18635,6 +18726,7 @@ def cmd_handoff(args: argparse.Namespace) -> None:
     except _handoff.BooksError as e:
         # Not a fabricated "a lot or a sale is missing" (A2-1137).
         _die(str(e))
+    _handoff_positions(rep, root / "work", ry, settings)
     if getattr(args, "json", False):
         _json_out(dict(rep, record=str(rp)))
     else:
@@ -19616,6 +19708,12 @@ def _radar_engine_args(bases: List[Path],
                 out.append("--transfers-as-acquisitions")
         except Exception:                                  # noqa: BLE001
             pass
+    # The project's .tt ALLOWLOSS filing positions (US-WASH-25): the US
+    # radar's engine applies them as the gains pass does (pre-release
+    # review; a claimed loss read WASHED).
+    _work = {Path(b).parent for b in bases}
+    if len(_work) == 1:
+        out += _loss_override_flags(next(iter(_work)))
     if missing_history is not None and out[1] == "canada":
         # The project's corporate_distributions list: the radar's own
         # pool moves a Canadian TRUST's return of capital to its record

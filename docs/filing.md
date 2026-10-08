@@ -84,8 +84,10 @@ the open steps one at a time; `--quick` skips the slow detectors.
       each one is real and not a custody move (`taxjson transfers`).
 - [ ] `taxjson sum` FILING POSITIONS — each `.tt` `ALLOWLOSS` line is a
       loss you claim although the superficial-loss rule would deny it: your
-      position, not the rule's test. Keep its reason, be ready to support
-      it, and mark the checklist's filing-positions step done
+      position, not the rule's test. `taxjson form-export` notes it on the
+      row it changes (US: the row has no code W; if the 1099-B shows box
+      1g for that sale, see docs/tax-rules.md). Keep its reason, be ready
+      to support it, and mark the checklist's filing-positions step done
       (`taxjson checklist --done filing-positions`); none listed, the step
       is n/a.
 - [ ] `taxjson edge-cases` — lists every trade that settles in the other
