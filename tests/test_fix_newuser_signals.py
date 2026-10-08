@@ -212,6 +212,55 @@ class TestRadarJudgesTheTradesOwnNames(unittest.TestCase):
                          flat(tj(root, "run", "--no-input").stdout))
 
 
+# ------------------------------------------- 4. sheltered-account elections
+class TestShelteredElection(unittest.TestCase):
+
+    def _event(self):
+        from taxjson.lib.corp_actions import CorporateAction
+        return CorporateAction(
+            date="2025-05-01", time="00:00:00", action_type="spinoff",
+            source_symbol="ZZK.TO", source_isin="", target_symbol="ZZL.TO",
+            target_isin="", ratio_new=1, ratio_old=10, qty_disposed=0,
+            qty_received=10, fmv=0.0, currency="CAD",
+            target_currency="CAD", account="rrsp", event_id="ev1")
+
+    def test_prompt_says_holdings_only(self):
+        from taxjson.bin import taxjson_corp_actions as CA
+        err = io.StringIO()
+        with mock.patch("builtins.input", side_effect=["1", "0", "y", ""]), \
+                redirect_stderr(err):
+            CA._prompt_election(self._event(), "canada", sheltered=True)
+        self.assertIn("Sheltered account: this election affects the "
+                      "holdings (their cost in the books) only",
+                      flat(err.getvalue()))
+        err = io.StringIO()
+        with mock.patch("builtins.input", side_effect=["1", "0", "y", ""]), \
+                redirect_stderr(err):
+            CA._prompt_election(self._event(), "canada")
+        self.assertNotIn("Sheltered account", err.getvalue())
+
+    def test_pending_list_says_holdings_only(self):
+        from taxjson.bin import taxjson_corp_actions as CA
+        doc = CA._pending_doc([self._event()], Path("manifest.json"),
+                              "canada", sheltered=True)
+        self.assertTrue(doc["pending"][0]["sheltered"])
+        self.assertFalse(CA._pending_doc([self._event()],
+                                         Path("manifest.json"),
+                                         "canada")["pending"][0]["sheltered"])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "taxjson.toml").write_text(
+                toml(2025, extra='[accounts.rrsp]\ntype = "sheltered"\n'))
+            (root / "work").mkdir()
+            (root / "inputs" / "rrsp").mkdir(parents=True)
+            (root / "work" / "pending_elections.json").write_text(
+                json.dumps({"schema_version": 1,
+                            "accounts": {"rrsp": doc}}))
+            r = tj(root, "elect", "--pending", check=False)
+            self.assertIn("Sheltered account: this election affects the "
+                          "holdings (their cost in the books) only",
+                          flat(r.stdout))
+
 
 if __name__ == "__main__":
     unittest.main()

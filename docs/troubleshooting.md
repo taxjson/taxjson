@@ -356,9 +356,9 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### "Error: 1 corp-action event(s) need an election but --no-input" (or "… but stdin is not a TTY"), and `tjs run` exits 3
 - **Check:** `tjs elect --pending` lists each event with what each election books and the hints it needs (also in `work/pending_elections.json`).
 - **Cause:** a spin-off or merger has more than one tax treatment and only you can choose. The run defers the account until it is chosen; run from a script or an AI assistant, stdin is not a terminal, so it cannot ask.
-- **Fix:** `tjs elect margin --set EVENT_ID=ELECTION` (add `--hint KEY=VALUE` where required), or run `tjs run` at a terminal to be asked; then run again.
+- **Fix:** `tjs elect margin --set EVENT_ID=ELECTION` (add `--hint KEY=VALUE` where required), or run `tjs run` at a terminal to be asked; then run again. An event of a sheltered account is asked too — the election sets the cost its holdings carry — but no tax depends on it: the prompt and `tjs elect --pending` say "sheltered account: this election affects the holdings (their cost in the books) only".
 - **Fixed in:** —
-- **Code:** `src/taxjson/bin/taxjson_corp_actions.py` — `corp-action event(s) need an election `; `src/taxjson/bin/taxjson_run.py` — `cmd_elect`
+- **Code:** `src/taxjson/bin/taxjson_corp_actions.py` — `corp-action event(s) need an election `, `SHELTERED_NOTE`; `src/taxjson/bin/taxjson_run.py` — `cmd_elect`, `_print_pending`
 
 ### "Warning: margin: spin-off SPNC.US on 2025-06-03 (event …) is booked at $0"
 - **Check:** `tjs spinoffs` shows the election, the value used and the cost booked.

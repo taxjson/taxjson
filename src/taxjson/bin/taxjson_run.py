@@ -3919,7 +3919,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     "--base-currency", base_currency,
                 ] + (["--ticker-map", str(ticker_map)] if ticker_map
                      else []) + (["--symbol-codes", str(_corp_codes)]
-                                 if _corp_codes else [])
+                                 if _corp_codes else []) + (
+                    # Asked all the same; the prompt says no tax
+                    # depends on it.
+                    [] if is_taxable else ["--sheltered"])
                 # Interactive by default: corp-actions prompts for the tax
                 # election (taxable vs rollover) on stderr and reads the
                 # answer from stdin. Without a TTY (or with --no-input) it
@@ -7799,6 +7802,10 @@ def _print_pending(root: Path, inputs_dir: Path, cache: Path,
         doc.section(f"{acct}: {eid}")
         if ev.get("summary"):
             doc.para(ev["summary"], indent="  ")
+        if ev.get("sheltered"):
+            from taxjson.bin.taxjson_corp_actions import SHELTERED_NOTE
+            doc.para(SHELTERED_NOTE[0].upper() + SHELTERED_NOTE[1:] + ".",
+                     indent="  ")
         if rec is not None:
             # The pending file only clears on the next successful run —
             # without this marker, "did my --set take?" looked like NO
@@ -8263,6 +8270,10 @@ def cmd_elect(args: argparse.Namespace) -> None:
     _tmap = root / "ticker.map"
     if _tmap.exists():
         _redo_corp_flags += ["--ticker-map", str(_tmap)]
+    _acfg = ((cfg.get("accounts") or {}).get(name) or {})
+    _redo_sheltered = ([] if isinstance(_acfg, dict)
+                       and _acfg.get("type", "sheltered") == "taxable"
+                       else ["--sheltered"])
     ran = False
     try:
         for broker, csvs in grouped.items():
@@ -8273,7 +8284,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
             cmd = _cmd("taxjson-corp-actions") + [
                 "--account-name", name, "--country", country,
                 "--brokerage", broker, "--manifest", str(manifest_path),
-            ] + _redo_corp_flags + (
+            ] + _redo_corp_flags + _redo_sheltered + (
                 ["--symbol-codes", str(_sc)]
                 if _sc and broker == "questrade" else []) + [
                 str(p) for p in csvs]

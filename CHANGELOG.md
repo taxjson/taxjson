@@ -82,6 +82,10 @@
 
 ### Added
 
+- **A sheltered account's corporate-action election says it is moot for
+  tax**: still asked (it sets the holdings' cost), the prompt and `taxjson
+  elect --pending` now say it affects the holdings only.
+
 - **`taxjson quick-start` lists every step from install to filing**
   (`tjs quick-start`), each with the exact command(s) and a one-line why:
   install or upgrade, `init`, the accounts, the broker files, `run`, filling

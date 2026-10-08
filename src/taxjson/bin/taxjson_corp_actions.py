@@ -120,10 +120,21 @@ def _format_options(options) -> str:
     return "\n".join(lines)
 
 
-def _prompt_election(event: CorporateAction, country: str) -> ElectionRecord:
+# Said with an event of a sheltered (registered) account: its election
+# is asked all the same — it sets the cost the holdings view and the
+# sheltered books carry — but no tax depends on it.
+SHELTERED_NOTE = ("sheltered account: this election affects the holdings "
+                  "(their cost in the books) only — nothing in the account "
+                  "is taxed either way")
+
+
+def _prompt_election(event: CorporateAction, country: str,
+                     sheltered: bool = False) -> ElectionRecord:
     """Walk the user through one event. Always includes an `ignore` option
     at the end, regardless of country/event_type, since IB noise is the
-    common case where no country-specific tax rule applies."""
+    common case where no country-specific tax rule applies. `sheltered`:
+    the event is a sheltered account's — said (SHELTERED_NOTE), still
+    asked."""
     options = options_for(country, event.action_type)
     if not options or options == [IGNORE_ELECTION]:
         # No country rule for this event type — only `ignore` makes sense.
@@ -136,6 +147,9 @@ def _prompt_election(event: CorporateAction, country: str) -> ElectionRecord:
     doc = _out.Doc(stream=sys.stderr)
     doc.section(f"EVENT {event.event_id}")
     doc.para(event.summary(), indent="  ")
+    if sheltered:
+        doc.para(SHELTERED_NOTE[0].upper() + SHELTERED_NOTE[1:] + ".",
+                 indent="  ")
     doc.kv([("account", event.account),
             ("qty disposed", f"{event.qty_disposed:g}"),
             ("qty received", f"{event.qty_received:g}")], indent="  ")
@@ -286,7 +300,7 @@ EXIT_ELECTIONS_REQUIRED = 3
 
 
 def _pending_doc(missing: List[CorporateAction], manifest_path: Path,
-                 country: str) -> dict:
+                 country: str, sheltered: bool = False) -> dict:
     """Machine-readable pending-elections document — everything a GUI
     (or `taxjson elect --set`) needs to resolve each event without a
     TTY: the event's identity/quantities/source rows, every available
@@ -323,6 +337,9 @@ def _pending_doc(missing: List[CorporateAction], manifest_path: Path,
             "ratio_old": ev.ratio_old,
             "source_rows": list(ev.raw_descriptions or []),
             "options": options,
+            # A sheltered account's event: asked all the same, but no
+            # tax depends on it (SHELTERED_NOTE).
+            "sheltered": bool(sheltered),
         })
     return {"schema_version": 1, "country": country,
             "manifest": str(manifest_path), "pending": pending}
@@ -402,6 +419,12 @@ def main():
         help="The account's internal-code record (`taxjson run` passes "
              "work/<acct>_symbol_codes.state): a Questrade chain booked "
              "under an internal code takes the listing it resolves to.",
+    )
+    parser.add_argument(
+        '--sheltered', action='store_true',
+        help="The account is sheltered (registered): each election is "
+             "still asked, and the prompt says it affects the holdings' "
+             "cost only, not tax (`taxjson run` passes it).",
     )
     parser.add_argument(
         '--list', dest='list_only', action='store_true',
@@ -535,7 +558,8 @@ def main():
                    f"with `taxjson elect ACCOUNT --set EVENT_ID=ELECTION`; "
                    f"the elections are saved in {manifest_path}."])
             if args.pending_json:
-                doc = _pending_doc(missing, manifest_path, args.country)
+                doc = _pending_doc(missing, manifest_path, args.country,
+                                   sheltered=args.sheltered)
                 Path(args.pending_json).parent.mkdir(parents=True,
                                                      exist_ok=True)
                 Path(args.pending_json).write_text(
@@ -552,7 +576,8 @@ def main():
         )
         for ev in missing:
             try:
-                rec = _prompt_election(ev, args.country)
+                rec = _prompt_election(ev, args.country,
+                                       sheltered=args.sheltered)
             except (EOFError, KeyboardInterrupt):
                 # Answers given SO FAR are already saved (per-event
                 # save below) — losing six typed FMVs to a Ctrl-C at
