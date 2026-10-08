@@ -43,9 +43,11 @@ the project's other books instead, in this order:
 3. the same broker proved it: in another of the project's accounts the
    same broker's ROOT.US was read as ROOT.TO on that account's own
    evidence (1 or 2), and the names are EQUAL: the broker files that
-   security's TSX listing on USD rows, so the shares bought here on a
-   USD row (a trade, a dividend reinvestment) are that listing too
-   (GitHub issue #3).
+   security's TSX listing on USD rows, so the units that came in here
+   on a USD row by a transfer or a dividend reinvestment (and their
+   later sales) are that listing too (GitHub issue #3). Not when the
+   account BOUGHT the bare ticker on a trade row (Candidate.bought): a
+   USD purchase is the US listing, as in 2.
 
 A Questrade REI row (a dividend reinvestment) is a candidate like a
 trade. In the parse it also binds on its own to the listing the account
@@ -145,6 +147,11 @@ class Candidate:
     names: Set[Tuple[str, ...]] = field(default_factory=set)
     shown: Dict[Tuple[str, ...], str] = field(default_factory=dict)
     arrivals: List[Tuple[str, float]] = field(default_factory=list)
+    # A purchase on a trade row of the bare ticker (not a dividend
+    # reinvestment): units bought at the broker in that row's currency —
+    # the US listing on a USD row, never re-read from another account's
+    # proof (CA/US-XLIST-02).
+    bought: bool = False
 
     def add_name(self, text: str) -> None:
         from taxjson.lib.symbol_codes import _CONTROL_RE, exact_name
@@ -227,13 +234,15 @@ def scan_questrade(paths: Iterable[Path]) -> Scan:
                 continue
             c = scan.candidate(listing, cur)
             c.add_name(questrade_name(desc))
-            if act != 'Transfers':
-                continue
             try:
                 q = parse_strict_number(row.get('Quantity'),
                                         field='Quantity', allow_blank=True,
                                         blank=0.0)
             except BrokerageParseError:
+                continue
+            if act == 'Trades' and not rei and q > _EPS:
+                c.bought = True
+            if act != 'Transfers':
                 continue
             dt = helper.parse_date(
                 (row.get('Transaction Date') or '').strip(), *_DATE_FMTS)
@@ -279,6 +288,8 @@ def scan_rbc(paths: Iterable[Path]) -> Scan:
                 continue
             c = scan.candidate(listing, cur)
             c.add_name(name)
+            if r.cls == 'trade' and r.qty > _EPS:
+                c.bought = True
             if r.cls == 'transfer' and r.qty > _EPS and r.date:
                 c.arrivals.append((r.date[:10], r.qty))
     return scan
@@ -595,7 +606,13 @@ def resolve(scan: Scan, ev: Evidence, *, account: str, broker: str,
             # 3. the same broker already proved it in another account:
             #    its rows of this spelling were read as the other
             #    listing there, on that account's own evidence, under
-            #    an equal name (GitHub issue #3).
+            #    an equal name (GitHub issue #3) — for units that came
+            #    in by a transfer or a dividend reinvestment only: a
+            #    purchase on a USD trade row of the bare ticker is the
+            #    US listing (many Canadian companies trade under the
+            #    same ticker on the NYSE).
+            if c.bought:
+                continue
             prov = sorted(p for p in ev.proved.get(lst, ())
                           if p[1] == broker and p[2] == alt and p[3]
                           and _names_ok(c.names, p[3], shown))

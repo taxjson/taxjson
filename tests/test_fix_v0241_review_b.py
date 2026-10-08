@@ -470,5 +470,63 @@ class TestShelteredElectionNote(unittest.TestCase):
         self.assertNotIn("superficial", text)
 
 
+# ========================================= L8: the same broker's proof
+def _scan(listing, cur, name, arrivals=(), bought=False):
+    s = LS.Scan()
+    c = s.candidate(listing, cur)
+    c.add_name(name)
+    c.arrivals += list(arrivals)
+    c.bought = bought
+    s.saw(listing, cur, name)
+    return s
+
+
+class TestBrokerProofScope(unittest.TestCase):
+    NAME = "QZALPHA MINES CORP"
+
+    def _ev(self):
+        ev = LS.Evidence()
+        ev.proved["QZAX.US"] = [("tfsa", "questrade", "QZAX.TO",
+                                 frozenset([exact_name(self.NAME)]))]
+        return ev
+
+    def _res(self, scan):
+        return LS.resolve(scan, self._ev(), account="lira",
+                          broker="questrade")
+
+    @rule("CA-XLIST-02")
+    def test_a_usd_purchase_keeps_the_us_listing(self):
+        r = self._res(_scan("QZAX.US", "USD", self.NAME, bought=True))
+        self.assertEqual(r["corrected"], {})
+
+    @rule("CA-XLIST-02")
+    def test_reinvested_units_are_read_as_the_tsx_listing(self):
+        r = self._res(_scan("QZAX.US", "USD", self.NAME))
+        got = r["corrected"]["QZAX.US"]
+        self.assertEqual((got["symbol"], got["how"]), ("QZAX.TO", "broker"))
+
+    @rule("US-XLIST-02")
+    def test_same_scope_in_a_us_project(self):
+        r = self._res(_scan("QZAX.US", "USD", self.NAME, bought=True))
+        self.assertEqual(r["corrected"], {})
+
+    def test_scan_marks_a_purchase(self):
+        qh = ("Transaction Date,Settlement Date,Action,Symbol,Description,"
+              "Quantity,Price,Gross Amount,Commission,Net Amount,Currency,"
+              "Account #,Activity Type,Account Type\n")
+
+        def q(action, qty, act):
+            return (f"2026-09-10 12:00:00 AM,2026-09-10 12:00:00 AM,{action},"
+                    f"QZAX,{self.NAME} WE ACTED AS AGENT,{qty},10,0,0,0,USD,"
+                    f"55500002,{act},Individual RRSP\n")         # pii-ok
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "q.csv"
+            p.write_text(qh + q("REI", 1, "Dividend reinvestment")
+                         + q("Sell", -1, "Trades"))
+            self.assertFalse(LS.scan_questrade([p]).cands["QZAX.US"].bought)
+            p.write_text(qh + q("Buy", 10, "Trades"))
+            self.assertTrue(LS.scan_questrade([p]).cands["QZAX.US"].bought)
+
+
 if __name__ == "__main__":
     unittest.main()

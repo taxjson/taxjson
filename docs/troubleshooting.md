@@ -743,6 +743,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.23.0`
 - **Code:** `src/taxjson/lib/listing_suffix.py` — `resolve`, `scan_questrade`, `scan_rbc`, `why`, `listing on a`; `src/taxjson/bin/taxjson_run.py` — `stage_listing_suffix`, `_listing_suffix_stale`, `_ticker_map_named`, `stage_cross_listings`; `src/taxjson/bin/taxjson_ticker_map.py` — `named_symbols`, `_lookup_named`; `src/taxjson/bin/taxjson_brokerage.py` — `listing_fixes`; `src/taxjson/lib/cross_listings.py` — `joined_note`
 
+### "QZAX.US read as QZAX.TO: Questrade files the TSX listing on a USD row" for shares an account BOUGHT on a USD row (before release)
+- **Check:** the account's own Questrade (or RBC) rows of the bare ticker include a purchase on a USD trade row, and the evidence the warning names is another account's ("account tfsa's QZAX.US was read as QZAX.TO on its own evidence").
+- **Cause:** the same broker's proof in another account (GitHub issue #3) re-read every USD row of the ticker in a second account, a genuine USD purchase of the US listing too — while CA/US-XLIST-02 say a USD trade keeps the US listing.
+- **Fix:** upgrade: that proof now re-reads only units that came into the account by a transfer or a dividend reinvestment (and their sales); an account that bought the ticker on a USD trade row keeps `ROOT.US`. If those shares really are the TSX listing, write `TOBASE QZAX.US QZAX.TO` in `ticker.map`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/listing_suffix.py` — `resolve`, `Candidate`, `scan_questrade`, `scan_rbc`
+
 ### A correct `TOBASE QZB.US QZA.TO` for a move from IB to Questrade left "Info: 1 position(s) go short in acct's data (QZA.US)" (in a registered account "Warning: Short position: QZA.US …"), or a QZA.US position the broker never held
 - **Check:** `tjs transfers` shows QZB.US out of IB and QZA (the company's TSX root) into Questrade on a USD row the same week, under one name; the account also holds QZA.TO in CAD; ticker.map has `TOBASE QZB.US QZA.TO`; `tjs journals` lists the pair as refused by your ticker.map.
 - **Cause:** the map's line booked the out-leg as QZA.TO, but the in-leg kept the row currency's listing QZA.US (the account holds QZA.TO in CAD, and one native-currency pool cannot hold both), and the transfer pairing refused the pair because the map names the out-leg. The units left QZA.TO and arrived in QZA.US, a different security: in a registered account a withdrawal at fair value, in a taxable one a later sale read as a short with no purchase (in no total), with nothing on the console. Without the map line the pair was joined as QZB.US and QZA.US.

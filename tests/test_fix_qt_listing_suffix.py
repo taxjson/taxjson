@@ -436,11 +436,18 @@ class TestRunAccountOrder(_RunBase, unittest.TestCase):
 
 @rule("CA-XLIST-02")
 class TestRunProvedByTheSameBroker(_RunBase, unittest.TestCase):
-    """A second Questrade account with no transfer of its own buys
-    QZAX on a USD row and reinvests a dividend in it (REI): the
+    """A second Questrade account with no transfer of its own reinvests a
+    dividend in QZAX on a USD row (REI) and sells the unit there: the
     proof the qt account's transfer gave (Questrade files QZAX's TSX
     listing on USD rows) reads its rows as QZAX.TO too (GitHub
-    issue #3)."""
+    issue #3). A purchase on a USD trade row is not re-read
+    (TestRunBoughtKeepsTheUsListing)."""
+    LIRA = (qt("2026-09-29", "REI", "QZAX", "QZALPHA MINES CORP "
+               "REINV@U$10.00 REC 09/15/26 PAY 09/29/26", "1",
+               net="-10.00", act="Dividend reinvestment")
+            + qt("2026-10-05", "Sell", "QZAX", "QZALPHA MINES CORP WE "
+                 "ACTED AS AGENT", "-1", net="11.00", act="Trades",
+                 price="11", gross="11"))
 
     @classmethod
     def setUpClass(cls):
@@ -454,16 +461,7 @@ class TestRunProvedByTheSameBroker(_RunBase, unittest.TestCase):
             head + '[accounts.lira]\ntype = "sheltered"\n\n[accounts.ibm]'
             + accts)
         (cls.root / "inputs" / "lira").mkdir(parents=True)
-        (cls.root / "inputs" / "lira" / "q.csv").write_text(
-            QH + qt("2026-09-10", "Buy", "QZAX", "QZALPHA MINES CORP WE "
-                    "ACTED AS AGENT", "10", net="-100.00", act="Trades",
-                    price="10", gross="-100")
-            + qt("2026-09-29", "REI", "QZAX", "QZALPHA MINES CORP "
-                 "REINV@U$10.00 REC 09/15/26 PAY 09/29/26", "1",
-                 net="-10.00", act="Dividend reinvestment")
-            + qt("2026-10-05", "Sell", "QZAX", "QZALPHA MINES CORP WE "
-                 "ACTED AS AGENT", "-11", net="121.00", act="Trades",
-                 price="11", gross="121"))
+        (cls.root / "inputs" / "lira" / "q.csv").write_text(QH + cls.LIRA)
         cls.r = _run(cls.root, "run", "--no-input")
         cls.out = " ".join((cls.r.stdout + cls.r.stderr).split())
 
@@ -476,6 +474,29 @@ class TestRunProvedByTheSameBroker(_RunBase, unittest.TestCase):
         book = self.symbols("lira_questrade")
         self.assertEqual({s for a, s in book if a == "BUYSELL"}, {"QZAX.TO"})
         self.assertNotIn("Short position", self.out)
+
+
+@rule("CA-XLIST-02")
+class TestRunBoughtKeepsTheUsListing(TestRunProvedByTheSameBroker):
+    """The second account BUYS QZAX on a USD trade row: the US listing
+    (a USD purchase of the bare ticker; many Canadian companies trade
+    under the same ticker on the NYSE) — the other account's proof does
+    not re-read it (v0.24.1 review L8)."""
+    LIRA = (qt("2026-09-10", "Buy", "QZAX", "QZALPHA MINES CORP WE "
+               "ACTED AS AGENT", "10", net="-100.00", act="Trades",
+               price="10", gross="-100")
+            + qt("2026-10-05", "Sell", "QZAX", "QZALPHA MINES CORP WE "
+                 "ACTED AS AGENT", "-10", net="110.00", act="Trades",
+                 price="11", gross="110"))
+    test_rows_read_as_the_tsx_listing = None    # the parent's verdict
+
+    def test_a_purchase_keeps_the_us_listing(self):
+        self.assertEqual(self.r.returncode, 0, self.r.stderr[-3000:])
+        st = LS.read_state(LS.state_path(self.root / "work", "lira",
+                                         "questrade"))
+        self.assertNotIn("QZAX.US", st["corrected"])
+        book = self.symbols("lira_questrade")
+        self.assertEqual({s for a, s in book if a == "BUYSELL"}, {"QZAX.US"})
 
 
 RBC_H = ('"Date","Activity","Symbol","Symbol Description","Quantity",'
