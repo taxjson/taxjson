@@ -2180,6 +2180,16 @@ def group_inputs_detailed(account_dir: Path):
                 _die(str(not_utf8(csv, e)))
             except OSError:
                 pass
+            # IB's dividends report (a slip source, not activity) in an
+            # account's folder: said so, its name masked (IB names it
+            # after the account number).
+            from taxjson.lib.ib_dividends import is_dividends_report
+            if is_dividends_report(csv):
+                from taxjson.lib.brokerages.base import shown_name
+                _die(f"inputs/{account_dir.name}/{shown_name(csv)} is IB's "
+                     f"dividends report (the T5 / T3 income per payment), "
+                     f"not an activity export — move it to inputs/slips/, "
+                     f"where `taxjson slip-audit` reads it.")
             # On the console: the file as it is on disk (an export's
             # default name is its account number; masking it here hid
             # which of two such files is meant).
