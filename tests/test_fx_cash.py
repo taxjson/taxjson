@@ -177,9 +177,13 @@ class TestFxCashCli(unittest.TestCase):
             root = self._project(tmp)
             r = _cli(root, "fx-cash")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("1,000.00", r.stdout)          # net
-        self.assertIn("800.00", r.stdout)            # after the $200
-        self.assertIn("REPORTABLE", r.stdout)
+        self.assertIn("1,000.00", r.stdout)          # the raw net
+        # The default ledger is NOT RELIABLE: it says so first and shows
+        # no reportable figure (CA-FX-07).
+        self.assertTrue(r.stdout.startswith(
+            "FX on foreign cash: NOT RELIABLE for 2026"), r.stdout)
+        self.assertNotIn("REPORTABLE", r.stdout)
+        self.assertNotIn("800.00", r.stdout)
         self.assertIn("s.39(1.1)", r.stdout)
         self.assertNotIn("99,999", r.stdout)                # sheltered
 
@@ -188,8 +192,11 @@ class TestFxCashCli(unittest.TestCase):
             root = self._project(tmp)
             r = _cli(root, "fx-cash", "--json")
         doc = json.loads(r.stdout)
-        self.assertAlmostEqual(doc["net_gain"], 1000.0)
-        self.assertAlmostEqual(doc["reportable"], 800.0)
+        # The raw figures only under `unreliable_raw` (CA-FX-07).
+        self.assertIs(doc["reliable"], False)
+        self.assertNotIn("reportable", doc)
+        self.assertAlmostEqual(doc["unreliable_raw"]["net_gain"], 1000.0)
+        self.assertAlmostEqual(doc["unreliable_raw"]["reportable"], 800.0)
         self.assertEqual(doc["currency"], "CAD")
 
     def test_events_listing(self):
@@ -226,10 +233,15 @@ class TestFxCashCli(unittest.TestCase):
             with redirect_stdout(out):
                 _fx_cash_after_run(root, root / "work",
                                    root / "reports")
-            self.assertIn("reportable 800.00", out.getvalue())
+            # The default ledger is NOT RELIABLE: never a reportable
+            # figure, on the console or in the report (CA-FX-07).
+            self.assertIn("FX on foreign cash: NOT RELIABLE for 2026",
+                          out.getvalue())
+            self.assertNotIn("reportable 800.00", out.getvalue())
             rpt = (root / "reports" / "fx_cash.rpt").read_text()
-        self.assertIn("REPORTABLE", rpt)
-        self.assertIn("800.00", rpt)
+        self.assertTrue(rpt.startswith("FX on foreign cash: NOT RELIABLE"))
+        self.assertNotIn("REPORTABLE", rpt)
+        self.assertIn("1,000.00", rpt)                  # the raw net
 
 
 if __name__ == "__main__":

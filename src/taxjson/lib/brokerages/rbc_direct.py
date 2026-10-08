@@ -2843,3 +2843,30 @@ class RbcBrokerage(BaseBrokerage):
         if sell:
             out.append(sell)
         return out
+
+
+def rbc_cash_events(path) -> List[Dict[str, Any]]:
+    """The cash events of one RBC activity export for the FX-on-cash
+    ledger v2 (lib/cash_events, tax-logic CA-FX-07): one CASHMOVE per
+    cash row (`classify_rbc_row` 'cash': deposits, withdrawals and cash
+    transfers — WIR, DEP, TFI ...), signed, dated by its settlement date.
+    RBC's activity export carries no cash balance: a CASHBAL .tt line
+    gives the ledger one to reconcile against."""
+    from taxjson.bin.taxjson_brokerage import hash_broker_account
+    from taxjson.lib import cash_events as CE
+    ex = read_rbc_rows(Path(path))
+    name = shown_name(path)
+    out: List[Dict[str, Any]] = []
+    for r in ex.rows:
+        if classify_rbc_row(r) != 'cash' or abs(r.value) < 1e-9:
+            continue
+        cur = (r.currency or '').strip().upper()
+        if not cur:
+            continue
+        acct = hash_broker_account(r.account) if r.account.strip() else ''
+        desc = re.sub(r'\d', '#', (r.code or r.activity or '').strip())
+        ev = CE.move(r.date, cur, r.value, settle=r.settle or r.date,
+                     where=name, account=acct, desc=desc)
+        ev['line_where'] = f"{name}:{r.line}"
+        out.append(ev)
+    return out

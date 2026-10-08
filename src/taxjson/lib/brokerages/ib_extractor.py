@@ -3390,10 +3390,10 @@ class IbBrokerage(BaseBrokerage):
         statement_period_end = ''
 
         # Explicit currency conversions (Trades / Forex rows, e.g.
-        # USD.CAD). Counted, never translated: no downstream consumer
-        # models a cash conversion as a disposition (`taxjson fx-cash`
-        # reconstructs FX cash gains from security cash flows only —
-        # KNOWN_ISSUES "IB Trades/Forex conversions are not modeled").
+        # USD.CAD). Counted, never a row of the position book: the
+        # FX-on-cash ledger v2 reads them from the statement itself
+        # (ib_cash_events; KNOWN_ISSUES "IB `Trades / Forex`
+        # conversions are not in the position books").
         # Emitting them as a BUYSELL of a phantom `USD`/`CASH.USD`
         # asset would corrupt the position book, so they get one
         # explicit note instead of vanishing into the asset filter.
@@ -5986,3 +5986,147 @@ class IbBrokerage(BaseBrokerage):
         else:
             self.emit_skip_summary(shown_name(path))
         return transactions
+
+
+# ---------------------------------------------------------------- cash events
+# The FX-on-cash ledger v2 (lib/fx_cash_v2, tax-logic CA-FX-07 /
+# US-FX-03) reads what a statement says about CASH that the position book
+# leaves out: Trades/Forex conversions, Deposits & Withdrawals, and the
+# Cash Report's Starting/Ending Cash per currency.
+_IB_INTERNAL_RE = re.compile(r'^\s*Internal Transfer\b', re.IGNORECASE)
+_IB_ADVANCE_RE = re.compile(r'^\s*(?:Adjustment:\s*Deposit Advance|'
+                            r'Cancellation\b)', re.IGNORECASE)
+_IB_CUR_RE = re.compile(r'^[A-Z]{3}$')
+
+
+def ib_cash_events(path) -> List[Dict[str, Any]]:
+    """The cash events of one IB activity statement (lib/cash_events):
+    FXCONV per Forex order (its commission a FLOW when charged in a
+    currency), CASHMOVE per Deposits & Withdrawals row (internal
+    transfers and deposit advances marked for pairing), CASHBAL from the
+    Cash Report (Starting Cash at the end of the day before the period,
+    Ending Cash at its last day) and Forex Balances as a cross-check
+    (`note` events). Rows carry no account: a combined statement's Cash
+    Report is one balance."""
+    from taxjson.lib import cash_events as CE
+    from taxjson.lib.brokerages.base import read_broker_text
+    name = shown_name(path)
+    text = read_broker_text(path)
+    headers: Dict[str, List[str]] = {}
+    out: List[Dict[str, Any]] = []
+    period = None
+    cash: Dict[Tuple[str, str], float] = {}
+    fxbal: Dict[str, float] = {}
+
+    def _n(v: str, what: str, where: str) -> float:
+        return parse_strict_number(v, field=what, where=where,
+                                   allow_blank=True, blank=0.0)
+
+    for lineno, row in enumerate(csv.reader(io.StringIO(text)), 1):
+        if len(row) < 3:
+            continue
+        sec, kind = row[0].strip(), row[1].strip()
+        if kind == 'Header':
+            headers[sec] = row[2:]
+            continue
+        if kind != 'Data':
+            continue
+        h = headers.get(sec) or []
+        d = dict(zip(h, row[2:]))
+        where = f"{name}:{lineno}"
+        if sec == 'Statement' and d.get('Field Name') == 'Period':
+            period = _ib_period(d.get('Field Value', ''))
+        elif sec == 'Trades' and d.get('Asset Category') == 'Forex' \
+                and d.get('DataDiscriminator', 'Order') == 'Order':
+            sym = (d.get('Symbol') or '').strip()
+            base, _, quote = sym.partition('.')
+            if not base or not quote:
+                raise BrokerageParseError(
+                    f"{where}: Forex symbol {sym!r} is not BASE.QUOTE")
+            day, _t = _ib_split_datetime(d.get('Date/Time', ''), where)
+            qty = _n(d.get('Quantity', ''), 'Quantity', where)
+            proceeds = _n(d.get('Proceeds', ''), 'Proceeds', where)
+            if abs(qty) < 1e-12 or abs(proceeds) < 1e-12:
+                continue
+            if qty > 0:          # bought BASE, paid QUOTE
+                out.append(CE.conv(day, quote, proceeds, base, qty,
+                                   where=where, desc=f"Forex {sym}"))
+            else:                # sold BASE, received QUOTE
+                out.append(CE.conv(day, base, qty, quote, proceeds,
+                                   where=where, desc=f"Forex {sym}"))
+            comm_col = next((c for c in h
+                             if re.match(r'^Comm in [A-Z]{3}$', c or '')),
+                            None)
+            if comm_col:
+                comm, ccur = _n(d.get(comm_col, ''), comm_col, where), \
+                    comm_col[-3:]
+            else:
+                comm = _n(d.get('Comm/Fee', ''), 'Comm/Fee', where)
+                ccur = (d.get('Currency') or quote).strip()
+            if abs(comm) > 1e-9:
+                out.append(CE.flow(day, ccur, comm, where=where,
+                                   desc=f"Forex {sym} commission"))
+        elif sec == 'Deposits & Withdrawals':
+            cur = (d.get('Currency') or '').strip()
+            if not _IB_CUR_RE.match(cur):
+                continue                         # Total rows
+            desc = (d.get('Description') or '').strip()
+            day = (d.get('Settle Date') or d.get('Date') or '').strip()
+            if not re.match(r'^\d{4}-\d{2}-\d{2}$', day):
+                raise BrokerageParseError(
+                    f"{where}: Deposits & Withdrawals date {day!r} is not "
+                    f"YYYY-MM-DD")
+            amt = _n(d.get('Amount', ''), 'Amount', where)
+            if abs(amt) < 1e-9:
+                continue
+            internal = ('transfer' if _IB_INTERNAL_RE.match(desc) else
+                        'advance' if _IB_ADVANCE_RE.match(desc) else '')
+            # The description can name a person or an account: keep only
+            # its leading words, digits masked.
+            short = re.sub(r'\d', '#', ' '.join(desc.split()[:3]))
+            ev = CE.move(day, cur, amt, where=name, desc=short,
+                         internal=internal)
+            ev['line_where'] = where
+            out.append(ev)
+        elif sec == 'Cash Report':
+            line = (d.get('Currency Summary') or '').strip()
+            cur = (d.get('Currency') or '').strip()
+            if line in ('Starting Cash', 'Ending Cash') \
+                    and _IB_CUR_RE.match(cur):
+                cash[(line, cur)] = cash.get((line, cur), 0.0) + _n(
+                    d.get('Total', ''), 'Total', where)
+        elif sec == 'Forex Balances':
+            cur = (d.get('Currency') or d.get('Description') or '').strip()
+            if _IB_CUR_RE.match(cur):
+                fxbal[cur] = fxbal.get(cur, 0.0) + _n(
+                    d.get('Quantity', ''), 'Quantity', where)
+    if cash and period is None:
+        raise BrokerageParseError(
+            f"{name}: a Cash Report but no Statement Period — the "
+            f"balances cannot be dated")
+    if period is not None:
+        start, end = period
+        # The period itself: a row of this statement dated before it
+        # (a correction IB posts with the original date) moved its cash
+        # inside it (lib/fx_cash_v2 dates the cash there).
+        out.append({"kind": "PERIOD", "date": start.isoformat(),
+                    "settle": start.isoformat(), "start": start.isoformat(),
+                    "end": end.isoformat(), "where": name,
+                    "origin": "broker"})
+        before = (start - timedelta(days=1)).isoformat()
+        for (line, cur), v in sorted(cash.items()):
+            day = before if line == 'Starting Cash' else end.isoformat()
+            ev = CE.balance(day, cur, v, where=f"{name}: Cash Report "
+                            f"{line}", statement=name)
+            out.append(ev)
+        for cur, q in sorted(fxbal.items()):
+            ending = cash.get(('Ending Cash', cur))
+            if ending is not None and abs(ending - q) > 1.0:
+                out.append({"kind": "NOTE", "date": end.isoformat(),
+                            "settle": end.isoformat(), "currency": cur,
+                            "where": name,
+                            "text": f"{name}: Forex Balances {cur} "
+                                    f"{q:,.2f} differs from the Cash "
+                                    f"Report's Ending Cash {ending:,.2f}",
+                            "origin": "broker"})
+    return out

@@ -226,6 +226,18 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
                    "de minimis).",
          "usa": "true: an end-of-run FX-on-cash report (§988, ordinary "
                 "income)."}),
+    Key("fx_cash_ledger", '"v1"',
+        "The FX-on-cash ledger: v1 (the default) reads only trades and "
+        "income and is NOT RELIABLE — never a filing figure; v2 (opt-in, "
+        "under audit) also reads conversions, deposits/withdrawals and "
+        "statement balances, models margin debt and refuses instead of "
+        "guessing.",
+        inline="v1 | v2"),
+    Key("fx_cash_inflow_cost", '"declared"',
+        "Ledger v2: money from outside the books needs a declared cost "
+        "(a .tt CASHMOVE line); \"spot\" takes the day's rate for every "
+        "undeclared inflow instead.",
+        inline="declared | spot"),
     Key("foreign_return_of_capital", '"dividend"',
         "A non-Canadian issuer's return of capital (IB): a dividend "
         "(s.90(1), the default), or \"acb\" to lower the shares' ACB.",
@@ -307,7 +319,8 @@ ACCOUNT_SPEC: Tuple[Key, ...] = (
 SETTINGS_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Project", ("year", "country", "province", "tax_date",
                  "local_timezone", "prior_year_record")),
-    ("Currencies", ("base_currency", "source_currencies", "fx_cash_gains")),
+    ("Currencies", ("base_currency", "source_currencies", "fx_cash_gains",
+                    "fx_cash_ledger", "fx_cash_inflow_cost")),
     ("Options", ("option_premium_timing", "option_grant_timing_since",
                  "option_buyback_loss_superficial", "leaps_months")),
     ("Income", ("corporate_distributions", "foreign_return_of_capital",

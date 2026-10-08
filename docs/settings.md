@@ -94,11 +94,25 @@ The keys come in groups, in the order `taxjson init` writes them.
 - **Example:** `source_currencies = ["USD", "GBP"]`
 
 #### `fx_cash_gains`
-- **Meaning:** `true` prints the FX-on-foreign-cash report at the end of `taxjson run` (Canada s.39(1.1) with its $200 exemption; US §988, ordinary income). `taxjson fx-cash` prints it on demand either way.
+- **Meaning:** `true` prints the FX-on-foreign-cash report at the end of `taxjson run` (Canada s.39(1.1) with its $200 exemption; US §988, ordinary income) and writes `reports/fx_cash.rpt`. `taxjson fx-cash` prints it on demand either way. With the default ledger the note says NOT RELIABLE, never a reportable figure (see `fx_cash_ledger`).
 - **Default:** `false`.
 - **Country:** both.
 - **Change it when:** you hold material foreign cash and want the figure every run.
 - **Example:** `fx_cash_gains = true`
+
+#### `fx_cash_ledger`
+- **Meaning:** which FX-on-cash ledger `taxjson fx-cash`, `taxjson sum`, the checklist and `close-year` use. `v1` reads only the trades and income of the taxable books (no conversion, deposit, withdrawal, margin balance or opening pool), so every output says NOT RELIABLE and shows no reportable figure. `v2` (opt-in, under audit) also reads the cash events — IB Forex trades, Deposits & Withdrawals and Cash Report balances; RBC cash rows; Kraken fiat funding, fiat conversions and ledger balances; Coinbase fiat and stablecoin moves and conversions; and the `.tt` lines `FXCONV`, `CASHMOVE`, `CASHOPEN`, `CASHBAL` — models a negative broker balance as a debt in that currency, opens the year with the pool `close-year` recorded for the year before (or `CASHOPEN` lines), reconciles each broker account to its statement balances (tolerance 1.00 unit), and when anything is missing says NOT COMPUTED with each problem (date, account, amount) instead of a figure. Even a computed v2 figure is labelled "v2 (opt-in, under audit)" and the checklist's fx-cash step stays at attention until you mark that figure reviewed (`taxjson checklist --done fx-cash`). `taxjson fx-cash --ledger v1|v2` overrides it for one run (`--cash-events` lists what v2 read). The code is `src/taxjson/lib/fx_cash_v2.py` — `build`; `src/taxjson/lib/cash_events.py` — `collect`.
+- **Default:** `"v1"`.
+- **Country:** both.
+- **Change it when:** you want to audit the full ledger on your books; expect to add `.tt` lines for what no export carries.
+- **Example:** `fx_cash_ledger = "v2"`
+
+#### `fx_cash_inflow_cost`
+- **Meaning:** ledger v2 only: what foreign cash that comes into the books from outside them (a deposit, a transfer in) costs when no `.tt` `CASHMOVE` line declares it. `declared` refuses it (NOT COMPUTED, naming the line to add); `spot` takes that day's rate for every such inflow — an explicit choice, listed in the report beside each move.
+- **Default:** `"declared"`.
+- **Country:** both.
+- **Change it when:** the foreign cash you deposit was bought on the day (so the day's rate is its cost) and you do not want a line per deposit.
+- **Example:** `fx_cash_inflow_cost = "spot"`
 
 #### Options
 
@@ -555,6 +569,11 @@ Hand-entered rows, any `*.tt` file in `inputs/<account>/`. One space-separated l
 - **Meaning:** a filing position against ONE superficial-loss denial (US: one wash-sale disallowance): that sale's loss stays allowed, and no ACB (US: basis) is raised for it on the replacement (no double benefit; US: no holding period carried either). DATE is the sale's trade or settlement date, SYMBOL its symbol as the books spell it (`taxjson wash-sales` shows it), QTY the units sold — needed only when two denied sales of the symbol share the day. The replacement units the denial would use stay used, so every other sale's verdict is unchanged. It is never a row of the books: `taxjson run` reads every account's lines into `work/loss_overrides.json` and gives them to every engine run of the books (`--loss-overrides`). A line that names no denied sale, or two, stops the run naming it (with that day's trades in the account); a malformed line, a line in a sheltered account and two lines naming one sale are refused before the books are built. Every position is a Warning on every run and is listed in `taxjson sum` (FILING POSITIONS; `filing_positions` in `--json`, with the denial the rule would make and why), `taxjson wash-sales` and the checklist's filing-positions step. It is your position, not the rule's test (tax-logic CA-SL-18 / US-WASH-25): delete the line to apply the rule. The parser is `src/taxjson/lib/loss_overrides.py` — `parse_line`, `read_project`.
 - **Example:** `ALLOWLOSS 2025-12-19 ZZQ.US reason="the RRSP call was bought 32 days after the trade date"`
 
+#### `FXCONV`, `CASHMOVE`, `CASHOPEN`, `CASHBAL`, `CASHBOOK`
+- **Form:** `FXCONV DATE FROM AMOUNT TO AMOUNT [value=BASE] [at=BOOK]`; `CASHMOVE DATE CUR SIGNED-AMOUNT HOW [at=BOOK]` with HOW one of `own`, `kept`, `spot`, `cost=BASE`, `proceeds=BASE`; `CASHOPEN DATE CUR SIGNED-UNITS BASE-COST [at=BOOK]`; `CASHBAL DATE CUR BALANCE [at=BOOK]` (no time column); `CASHBOOK BOOK` (no date), in the folder of a TAXABLE account.
+- **Meaning:** cash events for the FX-on-cash ledger v2 (`fx_cash_ledger = "v2"`), never rows of the books; `taxjson run` only checks their form. `FXCONV`: a currency conversion no export carries (both amounts positive: what left, what arrived; `value=` the base-currency value when neither side is the base currency, else the day's rate prices it). `CASHMOVE`: cash in (+) or out (−) of an account. When a broker export carries the same move (same account folder, date, currency and amount) the line DECLARES what it was instead of adding one: `cost=` what money coming in from outside the books cost you (in the base currency), `spot` the day's rate, `own` a move between two of your accounts in the books (the units and their cost travel; the out must come before the in), `kept` money going out that you still hold in that currency elsewhere (it leaves at its cost, no gain), `proceeds=` what money going out fetched when converted or spent (a disposition). `CASHOPEN`: an account's SETTLED balance at the start of the year, dated Jan 1, with its cost (a negative balance is a debt; the cost is then what the borrowed units were worth when borrowed); `close-year` with ledger v2 records the next year's opening, so these lines are needed only for a first year. `CASHBAL`: the balance a statement shows at the end of that day (trade-date basis) — the ledger reconciles to it; an account with no statement balance (RBC, Webull, Coinbase, a bank) needs one on or after its last event of the year. `at=` names the account's cash book as `taxjson fx-cash --ledger v2` prints it (`ib`, `rbc:3f2a`, or any word for a book kept by hand such as `bank`); without it the line goes to the book the file's `CASHBOOK` line names, else to the folder's only broker account. `CASHBOOK`: whose cash the file's rows move — its trades, income and cash lines — in a folder holding several broker accounts (a Webull `.tt` beside IB and RBC exports: `CASHBOOK webull`); the ledger never guesses it from the file's name, and a file whose rows are several accounts' is split. A row of a broker statement dated before the statement's period (a correction posted with the original date) moved its cash inside the period, and is walked at the period's first day. The parser is `src/taxjson/lib/cash_events.py` — `parse_line`, `FORMS`.
+- **Example:** `CASHMOVE 2025-03-03 USD 5000 cost=6850.00` (a deposit the IB statement shows, declared); `CASHMOVE 2025-06-02 USD -2000 kept` (withdrawn to your own US-dollar bank account); `CASHOPEN 2025-01-01 USD 1200.00 1610.40 at=ib`; `CASHBAL 2025-12-31 USD 340.12 at=webull`; `CASHBOOK webull`
+
 #### `SPLIT`
 - **Form:** `SPLIT DATE TIME OLD NEW RATIO`
 - **Meaning:** a split or consolidation (RATIO new shares per old: `2`, or `0.1` for one-for-ten) or, with RATIO `1` and a new symbol, a dated rename.
@@ -703,7 +722,7 @@ Country: `gift` is Canada only (a disposition at fair value, s.69(1)(b)); a US p
 
 ## filed/YEAR.json: close-year locks
 
-Written by `taxjson close-year`: the closed year's sales, year-end positions and cost, its country and date basis, and the carry-forwards (net capital loss or US short/long-term carryover; Canada's minimum tax carryover). Read by `taxjson check-filed`, `taxjson handoff`, `taxjson carryover`, `taxjson option-boundary` and the next year's estimate (through `prior_year_record`). Commit it; do not edit it. A lock closed under the other country's rules is refused.
+Written by `taxjson close-year`: the closed year's sales, year-end positions and cost, its country and date basis, and the carry-forwards (net capital loss or US short/long-term carryover; Canada's minimum tax carryover); with `fx_cash_ledger = "v2"` and a computed ledger, `fx_cash_v2` — each account's foreign cash and its cost at Dec 31, each debt — the next year's opening pool. Read by `taxjson check-filed`, `taxjson handoff`, `taxjson carryover`, `taxjson option-boundary` and the next year's estimate (through `prior_year_record`). Commit it; do not edit it. A lock closed under the other country's rules is refused.
 
 ---
 

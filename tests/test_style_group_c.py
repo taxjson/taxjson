@@ -247,26 +247,25 @@ class TestFxCashStyle(unittest.TestCase):
                     r = project(country).run(*args)
                     self.assertEqual(r.returncode, 0, r.stderr)
                     assert_styled(self, r.stdout)
+                    # The NOT RELIABLE line first (CA-FX-07 / US-FX-03).
                     self.assertTrue(r.stdout.startswith(
-                        "FX GAINS ON CASH — "))
+                        "FX on foreign cash: "))
+                    self.assertIn("\n\nFX GAINS ON CASH — ", r.stdout)
                     self.assertNotIn("WARNING:", r.stdout)
 
-    def test_last_line_the_checklist_reads(self):
-        # `taxjson checklist` runs fx-cash unwrapped and shows its last
-        # line: the whole CAVEAT sentence (or the no-activity line).
-        for country, want in (
-                ("canada", "CAVEAT: explicit currency conversions and "
-                           "cash deposits/withdrawals are not in the "
-                           "ledger, so this figure can be wrong in either "
-                           "direction — not only understated. Treat it as "
-                           "a starting point for the s.39(1.1) "
-                           "calculation, not the answer."),
-                ("usa", "No foreign-currency cash activity in taxable "
-                        "accounts this year.")):
+    def test_first_line_is_the_caveat(self):
+        # `taxjson fx-cash` says first, unwrapped, that the default
+        # ledger's figure is not for filing (the checklist reads --json).
+        for country in ("canada", "usa"):
             with self.subTest(country=country):
                 r = project(country).run("fx-cash", TAXJSON_WIDTH="0")
                 self.assertEqual(r.returncode, 0, r.stderr)
-                self.assertEqual(r.stdout.splitlines()[-1], want)
+                first = r.stdout.splitlines()[0]
+                self.assertTrue(first.startswith(
+                    "FX on foreign cash: "), first)
+                self.assertTrue(
+                    "NOT RELIABLE for " in first
+                    or "no foreign-currency cash flow" in first, first)
 
 
 class TestWashScopeHelpers(unittest.TestCase):
