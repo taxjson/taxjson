@@ -238,13 +238,18 @@ def _wording_only(na: Set[Tuple[str, ...]], nb: Set[Tuple[str, ...]],
     VOTING, NON VOTING, RESTRICTED) — possibly a broker's style for an
     issuer with one listed class — else None. Never when either
     listing is a depositary receipt (a CDR is its own security:
-    cross_listings.receipt_why), when the names state any other share
+    cross_listings.shown_apart, receipt_why), when the names state any other share
     designator or class letter, or when the listings' names anywhere in
     the exports state two voting classes or a class letter (an issuer
     with two classes): those stay apart, as do different companies."""
     from taxjson.lib import cross_listings as XL
     from taxjson.lib.symbol_codes import _FORM, exact_marks
-    if XL.receipt_why(a, all_a | na, written=a) \
+    # What the exports show apart is never a pair (the scan's own test,
+    # cross_listings.shown_apart: a Canadian line that is a receipt,
+    # names of two companies); a receipt word on either side too (an
+    # ADR's US line).
+    if XL.shown_apart(a, b, {a: all_a | na, b: all_b | nb}) \
+            or XL.receipt_why(a, all_a | na, written=a) \
             or XL.receipt_why(b, all_b | nb, written=b):
         return None
     every = all_a | all_b | na | nb

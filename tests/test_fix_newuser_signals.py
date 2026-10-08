@@ -356,6 +356,21 @@ class TestRadarJudgesTheTradesOwnNames(unittest.TestCase):
                                            "ZZC.TO"))
 
     @rule("CA-XLIST-05")
+    def test_what_the_scan_shows_apart_is_never_possible(self):
+        """The "possible" rule reuses the scan's test of two listings the
+        exports show apart (cross_listings.shown_apart)."""
+        from taxjson.lib import cross_listings as XL
+        com = {exact_name("ZZCELL INC COM")}
+        sv = {exact_name("ZZCELL INC SUBORD VTG SHS")}
+        with mock.patch.object(XL, "shown_apart",
+                               return_value="ZZC.TO is a receipt") as m:
+            self.assertIsNone(XR._wording_only(com, sv, com, sv, "ZZC.US",
+                                               "ZZC.TO"))
+        m.assert_called_once()
+        self.assertEqual(XL.shown_apart("ZZC.US", "ZZC.TO",
+                                        {"ZZC.US": com, "ZZC.TO": sv}), "")
+
+    @rule("CA-XLIST-05")
     def test_different_companies_still_dropped_in_a_run(self):
         margin = (qt_row("2025-11-03", "2025-11-04", "Buy", "ZZC", 100, 50,
                          "USD", "ZZCELL INC COM")
