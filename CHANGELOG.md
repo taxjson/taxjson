@@ -17,6 +17,17 @@
 
 ### Fixed
 
+- **A Questrade internal code of a spun-off warrant no longer resolves to the
+  common stock** (GitHub issue #4). A code whose descriptions state a
+  warrant, right, unit, preferred share or class letter anywhere is never
+  booked as a listing whose name states none (and the other way round): one
+  plain-worded row no longer decides. The account's own later trade under the
+  real ticker, described like the code's rows, resolves the code first. The
+  corporate-action stage books a spinoff chain under the code as the
+  symbol-code stage resolved it, so the run no longer prints a resolution and
+  a "booked under Questrade's INTERNAL code" warning for the same code, and
+  the chain and the later sale meet in one position.
+
 - **A `DISTINCT` line written with the bare US ticker answers the pair**:
   `DISTINCT QZX QZX.TO` also keeps `QZX.US` and `QZX.TO` apart (the books
   spell a broker's bare US ticker `.US`), so the cross-listing loss

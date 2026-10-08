@@ -609,11 +609,16 @@ def journal_codes(paths, *, helper=None) -> Dict[str, Dict[str, Any]]:
 def scan_code_uses(paths, *, helper=None) -> list:
     """[symbol_codes.CodeUse] for the internal codes in one account's
     exports that the account's own trades and transfers do not resolve
-    (the rows _resolve_symbol would keep the code on): the description
-    key, the row currencies (listing currency for an EXCHANGE RATE row)
-    and each transfer-in's (date, quantity) — what `taxjson run` needs
-    to infer the ticker from the project's other exports."""
-    from taxjson.lib.symbol_codes import CodeUse, desc_cut, questrade_name
+    (the rows _resolve_symbol would keep the code on), and for every code
+    that carries a spinoff / rights leg (taxjson-corp-actions books the
+    chain under the code-level resolution): the description key, every
+    distinct description, the row currencies (listing currency for an
+    EXCHANGE RATE row), each transfer-in's (date, quantity), and the
+    listings the account's own rows name for some of the code's rows
+    (`own`) — what `taxjson run` needs to resolve the code."""
+    from taxjson.lib.symbol_codes import (CodeUse, desc_cut,
+                                          questrade_name,
+                                          questrade_own_name)
     helper = helper or QuestradeBrokerage()
     paths = [Path(p) for p in paths]
     if not any(_INTERNAL_CODE_RE.match(
@@ -621,7 +626,17 @@ def scan_code_uses(paths, *, helper=None) -> list:
             for p in paths for _ln, r in _read_qt_rows(p)):
         return []                    # the common case: no code at all
     ctx = build_qt_account_context(paths, helper=helper)
+    # listing -> the description keys the account's own rows give it
+    keys_of: Dict[str, List[str]] = {}
+    for key, hits in sorted(ctx.desc_to_ticker.items()):
+        for s_, c_ in sorted(hits):
+            keys_of.setdefault(helper.apply_currency_suffix(s_, c_),
+                               []).append(key)
     uses: Dict[str, Any] = {}
+    descs: Dict[str, List[str]] = {}
+    own: Dict[str, Dict[str, List[str]]] = {}
+    legs: set = set()
+    names: Dict[str, Tuple[str, str]] = {}   # code -> (name, desc)
     for k in ctx.files:
         for _ln, row in _read_qt_rows(Path(k)):
             sym = (row.get('Symbol') or '').strip().lstrip('.').upper()
@@ -633,9 +648,29 @@ def scan_code_uses(paths, *, helper=None) -> list:
             act = (row.get('Activity Type') or '').strip()
             action = _canon_action(row.get('Action'))
             transfer = act == 'Transfers' or action == 'TF6'
-            if (sym in ctx.journal_codes
-                    or ctx.key_candidates(_get_desc_key(desc),
-                                          transfer_row=transfer)):
+            leg = bool(_QT_CA_LEG_RE.search(desc))
+            d1 = ' '.join(desc.split())
+            if d1 and d1 not in descs.setdefault(sym, []):
+                descs[sym].append(d1)
+            if leg:
+                legs.add(sym)
+                if sym not in names:
+                    names[sym] = (questrade_own_name(desc), '')
+            elif sym not in names or not names[sym][1]:
+                names[sym] = (questrade_name(desc), desc)
+            # A spinoff leg's own name, never its parent's (the key
+            # _get_desc_key reads from "... FROM SEC# n <PARENT> REC").
+            key = (_get_desc_key(questrade_own_name(desc)) if leg
+                   else _get_desc_key(desc))
+            cands = (set() if sym in ctx.journal_codes
+                     else ctx.key_candidates(key, transfer_row=transfer))
+            for s_, c_ in sorted(cands):
+                lst = helper.apply_currency_suffix(s_, c_)
+                ks = own.setdefault(sym, {}).setdefault(lst, [])
+                if not ks:
+                    ks.append(key)
+                    ks.extend(x for x in keys_of.get(lst, ()) if x != key)
+            if sym in ctx.journal_codes or (cands and not leg):
                 continue
             cur = (row.get('Currency') or '').strip().upper()
             if cur == 'CAD' and _FX_SETTLED_RE.search(desc):
@@ -662,13 +697,16 @@ def scan_code_uses(paths, *, helper=None) -> list:
                 (row.get('Transaction Date') or '').strip(), *_DATE_FMTS)
             if dt is not None and q > 1e-9:
                 u.arrivals.append((dt.strftime('%Y-%m-%d'), q))
-    for k in ctx.files:                  # a name from any row of the code
-        for _ln, row in _read_qt_rows(Path(k)):
-            sym = (row.get('Symbol') or '').strip().lstrip('.').upper()
-            if sym in uses and not uses[sym].name:
-                desc = row.get('Description') or ''
-                uses[sym].name = questrade_name(desc)
-                uses[sym].name_cut = desc_cut(desc, uses[sym].name)
+    for sym, u in uses.items():
+        # A name from any row of the code: a row of its own wording
+        # first, else a spinoff leg's own name (never the parent's).
+        if not u.name and sym in names:
+            nm, d = names[sym]
+            u.name = nm
+            u.name_cut = desc_cut(d, nm) if d else False
+        u.descriptions = list(descs.get(sym, ()))
+        if sym in legs or u.rows:
+            u.own = dict(own.get(sym, {}))
     return [uses[c] for c in sorted(uses)]
 
 
@@ -1138,11 +1176,17 @@ class QuestradeBrokerage(BaseBrokerage):
         _jc = self._ctx.journal_codes.get(sym)
         if _jc is not None:
             return str(_jc['symbol']), str(_jc['currency'])
+        # The code-level resolution (`taxjson run`, lib/symbol_codes)
+        # first: one code is one security, so every row of it is booked
+        # under ONE listing — a row whose own description matches
+        # another listing (a warrant code's plain-worded row, the
+        # common's name) does not split it (GitHub issue #4).
+        inferred = (self._inferred_code(sym)
+                    if _INTERNAL_CODE_RE.match(sym) else None)
+        if inferred is not None:
+            return inferred
         if len(cands) == 1:
             return next(iter(cands))
-        inferred = self._inferred_code(sym)
-        if not cands and inferred is not None:
-            return inferred
         if len(cands) > 1:
             key = (sym, tuple(sorted(cands)))
             if ticker_map_renames(self.apply_currency_suffix(sym, currency)):

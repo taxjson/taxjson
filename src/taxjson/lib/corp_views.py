@@ -133,6 +133,9 @@ def _current_events(root: Path, acct: str) -> Dict[str, Any]:
             encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError):       # re-audit A2-0795
         return out
+    from taxjson.lib.symbol_codes import SUFFIX
+    _codes = root / "work" / f"{acct}{SUFFIX}"
+    _codes = _codes if _codes.is_file() else None
     groups: Dict[str, List[Path]] = {}
     for ln in lines:
         kind, _, name = ln.partition("/")
@@ -146,7 +149,8 @@ def _current_events(root: Path, acct: str) -> Dict[str, Any]:
         try:
             with contextlib.redirect_stderr(io.StringIO()):
                 evs = combine_broker_copies(
-                    extract_events(EXTRACTORS[kind], paths, acct),
+                    extract_events(EXTRACTORS[kind], paths, acct,
+                                   symbol_codes=_codes),
                     stream=io.StringIO())
         except Exception:
             continue
