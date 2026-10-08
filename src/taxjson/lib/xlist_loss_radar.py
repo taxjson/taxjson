@@ -198,11 +198,14 @@ def _scoped_names(cache: Path, accounts: List[str],
 
 
 def _source_brokers(cache: Path, accounts: Iterable[str]
-                    ) -> Dict[Tuple[str, str], str]:
-    """{(account, export file name): broker} from each parsed export's
-    metadata (the books' rows carry the file they came from)."""
+                    ) -> Dict[str, Dict[str, Optional[str]]]:
+    """{account: {export file's source id: broker}} from each parsed
+    export's metadata: the books' rows carry the file they came from as
+    the parse showed it (export_coverage.file_source_id: an account id
+    in the name masked), never its real name."""
     from taxjson.lib.brokerages.detect import DISPLAY_NAMES
-    out: Dict[Tuple[str, str], str] = {}
+    from taxjson.lib.export_coverage import add_source
+    out: Dict[str, Dict[str, Optional[str]]] = {}
     for acct in accounts:
         files = [(b, cache / f"{acct}_{b}.json") for b in DISPLAY_NAMES]
         files += [(p.name[len(acct) + 1:-len(".json")], p)
@@ -217,7 +220,8 @@ def _source_brokers(cache: Path, accounts: Iterable[str]
                 continue
             for f in md.get("input_files") or []:
                 if f:
-                    out.setdefault((acct, Path(str(f)).name), b)
+                    add_source(out.setdefault(acct, {}),
+                               Path(str(f)).name, b)
     return out
 
 
@@ -395,16 +399,17 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
     brokers: Dict[Tuple[str, str], str] = {}
     # The broker of a books row: its export file (`source`); a gains row
     # through its books row's id.
-    src_of: Dict[Tuple[str, str], str] = {}
+    from taxjson.lib.export_coverage import source_broker
+    src_of: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for rows_ in rows_by_sym.values():
         for r in rows_:
             if r.get("id"):
-                src_of[(str(r.get("account") or ""), str(r["id"]))] = \
-                    Path(str(r.get("source") or "")).name
+                src_of[(str(r.get("account") or ""), str(r["id"]))] = r
 
-    def _names_for(acct_: str, sym: str, src: str) -> Set[Tuple[str, ...]]:
+    def _names_for(acct_: str, sym: str, row: Optional[Dict[str, Any]]
+                   ) -> Set[Tuple[str, ...]]:
         by_b, by_a = scoped
-        b_ = brokers.get((acct_, src)) if src else None
+        b_ = source_broker(brokers.get(acct_, {}), row) if row else None
         return (by_b.get((acct_, b_, sym)) if b_ else None) \
             or by_a.get((acct_, sym)) or names.get(sym, set())
 
@@ -443,12 +448,11 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
             # account and broker), not every name the project's exports
             # give either listing.
             na = _names_for(acct, a, src_of.get(
-                (acct, str(loss.get("id") or "")), ""))
+                (acct, str(loss.get("id") or ""))))
             nb: Set[Tuple[str, ...]] = set()
             for r in buys:
                 ra = str(r.get("account") or "")
-                nb |= _names_for(ra, b, Path(str(r.get("source") or "")
-                                             ).name)
+                nb |= _names_for(ra, b, r)
             verdict = XL._names_verdict(na, nb, shown)
             pair_names: Tuple[str, str] = ("", "")
             if verdict:

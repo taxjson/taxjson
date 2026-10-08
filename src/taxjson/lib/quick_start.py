@@ -587,12 +587,8 @@ def evaluate(root: Path, today: Optional[date] = None) -> Guide:
             res = fn(ctx)
         except Exception as e:                          # noqa: BLE001
             return State("todo", f"could not check ({e})")
-        ov = overrides.get(sid) or {}
-        if ov.get("status") in ("done", "skipped"):
-            res.override = ov["status"]
-            res.note = ov.get("note") or ""
-            if res.status in ("attention", "blocked"):
-                res.finding = res.detail
+        # A DONE mark answers the questions it recorded only.
+        cl.apply_override(res, overrides.get(sid) or {})
         return _from_checklist(res, ran)
 
     def option_question(ctx_) -> Any:
@@ -600,7 +596,8 @@ def evaluate(root: Path, today: Optional[date] = None) -> Guide:
         rows = OB.project_question_rows(root, cfg or {}, today=today)
         if rows:
             return cl.Result("option-boundary", "attention",
-                             OB.question_detail(rows, year), question=True)
+                             OB.question_detail(rows, year), question=True,
+                             answers=cl.option_keys(rows))
         return cl.Result("option-boundary", "done",
                          "no contract written before "
                          "option_grant_timing_since closed this year")

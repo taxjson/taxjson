@@ -429,7 +429,11 @@ class TestExportCoverage(unittest.TestCase):
     def test_checklist_and_quick_start(self):
         res = cl.d_export_coverage(ctx_of(self.root, 2025, date(2026, 3, 1)))
         self.assertEqual(res.status, "attention")
-        self.assertFalse(res.question)      # the export's own end
+        # A question even for the export's own end (v0.24.1 review: the
+        # user may know the broker had no later activity); a DONE mark
+        # answers this (account, broker, end) only.
+        self.assertTrue(res.question)
+        self.assertEqual(res.answers, ["margin|webull|2025-09-30"])
         self.assertIn("Webull exports for margin end 2025-09-30", res.detail)
         g = QS.evaluate(self.root, today=date(2026, 3, 1))
         self.assertEqual(g.states["inputs"].status, "attention")

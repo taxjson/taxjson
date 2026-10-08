@@ -16,12 +16,22 @@ and each broker whose exports feed it, the date the exports END:
 * otherwise the date of its last row (Questrade, a generic mapping): the
   export itself carries no end date.
 
+A trading summary's year is its end only while no row of the broker
+dates after it (a current export beside it whose end cannot be read:
+then its last row).
+
 The exports are short when that end is before the CUTOFF — Dec 31 of a
 finished tax year, or today in the year still running — and the broker
 still holds positions in the account at the end (its own rows: the
-account's books attributed by their source file, its transfer legs and
-corporate-action rows; a long position, or a written option, whose
-contract has not expired by the end) that the account's later rows of
+account's books attributed by their source file — the masked name and
+key the parse writes on each row, file_source_id, never the real file
+name an account id may be in —, its transfer legs and corporate-action
+rows, read through the books' renames (the run's effective map: a
+journal's legs meet the listing it joined); a long position, or a
+written option, whose contract has not expired by the end — and that
+the account's books hold too, on the same side (held_at_broker: a
+broker's sale of calls an opening .tt line bought is no written call
+open at that broker)) that the account's later rows of
 any source dated inside the gap (after the end, up to the cutoff) — a .tt line closing it, another broker's sale, a
 transfer-out — do not close. A broker whose positions are all closed is
 never listed: nothing after its end can be missing; when .tt lines
@@ -34,12 +44,19 @@ alone is short only when more than LAST_ROW_SLACK days of the year
 follow it with no row (an account can be quiet for weeks) — or when
 the export's year ends before the tax year starts.
 
+An option still open at the end whose contract expired inside the gap
+is named apart ("an option that expired after it with no expiry row"):
+the missing export holds its expiry, assignment or buy-back.
+
 The run says each one as a Warning ("<broker> exports for <account> end
 <date> with open positions (...); download the rest of <year>"); the
 checklist's export-coverage step needs attention until the export is
-added or the step is marked done (`taxjson checklist --done
-export-coverage`: e.g. a broker whose last row really is its last
-activity), and the run then says a note instead.
+added or the question is answered: "no <broker> activity in <account>
+after <end>?" — `taxjson checklist --done export-coverage` records the
+(account, broker, end) of every gap it answers (Gap.key), whatever the
+end was read from (the user may know the account was not used after an
+RBC as-of date). The run then says a note instead; a gap the mark did not
+answer (a later end, another account or broker) asks again.
 """
 from __future__ import annotations
 
@@ -88,12 +105,24 @@ class Gap:
     # lines (a hand-entered close, expiry or transfer-out): nothing is
     # missing for them.
     closed_by_tt: List[str] = field(default_factory=list)
+    # Options open at the end whose contract expired inside the gap
+    # (after the end, by the cutoff) with no expiry, assignment or
+    # buy-back row in the books: (symbol, quantity, expiry). Not in
+    # `positions`: the missing export holds their expiry row.
+    expired: List[Tuple[str, float, str]] = field(default_factory=list)
 
     @property
     def info(self) -> bool:
         """Every position open at the end was closed by later .tt lines:
         an Info, not a short export."""
-        return not self.positions
+        return not self.positions and not self.expired
+
+    @property
+    def key(self) -> str:
+        """The question this gap asks, as a `checklist --done
+        export-coverage` mark stores its answer: (account, broker, end)
+        — a later end, or another account or broker, asks again."""
+        return f"{self.account}|{self.broker}|{self.end}"
 
     def record(self) -> Dict[str, Any]:
         return {"account": self.account, "broker": self.broker,
@@ -102,7 +131,18 @@ class Gap:
                 "current_year": self.current_year,
                 "positions": [{"symbol": s, "quantity": q}
                               for s, q in self.positions],
-                "closed_by_tt": list(self.closed_by_tt)}
+                "expired": [{"symbol": s, "quantity": q, "expiry": e}
+                            for s, q, e in self.expired],
+                "closed_by_tt": list(self.closed_by_tt), "key": self.key}
+
+
+def key_text(key: str) -> str:
+    """A gap's key as a person reads it: "<broker> for <account> to
+    <end>"."""
+    parts = str(key).split("|")
+    if len(parts) != 3:
+        return str(key)
+    return f"{broker_name(parts[1])} for {parts[0]} to {parts[2]}"
 
 
 def broker_name(broker: str) -> str:
@@ -305,6 +345,99 @@ def _row_key(r: Dict[str, Any]) -> Tuple[str, str, str, str]:
             f"{float(r.get('quantity') or 0.0):.6f}")
 
 
+_RUN_SUFFIX_RE = re.compile(r"^(?P<name>.+)#\d+$")
+
+
+def file_source_id(name: Any) -> str:
+    """The source id the books' rows carry for an input file: its masked
+    shown name (brokerages.base.shown_name: an account id in the name is
+    masked to its first 2 characters + ***) plus, when the name
+    was masked, the key hashed from the real name (source_key) — the
+    parse's own provenance (bin/taxjson_brokerage)."""
+    from taxjson.lib.brokerages.base import (shown_name, source_identity,
+                                             source_key)
+    return source_identity(shown_name(name), source_key(name))
+
+
+def row_source_ids(r: Dict[str, Any]) -> List[str]:
+    """The source ids a book row's `source` / `source_key` may stand for
+    (file_source_id), best first: as written, and without the `#k` the
+    parse appends when two files of one parse show the same name; then
+    the shown name alone (a row that kept no key: add_source indexes it
+    when only one file shows it)."""
+    from taxjson.lib.brokerages.base import source_identity
+    src = Path(str(r.get("source") or "")).name
+    if not src:
+        return []
+    key = str(r.get("source_key") or "")
+    m = _RUN_SUFFIX_RE.match(src)
+    names = [src] + ([m["name"]] if m else [])
+    out = [source_identity(n, key) for n in names]
+    out += [n for n in names if n not in out]
+    return out
+
+
+def add_source(index: Dict[str, Optional[str]], name: Any,
+               broker: str) -> None:
+    """Index an input file for row_source_ids lookups: its source id,
+    and its shown name alone while no other broker's file shows the
+    same name (else None: ambiguous)."""
+    from taxjson.lib.brokerages.base import shown_name
+    index.setdefault(file_source_id(name), broker)
+    bare = shown_name(name)
+    if bare in index and index[bare] != broker:
+        index[bare] = None
+    else:
+        index.setdefault(bare, broker)
+
+
+def source_broker(index: Dict[str, Optional[str]], r: Dict[str, Any]
+                  ) -> Optional[str]:
+    """The broker whose input file a book row came from (add_source),
+    None when the row names no indexed file."""
+    for i in row_source_ids(r):
+        b = index.get(i)
+        if b:
+            return b
+    return None
+
+
+def _book_renames(root: Path, cache: Path) -> Dict[str, str]:
+    """The base-stage renames the books were merged with (the run's
+    effective map — the project's ticker.map plus the joins' TOBASE /
+    JOURNAL lines — else ticker.map): a transfer sidecar's and a
+    corporate-action file's rows are read through them, as the books'
+    own rows were."""
+    from taxjson.lib.xlist_loss_radar import _map_rules
+    try:
+        return _map_rules(root, cache)[0]
+    except Exception:                                   # noqa: BLE001
+        return {}
+
+
+def _as_booked(r: Dict[str, Any], renames: Dict[str, str]
+               ) -> Dict[str, Any]:
+    sym = str(r.get("symbol") or "").upper()
+    new = renames.get(sym)
+    return dict(r, symbol=new) if new and new != sym else r
+
+
+def _expiry_in_gap(sym: str, end: date, cutoff: date, current: bool
+                   ) -> Optional[str]:
+    """An option's expiry (ISO) when its contract expired after `end`
+    and by the cutoff (before today in the running year: a contract
+    expiring today may still trade), else None."""
+    from taxjson.lib.core import is_option_symbol, parse_option_expiry
+    if not is_option_symbol(sym):
+        return None
+    exp = _d(parse_option_expiry(sym))
+    if exp is None or exp <= end:
+        return None
+    if exp < cutoff or (exp == cutoff and not current):
+        return exp.isoformat()
+    return None
+
+
 def account_gaps(root: Path, acct: str, year: int, today: date
                  ) -> List[Gap]:
     """The short exports of one account (module docstring)."""
@@ -319,30 +452,35 @@ def account_gaps(root: Path, acct: str, year: int, today: date
     files = _broker_files(cache, acct)
     if not files:
         return []
-    by_source: Dict[str, str] = {}
+    # The books' rows name their file as the parse showed it (masked,
+    # file_source_id), never by the real name metadata keeps.
+    by_source: Dict[str, Optional[str]] = {}
     inputs: Dict[str, List[Path]] = {}
     corp_keys: Dict[Tuple[str, str, str, str], str] = {}
     sidecars: Dict[str, List[Dict[str, Any]]] = {}
+    renames = _book_renames(root, cache)
     for b, p in files:
         md = (_load(p) or {}).get("metadata") or {}
         names = [Path(str(f)).name for f in (md.get("input_files") or [])
                  if f]
         for n in names:
-            by_source.setdefault(n, b)
+            add_source(by_source, n, b)
         folder = root / "inputs" / acct
         inputs[b] = [folder / n for n in names if (folder / n).is_file()]
         for r in _rows(_load(cache / f"{acct}_{b}_corp.json")):
-            corp_keys.setdefault(_row_key(r), b)
+            corp_keys.setdefault(_row_key(_as_booked(r, renames)), b)
         side = _load(cache / f"{acct}_{b}_transfers.json")
         smd = (side or {}).get("metadata") or {}
         if isinstance(smd, dict) and smd.get("kind") == "transfer_sidecar":
-            sidecars[b] = [r for r in _rows(side)
+            # Through the books' renames: a journal's legs (QZD.TO out,
+            # QZD.U.TO in) meet the trades of the listing they joined.
+            sidecars[b] = [_as_booked(r, renames) for r in _rows(side)
                            if str(r.get("action")) == "TRANSFER"]
     rows_by: Dict[str, List[Dict[str, Any]]] = {}
     last: Dict[str, date] = {}
     for r in _rows(base):
-        src = Path(str(r.get("source") or "")).name
-        b = by_source.get(src) if src else corp_keys.get(_row_key(r))
+        b = source_broker(by_source, r) if r.get("source") \
+            else corp_keys.get(_row_key(r))
         if b is None:
             continue
         rows_by.setdefault(b, []).append(r)
@@ -364,8 +502,10 @@ def account_gaps(root: Path, acct: str, year: int, today: date
             continue
         end, how = _explicit_end(b, inputs.get(b, []))
         if how == "year":
-            # A trading summary's year bounds it; its last row dates it.
-            if end >= year_start:
+            # A trading summary's year bounds it; its last row dates it —
+            # so does a row past that year (an export beside it whose end
+            # cannot be read).
+            if end >= year_start or last[b] > end:
                 end, how = last[b], "last-row"
         elif end is not None:
             end = max(end, last[b])
@@ -379,7 +519,8 @@ def account_gaps(root: Path, acct: str, year: int, today: date
             short = end < cutoff and not _quiet_days(end, cutoff)
         if not short:
             continue
-        held = open_positions(rows, end)
+        held = held_at_broker(open_positions(rows, end),
+                              open_positions(all_rows, end))
         if not held:
             continue
         # Only rows inside the gap the missing export would cover (after
@@ -391,9 +532,38 @@ def account_gaps(root: Path, acct: str, year: int, today: date
         still, by_tt, by_other = closed_later(held, later)
         if not still and not by_tt:
             continue                    # closed by another broker's rows
+        open_: List[Tuple[str, float]] = []
+        expired: List[Tuple[str, float, str]] = []
+        for sym, q in still:
+            exp = _expiry_in_gap(sym, end, cutoff, current)
+            if exp is None:
+                open_.append((sym, q))
+            else:
+                expired.append((sym, q, exp))
         gaps.append(Gap(acct, b, end.isoformat(), how, cutoff.isoformat(),
-                        current, still, by_tt))
+                        current, open_, by_tt, expired))
     return gaps
+
+
+def held_at_broker(own: List[Tuple[str, float]],
+                   account: List[Tuple[str, float]]
+                   ) -> List[Tuple[str, float]]:
+    """The positions a broker's own rows leave open (`own`) that the
+    account's books hold too (`account`: every row of the account to the
+    same day, any source), each at most what the account holds, on the
+    same side. A broker's sale of units the books hold from another
+    source — a .tt opening line for positions bought before the data,
+    another broker's purchase — is not a position open at that broker
+    (a long call bought in an opening .tt and sold at the broker read as
+    a written call at the broker's own rows)."""
+    acct = dict(account)
+    out = []
+    for sym, q in own:
+        a = acct.get(sym, 0.0)
+        if a * q <= 0:
+            continue
+        out.append((sym, q if abs(q) <= abs(a) else a))
+    return out
 
 
 def _is_tt(r: Dict[str, Any]) -> bool:
@@ -464,6 +634,26 @@ def _held_text(g: Gap) -> str:
     return ", ".join(shown) + (f" +{more} more" if more > 0 else "")
 
 
+def _expired_text(g: Gap) -> str:
+    shown = [f"{s} {q:g}, expired {e}" for s, q, e in g.expired[:SHOWN]]
+    more = len(g.expired) - SHOWN
+    return "; ".join(shown) + (f"; +{more} more" if more > 0 else "")
+
+
+def _what_text(g: Gap) -> str:
+    """What the broker still held at the end: "open positions (...)"
+    and/or "options that expired after it with no expiry row (...)"."""
+    parts = []
+    if g.positions:
+        parts.append(f"open positions ({_held_text(g)})")
+    if g.expired:
+        n = len(g.expired)
+        parts.append(f"{'an option' if n == 1 else f'{n} options'} that "
+                     f"expired after it with no expiry row "
+                     f"({_expired_text(g)})")
+    return " and ".join(parts)
+
+
 def _how_text(g: Gap) -> str:
     return {"statement": f"The last statement's period ends {g.end}.",
             "as-of": f"The latest export is as of {g.end}.",
@@ -471,6 +661,14 @@ def _how_text(g: Gap) -> str:
             "year": f"The trading summary covers {g.end[:4]} only.",
             "last-row": f"The last row is dated {g.end}; the export "
                         f"itself names no end date."}.get(g.how, "")
+
+
+def question_text(g: Gap) -> str:
+    """The question a DONE mark answers, for this gap's end only."""
+    return (f"No {broker_name(g.broker)} activity in {g.account} after "
+            f"{g.end}? Mark `taxjson checklist --done {STEP}` (it answers "
+            f"this end only: a later end, or another account or broker, "
+            f"asks again).")
 
 
 def info_message(g: Gap) -> str:
@@ -487,23 +685,25 @@ def info_message(g: Gap) -> str:
 def message(g: Gap, year: int) -> Tuple[str, List[str]]:
     """(headline, details) of the run's Warning for one gap."""
     head = (f"{broker_name(g.broker)} exports for {g.account} end {g.end} "
-            f"with open positions ({_held_text(g)}); download the rest of "
-            f"{year}")
+            f"with {_what_text(g)}; download the rest of {year}")
     details = [
         f"{_how_text(g)} Sales, expiries, assignments and income after "
         f"{g.end} are not in the books"
         + (f" (the year so far runs to {g.cutoff})." if g.current_year
            else ".")]
+    if g.expired:
+        details.append(
+            f"Expired after {g.end} and still open in the books: "
+            f"{', '.join(s for s, _q, _e in g.expired[:SHOWN])}"
+            + (" ..." if len(g.expired) > SHOWN else "")
+            + " — the missing export holds the expiry, assignment or "
+              "buy-back row.")
     if g.closed_by_tt:
         details.append(f"Closed by later .tt lines, not listed: "
                        f"{', '.join(g.closed_by_tt[:SHOWN])}"
                        + (" ..." if len(g.closed_by_tt) > SHOWN else "")
                        + ".")
-    if g.how == "last-row":
-        details.append(
-            f"If {broker_name(g.broker)} really had no activity for "
-            f"{g.account} after {g.end}, confirm it with `taxjson "
-            f"checklist --done {STEP}`.")
+    details.append(question_text(g))
     return head, details
 
 
@@ -512,11 +712,9 @@ def detail(gaps: List[Gap]) -> str:
     hold positions: an Info gap is not listed)."""
     gaps = [g for g in gaps if not g.info]
     parts = [f"{broker_name(g.broker)} exports for {g.account} end "
-             f"{g.end} with open positions ({_held_text(g)})"
+             f"{g.end} with {_what_text(g)}"
              for g in gaps[:3]]
     more = len(gaps) - 3
-    quiet = all(g.how == "last-row" for g in gaps)
     return ("; ".join(parts) + (f"; +{more} more" if more > 0 else "")
-            + " — download the rest of the year"
-            + (" (or, if there was no later activity, `taxjson checklist "
-               f"--done {STEP}`)" if quiet else ""))
+            + " — download the rest of the year, or if there was no "
+              f"later activity, `taxjson checklist --done {STEP}`")

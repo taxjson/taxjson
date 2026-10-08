@@ -276,6 +276,11 @@ class Result:
     # finding stays shown beside the mark (option-boundary's transition
     # question CA-OPT-11, export-coverage).
     question: bool = False
+    # The questions asked, one key each (export-coverage: account|broker|
+    # end; option-boundary: account|contract|write date): a DONE mark
+    # answers the keys it recorded (question_answers) and no others — a
+    # later gap or contract is a new question (apply_override).
+    answers: List[str] = field(default_factory=list)
 
     @property
     def effective(self) -> str:
@@ -587,11 +592,11 @@ def d_export_coverage(ctx: Ctx) -> Result:
     gaps = [g for g in EC.find_gaps(ctx.root, ctx.cfg, today=ctx.today)
             if not g.info]
     if gaps:
-        # Only an end read from the last row is a question (the broker
-        # may simply have been quiet); a statement or as-of date is the
-        # export's own end: `--skip` accepts it.
+        # A question whatever the end was read from: only the user knows
+        # the broker had no later activity (an account not used after an
+        # RBC as-of date). A DONE mark answers the gaps it recorded.
         return Result("export-coverage", "attention", EC.detail(gaps),
-                      question=all(g.how == "last-row" for g in gaps))
+                      question=True, answers=sorted({g.key for g in gaps}))
     return Result("export-coverage", "done",
                   "every broker with open positions has exports to "
                   + ("today" if ctx.today <= date(ctx.year, 12, 31)
@@ -1605,9 +1610,15 @@ def d_option_boundary(ctx: Ctx) -> Result:
         # is in this year's gain, right only if the write year's return
         # did not report it — the user's answer (a DONE mark, or the
         # setting lowered to the write year) settles it.
-        from taxjson.lib.option_boundary import question_detail
+        from taxjson.lib.option_boundary import (project_question_rows,
+                                                 question_detail)
+        # Keyed as the mark records them (project_question_rows names
+        # each row's account).
+        keys = option_keys(project_question_rows(ctx.root, ctx.cfg,
+                                                 today=ctx.today))
         return Result("option-boundary", "attention",
-                      question_detail(asked, ctx.year), question=True)
+                      question_detail(asked, ctx.year), question=True,
+                      answers=keys or option_keys(asked))
     return Result("option-boundary", "done", "no amendment required")
 
 
@@ -2232,19 +2243,90 @@ class _StateLock:
 
 
 def set_override(root: Path, year: int, step: str, mark: Optional[str],
-                 note: str = "", today: Optional[date] = None) -> bool:
+                 note: str = "", today: Optional[date] = None,
+                 answers: Optional[List[str]] = None) -> bool:
     """Record (or with mark=None remove) a manual mark. Returns False when
-    removing a mark that was not there (nothing changed)."""
+    removing a mark that was not there (nothing changed). `answers`: the
+    question keys a DONE mark answers (QUESTION_STEPS, question_answers),
+    stored with it."""
     ids = {s[0] for s in STEPS}
     if step not in ids:
         raise KeyError(step)
     with _StateLock(root):
-        return _set_override_locked(root, year, step, mark, note, today)
+        return _set_override_locked(root, year, step, mark, note, today,
+                                    answers)
+
+
+# The steps whose attention is a question a DONE mark answers — for the
+# questions asked when it was made (Result.answers).
+QUESTION_STEPS = ("export-coverage", "option-boundary")
+
+
+def question_answers(root: Path, cfg: Dict[str, Any], step: str,
+                     today: Optional[date] = None) -> Optional[List[str]]:
+    """The keys of the questions `step` asks now (Result.answers), which
+    a `--done` mark records as answered; None for a step that asks
+    none. Reads files only (the books of the last run)."""
+    if step == "export-coverage":
+        from taxjson.lib import export_coverage as EC
+        return sorted({g.key for g in EC.find_gaps(root, cfg, today=today)
+                       if not g.info})
+    if step == "option-boundary":
+        from taxjson.lib import option_boundary as OB
+        return option_keys(OB.project_question_rows(root, cfg, today=today))
+    return None
+
+
+def option_keys(rows: List[Dict[str, Any]]) -> List[str]:
+    """The transition question's keys: one per contract written (account,
+    contract, write date)."""
+    return sorted({f"{r.get('account') or ''}|{r.get('symbol') or ''}|"
+                   f"{str(r.get('written') or '')[:10]}" for r in rows})
+
+
+def unanswered(r: Result, ov: Dict[str, Any]) -> List[str]:
+    """The question keys of `r` its DONE mark `ov` did not record (a
+    mark with none recorded answers none)."""
+    if not r.question or ov.get("status") != "done":
+        return []
+    done = {str(k) for k in (ov.get("answers") or [])
+            if isinstance(k, str)}
+    return [k for k in r.answers if k not in done]
+
+
+def key_text(sid: str, key: str) -> str:
+    """A question key as a person reads it."""
+    if sid == "export-coverage":
+        from taxjson.lib.export_coverage import key_text
+        return key_text(key)
+    parts = key.split("|")
+    return f"{parts[1]} written {parts[2]}" if len(parts) == 3 else key
+
+
+def apply_override(r: Result, ov: Dict[str, Any]) -> Result:
+    """Put a manual mark on a detector result: a DONE mark answers the
+    question keys it recorded only — a key it did not record leaves the
+    step needing attention, named in the detail."""
+    if ov.get("status") not in ("done", "skipped"):
+        return r
+    r.override = ov["status"]
+    r.note = ov.get("note") or ""
+    new = unanswered(r, ov)
+    if new:
+        r.question = False      # the mark does not answer these
+        shown = ", ".join(key_text(r.id, k) for k in new[:3]) + (
+            f" +{len(new) - 3} more" if len(new) > 3 else "")
+        r.detail = (f"{r.detail} — not answered by the done mark of "
+                    f"{ov.get('date') or '?'}: {shown}")
+    if r.status in ("attention", "blocked"):
+        r.finding = r.detail
+    return r
 
 
 def _set_override_locked(root: Path, year: int, step: str,
                          mark: Optional[str], note: str,
-                         today: Optional[date]) -> bool:
+                         today: Optional[date],
+                         answers: Optional[List[str]] = None) -> bool:
     state = load_state(root)
     if state.get("year") not in (None, year):
         # Another year's marks (a copied project, or `year` bumped):
@@ -2259,6 +2341,8 @@ def _set_override_locked(root: Path, year: int, step: str,
         state["overrides"][step] = {"status": mark,
                                     "date": (today or date.today()).isoformat(),
                                     "note": note}
+        if mark == "done" and answers is not None:
+            state["overrides"][step]["answers"] = sorted(set(answers))
     save_state(root, state, year)
     return True
 
@@ -2297,11 +2381,7 @@ def evaluate(ctx: Ctx, only: Optional[List[str]] = None,
                 r = DETECTORS[sid](ctx)
             except Exception as e:      # a detector must never take the list down
                 r = Result(sid, "blocked", f"detector failed: {e}")
-        if ov.get("status") in ("done", "skipped"):
-            r.override = ov["status"]
-            r.note = ov.get("note") or ""
-            if r.status in ("attention", "blocked"):
-                r.finding = r.detail
+        apply_override(r, ov)
         results.append(r)
     return results
 
