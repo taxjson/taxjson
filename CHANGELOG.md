@@ -47,6 +47,15 @@
   already right; RBC's fee worked out from the foreign price is gone). A
   same-currency mismatch still warns.
 
+- **A Questrade dividend reinvestment books the account's held listing**
+  (GitHub issue #3): an REI row with the bare TSX ticker on a USD row was
+  booked `ROOT.US` while the dividend it reinvests bound to `ROOT.TO`, so
+  one share split into +1 / -1 across two listings (a false short in a
+  registered account). It now books the listing the account trades under
+  the same name and root; and when another account's evidence proved the
+  same broker files that security's TSX listing on USD rows, the account's
+  USD rows of it are read as `ROOT.TO` too.
+
 
 ## v0.24.0 (2026-10-07)
 

@@ -157,6 +157,25 @@ class TestResolve(unittest.TestCase):
                                "QZOTHER HOLDINGS INC")]))
         self.assertEqual(r["corrected"], {})
 
+    def test_the_same_broker_proved_it_in_another_account(self):
+        # Another Questrade account read QZAX.US as QZAX.TO on its own
+        # evidence, under the same name (GitHub issue #3): shares bought
+        # here on a USD row are the TSX listing too.
+        s = _scan(QZAX_US=("USD", "QZALPHA MINES CORP", ()))
+        nm = frozenset([exact_name("QZALPHA MINES CORP")])
+        ev = _ev()
+        ev.proved["QZAX.US"] = [("tfsa", "questrade", "QZAX.TO", nm)]
+        got = _res(s, ev)["corrected"]["QZAX.US"]
+        self.assertEqual((got["symbol"], got["how"]), ("QZAX.TO", "broker"))
+        self.assertIn("account tfsa's QZAX.US was read as QZAX.TO",
+                      got["evidence"])
+        # Another broker's proof, or another name, is not evidence here.
+        for proof in (("tfsa", "rbc_direct", "QZAX.TO", nm),
+                      ("tfsa", "questrade", "QZAX.TO",
+                       frozenset([exact_name("QZOTHER HOLDINGS INC")]))):
+            ev.proved["QZAX.US"] = [proof]
+            self.assertEqual(_res(s, ev)["corrected"], {}, proof)
+
     def test_shares_bought_on_a_usd_row_keep_the_us_listing(self):
         # The same ticker on the NYSE and the TSX (an interlisted
         # company): a USD trade of the bare ticker is the US listing.
@@ -413,6 +432,50 @@ class TestRunAccountOrder(_RunBase, unittest.TestCase):
         st = self.check_corrected()
         self.assertEqual(set(st["corrected"]), {"QZAX.US", "QZBX.US"})
         self.assertIn("QZAA.US ↔ QZAX.TO", self.out)
+
+
+@rule("CA-XLIST-02")
+class TestRunProvedByTheSameBroker(_RunBase, unittest.TestCase):
+    """A second Questrade account with no transfer of its own buys
+    QZAX on a USD row and reinvests a dividend in it (REI): the
+    proof the qt account's transfer gave (Questrade files QZAX's TSX
+    listing on USD rows) reads its rows as QZAX.TO too (GitHub
+    issue #3)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._td = tempfile.TemporaryDirectory()
+        cls.root = Path(cls._td.name)
+        _project(cls.root, "canada")
+        # The second account comes FIRST: its evidence is parsed later.
+        cfg = (cls.root / "taxjson.toml").read_text()
+        head, accts = cfg.split("[accounts.ibm]")
+        (cls.root / "taxjson.toml").write_text(
+            head + '[accounts.lira]\ntype = "sheltered"\n\n[accounts.ibm]'
+            + accts)
+        (cls.root / "inputs" / "lira").mkdir(parents=True)
+        (cls.root / "inputs" / "lira" / "q.csv").write_text(
+            QH + qt("2026-09-10", "Buy", "QZAX", "QZALPHA MINES CORP WE "
+                    "ACTED AS AGENT", "10", net="-100.00", act="Trades",
+                    price="10", gross="-100")
+            + qt("2026-09-29", "REI", "QZAX", "QZALPHA MINES CORP "
+                 "REINV@U$10.00 REC 09/15/26 PAY 09/29/26", "1",
+                 net="-10.00", act="Dividend reinvestment")
+            + qt("2026-10-05", "Sell", "QZAX", "QZALPHA MINES CORP WE "
+                 "ACTED AS AGENT", "-11", net="121.00", act="Trades",
+                 price="11", gross="121"))
+        cls.r = _run(cls.root, "run", "--no-input")
+        cls.out = " ".join((cls.r.stdout + cls.r.stderr).split())
+
+    def test_rows_read_as_the_tsx_listing(self):
+        self.check_corrected()
+        st = LS.read_state(LS.state_path(self.root / "work", "lira",
+                                         "questrade"))
+        got = st["corrected"]["QZAX.US"]
+        self.assertEqual((got["symbol"], got["how"]), ("QZAX.TO", "broker"))
+        book = self.symbols("lira_questrade")
+        self.assertEqual({s for a, s in book if a == "BUYSELL"}, {"QZAX.TO"})
+        self.assertNotIn("Short position", self.out)
 
 
 RBC_H = ('"Date","Activity","Symbol","Symbol Description","Quantity",'

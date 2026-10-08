@@ -1064,8 +1064,33 @@ class QuestradeBrokerage(BaseBrokerage):
             else None
         return (str(r['symbol']), str(r['currency'])) if r else None
 
+    def _rei_listing(self, row: Dict[str, Any], sym: str, cur: str
+                     ) -> Tuple[str, str]:
+        """(symbol, suffix currency) of a reinvestment (REI) row: a DRIP
+        buys units of a position the account already holds, so a bare
+        ticker on the other currency's row (Questrade pays a TSX
+        stock's dividend on the USD side: `QZP` on a USD row) is the
+        listing the account trades under the same name — as the dotted
+        dividend it reinvests binds — not the row currency's (QZP.US: a
+        listing no market may have, or another company's). Only when
+        the account trades exactly ONE listing of that name, on the same
+        root, and not the row currency's (GitHub issue #3)."""
+        from taxjson.lib.cross_listings import listing_root
+        own = self.apply_currency_suffix(sym, cur)
+        cands = self._ctx.key_candidates(
+            _get_desc_key(row.get('Description') or '')) if self._ctx \
+            else set()
+        listings = {self.apply_currency_suffix(s, c): (s, c)
+                    for s, c in cands}
+        if own in listings or len(listings) != 1:
+            return sym, cur
+        (lst, (s, c)), = listings.items()
+        if listing_root(lst) != listing_root(own):
+            return sym, cur
+        return s, c
+
     def _resolve_symbol(self, row: Dict[str, Any], currency: str,
-                        lineno: Optional[int] = None):
+                        lineno: Optional[int] = None, rei: bool = False):
         """(symbol, suffix currency) for a non-trade row. Questrade
         writes some rows under an internal code (S098765, a TF6's
         R123456) or a dotted dividend code (.SAMPLP for an issuer held as
@@ -1086,6 +1111,12 @@ class QuestradeBrokerage(BaseBrokerage):
                           == 'Transfers'))
         if not code_like:
             cur = self._listing_currency(sym, currency)
+            if rei:
+                # A reinvestment buys the account's held listing
+                # (_rei_listing).
+                bound = self._rei_listing(row, sym, cur)
+                if bound != (sym, cur):
+                    return bound
             own = self.apply_currency_suffix(sym, cur)
             others = sorted({self.apply_currency_suffix(s, c)
                              for s, c in cands} - {own})
@@ -2152,7 +2183,8 @@ class QuestradeBrokerage(BaseBrokerage):
                 f"and Net Amount {net_s:,.2f} of the same sign "
                 f"({desc[:50]!r}) — a reinvestment buys shares for cash "
                 f"(or a reversal returns both); refusing to guess.")
-        sym_raw, scur = self._resolve_symbol(row, currency, lineno)
+        sym_raw, scur = self._resolve_symbol(row, currency, lineno,
+                                             rei=True)
         key = ('REI', self.apply_currency_suffix(sym_raw, scur),
                round(qty, 6), round(net, 2))
         if qty_s < 0:

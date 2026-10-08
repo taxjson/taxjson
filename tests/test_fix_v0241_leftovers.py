@@ -22,6 +22,9 @@
   currency (REINV@C$ on a USD row, U$ on a CAD row) is booked at the
   cash per unit, with no row-check Warning; a same-currency mismatch
   still warns.
+- 9 (GitHub issue #3): a Questrade REI row with the bare TSX ticker on a
+  USD row reinvests a dividend on the account's held TSX listing: it
+  books that listing (positions net to zero), not ROOT.US.
 
 Every fixture is SYNTHETIC: invented QZ*/ZZX tickers and names, fake
 account ids (pii-ok: 55500001).
@@ -537,6 +540,85 @@ class TestDripPricedInTheOtherCurrency(unittest.TestCase):
     def test_usa_drip_priced_in_the_other_currency(self):
         self._check("usa")
 
+
+
+# ------------------------------------------------------------------ 9
+
+# The issue's synthetic export (GitHub issue #3), account id pii-ok.
+_ISSUE3 = (
+    "Transaction Date,Settlement Date,Action,Symbol,Description,Quantity,"
+    "Price,Gross Amount,Commission,Net Amount,Currency,Account #,"
+    "Activity Type,Account Type\n"
+    "2026-07-15 12:00:00 AM,2026-07-16 12:00:00 AM,Buy,QZP.TO,QZPIPE CORP "
+    "WE ACTED AS AGENT,150,40.00,-6000.00,0,-6000.00,CAD,99900001,Trades,"
+    "Individual LIRA\n"
+    "2026-09-28 12:00:00 AM,2026-09-29 12:00:00 AM,Sell,QZP.TO,QZPIPE CORP "
+    "WE ACTED AS AGENT,-150,41.00,6150.00,0,6150.00,CAD,99900001,Trades,"
+    "Individual LIRA\n"
+    "2026-09-29 12:00:00 AM,2026-09-29 12:00:00 AM,DIV,.QZP,QZPIPE CORP "
+    "CASH DIV ON 150 SHS REC 09/15/26 PAY 09/29/26,0.0,0.0,0.0,0.0,50.0,"
+    "USD,99900001,Dividends,Individual LIRA\n"
+    "2026-09-29 12:00:00 AM,2026-09-29 12:00:00 AM,REI,QZP,QZPIPE CORP "
+    "REINV@C$41.00 REC 09/15/26 PAY 09/29/26,1.0,0.0,0.0,0.0,-29.50,USD,"
+    "99900001,Dividend reinvestment,Individual LIRA\n"
+    "2026-10-01 12:00:00 AM,2026-10-02 12:00:00 AM,Sell,QZP.TO,QZPIPE CORP "
+    "WE ACTED AS AGENT,-1,41.50,41.50,0,41.50,CAD,99900001,Trades,"
+    "Individual LIRA\n")
+
+
+class TestReinvestmentBooksTheHeldListing(unittest.TestCase):
+
+    def _check(self, country):
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(
+                td, year=2026, accounts='[accounts.lira]\ntype = '
+                '"sheltered"\n', files={"inputs/lira/q.csv": _ISSUE3},
+                canada={"source_currencies": ["USD"]},
+                usa={"source_currencies": ["CAD"]})[country]
+            r = cli(root, "run", "--no-input")
+            out = _flat(r.stdout + r.stderr)
+            self.assertEqual(r.returncode, 0, out[-3000:])
+            self.assertNotIn("Short position", out)
+            self.assertNotIn("is booked under its own symbol", out)
+            pos = {}
+            for p in (root / "work").glob("lira_questrade*.json"):
+                for t in json.loads(p.read_text()).get("transactions") \
+                        or []:
+                    if t.get("action") == "BUYSELL":
+                        pos[t["symbol"]] = (pos.get(t["symbol"], 0.0)
+                                            + t["quantity"])
+            self.assertEqual(pos, {"QZP.TO": 0.0})
+
+    @rule("CA-XLIST-02")
+    def test_canada_rei_books_the_held_listing(self):
+        self._check("canada")
+
+    @rule("US-XLIST-02")
+    def test_usa_rei_books_the_held_listing(self):
+        self._check("usa")
+
+    def test_a_listing_the_account_does_not_trade_keeps_the_currency(self):
+        """No held listing of that name: the row currency's listing, as
+        before (a DRIP of a US stock)."""
+        import os
+        import subprocess
+        import sys
+        from tax_rules.dual import SRC
+        lines = _ISSUE3.split("\n")
+        csv = "\n".join([lines[0]] + [ln for ln in lines[1:]
+                                      if ",REI," in ln]) + "\n"
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "q.csv"
+            p.write_text(csv)
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_brokerage",
+                 "--brokerage", "questrade", str(p)],
+                capture_output=True, text=True,
+                env=dict(os.environ, PYTHONPATH=str(SRC)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        syms = {t["symbol"] for t in json.loads(r.stdout)["transactions"]
+                if t["action"] == "BUYSELL"}
+        self.assertEqual(syms, {"QZP.US"})
 
 if __name__ == "__main__":
     unittest.main()

@@ -715,6 +715,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/brokerages/rbc_direct.py` — `reinvest_row_price`, `reinvest_identity_error`; `src/taxjson/lib/brokerages/questrade.py` — `reinvest_row_price`; `src/taxjson/lib/brokerages/schema.py` — `is far `
 
+### Questrade: "Warning: Short position: QZP.TO (lira): a registered account (TFSA/RRSP) cannot be short" after a dividend reinvestment (REI) on a USD row
+- **Check:** `tjs shares` (or the parsed book) shows the account `+1 QZP.US` and `-1 QZP.TO` for one share: the REI row has the bare TSX ticker (`QZP`) and Currency `USD` (Questrade pays the dividend on the USD side), and a later sale of that share is on a CAD row. On v0.24.0 the parser also said "'QZP' is booked under its own symbol, but the same security … trades as QZP.TO".
+- **Cause:** the reinvested share took the row currency's listing (`QZP.US`, which may be another company's NYSE ticker), while the dotted `.QZP` dividend it reinvests bound to the account's held listing `QZP.TO`. Nothing is missing: the purchase sat one listing over.
+- **Fix:** upgrade and `tjs run`. A reinvestment of a bare ticker on the other currency's row now books the listing the account trades under the same name and root (its cost stays the row's cash), and an account with no such holding takes the listing another account's evidence proved for the same broker and name (tax-logic CA-XLIST-02 / US-XLIST-02). With neither, the row currency's listing stays (a DRIP of a US stock).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/brokerages/questrade.py` — `_rei_listing`, `_resolve_symbol`; `src/taxjson/lib/listing_suffix.py` — `resolve`, `project_evidence`, `scan_questrade`, `proved`
+
 ### Questrade: "Warning: 99900001.csv: 1 dividend(s) marked NON-RES TAX WITHHELD are booked at the NET amount"
 - **Check:** the next line lists each dividend (`QZQ.US 2025-03-15 8.50`); `tjs divs` shows it at the net amount with no TAX row. On RBC the same wording is grossed up instead: `tjs events` shows a TAX row described `(Implied Tax)` at 15% of the gross.
 - **Cause:** Questrade's export gives neither the gross nor the tax of such a dividend, so it is booked at the net: income understated, foreign tax missing. RBC's export also gives only the net; its parser assumes the 15% US treaty rate (`gross = net / 0.85`) whatever the issuer's country.
