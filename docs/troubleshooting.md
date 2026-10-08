@@ -659,6 +659,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/xlist_loss_radar.py` — `analyze`, `open_findings`, `message`, `across listings`, `_roots`, `_held_at`, `RADAR_SHOWN`, `more_message`; `src/taxjson/bin/taxjson_run.py` — `_say_xlist_losses`, `cmd_scan`, `XLIST-LOSS`; `src/taxjson/lib/ticker_map_suggest.py` — `from_xlist_loss_radar`
 
+### `tjs scan`: "MAP-GAP QZE.TO/QZE.US: … QZE.US and QZE.TO share their letters but the names are not equal … — verify" where QZE.TO and QZE.US are two companies that IB lists under one bare symbol
+- **Check:** the IB statement's Financial Instrument Information lists two stocks under the symbol QZE (one on the TSX with a CA ISIN, one on the NYSE with a US ISIN); `tjs ticker-map --suggest` or the scan names QZE.US with both companies' names. The books are right: QZE.TO and QZE.US are two securities.
+- **Cause:** the IB parser named a stock row from the first instrument the statement lists under its bare symbol, so a USD row of the NYSE company could carry the TSX company's name (and another statement, listing them the other way round, the right one): QZE.US had two names, and the scan could not tell the pair apart.
+- **Fix:** upgrade and `tjs run`. When a statement lists several instruments under one symbol, a row takes the name of the one on its own listing's market (the Listing Exch, else the ISIN country), never the first listed; the scan then reads the two as different companies and asks for no line. A `DISTINCT QZE.US QZE.TO` written to quiet it can stay (it changes no figure).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `_security_name`, `fii_all`; `src/taxjson/lib/cross_listings.py` — `gather`, `shown_apart`
+
 ### `tjs scan`: "MAP-GAP QZX.TO/QZX.US: both listings appear in this project but ticker.map has no GLOBAL/TOBASE entry" (or "US-LISTING … hold QZX.TO instead") for a CDR or another company that uses the same letters
 - **Check:** compare the two listings' names in your broker's exports: a CDR's name says so ("… CDR (CAD HEDGED)"), another company's name shares no company word (a real-estate trust on one venue, a currency ETF on the other). `tjs sum --json` is the same with or without a `DISTINCT` line for the pair.
 - **Cause:** the scan read every US and Canadian listing that share a root as a probable interlisting: MAP-GAP asked for a `TOBASE` or `DISTINCT` line, and US-LISTING advised holding the Canadian line, even when the exports showed the Canadian line is a depositary receipt or the names are two companies'. The books were right (two securities); only the scan nagged.

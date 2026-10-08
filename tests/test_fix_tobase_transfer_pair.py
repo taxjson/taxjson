@@ -429,5 +429,64 @@ class TestUnrelatedUsa(_Unrelated, unittest.TestCase):
     COUNTRY = "usa"
 
 
+# ------------------------------------------------------------ IB names
+
+def ib_two_companies(first_tsx=True):
+    """One IB statement listing two companies under the bare symbol QZE:
+    QZENERGY LTD on the TSX (a CA ISIN) and QZEQUITY INC on the NYSE (a
+    US ISIN), each traded in its own currency."""
+    tsx = ('Financial Instrument Information,Data,Stocks,QZE,'
+           '"QZENERGY LTD",999000301,CA9990003011,,TSE,1,,,COMMON,,\n')
+    nyse = ('Financial Instrument Information,Data,Stocks,QZE,'
+            '"QZEQUITY INC",999000302,US9990003021,,NYSE,1,,,COMMON,,\n')
+    trades = ('Trades,Data,Order,Stocks,CAD,U5550001,QZE,'  # pii-ok
+              '"2026-03-02, 10:00:00",10,20,0,-200,0,0,0,0,O\n'
+              'Trades,Data,Order,Stocks,USD,U5550001,QZE,'  # pii-ok
+              '"2026-03-03, 10:00:00",5,40,0,-200,0,0,0,0,O\n')
+    return (IB_HEAD + (tsx + nyse if first_tsx else nyse + tsx)
+            + IB_TRADES_H + trades)
+
+
+class TestIbNamesFollowTheListing(unittest.TestCase):
+    """Two companies under one bare IB symbol: each row's name is the
+    instrument of the listing it is booked as, never the first listed
+    (owner report: a TSX and an NYSE company sharing a ticker read as
+    one listing with two names, a MAP-GAP in `taxjson scan`)."""
+
+    def _names(self, first_tsx):
+        from taxjson.lib.brokerages.ib_extractor import IbBrokerage
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "U5550001_2026.csv"  # pii-ok
+            p.write_text(ib_two_companies(first_tsx))
+            rows = IbBrokerage().parse_file(p)
+        return {(t["symbol"], t.get("security_name")) for t in rows
+                if t.get("action") == "BUYSELL"}
+
+    def test_each_listing_carries_its_own_company(self):
+        for first_tsx in (True, False):
+            with self.subTest(first_tsx=first_tsx):
+                self.assertEqual(self._names(first_tsx),
+                                 {("QZE.TO", "QZENERGY LTD"),
+                                  ("QZE.US", "QZEQUITY INC")})
+
+    def test_shown_apart_and_no_map_gap(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "taxjson.toml").write_text(_config("canada", "taxable"))
+            (root / "inputs" / "acct").mkdir(parents=True)
+            (root / "inputs" / "acct" / "U5550001_2026.csv").write_text(  # pii-ok
+                ib_two_companies(False))
+            _rates(root / "work" / "to_base.csv", "USD CAD", "1.2500")
+            r = _run(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+            _legs, names, _shown = XL.gather(root / "work", ["acct"])
+            self.assertEqual(names["QZE.TO"], {exact_name("QZENERGY LTD")})
+            self.assertEqual(names["QZE.US"], {exact_name("QZEQUITY INC")})
+            self.assertEqual(XL.shown_apart("QZE.US", "QZE.TO", names),
+                             XL.DIFFERENT)
+            r = _run(root, "scan")
+            self.assertNotIn("MAP-GAP", r.stdout, r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
