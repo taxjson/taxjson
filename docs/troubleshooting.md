@@ -645,6 +645,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/bin/taxjson_ticker_map.py` — `canonical_distinct`, `listing_spelling_notes`, `listing_pair_spelling`, `_parse_map_text`; `src/taxjson/lib/journals.py` — `canonical_distinct`; `src/taxjson/bin/taxjson_run.py` — `listing_spelling_notes`
 
+### "Error: 1 .tt JOURNAL line(s) join two listings that nothing shows are one security" — "QZG.NE is written on a venue that lists depositary receipts" or "QZG.TO is named as a depositary receipt (CDR)"
+- **Check:** the `.tt` line journals a Canadian depositary receipt (a CDR on Cboe Canada, written `QZG.NE`, or a listing the broker's export names "… CDR") and the US share it holds a fraction of (`QZG.US`). On v0.24.0 and earlier the line was booked: the two share the root QZG, which was taken as evidence that they are one security.
+- **Cause:** a CDR is its own security (a receipt over a fraction of the share, usually currency-hedged), not a listing of the share; pooling the two would merge two costs. The books spell a Canadian venue `.TO`, so the venue is read from the line as written; `src/taxjson/data/markets.toml` marks Cboe Canada (`[venues.NE] receipts = true`) and the receipt words (`[lists] receipt_words`).
+- **Fix:** a CDR is not journaled into its share: delete the line, and book a sale of one and a purchase of the other if that is what happened. If the two really are one security (both receipts, say), names that agree in the exports let the line book; or join them deliberately with a ticker.map `TOBASE` line.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cross_listings.py` — `receipt_why`, `declared_verdict`, `_hub_partners_agree`, `is written on a venue that lists depositary receipts`; `src/taxjson/lib/markets.py` — `receipt_suffixes`, `receipt_words`
+
 ### A move between brokers that changes the listing (RBC `TFO` out of QZP.TO, IB `ATON` into QZP.US) is not joined over a weekend
 - **Check:** `tjs transfers` shows the out-leg and the in-leg six or seven calendar days apart with a weekend between them (out on a Wednesday, in the next Tuesday); the new listing's sales read as a short and the old listing's shares never sell.
 - **Cause:** the pairing window was 5 calendar days; brokers book a transfer on their business days.

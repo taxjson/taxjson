@@ -4,6 +4,9 @@
   QZX.TO`) answers the `.US` pair (the books spell a bare US ticker
   QZX.US) and says how it was read; a GLOBAL / TOBASE line so written is
   not re-read (it would move pools) but warned, naming the line to write.
+- 2: a CDR (written on Cboe Canada, QZG.NE, or named "... CDR" in the
+  exports) is its own security: a .tt JOURNAL between it and QZG.US
+  needs names that agree, not the shared root.
 
 Every fixture is SYNTHETIC: invented QZ*/ZZX tickers and names, fake
 account ids (pii-ok: 55500001).
@@ -16,6 +19,7 @@ from pathlib import Path
 from tax_rules import rule
 
 from _qa_project import console, tj
+from tax_rules.dual import cli, projects_both
 from test_fix_qa_f3_xlist_loss import f3_project, zzx_loss
 
 
@@ -99,6 +103,88 @@ class TestDistinctBareUsTicker(unittest.TestCase):
         self.assertEqual(listing_spelling_notes(
             "GLOBAL QZCOIN QZC\nDISTINCT QZC QZD\nTOBASE ZZX.US ZZX.TO\n"),
             ([], []))
+
+
+
+# ------------------------------------------------------------------ 2
+
+_QT_CDR = ("Transaction Date,Settlement Date,Action,Symbol,Description,"
+           "Quantity,Price,Gross Amount,Commission,Net Amount,Currency,"
+           "Activity Type,Account #,Account Type\n"
+           "2025-03-03,2025-03-04,Buy,QZG.NE,QZGEE CORP CDR (CAD HEDGED),"
+           "10,20.00,-200.00,0,-200.00,CAD,Trades,55500001,Margin\n"
+           "2025-03-03,2025-03-04,Buy,QZG,QZGEE CORP,"
+           "10,30.00,-300.00,0,-300.00,USD,Trades,55500001,Margin\n")
+
+
+class TestCdrIsItsOwnRoot(unittest.TestCase):
+
+    def test_verdict(self):
+        from taxjson.lib import cross_listings as XL
+        from taxjson.lib.markets import receipt_suffixes
+        from taxjson.lib.symbol_codes import exact_name
+        self.assertIn("NE", receipt_suffixes())
+        self.assertEqual(XL.declared_verdict("QZG.TO", "QZG.US", {}, {}),
+                         "")
+        why = XL.declared_verdict("QZG.TO", "QZG.US", {}, {},
+                                  ("QZG.NE", "QZG.US"))
+        self.assertIn("QZG.NE is written on a venue that lists depositary "
+                      "receipts", why)
+        self.assertIn("no security name for either listing", why)
+        cdr = exact_name("QZGEE CORP CDR (CAD HEDGED)")
+        corp = exact_name("QZGEE CORP")
+        why = XL.declared_verdict("QZG.TO", "QZG.US",
+                                  {"QZG.TO": {cdr}, "QZG.US": {corp}},
+                                  {cdr: "QZGEE CORP CDR (CAD HEDGED)",
+                                   corp: "QZGEE CORP"})
+        self.assertIn("QZG.TO is named as a depositary receipt (CDR)", why)
+        # Two receipts named alike agree by their names.
+        self.assertEqual(XL.declared_verdict(
+            "QZG.TO", "QZG.U.TO", {"QZG.TO": {cdr}, "QZG.U.TO": {cdr}},
+            {cdr: "QZGEE CORP CDR (CAD HEDGED)"}), "")
+
+    def _stops(self, country, files, needle):
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, files=files,
+                                 usa={"source_currencies": ["CAD"]})[country]
+            r = cli(root, "run", "--no-input")
+            out = _flat(r.stdout + r.stderr)
+            self.assertNotEqual(r.returncode, 0, out[-2000:])
+            self.assertIn("join two listings that nothing shows are one "
+                          "security", out)
+            self.assertIn(needle, out)
+            self.assertIn("inputs/margin/m.tt:", out)
+
+    def _tt_only(self, country):
+        tt = ("BUYSELL 2025-03-03 10:00:00 QZG.NE 10 CAD 20.00 200.00 "
+              "0.00\n"
+              "JOURNAL 2025-03-05 QZG.NE QZG.US 10\n")
+        self._stops(country, {"inputs/margin/m.tt": tt},
+                    "QZG.NE is written on a venue that lists depositary "
+                    "receipts")
+
+    def _named(self, country):
+        files = {"inputs/margin/q.csv": _QT_CDR,
+                 "inputs/margin/m.tt": "JOURNAL 2025-03-05 QZG.TO QZG.US "
+                                       "5\n"}
+        self._stops(country, files,
+                    "QZG.TO is named as a depositary receipt (CDR)")
+
+    @rule("CA-XLIST-04")
+    def test_canada_cdr_venue_line_needs_names(self):
+        self._tt_only("canada")
+
+    @rule("US-XLIST-03")
+    def test_usa_cdr_venue_line_needs_names(self):
+        self._tt_only("usa")
+
+    @rule("CA-XLIST-04")
+    def test_canada_cdr_named_in_the_export_needs_names(self):
+        self._named("canada")
+
+    @rule("US-XLIST-03")
+    def test_usa_cdr_named_in_the_export_needs_names(self):
+        self._named("usa")
 
 
 if __name__ == "__main__":

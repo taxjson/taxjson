@@ -38,6 +38,13 @@ currency = "CAD"
 [venues.NE]
 country = "CAN"
 currency = "CAD"
+# Cboe Canada (NEO) lists Canadian depositary receipts (CDRs) under the
+# US company's ticker: a receipt is its own security, not a listing of
+# the share it holds a fraction of. A listing written on a `receipts`
+# venue never shares a root with another venue's listing as a .tt
+# JOURNAL line's evidence (lib/cross_listings.declared_verdict): the
+# names must agree instead.
+receipts = true
 [venues.VN]
 country = "CAN"
 currency = "CAD"
@@ -129,6 +136,12 @@ fiat = [
   "SEK", "NOK", "DKK", "PLN", "CZK", "HUF", "BRL", "MXN", "INR", "ZAR",
   "TRY", "KRW", "CNY", "CNH", "AED", "ILS",
 ]
+
+# Words a security name uses for a depositary receipt (a CDR, an ADR —
+# symbol_codes.exact_name spells "DEPOSITARY" as ADR): a listing whose
+# exports name it so is its own security, never one root with the share
+# it holds, as a .tt JOURNAL line's evidence (lib/cross_listings).
+receipt_words = ["CDR", "ADR"]
 
 # US-dollar stablecoins. Canada: US-dollar cash (tax-logic
 # CA-CRYPTO-02); USA: property valued at par in a swap (US-CRYPTO-02).

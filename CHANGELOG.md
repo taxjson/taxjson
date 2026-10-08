@@ -12,6 +12,13 @@
   `RENAME` line so written is not re-read (it would move pools): the run
   warns, naming the line to write.
 
+- **A `.tt` JOURNAL line between a CDR and its US share needs evidence**:
+  a listing written on a venue that lists depositary receipts (Cboe Canada,
+  `QZG.NE`; marked in markets.toml) or named as a receipt in the exports
+  ("... CDR") is its own security, so sharing the root QZG with `QZG.US`
+  no longer counts as evidence: the names must agree, else the run stops
+  naming the line.
+
 
 ## v0.24.0 (2026-10-07)
 

@@ -715,22 +715,51 @@ def listing_root(symbol: str) -> str:
 UNPROVEN = "unproven"
 
 
+def receipt_why(symbol: str, names: Iterable[Tuple[str, ...]] = (),
+                written: str = "") -> str:
+    """Why `symbol` is a depositary receipt for a journal's evidence
+    ("" when it is not): written on a venue that lists receipts under
+    the underlying's ticker (markets.toml `receipts = true`: a CDR on
+    Cboe Canada, QZG.NE — the .tt line's own spelling, as the books fold
+    a Canadian venue into .TO), or a name in the exports with a receipt
+    word ([lists] receipt_words: "... CDR"). A receipt is its own
+    security, never one root with the share it holds (v0.24.1
+    leftovers, 2)."""
+    from taxjson.lib.markets import (receipt_suffixes, receipt_words,
+                                     suffix_of)
+    w = str(written or "").upper()
+    if w and suffix_of(w) in receipt_suffixes():
+        return f"{w} is written on a venue that lists depositary receipts"
+    words = receipt_words()
+    for n in sorted(names):
+        hit = sorted(set(n) & words)
+        if hit:
+            return (f"{symbol} is named as a depositary receipt "
+                    f"({hit[0]})")
+    return ""
+
+
 def declared_verdict(frm: str, to: str,
                      names: Dict[str, Set[Tuple[str, ...]]],
-                     shown: Dict[Tuple[str, ...], str]) -> str:
+                     shown: Dict[Tuple[str, ...], str],
+                     written: Tuple[str, str] = ("", "")) -> str:
     """"" when something shows a .tt JOURNAL line's FROM and TO are two
     listings of one security, else why not (DIFFERENT for two
     companies): the exports' names of the two listings must not name
     different companies (companies_differ: a ticker another company
     uses on the other venue), and either the two share one root
-    (listing_root: QZG.TO / QZG.U.TO / QZG.US) or some name of each
-    agrees as a journal's two legs' names must (_journal_names_verdict).
-    A ticker.map line naming either listing is checked before this (the
+    (listing_root: QZG.TO / QZG.U.TO / QZG.US) — unless one is a
+    depositary receipt (receipt_why; `written`: the line's own FROM and
+    TO spellings), its own security — or some name of each agrees as a
+    journal's two legs' names must (_journal_names_verdict). A
+    ticker.map line naming either listing is checked before this (the
     user's map decides: a TOBASE line is the deliberate join)."""
     nx, ny = names.get(frm, set()), names.get(to, set())
     if nx and ny and all(companies_differ(a, b) for a in nx for b in ny):
         return DIFFERENT
-    if listing_root(frm) == listing_root(to):
+    receipt = (receipt_why(frm, nx, written[0])
+               or receipt_why(to, ny, written[1]))
+    if listing_root(frm) == listing_root(to) and not receipt:
         return ""
     why = ""
     for a in sorted(nx):
@@ -746,6 +775,10 @@ def declared_verdict(frm: str, to: str,
     if not nx or not ny:
         why = ("no security name for " + ("either listing" if not nx
                                           and not ny else "one listing"))
+    if listing_root(frm) == listing_root(to):
+        return (f"nothing shows {frm} and {to} are one security: {receipt}"
+                f" (its own security, not a listing of the share) and "
+                f"{why}")
     return (f"nothing shows {frm} and {to} are one security: their roots "
             f"differ ({listing_root(frm)}, {listing_root(to)}) and {why}")
 
@@ -769,7 +802,8 @@ def _hub_partners_agree(hub: str, pairs: List[Pair],
     def solid(p: Pair) -> bool:
         mine, theirs = side(p)
         if p.journal == "tt":
-            return listing_root(mine.symbol) == listing_root(hub)
+            return (listing_root(mine.symbol) == listing_root(hub)
+                    and not p.extra.get("receipt"))
         return bool(mine.name and theirs.name
                     and _journal_key(mine.raw_name)
                     == _journal_key(theirs.raw_name))
@@ -875,7 +909,12 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
         # On the user's word only when something shows the two are
         # listings of one security (pre-release review M2): a deliberate
         # join of two symbols is a ticker.map TOBASE line.
-        verdict = declared_verdict(o.symbol, i.symbol, names, shown)
+        # The line's own spellings: a receipt venue (QZG.NE) is folded
+        # into .TO in the books.
+        _w = (j.line or "").split()
+        written = (_w[2], _w[3]) if len(_w) >= 4 else ("", "")
+        verdict = declared_verdict(o.symbol, i.symbol, names, shown,
+                                   written)
         if verdict:
             if refused is not None:
                 nx = names.get(o.symbol, set())
@@ -887,8 +926,14 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
                 _refuse(p, UNPROVEN, verdict)
             continue
         frm, to = tobase_direction(o.symbol, i.symbol, base_currency)
+        receipt = bool(receipt_why(o.symbol, names.get(o.symbol, ()),
+                                   written[0])
+                       or receipt_why(i.symbol, names.get(i.symbol, ()),
+                                      written[1]))
         joined.append(Pair(o, i, frm, to, journal="tt",
-                           extra={"where": j.where}))
+                           extra={"where": j.where,
+                                  **({"receipt": True} if receipt
+                                     else {})}))
     # 0. A currency journal the parser paired (one account, one day, one
     #    description): its two lines are one security.
     if currency_journals:
