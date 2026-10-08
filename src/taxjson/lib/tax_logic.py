@@ -125,6 +125,7 @@ PARTITION_RULES = frozenset({
     "CA-OPEN-02",      # opening cost at the snapshot day's BoC rate (US: USD only)
     "CA-CRYPTO-02",    # stablecoins as US-dollar cash
     "CA-DATE-01",      # settle-date tax year by default
+    "CA-CORP-11",      # a registered plan's defaulted spin-off counts for s.54 (US: not a wash purchase)
     "CA-CTRY-02",      # US-only settings/commands/flags refused
     "CA-CTRY-03",      # base currency CAD
     "CA-INC-03",       # s.260 payment in lieu as a dividend (D3)
@@ -3263,10 +3264,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                 "US-CORP-12", _sheltered_elections(s),
                 "a tax-advantaged account (IRA, Roth IRA, 401(k), HSA, "
                 "529 ...)", "wash-sale rule (§1091)",
-                "The spun-off shares are acquired on the distribution date, "
-                "as under taxable_distribution_301; elect tax_free_355 for "
-                "a §355 spin-off, whose shares are not a purchase for the "
-                "wash-sale rule."),
+                "The spun-off shares are held from the distribution date "
+                "but are not a purchase for the wash-sale rule, as under "
+                "tax_free_355 (most spin-offs are tax-free under §355); an "
+                "explicit taxable_distribution_301 election makes them "
+                "one."),
         ]),
         ("Income", [
             Rule("US-INC-01",

@@ -4219,13 +4219,20 @@ def sheltered_default_applies(event: CorporateAction) -> bool:
     return False
 
 
-def sheltered_default_rows(event: CorporateAction) -> List[dict]:
+def sheltered_default_rows(event: CorporateAction,
+                           country: str) -> List[dict]:
     """The rows of a sheltered account's event booked without asking
     (see SHELTERED_DEFAULT): a spin-off books the new shares at $0 cost
     and leaves the parent's cost alone; a merger carries the old shares'
     cost to the new ones (the share-for-share booking). The same share
-    quantities and dates as any election, so the superficial-loss /
-    wash-sale tests see the same units."""
+    quantities and dates as any election. Whether the spun-off shares
+    are a purchase for the loss rules is each country's own: Canada —
+    acquired on the distribution date, as under every spin-off election
+    (CA-CORP-11); USA — not a purchase for the wash-sale rule, as under
+    tax_free_355 (most spin-offs are §355; the user never chose a
+    taxable treatment), the BUY typed like a §355 spin-off's (US-CORP-12)."""
+    from taxjson.lib.country import is_usa
+    from taxjson.lib.core import SPINOFF_355_TYPE
     if event.action_type == 'spinoff':
         rows = _emit_allocated_basis_spinoff(
             event, {},
@@ -4234,6 +4241,10 @@ def sheltered_default_rows(event: CorporateAction) -> List[dict]:
                 f"(sheltered account: new shares at $0 cost, the parent "
                 f"keeps its cost; no tax in the account)"),
             allocated_acb=0.0, zero_is_intended=True)
+        if is_usa(country):
+            for r in rows:
+                if r.get('action') == 'BUYSELL':
+                    r['type'] = SPINOFF_355_TYPE
     else:
         rows = _emit_basis_carryover_rename(
             event, {},

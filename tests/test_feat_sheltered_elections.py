@@ -19,7 +19,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tax_rules import rule
+from tax_rules import rule, rule_absent
 from tax_rules.dual import cli, settings_for
 
 from taxjson.lib.country import CANADA, USA, HOME_CURRENCY
@@ -92,7 +92,7 @@ class _Base:
 
     # ------------------------------------------------------------ fixtures
     def _project(self, td, *, spin_in=None, mode=None, merger=False,
-                 withdraw=False):
+                 withdraw=False, margin_trades=()):
         """margin (taxable) and PLAN (sheltered), both IB. The spin-off
         (or, `merger`, an ABC -> XYZ share exchange) happens in `spin_in`
         (default: the sheltered account). `withdraw`: the 25 spun-off
@@ -127,6 +127,9 @@ class _Base:
             margin_kw["xfers"] = [("SPNCO", "2025-05-02", 25, 500)]
             margin_kw["trades"] = (list(margin_kw.get("trades", []))
                                    + [("SPNCO", "2025-07-02", -25, 30.0)])
+        if margin_trades:
+            margin_kw["trades"] = (list(margin_kw.get("trades", []))
+                                   + list(margin_trades))
         for acct, kw, aid in ((plan, plan_kw, "U5550002"),     # pii-ok
                               ("margin", margin_kw, "U5550001")):  # pii-ok
             d = root / "inputs" / acct
@@ -244,6 +247,25 @@ class _Base:
             self.assertEqual((t["proceeds"], cost, t["gain"]),
                              (750.0, 500.0, 250.0))
 
+    def _loss_near_the_spin_off(self, td, elect=None):
+        """margin buys 10 SPNCO at 20 and sells them at 10 a week after
+        the plan received 25 SPNCO in the spin-off (still held at day
+        30): a 100 loss with the plan's shares in its window. The filing
+        totals, with the plan's event defaulted or `elect`ed."""
+        root = self._project(td, margin_trades=[
+            ("SPNCO", "2025-02-03", 10, 20.0),
+            ("SPNCO", "2025-03-10", -10, 10.0)])
+        r = cli(root, "run", "--no-input")
+        self.assertEqual(r.returncode, 0, _flat(r)[-3000:])
+        if elect:
+            eid = self._event_id(root, self.PLAN)
+            e = cli(root, "elect", self.PLAN, "--set", f"{eid}={elect}")
+            self.assertEqual(e.returncode, 0, _flat(e))
+            r = cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, _flat(r)[-3000:])
+        return json.loads(cli(root, "sum", "--json").stdout)[
+            "filing"]["totals"]
+
     def check_merger_carries_the_cost(self):
         with tempfile.TemporaryDirectory() as td:
             root = self._project(td, merger=True)
@@ -285,6 +307,16 @@ class TestCanadaRegisteredAccount(_Base, unittest.TestCase):
     def test_merger_carries_the_cost(self):
         self.check_merger_carries_the_cost()
 
+    def test_defaulted_shares_count_for_the_superficial_loss_rule(self):
+        """Canada as built: the registered account's spun-off shares
+        are acquired on the distribution date, as under every spin-off
+        election, so the margin loss a week later is denied (for good:
+        the holder is a registered plan)."""
+        with tempfile.TemporaryDirectory() as td:
+            t = self._loss_near_the_spin_off(td)
+        self.assertEqual(t["gain"], 0.0, t)
+        self.assertEqual(t["permanently_denied"], 100.0, t)
+
     def test_tax_logic_states_both_modes(self):
         from taxjson.lib.tax_logic import rule_sections
         text = {m: next(r.text for _t, rs in rule_sections(
@@ -319,6 +351,23 @@ class TestUsRetirementAccount(_Base, unittest.TestCase):
     def test_merger_carries_the_cost(self):
         self.check_merger_carries_the_cost()
 
+    def test_defaulted_shares_are_not_a_wash_sale_purchase(self):
+        """As under tax_free_355: the IRA's defaulted spun-off shares do
+        not wash the margin loss a week later."""
+        with tempfile.TemporaryDirectory() as td:
+            t = self._loss_near_the_spin_off(td)
+        self.assertEqual((t["gain"], t["permanently_denied"]),
+                         (-100.0, 0.0), t)
+
+    def test_an_explicit_301_election_still_counts(self):
+        """taxable_distribution_301 elected in the IRA: the shares are a
+        purchase, and the IRA replacement denies the loss for good (Rev.
+        Rul. 2008-5)."""
+        with tempfile.TemporaryDirectory() as td:
+            t = self._loss_near_the_spin_off(
+                td, elect="taxable_distribution_301")
+        self.assertEqual(t["permanently_denied"], 100.0, t)
+
     def test_tax_logic_states_both_modes(self):
         from taxjson.lib.tax_logic import rule_sections
         text = {m: next(r.text for _t, rs in rule_sections(
@@ -326,7 +375,27 @@ class TestUsRetirementAccount(_Base, unittest.TestCase):
             if r.id == "US-CORP-12") for m in ("zero", "ask")}
         self.assertIn("booked without asking", text["zero"])
         self.assertIn("wash-sale rule", text["zero"])
+        self.assertIn("not a purchase for the wash-sale rule, as under "
+                      "tax_free_355", text["zero"])
         self.assertIn("is asked like a taxable account's", text["ask"])
+
+
+class TestPartition(unittest.TestCase):
+    """The same book under both countries: the plan's defaulted spun-off
+    shares are acquired for Canada's superficial-loss rule (CA-CORP-11)
+    and not a purchase for the US wash-sale rule (US-CORP-12)."""
+
+    @rule("CA-CORP-11")
+    @rule_absent("CA-CORP-11", country="usa")
+    @rule("US-CORP-12")
+    def test_registered_spin_off_counts_in_canada_only(self):
+        got = {}
+        for cls in (TestCanadaRegisteredAccount, TestUsRetirementAccount):
+            t = cls("test_merger_carries_the_cost")
+            with tempfile.TemporaryDirectory() as td:
+                got[cls.COUNTRY] = t._loss_near_the_spin_off(td)[
+                    "permanently_denied"]
+        self.assertEqual(got, {CANADA: 100.0, USA: 0.0})
 
 
 class TestSettingRefused(unittest.TestCase):

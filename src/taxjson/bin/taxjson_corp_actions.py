@@ -289,7 +289,7 @@ def _emit_resolved(events: List[CorporateAction], manifest: Manifest,
         rec = manifest.get(ev.event_id)
         if rec is None and ev.event_id in sheltered_default:
             emitted_event_count += 1
-            transactions.extend(sheltered_default_rows(ev))
+            transactions.extend(sheltered_default_rows(ev, country))
             defaulted.append(ev.event_id)
             continue
         if rec is None:

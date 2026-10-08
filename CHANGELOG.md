@@ -115,7 +115,11 @@
   `run --strict`, `elect --pending`, the checklist and quick-start do not
   wait for it. An election saved with `taxjson elect` still wins; a
   taxable account is asked as before. `[settings] sheltered_elections =
-  "ask"` restores the question. Tax-logic `CA-CORP-11` / `US-CORP-12`.
+  "ask"` restores the question. In a US project the spun-off shares
+  booked this way are not a wash-sale purchase, as under `tax_free_355`
+  (an explicit `taxable_distribution_301` election makes them one); in
+  Canada they count as acquired, as under every spin-off election.
+  Tax-logic `CA-CORP-11` / `US-CORP-12`.
 
 - **The default FX-on-cash figure is no longer presented as reportable**:
   it never read conversions, deposits/withdrawals or margin balances, so
