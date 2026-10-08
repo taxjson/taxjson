@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.24.0 (2026-10-07)
+
 ### Added
 
 - **`taxjson quick-start` lists every step from install to filing**

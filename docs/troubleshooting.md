@@ -83,14 +83,14 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the named line is a `GLOBAL`, `TOBASE`, `JOURNAL` or undated `RENAME` line with an option symbol (or a future, `F:…`) on one side and a share symbol on the other, or two option symbols whose expiry, right (C/P), strike or market (`.US`, `.TO`) differ.
 - **Cause:** such a line makes the two the same security at every date: the contract's cost was pooled with the shares (or with another contract), and the gains changed without a word. Earlier the line was accepted silently (only a dated `RENAME` was refused).
 - **Fix:** delete the line. An option follows its underlying's line: join the shares' symbols instead (a line for the shares moves their options too). A respelling of one contract — the same expiry, right, strike and market, the root spelled otherwise (`GLOBAL QZB.B250620C00010000.TO QZB250620C00010000.TO`, an adjusted-series digit) — is allowed. Book an exercise or assignment as the broker's rows show it.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/bin/taxjson_convert_tt.py` — `_join_derivative_check`; `src/taxjson/bin/taxjson_ticker_map.py` — `_parse_map_text`
 
 ### `tjs format-map`: "Warning: 2 ticker.map problem(s): `taxjson run` refuses the map until each is fixed" or "Error: ticker.map: laying the map out in groups would change what it means"
 - **Check:** the warning lists each problem as `- ticker.map:<line>: …` (the line numbers of the file before formatting) and says how many lines went to the "Unrecognized" group; the error writes nothing (exit 2).
 - **Cause:** a line `taxjson run` cannot use (no keyword, malformed, a second target for one symbol) is kept exactly as written at the end of the file, in the "Unrecognized" group, so the line that wins stays first. The error means that moving the lines into their groups would change which of two contradicting lines wins, or the order of two dated renames that contradict each other.
 - **Fix:** fix or delete each named line (see "Error: 2 ticker.map problem(s)" above), then `tjs format-map --write` again.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/ticker_map_format.py` — `format_map`, `would change what it means`; `src/taxjson/bin/taxjson_run.py` — `cmd_format_map`
 
 ### "Warning: [settings] option_grant_timing_since is not set, so grant timing (ITA s.49(1)) starts at the project year (2025)"
@@ -176,7 +176,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the next lines quote the `.tt` line (`BUYSELL 2025-01-10 10:00:00 QZA.TO 10 CAD 10 110`); `tjs checklist`'s run-clean step lists it ("1 .tt line(s) whose total is not qty x price +/- fee, booked as written"), and `tjs run --strict` stops on it. A sale whose commission exceeds its gross, written with a 0 total, reads "a .tt sale's total is 0 but its commission exceeds its gross".
 - **Cause:** a `.tt` BUYSELL line's total is what the engine books — a purchase's cost, a sale's proceeds — not quantity x price. A total more than 1% (at least 0.05) off quantity x price (x the contract size) + fee for a purchase, − fee for a sale, is usually a typo; it is booked as written. Before the fix the warning reached only the `.sum` DIAGNOSTICS, so a wrong cost or proceeds went through with nothing on the console, `--strict` and the checklist saying nothing. A line with no price (0: the total alone states the amount) and a futures line without its size are not compared.
 - **Fix:** correct the total (or the quantity or price) and `tjs run`. If the total is right as written (a charge the line does not show), put the difference in the line's fee column so the two agree. An `ACQUIRED` line ("a .tt ACQUIRED line's total 530.00 is not qty x price = 480.00") has no fee column: write the price the message gives (the total divided by the quantity). Earlier the warning on an `ACQUIRED` line quoted the `BUYSELL` it expands to and advised the fee column, and the warning and the `--strict` stop named the file unmasked while the "Reading" step line masked an account-number-like part of the name; all three now name it the same (masked) way.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/tt_totals.py` — `read_diag`, `project_mismatches`, `tolerance`, `source_line`, `a .tt line's total`, `ACQUIRED has no fee column`; `src/taxjson/bin/taxjson_convert_tt.py` — `.tt line total`; `src/taxjson/bin/taxjson_run.py` — `_echo_tt_totals`; `src/taxjson/lib/checklist.py` — `d_run_clean`
 
 ### Generic importer: "Error: generic_ws.csv: generic importer: no mapping for generic_ws.csv" or "Error: …: generic importer: generic_ws.csv: mapped column(s) not in the CSV header: action -> 'Transaction type'."
@@ -220,28 +220,28 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs find-missing-history` lists the CAD line (QZD.TO) short on the gambit's day, and the export shows a buy of one line and a sale of the other that day (RBC trade rows ending `CA JNL`). Look for the journal's evidence: its two transfer legs (RBC `TFR - … TRANSFER TO U$ J~1` / `… FROM C$ J~1`, Questrade's BRW `JOURNAL POSITION` pair) dated the settlement day in `tjs transfers`, or a `.tt` `JOURNAL` line. `tjs sum` has the gambit's gain in its totals.
 - **Cause:** the missing-history walks read a day's rows by the broker's clock (RBC numbers a day's rows, newest first), so the sale came before the buy. On a journal's days they read buys first: the journal's legs' own days and, in that account within 5 business days of them, the one nearest day whose trades are the journal's own (its units of the FROM listing bought, the same units of the TO listing sold) — for a journal the books show (a join of the run, a Questrade pair id, RBC's J~ reference on an RBC export, a `.tt` `JOURNAL` line); a legacy ticker.map `JOURNAL` line names every day of a buy of one listing and a sale of the same quantity of the other. Opposite trades of another quantity or direction near a journal are not its own: earlier, any such day within 5 business days of any journal between the two listings was read as one, which hid a sale with no purchase (a 100-unit sale of one listing and a buy of the other two days before an unrelated 50-unit journal). A `TOBASE` line names no journal: it says the two listings are one security, not that units moved between them — read as a journal on every day of its symbols it hid a genuinely missing purchase (a sale of one listing with no purchase and a buy of the other; or, after a gambit, any later sale and rebuy). So a gambit with no legs in the export (a `.tt` project, or a `JOURNAL` line `tjs format-map --write` migrated to `TOBASE`) reads as a short until the journal is declared.
 - **Fix:** with the broker's legs in the export nothing is needed. Without them, add the journal as a dated event, the line the run's "Info: 1 day(s) with a buy of one listing and a sale of the other that a ticker.map TOBASE line joins" names, in a `.tt` file of the account (`JOURNAL 2025-05-05 QZD.TO QZD.U.TO 1000`), then `tjs run`. If the units were not journaled, the purchase is missing (the entry above).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/missing_history.py` — `walk_journal_symbols`, `JournalDays`, `_journal_trade_day`, `_opposite_trades`, `_journal_line_symbols`, `_day_trades`, `detected_journal_symbols`, `journal_leg_key`, `_walk_key`, `undeclared_journal_days`; `src/taxjson/bin/taxjson_run.py` — `_report_short_positions`
 
 ### "Info: 1 day(s) with a buy of one listing and a sale of the other that a ticker.map TOBASE line joins, the same quantity, and no journal"
 - **Check:** the detail names each day as the `.tt` line to add (`` `JOURNAL 2025-03-03 QZF.TO QZF.U.TO 100` (margin) ``); `tjs find-missing-history` lists the joined symbol short on that day, and `tjs transfers` shows no journal legs for it.
 - **Cause:** a buy of one listing and a sale of the same quantity of the other on one day is what a Norbert's gambit looks like, and also what selling shares bought before your files start and buying the other listing looks like. A `TOBASE` line joins the two listings as one security but is no evidence that units moved, so the day reads in the broker's clock order and a sale stamped before the buy has no purchase.
 - **Fix:** if the units were journaled, add the named line to a `.tt` file of that account and `tjs run`: the day then reads as the journal's. Otherwise supply the missing purchase (`tjs find-missing-history`).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/missing_history.py` — `undeclared_journal_days`; `src/taxjson/bin/taxjson_run.py` — `_report_short_positions`, `that a ticker.map TOBASE line `
 
 ### "Warning: … with no purchase in your files … Those sales are NOT in `taxjson sum`" while `tjs sum` has the sale in its totals; or "`taxjson sum` books those sales as short sales closed by a later purchase" or "Info: 1 position read short in 2025 by `taxjson find-missing-history`"
 - **Check:** `tjs sum --json`: `no_purchase_uncovered` lists the sales the totals lack; `no_purchase_in_totals` lists those the gains engine booked, with `booked` = `short_cover` or `matched`.
 - **Cause:** the closing summary and `tjs sum` said "NOT in `taxjson sum`" for every sale the missing-history walk read as sold before bought, also when the gains engine had booked it: as a short sale a later purchase of the year closed (in the totals, at that purchase's cost), or from a purchase it reads first (the walk and the engine order a day's rows differently). Now the claim is made only for sales the gains files lack (an open short at the year's end); a short closed within the year is a Warning saying so, and a sale the engine matched is an Info line.
 - **Fix:** for "NOT in `taxjson sum`" and for a short closed by a later purchase when you held the shares before your files start, supply the purchase (`tjs find-missing-history`, docs/getting-started.md step 5). For the Info line, compare the day's trades with the broker's: the totals already have the sale.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/first_run.py` — `engine_booking`, `BOOKED_SHORT_COVER`, `render_blocks`; `src/taxjson/bin/taxjson_run.py` — `_uncovered_sales`, `no_purchase_in_totals`
 
 ### "Info: 1 position(s) go short in margin's data (QZN.TO) … Until the purchase is supplied their gain is in no total" for a short sale closed within the year; or `tjs find-missing-history` counting its cover as a sale (InYrSales 2)
 - **Check:** the closing summary says "`taxjson sum` books those sales as short sales closed by a later purchase" for the same symbol, and `tjs sum --json` lists it under `no_purchase_in_totals` with `booked` = `short_cover`. `tjs find-missing-history` showed InYrSales 2 and InYrProceeds as the sale's proceeds plus the cover's cost.
 - **Cause:** the run's mid-run note said "in no total" for every position that went short, while the gains engine had booked a short a later purchase of the year closed (in the totals, at that purchase's cost). find-missing-history's in-year count took every row that drew on the short, the covering purchase included, and added its cost to the proceeds. After the first fix the note still read the last run's cross-account wash file (`<account>_gains_wash.json`, rebuilt only after the note), so on a re-run after adding (or removing) the covering purchase it said the opposite of the closing summary; it now reads this run's gains files.
 - **Fix:** upgrade and `tjs run`. The mid-run note now follows the engine's booking, as the closing summary and `tjs sum` do: "booked as short sales closed by a later purchase" (in the totals), "read short … by the missing-history check" (sold from a purchase in your files), or "in no total" (still short at the year's end). InYrSales and InYrProceeds count sales only; a short carried into the year and covered in it is still listed, with a line saying the cover's gain or loss is in the year. If you held the shares before your files start, supply the purchase (docs/getting-started.md step 5).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_short_positions_note`, `_report_short_positions`; `src/taxjson/lib/first_run.py` — `engine_booking`; `src/taxjson/lib/missing_history.py` — `assess_tax_year_relevance`; `src/taxjson/bin/taxjson_missing_history.py` — `_print_section`
 
 ### "Warning: Short position: QZQ.US (margin): the broker codes the sale on 2025-04-01 CLOSING (IB code C, IB Basis …), but the data holds no position to close"
@@ -276,14 +276,14 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs transfers` shows the arrival in one account and, in another account on or near the same day, a journal's two legs of the same security (a `.tt` `JOURNAL` line's legs, a Questrade BRW `JOURNAL POSITION` pair, RBC `TFR … J~` legs); the arrival's "booked at the ACB the broker states on the row" Warning is missing, or an "in-kind move(s) … booked" Warning names the journal's account.
 - **Cause:** the transfer pairing pooled every account's transfer legs per security, so the journal's out-leg of one listing cancelled the other account's arrival (the arrival's book value was dropped and the sale read the other account's cost), or its in-leg paired with a taxable account's transfer-out as an in-kind contribution. A journal moves units inside one account: its legs now cancel within their own pair (or with the broker's leg a one-legged `.tt` line stands beside) and never pair with another account's transfer (tax-logic CA-XLIST-04 / US-XLIST-03).
 - **Fix:** re-run `tjs run` on a release with the fix. On an older install remove the `.tt` `JOURNAL` line and add `TOBASE FROM TO` to ticker.map instead.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/transfer_in.py` — `own_journal_legs`, `movable_rows`, `arrivals`, `sidecar_rows`; `src/taxjson/bin/taxjson_run.py` — `transfer_arrivals`, `in_kind_state`, `_sidecar_transfer_rows`
 
 ### "Info: 1 position(s) go short in b's data (QZD.U.TO)" after a Norbert's gambit in one account while another account received the same listing by transfer that day; the gambit's join only suggested
 - **Check:** `tjs transfers` shows account b's journal legs (RBC `TFR … J~1`, or a Questrade BRW `JOURNAL POSITION` pair) and, the same day, a transfer-in of the same listing (QZD.TO, the same quantity) in account a; `tjs journals` (or `tjs ticker-map --suggest`) lists b's journal as a suggestion, not a join.
 - **Cause:** the cross-listing pairing first cancelled every same-symbol out-leg and in-leg across all accounts, before it paired legs by the broker's reference: a's arrival cancelled b's out-leg, so b's journal had one leg left and its two listings were not joined (b's sale of the other listing had no purchase). A Questrade BRW pair in a US project went the same way.
 - **Fix:** upgrade and `tjs run`: legs that carry the broker's reference (RBC's `J~`, Questrade's journal pair, in both countries) pair inside their account first, and a journal's leg never cancels another account's transfer (tax-logic CA-XLIST-01 / US-XLIST-01). On an older install add `TOBASE QZD.U.TO QZD.TO` to ticker.map.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/cross_listings.py` — `analyze`
 
 ### "Warning: 1 transfer in a taxable loss's 30-day window counted as an account move, not a purchase"
@@ -341,7 +341,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the run's console said "joined as one security by their transfer journal: QZD.U.TO ↔ QZD.TO …" and `work/ticker.map.effective` has the `TOBASE` / `JOURNAL` line; `ticker.map` itself has no line for the pair. The books hold the position under one symbol, the broker lists it under both.
 - **Cause:** `tjs sanity` folded the broker's symbols with `ticker.map` only, not with the listings the run joined itself, so the broker's other-listing position was compared on its own.
 - **Fix:** upgrade: sanity folds with the map the books were merged with (`work/ticker.map.effective` when the run wrote one, else `ticker.map`). A real difference still shows.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `_EFF_MAP`; `src/taxjson/lib/cross_listings.py` — `EFFECTIVE_MAP`
 
 ### "Warning: 3 positions differ from the broker's holdings files"
@@ -378,98 +378,98 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs format-map --check` says "ticker.map holds dated events to migrate"; `tjs format-map` (a dry run) shows each `JOURNAL A B` becoming `TOBASE A B` and each dated `RENAME OLD NEW YYYY-MM-DD` moving to `inputs/<account>/renames.tt`.
 - **Cause:** ticker.map now holds standing truths only. A journal between two listings and a ticker change happen on a date: they are `.tt` lines of an account, date first (`JOURNAL <date> FROM TO <qty>`, `RENAME <date> OLD NEW`). The old lines still work (a `JOURNAL` line is read as `TOBASE`, a dated `RENAME` as the event), said once per run.
 - **Fix:** `tjs format-map --write`: it rewrites the `JOURNAL` lines as `TOBASE`, moves the dated `RENAME` lines (comments too) to a `renames.tt` (the first account whose books carry the change; one per account kind, securities or crypto, whose books hold the symbols), keeps a backup of ticker.map, and refuses rather than change the books. Then `tjs run`: the totals are the same. The tax books never changed with a `JOURNAL` line; the holdings view did (it moves a journal's units only by its rows): where the holdings show the two listings long and short, the dry run names a `.tt` line `JOURNAL <date> FROM TO <qty>` to add.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/dated_events.py` — `legacy_note`, `home_accounts`, `plan_migration`; `src/taxjson/lib/ticker_map_format.py` — `format_map`, `_migrate_items`, `Moved`; `src/taxjson/bin/taxjson_run.py` — `cmd_format_map`, `_journal_gaps`
 
 ### "Error: moving ticker.map's dated RENAME lines to .tt files would change the books — nothing was written"
 - **Check:** each listed line names the account and the change, how it is booked now and how it would be after the move (`… is booked 2025-04-01 late=separate now and would be 2025-04-01 after the move`), or the contradiction the move would create; `tjs renames` shows the event and its declarations.
 - **Cause:** a dated ticker.map `RENAME` and a `.tt` `RENAME` line of the same change say different things (another `late=`, another date). The run books them as one event — the date the earliest declared, each declaring account's `late=` for its own late rows, the map line's `late=` for the others — and moving the map line into an account's `.tt` file would change that (for example an account would then declare both `late=fold` and `late=separate`). Earlier, `--write` moved it anyway and the books changed (a `late=fold` lost, a late buy split from the renamed shares). An account with no books yet (`work/<account>_base.json`) is compared on every change of its kind; earlier such an account of the other kind (a crypto account with no inputs yet, for a securities change) refused every move, and so did a home account whose own `.tt` line chose the other `late=` while another account could take the line — the line now goes to an account whose own lines agree.
 - **Fix:** make the two lines say the same, or delete one; run `tjs run`, then `tjs format-map --write` again. A moved line that repeats a `.tt` line written differently but booked the same is moved, with an Info line asking you to keep one.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/dated_events.py` — `plan_migration`, `resolve_renames`, `MigrationPlan`; `src/taxjson/bin/taxjson_run.py` — `cmd_format_map`
 
 ### "Error: 1 .tt dated-event line(s) cannot be booked"
 - **Check:** each listed line names its file and line (`inputs/<account>/<file>.tt:N`) and the form it expected: `JOURNAL <date> <FROM> <TO> <qty>` or `RENAME <date> <OLD> <NEW> [late=fold|late=separate]`.
 - **Cause:** a dated event line is malformed (the ticker.map order `RENAME OLD NEW YYYY-MM-DD` instead of date first, `JOURNAL FROM TO` with no date or quantity, a zero quantity), a JOURNAL or RENAME (or a legacy ticker.map dated `RENAME`) names an option contract or a future ("JOURNAL line names an option contract …: … never journaled", "RENAME line renames an option contract …": a contract never becomes shares by a journal or a ticker change, and an option follows its underlying's rename — write the stock's `RENAME` line), a line is dated in the future ("… in the future — a dated event is written once it has happened") or a JOURNAL moves an implausible quantity, a JOURNAL moves more units than a journal the broker's rows already hold between the same two listings on the line's date ("the broker's rows already hold a journal of 1000 …: … write only the units they lack (500)"), a JOURNAL sits in a crypto account, or RENAME declarations cannot all be true: one ticker renamed to two symbols within a week ("contradicts"), one change declared on two dates further apart ("one change has one date"), a cycle such as `A -> B` plus `B -> A` ("form a cycle"), one account choosing both `late=fold` and `late=separate`, or an undated ticker.map rule for the same ticker. Each declaration counts, `.tt` lines of every account and dated ticker.map lines alike. Nothing is built: a dropped event would change the books. Earlier, two declarations of one change a month apart were booked as two changes, and a swap was accepted.
 - **Fix:** fix or delete the line. A ticker change declared in two places is fine when both name the same change within a week (one event, dated the earliest, an Info line); two identical JOURNAL lines are one journal (a Warning: "… repeats … word for word: one journal, booked once"). Two accounts may choose different `late=` for their own late rows. A symbol that really changed back is booked in its account with a `.tt` line `SPLIT <date> <time> OLD NEW 1`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/bin/taxjson_convert_tt.py` — `parse_journal_line`, `parse_rename_line`, `_rename_derivative_check`, `_not_in_future`; `src/taxjson/lib/dated_events.py` — `read_declarations`, `check_against_map`, `resolve_renames`, `DatedEventError`; `src/taxjson/lib/cross_listings.py` — `declared_twins`, `partial_overlaps`; `src/taxjson/bin/taxjson_run.py` — `_read_dated_events`, `stage_dated_events`
 
 ### "Warning: inputs/margin/j.tt:1: JOURNAL 2025-05-05 QZD.TO QZD.U.TO 1500 is booked in full beside the broker's journal of 1000 between the same listings"
 - **Check:** the Warning names the broker's journal's legs (`2025-05-06, 2025-05-06`) and, for an RBC gambit, its trades' day; `tjs transfers` shows the broker's legs and the `.tt` line's legs both moving units between the two listings; `tjs journals` lists both.
 - **Cause:** a `.tt` `JOURNAL` line that moves more units than the broker's own journal between the same two listings in the same account stops the run on the journal's own date (it would move those units twice), but a line dated one business day off — RBC dates a gambit's trades on the trade day and its `J~` legs on the settlement day — was booked in full on top of the broker's journal without a word.
 - **Fix:** if the line restates the broker's journal, date it as the broker's legs (`JOURNAL 2025-05-06 …`): the run then says which units the rows lack, and you write only those. If it is a separate journal, check its date against your records; nothing else is needed.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/cross_listings.py` — `near_restatements`, `NEAR_DAYS`; `src/taxjson/bin/taxjson_run.py` — `stage_dated_events`
 
 ### A ticker that changed twice (`RENAME` A to B, then B to C) leaves the position in B and C goes short
 - **Check:** `tjs renames` lists both changes, but the second shows no position carried in an account that held A; `tjs shares` shows that account long B and short C.
 - **Cause:** the dated renames were applied in the order they were read (ticker.map order, then the accounts' `.tt` files), not by date, and an account counted as holding B only from rows of B, not from the first change's rename row. A `format-map` migration that put the two lines in different accounts' files could reverse the order.
 - **Fix:** upgrade: the changes apply in date order, and the first change's rename row counts as holding B (on the same date too, in the lines' order). Re-run `tjs run`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/renames.py` — `apply_dated_renames`
 
 ### "Error: SPLIT QZA.TO→QZB.TO: rename would merge a LONG position into an existing SHORT pool" (US: a total that misses the sales between the declared date and the broker's rename row) with a `.tt` `RENAME … late=fold`
 - **Check:** the account's own rows hold the change (a broker corporate-action row or a `.tt` `SPLIT <date> <time> OLD NEW 1`) a few days after the date the `RENAME` line declares, and the account sold OLD between the two dates; `tjs shares` shows NEW short before the rename row.
 - **Cause:** `late=fold` re-booked every OLD row on or after the declared date as NEW, even the ones before the account's own rename row, while `tjs renames` called only the rows after that row late. The sale became a short NEW position that the rename row then merged into.
 - **Fix:** upgrade: `late=fold` re-books only the rows the engine takes after the account's own rename row (next entry), the rows `tjs renames` lists. Re-run `tjs run`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/renames.py` — `apply_dated_renames`, `after_rename_row`, `late_rows`
 
 ### Canada: an OLD sale on the day of an evening rename row (IB's 20:25 corporate actions, a timed `.tt` SPLIT) goes short with `late=fold` declared, and `run --strict` passes
 - **Check:** the account's rename row is timed later in the day (`SPLIT 2025-04-03 20:25:00 QZA.TO QZB.TO 1`) than an OLD trade of the same day (10:00); `work/<account>_base.json` keeps that trade as QZA.TO; `tjs find-missing-history` lists QZA.TO short, and the total misses its gain. A US project books the same input correctly.
 - **Cause:** the late rows were decided by clock time, but the Canada engine orders by settlement date and takes a ticker change ahead of every trade executed on its date: the morning sale, kept as OLD, came after the change had emptied OLD.
 - **Fix:** upgrade: an account's late rows are the ones its country's engine takes after its own rename row. In Canada every OLD trade executed on the rename row's date is late (`late=fold` books it as NEW; without a declaration `tjs renames` lists it and `run --strict` stops); in the US the clock decides (a trade before the evening row is still OLD). Re-run `tjs run`. A stage tool run on its own (`taxjson-merge2`, `taxjson-ticker-map`) takes `--country` for this and refuses such a row without it.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/renames.py` — `after_rename_row`, `RenameNeedsCountry`, `late_rows`, `apply_dated_renames`; `src/taxjson/lib/corporate_timeline.py` — `event_sort_key`
 
 ### A broker's (or a `.tt`) SPLIT QZA→QZB and a `RENAME` QZB→QZC on the same date: "RENAME 2025-04-01 QZB.TO QZC.TO books nothing" and QZC goes short
 - **Check:** the account's own rows rename QZA into QZB on the date the `RENAME` line declares for QZB; `tjs renames --pending` lists the line under DECLARED, NOT BOOKED.
 - **Cause:** on the date itself only a rename row the run had booked from another declaration counted as holding QZB; the broker's or a `.tt` SPLIT row did not.
 - **Fix:** upgrade: any rename row into the old symbol on the date counts, and the second change is stamped no earlier than the first. Re-run `tjs run`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/renames.py` — `apply_dated_renames`
 
 ### "RENAME 2025-04-01 QZA.TO QZB.TO books nothing" when ticker.map respells the rows (`GLOBAL QZAX.TO QZA.TO`), and "is dated, but ticker.map renames QZAX.TO to QZA.TO at every date" for the raw spelling
 - **Check:** ticker.map has an undated line mapping the broker's spelling onto the symbol the `RENAME` line names; `tjs renames --pending` lists the line under DECLARED, NOT BOOKED.
 - **Cause:** a dated rename books on the exports' raw symbols, before the undated renames apply, and only matched the declared symbol: the rows in the raw spelling were never renamed. Declaring the raw spelling is refused because the map renames it at every date.
 - **Fix:** upgrade: a declaration naming the symbol ticker.map gives the rows (`RENAME 2025-04-01 QZA.TO QZB.TO`) books on every raw spelling mapped onto it, late rows included; the refusal of the raw spelling names that line. Re-run `tjs run`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/renames.py` — `apply_dated_renames`; `src/taxjson/lib/dated_events.py` — `check_against_map`
 
 ### "Warning: ATTENTION: 2 trade(s) in QZOLD.TO after its rename to QZNEW.TO on 2025-04-01" for an account that never held QZOLD.TO, while another account's line says `late=fold`
 - **Check:** `tjs renames --json` lists the account's rows under `late` as `unresolved`; the account's stage notes (`work/<account>_*.diag`) say "… row(s) of account b on or after 2025-04-01 are kept as QZOLD.TO: late=fold applies to the accounts that held QZOLD.TO before the date".
 - **Cause:** an event's `late=` describes how the brokers of the accounts that held the old ticker booked the renamed shares. An account that bought the old ticker only after the change may hold another company's shares now using it; earlier, another account's `late=fold` folded those rows into the new symbol without a word.
 - **Fix:** add a line of the account's own to one of its `.tt` files: `RENAME 2025-04-01 QZOLD.TO QZNEW.TO late=separate` (another security) or `… late=fold` (the renamed shares), then `tjs run`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/renames.py` — `apply_dated_renames`, `DatedRename`, `declared_late`
 
 ### "Warning: inputs/margin/m.tt:2: RENAME 2025-04-01 QZAA.TO QZB.TO books nothing"
 - **Check:** `tjs renames` lists the line under DECLARED, NOT BOOKED (`--pending` counts it); `work/dated_events.state` records it with status `unused`.
 - **Cause:** no account of the line's kind (securities, or crypto for a crypto account's line) holds the old symbol before the date: a typo of the symbol, a date after the last row of it, or a line in an account of the other kind. Earlier such a line was silently ignored. A chain declared for one day (`RENAME 2025-04-01 QZA.TO QZB.TO` and `RENAME 2025-04-01 QZB.TO QZC.TO`) used to book only the first link; it now books both, in date and line order.
 - **Fix:** correct the symbols or the date, or delete the line; then `tjs run`. `run --strict` stops on such a line ("--strict: 1 declared rename(s) book nothing — aborting"); earlier it passed.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_unused_renames`; `src/taxjson/lib/renames.py` — `unused_declarations`, `apply_dated_renames`; `src/taxjson/lib/dated_events.py` — `rename_records`
 
 ### A `.tt` RENAME in a securities account moved a coin in a crypto account (or the reverse)
 - **Check:** `tjs renames` lists the change under the crypto account too, `work/<crypto account>_base.json` holds a SPLIT row for it, and the coin's sale goes short.
 - **Cause:** a `.tt` RENAME applied to every account holding the old symbol, whatever its kind; a bare symbol can name a security and a coin.
 - **Fix:** upgrade: a `.tt` RENAME applies only to accounts of its declaring account's kind (tax-logic CA-CRYPTO-RENAME / US-CRYPTO-RENAME). Declare a coin's ticker change in a crypto account's `.tt` file. A legacy ticker.map dated RENAME still applies to every account.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/renames.py` — `apply_dated_renames`, `KIND_CRYPTO`; `src/taxjson/lib/dated_events.py` — `account_kind`
 
 ### "Error: 1 .tt JOURNAL line(s) join two listings that nothing shows are one security"
 - **Check:** each listed line names its place (`inputs/<account>/<file>.tt:N`), the two symbols and why: "their roots differ (QZAAA, QZBBB) and no security name for either listing" (or "the legs' names are not equal word for word"), or "the names name different companies". `tjs journals --pending` lists it as refused with the way out.
 - **Cause:** a `.tt` `JOURNAL` line joins its two listings as one security in every account and year, so it needs evidence that they are two listings of ONE security: the same root (the symbol without its venue suffix — a listing suffix of `data/markets.toml` — and, on a Canadian venue, without the US-dollar line's `.U`: `QZG.TO`, `QZG.U.TO`, `QZG.US`; a class, warrant or unit designator is part of the root, so `QZG.A` / `QZG.B` and `QZG.WS` / `QZG.L` differ), or names in the exports that agree as a broker journal's legs' names must, and no names of two different companies (tax-logic CA-XLIST-04 / US-XLIST-03). A typo in a symbol used to merge two companies' pools silently, and any last dotted part used to be read as a venue (two share classes joined on one root).
 - **Fix:** check the two symbols. If they are one security under two tickers, add the line the message prints, `TOBASE FROM TO`, to ticker.map (a deliberate, standing join): the `.tt` line is then booked. Otherwise delete the `.tt` line.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/cross_listings.py` — `declared_verdict`, `listing_root`, `UNPROVEN`, `analyze`; `src/taxjson/bin/taxjson_run.py` — `stage_cross_listings`, `nothing shows are one security`
 
 ### `reports/<account>_holdings.toml` shows a long on one listing and an equal short on the other after a Norbert's gambit (ticker.map `JOURNAL` line)
 - **Check:** `tjs transfers` shows no journal rows for the gambit's day in that account (the export lacks the journal's two legs); the account's totals in `tjs sum` are right, and `tjs sanity` (which compares the joined security) agrees with the broker.
 - **Cause:** a ticker.map `JOURNAL` line used to fold the two listings together in the holdings view. It is now read as `TOBASE` (one security for the cost and the loss rules), and the holdings view moves units between listings only by the journal's transfer legs, which this export does not have.
 - **Fix:** add the journal as a dated event, one line in a `.tt` file of the account: `JOURNAL 2025-03-05 QZD.TO QZD.U.TO 1000` (the day, the listing the units left, the listing they reached, the quantity), then `tjs run`. A journal the broker's rows already hold is recognised and not booked twice.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/bin/taxjson_export.py` — `_apply_transfer_evidence`; `src/taxjson/lib/dated_events.py` — `write_sidecars`, `settle_journals`
 
 ### "Warning: 2 trade(s) in OLDQZ after its rename to NEWQZ on 2025-03-03"
@@ -550,56 +550,56 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the account's `[accounts.NAME]` has `transfers = true`, and the export holds the BRW pair `<NAME> JOURNAL POSITION TO USD` / `… FROM CAD BOOK VALUE: $X CNV@ r`. With `transfers = false` the same export says "(currency journal 2025-09-25)".
 - **Cause:** the parser gives the two legs one pair id (`journal_pair`), but the books dropped it: only the transfer sidecar (`transfers = false`) kept it, so with `transfers = true` the run never saw the currency journal and joined the lines only when the names were equal word for word.
 - **Fix:** re-run `tjs run` on a release with the fix: the pair id is kept on the book rows too. On an older install add `JOURNAL QZD.U.TO QZD.TO` to ticker.map.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/core.py` — `journal_pair`; `src/taxjson/lib/brokerages/questrade.py` — `_plan_qt_journals`; `src/taxjson/lib/cross_listings.py` — `gather`
 
 ### "Warning: 99900001.csv: Questrade symbol QZOLD.US looks renamed to QZNEW.US" or "Warning: 99900001.csv: RBC symbol QZOLD (USD) looks renamed to QZNEW"
 - **Check:** the next lines say the old symbol stops with shares still open and the new one (same description) starts with a sale or goes short; `tjs renames --pending` lists it as suggested with the `.tt` line `RENAME <date> OLD NEW` and the dated ticker.map line that book it. IB says `IB lists one stock (contract id …) under several symbols`; Webull says `… goes short with a SALE on … — likely a ticker change Webull reported without a reorganization row`. `tjs shares` shows the old symbol open and the new one short.
 - **Cause:** the broker changed the ticker without a reorganization row. As exported, the old pool is stranded and the new symbol's sale reads as a short, so its gain is in no total.
 - **Fix:** if they are one security, add the line the warning gives to a `.tt` file of the account: the ticker change as a dated event, date first (`RENAME 2025-05-10 QZOLD.US QZNEW.US`, the new symbol's first row; use the broker's change date if you know it), see `tjs renames`. The hint stops once a `.tt` RENAME line or a ticker.map rule joins them. Earlier releases suggested a ticker.map line (`GLOBAL QZOLD.US QZNEW.US`, or a dated `RENAME QZOLD.US QZNEW.US 2025-05-10`), still read. IB's one contract id under two symbols is booked without a line (next entry).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/brokerages/questrade.py` — `looks renamed to`; `src/taxjson/lib/brokerages/rbc_direct.py` — `looks renamed to`; `src/taxjson/lib/brokerages/ib_extractor.py` — `under several symbols`; `src/taxjson/lib/brokerages/webull.py` — `ticker change Webull reported without a`
 
 ### "Warning: the account's IB statements: IB lists one stock (contract id …) under several symbols: QZOLD, QZNEW — booked as a ticker change, a dated event (QZOLD.US -> QZNEW.US on 2025-05-12)"
 - **Check:** `tjs renames` lists the change with source `IB contract id` and the position and cost it carried. If the two symbols are two different securities, `tjs shares` would show QZOLD's rows merged into QZNEW. A trade in QZOLD after the date is listed by `tjs renames` (another company reusing the ticker, or IB's late rows).
 - **Cause:** IB changed the ticker of one contract id without a corporate-action row. One contract id is strong evidence: the parser books the change as a dated rename event (event_source `ib-conid`, at 00:00 on QZNEW's earliest row of any section — a trade, a transfer, a corporate action, a dividend, a return of capital): the position, its cost and acquisition dates carry to the new symbol, no ticker.map line needed. It does so only when that contract id's own rows date the change (QZOLD's last row that moves a position or its cost — a trade, a transfer, a corporate action, a return of capital — on an earlier day; a dividend, withholding or payment in lieu of QZOLD paid after the change is income and does not count), read from every IB account of the project: one decision and one date in all of them; otherwise see the next entry. A `.tt` RENAME line for the change, or a ticker.map rule joining the two in that direction, books it instead (no Warning); a corporate action the parse books as the change (IB's own renaming split, a merger) books it from that row. Before the second pre-release review each IB account decided alone (one account booked the change while another refused it, and that account's hint date could move the first account's change past its sale), and a QZOLD dividend or withholding adjustment after QZNEW's first row refused the change.
 - **Fix:** nothing when they are one security (earlier releases asked for the ticker.map line `RENAME QZOLD.US QZNEW.US 2025-05-12`, which still works). If they are two securities, add `DISTINCT QZOLD.US QZNEW.US` to ticker.map; if QZOLD's rows after the date are another company's, add `RENAME 2025-05-12 QZOLD.US QZNEW.US late=separate` to a `.tt` file of the account (`late=fold`: IB's late rows are the renamed shares). Then `tjs run`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `_warn_stock_aliases`, `_book_conid_renames`, `_merge_seen`, `_CONID_MOVES`, `_ib_account_prescans`, `booked as a ticker change`; `src/taxjson/bin/taxjson_run.py` — `stage_ib_project`; `src/taxjson/bin/taxjson_brokerage.py` — `--project-statements`; `src/taxjson/lib/renames.py` — `row_source`, `SOURCE_IB_CONID`
 
 ### `run --fast` keeps an IB ticker change dated from another account's IB statement after that statement is removed
 - **Check:** `tjs renames` shows the change of one contract id dated on a row that only the removed statement had; `work/<account>_ib_project.state` is missing (older releases) or still lists the removed statement.
 - **Cause:** the state of the project's other IB statements is a dependency of each IB parse, but when the last other account's IB statement went the run deleted the state file instead of rewriting it, so `--fast` saw nothing newer and kept the old parse.
 - **Fix:** upgrade: the state is kept (with `"accounts": {}`) and the parse is rebuilt when it changes. On an older install run `tjs run` without `--fast`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `stage_ib_project`
 
 ### "Warning: the account's IB statements: IB lists one stock (contract id …) under several symbols: QZOLD, QZNEW — a ticker change taxjson does not book from the contract id: …"
 - **Check:** the warning says why and gives the `.tt` line, e.g. "QZNEW's rows begin on 2025-05-12 (a trade or transfer in account 'ma'), on or before QZOLD's last row that moves its position or cost (2025-05-20, a return of capital row in account 'mb') … `RENAME 2025-05-12 QZOLD.US QZNEW.US`" (the date is QZNEW's earliest row in any IB account; every IB account holding the stock says the same), or "ib.csv lists QZNEW under several contract ids (…): the rows there cannot be told apart". `tjs renames` lists the change as suggested; QZNEW's sale goes short until the change is booked (`run --strict` stops). On v0.24.0 the change was booked on QZNEW's first trade (a split or return of capital of QZNEW before that trade was lost; now it is dated at QZNEW's earliest row of any section) and booked even then: a ticker another company had used dated the change from that company's rows, and an IB split that also renames was booked twice (phantom shares).
 - **Cause:** the contract id's rows, in every IB account of the project, cannot date the change: QZNEW's rows (any section) begin on or before QZOLD's last row that moves a position or its cost (a trade, a transfer, a corporate action, a return of capital; a dividend, withholding or payment in lieu does not count) (the same day included, or another company using QZOLD later); or one statement lists the symbol under two contract ids (another company used the ticker). A declaration that renames QZOLD to a third symbol (a `.tt` RENAME line, a ticker.map rule) says "not booked as a ticker change: … and that line decides".
 - **Fix:** if they are one security, add the `.tt` line the warning gives to a `.tt` file of the account, with the date of the change if you know it (`late=fold` if QZOLD's rows after the date are the renamed shares, `late=separate` if another company's), then `tjs run`. If they are two securities, add `DISTINCT QZOLD.US QZNEW.US` to ticker.map. For a declaration naming a third symbol, fix the declaration: one ticker change, one line.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `_warn_stock_aliases`, `_conid_seen`, `_conid_verdict`, `_conid_link`, `_declared_clash`, `_account_tt_links`, `_ib_placeholder_ticker`, `does not book from the contract id`
 
 ### "Warning: the account's IB statements: IB lists one stock (contract id …) under several symbols: QZOLD, QZNEW (a corporate action of 2025-04-01 names QZNEW and QZOLD together, but the parse books no symbol change from it) — …"
 - **Check:** the statement has a Corporate Actions row naming both symbols that the parser does not book (a `CUSIP/ISIN Change` or a name change): the run also says "UNBOOKED: … unhandled Corporate Action row(s) … for: QZOLD". The rest of the line is the contract id's own verdict: booked as a ticker change, or the `.tt` line to add (`RENAME 2025-04-01 QZOLD.US QZNEW.US` when the row itself is the first QZNEW row).
 - **Cause:** a corporate action naming both symbols stands the contract-id path down only when the parse books it as the symbol change (a renaming split's SPLIT row from QZOLD to QZNEW; a merger is booked by the corporate-action stage). Before the second pre-release review any such row stood it down with "the change is that row's (booked from it)" while nothing booked the change: QZNEW's sale went short, out of the sum, with no ATTENTION.
 - **Fix:** if the contract id booked the change, nothing (the UNBOOKED line still asks you to check the corporate action). Otherwise add the `.tt` line it gives (date: the corporate action's day if that is the change), then `tjs run`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `_conid_link`, `_book_conid_renames`, `but the parse books no symbol`
 
 ### "Error: inputs/mb/renames.tt:1: the ticker change QZOLD.US -> QZNEW.US is declared on 2025-05-14, but the IB statements of account 'ma' already trade or transfer QZNEW on 2025-05-12 …"
 - **Check:** IB lists QZOLD and QZNEW under one contract id, and a declared date (a `.tt` RENAME line, a ticker.map dated RENAME) falls after the first QZNEW trade or transfer of the named IB account. The run stops at that account's parse.
 - **Cause:** booked on the declared date, the change would move that account's position after its QZNEW rows: its QZNEW sale goes short (a hard error in a Canadian project) or sells nothing (a US project, silently). Before the second pre-release review each IB account dated the change from its own rows, so the date one account's warning gave could be too late for another.
 - **Fix:** use the line the message gives, dated on or before that day (QZNEW's earliest row in any IB account), e.g. `RENAME 2025-05-12 QZOLD.US QZNEW.US`, then `tjs run`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `_check_declared_dates`, `_declared_dates`, `the change cannot be later than that row`
 
 ### "Warning: ATTENTION: the account's IB statements: IB lists one stock (contract id …) under several symbols: QZOLD, QZNEW — inputs/margin/renames.tt:1 declares the ticker change the other way round (QZNEW.US -> QZOLD.US) …"
 - **Check:** the line says how the contract id's rows run (QZOLD's rows end before QZNEW's begin) and the line to write instead; `run --strict` stops.
 - **Cause:** a `.tt` RENAME line (or a ticker.map dated RENAME) declares the change from the newer symbol to the older one while the rows date it the other way. Before the second pre-release review a line in either direction silenced the contract id, and the backwards line moved nothing the right way.
 - **Fix:** if QZOLD became QZNEW, write the line as the message gives it (`RENAME 2025-05-12 QZOLD.US QZNEW.US`); if they are two securities, replace it with `DISTINCT QZOLD.US QZNEW.US` in ticker.map. Then `tjs run`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `_declared_join`, `the ticker change the other way round`
 
 ### "Warning: ATTENTION: the account's IB statements: IB lists one stock (contract id …) under several symbols: QZOLD, QZNEW — a ticker change"
@@ -621,28 +621,28 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the pair's two legs are one account's, on one day, the same quantity, in the broker's journal wording: RBC `TFR - <NAME> TRANSFER TO C$  J` / `… TRANSFER FROM U$  J~<ref>`, IB `InterDepot (<ROOT>)`, Questrade `<NAME> JOURNAL POSITION TO USD`. The names in the reason are a fund's two brands (`'QZNEWBRAND US DLR CURRENCY ETF UNIT CL A' vs 'QZOLDBRAND U S DLR CURRENCY ETF UNIT NEW …'`), or one name with and one without its corporate form (`'QZNATURAL RESOURCES LTD' vs 'QZNATURAL RESOURCES'`, `'QZGOLD CORP COM NEW' vs 'QZGOLD CORP'`).
 - **Cause:** the join compared every name either listing ever had in the project, so a fund renamed after the journal, or a listing another broker spells without LTD, refused a journal whose own two legs name one security.
 - **Fix:** upgrade and `tjs run`. An explicit journal pair now compares the two legs' own names on its date; a corporate-form word ending one name only (never a form word inside a name — `QZ SE ASIA FUND` is not `QZ ASIA FUND` — and never `LP`: a partnership is not the company), a leading `THE` and a `COM NEW` spelling do not block it (two stated forms must still agree, every share class and designator counts, and a name naming another company refuses). Each join is a Warning ending "the broker's journal moved the units between the two listings, both legs naming one security (…)"; a `DISTINCT` line undoes it. A ticker.map `TOBASE` / `JOURNAL` line you added for the pair stays valid.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/cross_listings.py` — `journal_wording`, `_explicit_journal`, `_journal_names_verdict`, `_journal_key`, `analyze`, `joined_note`, `the broker's journal moved the units`
 
 ### `tjs ticker-map --suggest`: "TOBASE QZD.U.TO QZD.TO … not joined automatically: the legs pair with more than one other leg" (two equal gambits days apart) or "… a listing pairs with two other listings"
 - **Check:** `tjs transfers` (or the export) shows two journals of the same quantity a day or two apart (out and in on 2023-03-07, out and in on 2023-03-09), or the security's US-dollar line under two symbols over the years (QZD.US in older exports, QZD.U.TO later), each journaled onto QZD.TO.
 - **Cause:** a leg that could pair with two others was ambiguous, even when each journal's two legs were on one day or carried the same broker reference; and a listing joined to two others was ambiguous, even when both were the other-currency lines of one fund moved onto it by the broker's journals.
 - **Fix:** upgrade and `tjs run`. Explicit journal legs unique on their day pair first; a reference both legs carry (RBC's `J~…`, Questrade's journal pair) pairs those two and no others; the base-currency listing that several journal pairs map onto is joined to each — when the listings mapped onto it are one security with each other too (each one's name equal to the shared listing's name of its day, or their own names agreeing: a `… PLC` and a `… CORP` that each match a name stating no form stay suggestions, and so do partners whose own listings' names state different corporate forms, an `… LP` and a `… CORP`, even when every journal leg names the shared listing word for word). Ordinary transfers in those shapes stay suggestions: add the `TOBASE` line only if they are one security.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/cross_listings.py` — `analyze`, `_hub_partners_agree`, `the legs pair with more than one other leg`, `a listing pairs with two other listings`
 
 ### "Warning: possible superficial loss across listings: QZX.TO sold at a loss, QZX.US bought within 30 days" (US: "possible wash sale across listings")
 - **Check:** the message names the loss, the purchase and the name both listings share, then the two ticker.map lines that answer it; `tjs ticker-map --suggest` offers the `TOBASE` line, `tjs scan` lists the pair as XLIST-LOSS, and `tjs run --strict` stops on it. The loss is still allowed in `tjs sum`.
 - **Cause:** two listings of one company's shares (the TSX line and the NYSE line) are identical property, but taxjson joins them only on evidence: a ticker.map `TOBASE` line, a `.tt` JOURNAL line or a transfer journal it pairs itself (tax-logic CA-XLIST-01), never on the names alone. Sold at a loss on one listing and bought on the other within 30 days, the unjoined pair kept the loss allowed with nothing said: no suggestion, a clean scan. Now a loss in the tax year with another listing of the same root bought within 30 days before or after it, in any of your accounts (registered included), under a name equal word for word once normalised, is flagged (CA-XLIST-05; US-XLIST-04 for a US project's wash sales). In Canada the other listing must still be held at the end of day 30, as the rule requires; the US rule has no such test. Names that differ, or a listing whose exports carry no name (a `.tt`-only book), are not flagged. A class share's root is also read without its class letter (a loss on `QZT.B.TO` and a purchase of `QZT`, both named "… CL B"); a split or consolidation of the other listing scales the units held at day 30. The run lists the first 20 pairs and counts the rest in one line ("3 more possible superficial losses across listings, not listed here"); `tjs scan` lists every one.
 - **Fix:** if the two listings are one security, add the `TOBASE` line (`tjs ticker-map --suggest --write` offers it) and `tjs run`: the loss is denied (disallowed) and its amount goes onto the replacement's cost. If they are different securities (a CDR, another company that uses the root), add the `DISTINCT` line. Either line ends the warning.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/xlist_loss_radar.py` — `analyze`, `open_findings`, `message`, `across listings`, `_roots`, `_held_at`, `RADAR_SHOWN`, `more_message`; `src/taxjson/bin/taxjson_run.py` — `_say_xlist_losses`, `cmd_scan`, `XLIST-LOSS`; `src/taxjson/lib/ticker_map_suggest.py` — `from_xlist_loss_radar`
 
 ### A move between brokers that changes the listing (RBC `TFO` out of QZP.TO, IB `ATON` into QZP.US) is not joined over a weekend
 - **Check:** `tjs transfers` shows the out-leg and the in-leg six or seven calendar days apart with a weekend between them (out on a Wednesday, in the next Tuesday); the new listing's sales read as a short and the old listing's shares never sell.
 - **Cause:** the pairing window was 5 calendar days; brokers book a transfer on their business days.
 - **Fix:** upgrade and `tjs run`: the window is 5 business days (weekends not counted; holidays count as days). The legs must still be the same quantity and pair uniquely, and the names must be equal. Such a move between two listings that a broker journal already joined is part of that join when its legs' names agree as a journal's must (one broker spelling the corporate form, the other not).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/cross_listings.py` — `business_days`, `_close`, `PAIR_DAYS`, `a transfer between two listings a broker journal`
 
 ### `tjs ticker-map --suggest`: "TOBASE QZLR.US QZLR.TO — rbc.csv: QZLR: dividend row(s) but no trade rows for QZLR in any RBC file of this account" for a US stock
@@ -790,14 +790,14 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs journals --pending` lists each journal the books did not pool: its date, FROM → TO, quantity, broker, how it was found (a Questrade BRW journal, an RBC journal transfer, an IB InterDepot, a move across brokers), the reason, and the lines that settle it. `tjs journals` shows the joined ones too, each with the `TOBASE` / `JOURNAL` line that pools it.
 - **Cause:** a broker journal moved a position from one listing of a security to another, and the run did not join the two listings: their names are not equal word for word or the legs pair more than one way (suggested), or the two legs name different companies (refused). Not pooled, the old listing's shares never sell and the new listing's sales read as a short.
 - **Fix:** if they are one security, add the `.tt` line (`JOURNAL <date> FROM TO QTY`, in a `.tt` file of the account's `inputs/`) or the ticker.map line it gives, then `tjs run`. If the legs really are two securities, add `DISTINCT FROM TO` to ticker.map: a journal your ticker.map keeps apart (a `DISTINCT` line, a line naming a listing) is still listed as refused, with how to change it, but is a decision made and never pending.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/checklist.py` — `d_journals`; `src/taxjson/lib/journals.py` — `report`, `_classify`; `src/taxjson/lib/cross_listings.py` — `analyze`, `refused`
 
 ### `tjs checklist`: "[!] renames … 1 look-alike rename(s) not booked — `taxjson renames --pending`"
 - **Check:** `tjs renames --pending` lists each one under SUGGESTED: the old and new symbol, the account, which broker's hint (Questrade, RBC, Webull "looks renamed") and the `.tt` line `RENAME <date> OLD NEW` (then the dated ticker.map line) that books it.
 - **Cause:** the broker changed a ticker without a reorganization row: the old symbol stops with shares still open and the new one, under the same security name, starts with a sale. The run's parse warned; nothing books the rename until you say it is one.
 - **Fix:** if it is one security, add one of the two lines (the date is the new symbol's first row; the broker's own change date is better if you know it), then `tjs run`. If they are two securities, add `DISTINCT OLD NEW` to ticker.map.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/checklist.py` — `d_renames`; `src/taxjson/lib/renames.py` — `rename_hints`, `_LOOKS_RE`
 
 ### "Warning: these books are not the clean result of the current inputs"
