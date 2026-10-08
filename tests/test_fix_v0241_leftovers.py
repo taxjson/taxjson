@@ -44,21 +44,26 @@ class TestDistinctBareUsTicker(unittest.TestCase):
 
     def test_parse(self):
         from taxjson.bin.taxjson_ticker_map import (_parse_map_text,
-                                                    canonical_distinct)
+                                                    distinct_spellings)
         tm, problems, _notes = _parse_map_text(
             "DISTINCT ZZX ZZX.TO\nDISTINCT QZB.B.TO QZB.B\n"
             "DISTINCT QZC QZD\nDISTINCT ZZY.US ZZY\n")
         self.assertEqual(problems, [])
-        self.assertIn(frozenset(("ZZX.US", "ZZX.TO")), tm.distinct)
-        self.assertIn(frozenset(("QZB.B.TO", "QZB.B.US")), tm.distinct)
+        # The pair as written (a bare symbol may be a coin or a broker's
+        # code) and the US listing's.
+        for pair in (("ZZX.US", "ZZX.TO"), ("ZZX", "ZZX.TO"),
+                     ("QZB.B.TO", "QZB.B.US"), ("QZB.B.TO", "QZB.B")):
+            self.assertIn(frozenset(pair), tm.distinct)
         # Two bare symbols are two coins; a bare symbol whose US
         # spelling is the other side is left as written.
         self.assertIn(frozenset(("QZC", "QZD")), tm.distinct)
+        self.assertNotIn(frozenset(("QZC.US", "QZD")), tm.distinct)
         self.assertIn(frozenset(("ZZY.US", "ZZY")), tm.distinct)
+        self.assertEqual(len(tm.distinct), 6)
         # An option contract is no bare ticker.
-        self.assertEqual(canonical_distinct("ZZX250117C00010000",
+        self.assertEqual(distinct_spellings("ZZX250117C00010000",
                                             "ZZX.TO"),
-                         ("ZZX250117C00010000", "ZZX.TO"))
+                         (frozenset(("ZZX250117C00010000", "ZZX.TO")),))
 
     def _distinct(self, country, kind):
         with tempfile.TemporaryDirectory() as td:
@@ -94,7 +99,7 @@ class TestDistinctBareUsTicker(unittest.TestCase):
             r = tj(root, "run", "--no-input")
             text = _flat(console(r))
             self.assertIn("Warning: ticker.map:1: `TOBASE ZZX ZZX.TO` "
-                          "names ZZX without a market suffix", text)
+                          "names ZZX, a symbol the books do not hold", text)
             self.assertIn("write `TOBASE ZZX.US ZZX.TO`", text)
             # Not re-read: the loss stays allowed, the radar still asks.
             self.assertIn(f"possible {kind} across listings", text)
@@ -109,11 +114,23 @@ class TestDistinctBareUsTicker(unittest.TestCase):
     def test_usa_tobase_with_the_bare_us_ticker_is_warned(self):
         self._tobase("usa", "wash sale")
 
-    def test_coin_lines_are_quiet(self):
+    def test_coins_and_codes_are_quiet(self):
         from taxjson.bin.taxjson_ticker_map import listing_spelling_notes
         self.assertEqual(listing_spelling_notes(
             "GLOBAL QZCOIN QZC\nDISTINCT QZC QZD\nTOBASE ZZX.US ZZX.TO\n"),
             ([], []))
+        # A broker's code or raw spelling the books hold is a symbol of
+        # its own: its GLOBAL line is live, nothing said.
+        text = ("GLOBAL QZ056068 QZDW.US\nGLOBAL QZF.PR QZF.PR.A.TO\n"
+                "TOBASE ZZX ZZX.TO\n")
+        books = {"QZ056068", "QZDW.US", "QZF.PR", "QZF.PR.A.TO", "ZZX.TO"}
+        self.assertEqual(listing_spelling_notes(text, "ticker.map", books),
+                         ([], []))
+        # The US listing in the books, the bare ticker not: warned.
+        _i, warns = listing_spelling_notes(text, "ticker.map",
+                                           books | {"ZZX.US"})
+        self.assertEqual(len(warns), 1)
+        self.assertIn("ticker.map:3: `TOBASE ZZX ZZX.TO`", warns[0])
 
 
 

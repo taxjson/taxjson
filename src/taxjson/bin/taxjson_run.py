@@ -5365,6 +5365,29 @@ def stage_in_kind_context(root: Path, cache: Path, settings: Dict[str, Any],
     return p
 
 
+def _say_listing_spellings(root: Path) -> None:
+    """The ticker.map lines that pair a bare ticker with a share listing
+    where the books hold the ticker's US listing, not the bare symbol
+    (taxjson_ticker_map.listing_spelling_notes): a DISTINCT line also
+    keeps the US listing apart (Info); a rename-type line joins nothing
+    (Warning naming the line to write). Advisory: never fatal."""
+    tm = root / "ticker.map"
+    if not tm.is_file():
+        return
+    try:
+        from taxjson.bin.taxjson_ticker_map import listing_spelling_notes
+        from taxjson.lib.cli_diag import read_text_utf8
+        from taxjson.lib.ticker_map_suggest import books_symbols
+        infos, warns = listing_spelling_notes(
+            read_text_utf8(tm), tm.name, books_symbols(root))
+    except Exception:                               # noqa: BLE001
+        return
+    for m in infos:
+        _say_once(("spelling", m), "note", m, prog=_PROG)
+    for m in warns:
+        _say_once(("spelling", m), "warning", m, prog=_PROG)
+
+
 def _say_xlist_losses(root: Path, cfg: Dict[str, Any], cache: Path, *,
                       strict: bool = False) -> None:
     """A loss on one listing and a purchase of another listing of the
@@ -6408,17 +6431,6 @@ def cmd_run(args: argparse.Namespace) -> None:
                  "single meaning; either changes ACB pools and gains. Fix "
                  "the line (KEYWORD FROM TO, separated by spaces; notes "
                  "after `#`) or delete it.")
-        # A bare ticker beside a share listing (`DISTINCT QZX QZX.TO`):
-        # DISTINCT reads it as the US listing; a rename keyword does not
-        # (it would move pools) and is said (v0.24.1 leftovers, 1).
-        from taxjson.bin.taxjson_ticker_map import listing_spelling_notes
-        from taxjson.lib.cli_diag import read_text_utf8
-        _sp_info, _sp_warn = listing_spelling_notes(
-            read_text_utf8(ticker_map), ticker_map.name)
-        for _m in _sp_info:
-            _say("note", _m, prog=_PROG)
-        for _m in _sp_warn:
-            _say("warning", _m, prog=_PROG)
     # Dated events: the .tt JOURNAL / RENAME lines of every account
     # (lib/dated_events), checked up front; ticker.map's legacy JOURNAL
     # and dated RENAME lines still work, said once.
@@ -6878,6 +6890,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     _say_in_kind(root, cache, settings,
                  strict=getattr(args, "strict", False))
     if not args.account and not pending_accounts:
+        # A ticker.map line naming a bare ticker whose US listing the
+        # books hold (v0.24.1 leftovers, 1), said before the radar.
+        _say_listing_spellings(root)
         # Every account's gains are final: a loss on one listing, the
         # other listing bought in the window (QA F3).
         _say_xlist_losses(root, cfg, cache,

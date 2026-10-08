@@ -130,30 +130,36 @@ def listing_pair_spelling(a: str, b: str) -> Optional[str]:
     return None
 
 
-def canonical_distinct(a: str, b: str) -> Tuple[str, str]:
-    """A DISTINCT line's two symbols as the books spell them: a bare
-    ticker paired with a share listing is the US listing (`DISTINCT
-    QZX QZX.TO` keeps QZX.US and QZX.TO apart) — the spelling every
-    parser gives a broker's bare US ticker, so the line answers the
+def distinct_spellings(a: str, b: str) -> Tuple[frozenset, ...]:
+    """The pairs a DISTINCT line keeps apart: the two symbols as written
+    and, when one is a bare ticker beside a share listing (`DISTINCT QZX
+    QZX.TO`), that ticker's US listing too (QZX.US — the spelling every
+    parser gives a broker's bare US ticker), so the line answers the
     pair the loss radar, `ticker-map --suggest` and the cross-listing
-    join name. A DISTINCT line changes no symbol, so this reading moves
-    no pool (v0.24.1 leftovers, 1)."""
+    join name. The pair as written stays (a bare symbol may be a coin or
+    a broker's code in the books). A DISTINCT line changes no symbol, so
+    neither reading moves a pool (v0.24.1 leftovers, 1)."""
     a, b = str(a).upper(), str(b).upper()
+    out = [frozenset((a, b))]
     bare = listing_pair_spelling(a, b)
-    if bare is None:
-        return a, b
-    return (us_listing(a), b) if a == bare else (a, us_listing(b))
+    if bare is not None:
+        out.append(frozenset((us_listing(a), b) if a == bare
+                             else (a, us_listing(b))))
+    return tuple(out)
 
 
-def listing_spelling_notes(text: str, name: str = "ticker.map"
+def listing_spelling_notes(text: str, name: str = "ticker.map",
+                           books: Optional[set] = None
                            ) -> Tuple[List[str], List[str]]:
     """(Info lines, Warning lines) for the map's lines that pair a bare
-    ticker with a share listing (listing_pair_spelling). A DISTINCT line
-    is read with the US spelling (canonical_distinct) — said as Info
-    naming the line as the books spell it. A GLOBAL / TOBASE / JOURNAL /
-    undated RENAME line is NOT re-read (it would move pools and the
-    gain): a bare symbol is a coin in the books, so the line most
-    likely joins nothing — said as a Warning naming the line to write."""
+    ticker with a share listing (listing_pair_spelling) where the books
+    (`books`: every symbol they name, ticker_map_suggest.books_symbols)
+    hold the ticker's US listing and not the bare symbol itself (a coin
+    or a broker's code is a symbol of its own). A DISTINCT line also
+    keeps the US listing apart (distinct_spellings) — said as Info. A
+    GLOBAL / TOBASE / JOURNAL / undated RENAME line is NOT re-read (it
+    would move pools and the gain): it joins nothing, said as a Warning
+    naming the line to write. Without `books`, every such line."""
     infos: List[str] = []
     warns: List[str] = []
     for lineno, raw in enumerate(str(text or "").splitlines(), 1):
@@ -165,21 +171,23 @@ def listing_spelling_notes(text: str, name: str = "ticker.map"
         bare = listing_pair_spelling(a, b)
         if bare is None:
             continue
+        if books is not None and (bare in books
+                                  or us_listing(bare) not in books):
+            continue
         line = " ".join(parts)
         where = f"{name}:{lineno}"
+        fa = us_listing(a) if a == bare else a
+        fb = us_listing(b) if b == bare else b
         if kw == "DISTINCT":
-            ca, cb = canonical_distinct(a, b)
-            infos.append(f"{where}: `{line}` is read as `DISTINCT {ca} "
-                         f"{cb}`: a US listing is {us_listing(bare)} in "
-                         f"the books (a bare symbol is a coin)")
+            infos.append(f"{where}: `{line}` is read as `DISTINCT {fa} "
+                         f"{fb}`: a US listing is {us_listing(bare)} in "
+                         f"the books")
         elif kw in ("GLOBAL", "TOBASE", "JOURNAL", "RENAME"):
-            fa = us_listing(a) if a == bare else a
-            fb = us_listing(b) if b == bare else b
-            warns.append(f"{where}: `{line}` names {bare} without a "
-                         f"market suffix: in the books a bare symbol is a "
-                         f"coin and a US listing is {us_listing(bare)}, so "
-                         f"the line most likely joins nothing. If {bare} "
-                         f"is the US listing, write `{kw} {fa} {fb}`")
+            warns.append(f"{where}: `{line}` names {bare}, a symbol the "
+                         f"books do not hold (they spell its US listing "
+                         f"{us_listing(bare)}), so the line joins nothing. "
+                         f"If {bare} is the US listing, write `{kw} {fa} "
+                         f"{fb}`")
     return infos, warns
 
 
@@ -337,11 +345,11 @@ def _parse_map_text(text: str, name: str = "ticker.map",
                         notes.append(f"{where}: DISTINCT pairs a symbol "
                                      f"with itself (no effect): {line!r}")
                         continue
-                    # A bare US ticker beside a share listing is the
-                    # US listing (canonical_distinct).
-                    pair = frozenset(canonical_distinct(*syms))
-                    distinct.add(pair)
-                    distinct_where.setdefault(pair, (where, line))
+                    # A bare US ticker beside a share listing: its US
+                    # listing too (distinct_spellings).
+                    for pair in distinct_spellings(*syms):
+                        distinct.add(pair)
+                        distinct_where.setdefault(pair, (where, line))
                 else:
                     problems.append(f"{where}: DISTINCT line needs "
                                     f"`a b`: {line!r}")

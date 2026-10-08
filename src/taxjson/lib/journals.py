@@ -121,9 +121,9 @@ class _Map:
                 # Read as the map parser reads it (a bare US ticker
                 # beside a share listing is the US listing).
                 from taxjson.bin.taxjson_ticker_map import \
-                    canonical_distinct
-                self.distinct.setdefault(
-                    frozenset(canonical_distinct(a, b)), (where, line))
+                    distinct_spellings
+                for pair in distinct_spellings(a, b):
+                    self.distinct.setdefault(pair, (where, line))
                 continue
             if kw not in _RULE_KEYWORDS:
                 continue
