@@ -1137,3 +1137,10 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** upgrade. Re-run `tjs run` to rebuild the work files; for a file you wrote, replace the value with a real number. The JSON writers of filing figures (`taxjson-gains`, `taxjson-form-export`, `taxjson-sum-gains`, `taxjson-sum-income`, `taxjson-carryover`, `taxjson-t1135`, `taxjson-split-gains` and the run's `<account>_report.json`) now refuse a NaN or an infinity, naming where it is, instead of writing it.
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/json_input.py` — `read_json_doc`, `check_row_types`, `filing_json_text`, `dump_filing_json`, `NonFiniteOutputError`; `src/taxjson/lib/report_model.py` — `load_report_json`
+
+### `taxjson-form-export --csv s3.csv`: "cannot write --csv s3.csv: [Errno 17] File exists: 's3.csv.part'"
+- **Check:** a file `s3.csv.part` sits beside the CSV, left by an earlier export that was killed or interrupted, or written by another export of the same file running at the same time.
+- **Cause:** the CSV was written through the fixed temp name `<file>.part` and created it only if it did not exist, so a leftover one stopped every later export, and the failed write then deleted it (another export's unfinished data).
+- **Fix:** upgrade: the CSV is now written through a new owner-only temp file of its own and renamed over the target, as the other taxjson writers do. On an older release, delete the leftover `.part` file once no export is running.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_form_export.py` — `write_csv`; `src/taxjson/lib/safe_write.py` — `atomic_open`

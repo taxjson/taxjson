@@ -85,7 +85,6 @@ the project's country).
 from taxjson.lib.out import exit_text
 import argparse
 import csv
-import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1227,27 +1226,17 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
 
 
 def write_csv(rep: Dict[str, Any], path: Path) -> None:
-    """Write through `<path>.part` and replace, as the TXF --out does: a
-    failed write left a truncated CSV in place of the good one
-    (S032-24)."""
-    from taxjson.lib.safe_write import discard, publish, temp_name
-    tmp = temp_name(path)
-    try:
-        _write_csv(rep, tmp)
-        publish(tmp, path)
-    except BaseException:
-        discard(tmp)
-        raise
-
-
-def _write_csv(rep: Dict[str, Any], path: Path) -> None:
-    # A fresh owner-only file, never through a symlink at `path`
-    # (lib/safe_write; security review M1).
-    from taxjson.lib.safe_write import open_new
-    with open_new(path, newline="") as f:
+    """Write through a new owner-only temp file of this writer's own
+    beside `path` and replace (lib/safe_write.atomic_open): a failed
+    write left a truncated CSV in place of the good one (S032-24), and
+    the fixed `<path>.part` temp it used made a leftover or concurrent
+    one fail the write, or be deleted (the issue #9 pattern)."""
+    from taxjson.lib.safe_write import atomic_open
+    with atomic_open(path, newline="") as f:
         _rows_csv(rep, f)
-        f.flush()
-        os.fsync(f.fileno())
+
+
+_write_csv = write_csv      # the old name, kept for its importers
 
 
 def _rows_csv(rep: Dict[str, Any], f) -> None:

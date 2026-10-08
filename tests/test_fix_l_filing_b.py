@@ -1021,10 +1021,12 @@ class TestSchedule3Render(unittest.TestCase):
             out.write_text("good\n")
             rep = FE.build_schedule3([_g()], 2025)
 
-            def boom(_rep, path):
-                Path(path).write_text("partial")
+            # The row writer fails half-way (it wrote to its own temp
+            # file, never to out.csv; issue #9: a temp of its own).
+            def boom(_rep, f):
+                f.write("partial")
                 raise OSError(27, "File too large")
-            with mock.patch.object(FE, "_write_csv", boom):
+            with mock.patch.object(FE, "_rows_csv", boom):
                 with self.assertRaises(OSError):
                     FE.write_csv(rep, out)
             self.assertEqual(out.read_text(), "good\n")

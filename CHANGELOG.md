@@ -38,6 +38,10 @@
   field. `taxjson-form-export` used to export it at exit 0 with `NaN` in
   its JSON. The JSON writers of filing figures now refuse a non-finite
   number instead of writing it (#8).
+- `taxjson-form-export --csv` writes through a temp file of its own, as
+  the other writers do since #9: it used the fixed `<file>.part`, so a
+  leftover one (an interrupted export) stopped every later export with
+  "File exists", and two exports of one file shared the temp file.
 - `taxjson format-map` replaces every header an earlier taxjson version
   wrote into ticker.map with the current one: the earliest projects'
   header ("symbol rules for the taxjson pipeline", "Each line is: KEYWORD

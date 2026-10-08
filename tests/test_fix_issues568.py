@@ -272,5 +272,29 @@ class TestIssue8NonFinite(unittest.TestCase):
                          {"lines": [{"gain": 1.5}]})
 
 
+class TestFormExportCsvOwnTempFile(unittest.TestCase):
+    """--csv wrote through a FIXED `<out>.part` (the issue #9 pattern):
+    a leftover or concurrent `<out>.part` made the write fail, and two
+    writers shared one temp file. It now writes through
+    safe_write.atomic_open (a unique temp of its own)."""
+
+    def _rep(self, gain):
+        from taxjson.bin import taxjson_form_export as FE
+        return FE.build_schedule3(_gains_doc(gain)["transactions"])
+
+    def test_csv_ignores_a_leftover_part_file(self):
+        from taxjson.bin.taxjson_form_export import write_csv
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "s3.csv"
+            stale = Path(tmp) / "s3.csv.part"
+            stale.write_text("someone else's temp\n")
+            write_csv(self._rep(20.0), out)
+            self.assertIn("SYNTH.TO", out.read_text())
+            self.assertEqual(stale.read_text(), "someone else's temp\n")
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()),
+                             ["s3.csv", "s3.csv.part"])
+            self.assertEqual(out.stat().st_mode & 0o077, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
