@@ -49,7 +49,9 @@ from taxjson.lib.ticker_map import map_ticker
 #   DELETE  from      — nuke that ticker's transactions (a pure artifact).
 #   DISTINCT a b      — declares two look-alike listings are SEPARATE
 #                       securities (a CDR vs its US underlying); changes
-#                       no symbol, silences the scan's MAP-GAP nag.
+#                       no symbol; silences any finding or suggestion
+#                       for the pair (not needed for a CDR or another
+#                       company the exports' names already show apart).
 #   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
 #                     — legacy: a ticker change on that date, a DATED
 #                       event (lib/renames) now written in a .tt file as
@@ -69,7 +71,7 @@ _MAP_KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DELETE", "DISTINCT",
 # securities despite looking like one (CDRs vs their US underlying:
 # SAMPLR.TO is a fractional CAD-hedged receipt over SAMPLR.US, not a listing
 # equivalent — pooling their ACB would be wrong). DISTINCT changes no
-# symbol; it silences the scan's MAP-GAP nagging for that pair and
+# symbol; it silences the scan's MAP-GAP finding for that pair and
 # records the judgment in the map file where it belongs.
 # dated: the dated RENAME lines (lib/renames.DatedRename), each a ticker
 # change booked as an event on its date; undated_rename: the FROM symbols

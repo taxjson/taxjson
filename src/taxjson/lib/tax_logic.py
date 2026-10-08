@@ -1991,7 +1991,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "in CAD with no conversion. The Canadian line is the "
                  "ticker.map target, else a listing of the same root on "
                  "any Canadian venue (.TO, .V, .CN, .NE, .VN) seen in the "
-                 "books; a DISTINCT pair is not one.", cont=True),
+                 "books — unless the exports show the two apart (the "
+                 "Canadian line a depositary receipt, by a receipt word in "
+                 "its name or a receipt venue; or names of different "
+                 "companies), and with a 'verify' unless their names are "
+                 "equal. A DISTINCT pair is not one.", cont=True),
             Rule("CA-RPT-07",
                  "`taxjson edge-cases`: every trade whose year or "
                  "superficial-loss verdict turns on a boundary — window "
