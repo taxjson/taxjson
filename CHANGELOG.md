@@ -20,6 +20,15 @@
 
 ### Fixed
 
+- `taxjson format-map` replaces every header an earlier taxjson version
+  wrote into ticker.map with the current one: the earliest projects'
+  header ("symbol rules for the taxjson pipeline", "Each line is: KEYWORD
+  from [to]", "'#' starts a comment") and every `taxjson init` template
+  were kept as the user's notes when re-wrapped, re-cased or followed
+  directly by the user's own lines, so a map carried two headers. A copy
+  the user edited is kept, with an Info line; so is a comment that still
+  describes JOURNAL or a dated RENAME as a map rule. `taxjson migrate`
+  starts a new ticker.map with the current header.
 - `taxjson slip-audit` (found auditing a full CRA slip set):
   - a hand-entered `.tt` return of capital of a fund held at two brokers
     in one account goes with the distribution it belongs to (record date,

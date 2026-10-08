@@ -778,9 +778,10 @@ def apply(pl: Plan) -> None:
 
     if pl.map_append:
         tm = root / "ticker.map"
-        before = tm.read_text(encoding="utf-8-sig") if tm.is_file() else (
-            "# ticker.map — symbol rules and lookups (see `taxjson-ticker-"
-            "map --help`).\n")
+        # A new map starts with the header `taxjson format-map` writes.
+        from taxjson.lib.ticker_map_format import header_text
+        before = (tm.read_text(encoding="utf-8-sig") if tm.is_file()
+                  else header_text())
         _write(tm, _joined(before, pl.map_append))
     if pl.toml_text is not None:
         _write(root / "taxjson.toml", pl.toml_text)

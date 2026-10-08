@@ -22059,6 +22059,7 @@ def cmd_format_map(args: argparse.Namespace) -> None:
         _say("note", f"{res.retired} line(s) of a removed feature are in "
              f"the \"Retired\" group", "taxjson ignores them; delete "
              "them.", prog=prog)
+    _format_map_header_notes(res, prog)
     # Where each moved RENAME goes (a .tt RENAME applies to every account
     # of its kind holding the old symbol), and whether the run would book
     # the same events after the move (lib/dated_events.plan_migration).
@@ -22216,6 +22217,34 @@ def cmd_format_map(args: argparse.Namespace) -> None:
     _migration_notes(res, plan.homes, plan.skipped, prog, plan.twins, root,
                      text)
     _say("note", f"lines per group: {counts}", prog=prog)
+
+
+def _format_map_header_notes(res, prog: str) -> None:
+    """format-map's Info lines on the map's comments
+    (lib/ticker_map_format.FormatResult): an earlier taxjson header
+    replaced by the current one, one kept because the user edited it, and
+    the user's comments that still describe the legacy dated events as map
+    rules (kept: they are the user's)."""
+    if res.regenerated:
+        _say("note", f"{res.regenerated} comment line(s) of an earlier "
+             f"taxjson header are replaced by the current header",
+             prog=prog)
+    n = len(res.edited_headers)
+    if n:
+        _say("note", ("a comment block looks" if n == 1 else
+                      f"{n} comment blocks look")
+             + " like an old taxjson header you edited — kept; delete "
+             + ("it if it no longer applies" if n == 1
+                else "them if they no longer apply"),
+             *[f"- {ln}" for ln in res.edited_headers], prog=prog)
+    n = len(res.dated_comments)
+    if n:
+        _say("note", f"{n} comment block(s) still describe JOURNAL or a "
+             f"dated RENAME as a ticker.map rule",
+             *[f"- {ln}" for ln in res.dated_comments],
+             "A journal or a ticker change on a date is a .tt line of an "
+             "account now (docs/settings.md, \".tt files\"); your comments "
+             "are kept: edit them if they no longer apply.", prog=prog)
 
 
 def _journal_gaps(root: Path, map_text: str,
