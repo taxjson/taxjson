@@ -13346,6 +13346,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                      "(g) ADJUSTMENT", "(h) GAIN"], _body,
                     aligns=["<", ">", ">", ">", ">"], foot=_foot):
                 print(_ln)
+            print()     # the table's notes stand apart from its RETURN row
             _permd = filing_total.get("permanently_denied") or 0.0
             _item("(d) − (e) + (g) = (h). Column (g) is the code-W wash-"
                   "sale loss disallowed and added back, so (h) is the "
@@ -13397,6 +13398,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                     aligns=["<", ">", ">", ">", ">", ">"], foot=_foot,
                     drop=(5,)):
                 print(_ln)
+            print()     # the table's notes stand apart from its RETURN row
             _permd = filing_total.get("permanently_denied") or 0.0
             _item("PROCEEDS − COST(ACB) − OUTLAYS = GAIN, the allowed "
                   "gain. A short sale shows what it brought in as "
