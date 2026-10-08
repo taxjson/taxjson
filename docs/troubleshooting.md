@@ -659,6 +659,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/cross_listings.py` — `receipt_why`, `declared_verdict`, `_hub_partners_agree`, `is written on a venue that lists depositary receipts`; `src/taxjson/lib/markets.py` — `receipt_suffixes`, `receipt_words`
 
+### A broker journal split over several rows (one reference: 1000 out of QZD.TO, 600 and 400 into QZD.U.TO) is not joined, or its sale reads as missing history
+- **Check:** `tjs transfers` shows three or more transfer legs in one account with one broker reference (RBC's `J~…`, Questrade's journal pair): the out-legs on one listing, the in-legs on the other, the same units in total. On v0.24.0 `tjs ticker-map --suggest` or `tjs journals` listed the move (or nothing), and `tjs find-missing-history` could flag the sale after it.
+- **Cause:** three readers of a broker reference used three rules: the cross-listing join and the missing-history walk took a reference group as a journal only with exactly one leg each way, while the transfer-in check settled any group whose units balanced.
+- **Fix:** upgrade and `tjs run`. One rule now (tax-logic CA-XLIST-04 / US-XLIST-03): a reference group is one journal when its out-legs name one listing, its in-legs one, they move the same units and every leg is within 5 business days of the others. Any other group (units that do not balance, a third listing, legs further apart) is no journal for any of them.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/missing_history.py` — `ref_group_journal`, `_detected_journals`; `src/taxjson/lib/cross_listings.py` — `analyze`; `src/taxjson/lib/transfer_in.py` — `own_journal_legs`
+
 ### A move between brokers that changes the listing (RBC `TFO` out of QZP.TO, IB `ATON` into QZP.US) is not joined over a weekend
 - **Check:** `tjs transfers` shows the out-leg and the in-leg six or seven calendar days apart with a weekend between them (out on a Wednesday, in the next Tuesday); the new listing's sales read as a short and the old listing's shares never sell.
 - **Cause:** the pairing window was 5 calendar days; brokers book a transfer on their business days.

@@ -151,8 +151,10 @@ def own_journal_legs(rows: Sequence[Tuple[str, str, Dict[str, Any]]]
     * the legs a journal's own pair id marks (missing_history.
       journal_leg_key: Questrade's BRW `journal_pair`, RBC's J~
       reference, a .tt JOURNAL line's pair id) cancel within their
-      account and pair: a pair whose out-legs and in-legs add up to the
-      same quantity is settled, every leg of it;
+      account and pair: a group that is one journal (missing_history.
+      ref_group_journal: its out-legs on one listing, its in-legs on
+      one, the same units, within PAIR_DAYS business days) is settled,
+      every leg of it;
     * a leg left over from such a pair (a .tt JOURNAL line whose other
       leg the broker's rows hold: lib/dated_events.settle_journals)
       settles with the account's leg it stands beside: the opposite
@@ -173,13 +175,16 @@ def own_journal_legs(rows: Sequence[Tuple[str, str, Dict[str, Any]]]
             return float(rows[n][2].get("quantity") or 0.0)
         except (TypeError, ValueError):
             return 0.0
+    from taxjson.lib.missing_history import ref_group_journal
     settled: set = set()
     left: List[int] = []
     for _k, ns in sorted(groups.items()):
-        qs = [_q(n) for n in ns]
-        if (any(q > _EPS for q in qs) and any(q < -_EPS for q in qs)
-                and abs(sum(qs)) <= max(_EPS, 1e-6 * max(abs(q)
-                                                         for q in qs))):
+        # One rule for a reference group (missing_history.
+        # ref_group_journal, as the cross-listing join and the
+        # missing-history walk read it).
+        if ref_group_journal(
+                (str(rows[n][2].get("symbol") or ""), _q(n),
+                 str(rows[n][2].get("date") or "")) for n in ns):
             settled.update(ns)
         else:
             left.extend(ns)

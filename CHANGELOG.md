@@ -25,6 +25,13 @@
   beside the broker's journal" Warning, which nothing could silence
   before (docs/settings.md).
 
+- **A broker journal split over several rows is one journal everywhere**:
+  a reference shared by more than two legs (1000 out, 600 + 400 in) was
+  read three ways by the cross-listing join, the transfer-in check and the
+  missing-history walk. One rule now: one journal when its out-legs name
+  one listing, its in-legs one, the units balance and the legs are within
+  5 business days; otherwise no journal for any of them.
+
 
 ## v0.24.0 (2026-10-07)
 

@@ -10,6 +10,9 @@
 - 3: a .tt JOURNAL line ending `separate` is a journal of its own: the
   near-restatement Warning is silenced and the line is booked in full,
   never settled against the broker's legs near it.
+- 4: one rule for a broker reference several legs share (a journal the
+  broker split over rows): the cross-listing join, the transfer-in
+  arrivals and the missing-history walk agree on a 3-leg group.
 
 Every fixture is SYNTHETIC: invented QZ*/ZZX tickers and names, fake
 account ids (pii-ok: 55500001).
@@ -255,6 +258,86 @@ class TestSeparateJournalLine(unittest.TestCase):
     @rule("US-XLIST-03")
     def test_usa_separate_line(self):
         self._check("usa")
+
+
+
+# ------------------------------------------------------------------ 4
+
+class TestSplitLegReferenceGroup(unittest.TestCase):
+    """A broker reference shared by three legs: one journal when its
+    legs balance on one listing each side; never one otherwise — and the
+    three readers agree."""
+
+    NAME = "QZD US DLR CURRENCY ETF UNIT"
+
+    def _three(self, legs):
+        """(cross_listings joined pairs, transfer_in settled indices,
+        missing_history detected journals) of one account's legs
+        [(symbol, qty, date)] sharing one journal_pair id."""
+        from taxjson.lib import cross_listings as XL
+        from taxjson.lib.missing_history import (_detected_journals,
+                                                 journal_leg_key)
+        from taxjson.lib.symbol_codes import exact_name
+        from taxjson.lib.transfer_in import own_journal_legs
+        rows = [("m", "questrade",
+                 {"action": "TRANSFER", "symbol": sym, "quantity": q,
+                  "date": day, "journal_pair": "qz-1",
+                  "description": self.NAME})
+                for sym, q, day in legs]
+        nm = exact_name(self.NAME)
+        xl_legs = [XL.Leg("m", "questrade", r["symbol"], r["date"],
+                          r["quantity"], name=nm, raw_name=self.NAME,
+                          ref="|".join(journal_leg_key(r, "questrade")))
+                   for _a, _b, r in rows]
+        res = XL.analyze(xl_legs, {s: {nm} for s, _q, _d in legs},
+                         {nm: self.NAME}, base_currency="CAD")
+        joined = [(p.out.symbol, p.into.symbol, -p.out.quantity,
+                   p.into.quantity) for p in res["joined"]]
+        settled, _orph = own_journal_legs(rows)
+        found = _detected_journals(
+            [(a, r, b) for a, b, r in rows], {"QZD.U.TO": "QZD.TO"})
+        return joined, settled, [(j[2], j[4], j[5]) for j in found]
+
+    def test_split_journal_is_one_journal_in_all_three(self):
+        joined, settled, found = self._three(
+            [("QZD.TO", -1000, "2025-05-06"),
+             ("QZD.U.TO", 600, "2025-05-06"),
+             ("QZD.U.TO", 400, "2025-05-07")])
+        self.assertEqual([(a, b) for a, b, _q, _r in joined],
+                         [("QZD.TO", "QZD.U.TO")])
+        self.assertEqual([(q, r) for _a, _b, q, r in joined],
+                         [(1000.0, 1000.0)])
+        self.assertEqual(settled, {0, 1, 2})
+        self.assertEqual(found, [("QZD.TO", "QZD.U.TO", 1000.0)])
+
+    def test_groups_that_are_no_journal_in_all_three(self):
+        for legs in (
+                # The units do not balance.
+                [("QZD.TO", -1000, "2025-05-06"),
+                 ("QZD.U.TO", 600, "2025-05-06"),
+                 ("QZD.U.TO", 300, "2025-05-06")],
+                # A third listing.
+                [("QZD.TO", -1000, "2025-05-06"),
+                 ("QZD.U.TO", 600, "2025-05-06"),
+                 ("QZD.US", 400, "2025-05-06")],
+                # Legs further apart than a journal's window.
+                [("QZD.TO", -1000, "2025-05-06"),
+                 ("QZD.U.TO", 600, "2025-05-06"),
+                 ("QZD.U.TO", 400, "2025-05-20")]):
+            joined, settled, found = self._three(legs)
+            self.assertEqual(joined, [], legs)
+            self.assertEqual(settled, set(), legs)
+            self.assertEqual(found, [], legs)
+
+    def test_the_rule(self):
+        from taxjson.lib.missing_history import ref_group_journal
+        self.assertEqual(ref_group_journal(
+            [("A.TO", -10, "2025-01-02"), ("A.TO", 10, "2025-01-02")]),
+            ("A.TO", "A.TO", 10.0))
+        self.assertIsNone(ref_group_journal([("A.TO", -10, "2025-01-02")]))
+        self.assertEqual(ref_group_journal(
+            [("A.TO", -6, "2025-01-02"), ("A.TO", -4, "2025-01-02"),
+             ("A.U.TO", 10, "2025-01-03")]), ("A.TO", "A.U.TO", 10.0))
 
 
 if __name__ == "__main__":

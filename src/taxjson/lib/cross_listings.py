@@ -992,14 +992,25 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
     for g in legs:
         if g.ref and not g.used:
             by_ref.setdefault((g.account, g.broker, g.ref), []).append(g)
+    from dataclasses import replace as _replace
+    from taxjson.lib.missing_history import ref_group_journal
     for _k, gl in sorted(by_ref.items()):
-        o = [g for g in gl if g.quantity < 0]
-        i = [g for g in gl if g.quantity > 0]
-        if (len(o) == 1 and len(i) == 1 and _same_qty(o[0], i[0])
-                and _close(o[0], i[0], days)):
-            o[0].used = i[0].used = True
-            if o[0].symbol != i[0].symbol:
-                picked.append((o[0], i[0]))
+        # One rule for a reference group (missing_history.
+        # ref_group_journal, as transfer_in and the missing-history walk
+        # read it): a journal the broker split over several rows (1000
+        # out, 600 + 400 in) is one pair of its total units.
+        jr = ref_group_journal((g.symbol, g.quantity, g.date) for g in gl)
+        if jr is None:
+            continue
+        o = sorted((g for g in gl if g.quantity < 0), key=lambda g: g.date)
+        i = sorted((g for g in gl if g.quantity > 0), key=lambda g: g.date)
+        for g in o + i:
+            g.used = True
+        if jr[0] != jr[1]:
+            # One leg per side: the first, carrying the group's units.
+            po = o[0] if len(o) == 1 else _replace(o[0], quantity=-jr[2])
+            pi = i[0] if len(i) == 1 else _replace(i[0], quantity=jr[2])
+            picked.append((po, pi))
 
     def _own(g: Leg) -> bool:
         # A journal's leg (a broker reference, a .tt JOURNAL line's):

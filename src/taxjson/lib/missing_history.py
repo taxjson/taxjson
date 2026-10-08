@@ -614,6 +614,55 @@ def _row_get(t: Any):
         lambda f, d=None, _t=t: getattr(_t, f, d))
 
 
+def ref_group_journal(legs: Iterable[Tuple[str, float, str]]
+                      ) -> Optional[Tuple[str, str, float]]:
+    """THE rule for the legs one broker reference groups in one account
+    (journal_leg_key: a Questrade journal_pair, RBC's J~ reference, a
+    .tt JOURNAL line's pair id), shared by cross_listings.analyze (step
+    0b), transfer_in.own_journal_legs and _detected_journals (v0.24.1
+    leftovers, 4). `legs` are (symbol, signed quantity, date): the group
+    is ONE journal of (out symbol, in symbol, units) when its out-legs
+    all name one listing, its in-legs all name one listing (the same one
+    for a custody note), the two directions move the same units (a
+    journal the broker split over several rows — 600 + 400 into the
+    1000 out — is one journal) and every leg is dated within
+    cross_listings.PAIR_DAYS business days of the others; None
+    otherwise (one direction only, units that do not balance, a third
+    listing: not a journal the reference proves)."""
+    from taxjson.lib.cross_listings import PAIR_DAYS, business_days
+    eps = 1e-6
+    outs: List[Tuple[str, float, str]] = []
+    ins: List[Tuple[str, float, str]] = []
+    for sym, q, day in legs:
+        try:
+            q = float(q)
+        except (TypeError, ValueError):
+            return None
+        if q < -eps:
+            outs.append((str(sym).upper(), q, str(day or "")[:10]))
+        elif q > eps:
+            ins.append((str(sym).upper(), q, str(day or "")[:10]))
+    if not outs or not ins:
+        return None
+    o_syms = {x[0] for x in outs}
+    i_syms = {x[0] for x in ins}
+    if len(o_syms) != 1 or len(i_syms) != 1:
+        return None
+    qo = -sum(x[1] for x in outs)
+    qi = sum(x[1] for x in ins)
+    if abs(qo - qi) > max(eps, 1e-6 * max(qo, qi)):
+        return None
+    days = sorted(x[2] for x in outs + ins)
+    try:
+        lo, hi = (date.fromisoformat(days[0]),
+                  date.fromisoformat(days[-1]))
+    except ValueError:
+        return None
+    if business_days(lo, hi) > PAIR_DAYS:
+        return None
+    return next(iter(o_syms)), next(iter(i_syms)), qi
+
+
 def _detected_journals(rows: Iterable[Tuple[Any, ...]],
                        renames: Optional[Dict[str, str]] = None
                        ) -> List[Tuple[str, str, str, str, str, float]]:
@@ -647,16 +696,18 @@ def _detected_journals(rows: Iterable[Tuple[Any, ...]],
             sym, q, str(get('date') or '')[:10])
     out: List[Tuple[str, str, str, str, str, float]] = []
     for k, legs in sorted(groups.items()):
-        outs = [g for g in legs.values() if g[1] < 0]
-        ins = [g for g in legs.values() if g[1] > 0]
-        if len(outs) != 1 or len(ins) != 1 \
-                or abs(outs[0][1] + ins[0][1]) > 1e-6:
+        # One rule for a reference group (ref_group_journal): a journal
+        # split over several rows is one journal, dated by its first
+        # out- and in-leg.
+        j = ref_group_journal(legs.values())
+        if j is None:
             continue
-        a, b = (ren.get(outs[0][0], outs[0][0]),
-                ren.get(ins[0][0], ins[0][0]))
+        o_sym, i_sym, units = j
+        a, b = ren.get(o_sym, o_sym), ren.get(i_sym, i_sym)
         if a == b:
-            out.append((k[0], outs[0][2], outs[0][0], ins[0][2], ins[0][0],
-                        ins[0][1]))
+            od = min(g[2] for g in legs.values() if g[1] < 0)
+            idt = min(g[2] for g in legs.values() if g[1] > 0)
+            out.append((k[0], od, o_sym, idt, i_sym, units))
     return out
 
 
